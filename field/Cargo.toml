@@ -1,0 +1,9 @@
+[package]
+name = "field"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sys = {path = "../sys"}
+hex = "0.4.3"
+base64 = "0.22.1"

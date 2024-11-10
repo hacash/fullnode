@@ -5,4 +5,6 @@ edition = "2021"
 
 [dependencies]
 x16rs = {path = "./x16rs"}
+sys = {path = "./sys"}
+field = {path = "./field"}
 
