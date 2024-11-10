@@ -1,0 +1,16 @@
+[package]
+name = "x16rs"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+cc = "1.0"
+
+[dependencies]
+sha2 = "0.10.2"
+sha3 = "0.10.1"
+ripemd = "0.1.1"
+
+
+[dev-dependencies]
+hex = "0.4.3"

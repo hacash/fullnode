@@ -1,0 +1,8 @@
+[package]
+name = "hacash"
+version = "0.2.0"
+edition = "2021"
+
+[dependencies]
+x16rs = {path = "./x16rs"}
+
