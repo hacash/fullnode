@@ -1,32 +1,27 @@
 
 // sha3-256
-pub fn sha3(stuff: impl AsRef<[u8]>) -> [u8; H32S] {
-
+pub fn sha3(data: impl AsRef<[u8]>) -> [u8; H32S] {
     let mut hasher = Sha3_256::new();
-    hasher.update(stuff);
+    hasher.update(data);
     let result = hasher.finalize();
     let result: [u8; H32S] = result[..].try_into().unwrap();
     result
-
 }
 
 
 // sha2-256
-pub fn sha2(stuff: impl AsRef<[u8]>) -> [u8; H32S] {
-
+pub fn sha2(data: impl AsRef<[u8]>) -> [u8; H32S] {
     let mut hasher = Sha256::new();
-    hasher.update(stuff);
+    hasher.update(data);
     let result = hasher.finalize();
     let result: [u8; H32S] = result[..].try_into().unwrap();
     result
-
 }
 
 
-pub fn ripemd160(stuff: impl AsRef<[u8]>) -> [u8; 20] {
-
+pub fn ripemd160(data: impl AsRef<[u8]>) -> [u8; 20] {
     let mut hasher = Ripemd160::new();
-    hasher.update(stuff);
+    hasher.update(data);
     // to [u8; 20]
     let result = hasher.finalize();
     let result: [u8; 20] = result[..].try_into().unwrap();
@@ -34,7 +29,7 @@ pub fn ripemd160(stuff: impl AsRef<[u8]>) -> [u8; 20] {
 }
 
 
-pub fn calculate_hash(stuff: impl AsRef<[u8]>) -> [u8; H32S] {
-    sha3(stuff)
+pub fn calculate_hash(data: impl AsRef<[u8]>) -> [u8; H32S] {
+    sha3(data)
 }
 

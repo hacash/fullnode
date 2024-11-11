@@ -10,6 +10,7 @@ const DMD_M: usize = 16;
 const DMD_N: usize = DMD_M - DMD_L; // 6
 
 fn include_dhbx_char(c: u8) -> bool {
+    // WTYUIAHXVMEKBSZN
     for i in 1..DIAMOND_HASH_BASE_CHAR_NUM {
         if c == DIAMOND_HASH_BASE_CHARS[i] {
             return true;

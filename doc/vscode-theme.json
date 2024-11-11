@@ -4,7 +4,14 @@
     "editor.fontLigatures": true,
     "window.autoDetectHighContrast": false,
     "editor.guides.bracketPairs": false,
+
+    "rust-analyzer.typing.autoClosingAngleBrackets.enable": true,
+    "rust-analyzer.inlayHints.typeHints.enable": false,
+    "rust-analyzer.inlayHints.genericParameterHints.const.enable": false,
+    "rust-analyzer.inlayHints.parameterHints.enable": false,
+
     "workbench.colorCustomizations": {
+
         "[Default Dark Modern]": {
             "editor.background": "#000",
             "editor.lineHighlightBackground": "#123",
@@ -28,9 +35,9 @@
             "variables": "#8ec3f5",
             "functions": "#e9e49d",
             "keywords": "#af828c",
-            "numbers": "#8b4444",
+            "numbers": "#830eb1",
             "strings": "#bd764d",
-            "types": "#0eaca4",
+            "types": "#03c0b0",
             "textMateRules": [
                 {
                     "scope": "keyword.control",
@@ -92,7 +99,7 @@
                 {
                     "scope": "constant.language",
                     "settings": {
-                        "foreground": "#3463ca",
+                        "foreground": "#4361c5",
                         "fontStyle": "italic"
                     }
                 },
@@ -108,7 +115,14 @@
                         "foreground": "#1c848b",
                         "fontStyle": "italic"
                     }
+                },
+                {
+                    "scope": "support.type.primitive",
+                    "settings": {
+                        "foreground": "#007e77"
+                    }
                 }
+                
             ]
         }
     }

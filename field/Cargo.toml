@@ -5,5 +5,6 @@ edition = "2021"
 
 [dependencies]
 sys = {path = "../sys"}
+concat-idents = "1.1.5"
 hex = "0.4.3"
 base64 = "0.22.1"
