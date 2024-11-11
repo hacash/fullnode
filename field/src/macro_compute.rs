@@ -1,5 +1,24 @@
 
 
+
+macro_rules! ord_impl {
+    ($class:ident, $vn: ident) => (   
+        impl PartialOrd for $class {
+            #[inline]
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+        impl Ord for $class {
+            #[inline]
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.$vn.cmp(&other.$vn)
+            }
+        }
+    )   
+}
+    
+
 macro_rules! compute_opt_impl {
     ($class:ident, $vn: ident, $op: ident, $opt: ident ) => (   
         impl $op for $class {

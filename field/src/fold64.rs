@@ -15,52 +15,35 @@ const FOLDU64XLIST: [u64; 8] = [FOLDU64SX1, FOLDU64SX2, FOLDU64SX3, FOLDU64SX4, 
 
 
 #[derive(Default, Debug, Hash, Copy, Clone, PartialEq, Eq)]
-pub struct FoldU64 {
+pub struct Fold64 {
     value: u64,
 }
 
 
-impl Display for FoldU64{
+impl Display for Fold64 {
     fn fmt(&self,f: &mut std::fmt::Formatter) -> std::fmt::Result{
         write!(f,"{}", self.value)
     }
 }
 
-impl Deref for FoldU64 {
+impl Deref for Fold64 {
     type Target = u64;
     fn deref(&self) -> &u64 {
         &self.value
     }
 }
 
-impl PartialOrd for FoldU64 {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for FoldU64 {
-    #[inline]
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.value.cmp(&other.value)
-    }
-}
+ord_impl!{Fold64, value}
+compute_impl!{Fold64, value, u64}
 
 
-compute_impl!{FoldU64, value, u64}
-
-
-
-
-
-impl Parse for FoldU64 {
+impl Parse for Fold64 {
 
     fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
         let bt = bufeatone(buf)?;
         let tl = bt >> 5;
         if tl == 8 { // error
-            return Err(s!("FoldU64 format error"))
+            return Err(s!("Fold64 format error"))
         }
         let mut body = vec![bt & 0b00011111];
         let n = tl as usize;
@@ -79,10 +62,10 @@ impl Parse for FoldU64 {
 }
 
 
-impl Serialize for FoldU64 {
+impl Serialize for Fold64 {
 
     fn serialize(&self) -> Vec<u8> {
-        if self.value > FoldU64::MAX {
+        if self.value > Fold64::MAX {
             unimplemented!() // fatal error!!!
         }
         let vs = self.size() as u8;
@@ -110,52 +93,44 @@ impl Serialize for FoldU64 {
 }
 
 
-impl Field for FoldU64 {}
+impl Field for Fold64 {}
 
 
-impl Uint for FoldU64 {
-    fn to_u64(&self) -> u64 {
-        self.value
-    }
-    fn from_u64(v: u64) -> Self {
-        Self{ value: v }
-    }
-    fn from_u32(v: u32) -> Self {
-        Self{ value: v as u64 }
-    }
-    fn from_u16(v: u16) -> Self {
-        Self{ value: v as u64 }
-    }
-    fn from_u8(v: u8) -> Self {
-        Self{ value: v as u64 }
-    }
-    fn from_usize(v: usize) -> Self {
-        Self{ value: v as u64 }
-    }
-    fn parse_u64(&mut self, v: u64) -> Rerr {
-        self.value = v;
-        Ok(())
-    }
-    fn parse_u32(&mut self, v: u32) -> Rerr {
-        self.value = v as u64;
-        Ok(())
-    }
-    fn parse_u16(&mut self, v: u16) -> Rerr {
-        self.value = v as u64;
-        Ok(())
-    }
-    fn parse_u8(&mut self, v: u8) -> Rerr {
-        self.value = v as u64;
-        Ok(())
-    }
-    fn parse_usize(&mut self, v: usize) -> Rerr {
-        self.value = v as u64;
-        Ok(())
-    }
+macro_rules! from_uint_fold64 {
+    ($ty:ident) => (
+        from_uint!{$ty, u64}
+    )
 }
 
 
-impl FoldU64 {
+macro_rules! parse_uint_fold64 {
+    ($ty:ident) => (
+        parse_uint!{$ty, u64}
+    )
+}
+
+
+impl Uint for Fold64 {
+
+    fn to_u64(&self) -> u64 {
+        self.value
+    }
+
+    from_uint_fold64!{u64}
+    from_uint_fold64!{u32}
+    from_uint_fold64!{u16}
+    from_uint_fold64!{u8}
+    from_uint_fold64!{usize}
+
+    parse_uint_fold64!{u64}
+    parse_uint_fold64!{u32}
+    parse_uint_fold64!{u16}
+    parse_uint_fold64!{u8}
+    parse_uint_fold64!{usize}
+}
+
+
+impl Fold64 {
 
     pub const MAX: u64 = FOLDU64SX8 - 1;
 
@@ -168,6 +143,7 @@ impl FoldU64 {
 
 
 
+
 /************************ test ************************/
 
 
@@ -175,13 +151,13 @@ impl FoldU64 {
 
 
 #[cfg(test)]
-mod tests {
+mod fold64_tests {
     use super::*;
 
     /*
     #[test]
     fn test1() {
-        for i in 0..=FoldU64::MAX {
+        for i in 0..=Fold64::MAX {
             do_t_one(i);
         }
     }
@@ -233,8 +209,8 @@ mod tests {
     }
 
     fn do_t_one(n: u64) {
-        let fu = FoldU64::from(n);
-        let mut fu2 = FoldU64::from(0);
+        let fu = Fold64::from(n);
+        let mut fu2 = Fold64::from(0);
         let _ = fu2.parse(&fu.serialize());
         assert_eq!(fu, fu2);
     }

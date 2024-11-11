@@ -22,10 +22,12 @@ use sys::*;
 
 include!("impl.rs");
 
-include!("impl_compute.rs");
+include!("macro_compute.rs");
+include!("macro_uint.rs");
 
 include!("empty.rs");
-include!("foldu64.rs");
+include!("uint.rs");
+include!("fold64.rs");
 
 
 
