@@ -26,7 +26,7 @@ macro_rules! errf {
 }
 
 #[macro_export]
-macro_rules! errunbox{
+macro_rules! errunbox {
     ($errbox:expr) => {
         match $errbox {
             Ok(v) => Ok(v),

@@ -14,28 +14,28 @@
             "statusBar.background": "#08324e",
             "titleBar.activeBackground": "#000",
             "terminal.background":"#000", 
-            "editorBracketHighlight.foreground1": "#ccc",
-            "editorBracketHighlight.foreground2": "#e9dab3",
-            "editorBracketHighlight.foreground3": "#e4cb86",
-            "editorBracketHighlight.foreground4": "#e4c05f",
-            "editorBracketHighlight.foreground5": "#e4b636",
-            "editorBracketHighlight.foreground6": "#e6b01a",
-        },
+            "editorBracketHighlight.foreground1": "#aaaaaa",
+            "editorBracketHighlight.foreground2": "#bbbb99",
+            "editorBracketHighlight.foreground3": "#cccc88",
+            "editorBracketHighlight.foreground4": "#dddd77",
+            "editorBracketHighlight.foreground5": "#eeee66",
+            "editorBracketHighlight.foreground6": "#ffff55"
+        }
     },
     "editor.tokenColorCustomizations": {
         "[Default Dark Modern]": {
             "comments": "#334444",
-            "variables": "#70ade6",
+            "variables": "#8ec3f5",
             "functions": "#e9e49d",
             "keywords": "#af828c",
             "numbers": "#8b4444",
             "strings": "#bd764d",
-            "types": "#1c848b",
+            "types": "#0eaca4",
             "textMateRules": [
                 {
                     "scope": "keyword.control",
                     "settings": {
-                        "foreground": "#af828c",
+                        "foreground": "#965d6a",
                         "fontStyle": ""
                     }
                 },
@@ -55,21 +55,25 @@
                 {
                     "scope": "entity.name.function.preprocessor",
                     "settings": {
-                        "foreground": "#7d912e"
+                        "foreground": "#95ad33"
+                    }
+                },
+                {
+                    "scope": "entity.name.function.macro",
+                    "settings": {
+                        "foreground": "#95ad33"
                     }
                 },
                 {
                     "scope": "storage.type",
                     "settings": {
-                        "foreground": "#796b6e",
-                        // "fontStyle": "italic"
+                        "foreground": "#796b6e"
                     }
                 },
                 {
                     "scope": "storage.modifier",
                     "settings": {
-                        "foreground": "#796b6e",
-                        // "fontStyle": "italic"
+                        "foreground": "#796b6e"
                     }
                 },
                 {
@@ -80,29 +84,9 @@
                     }
                 },
                 {
-                    "scope": "meta.function.call",
-                    "settings": {
-                        "foreground": "#ddd",
-                        "fontStyle": ""
-                    }
-                },
-                {
-                    "scope": "meta.function.definition",
-                    "settings": {
-                        "foreground": "#ddd",
-                        "fontStyle": ""
-                    }
-                },
-                {
-                    "scope": "meta.function.definition",
-                    "settings": {
-                        "foreground": "#ddd",
-                    }
-                },
-                {
                     "scope": "constant",
                     "settings": {
-                        "foreground": "#fff",
+                        "foreground": "#fff"
                     }
                 },
                 {
@@ -115,7 +99,7 @@
                 {
                     "scope": "variable.other.constant",
                     "settings": {
-                        "foreground": "#fff",
+                        "foreground": "#fff"
                     }
                 },
                 {
@@ -124,7 +108,7 @@
                         "foreground": "#1c848b",
                         "fontStyle": "italic"
                     }
-                },
+                }
             ]
         }
     }

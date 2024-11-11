@@ -87,7 +87,6 @@ pub fn check_diamond_difficulty(number: u32, sha3hx: &[u8; H32S], x16rshx: &[u8;
             diffnum -= 255;
         }
     }
-
     // over loop
     false
 }
