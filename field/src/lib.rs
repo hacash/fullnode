@@ -8,26 +8,30 @@ pub mod interface;
 // use std::ops::{Deref, Add, Sub, Mul, Div, AddAssign, SubAssign, MulAssign, DivAssign, Index, IndexMut};
 // use std::convert::TryInto;
 
-use std::fmt::Display;
+use std::fmt::{Display, Formatter, Result};
 use std::cmp::Ordering;
 use std::ops::{
-    Deref, Add, Sub, Mul, Div, 
+    Deref, Index, IndexMut, Add, Sub, Mul, Div, 
     AddAssign, SubAssign, MulAssign, DivAssign
 };
 
 use concat_idents::concat_idents;
+use base64::prelude::*;
 
 use sys::*;
 
 
 include!("impl.rs");
-
-include!("macro_compute.rs");
-include!("macro_uint.rs");
-
 include!("empty.rs");
-include!("uint.rs");
-include!("fold64.rs");
 
+// number
+include!("number/macro_compute.rs");
+include!("number/macro_uint.rs");
+include!("number/uint.rs");
+include!("number/fold64.rs");
+
+// bytes
+include!("bytes/fixed.rs");
+include!("bytes/datas.rs");
 
 

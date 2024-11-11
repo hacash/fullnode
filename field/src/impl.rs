@@ -1,4 +1,3 @@
-use base64::prelude::*;
 
 use interface::*;
 

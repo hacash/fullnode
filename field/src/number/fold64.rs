@@ -1,5 +1,5 @@
 
-const FOLDU64SX1: u64 = 32; // 2^5        // 1byte :                    32
+const FOLDU64SX1: u64 = 32; // 2^^5       // 1byte :                    32
 const FOLDU64SX2: u64 = FOLDU64SX1 * 256; // 2byte :                  8192
 const FOLDU64SX3: u64 = FOLDU64SX2 * 256; // 3byte :               2097152
 const FOLDU64SX4: u64 = FOLDU64SX3 * 256; // 4byte :            5_36870912
@@ -32,6 +32,7 @@ impl Deref for Fold64 {
         &self.value
     }
 }
+
 
 ord_impl!{Fold64, value}
 compute_impl!{Fold64, value, u64}

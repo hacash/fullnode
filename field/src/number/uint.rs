@@ -22,9 +22,16 @@ macro_rules! uint_define {
             }
         }
 
+        impl AsRef<$vty> for $class {
+            fn as_ref(&self) -> &$vty {
+                &self.value
+            }
+        }
+
         
         ord_impl!{$class, value}
         compute_impl!{$class, value, $vty}
+
 
         impl Parse for $class {
             fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
@@ -43,7 +50,7 @@ macro_rules! uint_define {
                 self.to_bytes().to_vec()
             }
             fn size(&self) -> usize {
-                <$class>::SIZE
+                $size
             }
         }
 
@@ -106,8 +113,6 @@ uint_define!{Uint5, 5, 8, u64}
 uint_define!{Uint6, 6, 8, u64}
 uint_define!{Uint7, 7, 8, u64}
 uint_define!{Uint8, 8, 8, u64}
-
-
 
 
 
