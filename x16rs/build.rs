@@ -1,21 +1,14 @@
 extern crate cc;
 
-
 fn main() {
-    cc::Build::new()
-        .file("src/x16rs.c")
-        .compile("x16rs");
+    cc::Build::new().file("src/x16rs.c").compile("x16rs");
     println!("cargo:rerun-if-changed=src/x16rs.c");
 }
-
-
-
-
 
 /*
 
 
-## linux 
+## linux
 
 # - static
 gcc -c src/x16rs/x16rs.c && ar rcs libx16rs.a x16rs.o && mv *.a ./src/x16rs && rm -f *.o
@@ -40,16 +33,12 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 */
 
-
-
-
-
 /*
 
 
 build release software
 
-Ubuntu: 
+Ubuntu:
 RUSTFLAGS='-C target-feature=+crt-static' RUST_BACKTRACE=1 cargo build --release --target x86_64-unknown-linux-gnu
 cp target/x86_64-unknown-linux-gnu/release/hacash ../../download_rust/hacash_ubuntu
 
@@ -65,11 +54,6 @@ cp target/x86_64-apple-darwin/release/hacash ./hacash_macos
 
 */
 
-
-
-
-
-
 /*
 
 # Step 1: create libx16rs.a
@@ -84,7 +68,7 @@ cargo build --release --target=x86_64-unknown-linux-musl
 ldd target/x86_64-unknown-linux-musl/release/hacash
 
 
-RUSTFLAGS="$RUSTFLAGS -Awarnings -L ./src/x16rs/" cargo build && 
+RUSTFLAGS="$RUSTFLAGS -Awarnings -L ./src/x16rs/" cargo build &&
 cp ./target/debug/hacash ./test/hacash_dev1 &&
 ./test/hacash_dev1 hacash.dev1.config.ini
 
@@ -92,4 +76,4 @@ cp ./target/debug/hacash ./test/hacash_dev1 &&
 RUSTFLAGS="$RUSTFLAGS -Awarnings" RUST_BACKTRACE=1 cargo run -- --reptblk
 
 
-*/ 
+*/

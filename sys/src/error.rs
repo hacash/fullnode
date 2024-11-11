@@ -1,5 +1,5 @@
 pub type Ret<T> = Result<T, Error>;
-pub type Err    = Result<(), Error>;
+pub type Rerr   = Result<(), Error>;
 
 
 pub const _BUF_E1: &str = "buffer too short";

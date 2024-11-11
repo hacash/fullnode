@@ -1,0 +1,131 @@
+{
+    "git.confirmSync": false,
+    "files.autoSave": "onWindowChange",
+    "editor.fontLigatures": true,
+    "window.autoDetectHighContrast": false,
+    "editor.guides.bracketPairs": false,
+    "workbench.colorCustomizations": {
+        "[Default Dark Modern]": {
+            "editor.background": "#000",
+            "editor.lineHighlightBackground": "#123",
+            "editorCursor.foreground": "#fff",
+            "activityBar.background": "#222",
+            "sideBar.background": "#111",
+            "statusBar.background": "#08324e",
+            "titleBar.activeBackground": "#000",
+            "terminal.background":"#000", 
+            "editorBracketHighlight.foreground1": "#ccc",
+            "editorBracketHighlight.foreground2": "#e9dab3",
+            "editorBracketHighlight.foreground3": "#e4cb86",
+            "editorBracketHighlight.foreground4": "#e4c05f",
+            "editorBracketHighlight.foreground5": "#e4b636",
+            "editorBracketHighlight.foreground6": "#e6b01a",
+        },
+    },
+    "editor.tokenColorCustomizations": {
+        "[Default Dark Modern]": {
+            "comments": "#334444",
+            "variables": "#70ade6",
+            "functions": "#e9e49d",
+            "keywords": "#af828c",
+            "numbers": "#8b4444",
+            "strings": "#bd764d",
+            "types": "#1c848b",
+            "textMateRules": [
+                {
+                    "scope": "keyword.control",
+                    "settings": {
+                        "foreground": "#af828c",
+                        "fontStyle": ""
+                    }
+                },
+                {
+                    "scope": "keyword.operator",
+                    "settings": {
+                        "foreground": "#ddd"
+                    }
+                },
+                {
+                    "scope": "keyword.other",
+                    "settings": {
+                        "foreground": "#796b6e",
+                        "fontStyle": "italic"
+                    }
+                },
+                {
+                    "scope": "entity.name.function.preprocessor",
+                    "settings": {
+                        "foreground": "#7d912e"
+                    }
+                },
+                {
+                    "scope": "storage.type",
+                    "settings": {
+                        "foreground": "#796b6e",
+                        // "fontStyle": "italic"
+                    }
+                },
+                {
+                    "scope": "storage.modifier",
+                    "settings": {
+                        "foreground": "#796b6e",
+                        // "fontStyle": "italic"
+                    }
+                },
+                {
+                    "scope": "punctuation",
+                    "settings": {
+                        "foreground": "#ddd",
+                        "fontStyle": ""
+                    }
+                },
+                {
+                    "scope": "meta.function.call",
+                    "settings": {
+                        "foreground": "#ddd",
+                        "fontStyle": ""
+                    }
+                },
+                {
+                    "scope": "meta.function.definition",
+                    "settings": {
+                        "foreground": "#ddd",
+                        "fontStyle": ""
+                    }
+                },
+                {
+                    "scope": "meta.function.definition",
+                    "settings": {
+                        "foreground": "#ddd",
+                    }
+                },
+                {
+                    "scope": "constant",
+                    "settings": {
+                        "foreground": "#fff",
+                    }
+                },
+                {
+                    "scope": "constant.language",
+                    "settings": {
+                        "foreground": "#3463ca",
+                        "fontStyle": "italic"
+                    }
+                },
+                {
+                    "scope": "variable.other.constant",
+                    "settings": {
+                        "foreground": "#fff",
+                    }
+                },
+                {
+                    "scope": "variable.other.enummember",
+                    "settings": {
+                        "foreground": "#1c848b",
+                        "fontStyle": "italic"
+                    }
+                },
+            ]
+        }
+    }
+}
