@@ -8,7 +8,7 @@ pub mod interface;
 // use std::ops::{Deref, Add, Sub, Mul, Div, AddAssign, SubAssign, MulAssign, DivAssign, Index, IndexMut};
 // use std::convert::TryInto;
 
-use std::fmt::{Display, Formatter, Result};
+use std::fmt::{Debug, Display, Formatter, Result};
 use std::cmp::Ordering;
 use std::ops::{
     Deref, Index, IndexMut, Add, Sub, Mul, Div, 
@@ -17,6 +17,10 @@ use std::ops::{
 
 use concat_idents::concat_idents;
 use base64::prelude::*;
+
+// use num_bigint::BigInt;
+// use num_bigint::Sign::{Minus, Plus};
+// use num_traits::{FromPrimitive, ToPrimitive, Num};
 
 use sys::*;
 
@@ -37,4 +41,8 @@ include!{"bytes/datas.rs"}
 // core
 include!{"core/define.rs"}
 include!{"core/address.rs"}
+include!{"core/amount.rs"}
+
+// combi
+include!{"combi/struct.rs"}
 
