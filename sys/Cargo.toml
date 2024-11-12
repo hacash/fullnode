@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+x16rs = {path = "../x16rs"}
 hex = "0.4.3"
 base64 = "0.22.1"
 chrono = "0.4.38"
+base58check = "0.1.0"
+libsecp256k1 = "0.7.1"
+getrandom = "0.2.15"

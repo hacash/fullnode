@@ -14,9 +14,9 @@ pub trait Parse {
 /*
 * #[derive(Default)]
 */
-pub trait Field : Serialize + Parse + Default { 
+pub trait Field : Serialize + Parse { 
     // customizable new() func will change something
-    fn new() -> Self where Self: Sized { Self::default() }
+    fn new() -> Self where Self: Sized { unimplemented!() }
 
     fn must(buf: &[u8]) -> Self where Self: Sized {
         let mut v = Self::new();

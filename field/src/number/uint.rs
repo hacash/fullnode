@@ -31,6 +31,7 @@ macro_rules! uint_define {
         
         ord_impl!{$class, value}
         compute_impl!{$class, value, $vty}
+        from_uint_all!{$class, value, $vty}
 
 
         impl Parse for $class {
@@ -55,7 +56,11 @@ macro_rules! uint_define {
         }
 
 
-        impl Field for $class {}
+        impl Field for $class {
+            fn new() -> Self {
+                Self::default()
+            }
+        }
 
         impl Uint for $class {
             concat_idents!{to_ty = to_, $vty {

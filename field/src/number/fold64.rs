@@ -36,6 +36,7 @@ impl Deref for Fold64 {
 
 ord_impl!{Fold64, value}
 compute_impl!{Fold64, value, u64}
+from_uint_all!{Fold64, value, u64}
 
 
 impl Parse for Fold64 {
@@ -94,19 +95,23 @@ impl Serialize for Fold64 {
 }
 
 
-impl Field for Fold64 {}
+impl Field for Fold64 {
+    fn new() -> Self {
+        Self::default()
+    }
+}
 
 
 macro_rules! from_uint_fold64 {
     ($ty:ident) => (
-        from_uint!{$ty, u64}
+        from_uint_ty!{$ty, u64}
     )
 }
 
 
 macro_rules! parse_uint_fold64 {
     ($ty:ident) => (
-        parse_uint!{$ty, u64}
+        parse_uint_ty!{$ty, u64}
     )
 }
 

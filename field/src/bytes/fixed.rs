@@ -7,7 +7,7 @@ macro_rules! fixed_define {
 
         #[derive(Default, Debug, Hash, Copy, Clone, PartialEq, Eq)]
         pub struct $class {
-            pub bytes: [u8; $size],
+            bytes: [u8; $size],
         }
 
 
@@ -61,8 +61,12 @@ macro_rules! fixed_define {
             }
         }
 
-        impl Field for $class {}
 
+        impl Field for $class {
+            fn new() -> Self {
+                Self::default()
+            }
+        }
 
 
         impl Hex for $class {
@@ -82,6 +86,7 @@ macro_rules! fixed_define {
         impl $class {
 
             pub const SIZE: usize = $size as usize;
+            pub const DEFAULT: Self = Self{ bytes: [0u8; $size] };
 
             pub fn to_vec(&self) -> Vec<u8> {
                 self.bytes.to_vec()
@@ -112,6 +117,7 @@ fixed_define!{Fixed16, 16}
 fixed_define!{Fixed18, 18}
 fixed_define!{Fixed20, 20}
 fixed_define!{Fixed21, 21}
+fixed_define!{Fixed32, 32}
 
 
 

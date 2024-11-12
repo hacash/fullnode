@@ -4,9 +4,9 @@ use ripemd::Ripemd160;
 
 pub const H32S: usize = 32;
 
-include!("x16rs.rs");
-include!("hash.rs");
-include!("block.rs");
-include!("diamond.rs");
+include!{"x16rs.rs"}
+include!{"hash.rs"}
+include!{"block.rs"}
+include!{"diamond.rs"}
 
 

@@ -21,17 +21,20 @@ use base64::prelude::*;
 use sys::*;
 
 
-include!("impl.rs");
-include!("empty.rs");
+include!{"impl.rs"}
+include!{"empty.rs"}
 
 // number
-include!("number/macro_compute.rs");
-include!("number/macro_uint.rs");
-include!("number/uint.rs");
-include!("number/fold64.rs");
+include!{"number/macro_compute.rs"}
+include!{"number/macro_uint.rs"}
+include!{"number/uint.rs"}
+include!{"number/fold64.rs"}
 
 // bytes
-include!("bytes/fixed.rs");
-include!("bytes/datas.rs");
+include!{"bytes/fixed.rs"}
+include!{"bytes/datas.rs"}
 
+// core
+include!{"core/define.rs"}
+include!{"core/address.rs"}
 

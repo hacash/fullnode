@@ -64,7 +64,11 @@ macro_rules! datas_define {
         }
 
 
-        impl Field for $class {}
+        impl Field for $class {
+            fn new() -> Self {
+                Self::default()
+            }
+        }
 
 
         impl Hex for $class {
