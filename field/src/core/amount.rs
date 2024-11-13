@@ -376,12 +376,10 @@ mod amount_tests {
         let a1 = Amount::mei(9527);
         let a2 = Amount::coin(9527, 248);
         let a3 = Amount::from("133188:246").unwrap();
-        let a4 = Amount::from("1328.88   ").unwrap();
-        let a3 = a3.sub(&Amount::mei(3), AmtMode::U64).unwrap();
+        let a4 = Amount::from("1000.88   ").unwrap();
+        let a3 = a3.sub(&Amount::mei(331), AmtMode::U64).unwrap();
         assert_eq!(a1.to_fin_string(), a2.to_fin_string());
         assert_eq!(a3.to_fin_string(), a4.to_fin_string());
-
-
 
     }
 

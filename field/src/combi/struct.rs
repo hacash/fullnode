@@ -15,7 +15,7 @@ macro_rules! combi_struct {
             fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
                 let mut mv = 0;
                 $(
-                    mv += self.$item.parse(&buf[mv..]) ?;
+                    mv += self.$item.parse(&buf[mv..])?;
                 )+
                 Ok(mv)
             }
