@@ -11,6 +11,7 @@ use super::transaction::*;
 
 
 
+include!{"define.rs"}
 include!{"util.rs"}
 include!{"intro.rs"}
 include!{"v1.rs"}

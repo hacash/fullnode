@@ -82,7 +82,7 @@ impl AddrOrPtr {
     * real address by ptr in list 
     */
     #[allow(dead_code)]
-    fn real(&self, addrs: &Vec<Address>) -> Ret<Address> {
+    pub fn real(&self, addrs: &Vec<Address>) -> Ret<Address> {
         match self {
             Self::Val1(v) => Ok(*v),
             Self::Val2(v) => {

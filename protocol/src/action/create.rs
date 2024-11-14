@@ -23,3 +23,14 @@ pub fn create(buf: &[u8]) -> Ret<(Box<dyn Action>, usize)> {
 
 
 
+/*
+* list defind
+*/
+combi_dynlist!{ DynListAction,
+    Uint2, Action, create
+}
+
+
+
+
+
