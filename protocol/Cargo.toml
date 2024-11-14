@@ -9,3 +9,4 @@ sys = {path = "../sys"}
 field = {path = "../field"}
 vm = {path = "../vm"}
 dyn-clone = "1.0.17"
+concat-idents = "1.1.5"

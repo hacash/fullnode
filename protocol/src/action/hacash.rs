@@ -12,10 +12,9 @@ action_define!{ HacToTransfer, 1,
     },
     (self, ctx, _gas {
         let env = ctx.env();
-        let _from = env.tx.main; 
-        let _to = self.to.real(&env.tx.addrs)?;
-        // hac_transfer(ctx, state, &from, &to, &self.hacash)
-        errf!("")
+        let from = env.tx.main; 
+        let to = self.to.real(&env.tx.addrs)?;
+        hac_transfer(env, ctx.state(), &from, &to, &self.hacash)
     })
 }
 

@@ -1,31 +1,13 @@
 
 
-#[macro_export]
-macro_rules! inst_state_define {
-    ($class:ident ) => {
-
-        pub struct $class {
-            sta: ArcDynState,
-        }
-
-        impl $class {
-            fn wrap(s: ArcDynState) -> Self {
-                Self {
-                    sta: s
-                }
-            }
-        }
-
-
-    };
-}
-
-
-
-
 /*
 * test
 */
-inst_state_define!{ TestSta834765495863457 }
+inst_state_define!{ CoreState,
+
+    1, lastest, Empty : Fixed10
+    
+    11, balance, Address : Uint8
+}
 
 

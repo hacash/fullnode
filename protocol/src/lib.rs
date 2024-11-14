@@ -9,6 +9,7 @@ pub mod action;
 pub mod transaction;
 pub mod block;
 pub mod state;
+pub mod operate;
 
 
 use interface::*;
