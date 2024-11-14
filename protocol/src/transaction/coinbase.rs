@@ -86,3 +86,8 @@ impl TxExec for TransactionCoinbase {
     }
     */
 }
+
+
+impl TransactionCoinbase {
+    pub const TYPE: u8 = 0; // 0
+}

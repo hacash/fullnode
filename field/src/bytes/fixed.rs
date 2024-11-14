@@ -95,6 +95,16 @@ macro_rules! fixed_define {
                 self.bytes.to_vec()
             }
 
+            pub fn from_vec(v: Vec<u8>) -> Self where Self: Sized {
+                Self::from(v.try_into().unwrap())
+            }
+
+            pub fn from(v: [u8; $size]) -> Self where Self: Sized {
+                Self{
+                    bytes: v
+                }
+            }
+
 
         }
 
@@ -136,7 +146,7 @@ impl Bool {
         self[0] != 0
     }
 
-    pub fn from(v: bool) -> Self where Self: Sized {
+    pub fn new(v: bool) -> Self where Self: Sized {
         let v = match v {
             true => 1u8,
             false => 0u8,

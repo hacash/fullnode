@@ -44,6 +44,3 @@ macro_rules! transaction_define {
 
     )
 }
-
-
-

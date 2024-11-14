@@ -4,7 +4,7 @@ pub trait TxExec {
 }
 
 
-pub trait TransactionRead : Field + TxExec + Send + Sync + DynClone { 
+pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone { 
     fn ty(&self) -> u8 { unimplemented!() }
 
     fn address(&self) -> Address { unimplemented!() }
@@ -25,7 +25,7 @@ pub trait TransactionRead : Field + TxExec + Send + Sync + DynClone {
 }   
 
 
-pub trait Transaction : TransactionRead + Send + Sync {
+pub trait Transaction : TransactionRead + Field + Send + Sync {
     fn as_read(&self) -> &dyn TransactionRead;
 }
 

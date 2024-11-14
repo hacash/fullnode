@@ -7,7 +7,7 @@ use super::interface::*;
 
 macro_rules! not_find_action_kind_error {
     ($t:expr) => {
-        Err(format!("not find action kind '{}'", $t).to_owned())
+        Err(format!("action kind '{}' not find", $t).to_owned())
     };
 }
 

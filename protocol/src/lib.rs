@@ -5,4 +5,6 @@ pub mod interface;
 pub mod context;
 pub mod action;
 pub mod transaction;
+pub mod block;
+
 

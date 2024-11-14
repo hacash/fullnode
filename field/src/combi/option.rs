@@ -66,7 +66,7 @@ macro_rules! combi_option {
 
             pub fn must(v: $vty) -> $class {
                 $class {
-                    exist: Bool::from(true),
+                    exist: Bool::new(true),
                     value: Some(v),
                 }
             }

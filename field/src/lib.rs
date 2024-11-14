@@ -51,6 +51,7 @@ include!{"combi/list.rs"}
 include!{"combi/option.rs"}
 include!{"combi/revenum.rs"}
 include!{"combi/dynlist.rs"}
+include!{"combi/dynvec.rs"}
 
 
 

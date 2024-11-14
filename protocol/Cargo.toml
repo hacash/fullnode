@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+x16rs = {path = "../x16rs"}
 sys = {path = "../sys"}
 field = {path = "../field"}
 dyn-clone = "1.0.17"
