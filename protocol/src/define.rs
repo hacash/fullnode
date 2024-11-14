@@ -1,3 +1,9 @@
+/*
+* type 
+*/
+pub type ArcDynState = Arc<dyn State>;
+
+
 
 pub struct ActLv {}
 impl ActLv {
@@ -10,6 +16,8 @@ impl ActLv {
     pub const ANY:          i8 = 127; // any where
 
 }
+
+
 
 
 

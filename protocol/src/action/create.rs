@@ -17,7 +17,7 @@ pub fn create(buf: &[u8]) -> Ret<(Box<dyn Action>, usize)> {
     }
     match hasact {
         Some(a) => Ok(a),
-        None => not_find_action_kind_error!(kid)
+        None => errf!("action kind '{}' not find", kid).to_owned(),
     }
 }
 

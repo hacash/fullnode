@@ -9,9 +9,12 @@ pub trait DiskDB {
 
 
 pub trait State {
-    fn build() -> Self where Self: Sized {
-        
-    }
+    fn build(_: Arc<dyn DiskDB>, _: Arc<dyn State>) -> Self where Self: Sized { unimplemented!() }
+    fn disk(&self) -> Arc<dyn DiskDB> { unimplemented!() }
+
+    fn get(&self, _: u16, _: &dyn Serialize) -> Option<Vec<u8>> { unimplemented!() }
+    fn set(&self, _: u16, _: &dyn Serialize, _: &dyn Serialize) -> Rerr { unimplemented!() }
+    fn del(&self, _: u16, _: &dyn Serialize) -> Rerr { unimplemented!() }
 }
 
 
