@@ -1,4 +1,3 @@
-
 use sys::*;
 use field::interface::*;
 use field::*;
@@ -22,6 +21,7 @@ include!{"macro.rs"}
 include!{"create.rs"}
 
 
+
 /*
 * register
 */
@@ -30,6 +30,12 @@ action_register!{
 }
 
 
+/*
+* list defind
+*/
+combi_dynlist!{ DynListAction,
+    Uint2, Action, create
+}
 
 
 

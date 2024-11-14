@@ -71,11 +71,7 @@ impl Serialize for Amount {
 }
 
 
-impl Field for Amount {
-    fn new() -> Self where Self: Sized {
-        Self::default()
-    }
-}
+impl_field_only_new!{Amount}
 
 
 impl Amount {

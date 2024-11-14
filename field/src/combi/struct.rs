@@ -38,12 +38,7 @@ macro_rules! combi_struct {
             }
         }
 
-
-        impl Field for $class {
-            fn new() -> Self {
-                Self::default()
-            }
-        }
+        impl_field_only_new!{$class}
 
 
     )

@@ -63,13 +63,7 @@ macro_rules! datas_define {
             }
         }
 
-
-        impl Field for $class {
-            fn new() -> Self {
-                Self::default()
-            }
-        }
-
+        impl_field_only_new!{$class}
 
         impl Hex for $class {
             fn to_hex(&self) -> String {

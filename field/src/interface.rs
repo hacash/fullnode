@@ -77,6 +77,11 @@ pub trait Uint : Field {
     fn to_u32(&self) -> u32 { unimplemented!(); }
     fn to_u64(&self) -> u64 { unimplemented!(); }
     fn to_usize(&self) -> usize { unimplemented!(); }
+    fn as_u8(&self) -> &u8 { unimplemented!(); }
+    fn as_u16(&self) -> &u16 { unimplemented!(); }
+    fn as_u32(&self) -> &u32 { unimplemented!(); }
+    fn as_u64(&self) -> &u64 { unimplemented!(); }
+    fn as_usize(&self) -> &usize { unimplemented!(); }
     fn from_u8(_: u8) -> Self where Self: Sized { unimplemented!(); } // panic
     fn from_u16(_: u16) -> Self where Self: Sized { unimplemented!(); } // panic
     fn from_u32(_: u32) -> Self where Self: Sized { unimplemented!(); } // panic
@@ -98,6 +103,4 @@ pub trait Float : Field {
     fn parse_f32(&mut self, _: f32) -> Rerr { unimplemented!(); } // panic
     fn parse_f64(&mut self, _: f64) -> Rerr { unimplemented!(); } // panic
 }
-
-
 

@@ -95,11 +95,7 @@ impl Serialize for Fold64 {
 }
 
 
-impl Field for Fold64 {
-    fn new() -> Self {
-        Self::default()
-    }
-}
+impl_field_only_new!{Fold64}
 
 
 macro_rules! from_uint_fold64 {
@@ -120,6 +116,10 @@ impl Uint for Fold64 {
 
     fn to_u64(&self) -> u64 {
         self.value
+    }
+
+    fn as_u64(&self) -> &u64 {
+        &self.value
     }
 
     from_uint_fold64!{u64}

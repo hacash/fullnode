@@ -9,4 +9,5 @@ concat-idents = "1.1.5"
 hex = "0.4.3"
 base64 = "0.22.1"
 base58check = "0.1.0"
+dyn-clone = "1.0.17"
 

@@ -1,6 +1,9 @@
 use base58check::*;
 
+const ADDR_OR_PTR_DIV_NUM: u8 = 10;
+
 pub type Address = Fixed21;
+pub type Addrptr = Uint1;
 
 
 impl Address {
@@ -41,6 +44,57 @@ impl Address {
         Ok(address)
     }
     
+}
+
+
+/*
+*
+*/
+combi_list!{ AddressListW1, Uint1, Address }
+
+
+/*
+*
+*/
+combi_revenum!{ AddrOrList, Address, AddressListW1, ADDR_OR_PTR_DIV_NUM }
+
+impl AddrOrList {
+
+    #[allow(dead_code)]
+    fn list(&self) -> Vec<Address> {
+        match self {
+            Self::Val1(v) => vec![*v],
+            Self::Val2(v) => v.list().clone(),
+        }
+    }
+
+}
+
+
+/*
+*
+*/
+combi_revenum!{ AddrOrPtr, Address, Addrptr, ADDR_OR_PTR_DIV_NUM }
+
+impl AddrOrPtr {
+
+    /**
+    * real address by ptr in list 
+    */
+    #[allow(dead_code)]
+    fn real(&self, addrs: &Vec<Address>) -> Ret<Address> {
+        match self {
+            Self::Val1(v) => Ok(*v),
+            Self::Val2(v) => {
+                let ix = v.to_uint() as usize;
+                match ix < addrs.len() {
+                    true => Ok(addrs[ix].clone()),
+                    false => errf!("addr ptr index overflow")
+                }
+            },
+        }
+    }
+
 }
 
 

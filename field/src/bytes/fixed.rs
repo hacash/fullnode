@@ -5,11 +5,18 @@
 macro_rules! fixed_define {
     ($class:ident, $size: expr) => {
 
-        #[derive(Default, Debug, Hash, Copy, Clone, PartialEq, Eq)]
+        #[derive(Debug, Hash, Copy, Clone, PartialEq, Eq)]
         pub struct $class {
             bytes: [u8; $size],
         }
 
+        impl Default for $class {
+            fn default() -> Self {
+                $class {
+                    bytes: [0u8; $size],
+                }
+            }
+        }
 
         impl Display for $class {
             fn fmt(&self,f: &mut Formatter) -> Result {
@@ -62,11 +69,7 @@ macro_rules! fixed_define {
         }
 
 
-        impl Field for $class {
-            fn new() -> Self {
-                Self::default()
-            }
-        }
+        impl_field_only_new!{$class}
 
 
         impl Hex for $class {
@@ -101,15 +104,15 @@ macro_rules! fixed_define {
 
 
 
-fixed_define!{Fixed1, 1}
-fixed_define!{Fixed2, 2}
-fixed_define!{Fixed3, 3}
-fixed_define!{Fixed4, 4}
-fixed_define!{Fixed5, 5}
-fixed_define!{Fixed6, 6}
-fixed_define!{Fixed7, 7}
-fixed_define!{Fixed8, 8}
-fixed_define!{Fixed9, 9}
+fixed_define!{Fixed1,  1}
+fixed_define!{Fixed2,  2}
+fixed_define!{Fixed3,  3}
+fixed_define!{Fixed4,  4}
+fixed_define!{Fixed5,  5}
+fixed_define!{Fixed6,  6}
+fixed_define!{Fixed7,  7}
+fixed_define!{Fixed8,  8}
+fixed_define!{Fixed9,  9}
 fixed_define!{Fixed10, 10}
 fixed_define!{Fixed12, 12}
 fixed_define!{Fixed15, 15}
@@ -118,6 +121,30 @@ fixed_define!{Fixed18, 18}
 fixed_define!{Fixed20, 20}
 fixed_define!{Fixed21, 21}
 fixed_define!{Fixed32, 32}
+fixed_define!{Fixed33, 33}
+fixed_define!{Fixed64, 64}
 
 
+/*
+* Bool
+*/
+pub type Bool = Fixed1;
+
+impl Bool {
+
+    pub fn check(&self) -> bool {
+        self[0] != 0
+    }
+
+    pub fn from(v: bool) -> Self where Self: Sized {
+        let v = match v {
+            true => 1u8,
+            false => 0u8,
+        };
+        Self{
+            bytes: [v]
+        }
+    }
+
+}
 

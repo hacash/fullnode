@@ -55,12 +55,7 @@ macro_rules! uint_define {
             }
         }
 
-
-        impl Field for $class {
-            fn new() -> Self {
-                Self::default()
-            }
-        }
+        impl_field_only_new!{$class}
 
         impl Uint for $class {
             concat_idents!{to_ty = to_, $vty {
@@ -87,6 +82,10 @@ macro_rules! uint_define {
 
             pub fn to_uint(&self) -> $vty {
                 self.value
+            }   
+
+            pub fn as_uint(&self) -> &$vty {
+                &self.value
             }   
 
             pub fn to_bytes(&self) -> [u8; $size] {
