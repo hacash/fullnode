@@ -1,25 +1,24 @@
-use block::BlkOrigin;
-use transaction::TxOrigin;
-
 
 // TxPkg
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct TxPkg {
 	pub time: u64,
 	pub hash: Hash,
 	pub data: Vec<u8>,
-    pub objc: Box<dyn Transaction>,
+    // pub objc: Box<dyn Transaction>,
     pub orgi: TxOrigin,
 }
 
 
+
+
 // BlockPkg
-#[derive(Clone)]
+#[derive(Default, Clone)]
 pub struct BlockPkg {
 	pub time: u64,
 	pub hash: Hash,
 	pub data: Vec<u8>,
-    pub objc: Box<dyn Block>,
+    // pub objc: Box<dyn Block>,
     pub orgi: BlkOrigin,
 }
 

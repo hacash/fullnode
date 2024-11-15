@@ -4,20 +4,51 @@
 macro_rules! inst_state_define {
     ($class:ident, $( $idx:expr, $kn:ident, $kty:ty : $vty:ty)+ ) => {
 
+        concat_idents!{ classread = $class, Read {
+            pub struct classread {
+                _sta: Arc<dyn State>,
+            }
+
+            impl classread {
+                pub fn wrap(s: Arc<dyn State>) -> Self {
+                    Self {
+                        _sta: s,
+                    }
+                }
+
+                $(
+
+                    pub fn $kn(&self, _k: &$kty) -> Ret<Option<$vty>> {
+                        errf!("")
+                    }
+
+                    concat_idents!{ get_stat = get_, $kn, {
+                    pub fn get_stat(&self) -> Ret<$vty> {
+                        errf!("")
+                    }
+                    }}
+
+                )+
+            }
+
+        }}
+
+        /**********************8 */
+
         pub struct $class<'a> {
-            sta: &'a mut dyn State,
+            _sta: &'a mut dyn State,
         }
 
         impl<'a> $class<'a> {
             pub fn wrap(s: &'a mut dyn State) -> Self {
                 Self {
-                    sta: s,
+                    _sta: s,
                 }
             }
 
             $(
 
-                pub fn $kn(&self, _k: &$kty) -> Ret<Option<&$vty>> {
+                pub fn $kn(&self, _k: &$kty) -> Ret<Option<$vty>> {
                     errf!("")
                 }
 
@@ -56,6 +87,8 @@ macro_rules! inst_state_define {
 
     };
 }
+
+
 
 
 

@@ -256,6 +256,35 @@ impl Amount {
             AmtMode::U128 => sub_mode_u128(self, amt),
         }
     }
+
+    pub fn compress(&self, btn: usize, upvalue: bool) -> Ret<Amount> {
+        if self.dist < 0 {
+            return errf!("cannot compress negative amount")
+        }
+        const ML: usize = 16;
+        let mut amt = self.clone();
+        while amt.tail_len() > btn {
+            if amt.byte.len() > ML {
+                return errf!("amount bytes too long to compress")
+            }
+            if amt.unit == 255 {
+                return errf!("amount uint too big to compress")
+            }
+            let mut numpls = u128::from_be_bytes(add_left_padding(&amt.byte, ML).try_into().unwrap()) / 10;
+            if upvalue {
+                numpls += 1;
+            }
+            let nbts = drop_left_zero(&numpls.to_be_bytes());
+            // update
+            amt.unit += 1;
+            amt.dist = nbts.len() as i8;
+            amt.byte = nbts;
+        }
+        // ok
+        Ok(amt)
+    }
+
+
 }
 
 
@@ -343,6 +372,7 @@ macro_rules! compute_mode_define {
         }
     }
 }
+
 
 compute_mode_define!{add_mode_u64,  checked_add, u64,   8}
 compute_mode_define!{add_mode_u128, checked_add, u128, 16}

@@ -84,6 +84,20 @@ macro_rules! fixed_define {
             }
         }
 
+        impl Readable for $class {
+            fn from_readable(v: &[u8]) -> Self {
+                Self {
+                    bytes: bytes_from_readable_string(v, $size).try_into().unwrap()
+                }
+            }
+            fn to_readable(&self) -> String {
+                bytes_to_readable_string(&self.bytes)
+            }
+            fn to_readable_left(&self) -> String {
+               self.to_readable().trim().to_owned()
+            }
+        }
+
 
 
         impl $class {

@@ -8,7 +8,7 @@ macro_rules! flush {(
     {
         use std::io::Write;
         print!( $( $param ),+ );
-        std::io::stdout().flush();
+        let _ = std::io::stdout().flush();
     }
 )}
 

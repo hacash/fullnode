@@ -11,7 +11,7 @@ pub struct EngineConf {
     pub unstable_block: u64, // The number of blocks that are likely to fall back from the fork
     pub fast_sync: bool,
     pub data_dir: String,
-    pub store_data_dir: PathBuf, // block data
+    pub block_data_dir: PathBuf, // block data
     pub state_data_dir: PathBuf, // chain state
     // data service
     pub recent_blocks: bool,
@@ -37,7 +37,7 @@ impl EngineConf {
     }
     
     pub fn new(ini: &IniObj, dbv: u32) -> EngineConf {
-    
+        
         // datadir
         let data_dir = get_data_dir(ini);
     
@@ -53,7 +53,7 @@ impl EngineConf {
             chain_id: 0,
             unstable_block: 4, // 4 block
             fast_sync: false,
-            store_data_dir: join_path(&data_dir, "store"),
+            block_data_dir: join_path(&data_dir, "block"),
             state_data_dir: state_data_dir,
             data_dir: data_dir.to_str().unwrap().to_owned(),
             recent_blocks: ini_must_bool(sec_server, "recent_blocks", false),
@@ -82,8 +82,8 @@ impl EngineConf {
         cnf.miner_enable = ini_must_bool(sec_miner, "enable", false);
         if cnf.miner_enable {
             cnf.miner_reward_address = ini_must_address(sec_miner, "reward");
-            let mut msg = ini_must_maxlen(sec_miner, "message", "", 16);
-            let mut msgapp = vec![' ' as u8].repeat(16-msg.len());
+            let msg = ini_must_maxlen(sec_miner, "message", "", 16);
+            let msgapp = vec![' ' as u8].repeat(16-msg.len());
             let msg: [u8; 16] = vec![msg.as_bytes().to_vec(), msgapp].concat().try_into().unwrap();
             cnf.miner_message = Fixed16::from_readable(&msg);
         }
@@ -94,9 +94,9 @@ impl EngineConf {
         if cnf.dmer_enable {
             cnf.dmer_reward_address = ini_must_address(sec_dmer, "reward");
             cnf.dmer_bid_account = ini_must_account(sec_dmer, "bid_password");
-            cnf.dmer_bid_min =  ini_must_amount(sec_dmer, "bid_min").compress(4, true).unwrap();
-            cnf.dmer_bid_max =  ini_must_amount(sec_dmer, "bid_max").compress(4, true).unwrap();
-            cnf.dmer_bid_step = ini_must_amount(sec_dmer, "bid_step").compress(4, true).unwrap();
+            cnf.dmer_bid_min =  ini_must_amount(sec_dmer, "bid_min").compress(2, true).unwrap();
+            cnf.dmer_bid_max =  ini_must_amount(sec_dmer, "bid_max").compress(2, true).unwrap();
+            cnf.dmer_bid_step = ini_must_amount(sec_dmer, "bid_step").compress(2, true).unwrap();
         }
 
         // ok

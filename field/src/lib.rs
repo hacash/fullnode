@@ -40,6 +40,7 @@ include!{"core/define.rs"}
 include!{"core/address.rs"}
 include!{"core/amount.rs"}
 include!{"core/sign.rs"}
+include!{"core/status.rs"}
 
 // combi
 include!{"combi/struct.rs"}

@@ -4,11 +4,11 @@
 
 pub struct Chunk {
 
-    height: u64, // block height
-    hash: Hash,
+    pub height: u64, // block height
+    pub hash: Hash,
 
-    block: Arc<dyn Block>,
-    state: Arc<dyn State>,
+    pub block: Arc<dyn Block>,
+    pub state: Arc<dyn State>,
 
     childs: Mutex<Vec<Arc<Chunk>>>,
     parent: Weak<Chunk>,

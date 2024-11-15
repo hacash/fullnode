@@ -16,20 +16,19 @@ pub fn bytes_to_readable_string(bts: &[u8]) -> String {
 }
 
 
-pub fn bytes_from_readable_string(stuff: &[u8], len: usize) -> Ret<Vec<u8>> {
-    let mut bts = Vec::with_capacity(len);
-    let rs = stuff.to_vec();
+pub fn bytes_from_readable_string(stuff: &[u8], len: usize) -> Vec<u8> {
+    let ept = ' ' as u8;
+    let mut bts = vec![ept; len];
     for i in 0..stuff.len() {
         if i >= len {
             break
         }
-        let a = rs[i];
-        bts.push(match a {
-            32..=126 => a,
-            _ => return Err("string cannot readable".to_string()),
-        });
+        bts[i] = match stuff[i] {
+            a @ 32..=126 => a,
+            _ => ept,
+        };
     }
-    Ok(bts)
+    bts
 }
 
 pub fn bytes_try_to_readable_string(bts: &[u8]) -> Option<String> {
