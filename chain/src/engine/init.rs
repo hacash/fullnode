@@ -1,3 +1,5 @@
+use block::BlkOrigin;
+
 
 
 fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>) -> Box<dyn Block> {
@@ -35,7 +37,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
     // insert lock
     loop {
         next_height += 1;
-        let Some((_, _, block)) = disk.block_by_height(&next_height.into()) else {
+        let Some((hx, blkdata, block)) = disk.block_by_height(&next_height.into()) else {
             println!(" ok.");
             return // end finish
         };
@@ -48,7 +50,13 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
             flush!("➢{}", next_height);
         }
         // try insert
-        let ier = this.do_insert(block.into());
+        let ier = this.do_insert(BlockPkg{
+            hein: next_height,
+            hash: hx,
+            data: blkdata,
+            objc: block,
+            orgi: BlkOrigin::REBUILD
+        });
         if let Err(e) = ier {
             panic!("[State Panic] rebuild block state error: {}", e);
         }

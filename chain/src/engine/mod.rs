@@ -5,6 +5,7 @@ use sys::*;
 use field::*;
 use field::interface::*;
 use protocol::interface::*;
+use protocol::*;
 use protocol::state::*;
 
 use super::roller::*;

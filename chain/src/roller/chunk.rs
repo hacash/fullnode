@@ -10,8 +10,8 @@ pub struct Chunk {
     pub block: Arc<dyn Block>,
     pub state: Arc<dyn State>,
 
-    childs: Mutex<Vec<Arc<Chunk>>>,
-    parent: Weak<Chunk>,
+    pub childs: Mutex<Vec<Arc<Chunk>>>,
+    pub parent: Weak<Chunk>,
 
 }
 

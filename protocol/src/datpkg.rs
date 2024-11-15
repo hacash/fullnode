@@ -13,16 +13,14 @@ pub struct TxPkg {
 
 
 // BlockPkg
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct BlockPkg {
-	pub time: u64,
+	pub hein: u64,
 	pub hash: Hash,
 	pub data: Vec<u8>,
-    // pub objc: Box<dyn Block>,
+    pub objc: Box<dyn Block>,
     pub orgi: BlkOrigin,
 }
-
-
 
 
 
