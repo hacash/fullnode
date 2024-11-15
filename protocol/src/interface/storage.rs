@@ -1,6 +1,6 @@
 
 pub trait DiskDB {
-    fn open() -> Self where Self: Sized { unimplemented!() }
+    fn open(_: &str) -> Self where Self: Sized { unimplemented!() }
     
     fn load(&self,   _: &[u8]) -> Option<Vec<u8>> { unimplemented!() }
     fn save(&self,   _: &[u8], _: &[u8] ) -> Rerr { unimplemented!() }
@@ -12,7 +12,7 @@ pub trait StaChg {
 }
 
 pub trait State {
-    fn build(_: Arc<dyn DiskDB>, _: Arc<dyn State>) -> Self where Self: Sized { unimplemented!() }
+    fn build(_: Arc<dyn DiskDB>, _: Weak<dyn State>) -> Self where Self: Sized { unimplemented!() }
     fn disk(&self) -> Arc<dyn DiskDB> { unimplemented!() }
 
     fn get(&self,     _: &[u8]) -> Option<Vec<u8>> { unimplemented!() }

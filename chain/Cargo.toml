@@ -1,0 +1,10 @@
+[package]
+name = "chain"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sys = {path = "../sys"}
+field = {path = "../field"}
+protocol = {path = "../protocol"}
+
