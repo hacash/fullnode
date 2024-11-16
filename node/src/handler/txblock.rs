@@ -35,7 +35,7 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
 async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec<u8>) {
     // println!("222222222222 handle_txblock_arrive Block len={}",  body.clone().len());
     let mut blkhead = BlockIntro::default();
-    if let Err(_) = blkhead.parse(&body, 0) {
+    if let Err(_) = blkhead.parse(&body) {
         return // parse tx error
     }
     let blkhei = blkhead.height().uint();
@@ -143,7 +143,7 @@ fn clean_invalid_normal_txs(eng: Arc<dyn EngineRead>, txpool: Arc<dyn TxPool>, b
     // already minted hacd number
     let sta = eng.state();
     let ldn = MintStateDisk::wrap(sta.as_ref()).latest_diamond().number.uint();
-    txpool.drain_filter_at(&|a: &Box<dyn TxPkg>| {
+    txpool.drain_filter_at(&|a: &Box<TxPkg>| {
         match eng.try_execute_tx( a.objc().as_read() ) {
             Err(..) => true, // delete
             _ => false,
@@ -157,7 +157,7 @@ fn clean_invalid_diamond_mint_txs(eng: Arc<dyn EngineRead>, txpool: Arc<dyn TxPo
     // already minted hacd number
     let sta = eng.state();
     let curdn = MintStateDisk::wrap(sta.as_ref()).latest_diamond().number.uint();
-    txpool.drain_filter_at(&|a: &Box<dyn TxPkg>| {
+    txpool.drain_filter_at(&|a: &Box<TxPkg>| {
         let tx = a.objc().as_read();
         let dn = get_diamond_mint_number(tx);
         // println!("TXPOOL: drain_filter_at dmint, tx: {}, dn: {}, last dn: {}", tx.hash().hex(), dn, ldn);

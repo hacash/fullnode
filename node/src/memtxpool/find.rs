@@ -3,7 +3,7 @@ impl TxGroup {
 
     fn search(&self, txhx: &Hash) -> Option<usize> {
         for (i, txp) in self.txpkgs.iter().enumerate() {
-            if *txhx == *txp.hash() {
+            if *txhx == txp.hash {
                 return Some(i);
             }
         }
@@ -11,7 +11,7 @@ impl TxGroup {
         return None
     }
 
-    fn find(&self, txhx: &Hash) -> Option<(usize, &Box<dyn TxPkg>)> {
+    fn find(&self, txhx: &Hash) -> Option<(usize, &Box<TxPkg>)> {
         let havid = self.search(txhx);
         if let Some(hid) = havid {
             if let Some(tx) = self.txpkgs.get(hid) {

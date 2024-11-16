@@ -2,15 +2,15 @@
 
 impl HNode for HacashNode {
 
-    fn submit_transaction(&self, txpkg: &Box<dyn TxPkg>, in_async: bool) -> RetErr {
+    fn submit_transaction(&self, txpkg: &Box<TxPkg>, in_async: bool) -> Rerr {
         // check signature
-        let txread = txpkg.objc().as_ref().as_read();
-        txread.verify_signature()?;
+        let txread = txpkg.objc.as_read();
+        // txread.verify_signature()?;
         // try execute tx
         self.engine.try_execute_tx(txread)?;
         // add to pool
         let msghdl = self.msghdl.clone();
-        let txbody = txpkg.body().clone().into_vec();
+        let txbody = txpkg.data.clone();
         let runobj = async move {
             msghdl.submit_transaction(txbody).await;
         };
@@ -23,11 +23,11 @@ impl HNode for HacashNode {
     }
 
 
-    fn submit_block(&self, blkpkg: &Box<dyn BlockPkg>, in_async: bool) -> RetErr {
+    fn submit_block(&self, blkpkg: &Box<BlockPkg>, in_async: bool) -> Rerr {
         // NOT do any check
         // insert
         let msghdl = self.msghdl.clone();
-        let blkbody = blkpkg.body().clone().into_vec();
+        let blkbody = blkpkg.data.clone();
         let runobj = async move {
             msghdl.submit_block(blkbody).await;
         };

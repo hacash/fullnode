@@ -11,6 +11,7 @@ vm = {path = "./vm"}
 protocol = {path = "./protocol"}
 chain = {path = "./chain"}
 mint = {path = "./mint"}
+node = {path = "./node"}
 
 
 

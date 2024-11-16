@@ -2,7 +2,7 @@
 
 impl P2PManage {
 
-    async fn handle_peer_message(&self, peer: Arc<Peer>, mut conn_read: OwnedReadHalf) -> RetErr {
+    async fn handle_peer_message(&self, peer: Arc<Peer>, mut conn_read: OwnedReadHalf) -> Rerr {
 
         let peer1 = peer.clone();
         let peer2 = peer.clone();

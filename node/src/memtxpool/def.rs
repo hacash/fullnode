@@ -17,7 +17,7 @@ pub const TXPOOL_GROUP_TIPS: [&str; TXPOOL_GROUP_MAX_SIZE] = [
 
 
 
-fn check_group_id(wgi: usize) -> RetErr {
+fn check_group_id(wgi: usize) -> Rerr {
     if wgi > TXPOOL_GROUP_MAX_SIZE {
         return errf!("tx pool group overflow")
     }

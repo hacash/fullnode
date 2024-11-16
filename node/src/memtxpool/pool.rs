@@ -8,7 +8,7 @@ pub struct MemTxPool {
 impl MemTxPool {
     
     pub fn new(gs: Vec<usize>) -> MemTxPool {
-        let MS = TXPOOL_GROUP_MAX_SIZE;
+        const MS: usize = TXPOOL_GROUP_MAX_SIZE;
         if gs.len() != MS {
             panic!("new tx pool group size must be {}", MS)
         }
@@ -33,7 +33,7 @@ impl TxPool for MemTxPool {
         Ok(count)
     }
 
-    fn iter_at(&self, scan: &mut dyn FnMut(&Box<dyn TxPkg>)->bool, gi: usize) -> RetErr {
+    fn iter_at(&self, scan: &mut dyn FnMut(&Box<TxPkg>)->bool, gi: usize) -> Rerr {
         check_group_id(gi)?;
         let grp = self.groups[gi].lock().unwrap();
         for txp in &grp.txpkgs {
@@ -45,14 +45,14 @@ impl TxPool for MemTxPool {
     }
 
     // insert to target group
-    fn insert_at(&self, txp: Box<dyn TxPkg>, gi: usize) -> RetErr { 
+    fn insert_at(&self, txp: Box<TxPkg>, gi: usize) -> Rerr { 
         check_group_id(gi)?;
         // do insert
         let mut grp = self.groups[gi].lock().unwrap();
         grp.insert(txp)
     }
 
-    fn delete_at(&self, hxs: &Vec<Hash>, gi: usize) -> RetErr {
+    fn delete_at(&self, hxs: &Vec<Hash>, gi: usize) -> Rerr {
         check_group_id(gi)?;
         // do delete
         let mut grp = self.groups[gi].lock().unwrap();
@@ -60,7 +60,7 @@ impl TxPool for MemTxPool {
         Ok(())
     }
 
-    fn clear_at(&self, gi: usize) -> RetErr {
+    fn clear_at(&self, gi: usize) -> Rerr {
         check_group_id(gi)?;
         // do clean
         let mut grp = self.groups[gi].lock().unwrap();
@@ -69,7 +69,7 @@ impl TxPool for MemTxPool {
     }
 
     // from group id
-    fn find_at(&self, hx: &Hash, gi: usize) -> Option<Box<dyn TxPkg>> {
+    fn find_at(&self, hx: &Hash, gi: usize) -> Option<Box<TxPkg>> {
         check_group_id(gi).unwrap();
         // do clean
         let grp = self.groups[gi].lock().unwrap();
@@ -80,8 +80,8 @@ impl TxPool for MemTxPool {
     }
 
     // remove if true
-    fn drain_filter_at(&self, filter: &dyn Fn(&Box<dyn TxPkg>)->bool, gi: usize) 
-        -> RetErr
+    fn drain_filter_at(&self, filter: &dyn Fn(&Box<TxPkg>)->bool, gi: usize) 
+        -> Rerr
     {
         check_group_id(gi)?;
         self.groups[gi].lock().unwrap().drain_filter(filter)
@@ -89,7 +89,7 @@ impl TxPool for MemTxPool {
 
     
     // find
-    fn find(&self, hx: &Hash) -> Option<Box<dyn TxPkg>> {
+    fn find(&self, hx: &Hash) -> Option<Box<TxPkg>> {
         for gi in 0..self.groups.len() {
             if let Some(tx) = self.find_at(hx, gi) {
                 return Some(tx) // ok find
@@ -99,7 +99,7 @@ impl TxPool for MemTxPool {
         None
     }
 
-    fn insert(&self, txp: Box<dyn TxPkg>) -> RetErr {
+    fn insert(&self, txp: Box<TxPkg>) -> Rerr {
         let tx = txp.objc();
         let acts = tx.actions();
         let actlen = acts.len();
@@ -117,7 +117,7 @@ impl TxPool for MemTxPool {
         self.insert_at(txp, group_id)
     }
 
-    fn drain(&self, hxs: &Vec<Hash>) -> Ret<Vec<Box<dyn TxPkg>>> {
+    fn drain(&self, hxs: &Vec<Hash>) -> Ret<Vec<Box<TxPkg>>> {
         let mut txres = vec![];
         let mut hxst = HashSet::from_iter(hxs.clone().into_iter());
         for gi in 0..self.groups.len() {

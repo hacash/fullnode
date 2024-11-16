@@ -1,5 +1,5 @@
 
-fn scan_group_rng_by_feep(txpkgs: &Vec<Box<dyn TxPkg>>, feep: u64, wsz: (usize, usize)) -> (usize, usize) {
+fn scan_group_rng_by_feep(txpkgs: &Vec<Box<TxPkg>>, feep: u64, wsz: (usize, usize)) -> (usize, usize) {
     let mut rxl = wsz.0;
     let mut rxr = wsz.1;
     // scan rng

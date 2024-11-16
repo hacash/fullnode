@@ -2,6 +2,7 @@ use std::sync::*;
 
 use sys::*;
 use chain::{engine::ChainEngine, interface::*};
+use node::node::*;
 
 
 include!{"../version.rs"}
@@ -52,6 +53,10 @@ pub fn fullnode_with_minter_scaner(iniobj: IniObj,
     let engine = ChainEngine::open(&iniobj, dbv, minter);
     let engptr: Arc<dyn Engine> = Arc::new(engine);
     
+    // node
+    let mut hnode = Arc::new(HacashNode::open(&iniobj, engptr.clone()));
+
+
 
 
     todo!()

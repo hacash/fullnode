@@ -5,7 +5,7 @@
 pub async fn tcp_dial_handshake(addr: SocketAddr, outsec: u64) -> Ret<TcpStream> {
     let mut stream = errunbox!( TcpStream::connect(addr).await )?;
     let conn = &mut stream;
-    tcp_check_handshake(conn, 4).await?;
+    tcp_check_handshake(conn, outsec).await?;
     Ok(stream)
 }
 
@@ -20,7 +20,7 @@ pub async fn tcp_dial_handshake_send_msg_and_read_all(addr: SocketAddr, msgty: u
 pub async fn tcp_dial_to_check_is_public_id(addr: SocketAddr, pid: &PeerKey, outsec: u64) -> Ret<bool> {
     let mut conn = errunbox!( TcpStream::connect(addr).await )?;
     let conn = &mut conn;
-    tcp_check_handshake(conn, 4).await?;
+    tcp_check_handshake(conn, outsec).await?;
     tcp_send_msg(conn, MSG_REQUEST_NODE_KEY_FOR_PUBLIC_CHECK, vec![]).await?;
     let retmsg = tcp_read(conn, PEER_KEY_SIZE, 3).await?;
     if *pid != *retmsg {
@@ -34,7 +34,7 @@ pub async fn tcp_dial_to_check_is_public_id(addr: SocketAddr, pid: &PeerKey, out
 /////////////////// READ WRITE ///////////////////
 
 
-pub async fn tcp_check_handshake(conn: &mut (impl AsyncRead + AsyncWrite + Unpin), outsec: u64) -> RetErr {
+pub async fn tcp_check_handshake(conn: &mut (impl AsyncRead + AsyncWrite + Unpin), outsec: u64) -> Rerr {
     // send handshake
     let handshake = P2P_HAND_SHAKE_MAGIC_NUMBER.to_be_bytes();
     errunbox!( AsyncWriteExt::write_all(conn, &handshake).await )?;
@@ -57,7 +57,7 @@ pub async fn tcp_handshake_read_one_msg(conn: &mut (impl AsyncRead + AsyncWrite 
 /////////////////// WRITE ///////////////////
 
 
-pub async fn tcp_send_msg(conn: &mut (impl AsyncWrite + Unpin), msgty: u8, mut msgbody: Vec<u8>) -> RetErr {
+pub async fn tcp_send_msg(conn: &mut (impl AsyncWrite + Unpin), msgty: u8, msgbody: Vec<u8>) -> Rerr {
     let bufcon = tcp_create_msg(msgty, msgbody);
     tcp_send(conn, &bufcon).await
 }
@@ -71,7 +71,7 @@ pub fn tcp_create_msg(msgty: u8, mut body: Vec<u8>) -> Vec<u8> {
     bufcon
 }
 
-pub async fn tcp_send(conn: &mut (impl AsyncWrite + Unpin), body: &Vec<u8>) -> RetErr {
+pub async fn tcp_send(conn: &mut (impl AsyncWrite + Unpin), body: &Vec<u8>) -> Rerr {
     errunbox!( AsyncWriteExt::write_all(conn, body).await )
 }
 

@@ -3,14 +3,9 @@
 * return: exist peer
 */
 fn check_exist_in_dht_list(lklist: PeerList, peer: &Peer) -> Option<Arc<Peer>> {
-    let mut list = lklist.lock().unwrap();
-    for p in list.iter() {
-        if p.key == peer.key || p.addr == peer.addr{
-            return Some(p.clone()) // repeat peer
-        }
-    }
-    // not find
-    return None
+    lklist.lock().unwrap().iter().find(|p|{
+        p.key == peer.key || p.addr == peer.addr
+    }).map(|a|a.clone())
 }
 
 
@@ -90,14 +85,7 @@ fn remove_peer_from_dht_list(lklist: PeerList, peer: Arc<Peer>) -> bool {
  * find
  */
  fn find_peer_from_dht_list(lklist: PeerList, pk: &PeerKey) -> Option<Arc<Peer>> {
-    let mut list = lklist.lock().unwrap();
-    for i in 0..list.len() {
-        if *pk == list[i].key {
-            return Some(list[i].clone())
-        }
-    }
-    // not find
-    None
+    lklist.lock().unwrap().iter().find(|a|*pk==a.key).map(|a|a.clone())
 }
 
 

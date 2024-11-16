@@ -2,7 +2,7 @@
 
 impl P2PManage {
 
-    pub async fn connect_boot_nodes(&self) -> RetErr {
+    pub async fn connect_boot_nodes(&self) -> Rerr {
 
         print!("[P2P] Connect {} boot nodes", self.cnf.boot_nodes.len());
         for ndip in &self.cnf.boot_nodes {
@@ -20,13 +20,13 @@ impl P2PManage {
         Ok(())
     }
 
-    pub async fn connect_node(&self, addr: &SocketAddr) -> RetErr {
-        let mut conn = errunbox!( TcpStream::connect(addr).await )?;
+    pub async fn connect_node(&self, addr: &SocketAddr) -> Rerr {
+        let conn = errunbox!( TcpStream::connect(addr).await )?;
         let report_me = true;
         self.handle_conn(conn, report_me).await
     }
 
-    pub async fn handle_conn(&self, mut conn: TcpStream, report_me: bool) -> RetErr {
+    pub async fn handle_conn(&self, mut conn: TcpStream, report_me: bool) -> Rerr {
         tcp_check_handshake(&mut conn, 7).await?;
         let mynodeinfo = self.pick_my_node_info();
         if report_me {
@@ -37,7 +37,7 @@ impl P2PManage {
         self.insert_peer(conn, mynodeinfo).await
     }
 
-    pub async fn insert_peer(&self, mut conn: TcpStream, mynodeinfo: Vec<u8>) -> RetErr {
+    pub async fn insert_peer(&self, conn: TcpStream, mynodeinfo: Vec<u8>) -> Rerr {
         let (peer, conn_read) = self.try_create_peer(conn, mynodeinfo).await?;
         // loop read peer msg
         self.handle_peer_message(peer.clone(), conn_read).await?;

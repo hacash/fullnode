@@ -7,9 +7,9 @@ use std::sync::{ Arc, Mutex as StdMutex };
 use tokio::net::*;
 use tokio::net::tcp::*;
 
-use crate::sys::*;
-use crate::base::field::*;
-use crate::interface::field::*;
+use sys::*;
+use field::*;
+use field::interface::*;
 
 use super::p2p::*;
 

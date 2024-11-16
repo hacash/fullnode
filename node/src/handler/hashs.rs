@@ -74,7 +74,7 @@ impl MsgHandler {
                 return // not find block hash by height
             }
             let myhx = myhx.unwrap();
-            let hx = Fixed32::cons( bufcut!(hashs, hi, hi+32) );
+            let hx = Fixed32::from( bufcut!(hashs, hi, hi+32) );
             if hx == myhx {
                 // sync blocks from next height
                 get_status_try_sync_blocks(self, peer, hei + 1).await;

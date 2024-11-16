@@ -3,7 +3,7 @@
 
 pub struct HacashNode {
     cnf: NodeConf,
-    engine: Arc<BlockEngine>,
+    engine: Arc<dyn Engine>,
     txpool: Arc<MemTxPool>,
     p2p: Arc<P2PManage>,
     msghdl: Arc<MsgHandler>,
@@ -12,7 +12,7 @@ pub struct HacashNode {
 
 impl HacashNode {
 
-    pub fn open(ini: &IniObj, engine: Arc<BlockEngine>) -> HacashNode {
+    pub fn open(ini: &IniObj, engine: Arc<dyn Engine>) -> HacashNode {
         let cnf = NodeConf::new(ini);
         // tx pool
         let mut tpmaxs = vec![5000, 200];

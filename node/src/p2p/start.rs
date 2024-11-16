@@ -2,7 +2,7 @@
 
 impl P2PManage {
 
-    pub async fn start(this: Arc<P2PManage>) -> RetErr {
+    pub async fn start(this: Arc<P2PManage>) -> Rerr {
 
         // start p2p listen
         // let p2p = this.clone();

@@ -1,26 +1,26 @@
-use std::sync::{ Arc };
+use std::sync::Arc;
 use std::time::*;
 use std::thread;
 
 
-use crate::sys::*;
-use crate::config::EngineConf;
-use crate::core::field::*;
-use crate::core::component::TxPackage;
-use crate::mint::action as mint_action;
+use sys::*;
+use chain::engine::*;
+use chain::interface::*;
+use field::*;
+use field::interface::*;
+use protocol::*;
+use mint::action as mint_action;
 
-use crate::interface::field::*;
-use crate::interface::protocol::*;
-use crate::interface::node::*;
-use crate::interface::chain::*;
+use protocol::interface::*;
 
+use super::interface::*;
 use super::memtxpool::TXPOOL_GROUP_DIAMOND_MINT;
 
 
 include!("bidding.rs");
 
 
-pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> RetErr {
+pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> Rerr {
     
     // check config
     let eng = hnode.engine();

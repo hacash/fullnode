@@ -91,7 +91,7 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
     let mut my_tx = my_bid_txp.objc().clone();
     my_tx.set_fee(new_bid_fee.clone());
     my_tx.fill_sign(&engcnf.dmer_bid_account);
-    let txp: Box<dyn TxPkg> = Box::new(TxPackage::new(my_tx));
+    let txp: Box<TxPkg> = Box::new(TxPkg::new(my_tx));
 
     // submit tx
     if let Err(e) = hnode.submit_transaction(&txp, false) {
@@ -106,9 +106,9 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
 ///////////////////////////////////////////////
 
 
-fn pick_my_bid_tx(tx_pool: &dyn TxPool, my_addr: &Address) -> Option<Box<dyn TxPkg>> {
-    let mut my_bid_tx: Option<Box<dyn TxPkg>> = None;
-    let mut pick_dmint = |a: &Box<dyn TxPkg>| {
+fn pick_my_bid_tx(tx_pool: &dyn TxPool, my_addr: &Address) -> Option<Box<TxPkg>> {
+    let mut my_bid_tx: Option<Box<TxPkg>> = None;
+    let mut pick_dmint = |a: &Box<TxPkg>| {
         if *my_addr == a.objc().address().unwrap() {
             my_bid_tx = Some(a.clone());
             return false // end
@@ -123,9 +123,9 @@ fn pick_my_bid_tx(tx_pool: &dyn TxPool, my_addr: &Address) -> Option<Box<dyn TxP
 
 
 
-fn pick_first_bid_tx(tx_pool: &dyn TxPool) -> Option<Box<dyn TxPkg>> {
-    let mut first: Option<Box<dyn TxPkg>> = None;
-    let mut pick_dmint = |a: &Box<dyn TxPkg>| {
+fn pick_first_bid_tx(tx_pool: &dyn TxPool) -> Option<Box<TxPkg>> {
+    let mut first: Option<Box<TxPkg>> = None;
+    let mut pick_dmint = |a: &Box<TxPkg>| {
         first = Some(a.clone());
         return false // end
     };

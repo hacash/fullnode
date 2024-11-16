@@ -25,7 +25,7 @@ impl Peer {
 
     pub fn nick(&self) -> String {
         let mut nick = self.name.clone();
-        let kpx: [u8; 4] = self.key.clone()[0..4].try_into().unwrap();
+        // let kpx: [u8; 4] = self.key.clone()[0..4].try_into().unwrap();
         // nick += format!("【 {} 】", kpx[0]).as_str(); return nick; // debug
         if self.is_public {
             nick += format!("<{}>", self.addr).as_str();
@@ -67,7 +67,7 @@ impl Peer {
         let mut addr = conn.peer_addr().unwrap();
         let mut is_public = false;
         let mut is_cntome = false;
-        let mut idnamebts: &[u8];
+        let idnamebts: &[u8];
         let mut oginport: u16 = 0;
         if msg.len() < 4 {
             return errf!("msg length too short")
@@ -87,7 +87,7 @@ impl Peer {
             return errf!("msg length too short")
         }
         let peerkey = bufcut!(idnamebts, 0, PEER_KEY_SIZE);
-        let name = Fixed16::cons( bufcut!(idnamebts, PEER_KEY_SIZE, PEER_KEY_SIZE*2) ).readable().replace(" ", "");
+        let name = Fixed16::from( bufcut!(idnamebts, PEER_KEY_SIZE, PEER_KEY_SIZE*2) ).to_readable().replace(" ", "");
         if peerkey == mykeyname[0..PEER_KEY_SIZE] {
             return  errf!("cannot connect to self")
         }
@@ -109,14 +109,14 @@ impl Peer {
         }
         
         // conn split
-        let (mut read_half, mut write_half) = stream.into_split();
+        let (read_half, write_half) = stream.into_split();
 
         // cid
         PEER_AUTO_ID_INCREASE.fetch_add(1, Ordering::Relaxed);
         let atid = PEER_AUTO_ID_INCREASE.load(Ordering::Relaxed);
 
         // create
-        let mut peer = Peer {
+        let peer = Peer {
             id: atid,
             key: peerkey,
             name: name,

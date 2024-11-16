@@ -83,12 +83,12 @@ async fn do_find_nodes(this: &P2PManage) {
 
 
 
-async fn request_public_nodes(addr: SocketAddr, datas: &mut HashMap<PeerKey, SocketAddr>) -> RetErr {
+async fn request_public_nodes(addr: SocketAddr, datas: &mut HashMap<PeerKey, SocketAddr>) -> Rerr {
     let adrbts = tcp_dial_handshake_send_msg_and_read_all(
         addr, MSG_REQUEST_NEAREST_PUBLIC_NODES, 5).await?;
         // println!("msg MSG_REQUEST_NEAREST_PUBLIC_NODES get {}", adrbts.hex());
     let sn = 6+16; // ip port + key
-    let mut num = adrbts[0] as usize;
+    let num = adrbts[0] as usize;
     if num < 1 {
         return Ok(()) // not find any
     }

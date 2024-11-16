@@ -3,14 +3,14 @@
 impl HacashNode {
 
     // 
-    pub fn start(this: Arc<HacashNode> ) -> RetErr {
+    pub fn start(this: Arc<HacashNode> ) -> Rerr {
 
         let rt = new_current_thread_tokio_rt();
         let p2p = this.p2p.clone();
         let hdl = this.msghdl.clone();
 
         // diamond auto bid
-        start_diamond_auto_bidding(this.clone());
+        // start_diamond_auto_bidding(this.clone());
 
         // handle msg
         std::thread::spawn(move||{

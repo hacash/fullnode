@@ -2,7 +2,7 @@
 /**
  * ipport(6bytes) + key(16byte)
  */
-fn serialize_public_nodes(peerlist: &Vec<Arc<Peer>>, max: usize) -> (usize, Vec<u8>) {
+fn serialize_public_nodes(peerlist: &Vec<Arc<Peer>>, _max: usize) -> (usize, Vec<u8>) {
     let mut listbts = vec![];
     let mut count = 0usize;
     for p in peerlist {

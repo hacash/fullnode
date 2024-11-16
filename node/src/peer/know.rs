@@ -20,21 +20,13 @@ impl Knowledge {
     pub fn add(&self, key: KnowKey) {
         let mut dt = self.data.lock().unwrap();
         if dt.len() >= self.size {
-            dt.back(); // drop one
+            dt.back(); // drop tail
         }
         dt.push_front(key);
     }
 
     pub fn check(&self, key: &KnowKey) -> bool {
-        let dt = self.data.lock().unwrap();
-        let max = dt.len();
-        for i in 0..max {
-            if dt[i] == *key {
-                return true
-            }
-        }
-        // not find
-        false
+        self.data.lock().unwrap().iter().any(|a|a==key)
     }
 
 
