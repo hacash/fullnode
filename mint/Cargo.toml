@@ -1,0 +1,9 @@
+[package]
+name = "mint"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sys = {path = "../sys"}
+protocol = {path = "../protocol"}
+chain = {path = "../chain"}

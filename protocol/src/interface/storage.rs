@@ -1,5 +1,5 @@
 
-pub trait DiskDB {
+pub trait DiskDB : Send + Sync {
     // fn open(_: &Path) -> Self where Self: Sized { unimplemented!() }
     
     fn load(&self,   _: &[u8]) -> Option<Vec<u8>> { unimplemented!() }
@@ -8,7 +8,7 @@ pub trait DiskDB {
 }
 
 
-pub trait State {
+pub trait State : Send + Sync {
     // fn build(_: Arc<dyn DiskDB>, _: Weak<dyn State>) -> Self where Self: Sized { unimplemented!() }
     fn fork_sub(&self, _: Arc<dyn State>) -> Box<dyn State>  { unimplemented!() }
     // fn set_parent(&mut self, _: Arc<dyn State>) { unimplemented!() }

@@ -7,6 +7,7 @@ use field::interface::*;
 use protocol::interface::*;
 use protocol::*;
 use protocol::state::*;
+use protocol::context as ctx;
 
 use super::roller::*;
 use super::db::*;

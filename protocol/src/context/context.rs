@@ -9,6 +9,10 @@ impl ContextInst {
     pub fn new(env: Env, sta: Box<dyn State>) -> Self {
         Self{ env, sta }
     }
+
+    pub fn into_state(self) -> Box<dyn State> {
+        self.sta
+    }
 }
 
 

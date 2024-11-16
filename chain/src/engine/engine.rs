@@ -2,7 +2,7 @@
 pub struct ChainEngine {
     cnf: EngineConf,
     // 
-    minter: Arc<dyn Minter>,
+    minter: Box<dyn Minter>,
     // data
     disk: Arc<dyn DiskDB>,
     roller: Mutex<Roller>,
@@ -14,8 +14,11 @@ impl ChainEngine {
 
 
     pub fn open(ini: &IniObj, dbv: u32,
-        minter: Arc<dyn Minter>
+        minter: Box<dyn Minter>
     ) -> ChainEngine {
+        // init
+        minter.init(ini); 
+        // cnf
         let cnf = EngineConf::new(ini, dbv);
         let blk_dir = &cnf.block_data_dir;
         let sta_dir = &cnf.state_data_dir;
@@ -49,3 +52,9 @@ impl ChainEngine {
 
 
 }
+
+
+impl EngineRead for ChainEngine {}
+
+impl Engine for ChainEngine {}
+

@@ -10,18 +10,3 @@ pub struct TxPkg {
 }
 
 
-
-
-// BlockPkg
-#[derive(Clone)]
-pub struct BlockPkg {
-	pub hein: u64,
-	pub hash: Hash,
-	pub data: Vec<u8>,
-    pub objc: Box<dyn Block>,
-    pub orgi: BlkOrigin,
-}
-
-
-
-

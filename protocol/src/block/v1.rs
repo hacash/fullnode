@@ -20,7 +20,7 @@ combi_struct_with_parse!{ BlockV1,
 
 
 impl BlockExec for BlockV1 {
-    fn execute(&self, ccnf: ctx::Chain, state: Box<dyn State>) -> Rerr {
+    fn execute(&self, ccnf: ctx::Chain, state: Box<dyn State>) -> Ret<Box<dyn State>> {
         // create env
         let env = ctx::Env{
             chain: ccnf,
@@ -40,9 +40,11 @@ impl BlockExec for BlockV1 {
             // do exec
             tx.execute(&mut ctxobj)?;
         }
+        
+        // todo!();
 
+        Ok(ctxobj.into_state())
 
-        todo!()
     }
 }
 

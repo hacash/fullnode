@@ -1,6 +1,6 @@
 
 pub trait BlockExec {
-    fn execute(&self, _: context::Chain, _: Box<dyn State>) -> Rerr { unimplemented!() }
+    fn execute(&self, _: context::Chain, _: Box<dyn State>) -> Ret<Box<dyn State>> { unimplemented!() }
 }
 
 

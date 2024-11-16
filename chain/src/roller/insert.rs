@@ -1,9 +1,18 @@
 
+type RollerInsertRet = Ret<(Option<Arc<Chunk>>, Option<Arc<Chunk>>)>;
+
+
+impl Roller {
+    pub fn insert(&mut self, chunk: Chunk) -> RollerInsertRet {
+        insert_to_roller(self, chunk)
+    }
+}
+
 
 /*
 * return (change to new root, change to new pointer)
 */
-pub fn insert_to_roller(roller: &mut Roller, mut chunk: Chunk) -> Ret<(Option<Arc<Chunk>>, Option<Arc<Chunk>>)> {
+pub fn insert_to_roller(roller: &mut Roller, mut chunk: Chunk) -> RollerInsertRet {
     let new_hei = chunk.height;
     // check
     let root_hei = roller.root.height;

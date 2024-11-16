@@ -10,4 +10,7 @@ field = {path = "./field"}
 vm = {path = "./vm"}
 protocol = {path = "./protocol"}
 chain = {path = "./chain"}
+mint = {path = "./mint"}
+
+
 

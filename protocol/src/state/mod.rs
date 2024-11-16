@@ -6,8 +6,6 @@ use sys::*;
 use field::*;
 use field::interface::*;
 
-use super::interface::*;
-
 use super::*;
 
 

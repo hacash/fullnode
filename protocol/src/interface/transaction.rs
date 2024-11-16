@@ -10,6 +10,9 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
     fn main(&self) -> Address { unimplemented!() }
     fn addrs(&self) -> Vec<Address> { unimplemented!() }
 
+    fn message(&self) -> &Fixed16 { unimplemented!() }
+    fn reward(&self) -> &Amount { unimplemented!() }
+
     fn actions(&self) -> &Vec<Box<dyn Action>> { unimplemented!() }
 
     // burn_90_percent_fee

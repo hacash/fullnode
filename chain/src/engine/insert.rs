@@ -25,11 +25,22 @@ impl ChainEngine {
         // create sub state 
         let prev_state = prev_chunk.state.clone();
         let mut sub_state = prev_state.fork_sub(prev_state.clone());
-        // 
-        
-
+        // exec block get state
+        let chaincnf = ctx::Chain {
+            id: self.cnf.chain_id,
+        };
+        sub_state = block.objc.execute(chaincnf, sub_state)?;
+        // create chunk
+        let chunk = Chunk::create(block.into_block().into(), sub_state.into());
+        // move
+        let (root, _pointer) = self.roller.lock().unwrap().insert(chunk)?;
+        // write state to disk
+        if let Some(root) = root {
+            root.state.write_to_disk();
+        }
 
         todo!()
+        
     }
 
 }

@@ -106,19 +106,3 @@ impl EngineConf {
 }
 
 
-
-/**
- * get data path
- */
-fn get_data_dir(ini: &IniObj) -> PathBuf {
-
-    let sec = ini_section(ini, "default"); // default = root
-    let data_dir = ini_must(&sec, "data_dir", "hacash_mainnet_data");
-
-    let mut ddrp = PathBuf::from(&data_dir);
-    // println!("{:?} {}", ddrp, ddrp.is_absolute());
-    if ! ddrp.is_absolute() {
-        ddrp = std::env::current_exe().unwrap().parent().unwrap().to_path_buf().join(&data_dir);
-    }
-    ddrp
-}
