@@ -1,6 +1,6 @@
 
 pub struct MsgHandler {
-    engine: Arc<BlockEngine>,
+    engine: Arc<dyn Engine>,
     txpool: Arc<MemTxPool>,
     p2pmng: StdMutex<Option<Box<dyn PeerManage>>>,
 
@@ -14,7 +14,7 @@ pub struct MsgHandler {
 
 impl MsgHandler {
 
-    pub fn new(engine: Arc<BlockEngine>, txpool: Arc<MemTxPool>) -> MsgHandler {
+    pub fn new(engine: Arc<dyn Engine>, txpool: Arc<MemTxPool>) -> MsgHandler {
         let (tx, rx): (Sender<BlockTxArrive>, Receiver<BlockTxArrive>) = mpsc::channel(4000);
         MsgHandler{
             engine: engine,
@@ -62,7 +62,7 @@ impl MsgHandler {
         peer.send_msg(MSG_REQ_STATUS, vec![]).await;
     }
     
-    pub async fn on_disconnect(&self, peer: Arc<Peer>) {
+    pub async fn on_disconnect(&self, _peer: Arc<Peer>) {
         // println!("- on disconnect peer = {}", peer.nick());
         // do nothing
     }

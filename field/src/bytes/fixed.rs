@@ -119,6 +119,13 @@ macro_rules! fixed_define {
                 }
             }
 
+            pub fn into_array(self) -> [u8; $size] {
+                self.bytes
+            }
+
+            pub fn as_bytes(&self) -> &[u8] {
+                &self.bytes
+            }
 
         }
 

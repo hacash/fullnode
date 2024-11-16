@@ -52,7 +52,7 @@ impl TxGroup {
         let mut delmk = 0; // 0:notfind   1:remove   2:pop
         let mut i = num - 1;
         while i >= 0 {
-            if *hx == *self.txpkgs[i].hash() {
+            if *hx == self.txpkgs[i].hash {
                 if i == num-1 {
                     delmk = 2 // tail
                 }else{

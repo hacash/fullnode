@@ -15,6 +15,8 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
 
     fn actions(&self) -> &Vec<Box<dyn Action>> { unimplemented!() }
 
+    fn fee_purity(&self) -> u64 { unimplemented!() }
+
     // burn_90_percent_fee
     fn burn_90(&self) -> bool {
         for act in self.actions() {

@@ -24,8 +24,8 @@ impl MsgHandler {
             return // is not a same network
         }
         // sync blocks first
-        let lat_hei = my_status.latest_height.uint();
-        if my_status.latest_height == 0 && status.latest_height > 0 {
+        let lat_hei = my_status.latest_height.to_uint();
+        if my_status.latest_height.to_uint() == 0 && status.latest_height.to_uint() > 0 {
             let start_hei = lat_hei + 1;
             get_status_try_sync_blocks(self, peer, start_hei).await;
             return
@@ -48,14 +48,14 @@ fn create_status(hdl: &MsgHandler) -> HandshakeStatus {
     let latest = hdl.engine.latest_block();
     let mintck = hdl.engine.mint_checker();
     let msgobj = HandshakeStatus {
-        genesis_hash: *mintck.genesis().hash(),
+        genesis_hash: mintck.genesis_block().hash(),
         block_version: Uint1::from(1),
         transaction_type: Uint1::from(2),
         action_kind: Uint2::from(12),
         repair_serial: Uint2::from(1),
         __mark: Uint3::from(0),
-        latest_height: *latest.objc().height(),
-        latest_hash: *latest.hash(),
+        latest_height: *latest.height(),
+        latest_hash: latest.hash(),
     };
     msgobj
 }

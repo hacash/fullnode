@@ -4,7 +4,7 @@ impl TxGroup {
 
     fn insert(&mut self, txp: Box<TxPkg>) -> Rerr {
         let feep = txp.fee_purity();
-        if let Some((hid, hav)) = self.find(txp.hash()) {
+        if let Some((hid, hav)) = self.find(&txp.hash) {
             if feep <= hav.fee_purity() {
                 return errf!("tx already exists in tx pool and it's fee is higher")
             }

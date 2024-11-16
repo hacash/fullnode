@@ -100,8 +100,7 @@ impl TxPool for MemTxPool {
     }
 
     fn insert(&self, txp: Box<TxPkg>) -> Rerr {
-        let tx = txp.objc();
-        let acts = tx.actions();
+        let acts = txp.objc.actions();
         let actlen = acts.len();
         // check for group
         const DMINT: u16 = mint_action::ACTION_KIND_ID_DIAMOND_MINT;

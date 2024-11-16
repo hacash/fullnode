@@ -8,7 +8,7 @@ impl MsgHandler {
         }
         let starthei = u64::from_be_bytes( bufcut!(buf, 0, 8) );
         let latest = self.engine.latest_block();
-        let lathei = latest.objc().height().uint();
+        let lathei = latest.height().to_uint();
 	    let maxsendsize = 1024 * 1024 * 20usize; // max 20MB
 	    let maxsendnum = 10000usize; // max 10000
         let mut totalsize = 0;

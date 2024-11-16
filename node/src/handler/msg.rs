@@ -22,7 +22,7 @@ pub enum BlockTxArrive {
 
 
 // test
-StructFieldStruct!{ HandshakeStatus,
+combi_struct!{ HandshakeStatus,
     genesis_hash:            Hash
     block_version:           Uint1
     transaction_type:        Uint1

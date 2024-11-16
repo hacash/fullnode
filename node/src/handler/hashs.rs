@@ -13,7 +13,7 @@ impl MsgHandler {
         let endhei = u64::from_be_bytes( bufcut!(buf, 1, 9) );
         // req
         let latest = self.engine.latest_block();
-        let lathei = latest.objc().height().uint();
+        let lathei = latest.height().to_uint();
         if endhei > lathei {
             return
         }
@@ -52,7 +52,7 @@ impl MsgHandler {
         let mut hash_num = hash_len as u64 / 32;
         // check
         let latest = self.engine.latest_block();
-        let lathei = latest.objc().height().uint();
+        let lathei = latest.height().to_uint();
         if end_hei > lathei {
             return // not find target height block
         }
