@@ -2,7 +2,7 @@
 
 impl MsgHandler {
 
-    async fn send_hashs(&self, peer: Arc<Peer>, mut buf: Vec<u8>) {
+    async fn send_hashs(&self, peer: Arc<Peer>, buf: Vec<u8>) {
         if buf.len() != 1+8 {
             return // error len
         }
@@ -21,13 +21,13 @@ impl MsgHandler {
         if hnum >= endhei {
             starthei = 1;
         }
-        let stoptr = self.engine.store();
-        let store = CoreStoreDisk::wrap(stoptr.as_ref());
+        let stoptr = self.engine.disk();
+        let store = BlockDisk::wrap(stoptr);
         // load
         let mut reshxs = Vec::with_capacity((hnum + 8) as usize);
         reshxs.push( buf[1..9].to_vec() ); // endhei
         for hei in (starthei..=endhei).rev() {
-            let curhx = store.blockptr(&BlockHeight::from(hei));
+            let curhx = store.block_hash(&BlockHeight::from(hei));
             if curhx.is_none() {
                 return // not find block hash by height
             }
@@ -65,11 +65,11 @@ impl MsgHandler {
             start_hei = 1; // first block
         }
         // diff each blk hash
-        let stoptr = self.engine.store();
-        let store = CoreStoreDisk::wrap(stoptr.as_ref());
+        let duskptr = self.engine.disk();
+        let store = BlockDisk::wrap(duskptr);
         let mut hi = 0;
         for hei in (start_hei..=end_hei).rev() {
-            let myhx = store.blockptr(&BlockHeight::from(hei));
+            let myhx = store.block_hash(&BlockHeight::from(hei));
             if myhx.is_none() {
                 return // not find block hash by height
             }

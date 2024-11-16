@@ -10,7 +10,7 @@ pub trait TxPool: Send + Sync {
     fn drain_filter_at(&self, _: &dyn Fn(&Box<TxPkg>)->bool, _: usize) 
         -> Rerr { Ok(()) }
 
-    fn find(&self, hx: &Hash) -> Option<Box<TxPkg>> { None }
+    fn find(&self, _hx: &Hash) -> Option<Box<TxPkg>> { None }
     fn insert(&self, _: Box<TxPkg>) -> Rerr { Ok(()) }
     fn drain(&self, _: &Vec<Hash>) -> Ret<Vec<Box<TxPkg>>> { Ok(vec![]) }
 

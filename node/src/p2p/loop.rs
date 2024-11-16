@@ -9,7 +9,7 @@ impl P2PManage {
         let mut checkpeer_tkr = new_ticker(53*3).await; // 3mins ping all no active nodes
         let mut boostndes_tkr = new_ticker(54*5).await; // 5mins boost public nodes form offshoots table
 
-        let mut server_listener = this.server().await;
+        let server_listener = this.server().await;
         let mut closech = this.closer.signal();
 
         loop {

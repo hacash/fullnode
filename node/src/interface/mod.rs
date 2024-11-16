@@ -6,7 +6,6 @@ use chain::interface::*;
 
 use sys::*;
 use field::*;
-use field::interface::*;
 
 
 

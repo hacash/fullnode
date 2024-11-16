@@ -2,7 +2,7 @@
 
 impl MsgHandler {
 
-    async fn send_blocks(&self, peer: Arc<Peer>, mut buf: Vec<u8>) {
+    async fn send_blocks(&self, peer: Arc<Peer>, buf: Vec<u8>) {
         if buf.len() != 8 {
             return // error len
         }
@@ -15,19 +15,17 @@ impl MsgHandler {
         let mut totalnum = 0;
         let mut endhei = 0;
         // load data
-        let stoptr = self.engine.store();
-        let store = CoreStoreDisk::wrap(stoptr.as_ref());
+        let stoptr = self.engine.disk();
+        let store = BlockDisk::wrap(stoptr);
         let mut blkdtsary = vec![];
         for hei in starthei ..= lathei {
-            let blkdts = store.blockdatabyptr(&BlockHeight::from(hei));
-            if blkdts.is_none() {
+            let Some((_, blkdts)) = store.block_data_by_height(&BlockHeight::from(hei)) else {
                 return // not find block hash by height
-            }
-            let dts = blkdts.unwrap().into_vec();
-            totalsize += dts.len();
+            };
+            totalsize += blkdts.len();
             totalnum += 1;
             endhei = hei;
-            blkdtsary.push( dts );
+            blkdtsary.push( blkdts );
             if totalnum >= maxsendnum || totalsize >= maxsendsize {
                 break // chunk finish
             }
