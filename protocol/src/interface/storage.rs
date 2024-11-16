@@ -10,6 +10,8 @@ pub trait DiskDB {
 
 pub trait State {
     // fn build(_: Arc<dyn DiskDB>, _: Weak<dyn State>) -> Self where Self: Sized { unimplemented!() }
+    fn fork_sub(&self, _: Arc<dyn State>) -> Box<dyn State>  { unimplemented!() }
+    // fn set_parent(&mut self, _: Arc<dyn State>) { unimplemented!() }
     fn disk(&self) -> Arc<dyn DiskDB> { unimplemented!() }
     fn write_to_disk(&self) { unimplemented!() }
 

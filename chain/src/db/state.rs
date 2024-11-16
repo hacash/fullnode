@@ -15,6 +15,9 @@ impl StateInst {
             mem: MemKV::new()
         }
     }
+    
+
+
 }
 
 
@@ -22,6 +25,14 @@ impl State for StateInst {
 
     fn disk(&self) -> Arc<dyn DiskDB> {
         self.disk.clone()
+    }
+    
+    fn fork_sub(&self, p: Arc<dyn State>) -> Box<dyn State> {
+        Box::new(Self{
+            disk: self.disk.clone(),
+            mem: MemKV::new(),
+            parent: Arc::downgrade(&p),
+        })
     }
 
     fn write_to_disk(&self) {

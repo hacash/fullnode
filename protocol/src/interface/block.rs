@@ -1,11 +1,13 @@
 
 pub trait BlockExec {
-    fn execute(&self) -> Rerr { unimplemented!() }
+    fn execute(&self, _: context::Chain, _: Box<dyn State>) -> Rerr { unimplemented!() }
 }
 
 
 pub trait BlockRead : BlockExec + Serialize + Send + Sync + DynClone {
 
+    
+    fn hash_cache(&self) -> &Hash { unimplemented!() }
     fn hash(&self) -> Hash { unimplemented!() }
 
     fn version(&self) -> &Uint1 { unimplemented!() }

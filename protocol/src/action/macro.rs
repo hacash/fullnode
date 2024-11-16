@@ -1,8 +1,7 @@
 
 #[macro_export]
 macro_rules! action_define {
-    ($class:ident, $kid:expr, $lv:expr,
-        $gas:expr, $burn90:expr,
+    ($class:ident, $kid:expr, $lv:expr, $burn90:expr,
         { $( $item:ident : $ty:ty )* },
         ($pself:ident, $pctx:ident, $pgas:ident $exec:expr)
     ) => {
@@ -57,9 +56,9 @@ macro_rules! action_define {
         }
 
         impl ActExec for $class {
-            fn execute(&$pself, $pctx: &mut dyn Context) -> Ret<(i64, Vec<u8>)> {
+            fn execute(&$pself, $pctx: &mut dyn Context) -> Ret<(u32, Vec<u8>)> {
                 #[allow(unused_mut)] 
-                let mut $pgas: i64 = 0;
+                let mut $pgas: u32 = 0;
                 let res: Ret<Vec<u8>> = $exec;
                 Ok(($pgas, res?))
             }
@@ -68,7 +67,6 @@ macro_rules! action_define {
         impl Action for $class {
             fn kind(&self) -> u16 { self.kind.to_uint() }
             fn level(&self) -> i8 { $lv }
-            fn gas(&self) -> i64 { $gas }
             fn burn_90(&self) -> bool { $burn90 }
         }
 
@@ -105,7 +103,6 @@ macro_rules! action_register {
 // test define action
 action_define!{Test63856464969364, 9527, 
     ActLv::MAINCALL, // level
-    0, // gas 
     false, // burn 90 fee
     {
         id: Uint1

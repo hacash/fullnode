@@ -18,15 +18,17 @@ macro_rules! transaction_define {
         }
 
         impl TxExec for $class {
-            fn execute(&self, _: u64) -> Rerr {
-                errf!("")
+            fn execute(&self, _ctxobj: &mut dyn Context) -> Rerr {
+                
+
+                todo!()
             }
         }
 
 
         impl TransactionRead for $class {
             fn ty(&self) -> u8 {
-                self.ty.to_u8()
+                self.ty.to_uint()
             }
         }
 

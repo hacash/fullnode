@@ -1,14 +1,14 @@
 
 pub trait TxExec {
-    fn execute(&self, _: u64) -> Rerr { unimplemented!() }
+    fn execute(&self, _: &mut dyn Context) -> Rerr { unimplemented!() }
 }
 
 
 pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone { 
     fn ty(&self) -> u8 { unimplemented!() }
 
-    fn address(&self) -> Address { unimplemented!() }
-    fn addrlist(&self) -> Vec<Address> { unimplemented!() }
+    fn main(&self) -> Address { unimplemented!() }
+    fn addrs(&self) -> Vec<Address> { unimplemented!() }
 
     fn actions(&self) -> &Vec<Box<dyn Action>> { unimplemented!() }
 

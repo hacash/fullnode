@@ -37,7 +37,7 @@ impl TransactionRead for TransactionCoinbase {
         self.ty.to_uint()
     }
 
-    fn address(&self) -> Address {
+    fn main(&self) -> Address {
         self.address.clone()
     }
 
@@ -72,7 +72,7 @@ impl Transaction for TransactionCoinbase {
 
 impl TxExec for TransactionCoinbase {
     
-    fn execute(&self, _: u64) -> Rerr {
+    fn execute(&self, _: &mut dyn Context) -> Rerr {
         unimplemented!()
     }
 
