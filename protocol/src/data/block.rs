@@ -12,6 +12,17 @@ pub struct BlockPkg {
 
 impl BlockPkg {
 
+	pub fn build(data: Vec<u8>) -> Ret<Self> {
+		let (objc, _) = block::create(&data)?;
+		Ok(Self {
+			orgi: BlkOrigin::UNKNOWN,
+            hein: objc.height().to_uint(),
+			hash: objc.hash(),
+			data,
+			objc,
+		})
+	}
+
 	pub fn into_block(self) -> Box<dyn Block> {
 		self.objc
 	}

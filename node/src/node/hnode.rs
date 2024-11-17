@@ -2,7 +2,7 @@
 
 impl HNode for HacashNode {
 
-    fn submit_transaction(&self, txpkg: &Box<TxPkg>, in_async: bool) -> Rerr {
+    fn submit_transaction(&self, txpkg: &TxPkg, in_async: bool) -> Rerr {
         // check signature
         let txread = txpkg.objc.as_read();
         // txread.verify_signature()?;
@@ -23,7 +23,7 @@ impl HNode for HacashNode {
     }
 
 
-    fn submit_block(&self, blkpkg: &Box<BlockPkg>, in_async: bool) -> Rerr {
+    fn submit_block(&self, blkpkg: &BlockPkg, in_async: bool) -> Rerr {
         // NOT do any check
         // insert
         let msghdl = self.msghdl.clone();

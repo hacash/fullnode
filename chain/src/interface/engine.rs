@@ -22,9 +22,10 @@ pub trait EngineRead: Send + Sync {
 }
 
 pub trait Engine : EngineRead + Send + Sync {
+    fn as_read(&self) -> &dyn EngineRead { unimplemented!() }
     // fn init(&self, _: &IniObj) -> Option<Error> { unimplemented!() }
     // fn start(&self) -> Option<Error> { unimplemented!() }
-    fn insert(&self, _: Box<BlockPkg>) -> Rerr { unimplemented!() }
+    fn insert(&self, _: BlockPkg) -> Rerr { unimplemented!() }
     fn insert_sync(&self, _: u64, _: Vec<u8>) -> Rerr { unimplemented!() }
 }
 

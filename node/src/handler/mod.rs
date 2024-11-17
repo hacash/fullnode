@@ -7,10 +7,8 @@ use sys::*;
 use field::*;
 use protocol;
 use protocol::*;
-use protocol::transaction;
-use protocol::block::{self, *};
-use mint::action as mint_action;
-
+use protocol::block::*;
+use protocol::action::*;
 
 use field::interface::*;
 use chain::interface::*;

@@ -33,7 +33,7 @@ impl TxPool for MemTxPool {
         Ok(count)
     }
 
-    fn iter_at(&self, scan: &mut dyn FnMut(&Box<TxPkg>)->bool, gi: usize) -> Rerr {
+    fn iter_at(&self, scan: &mut dyn FnMut(&TxPkg)->bool, gi: usize) -> Rerr {
         check_group_id(gi)?;
         let grp = self.groups[gi].lock().unwrap();
         for txp in &grp.txpkgs {
@@ -45,7 +45,7 @@ impl TxPool for MemTxPool {
     }
 
     // insert to target group
-    fn insert_at(&self, txp: Box<TxPkg>, gi: usize) -> Rerr { 
+    fn insert_at(&self, txp: TxPkg, gi: usize) -> Rerr { 
         check_group_id(gi)?;
         // do insert
         let mut grp = self.groups[gi].lock().unwrap();
@@ -69,7 +69,7 @@ impl TxPool for MemTxPool {
     }
 
     // from group id
-    fn find_at(&self, hx: &Hash, gi: usize) -> Option<Box<TxPkg>> {
+    fn find_at(&self, hx: &Hash, gi: usize) -> Option<TxPkg> {
         check_group_id(gi).unwrap();
         // do clean
         let grp = self.groups[gi].lock().unwrap();
@@ -80,7 +80,7 @@ impl TxPool for MemTxPool {
     }
 
     // remove if true
-    fn drain_filter_at(&self, filter: &dyn Fn(&Box<TxPkg>)->bool, gi: usize) 
+    fn drain_filter_at(&self, filter: &dyn Fn(&TxPkg)->bool, gi: usize) 
         -> Rerr
     {
         check_group_id(gi)?;
@@ -89,7 +89,7 @@ impl TxPool for MemTxPool {
 
     
     // find
-    fn find(&self, hx: &Hash) -> Option<Box<TxPkg>> {
+    fn find(&self, hx: &Hash) -> Option<TxPkg> {
         for gi in 0..self.groups.len() {
             if let Some(tx) = self.find_at(hx, gi) {
                 return Some(tx) // ok find
@@ -99,11 +99,11 @@ impl TxPool for MemTxPool {
         None
     }
 
-    fn insert(&self, txp: Box<TxPkg>) -> Rerr {
+    fn insert(&self, txp: TxPkg) -> Rerr {
         let acts = txp.objc.actions();
         let actlen = acts.len();
         // check for group
-        const DMINT: u16 = mint_action::ACTION_KIND_ID_DIAMOND_MINT;
+        const DMINT: u16 = DiamondMint::KIND;
         let mut group_id = TXPOOL_GROUP_NORMAL;
         for i in 0..actlen {
             let act = &acts[i];
@@ -116,7 +116,7 @@ impl TxPool for MemTxPool {
         self.insert_at(txp, group_id)
     }
 
-    fn drain(&self, hxs: &Vec<Hash>) -> Ret<Vec<Box<TxPkg>>> {
+    fn drain(&self, hxs: &Vec<Hash>) -> Ret<Vec<TxPkg>> {
         let mut txres = vec![];
         let mut hxst = HashSet::from_iter(hxs.clone().into_iter());
         for gi in 0..self.groups.len() {

@@ -1,7 +1,7 @@
 
 struct TxGroup {
     maxsz: usize,
-    txpkgs: Vec<Box<TxPkg>>,
+    txpkgs: Vec<TxPkg>,
 }
 
 impl TxGroup {

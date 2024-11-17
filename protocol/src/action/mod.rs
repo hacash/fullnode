@@ -9,8 +9,8 @@ include!{"init.rs"}
 include!{"macro.rs"}
 include!{"create.rs"}
 
-
 include!{"hacash.rs"}
+include!{"diamond.rs"}
 
 
 /*

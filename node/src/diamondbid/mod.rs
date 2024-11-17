@@ -5,11 +5,10 @@ use std::thread;
 
 use sys::*;
 use chain::engine::*;
-use chain::interface::*;
 use field::*;
 use field::interface::*;
 use protocol::*;
-use mint::action as mint_action;
+use protocol::action::*;
 
 use protocol::interface::*;
 
@@ -28,7 +27,7 @@ pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> Rerr {
     let bidmin = cnf.dmer_bid_min.clone();
     let bidmax = cnf.dmer_bid_max.clone();
     let mut bidstep = cnf.dmer_bid_step.clone();
-    let minstep = Amount::new_small(1, 244);
+    let minstep = Amount::coin(1, 244);
 
     if ! cnf.dmer_enable {
         return Ok(()) // not enable
@@ -67,7 +66,7 @@ pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> Rerr {
         thread::sleep( Duration::from_secs(15) );
         let mut current_number: u32 = 0;
         loop {
-            let pending_height = eng.latest_block().objc().height().uint() + 1;
+            let pending_height = eng.latest_block().height().to_uint() + 1;
             check_bidding_step(hnode.clone(), &engcnf, pending_height, &mut current_number);
             // sleep 0.3 secs
             thread::sleep( Duration::from_millis(77) );

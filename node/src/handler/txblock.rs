@@ -4,22 +4,20 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
     // println!("1111111 handle_txblock_arrive Tx, peer={} len={}", peer.nick(), body.clone().len());
     let engcnf = this.engine.config();
     // parse
-    let txpkg = transaction::create_pkg(BytesW4::from_vec(body));
-    if let Err(e) = txpkg {
+    let Ok(txpkg) = TxPkg::build(body) else {
         return // parse tx error
-    }
-    let txpkg = txpkg.unwrap();
+    };
     // tx hash with fee
-    let hxfe = txpkg.objc().hash_with_fee();
+    let hxfe = txpkg.objc.hash_with_fee();
     let (already, knowkey) = check_know(&this.knows, &hxfe, peer.clone());
     if already {
         return  // alreay know it
     }
     // println!("p2p recv new tx: {}, {}", txpkg.objc().hash().half(), hxfe.nonce());
-    let txdatas = txpkg.body().clone().into_vec();
+    let txdatas = txpkg.data.clone();
     if engcnf.is_open_miner() {
         // try execute tx
-        if let Err(..) = this.engine.try_execute_tx(txpkg.objc().as_ref().as_read()) {
+        if let Err(..) = this.engine.try_execute_tx(txpkg.objc.as_read()) {
             return // tx execute fail
         }
         // add to pool
@@ -66,7 +64,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         let hxstrt = &blkhx.as_bytes()[4..12];
         let hxtail = &blkhx.as_bytes()[30..];
         let txs = blkhead.transaction_count().to_uint() - 1;
-        let blkts = &timeshow(blkhead.timestamp().to_uint())[14..];
+        let _blkts = &timeshow(blkhead.timestamp().to_uint())[14..];
         print!("❏ block {} …{}…{} txs{:2} insert at {} ", 
             blkhei, hex::encode(hxstrt), hex::encode(hxtail), txs, &ctshow()[11..]);
         let bodycp = body.clone();
@@ -74,18 +72,18 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         let txpool = this.txpool.clone();
         std::thread::spawn(move||{
             // create block
-            let blkpkg = block::create_pkg(BytesW4::from_vec(bodycp));
-            if let Err(e) = blkpkg {
+            let blkpkg = BlockPkg::build(bodycp);
+            if let Err(..) = blkpkg {
                 return // parse error
             }
             let blkp = blkpkg.unwrap();
-            let thsx = blkp.objc().transaction_hash_list(false); // hash no fee
+            let thsx = blkp.objc.transaction_hash_list(false); // hash no fee
             if let Err(e) = engptr.insert(blkp) {
                 println!("Error: {}", e);
             }else{
                 println!("ok.");
                 if is_open_miner {
-                    drain_all_block_txs(engptr.clone(), txpool, thsx, blkhei);
+                    drain_all_block_txs(engptr.as_ref().as_read(), txpool, thsx, blkhei);
                 }
             }
         });
@@ -119,7 +117,7 @@ fn check_know(mine: &Knowledge, hxkey: &Hash, peer: Option<Arc<Peer>>) -> (bool,
 
 
 // drain_all_block_txs
-fn drain_all_block_txs(eng: Arc<dyn EngineRead>, txpool: Arc<dyn TxPool>, txs: Vec<Hash>, blkhei: u64) {
+fn drain_all_block_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, txs: Vec<Hash>, blkhei: u64) {
     if blkhei % 15 == 0 {
         println!("{}.", txpool.print());
     }
@@ -139,11 +137,11 @@ fn drain_all_block_txs(eng: Arc<dyn EngineRead>, txpool: Arc<dyn TxPool>, txs: V
 
 
 // clean_
-fn clean_invalid_normal_txs(eng: Arc<dyn EngineRead>, txpool: Arc<dyn TxPool>, blkhei: u64) {
+fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, blkhei: u64) {
     // already minted hacd number
     let sta = eng.state();
     let ldn = MintStateDisk::wrap(sta.as_ref()).latest_diamond().number.uint();
-    txpool.drain_filter_at(&|a: &Box<TxPkg>| {
+    txpool.drain_filter_at(&|a: &TxPkg| {
         match eng.try_execute_tx( a.objc.as_read() ) {
             Err(..) => true, // delete
             _ => false,
@@ -153,11 +151,11 @@ fn clean_invalid_normal_txs(eng: Arc<dyn EngineRead>, txpool: Arc<dyn TxPool>, b
 
 
 // clean_
-fn clean_invalid_diamond_mint_txs(eng: Arc<dyn EngineRead>, txpool: Arc<dyn TxPool>, blkhei: u64) {
+fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, blkhei: u64) {
     // already minted hacd number
     let sta = eng.state();
     let curdn = MintStateDisk::wrap(sta.as_ref()).latest_diamond().number.uint();
-    txpool.drain_filter_at(&|a: &Box<TxPkg>| {
+    txpool.drain_filter_at(&|a: &TxPkg| {
         let tx = a.objc.as_read();
         let dn = get_diamond_mint_number(tx);
         // println!("TXPOOL: drain_filter_at dmint, tx: {}, dn: {}, last dn: {}", tx.hash().hex(), dn, ldn);
@@ -169,13 +167,12 @@ fn clean_invalid_diamond_mint_txs(eng: Arc<dyn EngineRead>, txpool: Arc<dyn TxPo
 
 // for diamond create action
 fn get_diamond_mint_number(tx: &dyn TransactionRead) -> u32 {
-    const DMINT: u16 = mint_action::ACTION_KIND_ID_DIAMOND_MINT;
-    let mut num: u32 = 0;
+    const DMINT: u16 = DiamondMint::KIND;
     for act in tx.actions() {
         if act.kind() == DMINT {
-            let dm = mint_action::DiamondMint::must(&act.serialize());
-            return dm.head.number.uint();
+            let dm = DiamondMint::must(&act.serialize());
+            return dm.number.to_uint();
         }
     }
-    num
+    0
 }

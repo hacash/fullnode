@@ -5,9 +5,7 @@ use std::collections::*;
 use sys::*;
 use field::*;
 use protocol::*;
-
-use mint::action as mint_action;
-
+use protocol::action::*;
 
 use super::interface::*;
 

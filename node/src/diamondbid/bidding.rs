@@ -9,7 +9,7 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
     let txpool = hnode.txpool();
     let txplptr = txpool.as_ref();
     let my_acc = &engcnf.dmer_bid_account;
-    let my_addr = Address::cons(*my_acc.address());
+    let my_addr = Address::from(*my_acc.address());
 
     macro_rules! retry {
         ($ms: expr) => {
@@ -31,12 +31,12 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
         retry!(3); // tx pool empty
     };
 
-    let first_bid_addr = first_bid_txp.objc().address().unwrap();
+    let first_bid_addr = first_bid_txp.objc.main();
     if my_addr == first_bid_addr {
         retry!(1); // im the first
     }
 
-    let first_bid_fee = first_bid_txp.objc().fee();
+    let first_bid_fee = first_bid_txp.objc.fee();
     if first_bid_fee.more_than(&engcnf.dmer_bid_max) {
         retry!(10); // my max too low
     }
@@ -45,12 +45,12 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
         retry!(3); // have no my tx
     };
 
-    let my_bid_addr = my_bid_txp.objc().address().unwrap();
+    let my_bid_addr = my_bid_txp.objc.main();
     if my_bid_addr == first_bid_addr {
         retry!(1); // im the first
     }
 
-    let my_bid_fee = my_bid_txp.objc().fee();
+    let my_bid_fee = my_bid_txp.objc.fee();
     if my_bid_fee.more_or_equal(&engcnf.dmer_bid_max) {
         retry!(5); // my fee up max
     }
@@ -75,23 +75,23 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
     }
 
     // ok
-    if let Some(mint) = checkout_diamond_mint_action(my_bid_txp.objc().as_read()) {
-        let dia = mint.head.diamond.readable();
-        let dnum = mint.head.number.uint();
+    if let Some(mint) = checkout_diamond_mint_action(my_bid_txp.objc.as_read()) {
+        let dia = mint.diamond.to_readable();
+        let dnum = mint.number.to_uint();
         let dfee = new_bid_fee.to_fin_string();
         if *bidding_number != dnum {
             *bidding_number = dnum;
-            flush!("✵✵✵✵ Diamond Auto Bid {}({}) by {} raise fee to ⇨ {}", dia, dnum, my_addr.readable(), dfee);
+            flush!("✵✵✵✵ Diamond Auto Bid {}({}) by {} raise fee to ⇨ {}", dia, dnum, my_addr.to_readable(), dfee);
         }else{
             flush!(" ⇨ {}", dfee);
         }
     }
     
     // raise fee
-    let mut my_tx = my_bid_txp.objc().clone();
+    let mut my_tx = my_bid_txp.into_transaction();
     my_tx.set_fee(new_bid_fee.clone());
     my_tx.fill_sign(&engcnf.dmer_bid_account);
-    let txp: Box<TxPkg> = Box::new(TxPkg::new(my_tx));
+    let txp = TxPkg::create(my_tx);
 
     // submit tx
     if let Err(e) = hnode.submit_transaction(&txp, false) {
@@ -106,10 +106,10 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
 ///////////////////////////////////////////////
 
 
-fn pick_my_bid_tx(tx_pool: &dyn TxPool, my_addr: &Address) -> Option<Box<TxPkg>> {
-    let mut my_bid_tx: Option<Box<TxPkg>> = None;
-    let mut pick_dmint = |a: &Box<TxPkg>| {
-        if *my_addr == a.objc().address().unwrap() {
+fn pick_my_bid_tx(tx_pool: &dyn TxPool, my_addr: &Address) -> Option<TxPkg> {
+    let mut my_bid_tx: Option<TxPkg> = None;
+    let mut pick_dmint = |a: &TxPkg| {
+        if *my_addr == a.objc.main() {
             my_bid_tx = Some(a.clone());
             return false // end
         }
@@ -123,9 +123,9 @@ fn pick_my_bid_tx(tx_pool: &dyn TxPool, my_addr: &Address) -> Option<Box<TxPkg>>
 
 
 
-fn pick_first_bid_tx(tx_pool: &dyn TxPool) -> Option<Box<TxPkg>> {
-    let mut first: Option<Box<TxPkg>> = None;
-    let mut pick_dmint = |a: &Box<TxPkg>| {
+fn pick_first_bid_tx(tx_pool: &dyn TxPool) -> Option<TxPkg> {
+    let mut first: Option<TxPkg> = None;
+    let mut pick_dmint = |a: &TxPkg| {
         first = Some(a.clone());
         return false // end
     };
@@ -136,12 +136,11 @@ fn pick_first_bid_tx(tx_pool: &dyn TxPool) -> Option<Box<TxPkg>> {
 
 
 // for diamond create action
-fn checkout_diamond_mint_action(tx: &dyn TransactionRead) -> Option<mint_action::DiamondMint> {
-    const DMINT: u16 = mint_action::ACTION_KIND_ID_DIAMOND_MINT;
-    let mut num: u32 = 0;
+fn checkout_diamond_mint_action(tx: &dyn TransactionRead) -> Option<DiamondMint> {
+    const DMINT: u16 = DiamondMint::KIND;
     for act in tx.actions() {
         if act.kind() == DMINT {
-            let dm = mint_action::DiamondMint::must(&act.serialize());
+            let dm = DiamondMint::must(&act.serialize());
             return Some(dm);
         }
     }

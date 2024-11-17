@@ -7,8 +7,14 @@ pub trait TxExec {
 pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone { 
     fn ty(&self) -> u8 { unimplemented!() }
 
+
+    fn hash(&self) -> Hash { unimplemented!() }
+    fn hash_with_fee(&self) -> Hash { unimplemented!() }
+
     fn main(&self) -> Address { unimplemented!() }
     fn addrs(&self) -> Vec<Address> { unimplemented!() }
+
+    fn fee(&self) -> &Amount { unimplemented!() }
 
     fn message(&self) -> &Fixed16 { unimplemented!() }
     fn reward(&self) -> &Amount { unimplemented!() }

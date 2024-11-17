@@ -1,7 +1,7 @@
 
 #[derive(Default, PartialEq, Copy, Clone)]
 pub enum BlkOrigin {
-    #[default] UNKNOW,
+    #[default] UNKNOWN,
     REBUILD,
     SYNC,
     DISCOVER, // other find

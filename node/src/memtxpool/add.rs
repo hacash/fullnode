@@ -2,7 +2,7 @@
 
 impl TxGroup {
 
-    fn insert(&mut self, txp: Box<TxPkg>) -> Rerr {
+    fn insert(&mut self, txp: TxPkg) -> Rerr {
         let feep = txp.fee_purity();
         if let Some((hid, hav)) = self.find(&txp.hash) {
             if feep <= hav.fee_purity() {
@@ -41,7 +41,7 @@ impl TxGroup {
         Ok(())
     }
 
-    fn insert_rng(&mut self, txp: Box<TxPkg>, feep: u64, rng: (usize, usize)) ->Rerr {
+    fn insert_rng(&mut self, txp: TxPkg, feep: u64, rng: (usize, usize)) ->Rerr {
         let (rxl, rxr) = rng;
         let mut istx = usize::MAX;
         for i in rxl .. rxr {

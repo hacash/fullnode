@@ -56,5 +56,9 @@ impl ChainEngine {
 
 impl EngineRead for ChainEngine {}
 
-impl Engine for ChainEngine {}
+impl Engine for ChainEngine {
+    fn as_read(&self) -> &dyn EngineRead {
+        self
+    }
+}
 

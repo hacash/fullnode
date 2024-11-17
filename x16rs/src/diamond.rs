@@ -18,23 +18,13 @@ pub fn is_valid_diamond_name(v: &[u8]) -> bool {
     // check in array
     for a in v {
         if ! DIAMOND_HASH_BASE_CHARS.iter().any(|x|x==a) {
-            return false // err char
+            return false // invalid char
         }
     }
     // ok
     true
 }
 
-fn include_dhbx_char(c: u8) -> bool {
-    // WTYUIAHXVMEKBSZN
-    for i in 1..DIAMOND_HASH_BASE_CHAR_NUM {
-        if c == DIAMOND_HASH_BASE_CHARS[i] {
-            return true;
-        }
-    }
-    // not find
-    false
-}
 
 /*
 *
@@ -53,7 +43,7 @@ pub fn check_diamond_hash_result(stuff: impl AsRef<[u8]>) -> Option<[u8; DMD_N]>
         if hxval[i] == b'0' {
             return None; // right 6 char must NOT be '0'
         }
-        if !include_dhbx_char(hxval[i]) {
+        if ! DIAMOND_HASH_BASE_CHARS.iter().any(|x|*x==hxval[i]) {
             return None; // invalid char
         }
     }

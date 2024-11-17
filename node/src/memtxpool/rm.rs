@@ -5,7 +5,7 @@ impl TxGroup {
         self.txpkgs.clear()
     }
 
-    fn remove(&mut self, txhx: &Hash) -> Option<Box<TxPkg>> {
+    fn remove(&mut self, txhx: &Hash) -> Option<TxPkg> {
         let rmid = self.search(txhx);
         let rmid = match rmid {
             None => return None, // not find
@@ -15,7 +15,7 @@ impl TxGroup {
         Some(self.txpkgs.remove(rmid))
     }
 
-    fn drain(&mut self, hxst: &mut HashSet<Hash>) -> Vec<Box<TxPkg>> {
+    fn drain(&mut self, hxst: &mut HashSet<Hash>) -> Vec<TxPkg> {
         let mut res = vec![];
         let hxs: Vec<Hash> = hxst.iter().map(|a|a.clone()).collect();
         for hx in hxs {
@@ -29,7 +29,7 @@ impl TxGroup {
 
 
     // remove if true
-    fn drain_filter(&mut self, filter: &dyn Fn(&Box<TxPkg>)->bool) -> Rerr {
+    fn drain_filter(&mut self, filter: &dyn Fn(&TxPkg)->bool) -> Rerr {
         self.txpkgs.retain(|a| !filter(a) );
         Ok(())
     }

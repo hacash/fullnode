@@ -11,7 +11,7 @@ impl TxGroup {
         return None
     }
 
-    fn find(&self, txhx: &Hash) -> Option<(usize, &Box<TxPkg>)> {
+    fn find(&self, txhx: &Hash) -> Option<(usize, &TxPkg)> {
         let havid = self.search(txhx);
         if let Some(hid) = havid {
             if let Some(tx) = self.txpkgs.get(hid) {
