@@ -7,7 +7,7 @@ inst_state_define!{ CoreState,
 
     /* status */
 
-    1, lastest, Empty : Fixed10
+    2, latest_diamond, Empty : DiamondSmelt
 
     /* state */
     

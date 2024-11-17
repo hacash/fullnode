@@ -137,10 +137,8 @@ fn drain_all_block_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, txs: Vec<H
 
 
 // clean_
-fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, blkhei: u64) {
+fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, _blkhei: u64) {
     // already minted hacd number
-    let sta = eng.state();
-    let ldn = MintStateDisk::wrap(sta.as_ref()).latest_diamond().number.uint();
     txpool.drain_filter_at(&|a: &TxPkg| {
         match eng.try_execute_tx( a.objc.as_read() ) {
             Err(..) => true, // delete
@@ -151,10 +149,10 @@ fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, blkhe
 
 
 // clean_
-fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, blkhei: u64) {
+fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, _blkhei: u64) {
     // already minted hacd number
     let sta = eng.state();
-    let curdn = MintStateDisk::wrap(sta.as_ref()).latest_diamond().number.uint();
+    let curdn = CoreStateRead::wrap(sta).get_latest_diamond().number.to_uint();
     txpool.drain_filter_at(&|a: &TxPkg| {
         let tx = a.objc.as_read();
         let dn = get_diamond_mint_number(tx);

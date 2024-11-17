@@ -1,3 +1,5 @@
+const U128WIDTH: usize = u128::BITS as usize / 8;
+const U64WIDTH:  usize =  u64::BITS as usize / 8;
 
 #[allow(dead_code)] const UNIT_MEI:  u8 = 248;
 #[allow(dead_code)] const UNIT_ZHU:  u8 = 240;
@@ -35,6 +37,25 @@ impl Display for Amount{
 impl Debug for Amount {
     fn fmt(&self,f: &mut Formatter) -> Result {
         write!(f,"[unit:{}, dist:{}, byte: {:?}]", self.unit, self.dist, self.byte)
+    }
+}
+
+
+impl Ord for Amount {
+    fn cmp(&self, other: &Self) -> Ordering {
+        if self.equal(other) {
+            return Ordering::Equal
+        }
+        if self.more_than(other) {
+            return Ordering::Greater
+        }
+        return Ordering::Less
+    }
+}
+
+impl PartialOrd for Amount {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -90,6 +111,20 @@ impl Amount {
 
     pub fn tail_len(&self) -> usize {
         self.dist.abs() as usize
+    }
+
+    pub fn tail_u128(&self) -> u128 {
+        if self.byte.len() > U128WIDTH {
+            panic!("amount tail bytes length too long over {}", U128WIDTH)
+        }
+        u128::from_be_bytes(add_left_padding(&self.byte, U128WIDTH).try_into().unwrap())
+    }
+
+    pub fn tail_u64(&self) -> u64 {
+        if self.byte.len() > U64WIDTH {
+            panic!("amount tail bytes length too long over {}", U64WIDTH)
+        }
+        u64::from_be_bytes(add_left_padding(&self.byte, U64WIDTH).try_into().unwrap())
     }
 
 
@@ -173,12 +208,9 @@ impl Amount {
         let Ok(u) = amt[1].parse::<u8>() else {
             ret_amtfmte!{"unit", amt[1]}
         };
-        let bts = drop_left_zero(&v.to_be_bytes());
-        Ok(Self{
-            unit: u,
-            dist: (bts.len() as i8) * negmark,
-            byte: bts
-        })
+        let mut amt = Self::coin(v, u);
+        amt.dist *= negmark; // if neg
+        Ok(amt)
     }
     
     fn from_mei(v: String, negmark: i8) -> Ret<Amount> {
@@ -194,12 +226,9 @@ impl Amount {
             f *= 10.0;
         }
         let v = f as u128;
-        let bts = drop_left_zero(&v.to_be_bytes());
-        Ok(Self{
-            unit: u,
-            dist: (bts.len() as i8) * negmark,
-            byte: bts
-        })
+        let mut amt = Self::coin(v, u);
+        amt.dist *= negmark; // if neg
+        Ok(amt)
     }
 
 
@@ -221,24 +250,70 @@ impl Amount {
 
     pub fn to_strings(&self) -> (String, String, String) {
         let blen =self.byte.len();
-        if blen > 16 {
+        if blen > U128WIDTH {
             return ("*".into(), "*".into(), "*".into())
         }
         let s1 = match self.dist < 0 {
             true => "-",
             false => "",
         }.to_string();
-        let s2 = match blen > 8 {
-            true => u128::from_be_bytes(add_left_padding(&self.byte, 16).try_into().unwrap()).to_string(),
-            false => u64::from_be_bytes(add_left_padding(&self.byte,  8).try_into().unwrap()).to_string(),
+        let s2 = match blen > U64WIDTH {
+            true => u128::from_be_bytes(add_left_padding(&self.byte, U128WIDTH).try_into().unwrap()).to_string(),
+            false => u64::from_be_bytes(add_left_padding(&self.byte,  U64WIDTH).try_into().unwrap()).to_string(),
         };
         (s1, s2, self.unit.to_string())
     }
 
+}
+
+
+// compare 
+impl Amount {
+
+    pub fn equal(&self, src: &Amount) -> bool {
+        self.unit == src.unit &&
+        self.dist == src.dist &&
+        self.byte == src.byte
+    }
+
+    pub fn more_than(&self, src: &Amount) -> bool {
+        if self.dist < 0 || src.dist < 0 {
+            panic!("cannot compare between with negative")
+        }
+        if self.equal(src) {
+            return false // a == b
+        }
+        let us1 = self.unit as usize;
+        let us2 =  src.unit as usize;
+        let mut tns1 = self.tail_u128().to_string();
+        let mut tns2 =  src.tail_u128().to_string();
+        let ts1 = tns1.len();
+        let ts2 = tns2.len();
+        let rlunit1 = us1 + ts1;
+        let rlunit2 = us2 + ts2;
+        if rlunit1 > rlunit2 {
+            return true
+        } else if rlunit1 < rlunit2 {
+            return false
+        }
+        // byte width match
+        if us1 > us2 {
+            tns1 += &"0".repeat(us2-us1);
+        } else if us1 < us2 {
+            tns2 += &"0".repeat(us1-us2);
+        }
+        // 
+        let Ok(ru1) = tns1.parse::<u128>() else {
+            panic!("amount bytes value too big")
+        };
+        let Ok(ru2) = tns2.parse::<u128>() else {
+            panic!("amount bytes value too big")
+        };
+        ru1 > ru2
+    }
 
 
 }
-
 
 // compute 
 impl Amount {
@@ -261,16 +336,15 @@ impl Amount {
         if self.dist < 0 {
             return errf!("cannot compress negative amount")
         }
-        const ML: usize = 16;
         let mut amt = self.clone();
         while amt.tail_len() > btn {
-            if amt.byte.len() > ML {
+            if amt.byte.len() > U128WIDTH {
                 return errf!("amount bytes too long to compress")
             }
             if amt.unit == 255 {
                 return errf!("amount uint too big to compress")
             }
-            let mut numpls = u128::from_be_bytes(add_left_padding(&amt.byte, ML).try_into().unwrap()) / 10;
+            let mut numpls = u128::from_be_bytes(add_left_padding(&amt.byte, U128WIDTH).try_into().unwrap()) / 10;
             if upvalue {
                 numpls += 1;
             }
@@ -374,10 +448,10 @@ macro_rules! compute_mode_define {
 }
 
 
-compute_mode_define!{add_mode_u64,  checked_add, u64,   8}
-compute_mode_define!{add_mode_u128, checked_add, u128, 16}
-compute_mode_define!{sub_mode_u64,  checked_sub, u64,   8}
-compute_mode_define!{sub_mode_u128, checked_sub, u128, 16}
+compute_mode_define!{add_mode_u64,  checked_add, u64,   U64WIDTH}
+compute_mode_define!{add_mode_u128, checked_add, u128, U128WIDTH}
+compute_mode_define!{sub_mode_u64,  checked_sub, u64,   U64WIDTH}
+compute_mode_define!{sub_mode_u128, checked_sub, u128, U128WIDTH}
 
 
 

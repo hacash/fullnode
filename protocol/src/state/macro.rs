@@ -23,8 +23,8 @@ macro_rules! inst_state_define {
                     }
 
                     concat_idents!{ get_stat = get_, $kn, {
-                    pub fn get_stat(&self) -> Ret<$vty> {
-                        errf!("")
+                    pub fn get_stat(&self) -> $vty {
+                        $vty::default()
                     }
                     }}
 
