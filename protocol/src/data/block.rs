@@ -20,31 +20,31 @@ impl BlockPkg {
 
 
 
-combi_struct!{ RecentBlockInfo, 
-    height:  BlockHeight
-    hash:    Hash
-    prev:    Hash
-    txs:     Uint4 // transaction_count
-    miner:   Address
-    message: Fixed16
-    reward:  Amount
-    time:    Timestamp
-    arrive:  Timestamp
+pub struct RecentBlockInfo { 
+    pub height:  u64,
+    pub hash:    Hash,
+    pub prev:    Hash,
+    pub txs:     u32, /* transaction_count */
+    pub miner:   Address,
+    pub message: String,
+    pub reward:  Amount,
+    pub time:    u64,
+    pub arrive:  u64,
 }
 
 
 pub fn create_recent_block_info(blk: &dyn BlockRead) -> RecentBlockInfo {
     let coinbase = &blk.transactions()[0];
     RecentBlockInfo {
-        height:  blk.height().clone(),
+        height:  blk.height().to_uint(),
         hash:    blk.hash(),
         prev:    blk.prevhash().clone(),
-        txs:     blk.transaction_count().clone(), // transaction_count
+        txs:     blk.transaction_count().to_uint(), // transaction_count
         miner:   coinbase.main(),
-        message: coinbase.message().clone(),
+        message: coinbase.message().to_readable(),
         reward:  coinbase.reward().clone(),
-        time:    blk.timestamp().clone(),
-        arrive:  Timestamp::from(curtimes()),
+        time:    blk.timestamp().to_uint(),
+        arrive:  curtimes(),
     }
 }
 

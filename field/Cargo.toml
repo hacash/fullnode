@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+x16rs = {path = "../x16rs"}
 sys = {path = "../sys"}
 concat-idents = "1.1.5"
 hex = "0.4.3"

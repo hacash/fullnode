@@ -9,6 +9,22 @@ const DMD_L: usize = 10;
 const DMD_M: usize = 16;
 const DMD_N: usize = DMD_M - DMD_L; // 6
 
+
+
+pub fn is_valid_diamond_name(v: &[u8]) -> bool {
+    if v.len() != DMD_N {
+        return false
+    }
+    // check in array
+    for a in v {
+        if ! DIAMOND_HASH_BASE_CHARS.iter().any(|x|x==a) {
+            return false // err char
+        }
+    }
+    // ok
+    true
+}
+
 fn include_dhbx_char(c: u8) -> bool {
     // WTYUIAHXVMEKBSZN
     for i in 1..DIAMOND_HASH_BASE_CHAR_NUM {

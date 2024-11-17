@@ -35,20 +35,31 @@ include!{"number/fold64.rs"}
 include!{"bytes/fixed.rs"}
 include!{"bytes/datas.rs"}
 
+// combi
+include!{"combi/struct.rs"}
+include!{"combi/list.rs"}
+include!{"combi/optional.rs"}
+include!{"combi/revenum.rs"}
+include!{"combi/dynlist.rs"}
+include!{"combi/dynvec.rs"}
+
 // core
 include!{"core/define.rs"}
 include!{"core/address.rs"}
 include!{"core/amount.rs"}
+include!{"core/diamond.rs"}
 include!{"core/sign.rs"}
 include!{"core/status.rs"}
 
-// combi
-include!{"combi/struct.rs"}
-include!{"combi/list.rs"}
-include!{"combi/option.rs"}
-include!{"combi/revenum.rs"}
-include!{"combi/dynlist.rs"}
-include!{"combi/dynvec.rs"}
+// component
+include!{"component/balance.rs"}
+include!{"component/status.rs"}
+include!{"component/total.rs"}
+include!{"component/diamond.rs"}
+include!{"component/channel.rs"}
+include!{"component/contract.rs"}
+
+
 
 
 

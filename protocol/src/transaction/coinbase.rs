@@ -6,7 +6,9 @@ combi_struct!{ CoinbaseExtendDataV1,
 }
 
 // CoinbaseExtend
-combi_option!{ CoinbaseExtend, CoinbaseExtendDataV1 }
+combi_optional!{ CoinbaseExtend, 
+    extend: CoinbaseExtendDataV1 
+}
 
 
 // coinbase

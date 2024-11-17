@@ -12,7 +12,6 @@ pub type Satoshi = Uint8;
 
 
 // diamond
-pub type DiamondName = Fixed6;
 pub type DiamondNumber = Uint3;
 pub type DiamondVisualGene = Fixed10;
 pub type DiamondLifeGene   = Fixed32;

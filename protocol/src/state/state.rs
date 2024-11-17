@@ -5,8 +5,11 @@
 */
 inst_state_define!{ CoreState,
 
+    /* status */
 
     1, lastest, Empty : Fixed10
+
+    /* state */
     
     11, balance, Address : Uint8
 

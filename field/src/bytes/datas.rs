@@ -102,6 +102,24 @@ macro_rules! datas_define {
                 })
             }
 
+            pub fn length(&self) -> usize {
+                self.count.to_usize()
+            }
+        
+            pub fn push(&mut self, a: u8) -> Rerr {
+                if self.bytes.len() + 1 > <$sty>::MAX as usize {
+                    return errf!("append size overflow")
+                }
+                self.count += 1u8;
+                self.bytes.push(a);
+                Ok(())
+            }
+        
+            pub fn append(&mut self, tar: &mut Vec<u8>) -> Rerr {
+                self.count += tar.len() as u64;
+                self.bytes.append(tar);
+                Ok(())
+            }
 
         }
 
