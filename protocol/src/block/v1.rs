@@ -25,8 +25,8 @@ impl BlockExec for BlockV1 {
         let env = ctx::Env{
             chain: ccnf,
             block: ctx::Block{
-                height: self.height().to_uint(),
-                hash: self.hash_cache().clone(),
+                height: self.height().uint(),
+                hash: self.hash(),
             },
             tx: ctx::Tx::default(),
         };
@@ -49,7 +49,7 @@ impl BlockExec for BlockV1 {
 }
 
 impl BlockRead for BlockV1 {
-    fn hash_cache(&self) -> &Hash { unimplemented!() }
+    fn hash(&self) -> Hash { unimplemented!() }
 }
 
 impl Block for BlockV1 {}

@@ -18,8 +18,8 @@ macro_rules! inst_state_define {
 
                 $(
 
-                    pub fn $kn(&self, _k: &$kty) -> Ret<Option<$vty>> {
-                        errf!("")
+                    pub fn $kn(&self, _k: &$kty) -> Option<$vty> {
+                        None
                     }
 
                     concat_idents!{ get_stat = get_, $kn, {
@@ -48,31 +48,28 @@ macro_rules! inst_state_define {
 
             $(
 
-                pub fn $kn(&self, _k: &$kty) -> Ret<Option<$vty>> {
-                    errf!("")
+                pub fn $kn(&self, _k: &$kty) -> Option<$vty> {
+                    None
                 }
 
                 concat_idents!{ set_fn = $kn, _set {
-                    pub fn set_fn(&mut self, _k: &$kty, _v: &$vty) -> Rerr {
-                        errf!("")
+                    pub fn set_fn(&mut self, _k: &$kty, _v: &$vty) {
                     }
                 }}
                 concat_idents!{ del_fn = $kn, _del {
-                    pub fn del_fn(&mut self, _k: &$kty) -> Rerr {
-                        errf!("")
+                    pub fn del_fn(&mut self, _k: &$kty) {
                     }
                 }}
 
 
                 concat_idents!{ get_stat = get_, $kn, {
-                pub fn get_stat(&self) -> Ret<&$vty> {
-                    errf!("")
+                pub fn get_stat(&self) -> $vty {
+                    <$vty>::default()
                 }
                 }}
 
                 concat_idents!{ set_stat = set_, $kn {
-                    pub fn set_stat(&mut self, _v: &$vty) -> Rerr {
-                        errf!("")
+                    pub fn set_stat(&mut self, _v: &$vty) {
                     }
                 }}
 

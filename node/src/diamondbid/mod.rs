@@ -65,7 +65,7 @@ pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> Rerr {
         thread::sleep( Duration::from_secs(15) );
         let mut current_number: u32 = 0;
         loop {
-            let pending_height = eng.latest_block().height().to_uint() + 1;
+            let pending_height = eng.latest_block().height().uint() + 1;
             check_bidding_step(hnode.clone(), &engcnf, pending_height, &mut current_number);
             // sleep 0.3 secs
             thread::sleep( Duration::from_millis(77) );

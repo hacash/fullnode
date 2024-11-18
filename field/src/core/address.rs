@@ -68,6 +68,10 @@ impl AddrOrList {
         }
     }
 
+    pub fn from_addr(v: Address) -> Self {
+        Self::Val1(v)
+    } 
+
 }
 
 
@@ -94,6 +98,10 @@ impl AddrOrPtr {
             },
         }
     }
+
+    pub fn from_addr(v: Address) -> Self {
+        Self::Val1(v)
+    } 
 
 }
 

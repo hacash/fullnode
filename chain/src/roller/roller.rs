@@ -24,10 +24,12 @@ impl Roller {
         }
     }
 
+    #[allow(dead_code)]
     pub fn root_height(&self) -> u64 {
         self.root.height
     }
 
+    #[allow(dead_code)]
     pub fn last_height(&self) -> u64 {
         self.chunk.upgrade().unwrap().height
     }

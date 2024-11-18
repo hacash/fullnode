@@ -12,11 +12,22 @@ pub struct BlockPkg {
 
 impl BlockPkg {
 
+	pub fn create(objc: Box<dyn Block>) -> Self {
+        let data = objc.serialize();
+		Self {
+			orgi: BlkOrigin::UNKNOWN,
+            hein: objc.height().uint(),
+			hash: objc.hash(),
+			data,
+			objc,
+		}
+	}
+
 	pub fn build(data: Vec<u8>) -> Ret<Self> {
 		let (objc, _) = block::create(&data)?;
 		Ok(Self {
 			orgi: BlkOrigin::UNKNOWN,
-            hein: objc.height().to_uint(),
+            hein: objc.height().uint(),
 			hash: objc.hash(),
 			data,
 			objc,
@@ -47,14 +58,14 @@ pub struct RecentBlockInfo {
 pub fn create_recent_block_info(blk: &dyn BlockRead) -> RecentBlockInfo {
     let coinbase = &blk.transactions()[0];
     RecentBlockInfo {
-        height:  blk.height().to_uint(),
+        height:  blk.height().uint(),
         hash:    blk.hash(),
         prev:    blk.prevhash().clone(),
-        txs:     blk.transaction_count().to_uint(), // transaction_count
+        txs:     blk.transaction_count().uint(), // transaction_count
         miner:   coinbase.main(),
-        message: coinbase.message().to_readable(),
+        message: coinbase.message().to_readable_left(),
         reward:  coinbase.reward().clone(),
-        time:    blk.timestamp().to_uint(),
+        time:    blk.timestamp().uint(),
         arrive:  curtimes(),
     }
 }

@@ -59,8 +59,8 @@ macro_rules! action_define {
             fn execute(&$pself, $pctx: &mut dyn Context) -> Ret<(u32, Vec<u8>)> {
                 #[allow(unused_mut)] 
                 let mut $pgas: u32 = 0;
-                let res: Ret<Vec<u8>> = $exec;
-                Ok(($pgas, res?))
+                let _res: Ret<Vec<u8>> = $exec;
+                Ok(($pgas, _res?))
             }
         }
 

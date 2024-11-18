@@ -1,3 +1,5 @@
+use std::collections::*;
+
 use sys::*;
 use field::{self, *, interface::*};
 
@@ -6,6 +8,7 @@ use super::action::*;
 
 
 include!{"define.rs"}
+include!{"util.rs"}
 include!{"macro.rs"}
 include!{"coinbase.rs"}
 include!{"create.rs"}

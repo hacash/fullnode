@@ -1,5 +1,6 @@
 
 
+#[allow(dead_code)]
 pub struct MemTxPool {
     group_size: Vec<usize>,
     groups: Vec<Mutex<TxGroup>>,

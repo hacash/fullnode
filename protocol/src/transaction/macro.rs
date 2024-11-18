@@ -41,6 +41,20 @@ macro_rules! transaction_define {
 
         impl $class {
             pub const TYPE: u8 = $tyid;
+
+            pub fn new_by(addr: Address, fee: Amount) -> $class {
+                $class{
+                    ty: Uint1::from($tyid),
+                    timestamp: Timestamp::from(curtimes()),
+                    addrlist: AddrOrList::from_addr(addr),
+                    fee: fee,
+                    actions: DynListAction::default(),
+                    signs: SignListW2::default(),
+                    gas_max : Uint1::default(),
+                    ano_mark: Fixed1::default(),
+                }
+            }
+
         }
 
 

@@ -80,6 +80,10 @@ macro_rules! uint_define {
                 Self{ value: v }
             }
 
+            pub fn uint(&self) -> $vty {
+                self.value
+            }
+
             pub fn to_uint(&self) -> $vty {
                 self.value
             }   

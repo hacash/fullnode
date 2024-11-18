@@ -36,7 +36,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
     if let Err(_) = blkhead.parse(&body) {
         return // parse tx error
     }
-    let blkhei = blkhead.height().to_uint();
+    let blkhei = blkhead.height().uint();
     let blkhx = blkhead.hash();
     let (already, knowkey) = check_know(&this.knows, &blkhx, peer.clone());
     if already {
@@ -48,7 +48,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
     let is_open_miner = engcnf.is_open_miner();
     let heispan = engcnf.unstable_block;
     let latest = eng.latest_block();
-    let lathei = latest.height().to_uint();
+    let lathei = latest.height().uint();
     if blkhei > heispan && blkhei < lathei - heispan {
         return // height too late
     }
@@ -63,8 +63,8 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         // do insert  ◆ ◇ ⊙ ■ □ △ ▽ ❏ ❐ ❑ ❒  ▐ ░ ▒ ▓ ▔ ▕ ■ □ ▢ ▣ ▤ ▥ ▦ ▧ ▨ ▩ ▪ ▫    
         let hxstrt = &blkhx.as_bytes()[4..12];
         let hxtail = &blkhx.as_bytes()[30..];
-        let txs = blkhead.transaction_count().to_uint() - 1;
-        let _blkts = &timeshow(blkhead.timestamp().to_uint())[14..];
+        let txs = blkhead.transaction_count().uint() - 1;
+        let _blkts = &timeshow(blkhead.timestamp().uint())[14..];
         print!("❏ block {} …{}…{} txs{:2} insert at {} ", 
             blkhei, hex::encode(hxstrt), hex::encode(hxtail), txs, &ctshow()[11..]);
         let bodycp = body.clone();
@@ -169,7 +169,7 @@ fn get_diamond_mint_number(tx: &dyn TransactionRead) -> u32 {
     for act in tx.actions() {
         if act.kind() == DMINT {
             let dm = DiamondMint::must(&act.serialize());
-            return dm.number.to_uint();
+            return dm.head.number.to_uint();
         }
     }
     0

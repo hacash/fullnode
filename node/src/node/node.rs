@@ -1,6 +1,6 @@
 
 
-
+#[allow(dead_code)]
 pub struct HacashNode {
     cnf: NodeConf,
     engine: Arc<dyn Engine>,

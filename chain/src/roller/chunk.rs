@@ -20,7 +20,7 @@ impl Chunk {
 
     pub fn create(b: Arc<dyn Block>, s: Arc<dyn State>) -> Self {
         Self {
-            height: b.height().to_uint(),
+            height: b.height().uint(),
             hash: b.hash(),
             block: b,
             state: s,

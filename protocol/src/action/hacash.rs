@@ -18,5 +18,34 @@ action_define!{ HacToTransfer, 1,
 }
 
 
+action_define!{ HacFromTransfer, 1, 
+    ActLv::MAINCALL, // level
+    false, // burn 90 fee
+    {
+        from   : AddrOrPtr
+        hacash : Amount
+    },
+    (self, _ctx, _gas {
+        Ok(vec![])
+    })
+}
+
+
+
+
+action_define!{ HacFromToTransfer, 1, 
+    ActLv::MAINCALL, // level
+    false, // burn 90 fee
+    {
+        from   : AddrOrPtr
+        to     : AddrOrPtr
+        hacash : Amount
+    },
+    (self, _ctx, _gas {
+        Ok(vec![])
+    })
+}
+
+
 
 

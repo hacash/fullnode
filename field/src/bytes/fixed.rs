@@ -96,6 +96,12 @@ macro_rules! fixed_define {
             fn to_readable_left(&self) -> String {
                self.to_readable().trim().to_owned()
             }
+            fn to_readable_or_hex(&self) -> String {
+                match check_readable_string(&self.bytes) {
+                    true => self.to_readable(),
+                    false => self.to_hex(),
+                }
+            }
         }
 
 
@@ -104,6 +110,10 @@ macro_rules! fixed_define {
 
             pub const SIZE: usize = $size as usize;
             pub const DEFAULT: Self = Self{ bytes: [0u8; $size] };
+
+            pub fn hex(&self) -> String {
+                self.to_hex()
+            }
 
             pub fn to_vec(&self) -> Vec<u8> {
                 self.bytes.to_vec()

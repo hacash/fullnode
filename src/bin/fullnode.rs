@@ -3,6 +3,7 @@ use std::sync::*;
 use sys::*;
 use chain::{engine::ChainEngine, interface::*};
 use node::node::*;
+use server::*;
 
 
 include!{"../version.rs"}
@@ -28,12 +29,12 @@ fn main() {
 
 
 pub fn fullnode(iniobj: IniObj) {
-    let empty_scaner = Box::new(EmptyBlockScaner{});
+    let empty_scaner = Arc::new(EmptyBlockScaner{});
     fullnode_with_scaner(iniobj, empty_scaner)
 }
 
 
-pub fn fullnode_with_scaner(iniobj: IniObj, scaner: Box<dyn Scaner>) {
+pub fn fullnode_with_scaner(iniobj: IniObj, scaner: Arc<dyn Scaner>) {
     let minter = Box::new(mint::HacashMinter::create(&iniobj));
     fullnode_with_minter_scaner(iniobj, minter, scaner)
 }
@@ -41,12 +42,12 @@ pub fn fullnode_with_scaner(iniobj: IniObj, scaner: Box<dyn Scaner>) {
 
 pub fn fullnode_with_minter_scaner(iniobj: IniObj, 
     minter: Box<dyn Minter>,
-    _scaner: Box<dyn Scaner>
+    scaner: Arc<dyn Scaner>
 ) {
 
-    // use std::sync::mpsc::channel;
-    // let (cltx, clrx) = channel();
-    // ctrlc::set_handler(move || cltx.send(()).unwrap()); // ctrl+c to quit
+    use std::sync::mpsc::channel;
+    let (cltx, clrx) = channel();
+    ctrlc::set_handler(move || cltx.send(()).unwrap()).unwrap(); // ctrl+c to quit
 
     // engine
     let dbv = HACASH_STATE_DB_UPDT;
@@ -54,9 +55,27 @@ pub fn fullnode_with_minter_scaner(iniobj: IniObj,
     let engptr: Arc<dyn Engine> = Arc::new(engine);
     
     // node
-    let _hnode = Arc::new(HacashNode::open(&iniobj, engptr.clone()));
+    let hnode = Arc::new(HacashNode::open(&iniobj, engptr.clone()));
 
+    // server
+    let server = DataServer::open(&iniobj, engptr.clone(), hnode.clone());
+    std::thread::spawn(move||{
+        server.start(); // http rpc 
+    });
 
+    // handle ctr+c to close
+    let hn2 = hnode.clone();
+    std::thread::spawn(move||{ loop{
+        let _ = clrx.recv();
+        let _ = scaner.exit();
+        hn2.close(); // ctrl+c to quit
+    }});
+
+    // start
+    let _ = HacashNode::start(hnode);
+
+    // on closed
+    println!("\nHacash node closed.");
 
 
     todo!()

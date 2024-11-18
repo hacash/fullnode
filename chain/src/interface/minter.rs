@@ -1,9 +1,10 @@
 
 
 pub trait Minter : Send + Sync {
+    fn config(&self) -> Box<dyn Any> { unimplemented!() }
     fn init(&self, _:&IniObj) {}
     // fn config(&self) -> &MintConf;
-    // fn next_difficulty(&self, _: &dyn BlockRead, _: &dyn Store) -> u32;
+    fn next_difficulty(&self, _: &dyn BlockRead, _: &BlockDisk) -> u32 { unimplemented!() }
     // check
     fn prepare(&self, _: &dyn DiskDB, _: &dyn BlockRead) -> Rerr { Ok(()) }
     fn consensus(&self, _: &dyn DiskDB, _: &dyn BlockRead, _: &dyn BlockRead) -> Rerr {  Ok(())  }

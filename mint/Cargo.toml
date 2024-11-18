@@ -5,5 +5,10 @@ edition = "2021"
 
 [dependencies]
 sys = {path = "../sys"}
+field = {path = "../field"}
 protocol = {path = "../protocol"}
 chain = {path = "../chain"}
+hex = "0.4.3"
+num-bigint = "0.4.6"
+num-traits = "0.2.19"
+lazy_static = "1.5.0"

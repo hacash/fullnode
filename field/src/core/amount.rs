@@ -162,6 +162,18 @@ impl Amount {
     pub fn mei(v: u64) -> Amount {
         Self::coin(v as u128, UNIT_MEI)
     }
+    pub fn zhu(v: u64) -> Amount {
+        Self::coin(v as u128, UNIT_ZHU)
+    }
+    pub fn shuo(v: u64) -> Amount {
+        Self::coin(v as u128, UNIT_SHUO)
+    }
+    pub fn ai(v: u64) -> Amount {
+        Self::coin(v as u128, UNIT_AI)
+    }
+    pub fn miao(v: u64) -> Amount {
+        Self::coin(v as u128, UNIT_MIAO)
+    }
 
     pub fn coin(mut v: u128, mut u: u8) -> Amount {
         while v % 10 == 0 {
@@ -262,6 +274,54 @@ impl Amount {
             false => u64::from_be_bytes(add_left_padding(&self.byte,  U64WIDTH).try_into().unwrap()).to_string(),
         };
         (s1, s2, self.unit.to_string())
+    }
+
+    pub fn to_unit_string(&self, unit_str: &str) -> String {
+        let unit;
+        if let Ok(u) = unit_str.parse::<u8>() {
+            unit = u;
+        }else{
+            unit = match unit_str {
+                "mei"  => UNIT_MEI,
+                "zhu"  => UNIT_ZHU,
+                "shuo" => UNIT_SHUO,
+                "ai"   => UNIT_AI,
+                "miao" => UNIT_MIAO,
+                _ => 0,
+            }
+        }
+        if unit > 0 {
+            self.to_unit_unsafe(unit).to_string()
+        }else{
+            self.to_fin_string()
+        }
+    }
+
+}
+
+impl Amount {
+
+    pub fn to_unit_unsafe(&self, base_unit: u8) -> f64 {
+        if self.is_zero() {
+            return 0f64
+        }
+        if self.tail_len() > U128WIDTH {
+            return f64::NAN
+        }
+        // 
+        let chax = (base_unit as i64 - (self.unit as i64)).abs() as u64;
+        let tv = self.tail_u128() as f64;
+        // unit
+        let base = 10f64.powf(chax as f64) as f64;
+        let mut resv = match self.unit > base_unit {
+            true => tv * base,
+            false => tv / base,
+        };
+        // sign
+        if self.dist < 0 {
+            resv = resv * -1f64;
+        }
+        resv
     }
 
 }

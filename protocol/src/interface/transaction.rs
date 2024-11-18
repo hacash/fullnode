@@ -14,12 +14,20 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
     fn main(&self) -> Address { unimplemented!() }
     fn addrs(&self) -> Vec<Address> { unimplemented!() }
 
-    fn fee(&self) -> &Amount { unimplemented!() }
+    fn timestamp(&self) -> &Timestamp { unimplemented!() }
 
+    fn fee(&self) -> &Amount { unimplemented!() }
+    fn fee_got(&self) -> Amount { unimplemented!() }
+    
     fn message(&self) -> &Fixed16 { unimplemented!() }
     fn reward(&self) -> &Amount { unimplemented!() }
 
+    fn action_count(&self) -> &Uint2 { unimplemented!() }
     fn actions(&self) -> &Vec<Box<dyn Action>> { unimplemented!() }
+    fn signs(&self) -> &Vec<Sign> { unimplemented!() }
+    
+    fn req_sign(&self) -> Vec<Address> { unimplemented!() }
+    fn verify_signature(&self) -> Rerr { unimplemented!() }
 
     fn fee_purity(&self) -> u64 { unimplemented!() }
 

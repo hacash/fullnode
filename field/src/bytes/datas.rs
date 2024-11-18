@@ -77,6 +77,22 @@ macro_rules! datas_define {
             }
         }
 
+        impl Readable for $class {
+            fn to_readable(&self) -> String {
+                bytes_to_readable_string(&self.bytes)
+            }
+            fn to_readable_left(&self) -> String {
+               self.to_readable().trim().to_owned()
+            }
+            fn to_readable_or_hex(&self) -> String {
+                match check_readable_string(&self.bytes) {
+                    true => self.to_readable(),
+                    false => self.to_hex(),
+                }
+            }
+        }
+        
+
         
         impl $class {
 

@@ -144,6 +144,10 @@ impl Fold64 {
         Self{ value: v }
     }
 
+    pub fn uint(&self) -> u64 {
+        self.value
+    }
+    
 }
 
 

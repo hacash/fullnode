@@ -2,6 +2,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast::{self, Receiver, Sender};
 
 
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct Closer {
     closech: Arc<Receiver<bool>>,

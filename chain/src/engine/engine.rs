@@ -1,4 +1,5 @@
 
+#[allow(dead_code)]
 pub struct ChainEngine {
     cnf: EngineConf,
     // 

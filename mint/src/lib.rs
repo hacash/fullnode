@@ -1,16 +1,11 @@
-
 use sys::*;
 use protocol::interface::*;
 use chain::interface::*;
 
-
-
-
+include!{"config.rs"}
 
 
 pub mod action;
-
-
 
 
 
