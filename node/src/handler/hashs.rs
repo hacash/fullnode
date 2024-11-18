@@ -34,7 +34,7 @@ impl MsgHandler {
             reshxs.push( curhx.unwrap().to_vec() );
         }
         // return hashs to peer
-        peer.send_msg(MSG_BLOCK_HASH, reshxs.concat()).await;
+        let _ = peer.send_msg(MSG_BLOCK_HASH, reshxs.concat()).await;
     }
 
     async fn receive_hashs(&self, peer: Arc<Peer>, mut buf: Vec<u8>) {

@@ -38,6 +38,14 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
 
 pub trait Transaction : TransactionRead + Field + Send + Sync {
     fn as_read(&self) -> &dyn TransactionRead;
+
+    fn set_fee(&mut self, _: Amount) { unimplemented!(); }
+    fn set_nonce(&mut self, _: Hash) { unimplemented!(); }
+
+    fn fill_sign(&mut self,_: &Account) -> Ret<Sign> { unimplemented!() }
+    fn push_sign(&mut self,_: Sign) -> Rerr { unimplemented!() }
+    fn push_action(&mut self, _: Box<dyn Action>) -> Rerr { unimplemented!() }
+
 }
 
 

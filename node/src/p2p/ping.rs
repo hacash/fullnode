@@ -58,7 +58,7 @@ async fn do_ping_nodes(peers: Vec<Arc<Peer>>) {
         let active = { peer.active.lock().unwrap().clone() };
         if now - secs(60*5) > active { // 5min
             // send ping msg
-            peer.send_p2p_msg(MSG_PING, vec![]).await;
+            let _ = peer.send_p2p_msg(MSG_PING, vec![]).await;
         } 
     }
 }

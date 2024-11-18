@@ -49,13 +49,13 @@ async fn send_req_block_msg(hdl: &MsgHandler, peer: Arc<Peer>, starthei: u64) {
     hdl.doing_sync.store(curtimes(), Ordering::Relaxed);
     // do
     let hei = Uint8::from(starthei);
-    peer.send_msg(MSG_REQ_BLOCK, hei.serialize()).await;
+    let _ = peer.send_msg(MSG_REQ_BLOCK, hei.serialize()).await;
     flush!("sync blocks from {} {}...", peer.name(), starthei);
 }
 
 async fn send_req_block_hash_msg(peer: Arc<Peer>, num: u8, starthei: u64) {
     let hei = Uint8::from(starthei);
     let buf = vec![vec![num], hei.serialize()].concat();
-    peer.send_msg(MSG_REQ_BLOCK_HASH, buf).await;
+    let _ = peer.send_msg(MSG_REQ_BLOCK_HASH, buf).await;
     // flush!("send_req_block_hash_msg {} {}...", peer.name(), starthei);
 }

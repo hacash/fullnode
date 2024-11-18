@@ -54,7 +54,7 @@ pub fn fullnode_with_minter_scaner(iniobj: IniObj,
     let engptr: Arc<dyn Engine> = Arc::new(engine);
     
     // node
-    let mut hnode = Arc::new(HacashNode::open(&iniobj, engptr.clone()));
+    let _hnode = Arc::new(HacashNode::open(&iniobj, engptr.clone()));
 
 
 

@@ -23,7 +23,7 @@ impl P2PManage {
                 _ = reconnect_tkr.tick() => {
                     let no_nodes = this.backbones().len() < 2;
                     if no_nodes && this.cnf.findnodes {
-                        this.connect_boot_nodes().await; // connect boots
+                        let _ = this.connect_boot_nodes().await; // connect boots
                     }
                 },
                 _ = findnodes_tkr.tick() => {
@@ -36,9 +36,9 @@ impl P2PManage {
                     this.ping_nodes().await; // do ping all nodes
                 },
                 _ = boostndes_tkr.tick() => {
-                    this.boost_public();
+                    this.boost_public().await;
                     if this.backbones().len() == 0 {
-                        this.connect_boot_nodes().await; // connect boots
+                        let _ = this.connect_boot_nodes().await; // connect boots
                     }
                 },
                 client = server_listener.accept() => {

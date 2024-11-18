@@ -57,7 +57,7 @@ impl P2PManage {
 
         }else if MSG_REQUEST_NODE_KEY_FOR_PUBLIC_CHECK == ty {
             let buf = self.cnf.node_key.clone();
-            AsyncWriteExt::write_all(conn, &buf).await;
+            let _ = AsyncWriteExt::write_all(conn, &buf).await;
             return errf!("ok") // finish close
 
         }else if MSG_REQUEST_NEAREST_PUBLIC_NODES == ty {
@@ -65,7 +65,7 @@ impl P2PManage {
             let (count, adrbts) = serialize_public_nodes(&peerlist, 100); // max 100
             let retbts = vec![vec![count as u8], adrbts].concat(); // + len
             // println!("msg MSG_REQUEST_NEAREST_PUBLIC_NODES return {}", retbts.hex());
-            AsyncWriteExt::write_all(conn, &retbts).await;
+            let _ = AsyncWriteExt::write_all(conn, &retbts).await;
             return errf!("ok") // finish close
         }
         // other msg

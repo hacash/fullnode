@@ -6,7 +6,7 @@ impl MsgHandler {
         // println!("+++ send_status_to_peer peer={}", peer.nick());
         let my_status = create_status(self);
         let msgbuf = my_status.serialize();
-        peer.send_msg(MSG_STATUS, msgbuf).await;
+        let _ = peer.send_msg(MSG_STATUS, msgbuf).await;
     }
 
     async fn receive_status(&self, peer: Arc<Peer>, buf: Vec<u8>) {

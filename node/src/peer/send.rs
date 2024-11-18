@@ -20,7 +20,7 @@ impl Peer {
                 Some(w) => w,
             };
         }
-        tcp_send(&mut w, buf).await;
+        let _ = tcp_send(&mut w, buf).await;
         {
             *self.conn_write.lock().unwrap() = Some(w);
         }

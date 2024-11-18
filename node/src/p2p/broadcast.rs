@@ -21,7 +21,7 @@ impl P2PManage {
         // send each
         for peer in resps {
             // println!("broadcast_unaware msg={} to peer={}", ty, peer.nick());
-            peer.send(&msgbuf).await;
+            let _ = peer.send(&msgbuf).await;
         }
     }
 

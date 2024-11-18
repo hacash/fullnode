@@ -28,7 +28,7 @@ impl Closer {
     }
 
     pub fn close(&self) {
-        self.closechtx.send(true);
+        let _ = self.closechtx.send(true);
     }
 
 }

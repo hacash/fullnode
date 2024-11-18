@@ -39,7 +39,7 @@ impl MsgHandler {
             resblkdts,
         ].concat();
         // return blocks to peer
-        peer.send_msg(MSG_BLOCK, msgbody).await;
+        let _ = peer.send_msg(MSG_BLOCK, msgbody).await;
     }
     
     async fn receive_blocks(&self, peer: Arc<Peer>, mut buf: Vec<u8>) {

@@ -9,7 +9,12 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
     let txpool = hnode.txpool();
     let txplptr = txpool.as_ref();
     let my_acc = &engcnf.dmer_bid_account;
+    let mut bid_step = engcnf.dmer_bid_step.clone();
+    let min_step = Amount::coin(1, 244);
     let my_addr = Address::from(*my_acc.address());
+    if bid_step < min_step {
+        bid_step = min_step;
+    }
 
     macro_rules! retry {
         ($ms: expr) => {
@@ -37,9 +42,13 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
     }
 
     let first_bid_fee = first_bid_txp.objc.fee();
-    if first_bid_fee.more_than(&engcnf.dmer_bid_max) {
+    if *first_bid_fee > engcnf.dmer_bid_max {
         retry!(10); // my max too low
     }
+    let Ok(first_bid_fee) = first_bid_fee.compress(2, true) else {
+        printerr!("cannot compress fee {} to 4 legnth",  &first_bid_fee.to_fin_string() );
+        retry!(10); // move step fail
+    };
 
     let Some(my_bid_txp) = pick_my_bid_tx(txplptr, &my_addr) else {
         retry!(3); // have no my tx
@@ -51,29 +60,26 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
     }
 
     let my_bid_fee = my_bid_txp.objc.fee();
-    if my_bid_fee.more_or_equal(&engcnf.dmer_bid_max) {
+    if my_bid_fee >= &engcnf.dmer_bid_max {
         retry!(5); // my fee up max
     }
 
-    let Ok(mut new_bid_fee) = first_bid_fee.add(&engcnf.dmer_bid_step) else {
+    let Ok(new_bid_fee) = first_bid_fee.add_mode_u64(&bid_step) else {
         printerr!("cannot add fee {} with {}, ", 
-            &first_bid_fee.to_fin_string(), &engcnf.dmer_bid_step.to_fin_string()
+            &first_bid_fee.to_fin_string(), bid_step.to_fin_string()
         );
         retry!(10); // move step fail
     };
-    let Ok(mut new_bid_fee) = new_bid_fee.compress(4, true) else {
-        printerr!("cannot compress fee {} to 4 legnth", 
-            &new_bid_fee.to_fin_string()
-        );
+    let Ok(mut new_bid_fee) = new_bid_fee.compress(2, true) else {
+        printerr!("cannot compress fee {} to 4 legnth", &new_bid_fee.to_fin_string());
         retry!(10); // move step fail
     };
-    if new_bid_fee.more_than(&engcnf.dmer_bid_max) {
+    if new_bid_fee > engcnf.dmer_bid_max {
         new_bid_fee = engcnf.dmer_bid_max.clone()
     }
-    if new_bid_fee.less_or_equal(first_bid_fee) {
+    if new_bid_fee <= first_bid_fee {
         retry!(10); // my max too low
     }
-
     // ok
     if let Some(mint) = checkout_diamond_mint_action(my_bid_txp.objc.as_read()) {
         let dia = mint.diamond.to_readable();
@@ -90,7 +96,7 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
     // raise fee
     let mut my_tx = my_bid_txp.into_transaction();
     my_tx.set_fee(new_bid_fee.clone());
-    my_tx.fill_sign(&engcnf.dmer_bid_account);
+    let _ = my_tx.fill_sign(&engcnf.dmer_bid_account);
     let txp = TxPkg::create(my_tx);
 
     // submit tx
@@ -115,7 +121,7 @@ fn pick_my_bid_tx(tx_pool: &dyn TxPool, my_addr: &Address) -> Option<TxPkg> {
         }
         true // next
     };
-    tx_pool.iter_at(&mut pick_dmint, TXPOOL_GROUP_DIAMOND_MINT);
+    let _ = tx_pool.iter_at(&mut pick_dmint, TXPOOL_GROUP_DIAMOND_MINT);
     // ok
     my_bid_tx
 }
@@ -129,7 +135,7 @@ fn pick_first_bid_tx(tx_pool: &dyn TxPool) -> Option<TxPkg> {
         first = Some(a.clone());
         return false // end
     };
-    tx_pool.iter_at(&mut pick_dmint, TXPOOL_GROUP_DIAMOND_MINT);
+    let _ = tx_pool.iter_at(&mut pick_dmint, TXPOOL_GROUP_DIAMOND_MINT);
     // ok
     first
 }

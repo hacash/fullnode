@@ -6,12 +6,10 @@ impl TxGroup {
     }
 
     fn remove(&mut self, txhx: &Hash) -> Option<TxPkg> {
-        let rmid = self.search(txhx);
-        let rmid = match rmid {
-            None => return None, // not find
-            Some(idx) => idx,
+        let Some(rmid) = self.search(txhx) else {
+            return None
         };
-        // rm & ret
+        // remove
         Some(self.txpkgs.remove(rmid))
     }
 
@@ -45,6 +43,19 @@ impl TxGroup {
 
     // delete one tx
     fn del_one(&mut self, hx: &Hash) -> bool {
+        let mut rmidx: usize = 0;
+        for tx in self.txpkgs.iter() {
+            if tx.hash == *hx {
+                self.txpkgs.remove(rmidx);
+                return true
+            }
+            rmidx += 1;
+        }
+        // not find
+        false
+
+        /*
+
         let num = self.txpkgs.len();
         if num <= 0 {
             return false // nothing
@@ -70,6 +81,7 @@ impl TxGroup {
             self.txpkgs.remove(i);
         }
         true
+        */
     }
     
 

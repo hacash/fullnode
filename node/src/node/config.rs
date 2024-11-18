@@ -95,7 +95,7 @@ fn read_node_key(ini: &IniObj) -> [u8; 16] {
     let mut nidfile = OpenOptions::new().read(true).write(true).create(true).open(nidfp).expect("cannot open node info file.");
     // read
     let mut snid = String::new();
-    nidfile.read_to_string(&mut snid);
+    nidfile.read_to_string(&mut snid).unwrap();
     // println!("read node id = {}", snid);
     if let Ok(nid) = hex::decode(&snid) {
         if nid.len() == 16 {
@@ -104,8 +104,8 @@ fn read_node_key(ini: &IniObj) -> [u8; 16] {
     }
     if node_key[0] == 0 && node_key[15] == 0 {
         // save
-        getrandom::getrandom(&mut node_key);
-        nidfile.write_all(hex::encode(&node_key).as_bytes());
+        getrandom::getrandom(&mut node_key).unwrap();
+        nidfile.write_all(hex::encode(&node_key).as_bytes()).unwrap();
     }
     // let nidhx = hex::encode(&node_key);
     // println!("node id = {}", nidhx);

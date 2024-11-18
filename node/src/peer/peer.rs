@@ -51,10 +51,10 @@ impl Peer {
         // drop conn obj to close
         // do close first
         let close_msg = vec![0u8,0,0,1,MSG_REQUEST_NEAREST_PUBLIC_NODES];
-        tcp_send(&mut w, &close_msg).await; // send close mark
+        let _ = tcp_send(&mut w, &close_msg).await; // send close mark
         // do close two
         let close_msg = vec![0u8,0,0,1,MSG_CLOSE]; // close
-        tcp_send(&mut w, &close_msg).await; // send close mark
+        let _ = tcp_send(&mut w, &close_msg).await; // send close mark
         w.forget();
     }
 

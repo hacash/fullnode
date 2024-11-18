@@ -21,7 +21,7 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
             return // tx execute fail
         }
         // add to pool
-        this.txpool.insert(txpkg);
+        let _ = this.txpool.insert(txpkg);
     }
     // broadcast
     let p2p = this.p2pmng.lock().unwrap();
@@ -83,7 +83,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
             }else{
                 println!("ok.");
                 if is_open_miner {
-                    drain_all_block_txs(engptr.as_ref().as_read(), txpool, thsx, blkhei);
+                    drain_all_block_txs(engptr.as_ref().as_read(), txpool.as_ref(), thsx, blkhei);
                 }
             }
         });
@@ -117,17 +117,17 @@ fn check_know(mine: &Knowledge, hxkey: &Hash, peer: Option<Arc<Peer>>) -> (bool,
 
 
 // drain_all_block_txs
-fn drain_all_block_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, txs: Vec<Hash>, blkhei: u64) {
+fn drain_all_block_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, txs: Vec<Hash>, blkhei: u64) {
     if blkhei % 15 == 0 {
         println!("{}.", txpool.print());
     }
     // drop all exist normal tx
     if txs.len() > 0 {
-        txpool.drain(&txs);
+        let _ = txpool.drain(&txs);
     }
     // drop all overdue diamond mint tx
     if blkhei % 5 == 0 {
-        clean_invalid_diamond_mint_txs(eng.clone(), txpool.clone(), blkhei);
+        clean_invalid_diamond_mint_txs(eng, txpool, blkhei);
     }
     // drop invalid normal
     if blkhei % 48 == 0 { // 4 hours
@@ -137,9 +137,9 @@ fn drain_all_block_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, txs: Vec<H
 
 
 // clean_
-fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, _blkhei: u64) {
+fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _blkhei: u64) {
     // already minted hacd number
-    txpool.drain_filter_at(&|a: &TxPkg| {
+    let _ = txpool.drain_filter_at(&|a: &TxPkg| {
         match eng.try_execute_tx( a.objc.as_read() ) {
             Err(..) => true, // delete
             _ => false,
@@ -149,11 +149,11 @@ fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, _blkh
 
 
 // clean_
-fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: Arc<dyn TxPool>, _blkhei: u64) {
+fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _blkhei: u64) {
     // already minted hacd number
     let sta = eng.state();
     let curdn = CoreStateRead::wrap(sta).get_latest_diamond().number.to_uint();
-    txpool.drain_filter_at(&|a: &TxPkg| {
+    let _ = txpool.drain_filter_at(&|a: &TxPkg| {
         let tx = a.objc.as_read();
         let dn = get_diamond_mint_number(tx);
         // println!("TXPOOL: drain_filter_at dmint, tx: {}, dn: {}, last dn: {}", tx.hash().hex(), dn, ldn);

@@ -27,7 +27,7 @@ impl P2PManage {
 
         // event loop
         // this.event_loop().await;
-        P2PManage::event_loop(this).await;
+        let _ = P2PManage::event_loop(this).await;
         Ok(())
     }
 

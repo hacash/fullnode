@@ -320,15 +320,15 @@ impl Amount {
 
     pub fn add(&self, amt: &Amount, mode: AmtMode) -> Ret<Amount> {
         match mode {
-            AmtMode::U64 => add_mode_u64(self, amt),
-            AmtMode::U128 => add_mode_u128(self, amt),
+            AmtMode::U64 => self.add_mode_u64(amt),
+            AmtMode::U128 => self.add_mode_u128(amt),
         }
     }
 
     pub fn sub(&self, amt: &Amount, mode: AmtMode) -> Ret<Amount> {
         match mode {
-            AmtMode::U64 => sub_mode_u64(self, amt),
-            AmtMode::U128 => sub_mode_u128(self, amt),
+            AmtMode::U64 => self.sub_mode_u64(amt),
+            AmtMode::U128 => self.sub_mode_u128(amt),
         }
     }
 
@@ -395,7 +395,8 @@ fn drop_left_zero(v: &[u8]) -> Vec<u8> {
 macro_rules! compute_mode_define {
     ($fun:ident, $op: ident, $ty:ty, $ts:expr) => {
 
-        fn $fun(dst: &Amount, src: &Amount) -> Ret<Amount> {
+        pub fn $fun(&self, src: &Amount) -> Ret<Amount> {
+            let dst: &Amount = self;
             if dst.dist < 0 || src.dist < 0 {
                 rte_cneg!{stringify!($op)}
             }
@@ -447,14 +448,14 @@ macro_rules! compute_mode_define {
     }
 }
 
+impl Amount {
 
 compute_mode_define!{add_mode_u64,  checked_add, u64,   U64WIDTH}
 compute_mode_define!{add_mode_u128, checked_add, u128, U128WIDTH}
 compute_mode_define!{sub_mode_u64,  checked_sub, u64,   U64WIDTH}
 compute_mode_define!{sub_mode_u128, checked_sub, u128, U128WIDTH}
 
-
-
+}
 
 
 

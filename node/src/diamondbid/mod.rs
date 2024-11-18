@@ -26,7 +26,7 @@ pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> Rerr {
     let cnf = eng.config();
     let bidmin = cnf.dmer_bid_min.clone();
     let bidmax = cnf.dmer_bid_max.clone();
-    let mut bidstep = cnf.dmer_bid_step.clone();
+    let bidstep = cnf.dmer_bid_step.clone();
     let minstep = Amount::coin(1, 244);
 
     if ! cnf.dmer_enable {
@@ -42,14 +42,13 @@ pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> Rerr {
         }
     }
 
-    if bidstep.less_than(&minstep) {
+    if bidstep < minstep {
         printerr!("bid step amount cannot less than {} HAC",
             &minstep.to_fin_string()
         );
-        bidstep = minstep;
     }
 
-    if bidmax.less_than(&bidmin) {
+    if bidmax < bidmin {
         printerr!("max bid fee {} cannot less than min fee {}", 
             &bidmax.to_fin_string(), &bidmin.to_fin_string()
         );
