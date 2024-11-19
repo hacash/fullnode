@@ -1,11 +1,11 @@
 const U128WIDTH: usize = u128::BITS as usize / 8;
 const U64WIDTH:  usize =  u64::BITS as usize / 8;
 
-#[allow(dead_code)] const UNIT_MEI:  u8 = 248;
-#[allow(dead_code)] const UNIT_ZHU:  u8 = 240;
-#[allow(dead_code)] const UNIT_SHUO: u8 = 232;
-#[allow(dead_code)] const UNIT_AI:   u8 = 224;
-#[allow(dead_code)] const UNIT_MIAO: u8 = 216;
+pub const UNIT_MEI:  u8 = 248;
+pub const UNIT_ZHU:  u8 = 240;
+pub const UNIT_SHUO: u8 = 232;
+pub const UNIT_AI:   u8 = 224;
+pub const UNIT_MIAO: u8 = 216;
 
 
 const FROM_CHARS: &[u8; 14] = b"0123456789-.: "; 

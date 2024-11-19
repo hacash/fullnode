@@ -80,10 +80,11 @@ impl Transaction for TransactionCoinbase {
 
 impl TxExec for TransactionCoinbase {
     
-    fn execute(&self, _: &mut dyn Context) -> Rerr {
-        
-
-        todo!()
+    fn execute(&self, ctx: &mut dyn Context) -> Rerr {
+        let addr = self.main();
+        let amt = self.reward();
+        operate::hac_add(ctx, &addr, amt)?;
+        Ok(())
     }
 
     /*
