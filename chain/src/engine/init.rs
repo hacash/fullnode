@@ -28,7 +28,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
     let status = disk.status();
     // next
     let mut next_height: u64 = {
-        let chei = this.roller.lock().unwrap().root.height;
+        let chei = this.roller.read().unwrap().root.height;
         chei
     };
     // build unstable blocks 

@@ -8,7 +8,11 @@ pub struct ChainEngine {
 
     // data
     disk: Arc<dyn DiskDB>,
-    roller: Mutex<Roller>,
+    blockdisk: BlockDisk,
+
+    roller: RwLock<Roller>,
+
+    isrtlk: Mutex<()>,
 
 }
 
@@ -38,14 +42,17 @@ impl ChainEngine {
         // base or genesis block
         let bsblk =  load_root_block(minter.as_ref(), disk.clone(), is_state_upgrade);
         let roller = Roller::create(cnf.unstable_block, bsblk, staptr);
-        let roller = Mutex::new(roller);
+        let roller = RwLock::new(roller);
         // engine
+        let d1 = disk.clone();
         let mut engine = ChainEngine {
             cnf,
             minter,
             scaner,
-            disk,
             roller,
+            disk,
+            blockdisk: BlockDisk::wrap(d1),
+            isrtlk: ().into(),
         };
         rebuild_unstable_blocks(&mut engine);
         engine
@@ -55,18 +62,4 @@ impl ChainEngine {
 
 }
 
-
-impl EngineRead for ChainEngine {}
-
-impl Engine for ChainEngine {
-    fn as_read(&self) -> &dyn EngineRead {
-        self
-    }
-
-    fn exit(&self) {
-        self.minter.exit();
-        self.scaner.exit();
-    }
-
-}
 

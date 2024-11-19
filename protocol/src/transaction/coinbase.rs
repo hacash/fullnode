@@ -42,6 +42,10 @@ impl TransactionRead for TransactionCoinbase {
         self.address.clone()
     }
 
+    fn addrs(&self) -> Vec<Address> {
+        vec![self.main()]
+    }
+
     fn reward(&self) -> &Amount {
         &self.reward
     }
@@ -77,7 +81,9 @@ impl Transaction for TransactionCoinbase {
 impl TxExec for TransactionCoinbase {
     
     fn execute(&self, _: &mut dyn Context) -> Rerr {
-        unimplemented!()
+        
+
+        todo!()
     }
 
     /*

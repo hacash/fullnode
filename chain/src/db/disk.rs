@@ -47,6 +47,14 @@ impl DiskDB for DiskKV {
         self.ldb.get_u8(&opt, k).unwrap() // must 
     }
 
+    fn save_batch(&self, kvs: Vec<(Vec<u8>, Vec<u8>)>) {
+        let batch = WriteBatch::new();
+        for (k, v) in kvs.iter() {
+            batch.put_u8(k, v);
+        }
+        self.ldb.write(&WriteOptions::new(), &batch).unwrap(); // must
+    }
 }
+
 
 

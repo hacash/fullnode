@@ -18,5 +18,6 @@ include!{"config.rs"}
 include!{"engine.rs"}
 include!{"init.rs"}
 include!{"insert.rs"}
+include!{"trait.rs"}
 
 

@@ -92,6 +92,10 @@ macro_rules! uint_define {
                 &self.value
             }   
 
+            pub fn to_vec(&self) -> Vec<u8> {
+                self.to_bytes().into()
+            }
+
             pub fn to_bytes(&self) -> [u8; $size] {
                 let mut real = [0u8; $size];
                 let bts = <$vty>::to_be_bytes(self.value);

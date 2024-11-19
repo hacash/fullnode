@@ -11,7 +11,7 @@ pub trait EngineRead: Send + Sync {
 
     // fn confirm_state(&self) -> (Arc<dyn State>, Arc<dyn BlockPkg>) { unimplemented!() }
     fn latest_block(&self) -> Arc<dyn Block> { unimplemented!() }
-    fn mint_checker(&self) -> Arc<dyn Minter> { unimplemented!() }
+    fn mint_checker(&self) -> &dyn Minter { unimplemented!() }
 
     fn recent_blocks(&self) -> Vec<Arc<RecentBlockInfo>> { unimplemented!() }
     fn average_fee_purity(&self) -> u64 { 0 } // 1w zhu(shuo) / 200byte(1trs)
