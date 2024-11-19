@@ -76,6 +76,10 @@ impl_field_only_new!{$class}
 
 impl $class {
 
+	pub fn length(&self) -> usize {
+		self.count.uint() as usize
+	}
+
 	pub fn count(&self) -> &$cty {
 		&self.count
 	}
@@ -83,6 +87,15 @@ impl $class {
 	pub fn list(&self) -> &Vec<$vty> {
 		&self.lists
 	}
+
+    pub fn replace(&mut self, i: usize, v: $vty) -> Rerr {
+        let tl = self.length() as usize;
+        if i >= tl {
+            return errf!("list index overflow")
+        }
+        self.lists[i] = v;
+        Ok(())
+    }
 
 	pub fn push(&mut self, v: $vty) -> Rerr {
         if *self.count as usize + 1 > <$cty>::MAX as usize {

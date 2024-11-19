@@ -66,6 +66,15 @@ impl_field_only_new!{$class}
 
 impl $class {
 
+    pub fn replace(&mut self, i: usize, v: Box<dyn $dynty>) -> Rerr {
+        let tl = self.length() as usize;
+        if i >= tl {
+            return errf!("list index overflow")
+        }
+        self.vlist[i] = v;
+        Ok(())
+    }
+
 	pub fn push(&mut self, v: Box<dyn $dynty>) -> Rerr {
         if *self.count >= <$lenty>::MAX {
             return errf!("list length overflow");
@@ -84,6 +93,10 @@ impl $class {
                 self.vlist.pop()
             }
         }
+	}
+
+	pub fn length(&self) -> usize {
+		self.count.uint() as usize
 	}
 
 	pub fn count(&self) -> &$lenty {

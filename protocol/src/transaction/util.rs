@@ -6,7 +6,7 @@ pub fn verify_tx_signature(tx: &dyn TransactionRead) -> Rerr {
     let hx = tx.hash();
     let hxwf = tx.hash_with_fee();
     let signs = tx.signs();
-    let addrs = tx.req_sign();
+    let addrs = tx.req_sign()?;
     let main_addr = tx.main();
     let txty = tx.ty();
     for adr in addrs {
@@ -24,7 +24,7 @@ pub fn check_tx_signature(tx: &dyn TransactionRead) -> Ret<HashMap<Address, bool
     let hx = tx.hash();
     let hxwf = tx.hash_with_fee();
     let signs = tx.signs();
-    let addrs = tx.req_sign();
+    let addrs = tx.req_sign()?;
     let main_addr = tx.main();
     let txty = tx.ty();
     let mut ckres = HashMap::new();

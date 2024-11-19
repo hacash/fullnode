@@ -4,6 +4,8 @@ pub struct ChainEngine {
     cnf: EngineConf,
     // 
     minter: Box<dyn Minter>,
+    scaner: Box<dyn Scaner>,
+
     // data
     disk: Arc<dyn DiskDB>,
     roller: Mutex<Roller>,
@@ -15,7 +17,8 @@ impl ChainEngine {
 
 
     pub fn open(ini: &IniObj, dbv: u32,
-        minter: Box<dyn Minter>
+        minter: Box<dyn Minter>,
+        scaner: Box<dyn Scaner>
     ) -> ChainEngine {
         // init
         minter.init(ini); 
@@ -33,16 +36,14 @@ impl ChainEngine {
         let state = StateInst::build(Arc::new(sta_db), Weak::<StateInst>::new());
         let staptr = Arc::new(state);
         // base or genesis block
-        let bsblk = match is_state_upgrade {
-            true => minter.genesis_block().into(), // rebuild all block
-            false => load_root_block(minter.as_ref(), disk.clone())
-        };
-        let roller = Roller::create(cnf.unstable_block, bsblk.into(), staptr);
+        let bsblk =  load_root_block(minter.as_ref(), disk.clone(), is_state_upgrade);
+        let roller = Roller::create(cnf.unstable_block, bsblk, staptr);
         let roller = Mutex::new(roller);
         // engine
         let mut engine = ChainEngine {
             cnf,
             minter,
+            scaner,
             disk,
             roller,
         };
@@ -61,5 +62,11 @@ impl Engine for ChainEngine {
     fn as_read(&self) -> &dyn EngineRead {
         self
     }
+
+    fn exit(&self) {
+        self.minter.exit();
+        self.scaner.exit();
+    }
+
 }
 

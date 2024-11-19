@@ -1,6 +1,6 @@
 
 
-impl RPCServer {
+impl HttpServer {
 
     #[allow(dead_code)]
     fn route_rpc(&self, _app: &mut Router, _pathkind: &str) {
@@ -9,7 +9,7 @@ impl RPCServer {
     }
 
     /*
-    fn app_router(rpc: Arc<RPCServer>) -> Router {
+    fn app_router(rpc: Arc<HttpServer>) -> Router {
         let app = Router::new();
         
         // stable rpc

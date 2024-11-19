@@ -1,6 +1,6 @@
 
 
-impl RPCServer {
+impl HttpServer {
 
     pub fn start(self) {
         if !self.cnf.enable {
@@ -13,10 +13,11 @@ impl RPCServer {
         });
     }
 
+
 }
 
 
-async fn server_listen(ser: RPCServer) {
+async fn server_listen(ser: HttpServer) {
     let port = ser.cnf.listen;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await;

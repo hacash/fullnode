@@ -1,19 +1,24 @@
 use block::BlkOrigin;
 
 
-
-fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>) -> Box<dyn Block> {
+fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>, is_state_upgrade: bool) -> Arc<dyn Block> {
+    let ret_gns_blk = ||{
+        minter.genesis_block().clone()
+    };
+    if is_state_upgrade {
+        return ret_gns_blk() // genesis block for upgrade
+    }
     let disk = BlockDisk::wrap(disk.clone());
     let status = disk.status();
     let rhei = &status.root_height;
     let rhein = rhei.to_uint();
     if 0 == rhein {
-        return minter.genesis_block().into() // genesis block
+        return ret_gns_blk() // genesis block
     }
     let Some((_, _, resblk)) = disk.block_by_height(&rhei) else {
         panic!("rebuild state error, cannot laod block {}", rhein)
     };
-    resblk
+    resblk.into()
 }
 
 

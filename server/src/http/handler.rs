@@ -1,7 +1,7 @@
 
 /*
 #[async_trait]
-impl Handler<Request> for RPCServer {
+impl Handler<Request> for HttpServer {
     type Output = Result<Response>;
     async fn call(&self, req: Request) -> Self::Output {
         let path = req.path();

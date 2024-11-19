@@ -21,9 +21,9 @@ combi_struct!{ TransactionCoinbase,
 }
 
 
+
 impl TransactionRead for TransactionCoinbase {
 
-    /*
     fn hash(&self) -> Hash { 
         let stuff = self.serialize();
         let hx = x16rs::calculate_hash(stuff);
@@ -33,27 +33,27 @@ impl TransactionRead for TransactionCoinbase {
     fn hash_with_fee(&self) -> Hash {
         self.hash()
     }
-    */
 
     fn ty(&self) -> u8 {
-        self.ty.to_uint()
+        self.ty.to_u8()
     }
 
     fn main(&self) -> Address {
         self.address.clone()
     }
 
-    /*
     fn reward(&self) -> &Amount {
         &self.reward
     }
 
-    fn message(&self) -> &StringTrim16 {
+    fn message(&self) -> &Fixed16 {
         &self.message
     }
-    */
 
     // call ret error
+    fn verify_signature(&self) -> Rerr {
+        errf!("cannot call verify_signature() in coinbase tx")
+    }
     
 }
 
@@ -62,15 +62,17 @@ impl Transaction for TransactionCoinbase {
         self
     }
 
-    /*
     fn set_nonce(&mut self, nonce: Hash) { 
-        match &mut self.extend.datas_v1 {
+        match &mut self.extend.extend {
             Some(ref mut d) => d.miner_nonce = nonce,
             _ => (), // do nothing
         };
     }
-    */
 }
+
+
+
+
 
 impl TxExec for TransactionCoinbase {
     

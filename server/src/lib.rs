@@ -14,6 +14,6 @@ mod rpc;
 pub mod http;
 
 // extend
-pub type DataServer = http::RPCServer;
+pub type HttpServer = http::HttpServer;
 
 

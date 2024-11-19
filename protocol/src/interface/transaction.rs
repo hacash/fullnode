@@ -26,7 +26,7 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
     fn actions(&self) -> &Vec<Box<dyn Action>> { unimplemented!() }
     fn signs(&self) -> &Vec<Sign> { unimplemented!() }
     
-    fn req_sign(&self) -> Vec<Address> { unimplemented!() }
+    fn req_sign(&self) -> Ret<HashSet<Address>> { unimplemented!() }
     fn verify_signature(&self) -> Rerr { unimplemented!() }
 
     fn fee_purity(&self) -> u64 { unimplemented!() }

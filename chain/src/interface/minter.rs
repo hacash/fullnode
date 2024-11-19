@@ -12,10 +12,10 @@ pub trait Minter : Send + Sync {
     // do
     fn initialize(&self, _: &mut dyn State) -> Rerr { Ok(()) }
     // data
-    fn genesis(&self) -> Arc<dyn Block> { unimplemented!() }
-    fn genesis_block(&self) -> Box<dyn Block> { unimplemented!() }
+    fn genesis_block(&self) -> Arc<dyn Block> { unimplemented!() }
     // actions
     // fn actions(&self) -> Vec<Box<dyn Action>>;
+    fn exit(&self) {}
 }
 
 

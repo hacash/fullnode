@@ -27,6 +27,8 @@ pub trait Engine : EngineRead + Send + Sync {
     // fn start(&self) -> Option<Error> { unimplemented!() }
     fn insert(&self, _: BlockPkg) -> Rerr { unimplemented!() }
     fn insert_sync(&self, _: u64, _: Vec<u8>) -> Rerr { unimplemented!() }
+
+    fn exit(&self) {}
 }
 
 

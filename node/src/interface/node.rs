@@ -9,5 +9,8 @@ pub trait HNode: Send + Sync {
     fn txpool(&self) -> Arc<dyn TxPool> { unimplemented!() }
 
     fn all_peer_prints(&self) -> Vec<String> { unimplemented!() }
+
+    fn exit(&self) {}
+    
 }
 

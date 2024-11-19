@@ -378,6 +378,13 @@ impl Amount {
 // compute 
 impl Amount {
 
+    pub fn unit_sub(&mut self, sub: u8) {
+        if self.unit <= sub {
+            panic!("unit_sub error: unit must big than {}", sub)
+        }
+        self.unit -= sub;
+    }
+
     pub fn add(&self, amt: &Amount, mode: AmtMode) -> Ret<Amount> {
         match mode {
             AmtMode::U64 => self.add_mode_u64(amt),

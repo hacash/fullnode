@@ -1,16 +1,16 @@
 
 #[derive(Clone)]
-pub struct RPCServer {
+pub struct HttpServer {
     cnf: ServerConf,
     engine: ChainEngine,
     hcshnd: ChainNode,
 }
 
 
-impl RPCServer {
-    pub fn open(iniobj: &IniObj, eng: ChainEngine, nd: ChainNode) -> RPCServer {
+impl HttpServer {
+    pub fn open(iniobj: &IniObj, eng: ChainEngine, nd: ChainNode) -> HttpServer {
         let cnf = ServerConf::new(iniobj);
-        RPCServer{
+        HttpServer{
             cnf: cnf,
             engine: eng,
             hcshnd: nd,

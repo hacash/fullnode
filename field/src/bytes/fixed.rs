@@ -73,6 +73,12 @@ macro_rules! fixed_define {
 
 
         impl Hex for $class {
+            fn from_hex(buf: &[u8]) -> Self {
+                let bts = bytes_from_hex(buf, $size).unwrap();
+                Self {
+                    bytes: bts.try_into().unwrap()
+                }
+            }
             fn to_hex(&self) -> String {
                 hex::encode(&self.bytes)
             }

@@ -1,11 +1,14 @@
-
 /*
 
-    RUSTFLAGS="-C target-feature=-crt-static" cargo build
+RUSTFLAGS="-C target-feature=-crt-static" cargo build
+
 
 */
 
 
 
-include!{"./bin/fullnode.rs"}
 
+/*
+* main fullnode
+*/
+include!{"./bin/fullnode.rs"}
