@@ -1,3 +1,4 @@
+
 use num_bigint::*;
 use num_bigint::Sign::*;
 use num_traits::*;
@@ -48,7 +49,7 @@ impl Ord for Amount {
         if self.equal(other) {
             return Ordering::Equal
         }
-        if self.more_than(other) {
+        if self.greater(other) {
             return Ordering::Greater
         }
         return Ordering::Less
@@ -175,60 +176,49 @@ impl Amount {
         Self::default()
     }
     pub fn mei(v: u64) -> Amount {
-        Self::coin(v as u128, UNIT_MEI)
+        Self::coin(v, UNIT_MEI)
     }
     pub fn zhu(v: u64) -> Amount {
-        Self::coin(v as u128, UNIT_ZHU)
+        Self::coin(v, UNIT_ZHU)
     }
     pub fn shuo(v: u64) -> Amount {
-        Self::coin(v as u128, UNIT_SHUO)
+        Self::coin(v, UNIT_SHUO)
     }
     pub fn ai(v: u64) -> Amount {
-        Self::coin(v as u128, UNIT_AI)
+        Self::coin(v, UNIT_AI)
     }
     pub fn miao(v: u64) -> Amount {
-        Self::coin(v as u128, UNIT_MIAO)
+        Self::coin(v, UNIT_MIAO)
     }
 
     coin_with!{coin_u128, u128}
     coin_with!{coin_u64,  u64}
 
-    pub fn coin(v: u128, u: u8) -> Amount {
-        Self::coin_u128(v, u)
+    pub fn coin(v: u64, u: u8) -> Amount {
+        Self::coin_u64(v, u)
     }
 
     pub fn from(v: &str) -> Ret<Amount> {
-        let mut v = v.replace(",", "").replace(" ", "").replace("\n", "");
+        let v = v.replace(",", "").replace(" ", "").replace("\n", "");
         for a in v.chars() {
             if ! FROM_CHARS.contains(&(a as u8)) {
                 ret_amtfmte!{"unsupported characters", String::from(a)}
             }
         }
-        let negmark: i8 = match v.starts_with("-") {
-            false => 1,
-            true => {
-                v = v.trim_start_matches('-').to_string();
-                -1
-            }
-        };
         match v.contains(":") {
-            true  => Self::from_fin(v, negmark),
-            false => Self::from_mei(v, negmark),
+            true  => Self::from_fin(v),
+            false => Self::from_mei(v),
         } 
     }
 
-    fn from_fin(v: String, negmark: i8) -> Ret<Amount> {
+    fn from_fin(v: String) -> Ret<Amount> {
         let amt: Vec<&str> = v.split(":").collect();
         let Ok(u) = amt[1].parse::<u8>() else {
             ret_amtfmte!{"unit", amt[1]}
         };
-        let Ok(v) = amt[0].parse::<u128>() else {
+        let Ok(v) = amt[0].parse::<i128>() else {
             // from bigint
-            let nstr = match negmark > 0 {
-                true => "",
-                false => "-",
-            }.to_owned() + &amt[0];
-            let Ok(bign) = BigInt::from_str_radix(&nstr, 10) else {
+            let Ok(bign) = BigInt::from_str_radix(&amt[0], 10) else {
                 return errf!("amount '{}' overflow BigInt::from_str_radix", &v)
             };
             let mut amt = Self::from_bigint(&bign)?;
@@ -236,12 +226,14 @@ impl Amount {
             return Ok(amt)
         };
         // from u128
-        let mut amt = Self::coin(v, u);
-        amt.dist *= negmark; // if neg
+        let mut amt = Self::coin_u128(v.abs() as u128, u);
+        if v < 0 {
+            amt.dist *= -1; // if neg
+        }
         Ok(amt)
     }
     
-    fn from_mei(v: String, negmark: i8) -> Ret<Amount> {
+    fn from_mei(v: String) -> Ret<Amount> {
         let mut u: u8 = UNIT_MEI;
         let Ok(mut f) = v.parse::<f64>() else {
             ret_amtfmte!{"value", v}
@@ -253,9 +245,14 @@ impl Amount {
             u -= 1;
             f *= 10.0;
         }
-        let v = f as u128;
-        let mut amt = Self::coin(v, u);
-        amt.dist *= negmark; // if neg
+        if f > u128::MAX as f64 {
+            ret_amtfmte!{"value", v}
+        }
+
+        let mut amt = Self::coin_u128(f.abs() as u128, u);
+        if f < 0.0 {
+            amt.dist *= -1; // if neg
+        }
         Ok(amt)
     }
 
@@ -280,10 +277,10 @@ impl Amount {
         if dist > 127 {
             return Err("Amount is too wide.".to_string())
         }
-        let dist = match sign == Plus {
-            true => dist as i8,
-            false => dist as i8 * -1,
-        };
+        let mut dist = dist as i8;
+        if sign == Minus {
+            dist *= -1; // is negative
+        }
         // ok
         Ok( Self {
             byte,
@@ -400,17 +397,17 @@ impl Amount {
 }
 
 
-macro_rules! more_than_with {
+macro_rules! greater_with {
     ($fn:ident, $ty:ty) => {
         fn $fn(&self, src: &Amount) -> bool {
-            let us1 = self.unit as usize;
-            let us2 =  src.unit as usize;
             concat_idents!{ tail_u = tail_, $ty {
                 let mut tns1 = self.tail_u().unwrap().to_string();
                 let mut tns2 =  src.tail_u().unwrap().to_string();
             }}
             let ts1 = tns1.len();
             let ts2 = tns2.len();
+            let us1 = self.unit as usize;
+            let us2 =  src.unit as usize;
             let rlunit1 = us1 + ts1;
             let rlunit2 = us2 + ts2;
             if rlunit1 > rlunit2 {
@@ -418,17 +415,17 @@ macro_rules! more_than_with {
             } else if rlunit1 < rlunit2 {
                 return false
             }
-            // byte width match
+            // byte width is same
             if us1 > us2 {
-                tns1 += &"0".repeat(us2-us1);
+                tns1 += &"0".repeat(us1-us2);
             } else if us1 < us2 {
-                tns2 += &"0".repeat(us1-us2);
+                tns2 += &"0".repeat(us2-us1);
             }
             let Ok(ru1) = tns1.parse::<$ty>() else {
-                panic!("amount bytes value too big")
+                return self.greater_mode_bigint(src)
             };
             let Ok(ru2) = tns2.parse::<$ty>() else {
-                panic!("amount bytes value too big")
+                return self.greater_mode_bigint(src)
             };
             ru1 > ru2
         }
@@ -446,10 +443,16 @@ impl Amount {
         self.byte == src.byte
     }
 
-    more_than_with!{more_than_u128, u128}
-    more_than_with!{more_than_u64,  u64}
+    greater_with!{greater_mode_u128, u128}
+    greater_with!{greater_mode_u64,  u64}
 
-    pub fn more_than(&self, src: &Amount) -> bool {
+    pub fn greater_mode_bigint(&self, src: &Amount) -> bool {
+        let db = self.to_bigint();
+        let sb =  src.to_bigint();
+        db > sb
+    }
+
+    pub fn greater(&self, src: &Amount) -> bool {
         if self.dist < 0 || src.dist < 0 {
             panic!("cannot compare between with negative")
         }
@@ -469,14 +472,13 @@ impl Amount {
         let dtl = self.tail_len();
         let stl =  src.tail_len();
         if dtl <= U64S && stl <= U64S {
-            return self.more_than_u64(src)
+            return self.greater_mode_u64(src)
         } else if dtl <= U128S && stl <= U128S {
-            return self.more_than_u128(src)
+            return self.greater_mode_u128(src)
+        }else {
+            return self.greater_mode_bigint(src)
         }
         // UBIG
-        let db = self.to_bigint();
-        let sb =  src.to_bigint();
-        db > sb
     }
 
 
