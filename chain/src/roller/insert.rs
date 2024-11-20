@@ -38,12 +38,14 @@ pub fn insert_to_roller(roller: &mut Roller, mut chunk: Chunk) -> RollerInsertRe
         roller.chunk = Arc::downgrade(&new_chunk); // update stat
         new_pointer = Some(new_chunk.clone());
         // maybe new root
-        let new_root_hei = curr_hei - roller.unstable;
-        if new_root_hei > root_hei {
-            // find new root
-            let nrt = back_to_parent_chunk(new_chunk, new_root_hei);
-            roller.root = nrt.clone(); // update stat
-            new_root = Some(nrt);
+        if curr_hei > roller.unstable {
+            let new_root_hei = curr_hei - roller.unstable;
+            if new_root_hei > root_hei {
+                // find new root
+                let nrt = back_to_parent_chunk(new_chunk, new_root_hei);
+                roller.root = nrt.clone(); // update stat
+                new_root = Some(nrt);
+            }
         }
     }
     // return

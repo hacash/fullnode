@@ -17,12 +17,3 @@ impl Base64 for Vec<u8> {
         BASE64_STANDARD.encode(self)
     }
 }
-
-impl Uint for Vec<u8> {
-    fn to_u8(&self) -> u8 {
-        match self.len() == 1 {
-            true => self[0],
-            false => panic!("{}", s!("length error")),
-        }
-    }
-}

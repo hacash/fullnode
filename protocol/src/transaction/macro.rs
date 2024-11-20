@@ -37,7 +37,7 @@ macro_rules! transaction_define {
             }
         
             fn ty(&self) -> u8 {
-                self.ty.to_u8()
+                self.ty.uint()
             }
         
             fn main(&self) -> Address {

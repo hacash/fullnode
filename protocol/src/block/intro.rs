@@ -50,7 +50,7 @@ impl BlockRead for BlockHeadMeta {
 
     fn hash(&self) -> Hash {
         let intro = vec![ self.head.serialize(), self.meta.serialize() ].concat();
-        let hx = x16rs::block_hash(self.height().to_u64(), intro);
+        let hx = x16rs::block_hash(self.height().uint(), intro);
         Hash::must(&hx[..])
     }
 

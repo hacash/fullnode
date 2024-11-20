@@ -35,7 +35,7 @@ impl TransactionRead for TransactionCoinbase {
     }
 
     fn ty(&self) -> u8 {
-        self.ty.to_u8()
+        self.ty.uint()
     }
 
     fn main(&self) -> Address {
@@ -83,6 +83,7 @@ impl TxExec for TransactionCoinbase {
     fn execute(&self, ctx: &mut dyn Context) -> Rerr {
         let addr = self.main();
         let amt = self.reward();
+
         operate::hac_add(ctx, &addr, amt)?;
         Ok(())
     }

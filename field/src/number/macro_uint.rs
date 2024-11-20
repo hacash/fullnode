@@ -1,4 +1,4 @@
-
+/*
 macro_rules! from_uint_ty {
     ($ty:ident, $vt:ty) => (
         concat_idents!{frn = from_, $ty {
@@ -20,7 +20,7 @@ macro_rules! parse_uint_ty {
         }}
     )
 }
-
+*/
 
 macro_rules! from_uint {
     ($class:ident, $vn:ident, $vt:ty, $tt:ty) => (

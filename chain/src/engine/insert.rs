@@ -14,8 +14,11 @@ impl ChainEngine {
         }
         if let Some(..) = pointer {
             let mut hxpaths = Vec::new();
-            print!("do_roll_disk.save_block_hash_path ");
+            print!("\ndo_roll_disk.save_block_hash_path: ");
             while let Some(ref p) = pointer {
+                if p.height < 1 {
+                    break // end
+                }
                 print!("->{}", p.height);
                 hxpaths.push((BlockHeight::from(p.height), p.hash));
                 pointer = p.parent.upgrade();
@@ -89,12 +92,14 @@ impl ChainEngine {
                     if blocks.len() == 0 {
                         break
                     }
+                    println!("{}", hex::encode(&blocks[0..500]));
                     let blk = block::create(&blocks);
                     if let Err(e) = blk {
-                        let _ = cherr1.send(format!("blocks::create error: {}", e));
+                        let _ = cherr1.send(format!("block {} parse error: {}", hei, e));
                         break
                     }
                     let (blk, sk) = blk.unwrap();
+                    println!("block::create sk = {}", sk);
                     let blkhei = blk.height().uint();
                     if hei != blkhei {
                         let _ = cherr1.send(format!("need block height {} but got {}", hei, blkhei));
@@ -245,5 +250,34 @@ impl ChainEngine {
 fn sync_warning(e: String) -> Rerr {
     errf!("\n[Block Sync Warning] {}\n", e)
 }
+
+
+
+
+
+
+/*
+
+
+01
+0000000001
+005c57b130
+000000077790ba2fcdeaef4a4299d9b667135bac577ce204dee8388f1b97f7e6
+4448ea1749d50416b41848e62edb30f8570153f80bd463f6b76de8d2948050f3
+00000001
+00000516
+fffffffe
+0000
+00000c1fa1c032d90fd7afc54deb03941e87b4c59756
+f80101
+20202020202020202020202020202020
+00
+
+01
+0000000002
+005c57b2e6001e231cb03f9938d54f04407797b8188f0375eb10f0bcb426dccae87dcadb564448ea1749d50416b41848e62edb30f8570153f80bd463f6b76de8d2948050f300000001000007adfffffffe000000000c1fa1c032d90fd7afc54deb03941e87b4c59756f801012020202020202020202020202020202000010000000003005c57b3f3000c0a2a3761fec7aa214975c1cce407b509a828d16dcf6d3bdb1f612a2466f54448ea1749d50416b41848e62edb30f8570153f80bd463f6b76de8d2948050f3000000010000037afffffffe000000000c1fa1c032d90fd7afc54deb03941e87b4c59756f801012020202020202020202020202020202000010000000004005c57b52d0015920ecbd8048128b9e27a26bd08b488050c78b89291d740889ed4d785f4104448ea1749d50416b41848e62edb30f8570153f80bd463f6b76de8d2948050f30000000100000039fffffffe000000000c1fa1c032d90fd7afc54deb03941e87
+
+*/
+
 
 

@@ -159,6 +159,9 @@ macro_rules! ret_amtfmte {
 impl Amount {
 
 
+    pub fn zero() -> Amount {
+        Self::default()
+    }
     pub fn mei(v: u64) -> Amount {
         Self::coin(v as u128, UNIT_MEI)
     }
@@ -464,6 +467,9 @@ macro_rules! compute_mode_define {
 
         pub fn $fun(&self, src: &Amount) -> Ret<Amount> {
             let dst: &Amount = self;
+            if dst.unit == 0 && src.unit == 0 {
+                return Ok(Self::zero())
+            }
             if dst.dist < 0 || src.dist < 0 {
                 rte_cneg!{stringify!($op)}
             }
@@ -476,7 +482,11 @@ macro_rules! compute_mode_define {
             let mut su = <$ty>::from_be_bytes(add_left_padding(&src.byte, $ts).try_into().unwrap());
             let utsk = (dst.unit as i32 - src.unit as i32).abs() as u32;
             let mut baseut;
-            if dst.unit > src.unit {
+            if dst.unit == 0 {
+                baseut = src.unit;
+            }else if src.unit == 0 {
+                baseut = dst.unit;
+            }else if dst.unit > src.unit {
                 let Some(ndu) = du.checked_mul( 10u64.pow(utsk) as $ty ) else {
                     rte_ovfl!{}
                 };
@@ -550,5 +560,20 @@ mod amount_tests {
         assert_eq!(a3.to_fin_string(), a4.to_fin_string());
 
     }
+
+
+    #[test]
+    fn test2() {
+
+        let a1 = Amount::mei(1);
+        let a2 = Amount::mei(2);
+        let a3 = Amount::mei(3);
+        let a4 = a1.add_mode_u128(&a2).unwrap();
+        assert_eq!(a3.to_fin_string(), a4.to_fin_string());
+
+    }
+
+
+
 
 }

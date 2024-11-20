@@ -1,7 +1,7 @@
 
 
 macro_rules! uint_define {
-    ($class:ident, $size: expr, $numlen: expr, $vty: ty ) => {
+    ($class:ident, $size:expr, $numlen:expr, $vty:ty ) => {
                 
         #[derive(Default, Debug, Hash, Copy, Clone, PartialEq, Eq)]
         pub struct $class {
@@ -56,20 +56,6 @@ macro_rules! uint_define {
         }
 
         impl_field_only_new!{$class}
-
-        impl Uint for $class {
-            concat_idents!{to_ty = to_, $vty {
-                fn to_ty(&self) -> $vty {
-                    self.value
-                }
-            }}
-            concat_idents!{from_ty = from_, $vty {
-                fn from_ty(v: $vty) -> Self {
-                    Self{ value: v }
-                }
-            }}
-        }
-
 
         impl $class {
 

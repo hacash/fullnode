@@ -91,7 +91,7 @@ impl DiamondOwnedForm {
 	pub fn drop(&mut self, dian: &DiamondNameListMax200) -> Ret<usize> {
 
 		let l = DiamondName::SIZE;
-		let srclen = dian.count().to_usize();
+		let srclen = dian.count().uint() as usize;
 		let mut dianset = dian.hashset();
 		let dstsz = self.names.length();
 		let dstlen = dstsz / l;
@@ -121,7 +121,7 @@ impl DiamondOwnedForm {
 		}
 		self.names.bytes = self.names.bytes.split_off(rmleft);
 		self.names.count -= (srclen * l) as u64;
-		Ok(self.names.count.to_usize())
+		Ok(*self.names.count as usize)
 
 	}
 

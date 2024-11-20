@@ -22,10 +22,10 @@ combi_optional!{ DiamondNumberOptional,
 }
 impl DiamondNumberAuto {
 	pub fn to_diamond(&self) -> DiamondNumber {
-		DiamondNumber::from( self.to_u64() as u32 )
+		DiamondNumber::from( self.uint() as u32 )
 	}
 	pub fn from_diamond(dia: &DiamondNumber) -> DiamondNumberAuto {
-		DiamondNumberAuto::from( dia.to_u64() )
+		DiamondNumberAuto::from( dia.uint() as u64 )
 	}
 }
 
@@ -41,7 +41,7 @@ impl DiamondNameListMax200 {
 
     pub fn check(&self) -> Ret<u8> {
         // check len
-        let setlen = self.count.to_uint() as u64;
+        let setlen = self.count.uint() as u64;
         let reallen = self.lists.len() as u64 ;
         if setlen != reallen {
             return errf!("check fail: length need {} but got {}", setlen, reallen)

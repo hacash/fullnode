@@ -2,7 +2,7 @@
 
 #[macro_export]
 macro_rules! combi_dynlist {
-    ($class:ident, $lenty:ty, $dynty:ident, $parseobjfunc: path) => (
+    ($class:ident, $lenty:ty, $dynty:ident, $parseobjfunc:path) => (
 
 
 #[derive(Default, Clone)]
@@ -13,7 +13,7 @@ pub struct $class {
 
 impl std::fmt::Debug for $class {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f,"[dyn list {}]", self.count.to_u64())
+        write!(f,"[dyn list {}]", self.count.uint())
     }
 }
 
@@ -31,7 +31,7 @@ impl Parse for $class {
 
     fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
         let mut seek = self.count.parse(buf) ?;
-        let count = self.count.to_u64() as usize;
+        let count = *self.count as usize;
         self.vlist = Vec::new();
         for _ in 0..count {
             let(obj, mvsk) = $parseobjfunc(&buf[seek..]) ?;
@@ -48,7 +48,7 @@ impl Serialize for $class {
         let mut bts = vec![];
         let bt1 = self.count.serialize();
         bts.push(bt1);
-        for i in 0..self.count.to_usize() {
+        for i in 0 .. *self.count as usize {
             let bt = self.vlist[i].as_ref().serialize();
             bts.push(bt);
         }
@@ -57,7 +57,7 @@ impl Serialize for $class {
 
     fn size(&self) -> usize {
         let mut sznum = self.count.size();
-        for i in 0..self.count.to_usize() {
+        for i in 0 .. *self.count as usize {
             sznum += self.vlist[i as usize].as_ref().size();
         }
         sznum
@@ -89,7 +89,7 @@ impl $class {
 	}
 
 	pub fn pop(&mut self) -> Option<Box<dyn $dynty>> {
-        let n = self.count.to_u64();
+        let n = self.count.uint();
         match n {
             0 => None,
             _ => {
@@ -100,7 +100,7 @@ impl $class {
 	}
 
 	pub fn length(&self) -> usize {
-		self.count.uint() as usize
+		*self.count as usize
 	}
 
 	pub fn count(&self) -> &$lenty {

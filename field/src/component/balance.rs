@@ -6,10 +6,10 @@ combi_optional!{ SatoshiOptional,
 }
 impl SatoshiAuto {
 	pub fn to_satoshi(&self) -> Satoshi {
-		Satoshi::from( self.to_u64() )
+		Satoshi::from( self.uint() )
 	}
 	pub fn from_satoshi(sat: &Satoshi) -> SatoshiAuto {
-		SatoshiAuto::from( sat.to_u64() )
+		SatoshiAuto::from( sat.uint() )
 	}
 }
 

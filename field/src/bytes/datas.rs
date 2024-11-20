@@ -44,7 +44,7 @@ macro_rules! datas_define {
         impl Parse for $class {
             fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
                 self.count.parse(buf)?;
-                let sz = self.count.to_uint() as usize;
+                let sz = *self.count as usize;
                 let bts = bufeat(buf, sz)?;
                 *self = Self::from(bts)?;
                 Ok(<$sty>::SIZE + sz)
@@ -59,7 +59,7 @@ macro_rules! datas_define {
                 ].concat()
             }
             fn size(&self) -> usize {
-                <$sty>::SIZE + self.count.to_uint() as usize
+                <$sty>::SIZE + *self.count as usize
             }
         }
 
@@ -119,7 +119,7 @@ macro_rules! datas_define {
             }
 
             pub fn length(&self) -> usize {
-                self.count.to_usize()
+                *self.count as usize
             }
         
             pub fn push(&mut self, a: u8) -> Rerr {

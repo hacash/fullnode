@@ -65,7 +65,7 @@ macro_rules! action_define {
         }
 
         impl Action for $class {
-            fn kind(&self) -> u16 { self.kind.to_uint() }
+            fn kind(&self) -> u16 { self.kind.uint() }
             fn level(&self) -> i8 { $lv }
             fn burn_90(&self) -> bool { $burn90 }
         }

@@ -5,12 +5,13 @@ combi_struct_with_parse!{ BlockV1,
     (self, buf, {
         // intro
         let mut intro = BlockIntro::default();
-        let isk = intro.parse(buf)?;
-        let trslen = intro.head.transaction_count.to_uint();
+        let mut seek = intro.parse(buf)?;
+        let trslen = intro.head.transaction_count.uint();
         self.intro = intro;
         // body
         self.transactions.set_count(trslen.into());
-        self.transactions.parse(&buf[isk..])
+        seek += self.transactions.parse(&buf[seek..])?;
+        Ok(seek)
     }),
     // head meta
 	intro : BlockIntro

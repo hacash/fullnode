@@ -11,7 +11,7 @@ fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>, is_state_upgrade: boo
     let disk = BlockDisk::wrap(disk.clone());
     let status = disk.status();
     let rhei = &status.root_height;
-    let rhein = rhei.to_uint();
+    let rhein = rhei.uint();
     if 0 == rhein {
         return ret_gns_blk() // genesis block
     }
@@ -32,7 +32,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
         chei
     };
     // build unstable blocks 
-    let finish_height = status.last_height.to_uint();
+    let finish_height = status.last_height.uint();
     let is_all_rebuild = finish_height - next_height > 10;
     if is_all_rebuild {
         println!("[Database] rebuild all blocks to upgrade data version, plase waiting...");

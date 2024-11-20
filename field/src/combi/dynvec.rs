@@ -13,7 +13,7 @@ pub struct $class {
 
 impl std::fmt::Debug for $class {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f,"[dyn list {}]", self.count.to_u64())
+        write!(f,"[dyn list {}]", self.count.uint())
     }
 }
 
@@ -85,7 +85,7 @@ impl $class {
 	}
 
 	pub fn pop(&mut self) -> Option<Box<dyn $dynty>> {
-        let n = self.count.to_uint();
+        let n = self.count.uint();
         match n {
             0 => None,
             _ => {
@@ -96,7 +96,7 @@ impl $class {
 	}
 
 	pub fn length(&self) -> usize {
-		self.count.uint() as usize
+		*self.count as usize
 	}
 
 	pub fn count(&self) -> &$lenty {

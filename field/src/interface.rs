@@ -71,7 +71,8 @@ pub trait Readable : Field {
     fn create_readable(_: &[u8]) -> Ret<(Self, usize)> where Self: Sized { unimplemented!(); }
 }
 
-pub trait Uint : Field {
+/*
+pub trait Uintttt : Field {
     fn to_u8(&self) -> u8 { unimplemented!(); }
     fn to_u16(&self) -> u16 { unimplemented!(); }
     fn to_u32(&self) -> u32 { unimplemented!(); }
@@ -92,8 +93,8 @@ pub trait Uint : Field {
     fn parse_u32(&mut self, _: u32) -> Rerr { unimplemented!(); } // panic
     fn parse_u64(&mut self, _: u64) -> Rerr { unimplemented!(); } // panic
     fn parse_usize(&mut self, _: usize) -> Rerr { unimplemented!(); } // panic
-
 }
+*/
 
 pub trait Float : Field {
     fn to_f32(&self) -> f32 { unimplemented!(); }

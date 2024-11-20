@@ -152,7 +152,7 @@ fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _blkhei: 
 fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _blkhei: u64) {
     // already minted hacd number
     let sta = eng.state();
-    let curdn = CoreStateRead::wrap(sta).get_latest_diamond().number.to_uint();
+    let curdn = CoreStateRead::wrap(sta).get_latest_diamond().number.uint();
     let _ = txpool.drain_filter_at(&|a: &TxPkg| {
         let tx = a.objc.as_read();
         let dn = get_diamond_mint_number(tx);
@@ -169,7 +169,7 @@ fn get_diamond_mint_number(tx: &dyn TransactionRead) -> u32 {
     for act in tx.actions() {
         if act.kind() == DMINT {
             let dm = DiamondMint::must(&act.serialize());
-            return dm.head.number.to_uint();
+            return dm.head.number.uint();
         }
     }
     0

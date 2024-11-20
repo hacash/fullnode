@@ -98,44 +98,6 @@ impl Serialize for Fold64 {
 impl_field_only_new!{Fold64}
 
 
-macro_rules! from_uint_fold64 {
-    ($ty:ident) => (
-        from_uint_ty!{$ty, u64}
-    )
-}
-
-
-macro_rules! parse_uint_fold64 {
-    ($ty:ident) => (
-        parse_uint_ty!{$ty, u64}
-    )
-}
-
-
-impl Uint for Fold64 {
-
-    fn to_u64(&self) -> u64 {
-        self.value
-    }
-
-    fn as_u64(&self) -> &u64 {
-        &self.value
-    }
-
-    from_uint_fold64!{u64}
-    from_uint_fold64!{u32}
-    from_uint_fold64!{u16}
-    from_uint_fold64!{u8}
-    from_uint_fold64!{usize}
-
-    parse_uint_fold64!{u64}
-    parse_uint_fold64!{u32}
-    parse_uint_fold64!{u16}
-    parse_uint_fold64!{u8}
-    parse_uint_fold64!{usize}
-}
-
-
 impl Fold64 {
 
     pub const MAX: u64 = FOLDU64SX8 - 1;

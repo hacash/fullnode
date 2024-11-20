@@ -90,7 +90,7 @@ impl AddrOrPtr {
         match self {
             Self::Val1(v) => Ok(*v),
             Self::Val2(v) => {
-                let ix = v.to_uint() as usize;
+                let ix = v.uint() as usize;
                 match ix < addrs.len() {
                     true => Ok(addrs[ix].clone()),
                     false => errf!("addr ptr index overflow")
