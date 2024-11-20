@@ -28,7 +28,7 @@ pub fn block_reward_number(block_height: u64) -> u8 {
 
 pub fn block_reward(block_height: u64) -> Amount {
 	let num = block_reward_number(block_height);
-	return Amount::mei(num as u64)
+	return Amount::small_mei(num)
 }
 
 pub fn cumulative_block_reward(block_height: u64) -> u64 {

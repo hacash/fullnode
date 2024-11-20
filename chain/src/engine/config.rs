@@ -66,9 +66,9 @@ impl EngineConf {
             dmer_enable: false,
             dmer_reward_address: Address::default(),
             dmer_bid_account: Account::create_by_password("123456").unwrap(),
-            dmer_bid_min:  Amount::mei(1),
-            dmer_bid_max:  Amount::mei(31),
-            dmer_bid_step: Amount::coin(5, 247),
+            dmer_bid_min:  Amount::small_mei(1),
+            dmer_bid_max:  Amount::small_mei(31),
+            dmer_bid_step: Amount::small(5, 247),
         };
 
         let sec = &ini_section(ini, "node");

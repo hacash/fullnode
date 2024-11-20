@@ -175,6 +175,20 @@ impl Amount {
     pub fn zero() -> Amount {
         Self::default()
     }
+    pub fn small(v: u8, u: u8) -> Amount {
+        Self {
+            unit: u,
+            dist: 1i8,
+            byte: vec![v],
+        }
+    }
+    pub fn small_mei(v: u8) -> Amount {
+        Self {
+            unit: UNIT_MEI,
+            dist: 1i8,
+            byte: vec![v],
+        }
+    }
     pub fn mei(v: u64) -> Amount {
         Self::coin(v, UNIT_MEI)
     }
@@ -421,13 +435,19 @@ macro_rules! greater_with {
             } else if us1 < us2 {
                 tns2 += &"0".repeat(us2-us1);
             }
-            let Ok(ru1) = tns1.parse::<$ty>() else {
-                return self.greater_mode_bigint(src)
-            };
-            let Ok(ru2) = tns2.parse::<$ty>() else {
-                return self.greater_mode_bigint(src)
-            };
-            ru1 > ru2
+            let ns = tns1.len(); 
+            assert!(ns==tns2.len());
+            // !("greater_with: {}   {}", tns1, tns2);
+            for i in 0 .. ns {
+                let a1 = tns1.as_bytes()[i];
+                let a2 = tns2.as_bytes()[i];
+                if a1 > a2 {
+                    return true // more
+                }else if a1 < a2 {
+                    return false // less
+                }
+            }
+            return false // all same
         }
         
     };
@@ -759,6 +779,16 @@ mod amount_tests {
             // let a2 = a0.sub_mode_bigint(&a1).unwrap();
             // println!("{}", a2.to_fin_string());
         }
+
+    }
+
+    #[test]
+    fn test7() {
+
+        let a1 = Amount::from("11111111111111111:201").unwrap();
+        let a2 = Amount::from("111111111111112:202").unwrap();
+        // assert!(a2 > a1);
+        println!("{} {} {} {} {}", a1<a2, a1==a2, a1>a2, a1>=a2, a1<=a2)
 
     }
 

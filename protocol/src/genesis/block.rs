@@ -30,7 +30,7 @@ fn create_genesis_block() -> BlockV1 {
     trsvec.push(Box::new(TransactionCoinbase{
         ty: Uint1::from(0),
         address: reward_addr,
-        reward: Amount::mei(1),
+        reward: Amount::small_mei(1),
         message: Fixed16::from_readable(b"hardertodobetter"),
         extend: CoinbaseExtend::default()
     })).unwrap();
