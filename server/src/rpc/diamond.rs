@@ -318,7 +318,7 @@ async fn diamond_inscription_protocol_cost(State(ctx): State<ApiCtx>, q: Query<Q
         let Some(diasmelt) = mintstate.diamond_smelt(dia) else {
             return api_error(&format!("cannot find diamond {}", dia))
         };
-        let camt = Amount::coin(*diasmelt.average_bid_burn as u128, 247);
+        let camt = Amount::coin(*diasmelt.average_bid_burn as u64, 247);
         let Ok(newcost) = cost.add_mode_u128( &camt ) else {
             return api_error(&format!("cannot add cost {} and {}", camt.to_fin_string(), cost.to_fin_string()))
         };

@@ -80,7 +80,7 @@ impl ChainEngine {
         // create thread
         let (chblk, chblkcv) = std::sync::mpsc::sync_channel(10);
         let (chrol, chrolcv) = std::sync::mpsc::sync_channel(1);
-        let (cherr, cherrcv) = std::sync::mpsc::sync_channel(2);
+        let (cherr, cherrcv) = std::sync::mpsc::channel();
         let cherr1 = cherr.clone();
         let cherr2 = cherr.clone();
         std::thread::scope(|s| {
@@ -99,20 +99,21 @@ impl ChainEngine {
                         break
                     }
                     let (blk, sk) = blk.unwrap();
-                    // println!("block::create sk = {}", sk);
+                    // println!("block::create() sk = {}", sk);
                     let blkhei = blk.height().uint();
+                    // println!("-> {}, tx: {}", blkhei, blk.transaction_count().uint()-1);
                     if hei != blkhei {
                         let _ = cherr1.send(format!("need block height {} but got {}", hei, blkhei));
                         break
                     }
                     let (left, right) = blocks.split_at_mut(sk);
-                    blocks = right; // next chunk
                     let mut pkg = BlockPkg::new(blk, left.into());
                     pkg.set_origin( BlkOrigin::SYNC );
                     if let Err(..) = chblk.send(pkg) {
                         break // end
                     }
                     // next
+                    blocks = right; // next chunk
                     hei += 1;
                 }
             });
@@ -152,6 +153,7 @@ impl ChainEngine {
         // finish
         let err = cherrcv.recv().unwrap();
         if err.len() > 0 {
+            println!("{}", err);
             return sync_warning(err)
         }
         // ok

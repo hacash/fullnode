@@ -66,7 +66,7 @@ impl PartialOrd for Amount {
 impl Parse for Amount {
     fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
         self.unit = bufeatone(&buf)?;
-        self.dist = bufeatone(&buf)? as i8;
+        self.dist = bufeatone(&buf[1..])? as i8;
         let btlen = self.dist.abs() as usize;
         self.byte = bufeat(&buf[2..], btlen)?;
         Ok(2 + btlen)
