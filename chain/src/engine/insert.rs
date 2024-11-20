@@ -14,16 +14,16 @@ impl ChainEngine {
         }
         if let Some(..) = pointer {
             let mut hxpaths = Vec::new();
-            print!("\ndo_roll_disk.save_block_hash_path: ");
+            // print!("\ndo_roll_disk.save_block_hash_path: ");
             while let Some(ref p) = pointer {
-                if p.height < 1 {
+                if hxpaths.len() >= 4 || p.height < 1 {
                     break // end
                 }
-                print!("->{}", p.height);
+                // print!("->{}", p.height);
                 hxpaths.push((BlockHeight::from(p.height), p.hash));
                 pointer = p.parent.upgrade();
             }
-            println!("");
+            // println!("");
             self.blockdisk.save_block_hash_path(hxpaths);
         }
         // write block data to disk
@@ -92,14 +92,14 @@ impl ChainEngine {
                     if blocks.len() == 0 {
                         break
                     }
-                    println!("{}", hex::encode(&blocks[0..500]));
+                    // println!("{}", hex::encode(&blocks[0..500]));
                     let blk = block::create(&blocks);
                     if let Err(e) = blk {
                         let _ = cherr1.send(format!("block {} parse error: {}", hei, e));
                         break
                     }
                     let (blk, sk) = blk.unwrap();
-                    println!("block::create sk = {}", sk);
+                    // println!("block::create sk = {}", sk);
                     let blkhei = blk.height().uint();
                     if hei != blkhei {
                         let _ = cherr1.send(format!("need block height {} but got {}", hei, blkhei));

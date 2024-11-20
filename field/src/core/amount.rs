@@ -1,5 +1,9 @@
-const U128WIDTH: usize = u128::BITS as usize / 8;
-const U64WIDTH:  usize =  u64::BITS as usize / 8;
+use num_bigint::*;
+use num_bigint::Sign::*;
+use num_traits::*;
+
+const U128S: usize = u128::BITS as usize / 8;
+const U64S:  usize =  u64::BITS as usize / 8;
 
 pub const UNIT_MEI:  u8 = 248;
 pub const UNIT_ZHU:  u8 = 240;
@@ -8,14 +12,13 @@ pub const UNIT_AI:   u8 = 224;
 pub const UNIT_MIAO: u8 = 216;
 
 
-const FROM_CHARS: &[u8; 14] = b"0123456789-.: "; 
-
-
+const FROM_CHARS: &[u8; 13] = b"0123456789-.:"; 
 
 
 pub enum AmtMode {
     U64,
     U128,
+    BIGINT,
 }
 
 
@@ -36,10 +39,9 @@ impl Display for Amount{
 
 impl Debug for Amount {
     fn fmt(&self,f: &mut Formatter) -> Result {
-        write!(f,"[unit:{}, dist:{}, byte: {:?}]", self.unit, self.dist, self.byte)
+        write!(f,"[{},{},{:?}]", self.unit, self.dist, self.byte)
     }
 }
-
 
 impl Ord for Amount {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -62,20 +64,11 @@ impl PartialOrd for Amount {
 
 impl Parse for Amount {
     fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
-        let mut seek = 0;
-        // unit
-        let btv = bufeat(&buf[seek..], 1)?;
-        self.unit = btv[0];
-        seek += 1;
-        // dist
-        let btv = bufeat(&buf[seek..], 1)?;
-        self.dist = btv[0] as i8;
-        seek += 1;
-        // bytes
+        self.unit = bufeatone(&buf)?;
+        self.dist = bufeatone(&buf)? as i8;
         let btlen = self.dist.abs() as usize;
-        let btv = bufeat(&buf[seek..], btlen)?;
-        self.byte = btv;
-        Ok(seek + btlen)
+        self.byte = bufeat(&buf[2..], btlen)?;
+        Ok(2 + btlen)
     }
 }
 
@@ -113,20 +106,19 @@ impl Amount {
         self.dist.abs() as usize
     }
 
-    pub fn tail_u128(&self) -> u128 {
-        if self.byte.len() > U128WIDTH {
-            panic!("amount tail bytes length too long over {}", U128WIDTH)
+    pub fn tail_u128(&self) -> Ret<u128> {
+        if self.byte.len() > U128S {
+            return errf!("amount tail bytes length too long over {}", U128S)
         }
-        u128::from_be_bytes(add_left_padding(&self.byte, U128WIDTH).try_into().unwrap())
+        Ok(u128::from_be_bytes(add_left_padding(&self.byte, U128S).try_into().unwrap()))
     }
 
-    pub fn tail_u64(&self) -> u64 {
-        if self.byte.len() > U64WIDTH {
-            panic!("amount tail bytes length too long over {}", U64WIDTH)
+    pub fn tail_u64(&self) -> Ret<u64> {
+        if self.byte.len() > U64S {
+            return errf!("amount tail bytes length too long over {}", U64S)
         }
-        u64::from_be_bytes(add_left_padding(&self.byte, U64WIDTH).try_into().unwrap())
+        Ok(u64::from_be_bytes(add_left_padding(&self.byte, U64S).try_into().unwrap()))
     }
-
 
     pub fn is_zero(&self) -> bool {
         self.unit == 0 || self.dist == 0
@@ -155,6 +147,26 @@ macro_rules! ret_amtfmte {
     };
 }
 
+macro_rules! coin_with {
+    ($fn:ident, $ty:ty) => {
+        fn $fn(mut v: $ty, mut u: u8) -> Amount {
+            while v % 10 == 0 {
+                if u == 255 {
+                    break // unit max
+                }
+                v /= 10;
+                u += 1;
+            }
+            let bts = drop_left_zero(&v.to_be_bytes());
+            Self{
+                unit: u,
+                dist: bts.len() as i8,
+                byte: bts
+            }
+        }
+    }
+}
+
 // from
 impl Amount {
 
@@ -178,25 +190,15 @@ impl Amount {
         Self::coin(v as u128, UNIT_MIAO)
     }
 
-    pub fn coin(mut v: u128, mut u: u8) -> Amount {
-        while v % 10 == 0 {
-            if u == 255 {
-                break;
-            }
-            v /= 10;
-            u += 1;
-        }
-        let bts = drop_left_zero(&v.to_be_bytes());
-        Self{
-            unit: u,
-            dist: bts.len() as i8,
-            byte: bts
-        }
+    coin_with!{coin_u128, u128}
+    coin_with!{coin_u64,  u64}
+
+    pub fn coin(v: u128, u: u8) -> Amount {
+        Self::coin_u128(v, u)
     }
 
-
     pub fn from(v: &str) -> Ret<Amount> {
-        let mut v = v.replace(",", "").replace(" ", "");
+        let mut v = v.replace(",", "").replace(" ", "").replace("\n", "");
         for a in v.chars() {
             if ! FROM_CHARS.contains(&(a as u8)) {
                 ret_amtfmte!{"unsupported characters", String::from(a)}
@@ -217,12 +219,23 @@ impl Amount {
 
     fn from_fin(v: String, negmark: i8) -> Ret<Amount> {
         let amt: Vec<&str> = v.split(":").collect();
-        let Ok(v) = amt[0].parse::<u128>() else {
-            ret_amtfmte!{"value", amt[0]}
-        };
         let Ok(u) = amt[1].parse::<u8>() else {
             ret_amtfmte!{"unit", amt[1]}
         };
+        let Ok(v) = amt[0].parse::<u128>() else {
+            // from bigint
+            let nstr = match negmark > 0 {
+                true => "",
+                false => "-",
+            }.to_owned() + &amt[0];
+            let Ok(bign) = BigInt::from_str_radix(&nstr, 10) else {
+                return errf!("amount '{}' overflow BigInt::from_str_radix", &v)
+            };
+            let mut amt = Self::from_bigint(&bign)?;
+            amt.unit = u;
+            return Ok(amt)
+        };
+        // from u128
         let mut amt = Self::coin(v, u);
         amt.dist *= negmark; // if neg
         Ok(amt)
@@ -246,6 +259,40 @@ impl Amount {
         Ok(amt)
     }
 
+    pub fn from_bigint( bignum: &BigInt ) -> Ret<Amount> {
+        let numstr = bignum.to_string();
+        if numstr == "0" {
+            return Ok(Amount::zero())
+        }
+        let mut numuse = numstr.as_str().trim_end_matches('0').to_owned();
+        let mut unit = numstr.len() - numuse.len();
+        if unit > 255 { // unit max is 255 
+            numuse += &"0".repeat(unit - 255);
+            unit = 255;
+        }
+        let biguse = BigInt::from_str_radix(&numuse, 10);
+        if let Err(e) = biguse {
+            return errf!("BigInt::from_str_radix error: {} {} {} {}", numstr, numuse, numuse, e.to_string())
+        }
+        let biguse = biguse.unwrap();
+        let (sign, byte) = biguse.to_bytes_be();
+        let dist = byte.len();
+        if dist > 127 {
+            return Err("Amount is too wide.".to_string())
+        }
+        let dist = match sign == Plus {
+            true => dist as i8,
+            false => dist as i8 * -1,
+        };
+        // ok
+        Ok( Self {
+            byte,
+            dist,
+            unit: unit as u8
+        })
+    }
+
+
 
 }
 
@@ -253,31 +300,49 @@ impl Amount {
 impl Amount {
 
 
+    pub fn sign(&self) -> String {
+        match self.dist > 0 {
+            true => "",
+            false => "-",
+        }.to_string()
+    }
+
     pub fn to_string(&self) -> String {
         let a = self.to_fin_string();
         "ㄜ".to_owned() + a.as_str()
     }
 
     pub fn to_fin_string(&self) -> String {
-        let (a, b, c) = self.to_strings();
+        let (a, b, c) = self.to_string_part();
         format!("{}{}:{}", a, b, c)
     }
 
-    pub fn to_strings(&self) -> (String, String, String) {
-        let blen =self.byte.len();
-        if blen > U128WIDTH {
-            return ("*".into(), "*".into(), "*".into())
-        }
-        let s1 = match self.dist < 0 {
-            true => "-",
-            false => "",
-        }.to_string();
-        let s2 = match blen > U64WIDTH {
-            true => u128::from_be_bytes(add_left_padding(&self.byte, U128WIDTH).try_into().unwrap()).to_string(),
-            false => u64::from_be_bytes(add_left_padding(&self.byte,  U64WIDTH).try_into().unwrap()).to_string(),
+    pub fn to_string_part(&self) -> (String, String, String) {
+        let blen = self.tail_len();
+        let s2 = match blen > U128S {
+            true => BigInt::from_bytes_be(Plus, &self.byte).to_string(),
+            false => match blen > U64S {
+                true => u128::from_be_bytes(add_left_padding(&self.byte, U128S).try_into().unwrap()).to_string(),
+                false => u64::from_be_bytes(add_left_padding(&self.byte,  U64S).try_into().unwrap()).to_string(),
+            }
         };
-        (s1, s2, self.unit.to_string())
+        (self.sign(), s2, self.unit.to_string())
     }
+
+    pub fn to_bigint(&self) -> BigInt {
+        if self.is_zero() {
+            return 0u64.into();
+        }
+        let sig = match self.dist > 0 { // sign
+            true => Plus,
+            false => Minus,
+        };
+        let bignum = BigInt::from_bytes_be(sig, &self.byte[..]);
+        let base: BigInt = 10u64.into();
+        let powv = base.pow(self.unit as u32);
+        bignum * powv
+    }
+
 
     pub fn to_unit_string(&self, unit_str: &str) -> String {
         let unit;
@@ -293,14 +358,16 @@ impl Amount {
                 _ => 0,
             }
         }
-        if unit > 0 {
-            self.to_unit_unsafe(unit).to_string()
-        }else{
-            self.to_fin_string()
+        match unit > 0 {
+            true => self.to_unit_unsafe(unit).to_string(),
+            false => self.to_fin_string(),
         }
     }
 
 }
+
+
+
 
 impl Amount {
 
@@ -308,25 +375,65 @@ impl Amount {
         if self.is_zero() {
             return 0f64
         }
-        if self.tail_len() > U128WIDTH {
-            return f64::NAN
-        }
-        // 
-        let chax = (base_unit as i64 - (self.unit as i64)).abs() as u64;
-        let tv = self.tail_u128() as f64;
-        // unit
-        let base = 10f64.powf(chax as f64) as f64;
-        let mut resv = match self.unit > base_unit {
+        let chax = (base_unit as i64 - (self.unit as i64)).abs();
+        let tv = match self.tail_len() <= U128S {
+            true => self.tail_u128().unwrap() as f64, // u128
+            false => match BigInt::from_bytes_be(Plus, &self.byte[..]).to_f64() {
+                Some(v) => v,
+                None => return f64::NAN,
+            },
+        };
+        // by f64
+        let base = 10f64.powf(chax as f64);
+        let resv = match self.unit > base_unit {
             true => tv * base,
             false => tv / base,
         };
         // sign
-        if self.dist < 0 {
-            resv = resv * -1f64;
+        return match self.dist > 0 {
+            true => resv,
+            false => resv * -1f64,
         }
-        resv
+
     }
 
+}
+
+
+macro_rules! more_than_with {
+    ($fn:ident, $ty:ty) => {
+        fn $fn(&self, src: &Amount) -> bool {
+            let us1 = self.unit as usize;
+            let us2 =  src.unit as usize;
+            concat_idents!{ tail_u = tail_, $ty {
+                let mut tns1 = self.tail_u().unwrap().to_string();
+                let mut tns2 =  src.tail_u().unwrap().to_string();
+            }}
+            let ts1 = tns1.len();
+            let ts2 = tns2.len();
+            let rlunit1 = us1 + ts1;
+            let rlunit2 = us2 + ts2;
+            if rlunit1 > rlunit2 {
+                return true
+            } else if rlunit1 < rlunit2 {
+                return false
+            }
+            // byte width match
+            if us1 > us2 {
+                tns1 += &"0".repeat(us2-us1);
+            } else if us1 < us2 {
+                tns2 += &"0".repeat(us1-us2);
+            }
+            let Ok(ru1) = tns1.parse::<$ty>() else {
+                panic!("amount bytes value too big")
+            };
+            let Ok(ru2) = tns2.parse::<$ty>() else {
+                panic!("amount bytes value too big")
+            };
+            ru1 > ru2
+        }
+        
+    };
 }
 
 
@@ -339,6 +446,9 @@ impl Amount {
         self.byte == src.byte
     }
 
+    more_than_with!{more_than_u128, u128}
+    more_than_with!{more_than_u64,  u64}
+
     pub fn more_than(&self, src: &Amount) -> bool {
         if self.dist < 0 || src.dist < 0 {
             panic!("cannot compare between with negative")
@@ -346,33 +456,27 @@ impl Amount {
         if self.equal(src) {
             return false // a == b
         }
-        let us1 = self.unit as usize;
-        let us2 =  src.unit as usize;
-        let mut tns1 = self.tail_u128().to_string();
-        let mut tns2 =  src.tail_u128().to_string();
-        let ts1 = tns1.len();
-        let ts2 = tns2.len();
-        let rlunit1 = us1 + ts1;
-        let rlunit2 = us2 + ts2;
-        if rlunit1 > rlunit2 {
-            return true
-        } else if rlunit1 < rlunit2 {
-            return false
+        let dzro = self.is_zero();
+        let szro =  src.is_zero();
+        if dzro && szro {
+            return false // both(0
+        } else if dzro {
+            return false // left(0) < right(+)
+        } else if szro {
+            return true // left(+) > right(0)
         }
-        // byte width match
-        if us1 > us2 {
-            tns1 += &"0".repeat(us2-us1);
-        } else if us1 < us2 {
-            tns2 += &"0".repeat(us1-us2);
+        // U128 or U64
+        let dtl = self.tail_len();
+        let stl =  src.tail_len();
+        if dtl <= U64S && stl <= U64S {
+            return self.more_than_u64(src)
+        } else if dtl <= U128S && stl <= U128S {
+            return self.more_than_u128(src)
         }
-        // 
-        let Ok(ru1) = tns1.parse::<u128>() else {
-            panic!("amount bytes value too big")
-        };
-        let Ok(ru2) = tns2.parse::<u128>() else {
-            panic!("amount bytes value too big")
-        };
-        ru1 > ru2
+        // UBIG
+        let db = self.to_bigint();
+        let sb =  src.to_bigint();
+        db > sb
     }
 
 
@@ -382,16 +486,29 @@ impl Amount {
 impl Amount {
 
     pub fn unit_sub(&mut self, sub: u8) {
-        if self.unit <= sub {
-            panic!("unit_sub error: unit must big than {}", sub)
-        }
+        assert!(sub < self.unit, "unit_sub error: unit must big than {}", sub);
         self.unit -= sub;
+    }
+
+    pub fn add_mode_bigint(&self, src: &Amount) -> Ret<Amount> {
+        let mut db = self.to_bigint();
+        let ds =  src.to_bigint();
+        db = db + ds;
+        Self::from_bigint(&db)
+    }
+
+    pub fn sub_mode_bigint(&self, src: &Amount) -> Ret<Amount> {
+        let mut db = self.to_bigint();
+        let ds =  src.to_bigint();
+        db = db - ds;
+        Self::from_bigint(&db)
     }
 
     pub fn add(&self, amt: &Amount, mode: AmtMode) -> Ret<Amount> {
         match mode {
             AmtMode::U64 => self.add_mode_u64(amt),
             AmtMode::U128 => self.add_mode_u128(amt),
+            AmtMode::BIGINT => self.add_mode_bigint(amt),
         }
     }
 
@@ -399,6 +516,7 @@ impl Amount {
         match mode {
             AmtMode::U64 => self.sub_mode_u64(amt),
             AmtMode::U128 => self.sub_mode_u128(amt),
+            AmtMode::BIGINT => self.sub_mode_bigint(amt),
         }
     }
 
@@ -407,14 +525,14 @@ impl Amount {
             return errf!("cannot compress negative amount")
         }
         let mut amt = self.clone();
+        if amt.tail_len() > U128S {
+            return errf!("amount bytes too long to compress")
+        }
         while amt.tail_len() > btn {
-            if amt.byte.len() > U128WIDTH {
-                return errf!("amount bytes too long to compress")
-            }
             if amt.unit == 255 {
                 return errf!("amount uint too big to compress")
             }
-            let mut numpls = u128::from_be_bytes(add_left_padding(&amt.byte, U128WIDTH).try_into().unwrap()) / 10;
+            let mut numpls = u128::from_be_bytes(add_left_padding(&amt.byte, U128S).try_into().unwrap()) / 10;
             if upvalue {
                 numpls += 1;
             }
@@ -463,16 +581,34 @@ fn drop_left_zero(v: &[u8]) -> Vec<u8> {
 
 
 macro_rules! compute_mode_define {
-    ($fun:ident, $op: ident, $ty:ty, $ts:expr) => {
+    ($fun:ident, $op:ident, $ty:ty, $ts:expr, $add_or_sub:expr) => {
 
         pub fn $fun(&self, src: &Amount) -> Ret<Amount> {
             let dst: &Amount = self;
-            if dst.unit == 0 && src.unit == 0 {
-                return Ok(Self::zero())
-            }
             if dst.dist < 0 || src.dist < 0 {
                 rte_cneg!{stringify!($op)}
             }
+            let dzro = dst.is_zero();
+            let szro = src.is_zero();
+            if dzro && szro {
+                return Ok(Self::zero())
+            }
+            if $add_or_sub {
+                // add
+                if dzro {
+                    return Ok(src.clone())
+                }else if szro {
+                    return Ok(dst.clone())
+                }
+            }else{
+                // sub
+                if dzro {
+                    rte_ovfl!{}
+                }else if szro {
+                    return Ok(dst.clone())
+                }
+            }
+            // both not zero
             let dtl = dst.tail_len();
             let stl = src.tail_len();
             if dtl > $ts || stl > $ts {
@@ -481,12 +617,8 @@ macro_rules! compute_mode_define {
             let mut du = <$ty>::from_be_bytes(add_left_padding(&dst.byte, $ts).try_into().unwrap());
             let mut su = <$ty>::from_be_bytes(add_left_padding(&src.byte, $ts).try_into().unwrap());
             let utsk = (dst.unit as i32 - src.unit as i32).abs() as u32;
-            let mut baseut;
-            if dst.unit == 0 {
-                baseut = src.unit;
-            }else if src.unit == 0 {
-                baseut = dst.unit;
-            }else if dst.unit > src.unit {
+            let baseut;
+            if dst.unit > src.unit {
                 let Some(ndu) = du.checked_mul( 10u64.pow(utsk) as $ty ) else {
                     rte_ovfl!{}
                 };
@@ -500,37 +632,29 @@ macro_rules! compute_mode_define {
                 baseut = dst.unit;
             }else{
                 baseut = dst.unit;
+                if !$add_or_sub && du == su {
+                    // sub with same
+                    return Ok(Self::zero())
+                }
             }
             // do add
-            let Some(mut resv) = du.$op( su ) else {
+            let Some(resv) = du.$op( su ) else {
                 rte_ovfl!{}
             };
-            // drop tail zero
-            while resv % 10 == 0 {
-                if baseut == 255 {
-                    rte_ovfl!{}
-                }
-                resv /= 10;
-                baseut += 1;
-            };
-            // ok
-            let bts = drop_left_zero(&resv.to_be_bytes());
-            Ok(Amount{
-                unit: baseut,
-                dist: bts.len() as i8,
-                byte: bts,
-            })
 
+            concat_idents!{ coin_u = coin_, $ty {
+                Ok(Self::coin_u(resv, baseut))
+            }} 
         }
     }
 }
 
 impl Amount {
 
-compute_mode_define!{add_mode_u64,  checked_add, u64,   U64WIDTH}
-compute_mode_define!{add_mode_u128, checked_add, u128, U128WIDTH}
-compute_mode_define!{sub_mode_u64,  checked_sub, u64,   U64WIDTH}
-compute_mode_define!{sub_mode_u128, checked_sub, u128, U128WIDTH}
+compute_mode_define!{add_mode_u64,  checked_add, u64,   U64S, true}
+compute_mode_define!{add_mode_u128, checked_add, u128, U128S, true}
+compute_mode_define!{sub_mode_u64,  checked_sub, u64,   U64S, false}
+compute_mode_define!{sub_mode_u128, checked_sub, u128, U128S, false}
 
 }
 
@@ -565,15 +689,76 @@ mod amount_tests {
     #[test]
     fn test2() {
 
-        let a1 = Amount::mei(1);
-        let a2 = Amount::mei(2);
-        let a3 = Amount::mei(3);
+        let a1 = Amount::mei(1000);
+        let a2 = Amount::mei(2000);
+        let a3 = Amount::mei(3000);
         let a4 = a1.add_mode_u128(&a2).unwrap();
+        let a5 = a1.add_mode_u64(&a2).unwrap();
+        let a6 = a3.sub_mode_u128(&a1).unwrap();
+        let a7 = a3.sub_mode_u128(&a4).unwrap();
         assert_eq!(a3.to_fin_string(), a4.to_fin_string());
+        assert_eq!(a3.to_fin_string(), a5.to_fin_string());
+        assert_eq!(a3.to_fin_string(), "3:251");
+        assert_eq!(a6.to_fin_string(), a2.to_fin_string());
+        assert_eq!(a7.to_fin_string(), "0:0");
+        println!("{}  {}  {}  {}  {}  {}  {}", a1, a2, a3, a4, a5, a6, a7);
+        println!("{:?}  {:?}  {:?}  {:?}  {:?}  {:?}  {:?}", a1, a2, a3, a4, a5, a6, a7);
+
+    }
+
+    #[test]
+    fn test3() {
+        let stf = "340282366920938463463374607431768211455";
+        let a0 = Amount::from("7:200").unwrap();
+        for i in 1 .. stf.len() {
+            let f = format!("{}:200", &stf[..i]);
+            let a1 = Amount::from(&f).unwrap();
+            let a3 = a0.add_mode_u128(&a1).unwrap();
+            println!("{}", a3.to_fin_string());
+        }
+
+    }
+
+    #[test]
+    fn test4() {
+        let stf = "340282366920938463463374607431768211455";
+        let a0 = Amount::from(&format!("{}:200", stf)).unwrap();
+        let stl = stf.len();
+        for i in 1 .. stl {
+            let a1 = Amount::from(&format!("{}:200", &stf[stl-i..])).unwrap();
+            let a2 = a0.sub_mode_u128(&a1).unwrap();
+            println!("{}", a2.to_fin_string());
+        }
 
     }
 
 
+    #[test]
+    fn test5() {
+        let stf = "340282366920938463463374607431768211455";
+        let a0 = Amount::from(&format!("{}:100", stf)).unwrap();
+        for i in 1 .. 16 {
+            let a1 = a0.compress(16-i,  true).unwrap();
+            let a2 = a0.compress(16-i, false).unwrap();
+            println!("{}", a1.to_fin_string());
+            println!("{}", a2.to_fin_string());
+        }
+    }
+
+
+    #[test]
+    fn test6() {
+        let stf = "34028236692093846346337460743176821145579745987243958534961784351938476103756328479843750927435562347109475";
+        let _a0 = Amount::from(&format!("{}:100", stf)).unwrap();
+        let stl = stf.len();
+        for i in 1 .. stl {
+            let a1 = Amount::from(&format!("{}:100", &stf[stl-i..])).unwrap();
+            println!("{}", a1.to_fin_string())
+            // let a2 = a0.sub_mode_bigint(&a1).unwrap();
+            // println!("{}", a2.to_fin_string());
+        }
+
+    }
 
 
 }

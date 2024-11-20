@@ -18,7 +18,7 @@ action_define!{ HacToTransfer, 1,
 }
 
 
-action_define!{ HacFromTransfer, 1, 
+action_define!{ HacFromTransfer, 2, 
     ActLv::MAINCALL, // level
     false, // burn 90 fee
     {
