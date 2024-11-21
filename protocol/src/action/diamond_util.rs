@@ -41,7 +41,7 @@ pub fn calculate_diamond_visual_gene(name: &[u8;6], life_gene: &[u8;32]) -> Diam
     let searchgx = |x| {
         for (i, a) in x16rs::DIAMOND_HASH_BASE_CHARS.iter().enumerate() {
             if *a == x {
-                return HEX_CHARS[i]
+                return HEX_CHARS[i-1]
             }
         }
         panic!("not supply diamond char!!!")

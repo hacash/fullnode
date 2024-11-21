@@ -78,7 +78,6 @@ macro_rules! combi_struct_with_parse_serialize {
 
         impl_field_only_new!{$class}
 
-
     )
 }
 
@@ -95,3 +94,59 @@ macro_rules! combi_struct_with_parse {
 
     )
 }
+
+
+
+
+
+
+#[macro_export]
+macro_rules! combi_struct_field_more_than_condition {
+    ($class:ident, { $( $item:ident : $type:ty )+ }, $mrn:ident, $mrv:ty, $cdn:ident, $cdv:expr ) => (
+
+        #[derive(Default, Debug, Clone, PartialEq, Eq)]
+        pub struct $class {
+            $(
+                pub $item: $type,
+            )+
+            pub $mrn: $mrv
+        }
+
+        impl Parse for $class {
+
+            fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
+                let mut mv = 0;
+                $( mv += self.$item.parse(&buf[mv..])?; )+
+                if self.$cdn.uint() > $cdv {
+                    mv += self.$mrn.parse(&buf[mv..])?;
+                }
+                Ok(mv)
+            }
+
+        }
+
+        impl Serialize for $class {
+
+            fn serialize(&self) -> Vec<u8> {
+                let mut sers = vec![ $( self.$item.serialize() ),+ ];
+                if self.$cdn.uint() > $cdv {
+                    sers.push(self.$mrn.serialize());
+                }
+                sers.concat()
+            }
+
+            fn size(&self) -> usize {
+                let mut sz = [ $( self.$item.size() ),+ ].iter().sum();
+                if self.$cdn.uint() > $cdv {
+                    sz += self.$mrn.size();
+                }
+                sz
+            }
+
+        }
+
+        impl_field_only_new!{$class}
+
+    )
+}
+

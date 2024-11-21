@@ -453,15 +453,16 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
     }else if kind == DiamondMint::KIND {
 
         let action = DiamondMint::must(&act.serialize());
-        let name = action.head.diamond.to_readable();
-        let miner = action.head.address.readable();
+        let act = action.d;
+        let name = act.diamond.to_readable();
+        let miner = act.address.readable();
         resjsonobj = jsondata!{
             "name", name,
-            "number", action.head.number.uint(),
+            "number", act.number.uint(),
             "miner", miner,
-            "nonce", action.head.nonce.hex(),
-            "prev_hash", action.head.prev_hash.hex(), // prev block hash
-            "custom_message", action.custom_message.hex(),
+            "nonce", act.nonce.hex(),
+            "prev_hash", act.prev_hash.hex(), // prev block hash
+            "custom_message", act.custom_message.hex(),
         };
         if ret_desc {
             resjsonobj.insert("description", json!(format!(

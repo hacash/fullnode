@@ -47,15 +47,16 @@ async fn diamondminer_success(State(ctx): State<ApiCtx>, q: Query<Q6396>, body: 
         return api_error("upload action error");
     };
 
-    let mint_number = mint.head.number.uint();
-    let mint_name = mint.head.diamond.to_readable();
+    let act = &mint.d;
+    let mint_number = act.number.uint();
+    let mint_name = act.diamond.to_readable();
 
     // check number and hash
     let lastdia = mintstate.get_latest_diamond();
     if mint_number != lastdia.number.uint() + 1 {
         return api_error("diamond number error");
     }
-    if mint_number > 1 && mint.head.prev_hash != lastdia.born_hash {
+    if mint_number > 1 && act.prev_hash != lastdia.born_hash {
         return api_error("diamond prev hash error");
     }
 

@@ -13,6 +13,13 @@ impl Address {
 
     pub const UNKNOWN: Self = Fixed21::DEFAULT;
 
+    pub fn check_must_privakey(&self) -> Rerr {
+        match self.version() == Self::PRIVAKEY {
+            true => Ok(()),
+            false => errf!("address {} is not PRIVAKEY type", self.readable())
+        }
+    }
+
     pub fn version(&self) -> u8 {
         self[0]
     }

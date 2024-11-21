@@ -17,6 +17,7 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
     fn timestamp(&self) -> &Timestamp { unimplemented!() }
 
     fn fee(&self) -> &Amount { unimplemented!() }
+    fn fee_pay(&self) -> Amount { unimplemented!() }
     fn fee_got(&self) -> Amount { unimplemented!() }
     
     fn message(&self) -> &Fixed16 { unimplemented!() }

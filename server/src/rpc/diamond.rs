@@ -93,7 +93,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
         let Some(diamtact) = pickout_diamond_mint_action(txr) else {
             return true // continue
         };
-        let act = diamtact.head;
+        let act = diamtact.d;
         if number > 0 && number != act.number.uint() {
             return true // number not match, continue
         }

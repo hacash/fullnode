@@ -1,4 +1,3 @@
-use crate::operate;
 
 
 
@@ -98,13 +97,9 @@ impl BlockExec for BlockV1 {
         let mut total_fee = Amount::zero();
         // exec each tx
         for tx in txs {
-            // set env
-            ctx.env.tx.main = tx.main();
-            ctx.env.tx.addrs = tx.addrs();
-            // do exec
-            tx.execute(ctx)?;
-            // add fee
-            total_fee = total_fee.add_mode_u128(&tx.fee_got())?;
+            ctx.env.tx = ctx::Tx::create(tx.as_read()); // set env
+            tx.execute(ctx)?; // do exec
+            total_fee = total_fee.add_mode_u128(&tx.fee_got())?; // add fee
         }
         // add fee
         if total_fee.is_positive() { // amt > 0

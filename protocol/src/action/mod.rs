@@ -1,8 +1,11 @@
 use sys::*;
 use field::interface::*;
 use field::*;
+
+
 use super::*;
 use super::operate::*;
+use super::state::*;
 
 
 include!{"init.rs"}
@@ -27,6 +30,8 @@ action_register!{
     HacToTransfer
     HacFromTransfer
     HacFromToTransfer
+    // diamond
+    DiamondMint
 }
 
 

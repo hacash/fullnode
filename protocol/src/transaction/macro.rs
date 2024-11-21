@@ -69,6 +69,10 @@ impl TransactionRead for $class {
         false // not
     }
 
+    fn fee_pay(&self) -> Amount {
+        self.fee().clone()
+    }
+
     // fee_miner_received
     fn fee_got(&self) -> Amount {
         let mut gfee = self.fee().clone();

@@ -9,5 +9,6 @@ use super::interface::*;
 
 
 include!{"hacash.rs"}
+include!{"diamond.rs"}
 
 

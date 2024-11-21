@@ -169,7 +169,7 @@ fn get_diamond_mint_number(tx: &dyn TransactionRead) -> u32 {
     for act in tx.actions() {
         if act.kind() == DMINT {
             let dm = DiamondMint::must(&act.serialize());
-            return dm.head.number.uint();
+            return dm.d.number.uint();
         }
     }
     0

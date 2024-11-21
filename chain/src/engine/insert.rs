@@ -63,6 +63,7 @@ impl ChainEngine {
         // exec block get state
         let chaincnf = ctx::Chain {
             id: self.cnf.chain_id,
+            fast_sync: self.cnf.fast_sync,
         };
         sub_state = block.objc.execute(chaincnf, sub_state)?;
         // create chunk

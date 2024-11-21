@@ -2,7 +2,8 @@
 
 #[derive(Default, Clone)]
 pub struct Chain {
-    pub id: u64
+    pub id: u64,
+    pub fast_sync: bool,
 }
 
 
@@ -17,9 +18,19 @@ pub struct Block {
 #[derive(Default, Clone)]
 pub struct Tx {
     // pub version: u8,
+    pub fee: Amount,
     pub main: Address,
     pub addrs: Vec<Address>,
-    // pub fee: Uint8,
+}
+
+impl Tx {
+    pub fn create(tx: &dyn TransactionRead) -> Self {
+        Self {
+            main: tx.main(),
+            addrs: tx.addrs(),
+            fee: tx.fee_pay(),
+        }
+    }
 }
 
 
