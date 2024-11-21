@@ -27,23 +27,29 @@ include!{"chainlimit.rs"}
 * register
 */
 action_register!{
+
     // hac
-    HacToTransfer
-    HacFromTransfer
-    HacFromToTransfer
-    // diamond
-    DiamondMint
-    DiamondSingleTransfer
-    DiamondToTransfer
-    DiamondFromTransfer
-    DiamondFromToTransfer
+    HacToTransfer              // 1
+    HacFromTransfer            // 13
+    HacFromToTransfer          // 14
+    
     // channel
-    ChannelOpen
-    ChannelClose
+    ChannelOpen                // 2
+    ChannelClose               // 3
+    
+    // diamond
+    DiamondMint                // 4
+    DiamondSingleTransfer      // 5
+    DiamondFromToTransfer      // 6
+    DiamondToTransfer          // 7
+    DiamondFromTransfer        // 8
+
+    DiamondInscription         // 32
+    DiamondInscriptionClear    // 33
+    
     // satoshi
+    SatoshiToTransfer          // 9
+    SatoshiFromTransfer        // 10
+    SatoshiFromToTransfer      // 11
+
 }
-
-
-
-
-

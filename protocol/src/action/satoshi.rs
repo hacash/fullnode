@@ -2,7 +2,7 @@
 /*
 *
 */
-action_define!{ SatoshiToTransfer, 1, 
+action_define!{ SatoshiToTransfer, 9, 
     ActLv::TOP_ONLY, // level
     false, // burn 90 fee
     [], // need sign
@@ -10,38 +10,44 @@ action_define!{ SatoshiToTransfer, 1,
         to        : AddrOrPtr
         satoshi   : Satoshi 
     },
-    (self, _ctx, _gas {
-        Ok(vec![])
+    (self, ctx, _gas {
+        let from = ctx.env().tx.main; 
+        let to = ctx.addr(&self.to)?;
+        sat_transfer(ctx, &from, &to, &self.satoshi)
     })
 }
 
 
 
-action_define!{ SatoshiFromTransfer, 1, 
+action_define!{ SatoshiFromTransfer, 10, 
     ActLv::TOP_ONLY, // level
     false, // burn 90 fee
-    [], // need sign
+    [self.from], // need sign
     {
         from      : AddrOrPtr
         satoshi   : Satoshi   
     },
-    (self, _ctx, _gas {
-        Ok(vec![])
+    (self, ctx, _gas {
+        let from = ctx.addr(&self.from)?;
+        let to = ctx.env().tx.main; 
+        sat_transfer(ctx, &from, &to, &self.satoshi)
     })
 }
 
 
 
-action_define!{ SatoshiFromToTransfer, 1, 
+action_define!{ SatoshiFromToTransfer, 11, 
     ActLv::TOP_ONLY, // level
     false, // burn 90 fee
-    [], // need sign
+    [self.from], // need sign
     {
         from      : AddrOrPtr
         to        : AddrOrPtr
         satoshi   : Satoshi 
     },
-    (self, _ctx, _gas {
-        Ok(vec![])
+    (self, ctx, _gas {
+        let from = ctx.addr(&self.from)?;
+        let to = ctx.addr(&self.to)?;
+        sat_transfer(ctx, &from, &to, &self.satoshi)
     })
 }
