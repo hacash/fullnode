@@ -303,6 +303,18 @@ impl Amount {
     }
 
 
+    pub fn from_unit_byte(unit: u8, byte: Vec<u8>) -> Ret<Amount> {
+        let bl = byte.len();
+        if bl > 127 {
+            return Err("amount bytes len overflow 127.".to_string())
+        }
+        Ok(Amount{
+            unit: unit,
+            dist: bl as i8,
+            byte: byte,
+        })
+    }
+
 
 }
 
@@ -644,13 +656,15 @@ macro_rules! compute_mode_define {
             let utsk = (dst.unit as i32 - src.unit as i32).abs() as u32;
             let baseut;
             if dst.unit > src.unit {
-                let Some(ndu) = du.checked_mul( 10u64.pow(utsk) as $ty ) else {
+                let Some(ndu) = du.checked_mul( (10 as $ty).pow(utsk) as $ty ) else {
+                    // return self.add_mode_bigint(src) // to mode bigint
                     rte_ovfl!{}
                 };
                 du = ndu;
                 baseut = src.unit;
             }else if dst.unit < src.unit {
-                let Some(nsu) = su.checked_mul( 10u64.pow(utsk) as $ty ) else {
+                let Some(nsu) = su.checked_mul( (10 as $ty).pow(utsk) as $ty ) else {
+                    // return self.add_mode_bigint(src) // to mode bigint
                     rte_ovfl!{}
                 };
                 su = nsu;
@@ -664,6 +678,7 @@ macro_rules! compute_mode_define {
             }
             // do add
             let Some(resv) = du.$op( su ) else {
+                // return self.add_mode_bigint(src) // to mode bigint
                 rte_ovfl!{}
             };
 

@@ -39,6 +39,12 @@ combi_list!{ DiamondNameListMax200,
 
 impl DiamondNameListMax200 {
 
+    pub fn one(dia: DiamondName) -> Self {        
+        let mut obj = Self::default();
+        obj.push(dia).unwrap();
+        obj
+    }
+
     pub fn check(&self) -> Ret<u8> {
         // check len
         let setlen = self.count.uint() as u64;

@@ -43,11 +43,11 @@ macro_rules! datas_define {
 
         impl Parse for $class {
             fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
-                self.count.parse(buf)?;
+                let sk = self.count.parse(buf)?;
                 let sz = *self.count as usize;
-                let bts = bufeat(buf, sz)?;
+                let bts = bufeat(&buf[sk..], sz)?;
                 *self = Self::from(bts)?;
-                Ok(<$sty>::SIZE + sz)
+                Ok(sk + sz)
             }
         }
 
@@ -108,8 +108,21 @@ macro_rules! datas_define {
                 &self.bytes
             }
 
+            pub fn as_mut(&mut self) -> &mut Vec<u8> {
+                &mut self.bytes
+            }
+
+            pub fn update_count(&mut self) -> Rerr {
+                let l = self.bytes.len();
+                if l > <$lty>::MAX as usize {
+                    return errf!("cannot update count {} overflow", l)
+                }
+                self.count = <$sty>::from(l as $lty);
+                Ok(())
+            }
+
             pub fn from(buf: Vec<u8>) -> Ret<Self> {
-                if buf.len() > <$sty>::MAX as usize {
+                if buf.len() > <$lty>::MAX as usize {
                     return Err(s!("datas length too long"))
                 }
                 Ok(Self {
@@ -132,7 +145,7 @@ macro_rules! datas_define {
             }
         
             pub fn append(&mut self, tar: &mut Vec<u8>) -> Rerr {
-                self.count += tar.len() as u64;
+                self.count += tar.len() as $lty;
                 self.bytes.append(tar);
                 Ok(())
             }

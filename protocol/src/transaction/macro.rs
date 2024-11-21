@@ -284,12 +284,13 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
         }
     }
     */
-    // spend fee
-    operate::hac_sub(ctx, &main, fee)?;
     // execute actions
     for action in tx.actions() {
         action.execute(ctx)?;
     }
+    // spend fee
+    operate::hac_sub(ctx, &main, fee)?;
+    // ok finish
     Ok(())
 }
 

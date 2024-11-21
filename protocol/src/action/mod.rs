@@ -8,6 +8,7 @@ use super::operate::*;
 use super::state::*;
 
 
+include!{"util.rs"}
 include!{"init.rs"}
 include!{"macro.rs"}
 include!{"create.rs"}
@@ -32,6 +33,14 @@ action_register!{
     HacFromToTransfer
     // diamond
     DiamondMint
+    DiamondSingleTransfer
+    DiamondToTransfer
+    DiamondFromTransfer
+    DiamondFromToTransfer
+    // channel
+    ChannelOpen
+    ChannelClose
+    // satoshi
 }
 
 

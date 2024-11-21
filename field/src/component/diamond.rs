@@ -77,8 +77,7 @@ impl DiamondOwnedForm {
 	}
 
 	pub fn drop_one(&mut self, dian: &DiamondName) -> Ret<usize> {
-		let mut list = DiamondNameListMax200::default();
-		list.push(dian.clone()).unwrap();
+		let list = DiamondNameListMax200::one(dian.clone());
 		self.drop(&list)
 	}
 
@@ -89,41 +88,36 @@ impl DiamondOwnedForm {
 
 	// return balance quantity
 	pub fn drop(&mut self, dian: &DiamondNameListMax200) -> Ret<usize> {
-
-		let l = DiamondName::SIZE;
-		let srclen = dian.count().uint() as usize;
-		let mut dianset = dian.hashset();
-		let dstsz = self.names.length();
-		let dstlen = dstsz / l;
-		let mut rmleft = 0;
-		for i in 0..dstlen {
-			let x = i*l;
-			let y = x+l;
-			let dia = DiamondName::from(self.names.bytes[x..y].try_into().unwrap());
-			if dianset.contains(&dia) {
-				dianset.remove(&dia);
-				if x == rmleft {
-					// drop head, do nohing
-				}else{
-					let cvd = rmleft .. rmleft+l;
-					self.names.bytes.copy_within(cvd, x);
-				}
-				rmleft += l;
-			}
-			if dianset.is_empty() {
-				break // all finish
+		const DS: usize = DiamondName::SIZE;
+		let form: &mut Vec<u8> = self.names.as_mut(); 
+		let mut mstep = form.len() / DS;
+		let mut istep = 0usize;
+		let mut dropn = 0usize; // drop count
+		let mut delst = dian.hashset();
+		// loop
+		while istep < mstep {
+			let ix = istep * DS;
+			let id = DiamondName::from(form[ix .. ix+DS].try_into().unwrap());
+			if delst.contains(&id) {
+				mstep -= 1;
+				dropn += 1;
+				delst.remove(&id);
+				let tail = mstep*DS .. mstep*DS+DS;
+				form.copy_within(tail, ix);
+			}else{
+				// next
+				istep += 1;
 			}
 		}
-		if rmleft/l != srclen {
-			println!("names = {}", self.readable());
-			println!("rmleft/l={}, srclen={}, dstlen={}", rmleft/l, srclen, dstlen);
-			return errf!("drop {} not match", srclen)
-		}
-		self.names.bytes = self.names.bytes.split_off(rmleft);
-		self.names.count -= (srclen * l) as u64;
-		Ok(*self.names.count as usize)
-
+		// check
+		let ndlen = dian.length();
+		assert!(dropn == ndlen, "DiamondOwnedForm need drop {} but do {}, drop {} in {}", 
+			ndlen, dropn, dian.readable(), self.names.to_readable());
+		// ok
+		self.names.update_count()?;
+		Ok(dropn)
 	}
+
 
 }
 

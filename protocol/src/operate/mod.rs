@@ -1,3 +1,6 @@
+
+use num_bigint::*;
+
 use sys::*;
 
 use field::*;
@@ -10,5 +13,7 @@ use super::interface::*;
 
 include!{"hacash.rs"}
 include!{"diamond.rs"}
+include!{"satoshi.rs"}
+include!{"channel.rs"}
 
 

@@ -82,7 +82,8 @@ impl BlockExec for BlockV1 {
             tx: ctx::Tx::default(),
         };
         // create context
-        let mut ctxobj = ctx::ContextInst::new(env, state);
+        let eptx = TransactionCoinbase::new();
+        let mut ctxobj = ctx::ContextInst::new(env, state, &eptx);
         let ctx = &mut ctxobj;
         // coinbase
         let txs = self.transactions();
@@ -98,6 +99,7 @@ impl BlockExec for BlockV1 {
         // exec each tx
         for tx in txs {
             ctx.env.tx = ctx::Tx::create(tx.as_read()); // set env
+            ctx.txr = tx.as_read();
             tx.execute(ctx)?; // do exec
             total_fee = total_fee.add_mode_u128(&tx.fee_got())?; // add fee
         }
