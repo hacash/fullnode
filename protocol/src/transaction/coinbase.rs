@@ -34,6 +34,10 @@ impl TransactionRead for TransactionCoinbase {
         self.hash()
     }
 
+    fn fee_got(&self) -> Amount {
+        Amount::zero()
+    }
+
     fn ty(&self) -> u8 {
         self.ty.uint()
     }

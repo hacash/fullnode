@@ -56,6 +56,10 @@ impl ChainEngine {
         // create sub state 
         let prev_state = prev_chunk.state.clone();
         let mut sub_state = prev_state.fork_sub(prev_state.clone());
+        // initialize
+        if hei == 1 { // first block
+            self.minter.initialize(sub_state.as_mut())?;
+        }
         // exec block get state
         let chaincnf = ctx::Chain {
             id: self.cnf.chain_id,

@@ -16,13 +16,20 @@ impl HacashMinter {
 
 
 impl Minter for HacashMinter {
+
     fn init(&self, _: &IniObj) {
+        // extend actions
         protocol::action::setup_extend_actions_try_create(empty_create);
     }
 
     fn genesis_block(&self) -> Arc<dyn Block> {
         self.gnsblk.clone()
     }
+
+    fn initialize(&self, sta: &mut dyn State) -> Rerr {
+        do_initialize(sta)
+    }
+
 
 }
 

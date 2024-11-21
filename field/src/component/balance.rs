@@ -44,7 +44,7 @@ combi_struct!{ Balance,
 
 impl Balance {
 
-	pub fn from_hacash(amt: Amount) -> Balance {
+	pub fn hac(amt: Amount) -> Balance {
 		Balance{
 			hacash: amt,
 			satoshi: SatoshiAuto::default(),

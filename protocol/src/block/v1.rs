@@ -1,3 +1,5 @@
+use crate::operate;
+
 
 
 // BlockV1
@@ -18,37 +20,6 @@ combi_struct_with_parse!{ BlockV1,
 	// trs body
 	transactions : DynVecTransaction
 }
-
-
-impl BlockExec for BlockV1 {
-    fn execute(&self, ccnf: ctx::Chain, state: Box<dyn State>) -> Ret<Box<dyn State>> {
-        // create env
-        let env = ctx::Env{
-            chain: ccnf,
-            block: ctx::Block{
-                height: self.height().uint(),
-                hash: self.hash(),
-            },
-            tx: ctx::Tx::default(),
-        };
-        // create context
-        let mut ctxobj = ctx::ContextInst::new(env, state);
-        // exec each tx
-        for tx in self.transactions() {
-            // set env
-            ctxobj.env.tx.main = tx.main();
-            ctxobj.env.tx.addrs = tx.addrs();
-            // do exec
-            tx.execute(&mut ctxobj)?;
-        }
-        
-        // todo!();
-
-        Ok(ctxobj.into_state())
-
-    }
-}
-
 
 
 
@@ -99,6 +70,51 @@ impl BlockRead for BlockV1 {
 
 
 }
+
+impl BlockExec for BlockV1 {
+    fn execute(&self, ccnf: ctx::Chain, state: Box<dyn State>) -> Ret<Box<dyn State>> {
+        // create env
+        let env = ctx::Env{
+            chain: ccnf,
+            block: ctx::Block{
+                height: self.height().uint(),
+                hash: self.hash(),
+            },
+            tx: ctx::Tx::default(),
+        };
+        // create context
+        let mut ctxobj = ctx::ContextInst::new(env, state);
+        let ctx = &mut ctxobj;
+        // coinbase
+        let txs = self.transactions();
+        if txs.len() < 1 {
+            return errf!("block must have coinbase tx")
+        }
+        let cbtx = &txs[0];
+        if cbtx.ty() != TransactionCoinbase::TYPE {
+            return errf!("block first tx must be coinbase")
+        }
+        let base_addr = cbtx.main();
+        let mut total_fee = Amount::zero();
+        // exec each tx
+        for tx in txs {
+            // set env
+            ctx.env.tx.main = tx.main();
+            ctx.env.tx.addrs = tx.addrs();
+            // do exec
+            tx.execute(ctx)?;
+            // add fee
+            total_fee = total_fee.add_mode_u128(&tx.fee_got())?;
+        }
+        // add fee
+        if total_fee.is_positive() { // amt > 0
+            operate::hac_add(ctx, &base_addr, &total_fee)?;
+        }
+        Ok(ctxobj.into_state())
+
+    }
+}
+
 
 
 
