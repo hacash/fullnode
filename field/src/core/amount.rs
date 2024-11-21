@@ -31,10 +31,9 @@ pub struct Amount {
 	byte: Vec<u8>,
 }
 
-
-impl Display for Amount{
+impl Display for Amount {
     fn fmt(&self,f: &mut Formatter) -> Result{
-        write!(f,"{}", self.to_string())
+        write!(f,"{}", self.to_fin_string())
     }
 }
 
@@ -312,9 +311,9 @@ impl Amount {
 
 
     pub fn sign(&self) -> String {
-        match self.dist > 0 {
-            true => "",
-            false => "-",
+        match self.dist < 0 {
+            true => "-",
+            false => "",
         }.to_string()
     }
 
@@ -736,7 +735,7 @@ mod amount_tests {
             let f = format!("{}:200", &stf[..i]);
             let a1 = Amount::from(&f).unwrap();
             let a3 = a0.add_mode_u128(&a1).unwrap();
-            println!("{}", a3.to_fin_string());
+            println!("{}", a3);
         }
 
     }
@@ -749,7 +748,7 @@ mod amount_tests {
         for i in 1 .. stl {
             let a1 = Amount::from(&format!("{}:200", &stf[stl-i..])).unwrap();
             let a2 = a0.sub_mode_u128(&a1).unwrap();
-            println!("{}", a2.to_fin_string());
+            println!("{}", a2);
         }
 
     }
@@ -762,8 +761,8 @@ mod amount_tests {
         for i in 1 .. 16 {
             let a1 = a0.compress(16-i,  true).unwrap();
             let a2 = a0.compress(16-i, false).unwrap();
-            println!("{}", a1.to_fin_string());
-            println!("{}", a2.to_fin_string());
+            println!("{}", a1);
+            println!("{}", a2);
         }
     }
 
@@ -775,9 +774,9 @@ mod amount_tests {
         let stl = stf.len();
         for i in 1 .. stl {
             let a1 = Amount::from(&format!("{}:100", &stf[stl-i..])).unwrap();
-            println!("{}", a1.to_fin_string())
+            println!("{}", a1)
             // let a2 = a0.sub_mode_bigint(&a1).unwrap();
-            // println!("{}", a2.to_fin_string());
+            // println!("{}", a2);
         }
 
     }

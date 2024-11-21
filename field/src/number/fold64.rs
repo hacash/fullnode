@@ -7,6 +7,7 @@ const FOLDU64SX5: u64 = FOLDU64SX4 * 256; // 5byte :         1374_38953472
 const FOLDU64SX6: u64 = FOLDU64SX5 * 256; // 6byte :       351843_72088832
 const FOLDU64SX7: u64 = FOLDU64SX6 * 256; // 7byte :     90071992_54740992
 const FOLDU64SX8: u64 = FOLDU64SX7 * 256; // 8byte : 230_58430092_13693952
+//                                                  2 30584300 92136939.52
 
 const FOLDU64XLIST: [u64; 8] = [FOLDU64SX1, FOLDU64SX2, FOLDU64SX3, FOLDU64SX4, FOLDU64SX5, FOLDU64SX6, FOLDU64SX7, FOLDU64SX8];
 
@@ -44,7 +45,7 @@ impl Parse for Fold64 {
     fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
         let bt = bufeatone(buf)?;
         let tl = bt >> 5;
-        if tl == 8 { // error
+        if tl >= 8 { // error
             return Err(s!("Fold64 format error"))
         }
         let mut body = vec![bt & 0b00011111];

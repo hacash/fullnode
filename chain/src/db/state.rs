@@ -36,8 +36,10 @@ impl State for StateInst {
     }
 
     fn write_to_disk(&self) {
+        // debug_println!("write_to_disk !!!!!!");
         let batch = WriteBatch::new();
         for (k, v) in self.mem.0.iter() {
+            // debug_println!("write_to_disk {} -> {}", k.hex(), v);
             match v {
                 MemItem::Delete => batch.delete_u8(k),
                 MemItem::Value(v) => batch.put_u8(k, v),

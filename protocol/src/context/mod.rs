@@ -1,5 +1,6 @@
 use std::sync::*;
 
+use sys::*;
 use field::*;
 use vm::interface::*;
 

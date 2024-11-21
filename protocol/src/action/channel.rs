@@ -5,6 +5,7 @@
 action_define!{ ChannelOpen, 1, 
     ActLv::TOP_ONLY, // level
     false, // burn 90 fee
+    [], // need sign
     {
         channel_id     : ChannelId
         left_bill      : AddrHac
@@ -20,6 +21,7 @@ action_define!{ ChannelOpen, 1,
 action_define!{ ChannelClose, 1, 
     ActLv::TOP_ONLY, // level
     false, // burn 90 fee
+    [], // need sign
     {
         channel_id     : ChannelId 
     },

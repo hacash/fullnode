@@ -101,7 +101,7 @@ impl ChainEngine {
                     let (blk, sk) = blk.unwrap();
                     // println!("block::create() sk = {}", sk);
                     let blkhei = blk.height().uint();
-                    // println!("-> {}, tx: {}", blkhei, blk.transaction_count().uint()-1);
+                    // debug_println!("sync -> {}, tx: {}", blkhei, blk.transaction_count().uint()-1);
                     if hei != blkhei {
                         let _ = cherr1.send(format!("need block height {} but got {}", hei, blkhei));
                         break
@@ -125,7 +125,7 @@ impl ChainEngine {
                     };
                     let hei = blk.objc.height().uint();
                     let hx = blk.hash.clone();
-                    // println!("sync insert height: {}, body: {}", hei, blk.body().bytes.hex());
+                    // debug_println!("sync insert height: {}, body: {}", hei, blk.data.hex());
                     let res = this.do_insert_chunk(blk);
                     if let Err(e) = res {
                         let _ = cherr2.send(format!("create chunk {} error: {}", hei, e));
@@ -160,87 +160,6 @@ impl ChainEngine {
         Ok(())
     }
 
-
-
-    /*
-    fn do_insert_sync(&self, start_hei: u64, mut datas: Vec<u8>) -> Rerr {
-        let (crtchin, crtchout) = std::sync::mpsc::sync_channel(10);
-        let (istchin, istchout) = std::sync::mpsc::sync_channel(1);
-        let (errchin, errchout) = std::sync::mpsc::sync_channel(5);
-        let this = self;
-        let errchin1 = errchin.clone();
-        let errchin2 = errchin.clone();
-        std::thread::scope(|s| {
-            // parse block
-            s.spawn(move || {
-                let mut hei = start_hei;
-                let mut blocks = datas.as_mut_slice();
-                // let mut benchmark = Duration::new(0, 0);
-                loop {
-                    // let now = Instant::now();
-                    if blocks.len() == 0 {
-                        break
-                    }
-                    // let now0 = Instant::now();
-                    let blk = block::create(&blocks);
-                    if let Err(e) = blk {
-                        let err = sync_warning(format!("blocks::create error: {}", e));
-                        errchin1.send(err);
-                        break
-                    }
-                    let (blk, sk) = blk.unwrap();
-                    let blkhei = blk.height().uint();
-                    if hei != blkhei {
-                        let err = sync_warning(format!("need block height {} but got {}", hei, blkhei));
-                        errchin1.send(err);
-                        break
-                    }
-                    let (left, right) = blocks.split_at_mut(sk);
-                    blocks = right; // next chunk
-                    let mut pkg = BlockPkg::new(blk, left.into());
-                    pkg.set_origin( BlkOrigin::SYNC ); // mark block is sync
-                    // let now1 = Instant::now();
-                    // benchmark += now1.duration_since(now);
-                    if let Err(_) = crtchin.send(pkg) {
-                        break // end
-                    }
-                    // next block
-                    hei += 1;
-                }
-                // print!(" {:?}", benchmark);
-            });
-            // do insert
-            
-            loop {
-                // lpnum += 1;
-                let chk = istchout.recv();
-                if chk.is_err() {
-                    break // end
-                }
-                // let now = Instant::now();
-                let chunk_ptr = chk.unwrap();
-                let res = self.roll_store(chunk_ptr);
-                if res.is_err() {
-                    let err = sync_warning(format!("roll store error: {}", res.err().unwrap()));
-                    errchin.send(err);
-                    break // end
-                }
-                // next
-                // let now1 = Instant::now();
-                // benchmark += now1.duration_since(now);
-            }
-            // print!(" {:?} loop{} ", benchmark, lpnum);
-            // ok not err
-            errchin.send("".to_string());
-        });
-        let err = errchout.recv().unwrap();
-        if err.len() > 0 {
-            return Err(err)
-        }
-        // finish
-        Ok(())
-    }
-    */
 
 
 

@@ -320,7 +320,7 @@ async fn diamond_inscription_protocol_cost(State(ctx): State<ApiCtx>, q: Query<Q
         };
         let camt = Amount::coin(*diasmelt.average_bid_burn as u64, 247);
         let Ok(newcost) = cost.add_mode_u128( &camt ) else {
-            return api_error(&format!("cannot add cost {} and {}", camt.to_fin_string(), cost.to_fin_string()))
+            return api_error(&format!("cannot add cost {} and {}", camt, cost))
         };
         cost = newcost
     }

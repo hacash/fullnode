@@ -1,9 +1,21 @@
 
 #[derive(Clone)]
-pub enum  MemItem{
+pub enum MemItem{
     Delete,   
     Value(Vec<u8>),
 }
+
+impl Display for MemItem {
+    fn fmt(&self,f: &mut Formatter) -> Result {
+        write!(f,"{}", match self {
+            Self::Delete => "[delete]".to_owned(),
+            Self::Value(v) => v.hex(),
+        })
+    }
+}
+
+
+
 
 pub struct MemKV(HashMap<Vec<u8>, MemItem>);
 

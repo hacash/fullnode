@@ -5,7 +5,6 @@ const ADDR_OR_PTR_DIV_NUM: u8 = 10;
 pub type Address = Fixed21;
 pub type Addrptr = Uint1;
 
-
 impl Address {
     
     pub const PRIVAKEY: u8 = 0;
@@ -79,6 +78,8 @@ impl AddrOrList {
 *
 */
 combi_revenum!{ AddrOrPtr, Address, Addrptr, ADDR_OR_PTR_DIV_NUM }
+
+impl Copy for AddrOrPtr {} 
 
 impl AddrOrPtr {
 

@@ -23,7 +23,10 @@ include!{"chainlimit.rs"}
 * register
 */
 action_register!{
-    Test63856464969364
+    // hac
+    HacToTransfer
+    HacFromTransfer
+    HacFromToTransfer
 }
 
 

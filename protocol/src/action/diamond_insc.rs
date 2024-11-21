@@ -5,6 +5,7 @@
 action_define!{ DiamondInscription, 1, 
     ActLv::TOP_ONLY, // level
     false, // burn 90 fee
+    [], // need sign
     {
         diamonds         : DiamondNameListMax200
         protocol_cost    : Amount
@@ -20,6 +21,7 @@ action_define!{ DiamondInscription, 1,
 action_define!{ DiamondInscriptionClear, 1, 
     ActLv::TOP_ONLY, // level
     false, // burn 90 fee
+    [], // need sign
     {
         diamonds      : DiamondNameListMax200    
         protocol_cost : Amount

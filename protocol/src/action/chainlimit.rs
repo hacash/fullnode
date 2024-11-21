@@ -5,6 +5,7 @@
 action_define!{ SubmitHeightLimit, 1, 
     ActLv::TOP_ONLY, // level
     false, // burn 90 fee
+    [], // need sign
     {
         start: BlockHeight
         end:   BlockHeight
@@ -17,6 +18,7 @@ action_define!{ SubmitHeightLimit, 1,
 action_define!{ SubChainID, 1, 
     ActLv::TOP_ONLY, // level
     false, // burn 90 fee
+    [], // need sign
     {
         chain_id: Uint8  
     },

@@ -15,6 +15,7 @@ combi_struct!{ DiamondMintHead,
 action_define!{ DiamondMint, 4, 
     ActLv::TOP_ONLY, // level
     false, // burn 90 fee
+    [], // need sign
     {
         head                 : DiamondMintHead
         custom_message       : Hash      

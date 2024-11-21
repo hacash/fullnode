@@ -7,6 +7,7 @@ edition = "2021"
 sys = {path = "../sys"}
 field = {path = "../field"}
 protocol = {path = "../protocol"}
+debug_print = "1.0.0"
 hex = "0.4.3"
 dyn-clone = "1.0.17"
 cruzbit-leveldb = "1.0.0"

@@ -1,7 +1,7 @@
 
 #[macro_export]
 macro_rules! action_define {
-    ($class:ident, $kid:expr, $lv:expr, $burn90:expr,
+    ($class:ident, $kid:expr, $lv:expr, $burn90:expr, $reqsign:expr, 
         { $( $item:ident : $ty:ty )* },
         ($pself:ident, $pctx:ident, $pgas:ident $exec:expr)
     ) => {
@@ -68,6 +68,7 @@ macro_rules! action_define {
             fn kind(&self) -> u16 { self.kind.uint() }
             fn level(&self) -> i8 { $lv }
             fn burn_90(&self) -> bool { $burn90 }
+            fn req_sign(&$pself) -> Vec<AddrOrPtr> { $reqsign.to_vec() } // request_need_sign_addresses
         }
 
         impl $class {
@@ -104,6 +105,7 @@ macro_rules! action_register {
 action_define!{Test63856464969364, 9527, 
     ActLv::MAINCALL, // level
     false, // burn 90 fee
+    [],
     {
         id: Uint1
         addr: Address

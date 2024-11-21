@@ -3,7 +3,7 @@ use std::vec;
 macro_rules! check_amount_is_positive {
     ($amt:expr) => {
         if ! $amt.is_positive() {
-            return errf!("amount {} value is not positive", $amt.to_fin_string())
+            return errf!("amount {} value is not positive", $amt)
         }
     };
 }
@@ -19,7 +19,7 @@ macro_rules! amount_op_unsafe_func_define {
             let newhac = $exec; // do add or sub
             if newhac.size() > 12 {
                 return errf!("address {} amount {} size {} over 12 can not to store", 
-                    $addr.readable(), newhac.size(), newhac.to_fin_string())
+                    $addr.readable(), newhac.size(), newhac)
             }
             bls.hacash = newhac.clone();
             state.balance_set($addr, &bls);
@@ -33,7 +33,7 @@ macro_rules! amount_op_unsafe_func_define {
 amount_op_unsafe_func_define!{hac_sub_unsafe, hac, addr, amt, {
     if hac < *amt {
         return errf!("address {} balance {} not enough, need {}", 
-            addr.readable(), hac.to_fin_string(), amt.to_fin_string())
+            addr.readable(), hac, amt)
     }
     hac.sub_mode_u128(amt)?
 }}
@@ -55,8 +55,8 @@ pub fn hac_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, amt: &A
     }
     // do trs
     check_amount_is_positive!(amt);
-    hac_add_unsafe(ctx, from, amt)?;
-    hac_sub_unsafe(ctx, to, amt)?;
+    hac_sub_unsafe(ctx, from, amt)?;
+    hac_add_unsafe(ctx, to, amt)?;
     Ok(vec![])
 }
 
@@ -66,12 +66,12 @@ pub fn hac_check(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> Ret<Amo
     check_amount_is_positive!(amt);
     let state = CoreState::wrap(ctx.state());
     if let Some(bls) = state.balance( addr ) {
-        // println!("address {} balance {}", addr.readable(), bls.hacash.to_fin_string() );
+        // println!("address {} balance {}", addr.readable(), bls.hacash );
         if bls.hacash >= *amt {
             return Ok(bls.hacash)
         }
     }
-    errf!("address {} balance not enough need {}", addr.readable(), amt.to_fin_string() )
+    errf!("address {} balance not enough need {}", addr.readable(), amt )
 }
 
 

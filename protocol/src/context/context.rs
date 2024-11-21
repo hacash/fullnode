@@ -20,6 +20,10 @@ impl Context for ContextInst {
     fn env(&self) -> &Env {
         &self.env
     }
+
+    fn addr(&self, ptr :&AddrOrPtr) -> Ret<Address> {
+        ptr.real(&self.env.tx.addrs)
+    }
     
     fn state(&mut self) -> &mut dyn State {
         self.sta.as_mut()

@@ -5,44 +5,50 @@
 action_define!{ HacToTransfer, 1, 
     ActLv::MAINCALL, // level
     false, // burn 90 fee
+    [], // need sign
     {
         to : AddrOrPtr
         hacash : Amount
     },
     (self, ctx, _gas {
-        let env = ctx.env();
-        let from = env.tx.main; 
-        let to = self.to.real(&env.tx.addrs)?;
+        let from = ctx.env().tx.main; 
+        let to = ctx.addr(&self.to)?;
         hac_transfer(ctx, &from, &to, &self.hacash)
     })
 }
 
 
-action_define!{ HacFromTransfer, 2, 
+action_define!{ HacFromTransfer, 13, 
     ActLv::MAINCALL, // level
     false, // burn 90 fee
+    [self.from],
     {
         from   : AddrOrPtr
         hacash : Amount
     },
-    (self, _ctx, _gas {
-        Ok(vec![])
+    (self, ctx, _gas {
+        let from = ctx.addr(&self.from)?;
+        let to = ctx.env().tx.main; 
+        hac_transfer(ctx, &from, &to, &self.hacash)
     })
 }
 
 
 
 
-action_define!{ HacFromToTransfer, 1, 
+action_define!{ HacFromToTransfer, 14, 
     ActLv::MAINCALL, // level
     false, // burn 90 fee
+    [self.from],
     {
         from   : AddrOrPtr
         to     : AddrOrPtr
         hacash : Amount
     },
-    (self, _ctx, _gas {
-        Ok(vec![])
+    (self, ctx, _gas {
+        let from = ctx.addr(&self.from)?;
+        let to = ctx.addr(&self.to)?;
+        hac_transfer(ctx, &from, &to, &self.hacash)
     })
 }
 

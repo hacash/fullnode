@@ -43,20 +43,16 @@ pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> Rerr {
     }
 
     if bidstep < minstep {
-        printerr!("bid step amount cannot less than {} HAC",
-            &minstep.to_fin_string()
-        );
+        printerr!("bid step amount cannot less than {} HAC", &minstep );
     }
 
     if bidmax < bidmin {
-        printerr!("max bid fee {} cannot less than min fee {}", 
-            &bidmax.to_fin_string(), &bidmin.to_fin_string()
-        );
+        printerr!("max bid fee {} cannot less than min fee {}", &bidmax, &bidmin);
         panic!("");
     }
 
     println!("[Diamond Auto Bidding] Start with account {} min fee {} and max fee {}.",
-        &cnf.dmer_bid_account.readable(), &bidmin.to_fin_string(), &bidmax.to_fin_string()
+        &cnf.dmer_bid_account.readable(), &bidmin, &bidmax
     );
     
     // thread loop 
