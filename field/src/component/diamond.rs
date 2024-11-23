@@ -104,6 +104,9 @@ impl DiamondOwnedForm {
 				delst.remove(&id);
 				let tail = mstep*DS .. mstep*DS+DS;
 				form.copy_within(tail, ix);
+				if delst.is_empty() {
+					break // all finish
+				}
 			}else{
 				// next
 				istep += 1;
@@ -114,6 +117,7 @@ impl DiamondOwnedForm {
 		assert!(dropn == ndlen, "DiamondOwnedForm need drop {} but do {}, drop {} in {}", 
 			ndlen, dropn, dian.readable(), self.names.to_readable());
 		// ok
+		let _ = form.split_off(mstep * DS); // drop tail
 		self.names.update_count()?;
 		Ok(dropn)
 	}
