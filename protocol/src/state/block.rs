@@ -5,20 +5,25 @@ pub struct BlockDisk {
 
 impl BlockDisk {
 
+    const CSK: &[u8] = b"chain_status";
+
     pub fn wrap(disk: Arc<dyn DiskDB>) -> BlockDisk {
         Self { disk }
     }
 
     pub fn status(&self) -> ChainStatus {
-        const CSK: &[u8] = b"chain_status";
         let mut stat = ChainStatus::default();
-        match self.disk.load(CSK) {
+        match self.disk.load(Self::CSK) {
             None => stat,
             Some(v) => {
                 stat.parse(&v).unwrap(); // must
                 stat
             }
         }
+    }
+
+    pub fn save_status(&self, stat: &ChainStatus) {
+        self.disk.save(Self::CSK, &stat.serialize())
     }
 
     // save

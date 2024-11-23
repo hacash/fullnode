@@ -37,9 +37,5 @@ impl Chunk {
         self.parent = Arc::downgrade(&p).into();
     }
 
-    pub fn state(&self) -> Arc<dyn State> {
-        self.state.clone()
-    }
-
 }
 

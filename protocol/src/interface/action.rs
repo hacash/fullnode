@@ -12,7 +12,7 @@ pub trait ActExec {
 */
 pub trait Action : ActExec + Field + Send + Sync + DynClone {
     fn kind(&self) -> u16 { unimplemented!() }
-    fn level(&self) -> i8 { ActLv::MAINCALL }
+    fn level(&self) -> i8 { ActLv::TOP }
     fn burn_90(&self) -> bool { false } // is_burning_90_persent_fee
     fn req_sign(&self) -> Vec<AddrOrPtr> { vec![] } // request_need_sign_addresses
 }

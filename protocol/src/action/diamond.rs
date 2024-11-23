@@ -3,7 +3,7 @@
 * 
 */
 action_define!{ DiamondSingleTransfer, 5, 
-    ActLv::TOP_ONLY, // level
+    ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [], // need sign
     {
@@ -22,7 +22,7 @@ action_define!{ DiamondSingleTransfer, 5,
 * 
 */
 action_define!{ DiamondFromToTransfer, 6, 
-    ActLv::TOP_ONLY, // level
+    ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [self.from], // need sign
     {
@@ -44,7 +44,7 @@ action_define!{ DiamondFromToTransfer, 6,
 * 
 */
 action_define!{ DiamondToTransfer, 7, 
-    ActLv::TOP_ONLY, // level
+    ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [], // need sign
     {
@@ -63,7 +63,7 @@ action_define!{ DiamondToTransfer, 7,
 * 
 */
 action_define!{ DiamondFromTransfer, 8, 
-    ActLv::TOP_ONLY, // level
+    ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [self.from], // need sign
     {

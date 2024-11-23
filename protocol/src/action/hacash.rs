@@ -3,7 +3,7 @@
 * simple hac to
 */
 action_define!{ HacToTransfer, 1, 
-    ActLv::MAINCALL, // level
+    ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [], // need sign
     {
@@ -19,7 +19,7 @@ action_define!{ HacToTransfer, 1,
 
 
 action_define!{ HacFromTransfer, 13, 
-    ActLv::MAINCALL, // level
+    ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [self.from],
     {
@@ -37,7 +37,7 @@ action_define!{ HacFromTransfer, 13,
 
 
 action_define!{ HacFromToTransfer, 14, 
-    ActLv::MAINCALL, // level
+    ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [self.from],
     {

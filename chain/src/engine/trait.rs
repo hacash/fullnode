@@ -6,7 +6,7 @@ impl EngineRead for ChainEngine {
     }
 
     fn latest_block(&self) -> Arc<dyn Block> {
-        self.roller.read().unwrap().chunk.upgrade().unwrap().block.clone()
+        self.roller.read().unwrap().curr.upgrade().unwrap().block.clone()
     }
 
     fn mint_checker(&self) -> &dyn Minter {
@@ -14,7 +14,7 @@ impl EngineRead for ChainEngine {
     }
 
     fn state(&self) -> Arc<dyn State> {
-        self.roller.read().unwrap().chunk.upgrade().unwrap().state.clone()
+        self.roller.read().unwrap().curr.upgrade().unwrap().state.clone()
     }
 
     fn disk(&self) -> Arc<dyn DiskDB> {

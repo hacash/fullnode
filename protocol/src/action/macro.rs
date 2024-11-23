@@ -103,7 +103,7 @@ macro_rules! action_register {
 
 // test define action
 action_define!{Test63856464969364, 9527, 
-    ActLv::MAINCALL, // level
+    ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [],
     {

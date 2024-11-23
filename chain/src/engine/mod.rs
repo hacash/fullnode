@@ -20,6 +20,7 @@ use super::interface::*;
 include!{"config.rs"}
 include!{"engine.rs"}
 include!{"init.rs"}
+include!{"check.rs"}
 include!{"insert.rs"}
 include!{"trait.rs"}
 

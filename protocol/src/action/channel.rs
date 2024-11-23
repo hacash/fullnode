@@ -3,7 +3,7 @@
 *
 */
 action_define!{ ChannelOpen, 2, 
-    ActLv::TOP_ONLY, // level
+    ActLv::TOP, // level
     false, // burn 90 fee
     [], // need sign
     {
@@ -105,7 +105,7 @@ fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
 
 
 action_define!{ ChannelClose, 3, 
-    ActLv::TOP_ONLY, // level
+    ActLv::TOP, // level
     false, // burn 90 fee
     [], // need sign
     {

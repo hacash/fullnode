@@ -4,23 +4,24 @@ impl Roller {
 
     pub fn fast_search(&self, hei: u64, hx: &Hash) -> Option<Arc<Chunk>> {
         // search least current
-        let root = self.chunk.upgrade().unwrap(); // must have
-        if root.height == hei && root.hash == *hx {
-            return Some(root.clone())
+        let cur = self.curr.upgrade().unwrap(); // must have
+        if cur.height == hei && cur.hash == *hx {
+            return Some(cur.clone())
         }
-        if hei <= root.height {
+        let root = &self.root; 
+        if hei < root.height {
             return None // height too low
         }
         // or search from root
-        search_chunk_tree(self.root.clone(), hei, hx)
+        search_chunk_tree(root.clone(), hei, hx)
     }
 
 }
 
 
 pub fn search_chunk_tree(chunk: Arc<Chunk>, hei: u64, hx: &Hash) -> Option<Arc<Chunk>> {
-    if chunk.hash == *hx {
-        return Some(chunk.clone())
+    if chunk.height == hei && chunk.hash == *hx {
+        return Some(chunk.clone()) // find it
     }
     // search childs
     let childs = {

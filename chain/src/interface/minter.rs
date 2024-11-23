@@ -4,10 +4,10 @@ pub trait Minter : Send + Sync {
     fn config(&self) -> Box<dyn Any> { unimplemented!() }
     fn init(&self, _:&IniObj) {}
     // fn config(&self) -> &MintConf;
-    fn next_difficulty(&self, _: &dyn BlockRead, _: &BlockDisk) -> u32 { unimplemented!() }
+    fn next_difficulty(&self, _: &dyn BlockRead, _: &BlockDisk) -> u32 { u32::MAX }
     // check
-    fn prepare(&self, _: &dyn DiskDB, _: &dyn BlockRead) -> Rerr { Ok(()) }
-    fn consensus(&self, _: &dyn DiskDB, _: &dyn BlockRead, _: &dyn BlockRead) -> Rerr {  Ok(())  }
+    fn prepare(&self, _: &dyn BlockRead, _: &BlockDisk) -> Rerr { Ok(()) }
+    fn consensus(&self, _: &dyn BlockRead, _: &dyn BlockRead, _: &BlockDisk) -> Rerr {  Ok(())  }
     fn coinbase(&self, _: u64, _: &dyn Transaction) -> Rerr { Ok(()) }
     // do
     fn initialize(&self, _: &mut dyn State) -> Rerr { Ok(()) }

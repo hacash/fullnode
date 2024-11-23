@@ -1,9 +1,15 @@
 use std::sync::*;
+use std::collections::*;
+
+use num_bigint::*;
 
 use sys::*;
 use field::*;
+use field::interface::*;
+use protocol::block::*;
 use protocol::state::*;
 use protocol::genesis::*;
+use protocol::difficulty::*;
 use protocol::interface::*;
 use chain::interface::*;
 
@@ -15,5 +21,8 @@ pub mod action;
 
 
 include!{"check/init.rs"}
+include!{"check/coinbase.rs"}
+include!{"check/difficulty.rs"}
+include!{"check/consensus.rs"}
 include!{"minter.rs"}
 

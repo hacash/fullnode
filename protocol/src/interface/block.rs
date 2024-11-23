@@ -14,7 +14,7 @@ pub trait BlockRead : BlockExec + Serialize + Send + Sync + DynClone {
     fn difficulty(&self) -> &Uint4 { unimplemented!() } 
     fn prevhash(&self) -> &Hash { unimplemented!() }
     fn mrklroot(&self) -> &Hash { unimplemented!() }
-    
+    fn coinbase_transaction(&self) ->  Ret<&dyn Transaction> { unimplemented!() } // must have
     fn transaction_count(&self) -> &Uint4 { unimplemented!() }
     fn transactions(&self) -> &Vec<Box<dyn Transaction>> { unimplemented!() }
     fn transaction_hash_list(&self, _hash_with_fee: bool) -> Vec<Hash> { unimplemented!() }

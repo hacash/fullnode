@@ -53,11 +53,11 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         return // height too late
     }
     let mintckr = eng.mint_checker();
-    let stoptr = eng.disk();
+    let stoptr = BlockDisk::wrap(eng.disk().clone());
     // may insert
     if blkhei <= lathei + 1 {
         // prepare check
-        if let Err(_) = mintckr.prepare(stoptr.as_ref(), &blkhead) {
+        if let Err(_) = mintckr.prepare(&blkhead, &stoptr) {
             return  // difficulty check fail
         }
         // do insert  ◆ ◇ ⊙ ■ □ △ ▽ ❏ ❐ ❑ ❒  ▐ ░ ▒ ▓ ▔ ▕ ■ □ ▢ ▣ ▤ ▥ ▦ ▧ ▨ ▩ ▪ ▫    

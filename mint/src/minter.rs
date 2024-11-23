@@ -1,14 +1,20 @@
 
-
+#[allow(dead_code)]
 pub struct HacashMinter {
-    gnsblk: Arc<dyn Block>,
+    cnf: MintConf,
+    difficulty: DifficultyGnr,
+    genesis_block: Arc<dyn Block>,
 }
 
 impl HacashMinter {
 
-    pub fn create(_: &IniObj) -> Self {
+    pub fn create(ini: &IniObj) -> Self {
+        let cnf = MintConf::new(ini);
+        let dgnr =  DifficultyGnr::new(cnf.clone());
         Self {
-            gnsblk: genesis_block_pkg().into_block().into(),
+            cnf: cnf,
+            difficulty: dgnr,
+            genesis_block: genesis_block_pkg().into_block().into(),
         }
     }
 
@@ -22,13 +28,34 @@ impl Minter for HacashMinter {
         protocol::action::setup_extend_actions_try_create(empty_create);
     }
 
+    fn next_difficulty(&self, prev: &dyn BlockRead, sto: &BlockDisk) -> u32 {
+        let pdif = prev.difficulty().uint();
+        let ptim = prev.timestamp().uint();
+        let nhei = prev.height().uint() + 1;
+        let (difn, ..) = self.difficulty.target(&self.cnf, pdif, ptim, nhei, sto);
+        difn
+    }
+
+    fn prepare(&self, curblk: &dyn BlockRead, sto: &BlockDisk ) -> Rerr {
+        impl_prepare(self, curblk, sto)
+    }
+
+    fn consensus(&self, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockDisk ) -> Rerr {
+        impl_consensus(self, prevblk, curblk, sto)
+    }
+
     fn genesis_block(&self) -> Arc<dyn Block> {
-        self.gnsblk.clone()
+        self.genesis_block.clone()
     }
 
     fn initialize(&self, sta: &mut dyn State) -> Rerr {
         do_initialize(sta)
     }
+
+    fn coinbase(&self, hei: u64, tx: &dyn Transaction) -> Rerr {
+        check_coinbase(hei, tx)
+    }
+
 
 
 }

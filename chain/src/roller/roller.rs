@@ -2,12 +2,11 @@
 
 pub struct Roller {
 
-    unstable: u64, // config
+    unstable: u64, // config unstable height = 4
 
-    pub state: Weak<dyn State>, // current latest state
-    pub chunk: Weak<Chunk>,     // current latest block
+    pub curr: Weak<Chunk>,     // current latest block
 
-    pub root: Arc<Chunk>, // tree root block
+    pub root: Arc<Chunk>,       // tree root block
 }
 
 
@@ -18,8 +17,7 @@ impl Roller {
         let ckptr = Arc::new(chunk);
         Roller {
             unstable: alive,
-            state: Arc::downgrade(&state),
-            chunk: Arc::downgrade(&ckptr),
+            curr: Arc::downgrade(&ckptr),
             root: ckptr,
         }
     }
@@ -31,7 +29,7 @@ impl Roller {
 
     #[allow(dead_code)]
     pub fn last_height(&self) -> u64 {
-        self.chunk.upgrade().unwrap().height
+        self.curr.upgrade().unwrap().height
     }
 
 
