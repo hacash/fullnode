@@ -72,14 +72,13 @@ pub fn fullnode_with_minter_scaner(iniobj: IniObj,
     spawn(move||{ server.start() }); // start http server
     spawn(move||{ HacashNode::start(hnptr) }); // start p2p node
 
-    // wait to ctrl+c to quit
-    let _ = clrx.recv();
-
-    engine.exit(); // wait to exit
-    hxnode.exit(); // wait to exit
+    // wait to ctrl+c to exit
+    clrx.recv().unwrap();
+    hxnode.exit(); // wait something
+    engine.exit(); // wait something
 
     // all exit
-    println!("[Exit] Hacash node closed.");
+    println!("\n[Exit] Hacash blockchain and P2P node have been closed.\n");
 
 }
 

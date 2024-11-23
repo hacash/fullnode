@@ -123,6 +123,7 @@ impl ChainEngine {
             }
             self.blockdisk.save_block_hash_path(hxpaths);
             // save pointer to disk
+            // println!("new_root_hei => {} => {}", &new_root_hei, &curr.height);
             blockdisk.save_status(&ChainStatus{
                 root_height: BlockHeight::from(new_root_hei),
                 last_height: BlockHeight::from(curr.height),

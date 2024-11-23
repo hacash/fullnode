@@ -2,7 +2,7 @@
 
 impl HttpServer {
 
-    pub fn start(self) {
+    pub fn start(&self) {
         if !self.cnf.enable {
             return // disable
         }
@@ -17,7 +17,7 @@ impl HttpServer {
 }
 
 
-async fn server_listen(ser: HttpServer) {
+async fn server_listen(ser: &HttpServer) {
     let port = ser.cnf.listen;
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await;

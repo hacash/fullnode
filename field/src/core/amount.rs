@@ -811,4 +811,40 @@ mod amount_tests {
     }
 
 
+    #[test]
+    fn test8() {
+
+        // RUST_BACKTRACE=all cargo test amount_tests::test8 -- --nocapture
+
+        use std::time::Instant;
+
+        let a1 = Amount::mei(1234567890);
+        let a2 = Amount::mei(3344520);
+        let mx = 100000usize;
+        let mut aa = Amount::zero();
+
+        let now = Instant::now();
+        for _ in 0..mx {
+            aa = a1.add_mode_u64(&a2).unwrap();
+        }
+        println!("{}  {}", aa, now.elapsed().as_secs_f32());
+
+
+        let now = Instant::now();
+        for _ in 0..mx {
+            aa = a1.add_mode_u128(&a2).unwrap();
+        }
+        println!("{}  {}", aa, now.elapsed().as_secs_f32());
+
+
+        let now = Instant::now();
+        for _ in 0..mx {
+            aa = a1.add_mode_bigint(&a2).unwrap();
+        }
+        println!("{}  {}", aa, now.elapsed().as_secs_f32());
+
+
+    }
+
+
 }

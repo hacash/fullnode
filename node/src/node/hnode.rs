@@ -52,8 +52,8 @@ impl HNode for HacashNode {
     }
 
     fn exit(&self) {
-        self.p2p.exit();
         self.msghdl.exit();
+        self.p2p.exit();
         // wait something to finish
         // std::thread::sleep(std::time::Duration::from_secs_f32(0.5));
     }

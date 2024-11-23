@@ -87,7 +87,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
                 drain_all_block_txs(engptr.as_ref().as_read(), txpool.as_ref(), thsx, blkhei);
             }
         }
-        drop(isrlk); // insert finish
+        drop(isrlk); // close lock
     }else{
         // req sync
         if let Some(ref pr) = peer {

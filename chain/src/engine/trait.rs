@@ -32,6 +32,7 @@ impl EngineRead for ChainEngine {
 
 
 impl Engine for ChainEngine {
+    
     fn as_read(&self) -> &dyn EngineRead {
         self
     }
@@ -51,7 +52,7 @@ impl Engine for ChainEngine {
     }
 
     fn exit(&self) {
-        // wait block inserting finish
+        // wait block insert finish
         let lk = self.isrtlk.lock().unwrap();
         self.minter.exit();
         self.scaner.exit();

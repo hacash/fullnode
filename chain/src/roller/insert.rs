@@ -36,8 +36,8 @@ pub fn insert_to_roller(roller: &mut Roller, mut chunk: Chunk) -> RollerInsertRe
     if new_hei > curr_hei {
         roller.curr = Arc::downgrade(&new_chunk); // update pointer
         mv_curr = Some(new_chunk.clone());
-        let new_root_hei = match curr_hei > roller.unstable {
-            true => curr_hei - roller.unstable,
+        let new_root_hei = match new_hei > roller.unstable {
+            true => new_hei - roller.unstable,
             false => 0, // first height
         };
         if new_root_hei > root_hei { // set new root

@@ -11,7 +11,7 @@ pub struct MsgHandler {
     knows: Knowledge,
     exiter: Exiter,
 
-    inserting: StdMutex<()>,
+    inserting: StdMutex<bool>, // is exited
 }
 
 impl MsgHandler {
@@ -27,7 +27,7 @@ impl MsgHandler {
             doing_sync: AtomicU64::new(0),
             knows: Knowledge::new(200),
             exiter: Exiter::new(),
-            inserting: StdMutex::new(()),
+            inserting: StdMutex::new(false),
         }
     }
 
@@ -49,10 +49,10 @@ impl MsgHandler {
     }
 
     pub fn exit(&self) {
-        self.exiter.exit();
         // wait block inserting finish
-        let isrlk = self.inserting.lock().unwrap();
-        drop(isrlk);
+        let lk = self.inserting.lock().unwrap();
+        self.exiter.exit();
+        drop(lk)
     }
 
 }

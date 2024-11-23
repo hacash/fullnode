@@ -12,7 +12,7 @@ pub struct ChainEngine {
 
     roller: RwLock<Roller>,
 
-    isrtlk: Mutex<()>,
+    isrtlk: Mutex<()>, // is exit
 
 }
 
