@@ -50,4 +50,12 @@ impl HNode for HacashNode {
     fn all_peer_prints(&self) -> Vec<String> { 
         self.p2p.all_peer_prints()
     }
+
+    fn exit(&self) {
+        self.p2p.exit();
+        self.msghdl.exit();
+        // wait something to finish
+        // std::thread::sleep(std::time::Duration::from_secs_f32(0.5));
+    }
+
 }

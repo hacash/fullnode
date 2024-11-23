@@ -65,28 +65,29 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         let hxtail = &blkhx.as_bytes()[30..];
         let txs = blkhead.transaction_count().uint() - 1;
         let _blkts = &timeshow(blkhead.timestamp().uint())[14..];
+        // lock to inserting
+        let isrlk = this.inserting.lock().unwrap();
         print!("❏ block {} …{}…{} txs{:2} insert at {} ", 
             blkhei, hex::encode(hxstrt), hex::encode(hxtail), txs, &ctshow()[11..]);
         let bodycp = body.clone();
         let engptr = eng.clone();
         let txpool = this.txpool.clone();
-        std::thread::spawn(move||{
-            // create block
-            let blkpkg = BlockPkg::build(bodycp);
-            if let Err(..) = blkpkg {
-                return // parse error
+        // create block
+        let blkpkg = BlockPkg::build(bodycp);
+        if let Err(..) = blkpkg {
+            return // parse error
+        }
+        let blkp = blkpkg.unwrap();
+        let thsx = blkp.objc.transaction_hash_list(false); // hash no fee
+        if let Err(e) = engptr.insert(blkp) {
+            println!("Error: {}", e);
+        }else{
+            println!("ok.");
+            if is_open_miner {
+                drain_all_block_txs(engptr.as_ref().as_read(), txpool.as_ref(), thsx, blkhei);
             }
-            let blkp = blkpkg.unwrap();
-            let thsx = blkp.objc.transaction_hash_list(false); // hash no fee
-            if let Err(e) = engptr.insert(blkp) {
-                println!("Error: {}", e);
-            }else{
-                println!("ok.");
-                if is_open_miner {
-                    drain_all_block_txs(engptr.as_ref().as_read(), txpool.as_ref(), thsx, blkhei);
-                }
-            }
-        });
+        }
+        drop(isrlk); // insert finish
     }else{
         // req sync
         if let Some(ref pr) = peer {

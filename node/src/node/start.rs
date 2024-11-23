@@ -3,7 +3,7 @@
 impl HacashNode {
 
     // 
-    pub fn start(this: Arc<HacashNode> ) -> Rerr {
+    pub fn start(this: Arc<HacashNode> ) {
 
         let rt = new_current_thread_tokio_rt();
         let p2p = this.p2p.clone();
@@ -24,9 +24,6 @@ impl HacashNode {
         let _ = rt.block_on(async{
             P2PManage::start(p2p).await
         });
-
-        // ret
-        Ok(())
     }
 
 }

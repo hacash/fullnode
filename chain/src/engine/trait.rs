@@ -51,8 +51,11 @@ impl Engine for ChainEngine {
     }
 
     fn exit(&self) {
+        // wait block inserting finish
+        let lk = self.isrtlk.lock().unwrap();
         self.minter.exit();
         self.scaner.exit();
+        drop(lk);
     }
 
 }

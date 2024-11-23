@@ -9,7 +9,9 @@ pub struct MsgHandler {
 
     doing_sync: AtomicU64,
     knows: Knowledge,
-    closer: Closer,
+    exiter: Exiter,
+
+    inserting: StdMutex<()>,
 }
 
 impl MsgHandler {
@@ -24,7 +26,8 @@ impl MsgHandler {
             blktxch: Some(rx).into(),
             doing_sync: AtomicU64::new(0),
             knows: Knowledge::new(200),
-            closer: Closer::new(),
+            exiter: Exiter::new(),
+            inserting: StdMutex::new(()),
         }
     }
 
@@ -45,8 +48,11 @@ impl MsgHandler {
         let _ = self.blktx.send(BlockTxArrive::Block(None, body)).await;
     }
 
-    pub fn close(&self) {
-        self.closer.close();
+    pub fn exit(&self) {
+        self.exiter.exit();
+        // wait block inserting finish
+        let isrlk = self.inserting.lock().unwrap();
+        drop(isrlk);
     }
 
 }

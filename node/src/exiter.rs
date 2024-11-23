@@ -4,17 +4,17 @@ use tokio::sync::broadcast::{self, Receiver, Sender};
 
 #[allow(dead_code)]
 #[derive(Clone)]
-pub struct Closer {
+pub struct Exiter {
     closech: Arc<Receiver<bool>>,
     closechtx: Sender<bool>,
 }
 
 
-impl Closer {
+impl Exiter {
 
-    pub fn new() -> Closer {
+    pub fn new() -> Self {
         let (closetx, closerx) = broadcast::channel(4);
-        Closer{
+        Self {
             closech: closerx.into(),
             closechtx: closetx,
         }
@@ -28,7 +28,7 @@ impl Closer {
         self.closechtx.subscribe()
     }
 
-    pub fn close(&self) {
+    pub fn exit(&self) {
         let _ = self.closechtx.send(true);
     }
 

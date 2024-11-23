@@ -4,7 +4,7 @@
 impl MsgHandler {
 
     pub async fn start(this: Arc<MsgHandler>) {
-        let mut closech = this.closer.signal();
+        let mut closech = this.exiter.signal();
         let mut blktxch = { 
             this.blktxch.lock().unwrap().take().unwrap()
         };

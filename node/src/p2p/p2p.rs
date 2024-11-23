@@ -9,7 +9,7 @@ pub struct P2PManage {
     backbones: PeerList, // 4
     offshoots: PeerList, // 200
     // close mark
-    closer: Closer,
+    exiter: Exiter,
 }
 
 impl P2PManage {
@@ -21,7 +21,7 @@ impl P2PManage {
             backbones: StdMutex::new(vec![]).into(),
             offshoots: StdMutex::new(vec![]).into(),
             // closech: StdMutex::new(Some(closerx)),
-            closer: Closer::new(),
+            exiter: Exiter::new(),
         }
     }
 
@@ -101,8 +101,8 @@ impl P2PManage {
             l1, l2, mykp, l1names.join(", "));
     }
 
-    pub fn close(&self) {
-        self.closer.close();
+    pub fn exit(&self) {
+        self.exiter.exit();
     }
 
 }

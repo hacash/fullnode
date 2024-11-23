@@ -10,7 +10,7 @@ impl P2PManage {
         let mut boostndes_tkr = new_ticker(54*5).await; // 5mins boost public nodes form offshoots table
 
         let server_listener = this.server().await;
-        let mut closech = this.closer.signal();
+        let mut closech = this.exiter.signal();
 
         loop {
             tokio::select! {

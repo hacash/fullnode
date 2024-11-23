@@ -15,7 +15,7 @@ impl ChainEngine {
         let this = self;
         // create thread
         let (chblk, chblkcv) = std::sync::mpsc::sync_channel(10);
-        let (chrol, chrolcv) = std::sync::mpsc::sync_channel(1);
+        let (chrol, chrolcv) = std::sync::mpsc::sync_channel(0);
         let (cherr, cherrcv) = std::sync::mpsc::channel();
         let cherr1 = cherr.clone();
         let cherr2 = cherr.clone();
@@ -89,8 +89,9 @@ impl ChainEngine {
         // finish
         let err = cherrcv.recv().unwrap();
         if err.len() > 0 {
-            println!("{}", err);
-            return sync_warning(err)
+            let e = sync_warning(err);
+            println!("{:?}", &e);
+            return e
         }
         // ok
         Ok(())
@@ -99,29 +100,31 @@ impl ChainEngine {
 
     /*************************/
 
-    fn do_roll_disk(&self, root: Option<Arc<Chunk>>, mut pointer: Option<Arc<Chunk>>, hx: Hash, data: Vec<u8>) -> Rerr {
-        // write state to disk
-        let mut root_hei: u64 = 0;
-        if let Some(rt) = root {
-            root_hei = rt.height;
-            rt.state.write_to_disk();
-        }
-        if let Some(..) = pointer {
-            let curr = pointer.clone().unwrap();
+    fn do_roll_disk(&self, root: Option<Arc<Chunk>>, mut cptr: Option<Arc<Chunk>>, hx: Hash, data: Vec<u8>) -> Rerr {
+        let blockdisk = BlockDisk::wrap(self.disk.clone());
+        let new_root_hei: u64 = match root {
+            None => *blockdisk.status().root_height,
+            Some(rt) => {
+                rt.state.write_to_disk(); // write state to disk
+                rt.height
+            }
+        };
+        if let Some(..) = cptr {
+            let curr = cptr.clone().unwrap();
             let mut hxpaths = Vec::new();
             // print!("\ndo_roll_disk.save_block_hash_path: ");
-            while let Some(ref p) = pointer {
-                if hxpaths.len() >= 4 || p.height < 1 {
+            while let Some(ref p) = cptr {
+                if hxpaths.len() >= self.cnf.unstable_block as usize || p.height < 1 {
                     break // end
                 }
                 // print!("->{}", p.height);
                 hxpaths.push((BlockHeight::from(p.height), p.hash));
-                pointer = p.parent.upgrade();
+                cptr = p.parent.upgrade();
             }
             self.blockdisk.save_block_hash_path(hxpaths);
             // save pointer to disk
-            BlockDisk::wrap(self.disk.clone()).save_status(&ChainStatus{
-                root_height: BlockHeight::from(root_hei),
+            blockdisk.save_status(&ChainStatus{
+                root_height: BlockHeight::from(new_root_hei),
                 last_height: BlockHeight::from(curr.height),
             })
         }

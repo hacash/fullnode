@@ -38,7 +38,7 @@ pub fn insert_to_roller(roller: &mut Roller, mut chunk: Chunk) -> RollerInsertRe
         mv_curr = Some(new_chunk.clone());
         let new_root_hei = match curr_hei > roller.unstable {
             true => curr_hei - roller.unstable,
-            false => 1, // first height
+            false => 0, // first height
         };
         if new_root_hei > root_hei { // set new root
             let nrt = trace_upper_chunk(new_chunk, new_root_hei);

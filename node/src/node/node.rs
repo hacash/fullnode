@@ -31,9 +31,5 @@ impl HacashNode {
         }
     }
 
-    pub fn close(&self) {
-        self.p2p.close();
-        self.msghdl.close();
-    }
 
 }

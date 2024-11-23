@@ -1,4 +1,5 @@
 use std::sync::*;
+use std::thread::*;
 
 use sys::*;
 use chain::{engine::ChainEngine, interface::*};
@@ -55,32 +56,30 @@ pub fn fullnode_with_minter_scaner(iniobj: IniObj,
 ) {
 
     // setup ctrl+c to quit
-    let (cltx, clrx) = std::sync::mpsc::channel();
-    ctrlc::set_handler(move || cltx.send(()).unwrap()).unwrap();
+    let (cltx, clrx) = mpsc::channel();
+    ctrlc::set_handler(move||{ let _ = cltx.send(()); }).unwrap();
 
     // engine
     let dbv = HACASH_STATE_DB_UPDT;
-    let engine: Arc<dyn Engine> = Arc::new(ChainEngine::open(&iniobj, dbv, minter, scaner));
+    let engine = Arc::new(ChainEngine::open(&iniobj, dbv, minter, scaner));
     
     // node & server
-    let hanode = Arc::new(HacashNode::open(&iniobj, engine.clone()));
-    let server = HttpServer::open(&iniobj, engine.clone(), hanode.clone());
+    let hxnode = Arc::new(HacashNode::open(&iniobj, engine.clone()));
+    let hnptr = hxnode.clone();
+    let server = HttpServer::open(&iniobj, engine.clone(), hnptr.clone());
 
     // start all
-    let hn = hanode.clone();
-    std::thread::spawn(move||{
-        HacashNode::start(hn).unwrap();
-    });
-    std::thread::spawn(move||{
-        server.start(); // http rpc 
-    });
+    spawn(move||{ server.start() }); // start http server
+    spawn(move||{ HacashNode::start(hnptr) }); // start p2p node
 
     // wait to ctrl+c to quit
-    clrx.recv().unwrap();
-    engine.exit();
-    hanode.exit();
+    let _ = clrx.recv();
 
-    // on closed
-    println!("\nHacash node closed.");
+    engine.exit(); // wait to exit
+    hxnode.exit(); // wait to exit
+
+    // all exit
+    println!("[Exit] Hacash node closed.");
+
 }
 
