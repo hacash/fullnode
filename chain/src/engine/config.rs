@@ -14,6 +14,7 @@ pub struct EngineConf {
     pub block_data_dir: PathBuf, // block data
     pub state_data_dir: PathBuf, // chain state
     // data service
+    pub diamond_form: bool,
     pub recent_blocks: bool,
     pub average_fee_purity: bool,
     // HAC miner
@@ -56,6 +57,8 @@ impl EngineConf {
             block_data_dir: join_path(&data_dir, "block"),
             state_data_dir: state_data_dir,
             data_dir: data_dir.to_str().unwrap().to_owned(),
+            //
+            diamond_form: ini_must_bool(sec_server, "diamond_form", true),
             recent_blocks: ini_must_bool(sec_server, "recent_blocks", false),
             average_fee_purity: ini_must_bool(sec_server, "average_fee_purity", false),
             // HA Cminer

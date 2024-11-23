@@ -157,7 +157,9 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     state.diamond_name_set(&number, &name);
 
     // add diamond belong
-    diamond_owned_push_one(&mut state, &address, &name);
+    if env.chain.diamond_form {
+        diamond_owned_push_one(&mut state, &address, &name);
+    }
     
     // save count
     state.set_total_count(&ttcount);

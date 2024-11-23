@@ -4,6 +4,7 @@
 pub struct Chain {
     pub id: u64,
     pub fast_sync: bool,
+    pub diamond_form: bool,
 }
 
 

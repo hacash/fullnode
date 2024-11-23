@@ -162,9 +162,11 @@ impl ChainEngine {
             self.check_all_for_insert(&block, prev_chunk.block.clone(), &blockdisk)?;
         }
         // exec block get state
+        let sc = &self.cnf;
         let chaincnf = ctx::Chain {
             fast_sync,
-            id: self.cnf.chain_id,
+            diamond_form: sc.diamond_form,
+            id: sc.chain_id,
         };
         sub_state = block.objc.execute(chaincnf, sub_state)?;
         // create chunk

@@ -84,12 +84,15 @@ action_define!{ DiamondFromTransfer, 8,
 fn do_diamonds_transfer(diamonds: &DiamondNameListMax200, from: &Address, to: &Address, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     // check
     let dianum = diamonds.check()?;
+    let isdf = ctx.env().chain.diamond_form;
     //transfer
     let mut state = CoreState::wrap(ctx.state());
     for dianame in diamonds.list() {
         hacd_move_one_diamond(&mut state, from, to, &dianame)?; // move one
     }
-    diamond_owned_move(&mut state, from, to, diamonds)?;
+    if isdf {
+        diamond_owned_move(&mut state, from, to, diamonds)?;
+    }
     // transfer
     hacd_transfer(&mut state, from, to, &DiamondNumber::from(dianum as u32), &diamonds)
 }
