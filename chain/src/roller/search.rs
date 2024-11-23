@@ -2,6 +2,7 @@
 
 impl Roller {
 
+    
     pub fn fast_search(&self, hei: u64, hx: &Hash) -> Option<Arc<Chunk>> {
         // search least current
         let cur = self.curr.upgrade().unwrap(); // must have
@@ -17,6 +18,7 @@ impl Roller {
     }
 
 }
+
 
 
 pub fn search_chunk_tree(chunk: Arc<Chunk>, hei: u64, hx: &Hash) -> Option<Arc<Chunk>> {

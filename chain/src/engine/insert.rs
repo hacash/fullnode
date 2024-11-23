@@ -1,10 +1,11 @@
 
 impl ChainEngine {
 
+    
     fn do_insert(&self, block: BlockPkg) -> Rerr {
         let hx = block.hash.clone();
-        let (r, p, d) = self.do_insert_chunk(block)?;
-        self.do_roll_disk(r, p, hx, d)
+        let (r, c, d) = self.do_insert_chunk(block)?;
+        self.do_roll_disk(r, c, d, hx)
     }
 
     fn do_insert_sync(&self, start_hei: u64, mut datas: Vec<u8>) -> Rerr {
@@ -15,7 +16,7 @@ impl ChainEngine {
         let this = self;
         // create thread
         let (chblk, chblkcv) = std::sync::mpsc::sync_channel(10);
-        let (chrol, chrolcv) = std::sync::mpsc::sync_channel(0);
+        let (chrol, chrolcv) = std::sync::mpsc::sync_channel(4);
         let (cherr, cherrcv) = std::sync::mpsc::channel();
         let cherr1 = cherr.clone();
         let cherr2 = cherr.clone();
@@ -67,18 +68,18 @@ impl ChainEngine {
                         let _ = cherr2.send(format!("create chunk {} error: {}", hei, e));
                         break // end
                     }
-                    let (r, p, d) = res.unwrap();
-                    if let Err(..) = chrol.send((r, p, hx, d)) {
+                    let (r, c, d) = res.unwrap();
+                    if let Err(..) = chrol.send((r, c, d, hx)) {
                         break // end
                     }
                 }
             });
             // do roll
             loop {
-                let Ok((r, p, h, d)) = chrolcv.recv() else {
+                let Ok((r, c, d, hx)) = chrolcv.recv() else {
                     break // end
                 };
-                if let Err(e) = this.do_roll_disk(r, p, h, d) {
+                if let Err(e) = this.do_roll_disk(r, c, d, hx) {
                     let _ = cherr.send(format!("do roll error: {}", e));
                     break
                 }
@@ -100,37 +101,26 @@ impl ChainEngine {
 
     /*************************/
 
-    fn do_roll_disk(&self, root: Option<Arc<Chunk>>, mut cptr: Option<Arc<Chunk>>, hx: Hash, data: Vec<u8>) -> Rerr {
-        let blockdisk = BlockDisk::wrap(self.disk.clone());
+    fn do_roll_disk(&self, root: Option<Arc<Chunk>>, cptr: Option<Arc<Chunk>>, data: Vec<u8>, hx: Hash) -> Rerr {
         let new_root_hei: u64 = match root {
-            None => *blockdisk.status().root_height,
             Some(rt) => {
                 rt.state.write_to_disk(); // write state to disk
                 rt.height
-            }
+            },
+            None => self.roller.lock().unwrap().root.height
         };
+        let mut block_disk_batch = leveldb::Writebatch::new();
         if let Some(..) = cptr {
             let curr = cptr.clone().unwrap();
-            let mut hxpaths = Vec::new();
-            // print!("\ndo_roll_disk.save_block_hash_path: ");
-            while let Some(ref p) = cptr {
-                if hxpaths.len() >= self.cnf.unstable_block as usize || p.height < 1 {
-                    break // end
-                }
-                // print!("->{}", p.height);
-                hxpaths.push((BlockHeight::from(p.height), p.hash));
-                cptr = p.parent.upgrade();
-            }
-            self.blockdisk.save_block_hash_path(hxpaths);
-            // save pointer to disk
-            // println!("new_root_hei => {} => {}", &new_root_hei, &curr.height);
-            blockdisk.save_status(&ChainStatus{
+            block_disk_batch.put(&BlockDisk::CSK, &ChainStatus{
                 root_height: BlockHeight::from(new_root_hei),
                 last_height: BlockHeight::from(curr.height),
-            })
+            }.serialize());
         }
-        // write block data to disk
-        self.blockdisk.save_block_data(&hx, &data);
+        // save block data to disk
+        block_disk_batch.put(hx.as_ref(), &data);
+        // write all data by batch
+        self.blockdisk.save_batch(&block_disk_batch);
         Ok(())
     }
 
@@ -142,45 +132,48 @@ impl ChainEngine {
         let prev_hei = block.hein - 1;
         let prev_hx = block.objc.prevhash();
         let prev = { 
-            self.roller.read().unwrap().fast_search(prev_hei, prev_hx) 
+            self.roller.lock().unwrap().fast_search(prev_hei, prev_hx) 
         };
         let Some(prev_chunk) = prev else {
             return errf!("not find prev block <{}, {}>", prev_hei, prev_hx)
         };
-        // check repeat
-        let brothers: Vec<Arc<Chunk>> = {
-            prev_chunk.childs.lock().unwrap().iter().map(|a|a.clone()).collect()
-        };
-        for sub in brothers {
-            if hx == sub.hash {
-                return errf!("repetitive block height {} hash {}", hei, hx)
-            }
-        }
         // create sub state 
         let prev_state = prev_chunk.state.clone();
         let mut sub_state = prev_state.fork_sub(prev_state.clone());
-        // initialize
-        if hei == 1 { // first block
+        // initialize on first block
+        if hei == 1 {
             self.minter.initialize(sub_state.as_mut())?;
         }
         // check
-        let not_fast_sync = block.orgi!=BlkOrigin::SYNC || !self.cnf.fast_sync;
-        if not_fast_sync {
+        let fast_sync = block.orgi==BlkOrigin::REBUILD || (block.orgi==BlkOrigin::SYNC && self.cnf.fast_sync);
+        // println!("fast_sync = {}", fast_sync);
+        if !fast_sync {
+            // check repeat
+            let brothers: Vec<Arc<Chunk>> = {
+                prev_chunk.childs.lock().unwrap().iter().map(|a|a.clone()).collect()
+            };
+            for sub in brothers {
+                if hx == sub.hash {
+                    return errf!("repetitive block height {} hash {}", hei, hx)
+                }
+            }
+            // check consensus
             let blockdisk = BlockDisk::wrap(self.disk.clone());
             self.check_all_for_insert(&block, prev_chunk.block.clone(), &blockdisk)?;
         }
         // exec block get state
         let chaincnf = ctx::Chain {
+            fast_sync,
             id: self.cnf.chain_id,
-            fast_sync: self.cnf.fast_sync,
         };
         sub_state = block.objc.execute(chaincnf, sub_state)?;
         // create chunk
         let (objc, data) = block.apart();
         let chunk = Chunk::create(objc.into(), sub_state.into());
         // insert chunk
-        let (root, pointer) = self.roller.write().unwrap().insert(chunk)?;
-        Ok((root, pointer, data))
+        let (root, curr, path) = self.roller.lock().unwrap().insert(prev_chunk, chunk)?;
+        self.blockdisk.save_batch(&path);
+        Ok((root, curr, data))
     }
 
 

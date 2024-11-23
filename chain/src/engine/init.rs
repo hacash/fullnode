@@ -28,7 +28,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
     let status = disk.status();
     // next
     let mut next_height: u64 = {
-        this.roller.read().unwrap().root.height
+        this.roller.lock().unwrap().root.height
     };
     // build unstable blocks 
     let finish_height = *status.last_height;
@@ -43,7 +43,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
         next_height += 1;
         let Some((hx, blkdata, block)) = disk.block_by_height(&next_height.into()) else {
             println!(" ok.");
-            return // end finish
+            break; // end finish
         };
         if is_all_rebuild {
             if next_height % 500 == 0 {
@@ -62,9 +62,13 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
             orgi: BlkOrigin::REBUILD
         });
         if let Err(e) = ier {
-            panic!("[State Panic] rebuild block state error: {}", e);
+            panic!("[State Panic] rebuild block {} state error: {}", next_height, e);
         }
         // next
+    }
+    // finish tip
+    if is_all_rebuild {
+        flush!("\r{:10} ({:.2}%)", next_height, 100.0);
     }
 }
 

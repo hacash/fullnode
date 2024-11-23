@@ -15,6 +15,14 @@ pub struct Chunk {
 
 }
 
+/*
+impl Drop for Chunk {
+    fn drop(&mut self) {
+        println!("Chunk.drop({})", self.block.height());
+    }
+}
+*/
+
 
 impl Chunk {
 

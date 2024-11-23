@@ -35,19 +35,20 @@ impl State for StateInst {
         })
     }
 
+    
     fn write_to_disk(&self) {
         // debug_println!("write_to_disk !!!!!!");
-        let batch = WriteBatch::new();
-        for (k, v) in self.mem.0.iter() {
-            // debug_println!("write_to_disk {} -> {}", k.hex(), v);
+        let mut batch = leveldb::Writebatch::new();
+        for (k, v) in self.mem.memry.iter() {
             match v {
-                MemItem::Delete => batch.delete_u8(k),
-                MemItem::Value(v) => batch.put_u8(k, v),
+                MemItem::Delete => batch.delete(k),
+                MemItem::Value(v) => batch.put(k, &v),
             };
         }
-        self.disk.ldb.write(&WriteOptions::new(), &batch).unwrap(); // must
+        self.disk.ldb.write(&batch); // must
     }
 
+    
     fn get(&self, k: Vec<u8>) -> Option<Vec<u8>> {
         // search memory db
         if let Some(v) = self.mem.get(&k) {
@@ -64,10 +65,12 @@ impl State for StateInst {
         self.disk.load(&k)
     }
 
+    
     fn set(&mut self, k: Vec<u8>, v: Vec<u8>) {
         self.mem.put(k, v)
     }
 
+    
     fn del(&mut self, k: Vec<u8>) {
         self.mem.del(k) // add del mark
     }

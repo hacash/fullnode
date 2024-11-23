@@ -17,24 +17,35 @@ impl Display for MemItem {
 
 
 
-pub struct MemKV(HashMap<Vec<u8>, MemItem>);
+pub struct MemKV {
+    // batch: leveldb::Writebatch,
+    memry: HashMap<Vec<u8>, MemItem>
+}
 
 impl MemKV {
 
     pub fn new() -> MemKV {
-        Self(HashMap::default())
+        Self {
+            // batch: leveldb::Writebatch::new(),
+            memry: HashMap::default()
+        }
     }
 
+    
     pub fn del(&mut self, k: Vec<u8>) {
-        self.0.insert(k, MemItem::Delete);
+        // self.batch.delete(&k);
+        self.memry.insert(k, MemItem::Delete);
     }
 
+    
     pub fn put(&mut self, k: Vec<u8>, v: Vec<u8>) {
-        self.0.insert(k, MemItem::Value(v));
+        // self.batch.put(&k, &v);
+        self.memry.insert(k, MemItem::Value(v));
     }
 
+    
     pub fn get(&self, k: &Vec<u8>) -> Option<MemItem> {
-        match self.0.get(k) {
+        match self.memry.get(k) {
             None => None,
             Some(item) => Some(item.clone()),
         }

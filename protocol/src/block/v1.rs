@@ -92,12 +92,12 @@ impl BlockExec for BlockV1 {
             tx: ctx::Tx::default(),
         };
         // create context
-        let eptx = TransactionCoinbase::new();
-        let mut ctxobj = ctx::ContextInst::new(env, state, &eptx);
+        let cbtx = self.coinbase_transaction()?;
+        let mut ctxobj = ctx::ContextInst::new(env, state, cbtx.as_read());
         let ctx = &mut ctxobj;
         let txs = self.transactions();
         // coinbase
-        let base_addr = self.coinbase_transaction()?.main();
+        let base_addr = cbtx.main();
         let mut total_fee = Amount::zero();
         // exec each tx
         for tx in txs {

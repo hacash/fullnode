@@ -1,22 +1,27 @@
 
 impl EngineRead for ChainEngine {
 
+    
     fn config(&self) -> &EngineConf {
         &self.cnf
     }
 
+    
     fn latest_block(&self) -> Arc<dyn Block> {
-        self.roller.read().unwrap().curr.upgrade().unwrap().block.clone()
+        self.roller.lock().unwrap().curr.upgrade().unwrap().block.clone()
     }
 
+    
     fn mint_checker(&self) -> &dyn Minter {
         self.minter.as_ref()
     }
 
+    
     fn state(&self) -> Arc<dyn State> {
-        self.roller.read().unwrap().curr.upgrade().unwrap().state.clone()
+        self.roller.lock().unwrap().curr.upgrade().unwrap().state.clone()
     }
 
+    
     fn disk(&self) -> Arc<dyn DiskDB> {
         self.disk.clone()
     }
@@ -33,10 +38,12 @@ impl EngineRead for ChainEngine {
 
 impl Engine for ChainEngine {
     
+    
     fn as_read(&self) -> &dyn EngineRead {
         self
     }
 
+    
     fn insert(&self, blk: BlockPkg) -> Rerr {
         let lk = self.isrtlk.lock().unwrap();
         self.do_insert(blk)?;
@@ -44,6 +51,7 @@ impl Engine for ChainEngine {
         Ok(())
     }
 
+    
     fn insert_sync(&self, hei: u64, data: Vec<u8>) -> Rerr {
         let lk = self.isrtlk.lock().unwrap();
         self.do_insert_sync(hei, data)?;

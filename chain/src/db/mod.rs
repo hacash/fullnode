@@ -7,8 +7,6 @@ use sys::*;
 use protocol::interface::*;
 
 
-
-
 include!{"memkv.rs"}
 include!{"disk.rs"}
 include!{"state.rs"}

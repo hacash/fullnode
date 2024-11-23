@@ -5,12 +5,14 @@ pub struct BlockDisk {
 
 impl BlockDisk {
 
-    const CSK: &[u8] = b"chain_status";
+    pub const CSK: &[u8] = b"chain_status";
 
+    
     pub fn wrap(disk: Arc<dyn DiskDB>) -> BlockDisk {
         Self { disk }
     }
 
+    
     pub fn status(&self) -> ChainStatus {
         let mut stat = ChainStatus::default();
         match self.disk.load(Self::CSK) {
@@ -22,37 +24,48 @@ impl BlockDisk {
         }
     }
 
+    
     pub fn save_status(&self, stat: &ChainStatus) {
         self.disk.save(Self::CSK, &stat.serialize())
     }
 
     // save
 
+    
     pub fn save_block_data(&self, hx: &Hash, data: &Vec<u8>) {
         self.disk.save(hx.as_ref(), &data)
     }
 
+    
     pub fn save_block_hash(&self, hei: &BlockHeight, hx: &Hash) {
         self.disk.save(&hei.to_bytes(), hx.as_ref())
     }
 
-    pub fn save_block_hash_path(&self, kvs: Vec<(BlockHeight, Hash)>) {
-        let pmv: Vec<(Vec<u8>, Vec<u8>)> = kvs.iter().map(|(k, v)|(k.to_vec(), v.into_vec())).collect();
-        self.disk.save_batch(pmv)
+    
+    pub fn save_block_hash_path(&self, paths: &leveldb::Writebatch) {
+        self.disk.save_batch(paths)
+    }
+
+    
+    pub fn save_batch(&self, batch: &leveldb::Writebatch) {
+        self.disk.save_batch(batch)
     }
 
     // read
 
+    
     pub fn block_data(&self, hx: &Hash) -> Option<Vec<u8>> {
         self.disk.load(hx.as_ref())
     }
 
+    
     pub fn block_hash(&self, hei: &BlockHeight) -> Option<Hash> {
         let Some(hx) = self.disk.load(&hei.to_bytes()) else {
             return None
         };
         Some(Hash::must(&hx))
     }
+    
     
     pub fn block_data_by_height(&self, hei: &BlockHeight) -> Option<(Hash, Vec<u8>)> {
         let Some(hx) = self.block_hash(hei) else {
@@ -61,6 +74,7 @@ impl BlockDisk {
         self.block_data(&hx).map(|d|(hx, d))
     }
 
+    
     pub fn block(&self, hx: &Hash) -> Option<(Vec<u8>, Box<dyn Block>)> {
         let Some(data) = self.block_data(&hx) else {
             return None
@@ -71,6 +85,8 @@ impl BlockDisk {
             Ok(b) => Some((data, b))
         }
     }
+
+    
     pub fn block_by_height(&self, hei: &BlockHeight) -> Option<(Hash, Vec<u8>, Box<dyn Block>)> {
         let Some(hx) = self.block_hash(hei) else {
             return None
