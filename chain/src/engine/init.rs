@@ -24,8 +24,7 @@ fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>, is_state_upgrade: boo
 
 fn rebuild_unstable_blocks(this: &ChainEngine) {
 
-    let disk = BlockDisk::wrap(this.disk.clone());
-    let status = disk.status();
+    let status = this.blockdisk.status();
     // next
     let mut next_height: u64 = {
         this.roller.lock().unwrap().root.height
@@ -41,9 +40,10 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
     // insert lock
     loop {
         next_height += 1;
-        let Some((hx, blkdata, block)) = disk.block_by_height(&next_height.into()) else {
+        let Some((hx, blkdata, block)) = this.blockdisk.block_by_height(&next_height.into()) else {
             break; // end finish
         };
+        // assert_eq!(blkdata, block.serialize(), "assert_eq block {}", block.height().uint());
         if is_all_rebuild {
             if next_height % 500 == 0 {
                 let per = next_height as f32 / finish_height as f32;

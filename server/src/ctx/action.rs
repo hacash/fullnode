@@ -77,15 +77,15 @@ pub fn action_from_json(_main_addr: &Address, jsonv: &serde_json::Value) -> Ret<
         )
     }
 
-    macro_rules! j_uint5 {
+    macro_rules! j_uint4 {
         ($k: expr) => (
-            j_uint!($k, u64, Uint5)
+            j_uint!($k, u32, Uint4)
         )
     }
 
-    macro_rules! j_uint8 {
+    macro_rules! j_uint5 {
         ($k: expr) => (
-            j_uint!($k, u64, Uint8)
+            j_uint!($k, u64, Uint5)
         )
     }
 
@@ -226,11 +226,8 @@ pub fn action_from_json(_main_addr: &Address, jsonv: &serde_json::Value) -> Ret<
     }
 
     if_ret_act_ns!{ SubChainID,
-        chain_id,      j_uint8
+        chain_id,      j_uint4
     }
-
-
-
 
 
     // not support

@@ -117,7 +117,7 @@ macro_rules! combi_struct_field_more_than_condition {
             fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
                 let mut mv = 0;
                 $( mv += self.$item.parse(&buf[mv..])?; )+
-                if self.$cdn.uint() > $cdv {
+                if *self.$cdn > $cdv {
                     mv += self.$mrn.parse(&buf[mv..])?;
                 }
                 Ok(mv)
@@ -129,7 +129,7 @@ macro_rules! combi_struct_field_more_than_condition {
 
             fn serialize(&self) -> Vec<u8> {
                 let mut sers = vec![ $( self.$item.serialize() ),+ ];
-                if self.$cdn.uint() > $cdv {
+                if *self.$cdn > $cdv {
                     sers.push(self.$mrn.serialize());
                 }
                 sers.concat()
@@ -137,7 +137,7 @@ macro_rules! combi_struct_field_more_than_condition {
 
             fn size(&self) -> usize {
                 let mut sz = [ $( self.$item.size() ),+ ].iter().sum();
-                if self.$cdn.uint() > $cdv {
+                if *self.$cdn > $cdv {
                     sz += self.$mrn.size();
                 }
                 sz

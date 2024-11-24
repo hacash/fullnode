@@ -65,7 +65,7 @@ impl ChainEngine {
             if tx.timestamp().uint() > cur_time {
                 return errf!("tx timestamp {} cannot more than now {}", tx.timestamp(), cur_time)
             }
-            // verify signs
+            // verify signature
             tx.as_ref().as_read().verify_signature()?; 
         }
         // check size
@@ -85,8 +85,7 @@ impl ChainEngine {
         self.minter.consensus(prev_blk.as_read(), block.as_read(), sto)?;
         // coinbase tx id = 0, if coinbase error
         self.minter.coinbase(isrt_blk.hein, block.coinbase_transaction()?)?;
-    
-        // ok
+        // ok 
         Ok(())
 
     }

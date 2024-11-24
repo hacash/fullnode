@@ -43,7 +43,6 @@ amount_op_unsafe_func_define!{hac_add_unsafe, hac, addr, amt, {
 }}
 
 
-
 pub fn hac_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, amt: &Amount) -> Ret<Vec<u8>> {
     // is to self
     if from == to {

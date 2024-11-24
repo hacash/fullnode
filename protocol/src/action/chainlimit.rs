@@ -36,11 +36,11 @@ action_define!{ SubChainID, 30,
     false, // burn 90 fee
     [], // need sign
     {
-        chain_id: Uint8  
+        chain_id: Uint4
     },
     (self, ctx, _gas {
         let lid = ctx.env().chain.id;
-        let sid = self.chain_id.uint();
+        let sid = *self.chain_id;
         if lid != sid {
             return errf!("transction must belong to chain id {} but on chain {}", sid, lid)
         }

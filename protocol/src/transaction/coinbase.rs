@@ -64,7 +64,7 @@ impl TransactionRead for TransactionCoinbase {
 
     // call ret error
     fn verify_signature(&self) -> Rerr {
-        errf!("cannot call verify_signature() in coinbase tx")
+        Ok(())
     }
     
 }

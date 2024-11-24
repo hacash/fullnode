@@ -2,14 +2,13 @@
 * "0WTYUIAHXVMEKBSZN"
 */
 pub const DIAMOND_HASH_BASE_CHAR_NUM: usize = 17;
-pub const DIAMOND_HASH_BASE_STRING: &str = "0WTYUIAHXVMEKBSZN";
-pub const DIAMOND_HASH_BASE_CHARS: [u8; DIAMOND_HASH_BASE_CHAR_NUM] = *b"0WTYUIAHXVMEKBSZN";
+pub const DIAMOND_HASH_BASE_STRING: &str =       "0WTYUIAHXVMEKBSZN";
+pub const DIAMOND_HASH_BASE_CHARS:  [u8; 17] = *b"0WTYUIAHXVMEKBSZN";
+pub const DIAMOND_NAME_VALID_CHARS: [u8; 16] =  *b"WTYUIAHXVMEKBSZN";
 
 const DMD_L: usize = 10;
 const DMD_M: usize = 16;
 const DMD_N: usize = DMD_M - DMD_L; // 6
-
-
 
 pub fn is_valid_diamond_name(v: &[u8]) -> bool {
     if v.len() != DMD_N {

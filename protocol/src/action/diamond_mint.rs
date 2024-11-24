@@ -32,12 +32,12 @@ action_define!{ DiamondMint, 4,
 // 
 impl DiamondMint {
 
-    pub fn with(name: DiamondName, number: DiamondNumber) -> Self {
+    pub fn with(diamond: DiamondName, number: DiamondNumber) -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
             d: DiamondMintData{
-                diamond: name,
-                number: number,
+                diamond,
+                number,
                 prev_hash: Hash::default(),
                 nonce: Fixed8::default(),
                 address: Address::default(),
@@ -54,16 +54,13 @@ impl DiamondMint {
 */
 fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     let act = &this.d;
-    act.address.check_must_privakey()?;
-
+    act.address.must_privakey()?;
     let env = ctx.env().clone();
     let mut state = CoreState::wrap(ctx.state());
-
     let pending_height = env.block.height;
     let pending_hash = env.block.hash;
-
     let number = act.number;
-    let dianum = number.uint();
+    let dianum = *number;
     let name = act.diamond;
     let namestr = name.to_readable();
     let prev_hash = act.prev_hash;
@@ -75,37 +72,31 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     }
     // check mine
     let (sha3hx, mediumhx, diahx) = x16rs::mine_diamond(dianum, &prev_hash, &nonce, &address, &custom_message);
-
-    let not_fast_sync = false == env.chain.fast_sync;
+    let not_fast_sync = !env.chain.fast_sync;
     if not_fast_sync {
-
         // check
         if pending_hash.is_not_zero() && pending_height % 5 != 0 {
             return errf!("diamond must be contained in block height are highly divisible by 5")
         }
         // number
         let latest_diamond = state.get_latest_diamond();
-        let neednextnumber = 1 + *latest_diamond.number;
+        let latestdianum = *latest_diamond.number;
+        let neednextnumber = latestdianum + 1;
         if dianum != neednextnumber {
             return errf!("diamond number need {} but got {}", neednextnumber, dianum)
         }
-        // prev hash
+        // check prev hash
         if dianum > 1 && latest_diamond.born_hash != prev_hash {
             return errf!("diamond prev hash need {} but got {}", latest_diamond.born_hash, prev_hash)
         }
-
-        // latest
-        let latestdianum = *latest_diamond.number;
         if dianum != 1 + latestdianum {
             return errf!("latest diamond number need {} but got {}", dianum - 1, latestdianum)
         }
-
-        // difficulty
+        // check difficulty
         let diffok = x16rs::check_diamond_difficulty(dianum, &sha3hx, &mediumhx);
         if ! diffok {
             return errf!("diamond difficulty not match")
         }
-
         // name
         let dianame = x16rs::check_diamond_hash_result(diahx);
         let Some(dianame) = dianame else {
@@ -119,18 +110,14 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
         if name != dianame {
             return errf!("diamond name need {} but got {}", dianame.to_readable(), namestr)
         }
-
         // exist
         let hav = state.diamond(&name);
         if let Some(_) = hav {
             return errf!("diamond {} already exist", namestr)
         }
-
     }
-
     // tx fee
     let tx_bid_fee = &env.tx.fee;
-
     // total count 
     let mut ttcount = state.get_total_count();
     ttcount.minted_diamond += 1u64;
@@ -142,13 +129,10 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
         let burn = tx_bid_fee.clone().sub_mode_u64(&sub)?; // 90%
         ttcount.hacd_bid_burn_zhu += Uint8::from(burn.to_zhu_unsafe() as u64);
     }
-
     // gene
     let (life_gene, _visual_gene) = calculate_diamond_gene(dianum, &mediumhx, &diahx, &pending_hash, &tx_bid_fee);
-
     // bid_burn    
     let average_bid_burn = calculate_diamond_average_bid_burn(dianum, *ttcount.hacd_bid_burn_zhu);
-
     // save diamond smelt
     let diasmelt = DiamondSmelt {
         diamond: name.clone(),
@@ -164,7 +148,6 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     };
     state.set_latest_diamond(&diasmelt);
     state.diamond_smelt_set(&name, &diasmelt);
-
     // save diamond
     let diaitem = DiamondSto {
         status: DIAMOND_STATUS_NORMAL,
@@ -174,18 +157,14 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     };
     state.diamond_set(&name, &diaitem);
     state.diamond_name_set(&number, &name);
-
     // add diamond belong
     if env.chain.diamond_form {
         diamond_owned_push_one(&mut state, &address, &name);
     }
-    
     // save count
     state.set_total_count(&ttcount);
-
     // add balance
     hacd_add(&mut state, &act.address, &DiamondNumber::from(1))?;
-
     // ok
     Ok(vec![])
 }

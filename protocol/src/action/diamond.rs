@@ -11,8 +11,8 @@ action_define!{ DiamondSingleTransfer, 5,
         to        : AddrOrPtr 
     },
     (self, ctx, _gas {
-        let from = ctx.env().tx.main;
-        let to = ctx.addr(&self.to)?;
+        let from  = ctx.env().tx.main;
+        let to    = ctx.addr(&self.to)?;
         let dlist = DiamondNameListMax200::one(self.diamond);
         do_diamonds_transfer(&dlist, &from, &to, ctx)  
     })
@@ -32,12 +32,10 @@ action_define!{ DiamondFromToTransfer, 6,
     },
     (self, ctx, _gas {
         let from = ctx.addr(&self.from)?;
-        let to = ctx.addr(&self.to)?;
+        let to   = ctx.addr(&self.to)?;
         do_diamonds_transfer(&self.diamonds, &from, &to, ctx) 
     })
 }
-
-
 
 
 /*
@@ -53,7 +51,7 @@ action_define!{ DiamondToTransfer, 7,
     },
     (self, ctx, _gas {
         let from = ctx.env().tx.main;
-        let to = ctx.addr(&self.to)?;
+        let to   = ctx.addr(&self.to)?;
         do_diamonds_transfer(&self.diamonds, &from, &to, ctx) 
     })
 }
@@ -72,7 +70,7 @@ action_define!{ DiamondFromTransfer, 8,
     },
     (self, ctx, _gas {
         let from = ctx.addr(&self.from)?;
-        let to = ctx.env().tx.main;
+        let to   = ctx.env().tx.main;
         do_diamonds_transfer(&self.diamonds, &from, &to, ctx) 
     })
 }

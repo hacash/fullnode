@@ -12,7 +12,7 @@ action_define!{ SatoshiToTransfer, 9,
     },
     (self, ctx, _gas {
         let from = ctx.env().tx.main; 
-        let to = ctx.addr(&self.to)?;
+        let to   = ctx.addr(&self.to)?;
         sat_transfer(ctx, &from, &to, &self.satoshi)
     })
 }
@@ -29,7 +29,7 @@ action_define!{ SatoshiFromTransfer, 10,
     },
     (self, ctx, _gas {
         let from = ctx.addr(&self.from)?;
-        let to = ctx.env().tx.main; 
+        let to   = ctx.env().tx.main; 
         sat_transfer(ctx, &from, &to, &self.satoshi)
     })
 }
@@ -47,7 +47,7 @@ action_define!{ SatoshiFromToTransfer, 11,
     },
     (self, ctx, _gas {
         let from = ctx.addr(&self.from)?;
-        let to = ctx.addr(&self.to)?;
+        let to   = ctx.addr(&self.to)?;
         sat_transfer(ctx, &from, &to, &self.satoshi)
     })
 }

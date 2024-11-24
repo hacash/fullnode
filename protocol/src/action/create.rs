@@ -3,7 +3,7 @@
 fn cut_kind(buf: &[u8]) -> Ret<u16> {
     let mut kind = Uint2::default();
     kind.parse(buf)?;
-    Ok(kind.uint())
+    Ok(*kind)
 }
 
 

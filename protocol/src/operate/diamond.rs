@@ -61,14 +61,7 @@ pub fn hacd_transfer(state: &mut CoreState,
 }
 
 
-
-
-
 /*********************************** */
-
-
-
-
 
 
 pub fn hacd_move_one_diamond(state: &mut CoreState, addr_from: &Address, addr_to: &Address, hacd_name: &DiamondName) -> Rerr {

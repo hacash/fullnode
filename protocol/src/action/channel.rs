@@ -5,7 +5,10 @@
 action_define!{ ChannelOpen, 2, 
     ActLv::TOP, // level
     false, // burn 90 fee
-    [], // need sign
+    [
+        self.left_bill.address.into(),
+        self.right_bill.address.into()
+    ], // need sign
     {
         channel_id     : ChannelId
         left_bill      : AddrHac
@@ -19,8 +22,8 @@ action_define!{ ChannelOpen, 2,
 
 fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
 
-    this.left_bill.address.check_must_privakey()?;
-    this.right_bill.address.check_must_privakey()?;
+    this.left_bill.address.must_privakey()?;
+    this.right_bill.address.must_privakey()?;
 
     let (cid, left_addr, left_amt, right_addr, right_amt ) = (
         &this.channel_id,
@@ -127,8 +130,8 @@ fn channel_close(this: &ChannelClose, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
 
     // query
     let chan = must_have!("channel", state.channel(cid));
-    chan.left_bill.address.check_must_privakey()?;
-    chan.right_bill.address.check_must_privakey()?;
+    chan.left_bill.address.must_privakey()?;
+    chan.right_bill.address.must_privakey()?;
 
 	// verify two address sign
     ctx.check_sign( &chan.left_bill.address )?;

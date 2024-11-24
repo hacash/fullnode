@@ -4,7 +4,7 @@
 */
 action_define!{ DiamondInscription, 32, 
     ActLv::TOP, // level
-    false, // burn 90 fee
+    true, // burn 90 fee
     [], // need sign
     {
         diamonds         : DiamondNameListMax200
@@ -23,7 +23,6 @@ fn diamond_inscription(this: &DiamondInscription, ctx: &mut dyn Context) -> Ret<
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
     let pcost = &this.protocol_cost;
-
     // check
     this.diamonds.check()?;
 	if pcost.size() > 4 {
@@ -37,41 +36,35 @@ fn diamond_inscription(this: &DiamondInscription, ctx: &mut dyn Context) -> Ret<
     if insc_len > 64 {
 		return errf!("engraved content size cannot over 64 bytes")
     }
-    let insc_ty = this.engraved_type.uint();
+    let insc_ty = *this.engraved_type;
     if insc_ty <= 50 {
-        if ! check_readable_string(this.engraved_content.as_ref()) {
+        if ! check_readable_string(&this.engraved_content) {
             return errf!("engraved content must readable string")
         }
     }
-
     // cost
     let mut ttcost = Amount::zero();
     let pdhei = env.block.height;
-
     // do
     let mut state = CoreState::wrap(ctx.state());
     for dia in this.diamonds.list() {
         let cc = engraved_one_diamond(pdhei, &mut state, &main_addr, &dia, &this.engraved_content)?;
         ttcost = ttcost.add_mode_u64(&cc)?;
     }
-
 	// check cost
 	if pcost < &ttcost {
 		return errf!("diamond inscription cost error need {} but got {}", ttcost, pcost)
 	}
-
     // change count
     let mut ttcount = state.get_total_count();
     ttcount.diamond_engraved += this.diamonds.count().uint() as u64;
     ttcount.diamond_insc_burn_zhu += pcost.to_zhu_unsafe() as u64;
     state.set_total_count(&ttcount);
-
 	// sub main addr balance
 	if pcost.is_positive() {
         hac_sub(ctx, &main_addr, &pcost)?;
 	}
-
-    // finish
+    // ok
     Ok(vec![])
 
 }
@@ -84,7 +77,7 @@ fn diamond_inscription(this: &DiamondInscription, ctx: &mut dyn Context) -> Ret<
 
 action_define!{ DiamondInscriptionClear, 33, 
     ActLv::TOP, // level
-    false, // burn 90 fee
+    true, // burn 90 fee
     [], // need sign
     {
         diamonds      : DiamondNameListMax200    
@@ -171,10 +164,9 @@ fn diamond_inscription_clean(this: &DiamondInscriptionClear, ctx: &mut dyn Conte
 pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&Address, diamond: &DiamondName, content: &BytesW1) -> Ret<Amount> {
 
     let mut diasto = check_diamond_status(state, addr, diamond)?;
-    
     // check height
-    let prev_insc_hei = diasto.prev_engraved_height.uint();
-    let check_prev_block = 1000u64;
+    let prev_insc_hei = *diasto.prev_engraved_height;
+    let check_prev_block = 1000;
     if prev_insc_hei + check_prev_block > pending_height {
         return errf!("only one inscription can be made every {} blocks", check_prev_block)
     }
@@ -203,6 +195,8 @@ pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&A
 	// ok finish
 	Ok(cost)
 }
+
+
 
 /* 
 * return total cost

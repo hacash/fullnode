@@ -37,7 +37,7 @@ impl Context for ContextInst<'_> {
     }
     
     fn check_sign(&mut self, adr: &Address) -> Rerr {
-        adr.check_must_privakey()?;
+        adr.must_privakey()?;
         if self.check_sign_cache.contains_key(adr) {
             return self.check_sign_cache[adr].clone().map(|_|())
         }

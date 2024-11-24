@@ -12,7 +12,7 @@ action_define!{ HacToTransfer, 1,
     },
     (self, ctx, _gas {
         let from = ctx.env().tx.main; 
-        let to = ctx.addr(&self.to)?;
+        let to   = ctx.addr(&self.to)?;
         hac_transfer(ctx, &from, &to, &self.hacash)
     })
 }
@@ -28,7 +28,7 @@ action_define!{ HacFromTransfer, 13,
     },
     (self, ctx, _gas {
         let from = ctx.addr(&self.from)?;
-        let to = ctx.env().tx.main; 
+        let to   = ctx.env().tx.main; 
         hac_transfer(ctx, &from, &to, &self.hacash)
     })
 }
@@ -47,7 +47,7 @@ action_define!{ HacFromToTransfer, 14,
     },
     (self, ctx, _gas {
         let from = ctx.addr(&self.from)?;
-        let to = ctx.addr(&self.to)?;
+        let to   = ctx.addr(&self.to)?;
         hac_transfer(ctx, &from, &to, &self.hacash)
     })
 }

@@ -13,7 +13,7 @@ impl Address {
 
     pub const UNKNOWN: Self = Fixed21::DEFAULT;
 
-    pub fn check_must_privakey(&self) -> Rerr {
+    pub fn must_privakey(&self) -> Rerr {
         match self.version() == Self::PRIVAKEY {
             true => Ok(()),
             false => errf!("address {} is not PRIVAKEY type", self.readable())
@@ -53,6 +53,9 @@ impl Address {
 }
 
 
+
+
+
 /*
 *
 */
@@ -87,6 +90,13 @@ impl AddrOrList {
 combi_revenum!{ AddrOrPtr, Address, Addrptr, ADDR_OR_PTR_DIV_NUM }
 
 impl Copy for AddrOrPtr {} 
+
+impl From<Address> for AddrOrPtr {
+    fn from(addr: Address) -> Self {
+        Self::Val1(addr)
+    }
+}
+
 
 impl AddrOrPtr {
 

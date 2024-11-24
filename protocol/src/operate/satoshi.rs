@@ -1,23 +1,23 @@
 
 
-macro_rules! fnSatoshiOperateCommon{
+macro_rules! satoshi_operate_define {
     ($func_name: ident, $addr:ident, $sat:ident, $oldsat:ident,  $newsatblock:block) => (
 
-pub fn $func_name(ctx: &mut dyn Context, $addr: &Address, $sat: &Satoshi) -> Ret<Satoshi> {
-    if $sat.uint() == 0 {
-		return errf!("satoshi value cannot zore")
-    }    
-    let mut state = CoreState::wrap(ctx.state());
-    let mut userbls = state.balance( $addr ).unwrap_or_default();
-    let $oldsat = &userbls.satoshi.to_satoshi();
-    /* -------- */
-    let newsat = $newsatblock;// operate
-    /* -------- */
-    // save
-    userbls.satoshi = SatoshiAuto::from_satoshi( &newsat );
-    state.balance_set($addr, &userbls);
-    Ok(newsat)
-}
+        pub fn $func_name(ctx: &mut dyn Context, $addr: &Address, $sat: &Satoshi) -> Ret<Satoshi> {
+            if $sat.uint() == 0 {
+                return errf!("satoshi value cannot zore")
+            }    
+            let mut state = CoreState::wrap(ctx.state());
+            let mut userbls = state.balance( $addr ).unwrap_or_default();
+            let $oldsat = &userbls.satoshi.to_satoshi();
+            /* -------- */
+            let newsat = $newsatblock;// operate
+            /* -------- */
+            // save
+            userbls.satoshi = SatoshiAuto::from_satoshi( &newsat );
+            state.balance_set($addr, &userbls);
+            Ok(newsat)
+        }
 
     )
 }
@@ -25,12 +25,12 @@ pub fn $func_name(ctx: &mut dyn Context, $addr: &Address, $sat: &Satoshi) -> Ret
 
 /**************************** */
 
-fnSatoshiOperateCommon!(sat_add, addr, sat, oldsat, {
+satoshi_operate_define!(sat_add, addr, sat, oldsat, {
     // do add
     *oldsat + *sat 
 });
 
-fnSatoshiOperateCommon!(sat_sub, addr, sat, oldsat, {  
+satoshi_operate_define!(sat_sub, addr, sat, oldsat, {  
     // check
     if *oldsat < *sat {
 		return errf!("do sat_sub error: address {} balance {} not enough, need {}", 

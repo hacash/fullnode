@@ -163,6 +163,7 @@ pub fn both_interest(distribute_type: Uint1, amtl: &Amount, amtr: &Amount, cacll
     Ok(resamts)
 }
 
+
 pub fn calculate_interest_of_height(curblkhei: u64, chanopenblkhei: u64, distribute_type: Uint1, amtl: &Amount, amtr: &Amount)-> Ret<(Amount, Amount)> {
     if curblkhei < chanopenblkhei {
         return Err("current block height cannot less than channel open height".to_string())
