@@ -26,31 +26,73 @@ impl EngineRead for ChainEngine {
         self.disk.clone()
     }
 
-    fn recent_blocks(&self) -> Vec<Arc<RecentBlockInfo>> { unimplemented!() }
-    fn average_fee_purity(&self) -> u64 { 0 } // 1w zhu(shuo) / 200byte(1trs)
+    fn recent_blocks(&self) -> Vec<Arc<RecentBlockInfo>> {
+        let vs = self.rctblks.lock().unwrap();   
+        let res: Vec<_> = vs.iter().map(|x|x.clone()).collect();
+        res
+    }
 
-    fn try_execute_tx(&self, _: &dyn TransactionRead) -> Rerr { unimplemented!() }
-    // realtime average fee purity
-    // fn avgfee(&self) -> u32 { 0 }
+    // 1w zhu(shuo) / 200byte(1trs)
+    fn average_fee_purity(&self) -> u64 {
+        let avgfs = self.avgfees.lock().unwrap();
+        let al = avgfs.len();
+        if al == 0 {
+            return DEFAULT_AVERAGE_FEE_PURITY
+        }
+        let mut allfps = 0u64;
+        for a in avgfs.iter() {
+            allfps += a;
+        }
+        allfps / al as u64
+    } 
+
+    fn try_execute_tx(&self, tx: &dyn TransactionRead) -> Rerr {
+        let state = self.state();
+        let sub_state = state.fork_sub(state.clone());
+        let height = self.latest_block().height().uint() + 1; // next height
+        let hash = Hash::from([0u8; 32]); // empty hash
+        // ctx
+        let env = ctx::Env{
+            chain: ctx::Chain{
+                id: self.cnf.chain_id,
+                diamond_form: false,
+                fast_sync: false,
+            },
+            block: ctx::Block{
+                height,
+                hash,
+            },
+            tx: ctx::Tx::create(tx),
+        };
+        let mut ctxobj = ctx::ContextInst::new(env, sub_state, tx);
+        // do tx exec
+        tx.execute(&mut ctxobj)
+    }
+    
 }
 
 
 
 impl Engine for ChainEngine {
     
-    
     fn as_read(&self) -> &dyn EngineRead {
         self
     }
 
-    
     fn insert(&self, blk: BlockPkg) -> Rerr {
+        let blkobj = blk.objc.as_read();
+        if self.cnf.recent_blocks {
+            self.record_recent(blkobj);
+        }
+        if self.cnf.average_fee_purity {
+            self.record_avgfee(blkobj);
+        }
+        // do insert
         let lk = self.isrtlk.lock().unwrap();
         self.do_insert(blk)?;
         drop(lk);
         Ok(())
     }
-
     
     fn insert_sync(&self, hei: u64, data: Vec<u8>) -> Rerr {
         let lk = self.isrtlk.lock().unwrap();

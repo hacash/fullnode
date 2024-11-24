@@ -34,7 +34,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
     let finish_height = *status.last_height;
     let is_all_rebuild = finish_height - next_height > 20;
     if is_all_rebuild {
-        println!("[Database] rebuild all blocks to upgrade data version, plase waiting...");
+        println!("[Database] check all blocks to upgrade state db version, plase waiting...");
     }else{
         print!("[Engine] Data: {}, rebuild ({})", this.cnf.data_dir, next_height);
     }
@@ -42,7 +42,6 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
     loop {
         next_height += 1;
         let Some((hx, blkdata, block)) = disk.block_by_height(&next_height.into()) else {
-            println!(" ok.");
             break; // end finish
         };
         if is_all_rebuild {
@@ -69,6 +68,8 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
     // finish tip
     if is_all_rebuild {
         flush!("\r{:10} ({:.2}%)", next_height, 100.0);
+    }else{
+        println!(" ok.");
     }
 }
 

@@ -49,7 +49,12 @@ macro_rules! fixed_define {
                 self.bytes.as_slice()
             }
         }
-
+        
+        impl AsMut<[u8]> for $class {
+            fn as_mut(&mut self) -> &mut [u8] {
+                &mut self.bytes
+            }
+        }
 
         impl Parse for $class {
             fn parse(&mut self, buf: &[u8]) -> Ret<usize> {

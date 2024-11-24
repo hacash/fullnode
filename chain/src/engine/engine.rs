@@ -14,6 +14,9 @@ pub struct ChainEngine {
 
     isrtlk: Mutex<()>, // is exit
 
+    rctblks: Mutex<VecDeque<Arc<RecentBlockInfo>>>,
+    avgfees: Mutex<VecDeque<u64>>,
+
 }
 
 
@@ -51,6 +54,8 @@ impl ChainEngine {
             scaner,
             roller,
             disk,
+            rctblks: Mutex::default(),
+            avgfees: Mutex::default(),
             blockdisk: BlockDisk::wrap(d1),
             isrtlk: ().into(),
         };

@@ -29,6 +29,25 @@ action_define!{ DiamondMint, 4,
     })
 }
 
+// 
+impl DiamondMint {
+
+    pub fn with(name: DiamondName, number: DiamondNumber) -> Self {
+        Self {
+            kind: Uint2::from(Self::KIND),
+            d: DiamondMintData{
+                diamond: name,
+                number: number,
+                prev_hash: Hash::default(),
+                nonce: Fixed8::default(),
+                address: Address::default(),
+                custom_message: Hash::default(),
+            },
+        }
+    }
+
+}
+
 
 /*
 

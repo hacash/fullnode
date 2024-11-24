@@ -1,3 +1,4 @@
+use std::collections::*;
 use std::sync::*;
 use std::path::*;
 
@@ -21,6 +22,7 @@ include!{"config.rs"}
 include!{"engine.rs"}
 include!{"init.rs"}
 include!{"check.rs"}
+include!{"recent.rs"}
 include!{"insert.rs"}
 include!{"trait.rs"}
 

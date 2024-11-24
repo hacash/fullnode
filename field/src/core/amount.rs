@@ -397,6 +397,10 @@ impl Amount {
         self.to_unit_unsafe(UNIT_ZHU)
     }
 
+    pub fn to_shuo_unsafe(&self) -> f64 {
+        self.to_unit_unsafe(UNIT_SHUO)
+    }
+
     pub fn to_unit_unsafe(&self, base_unit: u8) -> f64 {
         if self.is_zero() {
             return 0f64
