@@ -1,7 +1,8 @@
 
 
 
-pub const DEFAULT_AVERAGE_FEE_PURITY: u64 = 10000_00000000 / 200;
+// a simple hac trs size is 166 bytes
+pub const DEFAULT_AVERAGE_FEE_PURITY: u64 = 10000_00000000 / 166; 
 
 
 

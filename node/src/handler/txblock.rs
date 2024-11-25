@@ -123,8 +123,8 @@ fn drain_all_block_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, txs: Vec<Hash>
         println!("{}.", txpool.print());
     }
     // drop all exist normal tx
-    if txs.len() > 0 {
-        let _ = txpool.drain(&txs);
+    if txs.len() > 1 {
+        let _ = txpool.drain(&txs[1..]); // over coinbase tx
     }
     // drop all overdue diamond mint tx
     if blkhei % 5 == 0 {

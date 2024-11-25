@@ -47,13 +47,24 @@ impl TxPool for MemTxPool {
 
     // insert to target group
     fn insert_at(&self, txp: TxPkg, gi: usize) -> Rerr { 
+        // let test_hex_show = txp.data.hex();
         check_group_id(gi)?;
         // do insert
         let mut grp = self.groups[gi].lock().unwrap();
-        grp.insert(txp)
+        grp.insert(txp)?;
+        /*
+        drop(grp);
+        print!("memtxpool insert_at {} total {}", gi, self.print());
+        if gi == 0 {
+            println!(", tx body: {}", test_hex_show);
+        }else{
+            println!("\n");
+        }
+        */
+        Ok(())
     }
 
-    fn delete_at(&self, hxs: &Vec<Hash>, gi: usize) -> Rerr {
+    fn delete_at(&self, hxs: &[Hash], gi: usize) -> Rerr {
         check_group_id(gi)?;
         // do delete
         let mut grp = self.groups[gi].lock().unwrap();
@@ -81,9 +92,7 @@ impl TxPool for MemTxPool {
     }
 
     // remove if true
-    fn drain_filter_at(&self, filter: &dyn Fn(&TxPkg)->bool, gi: usize) 
-        -> Rerr
-    {
+    fn drain_filter_at(&self, filter: &dyn Fn(&TxPkg)->bool, gi: usize) -> Rerr {
         check_group_id(gi)?;
         self.groups[gi].lock().unwrap().drain_filter(filter)
     }
@@ -110,6 +119,7 @@ impl TxPool for MemTxPool {
             let act = &acts[i];
             if act.kind() == DMINT {
                 group_id = TXPOOL_GROUP_DIAMOND_MINT;
+                break
             }
         }
         // println!("TXPOOL: insert tx {} in group {}", tx.hash().hex(), group_id);
@@ -117,14 +127,15 @@ impl TxPool for MemTxPool {
         self.insert_at(txp, group_id)
     }
 
-    fn drain(&self, hxs: &Vec<Hash>) -> Ret<Vec<TxPkg>> {
+    fn drain(&self, hxs: &[Hash]) -> Ret<Vec<TxPkg>> {
         let mut txres = vec![];
-        let mut hxst = HashSet::from_iter(hxs.clone().into_iter());
+        let mut hxst = HashSet::from_iter(hxs.to_vec());
         for gi in 0..self.groups.len() {
             let mut grp = self.groups[gi].lock().unwrap();
             let mut res = grp.drain(&mut hxst);
             txres.append(&mut res);
         }
+        // println!("memtxpool drain hxs {} status: {}", hxs.len(), self.print());
         Ok(txres)
     }
 

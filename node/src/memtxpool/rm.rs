@@ -33,7 +33,7 @@ impl TxGroup {
     }
 
 
-    fn delete(&mut self, txhxs: &Vec<Hash>) {
+    fn delete(&mut self, txhxs: &[Hash]) {
         for hx in txhxs {
             if ! self.del_one(hx) {
                 return // group is empty

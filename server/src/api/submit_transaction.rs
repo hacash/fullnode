@@ -1,8 +1,15 @@
+use chain::engine::DEFAULT_AVERAGE_FEE_PURITY;
+
 
 defineQueryObject!{ Q4396,
     __nnn__, Option<bool>, None,
 }
 
+/*
+
+curl "http://127.0.0.1:8085/submit/transaction?hexbody=true" -X POST -d ""
+
+*/
 async fn submit_transaction(State(ctx): State<ApiCtx>, q: Query<Q4396>, body: Bytes) -> impl IntoResponse {
     // body bytes
     let bddts = q_body_data_may_hex!(q, body);
@@ -13,6 +20,9 @@ async fn submit_transaction(State(ctx): State<ApiCtx>, q: Query<Q4396>, body: By
         return api_error(&format!("transaction parse error: {}", &e))
     }
     let txpkg = txpkg.unwrap();
+    if txpkg.fepr < DEFAULT_AVERAGE_FEE_PURITY {
+        return api_error(&format!("The transaction fee purity {} is too low, the node minimum configuration is {}.", txpkg.fepr, DEFAULT_AVERAGE_FEE_PURITY))
+    }
     // try submit
     let is_async = true;
     if let Err(e) = ctx.hcshnd.submit_transaction(&txpkg, is_async) {
