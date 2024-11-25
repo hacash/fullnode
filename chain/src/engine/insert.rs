@@ -110,8 +110,7 @@ impl ChainEngine {
             None => self.roller.lock().unwrap().root.height
         };
         let mut block_disk_batch = leveldb::Writebatch::new();
-        if let Some(..) = cptr {
-            let curr = cptr.clone().unwrap();
+        if let Some(curr) = cptr {
             block_disk_batch.put(&BlockDisk::CSK, &ChainStatus{
                 root_height: BlockHeight::from(new_root_hei),
                 last_height: BlockHeight::from(curr.height),

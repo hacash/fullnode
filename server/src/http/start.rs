@@ -22,13 +22,13 @@ async fn server_listen(ser: &HttpServer) {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr).await;
     if let Err(ref e) = listener {
-        println!("\n[Error] RPC Server bind port {} error: {}\n", port, e);
+        println!("\n[Error] Api Server bind port {} error: {}\n", port, e);
         return
     }
     let listener = listener.unwrap();
-    println!("[RPC Server] Listening on http://{addr}");
+    println!("[Http Api Server] Listening on http://{addr}");
     // 
-    let app = rpc::routes(ApiCtx::new(
+    let app = api::routes(ApiCtx::new(
         ser.engine.clone(),
         ser.hcshnd.clone(),
     ));

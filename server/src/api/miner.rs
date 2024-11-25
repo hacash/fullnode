@@ -186,15 +186,28 @@ fn miner_reset_next_new_block(sto: &BlockDisk, engine: ChainEngine, hnode: Chain
     update_miner_pending_block(block, cbtx);
 }
 
-// park txs to block
+
+
+/*
+    park txs to block
+*/
 fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &mut Vec<Hash>, 
     trs: &mut DynVecTransaction, engine: ChainEngine, txpool: Arc<dyn TxPool>,
 ) {
     let engcnf = engine.config();
     let txmaxn = engcnf.max_block_txs;
     let txmaxsz = engcnf.max_block_size;
+    let mut allfee = Amount::zero();
     let mut txallsz: usize = 80; // coinbase tx size
     let txallsz = &mut txallsz;
+
+    macro_rules! ok_push_one_tx {
+        ($a: expr) => {
+            trs.push($a.objc.clone()).unwrap();
+            trshxs.push($a.hash.clone());
+            *trslen += 1; 
+        }
+    }
 
     macro_rules! check_pick_one_tx {
         ($a: expr) => {
@@ -205,6 +218,10 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
             if let Err(..) = engine.try_execute_tx(txr) {
                 return true // execute fail, ignore, next
             }
+            let Ok(nf) = allfee.add_mode_u64(&$a.objc.fee_got()) else {
+                return true; // fee size err, ignore, next
+            };
+            allfee = nf;
         }
 
     }
@@ -215,9 +232,7 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
             // check tx
             check_pick_one_tx!(a);
             // ok push
-            trs.push(a.objc.clone()).unwrap();
-            trshxs.push(a.hash.clone());
-            *trslen += 1; 
+            ok_push_one_tx!(a);
             false // end
         };
         txpool.iter_at(&mut pick_dmint, TXPOOL_GROUP_DIAMOND_MINT).unwrap();
@@ -230,12 +245,9 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
         check_pick_one_tx!(a);
         // check size
         if txsz + *txallsz > txmaxsz || *trslen >= txmaxn {
-            return false // num or size enough
+            return false // end, num or size enough
         }
-        // ok push
-        trs.push(a.objc.clone()).unwrap();
-        trshxs.push(a.hash.clone());
-        *trslen += 1; 
+        ok_push_one_tx!(a);
         true // next
     };
     txpool.iter_at(&mut pick_normal_tx, TXPOOL_GROUP_NORMAL).unwrap();
@@ -244,7 +256,12 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
 }
 
 
+
+
 ///////////////////////////////////////////////////
+
+
+
 
 struct MWNCount {
     count: Arc<Mutex<u64>>,

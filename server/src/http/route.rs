@@ -3,24 +3,24 @@
 impl HttpServer {
 
     #[allow(dead_code)]
-    fn route_rpc(&self, _app: &mut Router, _pathkind: &str) {
+    fn route_api(&self, _app: &mut Router, _pathkind: &str) {
 
         // app.get(pathkind, query);
     }
 
     /*
-    fn app_router(rpc: Arc<HttpServer>) -> Router {
+    fn app_router(api: Arc<HttpServer>) -> Router {
         let app = Router::new();
         
-        // stable rpc
+        // stable api
         // app.get("/", console);
 
-        let ctx = rpc.clone();
+        let ctx = api.clone();
         app.clone().route("/query", Route::new().get(|req| async move { 
-            rpc::balance(ctx.as_ref(), req).await
+            api::balance(ctx.as_ref(), req).await
         }));
 
-        // self.route_rpc(&mut app, "/query",);
+        // self.route_api(&mut app, "/query",);
 
 
         // unstable api

@@ -21,6 +21,7 @@ impl HacashNode {
         });
 
         // start p2p loop, blocking
+        println!("[P2P] Start and listening on {}.", this.cnf.listen);
         let _ = rt.block_on(async{
             P2PManage::start(p2p).await
         });

@@ -10,7 +10,7 @@ include!("util.rs");
 pub mod ctx;
 mod extend;
 mod unstable;
-mod rpc;
+mod api;
 pub mod http;
 
 // extend

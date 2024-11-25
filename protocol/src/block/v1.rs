@@ -104,7 +104,7 @@ impl BlockExec for BlockV1 {
             ctx.env.tx = ctx::Tx::create(tx.as_read()); // set env
             ctx.txr = tx.as_read();
             tx.execute(ctx)?; // do exec
-            total_fee = total_fee.add_mode_u128(&tx.fee_got())?; // add fee
+            total_fee = total_fee.add_mode_u64(&tx.fee_got())?; // add fee
         }
         // add fee
         if total_fee.is_positive() { // amt > 0

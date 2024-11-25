@@ -35,7 +35,7 @@ impl Context for ContextInst<'_> {
     fn depth_add(&mut self) { self.depth += 1 }
     fn depth_sub(&mut self) { self.depth -= 1 }
 
-    fn tx(&self) -> &dyn TransactionRead { self.txr}
+    fn tx(&self) -> &dyn TransactionRead { self.txr }
     
     fn addr(&self, ptr :&AddrOrPtr) -> Ret<Address> {
         ptr.real(&self.env.tx.addrs)

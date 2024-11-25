@@ -7,7 +7,7 @@ use sys::*;
 
 use super::*;
 use super::ctx::*;
-use super::rpc;
+use super::api;
 
 include!("param.rs");
 include!("server.rs");
