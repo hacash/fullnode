@@ -7,7 +7,7 @@ combi_struct_with_parse!{ BlockV1,
         // intro
         let mut intro = BlockIntro::default();
         let mut seek = intro.parse(buf)?;
-        let trslen = intro.head.transaction_count.uint();
+        let trslen = *intro.head.transaction_count;
         self.intro = intro;
         // body
         self.transactions.set_count(trslen.into());

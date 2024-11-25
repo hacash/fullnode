@@ -104,7 +104,7 @@ pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&A
     let mut diasto = check_diamond_status(state, addr, diamond)?;
     
     // check height
-    let prev_insc_hei = diasto.prev_engraved_height.uint();
+    let prev_insc_hei = *diasto.prev_engraved_height;
     let check_prev_block = 1000u64;
     if prev_insc_hei + check_prev_block > pending_height {
         return errf!("only one inscription can be made every {} blocks", check_prev_block)
@@ -122,7 +122,7 @@ pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&A
     let mut cost = Amount::default(); // zero
 	if haveng >= 10 {
 		// burning cost bid fee 1/10 from 11 insc
-		cost = Amount::coin(diaslt.average_bid_burn.uint() as u64, 247);
+		cost = Amount::coin(*diaslt.average_bid_burn as u64, 247);
 	}
 
 	// do engraved
@@ -147,7 +147,7 @@ pub fn engraved_clean_one_diamond(_pending_height: u64, state: &mut CoreState, a
         return errf!("cannot find any inscriptions in HACD {}", diamond.to_readable())    }
 
     // burning cost bid fee
-    let cost = Amount::mei(diaslt.average_bid_burn.uint() as u64);
+    let cost = Amount::mei(*diaslt.average_bid_burn as u64);
 	// do clean
     diasto.prev_engraved_height = BlockHeight::from(0);
     diasto.inscripts = Inscripts::default();

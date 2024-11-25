@@ -43,7 +43,7 @@ impl TransactionRead for TransactionCoinbase {
     }
 
     fn ty(&self) -> u8 {
-        self.ty.uint()
+        *self.ty
     }
 
     fn main(&self) -> Address {

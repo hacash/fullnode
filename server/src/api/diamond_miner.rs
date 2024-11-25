@@ -48,12 +48,12 @@ async fn diamondminer_success(State(ctx): State<ApiCtx>, q: Query<Q6396>, body: 
     };
 
     let act = &mint.d;
-    let mint_number = act.number.uint();
+    let mint_number = *act.number;
     let mint_name = act.diamond.to_readable();
 
     // check number and hash
     let lastdia = mintstate.get_latest_diamond();
-    if mint_number != lastdia.number.uint() + 1 {
+    if mint_number != *lastdia.number + 1 {
         return api_error("diamond number error");
     }
     if mint_number > 1 && act.prev_hash != lastdia.born_hash {

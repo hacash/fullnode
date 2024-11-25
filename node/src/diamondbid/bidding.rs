@@ -84,7 +84,7 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
     if let Some(mint) = checkout_diamond_mint_action(my_bid_txp.objc.as_read()) {
         let act = mint.d;
         let dia = act.diamond.to_readable();
-        let dnum = act.number.uint();
+        let dnum = *act.number;
         let dfee = new_bid_fee.to_fin_string();
         if *bidding_number != dnum {
             *bidding_number = dnum;

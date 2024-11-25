@@ -43,15 +43,15 @@ async fn diamond(State(ctx): State<ApiCtx>, q: Query<Q3946>) -> impl IntoRespons
         "belong", diaobj.address.readable(),
         "inscriptions", diaobj.inscripts.array(),
         // smelt
-        "number", diasmelt.number.uint(),
+        "number", *diasmelt.number,
         "miner", diasmelt.miner_address.readable(),
         "born", jsondata!{
-            "height", diasmelt.born_height.uint(), // born block height
+            "height", *diasmelt.born_height, // born block height
             "hash", diasmelt.born_hash.hex(), // born block hash
         },
         "prev_hash", diasmelt.prev_hash.hex(),
         "bid_fee", diasmelt.bid_fee.to_unit_string(&unit),
-        "average_bid_burn", diasmelt.average_bid_burn.uint(),
+        "average_bid_burn", *diasmelt.average_bid_burn,
         "life_gene", diasmelt.life_gene.hex(),
         "visual_gene", calculate_diamond_visual_gene(&dian, &diasmelt.life_gene).hex(),
     };
@@ -94,7 +94,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
             return true // continue
         };
         let act = diamtact.d;
-        if number > 0 && number != act.number.uint() {
+        if number > 0 && number != *act.number {
             return true // number not match, continue
         }
         // append
@@ -171,7 +171,7 @@ async fn diamond_views(State(ctx): State<ApiCtx>, q: Query<Q5395>) -> impl IntoR
         };
         let data = jsondata!{
             "name", dian.to_readable(),
-            "number", diasmelt.number.uint(),
+            "number", *diasmelt.number,
             "bid_fee", diasmelt.bid_fee.to_unit_string(&unit),
             "life_gene", diasmelt.life_gene.hex(),
             // "visual_gene", calculate_diamond_visual_gene(&dian, &diasmelt.life_gene).hex(),

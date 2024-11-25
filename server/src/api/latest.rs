@@ -12,7 +12,7 @@ async fn latest(State(ctx): State<ApiCtx>, _q: Query<Q4376>) -> impl IntoRespons
     // return data
     let data = jsondata!{
         "height", lasthei,
-        "diamond", lastdia.number.uint(),
+        "diamond", *lastdia.number,
     };
     api_data(data)
 

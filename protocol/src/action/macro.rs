@@ -68,7 +68,7 @@ macro_rules! action_define {
         }
 
         impl Action for $class {
-            fn kind(&self) -> u16 { self.kind.uint() }
+            fn kind(&self) -> u16 { *self.kind }
             fn level(&self) -> i8 { $lv }
             fn burn_90(&$pself) -> bool { $burn90 }
             fn req_sign(&$pself) -> Vec<AddrOrPtr> { $reqsign.to_vec() } // request_need_sign_addresses

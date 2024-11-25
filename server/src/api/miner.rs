@@ -63,7 +63,7 @@ fn get_miner_pending_block_stuff(is_detail: bool, is_transaction: bool, is_stuff
     let mut tg_hash = stuff.target_hash.to_vec();
     right_00_to_ff(&mut tg_hash);
     let mut data = jsondata!{
-        "height", stuff.height.uint(),
+        "height", *stuff.height,
         "coinbase_nonce", hex_or_hase64!(stuff.coinbase_nonce),
         "block_intro", intro_data,
         "target_hash", hex_or_hase64!(tg_hash),
@@ -348,7 +348,7 @@ async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoR
             return true
         }
         let stf = &stf[0];
-        if stf.height.uint() <= lasthei {
+        if *stf.height <= lasthei {
             return true
         }
         // not need
@@ -397,7 +397,7 @@ async fn miner_success(State(ctx): State<ApiCtx>, q: Query<Q9347>) -> impl IntoR
             let mut res: Option<usize> = None;
             for i in 0..stf.len() {
                 let s = &stf[i];
-                if s.height.uint() == q.height {
+                if *s.height == q.height {
                     res = Some(i);
                     break
                 }

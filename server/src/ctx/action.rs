@@ -314,7 +314,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
 
         let action = SatoshiToTransfer::must(&act.serialize());
         let to_addr = action.to.real(adrs).unwrap().readable();
-        let amt_str = action.satoshi.uint();
+        let amt_str = *action.satoshi;
         resjsonobj = jsondata!{
             "from", main_addr,
             "to", to_addr,
@@ -331,7 +331,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
 
         let action = SatoshiFromTransfer::must(&act.serialize());
         let from_addr = action.from.real(adrs).unwrap().readable();
-        let amt_str = action.satoshi.uint();
+        let amt_str = *action.satoshi;
         resjsonobj = jsondata!{
             "from", from_addr,
             "to", main_addr,
@@ -349,7 +349,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
         let action = SatoshiFromToTransfer::must(&act.serialize());
         let from_addr = action.from.real(adrs).unwrap().readable();
         let to_addr = action.to.real(adrs).unwrap().readable();
-        let amt_str = action.satoshi.uint();
+        let amt_str = *action.satoshi;
         resjsonobj = jsondata!{
             "from", from_addr,
             "to", to_addr,
@@ -455,7 +455,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
         let miner = act.address.readable();
         resjsonobj = jsondata!{
             "name", name,
-            "number", act.number.uint(),
+            "number", *act.number,
             "miner", miner,
             "nonce", act.nonce.hex(),
             "prev_hash", act.prev_hash.hex(), // prev block hash
@@ -479,7 +479,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
             "diamond", dia_num,
             "diamonds", dia_names,
             "protocol_cost", cost_str,
-            "engraved_type", action.engraved_type.uint(),
+            "engraved_type", *action.engraved_type,
             "engraved_content", ins_str,
         };
         if ret_desc {
@@ -560,8 +560,8 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
     }else if kind == SubmitHeightLimit::KIND {
         
         let action = SubmitHeightLimit::must(&act.serialize());
-        let s_hei = action.start.uint();
-        let e_hei = action.end.uint();
+        let s_hei = *action.start;
+        let e_hei = *action.end;
         resjsonobj = jsondata!{
             "start_height", s_hei,
             "end_height", e_hei,
@@ -579,7 +579,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
     }else if kind == SubChainID::KIND {
         
         let action = SubChainID::must(&act.serialize());
-        let cid = action.chain_id.uint();
+        let cid = *action.chain_id;
         resjsonobj = jsondata!{
             "chain_id", cid,
         };

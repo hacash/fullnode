@@ -47,7 +47,7 @@ impl DiamondNameListMax200 {
 
     pub fn check(&self) -> Ret<u8> {
         // check len
-        let setlen = self.count.uint() as u64;
+        let setlen = *self.count as u64;
         let reallen = self.lists.len() as u64 ;
         if setlen != reallen {
             return errf!("check fail: length need {} but got {}", setlen, reallen)

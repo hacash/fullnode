@@ -64,7 +64,7 @@ pub fn sat_transfer(ctx: &mut dyn Context, addr_from: &Address, addr_to: &Addres
 
 
 pub fn sat_check(ctx: &mut dyn Context, addr: &Address, sat: &Satoshi) -> Ret<Satoshi> {
-    if 0 == sat.uint() {
+    if sat.uint() == 0 {
         return errf!("check satoshi is cannot empty")
     }
     let state = CoreState::wrap(ctx.state());

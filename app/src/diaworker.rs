@@ -436,7 +436,7 @@ fn push_diamond_mining_success(cnf: &DiaWorkConf, success: DiamondMint) {
             return // err
         }
         println!("Success submit tx diamond mint {} ({}) to mainnet, \n        get tx hash: {}\n", 
-            success.d.diamond.to_readable(), success.d.number.uint(), tx_hash
+            success.d.diamond.to_readable(), *success.d.number, tx_hash
         );
     });
 }

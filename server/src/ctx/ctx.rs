@@ -55,7 +55,7 @@ impl ApiCtx {
         }
         // read from disk
         let blkdts;
-        if height.uint() > 0 {
+        if *height > 0 {
             blkdts = store.block_data_by_height(&height).map(|(_,a)|a);
         }else{
             blkdts = store.block_data(&hash);

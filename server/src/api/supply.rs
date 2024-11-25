@@ -36,7 +36,7 @@ async fn supply(State(ctx): State<ApiCtx>, _q: Query<Q9364>) -> impl IntoRespons
         "trsbtc_subsidy", 0,
 
         "block_reward", z2m(blk_rwd),
-        "minted_diamond", lastdia.number.uint(),
+        "minted_diamond", *lastdia.number,
     };
     api_data(data)
 }

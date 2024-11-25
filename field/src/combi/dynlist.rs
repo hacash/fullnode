@@ -13,7 +13,7 @@ pub struct $class {
 
 impl std::fmt::Debug for $class {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f,"[dyn list {}]", self.count.uint())
+        write!(f,"[dyn list {}]", *self.count)
     }
 }
 
@@ -89,7 +89,7 @@ impl $class {
 	}
 
 	pub fn pop(&mut self) -> Option<Box<dyn $dynty>> {
-        let n = self.count.uint();
+        let n = *self.count;
         match n {
             0 => None,
             _ => {

@@ -26,23 +26,23 @@ async fn channel(State(ctx): State<ApiCtx>, q: Query<Q7542>) -> impl IntoRespons
     };
 
     // return data
-    let status = channel.status.uint();
+    let status = *channel.status;
     let mut data = jsondata!{
         "id", chid.to_hex(),
         "status", status,
-        "open_height", channel.open_height.uint(),
-        "reuse_version", channel.reuse_version.uint(),
-        "arbitration_lock", channel.arbitration_lock_block.uint(),
-        "interest_attribution", channel.interest_attribution.uint(),
+        "open_height", *channel.open_height,
+        "reuse_version", *channel.reuse_version,
+        "arbitration_lock", *channel.arbitration_lock_block,
+        "interest_attribution", *channel.interest_attribution,
         "left", json!(jsondata!{
             "address", channel.left_bill.address.readable(),
             "hacash", channel.left_bill.hacsat.amount.to_unit_string(&unit),
-            "satoshi", channel.left_bill.hacsat.satoshi.value().uint(),
+            "satoshi", *channel.left_bill.hacsat.satoshi.value(),
         }),
         "right", json!(jsondata!{
             "address", channel.right_bill.address.readable(),
             "hacash", channel.right_bill.hacsat.amount.to_unit_string(&unit),
-            "satoshi", channel.right_bill.hacsat.satoshi.value().uint(),
+            "satoshi", *channel.right_bill.hacsat.satoshi.value(),
         }),
     };
 
@@ -54,8 +54,8 @@ async fn channel(State(ctx): State<ApiCtx>, q: Query<Q7542>) -> impl IntoRespons
             false => channel.right_bill.address.readable(),
         };
         data.insert("challenging", json!(jsondata!{
-            "launch_height", challenging.challenge_launch_height.uint(),
-            "assert_bill_auto_number", challenging.assert_bill_auto_number.uint(),
+            "launch_height", *challenging.challenge_launch_height,
+            "assert_bill_auto_number", *challenging.assert_bill_auto_number,
             "assert_address_is_left_or_right", l_or_r,
             "assert_bill", json!(jsondata!{
                 "address", assaddr,

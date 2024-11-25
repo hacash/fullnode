@@ -30,8 +30,8 @@ async fn balance(State(ctx): State<ApiCtx>, q: Query<Q8364>) -> impl IntoRespons
         let bls = state.balance(&adr).unwrap_or_default();
         let mut resj = json!({
             "hacash": bls.hacash.to_unit_string(&unit),
-            "diamond": bls.diamond.uint(),
-            "satoshi": bls.satoshi.uint(),
+            "diamond": *bls.diamond,
+            "satoshi": *bls.satoshi,
         });
         // dianames
         if let Some(true) = q.diamonds {

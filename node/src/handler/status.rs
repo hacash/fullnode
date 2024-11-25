@@ -24,9 +24,9 @@ impl MsgHandler {
             return // is not a same network
         }
         // sync blocks first
-        let lat_hei = my_status.latest_height.uint();
-        if my_status.latest_height.uint() == 0 && status.latest_height.uint() > 0 {
-            let start_hei = lat_hei + 1;
+        let lat_hei = *my_status.latest_height;
+        if lat_hei == 0 && *status.latest_height > 0 {
+            let start_hei = 1; // first block
             get_status_try_sync_blocks(self, peer, start_hei).await;
             return
         }
