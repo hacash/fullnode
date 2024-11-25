@@ -20,7 +20,7 @@ include!{"config.rs"}
 pub mod action;
 
 
-include!{"check/init.rs"}
+include!{"check/initialize.rs"}
 include!{"check/coinbase.rs"}
 include!{"check/difficulty.rs"}
 include!{"check/consensus.rs"}

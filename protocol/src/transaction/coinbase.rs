@@ -91,20 +91,10 @@ impl TxExec for TransactionCoinbase {
     fn execute(&self, ctx: &mut dyn Context) -> Rerr {
         let addr = self.main();
         let amt = self.reward();
-
         operate::hac_add(ctx, &addr, amt)?;
         Ok(())
     }
 
-    /*
-    fn execute(&self, _: u64, sta: &mut dyn State) -> RetErr {
-        let mut state = CoreState::wrap(sta);
-        let rwdadr = self.address()?;
-        let amt = self.reward();
-        operate::hac_add(&mut state, &rwdadr, amt)?;
-        Ok(())
-    }
-    */
 }
 
 

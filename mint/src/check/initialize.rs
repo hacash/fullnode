@@ -12,9 +12,7 @@ fn do_initialize(db: &mut dyn State) -> Rerr {
     state.balance_set(&addr1, &bls2);
     state.balance_set(&addr2, &bls1);
     state.balance_set(&addr3, &bls1);
-
-    // let stateread = CoreStateDisk::wrap(db);
-
+    
     // ok
     Ok(())
 } 

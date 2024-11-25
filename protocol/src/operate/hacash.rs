@@ -32,7 +32,7 @@ macro_rules! amount_op_unsafe_func_define {
 
 amount_op_unsafe_func_define!{hac_sub_unsafe, hac, addr, amt, {
     if hac < *amt {
-        return errf!("address {} balance {} not enough, need {}", 
+        return errf!("address {} balance {} is insufficient, at least {}", 
             addr.readable(), hac, amt)
     }
     hac.sub_mode_u128(amt)?
@@ -70,7 +70,7 @@ pub fn hac_check(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> Ret<Amo
             return Ok(bls.hacash)
         }
     }
-    errf!("address {} balance not enough need {}", addr.readable(), amt )
+    errf!("address {} balance is insufficient, at least {}", addr.readable(), amt)
 }
 
 

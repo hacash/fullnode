@@ -61,12 +61,7 @@ impl TransactionRead for $class {
     
     // burn_90_percent_fee
     fn burn_90(&self) -> bool {
-        for act in self.actions() {
-            if act.burn_90() {
-                return true // burn
-            }
-        }
-        false // not
+        self.actions().iter().any(|a|a.burn_90())
     }
 
     fn fee_pay(&self) -> Amount {

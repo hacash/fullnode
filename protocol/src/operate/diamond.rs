@@ -30,7 +30,7 @@ diamond_operate_define!(hacd_add, addr, hacd, oldhacd, {
 diamond_operate_define!(hacd_sub, addr, hacd, oldhacd, {  
     // check
     if *oldhacd < *hacd {
-		return errf!("do hacd_sub error: address {} diamond {} not enough, need {}", 
+		return errf!("address {} diamond {} is insufficient, at least {}", 
             addr.readable(), oldhacd, hacd)
     }
     // do sub

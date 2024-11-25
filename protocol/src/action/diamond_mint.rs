@@ -19,7 +19,7 @@ combi_struct_field_more_than_condition!{ DiamondMintData, {
 */
 action_define!{ DiamondMint, 4, 
     ActLv::TOP_ONLY, // level
-    false, // burn 90 fee
+    *self.d.number > DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES, // burn 90 fee
     [], // need sign,
     {
         d: DiamondMintData
