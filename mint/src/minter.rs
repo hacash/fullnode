@@ -23,6 +23,10 @@ impl HacashMinter {
 
 impl Minter for HacashMinter {
 
+    fn config(&self) -> Box<dyn Any> {
+        Box::new(self.cnf.clone())
+    }
+
     fn init(&self, _: &IniObj) {
         // extend actions
         protocol::action::setup_extend_actions_try_create(empty_create);

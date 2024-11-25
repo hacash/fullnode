@@ -131,7 +131,7 @@ fn drain_all_block_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, txs: Vec<Hash>
         clean_invalid_diamond_mint_txs(eng, txpool, blkhei);
     }
     // drop invalid normal
-    if blkhei % 48 == 0 { // 4 hours
+    if blkhei % 24 == 0 { // 2 hours
         clean_invalid_normal_txs(eng, txpool, blkhei);
     }
 }

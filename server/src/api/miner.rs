@@ -200,6 +200,7 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
     let mut allfee = Amount::zero();
     let mut txallsz: usize = 80; // coinbase tx size
     let txallsz = &mut txallsz;
+    let mut invalidtxhxs = Vec::new();
 
     macro_rules! ok_push_one_tx {
         ($a: expr) => {
@@ -213,12 +214,15 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
         ($a: expr) => {
             let txr = $a.objc.as_ref().as_read();
             if let Err(..) = txr.verify_signature() {
+                invalidtxhxs.push(txr.hash());
                 return true // sign fail, ignore, next
             }
             if let Err(..) = engine.try_execute_tx(txr) {
+                invalidtxhxs.push(txr.hash());
                 return true // execute fail, ignore, next
             }
             let Ok(nf) = allfee.add_mode_u64(&$a.objc.fee_got()) else {
+                invalidtxhxs.push(txr.hash());
                 return true; // fee size err, ignore, next
             };
             allfee = nf;
@@ -252,6 +256,10 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
     };
     txpool.iter_at(&mut pick_normal_tx, TXPOOL_GROUP_NORMAL).unwrap();
 
+    // delete invalid txs
+    if invalidtxhxs.len() > 0 {
+        let _ = txpool.drain(&invalidtxhxs);
+    }
     // ok
 }
 

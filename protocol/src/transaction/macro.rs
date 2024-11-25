@@ -95,6 +95,12 @@ impl TransactionRead for $class {
         verify_tx_signature(self)
     }
     
+	fn fee_purity(&self) -> u64 {
+		let txsz = self.size() as u64;
+		let feeshuo = self.fee_got().to_shuo_unsafe() as u64;
+		feeshuo / txsz
+	}
+
 }
 
 

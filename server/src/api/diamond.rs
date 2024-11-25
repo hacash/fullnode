@@ -99,7 +99,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
         }
         // append
         let mut one = jsondata!{
-            // "purity", a.fee_purity(),
+            // "purity", a.fee purity(),
             "tx", txhx.hex(),
             "fee", txr.fee().to_unit_string(&unit),
             "bid", txr.main().readable(),

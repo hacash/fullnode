@@ -3,9 +3,9 @@
 impl TxGroup {
 
     fn insert(&mut self, txp: TxPkg) -> Rerr {
-        let feep = txp.fee_purity();
+        let feep = txp.fepr; // fee_purity
         if let Some((hid, hav)) = self.find(&txp.hash) {
-            if feep <= hav.fee_purity() {
+            if feep <= hav.fepr { // fee_purity
                 return errf!("tx already exists in tx pool and it's fee is higher")
             }
             // rm old
@@ -20,7 +20,7 @@ impl TxGroup {
         }
         if gnum >= self.maxsz {
             // tt's full, check the lowest fees
-            let lowfp = self.txpkgs.last().unwrap().fee_purity();
+            let lowfp = self.txpkgs.last().unwrap().fepr; // fee_purity
             if feep <= lowfp {
                 return errf!("tx pool is full and your tx fee is too low")
             }
@@ -46,7 +46,7 @@ impl TxGroup {
         let mut istx = usize::MAX;
         for i in rxl .. rxr {
             let ctx = &self.txpkgs[i];
-            if feep > ctx.fee_purity() {
+            if feep > ctx.fepr { // fee_purity
                 istx = i; // scan ok
                 break;
             }

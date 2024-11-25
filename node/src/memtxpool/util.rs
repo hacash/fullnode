@@ -10,7 +10,7 @@ fn scan_group_rng_by_feep(txpkgs: &Vec<TxPkg>, feep: u64, wsz: (usize, usize)) -
         }
         let fct = rxl + rng/2;
         let ct = &txpkgs[fct];
-        let cfp = ct.fee_purity();
+        let cfp = ct.fepr; // fee_purity
         if feep > cfp {
             rxr = fct; // in left
         } else if feep < cfp {
