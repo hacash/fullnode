@@ -53,7 +53,7 @@ combi_struct!{ DiamondSmelt,
 	bid_fee                   : Amount
 	nonce                     : Fixed8
 	// custom_message           : HashOptional
-	average_bid_burn          : Uint2
+	average_bid_burn          : Uint2 // unit: mei
 	life_gene                 : Hash
 }
 

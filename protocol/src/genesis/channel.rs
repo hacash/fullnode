@@ -1,11 +1,11 @@
 
+
 /****************  calculate ****************/
 
 
-pub fn calculate_interest(_user_distribute_amt: &Amount, _interest_calc_base_amt: &Amount, _caclloop: u64, _wfzn: u64) -> Ret<Amount> {
 
-    todo!()
-    /* 
+
+pub fn calculate_interest(user_distribute_amt: &Amount, interest_calc_base_amt: &Amount, caclloop: u64, wfzn: u64) -> Ret<Amount> {
     // check
     let uamt = user_distribute_amt;
     let bamt = interest_calc_base_amt;
@@ -32,12 +32,11 @@ pub fn calculate_interest(_user_distribute_amt: &Amount, _interest_calc_base_amt
         newunit += 1;
     }
     let realbest = Amount::from_unit_byte( newunit as u8, coinnum.to_bytes_be() )?;
-    let realbest = realbest.sub(bamt)?;
+    let realbest = realbest.sub_mode_u64(bamt)?;
     // println!("realest: {}", realbest.to_string());
-    let newuamt = realbest.add( uamt )?;
+    let newuamt = realbest.add_mode_u64( uamt )?;
     // ok
     return Ok(newuamt)
-    */
 } 
 
 
@@ -49,14 +48,10 @@ pub fn both_interest(distribute_type: Uint1, amtl: &Amount, amtr: &Amount, cacll
         return Ok((amt1, amt2))
     }
 
-    todo!()
-
-    /*
-
-    let ttamt = amtl.add(amtr)?;
+    let ttamt = amtl.add_mode_u64(amtr)?;
     let mut resamts = (amtl.clone(), amtr.clone());
     
-    if CHANNEL_INTEREST_ATTRIBUTION_Tsrc/difficulty/difficulty.rs src/difficulty/target.rsYPE_ALL_TO_LEFT == distribute_type{
+    if CHANNEL_INTEREST_ATTRIBUTION_TYPE_ALL_TO_LEFT == distribute_type{
         resamts.0 = calculate_interest(amtl, &ttamt, caclloop, wfzn)?;
     }
     if CHANNEL_INTEREST_ATTRIBUTION_TYPE_ALL_TO_RIGHT == distribute_type{
@@ -64,8 +59,8 @@ pub fn both_interest(distribute_type: Uint1, amtl: &Amount, amtr: &Amount, cacll
     }
     
     Ok(resamts)
-    */
 }
+
 
 pub fn calculate_interest_of_height(curblkhei: u64, chanopenblkhei: u64, distribute_type: Uint1, amtl: &Amount, amtr: &Amount)-> Ret<(Amount, Amount)> {
     if curblkhei < chanopenblkhei {
@@ -87,6 +82,7 @@ pub fn calculate_interest_of_height(curblkhei: u64, chanopenblkhei: u64, distrib
     // calculate_interest
     both_interest(distribute_type, amtl, amtr, caclloop, wfzn)
 }
+
 
 
 

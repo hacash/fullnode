@@ -57,6 +57,9 @@ macro_rules! action_define {
 
         impl ActExec for $class {
             fn execute(&$pself, $pctx: &mut dyn Context) -> Ret<(u32, Vec<u8>)> {
+                if !$pctx.env().chain.fast_sync {
+                    check_action_level($pctx.depth(), $pself, $pctx.tx().actions())?;
+                }
                 #[allow(unused_mut)] 
                 let mut $pgas: u32 = 0;
                 let _res: Ret<Vec<u8>> = $exec;
@@ -95,6 +98,48 @@ macro_rules! action_register {
         }
     };
 }
+
+
+
+// check action level
+fn check_action_level(depth: u8, act: &dyn Action, actions: &Vec<Box<dyn Action>>) -> Rerr {
+        if depth > 8 {
+            return errf!("action depth cannot over {}", 8)
+        }
+        let actlen = actions.len();
+        if actlen < 1 || actlen > 200 {
+            return errf!("one transaction max actions is 200")
+        }
+        let kid = act.kind();
+        let alv = act.level();
+        if alv == ActLv::TOP_ONLY {
+            if actlen > 1 {
+                return errf!("action {} just can execute on level {:?}", kid, alv)
+            }
+        } else if alv == ActLv::TOP_UNIQUE {
+            let mut smalv = 0;
+            for act in actions {
+                if act.kind() == kid {
+                    smalv += 1;
+                }
+            }
+            if smalv > 1 {
+                return errf!("action just can execute on level TOP_UNIQUE")
+            }
+        } else if alv == ActLv::TOP {
+            if depth > 1 {
+                return errf!("action just can execute on level TOP")
+            }
+        }
+        // ok
+        Ok(())
+}
+
+
+
+
+
+
 
 
 

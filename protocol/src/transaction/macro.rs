@@ -242,36 +242,37 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
     const _TXTY3: u8 = TransactionType3::TYPE;
     let env = ctx.env();
     let blkhei = env.block.height;
-    let mty = tx.ty();
+    let not_fast_sync = !env.chain.fast_sync;
     let hx = tx.hash();
     let main = tx.main();
     let fee = tx.fee();
-    // check BlockHeight more than 20w trs.Fee.Size() must less than 6 bytes.
-    if blkhei > 20_0000 && fee.size() > 2+4 {
-        return errf!("tx fee size cannot be more than 6 bytes when block height abover 200,000")
-    }
-    if blkhei > 33033 && mty <= TXTY1 { // last is 33019
-        return errf!("Type 1 transactions have been deprecated after height 33,033")
-    }
     let mut state = CoreState::wrap(ctx.state());
-    // check tx exist
-    let mut exiobj = state.tx_exist(&hx).unwrap_or_default();
-    let exhei = exiobj.uint();
-    if exhei > 0 { // have tx !!!
-        // handle hacash block chain bug start
-        let bugtx = Hash::from_hex(b"f22deb27dd2893397c2bc203ddc9bc9034e455fe630d8ee310e8b5ecc6dc5628");
-        if exhei != 63448 || hx != bugtx {
-            return errf!("tx {} already exist in height {}", hx, exhei)
+    // may fast_sync
+    if not_fast_sync {
+        // main check
+        if main.version() != Address::PRIVAKEY {
+            return errf!("tx fee address version must be PRIVAKEY type.")
         }
-        // pass the BUG
+        let mty = tx.ty();
+        // check BlockHeight more than 20w trs.Fee.Size() must less than 6 bytes.
+        if blkhei > 20_0000 && fee.size() > 2+4 {
+            return errf!("tx fee size cannot be more than 6 bytes when block height abover 200,000")
+        }
+        if blkhei > 33033 && mty <= TXTY1 { // last is 33019
+            return errf!("Type 1 transactions have been deprecated after height 33,033")
+        }
+        // check tx exist
+        if let Some(exhei) = state.tx_exist(&hx) { // have tx !!!
+            // handle hacash block chain bug start
+            let bugtx = Hash::from_hex(b"f22deb27dd2893397c2bc203ddc9bc9034e455fe630d8ee310e8b5ecc6dc5628");
+            if *exhei != 63448 || hx != bugtx {
+                return errf!("tx {} already exist in height {}", hx, *exhei)
+            }
+            // pass the BUG
+        }
     }
-    // save exist mark
-    exiobj = BlockHeight::from(blkhei);
-    state.tx_exist_set(&hx, &exiobj);
-    // sub fee
-    if main.version() != Address::PRIVAKEY {
-        return errf!("tx fee address version must be PRIVAKEY type.")
-    }
+    // set tx exist mark
+    state.tx_exist_set(&hx, &BlockHeight::from(blkhei));
     /*
     if mty <= TXTY3 {
         if self.ano_mark[0] != 0 {
@@ -285,6 +286,7 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
     }
     */
     // execute actions
+    ctx.depth_set(1); // set depth
     for action in tx.actions() {
         action.execute(ctx)?;
     }

@@ -120,7 +120,7 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     let tx_bid_fee = &env.tx.fee;
     // total count 
     let mut ttcount = state.get_total_count();
-    ttcount.minted_diamond += 1u64;
+    ttcount.minted_diamond += 1;
     if dianum > DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES {
         let mut sub = tx_bid_fee.clone();
         if sub.unit() > 1 {
