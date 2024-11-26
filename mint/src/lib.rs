@@ -19,6 +19,7 @@ include!{"config.rs"}
 
 
 pub mod action;
+pub mod hook;
 
 
 include!{"check/initialize.rs"}
