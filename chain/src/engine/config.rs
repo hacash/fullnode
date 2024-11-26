@@ -7,6 +7,7 @@
 pub struct EngineConf {
     pub max_block_txs: usize,
     pub max_block_size: usize,
+    pub max_tx_size: usize,
     pub chain_id: u32, // sub chain id
     pub unstable_block: u64, // The number of blocks that are likely to fall back from the fork
     pub fast_sync: bool,
@@ -17,6 +18,7 @@ pub struct EngineConf {
     pub diamond_form: bool,
     pub recent_blocks: bool,
     pub average_fee_purity: bool,
+    pub lowest_fee_purity: u64, 
     // HAC miner
     pub miner_enable: bool,
     pub miner_reward_address: Address,
@@ -39,6 +41,7 @@ impl EngineConf {
     
     pub fn new(ini: &IniObj, dbv: u32) -> EngineConf {
         
+
         // datadir
         let data_dir = get_data_dir(ini);
     
@@ -48,9 +51,13 @@ impl EngineConf {
         // server sec
         let sec_server = &ini_section(ini, "server");
 
+        // a simple hac trs size is 166 bytes
+        const LOWEST_FEE_PURITY: u64 = 10000_00000000 / 166; // 1:244
+
         let mut cnf = EngineConf{
             max_block_txs: 1000,
             max_block_size: 1024*1024*1, // 1MB
+            max_tx_size: 1024 * 16, // 16kb
             chain_id: 0,
             unstable_block: 4, // 4 block
             fast_sync: false,
@@ -61,6 +68,7 @@ impl EngineConf {
             diamond_form: ini_must_bool(sec_server, "diamond_form", true),
             recent_blocks: ini_must_bool(sec_server, "recent_blocks", false),
             average_fee_purity: ini_must_bool(sec_server, "average_fee_purity", false),
+            lowest_fee_purity: LOWEST_FEE_PURITY,
             // HA Cminer
             miner_enable: false,
             miner_reward_address: Address::default(),
@@ -73,6 +81,13 @@ impl EngineConf {
             dmer_bid_max:  Amount::small_mei(31),
             dmer_bid_step: Amount::small(5, 247),
         };
+        // setup lowest_fee
+        if ini_must(sec_server, "lowest_fee", "").len() > 0 {
+            let lfepr = ini_must_amount(sec_server, "lowest_fee").compress(2, true)
+                .unwrap().to_shuo_unsafe() as u64 / 166; // simple hac trs size
+            cnf.lowest_fee_purity = lfepr;
+            println!("[Config] Node accepted lowest fee purity {}.", lfepr);
+        }
 
         let sec = &ini_section(ini, "node");
         cnf.fast_sync = ini_must_bool(sec, "fast_sync", false);

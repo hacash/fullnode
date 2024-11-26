@@ -37,7 +37,7 @@ impl EngineRead for ChainEngine {
         let avgfs = self.avgfees.lock().unwrap();
         let al = avgfs.len();
         if al == 0 {
-            return DEFAULT_AVERAGE_FEE_PURITY
+            return self.cnf.lowest_fee_purity
         }
         let mut allfps = 0u64;
         for a in avgfs.iter() {

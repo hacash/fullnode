@@ -2,13 +2,14 @@
 
 #[allow(dead_code)]
 pub struct MemTxPool {
+    lowest_fepr: u64,
     group_size: Vec<usize>,
     groups: Vec<Mutex<TxGroup>>,
 }
 
 impl MemTxPool {
     
-    pub fn new(gs: Vec<usize>) -> MemTxPool {
+    pub fn new(lfepr: u64, gs: Vec<usize>) -> MemTxPool {
         const MS: usize = TXPOOL_GROUP_MAX_SIZE;
         if gs.len() != MS {
             panic!("new tx pool group size must be {}", MS)
@@ -18,6 +19,7 @@ impl MemTxPool {
             grps.push( Mutex::new( TxGroup::new(*sz)) );
         }
         MemTxPool {
+            lowest_fepr: lfepr,
             group_size: gs,
             groups: grps,
         }
@@ -47,6 +49,9 @@ impl TxPool for MemTxPool {
 
     // insert to target group
     fn insert_at(&self, txp: TxPkg, gi: usize) -> Rerr { 
+        if txp.fepr < self.lowest_fepr {
+            return errf!("tx fee purity {} too low to add txpool", txp.fepr)
+        }
         // let test_hex_show = txp.data.hex();
         check_group_id(gi)?;
         // do insert

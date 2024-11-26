@@ -38,17 +38,3 @@ impl HacashNode {
 
 
 
-
-/*
-
-
-        // test
-        for n in 0..256u8 {
-            let b = 100;
-            println!("{}<->{}: {}", b, n, super::p2p::calculate_one_byte_topology_distance(b, n));
-        }
-        panic!("{}", "test end");
-
-
-
-*/

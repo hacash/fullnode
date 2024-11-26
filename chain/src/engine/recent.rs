@@ -1,12 +1,6 @@
 
 
 
-// a simple hac trs size is 166 bytes
-pub const DEFAULT_AVERAGE_FEE_PURITY: u64 = 10000_00000000 / 166; 
-
-
-
-
 
 impl ChainEngine {
 
@@ -30,7 +24,7 @@ impl ChainEngine {
             juptxidx += 1; // jump diamond mint tx
         }
         // 10000_00000000u64 / 200; // 1w zhu / 200byte(1 trs)
-        let mut avgf = DEFAULT_AVERAGE_FEE_PURITY; 
+        let mut avgf = self.cnf.lowest_fee_purity; 
         if juptxidx < txnum {
             let mut allpry = 0;
             for i in juptxidx .. txnum {

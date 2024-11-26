@@ -14,6 +14,13 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
         return  // alreay know it
     }
     // println!("p2p recv new tx: {}, {}", txpkg.objc().hash().half(), hxfe.nonce());
+    // check fee purity
+    if txpkg.fepr < engcnf.lowest_fee_purity {
+        return // tx fee purity too low to broadcast
+    }
+    if txpkg.data.len() > engcnf.max_tx_size {
+        return // tx size overflow
+    }
     let txdatas = txpkg.data.clone();
     if engcnf.is_open_miner() {
         // try execute tx
@@ -31,6 +38,11 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
 
 
 async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec<u8>) {
+    let eng = this.engine.clone();
+    let engcnf = eng.config();
+    if body.len() > engcnf.max_block_size {
+        return // block size overflow
+    }
     // println!("222222222222 handle_txblock_arrive Block len={}",  body.clone().len());
     let mut blkhead = BlockIntro::default();
     if let Err(_) = blkhead.parse(&body) {
@@ -43,8 +55,6 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         return  // alreay know it
     }
     // check height and difficulty (mint consensus)
-    let eng = this.engine.clone();
-    let engcnf = eng.config();
     let is_open_miner = engcnf.is_open_miner();
     let heispan = engcnf.unstable_block;
     let latest = eng.latest_block();

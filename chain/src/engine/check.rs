@@ -55,9 +55,13 @@ impl ChainEngine {
             if txttnum >= 1 && txty == CBTY { // must not be coinbase
                 return errf!("tx({}) type cannot be coinbase", txttnum)  
             }
+            let txsz = tx.size();
+            if txsz > cnf.max_tx_size {
+                return errf!("tx size cannot more than {} bytes", cnf.max_tx_size);
+            }
             // size count
             txttnum += 1;
-            txttsize += tx.size();
+            txttsize += txsz;
             if txty == CBTY {
                 continue // igonre coinbase other check
             }
