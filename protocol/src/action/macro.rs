@@ -60,6 +60,9 @@ macro_rules! action_define {
                 if !$pctx.env().chain.fast_sync {
                     check_action_level($pctx.depth(), $pself, $pctx.tx().actions())?;
                 }
+                unsafe {
+                    ACTION_HOOK_FUNC($pself.kind(), $pself as &dyn Any, $pctx)?;
+                }
                 #[allow(unused_mut)] 
                 let mut $pgas: u32 = 0;
                 let _res: Ret<Vec<u8>> = $exec;

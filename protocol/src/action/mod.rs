@@ -1,3 +1,5 @@
+use std::any::*;
+
 use sys::*;
 use field::interface::*;
 use field::*;
@@ -9,7 +11,7 @@ use super::state::*;
 
 
 include!{"util.rs"}
-include!{"init.rs"}
+include!{"hook.rs"}
 include!{"macro.rs"}
 include!{"create.rs"}
 
