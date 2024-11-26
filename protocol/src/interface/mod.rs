@@ -8,9 +8,6 @@ use sys::*;
 use field::*;
 use field::interface::*;
 
-// use vm::*;
-use vm::interface::*;
-
 use super::*;
 use super::context::*;
 

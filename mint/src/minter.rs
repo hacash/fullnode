@@ -29,8 +29,8 @@ impl Minter for HacashMinter {
 
     fn init(&self, _: &IniObj) {
         // extend actions
-        protocol::action::setup_extend_actions_try_create(empty_try_create);
-        protocol::action::setup_action_hook(hook::empty_action_hook);
+        // protocol::action::setup_extend_actions_try_create(action::empty_try_create);
+        // protocol::action::setup_action_hook(hook::empty_action_hook);
     }
 
     fn next_difficulty(&self, prev: &dyn BlockRead, sto: &BlockDisk) -> u32 {
@@ -64,12 +64,3 @@ impl Minter for HacashMinter {
 
 
 }
-
-// 
-
-pub fn empty_try_create(_kind: u16, _buf: &[u8]) -> Ret<Option<(Box<dyn Action>, usize)>> {
-    Ok(None)
-}
-
-
-

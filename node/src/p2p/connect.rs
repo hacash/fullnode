@@ -64,7 +64,6 @@ impl P2PManage {
             let peerlist = self.publics();
             let (count, adrbts) = serialize_public_nodes(&peerlist, 100); // max 100
             let retbts = vec![vec![count as u8], adrbts].concat(); // + len
-            // println!("msg MSG_REQUEST_NEAREST_PUBLIC_NODES return {}", retbts.hex());
             let _ = AsyncWriteExt::write_all(conn, &retbts).await;
             return errf!("ok") // finish close
         }

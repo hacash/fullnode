@@ -17,6 +17,7 @@ impl Scaner for EmptyBlockScaner {}
 /*
 * fullnode main
 */ 
+#[allow(dead_code)]
 fn main() {
     fullnode()
 }

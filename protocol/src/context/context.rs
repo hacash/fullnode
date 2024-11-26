@@ -51,6 +51,5 @@ impl Context for ContextInst<'_> {
         isok.map(|_|())
     }
 
-    fn vm(&self) -> Arc<dyn VM> { unimplemented!() }
 }
 

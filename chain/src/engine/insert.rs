@@ -91,7 +91,7 @@ impl ChainEngine {
         let err = cherrcv.recv().unwrap();
         if err.len() > 0 {
             let e = sync_warning(err);
-            println!("{:?}", &e);
+            // println!("{:?}", &e);
             return e
         }
         // ok

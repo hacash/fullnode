@@ -50,7 +50,7 @@ async fn do_find_nodes(this: &P2PManage) {
     for p in peers {
         willdropeds.push(p.key.clone());
         if let Err(e) = request_public_nodes(p.addr, &mut allfindnodes).await {
-            println!("\n\ndo_find_nodes request_public_nodes Error: {}\n", e.to_string());
+            println!("request public nodes error: {}", e.to_string());
         }
     }
     if willdropeds.len() <= 1 {
@@ -87,9 +87,8 @@ async fn request_public_nodes(addr: SocketAddr, datas: &mut HashMap<PeerKey, Soc
     let adrbts = tcp_dial_handshake_send_msg_and_read_all(
         addr, MSG_REQUEST_NEAREST_PUBLIC_NODES, 5).await?;
     if adrbts.len() < 1 {
-        return errf!("data size error");
+        return errf!("data empty");
     }
-        // println!("msg MSG_REQUEST_NEAREST_PUBLIC_NODES get {}", adrbts.hex());
     let sn = 6+16; // ip port + key
     let num = adrbts[0] as usize;
     if num < 1 {

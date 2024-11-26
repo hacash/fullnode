@@ -7,7 +7,6 @@ edition = "2021"
 x16rs = {path = "./x16rs"}
 sys = {path = "./sys"}
 field = {path = "./field"}
-vm = {path = "./vm"}
 protocol = {path = "./protocol"}
 chain = {path = "./chain"}
 mint = {path = "./mint"}
