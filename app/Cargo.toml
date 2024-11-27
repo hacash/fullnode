@@ -14,5 +14,6 @@ serde_json = "1.0.133"
 reqwest = { version = "0.12.5", features = ["blocking"] }
 getrandom = "0.2.15"
 lazy_static = "1.4.0"
+ocl = "0.19.7"
 
 
