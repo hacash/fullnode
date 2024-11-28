@@ -57,7 +57,6 @@ include!{"component/status.rs"}
 include!{"component/total.rs"}
 include!{"component/diamond.rs"}
 include!{"component/channel.rs"}
-include!{"component/contract.rs"}
 
 
 
