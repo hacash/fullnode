@@ -17,25 +17,19 @@ impl ChainEngine {
     }
 
     fn record_avgfee(&self, block: &dyn BlockRead) {
-        let mut juptxidx = 1usize; // jump coinbase tx
+        let mut rfees = self.avgfees.lock().unwrap();
+        let mut avgf = self.cnf.lowest_fee_purity; 
         let txs = block.transactions();
         let txnum = txs.len();
-        if block.height().uint() % 5 == 0 {
-            juptxidx += 1; // jump diamond mint tx
-        }
-        // 10000_00000000u64 / 200; // 1w zhu / 200byte(1 trs)
-        let mut avgf = self.cnf.lowest_fee_purity; 
-        if juptxidx < txnum {
+        if txnum >= 30 {
+            let nmspx = txnum / 3;
             let mut allpry = 0;
-            for i in juptxidx .. txnum {
-                let tx = &txs[i];
-                let feeg = tx.fee_got().to_shuo_unsafe() as u64
-                    / tx.size() as u64;
-                allpry += feeg;
+            for i in nmspx .. nmspx*2 {
+                allpry += txs[i].fee_purity();
             }
-            avgf = allpry / (txnum - juptxidx) as u64;
+            avgf = allpry / nmspx as u64;
         }
-        let mut rfees = self.avgfees.lock().unwrap();
+        // record
         rfees.push_front(avgf);
         if rfees.len() > 8 { // record 8 block avg fee
             rfees.pop_back();
