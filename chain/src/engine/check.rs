@@ -65,6 +65,9 @@ impl ChainEngine {
             if txty == CBTY {
                 continue // igonre coinbase other check
             }
+            if tx.action_count().uint() as usize > cnf.max_tx_actions {
+                return errf!("tx action count cannot more than {}", cnf.max_tx_actions);
+            }
             // check time
             if tx.timestamp().uint() > cur_time {
                 return errf!("tx timestamp {} cannot more than now {}", tx.timestamp(), cur_time)

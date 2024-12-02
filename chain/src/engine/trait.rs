@@ -47,6 +47,23 @@ impl EngineRead for ChainEngine {
     } 
 
     fn try_execute_tx(&self, tx: &dyn TransactionRead) -> Rerr {
+        // check
+        let cnf = &self.cnf;
+        if tx.ty() == TransactionCoinbase::TYPE {
+            return errf!("cannot submit coinbase tx");
+        }
+        if tx.action_count().uint() as usize > cnf.max_tx_actions {
+            return errf!("tx action count cannot more than {}", cnf.max_tx_actions);
+        }
+        if tx.size() as usize > cnf.max_tx_size{
+            return errf!("tx size cannot more than {} bytes", cnf.max_tx_size);
+        }
+        // check time        
+        let cur_time = curtimes();
+        if tx.timestamp().uint() > cur_time {
+            return errf!("tx timestamp {} cannot more than now {}", tx.timestamp(), cur_time)
+        }
+
         let state = self.state();
         let sub_state = state.fork_sub(state.clone());
         let height = self.latest_block().height().uint() + 1; // next height

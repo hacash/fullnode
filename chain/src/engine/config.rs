@@ -8,6 +8,7 @@ pub struct EngineConf {
     pub max_block_txs: usize,
     pub max_block_size: usize,
     pub max_tx_size: usize,
+    pub max_tx_actions: usize,
     pub chain_id: u32, // sub chain id
     pub unstable_block: u64, // The number of blocks that are likely to fall back from the fork
     pub fast_sync: bool,
@@ -58,6 +59,7 @@ impl EngineConf {
             max_block_txs: 1000,
             max_block_size: 1024*1024*1, // 1MB
             max_tx_size: 1024 * 16, // 16kb
+            max_tx_actions: 200, // 200
             chain_id: 0,
             unstable_block: 4, // 4 block
             fast_sync: false,
