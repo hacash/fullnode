@@ -35,7 +35,7 @@ pub fn insert_to_roller(roller: &mut Roller, parent: Arc<Chunk>, mut chunk: Chun
         roller.curr = Arc::downgrade(&new_chunk); // update pointer
         mv_curr = Some(new_chunk.clone());
         // root
-        let new_root_hei = match new_hei > roller.unstable {
+        let new_root_hei = match new_hei > roller.unstable && root_hei < new_hei-roller.unstable {
             true => root_hei + 1,
             false => 0, // first height
         };

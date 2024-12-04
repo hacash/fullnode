@@ -24,10 +24,11 @@ impl BlockDisk {
         }
     }
 
-    
+    /*
     pub fn save_status(&self, stat: &ChainStatus) {
         self.disk.save(Self::CSK, &stat.serialize())
     }
+    */
 
     // save
 

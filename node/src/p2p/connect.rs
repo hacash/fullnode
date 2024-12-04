@@ -27,7 +27,7 @@ impl P2PManage {
     }
 
     pub async fn handle_conn(&self, mut conn: TcpStream, report_me: bool) -> Rerr {
-        tcp_check_handshake(&mut conn, 7).await?;
+        tcp_check_handshake(&mut conn, 5).await?;
         let mynodeinfo = self.pick_my_node_info();
         if report_me {
             // report my node info: mark+port+id+name

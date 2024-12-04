@@ -56,25 +56,29 @@ impl MsgHandler {
         if end_hei > lathei {
             return // not find target height block
         }
-        let dfhmax = self.engine.config().unstable_block as u64; 
+        let dfhmax = self.engine.config().unstable_block as u64 + 1; 
         if hash_num > dfhmax {
             hash_num = dfhmax;
         }
         let mut start_hei = end_hei - hash_num;
         if end_hei <= hash_num {
-            start_hei = 1; // first block
+            start_hei = 0; // first block
         }
+        // debug_println!("hash_len = {}, start_hei={}, end_hei={}, hash_num={}", hash_len, start_hei, end_hei, hash_num);
         // diff each blk hash
         let duskptr = self.engine.disk();
         let store = BlockDisk::wrap(duskptr);
         let mut hi = 0;
-        for hei in (start_hei..=end_hei).rev() {
+        for hei in ((start_hei+1)..=end_hei).rev() {
+            // println!("store.block_hash height = {}", hei);
             let myhx = store.block_hash(&BlockHeight::from(hei));
             if myhx.is_none() {
+                println!("not find block hash by height = {}", hei);
                 return // not find block hash by height
             }
             let myhx = myhx.unwrap();
             let hx = Fixed32::from( bufcut!(hashs, hi, hi+32) );
+            // debug_println!("hei={}, hx={}, myhx={}", hei, hx, myhx);
             if hx == myhx {
                 // sync blocks from next height
                 get_status_try_sync_blocks(self, peer, hei + 1).await;

@@ -45,13 +45,7 @@ impl Debug for Amount {
 
 impl Ord for Amount {
     fn cmp(&self, other: &Self) -> Ordering {
-        if self.equal(other) {
-            return Ordering::Equal
-        }
-        if self.greater(other) {
-            return Ordering::Greater
-        }
-        return Ordering::Less
+        self.cmp(other)
     }
 }
 
@@ -121,21 +115,21 @@ impl Amount {
     }
 
     pub fn is_zero(&self) -> bool {
-        self.unit == 0 || self.dist == 0
+        self.unit == 0 || self.dist == 0 || bytes_is_zero(&self.byte)
     }
 
     pub fn not_zero(&self) -> bool {
-        self.unit > 0 && self.dist != 0
+        !self.is_zero()
     }
 
     // check must be positive and cannot be zero
     pub fn is_positive(&self) -> bool {
-        self.unit > 0 && self.dist > 0
-    }   
+        self.unit > 0 && self.dist > 0 && bytes_not_zero(&self.byte)
+    }
 
     // check must be negative and cannot be zero
     pub fn is_negative(&self) -> bool {
-        self.unit > 0 && self.dist < 0
+        self.unit > 0 && self.dist < 0 && bytes_not_zero(&self.byte)
     }
     
 }
@@ -433,9 +427,10 @@ impl Amount {
 }
 
 
-macro_rules! greater_with {
+macro_rules! cmp_with {
     ($fn:ident, $ty:ty) => {
-        fn $fn(&self, src: &Amount) -> bool {
+        fn $fn(&self, src: &Amount) -> Ordering {
+            use Ordering::*;
             concat_idents!{ tail_u = tail_, $ty {
                 let mut tns1 = self.tail_u().unwrap().to_string();
                 let mut tns2 =  src.tail_u().unwrap().to_string();
@@ -447,9 +442,9 @@ macro_rules! greater_with {
             let rlunit1 = us1 + ts1;
             let rlunit2 = us2 + ts2;
             if rlunit1 > rlunit2 {
-                return true
+                return Greater
             } else if rlunit1 < rlunit2 {
-                return false
+                return Less
             }
             // byte width is same
             if us1 > us2 {
@@ -464,12 +459,12 @@ macro_rules! greater_with {
                 let a1 = tns1.as_bytes()[i];
                 let a2 = tns2.as_bytes()[i];
                 if a1 > a2 {
-                    return true // more
+                    return Greater // more
                 }else if a1 < a2 {
-                    return false // less
+                    return Less // less
                 }
             }
-            return false // all same
+            return Equal // all same
         }
         
     };
@@ -483,42 +478,45 @@ impl Amount {
         self.unit == src.unit &&
         self.dist == src.dist &&
         self.byte == src.byte
+        ||
+        self.is_zero() && src.is_zero()
     }
 
-    greater_with!{greater_mode_u128, u128}
-    greater_with!{greater_mode_u64,  u64}
+    cmp_with!{cmp_mode_u128, u128}
+    cmp_with!{cmp_mode_u64,  u64}
 
-    pub fn greater_mode_bigint(&self, src: &Amount) -> bool {
+    pub fn cmp_mode_bigint(&self, src: &Amount) -> Ordering {
         let db = self.to_bigint();
         let sb =  src.to_bigint();
-        db > sb
+        db.cmp(&sb)
     }
 
-    pub fn greater(&self, src: &Amount) -> bool {
+    pub fn cmp(&self, src: &Amount) -> Ordering {
+        use Ordering::*;
         if self.dist < 0 || src.dist < 0 {
             panic!("cannot compare between with negative")
         }
         if self.equal(src) {
-            return false // a == b
+            return Equal // a == b
         }
         let dzro = self.is_zero();
         let szro =  src.is_zero();
         if dzro && szro {
-            return false // both(0
+            return Equal // both(0
         } else if dzro {
-            return false // left(0) < right(+)
+            return Less // left(0) < right(+)
         } else if szro {
-            return true // left(+) > right(0)
+            return Greater // left(+) > right(0)
         }
         // U128 or U64
         let dtl = self.tail_len();
         let stl =  src.tail_len();
         if dtl <= U64S && stl <= U64S {
-            return self.greater_mode_u64(src)
+            return self.cmp_mode_u64(src)
         } else if dtl <= U128S && stl <= U128S {
-            return self.greater_mode_u128(src)
+            return self.cmp_mode_u128(src)
         }else {
-            return self.greater_mode_bigint(src)
+            return self.cmp_mode_bigint(src)
         }
         // UBIG
     }
@@ -606,6 +604,14 @@ macro_rules! rte_cneg {
     ($tip: expr) => {
         return Err(format!("amount {} cannot between negative", $tip));
     };
+}
+
+fn bytes_not_zero(v: &[u8]) -> bool {
+    v.iter().any(|a|*a>0)
+}
+
+fn bytes_is_zero(v: &[u8]) -> bool {
+    !bytes_not_zero(v)
 }
 
 fn add_left_padding(v: &Vec<u8>, n: usize) -> Vec<u8> {
@@ -858,7 +864,13 @@ mod amount_tests {
     fn test9() {
 
         let a1 = Amount::zero();
-        let a2 = Amount::from("0:0").unwrap();
+        let a2 = Amount{
+            unit: 0,
+            dist: 1,
+            byte: vec![0],
+        };
+
+        println!("bytes_not_zero  {} {} {}", bytes_not_zero(&[]), bytes_not_zero(&[0]), bytes_not_zero(&[0,0,0,0]));
 
         println!("a1 = {:?}, a2 = {:?}, a1 < a2 = {}", a1, a2, a1 < a2);
 

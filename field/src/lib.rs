@@ -53,7 +53,6 @@ include!{"core/status.rs"}
 
 // component
 include!{"component/balance.rs"}
-include!{"component/status.rs"}
 include!{"component/total.rs"}
 include!{"component/diamond.rs"}
 include!{"component/channel.rs"}

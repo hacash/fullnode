@@ -56,6 +56,6 @@ async fn send_req_block_msg(hdl: &MsgHandler, peer: Arc<Peer>, starthei: u64) {
 async fn send_req_block_hash_msg(peer: Arc<Peer>, num: u8, starthei: u64) {
     let hei = Uint8::from(starthei);
     let buf = vec![vec![num], hei.serialize()].concat();
-    let _ = peer.send_msg(MSG_REQ_BLOCK_HASH, buf).await;
-    // flush!("send_req_block_hash_msg {} {}...", peer.name(), starthei);
+    let _e = peer.send_msg(MSG_REQ_BLOCK_HASH, buf).await;
+    // flush!("send_req_block_hash_msg {} {}... {:?}", peer.name(), starthei, _e);
 }

@@ -23,6 +23,9 @@ fn diamond_inscription(this: &DiamondInscription, ctx: &mut dyn Context) -> Ret<
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
     let pcost = &this.protocol_cost;
+    if pcost.is_negative() {
+		return errf!("protocol cost cannot be negative")
+    }
     // check
     this.diamonds.check()?;
 	if pcost.size() > 4 {
@@ -53,7 +56,7 @@ fn diamond_inscription(this: &DiamondInscription, ctx: &mut dyn Context) -> Ret<
     }
 	// check cost
 	if pcost < &ttcost {
-		return errf!("diamond inscription cost error need {} but got {}", ttcost, pcost)
+		return errf!("diamond inscription cost error need {:?} but got {:?}", ttcost, pcost)
 	}
     // change count
     let mut ttcount = state.get_total_count();
@@ -95,6 +98,9 @@ fn diamond_inscription_clean(this: &DiamondInscriptionClear, ctx: &mut dyn Conte
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
     let pcost = &this.protocol_cost;
+    if pcost.is_negative() {
+		return errf!("protocol cost cannot be negative")
+    }
     // check
     this.diamonds.check()?;
 	if pcost.size() > 4 {
@@ -111,7 +117,7 @@ fn diamond_inscription_clean(this: &DiamondInscriptionClear, ctx: &mut dyn Conte
     }
 	// check cost
 	if pcost < &ttcost {
-		return errf!("diamond inscription cost error need {} but got {}", ttcost, pcost)
+		return errf!("diamond inscription cost error need {:?} but got {:?}", ttcost, pcost)
 	}
     // change count and sub hac
     if pcost.is_positive() {

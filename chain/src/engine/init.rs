@@ -15,7 +15,7 @@ fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>, is_state_upgrade: boo
     if 0 == rhein {
         return ret_gns_blk() // genesis block
     }
-    let Some((_, _, resblk)) = disk.block_by_height(&rhei) else {
+    let Some((_, _, resblk)) = disk.block_by_height(rhei) else {
         panic!("cannot load root block {}", rhein)
     };
     resblk.into()

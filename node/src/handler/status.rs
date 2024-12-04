@@ -24,19 +24,22 @@ impl MsgHandler {
             return // is not a same network
         }
         // sync blocks first
-        let lat_hei = *my_status.latest_height;
-        if lat_hei == 0 && *status.latest_height > 0 {
+        let tar_hei = *status.latest_height;
+        let my_hei = *my_status.latest_height;
+        // println!(">>> receive_status_from_peer peer={} my height={} tar height={}", peer.nick(), my_hei, tar_hei);
+        if my_hei == 0 && tar_hei > 0 {
             let start_hei = 1; // first block
             get_status_try_sync_blocks(self, peer, start_hei).await;
             return
         }
         // check hash fork and sync new blocks
-        if my_status.latest_height < status.latest_height {
+        if my_hei < tar_hei {
             let mut ubh = self.engine.config().unstable_block;
             if ubh > 255 {
                 ubh = 255
             }
-            let diff_hei = lat_hei;
+            let diff_hei = my_hei;
+            // println!(">>> send_req_block_hash_msg ubh={} diff_hei = {}", ubh, diff_hei);
             send_req_block_hash_msg(peer, ubh as u8, diff_hei).await;
             return
         }

@@ -13,7 +13,7 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
     if already {
         return  // alreay know it
     }
-    // println!("p2p recv new tx: {}, {}", txpkg.objc().hash().half(), hxfe.nonce());
+    // println!("p2p recv new tx: {}, {}", txpkg.objc.hash().half(), hxfe.nonce());
     // check fee purity
     if txpkg.fepr < engcnf.lowest_fee_purity {
         return // tx fee purity too low to broadcast
