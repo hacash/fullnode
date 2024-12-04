@@ -109,7 +109,7 @@ impl ChainEngine {
             },
             None => self.roller.lock().unwrap().root.height
         };
-        let mut block_disk_batch = leveldb::Writebatch::new();
+        let mut block_disk_batch = Writebatch::new();
         if let Some(curr) = cptr {
             block_disk_batch.put(&BlockDisk::CSK, &ChainStatus{
                 root_height: BlockHeight::from(new_root_hei),
@@ -119,7 +119,7 @@ impl ChainEngine {
         // save block data to disk
         block_disk_batch.put(hx.as_ref(), &data);
         // write all data by batch
-        self.blockdisk.save_batch(&block_disk_batch);
+        self.blockdisk.save_batch(block_disk_batch);
         Ok(())
     }
 
@@ -173,7 +173,7 @@ impl ChainEngine {
         let chunk = Chunk::create(objc.into(), sub_state.into());
         // insert chunk
         let (root, curr, path) = self.roller.lock().unwrap().insert(prev_chunk, chunk)?;
-        self.blockdisk.save_batch(&path);
+        self.blockdisk.save_batch(path);
         Ok((root, curr, data))
     }
 

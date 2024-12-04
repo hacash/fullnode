@@ -53,7 +53,7 @@ impl P2PManage {
                 else => break
             }
         }
-        // println!("[P2P] event loop end.");
+        println!("[P2P] Event loop end.");
         // close all peer
         this.disconnect_all_peers().await;
         Ok(())

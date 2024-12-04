@@ -3,7 +3,6 @@
 use sys::*;
 
 include!("config.rs");
-include!("util.rs");
 
 
 #[macro_use]

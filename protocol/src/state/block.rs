@@ -43,12 +43,12 @@ impl BlockDisk {
     }
 
     
-    pub fn save_block_hash_path(&self, paths: &leveldb::Writebatch) {
+    pub fn save_block_hash_path(&self, paths: Writebatch) {
         self.disk.save_batch(paths)
     }
 
     
-    pub fn save_batch(&self, batch: &leveldb::Writebatch) {
+    pub fn save_batch(&self, batch: Writebatch) {
         self.disk.save_batch(batch)
     }
 

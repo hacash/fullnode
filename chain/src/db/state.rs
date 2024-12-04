@@ -38,14 +38,14 @@ impl State for StateInst {
     
     fn write_to_disk(&self) {
         // debug_println!("write_to_disk !!!!!!");
-        let mut batch = leveldb::Writebatch::new();
+        let mut batch = sys::Writebatch::new();
         for (k, v) in self.mem.memry.iter() {
             match v {
                 MemItem::Delete => batch.delete(k),
                 MemItem::Value(v) => batch.put(k, &v),
             };
         }
-        self.disk.ldb.write(&batch); // must
+        self.disk.save_batch(batch); // must
     }
 
     

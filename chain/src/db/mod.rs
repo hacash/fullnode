@@ -8,7 +8,7 @@ use protocol::interface::*;
 
 
 include!{"memkv.rs"}
-include!{"disk.rs"}
+include!{"disk_leveldb_sys.rs"}
 include!{"state.rs"}
 
 

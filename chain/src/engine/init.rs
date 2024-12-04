@@ -67,7 +67,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
     }
     // finish tip
     if is_all_rebuild {
-        flush!("\r{:10} ({:.2}%)", next_height, 100.0);
+        flush!("\r{:10} ({:.2}%)", next_height-1, 100.0);
     }else{
         println!(" ok.");
     }

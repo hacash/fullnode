@@ -30,7 +30,7 @@ impl DiskDB for DiskKV {
     }
 
     
-    fn save_batch(&self, batch: &leveldb::Writebatch) {
+    fn save_batch(&self, batch: sys::Writebatch) {
         self.ldb.write(&batch); // must
     }
 }

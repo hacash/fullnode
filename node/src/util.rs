@@ -21,9 +21,15 @@ pub async fn new_ticker_at(inst: u64, dura: u64) -> Interval {
     intv
 }
 
+pub fn new_tokio_rt(is_multi_thread: bool) -> tokio::runtime::Runtime {
+    use tokio::runtime::Builder;
+    match is_multi_thread {
+        true => Builder::new_multi_thread(),
+        false => Builder::new_current_thread(),
+    }.enable_time().enable_io().build().unwrap()
+}
+
+
 pub fn new_current_thread_tokio_rt() -> tokio::runtime::Runtime {
-    let rt = tokio::runtime::Builder::new_current_thread()
-    .enable_time().enable_io()
-    .build().unwrap();
-    rt
+    new_tokio_rt(false) // current_thread
 }
