@@ -150,6 +150,9 @@ macro_rules! ret_amtfmte {
 macro_rules! coin_with {
     ($fn:ident, $ty:ty) => {
         fn $fn(mut v: $ty, mut u: u8) -> Amount {
+            if v == 0 || u == 0 {
+                return Self::zero()
+            }
             while v % 10 == 0 {
                 if u == 255 {
                     break // unit max
@@ -158,7 +161,7 @@ macro_rules! coin_with {
                 u += 1;
             }
             let bts = drop_left_zero(&v.to_be_bytes());
-            Self{
+            Self {
                 unit: u,
                 dist: bts.len() as i8,
                 byte: bts
@@ -847,6 +850,17 @@ mod amount_tests {
         }
         println!("{}  {}", aa, now.elapsed().as_secs_f32());
 
+
+    }
+
+
+    #[test]
+    fn test9() {
+
+        let a1 = Amount::zero();
+        let a2 = Amount::from("0:0").unwrap();
+
+        println!("a1 = {:?}, a2 = {:?}, a1 < a2 = {}", a1, a2, a1 < a2);
 
     }
 

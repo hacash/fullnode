@@ -16,5 +16,6 @@ include!{"context.rs"}
 include!{"action.rs"}
 include!{"transaction.rs"}
 include!{"block.rs"}
+include!{"vm.rs"}
 
 

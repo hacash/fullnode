@@ -9,5 +9,7 @@ pub trait Context {
     fn depth_add(&mut self) { unimplemented!() }
     fn depth_sub(&mut self) { unimplemented!() }
     fn tx(&self) -> &dyn TransactionRead { unimplemented!() }
+    fn vm(&mut self) -> &mut dyn VMI { unimplemented!() }
+    fn vm_set(&mut self, _: Box<dyn VMI>) -> Box<dyn VMI> { unimplemented!() }
 }
 

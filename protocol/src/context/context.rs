@@ -1,10 +1,15 @@
 
+pub struct VMEmpty {}
+impl VMI for VMEmpty {}
 
-
+/*
+*/
 pub struct ContextInst<'a> {
     pub env: Env,
     pub depth: u8,
     pub txr: &'a dyn TransactionRead,
+
+    pub vmi: Box<dyn VMI>,
 
     sta: Box<dyn State>,
     check_sign_cache: HashMap<Address, Ret<bool>>,
@@ -16,6 +21,7 @@ impl ContextInst<'_> {
         ContextInst{ env, sta, txr,
             depth: 0,
             check_sign_cache: HashMap::new(),
+            vmi: Box::new(VMEmpty{}),
         }
     }
 
@@ -36,6 +42,11 @@ impl Context for ContextInst<'_> {
     fn depth_sub(&mut self) { self.depth -= 1 }
 
     fn tx(&self) -> &dyn TransactionRead { self.txr }
+
+    fn vm(&mut self) -> &mut dyn VMI { self.vmi.as_mut() }
+    fn vm_set(&mut self, vm: Box<dyn VMI>) -> Box<dyn VMI> {
+        std::mem::replace(&mut self.vmi, vm)
+    }
     
     fn addr(&self, ptr :&AddrOrPtr) -> Ret<Address> {
         ptr.real(&self.env.tx.addrs)
