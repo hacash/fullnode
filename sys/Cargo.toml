@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-x16rs = {path = "../x16rs"}
+x16rs = { path = "../x16rs" }
 hex = "0.4.3"
 base64 = "0.22.1"
 chrono = "0.4.38"

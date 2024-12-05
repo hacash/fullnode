@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sys = {path = "../sys"}
-field = {path = "../field"}
-protocol = {path = "../protocol"}
-chain = {path = "../chain"}
-mint = {path = "../mint"}
-node = {path = "../node"}
+sys = { path = "../sys" }
+field = { path = "../field" }
+protocol = { path = "../protocol" }
+chain = { path = "../chain" }
+mint = { path = "../mint" }
+node = { path = "../node" }
 hex = "0.4.3"
 axum = "0.7.9"
 tokio = "1.41.1"

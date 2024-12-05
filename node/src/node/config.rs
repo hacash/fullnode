@@ -9,6 +9,8 @@ pub struct NodeConf {
     pub boot_nodes: Vec<SocketAddr>,
     pub offshoot_peers: usize, // private IP
     pub backbone_peers: usize, // public IP
+    
+    pub multi_thread: bool,
 
     pub txpool_maxs: Vec<usize>,
 
@@ -60,6 +62,7 @@ impl NodeConf {
             // connect peers
             offshoot_peers: 200,
             backbone_peers: 4,
+            multi_thread:  ini_must_bool(sec, "multi_thread", false),
             txpool_maxs: Vec::default(),
         };
 

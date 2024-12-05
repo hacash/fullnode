@@ -4,15 +4,16 @@ version = "0.2.0"
 edition = "2021"
 
 [dependencies]
-x16rs = {path = "./x16rs"}
-sys = {path = "./sys"}
-field = {path = "./field"}
-protocol = {path = "./protocol"}
-chain = {path = "./chain"}
-mint = {path = "./mint"}
-node = {path = "./node"}
-server = {path = "./server"}
-app = {path = "./app"}
+x16rs = { path = "./x16rs" }
+sys = { path = "./sys" }
+field = { path = "./field" }
+protocol = { path = "./protocol" }
+chain = { path = "./chain" }
+mint = { path = "./mint" }
+node = { path = "./node" }
+# node = { path = "./node", features = ["multi-thread"] }
+server = { path = "./server" }
+app = { path = "./app" }
 ctrlc = "3.4.5"
 
 
