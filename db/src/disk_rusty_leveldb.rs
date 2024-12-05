@@ -1,4 +1,7 @@
 
+include!{"batch_rusty_leveldb.rs"} 
+
+
 
 pub struct DiskKV {
     ldb: Mutex<rusty_leveldb::DB>,
@@ -37,7 +40,7 @@ impl DiskDB for DiskKV {
     }
 
     #[inline(always)]
-    fn save_batch(&self, batch: sys::Writebatch) {
+    fn save_batch(&self, batch: Writebatch) {
         let mut ldb =  self.ldb.lock().unwrap();
         ldb.write(batch.deref(), true).unwrap(); // must
         ldb.flush().unwrap();

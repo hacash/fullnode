@@ -1,13 +1,20 @@
 
+include!{"leveldb/mod.rs"}
+include!{"batch_leveldb_sys.rs"}
+
+
+/************************/
+
+
 pub struct DiskKV {
-    ldb: leveldb::LevelDB,
+    ldb: LevelDB,
 }
 
 
 impl DiskKV {
 
     pub fn open(dir: &Path) -> DiskKV {
-        Self { ldb: leveldb::LevelDB::open(dir) }
+        Self { ldb: LevelDB::open(dir) }
     }
 }
 
@@ -30,7 +37,7 @@ impl DiskDB for DiskKV {
     }
 
     
-    fn save_batch(&self, batch: sys::Writebatch) {
+    fn save_batch(&self, batch: Writebatch) {
         self.ldb.write(&batch); // must
     }
 }

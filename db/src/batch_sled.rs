@@ -2,8 +2,6 @@
 use sled::Batch;
 
 
-
-
 pub struct Writebatch {
     obj: Batch
 }

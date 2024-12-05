@@ -38,7 +38,7 @@ impl State for StateInst {
     
     fn write_to_disk(&self) {
         // debug_println!("write_to_disk !!!!!!");
-        let mut batch = sys::Writebatch::new();
+        let mut batch = Writebatch::new();
         for (k, v) in self.mem.memry.iter() {
             match v {
                 MemItem::Delete => batch.delete(k),

@@ -18,7 +18,6 @@ impl Display for MemItem {
 
 
 pub struct MemKV {
-    // batch: leveldb::Writebatch,
     memry: HashMap<Vec<u8>, MemItem>
 }
 
@@ -26,7 +25,6 @@ impl MemKV {
 
     pub fn new() -> MemKV {
         Self {
-            // batch: leveldb::Writebatch::new(),
             memry: HashMap::default()
         }
     }

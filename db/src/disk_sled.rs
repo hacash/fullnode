@@ -1,5 +1,8 @@
 
 
+include!{"batch_sled.rs"}
+
+
 pub struct DiskKV {
     ldb: sled::Db,
 }
@@ -33,7 +36,7 @@ impl DiskDB for DiskKV {
     }
 
     #[inline(always)]
-    fn save_batch(&self, batch: sys::Writebatch) {
+    fn save_batch(&self, batch: Writebatch) {
         self.ldb.apply_batch(batch.deref()).unwrap(); // must
         self.ldb.flush().unwrap();
     }

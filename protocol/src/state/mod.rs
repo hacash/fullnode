@@ -2,6 +2,8 @@
 
 use concat_idents::concat_idents; 
 
+use db::*;
+
 use field::*;
 use field::interface::*;
 

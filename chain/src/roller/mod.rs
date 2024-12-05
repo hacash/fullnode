@@ -1,6 +1,7 @@
 use std::sync::*;
 
 use sys::*;
+use db::*;
 use field::*;
 // use field::interface::*;
 use protocol::interface::*;

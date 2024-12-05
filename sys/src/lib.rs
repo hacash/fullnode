@@ -6,8 +6,6 @@ use std::collections::HashMap;
 
 pub type Error = String;
 
-pub mod leveldb;
-include!{"batch_leveldb_sys.rs"}
 
 include!{"panic.rs"}
 include!{"stdout.rs"}

@@ -6,6 +6,7 @@ use std::path::*;
 use debug_print::*;
 
 use sys::*;
+use db::*;
 use field::*;
 use field::interface::*;
 use protocol::interface::*;
@@ -14,7 +15,7 @@ use protocol::state::*;
 use protocol::context as ctx;
 
 use super::roller::*;
-use super::db::*;
+use super::state::*;
 use super::interface::*;
 
 

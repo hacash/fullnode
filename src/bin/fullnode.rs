@@ -79,7 +79,7 @@ pub fn fullnode_with_minter_scaner(iniobj: IniObj,
     engine.exit(); // wait something
 
     // all exit
-    println!("[Exit] Hacash blockchain and P2P node have been closed.");
+    println!("\n[Exit] Hacash blockchain and P2P node have been closed.");
 
 }
 
