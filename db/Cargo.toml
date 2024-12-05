@@ -10,6 +10,7 @@ libc = { version = "0.2.4", optional = true }
 leveldb-sys = { version = "2.0.9", optional = true }
 
 [features]
+default = ["db-sled"]
 db-sled = ["sled"]
 db-rusty-leveldb = ["rusty-leveldb"]
 db-leveldb-sys = ["libc", "leveldb-sys"]

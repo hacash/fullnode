@@ -20,8 +20,14 @@ impl HacashNode {
         });
 
         // start p2p loop, blocking
-        println!("[P2P] Start and listening on {}.", this.cnf.listen);
-        let _ = new_tokio_rt(true).block_on(async{
+        
+        let is_multi_thread = this.cnf.multi_thread;
+        let mut imtip = ".";
+        if is_multi_thread {
+            imtip = " with multi thread."
+        }
+        println!("[P2P] Start and listening on {}{}", this.cnf.listen, imtip);
+        let _ = new_tokio_rt(is_multi_thread).block_on(async{
             P2PManage::start(p2p).await
         });
     }
