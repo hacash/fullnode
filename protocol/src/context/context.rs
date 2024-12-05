@@ -15,6 +15,7 @@ pub struct ContextInst<'a> {
     check_sign_cache: HashMap<Address, Ret<bool>>,
 }
 
+
 impl ContextInst<'_> {
 
     pub fn new<'a>(env: Env, sta: Box<dyn State>, txr: &'a dyn TransactionRead) -> ContextInst<'a> {
@@ -35,6 +36,9 @@ impl Context for ContextInst<'_> {
     fn env(&self) -> &Env { &self.env}
 
     fn state(&mut self) -> &mut dyn State { self.sta.as_mut() }
+    fn state_replace(&mut self, sta: Box<dyn State>) -> Box<dyn State> {
+        std::mem::replace(&mut self.sta, sta)
+    }
 
     fn depth(&self) -> u8 { self.depth }
     fn depth_set(&mut self, d: u8) { self.depth = d }
@@ -44,7 +48,7 @@ impl Context for ContextInst<'_> {
     fn tx(&self) -> &dyn TransactionRead { self.txr }
 
     fn vm(&mut self) -> &mut dyn VMI { self.vmi.as_mut() }
-    fn vm_set(&mut self, vm: Box<dyn VMI>) -> Box<dyn VMI> {
+    fn vm_replace(&mut self, vm: Box<dyn VMI>) -> Box<dyn VMI> {
         std::mem::replace(&mut self.vmi, vm)
     }
     
@@ -61,6 +65,23 @@ impl Context for ContextInst<'_> {
         self.check_sign_cache.insert(*adr, isok.clone());
         isok.map(|_|())
     }
+
+    fn action_call(&mut self, k: u16, b: Vec<u8>) -> Ret<(i64, Vec<u8>)> {
+        ctx_action_call(self, k, b)
+    }
+
+    fn fork_sub(&mut self) -> Box<dyn State> {
+        ctx_state_fork_sub(self)
+    }
+
+    fn swap_sub(&mut self, sta: Box<dyn State>) -> Box<dyn State> {
+        ctx_state_swap_sub(self, sta)
+    }
+
+    fn merge_sub(&mut self, old: Box<dyn State>){
+        ctx_state_merge_sub(self, old)
+    }
+
 
 }
 

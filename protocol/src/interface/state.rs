@@ -1,8 +1,10 @@
 
 
 pub trait State : Send + Sync {
-    // fn build(_: Arc<dyn DiskDB>, _: Weak<dyn State>) -> Self where Self: Sized { unimplemented!() }
-    fn fork_sub(&self, _: Arc<dyn State>) -> Box<dyn State>  { unimplemented!() }
+    fn fork_sub(&self, _: Arc<dyn State>) -> Box<dyn State> { unimplemented!() }
+    fn merge_sub(&mut self, _: Box<dyn State>) { unimplemented!() }
+    fn to_mem(&self) -> MemMap { unimplemented!() }
+
     // fn set_parent(&mut self, _: Arc<dyn State>) { unimplemented!() }
     fn disk(&self) -> Arc<dyn DiskDB> { unimplemented!() }
     fn write_to_disk(&self) { unimplemented!() }

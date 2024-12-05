@@ -11,7 +11,7 @@ field::combi_struct!{ $class,
     timestamp  : Timestamp
     addrlist   : AddrOrList
     fee        : Amount
-    actions    : DynListAction
+    actions    : DynListActionW2
     signs      : SignListW2
     gas_max    : Uint1
     ano_mark   : Fixed1
@@ -158,7 +158,7 @@ impl $class {
             timestamp: Timestamp::from(curtimes()),
             addrlist: AddrOrList::from_addr(addr),
             fee: fee,
-            actions: DynListAction::default(),
+            actions: DynListActionW2::default(),
             signs: SignListW2::default(),
             gas_max : Uint1::default(),
             ano_mark: Fixed1::default(),

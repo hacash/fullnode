@@ -105,7 +105,7 @@ macro_rules! action_register {
 
 
 // check action level
-fn check_action_level(depth: u8, act: &dyn Action, actions: &Vec<Box<dyn Action>>) -> Rerr {
+pub fn check_action_level(depth: u8, act: &dyn Action, actions: &Vec<Box<dyn Action>>) -> Rerr {
         if depth > 8 {
             return errf!("action depth cannot over {}", 8)
         }

@@ -50,6 +50,7 @@ include!{"core/amount.rs"}
 include!{"core/diamond.rs"}
 include!{"core/sign.rs"}
 include!{"core/status.rs"}
+include!{"core/state.rs"}
 
 // component
 include!{"component/balance.rs"}

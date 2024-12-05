@@ -35,14 +35,23 @@ impl State for StateInst {
         })
     }
 
+    fn merge_sub(&mut self, sta: Box<dyn State>) {
+        self.mem.memry.extend(sta.to_mem())
+    }
+
+    fn to_mem(&self) -> MemMap {
+        self.mem.memry.clone()
+    }
+
+    
     
     fn write_to_disk(&self) {
         // debug_println!("write_to_disk !!!!!!");
         let mut batch = Writebatch::new();
         for (k, v) in self.mem.memry.iter() {
             match v {
-                MemItem::Delete => batch.delete(k),
-                MemItem::Value(v) => batch.put(k, &v),
+                None => batch.delete(k),
+                Some(v) => batch.put(k, &v),
             };
         }
         self.disk.save_batch(batch); // must
@@ -52,10 +61,7 @@ impl State for StateInst {
     fn get(&self, k: Vec<u8>) -> Option<Vec<u8>> {
         // search memory db
         if let Some(v) = self.mem.get(&k) {
-            return match v {
-                MemItem::Delete => None, // be delete by mark
-                MemItem::Value(v) => Some(v), // yes be put in
-            }
+            return v
         }
         // search parent
         if let Some(parent) = self.parent.upgrade() {
