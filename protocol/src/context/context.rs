@@ -6,7 +6,7 @@ impl VMI for VMEmpty {}
 */
 pub struct ContextInst<'a> {
     pub env: Env,
-    pub depth: u8,
+    pub depth: i8,
     pub txr: &'a dyn TransactionRead,
 
     pub vmi: Box<dyn VMI>,
@@ -40,8 +40,8 @@ impl Context for ContextInst<'_> {
         std::mem::replace(&mut self.sta, sta)
     }
 
-    fn depth(&self) -> u8 { self.depth }
-    fn depth_set(&mut self, d: u8) { self.depth = d }
+    fn depth(&self) -> i8 { self.depth }
+    fn depth_set(&mut self, d: i8) { self.depth = d }
     fn depth_add(&mut self) { self.depth += 1 }
     fn depth_sub(&mut self) { self.depth -= 1 }
 

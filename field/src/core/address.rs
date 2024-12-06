@@ -19,6 +19,17 @@ impl Address {
             false => errf!("address {} is not PRIVAKEY type", self.readable())
         }
     }
+    
+    pub fn is_contract(&self) -> bool {
+        self.version() == Self::CONTRACT
+    }
+
+    pub fn must_contract(&self) -> Rerr {
+        match self.version() == Self::CONTRACT {
+            true => Ok(()),
+            false => errf!("address {} is not CONTRACT type", self.readable())
+        }
+    }
 
     pub fn version(&self) -> u8 {
         self[0]

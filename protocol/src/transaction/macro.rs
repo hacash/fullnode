@@ -287,8 +287,8 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
     }
     */
     // execute actions
-    ctx.depth_set(1); // set depth
     for action in tx.actions() {
+        ctx.depth_set(-1); // set depth
         action.execute(ctx)?;
     }
     // spend fee

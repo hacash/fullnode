@@ -5,8 +5,8 @@ pub trait Context {
     fn state(&mut self) -> &mut dyn State { unimplemented!() }
     fn state_replace(&mut self, _: Box<dyn State>) -> Box<dyn State> { unimplemented!() }
     fn check_sign(&mut self, _: &Address) -> Rerr { unimplemented!() }
-    fn depth(&self) -> u8 { unimplemented!() }
-    fn depth_set(&mut self, _: u8) { unimplemented!() }
+    fn depth(&self) -> i8 { unimplemented!() }
+    fn depth_set(&mut self, _: i8) { unimplemented!() }
     fn depth_add(&mut self) { unimplemented!() }
     fn depth_sub(&mut self) { unimplemented!() }
     fn tx(&self) -> &dyn TransactionRead { unimplemented!() }

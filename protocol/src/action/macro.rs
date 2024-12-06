@@ -64,7 +64,7 @@ macro_rules! action_define {
                     ACTION_HOOK_FUNC($pself.kind(), $pself as &dyn Any, $pctx)?;
                 }
                 #[allow(unused_mut)] 
-                let mut $pgas: u32 = 0;
+                let mut $pgas: u32 = $pself.size() as u32; // act size is base gas use
                 let _res: Ret<Vec<u8>> = $exec;
                 Ok(($pgas, _res?))
             }
@@ -105,7 +105,7 @@ macro_rules! action_register {
 
 
 // check action level
-pub fn check_action_level(depth: u8, act: &dyn Action, actions: &Vec<Box<dyn Action>>) -> Rerr {
+pub fn check_action_level(depth: i8, act: &dyn Action, actions: &Vec<Box<dyn Action>>) -> Rerr {
         if depth > 8 {
             return errf!("action depth cannot over {}", 8)
         }
@@ -117,7 +117,7 @@ pub fn check_action_level(depth: u8, act: &dyn Action, actions: &Vec<Box<dyn Act
         let alv = act.level();
         if alv == ActLv::TOP_ONLY {
             if actlen > 1 {
-                return errf!("action {} just can execute on level {:?}", kid, alv)
+                return errf!("action {} just can execute on TOP_ONLY", kid)
             }
         } else if alv == ActLv::TOP_UNIQUE {
             let mut smalv = 0;
@@ -127,12 +127,18 @@ pub fn check_action_level(depth: u8, act: &dyn Action, actions: &Vec<Box<dyn Act
                 }
             }
             if smalv > 1 {
-                return errf!("action just can execute on level TOP_UNIQUE")
+                return errf!("action {} just can execute on level TOP_UNIQUE", kid)
             }
         } else if alv == ActLv::TOP {
-            if depth > 1 {
+            if depth >= 0 {
                 return errf!("action just can execute on level TOP")
             }
+        } else if alv == ActLv::AST {
+            if depth >= 0 {
+                return errf!("action just can execute on level AST")
+            }
+        } else if depth > alv {
+            return errf!("action just can execute on depth {} but call in {}", alv, depth)
         }
         // ok
         Ok(())
