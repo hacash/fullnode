@@ -1,20 +1,23 @@
 
 
-macro_rules! get_key {
+#[macro_export]
+macro_rules! inst_state_get_key {
     ($idx:expr, $key:expr) => {{
         let prex = ($idx as u16).to_be_bytes();
         vec![prex.to_vec(), $key.serialize()].concat()
     }}
 }
 
-macro_rules! get_or_none {
+#[macro_export]
+macro_rules! inst_state_get_or_none {
     ($self:ident, $key:ident, $idx:expr, $vty:ty) => {{
-        let k = get_key!($idx, $key);
+        let k = inst_state_get_key!($idx, $key);
         $self.sta.get(k).map(|v|<$vty>::must(&v))
     }}
 }
 
-macro_rules! get_or_default {
+#[macro_export]
+macro_rules! inst_state_get_or_default {
     ($self:ident, $idx:expr, $vty:ty) => {{
         let k = ($idx as u16).to_be_bytes();
         let mut v = <$vty>::default();
@@ -44,12 +47,12 @@ macro_rules! inst_state_define {
 
                 $(
                     pub fn $kn(&self, key: &$kty) -> Option<$vty> {
-                        get_or_none!(self, key, $idx, $vty)
+                        inst_state_get_or_none!(self, key, $idx, $vty)
                     }
 
                     concat_idents!{ get_stat = get_, $kn, {
                     pub fn get_stat(&self) -> $vty {
-                        get_or_default!(self, $idx, $vty)
+                        inst_state_get_or_default!(self, $idx, $vty)
                     }}
                     }
                 )+
@@ -73,18 +76,29 @@ macro_rules! inst_state_define {
             $(
 
                 pub fn $kn(&self, key: &$kty) -> Option<$vty> {
-                    get_or_none!(self, key, $idx, $vty)
+                    inst_state_get_or_none!(self, key, $idx, $vty)
                 }
+
+                concat_idents!{ fn_exist = $kn, _exist {
+                    pub fn fn_exist (&self, key: &$kty) -> bool {
+                        let k = inst_state_get_key!($idx, key);
+                        match self.sta.get(k) {
+                            Some(..) => true,
+                            None => false,
+                        }
+                    }
+                }}
 
                 concat_idents!{ fn_set = $kn, _set {
                     pub fn fn_set (&mut self, key: &$kty, v: &$vty) {
-                        let k = get_key!($idx, key);
+                        let k = inst_state_get_key!($idx, key);
                         self.sta.set(k, v.serialize())
                     }
                 }}
+
                 concat_idents!{ fn_del = $kn, _del {
                     pub fn fn_del(&mut self, key: &$kty) {
-                        let k = get_key!($idx, key);
+                        let k = inst_state_get_key!($idx, key);
                         self.sta.del(k)
                     }
                 }}
@@ -92,7 +106,7 @@ macro_rules! inst_state_define {
 
                 concat_idents!{ get_stat = get_, $kn, {
                 pub fn get_stat(&self) -> $vty {
-                    get_or_default!(self, $idx, $vty)
+                    inst_state_get_or_default!(self, $idx, $vty)
                 }
                 }}
 

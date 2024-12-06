@@ -75,7 +75,7 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     let not_fast_sync = !env.chain.fast_sync;
     if not_fast_sync {
         // check
-        if pending_hash.is_not_zero() && pending_height % 5 != 0 {
+        if pending_hash.not_zero() && pending_height % 5 != 0 {
             return errf!("diamond must be contained in block height are highly divisible by 5")
         }
         // number

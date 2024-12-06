@@ -122,7 +122,7 @@ macro_rules! fixed_define {
             pub const SIZE: usize = $size as usize;
             pub const DEFAULT: Self = Self{ bytes: [0u8; $size] };
 
-            pub fn is_not_zero(&self) -> bool {
+            pub fn not_zero(&self) -> bool {
                 self.bytes.iter().any(|a|*a>0)
             }
 
