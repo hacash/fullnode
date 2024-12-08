@@ -219,7 +219,7 @@ fn do_group_block_mining(height: u64, mut block_intro: Vec<u8>,
     let mut most_nonce = 0u32;
     let mut most_hash = [255u8; 32];
     for nonce in nonce_start .. nonce_start + nonce_space {
-        // std::thread::sleep(std::time::Duration::from_micros(333)); // test
+        // std::thread::sleep(std::time::Duration::from_millis(1)); // test
         block_intro[79..83].copy_from_slice(&nonce.to_be_bytes());
         let reshx = x16rs::block_hash(height, &block_intro);
         if hash_more_power(&reshx, &most_hash) {

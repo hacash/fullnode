@@ -67,7 +67,6 @@ impl TransactionRead for $class {
     fn fee_pay(&self) -> Amount {
         self.fee().clone()
     }
-
     // fee_miner_received
     fn fee_got(&self) -> Amount {
         let mut gfee = self.fee().clone();
@@ -75,7 +74,16 @@ impl TransactionRead for $class {
             gfee.unit_sub(1); // burn 90
         }
         gfee
-    } 
+    }
+
+    fn fee_extend(&self) -> (u16, Amount) {
+        let mut fee = self.fee_pay();
+        let par = (*self.gas_max) as u16;
+        let max = par * par / 2;
+        fee.dist_mul(max as u128);
+        (max, fee)
+    }
+
 
     fn req_sign(&self) -> Ret<HashSet<Address>> {
         let addrs = &self.addrs();

@@ -50,7 +50,7 @@ pub fn calculate_mrkl_coinbase_modify(list: &Vec<Hash>) -> Vec<Hash> {
     let mut res = vec![];
     let hxl = list.len();
     if hxl == 0 {
-        panic_never_call_this!()
+        never!()
     }
     if hxl == 1 {
         return res

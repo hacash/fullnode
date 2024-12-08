@@ -527,6 +527,34 @@ impl Amount {
 // compute 
 impl Amount {
 
+    pub fn dist_mul(&mut self, n: u128) {
+        if self.is_zero() {
+            *self = Self::zero(); 
+            return
+        }
+        assert!(self.byte.len() > U128S, "dist_mul error: dist over flow");
+        let mut du = u128::from_be_bytes(add_left_padding(&self.byte, U128S).try_into().unwrap());
+        du = du.checked_mul(n).unwrap();
+        if du == 0 {
+            *self = Self::zero(); 
+            return
+        }
+        while du % 10 == 0 {
+            if self.unit == 255 {
+                break
+            }
+            self.unit += 1;
+        }
+        let numbts = drop_left_zero(&du.to_be_bytes());
+        let neg: i8 = match self.dist < 1 {
+            true => -1,
+            false => 1,
+        };
+        self.dist = numbts.len() as i8 * neg;
+        self.byte = numbts;
+
+    }
+
     pub fn unit_sub(&mut self, sub: u8) {
         assert!(sub < self.unit, "unit_sub error: unit must big than {}", sub);
         self.unit -= sub;

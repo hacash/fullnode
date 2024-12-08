@@ -1,6 +1,6 @@
 
 #[macro_export]
-macro_rules! panic_never_call_this {
+macro_rules! never {
     ()=>( panic!("never call this") )
 }
 

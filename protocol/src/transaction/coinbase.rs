@@ -42,6 +42,11 @@ impl TransactionRead for TransactionCoinbase {
         Amount::zero()
     }
 
+    fn fee_extend(&self) -> (u16, Amount) {
+        (0, Amount::zero())
+    }
+
+
     fn ty(&self) -> u8 {
         *self.ty
     }
