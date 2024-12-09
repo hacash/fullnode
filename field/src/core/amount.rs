@@ -532,7 +532,7 @@ impl Amount {
             *self = Self::zero(); 
             return
         }
-        assert!(self.byte.len() > U128S, "dist_mul error: dist over flow");
+        assert!(self.byte.len() <= U128S, "dist_mul error: dist overflow");
         let mut du = u128::from_be_bytes(add_left_padding(&self.byte, U128S).try_into().unwrap());
         du = du.checked_mul(n).unwrap();
         if du == 0 {

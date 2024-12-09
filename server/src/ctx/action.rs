@@ -389,7 +389,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
 
         let action = DiamondToTransfer::must(&act.serialize());
         let to_addr = action.to.real(adrs).unwrap().readable();
-        let dia_num = action.diamonds.count().uint();
+        let dia_num = action.diamonds.length();
         let dia_names = action.diamonds.readable();
         resjsonobj =  jsondata!{
             "from", main_addr,
@@ -408,7 +408,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
         
         let action = DiamondFromTransfer::must(&act.serialize());
         let from_addr = action.from.real(adrs).unwrap().readable();
-        let dia_num = action.diamonds.count().uint();
+        let dia_num = action.diamonds.length();
         let dia_names = action.diamonds.readable();
         resjsonobj = jsondata!{
             "from", from_addr,
@@ -428,7 +428,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
         let action = DiamondFromToTransfer::must(&act.serialize());
         let from_addr = action.from.real(adrs).unwrap().readable();
         let to_addr = action.to.real(adrs).unwrap().readable();
-        let dia_num = action.diamonds.count().uint();
+        let dia_num = action.diamonds.length();
         let dia_names = action.diamonds.readable();
         resjsonobj = jsondata!{
             "from", from_addr,
@@ -471,7 +471,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
     }else if kind == DiamondInscription::KIND {
 
         let action = DiamondInscription::must(&act.serialize());
-        let dia_num = action.diamonds.count().uint();
+        let dia_num = action.diamonds.length();
         let dia_names = action.diamonds.readable();
         let cost_str = action.protocol_cost.to_unit_string(unit);
         let ins_str = action.engraved_content.to_readable_or_hex();
@@ -494,7 +494,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
     }else if kind == DiamondInscriptionClear::KIND {
 
         let action = DiamondInscriptionClear::must(&act.serialize());
-        let dia_num = action.diamonds.count().uint();
+        let dia_num = action.diamonds.length();
         let dia_names = action.diamonds.readable();
         let cost_str = action.protocol_cost.to_unit_string(unit);
         resjsonobj = jsondata!{

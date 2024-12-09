@@ -111,7 +111,7 @@ pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&A
     }
 
     // check insc
-    let haveng = diasto.inscripts.count().uint();
+    let haveng = diasto.inscripts.length();
     if haveng >= 200 {
         return errf!("maximum inscriptions for one diamond is 200")
     }
@@ -143,7 +143,7 @@ pub fn engraved_clean_one_diamond(_pending_height: u64, state: &mut CoreState, a
     let mut diasto = check_diamond_status(state, addr, diamond)?;
     let diaslt = must_have!(format!("diamond {}", diamond.to_readable()), state.diamond_smelt(&diamond));
     // check
-    if diasto.inscripts.count().uint() <= 0 {
+    if diasto.inscripts.length() <= 0 {
         return errf!("cannot find any inscriptions in HACD {}", diamond.to_readable())    }
 
     // burning cost bid fee

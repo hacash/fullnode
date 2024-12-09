@@ -312,7 +312,7 @@ async fn diamond_inscription_protocol_cost(State(ctx): State<ApiCtx>, q: Query<Q
         let Some(diaobj) = mintstate.diamond(dia) else {
             return api_error(&format!("cannot find diamond {}", dia))
         };
-        if diaobj.inscripts.count().uint() < 10 {
+        if diaobj.inscripts.length() < 10 {
             continue // no need cost
         }
         let Some(diasmelt) = mintstate.diamond_smelt(dia) else {

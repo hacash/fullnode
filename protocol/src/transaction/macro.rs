@@ -79,7 +79,7 @@ impl TransactionRead for $class {
     fn fee_extend(&self) -> (u16, Amount) {
         let mut fee = self.fee_pay();
         let par = (*self.gas_max) as u16;
-        let max = par * par / 2;
+        let max = par * par;
         fee.dist_mul(max as u128);
         (max, fee)
     }
@@ -191,7 +191,7 @@ impl $class {
     }
 
     fn insert_sign(&mut self, signobj: Sign) -> Rerr {
-        let plen = self.signs.count().uint() as usize;
+        let plen = self.signs.length();
         if plen >= u16::MAX as usize - 1 {
             return errf!("sign object too much")
         }
@@ -258,6 +258,9 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
     let mut state = CoreState::wrap(ctx.state());
     // may fast_sync
     if not_fast_sync {
+        if tx.action_count().uint() == 0 {
+            return errf!("tx actions cannot empty.")
+        }
         // main check
         if main.version() != Address::PRIVAKEY {
             return errf!("tx fee address version must be PRIVAKEY type.")
