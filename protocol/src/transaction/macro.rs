@@ -77,7 +77,7 @@ impl TransactionRead for $class {
     }
 
     fn fee_extend(&self) -> (u16, Amount) {
-        let mut fee = self.fee_pay();
+        let mut fee = self.fee_got();
         let par = (*self.gas_max) as u16;
         let max = par * par;
         fee.dist_mul(max as u128);

@@ -39,6 +39,7 @@ include!{"bytes/datas.rs"}
 include!{"combi/struct.rs"}
 include!{"combi/list.rs"}
 include!{"combi/optional.rs"}
+include!{"combi/option.rs"}
 include!{"combi/revenum.rs"}
 include!{"combi/dynlist.rs"}
 include!{"combi/dynvec.rs"}
