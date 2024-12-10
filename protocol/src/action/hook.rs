@@ -19,9 +19,9 @@ pub fn setup_extend_actions_try_create(f: FnExtendActionsTryCreateFunc) {
     Action hook
 */
 
-pub type FnActionHookFunc = fn(u16, _: &dyn Any, _: &mut dyn Context) -> Rerr ;
+pub type FnActionHookFunc = fn(u16, _: &dyn Any, _: &mut dyn Context, _: &mut u32) -> Rerr ;
 
-pub static mut ACTION_HOOK_FUNC: FnActionHookFunc = |_,_,_|Ok(());
+pub static mut ACTION_HOOK_FUNC: FnActionHookFunc = |_,_,_,_|Ok(());
 
 pub fn setup_action_hook(f: FnActionHookFunc) {
     unsafe {

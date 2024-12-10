@@ -7,9 +7,9 @@ pub type Addrptr = Uint1;
 
 impl Address {
     
-    pub const PRIVAKEY: u8 = 0;
-    pub const MULTISIG: u8 = 1;
-    pub const CONTRACT: u8 = 2;
+    pub const PRIVAKEY: u8 = 0; // leading symbol: 1
+    pub const CONTRACT: u8 = 1; // Q-Z, a-k, m-o
+    // pub const MULTISIG: u8 = ...;
 
     pub const UNKNOWN: Self = Fixed21::DEFAULT;
 
@@ -36,9 +36,7 @@ impl Address {
     }
 
     pub fn readable(&self) -> String {
-        let btcon = self.serialize();
-        let bts: [u8; Self::SIZE] = btcon.try_into().unwrap();
-        Account::to_readable(&bts)
+        Account::to_readable(&*self)
     }
     
     pub fn from_readable(addr: &str) -> Ret<Self> {

@@ -60,13 +60,13 @@ macro_rules! action_define {
                 if !$pctx.env().chain.fast_sync {
                     check_action_level($pctx.depth(), $pself, $pctx.tx().actions())?;
                 }
-                unsafe {
-                    ACTION_HOOK_FUNC($pself.kind(), $pself as &dyn Any, $pctx)?;
-                }
                 #[allow(unused_mut)] 
                 let mut $pgas: u32 = $pself.size() as u32; // act size is base gas use
-                let _res: Ret<Vec<u8>> = $exec;
-                Ok(($pgas, _res?))
+                let res: Ret<Vec<u8>> = $exec;
+                unsafe {
+                    ACTION_HOOK_FUNC($pself.kind(), $pself as &dyn Any, $pctx, &mut $pgas)?;
+                }
+                Ok(($pgas, res?))
             }
         }
 
