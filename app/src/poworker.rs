@@ -41,6 +41,7 @@ pub struct PoWorkConf {
     pub unitsize: u32, // opencl hashes per work unit
     pub itemloop: u32, // opencl loops per work unit
     pub opencldir: String, // opencl source dir
+    pub debug: u32, // opencl source dir
     pub deviceid: u32, // opencl device id
 }
 
@@ -61,6 +62,7 @@ impl PoWorkConf {
             unitsize: ini_must_u64(sec, "unit_size", 32) as u32,
             itemloop: ini_must_u64(sec, "item_loop", 1) as u32,
             opencldir: ini_must(sec, "opencl_dir", "opencl/"),
+            debug: ini_must_u64(sec, "debug", 0) as u32,
             deviceid: ini_must_u64(sec, "device_id", 0) as u32,
         };
         cnf
@@ -284,7 +286,7 @@ fn do_group_block_mining_opencl(
     item_loop: u32,
 ) -> (u32, [u8; 32]) {
     let mut most_nonce = 0u32;
-    let mut most_hash = [255u8; 32];
+    let mut most_hash = [254u8; 32];
     let global_work_size = num_work_groups * local_work_size;
     let repeat = x16rs::block_hash_repeat(height) as u32;
 
@@ -389,7 +391,7 @@ fn deal_block_mining_results(cnf: &PoWorkConf, most_hash: &mut Vec<u8>,
         hac1day, mnper * 100.0, rates_to_show(nonce_rates)
     );
     // check success
-    if hash_more_power(&most.result_hash, &most.target_hash) {
+    if cnf.debug == 1 || hash_more_power(&most.result_hash, &most.target_hash) {
         push_block_mining_success(cnf, &most);
     }
     // print next height
@@ -517,7 +519,7 @@ fn push_block_mining_success(cnf: &PoWorkConf, success: &BlockMiningResult) {
         &cnf.rpcaddr, success.height, success.head_nonce, success.coinbase_nonce.hex()
     );
     let _ = HttpClient::new().get(&urlapi_success).send();
-    // println!("{} {}", &urlapi_success, HttpClient::new().get(&urlapi_success).send().unwrap().text().unwrap());
+    println!("{} {}", &urlapi_success, HttpClient::new().get(&urlapi_success).send().unwrap().text().unwrap());
     // print
     println!("\n\n████████████████ [MINING SUCCESS] Find a block height {},\n██ hash {} to submit.",
         success.height, success.result_hash.hex()
