@@ -91,7 +91,7 @@ impl TransactionRead for $class {
         for act in self.actions() {
             for ptr in act.req_sign() {
                 let adr = ptr.real(addrs)?; 
-                if adr.version() == Address::PRIVAKEY {
+                if adr.is_privakey() {
                     adrsets.insert(adr); // just PRIVAKEY
                 }
             }
@@ -262,7 +262,7 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
             return errf!("tx actions cannot empty.")
         }
         // main check
-        if main.version() != Address::PRIVAKEY {
+        if ! main.is_privakey() {
             return errf!("tx fee address version must be PRIVAKEY type.")
         }
         let mty = tx.ty();
