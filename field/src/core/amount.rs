@@ -31,8 +31,8 @@ pub struct Amount {
 	byte: Vec<u8>,
 }
 
-impl Display for Amount {
-    fn fmt(&self,f: &mut Formatter) -> Result{
+impl std::fmt::Display for Amount {
+    fn fmt(&self,f: &mut Formatter) -> Result {
         write!(f,"{}", self.to_fin_string())
     }
 }

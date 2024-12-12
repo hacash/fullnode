@@ -22,7 +22,7 @@ pub struct Fold64 {
 
 
 impl Display for Fold64 {
-    fn fmt(&self,f: &mut std::fmt::Formatter) -> std::fmt::Result{
+    fn fmt(&self,f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f,"{}", self.value)
     }
 }

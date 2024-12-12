@@ -48,11 +48,6 @@ pub fn hacd_transfer(state: &mut CoreState,
     if addr_from == addr_to {
 		return errf!("cannot transfer to self")
     }
-    // check contract
-    /*use vm::rt::SystemCallType::*;
-    let amtv = dlist.form(); // name bytes vec
-    ctx.syscall_check_true(addr_from, PermitHACD  as u8, amtv.clone())?;
-    ctx.syscall_check_true(addr_to,   PayableHACD as u8, amtv)?;*/
     // do transfer
     hacd_sub(state, addr_from, hacd)?;
     hacd_add(state, addr_to, hacd)?;

@@ -50,11 +50,6 @@ pub fn sat_transfer(ctx: &mut dyn Context, addr_from: &Address, addr_to: &Addres
     if addr_from == addr_to {
 		return errf!("cannot trs to self")
     }
-    // check contract
-    /*use vm::rt::SystemCallType::*;
-    let amtv = sat.value().to_be_bytes().to_vec();
-    ctx.syscall_check_true(addr_from, PermitSAT  as u8, amtv.clone())?;
-    ctx.syscall_check_true(addr_to,   PayableSAT as u8, amtv)?;*/
     // do transfer
     sat_sub(ctx, addr_from, sat)?;
     sat_add(ctx, addr_to, sat)?;

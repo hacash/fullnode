@@ -1,0 +1,66 @@
+
+combi_struct!{ AssetAmt,
+    serial: Fold64
+    amount: Fold64
+}
+
+impl std::fmt::Display for AssetAmt {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f,"({},{})", self.serial, self.amount)
+    }
+}
+
+impl std::cmp::Ord for AssetAmt {
+    fn cmp(&self, other: &Self) -> Ordering {
+        assert!(*self.serial == *other.serial);
+        self.amount.cmp(&other.amount)
+    }
+}
+
+impl std::cmp::PartialOrd for AssetAmt {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+
+macro_rules! checked_opt {
+    ($name : ident) => {
+        pub fn $name(&self, other: &Self) -> Ret<Self> {
+            let err = errf!("cannot do {} with asset {} and {}", stringify!($name), self, other);
+            if *self.serial != *other.serial {
+                return err
+            }
+            match self.amount.$name(*self.amount) {
+                Some(v) => Ok(Self{
+                    serial: self.serial,
+                    amount: Fold64::from(v),
+                }),
+                _ => err,
+            }
+        }
+        
+    };
+}
+
+impl AssetAmt {
+
+    checked_opt!{ checked_add }
+    checked_opt!{ checked_sub }
+
+}
+
+
+
+impl AssetAmt {
+
+    pub fn new(serial: Fold64) -> Self {
+        Self {
+            serial,
+            ..Default::default()
+        }
+    }
+
+}
+
+

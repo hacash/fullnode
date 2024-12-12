@@ -18,6 +18,7 @@ include!{"create.rs"}
 include!{"hacash.rs"}
 include!{"satoshi.rs"}
 include!{"diamond.rs"}
+include!{"asset.rs"}
 include!{"diamond_mint.rs"}
 include!{"diamond_insc.rs"}
 include!{"diamond_util.rs"}
@@ -34,30 +35,30 @@ action_register!{
     HacToTrs              // 1
     HacFromTrs            // 13
     HacFromToTrs          // 14
-    // HacAmountCompress       // 15
+    // HacAmountCompress  // 15
     
     // channel
-    ChannelOpen                // 2
-    ChannelClose               // 3
+    ChannelOpen           // 2
+    ChannelClose          // 3
     
     // diamond
-    DiamondMint                // 4
-    DiaSingleTrs      // 5
-    DiaFromToTrs      // 6
-    DiaToTrs          // 7
-    DiaFromTrs        // 8
+    DiamondMint           // 4
+    DiaSingleTrs          // 5
+    DiaFromToTrs          // 6
+    DiaToTrs              // 7
+    DiaFromTrs            // 8
     
     // satoshi
-    // SatoshiGenesis          // 9
-    SatToTrs          // 10
-    SatFromTrs        // 11
-    SatFromToTrs      // 12
+    // SatoshiGenesis     // 9
+    SatToTrs              // 10
+    SatFromTrs            // 11
+    SatFromToTrs          // 12
 
     // asset
-    // AssetCreate             // 16
-    // AssetToTransfer         // 17
-    // AssetFromTransfer       // 18
-    // AssetFromToTransfer     // 19
+    AssetCreate           // 16
+    AssetToTrs            // 17
+    AssetFromTrs          // 18
+    AssetFromToTrs        // 19
 
     // inscription
     DiamondInscription         // 32
