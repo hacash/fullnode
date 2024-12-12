@@ -2,7 +2,7 @@
 /*
 *
 */
-action_define!{ SatoshiToTransfer, 10, 
+action_define!{ SatToTrs, 10, 
     ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [], // need sign
@@ -19,7 +19,7 @@ action_define!{ SatoshiToTransfer, 10,
 
 
 
-action_define!{ SatoshiFromTransfer, 11, 
+action_define!{ SatFromTrs, 11, 
     ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [self.from], // need sign
@@ -36,7 +36,7 @@ action_define!{ SatoshiFromTransfer, 11,
 
 
 
-action_define!{ SatoshiFromToTransfer, 12, 
+action_define!{ SatFromToTrs, 12, 
     ActLv::MAIN_CALL, // level
     false, // burn 90 fee
     [self.from], // need sign

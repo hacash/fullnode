@@ -31,9 +31,9 @@ include!{"chainlimit.rs"}
 action_register!{
 
     // hac
-    HacToTransfer              // 1
-    HacFromTransfer            // 13
-    HacFromToTransfer          // 14
+    HacToTrs              // 1
+    HacFromTrs            // 13
+    HacFromToTrs          // 14
     // HacAmountCompress       // 15
     
     // channel
@@ -42,16 +42,16 @@ action_register!{
     
     // diamond
     DiamondMint                // 4
-    DiamondSingleTransfer      // 5
-    DiamondFromToTransfer      // 6
-    DiamondToTransfer          // 7
-    DiamondFromTransfer        // 8
+    DiaSingleTrs      // 5
+    DiaFromToTrs      // 6
+    DiaToTrs          // 7
+    DiaFromTrs        // 8
     
     // satoshi
     // SatoshiGenesis          // 9
-    SatoshiToTransfer          // 10
-    SatoshiFromTransfer        // 11
-    SatoshiFromToTransfer      // 12
+    SatToTrs          // 10
+    SatFromTrs        // 11
+    SatFromToTrs      // 12
 
     // asset
     // AssetCreate             // 16
