@@ -14,6 +14,7 @@ include!{"string.rs"}
 include!{"error.rs"}
 include!{"number.rs"}
 include!{"slice.rs"}
+include!{"match.rs"}
 include!{"hex.rs"}
 include!{"base64.rs"}
 include!{"ini.rs"}

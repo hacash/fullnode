@@ -34,6 +34,7 @@ action_register!{
     HacToTransfer              // 1
     HacFromTransfer            // 13
     HacFromToTransfer          // 14
+    // HacAmountCompress       // 15
     
     // channel
     ChannelOpen                // 2
@@ -45,13 +46,21 @@ action_register!{
     DiamondFromToTransfer      // 6
     DiamondToTransfer          // 7
     DiamondFromTransfer        // 8
-
-    DiamondInscription         // 32
-    DiamondInscriptionClear    // 33
     
     // satoshi
-    SatoshiToTransfer          // 9
-    SatoshiFromTransfer        // 10
-    SatoshiFromToTransfer      // 11
+    // SatoshiGenesis          // 9
+    SatoshiToTransfer          // 10
+    SatoshiFromTransfer        // 11
+    SatoshiFromToTransfer      // 12
+
+    // asset
+    // AssetCreate             // 16
+    // AssetToTransfer         // 17
+    // AssetFromTransfer       // 18
+    // AssetFromToTransfer     // 19
+
+    // inscription
+    DiamondInscription         // 32
+    DiamondInscriptionClear    // 33
 
 }

@@ -54,27 +54,18 @@ fn append_transfer_scan(tx: &dyn TransactionRead, act: &dyn Action,
 ) {
     let trace = match act.kind() {
 
-        /*
-        HacToTransfer:     1
-        HacFromTransfer:   13
-        HacFromToTransfer: 14
-        */
-        1 | 13 | 14 => ck.hacash,
+        HacToTransfer::KIND |
+        HacFromTransfer::KIND |
+        HacFromToTransfer::KIND => ck.hacash,
 
-        /*
-        DiamondSingleTransfer: 5
-        DiamondFromToTransfer: 6
-        DiamondToTransfer:     7
-        DiamondFromTransfer:   8
-        */
-        5 ..= 8 =>     ck.diamond,
+        DiamondSingleTransfer::KIND |
+        DiamondFromToTransfer::KIND |
+        DiamondToTransfer::KIND |
+        DiamondFromTransfer::KIND => ck.diamond,
 
-        /*
-        SatoshiToTransfer:     9
-        SatoshiFromTransfer:   10
-        SatoshiFromToTransfer: 11
-        */
-        9 ..= 11 =>    ck.satoshi,
+        SatoshiToTransfer::KIND |
+        SatoshiFromTransfer::KIND |
+        SatoshiFromToTransfer::KIND => ck.satoshi,
 
         _ => false,
     };

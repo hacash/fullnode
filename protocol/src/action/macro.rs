@@ -75,6 +75,7 @@ macro_rules! action_define {
             fn level(&self) -> i8 { $lv }
             fn burn_90(&$pself) -> bool { $burn90 }
             fn req_sign(&$pself) -> Vec<AddrOrPtr> { $reqsign.to_vec() } // request_need_sign_addresses
+            fn as_any(&self) -> &dyn Any { self }
         }
 
         impl $class {
