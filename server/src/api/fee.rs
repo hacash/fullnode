@@ -11,14 +11,17 @@ async fn fee_average(State(ctx): State<ApiCtx>, q: Query<Q7365>) -> impl IntoRes
     q_unit!(q, unit);
     q_must!(q, consumption, 0);
 
-    let avgfeep = ctx.engine.average_fee_purity(); // unit: shuo
+    let avgfeep = ctx.engine.average_fee_purity(); // unit: 238
 
     let mut data = jsondata!{
-        "purity", avgfeep, // shuo
+        "purity", avgfeep, // 238
     };
 
     if consumption > 0 {
-        let setfee = Amount::shuo(avgfeep * consumption);
+        let mut setfee = Amount::zhu(avgfeep * consumption / 100); // unit: 238
+        if setfee.is_zero() {
+            setfee = Amount::zhu(1);
+        }
         data.insert("feasible", json!(setfee.to_unit_string(&unit)));
     }
     // ok

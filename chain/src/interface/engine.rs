@@ -14,7 +14,7 @@ pub trait EngineRead: Send + Sync {
     fn mint_checker(&self) -> &dyn Minter { unimplemented!() }
 
     fn recent_blocks(&self) -> Vec<Arc<RecentBlockInfo>> { unimplemented!() }
-    fn average_fee_purity(&self) -> u64 { 0 } // 1w zhu(shuo) / 200byte(1trs)
+    fn average_fee_purity(&self) -> u64 { 0 } // 100:238 / 166byte(1trs)
 
     fn try_execute_tx(&self, _: &dyn TransactionRead) -> Rerr { unimplemented!() }
     // realtime average fee purity

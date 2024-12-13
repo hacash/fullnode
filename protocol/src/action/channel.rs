@@ -94,7 +94,7 @@ fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     // update total count
     let mut ttcount = state.get_total_count();
     ttcount.opening_channel += 1u64;
-    ttcount.channel_deposit_zhu += left_amt.add_mode_u64(right_amt)?.to_zhu_unsafe() as u64;
+    ttcount.channel_deposit_zhu += left_amt.add_mode_u64(right_amt)?.to_zhu_u64().unwrap();
     state.set_total_count(&ttcount);
 
     // ok finish

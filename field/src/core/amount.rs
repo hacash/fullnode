@@ -362,6 +362,16 @@ impl Amount {
         bignum * powv
     }
 
+    pub fn to_biguint(&self) -> BigUint {
+        assert!(!self.is_negative());
+        if self.is_zero() {
+            return 0u64.into();
+        }
+        let numv = BigUint::from_bytes_be(&self.byte[..]);
+        let powv = BigUint::from(10u64).pow(self.unit as u64);
+        numv * powv
+    }
+
 
     pub fn to_unit_string(&self, unit_str: &str) -> String {
         let unit;
@@ -378,7 +388,7 @@ impl Amount {
             }
         }
         match unit > 0 {
-            true => self.to_unit_unsafe(unit).to_string(),
+            true => unsafe { self.to_unit_float(unit).to_string() },
             false => self.to_fin_string(),
         }
     }
@@ -386,19 +396,44 @@ impl Amount {
 }
 
 
+macro_rules! to_unit_define {
+    ($fu64:ident, $fu128:ident, $unit:expr) => {
+        
+    pub fn $fu128(&self) -> Option<u128> {
+        self.to_unit_biguint($unit).to_u128()
+    }
+    
+    pub fn $fu64(&self) -> Option<u64> {
+        let Some(u) = self.$fu128() else {
+            return None
+        };
+        if u > u64::MAX as u128 {
+            return None
+        }
+        Some(u as u64)
+    }
+    };
+}
+
 
 
 impl Amount {
 
-    pub fn to_zhu_unsafe(&self) -> f64 {
-        self.to_unit_unsafe(UNIT_ZHU)
+    to_unit_define!{ to_mei_u64, to_mei_u128, UNIT_MEI }
+    to_unit_define!{ to_zhu_u64, to_zhu_u128, UNIT_ZHU }
+    to_unit_define!{ to_238_u64, to_238_u128, 238 } // for fee_purity
+
+    pub fn to_unit_biguint(&self, base_unit: u8) -> BigUint {
+        assert!(!self.is_negative());
+        if self.is_zero() {
+            return 0u64.into()
+        }
+        let bigu = self.to_biguint();
+        let powv: BigUint = BigUint::from(10u64).pow(base_unit as u64);
+        bigu / powv
     }
 
-    pub fn to_shuo_unsafe(&self) -> f64 {
-        self.to_unit_unsafe(UNIT_SHUO)
-    }
-
-    pub fn to_unit_unsafe(&self, base_unit: u8) -> f64 {
+    pub unsafe fn to_unit_float(&self, base_unit: u8) -> f64 {
         if self.is_zero() {
             return 0f64
         }

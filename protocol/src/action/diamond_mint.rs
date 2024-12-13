@@ -127,7 +127,7 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
             sub.unit_sub(1);
         }
         let burn = tx_bid_fee.clone().sub_mode_u64(&sub)?; // 90%
-        ttcount.hacd_bid_burn_zhu += Uint8::from(burn.to_zhu_unsafe() as u64);
+        ttcount.hacd_bid_burn_zhu += Uint8::from( burn.to_zhu_u64().unwrap() );
     }
     // gene
     let (life_gene, _visual_gene) = calculate_diamond_gene(dianum, &mediumhx, &diahx, &pending_hash, &tx_bid_fee);

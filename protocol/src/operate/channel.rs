@@ -58,9 +58,9 @@ pub fn close_channel_with_distribution(pdhei: u64, ctx: &mut dyn Context, channe
         if ttnewhac < ttamt {
             return errf!("interest calculate error!")
         }
-        let ttiesthac =  ttnewhac.sub_mode_u64(&ttamt) ? .to_zhu_unsafe() as u64;
+        let ttiesthac = ttnewhac.sub_mode_u64(&ttamt) ? .to_zhu_u64().unwrap();
         ttcount.channel_interest_zhu += ttiesthac;
-        ttcount.channel_deposit_zhu -= ttamt.to_zhu_unsafe() as u64;
+        ttcount.channel_deposit_zhu -= ttamt.to_zhu_u64().unwrap();
         if newamt1.is_positive() {
             hac_add(ctx, left_addr, &newamt1)?;
         }

@@ -61,7 +61,7 @@ fn diamond_inscription(this: &DiamondInscription, ctx: &mut dyn Context) -> Ret<
     // change count
     let mut ttcount = state.get_total_count();
     ttcount.diamond_engraved += this.diamonds.length() as u64;
-    ttcount.diamond_insc_burn_zhu += pcost.to_zhu_unsafe() as u64;
+    ttcount.diamond_insc_burn_zhu += pcost.to_zhu_u64().unwrap();
     state.set_total_count(&ttcount);
 	// sub main addr balance
 	if pcost.is_positive() {
@@ -122,7 +122,7 @@ fn diamond_inscription_clean(this: &DiamondInscriptionClear, ctx: &mut dyn Conte
     // change count and sub hac
     if pcost.is_positive() {
         let mut ttcount = state.get_total_count();
-        ttcount.diamond_insc_burn_zhu += pcost.to_zhu_unsafe() as u64;
+        ttcount.diamond_insc_burn_zhu += pcost.to_zhu_u64().unwrap();
         state.set_total_count(&ttcount);
 	    // sub main addr balance
         hac_sub(ctx, &main_addr, &pcost)?;

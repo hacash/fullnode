@@ -53,7 +53,7 @@ impl EngineConf {
         let sec_server = &ini_section(ini, "server");
 
         // a simple hac trs size is 166 bytes
-        const LOWEST_FEE_PURITY: u64 = 10000_00000000 / 166; // 1:244
+        const LOWEST_FEE_PURITY: u64 = 10000_00 / 166; // 1:244 = 1000000:238 / 166 = 6024
 
         let mut cnf = EngineConf{
             max_block_txs: 1000,
@@ -86,7 +86,7 @@ impl EngineConf {
         // setup lowest_fee
         if ini_must(sec_server, "lowest_fee", "").len() > 0 {
             let lfepr = ini_must_amount(sec_server, "lowest_fee").compress(2, true)
-                .unwrap().to_shuo_unsafe() as u64 / 166; // simple hac trs size
+                .unwrap().to_238_u64().unwrap() / 166; //  =6024, simple hac trs size
             cnf.lowest_fee_purity = lfepr;
             println!("[Config] Node accepted lowest fee purity {}.", lfepr);
         }

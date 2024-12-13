@@ -44,8 +44,8 @@ impl TxPkg {
 
 	fn calc_fee_purity(&self) -> u64 {
 		let txsz = self.data.len() as u64;
-		let feeshuo = self.objc.fee_got().to_shuo_unsafe() as u64;
-		feeshuo / txsz
+		let fee238 = self.objc.fee_got().to_238_u64().unwrap_or_default();
+		fee238 / txsz
 	}
 
 }

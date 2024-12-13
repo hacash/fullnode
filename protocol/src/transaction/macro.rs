@@ -105,8 +105,8 @@ impl TransactionRead for $class {
     
 	fn fee_purity(&self) -> u64 {
 		let txsz = self.size() as u64;
-		let feeshuo = self.fee_got().to_shuo_unsafe() as u64;
-		feeshuo / txsz
+		let fee238 = self.fee_got().to_238_u64().unwrap_or_default();
+		fee238 / txsz
 	}
 
 }
