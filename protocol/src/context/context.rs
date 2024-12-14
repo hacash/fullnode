@@ -66,7 +66,7 @@ impl Context for ContextInst<'_> {
         isok.map(|_|())
     }
 
-    fn action_call(&mut self, k: u16, b: Vec<u8>) -> Ret<(i64, Vec<u8>)> {
+    fn action_call(&mut self, k: u16, b: Vec<u8>) -> Ret<(u32, Vec<u8>)> {
         ctx_action_call(self, k, b)
     }
 

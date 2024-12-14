@@ -13,7 +13,7 @@ pub trait Context {
     fn vm(&mut self) -> &mut dyn VMI { unimplemented!() }
     fn vm_replace(&mut self, _: Box<dyn VMI>) -> Box<dyn VMI> { unimplemented!() }
     
-    fn action_call(&mut self, _: u16, _: Vec<u8>) -> Ret<(i64, Vec<u8>)> { unimplemented!() }
+    fn action_call(&mut self, _: u16, _: Vec<u8>) -> Ret<(u32, Vec<u8>)> { unimplemented!() }
 
     fn fork_sub(&mut self) -> Box<dyn State> { unimplemented!() }
     fn swap_sub(&mut self, _: Box<dyn State>) -> Box<dyn State> { unimplemented!() }
