@@ -1,5 +1,11 @@
 
-pub trait Context {
+pub trait ExtActCal {
+    fn height(&self) -> u64 { unimplemented!() } // ctx blk hei
+    fn action_call(&mut self, _: u16, _: Vec<u8>) -> Ret<(u32, Vec<u8>)> { unimplemented!() }
+}
+
+pub trait Context : ExtActCal {
+    fn as_ext_caller(&mut self) -> &mut dyn ExtActCal { unimplemented!() }
     fn env(&self) -> &Env { unimplemented!() }
     fn addr(&self, _:&AddrOrPtr) -> Ret<Address> { unimplemented!() }
     fn state(&mut self) -> &mut dyn State { unimplemented!() }
@@ -13,8 +19,6 @@ pub trait Context {
     fn vm(&mut self) -> &mut dyn VMI { unimplemented!() }
     fn vm_replace(&mut self, _: Box<dyn VMI>) -> Box<dyn VMI> { unimplemented!() }
     
-    fn action_call(&mut self, _: u16, _: Vec<u8>) -> Ret<(u32, Vec<u8>)> { unimplemented!() }
-
     fn fork_sub(&mut self) -> Box<dyn State> { unimplemented!() }
     fn swap_sub(&mut self, _: Box<dyn State>) -> Box<dyn State> { unimplemented!() }
     fn merge_sub(&mut self, _: Box<dyn State>) { unimplemented!() }

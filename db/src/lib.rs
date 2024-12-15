@@ -15,3 +15,5 @@ include!{"disk_rusty_leveldb.rs"}
 #[cfg(feature = "db-leveldb-sys")]
 include!{"disk_leveldb_sys.rs"}
 
+
+include!{"memkv.rs"}

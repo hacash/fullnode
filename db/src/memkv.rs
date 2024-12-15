@@ -1,9 +1,12 @@
+use std::collections::*;
+
+pub type MemMap = HashMap<Vec<u8>, Option<Vec<u8>>>;
 
 
 
-
+#[derive(Default)]
 pub struct MemKV {
-    memry: MemMap
+    pub memry: MemMap
 }
 
 impl MemKV {

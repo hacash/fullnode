@@ -31,31 +31,32 @@ impl ContextInst<'_> {
     }
 }
 
+impl ExtActCal for ContextInst<'_> {
+    fn height(&self) -> u64 { self.env.block.height }
+    fn action_call(&mut self, k: u16, b: Vec<u8>) -> Ret<(u32, Vec<u8>)> {
+        ctx_action_call(self, k, b)
+    }
+}
 
 impl Context for ContextInst<'_> {
+    fn as_ext_caller(&mut self) -> &mut dyn ExtActCal { self }
     fn env(&self) -> &Env { &self.env}
-
     fn state(&mut self) -> &mut dyn State { self.sta.as_mut() }
     fn state_replace(&mut self, sta: Box<dyn State>) -> Box<dyn State> {
         std::mem::replace(&mut self.sta, sta)
     }
-
     fn depth(&self) -> i8 { self.depth }
     fn depth_set(&mut self, d: i8) { self.depth = d }
     fn depth_add(&mut self) { self.depth += 1 }
     fn depth_sub(&mut self) { self.depth -= 1 }
-
     fn tx(&self) -> &dyn TransactionRead { self.txr }
-
     fn vm(&mut self) -> &mut dyn VMI { self.vmi.as_mut() }
     fn vm_replace(&mut self, vm: Box<dyn VMI>) -> Box<dyn VMI> {
         std::mem::replace(&mut self.vmi, vm)
     }
-    
     fn addr(&self, ptr :&AddrOrPtr) -> Ret<Address> {
         ptr.real(&self.env.tx.addrs)
     }
-    
     fn check_sign(&mut self, adr: &Address) -> Rerr {
         adr.must_privakey()?;
         if self.check_sign_cache.contains_key(adr) {
@@ -65,23 +66,14 @@ impl Context for ContextInst<'_> {
         self.check_sign_cache.insert(*adr, isok.clone());
         isok.map(|_|())
     }
-
-    fn action_call(&mut self, k: u16, b: Vec<u8>) -> Ret<(u32, Vec<u8>)> {
-        ctx_action_call(self, k, b)
-    }
-
     fn fork_sub(&mut self) -> Box<dyn State> {
         ctx_state_fork_sub(self)
     }
-
     fn swap_sub(&mut self, sta: Box<dyn State>) -> Box<dyn State> {
         ctx_state_swap_sub(self, sta)
     }
-
     fn merge_sub(&mut self, old: Box<dyn State>){
         ctx_state_merge_sub(self, old)
     }
-
-
 }
 
