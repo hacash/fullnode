@@ -4,7 +4,7 @@
 
 
 
-defineQueryObject!{ Q2953,
+api_querys_define!{ Q2953,
     height, Option<u32>, None,
     hash, Option<String>, None,
     tx_hash_list, Option<bool>, None,
@@ -68,7 +68,7 @@ async fn block_intro(State(ctx): State<ApiCtx>, q: Query<Q2953>) -> impl IntoRes
 /******************* block recents *******************/
 
 
-defineQueryObject!{ Q7456,
+api_querys_define!{ Q7456,
     __nnn__, Option<u32>, None,
 }
 
@@ -104,7 +104,7 @@ async fn block_recents(State(ctx): State<ApiCtx>, q: Query<Q7456>) -> impl IntoR
 /******************* block views *******************/
 
 
-defineQueryObject!{ Q4935,
+api_querys_define!{ Q4935,
     limit, Option<i64>, None,
     page, Option<i64>, None,
     start, Option<i64>, None,
@@ -166,7 +166,7 @@ async fn block_views(State(ctx): State<ApiCtx>, q: Query<Q4935>) -> impl IntoRes
 /******************* block datas *******************/
 
 
-defineQueryObject!{ Q8538,
+api_querys_define!{ Q8538,
     start_height, Option<u64>, None,
     limit, Option<u64>, None,
     max_size, Option<usize>, None,

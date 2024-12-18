@@ -1,7 +1,7 @@
 // use crate::mint::component::DiamondOwnedForm;
 
 
-defineQueryObject!{ Q8364,
+api_querys_define!{ Q8364,
     address, String, s!(""),
     diamonds, Option<bool>, None,
     asset, Option<String>, None,

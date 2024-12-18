@@ -167,7 +167,7 @@ macro_rules! q_data_hash {
 
 
 #[macro_export]
-macro_rules! defineQueryObject{
+macro_rules! api_querys_define {
     ( $name: ident, $( $item: ident, $ty: ty, $dv: expr,)+ ) => (
 
         #[derive(serde::Deserialize)]
@@ -182,6 +182,7 @@ macro_rules! defineQueryObject{
             base64body: Option<bool>,
             hex: Option<bool>,
             base64: Option<bool>,
+            extendpath: Option<String>,
         }
 
         impl Default for $name {
@@ -196,6 +197,7 @@ macro_rules! defineQueryObject{
                     base64body: None,
                     hex: None,
                     base64: None,
+                    extendpath: None,
                 }
             }
         }

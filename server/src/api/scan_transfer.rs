@@ -1,5 +1,5 @@
 
-defineQueryObject!{ Q4538,
+api_querys_define!{ Q4538,
     height, u64, 1,
     txposi, isize, -1,
     filter_from, Option<String>, None,

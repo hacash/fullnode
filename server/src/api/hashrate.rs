@@ -53,7 +53,7 @@ fn query_hashrate(ctx: &ApiCtx) -> JsonObject {
 
 
 
-defineQueryObject!{ Q5295,
+api_querys_define!{ Q5295,
     __nnn_, Option<bool>, None,
 }
 
@@ -66,7 +66,7 @@ async fn hashrate(State(ctx): State<ApiCtx>, _: Query<Q5295>) -> impl IntoRespon
 
 
 
-defineQueryObject!{ Q9314,
+api_querys_define!{ Q9314,
     days, Option<u64>, None,
     target, Option<bool>, None,
     scale, Option<f64>, None,

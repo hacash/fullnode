@@ -4,7 +4,7 @@
 
 
 
-defineQueryObject!{ Q7542,
+api_querys_define!{ Q7542,
     id, Option<String>, None,
 }
 

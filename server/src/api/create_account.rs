@@ -1,6 +1,6 @@
 
 
-defineQueryObject!{ Q8936,
+api_querys_define!{ Q8936,
     quantity, Option<u64>, None,
 }
 

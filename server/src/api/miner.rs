@@ -294,7 +294,7 @@ impl Drop for MWNCount {
 
 
 
-defineQueryObject!{ Q4391,
+api_querys_define!{ Q4391,
     height, u64, 0,
     rqid, String, s!(""), // must random query id
     wait, Option<u64>, None,
@@ -329,7 +329,7 @@ async fn miner_notice(State(ctx): State<ApiCtx>, q: Query<Q4391>) -> impl IntoRe
 ///////////////////////////////////////////////////
 
 
-defineQueryObject!{ Q2954,
+api_querys_define!{ Q2954,
     detail, Option<bool>, None,
     transaction, Option<bool>, None,
     stuff, Option<bool>, None,
@@ -380,7 +380,7 @@ async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoR
 ///////////////////////////////////////////////////
 
 
-defineQueryObject!{ Q9347,
+api_querys_define!{ Q9347,
     height, u64, 0,
     block_nonce, u32, 0,
     coinbase_nonce, String, s!(""),

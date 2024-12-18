@@ -3,7 +3,7 @@
 /******************** fee average ********************/
 
 
-defineQueryObject!{ Q7365,
+api_querys_define!{ Q7365,
     consumption, Option<u64>, None, // tx size or gas use
 }
 
@@ -31,7 +31,7 @@ async fn fee_average(State(ctx): State<ApiCtx>, q: Query<Q7365>) -> impl IntoRes
 
 /******************** raise fee ********************/
 
-defineQueryObject!{ Q5396,
+api_querys_define!{ Q5396,
     fee, String, s!(""),
     fee_prikey, String, s!(""),
     hash, Option<String>, None, // find by tx hash

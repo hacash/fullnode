@@ -4,7 +4,7 @@
 
 
 
-defineQueryObject!{ Q3946,
+api_querys_define!{ Q3946,
     name, Option<String>, None,
     number, Option<u32>, None,
 }
@@ -62,7 +62,7 @@ async fn diamond(State(ctx): State<ApiCtx>, q: Query<Q3946>) -> impl IntoRespons
 /******************* diamond bidding *******************/
 
 
-defineQueryObject!{ Q8346,
+api_querys_define!{ Q8346,
     limit, Option<usize>, None,
     number, Option<usize>, None,
     since, Option<bool>, None,
@@ -137,7 +137,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
 /******************* diamond views *******************/
 
 
-defineQueryObject!{ Q5395,
+api_querys_define!{ Q5395,
     name, Option<String>, None,
     limit, Option<i64>, None,
     page, Option<i64>, None,
@@ -215,7 +215,7 @@ async fn diamond_views(State(ctx): State<ApiCtx>, q: Query<Q5395>) -> impl IntoR
 /******************* diamond engrave *******************/
 
 
-defineQueryObject!{ Q5733,
+api_querys_define!{ Q5733,
     height, u64, 0,
     txposi, Option<isize>, None, // -1,
     tx_hash, Option<bool>, None, // if return txhash
@@ -295,7 +295,7 @@ async fn diamond_engrave(State(ctx): State<ApiCtx>, q: Query<Q5733>) -> impl Int
 /******************* diamond inscription protocol cost *******************/
 
 
-defineQueryObject!{ Q5543,
+api_querys_define!{ Q5543,
     name, String, s!(""), // diamond names
 }
 

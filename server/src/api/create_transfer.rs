@@ -1,5 +1,5 @@
 
-defineQueryObject!{ Q9374,
+api_querys_define!{ Q9374,
     fee, String, s!(""),
     main_prikey, String, s!(""),
     to_address, String, s!(""),

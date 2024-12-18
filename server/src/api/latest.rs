@@ -1,6 +1,6 @@
 
 
-defineQueryObject!{ Q4376,
+api_querys_define!{ Q4376,
     __nnn_, Option<bool>, None,
 }
 

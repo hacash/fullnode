@@ -3,7 +3,7 @@
 /******************* diamondminer init *******************/
 
 
-defineQueryObject!{ Q7846,
+api_querys_define!{ Q7846,
     ___nnn___, Option<bool>, None,
 }
 
@@ -27,7 +27,7 @@ async fn diamondminer_init(State(ctx): State<ApiCtx>, _q: Query<Q7846>) -> impl 
 
 
 
-defineQueryObject!{ Q6396,
+api_querys_define!{ Q6396,
     ___nnn___, Option<bool>, None,
 }
 
