@@ -42,10 +42,9 @@ impl TransactionRead for TransactionCoinbase {
         Amount::zero()
     }
 
-    fn fee_extend(&self) -> (u16, Amount) {
-        (0, Amount::zero())
+    fn fee_extend(&self) -> Ret<(u16, Amount)> {
+        errf!("cannot get fee extend on coinbase tx")
     }
-
 
     fn ty(&self) -> u8 {
         *self.ty
@@ -69,7 +68,7 @@ impl TransactionRead for TransactionCoinbase {
 
     // call ret error
     fn verify_signature(&self) -> Rerr {
-        Ok(())
+        errf!("cannot verify signature on coinbase tx")
     }
     
 }

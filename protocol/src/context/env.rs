@@ -11,7 +11,8 @@ pub struct Chain {
 #[derive(Default, Clone)]
 pub struct Block {
     pub height: u64,
-    pub hash: Hash
+    pub hash: Hash,
+    pub coinbase: Address,
 }
 
 

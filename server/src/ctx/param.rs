@@ -4,6 +4,7 @@
 macro_rules! ctx_state{
     ($ctx:expr, $state:ident) => (
         let _s1_db = $ctx.engine.state();
+        let _s1_db = _s1_db.as_ref();
         let $state = CoreStateRead::wrap(_s1_db);
     )
 }
@@ -15,23 +16,6 @@ macro_rules! ctx_store{
         let $disk = BlockDisk::wrap(_s2_db);
     )
 }
-
-#[macro_export]
-macro_rules! ctx_mintstate{
-    ($ctx:expr, $state:ident) => (
-        let _s3_db = $ctx.engine.state();
-        let $state = CoreStateRead::wrap(_s3_db);
-    )
-}
-
-#[macro_export]
-macro_rules! ctx_mintstore{
-    ($ctx:expr, $disk:ident) => (
-        let _s4_db = $ctx.engine.disk();
-        let $disk = BlockDisk::wrap(_s4_db);
-    )
-}
-
 
 #[macro_export]
 macro_rules! ctx_mintcnf{

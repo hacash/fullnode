@@ -78,6 +78,7 @@ impl EngineRead for ChainEngine {
             block: ctx::Block{
                 height,
                 hash,
+                coinbase: Address::default(),
             },
             tx: ctx::Tx::create(tx),
         };

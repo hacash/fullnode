@@ -562,23 +562,30 @@ impl Amount {
 // compute 
 impl Amount {
 
-    pub fn dist_mul(&mut self, n: u128) {
-        if self.dist < 0 {
-            panic!("cannot dist_mul for negative")
-        }
+    pub fn dist_mul(&self, n: u128) -> Ret<Amount> {
         if self.is_zero() {
-            *self = Self::zero(); 
-            return
+            return Ok(Self::zero())
         }
-        assert!(self.byte.len() <= U128S, "dist_mul error: dist overflow");
-        let mut du = u128::from_be_bytes(add_left_padding(&self.byte, U128S).try_into().unwrap());
-        du = du.checked_mul(n).unwrap();
-        *self = Self::coin_u128(du, self.unit);
+        if self.dist < 0 {
+            return errf!("cannot dist_mul for negative")
+        }
+        if self.byte.len() > U128S {
+            return errf!("dist_mul error: dist overflow")
+        }
+        let du = u128::from_be_bytes(add_left_padding(&self.byte, U128S).try_into().unwrap());
+        let Some(du) = du.checked_mul(n) else {
+            return errf!("dist_mul error: u128 overflow")
+        };
+        Ok(Self::coin_u128(du, self.unit))
     }
 
-    pub fn unit_sub(&mut self, sub: u8) {
-        assert!(sub < self.unit, "unit_sub error: unit must big than {}", sub);
-        self.unit -= sub;
+    pub fn unit_sub(&self, sub: u8) -> Ret<Amount> {
+        if sub >= self.unit {
+            return errf!("unit_sub error: unit must big than {}", sub)
+        }
+        let mut res = self.clone();
+        res.unit -= sub;
+        Ok(res)
     }
 
     pub fn add_mode_bigint(&self, src: &Amount) -> Ret<Amount> {

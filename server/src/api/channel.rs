@@ -9,7 +9,7 @@ defineQueryObject!{ Q7542,
 }
 
 async fn channel(State(ctx): State<ApiCtx>, q: Query<Q7542>) -> impl IntoResponse {
-    ctx_mintstate!(ctx, mintstate);
+    ctx_state!(ctx, state);
     q_unit!(q, unit);
     q_must!(q, id, s!(""));
     // id
@@ -21,7 +21,7 @@ async fn channel(State(ctx): State<ApiCtx>, q: Query<Q7542>) -> impl IntoRespons
         return api_error("channel id format error")
     }
     let chid = ChannelId::must(&id);
-    let Some(channel) = mintstate.channel(&chid) else {
+    let Some(channel) = state.channel(&chid) else {
         return api_error("channel not find")
     };
 

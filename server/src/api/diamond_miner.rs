@@ -8,8 +8,6 @@ defineQueryObject!{ Q7846,
 }
 
 async fn diamondminer_init(State(ctx): State<ApiCtx>, _q: Query<Q7846>) -> impl IntoResponse {
-    // ctx_mintstate!(ctx, mintstate);
-    // q_must!(q, wait, 45); // 45 sec
     let cnf = ctx.engine.config();
 
     if ! cnf.dmer_enable {
@@ -34,7 +32,7 @@ defineQueryObject!{ Q6396,
 }
 
 async fn diamondminer_success(State(ctx): State<ApiCtx>, q: Query<Q6396>, body: Bytes) -> impl IntoResponse {
-    ctx_mintstate!(ctx, mintstate);
+    ctx_state!(ctx, state);
     // q_must!(q, wait, 45); // 45 sec
     let cnf = ctx.engine.config();
 
@@ -52,7 +50,7 @@ async fn diamondminer_success(State(ctx): State<ApiCtx>, q: Query<Q6396>, body: 
     let mint_name = act.diamond.to_readable();
 
     // check number and hash
-    let lastdia = mintstate.get_latest_diamond();
+    let lastdia = state.get_latest_diamond();
     if mint_number != *lastdia.number + 1 {
         return api_error("diamond number error");
     }

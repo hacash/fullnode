@@ -9,7 +9,6 @@ defineQueryObject!{ Q8364,
 
 async fn balance(State(ctx): State<ApiCtx>, q: Query<Q8364>) -> impl IntoResponse  {
     ctx_state!(ctx, state);
-    ctx_mintstate!(ctx, mintstate);
     q_unit!(q, unit);
     let ads = q.address.replace(" ","").replace("\n","");
     let addrs: Vec<_> = ads.split(",").collect();
@@ -36,7 +35,7 @@ async fn balance(State(ctx): State<ApiCtx>, q: Query<Q8364>) -> impl IntoRespons
         });
         // dianames
         if let Some(true) = &q.diamonds {
-            let diaowned = mintstate.diamond_owned(&adr).unwrap_or_default();
+            let diaowned = state.diamond_owned(&adr).unwrap_or_default();
             let dianames = diaowned.readable();
             resj["diamonds"] = dianames.into();
         }

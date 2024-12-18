@@ -301,7 +301,6 @@ defineQueryObject!{ Q4391,
 }
 
 async fn miner_notice(State(ctx): State<ApiCtx>, q: Query<Q4391>) -> impl IntoResponse {
-    // ctx_mintstate!(ctx, mintstate);
     q_must!(q, wait, 45); // 45 sec
     set_in_range!(wait, 1, 300);
     let mut lasthei = 0;
@@ -338,7 +337,6 @@ defineQueryObject!{ Q2954,
 
 
 async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoResponse {
-    // ctx_mintstate!(ctx, mintstate);
     q_must!(q, detail, false);
     q_must!(q, transaction, false);
     q_must!(q, stuff, false); // coinbase and mkrl
@@ -390,7 +388,6 @@ defineQueryObject!{ Q9347,
 
 
 async fn miner_success(State(ctx): State<ApiCtx>, q: Query<Q9347>) -> impl IntoResponse {
-    // ctx_mintstate!(ctx, mintstate);
     if ! ctx.engine.config().miner_enable {
         return api_error("miner not enable")
     }

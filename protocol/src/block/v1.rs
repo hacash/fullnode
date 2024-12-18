@@ -83,21 +83,23 @@ impl BlockRead for BlockV1 {
 impl BlockExec for BlockV1 {
     fn execute(&self, ccnf: ctx::Chain, state: Box<dyn State>) -> Ret<Box<dyn State>> {
         // create env
-        let env = ctx::Env{
+        let mut env = ctx::Env{
             chain: ccnf,
             block: ctx::Block{
                 height: self.height().uint(),
                 hash: self.hash(),
+                coinbase: Address::default(),
             },
             tx: ctx::Tx::default(),
         };
-        // create context
+        // coinbase 
         let cbtx = self.coinbase_transaction()?;
+        let base_addr = cbtx.main();
+        env.block.coinbase = base_addr.clone();
+        // create ctx
         let mut ctxobj = ctx::ContextInst::new(env, state, cbtx.as_read());
         let ctx = &mut ctxobj;
         let txs = self.transactions();
-        // coinbase
-        let base_addr = cbtx.main();
         let mut total_fee = Amount::zero();
         // exec each tx
         for tx in txs {

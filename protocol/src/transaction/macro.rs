@@ -71,17 +71,16 @@ impl TransactionRead for $class {
     fn fee_got(&self) -> Amount {
         let mut gfee = self.fee().clone();
         if self.burn_90() && gfee.unit() > 1 {
-            gfee.unit_sub(1); // burn 90
+            gfee = gfee.unit_sub(1).unwrap(); // burn 90
         }
         gfee
     }
 
-    fn fee_extend(&self) -> (u16, Amount) {
-        let mut fee = self.fee_got();
+    fn fee_extend(&self) -> Ret<(u16, Amount)> {
         let par = (*self.gas_max) as u16;
         let max = par * par;
-        fee.dist_mul(max as u128);
-        (max, fee)
+        let fee = self.fee_got().dist_mul(max as u128)?;
+        Ok((max, fee))
     }
 
 

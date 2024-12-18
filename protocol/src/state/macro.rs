@@ -34,12 +34,12 @@ macro_rules! inst_state_define {
     ($class:ident, $( $idx:expr, $kn:ident, $kty:ty : $vty:ty)+ ) => {
 
         concat_idents!{ classread = $class, Read {
-            pub struct classread {
-                sta: Arc<dyn State>,
+            pub struct classread<'a> {
+                sta: &'a dyn State,
             }
 
-            impl classread {
-                pub fn wrap(s: Arc<dyn State>) -> Self {
+            impl<'a> classread<'a> {
+                pub fn wrap(s: &'a dyn State) -> Self {
                     Self {
                         sta: s,
                     }
