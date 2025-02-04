@@ -8,9 +8,7 @@ use chain::engine::*;
 use field::*;
 use field::interface::*;
 use protocol::*;
-use protocol::action::*;
-
-use protocol::interface::*;
+use protocol::transaction::*;
 
 use super::interface::*;
 use super::memtxpool::TXPOOL_GROUP_DIAMOND_MINT;

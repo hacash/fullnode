@@ -65,7 +65,9 @@ impl MsgHandler {
 
     pub async fn on_connect(&self, peer: Arc<Peer>) {
         // println!("on_connect peer={}", peer.nick());
+        // println!("&&&& peer.send_msg(MSG_REQ_STATUS, vec![]) ...");
         let _ = peer.send_msg(MSG_REQ_STATUS, vec![]).await;
+        // println!("&&&& peer.send_msg(MSG_REQ_STATUS, vec![]) ok.");
     }
     
     pub async fn on_disconnect(&self, _peer: Arc<Peer>) {
@@ -74,7 +76,7 @@ impl MsgHandler {
     }
     
     pub async fn on_message(&self, peer: Arc<Peer>, ty: u16, body: Vec<u8>) {
-        // println!("on_message peer={} ty={} len={}", peer.nick(), ty, body.len());
+        // println!("&&&& on_message peer={} ty={} len={}", peer.nick(), ty, body.len());
 
         match ty {
             MSG_TX_SUBMIT =>      { let _ = self.blktx.send(BlockTxArrive::Tx(Some(peer.clone()), body)).await; },

@@ -12,6 +12,8 @@ use protocol::state::*;
 use protocol::genesis::*;
 use protocol::difficulty::*;
 use protocol::interface::*;
+use protocol::action::*;
+use protocol::transaction::*;
 use chain::interface::*;
 
 

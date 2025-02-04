@@ -84,7 +84,11 @@ impl EngineRead for ChainEngine {
         };
         let mut ctxobj = ctx::ContextInst::new(env, sub_state, tx);
         // do tx exec
-        tx.execute(&mut ctxobj)
+        tx.execute(&mut ctxobj)?;
+        // minter check
+        self.minter.tx_check(tx, height)?;
+        // ok
+        Ok(())
     }
     
 }

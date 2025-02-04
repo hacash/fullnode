@@ -10,7 +10,7 @@ impl MsgHandler {
     }
 
     async fn receive_status(&self, peer: Arc<Peer>, buf: Vec<u8>) {
-        // println!(">>> receive_status_from_peer peer={}", peer.nick());
+        // println!("&&&& receive_status_from_peer peer={}", peer.nick());
         let status = HandshakeStatus::create(&buf);
         if status.is_err() {
             peer.disconnect().await;
@@ -26,9 +26,10 @@ impl MsgHandler {
         // sync blocks first
         let tar_hei = *status.latest_height;
         let my_hei = *my_status.latest_height;
-        // println!(">>> receive_status_from_peer peer={} my height={} tar height={}", peer.nick(), my_hei, tar_hei);
+        // println!("&&&& receive_status_from_peer peer={} my height={} tar height={}", peer.nick(), my_hei, tar_hei);
         if my_hei == 0 && tar_hei > 0 {
             let start_hei = 1; // first block
+            // println!("&&&& get_status_try_sync_blocks my_hei == 0 ...");
             get_status_try_sync_blocks(self, peer, start_hei).await;
             return
         }
@@ -39,8 +40,9 @@ impl MsgHandler {
                 ubh = 255
             }
             let diff_hei = my_hei;
-            // println!(">>> send_req_block_hash_msg ubh={} diff_hei = {}", ubh, diff_hei);
+            // println!("&&&& send_req_block_hash_msg ubh={} diff_hei = {}", ubh, diff_hei);
             send_req_block_hash_msg(peer, ubh as u8, diff_hei).await;
+            // println!("&&&& send_req_block_hash_msg ok.");
             return
         }
     }

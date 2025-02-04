@@ -13,45 +13,58 @@ impl P2PManage {
         }
         println!(".");
         for addr in &self.cnf.boot_nodes {
-            if let Err(e) = self.connect_node(addr).await {
+            // println!("&&&& connect_boot_nodes addr {} ...", addr);
+            if let Err(e) = self.connect_node(*addr).await {
                 println!("[P2P Error] Connect to {}, {}", &addr, e);
             }
+            // println!("&&&& connect_boot_nodes addr {} ok.", addr);
         }
         Ok(())
     }
 
-    pub async fn connect_node(&self, addr: &SocketAddr) -> Rerr {
-        let conn = errunbox!( TcpStream::connect(addr).await )?;
+    pub async fn connect_node(&self, addr: SocketAddr) -> Ret<Arc<Peer>> {
+        let conn = tcp_dial_connect(addr, 6).await?;
         let report_me = true;
         self.handle_conn(conn, report_me).await
     }
 
-    pub async fn handle_conn(&self, mut conn: TcpStream, report_me: bool) -> Rerr {
+    pub async fn handle_conn(&self, mut conn: TcpStream, report_me: bool) -> Ret<Arc<Peer>> {
         tcp_check_handshake(&mut conn, 5).await?;
         let mynodeinfo = self.pick_my_node_info();
+        let mndf = mynodeinfo.clone();
         if report_me {
             // report my node info: mark+port+id+name
-            tcp_send_msg(&mut conn, MSG_REPORT_PEER, mynodeinfo.clone()).await?;
+            // println!("&&&& tcp_send_msg(&mut conn, MSG_REPORT_PEER, mndf) ...");
+            tcp_send_msg(&mut conn, MSG_REPORT_PEER, mndf).await?;
+            // println!("&&&& tcp_send_msg(&mut conn, MSG_REPORT_PEER, mndf) ok.");
         }
         // deal conn
+        // println!("&&&& insert_peer(conn, mynodeinfo) ...");
         self.insert_peer(conn, mynodeinfo).await
     }
 
-    pub async fn insert_peer(&self, conn: TcpStream, mynodeinfo: Vec<u8>) -> Rerr {
+    pub async fn insert_peer(&self, conn: TcpStream, mynodeinfo: Vec<u8>) -> Ret<Arc<Peer>> {
+        // println!("&&&& try_create_peer(peer.clone()) ...");
         let (peer, conn_read) = self.try_create_peer(conn, mynodeinfo).await?;
+        // println!("&&&& try_create_peer(peer.clone()) ok.");
         // loop read peer msg
+        // println!("&&&& handle_peer_message(peer.clone(), conn_read) ...");
         self.handle_peer_message(peer.clone(), conn_read).await?;
+        // println!("&&&& handle_peer_message(peer.clone(), conn_read) ok.");
         // insert to node list
-        let droped = self.insert(peer);
+        // println!("&&&& insert(peer.clone()) ...");
+        let droped = self.insert(peer.clone());
         self.delay_close_peer(droped, 15).await; // delay 15 secs to close
-        Ok(())
+        // println!("&&&& insert(peer.clone()) ok.");
+        Ok(peer)
     }
 
 
     async fn try_create_peer(&self, mut stream: TcpStream, mynodeinfo: Vec<u8>) -> Ret<(Arc<Peer>, OwnedReadHalf)> {
         let conn = &mut stream;
         // read first msg
-        let (ty, body) = tcp_read_msg(conn, 4).await?;
+        let (ty, body) = tcp_read_msg(conn, 5).await?;
+        // println!("&&&& try_create_peer.tcp_read_msg() ty = {} .", ty);
         if MSG_REMIND_ME_IS_PUBLIC == ty {
             return errf!("ok") // finish close
 
@@ -68,6 +81,7 @@ impl P2PManage {
             return errf!("ok") // finish close
         }
         // other msg
+        // println!("&&&& try_create_peer.create_with_msg() ty = {}.", ty);
         Peer::create_with_msg(stream, ty, body, mynodeinfo).await
     }
     
@@ -100,7 +114,7 @@ impl P2PManage {
         }
         // set delay to close
         tokio::spawn(async move{
-            asleep(delay).await;
+            asleep(delay as f32).await;
             peer.disconnect().await;
         });
     }

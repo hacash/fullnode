@@ -78,6 +78,8 @@ impl BlockRead for BlockHeadMeta {
 		self.head.transaction_count()
 	}
 
+	
+
 
 	fn nonce(&self) -> &Uint4 {
         &self.meta.nonce

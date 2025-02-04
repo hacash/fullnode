@@ -332,20 +332,3 @@ async fn diamond_inscription_protocol_cost(State(ctx): State<ApiCtx>, q: Query<Q
 
 }
 
-
-
-
-/*****************************************/
-
-
-fn pickout_diamond_mint_action(tx: &dyn TransactionRead) -> Option<DiamondMint> {
-    let mut res: Option<DiamondMint> = None;
-    for a in tx.actions() {
-        if a.kind() == DiamondMint::KIND {
-            let act = DiamondMint::must(&a.serialize());
-            res = Some(act);
-            break // find ok
-        }
-    }
-    res
-}

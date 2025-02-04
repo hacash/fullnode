@@ -81,7 +81,7 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
         retry!(10); // my max too low
     }
     // ok
-    if let Some(mint) = checkout_diamond_mint_action(my_bid_txp.objc.as_read()) {
+    if let Some(mint) = pickout_diamond_mint_action(my_bid_txp.objc.as_read()) {
         let act = mint.d;
         let dia = act.diamond.to_readable();
         let dnum = *act.number;
@@ -140,19 +140,6 @@ fn pick_first_bid_tx(tx_pool: &dyn TxPool) -> Option<TxPkg> {
     // ok
     first
 }
-
-
-// for diamond create action
-fn checkout_diamond_mint_action(tx: &dyn TransactionRead) -> Option<DiamondMint> {
-    const DMINT: u16 = DiamondMint::KIND;
-    for act in tx.actions() {
-        if act.kind() == DMINT {
-            let dm = DiamondMint::must(&act.serialize());
-            return Some(dm);
-        }
-    }
-    None
-} 
 
 
 

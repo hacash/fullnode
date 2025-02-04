@@ -314,7 +314,7 @@ async fn miner_notice(State(ctx): State<ApiCtx>, q: Query<Q4391>) -> impl IntoRe
         if getlasthei() >= q.height {
             break // finish!
         }
-        asleep(1).await; // sleep 1 dec
+        asleep(1.0).await; // sleep 1 dec
     }
     drop(mwnc); // count - 1
     getlasthei();

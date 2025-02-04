@@ -9,7 +9,6 @@ sys = { path = "../sys" }
 db = { path = "../db", features = ["db-sled"] }
 # db = { path = "../db", features = ["db-leveldb-sys"] }
 field = { path = "../field" }
-debug_print = "1.0.0"
 dyn-clone = "1.0.17"
 concat-idents = "1.1.5"
 hex = "0.4.3"

@@ -11,7 +11,7 @@ pub fn create(buf: &[u8]) -> Ret<(Box<dyn Action>, usize)> {
     let kid = cut_kind(buf)?;
     let mut hasact = try_create(kid, buf)?;
     if let None = hasact {
-        unsafe{
+        unsafe {
             hasact = EXTEND_ACTIONS_TRY_CREATE_FUNC(kid, buf)?;
         }
     }

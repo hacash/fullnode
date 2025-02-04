@@ -6,6 +6,7 @@ pub trait Minter : Send + Sync {
     // fn config(&self) -> &MintConf;
     fn next_difficulty(&self, _: &dyn BlockRead, _: &BlockDisk) -> u32 { u32::MAX }
     // check
+    fn tx_check(&self, _: &dyn TransactionRead, _: u64) -> Rerr { Ok(()) }
     fn prepare(&self, _: &dyn BlockRead, _: &BlockDisk) -> Rerr { Ok(()) }
     fn consensus(&self, _: &dyn BlockRead, _: &dyn BlockRead, _: &BlockDisk) -> Rerr {  Ok(())  }
     fn coinbase(&self, _: u64, _: &dyn Transaction) -> Rerr { Ok(()) }

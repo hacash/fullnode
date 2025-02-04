@@ -51,6 +51,7 @@ impl TransactionRead for $class {
     fn action_count(&self) -> &Uint2 {
         self.actions.count()
     }
+    
     fn actions(&self) -> &Vec<Box<dyn Action>> {
         self.actions.list()
     }

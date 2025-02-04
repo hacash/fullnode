@@ -41,6 +41,10 @@ impl Minter for HacashMinter {
         difn
     }
 
+    fn tx_check(&self, tx: &dyn TransactionRead, chei: u64) -> Rerr {
+        impl_tx_check(self, tx, chei)
+    }
+
     fn prepare(&self, curblk: &dyn BlockRead, sto: &BlockDisk ) -> Rerr {
         impl_prepare(self, curblk, sto)
     }

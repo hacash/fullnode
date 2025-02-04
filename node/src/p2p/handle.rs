@@ -12,10 +12,6 @@ impl P2PManage {
         let hdl1 = self.msghandler.clone();
         let hdl2 = self.msghandler.clone();
         let hdl3 = self.msghandler.clone();
-        // on connect
-        tokio::spawn(async move {
-            hdl1.on_connect(peer1).await
-        });
         tokio::spawn(async move {
             // handle msg
             do_handle_pmsg(pary1, pary2, hdl2, peer2, conn_read).await;
@@ -24,6 +20,12 @@ impl P2PManage {
             tokio::spawn(async move {
                 hdlcp.on_disconnect(peer3).await
             });
+        });
+        // on connect
+        tokio::spawn(async move {
+            // println!("&&&& hdl1.on_connect(peer1) ...");
+            hdl1.on_connect(peer1).await;
+            // println!("&&&& hdl1.on_connect(peer1) ok.");
         });
         Ok(())
     }

@@ -1,8 +1,6 @@
 use std::sync::*;
 use std::any::*;
 
-// use dyn_clone::*;
-
 use sys::*;
 use db::*;
 use protocol::*;

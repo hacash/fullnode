@@ -43,6 +43,7 @@ impl MsgHandler {
     }
     
     async fn receive_blocks(&self, peer: Arc<Peer>, mut buf: Vec<u8>) {
+        // println!("&&&& receive_blocks ...");
         if buf.len() < 3 * 8 {
             println!("check data failed.");
             return
@@ -52,6 +53,7 @@ impl MsgHandler {
         let start_hei = u64::from_be_bytes( bufcut!(buf, 8, 16) );
         let end_hei = u64::from_be_bytes( bufcut!(buf, 16, 24) );
         let persent =  end_hei as f64 / latest_hei as f64 * 100.0;
+        // println!("&&&& receive_blocks start_hei={}, latest_hei={}, end_hei={} ...", start_hei, latest_hei, end_hei);
         {
             let isrlk = self.inserting.lock().unwrap();
             flush!("{}({:.2}%) inserting...", end_hei, persent);

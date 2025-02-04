@@ -13,6 +13,8 @@ impl P2PManage {
         // connect boot nodes
         let p2p = this.clone();
         tokio::spawn(async move{
+            asleep(0.25).await;
+            // println!("&&&& connect_boot_nodes");
             p2p.connect_boot_nodes().await
         });
 
@@ -20,7 +22,7 @@ impl P2PManage {
         if this.cnf.findnodes {
             let p2p = this.clone();
             tokio::spawn(async move{
-                asleep(15).await;
+                asleep(20.0).await;
                 p2p.find_nodes().await
             });
         }

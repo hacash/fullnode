@@ -17,6 +17,9 @@ pub const DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BLOCK_HASH: u32 = 4_0000;
 // 41001 diamond, start with Sha3_ Hash (diamondreshash + blockhash + bidfee) includes the bidding fee to participate in the decision of diamond shape color matching
 pub const DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BIDDING_FEE: u32 = 4_1000;
 
+// 107001 diamond, hip-18 & hip-19
+pub const DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST: u32 = 10_7000;
+
 
 
 

@@ -38,7 +38,7 @@ impl MsgHandler {
     }
 
     async fn receive_hashs(&self, peer: Arc<Peer>, mut buf: Vec<u8>) {
-        // println!("receive_hashs = {}", hex::encode(&buf));
+        // println!("&&&& receive_hashs = {}", hex::encode(&buf));
         if buf.len() < 8 {
             println!("check hash failed.");
             return
@@ -64,7 +64,7 @@ impl MsgHandler {
         if end_hei <= hash_num {
             start_hei = 0; // first block
         }
-        // debug_println!("hash_len = {}, start_hei={}, end_hei={}, hash_num={}", hash_len, start_hei, end_hei, hash_num);
+        // println!("&&&& hash_len = {}, start_hei={}, end_hei={}, hash_num={}", hash_len, start_hei, end_hei, hash_num);
         // diff each blk hash
         let duskptr = self.engine.disk();
         let store = BlockDisk::wrap(duskptr);
@@ -81,6 +81,7 @@ impl MsgHandler {
             // debug_println!("hei={}, hx={}, myhx={}", hei, hx, myhx);
             if hx == myhx {
                 // sync blocks from next height
+                // println!("&&&& get_status_try_sync_blocks receive_hashs myhx = {}, hei={} ...", myhx.hex(), hei+1);
                 get_status_try_sync_blocks(self, peer, hei + 1).await;
                 return // to sync new blocks
             }

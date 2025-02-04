@@ -4,8 +4,8 @@ pub fn secs(s: u64) -> Duration {
     Duration::from_secs(s)
 }
 
-pub async fn asleep(t: u64) {
-    tokio::time::sleep(secs(t)).await;
+pub async fn asleep(t: f32) {
+    tokio::time::sleep(Duration::from_millis((t*1000.0) as u64)).await;
 }
 
 pub async fn new_ticker(dura: u64) -> Interval {
