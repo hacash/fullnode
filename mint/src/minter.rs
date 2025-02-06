@@ -1,20 +1,28 @@
 
+
+
+
+
 #[allow(dead_code)]
 pub struct HacashMinter {
     cnf: MintConf,
     difficulty: DifficultyGnr,
     genesis_block: Arc<dyn Block>,
+    // check highest bidding
+    biddings: Mutex<VecDeque<BiddingRecord>>,
 }
 
 impl HacashMinter {
 
     pub fn create(ini: &IniObj) -> Self {
         let cnf = MintConf::new(ini);
-        let dgnr =  DifficultyGnr::new(cnf.clone());
+        let dgnr = DifficultyGnr::new(cnf.clone());
+        let dbs = Self::DELAY_SECS + Self::RECORD_NUM + 1;
         Self {
             cnf: cnf,
             difficulty: dgnr,
             genesis_block: genesis_block_pkg().into_block().into(),
+            biddings: Mutex::new(VecDeque::with_capacity(dbs)),
         }
     }
 

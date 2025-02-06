@@ -24,6 +24,7 @@ pub mod action;
 pub mod hook;
 
 
+include!{"check/bidding.rs"}
 include!{"check/initialize.rs"}
 include!{"check/coinbase.rs"}
 include!{"check/difficulty.rs"}

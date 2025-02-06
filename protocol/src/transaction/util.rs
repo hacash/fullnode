@@ -97,11 +97,13 @@ pub fn pickout_diamond_mint_action(tx: &dyn TransactionRead) -> Option<DiamondMi
 }
 
 
-pub fn pickout_diamond_mint_action_from_block(blk: &dyn BlockRead) -> Option<(Box<dyn Transaction>, DiamondMint)> {
+pub fn pickout_diamond_mint_action_from_block(blk: &dyn BlockRead) -> Option<(usize, Box<dyn Transaction>, DiamondMint)> {
+    let mut txposi: usize = 0;
     for tx in blk.transactions() {
         if let Some(act) = pickout_diamond_mint_action(tx.as_read()) {
-            return Some((tx.clone(), act))
+            return Some((txposi, tx.clone(), act))
         }
+        txposi += 1;
     }
     None
 }

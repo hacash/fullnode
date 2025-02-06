@@ -22,7 +22,7 @@ impl P2PManage {
         if this.cnf.findnodes {
             let p2p = this.clone();
             tokio::spawn(async move{
-                asleep(20.0).await;
+                asleep(15.0).await;
                 p2p.find_nodes().await
             });
         }

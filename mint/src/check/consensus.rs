@@ -1,7 +1,7 @@
 
 
 
-fn impl_tx_check(_this: &HacashMinter, tx: &dyn TransactionRead, next_hei: u64) -> Rerr {
+fn impl_tx_check(this: &HacashMinter, tx: &dyn TransactionRead, next_hei: u64) -> Rerr {
     let tn =  tx.action_count().uint();
     let txs = tx.actions();
     if tn as usize != txs.len() {
@@ -12,27 +12,26 @@ fn impl_tx_check(_this: &HacashMinter, tx: &dyn TransactionRead, next_hei: u64) 
     };
     // deal with diamond mint action
     if next_hei % 5 == 0 {
-        println!("diamond mint transaction cannot submit after height of ending in 4 or 9");
+        // println!("diamond mint transaction cannot submit after height of ending in 4 or 9");
         return errf!("diamond mint transaction cannot submit after height of ending in 4 or 9")
     }
-    let bidmin = block_reward(next_hei);
+    /*  test start *
     let bidaddr = tx.main();
     let bidfee  = tx.fee().clone();
     let dianame = diamintact.d.diamond;
     let dianum  = *diamintact.d.number;
-    const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
     println!("**** {} diamond bidding {}-{} addr: {}, fee: {}", ctshow().split_off(11),
         dianame.to_readable(), dianum, bidaddr.readable(), bidfee);
-    if dianum <= CKN {
-        // println!("not check before 107000");
-        return Ok(()) // not check before 107000
-    }
-    if bidfee < bidmin {
-        return errf!("diamond biding fee cannot less than {} after number {}", bidmin, CKN)
-    }
-
+    * test end */
+    // check_diamond_mint_minimum_bidding_fee
+    check_diamond_mint_minimum_bidding_fee(next_hei, tx, &diamintact)?;
+    // record tx
+    this.record_bidding(tx, &diamintact);
+    // ok
     Ok(())
 }
+
+
 
 fn impl_prepare(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockDisk) -> Rerr {
     let curhei = curblkhead.height().uint(); // u64
@@ -67,13 +66,30 @@ fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn Blo
     let curhei = curblk.height().uint(); // u64
     // check diamond mint action
     if curhei > 625000 && curhei % 5 == 0 {
-        if let Some((txp, diamint)) = pickout_diamond_mint_action_from_block(curblk) {
-            let dianame = diamint.d.diamond;
+        if let Some((tidx, txp, diamint)) = pickout_diamond_mint_action_from_block(curblk) {
+            const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
+            if tidx != 1 { // 0 is coinbase
+                return errf!("diamond mint transaction must be first one tx in block")
+            }
             let dianum  = *diamint.d.number;
-            let bidaddr  = txp.main();
             let bidfee  = txp.fee().clone();
-            println!("\n----\nblock height {} have a diamond {}-{}, address: {}, fee: {}\n----", 
-                curhei, dianame.to_readable(), dianum, bidaddr.readable(), bidfee)
+            // check_diamond_mint_minimum_bidding_fee
+            check_diamond_mint_minimum_bidding_fee(curhei, txp.as_read(), &diamint)?; // HIP-18
+            let rhbf = this.highest_bidding(dianum);
+            if bidfee < rhbf { // 
+                /* test print start */
+                println!("\n\n✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖\ndiamond mint bidding fee {} less than consensus record {}", bidfee, rhbf);
+                println!("block height {} have a diamond {}-{}, address: {}, fee: {}, RecordHighestBidding: {}, {}\n", 
+                    curhei, diamint.d.diamond.to_readable(), dianum, txp.main().readable(), bidfee,
+                    rhbf, this.print_bidding(),
+                );
+                /* test print end */ 
+                if dianum > CKN {  // HIP-19, check after 107000, reject blocks that don't follow the rules
+                    return errf!("diamond mint bidding fee {} less than consensus record {}", bidfee, rhbf)
+                }
+            } 
+            // clear for next diamond
+            this.clear_bidding();
         }
     }
     // check difficulty
@@ -104,5 +120,30 @@ fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn Blo
         }
     }
     // success
+    Ok(())
+}
+
+
+
+/************************/
+
+
+
+fn check_diamond_mint_minimum_bidding_fee(next_hei: u64, tx: &dyn TransactionRead, dmact: &DiamondMint) -> Rerr {
+    const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
+    // check
+    let bidmin = block_reward(next_hei);
+    let _bidaddr = tx.main();
+    let bidfee  = tx.fee().clone();
+    let _dianame = dmact.d.diamond;
+    let dianum  = *dmact.d.number;
+    if dianum <= CKN {
+        // println!("not check before 107000");
+        return Ok(()) // not check before 107000
+    }
+    if bidfee < bidmin {
+        return errf!("diamond biding fee cannot less than {} after number {}", bidmin, CKN)
+    }
+    // check all ok
     Ok(())
 }
