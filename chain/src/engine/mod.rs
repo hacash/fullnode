@@ -6,6 +6,7 @@ use sys::*;
 use db::*;
 use field::*;
 use field::interface::*;
+use protocol::block::BlkOrigin;
 use protocol::interface::*;
 use protocol::*;
 use protocol::state::*;

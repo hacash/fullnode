@@ -4,7 +4,7 @@ pub struct ChainEngine {
     cnf: EngineConf,
     // 
     minter: Box<dyn Minter>,
-    scaner: Box<dyn Scaner>,
+    scaner: Arc<dyn Scaner>,
 
     // data
     disk: Arc<dyn DiskDB>,
@@ -25,7 +25,7 @@ impl ChainEngine {
 
     pub fn open(ini: &IniObj, dbv: u32,
         minter: Box<dyn Minter>,
-        scaner: Box<dyn Scaner>
+        scaner: Arc<dyn Scaner>
     ) -> ChainEngine {
         // init
         minter.init(ini); 

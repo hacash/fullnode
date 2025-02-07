@@ -102,6 +102,7 @@ impl ChainEngine {
     /*************************/
 
     fn do_roll_disk(&self, root: Option<Arc<Chunk>>, cptr: Option<Arc<Chunk>>, data: Vec<u8>, hx: Hash) -> Rerr {
+        let nrt = root.clone();
         let new_root_hei: u64 = match root {
             Some(rt) => {
                 rt.state.write_to_disk(); // write state to disk
@@ -120,6 +121,13 @@ impl ChainEngine {
         block_disk_batch.put(hx.as_ref(), &data);
         // write all data by batch
         self.blockdisk.save_batch(block_disk_batch);
+        // scaner do roll
+        if let Some(new_root) = nrt {
+            let scres = self.scaner.roll(new_root.block.clone(), new_root.state.clone(), self.disk.clone());
+            if let Err(e) = scres {
+                panic!("\n\nBlock scaner roll error: {}\n\n", e);
+            }
+        }
         Ok(())
     }
 

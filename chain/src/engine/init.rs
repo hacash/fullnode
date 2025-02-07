@@ -1,4 +1,3 @@
-use block::BlkOrigin;
 
 
 fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>, is_state_upgrade: bool) -> Arc<dyn Block> {

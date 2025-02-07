@@ -60,6 +60,8 @@ pub fn fullnode_with_minter_scaner(iniobj: IniObj,
     let (cltx, clrx) = mpsc::channel();
     ctrlc::set_handler(move||{ let _ = cltx.send(()); }).unwrap();
 
+    let scaner = init_block_scaner(&iniobj, Some(scaner));
+
     // engine
     let dbv = HACASH_STATE_DB_UPDT;
     let engine = Arc::new(ChainEngine::open(&iniobj, dbv, minter, scaner));
@@ -83,3 +85,33 @@ pub fn fullnode_with_minter_scaner(iniobj: IniObj,
 
 }
 
+
+
+
+/*
+* init block scaner
+*/
+fn init_block_scaner(inicnf: &IniObj, blkscaner: Option<Box<dyn Scaner>>) -> Arc<dyn Scaner> {
+
+    // scaner
+    let scaner: Arc<dyn Scaner> = match blkscaner {
+        Some(mut scan) => {
+            scan.init(inicnf).unwrap(); // init block scaner
+            scan.into()
+        },
+        _ => Arc::new(EmptyBlockScaner{}),
+    };
+
+    // start block scaner
+    let scanercp1 = scaner.clone();
+    std::thread::spawn(move||{
+        scanercp1.start().unwrap();
+    });
+    let scanercp2 = scaner.clone();
+    std::thread::spawn(move||{
+        scanercp2.serve().unwrap();
+    });
+    
+    // ok
+    scaner
+}
