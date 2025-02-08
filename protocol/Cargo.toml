@@ -6,8 +6,8 @@ edition = "2021"
 [dependencies]
 x16rs = { path = "../x16rs" }
 sys = { path = "../sys" }
-db = { path = "../db", features = ["db-sled"] }
-# db = { path = "../db", features = ["db-leveldb-sys"] }
+# db = { path = "../db", features = ["db-sled"] }
+db = { path = "../db", features = ["db-leveldb-sys"] }
 field = { path = "../field" }
 dyn-clone = "1.0.17"
 concat-idents = "1.1.5"

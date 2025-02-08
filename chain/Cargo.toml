@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 sys = { path = "../sys" }
-db = { path = "../db", features = ["db-sled"] }
-# db = { path = "../db", features = ["db-leveldb-sys"] }
+# db = { path = "../db", features = ["db-sled"] }
+db = { path = "../db", features = ["db-leveldb-sys"] }
 field = { path = "../field" }
 protocol = { path = "../protocol" }
 hex = "0.4.3"
