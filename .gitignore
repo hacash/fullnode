@@ -3,6 +3,8 @@
 debug/
 target/
 
+hacash_*
+
 *.local.*
 *.ini
 *.exe

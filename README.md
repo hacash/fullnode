@@ -22,6 +22,9 @@ cp target/release/fullnode  ./hacash_fullnode_ubuntu
 cp target/release/poworker  ./hacash_poworker_ubuntu
 cp target/release/diaworker ./hacash_diaworker_ubuntu
 
+# or static 
+RUSTFLAGS="-C target-feature=+crt-static" RUST_BACKTRACE="full" cargo build --release --target=x86_64-unknown-linux-musl
+
 ```
 
 Windows:
