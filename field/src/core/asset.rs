@@ -6,7 +6,7 @@ combi_struct!{ AssetAmt,
 
 impl std::fmt::Display for AssetAmt {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f,"({},{})", self.serial, self.amount)
+        write!(f,"({}:{})", self.serial, self.amount)
     }
 }
 
@@ -32,10 +32,10 @@ macro_rules! checked_opt {
                 return err
             }
             match self.amount.$name(*self.amount) {
-                Some(v) => Ok(Self{
+                Some(v) => Self{
                     serial: self.serial,
-                    amount: Fold64::from(v),
-                }),
+                    amount: Fold64::from(v)?,
+                }.checked(),
                 _ => err,
             }
         }
@@ -47,6 +47,13 @@ impl AssetAmt {
 
     checked_opt!{ checked_add }
     checked_opt!{ checked_sub }
+
+    pub fn checked(self) -> Ret<Self> {
+        Ok(Self{
+            serial: self.serial.checked()?,
+            amount: self.amount.checked()?,
+        })
+    }
 
 }
 

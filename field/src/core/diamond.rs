@@ -25,7 +25,7 @@ impl DiamondNumberAuto {
 		DiamondNumber::from( self.uint() as u32 )
 	}
 	pub fn from_diamond(dia: &DiamondNumber) -> DiamondNumberAuto {
-		DiamondNumberAuto::from( dia.uint() as u64 )
+		DiamondNumberAuto::from( dia.uint() as u64 ).unwrap()
 	}
 }
 

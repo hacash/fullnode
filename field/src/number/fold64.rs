@@ -9,7 +9,16 @@ const FOLDU64SX7: u64 = FOLDU64SX6 * 256; // 7byte :     90071992_54740992
 const FOLDU64SX8: u64 = FOLDU64SX7 * 256; // 8byte : 230_58430092_13693952
 //                                                  2 30584300 92136939.52
 
-const FOLDU64XLIST: [u64; 8] = [FOLDU64SX1, FOLDU64SX2, FOLDU64SX3, FOLDU64SX4, FOLDU64SX5, FOLDU64SX6, FOLDU64SX7, FOLDU64SX8];
+const FOLDU64XLIST: [u64; 8] = [
+    FOLDU64SX1, 
+    FOLDU64SX2, 
+    FOLDU64SX3, 
+    FOLDU64SX4, 
+    FOLDU64SX5, 
+    FOLDU64SX6, 
+    FOLDU64SX7, 
+    FOLDU64SX8
+];
 
 
 
@@ -103,8 +112,19 @@ impl Fold64 {
 
     pub const MAX: u64 = FOLDU64SX8 - 1;
 
-    pub const fn from(v: u64) -> Self {
-        Self{ value: v }
+    pub const fn max() -> Self {
+        Self{ value: Self::MAX }
+    }
+
+    pub fn checked(self) -> Ret<Self> {
+        if self.value > Self::MAX {
+            return errf!("Fold64 value {} cannot more than max {}", self.value, Self::MAX)
+        }
+        Ok(self)
+    }
+
+    pub fn from(v: u64) -> Ret<Self> {
+        Self{ value: v }.checked()
     }
 
     pub fn uint(&self) -> u64 {

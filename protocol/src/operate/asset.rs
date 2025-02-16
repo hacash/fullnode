@@ -5,7 +5,7 @@ macro_rules! asset_operate_define {
 
         pub fn $func_name(ctx: &mut dyn Context, $addr: &Address, $amt: &AssetAmt) -> Ret<AssetAmt> {
             if *$amt.amount == 0 {
-                return errf!("Asset value cannot zore")
+                return errf!("Asset operate amount cannot be zore")
             }    
             let mut state = CoreState::wrap(ctx.state());
             let mut userbls = state.balance( $addr ).unwrap_or_default();

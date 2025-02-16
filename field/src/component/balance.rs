@@ -9,7 +9,7 @@ impl SatoshiAuto {
 		Satoshi::from( self.uint() )
 	}
 	pub fn from_satoshi(sat: &Satoshi) -> SatoshiAuto {
-		SatoshiAuto::from( sat.uint() )
+		SatoshiAuto::from( sat.uint() ).unwrap()
 	}
 }
 

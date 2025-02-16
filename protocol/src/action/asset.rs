@@ -57,10 +57,6 @@ action_define!{AssetToTrs, 17,
         amount: AssetAmt
     },
     (self, ctx, _gas {
-        let is_mainnet = ctx.env().chain.id==0 && ctx.env().block.height > 600000;
-        if is_mainnet {
-            return err!("asset just for test chain now")
-        }
         let from = ctx.env().tx.main; 
         let to   = ctx.addr(&self.to)?;
         asset_transfer(ctx, &from, &to, &self.amount)
@@ -78,10 +74,6 @@ action_define!{AssetFromTrs, 18,
         amount: AssetAmt
     },
     (self, ctx, _gas {
-        let is_mainnet = ctx.env().chain.id==0 && ctx.env().block.height > 600000;
-        if is_mainnet {
-            return err!("asset just for test chain now")
-        }
         let from = ctx.addr(&self.from)?;
         let to   = ctx.env().tx.main; 
         asset_transfer(ctx, &from, &to, &self.amount)
@@ -100,10 +92,6 @@ action_define!{AssetFromToTrs, 19,
         amount: AssetAmt
     },
     (self, ctx, _gas {
-        let is_mainnet = ctx.env().chain.id==0 && ctx.env().block.height > 600000;
-        if is_mainnet {
-            return err!("asset just for test chain now")
-        }
         let from = ctx.addr(&self.from)?;
         let to   = ctx.addr(&self.to)?;
         asset_transfer(ctx, &from, &to, &self.amount)

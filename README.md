@@ -22,6 +22,7 @@ cp target/release/fullnode  ./hacash_fullnode_ubuntu
 cp target/release/poworker  ./hacash_poworker_ubuntu
 cp target/release/diaworker ./hacash_diaworker_ubuntu
 
+
 # or static linked
 # edit chain/Cargo.toml and protocol/Cargo.toml, change "db-leveldb-sys" to "db-sled"
 rustup target add x86_64-unknown-linux-musl
@@ -29,6 +30,29 @@ RUSTFLAGS="-C target-feature=+crt-static" RUST_BACKTRACE="full" cargo build --re
 cp target/x86_64-unknown-linux-musl/release/fullnode  ./hacash_fullnode_ubuntu_18.0
 cp target/x86_64-unknown-linux-musl/release/poworker  ./hacash_poworker_ubuntu_18.0
 cp target/x86_64-unknown-linux-musl/release/diaworker ./hacash_diaworker_ubuntu_18.0
+
+
+# cross build for windows
+sudo apt install mingw-w64
+rustup target add x86_64-pc-windows-gnu
+rustup toolchain install stable-x86_64-pc-windows-gnu
+cargo build --release --target x86_64-pc-windows-gnu
+
+
+# cross build for macos
+# https://wapl.es/rust/2019/02/17/rust-cross-compile-linux-to-macos.html/
+sudo apt install clang gcc g++ zlib1g-dev libmpc-dev libmpfr-dev libgmp-dev openssl libssl-dev
+# install build osxcross
+git clone https://github.com/tpoechtrager/osxcross
+cd osxcross
+wget -nc https://s3.dockerproject.org/darwin/v2/MacOSX10.10.sdk.tar.xz
+mv MacOSX10.10.sdk.tar.xz tarballs/
+UNATTENDED=yes OSX_VERSION_MIN=10.6 ./build.sh
+# build
+rustup target add x86_64-apple-darwin
+rustup toolchain install stable-x86_64-apple-darwin
+./build_macos.sh
+
 
 ```
 

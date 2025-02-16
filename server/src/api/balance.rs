@@ -45,7 +45,7 @@ async fn balance(State(ctx): State<ApiCtx>, q: Query<Q8364>) -> impl IntoRespons
             let mut astptr = &astlist;
             match ast.parse::<u64>() {
                 Ok(astn) => {
-                    if let Some(ast) = bls.asset(Fold64::from(astn)) {
+                    if let Some(ast) = bls.asset(Fold64::from(astn).unwrap_or(Fold64::max())) {
                         astlist.push(ast);
                         astptr = &astlist;
                     }
