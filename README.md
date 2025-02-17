@@ -64,15 +64,28 @@ Windows:
 
 ```powershell
 
+## gnu
+# download and install: https://cmake.org/download/
+# download and install: https://www.msys2.org/
+pacman -Sy && pacman -Syu
+pacman -S mingw-w64-x86_64-toolchain
 
 rustup target add x86_64-pc-windows-gnu
-
+rustup toolchain install stable-x86_64-pc-windows-gnu
 set RUSTFLAGS='-C target-feature=+crt-static'; set RUST_BACKTRACE='full'; cargo build --release --target x86_64-pc-windows-gnu;
-
 cp target/x86_64-pc-windows-gnu/release/fullnode.exe   ./hacash_fullnode_windows.exe
 cp target/x86_64-pc-windows-gnu/release/poworker.exe   ./hacash_poworker_windows.exe
 cp target/x86_64-pc-windows-gnu/release/diaworker.exe ./hacash_diaworker_windows.exe
 
+## or msvc
+rustup target add x86_64-pc-windows-msvc
+rustup toolchain install stable-x86_64-pc-windows-msvc
+set RUSTFLAGS='-C target-feature=+crt-static'; set RUST_BACKTRACE='full'; cargo build --release --target x86_64-pc-windows-msvc;
+cp target/x86_64-pc-windows-msvc/release/fullnode.exe   ./hacash_fullnode_windows.exe
+cp target/x86_64-pc-windows-msvc/release/poworker.exe   ./hacash_poworker_windows.exe
+cp target/x86_64-pc-windows-msvc/release/diaworker.exe ./hacash_diaworker_windows.exe
+
+# dumpbin /dependents  ./hacash_fullnode_windows.exe
 
 ```
 
