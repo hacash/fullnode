@@ -11,7 +11,7 @@ use protocol::*;
 use protocol::transaction::*;
 
 use super::interface::*;
-use super::memtxpool::TXPOOL_GROUP_DIAMOND_MINT;
+use super::memtxpool::*;
 
 
 include!("bidding.rs");

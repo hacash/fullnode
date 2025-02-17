@@ -64,6 +64,9 @@ fn impl_prepare(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockDisk
 
 fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockDisk) -> Rerr {
     let curhei = curblk.height().uint(); // u64
+    /*if curhei > 628955 { // test debug
+        return errf!("test for curhei <= 628955")
+    }*/
     // check diamond mint action
     if curhei > 626666 && curhei % 5 == 0 {
         if let Some((tidx, txp, diamint)) = pickout_diamond_mint_action_from_block(curblk) {

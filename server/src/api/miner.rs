@@ -191,16 +191,18 @@ fn miner_reset_next_new_block(sto: &BlockDisk, engine: ChainEngine, hnode: Chain
 /*
     park txs to block
 */
-fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &mut Vec<Hash>, 
+fn append_valid_tx_pick_from_txpool(pending_hei: u64, trslen: &mut usize, trshxs: &mut Vec<Hash>, 
     trs: &mut DynVecTransaction, engine: ChainEngine, txpool: Arc<dyn TxPool>,
 ) {
     let engcnf = engine.config();
     let txmaxn = engcnf.max_block_txs;
     let txmaxsz = engcnf.max_block_size;
     let mut allfee = Amount::zero();
-    let mut txallsz: usize = 80; // coinbase tx size
+    let mut txallsz: usize = 80; // 80 is coinbase tx size
     let txallsz = &mut txallsz;
     let mut invalidtxhxs = Vec::new();
+
+    let mut sub_state = engine.sub_state();
 
     macro_rules! ok_push_one_tx {
         ($a: expr) => {
@@ -217,10 +219,10 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
                 invalidtxhxs.push(txr.hash());
                 return true // sign fail, ignore, next
             }
-            if let Err(..) = engine.try_execute_tx(txr) {
+            if let Err(..) = engine.try_execute_tx_by(txr, pending_hei, &mut sub_state) {
                 invalidtxhxs.push(txr.hash());
                 return true // execute fail, ignore, next
-            }
+            };
             let Ok(nf) = allfee.add_mode_u64(&$a.objc.fee_got()) else {
                 invalidtxhxs.push(txr.hash());
                 return true; // fee size err, ignore, next
@@ -231,7 +233,7 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
     }
 
     // pick one diamond mint tx
-    if nexthei % 5 == 0 {
+    if pending_hei % 5 == 0 {
         let mut pick_dmint = |a: &TxPkg| {
             // check tx
             check_pick_one_tx!(a);
@@ -239,7 +241,7 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
             ok_push_one_tx!(a);
             false // end
         };
-        txpool.iter_at(&mut pick_dmint, TXPOOL_GROUP_DIAMOND_MINT).unwrap();
+        txpool.iter_at(&mut pick_dmint, MemTxPool::DIAMINT).unwrap();
     }
 
     // pick normal tx
@@ -254,7 +256,7 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
         ok_push_one_tx!(a);
         true // next
     };
-    txpool.iter_at(&mut pick_normal_tx, TXPOOL_GROUP_NORMAL).unwrap();
+    txpool.iter_at(&mut pick_normal_tx, MemTxPool::NORMAL).unwrap();
 
     // delete invalid txs
     if invalidtxhxs.len() > 0 {

@@ -155,7 +155,7 @@ fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _blkhei: 
             Err(..) => true, // delete
             _ => false,
         }
-    }, TXPOOL_GROUP_NORMAL);
+    }, MemTxPool::NORMAL);
 }
 
 
@@ -169,7 +169,7 @@ fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _bl
         let dn = get_diamond_mint_number(tx);
         // println!("TXPOOL: drain_filter_at dmint, tx: {}, dn: {}, last dn: {}", tx.hash().hex(), dn, ldn);
         dn <= curdn // is not next diamond, delete
-    }, TXPOOL_GROUP_DIAMOND_MINT);
+    }, MemTxPool::DIAMINT);
 }
 
 

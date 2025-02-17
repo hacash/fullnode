@@ -5,7 +5,7 @@ use std::collections::*;
 use sys::*;
 use field::*;
 use protocol::*;
-use protocol::action::*;
+use protocol::transaction::*;
 
 use super::interface::*;
 

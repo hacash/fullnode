@@ -7,6 +7,7 @@ pub trait EngineRead: Send + Sync {
     fn config(&self) -> &EngineConf { unimplemented!() }
 
     fn state(&self) -> Arc<dyn State> { unimplemented!() }
+    fn sub_state(&self) -> Box<dyn State> { unimplemented!() }
     fn disk(&self) -> Arc<dyn DiskDB> { unimplemented!() }
 
     // fn confirm_state(&self) -> (Arc<dyn State>, Arc<dyn BlockPkg>) { unimplemented!() }
@@ -17,6 +18,7 @@ pub trait EngineRead: Send + Sync {
     fn average_fee_purity(&self) -> u64 { 0 } // 100:238 / 166byte(1trs)
 
     fn try_execute_tx(&self, _: &dyn TransactionRead) -> Rerr { unimplemented!() }
+    fn try_execute_tx_by(&self, _: &dyn TransactionRead, _: u64, _: &mut Box<dyn State>) -> Rerr { unimplemented!() }
     // realtime average fee purity
     // fn avgfee(&self) -> u32 { 0 }
 }

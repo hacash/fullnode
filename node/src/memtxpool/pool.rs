@@ -10,7 +10,7 @@ pub struct MemTxPool {
 impl MemTxPool {
     
     pub fn new(lfepr: u64, gs: Vec<usize>) -> MemTxPool {
-        const MS: usize = TXPOOL_GROUP_MAX_SIZE;
+        const MS: usize = MemTxPool::GROUP;
         if gs.len() != MS {
             panic!("new tx pool group size must be {}", MS)
         }
@@ -115,17 +115,10 @@ impl TxPool for MemTxPool {
     }
 
     fn insert(&self, txp: TxPkg) -> Rerr {
-        let acts = txp.objc.actions();
-        let actlen = acts.len();
         // check for group
-        const DMINT: u16 = DiamondMint::KIND;
-        let mut group_id = TXPOOL_GROUP_NORMAL;
-        for i in 0..actlen {
-            let act = &acts[i];
-            if act.kind() == DMINT {
-                group_id = TXPOOL_GROUP_DIAMOND_MINT;
-                break
-            }
+        let mut group_id =  Self::NORMAL;
+        if let Some(..) = pickout_diamond_mint_action(txp.objc.as_read()) {
+            group_id = Self::DIAMINT;
         }
         // println!("TXPOOL: insert tx {} in group {}", tx.hash().hex(), group_id);
         // insert
@@ -148,7 +141,7 @@ impl TxPool for MemTxPool {
         let mut shs: Vec<String> = vec![];
         for gi in 0..self.groups.len() {
             if let Ok(gr) = self.groups[gi].try_lock() {
-                shs.push(format!("{}({})", TXPOOL_GROUP_TIPS[gi], gr.txpkgs.len()));
+                shs.push(format!("{}({})", Self::TIPS[gi], gr.txpkgs.len()));
             }
         }
         format!("[TxPool] tx count: {}", shs.join(", "))

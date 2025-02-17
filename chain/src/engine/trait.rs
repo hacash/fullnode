@@ -21,6 +21,11 @@ impl EngineRead for ChainEngine {
         self.roller.lock().unwrap().curr.upgrade().unwrap().state.clone()
     }
 
+    fn sub_state(&self) -> Box<dyn State> {
+        let state = self.state();
+        let sub_state = state.fork_sub(state.clone());
+        sub_state
+    }
     
     fn disk(&self) -> Arc<dyn DiskDB> {
         self.disk.clone()
@@ -46,7 +51,7 @@ impl EngineRead for ChainEngine {
         allfps / al as u64
     } 
 
-    fn try_execute_tx(&self, tx: &dyn TransactionRead) -> Rerr {
+    fn try_execute_tx_by(&self, tx: &dyn TransactionRead, pd_hei: u64, sub_state: &mut Box<dyn State>) -> Rerr {
         // check
         let cnf = &self.cnf;
         if tx.ty() == TransactionCoinbase::TYPE {
@@ -64,9 +69,6 @@ impl EngineRead for ChainEngine {
             return errf!("tx timestamp {} cannot more than now {}", tx.timestamp(), cur_time)
         }
         // execute
-        let state = self.state();
-        let sub_state = state.fork_sub(state.clone());
-        let height = self.latest_block().height().uint() + 1; // next height
         let hash = Hash::from([0u8; 32]); // empty hash
         // ctx
         let env = ctx::Env{
@@ -76,18 +78,27 @@ impl EngineRead for ChainEngine {
                 fast_sync: false,
             },
             block: ctx::Block{
-                height,
+                height: pd_hei,
                 hash,
                 coinbase: Address::default(),
             },
             tx: ctx::Tx::create(tx),
         };
-        let mut ctxobj = ctx::ContextInst::new(env, sub_state, tx);
+        // cast mut to box
+        let sub = unsafe { Box::from_raw(sub_state.as_mut() as *mut (dyn State +'_)) };
+        let mut ctxobj = ctx::ContextInst::new(env, sub, tx);
         // do tx exec
         tx.execute(&mut ctxobj)?;
         // minter check
-        self.minter.tx_check(tx, height)?;
+        self.minter.tx_check(tx, pd_hei)?;
         // ok
+        Ok(())
+    }
+
+
+    fn try_execute_tx(&self, tx: &dyn TransactionRead) -> Rerr {
+        let height = self.latest_block().height().uint() + 1; // next height
+        self.try_execute_tx_by(tx, height, &mut self.sub_state())?;
         Ok(())
     }
     

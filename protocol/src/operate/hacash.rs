@@ -52,6 +52,11 @@ pub fn hac_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, amt: &A
         }
         return Ok(vec![]);
     }
+    /*test debug
+    let tadr = Address::from_readable("1EuGe2GU8tDKnHLNfBsgyffx66buK7PP6g").unwrap();
+    if *from == tadr || *to == tadr {
+        println!("-------- {} ---- {} => {}  {}", ctx.env().block.height, from.readable(), to.readable(), amt);
+    }*/
     // do trs
     check_amount_is_positive!(amt);
     hac_sub_unsafe(ctx, from, amt)?;
