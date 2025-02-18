@@ -1,6 +1,6 @@
 
 include!{"batch_leveldb_sys.rs"}
-include!{"leveldb/mod.rs"}
+include!{"leveldb-sys/mod.rs"}
 
 
 /************************/
