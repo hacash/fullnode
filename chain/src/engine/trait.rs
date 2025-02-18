@@ -91,6 +91,7 @@ impl EngineRead for ChainEngine {
         tx.execute(&mut ctxobj)?;
         // minter check
         self.minter.tx_check(tx, pd_hei)?;
+        let _ = Box::into_raw( ctxobj.into_state() ); // drop the box, back to mut ptr do manage
         // ok
         Ok(())
     }

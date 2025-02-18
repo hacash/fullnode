@@ -27,9 +27,9 @@ cp target/release/diaworker ./hacash_diaworker_ubuntu
 # edit chain/Cargo.toml and protocol/Cargo.toml, change "db-leveldb-sys" to "db-sled"
 rustup target add x86_64-unknown-linux-musl
 RUSTFLAGS="-C target-feature=+crt-static" RUST_BACKTRACE="full" cargo build --release --target=x86_64-unknown-linux-musl
-cp target/x86_64-unknown-linux-musl/release/fullnode   ./hacash_fullnode_ubuntu_18.0
-cp target/x86_64-unknown-linux-musl/release/poworker   ./hacash_poworker_ubuntu_18.0
-cp target/x86_64-unknown-linux-musl/release/diaworker ./hacash_diaworker_ubuntu_18.0
+cp target/x86_64-unknown-linux-musl/release/fullnode   ./hacash_fullnode_ubuntu_16.04
+cp target/x86_64-unknown-linux-musl/release/poworker   ./hacash_poworker_ubuntu_16.04
+cp target/x86_64-unknown-linux-musl/release/diaworker ./hacash_diaworker_ubuntu_16.04
 
 
 # cross build for windows
