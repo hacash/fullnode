@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 
 include!{"batch_rusty_leveldb.rs"} 
 

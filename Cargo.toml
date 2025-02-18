@@ -2,6 +2,7 @@
 name = "hacash"
 version = "0.2.0"
 edition = "2021"
+resolver = "2"
 
 [dependencies]
 x16rs = { path = "./x16rs" }
@@ -11,12 +12,15 @@ protocol = { path = "./protocol" }
 chain = { path = "./chain" }
 mint = { path = "./mint" }
 node = { path = "./node" }
-# node = { path = "./node", features = ["multi-thread"] }
 server = { path = "./server" }
 app = { path = "./app" }
 ctrlc = "3.4.5"
 
-
+[features]
+default = ["db-rusty-leveldb"]
+db-sled = ["protocol/db-sled", "chain/db-sled"]
+db-rusty-leveldb = ["protocol/db-rusty-leveldb", "chain/db-rusty-leveldb"]
+db-leveldb-sys = ["protocol/db-leveldb-sys", "chain/db-leveldb-sys"]
 
 
 [profile.release]

@@ -2,13 +2,12 @@
 name = "protocol"
 version = "0.1.0"
 edition = "2021"
+resolver = "2"
 
 [dependencies]
 x16rs = { path = "../x16rs" }
 sys = { path = "../sys" }
-# db = { path = "../db", features = ["db-sled"] }
-db = { path = "../db", features = ["db-rusty-leveldb"] }
-# db = { path = "../db", features = ["db-leveldb-sys"] }
+db = { path = "../db" }
 field = { path = "../field" }
 dyn-clone = "1.0.17"
 concat-idents = "1.1.5"
@@ -16,3 +15,8 @@ hex = "0.4.3"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
 lazy_static = "1.5.0"
+
+[features]
+db-sled = ["db/db-sled"]
+db-rusty-leveldb = ["db/db-rusty-leveldb"]
+db-leveldb-sys = ["db/db-leveldb-sys"]

@@ -13,18 +13,23 @@ sudo apt install build-essential cmake musl-tools
 # sudo ln -s /usr/bin/g++ /usr/bin/musl-g++
  
 # rustup target add x86_64-pc-windows-gnu
+# --features "db-sled"    --features "db-rusty-leveldb"    --features "db-leveldb-sys"
+cargo build --target x86_64-unknown-linux-musl --no-default-features --features "db-sled"
 
-cargo build --target x86_64-unknown-linux-musl
+# db features default: db-rusty-leveldb
+--no-default-features --features "db-sled"               # rust
+--no-default-features --features "db-rusty-leveldb"      # rust
+--no-default-features --features "db-leveldb-sys"        # c++
 
 # or
-RUSTFLAGS="-C target-feature=-crt-static" RUST_BACKTRACE="full" cargo build --release
+RUSTFLAGS="-C target-feature=-crt-static" RUST_BACKTRACE="full" cargo build --release --no-default-features --features "db-leveldb-sys"
 cp target/release/fullnode   ./hacash_fullnode_ubuntu
 cp target/release/poworker   ./hacash_poworker_ubuntu
 cp target/release/diaworker ./hacash_diaworker_ubuntu
 
 
 # or static linked
-# edit chain/Cargo.toml and protocol/Cargo.toml, change "db-leveldb-sys" to "db-sled"
+# edit chain/Cargo.toml and protocol/Cargo.toml, change features from "db-leveldb-sys" to "db-sled" or "db-rusty-leveldb"
 rustup target add x86_64-unknown-linux-musl
 RUSTFLAGS="-C target-feature=+crt-static" RUST_BACKTRACE="full" cargo build --release --target=x86_64-unknown-linux-musl
 cp target/x86_64-unknown-linux-musl/release/fullnode   ./hacash_fullnode_ubuntu_16.04
@@ -80,7 +85,7 @@ cp target/x86_64-pc-windows-gnu/release/diaworker.exe ./hacash_diaworker_windows
 ## or msvc
 rustup target add x86_64-pc-windows-msvc
 rustup toolchain install stable-x86_64-pc-windows-msvc
-set RUSTFLAGS='-C target-feature=+crt-static'; set RUST_BACKTRACE='full'; cargo build --release --target x86_64-pc-windows-msvc;
+set RUSTFLAGS='-C target-feature=+crt-static'; set RUST_BACKTRACE='full'; cargo build --release --target x86_64-pc-windows-msvc --no-default-features --features "db-leveldb-sys";
 cp target/x86_64-pc-windows-msvc/release/fullnode.exe   ./hacash_fullnode_windows.exe
 cp target/x86_64-pc-windows-msvc/release/poworker.exe   ./hacash_poworker_windows.exe
 cp target/x86_64-pc-windows-msvc/release/diaworker.exe ./hacash_diaworker_windows.exe
