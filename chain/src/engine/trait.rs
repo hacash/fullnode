@@ -57,11 +57,15 @@ impl EngineRead for ChainEngine {
         if tx.ty() == TransactionCoinbase::TYPE {
             return errf!("cannot submit coinbase tx");
         }
-        if tx.action_count().uint() as usize > cnf.max_tx_actions {
-            return errf!("tx action count cannot more than {}", cnf.max_tx_actions);
+        let an = tx.action_count().uint() as usize;
+        if an != tx.actions().len() {
+            return errf!("tx action count not match")
+        }
+        if an > cnf.max_tx_actions {
+            return errf!("tx action count cannot more than {}", cnf.max_tx_actions)
         }
         if tx.size() as usize > cnf.max_tx_size{
-            return errf!("tx size cannot more than {} bytes", cnf.max_tx_size);
+            return errf!("tx size cannot more than {} bytes", cnf.max_tx_size)
         }
         // check time        
         let cur_time = curtimes();
@@ -90,7 +94,6 @@ impl EngineRead for ChainEngine {
         // do tx exec
         tx.execute(&mut ctxobj)?;
         // minter check
-        self.minter.tx_check(tx, pd_hei)?;
         let _ = Box::into_raw( ctxobj.into_state() ); // drop the box, back to mut ptr do manage
         // ok
         Ok(())

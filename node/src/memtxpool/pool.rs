@@ -97,9 +97,10 @@ impl TxPool for MemTxPool {
     }
 
     // remove if true
-    fn drain_filter_at(&self, filter: &dyn Fn(&TxPkg)->bool, gi: usize) -> Rerr {
+    fn retain_at(&self, f: &mut dyn FnMut(&TxPkg)->bool, gi: usize) -> Rerr {
         check_group_id(gi)?;
-        self.groups[gi].lock().unwrap().drain_filter(filter)
+        self.groups[gi].lock().unwrap().retain(f);
+        Ok(())
     }
 
     

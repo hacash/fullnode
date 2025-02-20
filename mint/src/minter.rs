@@ -57,8 +57,8 @@ impl Minter for HacashMinter {
         impl_prepare(self, curblk, sto)
     }
 
-    fn consensus(&self, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockDisk ) -> Rerr {
-        impl_consensus(self, prevblk, curblk, sto)
+    fn consensus(&self, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sta: &dyn State, sto: &BlockDisk ) -> Rerr {
+        impl_consensus(self, prevblk, curblk, sta, sto)
     }
 
     fn genesis_block(&self) -> Arc<dyn Block> {

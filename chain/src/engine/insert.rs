@@ -165,8 +165,7 @@ impl ChainEngine {
                 }
             }
             // check consensus
-            let blockdisk = BlockDisk::wrap(self.disk.clone());
-            self.check_all_for_insert(&block, prev_chunk.block.clone(), &blockdisk)?;
+            self.check_all_for_insert(&block, prev_chunk.block.clone())?;
         }
         // exec block get state
         let sc = &self.cnf;

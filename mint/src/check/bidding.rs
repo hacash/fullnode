@@ -47,11 +47,15 @@ impl HacashMinter {
     }
 
 
-    fn highest_bidding(&self, number: u32) -> Amount {
+    fn highest_bidding(&self, number: u32, sta: &dyn State) -> Amount {
+        let coresta = CoreStateRead::wrap(sta);
         let ttx = curtimes() - Self::DELAY_SECS as u64;
         for r in self.biddings.lock().unwrap().iter() {
             if r.number == number && r.time < ttx {
-                return r.fee.clone()
+                let hacbls = coresta.balance(&r.addr).unwrap_or_default();
+                if hacbls.hacash >= r.fee {
+                    return r.fee.clone() // highest valid bid
+                }
             }
         }
         // 0:0

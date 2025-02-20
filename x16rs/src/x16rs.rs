@@ -14,10 +14,8 @@ pub fn x16rs_hash(loopnum: i32, indata: &[u8; H32S]) -> [u8; H32S] {
     unsafe {
         // input hash
         let input: *const u8 = indata.as_ptr();
-
         // output hash
         let output: *const u8 = outdata.as_ptr();
-
         // do call
         c_x16rs_hash(loopnum, input, output);
         // println!("{:?}", outdata);

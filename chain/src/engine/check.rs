@@ -3,7 +3,7 @@ use transaction::TransactionCoinbase;
 
 impl ChainEngine {
 
-    fn check_all_for_insert(&self, isrt_blk: &BlockPkg, prev_blk: Arc<dyn Block>, sto: &BlockDisk) -> Rerr {
+    fn check_all_for_insert(&self, isrt_blk: &BlockPkg, prev_blk: Arc<dyn Block>) -> Rerr {
         
         let cnf = &self.cnf;
         let block = &isrt_blk.objc;
@@ -65,7 +65,11 @@ impl ChainEngine {
             if txty == CBTY {
                 continue // igonre coinbase other check
             }
-            if tx.action_count().uint() as usize > cnf.max_tx_actions {
+            let an = tx.action_count().uint() as usize;
+            if an != tx.actions().len() {
+                return errf!("tx action count not match")
+            }
+            if an > cnf.max_tx_actions {
                 return errf!("tx action count cannot more than {}", cnf.max_tx_actions);
             }
             // check time
@@ -89,7 +93,9 @@ impl ChainEngine {
             return errf!("block mrkl root need {} but got {}", mkroot, mrklrt)
         }
         // check mint consensus & coinbase
-        self.minter.consensus(prev_blk.as_read(), block.as_read(), sto)?;
+        let sta = self.state();
+        let sto = &self.blockdisk;
+        self.minter.consensus(prev_blk.as_read(), block.as_read(), sta.as_ref(), sto)?;
         // coinbase tx id = 0, if coinbase error
         self.minter.coinbase(isrt_blk.hein, block.coinbase_transaction()?)?;
         // ok 

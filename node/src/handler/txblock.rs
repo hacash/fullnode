@@ -22,12 +22,17 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
         return // tx size overflow
     }
     let txdatas = txpkg.data.clone();
+    let chei = this.engine.latest_block().height().uint();
+    let txpr = txpkg.objc.as_read();
+    // try execute and check tx
+    if let Err(..) = this.engine.try_execute_tx(txpr) {
+        return // tx execute fail
+    }
+    if let Err(..) = this.engine.mint_checker().tx_check(txpr, chei) {
+        return // tx check fail
+    }
     if engcnf.is_open_miner() {
-        // try execute tx
-        if let Err(..) = this.engine.try_execute_tx(txpkg.objc.as_read()) {
-            return // tx execute fail
-        }
-        // add to pool
+        // add to tx pool
         let _ = this.txpool.insert(txpkg);
     }
     // broadcast
@@ -127,18 +132,18 @@ fn check_know(mine: &Knowledge, hxkey: &Hash, peer: Option<Arc<Peer>>) -> (bool,
 }
 
 
-// drain_all_block_txs
+// drain all block txs
 fn drain_all_block_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, txs: Vec<Hash>, blkhei: u64) {
     if blkhei % 15 == 0 {
         println!("{}.", txpool.print());
     }
-    // drop all exist normal tx
-    if txs.len() > 1 {
-        let _ = txpool.drain(&txs[1..]); // over coinbase tx
-    }
     // drop all overdue diamond mint tx
     if blkhei % 5 == 0 {
         clean_invalid_diamond_mint_txs(eng, txpool, blkhei);
+    }
+    // drop all exist normal tx
+    if txs.len() > 1 {
+        let _ = txpool.drain(&txs[1..]); // over coinbase tx
     }
     // drop invalid normal
     if blkhei % 24 == 0 { // 2 hours
@@ -148,13 +153,13 @@ fn drain_all_block_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, txs: Vec<Hash>
 
 
 // clean_
-fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _blkhei: u64) {
+fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, blkhei: u64) {
+    let pdhei = blkhei + 1;
+    let mut sub_state = eng.sub_state();
     // already minted hacd number
-    let _ = txpool.drain_filter_at(&|a: &TxPkg| {
-        match eng.try_execute_tx( a.objc.as_read() ) {
-            Err(..) => true, // delete
-            _ => false,
-        }
+    let _ = txpool.retain_at(&mut |a: &TxPkg| {
+        let exec = eng.try_execute_tx_by( a.objc.as_read(), pdhei, &mut sub_state);
+        exec.is_ok() // keep or delete 
     }, MemTxPool::NORMAL);
 }
 
@@ -164,11 +169,10 @@ fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _bl
     // already minted hacd number
     let sta = eng.state();
     let curdn = CoreStateRead::wrap(sta.as_ref()).get_latest_diamond().number.uint();
-    let _ = txpool.drain_filter_at(&|a: &TxPkg| {
-        let tx = a.objc.as_read();
-        let dn = get_diamond_mint_number(tx);
-        // println!("TXPOOL: drain_filter_at dmint, tx: {}, dn: {}, last dn: {}", tx.hash().hex(), dn, ldn);
-        dn <= curdn // is not next diamond, delete
+    let nextdn = curdn + 1;
+    let _ = txpool.retain_at(&mut |a: &TxPkg| {
+        // must be next diamond number, or delete
+        nextdn == get_diamond_mint_number(a.objc.as_read())
     }, MemTxPool::DIAMINT);
 }
 

@@ -7,7 +7,7 @@ pub trait TxPool: Send + Sync {
     fn delete_at(&self, _: &[Hash], _: usize) -> Rerr { Ok(()) } // from group id
     fn find_at(&self, _: &Hash, _: usize) -> Option<TxPkg> { None } // from group id
     fn clear_at(&self, _: usize) -> Rerr { Ok(()) } // by group id
-    fn drain_filter_at(&self, _: &dyn Fn(&TxPkg)->bool, _: usize) 
+    fn retain_at(&self, _: &mut dyn FnMut(&TxPkg)->bool, _: usize) 
         -> Rerr { Ok(()) }
 
     fn find(&self, _hx: &Hash) -> Option<TxPkg> { None }
