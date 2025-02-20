@@ -63,7 +63,7 @@ fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn Blo
         return errf!("test for curhei <= 628955")
     }*/
     // check diamond mint action
-    if curhei > 630000 && curhei % 5 == 0 {
+    if curhei > 629000 && curhei % 5 == 0 {
         if let Some((tidx, txp, diamint)) = pickout_diamond_mint_action_from_block(curblk) {
             const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
             if tidx != 1 { // idx 0 is coinbase
