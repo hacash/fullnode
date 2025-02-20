@@ -92,11 +92,11 @@ impl EngineRead for ChainEngine {
         let sub = unsafe { Box::from_raw(sub_state.as_mut() as *mut (dyn State +'_)) };
         let mut ctxobj = ctx::ContextInst::new(env, sub, tx);
         // do tx exec
-        tx.execute(&mut ctxobj)?;
-        // minter check
-        let _ = Box::into_raw( ctxobj.into_state() ); // drop the box, back to mut ptr do manage
-        // ok
-        Ok(())
+        let exeret = tx.execute(&mut ctxobj);
+        // drop the box, back to mut ptr do manage
+        let _ = Box::into_raw( ctxobj.into_state() ); 
+        // return execute result
+        exeret
     }
 
 
