@@ -5,6 +5,7 @@ use sys::*;
 use db::*;
 use protocol::*;
 use protocol::state::*;
+use protocol::block::*;
 use protocol::interface::*;
 
 use super::engine::*;

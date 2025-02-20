@@ -22,13 +22,13 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
         return // tx size overflow
     }
     let txdatas = txpkg.data.clone();
-    let chei = this.engine.latest_block().height().uint();
+    let next_hei = this.engine.latest_block().height().uint() + 1;
     let txpr = txpkg.objc.as_read();
     // try execute and check tx
     if let Err(..) = this.engine.try_execute_tx(txpr) {
         return // tx execute fail
     }
-    if let Err(..) = this.engine.mint_checker().tx_check(txpr, chei) {
+    if let Err(..) = this.engine.mint_checker().tx_check(txpr, next_hei) {
         return // tx check fail
     }
     if engcnf.is_open_miner() {
@@ -92,7 +92,8 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         if let Err(..) = blkpkg {
             return // parse error
         }
-        let blkp = blkpkg.unwrap();
+        let mut blkp = blkpkg.unwrap();
+        blkp.set_origin( BlkOrigin::DISCOVER );
         let thsx = blkp.objc.transaction_hash_list(false); // hash no fee
         if let Err(e) = engptr.insert(blkp) {
             println!("Error: {}", e);

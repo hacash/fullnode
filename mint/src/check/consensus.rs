@@ -57,13 +57,14 @@ fn impl_prepare(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockDisk
 
 
 
-fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sta: &dyn State, sto: &BlockDisk) -> Rerr {
+fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sta: &dyn State, sto: &BlockDisk, blkori: BlkOrigin) -> Rerr {
     let curhei = curblk.height().uint(); // u64
     /*if curhei > 628955 { // test debug
         return errf!("test for curhei <= 628955")
     }*/
     // check diamond mint action
-    if curhei > 629000 && curhei % 5 == 0 {
+    let is_discover = blkori == BlkOrigin::DISCOVER;
+    if is_discover && curhei % 5 == 0 {
         if let Some((tidx, txp, diamint)) = pickout_diamond_mint_action_from_block(curblk) {
             const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
             if tidx != 1 { // idx 0 is coinbase
@@ -86,7 +87,7 @@ fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn Blo
                     return errf!("diamond mint bidding fee {} less than consensus record {}", bidfee, rhbf)
                 }
             } else {
-                print!(", dia bid {} record {}", bidfee, rhbf)
+                print!(",\n        diamond bid fee {} record highest {} ", bidfee, rhbf)
             }
             // clear for next diamond
             this.clear_bidding();

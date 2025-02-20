@@ -95,7 +95,7 @@ impl ChainEngine {
         // check mint consensus & coinbase
         let sta = self.state();
         let sto = &self.blockdisk;
-        self.minter.consensus(prev_blk.as_read(), block.as_read(), sta.as_ref(), sto)?;
+        self.minter.consensus(prev_blk.as_read(), block.as_read(), sta.as_ref(), sto, isrt_blk.orgi)?;
         // coinbase tx id = 0, if coinbase error
         self.minter.coinbase(isrt_blk.hein, block.coinbase_transaction()?)?;
         // ok 
