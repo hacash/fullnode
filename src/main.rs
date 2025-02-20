@@ -15,3 +15,5 @@ cp hacash.config.ini ./target/debug/ && rm -rf ./target/debug/hacash_mainnet_dat
 include!{"./bin/fullnode.rs"}
 
 
+include!("devtest.rs");
+

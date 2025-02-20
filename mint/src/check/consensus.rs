@@ -57,42 +57,11 @@ fn impl_prepare(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockDisk
 
 
 
-fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sta: &dyn State, sto: &BlockDisk, blkori: BlkOrigin) -> Rerr {
+fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockDisk) -> Rerr {
     let curhei = curblk.height().uint(); // u64
     /*if curhei > 628955 { // test debug
         return errf!("test for curhei <= 628955")
     }*/
-    // check diamond mint action
-    let is_discover = blkori == BlkOrigin::DISCOVER;
-    if is_discover && curhei % 5 == 0 {
-        if let Some((tidx, txp, diamint)) = pickout_diamond_mint_action_from_block(curblk) {
-            const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
-            if tidx != 1 { // idx 0 is coinbase
-                return errf!("diamond mint transaction must be first one tx in block")
-            }
-            let dianum  = *diamint.d.number;
-            let bidfee  = txp.fee().clone();
-            // check_diamond_mint_minimum_bidding_fee
-            check_diamond_mint_minimum_bidding_fee(curhei, txp.as_read(), &diamint)?; // HIP-18
-            let rhbf = this.highest_bidding(dianum, sta);
-            if bidfee < rhbf { // 
-                /* test print start */
-                println!("\n\n✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖\ndiamond mint bidding fee {} less than consensus record {}", bidfee, rhbf);
-                println!("block height {} have a diamond {}-{}, address: {}, fee: {}, RecordHighestBidding: {}, {}\n", 
-                    curhei, diamint.d.diamond.to_readable(), dianum, txp.main().readable(), bidfee,
-                    rhbf, this.print_bidding(),
-                );
-                /* test print end */ 
-                if dianum > CKN {  // HIP-19, check after 107000, reject blocks that don't follow the rules
-                    return errf!("diamond mint bidding fee {} less than consensus record {}", bidfee, rhbf)
-                }
-            } else {
-                print!(",\n        diamond bid fee {} record highest {} ", bidfee, rhbf)
-            }
-            // clear for next diamond
-            this.clear_bidding();
-        }
-    }
     // check difficulty
     let blkspan = this.cnf.difficulty_adjust_blocks;
     if this.cnf.chain_id==0 && curhei < 288*200 {
@@ -121,6 +90,47 @@ fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn Blo
         }
     }
     // success
+    Ok(())
+}
+
+
+
+fn impl_examine(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr {
+    let curhei = curblk.hein; // u64
+
+    // check diamond mint action
+    let is_discover = curblk.orgi == BlkOrigin::DISCOVER;
+    if is_discover && curhei % 5 == 0 {
+        if let Some((tidx, txp, diamint)) = pickout_diamond_mint_action_from_block(curblk.objc.as_read()) {
+            const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
+            if tidx != 1 { // idx 0 is coinbase
+                return errf!("diamond mint transaction must be first one tx in block")
+            }
+            let dianum  = *diamint.d.number;
+            let bidfee  = txp.fee().clone();
+            // check_diamond_mint_minimum_bidding_fee
+            check_diamond_mint_minimum_bidding_fee(curhei, txp.as_read(), &diamint)?; // HIP-18
+            let rhbf = this.highest_bidding(dianum, sta);
+            if bidfee < rhbf { // 
+                /* test print start */
+                println!("\n\n✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖\ndiamond mint bidding fee {} less than consensus record {}", bidfee, rhbf);
+                println!("block height {} have a diamond {}-{}, address: {}, fee: {}, RecordHighestBidding: {}, {}\n", 
+                    curhei, diamint.d.diamond.to_readable(), dianum, txp.main().readable(), bidfee,
+                    rhbf, this.print_bidding(),
+                );
+                /* test print end */ 
+                if dianum > CKN {  // HIP-19, check after 107000, reject blocks that don't follow the rules
+                    return errf!("diamond mint bidding fee {} less than consensus record {}", bidfee, rhbf)
+                }
+            } else if bidfee > rhbf {
+                print!(",\n        diamond bid fee {} record highest {} ", bidfee, rhbf)
+            }
+            // check ok and clear for next diamond
+            this.clear_bidding();
+        }
+    }
+    
+
     Ok(())
 }
 

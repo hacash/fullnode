@@ -175,6 +175,7 @@ impl ChainEngine {
             id: sc.chain_id,
         };
         sub_state = block.objc.execute(chaincnf, sub_state)?;
+        self.minter.examine(&block, sub_state.as_ref())?;
         // create chunk
         let (objc, data) = block.apart();
         let chunk = Chunk::create(objc.into(), sub_state.into());

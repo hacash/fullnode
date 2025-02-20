@@ -238,7 +238,7 @@ pub fn action_from_json(_main_addr: &Address, jsonv: &serde_json::Value) -> Ret<
 
 // json string
 pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action, 
-    unit: &String, ret_kind: bool, ret_desc: bool
+    unit: &str, ret_kind: bool, ret_desc: bool
 ) -> JsonObject {
 
     let adrs = &tx.addrs();

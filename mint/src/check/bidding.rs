@@ -26,16 +26,20 @@ impl HacashMinter {
             addr: tx.main(),
             fee: tx.fee().clone(),
         };
+        macro_rules! rcdshow { () => {
+            // println!("- devtest record bidding {} {}", &record.addr.readable(), &record.fee);       
+        }}
         // push
         let mut bds = self.biddings.lock().unwrap();
         if bds.is_empty() {
+            rcdshow!();
             (*bds).push_front(record); // push at first
             return
         }
         if record.fee <= bds[0].fee {
             return // no need to record lowwer
         }
-        // println!("- record bidding {} {}", record.addr.readable(), record.fee);
+        rcdshow!();
         if bds[0].time == record.time {
             (*bds)[0] = record; // replace in same second
             return 

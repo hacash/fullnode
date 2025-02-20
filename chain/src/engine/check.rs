@@ -93,9 +93,7 @@ impl ChainEngine {
             return errf!("block mrkl root need {} but got {}", mkroot, mrklrt)
         }
         // check mint consensus & coinbase
-        let sta = self.state();
-        let sto = &self.blockdisk;
-        self.minter.consensus(prev_blk.as_read(), block.as_read(), sta.as_ref(), sto, isrt_blk.orgi)?;
+        self.minter.consensus(prev_blk.as_read(), block.as_read(), &self.blockdisk)?;
         // coinbase tx id = 0, if coinbase error
         self.minter.coinbase(isrt_blk.hein, block.coinbase_transaction()?)?;
         // ok 

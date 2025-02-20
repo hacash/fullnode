@@ -96,7 +96,8 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         blkp.set_origin( BlkOrigin::DISCOVER );
         let thsx = blkp.objc.transaction_hash_list(false); // hash no fee
         if let Err(e) = engptr.insert(blkp) {
-            println!("Error: {}", e);
+            println!("Error: {}, failed.", e);
+            // println!("- error block data hex: {}", body.hex());
         }else{
             println!("ok.");
             if is_open_miner {
@@ -147,7 +148,7 @@ fn drain_all_block_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, txs: Vec<Hash>
         let _ = txpool.drain(&txs[1..]); // over coinbase tx
     }
     // drop invalid normal
-    if blkhei % 24 == 0 { // 2 hours
+    if blkhei % 11 == 0 { // 1 hours
         clean_invalid_normal_txs(eng, txpool, blkhei);
     }
 }
