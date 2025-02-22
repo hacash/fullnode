@@ -45,6 +45,9 @@ impl P2PManage {
                     let Ok((client, _)) = errunbox!( client ) else {
                         continue
                     };
+                    if !this.cnf.acceptnodes {
+                        continue // not accept nodes
+                    }
                     let tobj = this.clone();
                     tokio::spawn(async move {
                         tobj.handle_conn(client, false).await // not report me

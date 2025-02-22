@@ -36,6 +36,12 @@ impl TxPool for MemTxPool {
         Ok(count)
     }
 
+    fn first_at(&self, gi: usize) -> Ret<Option<TxPkg>> {
+        check_group_id(gi)?;
+        let grp = self.groups[gi].lock().unwrap();
+        Ok(grp.txpkgs.first().map(|a|a.clone())) // get first one if have
+    }
+
     fn iter_at(&self, scan: &mut dyn FnMut(&TxPkg)->bool, gi: usize) -> Rerr {
         check_group_id(gi)?;
         let grp = self.groups[gi].lock().unwrap();

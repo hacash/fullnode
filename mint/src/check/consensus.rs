@@ -36,7 +36,7 @@ fn impl_prepare(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockDisk
     if curhei <= blkspan {
         return Ok(()) // not check in first cycle
     }
-    if this.cnf.chain_id == 0 && curhei < 288*200 {
+    if this.cnf.is_mainnet() && curhei < 288*200 {
         return Ok(()) // not check, compatible history code
     }
     if curhei % blkspan == 0 {
@@ -117,7 +117,7 @@ fn impl_examine(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr
                     println!("\n\n✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖\ndiamond mint bidding fee {} less than consensus record {}", bidfee, rhbf);
                     println!("block height {} have a diamond {}-{}, address: {}, fee: {}, RecordHighestBidding: {}, {}\n", 
                         curhei, diamint.d.diamond.to_readable(), dianum, txp.main().readable(), bidfee,
-                        rhbf, biddings.print(dianum),
+                        rhbf, biddings.print_all(dianum),
                     );
                     /* test print end */ 
                     if dianum > CKN {  // HIP-19, check after 107000, reject blocks that don't follow the rules

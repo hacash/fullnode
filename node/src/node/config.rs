@@ -6,6 +6,7 @@ pub struct NodeConf {
     pub node_name: String,
     pub listen: u16,
     pub findnodes: bool,
+    pub acceptnodes: bool,
     pub boot_nodes: Vec<SocketAddr>,
     pub offshoot_peers: usize, // private IP
     pub backbone_peers: usize, // public IP
@@ -39,6 +40,7 @@ impl NodeConf {
         }
         // off_find
         let find = ini_must_bool(sec, "not_find_nodes", false) == false;
+        let accept = ini_must_bool(sec, "not_accept_nodes", false) == false;
 
         // boots
         let boots = ini_must(sec, "boots", "");
@@ -58,6 +60,7 @@ impl NodeConf {
             node_name: node_name,
             listen: port as u16,
             findnodes: find,
+            acceptnodes: accept,
             boot_nodes: ipts,
             // connect peers
             offshoot_peers: 200,

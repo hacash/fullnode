@@ -11,6 +11,9 @@ pub struct MintConf {
 
 impl MintConf {
 
+    pub fn is_mainnet(&self) -> bool {
+        self.chain_id == 0
+    }
 
     pub fn new(ini: &IniObj) -> MintConf {
 

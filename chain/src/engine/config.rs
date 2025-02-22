@@ -39,6 +39,10 @@ impl EngineConf {
     pub fn is_open_miner(&self) -> bool {
         self.miner_enable || self.dmer_enable
     }
+
+    pub fn is_mainnet(&self) -> bool {
+        self.chain_id == 0
+    }
     
     pub fn new(ini: &IniObj, dbv: u32) -> EngineConf {
         

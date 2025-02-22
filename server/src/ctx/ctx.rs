@@ -11,17 +11,18 @@ pub struct ApiCtx {
     pub hcshnd: ChainNode,
     pub blocks: BlockCaches,
     pub miner_worker_notice_count: Arc<Mutex<u64>>,
+    pub launch_time: u64,
     blocks_max: usize, // 4
-
 }
 
 impl ApiCtx {
     pub fn new(eng: ChainEngine, nd: ChainNode) -> ApiCtx {
-        ApiCtx{
+        ApiCtx {
             engine: eng,
             hcshnd: nd,
             blocks: Arc::default(),
             miner_worker_notice_count: Arc::default(),
+            launch_time: curtimes(),
             blocks_max: 4,
         }
     }

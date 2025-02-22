@@ -68,6 +68,12 @@ impl MsgHandler {
         // println!("&&&& peer.send_msg(MSG_REQ_STATUS, vec![]) ...");
         let _ = peer.send_msg(MSG_REQ_STATUS, vec![]).await;
         // println!("&&&& peer.send_msg(MSG_REQ_STATUS, vec![]) ok.");
+        // if peer.is_cntome { // peer is connect to me
+        if let Ok(Some(txp)) = self.txpool.first_at(MemTxPool::DIAMINT) {
+            // send highest bidding diamond mint tx
+            let _ = peer.send_msg(MSG_TX_SUBMIT, txp.data).await;
+        }
+        // }
     }
     
     pub async fn on_disconnect(&self, _peer: Arc<Peer>) {
