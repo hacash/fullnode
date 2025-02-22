@@ -4,6 +4,7 @@ debug/
 target/
 osxcross/
 
+hascan*
 hacash_*
 
 *.local.*
