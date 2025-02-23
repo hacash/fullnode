@@ -68,7 +68,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         return // height too late
     }
     let mintckr = eng.mint_checker();
-    let stoptr = BlockDisk::wrap(eng.disk().clone());
+    let stoptr = BlockStore::wrap(eng.disk().clone());
     // may insert
     if blkhei <= lathei + 1 {
         // prepare check
@@ -159,10 +159,10 @@ fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, blkhei: u
     let pdhei = blkhei + 1;
     let mut sub_state = eng.sub_state();
     // already minted hacd number
-    let _ = txpool.retain_at(&mut |a: &TxPkg| {
+    let _ = txpool.retain_at(MemTxPool::NORMAL, &mut |a: &TxPkg| {
         let exec = eng.try_execute_tx_by( a.objc.as_read(), pdhei, &mut sub_state);
         exec.is_ok() // keep or delete 
-    }, MemTxPool::NORMAL);
+    });
 }
 
 
@@ -172,10 +172,10 @@ fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _bl
     let sta = eng.state();
     let curdn = CoreStateRead::wrap(sta.as_ref()).get_latest_diamond().number.uint();
     let nextdn = curdn + 1;
-    let _ = txpool.retain_at(&mut |a: &TxPkg| {
+    let _ = txpool.retain_at(MemTxPool::DIAMINT, &mut |a: &TxPkg| {
         // must be next diamond number, or delete
         nextdn == get_diamond_mint_number(a.objc.as_read())
-    }, MemTxPool::DIAMINT);
+    });
 }
 
 

@@ -23,7 +23,7 @@ impl DifficultyGnr {
 
 impl DifficultyGnr {
 
-    pub fn req_cycle_block(&self, hei: u64, sto: &BlockDisk) -> (u64, u32, [u8; HXS]) {
+    pub fn req_cycle_block(&self, hei: u64, sto: &BlockStore) -> (u64, u32, [u8; HXS]) {
         let cylnum = self.cnf.difficulty_adjust_blocks; // 288
         if hei < cylnum {
             let cyltime = genesis_block().timestamp().uint();
@@ -58,7 +58,7 @@ impl DifficultyGnr {
     /*
     *
     */
-    pub fn target(&self, mcnf: &MintConf, prevdiff: u32, prevblkt: u64, hei: u64, sto: &BlockDisk) -> (u32, [u8;32], BigUint) {
+    pub fn target(&self, mcnf: &MintConf, prevdiff: u32, prevblkt: u64, hei: u64, sto: &BlockStore) -> (u32, [u8;32], BigUint) {
         let cylnum = self.cnf.difficulty_adjust_blocks;
         if hei < cylnum * 2 {
             let dn = LOWEST_DIFFICULTY;

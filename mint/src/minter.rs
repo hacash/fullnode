@@ -40,7 +40,7 @@ impl Minter for HacashMinter {
         // protocol::action::setup_action_hook(hook::empty_action_hook);
     }
 
-    fn next_difficulty(&self, prev: &dyn BlockRead, sto: &BlockDisk) -> u32 {
+    fn next_difficulty(&self, prev: &dyn BlockRead, sto: &BlockStore) -> u32 {
         let pdif = prev.difficulty().uint();
         let ptim = prev.timestamp().uint();
         let nhei = prev.height().uint() + 1;
@@ -52,11 +52,11 @@ impl Minter for HacashMinter {
         impl_tx_check(self, tx, chei)
     }
 
-    fn prepare(&self, curblk: &dyn BlockRead, sto: &BlockDisk ) -> Rerr {
+    fn prepare(&self, curblk: &dyn BlockRead, sto: &BlockStore ) -> Rerr {
         impl_prepare(self, curblk, sto)
     }
 
-    fn consensus(&self, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockDisk) -> Rerr {
+    fn consensus(&self, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockStore) -> Rerr {
         impl_consensus(self, prevblk, curblk, sto)
     }
 

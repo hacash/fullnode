@@ -146,7 +146,7 @@ async fn hashrate_logs(State(ctx): State<ApiCtx>, q: Query<Q9314>) -> impl IntoR
 
 
 
-fn get_blk_rate(ctx: &ApiCtx, disk: &BlockDisk, hei: u64) -> u128 {
+fn get_blk_rate(ctx: &ApiCtx, disk: &BlockStore, hei: u64) -> u128 {
     let key = hei.to_string();
     let difn = ctx.load_block(disk, &key).unwrap().objc.difficulty().uint();
     let mtcnf = ctx_mintcnf!(ctx);

@@ -7,7 +7,7 @@ use field::*;
 use protocol::*;
 use protocol::transaction::*;
 
-use super::interface::*;
+use chain::interface::*;
 
 
 

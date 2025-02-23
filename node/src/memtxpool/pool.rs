@@ -9,14 +9,15 @@ pub struct MemTxPool {
 
 impl MemTxPool {
     
-    pub fn new(lfepr: u64, gs: Vec<usize>) -> MemTxPool {
+    pub fn new(lfepr: u64, gs: Vec<usize>, fpmds: Vec<bool>) -> MemTxPool {
         const MS: usize = MemTxPool::GROUP;
         if gs.len() != MS {
             panic!("new tx pool group size must be {}", MS)
         }
         let mut grps = Vec::with_capacity(MS);
-        for sz in &gs {
-            grps.push( Mutex::new( TxGroup::new(*sz)) );
+        for i in 0 .. gs.len() {
+            let sz = gs[i];
+            grps.push( Mutex::new( TxGroup::new(sz, fpmds[i])) );
         }
         MemTxPool {
             lowest_fepr: lfepr,
@@ -42,7 +43,7 @@ impl TxPool for MemTxPool {
         Ok(grp.txpkgs.first().map(|a|a.clone())) // get first one if have
     }
 
-    fn iter_at(&self, scan: &mut dyn FnMut(&TxPkg)->bool, gi: usize) -> Rerr {
+    fn iter_at(&self, gi: usize, scan: &mut dyn FnMut(&TxPkg)->bool) -> Rerr {
         check_group_id(gi)?;
         let grp = self.groups[gi].lock().unwrap();
         for txp in &grp.txpkgs {
@@ -54,7 +55,7 @@ impl TxPool for MemTxPool {
     }
 
     // insert to target group
-    fn insert_at(&self, txp: TxPkg, gi: usize) -> Rerr { 
+    fn insert_at(&self, gi: usize, txp: TxPkg) -> Rerr { 
         if txp.fepr < self.lowest_fepr {
             return errf!("tx fee purity {} too low to add txpool", txp.fepr)
         }
@@ -75,7 +76,7 @@ impl TxPool for MemTxPool {
         Ok(())
     }
 
-    fn delete_at(&self, hxs: &[Hash], gi: usize) -> Rerr {
+    fn delete_at(&self, gi: usize, hxs: &[Hash]) -> Rerr {
         check_group_id(gi)?;
         // do delete
         let mut grp = self.groups[gi].lock().unwrap();
@@ -92,7 +93,7 @@ impl TxPool for MemTxPool {
     }
 
     // from group id
-    fn find_at(&self, hx: &Hash, gi: usize) -> Option<TxPkg> {
+    fn find_at(&self, gi: usize, hx: &Hash) -> Option<TxPkg> {
         check_group_id(gi).unwrap();
         // do clean
         let grp = self.groups[gi].lock().unwrap();
@@ -103,7 +104,7 @@ impl TxPool for MemTxPool {
     }
 
     // remove if true
-    fn retain_at(&self, f: &mut dyn FnMut(&TxPkg)->bool, gi: usize) -> Rerr {
+    fn retain_at(&self, gi: usize, f: &mut dyn FnMut(&TxPkg)->bool) -> Rerr {
         check_group_id(gi)?;
         self.groups[gi].lock().unwrap().retain(f);
         Ok(())
@@ -113,7 +114,7 @@ impl TxPool for MemTxPool {
     // find
     fn find(&self, hx: &Hash) -> Option<TxPkg> {
         for gi in 0..self.groups.len() {
-            if let Some(tx) = self.find_at(hx, gi) {
+            if let Some(tx) = self.find_at(gi, hx) {
                 return Some(tx) // ok find
             }
         }
@@ -129,7 +130,7 @@ impl TxPool for MemTxPool {
         }
         // println!("TXPOOL: insert tx {} in group {}", tx.hash().hex(), group_id);
         // insert
-        self.insert_at(txp, group_id)
+        self.insert_at(group_id, txp)
     }
 
     fn drain(&self, hxs: &[Hash]) -> Ret<Vec<TxPkg>> {

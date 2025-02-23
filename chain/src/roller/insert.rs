@@ -1,6 +1,6 @@
 
 // root curr 
-type RollerInsertRet = Ret<(Option<Arc<Chunk>>, Option<Arc<Chunk>>, Writebatch)>;
+type RollerInsertRet = Ret<(Option<Arc<Chunk>>, Option<Arc<Chunk>>, MemBatch)>;
 
 
 impl Roller {
@@ -30,7 +30,7 @@ pub fn insert_to_roller(roller: &mut Roller, parent: Arc<Chunk>, mut chunk: Chun
     // move pointer
     let mut mv_root: Option<Arc<Chunk>> = None;
     let mut mv_curr: Option<Arc<Chunk>> = None;
-    let mut tc_path = Writebatch::new();
+    let mut tc_path = MemBatch::new();
     if new_hei > curr_hei {
         roller.curr = Arc::downgrade(&new_chunk); // update pointer
         mv_curr = Some(new_chunk.clone());
@@ -52,7 +52,7 @@ pub fn insert_to_roller(roller: &mut Roller, parent: Arc<Chunk>, mut chunk: Chun
 
 // search back
 
-fn trace_upper_chunk(mut seek: Arc<Chunk>, upper_hei: u64, tc_path: &mut Writebatch) -> Arc<Chunk> {
+fn trace_upper_chunk(mut seek: Arc<Chunk>, upper_hei: u64, tc_path: &mut MemBatch) -> Arc<Chunk> {
     let mut trc = |s: &Chunk| {
         tc_path.put(&BlockHeight::from(s.height).to_vec(), s.hash.as_ref());
     };

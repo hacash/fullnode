@@ -122,7 +122,7 @@ pub fn create_coinbase_tx(hei: u64, msg: Fixed16, adr: Address) -> TransactionCo
     }
 }
 
-fn miner_reset_next_new_block(sto: &BlockDisk, engine: ChainEngine, hnode: ChainNode) {
+fn miner_reset_next_new_block(sto: &BlockStore, engine: ChainEngine, hnode: ChainNode) {
 
     let engcnf = engine.config();
 
@@ -241,7 +241,7 @@ fn append_valid_tx_pick_from_txpool(pending_hei: u64, trslen: &mut usize, trshxs
             ok_push_one_tx!(a);
             false // end
         };
-        txpool.iter_at(&mut pick_dmint, MemTxPool::DIAMINT).unwrap();
+        txpool.iter_at(MemTxPool::DIAMINT, &mut pick_dmint).unwrap();
     }
 
     // pick normal tx
@@ -256,7 +256,7 @@ fn append_valid_tx_pick_from_txpool(pending_hei: u64, trslen: &mut usize, trshxs
         ok_push_one_tx!(a);
         true // next
     };
-    txpool.iter_at(&mut pick_normal_tx, MemTxPool::NORMAL).unwrap();
+    txpool.iter_at(MemTxPool::NORMAL, &mut pick_normal_tx).unwrap();
 
     // delete invalid txs
     if invalidtxhxs.len() > 0 {
@@ -372,7 +372,7 @@ async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoR
     if is_need_create_new() {
         // create next block
         miner_reset_next_new_block(
-            &BlockDisk::wrap(ctx.engine.disk()),
+            &BlockStore::wrap(ctx.engine.disk()),
             ctx.engine.clone(),
             ctx.hcshnd.clone(),
         );

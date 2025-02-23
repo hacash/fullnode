@@ -1,4 +1,17 @@
 
+
+pub trait EngineReadV2: Send + Sync {
+
+
+}
+
+
+
+/*
+    old
+*/
+
+
 pub trait EngineRead: Send + Sync {
     // key is height or hash
     // fn block(&self, _: &dyn Serialize) -> Option<Box<dyn BlockPkg>> { unimplemented!() }
@@ -8,7 +21,7 @@ pub trait EngineRead: Send + Sync {
 
     fn state(&self) -> Arc<dyn State> { unimplemented!() }
     fn sub_state(&self) -> Box<dyn State> { unimplemented!() }
-    fn disk(&self) -> Arc<dyn DiskDB> { unimplemented!() }
+    fn disk(&self) -> Arc<DiskKV> { unimplemented!() }
 
     // fn confirm_state(&self) -> (Arc<dyn State>, Arc<dyn BlockPkg>) { unimplemented!() }
     fn latest_block(&self) -> Arc<dyn Block> { unimplemented!() }

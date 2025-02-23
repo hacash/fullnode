@@ -42,19 +42,10 @@ impl State for StateInst {
     fn to_mem(&self) -> MemMap {
         self.mem.memry.clone()
     }
-
-    
     
     fn write_to_disk(&self) {
         // debug_println!("write_to_disk !!!!!!");
-        let mut batch = Writebatch::new();
-        for (k, v) in self.mem.memry.iter() {
-            match v {
-                None => batch.delete(k),
-                Some(v) => batch.put(k, &v),
-            };
-        }
-        self.disk.save_batch(batch); // must
+        self.disk.write(&self.mem); // must
     }
 
     
@@ -68,7 +59,7 @@ impl State for StateInst {
             return parent.get(k)
         }
         // load from disk
-        self.disk.load(&k)
+        self.disk.read(&k)
     }
 
     

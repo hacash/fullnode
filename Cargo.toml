@@ -15,10 +15,9 @@ node = { path = "./node" }
 server = { path = "./server" }
 app = { path = "./app" }
 ctrlc = "3.4.5"
-hex = "0.4.3"
 
 [features]
-default = ["db-rusty-leveldb"]
+default = ["db-sled"]
 db-sled = ["protocol/db-sled", "chain/db-sled"]
 db-rusty-leveldb = ["protocol/db-rusty-leveldb", "chain/db-rusty-leveldb"]
 db-leveldb-sys = ["protocol/db-leveldb-sys", "chain/db-leveldb-sys"]

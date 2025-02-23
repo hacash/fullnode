@@ -13,7 +13,7 @@ macro_rules! ctx_state{
 macro_rules! ctx_store{
     ($ctx:expr, $disk:ident) => (
         let _s2_db = $ctx.engine.disk();
-        let $disk = BlockDisk::wrap(_s2_db);
+        let $disk = BlockStore::wrap(_s2_db);
     )
 }
 

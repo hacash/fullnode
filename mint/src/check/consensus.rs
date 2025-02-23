@@ -29,7 +29,7 @@ fn impl_tx_check(this: &HacashMinter, tx: &dyn TransactionRead, next_hei: u64) -
 
 
 
-fn impl_prepare(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockDisk) -> Rerr {
+fn impl_prepare(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockStore) -> Rerr {
     let curhei = curblkhead.height().uint(); // u64
     let curdifnum = curblkhead.difficulty().uint();
     let blkspan = this.cnf.difficulty_adjust_blocks;
@@ -58,7 +58,7 @@ fn impl_prepare(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockDisk
 
 
 
-fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockDisk) -> Rerr {
+fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockStore) -> Rerr {
     let curhei = curblk.height().uint(); // u64
     let smaxh = this.cnf.sync_maxh;
     if smaxh > 0 && curhei > smaxh {
@@ -118,7 +118,7 @@ fn impl_examine(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr
                     println!("\n\n✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖\ndiamond mint bidding fee {} less than consensus record {}", bidfee, rhbf);
                     println!("block height {} have a diamond {}-{}, address: {}, fee: {}, RecordHighestBidding: {}, {}\n", 
                         curhei, diamint.d.diamond.to_readable(), dianum, txp.main().readable(), bidfee,
-                        rhbf, biddings.print(dianum),
+                        rhbf, biddings.print_all(dianum),
                     );
                     /* test print end */ 
                     if dianum > CKN {  // HIP-19, check after 107000, reject blocks that don't follow the rules

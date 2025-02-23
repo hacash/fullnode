@@ -27,7 +27,7 @@ impl EngineRead for ChainEngine {
         sub_state
     }
     
-    fn disk(&self) -> Arc<dyn DiskDB> {
+    fn disk(&self) -> Arc<DiskKV> {
         self.disk.clone()
     }
 

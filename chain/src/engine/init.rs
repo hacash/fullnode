@@ -7,7 +7,7 @@ fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>, is_state_upgrade: boo
     if is_state_upgrade {
         return ret_gns_blk() // genesis block for upgrade
     }
-    let disk = BlockDisk::wrap(disk.clone());
+    let disk = BlockStore::wrap(disk.clone());
     let status = disk.status();
     let rhei = &status.root_height;
     let rhein = rhei.uint();

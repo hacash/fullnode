@@ -27,13 +27,13 @@ impl ApiCtx {
         }
     }
 
-    pub fn load_block(&self, store: &BlockDisk, key: &String) -> Ret<Arc<BlockPkg>> {
+    pub fn load_block(&self, store: &BlockStore, key: &String) -> Ret<Arc<BlockPkg>> {
         self.load_block_from_cache(store, key, true)
     }
 
     
     // load block from cache or disk, key = height or hash
-    pub fn load_block_from_cache(&self, store: &BlockDisk, key: &String, with_cache: bool) -> Ret<Arc<BlockPkg>> {
+    pub fn load_block_from_cache(&self, store: &BlockStore, key: &String, with_cache: bool) -> Ret<Arc<BlockPkg>> {
         let mut hash = Hash::from([0u8; 32]);
         let mut height = BlockHeight::from(0);
         if key.len() == 64 {

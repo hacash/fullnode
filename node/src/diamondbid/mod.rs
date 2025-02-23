@@ -4,11 +4,13 @@ use std::thread;
 
 
 use sys::*;
+use chain::interface::*;
 use chain::engine::*;
 use field::*;
 use field::interface::*;
 use protocol::*;
 use protocol::transaction::*;
+
 
 use super::interface::*;
 use super::memtxpool::*;

@@ -22,7 +22,7 @@ impl MsgHandler {
             starthei = 1;
         }
         let stoptr = self.engine.disk();
-        let store = BlockDisk::wrap(stoptr);
+        let store = BlockStore::wrap(stoptr);
         // load
         let mut reshxs = Vec::with_capacity((hnum + 8) as usize);
         reshxs.push( buf[1..9].to_vec() ); // endhei
@@ -67,7 +67,7 @@ impl MsgHandler {
         // println!("&&&& hash_len = {}, start_hei={}, end_hei={}, hash_num={}", hash_len, start_hei, end_hei, hash_num);
         // diff each blk hash
         let duskptr = self.engine.disk();
-        let store = BlockDisk::wrap(duskptr);
+        let store = BlockStore::wrap(duskptr);
         let mut hi = 0;
         for hei in ((start_hei+1)..=end_hei).rev() {
             // println!("store.block_hash height = {}", hei);

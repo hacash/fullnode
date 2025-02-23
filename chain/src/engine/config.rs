@@ -77,7 +77,7 @@ impl EngineConf {
             recent_blocks: ini_must_bool(sec_server, "recent_blocks", false),
             average_fee_purity: ini_must_bool(sec_server, "average_fee_purity", false),
             lowest_fee_purity: LOWEST_FEE_PURITY,
-            // HA Cminer
+            // HAC miner
             miner_enable: false,
             miner_reward_address: Address::default(),
             miner_message: Fixed16::default(),

@@ -18,7 +18,6 @@ use protocol::state::*;
 use super::*;
 use super::peer::*;
 use super::memtxpool::*;
-use super::interface::*;
 
 
 

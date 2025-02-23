@@ -1,5 +1,5 @@
 
-fn scan_group_rng_by_feep(txpkgs: &Vec<TxPkg>, feep: u64, wsz: (usize, usize)) -> (usize, usize) {
+fn scan_group_rng_by_feep(txpkgs: &Vec<TxPkg>, feep: u64, fee: &Amount, fpmd: bool, wsz: (usize, usize)) -> (usize, usize) {
     let mut rxl = wsz.0;
     let mut rxr = wsz.1;
     // scan rng
@@ -10,10 +10,11 @@ fn scan_group_rng_by_feep(txpkgs: &Vec<TxPkg>, feep: u64, wsz: (usize, usize)) -
         }
         let fct = rxl + rng/2;
         let ct = &txpkgs[fct];
-        let cfp = ct.fepr; // fee_purity
-        if feep > cfp {
+        let lcd = match fpmd { true => feep > ct.fepr, false => fee > ct.objc.fee() }; // fee
+        let rcd = match fpmd { true => feep < ct.fepr, false => fee < ct.objc.fee() }; // fee puery
+        if lcd {
             rxr = fct; // in left
-        } else if feep < cfp {
+        } else if rcd {
             rxl = fct; // in right
         }else {
             // feep == cfp

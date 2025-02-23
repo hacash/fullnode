@@ -13,9 +13,8 @@ use protocol::*;
 
 
 use super::*;
-use super::interface::*;
 use super::p2p::*;
-// use super::diamondbid::*;
+use super::interface::*;
 use super::memtxpool::*;
 use super::handler::*;
 

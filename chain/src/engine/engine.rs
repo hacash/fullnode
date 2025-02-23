@@ -7,8 +7,8 @@ pub struct ChainEngine {
     scaner: Arc<dyn Scaner>,
 
     // data
-    disk: Arc<dyn DiskDB>,
-    blockdisk: BlockDisk,
+    disk: Arc<DiskKV>,
+    blockdisk: BlockStore,
 
     roller: Mutex<Roller>,
 
@@ -56,7 +56,7 @@ impl ChainEngine {
             disk,
             rctblks: Mutex::default(),
             avgfees: Mutex::default(),
-            blockdisk: BlockDisk::wrap(d1),
+            blockdisk: BlockStore::wrap(d1),
             isrtlk: ().into(),
         };
         rebuild_unstable_blocks(&mut engine);

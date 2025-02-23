@@ -110,15 +110,15 @@ impl ChainEngine {
             },
             None => self.roller.lock().unwrap().root.height
         };
-        let mut block_disk_batch = Writebatch::new();
+        let mut block_disk_batch = MemBatch::new();
         if let Some(curr) = cptr {
-            block_disk_batch.put(&BlockDisk::CSK, &ChainStatus{
+            block_disk_batch.put(&BlockStore::CSK.to_vec(), &ChainStatus{
                 root_height: BlockHeight::from(new_root_hei),
                 last_height: BlockHeight::from(curr.height),
             }.serialize());
         }
         // save block data to disk
-        block_disk_batch.put(hx.as_ref(), &data);
+        block_disk_batch.put(&hx.to_vec(), &data);
         // write all data by batch
         self.blockdisk.save_batch(block_disk_batch);
         // scaner do roll

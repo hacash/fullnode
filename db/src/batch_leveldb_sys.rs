@@ -15,19 +15,16 @@ impl Drop for Writebatch {
 
 
 impl Writebatch {
-    /// Create a new writebatch
+    
     pub fn new() -> Writebatch {
         let ptr = unsafe { leveldb_writebatch_create() };
         Writebatch { ptr, length: 0 }
     }
-
     
     pub fn len(&self) -> usize {
         self.length
     }
 
-    // Batch a put operation
-    
     pub fn put(&mut self, k: &[u8], value: &[u8]) {
         self.length += 1;
         unsafe {
@@ -39,8 +36,6 @@ impl Writebatch {
         }
     }
 
-    // Batch a delete operation
-    
     pub fn delete(&mut self, k: &[u8]) {
         unsafe {
             leveldb_writebatch_delete(self.ptr,
@@ -49,6 +44,9 @@ impl Writebatch {
         }
     }
 
+    pub fn deref(self) -> Self {
+        self
+    }
 
 }
 

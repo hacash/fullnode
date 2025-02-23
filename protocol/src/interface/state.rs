@@ -16,6 +16,14 @@ pub trait State : Send + Sync {
 
 
 
+pub trait Store : Send + Sync {
+
+    
+
+}
+
+
+
 
 
 

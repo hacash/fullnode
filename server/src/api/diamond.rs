@@ -113,7 +113,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
         true // next
 
     };
-    txpool.iter_at(&mut pick_dmint, MemTxPool::DIAMINT).unwrap();
+    txpool.iter_at(MemTxPool::DIAMINT, &mut pick_dmint).unwrap();
 
     let mut data = jsondata!{
         "number", *lastdia.number + 1, // current bidding diamond
