@@ -15,7 +15,10 @@ impl HacashNode {
     pub fn open(ini: &IniObj, engine: Arc<dyn Engine>) -> HacashNode {
         let cnf = NodeConf::new(ini);
         // tx pool
-        let mut tpmaxs = vec![5000, 200];
+        let mut tpmaxs = match engine.config().miner_enable {
+            true => vec![2000, 100], // miner node
+            false => vec![10, 10], // normal node
+        };
         let fpmds  = vec![true, false]; // is sort by fee_purity, normal or diamint
         cover(&mut tpmaxs, &cnf.txpool_maxs);
         let lfepr = engine.config().lowest_fee_purity;

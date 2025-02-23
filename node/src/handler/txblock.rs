@@ -31,10 +31,8 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
     if let Err(..) = this.engine.mint_checker().tx_check(txpr, next_hei) {
         return // tx check fail
     }
-    if engcnf.is_open_miner() {
-        // add to tx pool
-        let _ = this.txpool.insert(txpkg);
-    }
+    // add to tx pool
+    let _ = this.txpool.insert(txpkg);
     // broadcast
     let p2p = this.p2pmng.lock().unwrap();
     let p2p = p2p.as_ref().unwrap();
@@ -60,7 +58,6 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         return  // alreay know it
     }
     // check height and difficulty (mint consensus)
-    let is_open_miner = engcnf.is_open_miner();
     let heispan = engcnf.unstable_block;
     let latest = eng.latest_block();
     let lathei = latest.height().uint();
@@ -100,9 +97,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
             // println!("- error block data hex: {}", body.hex());
         }else{
             println!("ok.");
-            if is_open_miner {
-                drain_all_block_txs(engptr.as_ref().as_read(), txpool.as_ref(), thsx, blkhei);
-            }
+            drain_all_block_txs(engptr.as_ref().as_read(), txpool.as_ref(), thsx, blkhei);
         }
         drop(isrlk); // close lock
     }else{

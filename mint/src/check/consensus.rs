@@ -115,15 +115,14 @@ fn impl_examine(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr
             if let Some(rhbf) = biddings.highest(dianum, sta) {
                 if bidfee < rhbf { // 
                     /* test print start */
-                    println!("\n\n✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖\ndiamond mint bidding fee {} less than consensus record {}", bidfee, rhbf);
-                    println!("block height {} have a diamond {}-{}, address: {}, fee: {}, RecordHighestBidding: {}, {}\n", 
+                    println!("\n✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖\ndiamond mint bidding fee {} less than consensus record {}", bidfee, rhbf);
+                    println!("block height {} have a diamond {}-{}, address: {}, fee: {}, RecordHighestBidding: {}, {}", 
                         curhei, diamint.d.diamond.to_readable(), dianum, txp.main().readable(), bidfee,
-                        rhbf, biddings.print(dianum),
+                        rhbf, biddings.print_all(dianum),
                     );
                     /* test print end */ 
                     if dianum > CKN {  // HIP-19, check after 107000, reject blocks that don't follow the rules
-                        // stop HIP-19 for now
-                        // return errf!("diamond mint bidding fee {} less than consensus record {}", bidfee, rhbf)
+                        return errf!("diamond mint bidding fee {} less than consensus record {}", bidfee, rhbf)
                     }
                 } else if bidfee > rhbf {
                     print!(",\n        diamond bid fee {} record highest {} ", bidfee, rhbf)
