@@ -73,7 +73,7 @@ impl DifficultyGnr {
         let target_time_span = cylnum * blk_span; // 288 * 300
         let (prevcltime, _, _) = self.req_cycle_block(hei - cylnum, sto);
         let mut real_time_span = blk_span + prevblkt - prevcltime; // +300: 287+1block
-        if mcnf.chain_id==0 && hei < 288*450 {
+        if mcnf.is_mainnet() && hei < 288*450 {
             // in mainnet chain id = 0
             // -300 = 287block, compatible history code
             real_time_span -= blk_span; 

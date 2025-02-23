@@ -60,12 +60,13 @@ fn impl_prepare(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockDisk
 
 fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockDisk) -> Rerr {
     let curhei = curblk.height().uint(); // u64
-    /*if curhei > 628955 { // test debug
-        return errf!("test for curhei <= 628955")
-    }*/
+    let smaxh = this.cnf.sync_maxh;
+    if smaxh > 0 && curhei > smaxh {
+        return errf!("config [mint].height_max setting: {}", smaxh)
+    }
     // check difficulty
     let blkspan = this.cnf.difficulty_adjust_blocks;
-    if this.cnf.chain_id==0 && curhei < 288*200 {
+    if this.cnf.is_mainnet() && curhei < 288*200 {
         return Ok(()) // not check, compatible history code
     }
     // check
@@ -117,7 +118,7 @@ fn impl_examine(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr
                     println!("\n\n✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖\ndiamond mint bidding fee {} less than consensus record {}", bidfee, rhbf);
                     println!("block height {} have a diamond {}-{}, address: {}, fee: {}, RecordHighestBidding: {}, {}\n", 
                         curhei, diamint.d.diamond.to_readable(), dianum, txp.main().readable(), bidfee,
-                        rhbf, biddings.print_all(dianum),
+                        rhbf, biddings.print(dianum),
                     );
                     /* test print end */ 
                     if dianum > CKN {  // HIP-19, check after 107000, reject blocks that don't follow the rules

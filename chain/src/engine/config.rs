@@ -12,6 +12,7 @@ pub struct EngineConf {
     pub chain_id: u32, // sub chain id
     pub unstable_block: u64, // The number of blocks that are likely to fall back from the fork
     pub fast_sync: bool,
+    pub sync_maxh: u64, // sync max height, limit
     pub data_dir: String,
     pub block_data_dir: PathBuf, // block data
     pub state_data_dir: PathBuf, // chain state
@@ -67,6 +68,7 @@ impl EngineConf {
             chain_id: 0,
             unstable_block: 4, // 4 block
             fast_sync: false,
+            sync_maxh: 0,
             block_data_dir: join_path(&data_dir, "block"),
             state_data_dir: state_data_dir,
             data_dir: data_dir.to_str().unwrap().to_owned(),
@@ -100,6 +102,7 @@ impl EngineConf {
 
         let sec_mint = &ini_section(ini, "mint");
         cnf.chain_id = ini_must_u64(sec_mint, "chain_id", 0) as u32;
+        cnf.sync_maxh = ini_must_u64(sec_mint, "height_max", 0);
 
         // HAC miner
         let sec_miner = &ini_section(ini, "miner");
