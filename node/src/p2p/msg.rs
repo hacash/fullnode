@@ -1,5 +1,5 @@
 
-pub const P2P_HAND_SHAKE_MAGIC_NUMBER: u32 = 3418609257;
+pub const P2P_HAND_SHAKE_MAGIC_NUMBER: u32 = 3148609527; // for HIP-19
 pub const P2P_MSG_DATA_MAX_SIZE: u32 = 1012 * 1024 * 32; //  32MB
 
 // msg types
