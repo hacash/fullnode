@@ -17,6 +17,7 @@ use super::p2p::*;
 use super::interface::*;
 use super::memtxpool::*;
 use super::handler::*;
+use super::diamondbid::*;
 
 
 

@@ -19,7 +19,7 @@ use super::memtxpool::*;
 include!("bidding.rs");
 
 
-pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> Rerr {
+pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) {
     
     // check config
     let eng = hnode.engine();
@@ -30,7 +30,7 @@ pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> Rerr {
     let minstep = Amount::coin(1, 244);
 
     if ! cnf.dmer_enable {
-        return Ok(()) // not enable
+        return // not enable
     }
 
     macro_rules! printerr {
@@ -67,8 +67,6 @@ pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) -> Rerr {
             thread::sleep( Duration::from_millis(77) );
         }
     });
-
-    Ok(())
 }
 
 

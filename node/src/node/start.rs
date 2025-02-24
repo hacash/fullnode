@@ -9,7 +9,7 @@ impl HacashNode {
         let hdl = this.msghdl.clone();
 
         // diamond auto bid
-        // start_diamond_auto_bidding(this.clone());
+        start_diamond_auto_bidding(this.clone());
 
         // handle msg
         std::thread::spawn(move||{

@@ -134,7 +134,7 @@ fn pick_first_bid_tx(tx_pool: &dyn TxPool) -> Option<TxPkg> {
     let mut first: Option<TxPkg> = None;
     let mut pick_dmint = |a: &TxPkg| {
         first = Some(a.clone());
-        return false // end
+        return false // end at first
     };
     let _ = tx_pool.iter_at(MemTxPool::DIAMINT, &mut pick_dmint);
     // ok
