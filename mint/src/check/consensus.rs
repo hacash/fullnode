@@ -98,6 +98,20 @@ fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn Blo
 
 
 fn impl_examine(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr {
+
+    check_highest_bid_of_block(this, curblk, sta)?;
+
+    Ok(())
+}
+
+
+
+/************************/
+
+
+
+fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr {
+
     let curhei = curblk.hein; // u64
     // check diamond mint action
     // let is_discover = curblk.orgi == BlkOrigin::DISCOVER;
@@ -111,14 +125,15 @@ fn impl_examine(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr
             let bidfee  = txp.fee().clone();
             // check_diamond_mint_minimum_bidding_fee
             check_diamond_mint_minimum_bidding_fee(curhei, txp.as_read(), &diamint)?; // HIP-18
-            let mut biddings = this.bidding_prove.lock().unwrap();
-            if let Some(rhbf) = biddings.highest(dianum, sta) {
+            let mut bidrecord = this.bidding_prove.lock().unwrap();
+            if let Some(rhbf) = bidrecord.highest(dianum, sta) {
                 if bidfee < rhbf { // 
+                    bidrecord.failure(dianum, curblk); // record check block fail
                     /* test print start */
                     println!("\n✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖ ✕ ✖\ndiamond mint bidding fee {} less than consensus record {}", bidfee, rhbf);
                     println!("block height {} have a diamond {}-{}, address: {}, fee: {}, RecordHighestBidding: {}, {}", 
                         curhei, diamint.d.diamond.to_readable(), dianum, txp.main().readable(), bidfee,
-                        rhbf, biddings.print_all(dianum),
+                        rhbf, bidrecord.print(dianum),
                     );
                     /* test print end */ 
                     if dianum > CKN {  // HIP-19, check after 107000, reject blocks that don't follow the rules
@@ -130,17 +145,13 @@ fn impl_examine(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr
                 // check success
             }
             // check ok and clear for next diamond
-            biddings.roll(dianum);
+            bidrecord.roll(dianum);
         }
     }
-    
+
 
     Ok(())
 }
-
-
-
-/************************/
 
 
 

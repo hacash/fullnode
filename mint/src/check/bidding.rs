@@ -14,6 +14,7 @@ struct BiddingRecord {
 struct BiddingProve {
     // dia number => bidding info
     latest: u32,
+    failures: HashMap<u32, HashSet<Address>>, // The address of the broadcast invalid block
     biddings: HashMap<u32, VecDeque<BiddingRecord>>,
 }
 
@@ -27,6 +28,12 @@ impl BiddingProve {
     const DELAY_SECS: usize = 15; 
     const RECORD_NUM: usize = 10; 
     const PROVE_HOLD: usize = 5;  // latest 5 diamonds
+
+    fn failure(&mut self, dianum: u32, blk: &BlockPkg) {
+        let coinbase = &blk.objc.as_ref().transactions()[0];
+        let fails = self.failures.entry(dianum).or_default();
+        fails.insert(coinbase.main());
+    }
 
     fn record(&mut self, tx: &dyn TransactionRead, act: &DiamondMint) {
         let dianum = *act.d.number;
@@ -43,7 +50,8 @@ impl BiddingProve {
         };
 
         macro_rules! rcdshow { () => {
-            println!("- devtest record bidding {} {}", &record.addr.readable(), &record.fee);       
+            // println!("- devtest record bidding {} {}", &record.addr.readable(), &record.fee);  
+            // print!(",{}({})", &record.addr.readable()[0..7], &record.fee);       
         }}
         let bids = self.biddings.entry(dianum).or_default();
         // push
@@ -67,6 +75,18 @@ impl BiddingProve {
 
     }
 
+    fn check_fail(&self, dianum: u32, fee: Amount) -> Amount {
+        let Some(fails) = self.failures.get(&dianum) else {
+            return fee // no fail
+        };
+        let fsub = |x|fee.sub(&Amount::small(x, 247), AmtMode::U64).unwrap_or_default(); // -= 0.x
+        match fails.len() {
+            0..3 => fee,
+            3 => fsub(5), // -= 0.5
+            4 => fsub(9), // -= 0.9
+            5.. => Amount::zero() // do not check
+        }
+    }
 
     fn highest(&self, dianum: u32, sta: &dyn State) -> Option<Amount> {
         let coresta = CoreStateRead::wrap(sta);
@@ -76,12 +96,14 @@ impl BiddingProve {
                 if r.number == dianum && r.time < ttx {
                     let hacbls = coresta.balance(&r.addr).unwrap_or_default();
                     if hacbls.hacash >= r.fee {
-                        return Some(r.fee.clone()) // highest valid bid
+                        let rfe = self.check_fail(dianum, r.fee.clone());
+                        return Some(rfe); // highest valid bid
                     }
                 }
             }
         }
-        None // not find
+        // not find
+        None
     }
 
     fn print(&self, dianum: u32) -> String {
@@ -110,6 +132,7 @@ impl BiddingProve {
             return
         }
         let expired = dianum - ph;
+        self.failures.remove(&expired);
         self.biddings.remove(&expired);
     }
 }
