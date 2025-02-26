@@ -48,8 +48,8 @@ impl BlockPkg {
 		self.objc
 	}
 
-	pub fn apart(self) -> (Box<dyn Block>, Vec<u8>) {
-		(self.objc, self.data)
+	pub fn apart(self) -> (Hash, Box<dyn Block>, Vec<u8>) {
+		(self.hash, self.objc, self.data)
 	}
 
 	pub fn set_origin(&mut self, orgi: BlkOrigin) {

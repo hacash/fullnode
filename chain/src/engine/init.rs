@@ -23,7 +23,7 @@ fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>, is_state_upgrade: boo
 
 fn rebuild_unstable_blocks(this: &ChainEngine) {
 
-    let status = this.blockdisk.status();
+    let status = this.store.status();
     // next
     let mut next_height: u64 = {
         this.roller.lock().unwrap().root.height
@@ -39,7 +39,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
     // insert lock
     loop {
         next_height += 1;
-        let Some((hx, blkdata, block)) = this.blockdisk.block_by_height(&next_height.into()) else {
+        let Some((hx, blkdata, block)) = this.store.block_by_height(&next_height.into()) else {
             break; // end finish
         };
         // assert_eq!(blkdata, block.serialize(), "assert_eq block {}", block.height().uint());

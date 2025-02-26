@@ -26,10 +26,10 @@ impl Drop for Chunk {
 
 impl Chunk {
 
-    pub fn create(b: Arc<dyn Block>, s: Arc<dyn State>) -> Self {
+    pub fn create(h: Hash, b: Arc<dyn Block>, s: Arc<dyn State>) -> Self {
         Self {
             height: b.height().uint(),
-            hash: b.hash(),
+            hash: h,
             block: b,
             state: s,
             childs: Mutex::default(),

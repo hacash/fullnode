@@ -120,7 +120,7 @@ impl ChainEngine {
         // save block data to disk
         block_disk_batch.put(&hx.to_vec(), &data);
         // write all data by batch
-        self.blockdisk.save_batch(block_disk_batch);
+        self.store.save_batch(block_disk_batch);
         // scaner do roll
         if let Some(new_root) = nrt {
             let scres = self.scaner.roll(new_root.block.clone(), new_root.state.clone(), self.disk.clone());
@@ -177,11 +177,11 @@ impl ChainEngine {
         sub_state = block.objc.execute(chaincnf, sub_state)?;
         self.minter.examine(&block, sub_state.as_ref())?;
         // create chunk
-        let (objc, data) = block.apart();
-        let chunk = Chunk::create(objc.into(), sub_state.into());
+        let (hx, objc, data) = block.apart();
+        let chunk = Chunk::create(hx, objc.into(), sub_state.into());
         // insert chunk
         let (root, curr, path) = self.roller.lock().unwrap().insert(prev_chunk, chunk)?;
-        self.blockdisk.save_batch(path);
+        self.store.save_batch(path);
         Ok((root, curr, data))
     }
 
