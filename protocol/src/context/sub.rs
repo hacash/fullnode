@@ -10,11 +10,11 @@ impl State for EmptyState {}
 fn ctx_state_fork_sub(ctx: &mut dyn Context) -> Box<dyn State> {
     let nil = Box::new(EmptyState{});
     let mut old: Arc<dyn State> = ctx.state_replace(nil).into();
-    let sub = old.fork_sub(old.clone());
+    let sub = old.fork_sub(Arc::downgrade(&old));
     ctx.state_replace(sub);
     // arc => box
     Arc::get_mut(&mut old).map(|p| {
-        unsafe { Box::from_raw(p as *mut (dyn State +'_)) }
+        unsafe { Box::from_raw(p as *mut dyn State) }
     }).unwrap()
 }
 

@@ -23,7 +23,7 @@ impl EngineRead for ChainEngine {
 
     fn fork_sub_state(&self) -> Box<dyn State> {
         let state = self.state();
-        let sub_state = state.fork_sub(state.clone());
+        let sub_state = state.fork_sub(Arc::downgrade(&state));
         sub_state
     }
     
@@ -89,7 +89,7 @@ impl EngineRead for ChainEngine {
             tx: ctx::Tx::create(tx),
         };
         // cast mut to box
-        let sub = unsafe { Box::from_raw(sub_state.as_mut() as *mut (dyn State +'_)) };
+        let sub = unsafe { Box::from_raw(sub_state.as_mut() as *mut dyn State) };
         let mut ctxobj = ctx::ContextInst::new(env, sub, tx);
         // do tx exec
         let exec_res = tx.execute(&mut ctxobj);

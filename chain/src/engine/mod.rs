@@ -12,9 +12,10 @@ use protocol::*;
 use protocol::state::*;
 use protocol::context as ctx;
 
-use super::roller::*;
-use super::state::*;
 use super::interface::*;
+
+include!{"../state/mod.rs"}
+include!{"../roller/mod.rs"}
 
 
 include!{"config.rs"}

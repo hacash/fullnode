@@ -1,7 +1,7 @@
 
 
 pub trait State : Send + Sync {
-    fn fork_sub(&self, _: Arc<dyn State>) -> Box<dyn State> { unimplemented!() }
+    fn fork_sub(&self, _: Weak<dyn State>) -> Box<dyn State> { unimplemented!() }
     fn merge_sub(&mut self, _: Box<dyn State>) { unimplemented!() }
     fn to_mem(&self) -> MemMap { unimplemented!() }
 

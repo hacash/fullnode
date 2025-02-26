@@ -8,7 +8,7 @@ pub struct StateInst {
 
 impl StateInst {
 
-    pub fn build(d: Arc<DiskKV>, p: Weak<dyn State>) -> Self where Self: Sized {
+    fn build(d: Arc<DiskKV>, p: Weak<dyn State>) -> Self where Self: Sized {
         Self {
             disk: d,
             parent: p,
@@ -27,11 +27,11 @@ impl State for StateInst {
         self.disk.clone()
     }
     
-    fn fork_sub(&self, p: Arc<dyn State>) -> Box<dyn State> {
+    fn fork_sub(&self, p: Weak<dyn State>) -> Box<dyn State> {
         Box::new(Self{
             disk: self.disk.clone(),
             mem: MemKV::new(),
-            parent: Arc::downgrade(&p),
+            parent: p,
         })
     }
 

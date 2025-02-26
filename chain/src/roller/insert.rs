@@ -5,8 +5,7 @@ type RollerInsertRet = Ret<(Option<Arc<Chunk>>, Option<Arc<Chunk>>, MemBatch)>;
 
 impl Roller {
 
-    
-    pub fn insert(&mut self, parent: Arc<Chunk>, chunk: Chunk) -> RollerInsertRet {
+    fn insert(&mut self, parent: Arc<Chunk>, chunk: Chunk) -> RollerInsertRet {
         insert_to_roller(self, parent, chunk)
     }
 }
@@ -15,7 +14,7 @@ impl Roller {
 /*
 * return (change to new root, change to new pointer)
 */
-pub fn insert_to_roller(roller: &mut Roller, parent: Arc<Chunk>, mut chunk: Chunk) -> RollerInsertRet {
+fn insert_to_roller(roller: &mut Roller, parent: Arc<Chunk>, mut chunk: Chunk) -> RollerInsertRet {
     let new_hei = chunk.height;
     // check
     let root_hei = roller.root.height;
