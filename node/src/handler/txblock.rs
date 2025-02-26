@@ -65,7 +65,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         return // height too late
     }
     let mintckr = eng.mint_checker();
-    let stoptr = BlockStore::wrap(eng.disk().clone());
+    let stoptr = eng.store();
     // may insert
     if blkhei <= lathei + 1 {
         // prepare check
@@ -152,7 +152,7 @@ fn drain_all_block_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, txs: Vec<Hash>
 // clean_
 fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, blkhei: u64) {
     let pdhei = blkhei + 1;
-    let mut sub_state = eng.sub_state();
+    let mut sub_state = eng.fork_sub_state();
     // already minted hacd number
     let _ = txpool.retain_at(MemTxPool::NORMAL, &mut |a: &TxPkg| {
         let exec = eng.try_execute_tx_by( a.objc.as_read(), pdhei, &mut sub_state);

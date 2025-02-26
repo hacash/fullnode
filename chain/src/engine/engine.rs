@@ -14,6 +14,7 @@ pub struct ChainEngine {
 
     isrtlk: Mutex<()>, // is exit
 
+    // data cache
     rctblks: Mutex<VecDeque<Arc<RecentBlockInfo>>>,
     avgfees: Mutex<VecDeque<u64>>,
 

@@ -21,14 +21,14 @@ impl EngineRead for ChainEngine {
         self.roller.lock().unwrap().curr.upgrade().unwrap().state.clone()
     }
 
-    fn sub_state(&self) -> Box<dyn State> {
+    fn fork_sub_state(&self) -> Box<dyn State> {
         let state = self.state();
         let sub_state = state.fork_sub(state.clone());
         sub_state
     }
     
-    fn disk(&self) -> Arc<DiskKV> {
-        self.disk.clone()
+    fn store(&self) -> BlockStore {
+        BlockStore::wrap(self.disk.clone())
     }
 
     fn recent_blocks(&self) -> Vec<Arc<RecentBlockInfo>> {
@@ -102,7 +102,7 @@ impl EngineRead for ChainEngine {
 
     fn try_execute_tx(&self, tx: &dyn TransactionRead) -> Rerr {
         let height = self.latest_block().height().uint() + 1; // next height
-        self.try_execute_tx_by(tx, height, &mut self.sub_state())?;
+        self.try_execute_tx_by(tx, height, &mut self.fork_sub_state())?;
         Ok(())
     }
     
@@ -128,7 +128,7 @@ impl Engine for ChainEngine {
         let lk = self.isrtlk.lock().unwrap();
         self.do_insert(blk)?;
         drop(lk);
-        Ok(())
+        Ok(())    
     }
     
     fn insert_sync(&self, hei: u64, data: Vec<u8>) -> Rerr {

@@ -202,7 +202,7 @@ fn append_valid_tx_pick_from_txpool(pending_hei: u64, trslen: &mut usize, trshxs
     let txallsz = &mut txallsz;
     let mut invalidtxhxs = Vec::new();
 
-    let mut sub_state = engine.sub_state();
+    let mut sub_state = engine.fork_sub_state();
 
     macro_rules! ok_push_one_tx {
         ($a: expr) => {
@@ -372,7 +372,7 @@ async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoR
     if is_need_create_new() {
         // create next block
         miner_reset_next_new_block(
-            &BlockStore::wrap(ctx.engine.disk()),
+            &ctx.engine.store(),
             ctx.engine.clone(),
             ctx.hcshnd.clone(),
         );

@@ -15,8 +15,7 @@ impl MsgHandler {
         let mut totalnum = 0;
         let mut endhei = 0;
         // load data
-        let stoptr = self.engine.disk();
-        let store = BlockStore::wrap(stoptr);
+        let store = self.engine.store();
         let mut blkdtsary = vec![];
         for hei in starthei ..= lathei {
             let Some((_, blkdts)) = store.block_data_by_height(&BlockHeight::from(hei)) else {

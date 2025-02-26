@@ -44,7 +44,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
         };
         // assert_eq!(blkdata, block.serialize(), "assert_eq block {}", block.height().uint());
         if is_all_rebuild {
-            if next_height % 500 == 0 {
+            if next_height % 631 == 0 {
                 let per = next_height as f32 / finish_height as f32;
                 flush!("\r{:10} ({:.2}%)", next_height, per*100.0);
             }
