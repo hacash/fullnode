@@ -10,7 +10,7 @@ struct Chunk {
     block: Arc<dyn Block>,
     state: Arc<dyn State>,
 
-    childs: Vec<Arc<Chunk>>,
+    childs: Mutex<Vec<Arc<Chunk>>>,
     parent: Weak<Chunk>,
 
 }
@@ -32,23 +32,17 @@ impl Chunk {
             hash: h,
             block: b,
             state: s,
-            childs: Vec::new(),
+            childs: Mutex::default(),
             parent: Weak::new(), // none
         }
     }
 
-    fn push_child(&mut self, c: Arc<Chunk>) {
-        self.childs.push(c);
+    fn push_child(&self, c: Arc<Chunk>) {
+        self.childs.lock().unwrap().push(c);
     }
 
     fn set_parent(&mut self, p: Arc<Chunk>) {
         self.parent = Arc::downgrade(&p).into();
     }
 
-}
-
-fn chunk_push_child(p: Arc<Chunk>, c: Arc<Chunk>) {
-    // let parent = unsafe { Arc::get_mut_unchecked(&mut p) };
-    let parent = unsafe { &mut *(Arc::as_ptr(&p) as *mut Chunk) };
-    parent.push_child(c);
 }

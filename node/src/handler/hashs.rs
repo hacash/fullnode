@@ -39,7 +39,7 @@ impl MsgHandler {
     async fn receive_hashs(&self, peer: Arc<Peer>, mut buf: Vec<u8>) {
         // println!("&&&& receive_hashs = {}", hex::encode(&buf));
         if buf.len() < 8 {
-            println!("check hash failed.");
+            // println!("check hash failed.");
             return
         }
         let hashs = buf.split_off(8);
@@ -52,6 +52,7 @@ impl MsgHandler {
         // check
         let latest = self.engine.latest_block();
         let lathei = latest.height().uint();
+        // println!("&&&& latest.height().uint() = {}", lathei);
         if end_hei > lathei {
             return // not find target height block
         }
@@ -71,7 +72,7 @@ impl MsgHandler {
             // println!("store.block_hash height = {}", hei);
             let myhx = store.block_hash(&BlockHeight::from(hei));
             if myhx.is_none() {
-                println!("not find block hash by height = {}", hei);
+                // println!("not find block hash by height = {}", hei);
                 return // not find block hash by height
             }
             let myhx = myhx.unwrap();

@@ -28,7 +28,7 @@ fn insert_to_roller(roller: &mut Roller, parent: Arc<Chunk>, mut chunk: Chunk) -
     // insert
     chunk.set_parent(parent.clone());
     let new_chunk = Arc::new(chunk);
-    chunk_push_child(parent, new_chunk.clone());
+    parent.push_child(new_chunk.clone());
     // move pointer
     let mut mv_root: Option<Arc<Chunk>> = None;
     let mut mv_curr: Option<Arc<Chunk>> = None;

@@ -156,7 +156,7 @@ impl ChainEngine {
         // println!("fast_sync = {}", fast_sync);
         if !fast_sync {
             // check repeat
-            for sub in prev_chunk.childs.iter() {
+            for sub in prev_chunk.childs.lock().unwrap().clone().into_iter() {
                 if hx == sub.hash {
                     return errf!("repetitive block height {} hash {}", hei, hx)
                 }
