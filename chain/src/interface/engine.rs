@@ -36,6 +36,10 @@ pub trait Engine : EngineRead + Send + Sync {
     fn insert(&self, _: BlockPkg) -> Rerr;
     fn insert_sync(&self, _: u64, _: Vec<u8>) -> Rerr;
 
+    // for v2
+    fn discover(&self, _: BlockPkg) -> Rerr { unimplemented!() }
+    fn synchronize(&self, _: Vec<u8>) -> Rerr { unimplemented!() }
+
     fn exit(&self) {}
 }
 

@@ -156,10 +156,7 @@ impl ChainEngine {
         // println!("fast_sync = {}", fast_sync);
         if !fast_sync {
             // check repeat
-            let brothers: Vec<Arc<Chunk>> = {
-                prev_chunk.childs.lock().unwrap().iter().map(|a|a.clone()).collect()
-            };
-            for sub in brothers {
+            for sub in prev_chunk.childs.iter() {
                 if hx == sub.hash {
                     return errf!("repetitive block height {} hash {}", hei, hx)
                 }
@@ -196,6 +193,47 @@ impl ChainEngine {
 fn sync_warning(e: String) -> Rerr {
     errf!("\n[Block Sync Warning] {}\n", e)
 }
+
+
+
+
+
+
+
+
+
+
+
+#[allow(dead_code)]
+impl ChainEngine {
+
+    // return (new root, new head, blk data) 
+    fn create_chunk_and_insert(&self, _blkpkg: BlockPkg) -> InsertResult {
+        
+
+
+
+        unimplemented!()
+    }
+
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

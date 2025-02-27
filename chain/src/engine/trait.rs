@@ -146,4 +146,59 @@ impl Engine for ChainEngine {
         drop(lk);
     }
 
+
+
+
+
+    // for v2
+    fn discover(&self, _: BlockPkg) -> Rerr {
+        // do lock
+        loop {
+            match self.inserting.compare_exchange(ISRT_STAT_IDLE, ISRT_STAT_DISCOVER, Ordering::Acquire, Ordering::Relaxed) {
+                Ok(ISRT_STAT_IDLE) => break, // idle, go to insert
+                Err(ISRT_STAT_DISCOVER) => {
+                    sleep(Duration::from_millis(100)); // wait 0.1s
+                    continue // to check again
+                },
+                Err(ISRT_STAT_SYNCING) => {
+                    return errf!("the blockchain is syncing and cannot insert newly discovered block")
+                }
+                _ => never!()
+            }
+        }
+        // do insert
+        
+
+
+        unimplemented!()
+    }
+
+
+    fn synchronize(&self, _: Vec<u8>) -> Rerr {
+        // do lock
+        loop {
+            match self.inserting.compare_exchange(ISRT_STAT_IDLE, ISRT_STAT_SYNCING, Ordering::Acquire, Ordering::Relaxed) {
+                Ok(ISRT_STAT_IDLE) => break, // idle, go to sync
+                Err(ISRT_STAT_DISCOVER) => {
+                    sleep(Duration::from_millis(100)); // wait 0.1s
+                    continue // to check again
+                },
+                Err(ISRT_STAT_SYNCING) => {
+                    return errf!("the blockchain is syncing and need wait")
+                }
+                _ => never!()
+            }
+        }
+        // do sync
+    
+    
+    
+    
+        unimplemented!()
+    }
+
+
+
+
+
 }

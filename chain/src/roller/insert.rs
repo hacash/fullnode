@@ -5,10 +5,13 @@ type RollerInsertRet = Ret<(Option<Arc<Chunk>>, Option<Arc<Chunk>>, MemBatch)>;
 
 impl Roller {
 
+    // fn try_insert(&self) {  }
+
     fn insert(&mut self, parent: Arc<Chunk>, chunk: Chunk) -> RollerInsertRet {
         insert_to_roller(self, parent, chunk)
     }
 }
+
 
 
 /*
@@ -25,7 +28,7 @@ fn insert_to_roller(roller: &mut Roller, parent: Arc<Chunk>, mut chunk: Chunk) -
     // insert
     chunk.set_parent(parent.clone());
     let new_chunk = Arc::new(chunk);
-    parent.push_child(new_chunk.clone());
+    chunk_push_child(parent, new_chunk.clone());
     // move pointer
     let mut mv_root: Option<Arc<Chunk>> = None;
     let mut mv_curr: Option<Arc<Chunk>> = None;

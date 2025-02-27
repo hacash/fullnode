@@ -14,23 +14,20 @@ impl Roller {
             return None // height too low
         }
         // or search from root
-        search_chunk_tree(root.clone(), hei, hx)
+        search_chunk_tree(&root, hei, hx)
     }
 
 }
 
 
 
-fn search_chunk_tree(chunk: Arc<Chunk>, hei: u64, hx: &Hash) -> Option<Arc<Chunk>> {
+fn search_chunk_tree(chunk: &Arc<Chunk>, hei: u64, hx: &Hash) -> Option<Arc<Chunk>> {
     if chunk.height == hei && chunk.hash == *hx {
         return Some(chunk.clone()) // find it
     }
     // search childs
-    let childs = {
-        chunk.childs.lock().unwrap().clone()
-    };
-    for a in childs {
-        if let Some(r) = search_chunk_tree(a, hei, hx) {
+    for a in chunk.childs.iter() {
+        if let Some(r) = search_chunk_tree(&a, hei, hx) {
             return Some(r)
         }
     }
