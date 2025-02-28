@@ -25,9 +25,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
 
     let status = this.store.status();
     // next
-    let mut next_height: u64 = {
-        this.roller.lock().unwrap().root.height
-    };
+    let mut next_height = this.roller.lock().unwrap().root.height;
     // build unstable blocks 
     let finish_height = *status.last_height;
     let is_all_rebuild = finish_height - next_height > 20;

@@ -10,8 +10,11 @@ impl ChainEngine {
 
     fn do_insert_sync(&self, start_hei: u64, mut datas: Vec<u8>) -> Rerr {
         let cur_hei = self.latest_block().height().uint();
-        if start_hei != cur_hei + 1 {
-            return sync_warning(format!("need height {} but got {}", cur_hei+1, start_hei))
+        let hei_up = cur_hei + 1;
+        let ubh = self.cnf.unstable_block;
+        let hei_lo = maybe!(cur_hei>ubh, cur_hei-ubh+1, 1);
+        if start_hei < hei_lo || start_hei > hei_up {
+            return sync_warning(format!("height need between {} and {} but got {}", hei_lo, hei_up, start_hei))
         }
         let this = self;
         // create thread
@@ -138,8 +141,8 @@ impl ChainEngine {
         // find prev chunk
         let prev_hei = block.hein - 1;
         let prev_hx = block.objc.prevhash();
-        let prev = { 
-            self.roller.lock().unwrap().fast_search(prev_hei, prev_hx) 
+        let prev = {
+            self.roller.lock().unwrap().search(prev_hei, prev_hx) 
         };
         let Some(prev_chunk) = prev else {
             return errf!("not find prev block <{}, {}>", prev_hei, prev_hx)
@@ -156,7 +159,7 @@ impl ChainEngine {
         // println!("fast_sync = {}", fast_sync);
         if !fast_sync {
             // check repeat
-            for sub in prev_chunk.childs.lock().unwrap().clone().into_iter() {
+            for sub in prev_chunk.childs.iter() {
                 if hx == sub.hash {
                     return errf!("repetitive block height {} hash {}", hei, hx)
                 }

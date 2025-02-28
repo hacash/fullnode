@@ -3,7 +3,7 @@
 impl Roller {
 
     
-    fn fast_search(&self, hei: u64, hx: &Hash) -> Option<Arc<Chunk>> {
+    fn search(&self, hei: u64, hx: &Hash) -> Option<Arc<Chunk>> {
         // search least current
         let cur = self.curr.upgrade().unwrap(); // must have
         if cur.height == hei && cur.hash == *hx {
@@ -26,8 +26,8 @@ fn search_chunk_tree(chunk: Arc<Chunk>, hei: u64, hx: &Hash) -> Option<Arc<Chunk
         return Some(chunk.clone()) // find it
     }
     // search childs
-    for a in chunk.childs.lock().unwrap().clone().into_iter() {
-        if let Some(r) = search_chunk_tree(a, hei, hx) {
+    for a in chunk.childs.iter() {
+        if let Some(r) = search_chunk_tree(a.clone(), hei, hx) {
             return Some(r)
         }
     }

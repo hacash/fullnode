@@ -151,7 +151,7 @@ impl Engine for ChainEngine {
 
 
     // for v2
-    fn discover(&self, _: BlockPkg) -> Rerr {
+    fn discover(&self, blk: BlockPkg) -> Rerr {
         // do lock
         loop {
             match self.inserting.compare_exchange(ISRT_STAT_IDLE, ISRT_STAT_DISCOVER, Ordering::Acquire, Ordering::Relaxed) {
@@ -166,7 +166,20 @@ impl Engine for ChainEngine {
                 _ => never!()
             }
         }
+        // get mut roller
+        let mut roller = self.roller.lock().unwrap();
+        let roller = roller.deref_mut();
         // do insert
+        // search prev chunk in roller tree
+        let prev_hei = blk.hein - 1;
+        let prev_hx  = blk.objc.prevhash();
+        let Some(_prev_chunk) = roller.search(prev_hei, prev_hx) else {
+            return errf!("not find prev block <{}, {}>", prev_hei, prev_hx)
+        };
+        
+
+
+
         
 
 
@@ -190,6 +203,7 @@ impl Engine for ChainEngine {
             }
         }
         // do sync
+        let _roller = self.roller.lock().unwrap().deref_mut();
     
     
     
