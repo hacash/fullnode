@@ -128,7 +128,7 @@ impl Engine for ChainEngine {
         let lk = self.isrtlk.lock().unwrap();
         self.do_insert(blk)?;
         drop(lk);
-        Ok(())    
+        Ok(())
     }
     
     fn insert_sync(&self, hei: u64, data: Vec<u8>) -> Rerr {
@@ -171,19 +171,73 @@ impl Engine for ChainEngine {
         let roller = roller.deref_mut();
         // do insert
         // search prev chunk in roller tree
-        let prev_hei = blk.hein - 1;
+        let hei = blk.hein;
+        let hx = blk.hash;
+        let prev_hei = hei - 1;
         let prev_hx  = blk.objc.prevhash();
-        let Some(_prev_chunk) = roller.search(prev_hei, prev_hx) else {
+        let Some(prev_chunk) = roller.search(prev_hei, prev_hx) else {
             return errf!("not find prev block <{}, {}>", prev_hei, prev_hx)
         };
-        
-
-
-
-        
-
-
-        unimplemented!()
+        // check repeat
+        if prev_chunk.childs.iter().any(|c|c.hash==hx) {
+            return errf!("repetitive block <{}, {}>", hei, hx)
+        }
+        // minter verify
+        self.minter.blk_verify(&blk, prev_chunk.block.as_read(), &self.store)?;
+        self.block_verify(&blk, prev_chunk.block.clone())?;
+        // try execute
+        // create sub state 
+        let prev_state = prev_chunk.state.clone();
+        let mut sub_state = prev_state.fork_sub(Arc::downgrade(&prev_state));
+        // initialize on first block
+        if hei == 1 {
+            self.minter.initialize(sub_state.as_mut())?;
+        }
+        let c = &self.cnf;
+        let chain_option = ctx::Chain {
+            fast_sync: false,
+            diamond_form: c.diamond_form,
+            id: c.chain_id,
+        };
+        // execute block
+        sub_state = blk.objc.execute(chain_option, sub_state)?;
+        // create chunk
+        let (hx, objc, data) = blk.apart();
+        let chunk = Chunk::create(hx, objc.into(), sub_state.into());
+        // insert chunk
+        let (root, head, path) = roller.insert(prev_chunk, chunk)?;
+        let mut store_batch = path;
+        let mut state_write: Option<Arc<dyn State>> = None;
+        // Ok((root, curr, data))
+        let new_root_hei: u64 = match root.clone() {
+            Some(rt) => {
+                state_write = Some(rt.state.clone()); // write
+                rt.height
+            },
+            None => roller.root.height
+        };
+        if let Some(head) = head {
+            store_batch.put(&BlockStore::CSK.to_vec(), &ChainStatus{
+                root_height: BlockHeight::from(new_root_hei),
+                last_height: BlockHeight::from(head.height),
+            }.serialize());
+        }
+        // save block data to disk
+        store_batch.put(&hx.to_vec(), &data);
+        // scaner do roll
+        if let Some(new_root) = root {
+            let scres = self.scaner.roll(new_root.block.clone(), new_root.state.clone(), self.disk.clone());
+            if let Err(e) = scres {
+                panic!("\n\nBlock scaner roll error: {}\n\n", e);
+            }
+        }
+        // write all data to disk
+        if let Some(sw) = state_write {
+            sw.write_to_disk();
+        };
+        self.store.save_batch(store_batch);
+        // insert success
+        Ok(())
     }
 
 
