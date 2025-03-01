@@ -8,6 +8,13 @@ combi_struct!{ BlockPtr,
 }
 
 
+// BlockHeadOnlyHeight
+combi_struct!{ BlockHeadOnlyHeight, 
+	version           : Uint1
+	height            : BlockHeight
+}
+
+
 // BlockHead
 combi_struct!{ BlockHead, 
 	// head

@@ -1,4 +1,5 @@
 
+#[allow(dead_code)]
 impl ChainEngine {
 
     
@@ -177,12 +178,111 @@ impl ChainEngine {
         let (hx, objc, data) = block.apart();
         let chunk = Chunk::create(hx, objc.into(), sub_state.into());
         // insert chunk
-        let (root, curr, path) = self.roller.lock().unwrap().insert(prev_chunk, chunk)?;
+        let (root, curr, path, ..) = self.roller.lock().unwrap().insert(prev_chunk, chunk)?;
         self.store.save_batch(path);
         Ok((root, curr, data))
     }
 
 
+
+
+
+    fn insert_by(&self, roller: &mut Roller, blk: BlockPkg) -> Ret<RollerInsertData> {
+
+        let fast_sync = (self.cnf.fast_sync&&blk.orgi==BlkOrigin::SYNC) || blk.orgi==BlkOrigin::REBUILD;
+        // search prev chunk in roller tree
+        let hei = blk.hein;
+        let hx = blk.hash;
+        let prev_hei = hei - 1;
+        let prev_hx  = blk.objc.prevhash();
+        let Some(prev_chunk) = roller.search(prev_hei, prev_hx) else {
+            return errf!("not find prev block <{}, {}>", prev_hei, prev_hx)
+        };
+        if !fast_sync {
+            // check repeat
+            if prev_chunk.childs.iter().any(|c|c.hash==hx) {
+                return errf!("repetitive block <{}, {}>", hei, hx)
+            }
+            // minter verify
+            self.minter.blk_verify(blk.objc.as_read(), prev_chunk.block.as_read(), &self.store)?;
+            self.block_verify(&blk, prev_chunk.block.clone())?;
+        }
+        // try execute
+        // create sub state 
+        let prev_state = prev_chunk.state.clone();
+        let mut sub_state = prev_state.fork_sub(Arc::downgrade(&prev_state));
+        // initialize on first block
+        if hei == 1 {
+            self.minter.initialize(sub_state.as_mut())?;
+        }
+        let c = &self.cnf;
+        let chain_option = ctx::Chain {
+            fast_sync,
+            diamond_form: c.diamond_form,
+            id: c.chain_id,
+        };
+        // execute block
+        sub_state = blk.objc.execute(chain_option, sub_state)?;
+        if !fast_sync {
+            self.minter.blk_insert(&blk, sub_state.as_ref(), prev_state.as_ref())?;
+        }
+        // create chunk
+        let is_sync = blk.orgi == BlkOrigin::SYNC || blk.orgi == BlkOrigin::REBUILD;
+        let (hx, objc, data) = blk.apart();
+        let chunk = Chunk::create(hx, objc.into(), sub_state.into());
+        // insert chunk
+        let (a,b,c) = roller.insert_v2(prev_chunk, chunk)?;
+        // ok
+        Ok((roller.root.height, a, b, c, data, is_sync))
+    }
+
+    // justckhd = just check head
+    fn roll_by(&self, rid: RollerInsertData) -> Rerr {
+
+        let (old_root_hei, root_change, head_change, hx, data, is_sync) = rid;
+    
+        let justckhd = is_sync;
+        let mut store_batch = MemBatch::new();
+        // save block data to disk
+        store_batch.put(hx.as_bytes(), &data); // block data
+        // if head change
+        if let Some(new_head) = head_change {
+            let real_root_hei: u64 = match root_change.clone() {
+                Some(rt) => rt.height,
+                None => old_root_hei // roller.root.height
+            };
+            let new_head_hei = BlockHeight::from(new_head.height);
+            store_batch.put(&BlockStore::CSK.to_vec(), &ChainStatus{
+                root_height: BlockHeight::from(real_root_hei),
+                last_height: new_head_hei,
+            }.serialize());
+            if justckhd { // just check one head
+                store_batch.put(&new_head_hei.to_vec(), hx.as_bytes());
+            }else{
+                let mut chx = hx;
+                let mut hdi = new_head_hei;
+                for _ in 0..self.cnf.unstable_block { // search the tree
+                    store_batch.put(&hdi.to_vec(), chx.as_bytes());
+                    chx = match new_head.parent.upgrade() {
+                        Some(h) => h.hash,
+                        _ => break // end
+                    };
+                    hdi -= 1;
+                }
+            }
+        }
+        // write roll path and block data to disk
+        self.store.save_batch(store_batch);
+        // if root change
+        if let Some(new_root) = root_change.clone() {
+            // write state data to disk
+            new_root.state.write_to_disk();
+            // println!("----  new_root.state.write_to_disk() for height {}", new_root.height);
+            // scaner do roll
+            self.scaner.roll(new_root.block.clone(), new_root.state.clone(), self.disk.clone());
+        }
+        Ok(())
+    }
 
 
 }

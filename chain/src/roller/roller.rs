@@ -4,7 +4,7 @@ struct Roller {
 
     unstable: u64, // config unstable height = 4
 
-    curr: Weak<Chunk>,     // current latest block
+    head: Weak<Chunk>,     // current latest block
 
     root: Arc<Chunk>,       // tree root block
 }
@@ -18,7 +18,7 @@ impl Roller {
         let ckptr = Arc::new(chunk);
         Roller {
             unstable: alive,
-            curr: Arc::downgrade(&ckptr),
+            head: Arc::downgrade(&ckptr),
             root: ckptr,
         }
     }
@@ -28,7 +28,7 @@ impl Roller {
     }
     
     fn last_height(&self) -> u64 {
-        self.curr.upgrade().unwrap().height
+        self.head.upgrade().unwrap().height
     }
 
 }

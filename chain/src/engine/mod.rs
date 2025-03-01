@@ -12,7 +12,7 @@ use sys::*;
 use db::*;
 use field::*;
 use field::interface::*;
-use protocol::block::BlkOrigin;
+use protocol::block::*;
 use protocol::interface::*;
 use protocol::*;
 use protocol::state::*;

@@ -5,7 +5,7 @@ impl Roller {
     
     fn search(&self, hei: u64, hx: &Hash) -> Option<Arc<Chunk>> {
         // search least current
-        let cur = self.curr.upgrade().unwrap(); // must have
+        let cur = self.head.upgrade().unwrap(); // must have
         if cur.height == hei && cur.hash == *hx {
             return Some(cur.clone())
         }

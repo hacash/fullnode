@@ -49,7 +49,7 @@ impl EngineRead for ChainEngine {
 
     
     fn latest_block(&self) -> Arc<dyn Block> {
-        self.roller.lock().unwrap().curr.upgrade().unwrap().block.clone()
+        self.roller.lock().unwrap().head.upgrade().unwrap().block.clone()
     }
 
     
@@ -59,7 +59,7 @@ impl EngineRead for ChainEngine {
 
     
     fn state(&self) -> Arc<dyn State> {
-        self.roller.lock().unwrap().curr.upgrade().unwrap().state.clone()
+        self.roller.lock().unwrap().head.upgrade().unwrap().state.clone()
     }
 
     fn fork_sub_state(&self) -> Box<dyn State> {
@@ -175,7 +175,12 @@ impl Engine for ChainEngine {
         drop(lk);
         Ok(())
     }
-    
+
+    /*
+    fn insert_sync(&self, _: u64, data: Vec<u8>) -> Rerr {
+        self.synchronize(data)
+    }
+    */
     fn insert_sync(&self, hei: u64, data: Vec<u8>) -> Rerr {
         let lk = self.isrtlk.lock().unwrap();
         self.do_insert_sync(hei, data)?;
@@ -212,87 +217,122 @@ impl Engine for ChainEngine {
             "the blockchain is syncing and cannot insert newly discovered block"
         );
         // get mut roller
-        let mut temp = self.roller.lock().unwrap();
-        let roller = temp.deref_mut();
-        // do insert
-        // search prev chunk in roller tree
-        let hei = blk.hein;
-        let hx = blk.hash;
-        let prev_hei = hei - 1;
-        let prev_hx  = blk.objc.prevhash();
-        let Some(prev_chunk) = roller.search(prev_hei, prev_hx) else {
-            return errf!("not find prev block <{}, {}>", prev_hei, prev_hx)
-        };
-        // check repeat
-        if prev_chunk.childs.iter().any(|c|c.hash==hx) {
-            return errf!("repetitive block <{}, {}>", hei, hx)
-        }
-        // minter verify
-        self.minter.blk_verify(blk.objc.as_read(), prev_chunk.block.as_read(), &self.store)?;
-        self.block_verify(&blk, prev_chunk.block.clone())?;
-        // try execute
-        // create sub state 
-        let prev_state = prev_chunk.state.clone();
-        let mut sub_state = prev_state.fork_sub(Arc::downgrade(&prev_state));
-        // initialize on first block
-        if hei == 1 {
-            self.minter.initialize(sub_state.as_mut())?;
-        }
-        let c = &self.cnf;
-        let chain_option = ctx::Chain {
-            fast_sync: false,
-            diamond_form: c.diamond_form,
-            id: c.chain_id,
-        };
-        // execute block
-        sub_state = blk.objc.execute(chain_option, sub_state)?;
-        self.minter.blk_insert(&blk, sub_state.as_ref(), prev_state.as_ref())?;
-        // create chunk
-        let (hx, objc, data) = blk.apart();
-        let chunk = Chunk::create(hx, objc.into(), sub_state.into());
-        // insert chunk
-        let (root_change, head_change, path) = roller.insert(prev_chunk, chunk)?;
-        let mut store_batch = path;
-        // save block data to disk
-        store_batch.put(&hx.to_vec(), &data); // block data
-        // if head change
-        if let Some(new_head) = head_change {
-            let real_root_hei: u64 = match root_change.clone() {
-                Some(rt) => rt.height,
-                None => roller.root.height
-            };
-            store_batch.put(&BlockStore::CSK.to_vec(), &ChainStatus{
-                root_height: BlockHeight::from(real_root_hei),
-                last_height: BlockHeight::from(new_head.height),
-            }.serialize());
-        }
-        // if root change
-        if let Some(new_root) = root_change {
-            // write state data to disk
-            new_root.state.write_to_disk();
-            // scaner do roll
-            self.scaner.roll(new_root.block.clone(), new_root.state.clone(), self.disk.clone());
-        }
-        // write roll patha and block data to disk
-        self.store.save_batch(store_batch);
+        let mut roller = self.roller.lock().unwrap();
+        // do insert adnd rool
+        let rid = self.insert_by(roller.deref_mut(), blk)?;
+        self.roll_by(rid)?; // roll to write disk
         // insert success
         isrtlock.finish(); // unlock
         Ok(())
     }
 
 
-    fn synchronize(&self, _: Vec<u8>) -> Rerr {
+    fn synchronize(&self, mut datas: Vec<u8>) -> Rerr {
         // lock and wait
         let isrtlock = inserting_lock!( self, ISRT_STAT_SYNCING, 
             "the blockchain is syncing and need wait"
         );
-        // do sync
-        let _roller = self.roller.lock().unwrap().deref_mut();
-    
-    
+        // roller
+        let mut temp = self.roller.lock().unwrap();
+        let roller = temp.deref_mut();
+        let latest_hei = roller.last_height();
+        // check hei limit
+        let hei_up = latest_hei + 1;
+        let ubh = self.cnf.unstable_block;
+        let hei_lo = maybe!(latest_hei>ubh, latest_hei-ubh+1, 1);
+        // check start height
+        let Ok(blkhei) = BlockHeadOnlyHeight::build(&datas) else {
+            return sync_warning("block data format error".to_string())
+        };
+        let insert_start_hei = *blkhei.height;
+        if insert_start_hei < hei_lo || insert_start_hei > hei_up {
+            return sync_warning(format!("height need between {} and {} but got {}", hei_lo, hei_up, insert_start_hei))
+        }
+        // build block
+        let tree_isr = hei_up - insert_start_hei;
+        for _ in 0..tree_isr  {
+            if datas.len() == 0 {
+                break // end
+            }
+            let seek;
+            let blkobj = match block::create(&datas) {
+                Ok((b, s)) => {seek = s; b},
+                Err(e) => return errf!("block parse error: {}", e)
+            };
+            let right = datas.split_off(seek);
+            // try insert
+            let rid = self.insert_by(roller, BlockPkg::new(blkobj, datas))?;
+            self.roll_by(rid)?;
+            // next
+            datas = right;
+        }
+        // sync all by head
+        // error channel
+        let (errch, errcv) = std::sync::mpsc::channel();
+        let errch1 = errch.clone();
+        let errch2 = errch.clone();
+        // data channel
+        let (blkch, blkcv) = std::sync::mpsc::sync_channel(20);
+        let (ridch, ridcv) = std::sync::mpsc::sync_channel(8);
+        let mut need_blk_hei = roller.last_height() + 1;
+        let mut blockdts = datas.as_mut_slice();
+        // thread
+        std::thread::scope(|s| {
+            // parse block
+            s.spawn(move || { loop {
+                // println!("--------- need_blk_hei {} datas len={}", need_blk_hei, datas.len());
+                if blockdts.len() == 0 { break } // finish
+                let seek;
+                let blkobj = match block::create(&blockdts) {
+                    Ok((b, s)) => {seek = s; b},
+                    Err(e) => {
+                        errch.send(format!("block parse error: {}", e)).unwrap();
+                        break // err end
+                    }
+                };
+                let (left, right) = blockdts.split_at_mut(seek);
+                let mut pkg = BlockPkg::new(blkobj, left.into());
+                pkg.set_origin( BlkOrigin::SYNC );
+                if pkg.hein != need_blk_hei {
+                    let _ = errch.send(format!("need block height {} but got {}", need_blk_hei, pkg.hein));
+                    break // err end
+                }
+                if let Err(..) = blkch.send(pkg) { break }
+                // next block
+                blockdts = right; // next chunk
+                need_blk_hei += 1 ;
+            }});
+            // do insert
+            s.spawn(move || { loop {
+                let Ok(blk) = blkcv.recv() else { break };
+                let hei = blk.hein;
+                let rid = match self.insert_by(roller, blk) {
+                    Err(e) => {
+                        let _ = errch1.send(format!("insert {} error: {}", hei, e));
+                        break
+                    },
+                    Ok(r) => r,
+                };
+                if let Err(..) = ridch.send(rid) { break }
+            }});
+            // do roll
+            loop {
+                let Ok(rid) = ridcv.recv() else { break };
+                if let Err(e) = self.roll_by(rid) {
+                    let _ = errch2.send(format!("do roll error: {}", e));
+                    break
+                }
+            }
+            let _ = errch2.send("".to_string());
+        });
+        // may be have error
+        let e: String = errcv.recv().unwrap();
+        if e.len() > 0 {
+            return sync_warning(e)
+        }
+        // ok finish
         isrtlock.finish();
-
-        unimplemented!()
+        Ok(())
     }
 
 
