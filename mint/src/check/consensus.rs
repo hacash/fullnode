@@ -116,7 +116,8 @@ fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn 
     // check diamond mint action
     // let is_discover = curblk.orgi == BlkOrigin::DISCOVER;
     if curhei > 630000 && curhei % 5 == 0 {
-        if let Some((tidx, txp, diamint)) = pickout_diamond_mint_action_from_block(curblk.objc.as_read()) {
+        let block = curblk.objc.as_read();
+        if let Some((tidx, txp, diamint)) = pickout_diamond_mint_action_from_block(block) {
             const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
             if tidx != 1 && curhei > 600000 { // idx 0 is coinbase
                 return errf!("diamond mint transaction must be first one tx in block")
@@ -126,7 +127,7 @@ fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn 
             // check_diamond_mint_minimum_bidding_fee
             check_diamond_mint_minimum_bidding_fee(curhei, txp.as_read(), &diamint)?; // HIP-18
             let mut bidrecord = this.bidding_prove.lock().unwrap();
-            if let Some(rhbf) = bidrecord.highest(dianum, sta) {
+            if let Some(rhbf) = bidrecord.highest(dianum, sta, block.timestamp().uint()) {
                 if bidfee < rhbf { // 
                     bidrecord.failure(dianum, curblk); // record check block fail
                     /* test print start */

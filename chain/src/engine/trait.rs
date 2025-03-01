@@ -1,4 +1,28 @@
 
+
+
+macro_rules! inserting_lock {
+    ($self:ident, $change_to_stat:expr, $busy_tip:expr) => {
+    loop {
+        match $self.inserting.compare_exchange(ISRT_STAT_IDLE, $change_to_stat, Ordering::Acquire, Ordering::Relaxed) {
+            Ok(ISRT_STAT_IDLE) => break, // idle, go to sync
+            Err(ISRT_STAT_DISCOVER) => {
+                sleep(Duration::from_millis(100)); // wait 0.1s
+                continue // to check again
+            },
+            Err(ISRT_STAT_SYNCING) => {
+                return errf!($busy_tip)
+            }
+            _ => never!()
+        }
+    }}
+}
+
+
+
+
+
+
 impl EngineRead for ChainEngine {
 
     
@@ -148,23 +172,15 @@ impl Engine for ChainEngine {
 
 
 
+    /******** for v2  ********/
 
 
-    // for v2
+
+
     fn discover(&self, blk: BlockPkg) -> Rerr {
-        // do lock
-        loop {
-            match self.inserting.compare_exchange(ISRT_STAT_IDLE, ISRT_STAT_DISCOVER, Ordering::Acquire, Ordering::Relaxed) {
-                Ok(ISRT_STAT_IDLE) => break, // idle, go to insert
-                Err(ISRT_STAT_DISCOVER) => {
-                    sleep(Duration::from_millis(100)); // wait 0.1s
-                    continue // to check again
-                },
-                Err(ISRT_STAT_SYNCING) => {
-                    return errf!("the blockchain is syncing and cannot insert newly discovered block")
-                }
-                _ => never!()
-            }
+        // lock and wait
+        inserting_lock!{ self, ISRT_STAT_DISCOVER, 
+            "the blockchain is syncing and cannot insert newly discovered block"
         }
         // get mut roller
         let mut roller = self.roller.lock().unwrap();
@@ -242,19 +258,9 @@ impl Engine for ChainEngine {
 
 
     fn synchronize(&self, _: Vec<u8>) -> Rerr {
-        // do lock
-        loop {
-            match self.inserting.compare_exchange(ISRT_STAT_IDLE, ISRT_STAT_SYNCING, Ordering::Acquire, Ordering::Relaxed) {
-                Ok(ISRT_STAT_IDLE) => break, // idle, go to sync
-                Err(ISRT_STAT_DISCOVER) => {
-                    sleep(Duration::from_millis(100)); // wait 0.1s
-                    continue // to check again
-                },
-                Err(ISRT_STAT_SYNCING) => {
-                    return errf!("the blockchain is syncing and need wait")
-                }
-                _ => never!()
-            }
+        // lock and wait
+        inserting_lock!{ self, ISRT_STAT_SYNCING, 
+            "the blockchain is syncing and need wait"
         }
         // do sync
         let _roller = self.roller.lock().unwrap().deref_mut();

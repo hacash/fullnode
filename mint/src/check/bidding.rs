@@ -88,9 +88,9 @@ impl BiddingProve {
         }
     }
 
-    fn highest(&self, dianum: u32, sta: &dyn State) -> Option<Amount> {
+    fn highest(&self, dianum: u32, sta: &dyn State, fblkt: u64) -> Option<Amount> {
         let coresta = CoreStateRead::wrap(sta);
-        let ttx = curtimes() - Self::DELAY_SECS as u64;
+        let ttx = fblkt - Self::DELAY_SECS as u64;
         if let Some(bids) = self.biddings.get(&dianum) {
             for r in bids.iter() {
                 if r.number == dianum && r.time < ttx {

@@ -6,7 +6,8 @@ impl TxGroup {
         let feep = txp.fepr; // fee_purity
         let fee = txp.objc.fee().clone();
         if let Some((hid, hav)) = self.find(&txp.hash) {
-            if feep <= hav.fepr { // fee_purity
+            let lsth = maybe!( self.fpmd, feep <= hav.fepr, &fee <= hav.objc.fee() );
+            if lsth { // fee_purity
                 return errf!("tx already exists in tx pool and it's fee is higher")
             }
             // rm old
@@ -21,8 +22,9 @@ impl TxGroup {
         }
         if gnum >= self.maxsz {
             // tt's full, check the lowest fees
-            let lowfp = self.txpkgs.last().unwrap().fepr; // fee_purity
-            if feep <= lowfp {
+            let tail = self.txpkgs.last().unwrap();
+            let lsth = maybe!( self.fpmd, feep <= tail.fepr, &fee <= tail.objc.fee() );
+            if lsth {
                 return errf!("tx pool is full and your tx fee is too low")
             }
         }
@@ -33,7 +35,7 @@ impl TxGroup {
             (rxl, rxr) = scan_group_rng_by_feep(&self.txpkgs, feep, &fee, self.fpmd, (rxl, rxr));
         }
         // inser with rng
-        self.insert_rng(txp, feep, fee, (rxl, rxr))?;
+        self.insert_rng(txp, feep, &fee, (rxl, rxr))?;
         // check full
         if self.txpkgs.len() > self.maxsz {
             // drop lowest
@@ -42,13 +44,13 @@ impl TxGroup {
         Ok(())
     }
 
-    fn insert_rng(&mut self, txp: TxPkg, feep: u64, fee: Amount, rng: (usize, usize)) ->Rerr {
+    fn insert_rng(&mut self, txp: TxPkg, feep: u64, fee: &Amount, rng: (usize, usize)) ->Rerr {
         let (rxl, rxr) = rng;
         let mut istx = usize::MAX;
         for i in rxl .. rxr {
             let ctx = &self.txpkgs[i];
             // check fee or fee_purity 
-            let bgth = match self.fpmd { true => feep > ctx.fepr, false => fee > *ctx.objc.fee() };
+            let bgth = maybe!(self.fpmd, feep > ctx.fepr, fee > ctx.objc.fee() );
             if bgth { 
                 istx = i; // scan ok
                 break;

@@ -10,8 +10,8 @@ fn scan_group_rng_by_feep(txpkgs: &Vec<TxPkg>, feep: u64, fee: &Amount, fpmd: bo
         }
         let fct = rxl + rng/2;
         let ct = &txpkgs[fct];
-        let lcd = match fpmd { true => feep > ct.fepr, false => fee > ct.objc.fee() }; // fee
-        let rcd = match fpmd { true => feep < ct.fepr, false => fee < ct.objc.fee() }; // fee puery
+        let lcd = maybe!( fpmd, feep > ct.fepr, fee > ct.objc.fee() ); // fee
+        let rcd = maybe!( fpmd, feep < ct.fepr, fee < ct.objc.fee() ); // fee puery
         if lcd {
             rxr = fct; // in left
         } else if rcd {
