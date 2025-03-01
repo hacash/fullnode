@@ -48,20 +48,20 @@ impl Minter for HacashMinter {
         difn
     }
 
-    fn tx_check(&self, tx: &dyn TransactionRead, chei: u64) -> Rerr {
-        impl_tx_check(self, tx, chei)
+    fn tx_submit(&self, eng: &dyn EngineRead, tx: &dyn TransactionRead) -> Rerr {
+        impl_tx_submit(self, eng, tx)
     }
 
     fn blk_found(&self, curblk: &dyn BlockRead, sto: &BlockStore ) -> Rerr {
         impl_blk_found(self, curblk, sto)
     }
 
-    fn consensus(&self, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockStore) -> Rerr {
-        impl_consensus(self, prevblk, curblk, sto)
+    fn blk_verify(&self, curblk: &dyn BlockRead, prevblk: &dyn BlockRead, sto: &BlockStore) -> Rerr {
+        impl_blk_verify(self, curblk, prevblk, sto)
     }
 
-    fn examine(&self, curblk: &BlockPkg, sta: &dyn State) -> Rerr {
-        impl_examine(self, curblk, sta)
+    fn blk_insert(&self, curblk: &BlockPkg, sta: &dyn State, prev: &dyn State) -> Rerr {
+        impl_blk_insert(self, curblk, sta, prev)
     }
 
     fn genesis_block(&self) -> Arc<dyn Block> {

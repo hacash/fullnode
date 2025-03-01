@@ -1,7 +1,8 @@
 
 
 
-fn impl_tx_check(this: &HacashMinter, tx: &dyn TransactionRead, next_hei: u64) -> Rerr {
+fn impl_tx_submit(this: &HacashMinter, engine: &dyn EngineRead, tx: &dyn TransactionRead) -> Rerr {
+    let next_hei = engine.latest_block().height().uint() + 1;
     let Some(diamintact) = pickout_diamond_mint_action(tx) else {
         return Ok(()) // other normal tx
     };
@@ -58,15 +59,15 @@ fn impl_blk_found(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockSt
 
 
 
-fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockStore) -> Rerr {
+fn impl_blk_verify(this: &HacashMinter, curblk: &dyn BlockRead, prevblk: &dyn BlockRead, sto: &BlockStore) -> Rerr {
     let curhei = curblk.height().uint(); // u64
     let smaxh = this.cnf.sync_maxh;
     if smaxh > 0 && curhei > smaxh {
-        return errf!("config [mint].height_max setting: {}", smaxh)
+        return errf!("config [mint].height_max limit: {}", smaxh)
     }
     // check difficulty
-    let blkspan = this.cnf.difficulty_adjust_blocks;
-    if this.cnf.is_mainnet() && curhei < 288*200 {
+    // let blkspan = this.cnf.difficulty_adjust_blocks;
+    if curhei < 288*200 && this.cnf.is_mainnet() {
         return Ok(()) // not check, compatible history code
     }
     // check
@@ -84,12 +85,10 @@ fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn Blo
     if tarn != curn {
         return errf!("height {} PoW difficulty check failed must be {} but got {}", curhei, tarn, curn)
     }
-    if curhei % blkspan == 0 {
-        // must check hashrates cuz impl_prepare not do check
-        if  hash_big_than(curblk.hash().as_ref(), &tarhx) {
-            return errf!("height {} PoW hashrates check failed cannot more than {} but got {}", 
-                curhei, hex::encode(tarhx),  hex::encode(curblk.hash()))
-        }
+    // must check hashrates cuz impl_prepare not do check
+    if hash_big_than(curblk.hash().as_ref(), &tarhx) {
+        return errf!("height {} PoW hashrates check failed cannot more than {} but got {}", 
+            curhei, hex::encode(tarhx),  hex::encode(curblk.hash()))
     }
     // success
     Ok(())
@@ -97,9 +96,9 @@ fn impl_consensus(this: &HacashMinter, prevblk: &dyn BlockRead, curblk: &dyn Blo
 
 
 
-fn impl_examine(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr {
+fn impl_blk_insert(this: &HacashMinter, curblk: &BlockPkg, _sta: &dyn State, prev: &dyn State) -> Rerr {
 
-    check_highest_bid_of_block(this, curblk, sta)?;
+    check_highest_bid_of_block(this, curblk, prev)?;
 
     Ok(())
 }
@@ -110,7 +109,7 @@ fn impl_examine(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr
 
 
 
-fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn State) -> Rerr {
+fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, prevsta: &dyn State) -> Rerr {
 
     let curhei = curblk.hein; // u64
     // check diamond mint action
@@ -127,7 +126,7 @@ fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, sta: &dyn 
             // check_diamond_mint_minimum_bidding_fee
             check_diamond_mint_minimum_bidding_fee(curhei, txp.as_read(), &diamint)?; // HIP-18
             let mut bidrecord = this.bidding_prove.lock().unwrap();
-            if let Some(rhbf) = bidrecord.highest(dianum, sta, block.timestamp().uint()) {
+            if let Some(rhbf) = bidrecord.highest(dianum, prevsta, block.timestamp().uint()) {
                 if bidfee < rhbf { // 
                     bidrecord.failure(dianum, curblk); // record check block fail
                     /* test print start */

@@ -22,13 +22,12 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
         return // tx size overflow
     }
     let txdatas = txpkg.data.clone();
-    let next_hei = this.engine.latest_block().height().uint() + 1;
     let txpr = txpkg.objc.as_read();
     // try execute and check tx
     if let Err(..) = this.engine.try_execute_tx(txpr) {
         return // tx execute fail
     }
-    if let Err(..) = this.engine.mint_checker().tx_check(txpr, next_hei) {
+    if let Err(..) = this.engine.mint_checker().tx_submit(this.engine.as_read(), txpr) {
         return // tx check fail
     }
     // add to tx pool
