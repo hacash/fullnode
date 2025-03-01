@@ -126,10 +126,7 @@ impl ChainEngine {
         self.store.save_batch(block_disk_batch);
         // scaner do roll
         if let Some(new_root) = nrt {
-            let scres = self.scaner.roll(new_root.block.clone(), new_root.state.clone(), self.disk.clone());
-            if let Err(e) = scres {
-                panic!("\n\nBlock scaner roll error: {}\n\n", e);
-            }
+            self.scaner.roll(new_root.block.clone(), new_root.state.clone(), self.disk.clone());
         }
         Ok(())
     }

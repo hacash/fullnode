@@ -139,7 +139,11 @@ impl Engine for ChainEngine {
     fn as_read(&self) -> &dyn EngineRead {
         self
     }
-
+    /*
+    fn insert(&self, blk: BlockPkg) -> Rerr {
+        self.discover(blk)
+    }
+    */
     fn insert(&self, blk: BlockPkg) -> Rerr {
         let blkobj = blk.objc.as_read();
         if self.cnf.recent_blocks {
@@ -178,6 +182,14 @@ impl Engine for ChainEngine {
 
 
     fn discover(&self, blk: BlockPkg) -> Rerr {
+        // deal recent_blocks and average_fee_purity
+        let blkobj = blk.objc.as_read();
+        if self.cnf.recent_blocks {
+            self.record_recent(blkobj);
+        }
+        if self.cnf.average_fee_purity {
+            self.record_avgfee(blkobj);
+        }
         // lock and wait
         inserting_lock!{ self, ISRT_STAT_DISCOVER, 
             "the blockchain is syncing and cannot insert newly discovered block"
@@ -221,36 +233,29 @@ impl Engine for ChainEngine {
         let (hx, objc, data) = blk.apart();
         let chunk = Chunk::create(hx, objc.into(), sub_state.into());
         // insert chunk
-        let (root, head, path) = roller.insert(prev_chunk, chunk)?;
+        let (root_change, head_change, path) = roller.insert(prev_chunk, chunk)?;
         let mut store_batch = path;
-        let mut state_write: Option<Arc<dyn State>> = None;
-        // Ok((root, curr, data))
-        let new_root_hei: u64 = match root.clone() {
-            Some(rt) => {
-                state_write = Some(rt.state.clone()); // write
-                rt.height
-            },
-            None => roller.root.height
-        };
-        if let Some(head) = head {
+        // save block data to disk
+        store_batch.put(&hx.to_vec(), &data); // block data
+        // if head change
+        if let Some(new_head) = head_change {
+            let real_root_hei: u64 = match root_change.clone() {
+                Some(rt) => rt.height,
+                None => roller.root.height
+            };
             store_batch.put(&BlockStore::CSK.to_vec(), &ChainStatus{
-                root_height: BlockHeight::from(new_root_hei),
-                last_height: BlockHeight::from(head.height),
+                root_height: BlockHeight::from(real_root_hei),
+                last_height: BlockHeight::from(new_head.height),
             }.serialize());
         }
-        // save block data to disk
-        store_batch.put(&hx.to_vec(), &data);
-        // scaner do roll
-        if let Some(new_root) = root {
-            let scres = self.scaner.roll(new_root.block.clone(), new_root.state.clone(), self.disk.clone());
-            if let Err(e) = scres {
-                panic!("\n\nBlock scaner roll error: {}\n\n", e);
-            }
+        // if root change
+        if let Some(new_root) = root_change {
+            // write state data to disk
+            new_root.state.write_to_disk();
+            // scaner do roll
+            self.scaner.roll(new_root.block.clone(), new_root.state.clone(), self.disk.clone());
         }
-        // write all data to disk
-        if let Some(sw) = state_write {
-            sw.write_to_disk();
-        };
+        // write roll patha and block data to disk
         self.store.save_batch(store_batch);
         // insert success
         Ok(())
