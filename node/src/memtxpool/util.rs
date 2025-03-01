@@ -1,4 +1,13 @@
 
+macro_rules! purity_or_fee {
+    ($self:ident, $txp:expr, $opt:tt, $hav:expr) => {
+        maybe!($self.fpmd, $txp.fepr $opt $hav.fepr, $txp.objc.fee() $opt $hav.objc.fee() )
+    };
+}
+
+
+
+
 fn scan_group_rng_by_feep(txpkgs: &Vec<TxPkg>, feep: u64, fee: &Amount, fpmd: bool, wsz: (usize, usize)) -> (usize, usize) {
     let mut rxl = wsz.0;
     let mut rxr = wsz.1;

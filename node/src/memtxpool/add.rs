@@ -1,12 +1,11 @@
 
-
 impl TxGroup {
 
     fn insert(&mut self, txp: TxPkg) -> Rerr {
         let feep = txp.fepr; // fee_purity
         let fee = txp.objc.fee().clone();
         if let Some((hid, hav)) = self.find(&txp.hash) {
-            let lsth = maybe!( self.fpmd, feep <= hav.fepr, &fee <= hav.objc.fee() );
+            let lsth = purity_or_fee!{ self, txp, <=, hav };
             if lsth { // fee_purity
                 return errf!("tx already exists in tx pool and it's fee is higher")
             }
@@ -23,7 +22,7 @@ impl TxGroup {
         if gnum >= self.maxsz {
             // tt's full, check the lowest fees
             let tail = self.txpkgs.last().unwrap();
-            let lsth = maybe!( self.fpmd, feep <= tail.fepr, &fee <= tail.objc.fee() );
+            let lsth = purity_or_fee!{ self, txp, <=, tail };
             if lsth {
                 return errf!("tx pool is full and your tx fee is too low")
             }
@@ -35,7 +34,7 @@ impl TxGroup {
             (rxl, rxr) = scan_group_rng_by_feep(&self.txpkgs, feep, &fee, self.fpmd, (rxl, rxr));
         }
         // inser with rng
-        self.insert_rng(txp, feep, &fee, (rxl, rxr))?;
+        self.insert_rng(txp, (rxl, rxr))?;
         // check full
         if self.txpkgs.len() > self.maxsz {
             // drop lowest
@@ -44,13 +43,13 @@ impl TxGroup {
         Ok(())
     }
 
-    fn insert_rng(&mut self, txp: TxPkg, feep: u64, fee: &Amount, rng: (usize, usize)) ->Rerr {
+    fn insert_rng(&mut self, txp: TxPkg, rng: (usize, usize)) ->Rerr {
         let (rxl, rxr) = rng;
         let mut istx = usize::MAX;
         for i in rxl .. rxr {
-            let ctx = &self.txpkgs[i];
+            let txli = &self.txpkgs[i];
             // check fee or fee_purity 
-            let bgth = maybe!(self.fpmd, feep > ctx.fepr, fee > ctx.objc.fee() );
+            let bgth = purity_or_fee!{ self, txp, >, txli };
             if bgth { 
                 istx = i; // scan ok
                 break;
