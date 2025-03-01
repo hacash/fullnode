@@ -1,23 +1,40 @@
 
+struct InsertingLock<'a> {
+    mark: &'a AtomicUsize,
+}
+
+impl InsertingLock<'_> {
+    fn finish(self) {}
+}
+
+impl Drop for InsertingLock<'_> {
+    fn drop(&mut self) {
+        self.mark.store(ISRT_STAT_IDLE, Ordering::Relaxed);
+        // println!("---- InsertingLock HasDrop!");
+    }
+}
 
 
 macro_rules! inserting_lock {
     ($self:ident, $change_to_stat:expr, $busy_tip:expr) => {
-    loop {
-        match $self.inserting.compare_exchange(ISRT_STAT_IDLE, $change_to_stat, Ordering::Acquire, Ordering::Relaxed) {
-            Ok(ISRT_STAT_IDLE) => break, // idle, go to sync
-            Err(ISRT_STAT_DISCOVER) => {
-                sleep(Duration::from_millis(100)); // wait 0.1s
-                continue // to check again
-            },
-            Err(ISRT_STAT_SYNCING) => {
-                return errf!($busy_tip)
-            }
-            _ => never!()
+        {
+            loop {
+                match $self.inserting.compare_exchange(ISRT_STAT_IDLE, $change_to_stat, Ordering::Acquire, Ordering::Relaxed) {
+                    Ok(ISRT_STAT_IDLE) => break, // ok idle, go to insert or sync
+                    Err(ISRT_STAT_DISCOVER) => {
+                        sleep(Duration::from_millis(100)); // wait 0.1s
+                        continue // to check again
+                    },
+                    Err(ISRT_STAT_SYNCING) => {
+                        return errf!($busy_tip)
+                    }
+                    _ => never!()
+                }
+            };
+            InsertingLock{ mark: &$self.inserting }
         }
-    }}
+    }
 }
-
 
 
 
@@ -191,12 +208,12 @@ impl Engine for ChainEngine {
             self.record_avgfee(blkobj);
         }
         // lock and wait
-        inserting_lock!{ self, ISRT_STAT_DISCOVER, 
+        let isrtlock = inserting_lock!( self, ISRT_STAT_DISCOVER, 
             "the blockchain is syncing and cannot insert newly discovered block"
-        }
+        );
         // get mut roller
-        let mut roller = self.roller.lock().unwrap();
-        let roller = roller.deref_mut();
+        let mut temp = self.roller.lock().unwrap();
+        let roller = temp.deref_mut();
         // do insert
         // search prev chunk in roller tree
         let hei = blk.hein;
@@ -211,7 +228,7 @@ impl Engine for ChainEngine {
             return errf!("repetitive block <{}, {}>", hei, hx)
         }
         // minter verify
-        self.minter.blk_verify(&blk, prev_chunk.block.as_read(), &self.store)?;
+        self.minter.blk_verify(blk.objc.as_read(), prev_chunk.block.as_read(), &self.store)?;
         self.block_verify(&blk, prev_chunk.block.clone())?;
         // try execute
         // create sub state 
@@ -229,6 +246,7 @@ impl Engine for ChainEngine {
         };
         // execute block
         sub_state = blk.objc.execute(chain_option, sub_state)?;
+        self.minter.blk_insert(&blk, sub_state.as_ref(), prev_state.as_ref())?;
         // create chunk
         let (hx, objc, data) = blk.apart();
         let chunk = Chunk::create(hx, objc.into(), sub_state.into());
@@ -258,21 +276,22 @@ impl Engine for ChainEngine {
         // write roll patha and block data to disk
         self.store.save_batch(store_batch);
         // insert success
+        isrtlock.finish(); // unlock
         Ok(())
     }
 
 
     fn synchronize(&self, _: Vec<u8>) -> Rerr {
         // lock and wait
-        inserting_lock!{ self, ISRT_STAT_SYNCING, 
+        let isrtlock = inserting_lock!( self, ISRT_STAT_SYNCING, 
             "the blockchain is syncing and need wait"
-        }
+        );
         // do sync
         let _roller = self.roller.lock().unwrap().deref_mut();
     
     
-    
-    
+        isrtlock.finish();
+
         unimplemented!()
     }
 
