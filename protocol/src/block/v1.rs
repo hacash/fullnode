@@ -67,7 +67,7 @@ impl BlockRead for BlockV1 {
         self.transactions.list()
     }
 
-    fn coinbase_transaction(&self) ->  Ret<&dyn Transaction> {
+    fn coinbase_transaction(&self) ->  Ret<&dyn TransactionRead> {
         let txs = self.transactions();
         if txs.len() < 1 {
             return errf!("block must have coinbase tx")
@@ -76,7 +76,7 @@ impl BlockRead for BlockV1 {
         if cbtx.ty() != TransactionCoinbase::TYPE {
             return errf!("block first tx must be coinbase")
         }
-        Ok(cbtx.as_ref())
+        Ok(cbtx.as_read())
     }
 }
 
@@ -97,7 +97,7 @@ impl BlockExec for BlockV1 {
         let base_addr = cbtx.main();
         env.block.coinbase = base_addr.clone();
         // create ctx
-        let mut ctxobj = ctx::ContextInst::new(env, state, cbtx.as_read());
+        let mut ctxobj = ctx::ContextInst::new(env, state, cbtx);
         let ctx = &mut ctxobj;
         let txs = self.transactions();
         let mut total_fee = Amount::zero();

@@ -12,7 +12,7 @@ pub trait Minter : Send + Sync {
     // tx check
     // block check
     // 
-    fn coinbase(&self, _: u64, _: &dyn Transaction) -> Rerr { Ok(()) }
+    fn coinbase(&self, _: u64, _: &dyn TransactionRead) -> Rerr { Ok(()) }
     // do
     fn initialize(&self, _: &mut dyn State) -> Rerr { Ok(()) }
     // data

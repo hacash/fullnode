@@ -1,11 +1,11 @@
 
-fn check_coinbase(height: u64, cbtx: &dyn Transaction) -> Rerr {
+fn verify_coinbase(height: u64, cbtx: &dyn TransactionRead) -> Rerr {
     let goot = cbtx.reward();
     let need = block_reward(height);
-    if need == *goot {
-        return Ok(())
+    if need != *goot {
+        // check fail
+        return errf!("block coinbase reward need {} but got {}", need, goot)
     }
-    // check fail
-    errf!("block coinbase reward need {} but got {}", need, goot)
+    // ok    
+    Ok(())
 }
-

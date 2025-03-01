@@ -191,12 +191,6 @@ impl ChainEngine {
         if *mrklrt != mkroot {
             return errf!("block mrkl root need {} but got {}", mkroot, mrklrt)
         }
-        /*
-        // check mint consensus & coinbase
-        self.minter.consensus(prev_blk.as_read(), block.as_read(), &self.store)?;
-        // coinbase tx id = 0, if coinbase error
-        self.minter.coinbase(isrt_blk.hein, block.coinbase_transaction()?)?;
-        */
         // ok 
         Ok(())
 

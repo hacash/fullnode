@@ -72,8 +72,8 @@ impl Minter for HacashMinter {
         do_initialize(sta)
     }
 
-    fn coinbase(&self, hei: u64, tx: &dyn Transaction) -> Rerr {
-        check_coinbase(hei, tx)
+    fn coinbase(&self, hei: u64, tx: &dyn TransactionRead) -> Rerr {
+        verify_coinbase(hei, tx)
     }
 
 

@@ -65,6 +65,8 @@ fn impl_blk_verify(this: &HacashMinter, curblk: &dyn BlockRead, prevblk: &dyn Bl
     if smaxh > 0 && curhei > smaxh {
         return errf!("config [mint].height_max limit: {}", smaxh)
     }
+    // verify coinbase
+    verify_coinbase(curhei, curblk.coinbase_transaction()?)?;
     // check difficulty
     // let blkspan = this.cnf.difficulty_adjust_blocks;
     if curhei < 288*200 && this.cnf.is_mainnet() {
