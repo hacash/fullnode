@@ -29,14 +29,14 @@ fn impl_tx_check(this: &HacashMinter, tx: &dyn TransactionRead, next_hei: u64) -
 
 
 
-fn impl_prepare(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockStore) -> Rerr {
+fn impl_blk_found(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockStore) -> Rerr {
     let curhei = curblkhead.height().uint(); // u64
     let curdifnum = curblkhead.difficulty().uint();
     let blkspan = this.cnf.difficulty_adjust_blocks;
     if curhei <= blkspan {
         return Ok(()) // not check in first cycle
     }
-    if this.cnf.is_mainnet() && curhei < 288*200 {
+    if curhei < 288*200 && this.cnf.is_mainnet() {
         return Ok(()) // not check, compatible history code
     }
     if curhei % blkspan == 0 {

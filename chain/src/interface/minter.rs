@@ -12,7 +12,6 @@ pub trait Minter : Send + Sync {
     // tx check
     fn tx_check(&self, _: &dyn TransactionRead, _: u64) -> Rerr { Ok(()) }
     // block check
-    fn prepare(&self, _: &dyn BlockRead, _: &BlockStore) -> Rerr { Ok(()) }
     fn consensus(&self, _: &dyn BlockRead, _: &dyn BlockRead, _: &BlockStore) -> Rerr {  Ok(())  }
     fn examine(&self, _: &BlockPkg, _: &dyn State) -> Rerr {  Ok(())  }
     // 
@@ -31,7 +30,7 @@ pub trait Minter : Send + Sync {
 
     // check
     fn tx_submit(&self, _: &dyn EngineRead, _: &dyn TransactionRead) -> Rerr { unimplemented!() }
-    fn blk_found(&self, _: &BlockPkg, _: &BlockStore) -> Rerr { unimplemented!() }
+    fn blk_found(&self, _: &dyn BlockRead, _: &BlockStore) -> Rerr { Ok(()) }
     fn blk_verify(&self, _: &BlockPkg, _prev: &dyn BlockRead, _: &BlockStore) -> Rerr { unimplemented!() }
     fn blk_insert(&self, _: &dyn EngineRead, _: &BlockPkg) -> Rerr { unimplemented!() }
     // 

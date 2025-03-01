@@ -68,8 +68,8 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
     let stoptr = eng.store();
     // may insert
     if blkhei <= lathei + 1 {
-        // prepare check
-        if let Err(_) = mintckr.prepare(&blkhead, &stoptr) {
+        // check block found
+        if let Err(_) = mintckr.blk_found(&blkhead, &stoptr) {
             return  // difficulty check fail
         }
         // do insert  ◆ ◇ ⊙ ■ □ △ ▽ ❏ ❐ ❑ ❒  ▐ ░ ▒ ▓ ▔ ▕ ■ □ ▢ ▣ ▤ ▥ ▦ ▧ ▨ ▩ ▪ ▫    

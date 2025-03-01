@@ -52,8 +52,8 @@ impl Minter for HacashMinter {
         impl_tx_check(self, tx, chei)
     }
 
-    fn prepare(&self, curblk: &dyn BlockRead, sto: &BlockStore ) -> Rerr {
-        impl_prepare(self, curblk, sto)
+    fn blk_found(&self, curblk: &dyn BlockRead, sto: &BlockStore ) -> Rerr {
+        impl_blk_found(self, curblk, sto)
     }
 
     fn consensus(&self, prevblk: &dyn BlockRead, curblk: &dyn BlockRead, sto: &BlockStore) -> Rerr {
