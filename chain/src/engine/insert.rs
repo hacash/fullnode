@@ -227,21 +227,19 @@ impl ChainEngine {
             self.minter.blk_insert(&blk, sub_state.as_ref(), prev_state.as_ref())?;
         }
         // create chunk
-        let is_sync = blk.orgi == BlkOrigin::SYNC || blk.orgi == BlkOrigin::REBUILD;
         let (hx, objc, data) = blk.apart();
         let chunk = Chunk::create(hx, objc.into(), sub_state.into());
         // insert chunk
-        let (a,b,c) = roller.insert_v2(prev_chunk, chunk)?;
-        // ok
-        Ok((roller.root.height, a, b, c, data, is_sync))
+        roller.insert_v2(prev_chunk, chunk).map(|(a,b,c)|(
+            a, b, c, data, roller.root.height
+        ))
     }
 
     // justckhd = just check head
     fn roll_by(&self, rid: RollerInsertData) -> Rerr {
 
-        let (old_root_hei, root_change, head_change, hx, data, is_sync) = rid;
+        let (root_change, head_change, hx, data, old_root_hei) = rid;
     
-        let justckhd = is_sync;
         let mut store_batch = MemBatch::new();
         // save block data to disk
         store_batch.put(hx.as_bytes(), &data); // block data
@@ -256,19 +254,15 @@ impl ChainEngine {
                 root_height: BlockHeight::from(real_root_hei),
                 last_height: new_head_hei,
             }.serialize());
-            if justckhd { // just check one head
-                store_batch.put(&new_head_hei.to_vec(), hx.as_bytes());
-            }else{
-                let mut chx = hx;
-                let mut hdi = new_head_hei;
-                for _ in 0..self.cnf.unstable_block { // search the tree
-                    store_batch.put(&hdi.to_vec(), chx.as_bytes());
-                    chx = match new_head.parent.upgrade() {
-                        Some(h) => h.hash,
-                        _ => break // end
-                    };
-                    hdi -= 1;
-                }
+            let mut chx = hx;
+            let mut hdi = new_head_hei;
+            for _ in 0..self.cnf.unstable_block+1 { // search the tree
+                store_batch.put(&hdi.to_vec(), chx.as_bytes());
+                chx = match new_head.parent.upgrade() {
+                    Some(h) => h.hash,
+                    _ => break // end
+                };
+                hdi -= 1;
             }
         }
         // write roll path and block data to disk

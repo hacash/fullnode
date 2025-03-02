@@ -3,7 +3,7 @@
 type RollerInsertResult = (Option<Arc<Chunk>>, Option<Arc<Chunk>>, MemBatch, Hash);
 // old root hei, ... ,blk hx, blk data, is_sync
 type RollerInsertResd = (Option<Arc<Chunk>>, Option<Arc<Chunk>>, Hash);
-type RollerInsertData = (u64, Option<Arc<Chunk>>, Option<Arc<Chunk>>, Hash, Vec<u8>, bool);
+type RollerInsertData = (Option<Arc<Chunk>>, Option<Arc<Chunk>>, Hash, Vec<u8>, u64);
 
 
 impl Roller {
