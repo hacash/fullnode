@@ -102,6 +102,7 @@ impl BiddingProve {
         let ttx = fblkt - Self::DELAY_SECS as u64;
         for r in bids.iter() {
             let isusa = curhei <= r.tarhei || r.usable;
+            // println!("---- highest {} {} {}", curhei, r.tarhei, r.usable);
             if r.number == dianum && r.time < ttx && isusa {
                 let hacbls = coresta.balance(&r.addr).unwrap_or_default();
                 if hacbls.hacash >= r.fee {
@@ -117,7 +118,8 @@ impl BiddingProve {
     fn remove_tx(&mut self, dianum: u32, hx: Hash) {
         let bids = self.biddings.entry(dianum).or_default();
         bids.retain_mut(|a|{
-            if a.txhx == hx {
+            if a.txhx == hx {            
+                // println!("---- remove_tx fee: {}, hx: {}", a.fee, a.txhx.hex());
                 a.usable = false; // not usable may be not in txpool
             }
             true // keep all
