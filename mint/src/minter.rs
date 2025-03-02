@@ -48,7 +48,7 @@ impl Minter for HacashMinter {
         difn
     }
 
-    fn tx_submit(&self, eng: &dyn EngineRead, tx: &dyn TransactionRead) -> Rerr {
+    fn tx_submit(&self, eng: &dyn EngineRead, tx: &TxPkg) -> Rerr {
         impl_tx_submit(self, eng, tx)
     }
 

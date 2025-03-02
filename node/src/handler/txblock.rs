@@ -27,7 +27,7 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
     if let Err(..) = this.engine.try_execute_tx(txpr) {
         return // tx execute fail
     }
-    if let Err(..) = this.engine.mint_checker().tx_submit(this.engine.as_read(), txpr) {
+    if let Err(..) = this.engine.mint_checker().tx_submit(this.engine.as_read(), &txpkg) {
         return // tx check fail
     }
     // add to tx pool

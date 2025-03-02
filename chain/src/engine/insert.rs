@@ -204,8 +204,9 @@ impl ChainEngine {
                 return errf!("repetitive block <{}, {}>", hei, hx)
             }
             // minter verify
-            self.minter.blk_verify(blk.objc.as_read(), prev_chunk.block.as_read(), &self.store)?;
-            self.block_verify(&blk, prev_chunk.block.clone())?;
+            let prev_blk_ptr = prev_chunk.block.as_read();
+            self.minter.blk_verify(blk.objc.as_read(), prev_blk_ptr, &self.store)?;
+            self.block_verify(&blk, prev_blk_ptr)?;
         }
         // try execute
         // create sub state 
@@ -230,8 +231,8 @@ impl ChainEngine {
         let (hx, objc, data) = blk.apart();
         let chunk = Chunk::create(hx, objc.into(), sub_state.into());
         // insert chunk
-        roller.insert_v2(prev_chunk, chunk).map(|(a,b,c)|(
-            a, b, c, data, roller.root.height
+        roller.insert_v2(prev_chunk, chunk).map(|(a,b)|(
+            a, b, hx, data, roller.root.height
         ))
     }
 
@@ -254,15 +255,15 @@ impl ChainEngine {
                 root_height: BlockHeight::from(real_root_hei),
                 last_height: new_head_hei,
             }.serialize());
-            let mut chx = hx;
-            let mut hdi = new_head_hei;
+            let mut skchk = new_head;
+            let mut skhei = new_head_hei;
             for _ in 0..self.cnf.unstable_block+1 { // search the tree
-                store_batch.put(&hdi.to_vec(), chx.as_bytes());
-                chx = match new_head.parent.upgrade() {
-                    Some(h) => h.hash,
+                store_batch.put(&skhei.to_vec(), skchk.hash.as_bytes());
+                skchk = match skchk.parent.upgrade() {
+                    Some(h) => h,
                     _ => break // end
                 };
-                hdi -= 1;
+                skhei -= 1;
             }
         }
         // write roll path and block data to disk

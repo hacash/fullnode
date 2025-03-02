@@ -2,9 +2,12 @@
 
 #[allow(dead_code)]
 struct BiddingRecord {
+    usable: bool, // can use must in txpool
+    tarhei: u64, // for check 5 block hei
     time: u64,
     number: u32,
     diamond: DiamondName,
+    txhx: Hash,
     addr: Address,
     fee: Amount,
 }
@@ -35,18 +38,21 @@ impl BiddingProve {
         fails.insert(coinbase.main());
     }
 
-    fn record(&mut self, tx: &dyn TransactionRead, act: &DiamondMint) {
+    fn record(&mut self, curr_hei: u64, tx: &TxPkg, act: &DiamondMint) {
         let dianum = *act.d.number;
         if dianum > self.latest {
             self.latest = dianum; // update
         }
         let tnow = curtimes();
         let record = BiddingRecord {
+            usable: true,
+            tarhei: curr_hei / 5 * 5 + 5, // target height
             time: tnow,
             number: dianum,
             diamond: act.d.diamond,
-            addr: tx.main(),
-            fee: tx.fee().clone(),
+            txhx: tx.hash,
+            addr: tx.objc.main(),
+            fee: tx.objc.fee().clone(),
         };
 
         macro_rules! rcdshow { () => {
@@ -88,22 +94,34 @@ impl BiddingProve {
         }
     }
 
-    fn highest(&self, dianum: u32, sta: &dyn State, fblkt: u64) -> Option<Amount> {
+    fn highest(&self, curhei: u64, dianum: u32, sta: &dyn State, fblkt: u64) -> Option<Amount> {
+        let Some(bids) = self.biddings.get(&dianum) else {
+            return None
+        };  
         let coresta = CoreStateRead::wrap(sta);
         let ttx = fblkt - Self::DELAY_SECS as u64;
-        if let Some(bids) = self.biddings.get(&dianum) {
-            for r in bids.iter() {
-                if r.number == dianum && r.time < ttx {
-                    let hacbls = coresta.balance(&r.addr).unwrap_or_default();
-                    if hacbls.hacash >= r.fee {
-                        let rfe = self.check_fail(dianum, r.fee.clone());
-                        return Some(rfe); // highest valid bid
-                    }
+        for r in bids.iter() {
+            let isusa = curhei <= r.tarhei || r.usable;
+            if r.number == dianum && r.time < ttx && isusa {
+                let hacbls = coresta.balance(&r.addr).unwrap_or_default();
+                if hacbls.hacash >= r.fee {
+                    let rfe = self.check_fail(dianum, r.fee.clone());
+                    return Some(rfe); // highest valid bid
                 }
             }
         }
         // not find
         None
+    }
+
+    fn remove_tx(&mut self, dianum: u32, hx: Hash) {
+        let bids = self.biddings.entry(dianum).or_default();
+        bids.retain_mut(|a|{
+            if a.txhx == hx {
+                a.usable = false; // not usable may be not in txpool
+            }
+            true // keep all
+        });
     }
 
     fn print(&self, dianum: u32) -> String {

@@ -26,7 +26,7 @@ pub trait Minter : Send + Sync {
     // v2
 
     // check
-    fn tx_submit(&self, _: &dyn EngineRead, _: &dyn TransactionRead) -> Rerr { Ok(()) }
+    fn tx_submit(&self, _: &dyn EngineRead, _: &TxPkg) -> Rerr { Ok(()) }
     fn blk_found(&self, _: &dyn BlockRead, _: &BlockStore) -> Rerr { Ok(()) }
     fn blk_verify(&self, _: &dyn BlockRead, _prev: &dyn BlockRead, _: &BlockStore) -> Rerr { Ok(()) }
     fn blk_insert(&self, _: &BlockPkg, _sub: &dyn State, _prev: &dyn State) -> Rerr { Ok(()) }

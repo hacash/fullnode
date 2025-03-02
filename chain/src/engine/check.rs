@@ -102,7 +102,7 @@ impl ChainEngine {
     }
 
 
-    fn block_verify(&self, isrt_blk: &BlockPkg, prev_blk: Arc<dyn Block>) -> Rerr {
+    fn block_verify(&self, isrt_blk: &BlockPkg, prev_blk: &dyn BlockRead) -> Rerr {
         
         let cnf = &self.cnf;
         let block = &isrt_blk.objc;

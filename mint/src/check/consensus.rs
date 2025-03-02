@@ -1,9 +1,11 @@
 
 
 
-fn impl_tx_submit(this: &HacashMinter, engine: &dyn EngineRead, tx: &dyn TransactionRead) -> Rerr {
-    let next_hei = engine.latest_block().height().uint() + 1;
-    let Some(diamintact) = pickout_diamond_mint_action(tx) else {
+fn impl_tx_submit(this: &HacashMinter, engine: &dyn EngineRead, txp: &TxPkg) -> Rerr {
+    let txr = txp.objc.as_read();
+    let curr_hei = engine.latest_block().height().uint();
+    let next_hei = curr_hei + 1;
+    let Some(diamintact) = pickout_diamond_mint_action(txr) else {
         return Ok(()) // other normal tx
     };
     // deal with diamond mint action
@@ -20,10 +22,10 @@ fn impl_tx_submit(this: &HacashMinter, engine: &dyn EngineRead, tx: &dyn Transac
         dianame.to_readable(), dianum, bidaddr.readable(), bidfee);
     * test end */
     // check_diamond_mint_minimum_bidding_fee
-    check_diamond_mint_minimum_bidding_fee(next_hei, tx, &diamintact)?;
+    check_diamond_mint_minimum_bidding_fee(next_hei, txr, &diamintact)?;
     // record tx
     let mut biddings = this.bidding_prove.lock().unwrap();
-    biddings.record(tx, &diamintact);
+    biddings.record(curr_hei, txp, &diamintact);
     // ok
     Ok(())
 }
@@ -128,7 +130,7 @@ fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, prevsta: &
             // check_diamond_mint_minimum_bidding_fee
             check_diamond_mint_minimum_bidding_fee(curhei, txp.as_read(), &diamint)?; // HIP-18
             let mut bidrecord = this.bidding_prove.lock().unwrap();
-            if let Some(rhbf) = bidrecord.highest(dianum, prevsta, block.timestamp().uint()) {
+            if let Some(rhbf) = bidrecord.highest(curhei, dianum, prevsta, block.timestamp().uint()) {
                 if bidfee < rhbf { // 
                     bidrecord.failure(dianum, curblk); // record check block fail
                     /* test print start */
@@ -147,6 +149,7 @@ fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, prevsta: &
                 // check success
             }
             // check ok and clear for next diamond
+            bidrecord.remove_tx(dianum, txp.hash());
             bidrecord.roll(dianum);
         }
     }

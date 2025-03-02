@@ -2,7 +2,7 @@
 // root change, head change, store batch, block hash 
 type RollerInsertResult = (Option<Arc<Chunk>>, Option<Arc<Chunk>>, MemBatch, Hash);
 // old root hei, ... ,blk hx, blk data, is_sync
-type RollerInsertResd = (Option<Arc<Chunk>>, Option<Arc<Chunk>>, Hash);
+type RollerInsertResd = (Option<Arc<Chunk>>, Option<Arc<Chunk>>);
 type RollerInsertData = (Option<Arc<Chunk>>, Option<Arc<Chunk>>, Hash, Vec<u8>, u64);
 
 
@@ -25,7 +25,6 @@ impl Roller {
             return errf!("insert height must between [{}, {}] but got {}", old_root_hei+1, old_head_hei+1, chunk_hei)
         }
         // insert
-        let hx = chunk.hash;
         chunk.set_parent(parent.clone());
         let new_chunk = Arc::new(chunk);
         chunk_push_child(parent, new_chunk.clone());
@@ -49,7 +48,7 @@ impl Roller {
             }
         }
         // return
-        Ok((mv_root, mv_head, hx))
+        Ok((mv_root, mv_head))
 
     }
 
