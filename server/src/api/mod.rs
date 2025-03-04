@@ -25,7 +25,7 @@ use protocol::action::*;
 use protocol::interface::*;
 use protocol::genesis::*;
 use chain::interface::*;
-use ::node::memtxpool::*;
+use chain::memtxpool::*;
 // use crate::mint::action::*;
 // use crate::mint::state::{ MintStateDisk, MintStoreDisk };
 

@@ -10,10 +10,10 @@ use field::*;
 use field::interface::*;
 use protocol::*;
 use protocol::transaction::*;
+use chain::memtxpool::*;
 
 
 use super::interface::*;
-use super::memtxpool::*;
 
 
 include!("bidding.rs");

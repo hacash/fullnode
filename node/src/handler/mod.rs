@@ -14,10 +14,10 @@ use field::interface::*;
 use chain::interface::*;
 use protocol::interface::*;
 use protocol::state::*;
+use chain::memtxpool::*;
 
 use super::*;
 use super::peer::*;
-use super::memtxpool::*;
 
 
 

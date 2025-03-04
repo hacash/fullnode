@@ -16,6 +16,7 @@ use protocol::action::*;
 use protocol::*;
 use protocol::transaction::*;
 use chain::interface::*;
+use chain::memtxpool::*;
 
 
 include!{"config.rs"}
@@ -25,6 +26,7 @@ pub mod action;
 pub mod hook;
 
 
+include!{"check/block.rs"}
 include!{"check/bidding.rs"}
 include!{"check/initialize.rs"}
 include!{"check/coinbase.rs"}

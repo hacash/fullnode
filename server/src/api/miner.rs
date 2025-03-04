@@ -108,6 +108,7 @@ fn get_miner_pending_block_stuff(is_detail: bool, is_transaction: bool, is_stuff
     api_data(data)
 }
 
+/*
 pub fn create_coinbase_tx(hei: u64, msg: Fixed16, adr: Address) -> TransactionCoinbase {
     let rwdamt = block_reward(hei);
     TransactionCoinbase {
@@ -121,7 +122,24 @@ pub fn create_coinbase_tx(hei: u64, msg: Fixed16, adr: Address) -> TransactionCo
         })
     }
 }
+*/
 
+fn miner_reset_next_new_block(engine: ChainEngine, txpool: &dyn TxPool) {
+
+    let block = engine.mint_checker().packing_next_block(engine.as_read(), txpool);
+    let block = *block.downcast::<BlockV1>().unwrap(); //
+    let cbtx: Box<dyn Transaction> = block.transactions()[0].clone();
+    let cbtx: TransactionCoinbase = match cbtx.ty() == 0 {
+        true => TransactionCoinbase::must(&cbtx.serialize()),
+        false => never!(),
+    };
+    update_miner_pending_block(block, cbtx);
+}
+
+
+
+
+/*
 fn miner_reset_next_new_block(sto: &BlockStore, engine: ChainEngine, hnode: ChainNode) {
 
     let engcnf = engine.config();
@@ -185,12 +203,12 @@ fn miner_reset_next_new_block(sto: &BlockStore, engine: ChainEngine, hnode: Chai
     let block = BlockV1 { intro, transactions};
     update_miner_pending_block(block, cbtx);
 }
-
+*/
 
 
 /*
     park txs to block
-*/
+*
 fn append_valid_tx_pick_from_txpool(pending_hei: u64, trslen: &mut usize, trshxs: &mut Vec<Hash>, 
     trs: &mut DynVecTransaction, engine: ChainEngine, txpool: Arc<dyn TxPool>,
 ) {
@@ -264,7 +282,7 @@ fn append_valid_tx_pick_from_txpool(pending_hei: u64, trslen: &mut usize, trshxs
     }
     // ok
 }
-
+*/
 
 
 
@@ -372,9 +390,8 @@ async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoR
     if is_need_create_new() {
         // create next block
         miner_reset_next_new_block(
-            &ctx.engine.store(),
             ctx.engine.clone(),
-            ctx.hcshnd.clone(),
+            ctx.hcshnd.txpool().as_ref(),
         );
     }
 

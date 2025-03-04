@@ -40,14 +40,6 @@ impl Minter for HacashMinter {
         // protocol::action::setup_action_hook(hook::empty_action_hook);
     }
 
-    fn next_difficulty(&self, prev: &dyn BlockRead, sto: &BlockStore) -> u32 {
-        let pdif = prev.difficulty().uint();
-        let ptim = prev.timestamp().uint();
-        let nhei = prev.height().uint() + 1;
-        let (difn, ..) = self.difficulty.target(&self.cnf, pdif, ptim, nhei, sto);
-        difn
-    }
-
     fn tx_submit(&self, eng: &dyn EngineRead, tx: &TxPkg) -> Rerr {
         impl_tx_submit(self, eng, tx)
     }
@@ -72,9 +64,17 @@ impl Minter for HacashMinter {
         do_initialize(sta)
     }
 
+    // <dyn Block> == BlockV1
+    fn packing_next_block(&self, eng: &dyn EngineRead, tp: &dyn TxPool) -> Box<dyn Any> {
+        impl_packing_next_block(self, eng, tp)
+    }
+
+
+    /*
     fn coinbase(&self, hei: u64, tx: &dyn TransactionRead) -> Rerr {
         verify_coinbase(hei, tx)
     }
+    */
 
 
 

@@ -8,14 +8,14 @@ use std::sync::Arc;
 use tokio;
 
 use sys::*;
-use chain::interface::*;
 use protocol::*;
+use chain::interface::*;
+use chain::memtxpool::*;
 
 
 use super::*;
 use super::p2p::*;
 use super::interface::*;
-use super::memtxpool::*;
 use super::handler::*;
 use super::diamondbid::*;
 
