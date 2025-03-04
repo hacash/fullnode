@@ -24,8 +24,9 @@ fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>, is_state_upgrade: boo
 fn rebuild_unstable_blocks(this: &ChainEngine) {
 
     let status = this.store.status();
+    let mut roller = this.roller.lock().unwrap();
     // next
-    let mut next_height = this.roller.lock().unwrap().root.height;
+    let mut next_height = roller.root.height;
     // build unstable blocks 
     let finish_height = *status.last_height;
     let is_all_rebuild = finish_height - next_height > 20;
@@ -50,7 +51,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
             flush!("➢{}", next_height);
         }
         // try insert
-        let ier = this.do_insert(BlockPkg{
+        let ier = this.insert_by(roller.deref_mut(), BlockPkg{
             hein: next_height,
             hash: hx,
             data: blkdata,
@@ -60,6 +61,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
         if let Err(e) = ier {
             panic!("[State Panic] rebuild block {} state error: {}", next_height, e);
         }
+        this.roll_by(ier.unwrap()).unwrap();
         // next
     }
     // finish tip

@@ -1,6 +1,6 @@
 
 // root change, head change, store batch, block hash 
-type RollerInsertResult = (Option<Arc<Chunk>>, Option<Arc<Chunk>>, MemBatch, Hash);
+// type RollerInsertResult = (Option<Arc<Chunk>>, Option<Arc<Chunk>>, MemBatch, Hash);
 // old root hei, ... ,blk hx, blk data, is_sync
 type RollerInsertResd = (Option<Arc<Chunk>>, Option<Arc<Chunk>>);
 type RollerInsertData = (Option<Arc<Chunk>>, Option<Arc<Chunk>>, Hash, Vec<u8>, u64);
@@ -9,13 +9,14 @@ type RollerInsertData = (Option<Arc<Chunk>>, Option<Arc<Chunk>>, Hash, Vec<u8>, 
 impl Roller {
 
     // fn try_insert(&self) {  }
-
+    /*
     fn insert(&mut self, parent: Arc<Chunk>, chunk: Chunk) -> Ret<RollerInsertResult> {
         insert_to_roller(self, parent, chunk)
     }
+    */
 
     // just_ckhd just check head
-    fn insert_v2(&mut self, parent: Arc<Chunk>, mut chunk: Chunk) -> Ret<RollerInsertResd> {
+    fn insert(&mut self, parent: Arc<Chunk>, mut chunk: Chunk) -> Ret<RollerInsertResd> {
         let chunk_hei = chunk.height;
         // check
         let old_root_hei = self.root.height;
@@ -42,7 +43,7 @@ impl Roller {
                 false => 0, // first height
             };
             if new_root_hei > old_root_hei { // set new root
-                let nrt = trace_upper_chunk_v2(new_head, new_root_hei);
+                let nrt = trace_upper_chunk(new_head, new_root_hei);
                 self.root = nrt.clone(); // update stat
                 mv_root = Some(nrt);
             }
@@ -74,7 +75,7 @@ impl Roller {
 
 /*
 * return (change to new root, change to new pointer)
-*/
+*
 fn insert_to_roller(roller: &mut Roller, parent: Arc<Chunk>, mut chunk: Chunk) -> Ret<RollerInsertResult> {
     let new_hei = chunk.height;
     // check
@@ -125,8 +126,9 @@ fn trace_upper_chunk(mut seek: Arc<Chunk>, upper_hei: u64, tc_path: &mut MemBatc
     seek.clone() // ok find
 }
 
+*/
 
-fn trace_upper_chunk_v2(mut seek: Arc<Chunk>, upper_hei: u64) -> Arc<Chunk> {
+fn trace_upper_chunk(mut seek: Arc<Chunk>, upper_hei: u64) -> Arc<Chunk> {
     while seek.height != upper_hei {
         seek = seek.parent.upgrade().unwrap(); // must move to upper
     }

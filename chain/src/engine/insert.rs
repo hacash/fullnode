@@ -2,6 +2,7 @@
 #[allow(dead_code)]
 impl ChainEngine {
 
+    /*
     
     fn do_insert(&self, block: BlockPkg) -> Rerr {
         let hx = block.hash.clone();
@@ -103,7 +104,6 @@ impl ChainEngine {
     }
 
 
-    /*************************/
 
     fn do_roll_disk(&self, root: Option<Arc<Chunk>>, cptr: Option<Arc<Chunk>>, data: Vec<u8>, hx: Hash) -> Rerr {
         let nrt = root.clone();
@@ -184,6 +184,7 @@ impl ChainEngine {
     }
 
 
+    */
 
 
 
@@ -231,7 +232,7 @@ impl ChainEngine {
         let (hx, objc, data) = blk.apart();
         let chunk = Chunk::create(hx, objc.into(), sub_state.into());
         // insert chunk
-        roller.insert_v2(prev_chunk, chunk).map(|(a,b)|(
+        roller.insert(prev_chunk, chunk).map(|(a,b)|(
             a, b, hx, data, roller.root.height
         ))
     }
@@ -290,29 +291,6 @@ fn sync_warning(e: String) -> Rerr {
 }
 
 
-
-
-
-
-
-
-
-
-
-#[allow(dead_code)]
-impl ChainEngine {
-
-    // return (new root, new head, blk data) 
-    fn create_chunk_and_insert(&self, _blkpkg: BlockPkg) -> InsertResult {
-        
-
-
-
-        unimplemented!()
-    }
-
-
-}
 
 
 

@@ -3,6 +3,8 @@ use transaction::TransactionCoinbase;
 
 impl ChainEngine {
 
+    /* 
+
     fn check_all_for_insert(&self, isrt_blk: &BlockPkg, prev_blk: Arc<dyn Block>) -> Rerr {
         
         let cnf = &self.cnf;
@@ -101,6 +103,7 @@ impl ChainEngine {
 
     }
 
+    */
 
     fn block_verify(&self, isrt_blk: &BlockPkg, prev_blk: &dyn BlockRead) -> Rerr {
         
