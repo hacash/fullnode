@@ -11,7 +11,6 @@ use protocol::block::*;
 use protocol::state::*;
 use protocol::difficulty::*;
 use protocol::interface::*;
-use protocol::action::*;
 use protocol::*;
 use protocol::transaction::*;
 use chain::interface::*;
@@ -26,6 +25,8 @@ pub mod action;
 pub mod oprate;
 pub mod hook;
 
+
+use action::*;
 
 include!{"check/block.rs"}
 include!{"check/bidding.rs"}

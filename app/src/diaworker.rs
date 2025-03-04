@@ -13,7 +13,6 @@ use serde_json::Value as JV;
 use sys::*;
 use field::*;
 use field::interface::*;
-use protocol::action::*;
 use protocol::difficulty::*;
 use mint::genesis::*;
 use mint::action::*;

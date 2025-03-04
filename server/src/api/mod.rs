@@ -25,6 +25,7 @@ use protocol::action::*;
 use protocol::interface::*;
 use chain::interface::*;
 use mint::*;
+use mint::action::*;
 use mint::genesis::*;
 use mint::oprate::*;
 

@@ -20,8 +20,8 @@ include!{"satoshi.rs"}
 include!{"diamond.rs"}
 include!{"asset.rs"}
 // include!{"diamond_mint.rs"}
-include!{"diamond_insc.rs"}
-include!{"diamond_util.rs"}
+// include!{"diamond_insc.rs"}
+// include!{"diamond_util.rs"}
 // include!{"channel.rs"}
 include!{"chainlimit.rs"}
 
@@ -35,7 +35,7 @@ action_register!{
     HacToTrs              // 1
     HacFromTrs            // 13
     HacFromToTrs          // 14
-    // HacAmountCompress  // 15
+    // HacAmountCompress     // 15
     
     // channel
     // ChannelOpen           // 2
@@ -55,13 +55,13 @@ action_register!{
     SatFromToTrs          // 12
 
     // asset
-    AssetCreate           // 16
+    // AssetCreate           // 16
     AssetToTrs            // 17
     AssetFromTrs          // 18
     AssetFromToTrs        // 19
 
     // inscription
-    DiamondInscription         // 32
-    DiamondInscriptionClear    // 33
+    // DiamondInscription         // 32
+    // DiamondInscriptionClear    // 33
 
 }

@@ -14,7 +14,10 @@ use super::oprate::*;
 
 
 include!{"channel.rs"}
+include!{"diamond_util.rs"}
 include!{"diamond_mint.rs"}
+include!{"diamond_insc.rs"}
+include!{"asset.rs"}
 include!{"util.rs"}
 
 
@@ -28,6 +31,13 @@ action_register!{
     ChannelOpen           // 2
     ChannelClose          // 3
     DiamondMint           // 4
+
+    // asset
+    AssetCreate           // 16
+
+    // inscription
+    DiamondInscription         // 32
+    DiamondInscriptionClear    // 33
 
 
 }
