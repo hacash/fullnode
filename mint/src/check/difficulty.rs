@@ -26,8 +26,8 @@ impl DifficultyGnr {
     pub fn req_cycle_block(&self, hei: u64, sto: &BlockStore) -> (u64, u32, [u8; HXS]) {
         let cylnum = self.cnf.difficulty_adjust_blocks; // 288
         if hei < cylnum {
-            let cyltime = genesis_block().timestamp().uint();
-            let diffcty = genesis_block().difficulty().uint();
+            let cyltime = genesis::genesis_block().timestamp().uint();
+            let diffcty = genesis::genesis_block().difficulty().uint();
             let diffhx = u32_to_hash(diffcty);
             return (cyltime, diffcty, diffhx)
         }

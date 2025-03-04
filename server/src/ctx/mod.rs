@@ -12,18 +12,19 @@ use field::interface::*;
 use protocol::*;
 use protocol::interface::*;
 use protocol::action::*;
-
 use protocol::state::*;
 use chain::interface::*;
 use node::interface::*;
+
+use mint::action::*;
 
 // use crate::mint::action::*;
 // use crate::mint::state::{ MintStateDisk, MintStoreDisk };
 
 
-include!("util.rs");
-include!("param.rs");
-include!("action.rs");
-include!("ctx.rs");
+include!{"util.rs"}
+include!{"param.rs"}
+include!{"action.rs"}
+include!{"ctx.rs"}
 
 

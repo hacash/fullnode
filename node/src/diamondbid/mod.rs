@@ -16,7 +16,7 @@ use chain::memtxpool::*;
 use super::interface::*;
 
 
-include!("bidding.rs");
+include!{"bidding.rs"}
 
 
 pub fn start_diamond_auto_bidding(hnode: Arc<dyn HNode>) {

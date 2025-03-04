@@ -3,13 +3,22 @@
     Extend action
 */
 
+
+
 pub type FnExtendActionsTryCreateFunc = fn(u16, &[u8]) -> Ret<Option<(Box<dyn Action>, usize)>>;
 
-pub static mut EXTEND_ACTIONS_TRY_CREATE_FUNC: FnExtendActionsTryCreateFunc = |t,_|errf!("action kind '{}' not find", t).to_owned();
+macro_rules! fneatcf {
+    () => {
+        |_,_|Ok(None)
+    };
+}
+pub static mut EXTEND_ACTIONS_TRY_CREATE_FUNCS: [FnExtendActionsTryCreateFunc; 3] = [try_create, fneatcf!(), fneatcf!()];
 
-pub fn setup_extend_actions_try_create(f: FnExtendActionsTryCreateFunc) {
+
+pub fn setup_extend_actions_try_create(idx: usize, f: FnExtendActionsTryCreateFunc) {
     unsafe {
-        EXTEND_ACTIONS_TRY_CREATE_FUNC = f;
+        // println!("================= EXTEND_ACTIONS_TRY_CREATE_FUNCS[idx] = f = {}", idx);
+        EXTEND_ACTIONS_TRY_CREATE_FUNCS[idx] = f;
     }
 }
 

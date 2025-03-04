@@ -9,7 +9,7 @@ api_querys_define!{ Q7542,
 }
 
 async fn channel(State(ctx): State<ApiCtx>, q: Query<Q7542>) -> impl IntoResponse {
-    ctx_state!(ctx, state);
+    ctx_mint_state!(ctx, state);
     q_unit!(q, unit);
     q_must!(q, id, s!(""));
     // id

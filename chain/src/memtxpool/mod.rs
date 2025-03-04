@@ -11,11 +11,11 @@ use super::interface::*;
 
 
 
-include!("def.rs");
-include!("group.rs");
-include!("pool.rs");
-include!("util.rs");
-include!("find.rs");
-include!("add.rs");
-include!("rm.rs");
+include!{"def.rs"}
+include!{"group.rs"}
+include!{"pool.rs"}
+include!{"util.rs"}
+include!{"find.rs"}
+include!{"add.rs"}
+include!{"rm.rs"}
 

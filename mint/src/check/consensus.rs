@@ -163,7 +163,7 @@ fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, prevsta: &
 fn check_diamond_mint_minimum_bidding_fee(next_hei: u64, tx: &dyn TransactionRead, dmact: &DiamondMint) -> Rerr {
     const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
     // check
-    let bidmin = block_reward(next_hei);
+    let bidmin = genesis::block_reward(next_hei);
     let _bidaddr = tx.main();
     let bidfee  = tx.fee().clone();
     let _dianame = dmact.d.diamond;

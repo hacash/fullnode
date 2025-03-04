@@ -15,7 +15,6 @@ pub mod transaction;
 pub mod block;
 pub mod state;
 pub mod operate;
-pub mod genesis;
 pub mod difficulty;
 
 include!{"define.rs"}

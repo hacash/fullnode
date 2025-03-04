@@ -10,6 +10,15 @@ macro_rules! ctx_state{
 }
 
 #[macro_export]
+macro_rules! ctx_mint_state{
+    ($ctx:expr, $state:ident) => (
+        let _s1_db = $ctx.engine.state();
+        let _s1_db = _s1_db.as_ref();
+        let $state = MintStateRead::wrap(_s1_db);
+    )
+}
+
+#[macro_export]
 macro_rules! ctx_store{
     ($ctx:expr, $sto:ident) => (
         let $sto = $ctx.engine.store();

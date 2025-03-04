@@ -15,7 +15,7 @@ use field::*;
 use field::interface::*;
 use protocol::action::*;
 use protocol::difficulty::*;
-use protocol::genesis::*;
+use mint::genesis::*;
 
 
 

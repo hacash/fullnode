@@ -50,7 +50,7 @@ pub fn close_channel_with_distribution(pdhei: u64, ctx: &mut dyn Context, channe
     // do close
     if ttamt.is_positive() {
         // calculate_interest
-        let (newamt1, newamt2) = calculate_interest_of_height(
+        let (newamt1, newamt2) = genesis::calculate_interest_of_height(
             pdhei, *paychan.open_height, 
             paychan.interest_attribution, left_amt, right_amt
         )?;
@@ -91,7 +91,7 @@ pub fn close_channel_with_distribution(pdhei: u64, ctx: &mut dyn Context, channe
     };
     savechan.if_distribution = distribution;
     // save channel and count
-    let mut state = CoreState::wrap(ctx.state());
+    let mut state = MintState::wrap(ctx.state());
     state.channel_set(&channel_id, &savechan);
     state.set_total_count(&ttcount);
     // ok finish

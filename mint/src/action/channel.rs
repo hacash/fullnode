@@ -59,7 +59,7 @@ fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     // check exist
     let mut reuse_version = Uint4::from(1);
 	// channel ID with the same left and right addresses and closed by consensus can be reused
-    let mut state = CoreState::wrap(ctx.state());
+    let mut state = MintState::wrap(ctx.state());
     let havcha = state.channel(cid);
     if let Some(chan) = havcha {
         let chan_stat = chan.status;
@@ -126,7 +126,7 @@ fn channel_close(this: &ChannelClose, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     check_vaild_store_item_key("channel", cid, ChannelId::SIZE)?;
 
     let pending_height = ctx.env().block.height;
-    let state = CoreState::wrap(ctx.state());
+    let state = MintState::wrap(ctx.state());
 
     // query
     let chan = must_have!("channel", state.channel(cid));

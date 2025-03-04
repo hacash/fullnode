@@ -2,7 +2,7 @@
 
 use sys::*;
 
-include!("config.rs");
+include!{"config.rs"}
 
 
 #[macro_use]

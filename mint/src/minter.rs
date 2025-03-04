@@ -20,7 +20,7 @@ impl HacashMinter {
         Self {
             cnf: cnf,
             difficulty: dgnr,
-            genesis_block: genesis_block_pkg().into_block().into(),
+            genesis_block: genesis::genesis_block_pkg().into_block().into(),
             bidding_prove: Mutex::default(),
         }
     }
@@ -36,7 +36,7 @@ impl Minter for HacashMinter {
 
     fn init(&self, _: &IniObj) {
         // extend actions
-        // protocol::action::setup_extend_actions_try_create(action::empty_try_create);
+        protocol::action::setup_extend_actions_try_create(1, action::try_create);
         // protocol::action::setup_action_hook(hook::empty_action_hook);
     }
 

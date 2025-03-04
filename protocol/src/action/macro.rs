@@ -57,6 +57,7 @@ macro_rules! action_define {
 
         impl ActExec for $class {
             fn execute(&$pself, $pctx: &mut dyn Context) -> Ret<(u32, Vec<u8>)> {
+                use std::any::Any;
                 if !$pctx.env().chain.fast_sync {
                     check_action_level($pctx.depth(), $pself, $pctx.tx().actions())?;
                 }

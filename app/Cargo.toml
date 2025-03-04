@@ -8,6 +8,7 @@ x16rs = { path = "../x16rs" }
 sys = { path = "../sys" }
 field = { path = "../field" }
 protocol = { path = "../protocol" }
+mint = { path = "../mint" }
 hex = "0.4.3"
 serde = "1.0.215"
 serde_json = "1.0.133"

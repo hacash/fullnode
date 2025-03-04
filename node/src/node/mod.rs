@@ -22,10 +22,10 @@ use super::diamondbid::*;
 
 
 
-include!("config.rs");
-include!("util.rs");
-include!("node.rs");
-include!("start.rs");
-include!("hnode.rs");
+include!{"config.rs"}
+include!{"util.rs"}
+include!{"node.rs"}
+include!{"start.rs"}
+include!{"hnode.rs"}
 
 

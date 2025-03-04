@@ -10,7 +10,7 @@ use super::*;
 
 
 
-include!("block.rs");
-include!("reward.rs");
-include!("channel.rs");
+include!{"block.rs"}
+include!{"reward.rs"}
+include!{"channel.rs"}
 

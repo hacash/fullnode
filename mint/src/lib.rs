@@ -9,7 +9,6 @@ use field::*;
 use field::interface::*;
 use protocol::block::*;
 use protocol::state::*;
-use protocol::genesis::*;
 use protocol::difficulty::*;
 use protocol::interface::*;
 use protocol::action::*;
@@ -22,7 +21,9 @@ use chain::memtxpool::*;
 include!{"config.rs"}
 
 
+pub mod genesis;
 pub mod action;
+pub mod oprate;
 pub mod hook;
 
 

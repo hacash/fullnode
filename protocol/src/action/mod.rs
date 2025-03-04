@@ -22,7 +22,7 @@ include!{"asset.rs"}
 include!{"diamond_mint.rs"}
 include!{"diamond_insc.rs"}
 include!{"diamond_util.rs"}
-include!{"channel.rs"}
+// include!{"channel.rs"}
 include!{"chainlimit.rs"}
 
 
@@ -38,8 +38,8 @@ action_register!{
     // HacAmountCompress  // 15
     
     // channel
-    ChannelOpen           // 2
-    ChannelClose          // 3
+    // ChannelOpen           // 2
+    // ChannelClose          // 3
     
     // diamond
     DiamondMint           // 4

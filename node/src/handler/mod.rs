@@ -21,13 +21,13 @@ use super::peer::*;
 
 
 
-include!("msg.rs");
-include!("handler.rs");
-include!("status.rs");
-include!("blocks.rs");
-include!("hashs.rs");
-include!("start.rs");
-include!("txblock.rs");
+include!{"msg.rs"}
+include!{"handler.rs"}
+include!{"status.rs"}
+include!{"blocks.rs"}
+include!{"hashs.rs"}
+include!{"start.rs"}
+include!{"txblock.rs"}
 
 
 

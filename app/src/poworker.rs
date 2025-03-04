@@ -13,11 +13,11 @@ use serde_json::Value as JV;
 use sys::*;
 use field::*;
 use field::interface::*;
+use protocol::interface::*;
 use protocol::block::*;
 use protocol::transaction::*;
 use protocol::difficulty::*;
-use protocol::genesis::*;
-use protocol::interface::*;
+use mint::genesis::*;
 
 
 
@@ -67,7 +67,7 @@ const ONEDAY_BLOCK_NUM: f64 = 288.0; // one day block
 // current mining diamond number
 static MINING_BLOCK_HEIGHT: AtomicU64 = AtomicU64::new(0);
 lazy_static::lazy_static!{
-    static ref MINING_BLOCK_STUFF:  RwLock<Arc<BlockMiningStuff>> = RwLock::default();
+    static ref MINING_BLOCK_STUFF: RwLock<Arc<BlockMiningStuff>> = RwLock::default();
 }
 
 

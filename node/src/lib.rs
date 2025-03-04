@@ -1,7 +1,7 @@
 
 
-include!("util.rs");
-include!("exiter.rs");
+include!{"util.rs"}
+include!{"exiter.rs"}
 
 pub mod interface;
 pub mod diamondbid;

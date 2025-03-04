@@ -4,8 +4,8 @@ use leveldb_sys::*;
 use libc::size_t;
 
 
-include!("error.rs");
-include!("bytes.rs");
-// include!("batch.rs");
-include!("db.rs");
+include!{"error.rs"}
+include!{"bytes.rs"}
+// include!{"batch.rs"}
+include!{"db.rs"}
 
