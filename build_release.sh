@@ -17,3 +17,8 @@ RUSTFLAGS="-C target-feature=+crt-static" RUST_BACKTRACE="full" cargo build --re
 cp target/x86_64-unknown-linux-musl/release/fullnode   ./hacash_fullnode_ubuntu_dbsled
 
 
+# build hascan
+cd ../hascan
+RUSTFLAGS="$RUSTFLAGS -Awarnings" cargo build --release && cp ./target/release/hascan ./ && cp ./hascan ../fullnode/
+cd ../fullnode
+

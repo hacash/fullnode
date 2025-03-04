@@ -33,8 +33,8 @@ pub trait Engine : EngineRead + Send + Sync {
     fn as_read(&self) -> &dyn EngineRead;
     // fn init(&self, _: &IniObj) -> Option<Error>;
     // fn start(&self) -> Option<Error>;
-    fn insert(&self, _: BlockPkg) -> Rerr;
-    fn insert_sync(&self, _: u64, _: Vec<u8>) -> Rerr;
+    // fn insert(&self, _: BlockPkg) -> Rerr;
+    // fn insert_sync(&self, _: u64, _: Vec<u8>) -> Rerr;
 
     // for v2
     fn discover(&self, _: BlockPkg) -> Rerr { unimplemented!() }

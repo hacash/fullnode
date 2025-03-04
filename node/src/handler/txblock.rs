@@ -91,7 +91,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         let mut blkp = blkpkg.unwrap();
         blkp.set_origin( BlkOrigin::DISCOVER );
         let thsx = blkp.objc.transaction_hash_list(false); // hash no fee
-        if let Err(e) = engptr.insert(blkp) {
+        if let Err(e) = engptr.discover(blkp) {
             println!("Error: {}, failed.", e);
             // println!("- error block data hex: {}", body.hex());
         }else{

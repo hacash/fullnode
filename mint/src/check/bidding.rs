@@ -57,7 +57,7 @@ impl BiddingProve {
 
         macro_rules! rcdshow { () => {
             // println!("- devtest record bidding {} {}", &record.addr.readable(), &record.fee);  
-            flush!("{}({}) ", &record.addr.readable()[0..7], &record.fee);
+            // flush!("{}({}) ", &record.addr.readable()[0..7], &record.fee);
         }}
         let bids = self.biddings.entry(dianum).or_default();
         // push

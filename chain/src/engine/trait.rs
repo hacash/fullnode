@@ -156,11 +156,12 @@ impl Engine for ChainEngine {
     fn as_read(&self) -> &dyn EngineRead {
         self
     }
+    
     /*
     fn insert(&self, blk: BlockPkg) -> Rerr {
         self.discover(blk)
     }
-    */
+
     fn insert(&self, blk: BlockPkg) -> Rerr {
         let blkobj = blk.objc.as_read();
         if self.cnf.recent_blocks {
@@ -175,19 +176,20 @@ impl Engine for ChainEngine {
         drop(lk);
         Ok(())
     }
-
+    */
+    
     /*
     fn insert_sync(&self, _: u64, data: Vec<u8>) -> Rerr {
         self.synchronize(data)
     }
-    */
+
     fn insert_sync(&self, hei: u64, data: Vec<u8>) -> Rerr {
         let lk = self.isrtlk.lock().unwrap();
         self.do_insert_sync(hei, data)?;
         drop(lk);
         Ok(())
     }
-
+    */
     fn exit(&self) {
         // wait block insert finish
         let lk = self.isrtlk.lock().unwrap();
