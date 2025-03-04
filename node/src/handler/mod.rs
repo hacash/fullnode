@@ -12,7 +12,6 @@ use protocol::block::*;
 use field::interface::*;
 use chain::interface::*;
 use protocol::interface::*;
-use protocol::state::*;
 use chain::memtxpool::*;
 use mint::*;
 

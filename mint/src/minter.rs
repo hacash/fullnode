@@ -76,12 +76,17 @@ impl Minter for HacashMinter {
     }
     */
 
-    fn tx_check_group(&self, tx: &TxPkg) -> usize {
+    fn tx_pool_group(&self, tx: &TxPkg) -> usize {
         let mut group_id =  TXGID_NORMAL;
         if let Some(..) = action::pickout_diamond_mint_action(tx.objc.as_read()) {
             group_id = TXGID_DIAMINT;
         }
         group_id
+    }
+
+
+    fn tx_pool_refresh(&self, eng: &dyn EngineRead, txp: &dyn TxPool, txs: Vec<Hash>, blkhei: u64) {
+        impl_tx_pool_refresh(self, eng, txp, txs, blkhei)
     }
 
 

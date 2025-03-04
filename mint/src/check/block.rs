@@ -161,3 +161,57 @@ fn append_valid_tx_pick_from_txpool(pending_hei: u64, trslen: &mut usize, trshxs
     // ok
 }
 
+
+
+
+/********************************************/
+
+
+
+fn impl_tx_pool_refresh(_this: &HacashMinter, eng: &dyn EngineRead, txpool: &dyn TxPool, txs: Vec<Hash>, blkhei: u64) {
+
+    if blkhei % 15 == 0 {
+        println!("{}.", txpool.print());
+    }
+    // drop all overdue diamond mint tx
+    if blkhei % 5 == 0 {
+        clean_invalid_diamond_mint_txs(eng, txpool, blkhei);
+    }
+    // drop all exist normal tx
+    if txs.len() > 1 {
+        let _ = txpool.drain(&txs[1..]); // over coinbase tx
+    }
+    // drop invalid normal
+    if blkhei % 11 == 0 { // 1 hours
+        clean_invalid_normal_txs(eng, txpool, blkhei);
+    }
+}
+
+
+// clean_
+fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, blkhei: u64) {
+    let pdhei = blkhei + 1;
+    let mut sub_state = eng.fork_sub_state();
+    // already minted hacd number
+    let _ = txpool.retain_at(TXGID_NORMAL, &mut |a: &TxPkg| {
+        let exec = eng.try_execute_tx_by( a.objc.as_read(), pdhei, &mut sub_state);
+        exec.is_ok() // keep or delete 
+    });
+}
+
+
+// clean_
+fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _blkhei: u64) {
+    // already minted hacd number
+    let sta = eng.state();
+    let curdn = CoreStateRead::wrap(sta.as_ref()).get_latest_diamond().number.uint();
+    let nextdn = curdn + 1;
+    let _ = txpool.retain_at(TXGID_DIAMINT, &mut |a: &TxPkg| {
+        // must be next diamond number, or delete
+        nextdn == action::get_diamond_mint_number(a.objc.as_read())
+    });
+}
+
+
+
+

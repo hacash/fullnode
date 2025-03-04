@@ -10,12 +10,12 @@ pub struct MemTxPool {
 impl MemTxPool {
     
     pub fn new(lfepr: u64, gs: Vec<usize>, fpmds: Vec<bool>) -> MemTxPool {
-        const MS: usize = MemTxPool::GROUP;
-        if gs.len() != MS {
-            panic!("new tx pool group size must be {}", MS)
+        let gslen = gs.len();
+        if gslen == 0 || gslen != fpmds.len() {
+            never!()
         }
-        let mut grps = Vec::with_capacity(MS);
-        for i in 0 .. gs.len() {
+        let mut grps = Vec::with_capacity(gslen);
+        for i in 0 .. gslen {
             let sz = gs[i];
             grps.push( Mutex::new( TxGroup::new(sz, fpmds[i])) );
         }
@@ -26,25 +26,33 @@ impl MemTxPool {
         }
     }
 
+
+    fn check_group_id(&self, wgi: usize) -> Rerr {
+        if wgi > self.groups.len() {
+            return errf!("tx pool group overflow")
+        }
+        Ok(())
+    }
+
 }
 
 
 impl TxPool for MemTxPool {
 
     fn count_at(&self, gi: usize) -> Ret<usize> {
-        check_group_id(gi)?;
+        self.check_group_id(gi)?;
         let count = self.groups[gi].lock().unwrap().txpkgs.len();
         Ok(count)
     }
 
     fn first_at(&self, gi: usize) -> Ret<Option<TxPkg>> {
-        check_group_id(gi)?;
+        self.check_group_id(gi)?;
         let grp = self.groups[gi].lock().unwrap();
         Ok(grp.txpkgs.first().map(|a|a.clone())) // get first one if have
     }
 
     fn iter_at(&self, gi: usize, scan: &mut dyn FnMut(&TxPkg)->bool) -> Rerr {
-        check_group_id(gi)?;
+        self.check_group_id(gi)?;
         let grp = self.groups[gi].lock().unwrap();
         for txp in &grp.txpkgs {
             if false == scan(&txp) {
@@ -60,7 +68,7 @@ impl TxPool for MemTxPool {
             return errf!("tx fee purity {} too low to add txpool", txp.fepr)
         }
         // let test_hex_show = txp.data.hex();
-        check_group_id(gi)?;
+        self.check_group_id(gi)?;
         // do insert
         let mut grp = self.groups[gi].lock().unwrap();
         grp.insert(txp)?;
@@ -77,7 +85,7 @@ impl TxPool for MemTxPool {
     }
 
     fn delete_at(&self, gi: usize, hxs: &[Hash]) -> Rerr {
-        check_group_id(gi)?;
+        self.check_group_id(gi)?;
         // do delete
         let mut grp = self.groups[gi].lock().unwrap();
         grp.delete(hxs);
@@ -85,7 +93,7 @@ impl TxPool for MemTxPool {
     }
 
     fn clear_at(&self, gi: usize) -> Rerr {
-        check_group_id(gi)?;
+        self.check_group_id(gi)?;
         // do clean
         let mut grp = self.groups[gi].lock().unwrap();
         grp.clear();
@@ -94,7 +102,7 @@ impl TxPool for MemTxPool {
 
     // from group id
     fn find_at(&self, gi: usize, hx: &Hash) -> Option<TxPkg> {
-        check_group_id(gi).unwrap();
+        self.check_group_id(gi).unwrap();
         // do clean
         let grp = self.groups[gi].lock().unwrap();
         match grp.find(hx) {
@@ -105,7 +113,7 @@ impl TxPool for MemTxPool {
 
     // remove if true
     fn retain_at(&self, gi: usize, f: &mut dyn FnMut(&TxPkg)->bool) -> Rerr {
-        check_group_id(gi)?;
+        self.check_group_id(gi)?;
         self.groups[gi].lock().unwrap().retain(f);
         Ok(())
     }
@@ -146,7 +154,7 @@ impl TxPool for MemTxPool {
         let mut shs: Vec<String> = vec![];
         for gi in 0..self.groups.len() {
             if let Ok(gr) = self.groups[gi].try_lock() {
-                shs.push(format!("{}({})", Self::TIPS[gi], gr.txpkgs.len()));
+                shs.push(format!("{}({})", gi, gr.txpkgs.len()));
             }
         }
         format!("[TxPool] tx count: {}", shs.join(", "))

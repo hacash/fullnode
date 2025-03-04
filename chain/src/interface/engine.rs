@@ -1,10 +1,4 @@
 
-
-/*
-    old
-*/
-
-
 pub trait EngineRead: Send + Sync {
     // key is height or hash
     // fn block(&self, _: &dyn Serialize) -> Option<Box<dyn BlockPkg>>;
@@ -18,9 +12,9 @@ pub trait EngineRead: Send + Sync {
 
     // fn confirm_state(&self) -> (Arc<dyn State>, Arc<dyn BlockPkg>);
     fn latest_block(&self) -> Arc<dyn Block>;
-    fn mint_checker(&self) -> &dyn Minter;
+    fn mint_checker(&self) -> &dyn Minter { never!() }
 
-    fn recent_blocks(&self) -> Vec<Arc<RecentBlockInfo>>;
+    fn recent_blocks(&self) -> Vec<Arc<RecentBlockInfo>> { Vec::new() }
     fn average_fee_purity(&self) -> u64 { 0 } // 100:238 / 166byte(1trs)
 
     fn try_execute_tx(&self, _: &dyn TransactionRead) -> Rerr;
@@ -37,8 +31,8 @@ pub trait Engine : EngineRead + Send + Sync {
     // fn insert_sync(&self, _: u64, _: Vec<u8>) -> Rerr;
 
     // for v2
-    fn discover(&self, _: BlockPkg) -> Rerr { unimplemented!() }
-    fn synchronize(&self, _: Vec<u8>) -> Rerr { unimplemented!() }
+    fn discover(&self, _: BlockPkg) -> Rerr;
+    fn synchronize(&self, _: Vec<u8>) -> Rerr;
 
     fn exit(&self) {}
 }

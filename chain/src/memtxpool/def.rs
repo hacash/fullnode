@@ -1,5 +1,5 @@
 
-
+/*
 impl MemTxPool {
     pub const GROUP: usize = 2;
 
@@ -12,16 +12,8 @@ impl MemTxPool {
     ];
 
 }
-
+*/
 
 
 ///////////////////
 
-
-
-fn check_group_id(wgi: usize) -> Rerr {
-    if wgi > MemTxPool::GROUP {
-        return errf!("tx pool group overflow")
-    }
-    Ok(())
-}

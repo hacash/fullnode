@@ -8,8 +8,10 @@ impl HacashNode {
         let p2p = this.p2p.clone();
         let hdl = this.msghdl.clone();
 
-        // diamond auto bid
-        start_diamond_auto_bidding(this.clone());
+        // diamond auto bid on mainnet
+        if this.engine.config().is_mainnet() {
+            start_diamond_auto_bidding(this.clone());
+        }
 
         // handle msg
         std::thread::spawn(move||{
