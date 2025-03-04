@@ -3,6 +3,7 @@
 async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec<u8>) {
     // println!("1111111 handle_txblock_arrive Tx, peer={} len={}", peer.nick(), body.clone().len());
     let engcnf = this.engine.config();
+    let minter = this.engine.mint_checker();
     // parse
     let Ok(txpkg) = TxPkg::build(body) else {
         return // parse tx error
@@ -31,7 +32,7 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
         return // tx check fail
     }
     // add to tx pool
-    let _ = this.txpool.insert(txpkg);
+    let _ = this.txpool.insert_by(txpkg, &|tx|minter.tx_check_group(tx));
     // broadcast
     let p2p = this.p2pmng.lock().unwrap();
     let p2p = p2p.as_ref().unwrap();
@@ -153,7 +154,7 @@ fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, blkhei: u
     let pdhei = blkhei + 1;
     let mut sub_state = eng.fork_sub_state();
     // already minted hacd number
-    let _ = txpool.retain_at(MemTxPool::NORMAL, &mut |a: &TxPkg| {
+    let _ = txpool.retain_at(TXGID_NORMAL, &mut |a: &TxPkg| {
         let exec = eng.try_execute_tx_by( a.objc.as_read(), pdhei, &mut sub_state);
         exec.is_ok() // keep or delete 
     });
@@ -166,22 +167,10 @@ fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _bl
     let sta = eng.state();
     let curdn = CoreStateRead::wrap(sta.as_ref()).get_latest_diamond().number.uint();
     let nextdn = curdn + 1;
-    let _ = txpool.retain_at(MemTxPool::DIAMINT, &mut |a: &TxPkg| {
+    let _ = txpool.retain_at(TXGID_DIAMINT, &mut |a: &TxPkg| {
         // must be next diamond number, or delete
-        nextdn == get_diamond_mint_number(a.objc.as_read())
+        nextdn == mint::action::get_diamond_mint_number(a.objc.as_read())
     });
 }
 
 
-
-// for diamond create action
-fn get_diamond_mint_number(tx: &dyn TransactionRead) -> u32 {
-    const DMINT: u16 = DiamondMint::KIND;
-    for act in tx.actions() {
-        if act.kind() == DMINT {
-            let dm = DiamondMint::must(&act.serialize());
-            return *dm.d.number;
-        }
-    }
-    0
-}

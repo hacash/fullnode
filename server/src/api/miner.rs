@@ -259,7 +259,7 @@ fn append_valid_tx_pick_from_txpool(pending_hei: u64, trslen: &mut usize, trshxs
             ok_push_one_tx!(a);
             false // end
         };
-        txpool.iter_at(MemTxPool::DIAMINT, &mut pick_dmint).unwrap();
+        txpool.iter_at(TXGID_DIAMINT, &mut pick_dmint).unwrap();
     }
 
     // pick normal tx
@@ -274,7 +274,7 @@ fn append_valid_tx_pick_from_txpool(pending_hei: u64, trslen: &mut usize, trshxs
         ok_push_one_tx!(a);
         true // next
     };
-    txpool.iter_at(MemTxPool::NORMAL, &mut pick_normal_tx).unwrap();
+    txpool.iter_at(TXGID_NORMAL, &mut pick_normal_tx).unwrap();
 
     // delete invalid txs
     if invalidtxhxs.len() > 0 {
@@ -367,7 +367,7 @@ async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoR
     }
 
     // get highest bid tx from other node
-    let gotdmintx = ctx.hcshnd.txpool().first_at(MemTxPool::DIAMINT).unwrap().is_some();
+    let gotdmintx = ctx.hcshnd.txpool().first_at(TXGID_DIAMINT).unwrap().is_some();
     if  ctx.engine.config().is_mainnet() && ! gotdmintx && curtimes() < ctx.launch_time + 30 {
         return api_error("miner worker need launch after 30 secs for node start")
     }

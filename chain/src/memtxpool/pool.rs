@@ -122,12 +122,9 @@ impl TxPool for MemTxPool {
         None
     }
 
-    fn insert(&self, txp: TxPkg) -> Rerr {
+    fn insert_by(&self, txp: TxPkg, check_group: &dyn Fn(&TxPkg)->usize) -> Rerr {
         // check for group
-        let mut group_id =  Self::NORMAL;
-        if let Some(..) = pickout_diamond_mint_action(txp.objc.as_read()) {
-            group_id = Self::DIAMINT;
-        }
+        let group_id = check_group(&txp);
         // println!("TXPOOL: insert tx {} in group {}", tx.hash().hex(), group_id);
         // insert
         self.insert_at(group_id, txp)

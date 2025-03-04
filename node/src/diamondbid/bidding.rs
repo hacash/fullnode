@@ -122,7 +122,7 @@ fn pick_my_bid_tx(tx_pool: &dyn TxPool, my_addr: &Address) -> Option<TxPkg> {
         }
         true // next
     };
-    let _ = tx_pool.iter_at(MemTxPool::DIAMINT, &mut pick_dmint);
+    let _ = tx_pool.iter_at(TXGID_DIAMINT, &mut pick_dmint);
     // ok
     my_bid_tx
 }
@@ -136,7 +136,7 @@ fn pick_first_bid_tx(tx_pool: &dyn TxPool) -> Option<TxPkg> {
         first = Some(a.clone());
         return false // end at first
     };
-    let _ = tx_pool.iter_at(MemTxPool::DIAMINT, &mut pick_dmint);
+    let _ = tx_pool.iter_at(TXGID_DIAMINT, &mut pick_dmint);
     // ok
     first
 }

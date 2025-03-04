@@ -15,9 +15,9 @@ use protocol::action::*;
 use protocol::*;
 use protocol::transaction::*;
 use chain::interface::*;
-use chain::memtxpool::*;
 
 
+include!{"def.rs"}
 include!{"config.rs"}
 
 

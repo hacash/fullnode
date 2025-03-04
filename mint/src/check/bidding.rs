@@ -38,7 +38,7 @@ impl BiddingProve {
         fails.insert(coinbase.main());
     }
 
-    fn record(&mut self, curr_hei: u64, tx: &TxPkg, act: &DiamondMint) {
+    fn record(&mut self, curr_hei: u64, tx: &TxPkg, act: &action::DiamondMint) {
         let dianum = *act.d.number;
         if dianum > self.latest {
             self.latest = dianum; // update

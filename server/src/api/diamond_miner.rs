@@ -41,7 +41,7 @@ async fn diamondminer_success(State(ctx): State<ApiCtx>, q: Query<Q6396>, body: 
     }
 
     let actdts = q_body_data_may_hex!(q, body);
-    let Ok((mint, _)) = DiamondMint::create(&actdts) else {
+    let Ok((mint, _)) = mint::action::DiamondMint::create(&actdts) else {
         return api_error("upload action error");
     };
 

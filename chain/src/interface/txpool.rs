@@ -11,8 +11,8 @@ pub trait TxPool: Send + Sync {
     fn clear_at(&self,  _: usize) -> Rerr { Ok(()) } // by group id
     fn retain_at(&self, _: usize, _: &mut dyn FnMut(&TxPkg)->bool) -> Rerr { Ok(()) }
     // all
+    fn insert_by(&self, _: TxPkg, _: &dyn Fn(&TxPkg)->usize) -> Rerr { Ok(()) }
     fn find(&self,   _: &Hash) -> Option<TxPkg> { None }
-    fn insert(&self, _: TxPkg) -> Rerr { Ok(()) }
     fn drain(&self,  _: &[Hash]) -> Ret<Vec<TxPkg>> { Ok(vec![]) }
     // 
     fn print(&self) -> String { s!("") }

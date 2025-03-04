@@ -5,7 +5,7 @@ fn impl_tx_submit(this: &HacashMinter, engine: &dyn EngineRead, txp: &TxPkg) -> 
     let txr = txp.objc.as_read();
     let curr_hei = engine.latest_block().height().uint();
     let next_hei = curr_hei + 1;
-    let Some(diamintact) = pickout_diamond_mint_action(txr) else {
+    let Some(diamintact) = action::pickout_diamond_mint_action(txr) else {
         return Ok(()) // other normal tx
     };
     // deal with diamond mint action
@@ -120,7 +120,7 @@ fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, prevsta: &
     // let is_discover = curblk.orgi == BlkOrigin::DISCOVER;
     if curhei > 630000 && curhei % 5 == 0 {
         let block = curblk.objc.as_read();
-        if let Some((tidx, txp, diamint)) = pickout_diamond_mint_action_from_block(block) {
+        if let Some((tidx, txp, diamint)) = action::pickout_diamond_mint_action_from_block(block) {
             const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
             if tidx != 1 && curhei > 600000 { // idx 0 is coinbase
                 return errf!("diamond mint transaction must be first one tx in block")
@@ -160,7 +160,7 @@ fn check_highest_bid_of_block(this: &HacashMinter, curblk: &BlockPkg, prevsta: &
 
 
 
-fn check_diamond_mint_minimum_bidding_fee(next_hei: u64, tx: &dyn TransactionRead, dmact: &DiamondMint) -> Rerr {
+fn check_diamond_mint_minimum_bidding_fee(next_hei: u64, tx: &dyn TransactionRead, dmact: &action::DiamondMint) -> Rerr {
     const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
     // check
     let bidmin = genesis::block_reward(next_hei);

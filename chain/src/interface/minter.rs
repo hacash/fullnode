@@ -33,6 +33,7 @@ pub trait Minter : Send + Sync {
     // create block
     fn block_reward(&self, _: u64) -> u64 { 0 }
     fn packing_next_block(&self, _: &dyn EngineRead, _: &dyn TxPool) -> Box<dyn Any>; // BlockV1
+    fn tx_check_group(&self, _: &TxPkg) -> usize { 0 }
     // close exit
     fn exit(&self) {}
 }

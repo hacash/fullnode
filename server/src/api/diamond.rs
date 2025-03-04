@@ -90,7 +90,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
         }
         let txhx = a.hash;
         let txr = a.objc.as_ref().as_read();
-        let Some(diamtact) = pickout_diamond_mint_action(txr) else {
+        let Some(diamtact) = mint::action::pickout_diamond_mint_action(txr) else {
             return true // continue
         };
         let act = diamtact.d;
@@ -113,7 +113,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
         true // next
 
     };
-    txpool.iter_at(MemTxPool::DIAMINT, &mut pick_dmint).unwrap();
+    txpool.iter_at(TXGID_DIAMINT, &mut pick_dmint).unwrap();
 
     let mut data = jsondata!{
         "number", *lastdia.number + 1, // current bidding diamond

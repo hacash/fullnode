@@ -76,6 +76,15 @@ impl Minter for HacashMinter {
     }
     */
 
+    fn tx_check_group(&self, tx: &TxPkg) -> usize {
+        let mut group_id =  TXGID_NORMAL;
+        if let Some(..) = action::pickout_diamond_mint_action(tx.objc.as_read()) {
+            group_id = TXGID_DIAMINT;
+        }
+        group_id
+    }
+
+
 
 
 }

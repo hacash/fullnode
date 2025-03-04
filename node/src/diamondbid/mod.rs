@@ -9,8 +9,8 @@ use chain::engine::*;
 use field::*;
 use field::interface::*;
 use protocol::*;
-use protocol::transaction::*;
-use chain::memtxpool::*;
+use mint::*;
+use mint::action::*;
 
 
 use super::interface::*;

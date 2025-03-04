@@ -8,13 +8,13 @@ use field::*;
 use protocol;
 use protocol::*;
 use protocol::block::*;
-use protocol::action::*;
 
 use field::interface::*;
 use chain::interface::*;
 use protocol::interface::*;
 use protocol::state::*;
 use chain::memtxpool::*;
+use mint::*;
 
 use super::*;
 use super::peer::*;

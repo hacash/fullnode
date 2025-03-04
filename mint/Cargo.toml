@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 sys = {path = "../sys"}
+x16rs = {path = "../x16rs"}
 field = {path = "../field"}
 protocol = {path = "../protocol"}
 chain = {path = "../chain"}

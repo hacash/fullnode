@@ -4,7 +4,9 @@ use field::*;
 use field::interface::*;
 use protocol::*;
 use protocol::interface::*;
+use protocol::transaction::*;
 use protocol::action::*;
+use protocol::state::*;
 use protocol::operate::*;
 
 use super::oprate::*;
@@ -12,6 +14,8 @@ use super::oprate::*;
 
 
 include!{"channel.rs"}
+include!{"diamond_mint.rs"}
+include!{"util.rs"}
 
 
 /*
@@ -23,6 +27,7 @@ action_register!{
     // channel
     ChannelOpen           // 2
     ChannelClose          // 3
+    DiamondMint           // 4
 
 
 }

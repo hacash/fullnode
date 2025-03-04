@@ -24,7 +24,7 @@ use protocol::transaction::{ self, * };
 use protocol::action::*;
 use protocol::interface::*;
 use chain::interface::*;
-use chain::memtxpool::*;
+use mint::*;
 use mint::genesis::*;
 use mint::oprate::*;
 

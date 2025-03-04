@@ -19,7 +19,7 @@ include!{"hacash.rs"}
 include!{"satoshi.rs"}
 include!{"diamond.rs"}
 include!{"asset.rs"}
-include!{"diamond_mint.rs"}
+// include!{"diamond_mint.rs"}
 include!{"diamond_insc.rs"}
 include!{"diamond_util.rs"}
 // include!{"channel.rs"}
@@ -42,7 +42,7 @@ action_register!{
     // ChannelClose          // 3
     
     // diamond
-    DiamondMint           // 4
+    // DiamondMint           // 4
     DiaSingleTrs          // 5
     DiaFromToTrs          // 6
     DiaToTrs              // 7
