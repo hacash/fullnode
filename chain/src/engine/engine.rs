@@ -1,11 +1,12 @@
 
+// block inserting status
 const ISRT_STAT_IDLE:     usize = 0;
 const ISRT_STAT_DISCOVER: usize = 1;
 const ISRT_STAT_SYNCING:  usize = 2;
 
 
 // (new root, new head, blk data) 
-type InsertResult = Ret<(Option<Arc<Chunk>>, Option<Arc<Chunk>>, Vec<u8>)>;
+// type InsertResult = Ret<(Option<Arc<Chunk>>, Option<Arc<Chunk>>, Vec<u8>)>;
 
 
 
@@ -24,7 +25,6 @@ pub struct ChainEngine {
 
     isrtlk: Mutex<()>,
     inserting: AtomicUsize, // 0:not  1:discover  2:sync
-
 
     // data cache
     rctblks: Mutex<VecDeque<Arc<RecentBlockInfo>>>,

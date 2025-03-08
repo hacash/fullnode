@@ -98,12 +98,11 @@ impl DifficultyGnr {
 
 impl HacashMinter {
 
-    fn next_difficulty(&self, prev: &dyn BlockRead, sto: &BlockStore) -> u32 {
+    fn next_difficulty(&self, prev: &dyn BlockRead, sto: &BlockStore) -> (u32, [u8;32], BigUint) {
         let pdif = prev.difficulty().uint();
         let ptim = prev.timestamp().uint();
         let nhei = prev.height().uint() + 1;
-        let (difn, ..) = self.difficulty.target(&self.cnf, pdif, ptim, nhei, sto);
-        difn
+        self.difficulty.target(&self.cnf, pdif, ptim, nhei, sto)
     }
 
 }

@@ -76,10 +76,13 @@ fn impl_blk_verify(this: &HacashMinter, curblk: &dyn BlockRead, prevblk: &dyn Bl
     }
     // check
     let curn = curblk.difficulty().uint(); // u32
-    let _curbign = u32_to_biguint(curn);
-    let prevn = prevblk.difficulty().uint(); // u32
-    let prevtime = prevblk.timestamp().uint(); // u64
-    let (tarn, tarhx, _tarbign) = this.difficulty.target(&this.cnf, prevn, prevtime, curhei, sto);
+    let (tarn, tarhx, _tarbign) = this.next_difficulty(prevblk, sto);
+    /*
+    // dev test
+    if curhei > 633000 && (curhei%288==0 || curhei%288==1 || curhei%287==2 || curhei%288==287 || curhei%288==286) {
+        println!("---- this.next_difficulty(prevblk, sto) curhei: {}, tarint: {}, tarhx: {} ", curhei, tarn, hex::encode(&tarhx));
+    }
+    */
     // check
     /*if curbign!=tarbign || tarn!=curn || tarhx!=u32_to_hash(curn) {
         println!("\nheight: {}, {} {}, tarhx: {}  curhx: {} ----------------", 

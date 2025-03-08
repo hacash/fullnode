@@ -91,6 +91,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         }
         let mut blkp = blkpkg.unwrap();
         blkp.set_origin( BlkOrigin::DISCOVER );
+        may_show_miner_detail(mintckr, &blkp);
         let thsx = blkp.objc.transaction_hash_list(false); // hash no fee
         if let Err(e) = engptr.discover(blkp) {
             println!("Error: {}, failed.", e);
@@ -129,4 +130,19 @@ fn check_know(mine: &Knowledge, hxkey: &Hash, peer: Option<Arc<Peer>>) -> (bool,
 }
 
 
+fn may_show_miner_detail(minter: &dyn Minter, blkp: &BlockPkg) {
+    let Ok(cnf) = minter.config().downcast::<MintConf>() else {
+        return
+    };
+    if !cnf.show_miner_name {
+        return
+    }
+    // devtest start
+    let Ok(cbtx) = blkp.objc.coinbase_transaction() else {
+        return
+    };
+    let adrt = cbtx.main().readable().drain(..9).collect::<String>();
+    print!("miner: {}...<{}> ", adrt, cbtx.message().to_readable_left());
+    // devtest end
+}
 
