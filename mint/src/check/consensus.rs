@@ -39,20 +39,28 @@ fn impl_blk_found(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockSt
     if curhei <= blkspan {
         return Ok(()) // not check in first cycle
     }
-    if curhei < 288*200 && this.cnf.is_mainnet() {
+    if curhei < blkspan*200 && this.cnf.is_mainnet() {
         return Ok(()) // not check, compatible history code
     }
+
+    let cblkhx = curblkhead.hash();
     if curhei % blkspan == 0 {
-        return Ok(()) // not check, difficulty change to update
+        let (_, difnum, _) = this.difficulty.req_cycle_block(curhei - 1, sto);
+        let bign = u32_to_biguint(difnum).div(4usize); // min is 1/4
+        let mindiffhx = biguint_to_hash(&bign);
+        if hash_big_than(cblkhx.as_ref(), &mindiffhx) {
+            return errf!("block found {} PoW hashrates check failed cannot more than {} but got {}", 
+                curhei, hex::encode(mindiffhx),  hex::encode(cblkhx))
+        }
+        return Ok(()) // not check in here, difficulty change to update
     }
-    // check
+    // checka
     let (_, difnum, diffhx) = this.difficulty.req_cycle_block(curhei, sto);
     if difnum != curdifnum {
-        return errf!("block {} PoW difficulty must be {} but got {}", curhei, difnum, curdifnum)
+        return errf!("found block {} PoW difficulty must be {} but got {}", curhei, difnum, curdifnum)
     }
-    let cblkhx = curblkhead.hash();
     if hash_big_than(cblkhx.as_ref(), &diffhx) {
-        return errf!("block {} PoW hashrates check failed cannot more than {} but got {}", 
+        return errf!("found block {} PoW hashrates check failed cannot more than {} but got {}", 
             curhei, hex::encode(diffhx),  hex::encode(cblkhx))
     }
     // check success
@@ -70,8 +78,8 @@ fn impl_blk_verify(this: &HacashMinter, curblk: &dyn BlockRead, prevblk: &dyn Bl
     // verify coinbase
     verify_coinbase(curhei, curblk.coinbase_transaction()?)?;
     // check difficulty
-    // let blkspan = this.cnf.difficulty_adjust_blocks;
-    if curhei < 288*200 && this.cnf.is_mainnet() {
+    let blkcln = this.cnf.difficulty_adjust_blocks; // 288
+    if curhei < blkcln*200 && this.cnf.is_mainnet() {
         return Ok(()) // not check, compatible history code
     }
     // check

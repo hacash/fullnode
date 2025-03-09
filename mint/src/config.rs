@@ -4,8 +4,8 @@ pub struct MintConf {
     pub chain_id: u64, // sub chain id
     pub sync_maxh: u64, // sync block of max height
     pub show_miner_name: bool,
-    pub difficulty_adjust_blocks: u64, // height
-    pub each_block_target_time: u64, // secs
+    pub difficulty_adjust_blocks: u64, // height : 288
+    pub each_block_target_time: u64, // secs : 300
     // pub _test_mul: u64,
 }
 
