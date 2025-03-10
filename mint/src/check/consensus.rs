@@ -46,7 +46,7 @@ fn impl_blk_found(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockSt
     let cblkhx = curblkhead.hash();
     if curhei % blkspan == 0 {
         let (_, difnum, _) = this.difficulty.req_cycle_block(curhei - 1, sto);
-        let bign = u32_to_biguint(difnum).div(4usize); // min is 1/4
+        let bign = u32_to_biguint(difnum).mul(4usize); // max is 4 times
         let mindiffhx = biguint_to_hash(&bign);
         if hash_big_than(cblkhx.as_ref(), &mindiffhx) {
             return errf!("block found {} PoW hashrates check failed cannot more than {} but got {}", 
