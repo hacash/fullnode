@@ -2,6 +2,7 @@ use std::sync::Mutex;
 
 include!{"batch_rusty_leveldb.rs"} 
 
+use rusty_leveldb::LdbIterator;
 
 
 pub struct DiskKV {
@@ -48,6 +49,16 @@ impl DiskDB for DiskKV {
         let mut ldb =  self.ldb.lock().unwrap();
         ldb.write(batch.into_writebatch().deref(), true).unwrap(); // must
         ldb.flush().unwrap();
+    }
+
+    fn for_each(&self, each: &mut dyn FnMut(Vec<u8>, Vec<u8>)->bool) {
+        let mut ldb =  self.ldb.lock().unwrap();
+        let mut ldbiter = ldb.new_iter().unwrap();
+        while let Some((k, v)) = ldbiter.next() {
+            if !each(k, v) {
+                break // end
+            }
+        }
     }
 
 

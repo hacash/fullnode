@@ -43,6 +43,15 @@ impl DiskDB for DiskKV {
         self.ldb.flush().unwrap();
     }
 
+    fn for_each(&self, each: &mut dyn FnMut(Vec<u8>, Vec<u8>)->bool) {
+        let mut ldbiter = self.ldb.iter();
+        while let Some(Ok(it)) = ldbiter.next() {
+            if !each(it.0.to_vec(), it.1.to_vec()) {
+                break // end
+            }
+        }
+    }
+
 }
 
 

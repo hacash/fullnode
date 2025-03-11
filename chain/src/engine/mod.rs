@@ -25,6 +25,7 @@ include!{"../roller/mod.rs"}
 
 
 include!{"config.rs"}
+include!{"count.rs"}
 include!{"engine.rs"}
 include!{"init.rs"}
 include!{"check.rs"}

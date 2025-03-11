@@ -37,7 +37,7 @@ api_querys_define!{ Q5396,
     hash, Option<String>, None, // find by tx hash
 }
 
-async fn raise_fee(State(ctx): State<ApiCtx>, q: Query<Q5396>, body: Bytes) -> impl IntoResponse {
+async fn fee_raise(State(ctx): State<ApiCtx>, q: Query<Q5396>, body: Bytes) -> impl IntoResponse {
     // ctx_store!(ctx, store);
     q_must!(q, hash, s!(""));
     let fee = q_data_amt!(q, fee);

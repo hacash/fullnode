@@ -42,7 +42,7 @@ impl DiskDB for DiskKV {
         self.ldb.write(batch.as_writebatch()); // must
     }
 
-
+    
 }
 
 

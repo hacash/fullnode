@@ -53,6 +53,7 @@ impl ChainEngine {
         let disk = Arc::new(DiskKV::open(blk_dir));
         // if state database upgrade
         let sta_db =  DiskKV::open(sta_dir);
+        dev_count_switch_print(cnf.dev_count_switch, &sta_db); // dev test
         let state = StateInst::build(Arc::new(sta_db), Weak::<StateInst>::new());
         let staptr = Arc::new(state);
         // base or genesis block
@@ -80,5 +81,3 @@ impl ChainEngine {
 
 
 }
-
-

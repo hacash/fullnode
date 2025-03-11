@@ -116,6 +116,14 @@ impl Fold64 {
         Self{ value: Self::MAX }
     }
 
+    pub fn is_zero(&self) -> bool {
+        self.value == 0
+    }
+
+    pub fn not_zero(&self) -> bool {
+        self.value != 0
+    }
+
     pub fn checked(self) -> Ret<Self> {
         if self.value > Self::MAX {
             return errf!("Fold64 value {} cannot more than max {}", self.value, Self::MAX)

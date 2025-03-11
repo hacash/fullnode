@@ -16,6 +16,8 @@ pub struct EngineConf {
     pub data_dir: String,
     pub block_data_dir: PathBuf, // block data
     pub state_data_dir: PathBuf, // chain state
+    // dev count
+    pub dev_count_switch: usize,
     // data service
     pub diamond_form: bool,
     pub recent_blocks: bool,
@@ -72,6 +74,7 @@ impl EngineConf {
             block_data_dir: join_path(&data_dir, "block"),
             state_data_dir: state_data_dir,
             data_dir: data_dir.to_str().unwrap().to_owned(),
+            dev_count_switch: 0,
             //
             diamond_form: ini_must_bool(sec_server, "diamond_form", true),
             recent_blocks: ini_must_bool(sec_server, "recent_blocks", false),
@@ -103,6 +106,7 @@ impl EngineConf {
         let sec_mint = &ini_section(ini, "mint");
         cnf.chain_id = ini_must_u64(sec_mint, "chain_id", 0) as u32;
         cnf.sync_maxh = ini_must_u64(sec_mint, "height_max", 0);
+        cnf.dev_count_switch = ini_must_u64(sec_mint, "dev_count_switch", 0) as usize;
 
         // HAC miner
         let sec_miner = &ini_section(ini, "miner");
