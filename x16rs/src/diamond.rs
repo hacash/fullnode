@@ -16,7 +16,7 @@ pub fn is_valid_diamond_name(v: &[u8]) -> bool {
     }
     // check in array
     for a in v {
-        if ! DIAMOND_HASH_BASE_CHARS.iter().any(|x|x==a) {
+        if ! DIAMOND_NAME_VALID_CHARS.iter().any(|x|x==a) {
             return false // invalid char
         }
     }

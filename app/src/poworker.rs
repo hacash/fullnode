@@ -164,7 +164,7 @@ fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
     }
 
     let mut coinbase_nonce = Hash::default();
-    getrandom::getrandom(coinbase_nonce.as_mut()).unwrap();
+    getrandom::fill(coinbase_nonce.as_mut()).unwrap();
     let mut nonce_start: u32 = 0;
     let mut nonce_space: u32 = 100000;
     // stuff data
@@ -358,7 +358,7 @@ fn pull_pending_block_stuff(cnf: &PoWorkConf) {
     let mut rpid = vec![0].repeat(16);
     loop {
 
-        getrandom::getrandom(&mut rpid).unwrap();
+        getrandom::fill(&mut rpid).unwrap();
         let urlapi_notice = format!("http://{}/query/miner/notice?wait={}&height={}&rqid={}", 
             &cnf.rpcaddr, &cnf.noticewait, pending_height, &hex::encode(&rpid)
         );

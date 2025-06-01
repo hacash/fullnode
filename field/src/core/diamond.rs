@@ -7,7 +7,15 @@ impl DiamondName {
     }
 
     pub fn is_valid(stuff: &[u8]) -> bool {
-        x16rs::is_valid_diamond_name(stuff)
+        const DIAMOND_NAME_VALID_CHARS: [u8; 16] =  *b"WTYUIAHXVMEKBSZN";
+        if 6 != stuff.len() {
+            return false // length not match
+        }
+        let mut sources = DIAMOND_NAME_VALID_CHARS.iter();
+        // all 6 char is in "WTYUIAHXVMEKBSZN"
+        stuff.iter().all(|&x|{
+            sources.position(|&a|a==x).is_some()
+        })
     }
 }
 
@@ -34,6 +42,19 @@ impl DiamondNumberAuto {
 */
 combi_list!{ DiamondNameListMax200, 
 	Uint1, DiamondName
+}
+
+impl Iterator for DiamondNameListMax200 {
+    type Item = DiamondName;
+    fn next(&mut self) -> Option<DiamondName> {
+        match self.pop() {
+            Some(d) => {
+                self.count -= 1;
+                Some(d)
+            }
+            _ => None,
+        }
+    }
 }
 
 

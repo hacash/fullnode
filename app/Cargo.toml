@@ -13,7 +13,7 @@ hex = "0.4.3"
 serde = "1.0.215"
 serde_json = "1.0.133"
 reqwest = { version = "0.11.27", default-features = false, features = ["blocking", "rustls"] }
-getrandom = "0.2.15"
+getrandom = "0.3.2"
 lazy_static = "1.4.0"
 
 

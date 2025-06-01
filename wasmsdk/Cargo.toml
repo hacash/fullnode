@@ -1,0 +1,27 @@
+[package]
+name = "wasmsdk"
+version = "0.1.0"
+edition = "2021"
+
+
+[lib]
+crate-type = ["cdylib"]
+
+
+[dependencies]
+sys = { path = "../sys" }
+field = { path = "../field" }
+# wasm-bindgen = "0.2.100"
+
+
+[profile.dev]
+panic = "abort"
+
+
+[profile.release]
+opt-level = 'z'     # Optimize for size.
+lto = true          # Enable Link Time Optimization
+codegen-units = 1   # Reduce number of codegen units to increase optimizations.
+panic = 'abort'     # Abort on panic
+strip = true        # Strip symbols from binary
+

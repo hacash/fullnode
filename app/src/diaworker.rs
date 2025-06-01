@@ -218,7 +218,7 @@ fn run_diamond_worker_thread(cnf: &DiaWorkConf, _thrid: usize,
 
     // start mining
     let mut custom_nonce = Hash::default();
-    getrandom::getrandom(custom_nonce.as_mut()).unwrap(); 
+    getrandom::fill(custom_nonce.as_mut()).unwrap(); 
     let mut nonce_start = 0;
 
     loop {

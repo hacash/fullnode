@@ -110,7 +110,7 @@ fn read_node_key(ini: &IniObj) -> [u8; 16] {
     }
     if node_key[0] == 0 && node_key[15] == 0 {
         // save
-        getrandom::getrandom(&mut node_key).unwrap();
+        getrandom::fill(&mut node_key).unwrap();
         nidfile.write_all(hex::encode(&node_key).as_bytes()).unwrap();
     }
     // let nidhx = hex::encode(&node_key);

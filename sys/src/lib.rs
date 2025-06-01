@@ -17,6 +17,7 @@ include!{"slice.rs"}
 include!{"match.rs"}
 include!{"hex.rs"}
 include!{"base64.rs"}
+include!{"hash.rs"}
 include!{"ini.rs"}
 include!{"time.rs"}
 include!{"account.rs"}

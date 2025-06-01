@@ -37,18 +37,20 @@ impl Account {
 
     // create
     
-    pub fn create_randomly() -> Ret<Account> {
+    pub fn create_randomly(randomfill: &dyn Fn(&mut [u8])->Rerr) -> Ret<Account> {
         loop {
             let mut data = [0u8; 32];
-            if let Err(e) = getrandom::getrandom(&mut data) {
+            /*if let Err(e) = getrandom::fill(&mut data) {
                 return Err(e.to_string())
-            }
+            }*/
+            randomfill(&mut data)?;
             // println!("{:?}", data)
             if data[0] < 255 {
                 return Account::create_by_secret_key_value(data)
             }
         }
     }
+    
 
     pub fn create_by(pass: &str) -> Ret<Account> {
         // is private key
@@ -62,7 +64,7 @@ impl Account {
     }
 
     pub fn create_by_password(pass: &str) -> Ret<Account> {
-        let dt = x16rs::sha2(pass);
+        let dt = sha2(pass);
         Account::create_by_secret_key_value(dt)
     }
 
@@ -93,8 +95,8 @@ impl Account {
 
     pub fn get_address_by_public_key(pubkey: [u8; 33]) -> [u8; ADDRESS_SIZE] {
         // serialize_compressed
-        let dt = x16rs::sha2(pubkey);
-        let dt = x16rs::ripemd160(dt);
+        let dt = sha2(pubkey);
+        let dt = ripemd160(dt);
         let version = 0;
         let mut addr: [u8; 21] = [version; ADDRESS_SIZE];
         addr[1..].copy_from_slice(&dt[..]);
