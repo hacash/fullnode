@@ -331,7 +331,7 @@ fn pull_pending_block_stuff(cnf: &PoWorkConf) {
     let curr_hei = MINING_BLOCK_HEIGHT.load(Relaxed);
 
     // query pending
-    let urlapi_pending = format!("http://{}/query/miner/pending?stuff=true", &cnf.rpcaddr);
+    let urlapi_pending = format!("http://{}/query/miner/pending?stuff=true&t={}", &cnf.rpcaddr, sys::curtimes());
     let res = HttpClient::new().get(&urlapi_pending).send();
     let Ok(repv) = res else {
         println!("Error: cannot get block data at {}\n", &urlapi_pending);
@@ -392,8 +392,8 @@ fn pull_pending_block_stuff(cnf: &PoWorkConf) {
 
 fn push_block_mining_success(cnf: &PoWorkConf, success: &BlockMiningResult) {
     let urlapi_success = format!(
-        "http://{}/submit/miner/success?height={}&block_nonce={}&coinbase_nonce={}", 
-        &cnf.rpcaddr, success.height, success.head_nonce, success.coinbase_nonce.hex()
+        "http://{}/submit/miner/success?height={}&block_nonce={}&coinbase_nonce={}&t={}", 
+        &cnf.rpcaddr, success.height, success.head_nonce, success.coinbase_nonce.hex(), sys::curtimes()
     );
     let _ = HttpClient::new().get(&urlapi_success).send();
     // println!("{} {}", &urlapi_success, HttpClient::new().get(&urlapi_success).send().unwrap().text().unwrap());
