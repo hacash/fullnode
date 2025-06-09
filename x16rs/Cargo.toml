@@ -10,7 +10,7 @@ cc = "1.0"
 sha2 = "0.10.2"
 sha3 = "0.10.1"
 ripemd = "0.1.1"
-x16rs-sys = "0.1.0"
+x16rs-sys = "0.1.1"
 
 
 [dev-dependencies]
