@@ -21,12 +21,6 @@ fn ctx_state_fork_sub(ctx: &mut dyn Context) -> Box<dyn State> {
 
 /*
 */
-fn ctx_state_swap_sub(ctx: &mut dyn Context, old: Box<dyn State>) -> Box<dyn State> {
-    ctx.state_replace(old)
-}
-
-/*
-*/
 fn ctx_state_merge_sub(ctx: &mut dyn Context, mut old: Box<dyn State>) {
     let nil = Box::new(EmptyState{});
     let sub = ctx.state_replace(nil);

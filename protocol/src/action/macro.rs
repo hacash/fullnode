@@ -63,7 +63,7 @@ macro_rules! action_define {
                 }
                 #[allow(unused_mut)] 
                 let mut $pgas: u32 = $pself.size() as u32; // act size is base gas use
-                let res: Ret<Vec<u8>> = $exec;
+                let res: Ret<Vec<u8>> = $exec; // execute action body
                 unsafe {
                     ACTION_HOOK_FUNC($pself.kind(), $pself as &dyn Any, $pctx, &mut $pgas)?;
                 }

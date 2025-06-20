@@ -45,6 +45,15 @@ pub struct Env {
 }
 
 
+impl Env {
+    // return old tx
+    pub fn replace_tx(&mut self, tx: &dyn TransactionRead) -> Tx {
+        let tx = Tx::create(tx);
+        std::mem::replace(&mut self.tx, tx)
+    }
+}
+
+
 /*
 pub struct Context {
     pub env: Env,
