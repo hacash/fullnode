@@ -18,8 +18,8 @@ action_define!{AssetCreate, 16,
         if is_mainnet {
             return err!("asset just for test chain now")
         }
-        if self.ticket.length() > 6 {
-            return err!("ticket length cannot more than 6")
+        if self.ticket.length() > 8 {
+            return err!("ticket length cannot more than 8")
         }
         if self.name.length() > 32 {
             return err!("name length cannot more than 32")
@@ -27,8 +27,8 @@ action_define!{AssetCreate, 16,
         if *self.decimal > 16 {
             return err!("decimal cannot more than 16")
         }
-        if *self.serial < 32 {
-            return err!("serial cannot less than 32")
+        if *self.serial <= 1024 {
+            return err!("serial cannot less than 1024")
         }
         // check serial & prev_hash
 

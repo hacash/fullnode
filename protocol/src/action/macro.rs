@@ -62,8 +62,11 @@ macro_rules! action_define {
                     check_action_level($pctx.depth(), $pself, $pctx.tx().actions())?;
                 }
                 #[allow(unused_mut)] 
-                let mut $pgas: u32 = $pself.size() as u32; // act size is base gas use
-                let res: Ret<Vec<u8>> = $exec; // execute action body
+                // act size is base gas use, if burn 90% fee to use 10 times fee
+                let burn90fee10times = maybe!($pself.burn_90(), 10, 1);
+                let mut $pgas: u32 = $pself.size() as u32 * burn90fee10times;
+                // execute action body
+                let res: Ret<Vec<u8>> = $exec;
                 unsafe {
                     ACTION_HOOK_FUNC($pself.kind(), $pself as &dyn Any, $pctx, &mut $pgas)?;
                 }
