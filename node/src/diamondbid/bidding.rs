@@ -88,7 +88,7 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
         let dfee = new_bid_fee.to_fin_string();
         if *bidding_number != dnum {
             *bidding_number = dnum;
-            flush!("✵✵✵✵ Diamond Auto Bid {}({}) by {} raise fee to ⇨ {}", dia, dnum, my_addr.to_readable(), dfee);
+            flush!("✵✵✵✵ Diamond Auto Bid {}({}) by {} raise fee to ⇨ {}", dia, dnum, my_addr.readable(), dfee);
         }else{
             flush!(" ⇨ {}", dfee);
         }

@@ -297,6 +297,8 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
         }
     }
     */
+    // reset the vm
+    ctx.vm_replace(VMNil::empty());
     // execute actions
     for action in tx.actions() {
         ctx.depth_set(-1); // set depth
