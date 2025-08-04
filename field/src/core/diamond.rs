@@ -11,11 +11,12 @@ impl DiamondName {
         if 6 != stuff.len() {
             return false // length not match
         }
-        let mut sources = DIAMOND_NAME_VALID_CHARS.iter();
         // all 6 char is in "WTYUIAHXVMEKBSZN"
-        stuff.iter().all(|&x|{
-            sources.position(|&a|a==x).is_some()
-        })
+        let rrr = stuff.iter().all(|&x|
+            DIAMOND_NAME_VALID_CHARS.iter().position(|&a|a==x).is_some()
+        );
+        // println!("DiamondName::is_valid({}) => {}", std::str::from_utf8(&stuff).unwrap(), rrr);
+        rrr
     }
 }
 

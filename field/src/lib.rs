@@ -54,6 +54,7 @@ include!{"core/status.rs"}
 include!{"core/asset.rs"}
 
 // component
+include!{"component/asset.rs"}
 include!{"component/balance.rs"}
 include!{"component/total.rs"}
 include!{"component/diamond.rs"}

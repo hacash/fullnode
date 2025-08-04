@@ -13,6 +13,7 @@ macro_rules! amount_op_func_define {
     ($fn:ident, $hac:ident, $addr:ident, $amt:ident, $exec:block) => (
 
         fn $fn(ctx: &mut dyn Context, $addr: &Address, $amt: &Amount) -> Ret<Amount> {
+            $addr.check_version()?;
             let mut state = CoreState::wrap(ctx.state());
             let mut bls = state.balance( $addr ).unwrap_or_default();
             let $hac = bls.hacash;
@@ -68,6 +69,7 @@ pub fn hac_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, amt: &A
 
 pub fn hac_check(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> Ret<Amount> {
     check_amount_is_positive!(amt);
+    addr.check_version()?;
     let state = CoreState::wrap(ctx.state());
     if let Some(bls) = state.balance( addr ) {
         // println!("address {} balance {}", addr.readable(), bls.hacash );

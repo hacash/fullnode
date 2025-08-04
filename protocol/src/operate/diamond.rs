@@ -5,6 +5,7 @@ macro_rules! diamond_operate_define {
     ($func_name: ident, $addr:ident, $hacd:ident, $oldhacd:ident, $newhacdblock:block) => (
 
 pub fn $func_name(state: &mut CoreState, $addr: &Address, $hacd: &DiamondNumber) -> Ret<DiamondNumber> {
+    $addr.check_version()?;
     let mut userbls = state.balance( $addr ).unwrap_or_default();
     let $oldhacd = &userbls.diamond.to_diamond();
     /* -------- */
@@ -60,6 +61,8 @@ pub fn hacd_transfer(state: &mut CoreState,
 
 
 pub fn hacd_move_one_diamond(state: &mut CoreState, addr_from: &Address, addr_to: &Address, hacd_name: &DiamondName) -> Rerr {
+    addr_from.check_version()?;
+    addr_to.check_version()?;
     if addr_from == addr_to {
 		return errf!("cannot transfer to self")
     }
@@ -74,6 +77,7 @@ pub fn hacd_move_one_diamond(state: &mut CoreState, addr_from: &Address, addr_to
 
 
 pub fn check_diamond_status(state: &mut CoreState, addr_from: &Address, hacd_name: &DiamondName) -> Ret<DiamondSto> {
+    addr_from.check_version()?;
     // query
     let diaitem = must_have!(
         format!("diamond {}", hacd_name.to_readable()),
@@ -95,9 +99,7 @@ pub fn check_diamond_status(state: &mut CoreState, addr_from: &Address, hacd_nam
 * return total cost
 */
 pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&Address, diamond: &DiamondName, content: &BytesW1) -> Ret<Amount> {
-
     let mut diasto = check_diamond_status(state, addr, diamond)?;
-    
     // check height
     let prev_insc_hei = *diasto.prev_engraved_height;
     let check_prev_block = 1000u64;

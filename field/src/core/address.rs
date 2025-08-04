@@ -49,11 +49,12 @@ impl Address {
 
 /*
     version
+    https://en.bitcoin.it/wiki/List_of_address_prefixes
 */
 address_version_define!{
     PRIVAKEY : privakey, 0 // leading symbol: 1
-    CONTRACT : contract, 1 // Q-Z, a-k, m-o
-    // MULTISIG : ...
+    CONTRACT : contract, 1 // leading symbol: Q-Z, a-k, m-o
+    MULTISIG : multisig, 5 // leading symbol: 3
 }
 
 

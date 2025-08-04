@@ -134,26 +134,7 @@ fn diamond_inscription_clean(this: &DiamondInscriptionClear, ctx: &mut dyn Conte
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /************************************** */
-
-
 
 
 

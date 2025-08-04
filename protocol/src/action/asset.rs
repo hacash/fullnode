@@ -4,7 +4,7 @@
 
 action_define!{AssetToTrs, 17, 
     ActLv::MAIN_CALL,
-    true,
+    true, // burn 90 fee
     [], {
         to: AddrOrPtr
         amount: AssetAmt
@@ -19,9 +19,9 @@ action_define!{AssetToTrs, 17,
 
 action_define!{AssetFromTrs, 18, 
     ActLv::MAIN_CALL,
-    true,
+    true,  // burn 90 fee
     [
-        self.from
+        self.from // check signature
     ], {
         from: AddrOrPtr
         amount: AssetAmt
@@ -36,9 +36,9 @@ action_define!{AssetFromTrs, 18,
 
 action_define!{AssetFromToTrs, 19, 
     ActLv::MAIN_CALL,
-    true,
+    true,  // burn 90 fee
     [
-        self.from
+        self.from // check signature
     ], {
         from: AddrOrPtr
         to: AddrOrPtr

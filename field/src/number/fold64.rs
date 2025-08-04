@@ -1,12 +1,13 @@
 
+const BNUM: u64 = 256;
 const FOLDU64SX1: u64 = 32; // 2^^5       // 1byte :                    32
-const FOLDU64SX2: u64 = FOLDU64SX1 * 256; // 2byte :                  8192
-const FOLDU64SX3: u64 = FOLDU64SX2 * 256; // 3byte :               2097152
-const FOLDU64SX4: u64 = FOLDU64SX3 * 256; // 4byte :            5_36870912
-const FOLDU64SX5: u64 = FOLDU64SX4 * 256; // 5byte :         1374_38953472
-const FOLDU64SX6: u64 = FOLDU64SX5 * 256; // 6byte :       351843_72088832
-const FOLDU64SX7: u64 = FOLDU64SX6 * 256; // 7byte :     90071992_54740992
-const FOLDU64SX8: u64 = FOLDU64SX7 * 256; // 8byte : 230_58430092_13693952
+const FOLDU64SX2: u64 = FOLDU64SX1 * BNUM; // 2byte :                  8192
+const FOLDU64SX3: u64 = FOLDU64SX2 * BNUM; // 3byte :               2097152
+const FOLDU64SX4: u64 = FOLDU64SX3 * BNUM; // 4byte :            5_36870912
+const FOLDU64SX5: u64 = FOLDU64SX4 * BNUM; // 5byte :         1374_38953472
+const FOLDU64SX6: u64 = FOLDU64SX5 * BNUM; // 6byte :       351843_72088832
+const FOLDU64SX7: u64 = FOLDU64SX6 * BNUM; // 7byte :     90071992_54740992
+const FOLDU64SX8: u64 = FOLDU64SX7 * BNUM; // 8byte : 230_58430092_13693952
 //                                                  2 30584300 92136939.52
 
 const FOLDU64XLIST: [u64; 8] = [
@@ -150,12 +151,14 @@ impl Fold64 {
 
 
 
-
+/*
+    cargo test --fold64_tests
+*/
 #[cfg(test)]
 mod fold64_tests {
     use super::*;
 
-    /*
+    /* 
     #[test]
     fn test1() {
         for i in 0..=Fold64::MAX {
@@ -163,6 +166,28 @@ mod fold64_tests {
         }
     }
     */
+
+    #[test]
+    fn test3() {
+        do_t_one(0);
+        do_t_one(1);
+        do_t_one(2);
+        do_t_one(3);
+        for lx in FOLDU64XLIST.iter() {
+            do_t_one(lx - 3);
+            do_t_one(lx - 2);
+            do_t_one(lx - 1);
+            if *lx < FOLDU64SX8 {
+                do_t_one(lx - 0);
+                do_t_one(lx + 1);
+                do_t_one(lx + 2);
+                do_t_one(lx + 3);
+            }
+        }
+
+
+    }
+
 
     #[test]
     fn test2() {
@@ -202,6 +227,7 @@ mod fold64_tests {
         do_t_one(     90071992_54740992);
         do_t_one(     90071992_54740993);
         
+        do_t_one( 230_58430092_13693950);
         do_t_one( 230_58430092_13693951); // MAX
 
         // do_t_one( 230_58430992_13693952); // overflow error
@@ -210,10 +236,14 @@ mod fold64_tests {
     }
 
     fn do_t_one(n: u64) {
-        let fu = Fold64::from(n);
-        let mut fu2 = Fold64::from(0);
+        let fu = Fold64::from(n).unwrap();
+        let mut fu2 = Fold64::from(0).unwrap();
         let _ = fu2.parse(&fu.serialize());
         assert_eq!(fu, fu2);
+        assert_eq!(n, fu.uint());
+        assert_eq!(n, fu2.uint());
+        assert_eq!(fu.serialize(), fu2.serialize());
+        println!("{} {} {}", n, fu.serialize().to_hex(), fu2.size())
     }
     
 }

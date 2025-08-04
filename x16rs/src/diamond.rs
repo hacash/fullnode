@@ -10,7 +10,7 @@ const DMD_L: usize = 10;
 const DMD_M: usize = 16;
 const DMD_N: usize = DMD_M - DMD_L; // 6
 
-pub fn is_valid_diamond_name(v: &[u8]) -> bool {
+pub fn _is_valid_diamond_name(v: &[u8]) -> bool {
     if v.len() != DMD_N {
         return false
     }

@@ -10,6 +10,7 @@ use protocol::state::*;
 use protocol::operate::*;
 
 use super::oprate::*;
+use super::genesis::*;
 
 
 

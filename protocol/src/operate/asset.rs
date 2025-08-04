@@ -6,7 +6,8 @@ macro_rules! asset_operate_define {
         pub fn $func_name(ctx: &mut dyn Context, $addr: &Address, $amt: &AssetAmt) -> Ret<AssetAmt> {
             if *$amt.amount == 0 {
                 return errf!("Asset operate amount cannot be zore")
-            }    
+            }
+            $addr.check_version()?;
             let mut state = CoreState::wrap(ctx.state());
             let mut userbls = state.balance( $addr ).unwrap_or_default();
             let $oldamt = &userbls.asset_must($amt.serial);
@@ -62,6 +63,7 @@ pub fn asset_check(ctx: &mut dyn Context, addr: &Address, ast: &AssetAmt) -> Ret
     if *ast.amount == 0 {
         return errf!("check asset is cannot empty")
     }
+    addr.check_version()?;
     let state = CoreState::wrap(ctx.state());
     if let Some(bls) = state.balance( addr ) {
         let usrasset = bls.asset_must(ast.serial);
