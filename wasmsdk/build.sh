@@ -1,5 +1,13 @@
 
 ## Settings
+
+JSTARGET=nodejs
+# echo "$1, $JSTARGET"
+if [ -n "$1" ]; then
+    JSTARGET=$1
+fi
+# echo "$1, $JSTARGET"
+
 SDKNAME=hacashsdk
 LIBNAME=wasmsdk
 TARGET=wasm32-unknown-unknown
@@ -20,3 +28,8 @@ wasm-strip $BINARY
 ## Further reduce size
 mkdir -p dist
 wasm-opt -o dist/$SDKNAME.wasm -Oz $BINARY
+
+## 
+wasm-bindgen dist/$SDKNAME.wasm --out-dir ./dist/ --target $JSTARGET 
+
+

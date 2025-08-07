@@ -1,4 +1,4 @@
-#![no_std]
+// #![no_std]
 #![no_main]
 
 // use wasm_bindgen::prelude::wasm_bindgen;
@@ -19,23 +19,19 @@ macro_rules! panic {
 }
 
 
+use wasm_bindgen::prelude::*;
+use sys::*;
+use field::*;
 
-#[no_mangle]
-pub fn add(left: u64, right: u64) -> u64 {
-    let _ = left + right;
-    panic!("{}", 2)
+
+
+#[wasm_bindgen]
+pub fn hac_to_unit(stuff: &str, unit: u8) -> Ret<f64> {
+    Amount::from(stuff).map(|a|unsafe{a.to_unit_float(unit)})
 }
 
-
-#[no_mangle]
-pub fn create_by(stuff: i32) -> u32 {
-    let sss = &[stuff][..];//.as_bytes();
-    // let mut res = field::Fold64::from(sss[0] as u64).unwrap();
-    let mut res = sss[0] as u64 + field::Fold64::MAX;
-    res += 1;
-    res as u32
+#[wasm_bindgen]
+pub fn hac_to_mei(stuff: &str) -> Ret<f64> {
+    hac_to_unit(stuff, UNIT_MEI)
 }
-
-
-
 
