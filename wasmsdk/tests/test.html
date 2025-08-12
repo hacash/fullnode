@@ -1,0 +1,71 @@
+
+<!DOCTYPE html>
+    <head>
+        <title>Hacash WASM SDK test</title>
+        <script src="../dist/hacashsdk_bg.js"></script>
+    </head>
+    <body>
+        <h1>Ok.</h1>
+
+
+
+<script>
+    // Like with the `--target web` output the exports are immediately
+    // available but they won't work until we initialize the module. Unlike
+    // `--target web`, however, the globals are all stored on a
+    // `wasm_bindgen` global. The global itself is the initialization
+    // function and then the properties of the global are all the exported
+    // functions.
+    //
+    // Note that the name `wasm_bindgen` can be configured with the
+    // `--no-modules-global` CLI flag
+
+
+    
+    // console.log(__Hacash_WASM_SDK_Buffer)
+
+
+    hacash_sdk().then(function(sdk){
+        console.log(sdk)
+
+        try {
+            console.log(sdk.hac_to_mei("12:244"))
+        } catch (error) {
+            console.log(error)
+        }
+        console.log(sdk.hac_to_mei("12:244"))
+    })
+
+    // or use by async
+    
+    async function run() {
+        let sdk = await hacash_sdk()
+        console.log(sdk)
+    };
+
+    run()
+
+
+
+    // const { hac_to_mei } = wasm_bindgen;
+
+    // console.log(hac_to_mei);
+    // console.log(HacashSDK);
+
+    // async function run() {
+
+    //     await wasm_bindgen(HacashSDK)
+        
+    //     console.log(hac_to_mei("12:244"))
+    // }
+
+    // run()
+
+
+
+
+</script>
+
+
+    </body>
+</html>

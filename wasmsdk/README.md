@@ -1,5 +1,5 @@
 
-Prepare the compilation environment on Ubuntu:
+### Prepare the compilation environment on Ubuntu:
 
 ```sh
 
@@ -11,6 +11,13 @@ cargo install wasm-pack
 cargo install wasm-bindgen-cli
 sudo apt install wabt
 
+```
+
+
+### Build WASM:
+
+```sh
+
 ## build with wasm-bindgen --target nodejs or web or something else
 ./build.sh nodejs
 # or 
@@ -18,3 +25,17 @@ sudo apt install wabt
 
 
 ```
+
+### Test in web browser:
+
+```sh
+
+
+./build.sh no-modules
+
+# pack wasm code to one js file
+node pack.js
+
+```
+
+Open `./tests/test.html` in web browser and check devtools.
