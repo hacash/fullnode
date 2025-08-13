@@ -31,11 +31,15 @@ sudo apt install wabt
 ```sh
 
 
+
+
 ./build.sh no-modules
 
 # pack wasm code to one js file
 node pack.js
 
+cp ./tests/test.html ./dist/test.html
+
 ```
 
-Open `./tests/test.html` in web browser and check devtools.
+Open `./dist/test.html` in web browser and check devtools.

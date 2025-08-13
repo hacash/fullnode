@@ -23,15 +23,17 @@ let wasm2jscon = fs.readFileSync("dist/hacashsdk.js").toString()
 )
 */
 
-wasm2jscon = `${utilfn}const __Hacash_WASM_SDK_Buffer = base64ToBuffer("${wasmBase64}")\nlet hacash_sdk;\nlet hacash_sdk_mod;\n` + wasm2jscon + `
-    hacash_sdk = async function() {
-        if(!hacash_sdk_mod) {
-            hacash_sdk_mod = await wasm_bindgen({ module_or_path: __Hacash_WASM_SDK_Buffer})
-        }
-        return hacash_sdk_mod
+wasm2jscon = `${utilfn}const __Hacash_WASM_SDK_Buffer = base64ToBuffer("${wasmBase64}")\n` + wasm2jscon + `
+let __sdk_ok
+let hacash_sdk = async function() {
+    if(!__sdk_ok) {
+        await wasm_bindgen({ module_or_path: __Hacash_WASM_SDK_Buffer})
+        __sdk_ok = true
     }
-`
+    return wasm_bindgen
+}
 
+`
 
 // output js file
 fs.writeFileSync("dist/hacashsdk_bg.js", wasm2jscon)

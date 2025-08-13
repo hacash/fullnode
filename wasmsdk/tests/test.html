@@ -2,7 +2,7 @@
 <!DOCTYPE html>
     <head>
         <title>Hacash WASM SDK test</title>
-        <script src="../dist/hacashsdk_bg.js"></script>
+        <script src="./hacashsdk_bg.js"></script>
     </head>
     <body>
         <h1>Ok.</h1>
@@ -25,24 +25,25 @@
     // console.log(__Hacash_WASM_SDK_Buffer)
 
 
-    hacash_sdk().then(function(sdk){
+    async function do_test(sdk){
         console.log(sdk)
 
         try {
-            console.log(sdk.hac_to_mei("12:244"))
+            console.log(sdk.hac_to_mei("0.0012"))
         } catch (error) {
             console.log(error)
         }
         console.log(sdk.hac_to_mei("12:244"))
-    })
+    }
+
+    // get sdk
+    // hacash_sdk().then(do_test)
 
     // or use by async
-    
     async function run() {
         let sdk = await hacash_sdk()
-        console.log(sdk)
+        do_test(sdk)
     };
-
     run()
 
 
