@@ -3,9 +3,24 @@
     <head>
         <title>Hacash WASM SDK test</title>
         <script src="./hacashsdk_bg.js"></script>
+        <style>
+            #print {
+                padding: 20px;
+                background-color: #eee;
+            }
+            #print p {
+                font-size: 16px;
+                line-height: 20px;
+                margin: 0;
+                padding: 0;
+            }
+        </style>
     </head>
     <body>
-        <h1>Ok.</h1>
+        <h1>Hacash SDK test</h1>
+        <div id="print">
+            <p>...</p>
+        </div>
 
 
 
@@ -28,12 +43,20 @@
     async function do_test(sdk){
         console.log(sdk)
 
+        // util
+
+        print(sdk.hac_to_mei("12:244"))
+        print(sdk.hac_to_unit("12:244", 240))
+        
         try {
-            console.log(sdk.hac_to_mei("0.0012"))
+            print(sdk.hac_to_mei("0.0.012"))
         } catch (error) {
-            console.log(error)
+            print(error)
         }
-        console.log(sdk.hac_to_mei("12:244"))
+
+        // account
+        print(sdk.create_account("123456"))
+
     }
 
     // get sdk
@@ -47,21 +70,19 @@
     run()
 
 
+    /********************************/
 
-    // const { hac_to_mei } = wasm_bindgen;
 
-    // console.log(hac_to_mei);
-    // console.log(HacashSDK);
+    const $p = document.getElementById("print")
 
-    // async function run() {
-
-    //     await wasm_bindgen(HacashSDK)
-        
-    //     console.log(hac_to_mei("12:244"))
-    // }
-
-    // run()
-
+    function print(s) {
+        console.log(s)
+        let p = document.createElement("p")
+        p.innerText = typeof s === "object"
+            ? JSON.stringify(s)
+            : s.toString()
+        $p.appendChild(p)
+    }
 
 
 

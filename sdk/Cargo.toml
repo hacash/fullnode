@@ -1,6 +1,6 @@
 [package]
-name = "wasmsdk"
-version = "0.1.0"
+name = "sdk"
+version = "0.1.1"
 edition = "2021"
 
 
@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [dependencies]
 sys = { path = "../sys" }
 field = { path = "../field" }
+hex = "0.4.3"
 wasm-bindgen = "0.2.100"
 
 

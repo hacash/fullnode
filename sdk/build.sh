@@ -9,7 +9,7 @@ fi
 # echo "$1, $JSTARGET"
 
 SDKNAME=hacashsdk
-LIBNAME=wasmsdk
+LIBNAME=sdk
 TARGET=wasm32-unknown-unknown
 BINARY=target/$TARGET/release/$LIBNAME.wasm
 BINARY2=target/$TARGET/release/$SDKNAME.wasm
