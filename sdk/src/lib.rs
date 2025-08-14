@@ -20,10 +20,14 @@ macro_rules! panic {
 
 
 use wasm_bindgen::prelude::*;
+use sys::Account as SysAccount;
 use sys::*;
 use field::*;
+use field::interface::*;
 
 
+include!{"param.rs"}
 include!{"util.rs"}
 include!{"account.rs"}
+include!{"coin.rs"}
 

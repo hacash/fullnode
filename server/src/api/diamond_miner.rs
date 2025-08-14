@@ -60,7 +60,7 @@ async fn diamondminer_success(State(ctx): State<ApiCtx>, q: Query<Q6396>, body: 
 
     // create trs
     let bid_addr = Address::from(cnf.dmer_bid_account.address().clone());
-    let mut tx = TransactionType2::new_by(bid_addr, cnf.dmer_bid_min.clone());
+    let mut tx = TransactionType2::new_by(bid_addr, cnf.dmer_bid_min.clone(), curtimes());
     tx.push_action(Box::new(mint)).unwrap();
     tx.fill_sign(&cnf.dmer_bid_account).unwrap();
 

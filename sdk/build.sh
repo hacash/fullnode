@@ -19,7 +19,7 @@ BINARY2=target/$TARGET/release/$SDKNAME.wasm
 RUSTFLAGS="$RUSTFLAGS -A dead_code -A unused_imports -A unused_variables" \
 cargo build --target $TARGET --release --lib
 
-rm $BINARY2 && cp $BINARY $BINARY2
+rm -f $BINARY2 && cp $BINARY $BINARY2
 
 ## Reduce size (remove panic exception handling, etc.)
 # wasm-snip --snip-rust-fmt-code \

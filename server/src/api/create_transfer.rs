@@ -31,7 +31,7 @@ async fn create_coin_transfer(State(_ctx): State<ApiCtx>, q: Query<Q9374>) -> im
     let addr = Address::from(main_acc.address().clone());
     let fromaddr = Address::from(from_acc.address().clone());
     // trs v2
-    let mut trsobj = TransactionType2::new_by(addr, fee);
+    let mut trsobj = TransactionType2::new_by(addr, fee, curtimes());
     if timestamp > 0 {
         trsobj.timestamp = Timestamp::from(timestamp);
     }

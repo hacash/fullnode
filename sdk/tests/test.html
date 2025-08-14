@@ -12,7 +12,8 @@
                 font-size: 16px;
                 line-height: 20px;
                 margin: 0;
-                padding: 0;
+                padding: 0;  
+                word-break: break-all;
             }
         </style>
     </head>
@@ -22,8 +23,7 @@
             <p>...</p>
         </div>
 
-
-
+        
 <script>
     // Like with the `--target web` output the exports are immediately
     // available but they won't work until we initialize the module. Unlike
@@ -54,10 +54,38 @@
             print(error)
         }
 
-        // account
-        print(sdk.create_account("123456"))
+        // create account
+        let acc1 = sdk.create_account("123456")
+        let acc2 = sdk.create_account("8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92")
+        print(acc1)
+        print(acc1.pubkey === acc2.pubkey)
+
+        // verify address
+        print(sdk.verify_address("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"))
+        let vrf2 = sdk.verify_address("2MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9")
+        prints(vrf2, vrf2.success, vrf2.error_tip)
+
+
+        // create coin transfer
+        let trsobj = new sdk.CoinTransferParam()
+        console.log(trsobj.timestamp)
+        trsobj.timestamp = BigInt(9999)
+        trsobj.main_prikey = "123456"
+        trsobj.to_address = "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"
+        trsobj.fee = "1:244"
+        trsobj.hacash = "12.0"
+
+        console.log(sdk.CoinTransferParam, trsobj, trsobj.timestamp)
+        let res = sdk.create_coin_transfer(trsobj)
+        console.log(res)
+        console.log(res.body)
+
 
     }
+
+
+    /********************************/
+
 
     // get sdk
     // hacash_sdk().then(do_test)
@@ -67,7 +95,9 @@
         let sdk = await hacash_sdk()
         do_test(sdk)
     };
-    run()
+    run().then()
+
+
 
 
     /********************************/
@@ -75,18 +105,29 @@
 
     const $p = document.getElementById("print")
 
+    function prints(a,b,c,d,e,f,g) {
+        let list = [a,b,c,d,e,f,g]
+        for(let i in list) {
+            let x = list[i]
+            if(x !== undefined) print(x)
+        }
+    }
+
     function print(s) {
         console.log(s)
         let p = document.createElement("p")
         p.innerText = typeof s === "object"
-            ? JSON.stringify(s)
-            : s.toString()
+            ? s.toJSON ? JSON.stringify(s.toJSON) : JSON.stringify(s)
+            : s ? s.toString() : s
         $p.appendChild(p)
     }
 
 
 
 </script>
+
+
+
 
 
     </body>

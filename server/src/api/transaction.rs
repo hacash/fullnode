@@ -143,7 +143,7 @@ async fn transaction_build(State(_ctx): State<ApiCtx>, q: Query<Q2856>, body: By
 
     // create trs
     let main_addr = j_addr!("main_address");
-    let mut tx = TransactionType2::new_by(main_addr.clone(), j_hac!("fee"));
+    let mut tx = TransactionType2::new_by(main_addr.clone(), j_hac!("fee"), curtimes());
     if let Some(ts) = jsonv["timestamp"].as_u64() {
         tx.timestamp = Timestamp::from(ts);
     }

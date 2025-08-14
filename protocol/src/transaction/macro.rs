@@ -160,10 +160,10 @@ impl TxExec for $class {
 impl $class {
     pub const TYPE: u8 = $tyid;
 
-    pub fn new_by(addr: Address, fee: Amount) -> $class {
+    pub fn new_by(addr: Address, fee: Amount, ts: u64) -> $class {
         $class{
             ty: Uint1::from($tyid),
-            timestamp: Timestamp::from(curtimes()),
+            timestamp: Timestamp::from(ts),
             addrlist: AddrOrList::from_addr(addr),
             fee: fee,
             actions: DynListActionW2::default(),
@@ -186,7 +186,7 @@ impl $class {
             stuff.append(&mut self.gas_max.serialize());
             stuff.append(&mut self.ano_mark.serialize());
         }
-        let hx = x16rs::calculate_hash(stuff);
+        let hx = sys::calculate_hash(stuff);
         Hash::must(&hx[..])
     }
 

@@ -12,7 +12,7 @@ fn mrkl_merge(list: &Vec<Hash>) -> Vec<Hash> {
             true => list[x+1].to_vec(),
             false => lh.clone(),
         };
-        let hx = x16rs::calculate_hash(vec![lh, rh].concat());
+        let hx = sys::calculate_hash(vec![lh, rh].concat());
         res.push(Hash::must(&hx));
         x += 2;
         if x >= num {
@@ -83,7 +83,7 @@ pub fn calculate_mrkl_coinbase_modify(list: &Vec<Hash>) -> Vec<Hash> {
 pub fn calculate_mrkl_coinbase_update(cbhx: Hash, list: &Vec<Hash>) -> Hash {
     let mut reshx = cbhx;
     for h in list {
-        reshx = Hash::from(x16rs::calculate_hash(vec![reshx.to_vec(), h.to_vec()].concat()));
+        reshx = Hash::from(sys::calculate_hash(vec![reshx.to_vec(), h.to_vec()].concat()));
     }
     reshx
 }

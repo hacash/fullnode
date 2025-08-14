@@ -11,8 +11,14 @@ crate-type = ["cdylib"]
 [dependencies]
 sys = { path = "../sys" }
 field = { path = "../field" }
+protocol = { path = "../protocol",  default-features = false }
 hex = "0.4.3"
 wasm-bindgen = "0.2.100"
+
+
+[features]
+default = ["db-sled"]
+db-sled = ["protocol/db-sled"]
 
 
 [profile.dev]

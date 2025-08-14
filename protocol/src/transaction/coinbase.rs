@@ -26,7 +26,7 @@ impl TransactionRead for TransactionCoinbase {
 
     fn hash(&self) -> Hash { 
         let stuff = self.serialize();
-        let hx = x16rs::calculate_hash(stuff);
+        let hx = sys::calculate_hash(stuff);
         Hash::must(&hx[..])
     }
     

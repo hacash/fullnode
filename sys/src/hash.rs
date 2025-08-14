@@ -5,6 +5,11 @@ use ripemd::Ripemd160;
 pub const H32S: usize = 32;
 
 
+
+pub fn calculate_hash(data: impl AsRef<[u8]>) -> [u8; H32S] {
+    sha3(data)
+}
+
 // sha3-256
 pub fn sha3(data: impl AsRef<[u8]>) -> [u8; H32S] {
     let mut hasher = Sha3_256::new();
@@ -23,6 +28,7 @@ pub fn sha2(data: impl AsRef<[u8]>) -> [u8; H32S] {
     let result: [u8; H32S] = result[..].try_into().unwrap();
     result
 }
+
 
 
 pub fn ripemd160(data: impl AsRef<[u8]>) -> [u8; 20] {
