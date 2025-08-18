@@ -68,17 +68,17 @@
 
         // create coin transfer
         let trsobj = new sdk.CoinTransferParam()
-        console.log(trsobj.timestamp)
-        trsobj.timestamp = BigInt(9999)
+        print(trsobj.timestamp)
+        trsobj.timestamp = BigInt(1755223764)
         trsobj.main_prikey = "123456"
         trsobj.to_address = "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"
         trsobj.fee = "1:244"
         trsobj.hacash = "12.0"
-
-        console.log(sdk.CoinTransferParam, trsobj, trsobj.timestamp)
+        trsobj.satoshi = BigInt(12000000)
+        prints(trsobj, trsobj.timestamp)
         let res = sdk.create_coin_transfer(trsobj)
-        console.log(res)
-        console.log(res.body)
+        print(res.body)
+        // console.log(res.body)
 
 
     }
