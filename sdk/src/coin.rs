@@ -112,7 +112,6 @@ pub fn create_coin_transfer(param: CoinTransferParam) -> Ret<CoinTransferResult>
     }
     // hacd
     if param.diamonds.len() >= DiamondName::SIZE {
-        let act: Box<dyn Action>;
         let dialist = match DiamondNameListMax200::from_readable(&param.diamonds) {
             Err(e) => return errf!("diamonds error: {}", &e),
             Ok(d) => d,

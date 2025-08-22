@@ -32,13 +32,13 @@ pub fn create_account(pass: &str) -> Ret<Account> {
 */
 #[wasm_bindgen(getter_with_clone, inspectable)]
 pub struct VerifyAddressResult {
-    pub success:   bool,
-    pub error_tip: String,
+    pub ok: bool,
+    pub error:  String,
 }
 
 #[wasm_bindgen]
 pub fn verify_address(pass: &str) -> VerifyAddressResult {
-    let re = |e| VerifyAddressResult{ success: false, error_tip: e };
+    let re = |e| VerifyAddressResult{ ok: false, error: e };
 
     let addr = match Address::from_readable(pass) {
         Ok(a) => a,
@@ -50,7 +50,7 @@ pub fn verify_address(pass: &str) -> VerifyAddressResult {
     }
 
     // ok 
-    VerifyAddressResult{ success: true, error_tip: "".into() }
+    VerifyAddressResult{ ok: true, error: "".into() }
 }
 
 

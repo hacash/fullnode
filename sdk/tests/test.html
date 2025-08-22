@@ -63,23 +63,35 @@
         // verify address
         print(sdk.verify_address("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"))
         let vrf2 = sdk.verify_address("2MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9")
-        prints(vrf2, vrf2.success, vrf2.error_tip)
+        prints(vrf2, vrf2.ok, vrf2.error)
 
 
         // create coin transfer
         let trsobj = new sdk.CoinTransferParam()
-        print(trsobj.timestamp)
+        // print(trsobj.timestamp.toString())
         trsobj.timestamp = BigInt(1755223764)
         trsobj.main_prikey = "123456"
         trsobj.to_address = "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"
         trsobj.fee = "1:244"
         trsobj.hacash = "12.0"
         trsobj.satoshi = BigInt(12000000)
-        prints(trsobj, trsobj.timestamp)
+        // prints(trsobj, trsobj.timestamp.toString())
         let res = sdk.create_coin_transfer(trsobj)
         print(res.body)
         // console.log(res.body)
 
+        // sign tx
+        let stps = new sdk.SignTxParam()
+        stps.prikey = "abc123"
+        stps.body = res.body
+
+        try {
+            let resg = sdk.sign_tx(stps)
+            prints("sign res:", resg)
+            prints("tx body:", resg.body)
+        }catch(e) {
+            console.log(e)
+        }
 
     }
 
@@ -116,12 +128,17 @@
     function print(s) {
         console.log(s)
         let p = document.createElement("p")
-        p.innerText = typeof s === "object"
-            ? s.toJSON ? JSON.stringify(s.toJSON) : JSON.stringify(s)
-            : s ? s.toString() : s
+        p.innerText = s.toString()
+        // p.innerText = typeof s === "object"
+        //     ? JSON.stringify(s)
+        //     : s ? s.toString() : s
         $p.appendChild(p)
     }
 
+
+    BigInt.prototype.toJSON = function () {
+        return this.toString();
+    };
 
 
 </script>

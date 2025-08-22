@@ -30,5 +30,5 @@ include!{"param.rs"}
 include!{"util.rs"}
 include!{"account.rs"}
 include!{"coin.rs"}
-include!{"signature.rs"}
+include!{"sign.rs"}
 
