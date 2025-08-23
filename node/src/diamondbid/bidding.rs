@@ -45,7 +45,7 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
     if *first_bid_fee > engcnf.dmer_bid_max {
         retry!(10); // my max too low
     }
-    let Ok(first_bid_fee) = first_bid_fee.compress(2, true) else {
+    let Ok(first_bid_fee) = first_bid_fee.compress(2, AmtCpr::Grow) else {
         printerr!("cannot compress fee {} to 4 legnth", &first_bid_fee);
         retry!(10); // move step fail
     };
@@ -70,7 +70,7 @@ fn check_bidding_step(hnode: Arc<dyn HNode>, engcnf: &EngineConf, pending_height
         );
         retry!(10); // move step fail
     };
-    let Ok(mut new_bid_fee) = new_bid_fee.compress(2, true) else {
+    let Ok(mut new_bid_fee) = new_bid_fee.compress(2, AmtCpr::Grow) else {
         printerr!("cannot compress fee {} to 4 legnth", &new_bid_fee);
         retry!(10); // move step fail
     };

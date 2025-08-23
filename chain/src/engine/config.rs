@@ -94,7 +94,7 @@ impl EngineConf {
         };
         // setup lowest_fee
         if ini_must(sec_server, "lowest_fee", "").len() > 0 {
-            let lfepr = ini_must_amount(sec_server, "lowest_fee").compress(2, true)
+            let lfepr = ini_must_amount(sec_server, "lowest_fee").compress(2, AmtCpr::Grow)
                 .unwrap().to_238_u64().unwrap() / 166; //  =6024, simple hac trs size
             cnf.lowest_fee_purity = lfepr;
             println!("[Config] Node accepted lowest fee purity {}.", lfepr);
@@ -125,9 +125,9 @@ impl EngineConf {
         if cnf.dmer_enable {
             cnf.dmer_reward_address = ini_must_address(sec_dmer, "reward");
             cnf.dmer_bid_account = ini_must_account(sec_dmer, "bid_password");
-            cnf.dmer_bid_min =  ini_must_amount(sec_dmer, "bid_min").compress(2, true).unwrap();
-            cnf.dmer_bid_max =  ini_must_amount(sec_dmer, "bid_max").compress(2, true).unwrap();
-            cnf.dmer_bid_step = ini_must_amount(sec_dmer, "bid_step").compress(2, true).unwrap();
+            cnf.dmer_bid_min =  ini_must_amount(sec_dmer, "bid_min").compress(2, AmtCpr::Grow).unwrap();
+            cnf.dmer_bid_max =  ini_must_amount(sec_dmer, "bid_max").compress(2, AmtCpr::Grow).unwrap();
+            cnf.dmer_bid_step = ini_must_amount(sec_dmer, "bid_step").compress(2, AmtCpr::Grow).unwrap();
         }
 
         // ok

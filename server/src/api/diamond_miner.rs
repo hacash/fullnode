@@ -58,9 +58,38 @@ async fn diamondminer_success(State(ctx): State<ApiCtx>, q: Query<Q6396>, body: 
         return api_error("diamond prev hash error");
     }
 
-    // create trs
+    // check current highest diamond offer
     let bid_addr = Address::from(cnf.dmer_bid_account.address().clone());
-    let mut tx = TransactionType2::new_by(bid_addr, cnf.dmer_bid_min.clone(), curtimes());
+    let mut bid_offer = cnf.dmer_bid_min.clone();
+    if let Ok(Some(fbtx)) = ctx.hcshnd.txpool().first_at(mint::TXGID_DIAMINT) {
+        let hbfe = fbtx.objc.fee().clone();
+        let mmax = cnf.dmer_bid_max.clone();
+        let step = cnf.dmer_bid_step.clone();
+        if hbfe > mmax {
+            bid_offer = mmax; // higher than my max
+        } else if hbfe > bid_offer {
+            if fbtx.objc.main() == bid_addr {
+                // high is my self
+                bid_offer = hbfe;
+            } else {
+                // my = other high + step
+                if let Ok(new_bid) = hbfe.add_mode_u64(&step) {
+                    bid_offer = new_bid;
+                } else {
+                    println!("[diamond miner error] cannot add fee {} with {}, ", &hbfe, step);
+                }
+            }
+        }
+    }
+    // compress amount
+    if let Ok(new_bid) = bid_offer.compress(2, AmtCpr::Grow) {
+        bid_offer = new_bid;
+    } else {
+        println!("[diamond miner error] cannot compress fee {} to 4 legnth", &bid_offer);
+    };
+
+    // create trs
+    let mut tx = TransactionType2::new_by(bid_addr, bid_offer, curtimes());
     tx.push_action(Box::new(mint)).unwrap();
     tx.fill_sign(&cnf.dmer_bid_account).unwrap();
 

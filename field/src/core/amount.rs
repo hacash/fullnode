@@ -22,6 +22,11 @@ pub enum AmtMode {
     BIGINT,
 }
 
+pub enum AmtCpr {
+    Discard,
+    Grow,
+}
+
 
 
 #[derive(Default, Hash, Clone, PartialEq, Eq)]
@@ -618,7 +623,7 @@ impl Amount {
         }
     }
 
-    pub fn compress(&self, btn: usize, upvalue: bool) -> Ret<Amount> {
+    pub fn compress(&self, btn: usize, cpr: AmtCpr) -> Ret<Amount> {
         if self.dist < 0 {
             return errf!("cannot compress negative amount")
         }
@@ -631,7 +636,7 @@ impl Amount {
                 return errf!("amount uint too big to compress")
             }
             let mut numpls = u128::from_be_bytes(add_left_padding(&amt.byte, U128S).try_into().unwrap()) / 10;
-            if upvalue {
+            if let AmtCpr::Grow = cpr {
                 numpls += 1;
             }
             let nbts = drop_left_zero(&numpls.to_be_bytes());
