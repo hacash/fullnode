@@ -24,6 +24,7 @@ db-leveldb-sys = ["protocol/db-leveldb-sys", "chain/db-leveldb-sys"]
 
 
 [profile.release]
+debug = false       # for RUST_BACKTRACE=1 
 opt-level = 3       # Optimize for size.
 lto = true          # Enable Link Time Optimization
 codegen-units = 1   # Reduce number of codegen units to increase optimizations.

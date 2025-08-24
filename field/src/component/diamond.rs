@@ -113,7 +113,7 @@ impl DiamondOwnedForm {
 			}
 		}
 		// check
-		let ndlen = dian.length();
+		let ndlen = dian.length().uint() as usize;
 		assert!(dropn == ndlen, "DiamondOwnedForm need drop {} but do {}, drop {} in {}", 
 			ndlen, dropn, dian.readable(), self.names.to_readable());
 		// ok

@@ -191,7 +191,7 @@ impl $class {
     }
 
     fn insert_sign(&mut self, signobj: Sign) -> Rerr {
-        let plen = self.signs.length();
+        let plen = self.signs.length().uint() as usize;
         if plen >= u16::MAX as usize - 1 {
             return errf!("sign object too much")
         }
