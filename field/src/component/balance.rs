@@ -67,7 +67,7 @@ impl Balance {
 			}
 		}
 		self.assets.push(amt)?;
-		if self.assets.length().uint() > 20 {
+		if self.assets.length() > 20 {
 			return errf!("balance asset item quantity cannot big than 20")
 		}
 		Ok(())

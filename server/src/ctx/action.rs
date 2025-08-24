@@ -375,7 +375,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
         }else if let Some(action) = actany.downcast_ref::<DiaToTrs>() {
 
             let to_addr = must_addr!(action.to);
-            let dia_num = action.diamonds.length().uint();
+            let dia_num = action.diamonds.length();
             let dia_names = action.diamonds.readable();
             set_jsonobj!{
                 "from", main_addr,
@@ -391,7 +391,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
         }else if let Some(action) = actany.downcast_ref::<DiaFromTrs>() {
             
             let from_addr = must_addr!(action.from);
-            let dia_num = action.diamonds.length().uint();
+            let dia_num = action.diamonds.length();
             let dia_names = action.diamonds.readable();
             set_jsonobj!{
                 "from", from_addr,
@@ -408,7 +408,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
 
             let from_addr = must_addr!(action.from);
             let to_addr = must_addr!(action.to);
-            let dia_num = action.diamonds.length().uint();
+            let dia_num = action.diamonds.length();
             let dia_names = action.diamonds.readable();
             set_jsonobj!{
                 "from", from_addr,
@@ -444,7 +444,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
 
         }else if let Some(action) = actany.downcast_ref::<DiamondInscription>() {
 
-            let dia_num = action.diamonds.length().uint();
+            let dia_num = action.diamonds.length();
             let dia_names = action.diamonds.readable();
             let cost_str = action.protocol_cost.to_unit_string(unit);
             let ins_str = action.engraved_content.to_readable_or_hex();
@@ -466,7 +466,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
 
         }else if let Some(action) = actany.downcast_ref::<DiamondInscriptionClear>() {
 
-            let dia_num = action.diamonds.length().uint();
+            let dia_num = action.diamonds.length();
             let dia_names = action.diamonds.readable();
             let cost_str = action.protocol_cost.to_unit_string(unit);
             set_jsonobj!{

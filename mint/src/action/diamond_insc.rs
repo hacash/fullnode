@@ -60,7 +60,7 @@ fn diamond_inscription(this: &DiamondInscription, ctx: &mut dyn Context) -> Ret<
 	}
     // change count
     let mut ttcount = state.get_total_count();
-    ttcount.diamond_engraved += this.diamonds.length().uint() as u64;
+    ttcount.diamond_engraved += this.diamonds.length() as u64;
     ttcount.diamond_insc_burn_zhu += pcost.to_zhu_u64().unwrap();
     state.set_total_count(&ttcount);
 	// sub main addr balance
@@ -152,7 +152,7 @@ pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&A
         return errf!("only one inscription can be made every {} blocks", check_prev_block)
     }
     // check insc
-    let haveng = diasto.inscripts.length().uint();
+    let haveng = diasto.inscripts.length();
     if haveng >= 200 {
         return errf!("maximum inscriptions for one diamond is 200")
     }
@@ -182,7 +182,7 @@ pub fn engraved_clean_one_diamond(_pending_height: u64, state: &mut CoreState, a
     let mut diasto = check_diamond_status(state, addr, diamond)?;
     let diaslt = must_have!(format!("diamond {}", diamond.to_readable()), state.diamond_smelt(&diamond));
     // check
-    if diasto.inscripts.length().uint() <= 0 {
+    if diasto.inscripts.length() <= 0 {
         return errf!("cannot find any inscriptions in HACD {}", diamond.to_readable())    
     }
     // burning cost bid fee
