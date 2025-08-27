@@ -21,7 +21,7 @@ async fn block_intro(State(ctx): State<ApiCtx>, q: Query<Q2953>) -> impl IntoRes
     if height > 0 {
         key = height.to_string();
     }
-    let blkpkg = ctx.load_block(&store, &key);
+    let blkpkg = ctx.load_block(store.as_ref(), &key);
     if let Err(_) = blkpkg {
         return api_error("cannot find block")
     }

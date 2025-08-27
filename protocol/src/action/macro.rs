@@ -59,7 +59,7 @@ macro_rules! action_define {
             fn execute(&$pself, $pctx: &mut dyn Context) -> Ret<(u32, Vec<u8>)> {
                 use std::any::Any;
                 if !$pctx.env().chain.fast_sync {
-                    check_action_level($pctx.depth(), $pself, $pctx.tx().actions())?;
+                    check_action_level($pctx.depth().clone(), $pself, $pctx.tx().actions())?;
                 }
                 #[allow(unused_mut)] 
                 // act size is base gas use, if burn 90% fee to use 10 times fee
@@ -76,7 +76,7 @@ macro_rules! action_define {
 
         impl Action for $class {
             fn kind(&self) -> u16 { *self.kind }
-            fn level(&self) -> i8 { $lv }
+            fn level(&self) -> ActLv { $lv }
             fn burn_90(&$pself) -> bool { $burn90 }
             fn req_sign(&$pself) -> Vec<AddrOrPtr> { $reqsign.to_vec() } // request_need_sign_addresses
             fn as_any(&self) -> &dyn Any { self }
@@ -110,7 +110,8 @@ macro_rules! action_register {
 
 
 // check action level
-pub fn check_action_level(depth: i8, act: &dyn Action, actions: &Vec<Box<dyn Action>>) -> Rerr {
+pub fn check_action_level(depth: CallDepth, act: &dyn Action, actions: &Vec<Box<dyn Action>>) -> Rerr {
+        let depth: isize = depth.into();
         if depth > 8 {
             return errf!("action depth cannot over {}", 8)
         }
@@ -120,11 +121,12 @@ pub fn check_action_level(depth: i8, act: &dyn Action, actions: &Vec<Box<dyn Act
         }
         let kid = act.kind();
         let alv = act.level();
-        if alv == ActLv::TOP_ONLY {
+        let alvn: isize = alv.clone().into();
+        if alv == ActLv::TopOnly {
             if actlen > 1 {
                 return errf!("action {} just can execute on TOP_ONLY", kid)
             }
-        } else if alv == ActLv::TOP_UNIQUE {
+        } else if alv == ActLv::TopUnique {
             let mut smalv = 0;
             for act in actions {
                 if act.kind() == kid {
@@ -134,23 +136,20 @@ pub fn check_action_level(depth: i8, act: &dyn Action, actions: &Vec<Box<dyn Act
             if smalv > 1 {
                 return errf!("action {} just can execute on level TOP_UNIQUE", kid)
             }
-        } else if alv == ActLv::TOP {
+        } else if alv == ActLv::Top {
             if depth >= 0 {
                 return errf!("action just can execute on level TOP")
             }
-        } else if alv == ActLv::AST {
+        } else if alv == ActLv::Ast {
             if depth >= 0 {
                 return errf!("action just can execute on level AST")
             }
-        } else if depth > alv {
-            return errf!("action just can execute on depth {} but call in {}", alv, depth)
+        } else if depth > alvn {
+            return errf!("action just can execute on depth {} but call in {}", alvn, depth)
         }
         // ok
         Ok(())
 }
-
-
-
 
 
 
@@ -162,7 +161,7 @@ pub fn check_action_level(depth: i8, act: &dyn Action, actions: &Vec<Box<dyn Act
 
 // test define action
 action_define!{Test63856464969364, 9527, 
-    ActLv::MAIN_CALL, // level
+    ActLv::MainCall, // level
     false, // burn 90 fee
     [],
     {

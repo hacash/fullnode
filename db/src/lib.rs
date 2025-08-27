@@ -1,7 +1,8 @@
-use std::path::Path;
+use std::path::*;
 
 
-include!{"interface.rs"}
+use protocol::interface::*;
+
 
 /*****************************/
 
@@ -27,6 +28,6 @@ include!{"disk_leveldb_sys.rs"}
 
 /*****************************/
 
-include!{"memkv.rs"}
+include!{"batch.rs"}
 
 

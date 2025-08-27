@@ -1,13 +1,13 @@
 
-const BNUM: u64 = 256;
+const BYTEN: u64 = 256;
 const FOLDU64SX1: u64 = 32; // 2^^5       // 1byte :                    32
-const FOLDU64SX2: u64 = FOLDU64SX1 * BNUM; // 2byte :                  8192
-const FOLDU64SX3: u64 = FOLDU64SX2 * BNUM; // 3byte :               2097152
-const FOLDU64SX4: u64 = FOLDU64SX3 * BNUM; // 4byte :            5_36870912
-const FOLDU64SX5: u64 = FOLDU64SX4 * BNUM; // 5byte :         1374_38953472
-const FOLDU64SX6: u64 = FOLDU64SX5 * BNUM; // 6byte :       351843_72088832
-const FOLDU64SX7: u64 = FOLDU64SX6 * BNUM; // 7byte :     90071992_54740992
-const FOLDU64SX8: u64 = FOLDU64SX7 * BNUM; // 8byte : 230_58430092_13693952
+const FOLDU64SX2: u64 = FOLDU64SX1 * BYTEN; // 2byte :                  8192
+const FOLDU64SX3: u64 = FOLDU64SX2 * BYTEN; // 3byte :               2097152
+const FOLDU64SX4: u64 = FOLDU64SX3 * BYTEN; // 4byte :            5_36870912
+const FOLDU64SX5: u64 = FOLDU64SX4 * BYTEN; // 5byte :         1374_38953472
+const FOLDU64SX6: u64 = FOLDU64SX5 * BYTEN; // 6byte :       351843_72088832
+const FOLDU64SX7: u64 = FOLDU64SX6 * BYTEN; // 7byte :     90071992_54740992
+const FOLDU64SX8: u64 = FOLDU64SX7 * BYTEN; // 8byte : 230_58430092_13693952
 //                                                  2 30584300 92136939.52
 
 const FOLDU64XLIST: [u64; 8] = [
@@ -79,7 +79,7 @@ impl Serialize for Fold64 {
 
     fn serialize(&self) -> Vec<u8> {
         if self.value > Fold64::MAX {
-            unimplemented!() // fatal error!!!
+            never!() // fatal error!!!
         }
         let vs = self.size() as u8;
         let head = vec![(vs - 1) << 5];

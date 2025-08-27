@@ -6,7 +6,7 @@
 /*
 * get data path
 */
-pub fn get_data_dir(ini: &IniObj) -> PathBuf {
+pub fn get_mainnet_data_dir(ini: &IniObj) -> PathBuf {
 
     let sec = ini_section(ini, "default"); // default = root
     let data_dir = ini_must(&sec, "data_dir", "hacash_mainnet_data");

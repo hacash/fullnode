@@ -191,7 +191,7 @@ impl $class {
     }
 
     fn insert_sign(&mut self, signobj: Sign) -> Rerr {
-        let plen = self.signs.length() as usize;
+        let plen = self.signs.length();
         if plen >= u16::MAX as usize - 1 {
             return errf!("sign object too much")
         }
@@ -267,7 +267,7 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
         // check tx exist
         if let Some(exhei) = state.tx_exist(&hx) { // have tx !!!
             // handle hacash block chain bug start
-            let bugtx = Hash::from_hex(b"f22deb27dd2893397c2bc203ddc9bc9034e455fe630d8ee310e8b5ecc6dc5628");
+            let bugtx = Hash::from_hex(b"f22deb27dd2893397c2bc203ddc9bc9034e455fe630d8ee310e8b5ecc6dc5628").unwrap();
             if *exhei != 63448 || hx != bugtx {
                 return errf!("tx {} already exist in height {}", hx, *exhei)
             }
@@ -292,7 +292,7 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
     ctx.vm_replace(VMNil::empty());
     // execute actions
     for action in tx.actions() {
-        ctx.depth_set(-1); // set depth
+        ctx.depth_set(CallDepth::new(-1)); // set depth
         action.execute(ctx)?;
     }
     // spend fee

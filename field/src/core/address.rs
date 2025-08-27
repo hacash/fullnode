@@ -71,11 +71,9 @@ impl Address {
     }
     
     pub fn from_readable(addr: &str) -> Ret<Self> {
-        let res = addr.from_base58check();
-        if let Err(_) = res {
-            return Err("base58check error".to_string())
-        }
-        let (version, body) = res.unwrap();
+        let Ok((version, body)) = addr.from_base58check() else {
+            return errf!("base58check error")
+        };
         if body.len() != Self::SIZE - 1 {
             return Err("address length error".to_string())
         }

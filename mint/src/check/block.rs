@@ -15,7 +15,7 @@ fn impl_packing_next_block(this: &HacashMinter, engine: &dyn EngineRead, txpool:
     // update difficulty number
     if nexthei % mtcnf.difficulty_adjust_blocks == 0 {
         let sto = engine.store();
-        let (difn, ..) = this.next_difficulty(oldblk.as_read(), &sto);
+        let (difn, ..) = this.next_difficulty(oldblk.as_read(), sto.as_ref());
         newdifn = Uint4::from(difn);
     }
     // create coinbase tx

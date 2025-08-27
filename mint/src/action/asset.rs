@@ -2,7 +2,7 @@
 
 
 action_define!{AssetCreate, 16, 
-    ActLv::TOP_ONLY, // level
+    ActLv::TopOnly, // level
     false, // burn 90 fee
     [], {
         metadata: AssetSmelt

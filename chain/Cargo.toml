@@ -7,12 +7,7 @@ resolver = "2"
 [dependencies]
 sys = { path = "../sys" }
 field = { path = "../field" }
-db = { path = "../db"}
 protocol = { path = "../protocol" }
 hex = "0.4.3"
 dyn-clone = "1.0.17"
 
-[features]
-db-sled = ["db/db-sled", "protocol/db-sled"]
-db-rusty-leveldb = ["db/db-rusty-leveldb", "protocol/db-rusty-leveldb"]
-db-leveldb-sys = ["db/db-leveldb-sys", "protocol/db-leveldb-sys"]

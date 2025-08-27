@@ -39,17 +39,21 @@ impl DiskDB for DiskKV {
         self.ldb.lock().unwrap().get(k)
     }
 
-    fn write(&self, memkv: &MemKV) {
+    fn write(&self, memkv: &dyn MemDB) {
+        let wb = Membatch::from_memkv(memkv);
         let mut ldb =  self.ldb.lock().unwrap();
-        ldb.write(memkv.to_writebatch().deref(), true).unwrap(); // must
+        ldb.write(wb.into_batch().obj, true).unwrap(); // must
         ldb.flush().unwrap();
     }
 
-    fn write_batch(&self, batch: MemBatch) {
+    /*
+    fn write_batch(&self, batch: Box<dyn Any>) {
+        let wb = batch.downcast::<Membatch>().unwrap().into_batch();
         let mut ldb =  self.ldb.lock().unwrap();
-        ldb.write(batch.into_writebatch().deref(), true).unwrap(); // must
+        ldb.write(wb.obj, true).unwrap(); // must
         ldb.flush().unwrap();
     }
+    */
 
     fn for_each(&self, each: &mut dyn FnMut(Vec<u8>, Vec<u8>)->bool) {
         let mut ldb =  self.ldb.lock().unwrap();

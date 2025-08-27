@@ -3,7 +3,7 @@
 * simple hac to
 */
 action_define!{ HacToTrs, 1, 
-    ActLv::MAIN_CALL, // level
+    ActLv::MainCall, // level
     false, // burn 90 fee
     [], // need sign
     {
@@ -19,7 +19,7 @@ action_define!{ HacToTrs, 1,
 
 
 action_define!{ HacFromTrs, 13, 
-    ActLv::MAIN_CALL, // level
+    ActLv::MainCall, // level
     false, // burn 90 fee
     [self.from],
     {
@@ -37,7 +37,7 @@ action_define!{ HacFromTrs, 13,
 
 
 action_define!{ HacFromToTrs, 14, 
-    ActLv::MAIN_CALL, // level
+    ActLv::MainCall, // level
     false, // burn 90 fee
     [self.from],
     {

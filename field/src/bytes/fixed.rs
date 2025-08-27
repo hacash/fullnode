@@ -78,11 +78,11 @@ macro_rules! fixed_define {
 
 
         impl Hex for $class {
-            fn from_hex(buf: &[u8]) -> Self {
-                let bts = bytes_from_hex(buf, $size).unwrap();
-                Self {
+            fn from_hex(buf: &[u8]) -> Ret<Self> {
+                let bts = bytes_from_hex(buf, $size)?;
+                Ok(Self {
                     bytes: bts.try_into().unwrap()
-                }
+                })
             }
             fn to_hex(&self) -> String {
                 hex::encode(&self.bytes)
@@ -96,10 +96,10 @@ macro_rules! fixed_define {
         }
 
         impl Readable for $class {
-            fn from_readable(v: &[u8]) -> Self {
-                Self {
+            fn from_readable(v: &[u8]) -> Ret<Self> {
+                Ok(Self {
                     bytes: bytes_from_readable_string(v, $size).try_into().unwrap()
-                }
+                })
             }
             fn to_readable(&self) -> String {
                 bytes_to_readable_string(&self.bytes)
@@ -201,12 +201,8 @@ impl Bool {
     }
 
     pub fn new(v: bool) -> Self where Self: Sized {
-        let v = match v {
-            true => 1u8,
-            false => 0u8,
-        };
-        Self{
-            bytes: [v]
+        Self {
+            bytes: [ maybe!(v, 1, 0)]
         }
     }
 

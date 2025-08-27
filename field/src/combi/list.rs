@@ -76,12 +76,6 @@ impl_field_only_new!{$class}
 
 impl $class {
 
-    /*
-	pub fn count(&self) -> &$cty {
-		&self.count
-	}
-    */
-
 	pub fn length(&self) -> usize {
 		self.count.uint() as usize
 	}

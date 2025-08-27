@@ -1,6 +1,6 @@
 
 pub struct StateInst {
-    disk: Arc<DiskKV>,
+    disk: Arc<dyn DiskDB>,
     mem: MemKV,
     parent: Weak<dyn State>,
 }
@@ -8,7 +8,7 @@ pub struct StateInst {
 
 impl StateInst {
 
-    fn build(d: Arc<DiskKV>, p: Weak<dyn State>) -> Self where Self: Sized {
+    fn build(d: Arc<dyn DiskDB>, p: Weak<dyn State>) -> Self where Self: Sized {
         Self {
             disk: d,
             parent: p,

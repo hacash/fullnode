@@ -90,7 +90,7 @@ macro_rules! compute_other_list_impl {
 macro_rules! compute_other_all_impl {
     ($class:ident, $vn:ident, $op:ident, $opt:ident, $vty:ty) => ( 
         compute_other_list_impl!{$class, $vn, $op, $opt, $vty, 
-            i8, u8, i16, u16, i32, u32, i64, u64
+            i8, u8, i16, u16, i32, u32, i64, u64, i128, u128
         } 
     )
 }
@@ -108,7 +108,7 @@ macro_rules! compute_assign_other_list_impl {
 macro_rules! compute_assign_other_all_impl {
     ($class:ident, $vn:ident, $op:ident, $opt:ident, $vty:ty) => ( 
         compute_assign_other_list_impl!{$class, $vn, $op, $opt, $vty, 
-            i8, u8, i16, u16, i32, u32, i64, u64
+            i8, u8, i16, u16, i32, u32, i64, u64, i128, u128
         } 
     )
 }

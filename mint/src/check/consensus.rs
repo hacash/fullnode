@@ -32,7 +32,7 @@ fn impl_tx_submit(this: &HacashMinter, engine: &dyn EngineRead, txp: &TxPkg) -> 
 
 
 
-fn impl_blk_found(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockStore) -> Rerr {
+fn impl_blk_found(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &dyn Store) -> Rerr {
     let curhei = curblkhead.height().uint(); // u64
     let curdifnum = curblkhead.difficulty().uint();
     let blkspan = this.cnf.difficulty_adjust_blocks;
@@ -69,7 +69,7 @@ fn impl_blk_found(this: &HacashMinter, curblkhead: &dyn BlockRead, sto: &BlockSt
 
 
 
-fn impl_blk_verify(this: &HacashMinter, curblk: &dyn BlockRead, prevblk: &dyn BlockRead, sto: &BlockStore) -> Rerr {
+fn impl_blk_verify(this: &HacashMinter, curblk: &dyn BlockRead, prevblk: &dyn BlockRead, sto: &dyn Store) -> Rerr {
     let curhei = curblk.height().uint(); // u64
     let smaxh = this.cnf.sync_maxh;
     if smaxh > 0 && curhei > smaxh {

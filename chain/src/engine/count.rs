@@ -1,7 +1,7 @@
 
 
 #[allow(dead_code)]
-fn dev_count_switch_print(idx: usize, db: &DiskKV) {
+fn dev_count_switch_print(idx: usize, db: &dyn DiskDB) {
     if idx == 1 { count_all_address_balance(db) }
 }
 
@@ -16,7 +16,7 @@ fn dev_count_switch_print(idx: usize, db: &DiskKV) {
 
 
 #[allow(dead_code)]
-fn count_all_address_balance(db: &DiskKV) {
+fn count_all_address_balance(db: &dyn DiskDB) {
 
     let mut blsnum: usize = 0;
     let mut hacnum: usize = 0;

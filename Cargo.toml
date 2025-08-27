@@ -1,34 +1,25 @@
 [package]
 name = "hacash"
-version = "0.2.13"
-edition = "2021"
-resolver = "2"
+default-run = "hacash"
+version = "0.3.0"
+edition = "2024"
 
 [dependencies]
-x16rs = { path = "./x16rs" }
-sys = { path = "./sys" }
-field = { path = "./field" }
-protocol = { path = "./protocol" }
-chain = { path = "./chain" }
-mint = { path = "./mint" }
-node = { path = "./node" }
-server = { path = "./server" }
-app = { path = "./app" }
-ctrlc = "3.4.5"
+x16rs = {path = "./x16rs"}
+sys = {path = "./sys"}
+field = {path = "./field"}
+protocol = {path = "./protocol"}
+db = {path = "./db", default-features = false}
+mint = {path = "./mint"}
+chain = {path = "./chain"}
+node = {path = "./node"}
+server = {path = "./server"}
+app = {path = "./app"}
+
 
 [features]
 default = ["db-sled"]
-db-sled = ["protocol/db-sled", "chain/db-sled"]
-db-rusty-leveldb = ["protocol/db-rusty-leveldb", "chain/db-rusty-leveldb"]
-db-leveldb-sys = ["protocol/db-leveldb-sys", "chain/db-leveldb-sys"]
-
-
-[profile.release]
-debug = false       # for RUST_BACKTRACE=1 
-opt-level = 3       # Optimize for size.
-lto = true          # Enable Link Time Optimization
-codegen-units = 1   # Reduce number of codegen units to increase optimizations.
-panic = 'abort'     # Abort on panic
-strip = true        # Strip symbols from binary
-
+db-sled = ["db/db-sled"]
+db-rusty-leveldb = ["db/db-rusty-leveldb"]
+db-leveldb-sys = ["db/db-leveldb-sys"]
 

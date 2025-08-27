@@ -2,7 +2,7 @@
 
 #[macro_export]
 macro_rules! combi_dynlist {
-    ($class:ident, $lenty:ty, $dynty:ident, $parseobjfunc:path) => (
+    ($class:ident, $lenty:ty, $dynty:ident, $createfn:path) => (
 
 
 #[derive(Default, Clone)]
@@ -34,7 +34,7 @@ impl Parse for $class {
         let count = *self.count as usize;
         self.vlist = Vec::new();
         for _ in 0..count {
-            let(obj, mvsk) = $parseobjfunc(&buf[seek..]) ?;
+            let(obj, mvsk) = $createfn(&buf[seek..]) ?;
             seek += mvsk;
             self.vlist.push(obj);
         }

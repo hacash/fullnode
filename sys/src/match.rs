@@ -12,3 +12,15 @@ macro_rules! maybe {
 }
 
 
+
+#[macro_export]
+macro_rules! mayerr {
+    ($c:expr, $e:expr) => { 
+        match $c { 
+            true => Ok(()),
+            false => $e,
+        }
+    };
+}
+
+

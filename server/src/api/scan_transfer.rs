@@ -10,7 +10,7 @@ async fn scan_coin_transfer(State(ctx): State<ApiCtx>, q: Query<Q4538>) -> impl 
     ctx_store!(ctx, store);
     q_unit!(q, unit);
     q_coinkind!(q, coinkind);
-    let blkpkg = ctx.load_block(&store, &q.height.to_string());
+    let blkpkg = ctx.load_block(store.as_ref(), &q.height.to_string());
     if let Err(e) = blkpkg {
         return  api_error(&e)
     }

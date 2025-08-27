@@ -2,7 +2,7 @@
 
 impl P2PManage {
 
-    pub async fn start(this: Arc<P2PManage>) -> Rerr {
+    pub async fn start(this: Arc<P2PManage>, worker: Worker) -> Rerr {
 
         // start p2p listen
         // let p2p = this.clone();
@@ -29,7 +29,7 @@ impl P2PManage {
 
         // event loop
         // this.event_loop().await;
-        let _ = P2PManage::event_loop(this).await;
+        let _ = P2PManage::event_loop(this, worker).await;
         Ok(())
     }
 

@@ -2,20 +2,27 @@
 #[derive(Clone)]
 pub struct HttpServer {
     cnf: ServerConf,
-    engine: ChainEngine,
-    hcshnd: ChainNode,
+    engine: Arc<dyn Engine>,
+    hcshnd: Arc<dyn HNoder>,
 }
 
 
 impl HttpServer {
-    pub fn open(iniobj: &IniObj, eng: ChainEngine, nd: ChainNode) -> HttpServer {
+    pub fn open(iniobj: &IniObj, hnd: Arc<dyn HNoder>) -> Self {
         let cnf = ServerConf::new(iniobj);
-        HttpServer{
+        Self{
             cnf: cnf,
-            engine: eng,
-            hcshnd: nd,
+            engine: hnd.engine(),
+            hcshnd: hnd,
         }
     }
 
+}
+
+
+impl Server for HttpServer {
+    fn start(&self, worker: Worker) {
+        self.do_start(worker)
+    }
 }
 

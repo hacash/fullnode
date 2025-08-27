@@ -9,12 +9,9 @@ use serde_json::{Value, json};
 use sys::*;
 use field::*;
 use field::interface::*;
-use protocol::*;
 use protocol::interface::*;
 use protocol::action::*;
-use protocol::state::*;
-use chain::interface::*;
-use node::interface::*;
+use protocol::component::*;
 
 use mint::action::*;
 

@@ -2,7 +2,7 @@
 /********************/
 
 pub type ChainEngine = Arc<dyn Engine>;
-pub type ChainNode = Arc<dyn HNode>;
+pub type ChainNode = Arc<dyn HNoder>;
 pub type BlockCaches = Arc<Mutex<VecDeque<Arc<BlockPkg>>>>;
 
 #[derive(Clone)]
@@ -27,13 +27,13 @@ impl ApiCtx {
         }
     }
 
-    pub fn load_block(&self, store: &BlockStore, key: &String) -> Ret<Arc<BlockPkg>> {
+    pub fn load_block(&self, store: &dyn Store, key: &String) -> Ret<Arc<BlockPkg>> {
         self.load_block_from_cache(store, key, true)
     }
 
     
     // load block from cache or disk, key = height or hash
-    pub fn load_block_from_cache(&self, store: &BlockStore, key: &String, with_cache: bool) -> Ret<Arc<BlockPkg>> {
+    pub fn load_block_from_cache(&self, store: &dyn Store, key: &String, with_cache: bool) -> Ret<Arc<BlockPkg>> {
         let mut hash = Hash::from([0u8; 32]);
         let mut height = BlockHeight::from(0);
         if key.len() == 64 {
@@ -64,7 +64,7 @@ impl ApiCtx {
         if let None = blkdts {
             return errf!("block not find")
         }
-        let Ok(blkpkg) = BlockPkg::build(blkdts.unwrap()) else {
+        let Ok(blkpkg) = protocol::block::build_block_package(blkdts.unwrap()) else {
             return errf!("block parse error")
         };
         // ok

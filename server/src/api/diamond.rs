@@ -122,7 +122,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
 
     if since {
         // let mut acution_start = curtimes(); 
-        if let Ok(blk) = ctx.load_block( &store, &lastdia.born_height.to_string() ) {
+        if let Ok(blk) = ctx.load_block(store.as_ref(), &lastdia.born_height.to_string()) {
             let acution_start = blk.objc.timestamp().uint();
             data.insert("since", json!(acution_start));
         }
@@ -229,7 +229,7 @@ async fn diamond_engrave(State(ctx): State<ApiCtx>, q: Query<Q5733>) -> impl Int
     let mut datalist = vec![];
 
     // load block
-    let blkpkg = ctx.load_block(&store, &q.height.to_string());
+    let blkpkg = ctx.load_block(store.as_ref(), &q.height.to_string());
     if let Err(e) = blkpkg {
         return api_error(&e)
     }

@@ -5,7 +5,7 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
     let engcnf = this.engine.config();
     let minter = this.engine.mint_checker();
     // parse
-    let Ok(txpkg) = TxPkg::build(body) else {
+    let Ok(txpkg) = protocol::transaction::build_tx_package(body) else {
         return // parse tx error
     };
     // tx hash with fee
@@ -69,7 +69,7 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
     // may insert
     if blkhei <= lathei + 1 {
         // check block found
-        if let Err(_) = mintckr.blk_found(&blkhead, &sto) {
+        if let Err(_) = mintckr.blk_found(&blkhead, sto.as_ref()) {
             return  // difficulty check fail
         }
         // do insert  ◆ ◇ ⊙ ■ □ △ ▽ ❏ ❐ ❑ ❒  ▐ ░ ▒ ▓ ▔ ▕ ■ □ ▢ ▣ ▤ ▥ ▦ ▧ ▨ ▩ ▪ ▫    
@@ -85,12 +85,12 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         let engptr = eng.clone();
         let txpool = this.txpool.clone();
         // create block
-        let blkpkg = BlockPkg::build(bodycp);
+        let blkpkg =protocol::block::build_block_package(bodycp);
         if let Err(..) = blkpkg {
             return // parse error
         }
         let mut blkp = blkpkg.unwrap();
-        blkp.set_origin( BlkOrigin::DISCOVER );
+        blkp.set_origin( BlkOrigin::Discover );
         may_show_miner_detail(mintckr, &blkp);
         let thsx = blkp.objc.transaction_hash_list(false); // hash no fee
         if let Err(e) = engptr.discover(blkp) {

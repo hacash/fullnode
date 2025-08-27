@@ -9,7 +9,7 @@ pub struct P2PManage {
     backbones: PeerList, // 4
     offshoots: PeerList, // 200
     // close mark
-    exiter: Exiter,
+    // exiter: Exiter,
 }
 
 impl P2PManage {
@@ -21,7 +21,7 @@ impl P2PManage {
             backbones: StdMutex::new(vec![]).into(),
             offshoots: StdMutex::new(vec![]).into(),
             // closech: StdMutex::new(Some(closerx)),
-            exiter: Exiter::new(),
+            // exiter: Exiter::new(),
         }
     }
 
@@ -102,7 +102,7 @@ impl P2PManage {
     }
 
     pub fn exit(&self) {
-        self.exiter.exit();
+        // self.exiter.exit();
     }
 
 }

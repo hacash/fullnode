@@ -3,7 +3,7 @@
 *
 */
 action_define!{ DiamondInscription, 32, 
-    ActLv::TOP, // level
+    ActLv::Top, // level
     true, // burn 90 fee
     [], // need sign
     {
@@ -79,7 +79,7 @@ fn diamond_inscription(this: &DiamondInscription, ctx: &mut dyn Context) -> Ret<
 
 
 action_define!{ DiamondInscriptionClear, 33, 
-    ActLv::TOP, // level
+    ActLv::Top, // level
     true, // burn 90 fee
     [], // need sign
     {

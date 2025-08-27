@@ -1,13 +1,13 @@
 [package]
 name = "node"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 sys = { path = "../sys" }
 field = { path = "../field" }
 protocol = { path = "../protocol" }
-chain = { path = "../chain" }
+# chain = { path = "../chain" }
 mint = { path = "../mint" }
 hex = "0.4.3"
 chrono = "0.4.38"

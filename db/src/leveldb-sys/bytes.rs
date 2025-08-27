@@ -19,19 +19,19 @@ impl RawBytes {
         if ptr.is_null() {
             None
         } else {
-            Some(RawBytes {
+            unsafe { Some(RawBytes {
                 bytes: &mut *ptr,
                 size: size,
-            })
+            }) }
         }
     }
 
     /// Creates instance of `RawBytes` from leveldb-allocated data without null checking.
     pub unsafe fn from_raw_unchecked(ptr: *mut u8, size: usize) -> Self {
-        RawBytes {
+        unsafe { RawBytes {
             bytes: &mut *ptr,
             size: size,
-        }
+        } }
     }
 }
 

@@ -1,12 +1,11 @@
+use crate::CallDepth;
 
-pub struct VMEmpty {}
-impl VMI for VMEmpty {}
 
 /*
 */
 pub struct ContextInst<'a> {
     pub env: Env,
-    pub depth: i8,
+    pub depth: CallDepth,
     pub txr: &'a dyn TransactionRead,
 
     pub vmi: Box<dyn VMI>,
@@ -20,9 +19,9 @@ impl ContextInst<'_> {
 
     pub fn new<'a>(env: Env, sta: Box<dyn State>, txr: &'a dyn TransactionRead) -> ContextInst<'a> {
         ContextInst{ env, sta, txr,
-            depth: 0,
+            depth: CallDepth::new(0),
             check_sign_cache: HashMap::new(),
-            vmi: Box::new(VMEmpty{}),
+            vmi: VMNil::empty(),
         }
     }
 
@@ -40,7 +39,7 @@ impl ExtActCal for ContextInst<'_> {
 
 impl Context for ContextInst<'_> {
     fn as_ext_caller(&mut self) -> &mut dyn ExtActCal { self }
-    fn env(&self) -> &Env { &self.env}
+    fn env(&self) -> &Env { &self.env }
     fn state(&mut self) -> &mut dyn State { self.sta.as_mut() }
     fn state_fork(&mut self) -> Box<dyn State> {
         ctx_state_fork_sub(self)
@@ -51,10 +50,13 @@ impl Context for ContextInst<'_> {
     fn state_replace(&mut self, sta: Box<dyn State>) -> Box<dyn State> {
         std::mem::replace(&mut self.sta, sta)
     }
-    fn depth(&self) -> i8 { self.depth }
-    fn depth_set(&mut self, d: i8) { self.depth = d }
+    fn depth(&mut self) -> &mut CallDepth { &mut self.depth }
+    fn depth_set(&mut self, cd: CallDepth) { self.depth = cd }
+    /*
     fn depth_add(&mut self) { self.depth += 1 }
     fn depth_sub(&mut self) { self.depth -= 1 }
+    */
+
     fn tx(&self) -> &dyn TransactionRead { self.txr }
     fn vm(&mut self) -> &mut dyn VMI { self.vmi.as_mut() }
     fn vm_replace(&mut self, vm: Box<dyn VMI>) -> Box<dyn VMI> {

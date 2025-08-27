@@ -15,6 +15,12 @@ pub struct HacashMinter {
 impl HacashMinter {
 
     pub fn create(ini: &IniObj) -> Self {
+
+        // setup hook
+        protocol::block::setup_block_hasher( x16rs::block_hash );
+        protocol::action::setup_extend_actions_try_create(1, action::try_create);
+
+        // create
         let cnf = MintConf::new(ini);
         let dgnr = DifficultyGnr::new(cnf.clone());
         Self {
@@ -34,21 +40,15 @@ impl Minter for HacashMinter {
         Box::new(self.cnf.clone())
     }
 
-    fn init(&self, _: &IniObj) {
-        // extend actions
-        protocol::action::setup_extend_actions_try_create(1, action::try_create);
-        // protocol::action::setup_action_hook(hook::empty_action_hook);
-    }
-
     fn tx_submit(&self, eng: &dyn EngineRead, tx: &TxPkg) -> Rerr {
         impl_tx_submit(self, eng, tx)
     }
 
-    fn blk_found(&self, curblk: &dyn BlockRead, sto: &BlockStore ) -> Rerr {
+    fn blk_found(&self, curblk: &dyn BlockRead, sto: &dyn Store ) -> Rerr {
         impl_blk_found(self, curblk, sto)
     }
 
-    fn blk_verify(&self, curblk: &dyn BlockRead, prevblk: &dyn BlockRead, sto: &BlockStore) -> Rerr {
+    fn blk_verify(&self, curblk: &dyn BlockRead, prevblk: &dyn BlockRead, sto: &dyn Store) -> Rerr {
         impl_blk_verify(self, curblk, prevblk, sto)
     }
 

@@ -3,7 +3,7 @@
 *
 */
 action_define!{ ChannelOpen, 2, 
-    ActLv::TOP, // level
+    ActLv::Top, // level
     false, // burn 90 fee
     [
         self.left_bill.address.into(),
@@ -108,7 +108,7 @@ fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
 
 
 action_define!{ ChannelClose, 3, 
-    ActLv::TOP, // level
+    ActLv::Top, // level
     false, // burn 90 fee
     [], // need sign
     {

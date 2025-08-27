@@ -4,16 +4,18 @@ use sys::*;
 use field::{self, *, interface::*};
 
 use super::*;
+use super::interface::*;
 use super::operate;
 use super::action::*;
 use super::state::*;
+use super::component::*;
 
 
-include!{"define.rs"}
 include!{"util.rs"}
 include!{"macro.rs"}
 include!{"coinbase.rs"}
 include!{"create.rs"}
+include!{"store.rs"}
 
 /*
 * define

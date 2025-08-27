@@ -10,8 +10,9 @@ use tokio::net::tcp::*;
 
 use sys::{self, *};
 
+use protocol::*;
+
 use super::*;
-use super::node::*;
 use super::peer::*;
 use super::handler::*;
 

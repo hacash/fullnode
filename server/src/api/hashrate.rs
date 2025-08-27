@@ -22,7 +22,7 @@ fn query_hashrate(ctx: &ApiCtx) -> JsonObject {
     let ltc = 100u64; // realtime by current 100 blocks 
     if curhei > ltc {
         let key = (curhei - ltc).to_string();
-        let pblk = ctx.load_block(&store, &key);
+        let pblk = ctx.load_block(store.as_ref(), &key);
         if let Ok(pblk) = pblk {
             let p100t = pblk.objc.timestamp().uint();
             let cttt = (lastblk.timestamp().uint() - p100t) / ltc;
@@ -100,8 +100,9 @@ async fn hashrate_logs(State(ctx): State<ApiCtx>, q: Query<Q9314>) -> impl IntoR
         let s1 = lasthei - ((days-1-i) * bac);
         let s2 = secs + secs*i;
         // println!("{} {}", s1, s2);
-        let rt1 = get_blk_rate(&ctx, &store, s1);
-        let rt2 = get_blk_rate(&ctx, &store, s2);
+        let sto = store.as_ref();
+        let rt1 = get_blk_rate(&ctx, sto, s1);
+        let rt2 = get_blk_rate(&ctx, sto, s2);
         if rt1 > day200_max {
             day200_max = rt1;
         }
@@ -146,7 +147,7 @@ async fn hashrate_logs(State(ctx): State<ApiCtx>, q: Query<Q9314>) -> impl IntoR
 
 
 
-fn get_blk_rate(ctx: &ApiCtx, disk: &BlockStore, hei: u64) -> u128 {
+fn get_blk_rate(ctx: &ApiCtx, disk: &dyn Store, hei: u64) -> u128 {
     let key = hei.to_string();
     let difn = ctx.load_block(disk, &key).unwrap().objc.difficulty().uint();
     let mtcnf = ctx_mintcnf!(ctx);

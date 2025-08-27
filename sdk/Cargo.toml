@@ -1,7 +1,7 @@
 [package]
 name = "sdk"
 version = "0.1.1"
-edition = "2021"
+edition = "2024"
 
 
 [lib]
@@ -11,14 +11,9 @@ crate-type = ["cdylib"]
 [dependencies]
 sys = { path = "../sys" }
 field = { path = "../field" }
-protocol = { path = "../protocol",  default-features = false }
+protocol = { path = "../protocol" }
 hex = "0.4.3"
 wasm-bindgen = "0.2.100"
-
-
-[features]
-default = ["db-sled"]
-db-sled = ["protocol/db-sled"]
 
 
 [profile.dev]

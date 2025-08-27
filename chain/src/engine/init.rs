@@ -1,6 +1,6 @@
 
 
-fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>, is_state_upgrade: bool) -> Arc<dyn Block> {
+fn load_root_block(minter: &dyn Minter, disk: Arc<dyn DiskDB>, is_state_upgrade: bool) -> Arc<dyn Block> {
     let ret_gns_blk = ||{
         minter.genesis_block().clone()
     };
@@ -14,7 +14,7 @@ fn load_root_block(minter: &dyn Minter, disk: Arc<DiskKV>, is_state_upgrade: boo
     if 0 == rhein {
         return ret_gns_blk() // genesis block
     }
-    let Some((_, _, resblk)) = disk.block_by_height(rhei) else {
+    let Some((_, _, resblk)) = load_block_by_height(&disk, rhei) else {
         panic!("cannot load root block {}", rhein)
     };
     resblk.into()
@@ -38,7 +38,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
     // insert lock
     loop {
         next_height += 1;
-        let Some((hx, blkdata, block)) = this.store.block_by_height(&next_height.into()) else {
+        let Some((hx, blkdata, block)) = load_block_by_height(&this.store, &next_height.into()) else {
             break; // end finish
         };
         // assert_eq!(blkdata, block.serialize(), "assert_eq block {}", block.height().uint());
@@ -56,7 +56,7 @@ fn rebuild_unstable_blocks(this: &ChainEngine) {
             hash: hx,
             data: blkdata,
             objc: block,
-            orgi: BlkOrigin::REBUILD
+            orgi: BlkOrigin::Rebuild
         });
         if let Err(e) = ier {
             panic!("[State Panic] rebuild block {} state error: {}", next_height, e);

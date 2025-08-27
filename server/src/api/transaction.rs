@@ -283,7 +283,7 @@ async fn transaction_exist(State(ctx): State<ApiCtx>, q: Query<Q3457>) -> impl I
         return api_error("transaction not find")
     };
     let bkey = txp.to_string();
-    let blkpkg = ctx.load_block(&store, &bkey);
+    let blkpkg = ctx.load_block(store.as_ref(), &bkey);
     if let Err(_) = blkpkg {
         return api_error("cannot find block by transaction ptr")
     }

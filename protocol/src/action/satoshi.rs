@@ -3,7 +3,7 @@
 *
 */
 action_define!{ SatToTrs, 10, 
-    ActLv::MAIN_CALL, // level
+    ActLv::MainCall, // level
     false, // burn 90 fee
     [], // need sign
     {
@@ -20,7 +20,7 @@ action_define!{ SatToTrs, 10,
 
 
 action_define!{ SatFromTrs, 11, 
-    ActLv::MAIN_CALL, // level
+    ActLv::MainCall, // level
     false, // burn 90 fee
     [self.from], // need sign
     {
@@ -37,7 +37,7 @@ action_define!{ SatFromTrs, 11,
 
 
 action_define!{ SatFromToTrs, 12, 
-    ActLv::MAIN_CALL, // level
+    ActLv::MainCall, // level
     false, // burn 90 fee
     [self.from], // need sign
     {

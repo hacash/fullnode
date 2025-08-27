@@ -12,9 +12,9 @@ use protocol::block::*;
 use protocol::state::*;
 use protocol::difficulty::*;
 use protocol::interface::*;
-use protocol::*;
 use protocol::transaction::*;
-use chain::interface::*;
+use protocol::component::*;
+// use chain::interface::*;
 
 
 include!{"def.rs"}

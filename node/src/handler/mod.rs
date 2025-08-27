@@ -10,12 +10,10 @@ use protocol::*;
 use protocol::block::*;
 
 use field::interface::*;
-use chain::interface::*;
 use protocol::interface::*;
-use chain::memtxpool::*;
+use protocol::component::*;
 use mint::*;
 
-use super::*;
 use super::peer::*;
 
 

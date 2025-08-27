@@ -14,7 +14,7 @@ async fn submit_transaction(State(ctx): State<ApiCtx>, q: Query<Q4396>, body: By
     let bddts = q_body_data_may_hex!(q, body);
     // println!("get tx body: {}", hex::encode(&bddts));
     // parse
-    let txpkg = TxPkg::build( bddts );
+    let txpkg = protocol::transaction::build_tx_package( bddts );
     if let Err(e) = txpkg {
         return api_error(&format!("transaction parse error: {}", &e))
     }

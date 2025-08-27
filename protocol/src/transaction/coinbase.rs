@@ -80,7 +80,7 @@ impl Transaction for TransactionCoinbase {
 
     fn set_nonce(&mut self, nonce: Hash) { 
         match &mut self.extend.extend {
-            Some(ref mut d) => d.miner_nonce = nonce,
+            Some(d) => d.miner_nonce = nonce,
             _ => (), // do nothing
         };
     }

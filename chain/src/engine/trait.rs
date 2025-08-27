@@ -68,8 +68,8 @@ impl EngineRead for ChainEngine {
         sub_state
     }
     
-    fn store(&self) -> BlockStore {
-        BlockStore::wrap(self.disk.clone())
+    fn store(&self) -> Arc::<dyn Store> {
+        Arc::new(BlockStore::wrap(self.disk.clone()))
     }
 
     fn recent_blocks(&self) -> Vec<Arc<RecentBlockInfo>> {
@@ -116,18 +116,18 @@ impl EngineRead for ChainEngine {
         // execute
         let hash = Hash::from([0u8; 32]); // empty hash
         // ctx
-        let env = ctx::Env{
-            chain: ctx::Chain{
+        let env = protocol::Env {
+            chain: ChainInfo {
                 id: self.cnf.chain_id,
                 diamond_form: false,
                 fast_sync: false,
             },
-            block: ctx::Block{
+            block: BlkInfo {
                 height: pd_hei,
                 hash,
                 coinbase: Address::default(),
             },
-            tx: ctx::Tx::create(tx),
+            tx: create_tx_info(tx),
         };
         // cast mut to box
         let sub = unsafe { Box::from_raw(sub_state.as_mut() as *mut dyn State) };
@@ -294,7 +294,7 @@ impl Engine for ChainEngine {
                 };
                 let (left, right) = blockdts.split_at_mut(seek);
                 let mut pkg = BlockPkg::new(blkobj, left.into());
-                pkg.set_origin( BlkOrigin::SYNC );
+                pkg.set_origin( BlkOrigin::Sync );
                 if pkg.hein != need_blk_hei {
                     let _ = errch.send(format!("need block height {} but got {}", need_blk_hei, pkg.hein));
                     break // err end

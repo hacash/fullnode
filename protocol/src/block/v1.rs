@@ -81,30 +81,29 @@ impl BlockRead for BlockV1 {
 }
 
 impl BlockExec for BlockV1 {
-    fn execute(&self, ccnf: ctx::Chain, state: Box<dyn State>) -> Ret<Box<dyn State>> {
+    fn execute(&self, ccnf: ChainInfo, state: Box<dyn State>) -> Ret<Box<dyn State>> {
         // create env
-        let mut env = ctx::Env{
+        let mut env = Env {
             chain: ccnf,
-            block: ctx::Block{
+            block: BlkInfo {
                 height: self.height().uint(),
                 hash: self.hash(),
                 coinbase: Address::default(),
             },
-            tx: ctx::Tx::default(),
+            tx: TxInfo::default(),
         };
         // coinbase 
         let cbtx = self.coinbase_transaction()?;
         let base_addr = cbtx.main();
         env.block.coinbase = base_addr.clone();
         // create ctx
-        let mut ctxobj = ctx::ContextInst::new(env, state, cbtx);
+        let mut ctxobj = context::ContextInst::new(env, state, cbtx);
         let ctx = &mut ctxobj;
         let txs = self.transactions();
         let mut total_fee = Amount::zero();
         // exec each tx
         for tx in txs {
-            ctx.env.replace_tx(tx.as_read()); // set env
-            // ctx.env.tx = ctx::Tx::create(tx.as_read()); // set env
+            ctx.env.replace_tx( create_tx_info(tx.as_read()) ); // set env
             ctx.txr = tx.as_read();
             tx.execute(ctx)?; // do exec
             total_fee = total_fee.add_mode_u64(&tx.fee_got())?; // add fee
