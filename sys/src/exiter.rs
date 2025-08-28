@@ -2,26 +2,35 @@ use std::{sync::*, thread::sleep};
 
 use async_broadcast::{broadcast, Sender, Receiver, Recv, TryRecvError};
 
+type JobCount = Arc<Mutex<isize>>;
+
+
 #[derive(Clone)]
 pub struct Worker {
-    jobs: Arc<Mutex<isize>>,
+    jobs: Arc<Mutex<Option<JobCount>>>,
     receiver: Receiver<()>,
 }
 
 impl Worker {
 
     pub fn fork(&self) -> Self {
-        let mut jobs = self.jobs.lock().unwrap();
-        *jobs += 1;
+        let mut jbw =  self.jobs.lock().unwrap();
+        let Some(jobs) = jbw.as_mut() else {
+            panic!("cannot fork worker on end one");
+        };
+        let mut jbn = jobs.lock().unwrap();
+        *jbn += 1;
         Self {
-            jobs: self.jobs.clone(),
+            jobs: Arc::new(Some(jobs.clone()).into()),
             receiver: self.receiver.clone(),
         }
     }
 
     pub fn end(&self) {
-        let mut jobs = self.jobs.lock().unwrap();
-        *jobs -= 1;
+        if let Some(jobs) = self.jobs.lock().unwrap().take() {
+            let mut jbn = jobs.lock().unwrap();
+            *jbn -= 1;
+        }
     }
 
     pub fn wait(&mut self) -> Recv<'_, ()> {
@@ -45,7 +54,7 @@ impl Worker {
 #[allow(dead_code)]
 #[derive(Clone)]
 pub struct Exiter {
-    jobs: Arc<Mutex<isize>>,
+    jobs: JobCount,
     sender: Sender<()>,
     receiver: Receiver<()>,
 }
@@ -63,6 +72,7 @@ impl Exiter {
     }
 
     pub fn exit(&self) {
+        // broadcast to nitify all thread to quit
         let _ = self.sender.broadcast_blocking(());
     }
 
@@ -70,7 +80,7 @@ impl Exiter {
         let mut jobs = self.jobs.lock().unwrap();
         *jobs += 1;
         Worker {
-            jobs: self.jobs.clone(),
+            jobs: Arc::new(Some(self.jobs.clone()).into()),
             receiver: self.receiver.clone()
         }
     }
