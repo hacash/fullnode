@@ -11,6 +11,12 @@ pub struct Worker {
     receiver: Receiver<()>,
 }
 
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.end();
+    }
+}
+
 impl Worker {
 
     pub fn fork(&self) -> Self {
