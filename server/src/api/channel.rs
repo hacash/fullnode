@@ -36,13 +36,13 @@ async fn channel(State(ctx): State<ApiCtx>, q: Query<Q7542>) -> impl IntoRespons
         "interest_attribution", *channel.interest_attribution,
         "left", json!(jsondata!{
             "address", channel.left_bill.address.readable(),
-            "hacash", channel.left_bill.hacsat.amount.to_unit_string(&unit),
-            "satoshi", *channel.left_bill.hacsat.satoshi.value(),
+            "hacash", channel.left_bill.balance.hacash.to_unit_string(&unit),
+            "satoshi", channel.left_bill.balance.satoshi.uint(),
         }),
         "right", json!(jsondata!{
             "address", channel.right_bill.address.readable(),
-            "hacash", channel.right_bill.hacsat.amount.to_unit_string(&unit),
-            "satoshi", *channel.right_bill.hacsat.satoshi.value(),
+            "hacash", channel.right_bill.balance.hacash.to_unit_string(&unit),
+            "satoshi", channel.right_bill.balance.satoshi.uint(),
         }),
     };
 
@@ -68,8 +68,8 @@ async fn channel(State(ctx): State<ApiCtx>, q: Query<Q7542>) -> impl IntoRespons
     // if status == 2 or 3 // closed  status == 2 || status == 3 
     if let Some(distribution) = channel.if_distribution.if_value() {
         data.insert("distribution", json!(jsondata!{
-            "hacash", distribution.left_bill.amount.to_unit_string(&unit),
-            "satoshi", distribution.left_bill.satoshi.value().uint(),
+            "hacash", distribution.left_bill.hacash.to_unit_string(&unit),
+            "satoshi", distribution.left_bill.satoshi.uint(),
         }));
     }
 

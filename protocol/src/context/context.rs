@@ -8,7 +8,7 @@ pub struct ContextInst<'a> {
     pub depth: CallDepth,
     pub txr: &'a dyn TransactionRead,
 
-    pub vmi: Box<dyn VMI>,
+    pub vmi: Box<dyn VM>,
 
     sta: Box<dyn State>,
     check_sign_cache: HashMap<Address, Ret<bool>>,
@@ -58,8 +58,8 @@ impl Context for ContextInst<'_> {
     */
 
     fn tx(&self) -> &dyn TransactionRead { self.txr }
-    fn vm(&mut self) -> &mut dyn VMI { self.vmi.as_mut() }
-    fn vm_replace(&mut self, vm: Box<dyn VMI>) -> Box<dyn VMI> {
+    fn vm(&mut self) -> &mut dyn VM { self.vmi.as_mut() }
+    fn vm_replace(&mut self, vm: Box<dyn VM>) -> Box<dyn VM> {
         std::mem::replace(&mut self.vmi, vm)
     }
     fn addr(&self, ptr :&AddrOrPtr) -> Ret<Address> {

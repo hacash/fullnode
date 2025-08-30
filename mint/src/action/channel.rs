@@ -80,12 +80,14 @@ fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
         open_height: Uint5::from(pd_hei),
         arbitration_lock_block: Uint2::from(5000), // lock period is about 17 days
         interest_attribution: CHANNEL_INTEREST_ATTRIBUTION_TYPE_DEFAULT,
-        left_bill: AddrHacSat{
+        left_bill: AddrBalance {
             address: left_addr.clone(),
-            hacsat: HacSat{amount: left_amt.clone(), satoshi: SatoshiOptional::default()}},
-        right_bill: AddrHacSat{
+            balance: Balance::hac(left_amt.clone()),
+        },
+        right_bill:  AddrBalance {
             address: right_addr.clone(),
-            hacsat: HacSat{amount: right_amt.clone(), satoshi: SatoshiOptional::default()}},
+            balance: Balance::hac(right_amt.clone()),
+        },
         if_challenging: ChallengePeriodDataOptional::default(), // none
         if_distribution: ClosedDistributionDataOptional::default(), // none
     };

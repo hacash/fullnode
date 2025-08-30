@@ -3,7 +3,7 @@
 pub trait State : Send + Sync {
     fn fork_sub(&self, _: Weak<dyn State>) -> Box<dyn State> { never!() }
     fn merge_sub(&mut self, _: Box<dyn State>) { never!() }
-    fn to_mem(&self) -> MemMap { never!() }
+    fn as_mem(&self) -> &MemMap { never!() }
 
     // fn set_parent(&mut self, _: Arc<dyn State>) { never!() }
     fn disk(&self) -> Arc<dyn DiskDB> { never!() }

@@ -4,10 +4,8 @@ pub fn close_channel_default(pdhei: u64, ctx: &mut dyn Context, channel_id: &Cha
 ) -> Ret<Vec<u8>> {
     close_channel_with_distribution(
         pdhei, ctx, channel_id, paychan, 
-        &paychan.left_bill.hacsat.amount,
-        &paychan.right_bill.hacsat.amount,
-        &paychan.left_bill.hacsat.satoshi.value(),
-        &paychan.right_bill.hacsat.satoshi.value(),
+        &paychan.left_bill.balance,
+        &paychan.right_bill.balance,
         false,
     )
 }
@@ -19,10 +17,15 @@ pub fn close_channel_default(pdhei: u64, ctx: &mut dyn Context, channel_id: &Cha
  */
 pub fn close_channel_with_distribution(pdhei: u64, ctx: &mut dyn Context, channel_id: &ChannelId, 
     paychan: &ChannelSto, 
-    left_amt: &Amount,  right_amt: &Amount,
-    left_sat: &Satoshi, right_sat: &Satoshi,
+    left_bls: &Balance,  right_bls: &Balance,
     is_final_closed: bool,
 ) -> Ret<Vec<u8>> {
+    // bls
+    let left_amt  = &left_bls.hacash;
+    let right_amt = &right_bls.hacash;
+    let left_sat  = &left_bls.satoshi;
+    let right_sat = &right_bls.satoshi;
+
 
     // check
     if paychan.status != CHANNEL_STATUS_OPENING {
@@ -33,11 +36,11 @@ pub fn close_channel_with_distribution(pdhei: u64, ctx: &mut dyn Context, channe
 	if left_amt.is_negative() || right_amt.is_negative() {
 		return errf!("channel distribution amount cannot be negative.")
 	}
-    let ttamt = paychan.left_bill.hacsat.amount.add_mode_u64(&paychan.right_bill.hacsat.amount)?;
+    let ttamt = paychan.left_bill.balance.hacash.add_mode_u64(&paychan.right_bill.balance.hacash)?;
     if  left_amt.add_mode_u64(right_amt)? != ttamt {
         return errf!("HAC distribution amount must equal with lock in.")
     }
-    let ttsat = paychan.left_bill.hacsat.satoshi.value() + paychan.right_bill.hacsat.satoshi.value();
+    let ttsat = paychan.left_bill.balance.satoshi + paychan.right_bill.balance.satoshi;
     if *left_sat + *right_sat != ttsat {
         return errf!("BTC distribution amount must equal with lock in.")
     }
@@ -71,17 +74,19 @@ pub fn close_channel_with_distribution(pdhei: u64, ctx: &mut dyn Context, channe
     if *ttsat > 0 {
         ttcount.channel_deposit_sat -= *ttsat;
         if left_sat.uint() > 0 {
-            sat_add(ctx, left_addr, left_sat)?;
+            sat_add(ctx, left_addr, &left_sat.to_satoshi())?;
         }
         if right_sat.uint() > 0 {
-            sat_add(ctx, right_addr, right_sat)?;
+            sat_add(ctx, right_addr, &right_sat.to_satoshi())?;
         }
     }
     // save channel
     let distribution = ClosedDistributionDataOptional::must(ClosedDistributionData{
-        left_bill: HacSat{
-            amount: left_amt.clone(),
-            satoshi: SatoshiOptional::must(left_sat.clone()),
+        left_bill: Balance {
+            hacash: left_amt.clone(),
+            satoshi: left_sat.clone(),
+            diamond: DiamondNumberAuto::new(),
+            assets: AssetAmtW1::new(),
         }
     });
     let mut savechan = paychan.clone();

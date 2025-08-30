@@ -32,6 +32,12 @@ combi_struct!{ AddrHacSat,
 	hacsat : HacSat
 }
 
+// AddrBalance
+combi_struct!{ AddrBalance, 
+	address: Address
+	balance: Balance
+}
+
 combi_list!{ AssetAmtW1, Uint1, AssetAmt }
 
 // Balance

@@ -36,11 +36,11 @@ impl State for StateInst {
     }
 
     fn merge_sub(&mut self, sta: Box<dyn State>) {
-        self.mem.memry.extend(sta.to_mem())
+        self.mem.memry.extend(sta.as_mem().clone())
     }
 
-    fn to_mem(&self) -> MemMap {
-        self.mem.memry.clone()
+    fn as_mem(&self) -> &MemMap {
+        &self.mem.memry
     }
     
     fn write_to_disk(&self) {

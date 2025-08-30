@@ -18,8 +18,8 @@ pub trait Context : ExtActCal {
     // fn depth_add(&mut self) { never!() }
     // fn depth_sub(&mut self) { never!() }
     fn tx(&self) -> &dyn TransactionRead;
-    fn vm(&mut self) -> &mut dyn VMI;
-    fn vm_replace(&mut self, _: Box<dyn VMI>) -> Box<dyn VMI>;
+    fn vm(&mut self) -> &mut dyn VM;
+    fn vm_replace(&mut self, _: Box<dyn VM>) -> Box<dyn VM>;
     
 }
 
