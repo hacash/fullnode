@@ -1,0 +1,192 @@
+
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy)]
+pub enum CallTy {
+    Main = 1,
+    Abst = 2,
+}
+
+
+
+
+
+
+
+pub const FN_SIGN_WIDTH: usize = 4;
+pub type FnSign = [u8; FN_SIGN_WIDTH];
+
+pub fn calc_func_sign(name: &str) -> FnSign {
+    Hash::from(sys::sha3(name)).check().into_array()
+}
+ 
+pub trait ToHex { fn hex(&self) -> String; }
+impl ToHex for [u8; FN_SIGN_WIDTH] {
+    fn hex(&self) -> String {
+        hex::encode(self)
+    }
+}
+
+
+
+
+//////////////////////////////////////////
+
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, Default)]
+pub enum CodeType {
+    #[default] Bytecode = 0,
+    IRNode      = 1,
+}
+
+impl CodeType {
+    pub fn parse(n: u8) -> VmrtRes<Self> {
+        let ct = n & 0b00000111;
+        if ![
+            Self::Bytecode as u8,
+            Self::IRNode as u8,
+        ].contains(&ct) {
+            return itr_err_code!(ItrErrCode::CodeTypeError)
+        }
+        Ok(std_mem_transmute!(ct))
+    }
+}
+
+
+
+//////////////////////////////////////////
+
+
+
+pub enum FnKey {
+    Abst(AbstCall),
+    User(FnSign),
+}
+
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone)]
+pub enum FnConf {
+    IsPublic = 0b10000000,
+}
+
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Default)]
+pub struct FnObj {
+    pub confs: u8, // binary switch
+    pub ctype: CodeType,
+    pub codes: Vec<u8>,
+}
+
+impl FnObj {
+    
+    pub fn conf(&self, cnf: FnConf) -> bool {
+        let cnfset = cnf as u8;
+        self.confs & cnfset == cnfset
+    } 
+
+    pub fn create(mks: u8, codes: Vec<u8>) -> VmrtRes<Self> {
+        let ctype = CodeType::parse(mks)?;
+        Ok(Self {confs: mks, ctype, codes })
+    }
+
+    pub fn into_array(self) -> Vec<u8> {
+        self.codes
+    }
+}
+
+
+
+#[derive(Debug, Clone)]
+pub enum CallExit {
+    Abort,          // throw nil
+    Throw,          // throw <ERR>
+    Finish,         // func ret nil
+    Return,         // func ret <DATA>
+    Call(Funcptr),  // call func
+}
+
+
+
+
+#[derive(Debug, Clone)]
+pub enum CallTarget {
+    Location,
+    Libidx(u8),
+    Addr(ContractAddress),
+}
+
+impl CallTarget {
+    pub fn idx(&self) -> u8 {
+        match self {
+            CallTarget::Libidx(i) => *i,
+            _ => 0,
+        }
+    }
+}
+
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum CallMode {
+    #[default] Main,
+    Abst,
+    External,
+    Location,
+    Library,
+    Static,
+    Code,
+}
+
+
+#[derive(Debug, Clone)]
+pub struct Funcptr {
+    pub mode: CallMode,
+    pub target: CallTarget,
+    pub fnsign: FnSign,
+}
+
+
+//////////////////////////////////////////
+
+
+macro_rules! abst_call_type_define {
+    ( $( $k:ident : $v:expr )+ ) => {
+
+        #[allow(non_camel_case_types)]
+        #[repr(u8)]
+        #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+        pub enum AbstCall {
+        $(
+            $k = $v,
+        )+
+        }
+        impl AbstCall {
+            pub fn check(n: u8) -> VmrtErr {
+                if [$($v),+].contains(&n) {
+                    return Ok(())
+                }
+                itr_err_fmt!(ItrErrCode::AbstTypeError, "AbstCall type {} not find", n)
+            }
+        }
+
+    }
+}
+
+abst_call_type_define! {
+    Change       : 1u8
+    Append       : 2
+
+    PermitHAC    : 5
+    PermitHACD   : 6
+    PermitSAT    : 7
+    PermitAsset  : 8
+
+    PayableHAC   : 15
+    PayableHACD  : 16
+    PayableSAT   : 17
+    PayableAsset : 18
+}
+
+

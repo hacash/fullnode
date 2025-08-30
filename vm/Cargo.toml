@@ -1,0 +1,20 @@
+[package]
+name = "vm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+sys = {path = "../sys"}
+field = {path = "../field"}
+protocol = {path = "../protocol"}
+server = {path = "../server"}
+lazy_static = "1.5.0"
+concat-idents = "1.1.5"
+dyn-clone = "1.0.17"
+hex = "0.4.3"
+sha2 = "0.10.2"
+sha3 = "0.10.1"
+ripemd = "0.1.1"
+axum = "0.7.9"
+serde = "1.0.215"
+serde_json = "1.0.133"

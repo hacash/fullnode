@@ -15,6 +15,7 @@ chain = {path = "./chain"}
 node = {path = "./node"}
 server = {path = "./server"}
 app = {path = "./app"}
+vm = {path = "./vm"}
 
 
 [features]
