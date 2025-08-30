@@ -16,10 +16,6 @@ impl HacashMinter {
 
     pub fn create(ini: &IniObj) -> Self {
 
-        // setup hook
-        protocol::block::setup_block_hasher( x16rs::block_hash );
-        protocol::action::setup_extend_actions_try_create(1, action::try_create);
-
         // create
         let cnf = MintConf::new(ini);
         let dgnr = DifficultyGnr::new(cnf.clone());

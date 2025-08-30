@@ -14,7 +14,7 @@ pub enum ActLv {
     Top           =  -2,      // must on top
     Ast           =  -1,      // on act cond AST 
     MainCall      =   0,      // must in tx main call with depth 0
-    ContractCall  =   1,      // system call or other contract call
+    ContractCall  =   1,      // abst call or other contract call
     Any           = 127,      // any where
 }
 

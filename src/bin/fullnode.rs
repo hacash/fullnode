@@ -37,6 +37,11 @@ pub fn run_with_config(cnfpath: &str) {
 
 pub fn run_with_scaner(cnfpath: &str, scan: Box<dyn Scaner>) {
 
+    // setup hook
+    protocol::block::setup_block_hasher( x16rs::block_hash );
+    protocol::action::setup_extend_actions_try_create(1, mint::action::try_create);
+
+
     // build & setup
     let mut builder =  Builder::new(cnfpath);
 
