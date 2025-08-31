@@ -15,11 +15,12 @@ chain = {path = "./chain"}
 node = {path = "./node"}
 server = {path = "./server"}
 app = {path = "./app"}
-vm = {path = "./vm"}
+vm = {path = "./vm", optional = true }
 
 
 [features]
 default = ["db-sled"]
+hvm = ["dep:vm"]
 db-sled = ["db/db-sled"]
 db-rusty-leveldb = ["db/db-rusty-leveldb"]
 db-leveldb-sys = ["db/db-leveldb-sys"]
