@@ -122,6 +122,8 @@ cp target/x86_64-apple-darwin/release/diaworker ./hacash_diaworker_macos
 ```sh
 cp ./hacash.config.ini ./target/debug/   && RUST_BACKTRACE=1 cargo run
 cp ./hacash.config.ini ./target/release/ && RUST_BACKTRACE=1 cargo run --release
+## vm test
+cp ./hacash.config.ini ./target/release/   && RUST_BACKTRACE=1 cargo run --release --no-default-features --features "hvm db-leveldb-sys"
 ```
 
 

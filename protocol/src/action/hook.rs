@@ -28,7 +28,7 @@ pub fn setup_extend_actions_try_create(idx: usize, f: FnExtendActionsTryCreateFu
     Action hook
 */
 
-pub type FnActionHookFunc = fn(u16, _: &dyn Any, _: &mut dyn Context, _: &mut u32) -> Rerr ;
+pub type FnActionHookFunc = fn(u16, _act: &dyn Any, _ctx: &mut dyn Context, _gas: &mut u32) -> Rerr ;
 
 pub static mut ACTION_HOOK_FUNC: FnActionHookFunc = |_,_,_,_|Ok(());
 
