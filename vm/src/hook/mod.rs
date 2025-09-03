@@ -12,6 +12,5 @@ use super::rt::*;
 use super::machine::*;
 
 
-include!{"test.rs"}
 include!{"action.rs"}
 include!{"api.rs"}

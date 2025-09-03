@@ -7,16 +7,15 @@
 
 #[cfg(test)]
 mod maincall {
-    use vm::action::*;
     use ::field::interface::*;
     use field::*;
     use protocol::action::*;
     use protocol::interface::*;
     use protocol::transaction::*;
-    use mint::action::*;
     use sys::*;
     use vm::*;
     use vm::rt::*;
+    use vm::action::*;
 
 
     fn curl_trs(acts: Vec<Box<dyn Action>>) {
@@ -97,6 +96,8 @@ mod maincall {
 
     #[test]
     fn test3() {
+
+        use mint::action::*;
 
         let addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
         let caddr = ContractAddress::calculate(&addr, &Uint4::default());

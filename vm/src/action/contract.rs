@@ -32,7 +32,7 @@ action_define!{ContractDeploy, 122,
             return errf!("contract {} already exist", (*caddr).readable())
         }
         // check
-        self.contract.check(hei).map_err(|e|e.to_string())?;
+        map_itr_err!(self.contract.check(hei))?;
         // save the contract
         vmsto!(ctx).contract_set(&caddr, &self.contract);
         Ok(vec![])
@@ -63,8 +63,8 @@ action_define!{ContractChange, 123,
             return errf!("contract {} not exist", (*caddr).readable())
         };
         // merge and check
-		self.contract.check(hei).map_err(|e|e.to_string())?;
-        let is_edit = contract.merge(&self.contract, hei).map_err(|e|e.to_string())?;
+		map_itr_err!(self.contract.check(hei))?;
+        let is_edit = map_itr_err!(contract.merge(&self.contract, hei))?;
         let depth = 1; // sys call depth is 1
         let cty = CallTy::Abst as u8;
         let sys = maybe!(is_edit, Change, Append) as u8; // Upgrade or Append

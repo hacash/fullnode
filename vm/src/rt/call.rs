@@ -19,6 +19,16 @@ pub type FnSign = [u8; FN_SIGN_WIDTH];
 pub fn calc_func_sign(name: &str) -> FnSign {
     Hash::from(sys::sha3(name)).check().into_array()
 }
+
+pub fn checked_func_sign(s: &[u8]) -> VmrtRes<FnSign> {
+    if s.len() != FN_SIGN_WIDTH {
+        return itr_err!(ContractAddrErr, "fn sign size error")
+    }
+    Ok(s.to_vec().try_into().unwrap())
+}
+
+
+
  
 pub trait ToHex { fn hex(&self) -> String; }
 impl ToHex for [u8; FN_SIGN_WIDTH] {
@@ -82,7 +92,7 @@ pub struct FnObj {
 
 impl FnObj {
     
-    pub fn conf(&self, cnf: FnConf) -> bool {
+    pub fn check_conf(&self, cnf: FnConf) -> bool {
         let cnfset = cnf as u8;
         self.confs & cnfset == cnfset
     } 
@@ -136,7 +146,7 @@ pub enum CallMode {
     Location,
     Library,
     Static,
-    Code,
+    CodeCopy,
 }
 
 

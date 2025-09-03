@@ -4,14 +4,14 @@
 #[repr(u8)]
 #[derive(Default, PartialEq, Debug, Clone, Copy)]
 pub enum ItrErrCode {
-    ContractError    = 1u8,
-    NotFindContract  = 2,
-    AbstTypeError  = 3,
-    CodeTypeError    = 4,
-    InheritsError    = 5,
-    LibrarysError    = 6,
-    ComplieError     = 7, 
-    ContractAddrErr  = 8,
+    ContractError      = 1u8,
+    NotFindContract    = 2,
+    AbstTypeError      = 3,
+    CodeTypeError      = 4,
+    InheritsError      = 5,
+    LibrarysError      = 6,
+    ComplieError       = 7, 
+    ContractAddrErr    = 8,
     ContractUpgradeErr = 9,
 
     CodeError       = 11,
@@ -48,31 +48,32 @@ pub enum ItrErrCode {
     CallLibOverflow  = 52,
     CallInvalid      = 53,
     CallExitInvalid  = 54,
-    CallInCodeCall   = 55,
-    CallInAbst     = 56,
+    CallInCodeCopy   = 55,
+    CallInAbst       = 56,
     CallOtherInMain  = 57,
-    CallNoReturn     = 58,
-    CallNotPublic    = 59,
+    CallLocInLib     = 58,
+    CallLibInStatic  = 59,
+    CallNoReturn     = 60,
+    CallNotPublic    = 61,
     
-    CastFail      = 61,
-    CastParamFail = 62,
+    CastFail         = 71,
+    CastParamFail    = 72,
     
-    Arithmetic        = 71,
-    BytesHandle       = 72,
-    NativeCallError   = 73,
+    Arithmetic        = 81,
+    BytesHandle       = 82,
+    NativeCallError   = 83,
 
-    ExtActCallError  = 81,
+    ExtActCallError   = 91,
 
-    StorageKeyInvalid  = 91,
-    StorageKeyNotFind  = 92,
-    StorageExpired     = 93,
-    StorageNotExpired  = 94,
-    StoragePeriodErr   = 95,
-    StorageValSizeErr  = 96,
-    StorageRestoreNotMatch  = 97,
+    StorageKeyInvalid       = 101,
+    StorageKeyNotFind       = 102,
+    StorageExpired          = 103,
+    StorageNotExpired       = 104,
+    StoragePeriodErr        = 105,
+    StorageValSizeErr       = 106,
+    StorageRestoreNotMatch  = 107,
 
-
-    ThrowAbort = 101, // user code call
+    ThrowAbort = 111, // user code call
 
     #[default] NeverError = 255,
 }
@@ -114,10 +115,19 @@ impl IntoVmrt for Vec<u8> {
 
 #[allow(unused)]
 macro_rules! map_itr_err {
-    ($e : expr) => {
+    ($e: expr) => {
         $e.map_err(|a|a.to_string())
     }
 }
+
+
+#[allow(unused)]
+macro_rules! map_err_itr {
+    ($c: expr, $e: expr) => {
+        $e.map_err(|e|ItrErr($c, e.to_string()))
+    }
+}
+
 
 
 #[allow(unused)]

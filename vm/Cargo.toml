@@ -18,3 +18,7 @@ ripemd = "0.1.1"
 axum = "0.7.9"
 serde = "1.0.215"
 serde_json = "1.0.133"
+
+
+[dev-dependencies]
+mint = {path = "../mint"}

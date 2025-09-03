@@ -42,6 +42,15 @@ impl Address {
     }}
     )+
 
+    pub fn from_bytes(stuff: &[u8]) -> Ret<Self> {
+        if stuff.len() != Self::SIZE {
+            return errf!("address size not match")
+        }
+        let addr = Self::from(stuff.to_vec().try_into().unwrap());
+        addr.check_version()?;
+        Ok(addr)
+    }
+
 }   
 
     }

@@ -1,6 +1,5 @@
 
 
-
 fn buf_to_uint(buf: &[u8]) -> VmrtRes<Value> {
     let rlbts = buf_drop_left_zero(buf, 0);
     let sizen = rlbts.len();
@@ -116,6 +115,26 @@ impl Value {
 
     pub fn checked_bool_not(&self) -> VmrtRes<bool> {
         Ok(!self.checked_bool()?)
+    }
+
+    pub fn checked_address(&self) -> VmrtRes<Address> {
+        match self {
+            Bytes(adr) => map_err_itr!(CastParamFail, Address::from_bytes(adr)),
+            _ => itr_err_fmt!(CastParamFail, "cannot cast {:?} to address", self)
+        }
+    }
+
+    pub fn checked_contract_address(&self) -> VmrtRes<ContractAddress> {
+        let addr = self.checked_address()?;
+        map_err_itr!(ContractAddrErr, ContractAddress::from_addr(addr))
+    }
+
+    pub fn checked_fnsign(&self) -> VmrtRes<FnSign> {
+        match self {
+            U32(u) => Ok(u.to_be_bytes()),
+            Bytes(b) => checked_func_sign(&b),
+            _ => itr_err_fmt!(ContractAddrErr, "cannot cast {:?} to fn sign", self)
+        }
     }
 
 

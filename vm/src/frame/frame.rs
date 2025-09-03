@@ -63,8 +63,8 @@ pub struct Frame {
     pub oprnds: Stack,
     pub locals: Stack,
     pub heap: Heap,
-    pub ctxbase: ContractAddress, 
-    pub curcall: ContractAddress, 
+    pub ctxadr: ContractAddress, 
+    pub curadr: ContractAddress, 
 }
 
 
@@ -96,8 +96,8 @@ impl Frame {
         let cap = &r.space_cap;
         f.oprnds.reset(cap.total_stack - self.oprnds.len());
         f.locals.reset(cap.total_local - self.locals.len());
-        f.ctxbase = self.ctxbase.clone();
-        f.curcall = self.curcall.clone();
+        f.ctxadr = self.ctxadr.clone();
+        f.curadr = self.curadr.clone();
         f.depth = self.depth + 1;
         f
     }
@@ -152,8 +152,8 @@ impl Frame {
             &mut r.memory_vals,
             env.ctx.as_ext_caller(),
             env.sta,
-            &self.ctxbase,
-            &self.curcall,
+            &self.ctxadr,
+            &self.curadr,
         )
     }
 

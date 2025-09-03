@@ -58,7 +58,7 @@ macro_rules! func_list_merge_define {
 		fn check_merge(&mut self, src: &Self) -> VmrtRes<bool> {
 			let mut edit = false;
 			for a in src.list() {
-				if self.addition(a.clone()).map_err(|e|ItrErr(ContractUpgradeErr, e.to_string()))? {
+				if map_err_itr!(ContractUpgradeErr, self.addition(a.clone()))? {
 					edit = true;
 				}
 			}

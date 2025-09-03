@@ -99,7 +99,7 @@ impl ValueSto {
 inst_state_define!{ VMState,
 
     201, contract,  ContractAddress  :  ContractSto
-    202, ctrtdata,  ValueKey         :  ValueSto
+    202, ctrtkvdb,  ValueKey         :  ValueSto
 
 }
 
@@ -160,17 +160,17 @@ impl VMState<'_> {
     */
     fn load(&mut self, height: u64, cadr: &ContractAddress, k: &Value) -> VmrtRes<Value> {
         let k = Self::key(cadr, k)?;
-        let Some(mut v) = self.ctrtdata(&k) else {
+        let Some(mut v) = self.ctrtkvdb(&k) else {
             return Ok(Value::Nil) // not find
         };
         let (is_expire, is_delete) = Self::expire(height, &v);
         if is_delete {
-            self.ctrtdata_del(&k);
+            self.ctrtkvdb_del(&k);
             return Ok(Value::Nil) // over delete
         }
         if is_expire {
             if Self::cast_zip(&mut v) {
-                self.ctrtdata_set(&k, &v); // save zip
+                self.ctrtkvdb_set(&k, &v); // save zip
             }
             return Ok(Value::Nil) // time expire
         }
@@ -187,7 +187,7 @@ impl VMState<'_> {
         let mut period = period as u32;
         let vl = v.val_size();
         let k = Self::key(cadr, &k)?;
-        if let Some(vold) = self.ctrtdata(&k) {
+        if let Some(vold) = self.ctrtkvdb(&k) {
             let (exp, _) = Self::period(&vold);
             if height <= exp {
                 let vl_old = vold.data.val_size();
@@ -203,7 +203,7 @@ impl VMState<'_> {
             period: Uint3::from(period),
             data: ValueData::Val1(v),
         };
-        self.ctrtdata_set(&k, &vsto);
+        self.ctrtkvdb_set(&k, &vsto);
         Ok(())
     }
 
@@ -213,7 +213,7 @@ impl VMState<'_> {
             return itr_err_code!(StoragePeriodErr)
         }
         let k = Self::key(cadr, &k)?;
-        let Some(mut v) = self.ctrtdata(&k) else {
+        let Some(mut v) = self.ctrtkvdb(&k) else {
             return itr_err_code!(StorageKeyNotFind)
         };
         let (is_expire, _) = Self::expire(height, &v);
@@ -229,12 +229,12 @@ impl VMState<'_> {
 
     fn restore(&mut self, height: u64, cadr: &ContractAddress, k: Value, v: Value) -> VmrtErr {
         let k = Self::key(cadr, &k)?;
-        let Some(mut oldv) = self.ctrtdata(&k) else {
+        let Some(mut oldv) = self.ctrtkvdb(&k) else {
             return itr_err_code!(StorageKeyNotFind)
         };
         let (is_expire, is_delete) = Self::expire(height, &oldv);
         if is_delete {
-            self.ctrtdata_del(&k);
+            self.ctrtkvdb_del(&k);
             return itr_err_code!(StorageKeyNotFind)
         }
         if ! is_expire {
@@ -249,7 +249,7 @@ impl VMState<'_> {
 
     fn delete(&mut self, cadr: &ContractAddress, k: Value) -> VmrtErr {
         let k = Self::key(cadr, &k)?;
-        self.ctrtdata_del(&k);
+        self.ctrtkvdb_del(&k);
         Ok(())
     }
 

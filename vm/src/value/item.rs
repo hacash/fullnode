@@ -27,13 +27,13 @@ use Value::*;
 
 impl Value {
 
-    pub const TID_NIL: u8   = 0;
-    pub const TID_BOOL: u8  = 1;
-    pub const TID_U8: u8    = 2;
-    pub const TID_U16: u8   = 3;
-    pub const TID_U32: u8   = 4;
-    pub const TID_U64: u8   = 5;
-    pub const TID_U128: u8  = 6;
+    pub const TID_NIL:   u8 =  0;
+    pub const TID_BOOL:  u8 =  1;
+    pub const TID_U8:    u8 =  2;
+    pub const TID_U16:   u8 =  3;
+    pub const TID_U32:   u8 =  4;
+    pub const TID_U64:   u8 =  5;
+    pub const TID_U128:  u8 =  6;
     // pub const TID_U256:  u8 = 7;
     // pub const TID_U512:  u8 = 8;
     // pub const TID_U1024: u8 = 9;

@@ -75,15 +75,19 @@ impl Resoure {
         self.load_fn_by_search_inherits(vmsta, addr, FnKey::Abst(scty))
     }
 
-    pub fn load_must_call(&mut self, vmsta: &mut VMState, fptr: Funcptr, dstadr: &ContractAddress, srcadr: &ContractAddress) -> VmrtRes<(Option<ContractAddress>, Arc<FnObj>)> {
+    /*
+        return (change current address, fnobj)
+    */
+    pub fn load_must_call(&mut self, vmsta: &mut VMState, fptr: Funcptr, dstadr: &ContractAddress, srcadr: &ContractAddress) 
+    -> VmrtRes<(Option<ContractAddress>, Arc<FnObj>)> {
         use CallTarget::*;
         use ItrErrCode::*;
         match match fptr.target {
             Location => (None, self.load_usrfun(vmsta, dstadr, fptr.fnsign)?),
-            Addr(ctxadr) => (None, self.load_usrfun(vmsta, &ctxadr, fptr.fnsign)?),
+            Addr(ctxadr) => (Some(ctxadr.clone()), self.load_usrfun(vmsta, &ctxadr, fptr.fnsign)?),
             Libidx(lib) => self.load_fn_by_search_librarys(vmsta, srcadr, lib, fptr.fnsign).map(|(a,b)|(Some(a), b))?,
         }  {
-            (a, Some(b)) => Ok((a, b)),
+            (b, Some(c)) => Ok((b, c)),
             _ => itr_err_code!(CallNotExist), // 
         }
     }

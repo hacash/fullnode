@@ -180,8 +180,8 @@ pub fn execute_code(
     ctx: &mut dyn ExtActCal,
     state: &mut VMState,
 
-    ctxbase: &ContractAddress, 
-    _addr_src: &ContractAddress, 
+    context_addr: &ContractAddress, 
+    _current_addr: &ContractAddress, 
 
     // _is_sys_call: bool,
     // _call_depth: usize,
@@ -216,7 +216,7 @@ pub fn execute_code(
     macro_rules! pbuf { () => { itrparambuf!(codes, *pc, tail) } }
     macro_rules! pbufl { () => { itrparambufl!(codes, *pc, tail) } }
     macro_rules! pcutbuf { ($w: expr) => { itrbuf!(codes, *pc, tail, $w) } }
-    macro_rules! pctrtaddr { () => { ContractAddress::parse(&pcutbuf!(CONTRACT_ADDRESS_WIDTH)).map_err(|e|ItrErr(ContractAddrErr, e))? }}
+    macro_rules! _pctrtaddr { () => { ContractAddress::parse(&pcutbuf!(CONTRACT_ADDRESS_WIDTH)).map_err(|e|ItrErr(ContractAddrErr, e))? }}
     macro_rules! ops_pop_to_u16 { () => { ops.pop()?.checked_u16()? } }
     macro_rules! ops_peek_to_u16 { () => { ops.peek()?.checked_u16()? } }
 
@@ -276,7 +276,7 @@ pub fn execute_code(
             PU8   => ops.push(U8(pu8!()))?,
             PU16  => ops.push(U16(pu16!()))?,
             PNBUF => ops.push(Value::empty_bytes())?,
-            PBUF  => ops.push( pbuf!())?,
+            PBUF  => ops.push(pbuf!())?,
             PBUFL => ops.push(pbufl!().valid(cap)?)?, // buf long
             // stack & buffer operand
             DUP    => ops.push(ops.last()?)?,
@@ -316,25 +316,25 @@ pub fn execute_code(
                 gas += gst.global_put; },
             GGET => { *ops.peek()? = globals.get(ops.peek()?)?;
                 gas += gst.global_get; },
-            MPUT => { memorys.entry(ctxbase)?.put(ops.pop()?, ops.pop()?)?;
+            MPUT => { memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?;
                 gas += gst.memory_put; },
-            MGET => { *ops.peek()? = memorys.entry(ctxbase)?.get(ops.peek()?)?;
+            MGET => { *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?;
                 gas += gst.memory_get; },
             // storage
             SRENT => {
                 let (period, k) = (ops_pop_to_u16!(), ops.pop()?);
-                let addgas = state.renew(gst, hei, period, ctxbase, k)?;
+                let addgas = state.renew(gst, hei, period, context_addr, k)?;
                 gas += addgas; },
-            SRCV  => { state.restore(hei, ctxbase, ops.pop()?, ops.pop()?)?;
+            SRCV  => { state.restore(hei, context_addr, ops.pop()?, ops.pop()?)?;
                 gas += gst.storage_recover; },
-            SDEL  => state.delete(ctxbase, ops.pop()?)?,
+            SDEL  => state.delete(context_addr, ops.pop()?)?,
             SSAVE => { let period = pu8_as_u16!();
                 let (k, v) = (ops.pop()?, ops.pop()?);
                 let v_size = v.val_size() as i64;
-                state.save(hei, period, ctxbase, k, v)?;
+                state.save(hei, period, context_addr, k, v)?;
                 gas += (gst.storage_save_base + v_size ) * period as i64;
             },
-            SLOAD => { *ops.peek()? = state.load(hei, ctxbase, ops.peek()?)?;
+            SLOAD => { *ops.peek()? = state.load(hei, context_addr, ops.peek()?)?;
                 gas += gst.storage_read; },
             // cast
             CU8   => ops.peek()?.cast_u8()?,
@@ -391,36 +391,47 @@ pub fn execute_code(
             ABT => { exit = Abort;  break },  // panic
             AST => { if !ops.pop()?.to_bool() { exit = Abort;  break } }, // assert(..)
             // call
-            CALLCODE | CALLSTATIC | CALLLIB | CALLLOC | CALL => {
+            CALLCODE | CALLSTATIC | CALLLIB | CALLLOC | CALL | CALLDYN => {
                 let ist = instruction;
-                // check mode
-                if mode == Code {
-                    return itr_err_code!(CallInCodeCall) // cannot call again in code call mode 
+                macro_rules! not_ist {
+                    ( $( $ist: expr ),+ ) => {
+                        ![$( $ist ),+].contains(&ist)
+                    }
                 }
-                if mode == Abst && ist != CALLCODE {
-                    return itr_err_code!(CallInAbst) // cannot call any in abst but CallCode
-                }
-                if mode == Main && ist != CALL {
-                    return itr_err_code!(CallOtherInMain) // cannot call any in main but CallExternal
-                }
+                // check call in mode 
+                match mode {
+                    Main    if not_ist!(CALL, CALLDYN, CALLSTATIC, CALLCODE)
+                        => itr_err_code!(CallOtherInMain),
+                    Abst    if not_ist!(CALLLIB, CALLSTATIC, CALLCODE)
+                        => itr_err_code!(CallInAbst),
+                    Library if not_ist!(CALLLIB, CALLSTATIC, CALLCODE)
+                        => itr_err_code!(CallLocInLib),
+                    Static  if not_ist!(CALLSTATIC, CALLCODE)
+                        => itr_err_code!(CallLibInStatic),
+                    CodeCopy
+                        => itr_err_code!(CallInCodeCopy), // cannot call again in code call mode 
+                    _ => Ok(()), // Extenal | Location support all call instructions
+                }?;
                 // ok return
                 match ist {
-                    CALLCODE =>   exit = funcptr!(codes, *pc, tail, Code),
+                    CALLCODE =>   exit = funcptr!(codes, *pc, tail, CodeCopy),
                     CALLSTATIC => exit = funcptr!(codes, *pc, tail, Static),
                     CALLLIB =>    exit = funcptr!(codes, *pc, tail, Library),
+                    CALL =>       exit = funcptr!(codes, *pc, tail, External),
                     CALLLOC =>    exit = Call(Funcptr{
                         mode: Location,
                         target: CallTarget::Location,
                         fnsign: pcutbuf!(FN_SIGN_WIDTH),
                     }),
-                    CALL =>       exit = Call(Funcptr{ // External
+                    CALLDYN =>    exit = Call(Funcptr{ // External
                         mode: External,
-                        target: CallTarget::Addr(pctrtaddr!()),
-                        fnsign: pcutbuf!(FN_SIGN_WIDTH),
+                        target: CallTarget::Addr(ops.pop()?.checked_contract_address()?),
+                        fnsign: ops.pop()?.checked_fnsign()?,
                     }),
                     _ => unreachable!()
                 };
                 break
+                // call exit
             }
             // inst invalid
             _ => return itr_err_fmt!(InstInvalid, "{}", instbyte),

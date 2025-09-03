@@ -46,7 +46,7 @@ impl VM for MachineBox {
         let cty: CallTy = std_mem_transmute!(ty);
         match cty {
             CallTy::Main => {
-                let cty = CodeType::parse(kd).map_err(|e|e.to_string())?;
+                let cty = map_itr_err!(CodeType::parse(kd))?;
                 self.machine.as_mut().unwrap().main_call(exenv, cty, data.to_vec())
             },
             CallTy::Abst => {
@@ -92,14 +92,15 @@ impl Machine {
 
     pub fn main_call(&mut self, env: &mut ExecEnv, ctype: CodeType, codes: Vec<u8>) -> Ret<Value> {
         let fnobj = FnObj{confs: 0, ctype, codes};
-        self.do_call(env, CallMode::Main, fnobj, None).map_err(|e|e.to_string())
+        map_itr_err!(self.do_call(env, CallMode::Main, fnobj, None))
     }
 
     pub fn abst_call(&mut self, env: &mut ExecEnv, syscty: AbstCall, contract_addr: ContractAddress, param: Vec<u8>) -> Ret<Value> {
-        let Some(fnobj) = self.r.load_abst(env.sta, &contract_addr, syscty).map_err(|e|e.to_string())? else {
+        let Some(fnobj) = map_itr_err!(self.r.load_abst(env.sta, &contract_addr, syscty))? else {
             return Ok(Value::Nil) // not find call
         };
-        self.do_call(env, CallMode::Abst, fnobj.as_ref().clone(), Some(Value::bytes(param))).map_err(|e|e.to_string())
+        map_itr_err!(self.do_call(env, CallMode::Abst, 
+            fnobj.as_ref().clone(), Some(Value::bytes(param))))
     }
 
     fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, param: Option<Value>) -> VmrtRes<Value> {
