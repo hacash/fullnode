@@ -2,7 +2,12 @@
 * type 
 */
 
-
+/*
+    one package for
+    -> fee purity
+    -> gas price
+*/
+pub const GSCU: u64 = 32;
 
 
 

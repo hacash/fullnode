@@ -37,6 +37,18 @@ impl ContractAddress {
         Self::from_addr(Address::from(bts)).unwrap()
     }
 
+    pub fn new(addr: Address) -> Self {
+        Self{addr}
+    }
+
+    pub fn check(&self) -> Rerr {
+        let av = self.addr.version();
+        if av !=  Address::CONTRACT {
+            return errf!("address version {} is not CONTRACT", av)
+        }
+        Ok(())
+    }
+
     pub fn from_addr(addr: Address) -> Ret<Self> {
         let av = addr.version();
         if av !=  Address::CONTRACT {

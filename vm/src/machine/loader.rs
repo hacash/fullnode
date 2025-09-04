@@ -26,7 +26,8 @@ impl Resoure {
     }
 
 
-    fn load_fn_by_search_inherits(&mut self, vmsta: &mut VMState, addr: &ContractAddress, fnkey: FnKey) -> VmrtRes<Option<Arc<FnObj>>> {
+    fn load_fn_by_search_inherits(&mut self, vmsta: &mut VMState, addr: &ContractAddress, fnkey: FnKey) 
+    -> VmrtRes<Option<Arc<FnObj>>> {
         let csto = self.load_contract(vmsta, addr)?;
         macro_rules! do_get {($csto : expr) => (
             match fnkey {
@@ -53,39 +54,58 @@ impl Resoure {
 
     }
 
-    fn load_fn_by_search_librarys(&mut self, vmsta: &mut VMState, srcadr: &ContractAddress, lib: u8, fnsg: FnSign) -> VmrtRes<(ContractAddress, Option<Arc<FnObj>>)> {
-        use ItrErrCode::*;
+
+
+    fn load_fn_by_search_librarys(
+        &mut self, vmsta: &mut VMState, 
+        srcadr: &ContractAddress, lib: u8, fnsg: FnSign
+    ) -> VmrtRes<(ContractAddress, Option<Arc<FnObj>>)> {
         let csto = self.load_contract(vmsta, srcadr)?;
         let librarys = csto.sto.librarys.list();
+        self.load_fn_by_search_list(vmsta, librarys, lib, fnsg)
+    }
+
+    fn load_fn_by_search_list(
+        &mut self, vmsta: &mut VMState, adrlist: &Vec<ContractAddress>, lib: u8, fnsg: FnSign
+    ) -> VmrtRes<(ContractAddress, Option<Arc<FnObj>>)> {
+        use ItrErrCode::*;
+        let librarys = adrlist;
         let libidx = lib as usize;
         if libidx <= librarys.len() {
             return itr_err_code!(CallLibOverflow)
         }
         let taradr = librarys.get(libidx).unwrap();
+        map_err_itr!(ContractAddrErr, taradr.check())?; // check must contract addr
         let csto = self.load_contract(vmsta, taradr)?;
         Ok((taradr.clone(), csto.userfns.get(&fnsg).map(|f|f.clone())))
     }
 
-    pub fn load_usrfun(&mut self, vmsta: &mut VMState, addr: &ContractAddress, fnsg: FnSign) -> VmrtRes<Option<Arc<FnObj>>> {
+    pub fn load_userfn(&mut self, vmsta: &mut VMState, addr: &ContractAddress, fnsg: FnSign) -> VmrtRes<Option<Arc<FnObj>>> {
         self.load_fn_by_search_inherits(vmsta, addr, FnKey::User(fnsg))
     }
 
 
-    pub fn load_abst(&mut self, vmsta: &mut VMState, addr: &ContractAddress, scty: AbstCall) -> VmrtRes<Option<Arc<FnObj>>> {
+    pub fn load_abstfn(&mut self, vmsta: &mut VMState, addr: &ContractAddress, scty: AbstCall) -> VmrtRes<Option<Arc<FnObj>>> {
         self.load_fn_by_search_inherits(vmsta, addr, FnKey::Abst(scty))
     }
 
     /*
         return (change current address, fnobj)
     */
-    pub fn load_must_call(&mut self, vmsta: &mut VMState, fptr: Funcptr, dstadr: &ContractAddress, srcadr: &ContractAddress) 
-    -> VmrtRes<(Option<ContractAddress>, Arc<FnObj>)> {
+    pub fn load_must_call(&mut self, 
+        vmsta: &mut VMState, fptr: Funcptr, 
+        dstadr: &ContractAddress, srcadr: &ContractAddress,
+        adrlibs: Option<Vec<ContractAddress>>
+    ) -> VmrtRes<(Option<ContractAddress>, Arc<FnObj>)> {
         use CallTarget::*;
         use ItrErrCode::*;
         match match fptr.target {
-            Location => (None, self.load_usrfun(vmsta, dstadr, fptr.fnsign)?),
-            Addr(ctxadr) => (Some(ctxadr.clone()), self.load_usrfun(vmsta, &ctxadr, fptr.fnsign)?),
-            Libidx(lib) => self.load_fn_by_search_librarys(vmsta, srcadr, lib, fptr.fnsign).map(|(a,b)|(Some(a), b))?,
+            Location => (None, self.load_userfn(vmsta, dstadr, fptr.fnsign)?),
+            Addr(ctxadr) => (Some(ctxadr.clone()), self.load_userfn(vmsta, &ctxadr, fptr.fnsign)?),
+            Libidx(lib) => match adrlibs {
+                Some(ads) => self.load_fn_by_search_list(vmsta, &ads, lib, fptr.fnsign),
+                _ => self.load_fn_by_search_librarys(vmsta, srcadr, lib, fptr.fnsign),
+            }.map(|(a,b)|(Some(a), b))?,
         }  {
             (b, Some(c)) => Ok((b, c)),
             _ => itr_err_code!(CallNotExist), // 

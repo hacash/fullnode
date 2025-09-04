@@ -17,6 +17,7 @@ use lazy_static::lazy_static;
 use sys::*;
 use field::*;
 use field::interface::*;
+use protocol::*;
 use protocol::state::*;
 use protocol::block::*;
 use protocol::transaction::{ self, * };

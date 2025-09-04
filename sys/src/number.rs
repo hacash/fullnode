@@ -53,10 +53,19 @@ pub fn bytes_from_uint(val: u64, msz: usize, len: usize) -> Ret<Vec<u8>> {
 * number set in range
 */
 #[macro_export]
-macro_rules! set_in_range { ($n: expr, $a: expr, $b: expr) => {
+macro_rules! set_in_range { ($n: ident, $a: expr, $b: expr) => {
     $n = match $n {
         0..=$a => $a, 
         $a..=$b => $n,
         _ => $b,
     };
-} }
+}}
+
+#[macro_export]
+macro_rules! up_in_range { ($n: ident, $a: expr, $b: expr) => {
+    if $n < $a {
+        $n = $a;
+    } else if $n > $b {
+        $n = $b;
+    }
+}}

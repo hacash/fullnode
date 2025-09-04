@@ -79,9 +79,9 @@ impl TransactionRead for $class {
 
     fn fee_extend(&self) -> Ret<(u16, Amount)> {
         let par = (*self.gas_max) as u16;
-        let max = par * par;
-        let fee = self.fee_got().dist_mul(max as u128)?;
-        Ok((max, fee))
+        let bei = par * par;
+        let fee = self.fee_pay().dist_mul(bei as u128)?;
+        Ok((bei, fee))
     }
 
 
@@ -103,10 +103,12 @@ impl TransactionRead for $class {
         verify_tx_signature(self)
     }
     
+    // fee_purity is gas_price
 	fn fee_purity(&self) -> u64 {
 		let txsz = self.size() as u64;
+        assert!(txsz > GSCU, "Tx size cannot less than {} bytes", GSCU);
 		let fee238 = self.fee_got().to_238_u64().unwrap_or_default();
-		fee238 / txsz
+		fee238 / (txsz / GSCU)
 	}
 
 }

@@ -46,8 +46,12 @@ impl CallFrame {
                 }
                 // call next
                 Call(fnptr) => {
+                    let adrlist: Option<Vec<_>> = match curr_frame.mode {
+                        Main => Some(env.ctx.tx().addrs().iter().map(|a|ContractAddress::new(*a)).collect()),
+                        _ => None,
+                    };
                     let (chgsrcadr, fnobj) = r.load_must_call(env.sta, fnptr.clone(), 
-                        &curr_frame.ctxadr, &curr_frame.curadr)?;
+                        &curr_frame.ctxadr, &curr_frame.curadr, adrlist)?;
                     let fnobj = fnobj.as_ref().clone();
                     let is_public = fnobj.check_conf(FnConf::IsPublic);
                     // check gas
@@ -124,7 +128,7 @@ impl CallFrame {
             let Call(fnptr) = exit else { unreachable!() };
             // load user func
             let (srcadr, fnobj) = r.load_must_call(env.sta, fnptr.clone(), 
-                &curr_frame.ctxadr, &curr_frame.curadr)?;
+                &curr_frame.ctxadr, &curr_frame.curadr, None)?;
             let fnobj = fnobj.as_ref().clone();
             let is_public = fnobj.check_conf(FnConf::IsPublic);
             // check gas

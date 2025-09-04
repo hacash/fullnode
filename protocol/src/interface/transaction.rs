@@ -20,6 +20,7 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
     fn fee_pay(&self) -> Amount { never!() }
     fn fee_got(&self) -> Amount { never!() }
     fn fee_extend(&self) -> Ret<(u16, Amount)> { never!() }
+    fn fee_purity(&self) -> u64 { never!() }
     
     fn message(&self) -> &Fixed16 { never!() }
     fn reward(&self) -> &Amount { never!() }
@@ -31,7 +32,6 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
     fn req_sign(&self) -> Ret<HashSet<Address>> { never!() }
     fn verify_signature(&self) -> Rerr { never!() }
 
-    fn fee_purity(&self) -> u64 { never!() }
 
     // burn_90_percent_fee
     fn burn_90(&self) -> bool {

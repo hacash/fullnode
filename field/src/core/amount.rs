@@ -8,6 +8,7 @@ const U64S:  usize =  u64::BITS as usize / 8;
 
 pub const UNIT_MEI:  u8 = 248;
 pub const UNIT_ZHU:  u8 = 240;
+pub const UNIT_238:  u8 = 238;
 pub const UNIT_SHUO: u8 = 232;
 pub const UNIT_AI:   u8 = 224;
 pub const UNIT_MIAO: u8 = 216;
@@ -204,6 +205,9 @@ impl Amount {
     }
     pub fn miao(v: u64) -> Amount {
         Self::coin(v, UNIT_MIAO)
+    }
+    pub fn unit238(v: u64) -> Amount {
+        Self::coin(v, UNIT_238)
     }
 
     coin_with!{coin_u128, u128}
@@ -426,7 +430,7 @@ impl Amount {
 
     to_unit_define!{ to_mei_u64, to_mei_u128, UNIT_MEI }
     to_unit_define!{ to_zhu_u64, to_zhu_u128, UNIT_ZHU }
-    to_unit_define!{ to_238_u64, to_238_u128, 238 } // for fee_purity
+    to_unit_define!{ to_238_u64, to_238_u128, UNIT_238 } // for fee_purity
 
     pub fn to_unit_biguint(&self, base_unit: u8) -> BigUint {
         assert!(!self.is_negative());

@@ -85,11 +85,9 @@ impl EngineRead for ChainEngine {
         if al == 0 {
             return self.cnf.lowest_fee_purity
         }
-        let mut allfps = 0u64;
-        for a in avgfs.iter() {
-            allfps += a;
-        }
-        allfps / al as u64
+        // average
+        let ttn: u64 = avgfs.iter().sum();
+        ttn / avgfs.len() as u64
     } 
 
     fn try_execute_tx_by(&self, tx: &dyn TransactionRead, pd_hei: u64, sub_state: &mut Box<dyn State>) -> Rerr {
@@ -157,39 +155,6 @@ impl Engine for ChainEngine {
         self
     }
     
-    /*
-    fn insert(&self, blk: BlockPkg) -> Rerr {
-        self.discover(blk)
-    }
-
-    fn insert(&self, blk: BlockPkg) -> Rerr {
-        let blkobj = blk.objc.as_read();
-        if self.cnf.recent_blocks {
-            self.record_recent(blkobj);
-        }
-        if self.cnf.average_fee_purity {
-            self.record_avgfee(blkobj);
-        }
-        // do insert
-        let lk = self.isrtlk.lock().unwrap();
-        self.do_insert(blk)?;
-        drop(lk);
-        Ok(())
-    }
-    */
-    
-    /*
-    fn insert_sync(&self, _: u64, data: Vec<u8>) -> Rerr {
-        self.synchronize(data)
-    }
-
-    fn insert_sync(&self, hei: u64, data: Vec<u8>) -> Rerr {
-        let lk = self.isrtlk.lock().unwrap();
-        self.do_insert_sync(hei, data)?;
-        drop(lk);
-        Ok(())
-    }
-    */
     fn exit(&self) {
         // wait block insert finish
         let lk = self.isrtlk.lock().unwrap();

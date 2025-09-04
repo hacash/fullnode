@@ -62,7 +62,7 @@ impl EngineConf {
         let sec_server = &ini_section(ini, "server");
 
         // a simple hac trs size is 166 bytes
-        const LOWEST_FEE_PURITY: u64 = 10000_00 / 166; // 1:244 = 1000000:238 / 166 = 6024
+        const LOWEST_FEE_PURITY: u64 = 10000_00 / (166 / GSCU); // 1:244 = 1000000:238 / (166 / 32) = 200000
 
         let mut cnf = EngineConf{
             max_block_txs: 1000,
