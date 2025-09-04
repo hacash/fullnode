@@ -120,26 +120,6 @@ impl Machine {
         // init gas
         let gas_limit = SpaceCap::new(ctx.env().block.height).max_gas_of_tx as i64;
         let (feer, gasfee) = ctx.tx().fee_extend()?;
-        let main = ctx.env().tx.main;
-        protocol::operate::hac_check(ctx, &main, &gasfee)?;
-        let mut gas = ctx.tx().size() as i64 * feer as i64;
-        up_in_range!(gas, 0, gas_limit);  // max 65535
-        self.gas = gas;
-        self.gas_price = Self::gas_price(ctx);
-        Ok(gas)
-    }
-
-    
-
-    fn spend_gas(&mut self, ctx: &mut dyn Context, gas_rem: i64) -> Rerr {
-        assert!(gas_rem >= 0, "gas use error");
-        let cost = self.gas - gas_rem;
-        assert!(cost >= 0, "gas use error");
-        if cost == 0 {
-            return Ok(()) // spend nothing
-        }
-        // do spend
-        let cost_per = cost * self.gas_price;
         if feer == 0 {
             return errf!("gas extend cannot empty on contract call")
         }
