@@ -11,6 +11,8 @@ dist/
 debug/
 target/
 osxcross/
+testnet/
+
 
 hascan*
 hacash_*

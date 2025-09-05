@@ -189,17 +189,17 @@ abst_call_type_define! {
     Append       : 2
 
     PermitHAC    : 15
-    PermitHACD   : 16
-    PermitSAT    : 17
+    PermitSAT    : 16
+    PermitHACD   : 17
     PermitAsset  : 18
 
-    PayableHAC   : 35
-    PayableHACD  : 36
-    PayableSAT   : 37
-    PayableAsset : 38
+    PayableHAC   : 25
+    PayableSAT   : 26
+    PayableHACD  : 27
+    PayableAsset : 28
 
 
-    
+
 }
 
 

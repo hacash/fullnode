@@ -3,7 +3,6 @@
 pub mod rt;
 pub mod value;
 pub mod space;
-pub mod lang;
 pub mod ir;
 pub mod native;
 pub mod interpreter;
@@ -11,8 +10,8 @@ pub mod frame;
 pub mod machine;
 pub mod action;
 pub mod hook;
-
-pub mod testexec;
+pub mod lang;
+pub mod contract;
 
 use machine::*;
 

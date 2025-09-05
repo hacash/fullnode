@@ -19,8 +19,8 @@ vm = {path = "./vm", optional = true }
 
 
 [features]
-default = ["db-sled"]
-hvm = ["dep:vm"]
+default = ["db-sled", "hvm"]
+hvm = ["dep:vm", "field/hvm"]
 db-sled = ["db/db-sled"]
 db-rusty-leveldb = ["db/db-rusty-leveldb"]
 db-leveldb-sys = ["db/db-leveldb-sys"]

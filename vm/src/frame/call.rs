@@ -21,7 +21,7 @@ impl CallFrame {
         loop {
             let exit = curr_frame.execute(r, env)?; // call frame
             match exit {
-                // call end
+                // end func
                 Abort | Throw | Finish | Return => {
                     let retv = match exit {
                         Return | Throw => curr_frame.pop_value()?,
@@ -44,7 +44,7 @@ impl CallFrame {
                         _ => unreachable!()
                     }
                 }
-                // call next
+                // next call
                 Call(fnptr) => {
                     let adrlist: Option<Vec<_>> = match curr_frame.mode {
                         Main => Some(env.ctx.tx().addrs().iter().map(|a|ContractAddress::new(*a)).collect()),

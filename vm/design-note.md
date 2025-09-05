@@ -38,3 +38,17 @@ Call Context Change:
     - move current => Ext, ExtDyn, Lib, Static
 
 
+Abst Call Param:
+
+    - Change( bytes[0] )
+    - Append( bytes[0] )
+    - PermitHAC(      to_addr[21], amount[3~] )
+    - PermitSAT(      to_addr[21], satoshi[8] )
+    - PermitHACD(     to_addr[21], dianum[1], diamonds[6~] )
+    - PermitAsset(    to_addr[21], serial[8], amount[8] )
+    - PayableHAC(   from_addr[21], amount[3~] )
+    - PayableSAT(   from_addr[21], satoshi[8] )
+    - PayableHACD(  from_addr[21], dianum[1], diamonds[6~] )
+    - PayableAsset( from_addr[21], serial[8], amount[8] )
+
+
