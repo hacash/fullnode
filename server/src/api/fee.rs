@@ -4,12 +4,14 @@
 
 
 api_querys_define!{ Q7365,
-    consumption, Option<u64>, None, // tx size or gas use
+    consumption, Option<u64>, None,  // tx size or gas use
+    burn90,      Option<bool>, None, // if tx burn 90% fee
 }
 
 async fn fee_average(State(ctx): State<ApiCtx>, q: Query<Q7365>) -> impl IntoResponse {
     q_unit!(q, unit);
     q_must!(q, consumption, 0);
+    q_must!(q, burn90, false);
 
     let avgfeep = ctx.engine.average_fee_purity(); // unit: 238
 
@@ -21,6 +23,11 @@ async fn fee_average(State(ctx): State<ApiCtx>, q: Query<Q7365>) -> impl IntoRes
         let mut setfee = Amount::unit238(avgfeep / GSCU * consumption); // unit: 238
         if setfee.is_zero() {
             setfee = Amount::zhu(1);
+        }
+        if burn90 {
+            if let Ok(f) = setfee.dist_mul(10) {
+                setfee = f;
+            }
         }
         data.insert("feasible", json!(setfee.to_unit_string(&unit)));
     }

@@ -80,7 +80,7 @@ impl TransactionRead for $class {
     fn fee_extend(&self) -> Ret<(u16, Amount)> {
         let par = (*self.gas_max) as u16;
         let bei = par * par;
-        let fee = self.fee_pay().dist_mul(bei as u128)?;
+        let fee = self.fee_got().dist_mul(bei as u128)?;
         Ok((bei, fee))
     }
 

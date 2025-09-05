@@ -1,7 +1,9 @@
 
 
-
-pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u8], pm: Vec<u8>) -> Ret<Value> {
+/*
+    return gas, val
+*/
+pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u8], pm: Vec<u8>) -> Ret<(i64, Value)> {
     // check tx type
     const TY3: u8 = TransactionType3::TYPE;
     let txty = ctx.env().tx.ty;
@@ -16,7 +18,7 @@ pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u
     // depth
     let old_depth = ctx.depth().clone();
     ctx.depth_set(CallDepth::new(depth));
-    let rv = unsafe {
+    let (cost, rv) = unsafe {
         // ctx
         let ctxptr = ctx as *mut dyn Context;
         let ctxmut1: &mut dyn Context = &mut *ctxptr;
@@ -31,8 +33,10 @@ pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u
         vmimut.call(ctxmut2, stamut, ty, mk, cd, pm)?
     };
     ctx.depth_set(old_depth);
-    Ok(Value::bytes(rv))
+    Ok((cost, Value::bytes(rv)))
 }
+
+
 
 
 

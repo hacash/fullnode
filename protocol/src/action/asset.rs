@@ -7,12 +7,12 @@ action_define!{AssetToTrs, 17,
     true, // burn 90 fee
     [], {
         to: AddrOrPtr
-        amount: AssetAmt
+        asset: AssetAmt
     },
     (self, ctx, _gas {
         let from = ctx.env().tx.main; 
         let to   = ctx.addr(&self.to)?;
-        asset_transfer(ctx, &from, &to, &self.amount)
+        asset_transfer(ctx, &from, &to, &self.asset)
     })
 }
 
@@ -24,12 +24,12 @@ action_define!{AssetFromTrs, 18,
         self.from // check signature
     ], {
         from: AddrOrPtr
-        amount: AssetAmt
+        asset: AssetAmt
     },
     (self, ctx, _gas {
         let from = ctx.addr(&self.from)?;
         let to   = ctx.env().tx.main; 
-        asset_transfer(ctx, &from, &to, &self.amount)
+        asset_transfer(ctx, &from, &to, &self.asset)
     })
 }
 
@@ -42,12 +42,12 @@ action_define!{AssetFromToTrs, 19,
     ], {
         from: AddrOrPtr
         to: AddrOrPtr
-        amount: AssetAmt
+        asset: AssetAmt
     },
     (self, ctx, _gas {
         let from = ctx.addr(&self.from)?;
         let to   = ctx.addr(&self.to)?;
-        asset_transfer(ctx, &from, &to, &self.amount)
+        asset_transfer(ctx, &from, &to, &self.asset)
     })
 }
 
