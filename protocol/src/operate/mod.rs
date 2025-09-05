@@ -9,6 +9,7 @@ use super::interface::*;
 
 
 
+include!{"blackhole.rs"}
 include!{"hacash.rs"}
 include!{"diamond.rs"}
 include!{"satoshi.rs"}

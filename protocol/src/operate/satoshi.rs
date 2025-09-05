@@ -46,14 +46,16 @@ satoshi_operate_define!(sat_sub, addr, sat, oldsat, {
 /**************************** */
 
 
-pub fn sat_transfer(ctx: &mut dyn Context, addr_from: &Address, addr_to: &Address, sat: &Satoshi
+pub fn sat_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, sat: &Satoshi
 ) -> Ret<Vec<u8>> {
-    if addr_from == addr_to {
+    if from == to {
 		return errf!("cannot trs to self")
     }
     // do transfer
-    sat_sub(ctx, addr_from, sat)?;
-    sat_add(ctx, addr_to, sat)?;
+    sat_sub(ctx, from, sat)?;
+    sat_add(ctx, to,   sat)?;
+    let state = &mut CoreState::wrap(ctx.state());
+    blackhole_engulf(state, to);
     // ok
     Ok(vec![])
 }

@@ -14,7 +14,7 @@ macro_rules! amount_op_func_define {
 
         fn $fn(ctx: &mut dyn Context, $addr: &Address, $amt: &Amount) -> Ret<Amount> {
             $addr.check_version()?;
-            let mut state = CoreState::wrap(ctx.state());
+            let state = &mut CoreState::wrap(ctx.state());
             let mut bls = state.balance( $addr ).unwrap_or_default();
             let $hac = bls.hacash;
             let newhac = $exec; // do add or sub
@@ -61,7 +61,9 @@ pub fn hac_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, amt: &A
     // do trs
     check_amount_is_positive!(amt);
     do_hac_sub(ctx, from, amt)?;
-    do_hac_add(ctx, to, amt)?;
+    do_hac_add(ctx, to,   amt)?;
+    let state = &mut CoreState::wrap(ctx.state());
+    blackhole_engulf(state, to);
     Ok(vec![])
 }
 

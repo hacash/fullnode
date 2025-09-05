@@ -3,12 +3,11 @@
 macro_rules! asset_operate_define {
     ($func_name: ident, $addr:ident, $amt:ident, $oldamt:ident,  $newsatblock:block) => (
 
-        pub fn $func_name(ctx: &mut dyn Context, $addr: &Address, $amt: &AssetAmt) -> Ret<AssetAmt> {
+        pub fn $func_name(state: &mut CoreState, $addr: &Address, $amt: &AssetAmt) -> Ret<AssetAmt> {
             if *$amt.amount == 0 {
                 return errf!("Asset operate amount cannot be zore")
             }
             $addr.check_version()?;
-            let mut state = CoreState::wrap(ctx.state());
             let mut userbls = state.balance( $addr ).unwrap_or_default();
             let $oldamt = &userbls.asset_must($amt.serial);
             /* -------- */
@@ -46,14 +45,16 @@ asset_operate_define!(asset_sub, addr, asset, oldasset, {
 /**************************** */
 
 
-pub fn asset_transfer(ctx: &mut dyn Context, addr_from: &Address, addr_to: &Address, asset: &AssetAmt
+pub fn asset_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, asset: &AssetAmt
 ) -> Ret<Vec<u8>> {
-    if addr_from == addr_to {
+    if from == to {
 		return errf!("cannot trs to self")
     }
     // do transfer
-    asset_sub(ctx, addr_from, asset)?;
-    asset_add(ctx, addr_to, asset)?;
+    let state = &mut CoreState::wrap(ctx.state());
+    asset_sub(state, from, asset)?;
+    asset_add(state, to,   asset)?;
+    blackhole_engulf(state, to);
     // ok
     Ok(vec![])
 }

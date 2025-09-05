@@ -27,7 +27,7 @@ pub fn try_action_hook(kid: u16, action: &dyn Any, ctx: &mut dyn Context, _gas: 
 }
 
 
-fn coin_asset_transfer_call(abstfnf: AbstCall, abstfnt: AbstCall, action: &dyn Any, ctx: &mut dyn Context) -> Rerr {
+fn coin_asset_transfer_call(abstfrom: AbstCall, abstto: AbstCall, action: &dyn Any, ctx: &mut dyn Context) -> Rerr {
 
     let addrs = &ctx.env().tx.addrs;
     let mut from = ctx.env().tx.main;
@@ -100,7 +100,7 @@ fn coin_asset_transfer_call(abstfnf: AbstCall, abstfnt: AbstCall, action: &dyn A
     // call from contract
     if fc {
         let param = vec![to.serialize(), amtargv.clone()].concat();
-        let (_, rtv) = setup_vm_run(calldpt, ctx, absty, abstfnf as u8, from.as_bytes(), param)?;
+        let (_, rtv) = setup_vm_run(calldpt, ctx, absty, abstfrom as u8, from.as_bytes(), param)?;
         if rtv.is_zero() {
             return errf!("transfer from {} not allow", from.readable())
         }
@@ -109,7 +109,7 @@ fn coin_asset_transfer_call(abstfnf: AbstCall, abstfnt: AbstCall, action: &dyn A
     // call to contract
     if tc {
         let param = vec![from.serialize(), amtargv].concat();
-        let (_, rtv) = setup_vm_run(calldpt, ctx, absty, abstfnt as u8, to.as_bytes(), param)?;
+        let (_, rtv) = setup_vm_run(calldpt, ctx, absty, abstto as u8, to.as_bytes(), param)?;
         if rtv.is_zero() {
             return errf!("transfer to {} not allow", to.readable())
         }

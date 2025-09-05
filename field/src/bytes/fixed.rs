@@ -138,8 +138,8 @@ macro_rules! fixed_define {
                 Self::from(v.try_into().unwrap())
             }
 
-            pub fn from(v: [u8; $size]) -> Self where Self: Sized {
-                Self{
+            pub const fn from(v: [u8; $size]) -> Self where Self: Sized {
+                Self {
                     bytes: v
                 }
             }

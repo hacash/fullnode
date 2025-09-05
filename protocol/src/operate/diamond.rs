@@ -44,14 +44,15 @@ diamond_operate_define!(hacd_sub, addr, hacd, oldhacd, {
 
 
 pub fn hacd_transfer(state: &mut CoreState,
-    addr_from: &Address, addr_to: &Address, hacd: &DiamondNumber, _dlist: &DiamondNameListMax200
+    from: &Address, to: &Address, hacd: &DiamondNumber, _dlist: &DiamondNameListMax200
 ) -> Ret<Vec<u8>> {
-    if addr_from == addr_to {
+    if from == to {
 		return errf!("cannot transfer to self")
     }
     // do transfer
-    hacd_sub(state, addr_from, hacd)?;
-    hacd_add(state, addr_to, hacd)?;
+    hacd_sub(state, from, hacd)?;
+    hacd_add(state, to,   hacd)?;
+    blackhole_engulf(state, to);
     // ok
     Ok(vec![])
 }
