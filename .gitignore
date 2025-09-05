@@ -11,7 +11,12 @@ dist/
 debug/
 target/
 osxcross/
-testnet/
+testnet/*.ini
+testnet/fullnode
+testnet/poworker
+vm/testnet/*.ini
+vm/testnet/fullnode
+vm/testnet/poworker
 
 
 hascan*

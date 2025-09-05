@@ -3,18 +3,16 @@
 
 
 
-    mod common;
-
-
 #[cfg(test)]
 mod maincall {
 
-    use crate::common;
 
     use vm::*;
     use vm::rt::*;
 
     use vm::action::*;
+    use vm::contract::*;
+
     use field::*;
     use field::interface::*;
 
@@ -37,7 +35,6 @@ mod maincall {
     #[test]
     fn test2() {
 
-        use common;
         use Bytecode::*;
 
         let mut syscal1 = ContractAbstCall::new();
@@ -54,22 +51,22 @@ mod maincall {
         syscal2.cdty = Fixed1::from([0]);
         syscal2.code = BytesW2::from(hex::decode("070143480c437bEC").unwrap()).unwrap(); // return true
         // height > 12
-        let mut usrfun1 = ContractClientFunc::new();
+        let mut usrfun1 = ContractUserFunc::new();
         usrfun1.sign = Fixed4::from(calc_func_sign("testadd"));
         usrfun1.cdty = Fixed1::from([0b10000000]);
         usrfun1.code = BytesW2::from(build_codes!(
             CU16 DUP ADD RET
         )).unwrap(); /* a = a + a; return a */
         let mut csto = ContractSto::new();
-        csto.sytmcalls.push(syscal1).unwrap();
-        csto.sytmcalls.push(syscal2).unwrap();
+        csto.abstcalls.push(syscal1).unwrap();
+        csto.abstcalls.push(syscal2).unwrap();
         csto.userfuncs.push(usrfun1).unwrap();
         let mut act2 = ContractDeploy::new();
         act2.contract = csto;
         act2.protocol_fee = Amount::coin(6, 245);
 
         // print
-        common::curl_trs(vec![Box::new(act2)]);
+        curl_trs_1(vec![Box::new(act2)]);
 
     
     }
@@ -97,23 +94,23 @@ mod maincall {
         act.metadata.decimal = Uint1::from(4);
         act.metadata.ticket = BytesW1::from(b"USDT".to_vec()).unwrap();
         act.metadata.name = BytesW1::from(b"USD Tether".to_vec()).unwrap();
-        common::curl_trs(vec![Box::new(act)]);
+        curl_trs_1(vec![Box::new(act)]);
 
         let mut act = HacToTrs::new();
         act.to = AddrOrPtr::from_addr(cadr);
         act.hacash = Amount::mei(2);
-        common::curl_trs(vec![Box::new(act)]);
+        curl_trs_1(vec![Box::new(act)]);
         
         let mut act = HacFromTrs::new();
         act.from = AddrOrPtr::from_addr(cadr);
         act.hacash = Amount::mei(2);
-        common::curl_trs(vec![Box::new(act)]);
+        curl_trs_1(vec![Box::new(act)]);
         
     
         let mut act = HacFromTrs::new();
         act.from = AddrOrPtr::from_addr(cadr);
         act.hacash = Amount::mei(1);
-        common::curl_trs(vec![Box::new(act)]);
+        curl_trs_1(vec![Box::new(act)]);
         
     
     }
@@ -149,7 +146,7 @@ mod maincall {
         act.hacash = Amount::mei(4);
 
         
-        common::curl_trs(vec![Box::new(act.clone())]);
+        curl_trs_1(vec![Box::new(act.clone())]);
 
 
     }

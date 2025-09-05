@@ -51,6 +51,7 @@ Run local testnet:
 
 ```sh
 cd testnet
+cp fullnode_config_ini.txt fullnode.config.ini
 ./fullnode fullnode.config.ini
 ```
 
@@ -58,6 +59,7 @@ Run poworker to mint blocks:
 
 ```sh
 cd testnet
+cp poworker_config_ini.txt poworker.config.ini
 ./poworker poworker.config.ini
 ```
 

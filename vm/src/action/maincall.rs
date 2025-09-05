@@ -15,7 +15,7 @@ action_define!{ContractMainCall, 121,
             return errf!("marks bytes format error")
         }
         let depth = 0; // main call depth is 0
-        setup_vm_run(depth, ctx, CallTy::Main as u8, *self.ctype, &self.codes, vec![])?;
+        setup_vm_run(depth, ctx, CallMode::Main as u8, *self.ctype, &self.codes, vec![])?;
         Ok(vec![])
     })
 }
