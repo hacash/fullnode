@@ -32,7 +32,7 @@ cd vm
 Build local testnet fullnode:
 
 ```sh
-mkdir ./testnet && cd ../
+mkdir -p ./testnet && cd ../
 cargo build --bin fullnode --features hvm
 cp ./target/debug/fullnode ./vm/testnet/fullnode
 cd vm
