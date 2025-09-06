@@ -62,6 +62,7 @@ impl Syntax {
 
 
 fn build_ir_func(inst: Bytecode, pms: usize, args: usize, rs: usize, argvs: Vec<Box<dyn IRNode>>) -> Ret<Box<dyn IRNode>> {
+    use Bytecode::*;
     let mut argvs = VecDeque::from(argvs);
     let hrtv = maybe!(rs==1, true, false);
     let ttv = pms + args;
@@ -73,13 +74,21 @@ fn build_ir_func(inst: Bytecode, pms: usize, args: usize, rs: usize, argvs: Vec<
     }}
     macro_rules! param { () => {{
         let mut para = -1i16;
-        if let Some(n) = avg!().as_any().downcast_ref::<IRNodeParam1>() {
-            if n.inst == Bytecode::PU8 {
-                para = n.para as i16;
+        let e = errf!("ir func call param error");
+        let ag = avg!();
+        if let Some(n) = ag.as_any().downcast_ref::<IRNodeParam1>() {
+            para = n.para as i16;
+        } else if let Some(n) = ag.as_any().downcast_ref::<IRNodeParam2>() {
+            para = i16::from_be_bytes(n.para);
+        } else if let Some(n) = ag.as_any().downcast_ref::<IRNodeLeaf>() {
+            para = match n.inst {
+                P0 => 0,
+                P1 => 1,
+                _ => return e
             }
         }
         if para == -1 || para > 255{
-            return errf!("ir func call param format error")
+            return e
         }
         para as u8
     }}}
@@ -94,6 +103,7 @@ fn build_ir_func(inst: Bytecode, pms: usize, args: usize, rs: usize, argvs: Vec<
     if pms == 1 {
         let para = param!();
         return Ok(match args {
+            0 => Box::new(IRNodeParam1{hrtv, inst, para, text:s!("")}),
             1 => Box::new(IRNodeParam1Single{hrtv, inst, para, subx: avg!()}),
             _ => unreachable!()
         })
@@ -102,6 +112,7 @@ fn build_ir_func(inst: Bytecode, pms: usize, args: usize, rs: usize, argvs: Vec<
         let p1 = param!();
         let p2 = param!();
         return Ok(match args {
+            0 => Box::new(IRNodeParam2{hrtv, inst, para: [p1, p2]}),
             1 => Box::new(IRNodeParam2Single{hrtv, inst, para: [p1, p2], subx: avg!()}),
             _ => unreachable!()
         })

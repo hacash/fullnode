@@ -17,7 +17,7 @@ combi_struct!{ ContractAbstCall,
 }
 
 // Contract User Func
-combi_struct!{ ContractClientFunc, 
+combi_struct!{ ContractUserFunc, 
 	sign: Fixed4
 	cdty: Fixed1 // 1bit = is_public, 3bit8 = codetype
     code: BytesW2
@@ -36,7 +36,7 @@ impl ContractAddrsssListW1 {
 
 // Func List
 combi_list!(ContractAbstCallList, Uint1, ContractAbstCall);
-combi_list!(ContractClientFuncList, Uint2, ContractClientFunc);
+combi_list!(ContractUserFuncList, Uint2, ContractUserFunc);
 
 
 macro_rules! func_list_merge_define {
@@ -72,8 +72,8 @@ impl ContractAbstCallList {
 	func_list_merge_define!{ ContractAbstCall }
 }
 
-impl ContractClientFuncList {
-	func_list_merge_define!{ ContractClientFunc }
+impl ContractUserFuncList {
+	func_list_merge_define!{ ContractUserFunc }
 }
 
 // Contract
@@ -81,8 +81,8 @@ combi_struct!{ ContractSto,
 	metas: ContractMeta
 	inherits:  ContractAddrsssListW1
     librarys:  ContractAddrsssListW1
-	sytmcalls: ContractAbstCallList
-	userfuncs: ContractClientFuncList
+	abstcalls: ContractAbstCallList
+	userfuncs: ContractUserFuncList
     morextend: Uint8
 }
 
@@ -113,7 +113,7 @@ impl ContractSto {
 		self.inherits.append(src.inherits.lists.clone()).unwrap();
 		self.librarys.append(src.librarys.lists.clone()).unwrap();
 		// merge abst call
-		let edit1 = self.sytmcalls.check_merge(&src.sytmcalls)?;
+		let edit1 = self.abstcalls.check_merge(&src.abstcalls)?;
 		// merge usrfun call
 		let edit2 = self.userfuncs.check_merge(&src.userfuncs)?;
 		// check size
@@ -134,7 +134,7 @@ impl ContractSto {
 			return itr_err_fmt!(LibrarysError, "librarys link number overflow")
 		}
 		// abst call
-		for a in self.sytmcalls.list() {
+		for a in self.abstcalls.list() {
 			AbstCall::check(a.sign[0])?;
 			let ctype = CodeType::parse(a.cdty[0])?;
 			try_compile_check(ctype, &a.code)?; // // check compile
@@ -178,7 +178,7 @@ impl ContractSto {
             ..Default::default()
 		};
 		// parse sytmcalls
-		for a in obj.sto.sytmcalls.list() {
+		for a in obj.sto.abstcalls.list() {
 			let code = FnObj::create(a.cdty[0], a.code.to_vec())?;
 			let cty = std_mem_transmute!( a.sign[0] );
 			obj.abstfns.insert(cty, code.into());

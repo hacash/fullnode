@@ -89,17 +89,18 @@ impl VM for MachineBox {
         // env & do call
         let sta = &mut VMState::wrap(sta);
         let exenv = &mut ExecEnv{ ctx, sta, gas };
-        let cty: CallTy = std_mem_transmute!(ty);
+        let cty: CallMode = std_mem_transmute!(ty);
         let resv = match cty {
-            CallTy::Main => {
+            CallMode::Main => {
                 let cty = map_itr_err!(CodeType::parse(kd))?;
                 machine.main_call(exenv, cty, data.to_vec())
             },
-            CallTy::Abst => {
+            CallMode::Abst => {
                 let kid: AbstCall = std_mem_transmute!(kd);
                 let cadr = ContractAddress::parse(data)?;
                 machine.abst_call(exenv, kid, cadr, param)
             }
+            _ => unreachable!()
         }.map(|a|a.to_bytes())?;
         // spend gas
         let cost = self.spend_gas(ctx, *gas)?;

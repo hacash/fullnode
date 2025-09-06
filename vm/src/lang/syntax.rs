@@ -493,6 +493,32 @@ impl Syntax {
                 let para: Vec<u8> = iter::once(self.link_lib(id)?).chain(fnsg).collect();
                 Box::new(IRNodeParams{hrtv: false, inst: CALLCODE, para})
             }
+            Keyword(ByteCode) => {
+                let e = errf!("bytecode format error");
+                nxt = next!();
+                let Partition('{') = nxt else {
+                    return e
+                };
+                let mut codes: Vec<u8> = Vec::new();
+                loop {
+                    let inst: u8;
+                    match next!() {
+                        Identifier(id) => {
+                            let Some(t) = Bytecode::parse(id) else {
+                                return errf!("bytecode {} not find", id)
+                            };
+                            inst = t as u8;
+                        }
+                        Integer(n) if *n <= u8::MAX as u128 => {
+                            inst = *n as u8;
+                        }
+                        Partition('}') => break, // end
+                        _ => return e
+                    }
+                    codes.push(inst as u8);
+                }
+                Box::new(IRNodeBytecodes{inst: IRCODE, codes})
+            }
             Keyword(Abort)  => Box::new(IRNodeLeaf{hrtv: false, inst: ABT}),
             Keyword(Finish) => Box::new(IRNodeLeaf{hrtv: false, inst: END}),
             Keyword(Assert) => Box::new(IRNodeSingle{hrtv: false, inst: AST, subx: self.item_must(0)?}),

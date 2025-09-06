@@ -251,10 +251,10 @@ pub enum Bytecode {
     AST                 = 0xed, // c     assert throw
     ERR                 = 0xee, // a     throw (ERR)
     ABT                 = 0xef, //       abord
-    IRBLOCK             = 0xf0, // <IR NODE>
-    IRIF                = 0xf1, // <IR NODE>
-    IRWHILE             = 0xf2, // <IR NODE>
-    ________________243 = 0xf3,
+    IRCODE              = 0xf0, // <IR NODE>
+    IRBLOCK             = 0xf1, // <IR NODE>
+    IRIF                = 0xf2, // <IR NODE>
+    IRWHILE             = 0xf3, // <IR NODE>
     ________________244 = 0xf4,
     ________________245 = 0xf5,
     ________________246 = 0xf6,
@@ -298,6 +298,15 @@ impl Bytecode {
             $inst => BytecodeMetadata { valid: true, param: $p, input: $i, otput: $o, intro: stringify!($s) },
             )+
             _ => BytecodeMetadata::default(),
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            $(
+            stringify!($inst) => Some($inst),
+            )+
+            _ => None
         }
     }
 
@@ -357,9 +366,9 @@ bytecode_metadata_define!{
     CAT        : 0, 2, 1,     concat
     JOIN       : 0, 255, 1,   join_bytes
     BYTE       : 0, 2, 1,     byte
-    CUT        : 0, 3, 1,     buf_cut
-    LEFT       : 1, 1, 1,     buf_left
-    RIGHT      : 1, 1, 1,     buf_right
+    CUT        : 0, 3, 1,     buffer_cut
+    LEFT       : 1, 1, 1,     buffer_left
+    RIGHT      : 1, 1, 1,     buffer_right
 
     BAND       : 0, 2, 1,     bit_and
     BOR        : 0, 2, 1,     bit_or
@@ -373,9 +382,9 @@ bytecode_metadata_define!{
     EQ         : 0, 2, 1,     equal
     NEQ        : 0, 2, 1,     not_equal
     LT         : 0, 2, 1,     less_than
-    GT         : 0, 2, 1,     greater_than
+    GT         : 0, 2, 1,     more_than  
     LE         : 0, 2, 1,     less_equal
-    GE         : 0, 2, 1,     greater_equal
+    GE         : 0, 2, 1,     more_equal
 
     ADD        : 0, 2, 1,     add
     SUB        : 0, 2, 1,     sub
@@ -429,6 +438,7 @@ bytecode_metadata_define!{
     ERR        : 0, 1, 0,     throw
     ABT        : 0, 0, 0,     abort
 
+    IRCODE     : 2, 255, 0,   ir_code
     IRBLOCK    : 2, 255, 0,   ir_block
     IRIF       : 0, 3, 0,     ir_if
     IRWHILE    : 0, 2, 0,     ir_while

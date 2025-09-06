@@ -51,6 +51,7 @@ keyword_define!{
     Bool      : "bool"
     Bytes     : "bytes"
     CallCode  : "callcode"
+    ByteCode  : "bytecode"
     As        : "as"
     U8        : "u8"
     U16       : "u16"
@@ -182,14 +183,16 @@ impl IrFn {
 
 irfn_define!{
     
+    MOVE       : 1, 0, 0,     local_move   
+
     TYPEID     : 0, 1, 1,     type_id        
     CHIOSE     : 0, 3, 1,     chiose         
     SIZE       : 0, 1, 1,     size           
     CAT        : 0, 2, 1,     concat         
     BYTE       : 0, 2, 1,     byte           
-    CUT        : 0, 3, 1,     buf_cut        
-    LEFT       : 1, 1, 1,     buf_left       
-    RIGHT      : 1, 1, 1,     buf_right      
+    CUT        : 0, 3, 1,     buffer_cut     
+    LEFT       : 1, 1, 1,     buffer_left    
+    RIGHT      : 1, 1, 1,     buffer_right   
     INC        : 1, 1, 1,     increase       
     DEC        : 1, 1, 1,     decrease       
 
@@ -197,16 +200,17 @@ irfn_define!{
     HWRITE     : 0, 2, 0,     heap_write     
     HREAD      : 0, 2, 1,     heap_read      
 
+    ALLOC      : 1, 0 ,0,     local_alloc
     SRENT      : 0, 1, 0,     storage_rent   
     SRCV       : 0, 2, 0,     storage_recover
-    SDEL       : 0, 1, 0,     storage_delete  
-    SSAVE      : 0, 2, 0,     storage_save    
+    SDEL       : 0, 1, 0,     storage_delete 
+    SSAVE      : 0, 2, 0,     storage_save   
     SLOAD      : 0, 1, 1,     storage_load   
 
-    MGET       : 0, 1, 1,     memory_get
+    MGET       : 0, 1, 1,     memory_get     
     MPUT       : 0, 2, 0,     memory_put     
     GGET       : 0, 1, 1,     global_get     
-    GPUT       : 0, 2, 0,     global_put
+    GPUT       : 0, 2, 0,     global_put     
 
     BURN       : 2, 0, 0,     burn_gas       
 

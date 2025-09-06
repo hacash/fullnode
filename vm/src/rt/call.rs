@@ -1,13 +1,15 @@
 
 
+/*
+
 #[repr(u8)]
 #[derive(Debug, Clone, Copy)]
-pub enum CallTy {
+pub enum CallEntry {
     Main = 1,
     Abst = 2,
 }
 
-
+*/
 
 
 
@@ -184,6 +186,15 @@ macro_rules! abst_call_type_define {
     }
 }
 
+impl AbstCall {
+
+    pub fn uint(&self) -> u8 {
+        *self as u8
+    }
+    
+}
+
+
 abst_call_type_define! {
     Change       : 1u8
     Append       : 2
@@ -197,8 +208,6 @@ abst_call_type_define! {
     PayableSAT   : 26
     PayableHACD  : 27
     PayableAsset : 28
-
-
 
 }
 

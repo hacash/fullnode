@@ -35,7 +35,6 @@ fn coin_asset_transfer_call(abstfrom: AbstCall, abstto: AbstCall, action: &dyn A
     let amtargv: Vec<u8>;
     let calldpt: isize = CallDepth::new(1).into();
     let absty = CallMode::Abst as u8;
-    
     let asset_param = |asset: &AssetAmt| {
         vec![asset.serial.uint().to_be_bytes(), 
             asset.amount.uint().to_be_bytes()

@@ -743,6 +743,44 @@ impl IRNode for IRNodeParam2Single {
 
 
 #[derive(Default, Debug, Clone)]
+pub struct IRNodeBytecodes {
+    pub inst: Bytecode,
+    pub codes: Vec<u8>,
+}
+
+impl IRNode for IRNodeBytecodes {
+    fn as_any(&self) -> &dyn Any { self }
+    fn subs(&self) -> usize { 0 }
+    fn hasretval(&self) -> bool { false }
+    fn bytecode(&self) -> u8 { self.inst as u8 }
+    fn codegen(&self) -> VmrtRes<Vec<u8>> {
+        Ok(self.codes.clone())
+    }
+    fn serialize(&self) -> Vec<u8> {
+        iter::once(self.inst as u8)
+            .chain((self.codes.len() as u16).to_be_bytes())
+            .chain(self.codes.clone())
+            .collect::<Vec<_>>()
+    }
+    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
+        let pre = suo.repeat(tab);
+        let mut buf = String::new();
+        if desc {
+        }else{
+            buf.push_str(&format!("{}bytecode {{ ", pre));
+        }
+        buf.push_str(&self.codes.bytecode_print(false).unwrap());
+        buf.push_str(" }}");
+        buf
+    }
+}
+
+
+
+/*************************************/
+
+
+#[derive(Default, Debug, Clone)]
 pub struct IRNodeBlock {
     pub hrtv: bool, 
     pub inst: Bytecode,

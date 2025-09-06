@@ -1,0 +1,25 @@
+
+
+[node]
+fast_sync = false
+not_find_nodes = true
+listen = 3033
+; boots = 182.92.163.225:3337,54.193.49.59:3337,54.219.80.127:3337
+; boots = 127.0.0.1:13317
+
+
+[mint]
+; difficulty_adjust_blocks = 10
+; each_block_target_time = 10
+
+
+[server]
+enable = true
+listen = 8088
+diamond_form = true
+
+
+[miner]
+enable = true
+reward = 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9
+message = hvm_dev
