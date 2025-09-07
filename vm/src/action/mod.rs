@@ -36,6 +36,7 @@ action_register! {
     AstIf
     AstSelect
     ContractDeploy
+    ContractUpdate
     ContractMainCall
 
     EnvHeight //

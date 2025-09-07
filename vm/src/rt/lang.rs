@@ -182,6 +182,8 @@ impl IrFn {
 
 
 irfn_define!{
+
+    CALLDYN    : 0, 3, 1,     dynamic_call
     
     MOVE       : 1, 0, 0,     local_move   
 

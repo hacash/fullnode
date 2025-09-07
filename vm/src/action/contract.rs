@@ -10,12 +10,11 @@ macro_rules! vmsto {
 
 action_define!{ContractDeploy, 122, 
     ActLv::TopOnly, // level
-    false, [],
+    true, [], // burn 90% fee
     {   
         marks: Fixed4 // zero
         nonce: Uint4 
         contract: ContractSto
-        protocol_fee: Amount // 9 times of tx fee
     },
     (self, ctx, _gas {
         if self.marks.not_zero() {
@@ -24,8 +23,6 @@ action_define!{ContractDeploy, 122,
         }
         let hei = ctx.env().block.height;
         let maddr = ctx.env().tx.main;
-        // sub protocol fee
-        checked_sub_contract_protocol_fee(ctx, &self.protocol_fee)?;
         // check contract
         let caddr = ContractAddress::calculate(&maddr, &self.nonce);
         if vmsto!(ctx).contract_exist(&caddr) {
@@ -40,14 +37,13 @@ action_define!{ContractDeploy, 122,
 }
 
 
-action_define!{ContractChange, 123, 
+action_define!{ContractUpdate, 123, 
     ActLv::TopOnly, // level
-    false, [],
+    true, [], // burn 90% fee
     {   
         marks: Fixed2 // zero
         address: Address // contract address
         contract: ContractSto
-        protocol_fee: Amount // 9 times of tx fee
     },
     (self, ctx, _gas {
         use AbstCall::*;
@@ -55,8 +51,6 @@ action_define!{ContractChange, 123,
             return errf!("marks byte error")
         }
         let hei = ctx.env().block.height;
-        // sub protocol fee
-        checked_sub_contract_protocol_fee(ctx, &self.protocol_fee)?;
         // load old
         let caddr = ContractAddress::from_addr(self.address)?;
         let Some(mut contract) = vmsto!(ctx).contract(&caddr) else {
@@ -78,7 +72,7 @@ action_define!{ContractChange, 123,
 
 
 
-/**************************************/
+/**************************************
 
 
 fn checked_sub_contract_protocol_fee(ctx: &mut dyn Context, ptcfee: &Amount) -> Rerr {
@@ -93,3 +87,6 @@ fn checked_sub_contract_protocol_fee(ctx: &mut dyn Context, ptcfee: &Amount) -> 
     operate::hac_sub(ctx, &maddr, ptcfee)?;
     Ok(())
 }
+
+
+***********************************/

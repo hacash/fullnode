@@ -391,7 +391,7 @@ pub fn execute_code(
             ABT => { exit = Abort;  break },  // panic
             AST => { if !ops.pop()?.to_bool() { exit = Abort;  break } }, // assert(..)
             // call
-            CALLCODE | CALLSTATIC | CALLLIB | CALLLOC | CALL | CALLDYN => {
+            CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL | CALLDYN => {
                 let ist = instruction;
                 macro_rules! not_ist {
                     ( $( $ist: expr ),+ ) => {
@@ -410,21 +410,21 @@ pub fn execute_code(
                         => itr_err_code!(CallLibInStatic),
                     CodeCopy
                         => itr_err_code!(CallInCodeCopy), // cannot call again in code call mode 
-                    _ => Ok(()), // Extenal | Location support all call instructions
+                    _ => Ok(()), // Outer | Inner support all call instructions
                 }?;
                 // ok return
                 match ist {
                     CALLCODE =>   exit = funcptr!(codes, *pc, tail, CodeCopy),
                     CALLSTATIC => exit = funcptr!(codes, *pc, tail, Static),
                     CALLLIB =>    exit = funcptr!(codes, *pc, tail, Library),
-                    CALL =>       exit = funcptr!(codes, *pc, tail, External),
-                    CALLLOC =>    exit = Call(Funcptr{
-                        mode: Location,
-                        target: CallTarget::Location,
+                    CALL =>       exit = funcptr!(codes, *pc, tail, Outer),
+                    CALLINR =>    exit = Call(Funcptr{
+                        mode: Inner,
+                        target: CallTarget::Inner,
                         fnsign: pcutbuf!(FN_SIGN_WIDTH),
                     }),
-                    CALLDYN =>    exit = Call(Funcptr{ // External
-                        mode: External,
+                    CALLDYN =>    exit = Call(Funcptr{ // Outer
+                        mode: Outer,
                         target: CallTarget::Addr(ops.pop()?.checked_contract_address()?),
                         fnsign: ops.pop()?.checked_fnsign()?,
                     }),

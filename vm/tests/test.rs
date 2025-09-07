@@ -63,7 +63,7 @@ mod maincall {
         csto.userfuncs.push(usrfun1).unwrap();
         let mut act2 = ContractDeploy::new();
         act2.contract = csto;
-        act2.protocol_fee = Amount::coin(6, 245);
+        // act2.protocol_fee = Amount::coin(6, 245);
 
         // print
         curl_trs_1(vec![Box::new(act2)]);

@@ -100,14 +100,14 @@ impl Resoure {
         use CallTarget::*;
         use ItrErrCode::*;
         match match fptr.target {
-            Location => (None, self.load_userfn(vmsta, dstadr, fptr.fnsign)?),
-            Addr(ctxadr) => (Some(ctxadr.clone()), self.load_userfn(vmsta, &ctxadr, fptr.fnsign)?),
-            Libidx(lib) => match adrlibs {
+            Inner         => (None, self.load_userfn(vmsta, dstadr, fptr.fnsign)?),
+            Addr(ctxadr)  => (Some(ctxadr.clone()), self.load_userfn(vmsta, &ctxadr, fptr.fnsign)?),
+            Libidx(lib)   => match adrlibs {
                 Some(ads) => self.load_fn_by_search_list(vmsta, &ads, lib, fptr.fnsign),
                 _ => self.load_fn_by_search_librarys(vmsta, srcadr, lib, fptr.fnsign),
             }.map(|(a,b)|(Some(a), b))?,
         }  {
-            (b, Some(c)) => Ok((b, c)),
+            (b, Some(c))  => Ok((b, c)),
             _ => itr_err_code!(CallNotExist), // 
         }
     }

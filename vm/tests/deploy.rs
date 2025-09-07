@@ -44,7 +44,6 @@ mod deploy {
             CU16 DUP ADD RET
         )))
         .func(Func::new("recursion").irnode(ircodestr).unwrap())
-        .pfee("8:247")
         .testnet_deploy_print("8:246");
         
 

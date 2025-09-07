@@ -45,7 +45,7 @@ pub enum Bytecode {
     ________________31  = 0x1f,
     CALLDYN             = 0x20, // arg,fnsg,addr +     
     CALL                = 0x21, // *,****@       
-    CALLLOC             = 0x22, //   ****@       
+    CALLINR             = 0x22, //   ****@       
     CALLLIB             = 0x23, // *,****@          
     CALLSTATIC          = 0x24, // *,****@          
     CALLCODE            = 0x25, // *,****    
@@ -327,15 +327,16 @@ impl Bytecode {
     params, stack input, stack output
 */
 bytecode_metadata_define!{
-    EXTACTION  : 1, 1, 1,     call_extend_action
-    EXTFUNC    : 1, 1, 1,     call_extend_func
-    EXTENV     : 1, 0, 1,     call_extend_env
+    EXTACTION  : 1, 1, 1,     ext_action
+    EXTFUNC    : 1, 1, 1,     ext_func
+    EXTENV     : 1, 0, 1,     ext_env
 
-    CALL       : 21+4, 1, 1,  call
-    CALLLOC    : 4, 1, 1,     callloc
-    CALLLIB    : 1+4, 1, 1,   calllib
+    CALLDYN    :   0, 3, 1,   calldynamic
+    CALL       : 1+4, 1, 1,   call
+    CALLINR    :   4, 1, 1,   callinner
+    CALLLIB    : 1+4, 1, 1,   calllibrary
     CALLSTATIC : 1+4, 1, 1,   callstatic
-    CALLCODE   : 1+4, 0, 0,   callcode
+    CALLCODE   : 1+4, 0, 0,   callcodecopy
 
     NTCALL     : 1, 1, 1,     native_call
 

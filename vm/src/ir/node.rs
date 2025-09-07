@@ -355,7 +355,7 @@ impl IRNode for IRNodeParamsSingle {
                     let fun = hex::encode(&self.para[lx..]);
                     buf.push_str(&format!("{}.<{}>({})", adr.readable(), fun, substr));
                 }
-                CALLLOC => {
+                CALLINR => {
                     let f = hex::encode(&self.para);
                     buf.push_str(&format!("self.<{}>({})", f, substr));
                 }

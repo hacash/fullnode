@@ -125,7 +125,7 @@ pub enum CallExit {
 
 #[derive(Debug, Clone)]
 pub enum CallTarget {
-    Location,
+    Inner,
     Libidx(u8),
     Addr(ContractAddress),
 }
@@ -144,8 +144,8 @@ impl CallTarget {
 pub enum CallMode {
     #[default] Main,
     Abst,
-    External,
-    Location,
+    Outer,
+    Inner,
     Library,
     Static,
     CodeCopy,

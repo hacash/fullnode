@@ -68,11 +68,11 @@ impl CallFrame {
                     next_frame.prepare(fnptr.mode, fnobj, param)?;
                     let cadr = chgsrcadr.unwrap();
                     match fnptr.mode {
-                        Location => {}
+                        Inner => {}
                         Library | Static => {
                             next_frame.curadr = cadr;
                         }
-                        External => {
+                        Outer => {
                             if ! is_public {
                                 next_frame.reclaim(r); // reclaim resource
                                 return itr_err_fmt!(CallNotPublic, "contract {} func sign {}", cadr.readable(), fnptr.fnsign.hex())
@@ -148,8 +148,8 @@ impl CallFrame {
                 Library | Static => {
                     next_frame.curadr = srcadr.unwrap(); // setup src addr
                 },
-                Location => {},
-                External => {
+                Inner => {},
+                Outer => {
                     let CallTarget::Addr(adr) = fnptr.target else {
                         unreachable!()
                     };
@@ -181,7 +181,7 @@ impl CallFrame {
             0 => {},
             1 => {
                 // check and sub gas
-                *env.gas -= r.gas_extra.load_one_new_contract;
+                *env.gas -= r.gas_extra.load_new_contract;
                 if *env.gas < 0 {
                     return itr_err_code!(OutOfGas)
                 }

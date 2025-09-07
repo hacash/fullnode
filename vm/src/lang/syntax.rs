@@ -276,9 +276,9 @@ impl Syntax {
                 let fnsg = calc_func_sign(func);
                 let subx = self.must_get_func_argv()?;
                 return Ok(match &id=="self" {
-                    true => { // CALLLOC
+                    true => { // CALLINR
                         let para: Vec<u8> = fnsg.to_vec();
-                        Box::new(IRNodeParamsSingle{hrtv: true, inst: CALLLOC, para, subx})
+                        Box::new(IRNodeParamsSingle{hrtv: true, inst: CALLINR, para, subx})
                     },
                     false => { // CALL
                         let usadr = self.link_use(&id)?;

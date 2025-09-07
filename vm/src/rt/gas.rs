@@ -40,10 +40,10 @@ impl GasTable {
         gst.set(5,  &[POW]);
         gst.set(6,  &[HWRITE, HWRITEX, HWRITEXL]);
         gst.set(8,  &[MGET, JOIN, REV]);
-        gst.set(12, &[MPUT, CALLLOC]);
+        gst.set(12, &[MPUT, CALLINR]);
         gst.set(16, &[GGET, CALLCODE]);
         gst.set(24, &[GPUT, CALLLIB, CALLSTATIC]);
-        gst.set(32, &[SLOAD, CALL]);
+        gst.set(32, &[SLOAD, CALL, CALLDYN]);
         gst
     }
 
@@ -76,7 +76,8 @@ pub struct GasExtra {
     pub storage_read: i64,
     pub storage_save_base: i64,
     pub storage_recover: i64,
-    pub load_one_new_contract: i64,
+    pub load_new_contract: i64,
+    pub abst_call_min: i64,
 }
 
 impl GasExtra {
@@ -91,7 +92,8 @@ impl GasExtra {
             storage_read: 30, // 32,
             storage_save_base: 42, // (42+vlen) * period
             storage_recover: 62, // 64 for data recover
-            load_one_new_contract: 64,
+            load_new_contract: 2 * GSCU as i64, // 64
+            abst_call_min: 4 * GSCU as i64,     // 32
         }
     }
 }

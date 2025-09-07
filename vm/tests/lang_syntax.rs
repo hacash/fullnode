@@ -37,8 +37,8 @@ fn t1(){
     let sss = r##"
 
         
-        use AnySwap = VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
-        lib ERC20   = VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa(1)
+        lib AnySwap = VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
+        lib ERC20   = VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa : 1
 
         callcode ERC20::do_transfer
 
