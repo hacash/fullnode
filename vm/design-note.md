@@ -45,7 +45,8 @@ Gas Calculation:
     - 1 gcu = 32 gas / 32 byte
     - gas limit is 65535 for one tx
     - a machine execution charges at least 1 gcu of gas (32 gas) = gas / GSCU + 1
-    - from main load a contract for call cost 2 * gcu = 64gas
+    - load a contract for call cost 2 * gcu = 64gas
+    - call main cost gas at least 1 * gcu =  32gas
     - call abst cost gas at least 4 * gcu = 128gas
 
 
@@ -53,8 +54,8 @@ Call Kind:
 
     - DynCall                    (addr, fnsig, argv)
     - Call        <libidx, fnsig>(argv)
-    - LocCall             <fnsig>(argv)
-    - LidCall     <libidx, fnsig>(argv)
+    - InrCall             <fnsig>(argv)
+    - LibCall     <libidx, fnsig>(argv)
     - StaticCall  <libidx, fnsig>(argv)
     - CodeCopyCall<libidx, fnsig>(argv)
 
@@ -63,10 +64,10 @@ Call Privileges:
 
     - Main           => Outer, OuterDyn, Static, Code
     - Abst           => Inner, Lib, Static, Code
-    - Outer | Inner  => Outer, OuterDyn, Inner, Lib, Static, Code (support all types)
     - Library        => Lib, Static, Code
     - Static         => Static, Code
     - Code           => ()
+    - Outer | Inner  => Outer, OuterDyn, Inner, Lib, Static, Code (support all types)
 
 
 Call Context Change:

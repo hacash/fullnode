@@ -331,12 +331,12 @@ bytecode_metadata_define!{
     EXTFUNC    : 1, 1, 1,     ext_func
     EXTENV     : 1, 0, 1,     ext_env
 
-    CALLDYN    :   0, 3, 1,   calldynamic
+    CALLDYN    :   0, 3, 1,   call_dynamic
     CALL       : 1+4, 1, 1,   call
-    CALLINR    :   4, 1, 1,   callinner
-    CALLLIB    : 1+4, 1, 1,   calllibrary
-    CALLSTATIC : 1+4, 1, 1,   callstatic
-    CALLCODE   : 1+4, 0, 0,   callcodecopy
+    CALLINR    :   4, 1, 1,   call_inner
+    CALLLIB    : 1+4, 1, 1,   call_library
+    CALLSTATIC : 1+4, 1, 1,   call_static
+    CALLCODE   : 1+4, 0, 0,   call_codecopy
 
     NTCALL     : 1, 1, 1,     native_call
 
@@ -444,7 +444,7 @@ bytecode_metadata_define!{
     IRIF       : 0, 3, 0,     ir_if
     IRWHILE    : 0, 2, 0,     ir_while
 
-    BURN       : 2, 0, 0,     burn_gas
+    BURN       : 2, 0, 0,     gas_burn
     NOP        : 0, 0, 0,     nop
     NT         : 0, 0, 0,     never_touch
 

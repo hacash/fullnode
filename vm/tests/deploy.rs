@@ -7,6 +7,7 @@ mod common;
 
 #[cfg(test)]
 mod deploy {
+     use field::interface::*;
 
     use vm::*;
     use vm::rt::*;
@@ -28,16 +29,18 @@ mod deploy {
                 PU8 1
             }
             let foo = $0
+            if foo > 10 {
+                return 10
+            }
             let bar = $1
-            bar = 9 as u16
-            return self.recursion(foo + bar)
+            bar = 1 as u16
+            bar = self.recursion(foo + bar)
+            return foo + bar
         "##;
 
-
-        println!("{}", lang_to_bytecodes(ircodestr).unwrap().bytecode_print(false).unwrap());
-
-
-
+        let codes = lang_to_bytecodes(ircodestr).unwrap();
+        println!("{}", codes.bytecode_print(false).unwrap());
+        println!("{} {}", codes.len(), codes.to_hex());
 
         Contract::new()
         .call(Abst::new(PayableHAC).bytecode(build_codes!(

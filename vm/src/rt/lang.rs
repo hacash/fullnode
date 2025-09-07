@@ -183,7 +183,7 @@ impl IrFn {
 
 irfn_define!{
 
-    CALLDYN    : 0, 3, 1,     dynamic_call
+    CALLDYN    : 0, 3, 1,     call_dynamic
     
     MOVE       : 1, 0, 0,     local_move   
 
@@ -203,6 +203,7 @@ irfn_define!{
     HREAD      : 0, 2, 1,     heap_read      
 
     ALLOC      : 1, 0 ,0,     local_alloc
+
     SRENT      : 0, 1, 0,     storage_rent   
     SRCV       : 0, 2, 0,     storage_recover
     SDEL       : 0, 1, 0,     storage_delete 
@@ -214,7 +215,7 @@ irfn_define!{
     GGET       : 0, 1, 1,     global_get     
     GPUT       : 0, 2, 0,     global_put     
 
-    BURN       : 2, 0, 0,     burn_gas       
+    BURN       : 2, 0, 0,     gas_burn       
 
 }
 

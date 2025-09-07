@@ -393,25 +393,7 @@ pub fn execute_code(
             // call
             CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL | CALLDYN => {
                 let ist = instruction;
-                macro_rules! not_ist {
-                    ( $( $ist: expr ),+ ) => {
-                        ![$( $ist ),+].contains(&ist)
-                    }
-                }
-                // check call in mode 
-                match mode {
-                    Main    if not_ist!(CALL, CALLDYN, CALLSTATIC, CALLCODE)
-                        => itr_err_code!(CallOtherInMain),
-                    Abst    if not_ist!(CALLLIB, CALLSTATIC, CALLCODE)
-                        => itr_err_code!(CallInAbst),
-                    Library if not_ist!(CALLLIB, CALLSTATIC, CALLCODE)
-                        => itr_err_code!(CallLocInLib),
-                    Static  if not_ist!(CALLSTATIC, CALLCODE)
-                        => itr_err_code!(CallLibInStatic),
-                    CodeCopy
-                        => itr_err_code!(CallInCodeCopy), // cannot call again in code call mode 
-                    _ => Ok(()), // Outer | Inner support all call instructions
-                }?;
+                check_call_mode(mode, ist)?;
                 // ok return
                 match ist {
                     CALLCODE =>   exit = funcptr!(codes, *pc, tail, CodeCopy),
@@ -447,6 +429,30 @@ pub fn execute_code(
     check_gas!();
     Ok(exit)
 
+}
+
+
+fn check_call_mode(mode: CallMode, inst: Bytecode) -> VmrtErr {
+    use CallMode::*;
+    use Bytecode::*;
+    macro_rules! not_ist {
+        ( $( $ist: expr ),+ ) => {
+            ![$( $ist ),+].contains(&inst)
+        }
+    }
+    match mode {
+        Main    if not_ist!(CALL, CALLDYN, CALLSTATIC, CALLCODE)
+            => itr_err_code!(CallOtherInMain),
+        Abst    if not_ist!(CALLINR, CALLLIB, CALLSTATIC, CALLCODE)
+            => itr_err_code!(CallInAbst),
+        Library if not_ist!(CALLLIB, CALLSTATIC, CALLCODE)
+            => itr_err_code!(CallLocInLib),
+        Static  if not_ist!(CALLSTATIC, CALLCODE)
+            => itr_err_code!(CallLibInStatic),
+        CodeCopy // not allowed any call
+            => itr_err_code!(CallInCodeCopy),
+        _ => Ok(()), // Outer | Inner support all call instructions
+    }
 }
 
 

@@ -77,6 +77,7 @@ pub struct GasExtra {
     pub storage_save_base: i64,
     pub storage_recover: i64,
     pub load_new_contract: i64,
+    pub main_call_min: i64,
     pub abst_call_min: i64,
 }
 
@@ -93,7 +94,8 @@ impl GasExtra {
             storage_save_base: 42, // (42+vlen) * period
             storage_recover: 62, // 64 for data recover
             load_new_contract: 2 * GSCU as i64, // 64
-            abst_call_min: 4 * GSCU as i64,     // 32
+            main_call_min:     1 * GSCU as i64, // 64
+            abst_call_min:     4 * GSCU as i64,     // 32
         }
     }
 }

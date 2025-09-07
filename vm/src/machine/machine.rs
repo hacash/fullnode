@@ -12,8 +12,10 @@ pub struct MachineBox {
 impl Drop for MachineBox {
     fn drop(&mut self) {
         // println!("\n---------------\n[MachineBox Drop] Reclaim resoure))\n---------------\n");
-        let m = self.machine.take().unwrap();
-        MACHINE_MANAGER.reclaim(m.remove());
+        match self.machine.take() {
+            Some(m) => MACHINE_MANAGER.reclaim(m.remove()),
+            _ => ()
+        }
     }
 }
 
@@ -38,7 +40,8 @@ impl MachineBox {
 
     fn init_gas(&mut self, ctx: &mut dyn Context) -> Ret<i64> {
         // init gas
-        let gas_limit = SpaceCap::new(ctx.env().block.height).max_gas_of_tx as i64;
+        let spscp = &self.machine.as_mut().unwrap().r.space_cap;
+        let gas_limit = spscp.max_gas_of_tx as i64;
         let (feer, gasfee) = ctx.tx().fee_extend()?;
         if feer == 0 {
             return errf!("gas extend cannot empty on contract call")
@@ -53,11 +56,20 @@ impl MachineBox {
     }
 
 
-    fn spend_gas(&mut self, ctx: &mut dyn Context, gas_rem: i64) -> Ret<i64>{
+    fn spend_gas(&mut self, cty: CallMode, ctx: &mut dyn Context, gas_rem: i64) -> Ret<i64>{
+        use CallMode::*;
         assert!(self.gas_price > 0, "gas price error");
         assert!(gas_rem >= 0, "gas use error");
-        let cost = self.gas - gas_rem;
+        let mut cost = self.gas - gas_rem;
         assert!(cost > 0, "gas use error");
+        // min use
+        let gsext = &self.machine.as_mut().unwrap().r.gas_extra;
+        let min_use = match cty {
+            Main => gsext.main_call_min,
+            Abst => gsext.abst_call_min,
+            _ => unreachable!()
+        };
+        up_in_range!(cost, min_use, i64::MAX);
         // do spend
         let cost_per = cost * (self.gas_price / GSCU as i64);
         assert!(cost_per > 0, "gas cost error");
@@ -83,19 +95,20 @@ impl VM for MachineBox {
         ctx: &mut dyn Context, sta: &mut dyn State,
         ty: u8, kd: u8, data: &[u8], param: Vec<u8>
     ) -> Ret<(i64, Vec<u8>)> {
+        use CallMode::*;
         // init gas & check balance
         let gas = &mut self.check_gas(ctx)?;
-        let machine = self.machine.as_mut().unwrap();
         // env & do call
+        let machine = self.machine.as_mut().unwrap();
         let sta = &mut VMState::wrap(sta);
         let exenv = &mut ExecEnv{ ctx, sta, gas };
         let cty: CallMode = std_mem_transmute!(ty);
         let resv = match cty {
-            CallMode::Main => {
+            Main => {
                 let cty = map_itr_err!(CodeType::parse(kd))?;
                 machine.main_call(exenv, cty, data.to_vec())
             },
-            CallMode::Abst => {
+            Abst => {
                 let kid: AbstCall = std_mem_transmute!(kd);
                 let cadr = ContractAddress::parse(data)?;
                 machine.abst_call(exenv, kid, cadr, param)
@@ -103,7 +116,7 @@ impl VM for MachineBox {
             _ => unreachable!()
         }.map(|a|a.to_bytes())?;
         // spend gas
-        let cost = self.spend_gas(ctx, *gas)?;
+        let cost = self.spend_gas(cty, ctx, *gas)?;
         // ok
         Ok((cost, resv))
     }
@@ -145,12 +158,14 @@ impl Machine {
         map_itr_err!(self.do_call(env, CallMode::Main, fnobj, None))
     }
 
-    pub fn abst_call(&mut self, env: &mut ExecEnv, syscty: AbstCall, contract_addr: ContractAddress, param: Vec<u8>) -> Ret<Value> {
-        let Some(fnobj) = map_itr_err!(self.r.load_abstfn(env.sta, &contract_addr, syscty))? else {
-            return Ok(Value::Nil) // not find call
+    pub fn abst_call(&mut self, env: &mut ExecEnv, cty: AbstCall, contract_addr: ContractAddress, param: Vec<u8>) -> Ret<Value> {
+        let Some(fnobj) = map_itr_err!(self.r.load_abstfn(env.sta, &contract_addr, cty))? else {
+            // return Ok(Value::Nil) // not find call
+            return errf!("abst func {} not find", cty as u8) // not find call
         };
-        map_itr_err!(self.do_call(env, CallMode::Abst, 
-            fnobj.as_ref().clone(), Some(Value::bytes(param))))
+        let fnobj = fnobj.as_ref().clone();
+        let param =  Some(Value::bytes(param));
+        map_itr_err!(self.do_call(env, CallMode::Abst, fnobj, param))
     }
 
     fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, param: Option<Value>) -> VmrtRes<Value> {
