@@ -4,9 +4,6 @@ impl CallFrame {
     pub fn start_call(&mut self, r: &mut Resoure, env: &mut ExecEnv, mode: CallMode, code: FnObj, param: Option<Value>) -> VmrtRes<Value> {
         use CallExit::*;
         use CallMode::*;
-        if let Main | Abst = mode {} else {
-            never!()
-        }
         // to spend gas
         self.contract_count = r.contracts.len();
         let mut curr_frame = self.increase(r)?;
@@ -53,7 +50,7 @@ impl CallFrame {
                     let (chgsrcadr, fnobj) = r.load_must_call(env.sta, fnptr.clone(), 
                         &curr_frame.ctxadr, &curr_frame.curadr, adrlist)?;
                     let fnobj = fnobj.as_ref().clone();
-                    let is_public = fnobj.check_conf(FnConf::IsPublic);
+                    let fn_is_public = fnobj.check_conf(FnConf::IsPublic);
                     // check gas
                     self.check_load_new_contract_and_gas(r, env)?;
                     // if call code
@@ -73,7 +70,7 @@ impl CallFrame {
                             next_frame.curadr = cadr;
                         }
                         Outer => {
-                            if ! is_public {
+                            if ! fn_is_public {
                                 next_frame.reclaim(r); // reclaim resource
                                 return itr_err_fmt!(CallNotPublic, "contract {} func sign {}", cadr.readable(), fnptr.fnsign.hex())
                             }

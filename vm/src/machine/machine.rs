@@ -6,14 +6,14 @@ use value::Value;
 pub struct MachineBox {
     gas: i64,
     gas_price: i64,
-    pub machine: Option<Machine>
+    machine: Option<Machine>
 } 
 
 impl Drop for MachineBox {
     fn drop(&mut self) {
         // println!("\n---------------\n[MachineBox Drop] Reclaim resoure))\n---------------\n");
         match self.machine.take() {
-            Some(m) => MACHINE_MANAGER.reclaim(m.remove()),
+            Some(m) => MACHINE_MANAGER.reclaim(m.r),
             _ => ()
         }
     }
@@ -115,8 +115,11 @@ impl VM for MachineBox {
             }
             _ => unreachable!()
         }.map(|a|a.to_bytes())?;
-        // spend gas
-        let cost = self.spend_gas(cty, ctx, *gas)?;
+        // spend gas, but in calling do not spend
+        let cost = maybe!( machine.is_in_calling(),
+            self.gas - *gas,
+            self.spend_gas(cty, ctx, *gas)?
+        );
         // ok
         Ok((cost, resv))
     }
@@ -134,23 +137,22 @@ impl VM for MachineBox {
 #[allow(dead_code)]
 pub struct Machine {
     r: Resoure,
-    frames: CallFrame,
+    frames: Vec<CallFrame>,
 }
 
 
 
 impl Machine {
 
+    pub fn is_in_calling(&self) -> bool {
+        ! self.frames.is_empty()
+    }
+
     pub fn create(r: Resoure) -> Self {
         Self {
             r,
-            frames: CallFrame::new(),
+            frames: vec![],
         }
-    }
-
-    pub fn remove(mut self) -> Resoure {
-        self.frames.reclaim(&mut self.r);
-        self.r
     }
 
     pub fn main_call(&mut self, env: &mut ExecEnv, ctype: CodeType, codes: Vec<u8>) -> Ret<Value> {
@@ -169,8 +171,12 @@ impl Machine {
     }
 
     fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, param: Option<Value>) -> VmrtRes<Value> {
-        self.frames.start_call(&mut self.r, env, mode, code, param)
+        self.frames.push(CallFrame::new()); // for reclaim
+        let res = self.frames.last_mut().unwrap().start_call(&mut self.r, env, mode, code, param);
+        self.frames.pop().unwrap().reclaim(&mut self.r); // do reclaim
+        res
     }
+
 
 
 }
