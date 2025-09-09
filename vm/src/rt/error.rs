@@ -18,7 +18,11 @@ pub enum ItrErrCode {
     CodeTooLong     = 12, // code length
     CodeOverflow    = 13, // pc out of limit
     CodeEmpty       = 14,
-    IRNodeOverDepth = 15,
+    CodeNotWithEnd  = 15,
+    JumpOverflow    = 16,
+    JumpInDataSeg   = 17,
+
+    IRNodeOverDepth = 20,
     
     InstInvalid    = 21, // 
     InstDisabled   = 22, // 

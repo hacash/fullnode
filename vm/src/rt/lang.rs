@@ -218,7 +218,9 @@ irfn_define!{
     GGET       : 0, 1, 1,     global_get     
     GPUT       : 0, 2, 0,     global_put     
 
-    BURN       : 2, 0, 0,     gas_burn       
+    BURN       : 2, 0, 0,     gas_burn     
+
+    END        : 0, 0, 0,     end
 
 }
 

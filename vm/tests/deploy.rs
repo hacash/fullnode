@@ -19,6 +19,16 @@ mod deploy {
     use vm::contract::*;
 
     #[test]
+    fn verify_codes() {
+
+        verify_bytecodes(&build_codes!(
+            PU8 1 JMPL 0 2 RET
+        )).unwrap()
+
+    }
+
+
+    #[test]
     fn recursion() {
 
         /*
@@ -62,7 +72,7 @@ mod deploy {
         Contract::new()
         .call(Abst::new(PermitHAC).bytecode(permithac_codes))
         .call(Abst::new(PayableHAC).bytecode(build_codes!(
-            PU8 1 RET
+            PU8 1 JMPL 0 RET
         )))
         .func(Func::new("recursion").irnode(recursion_fnstr).unwrap())
         .testnet_deploy_print("15:244");    

@@ -13,6 +13,7 @@ include!("cap.rs");
 include!("error.rs");
 include!("call.rs");
 include!("parse.rs");
+include!("verify.rs");
 
 
 
