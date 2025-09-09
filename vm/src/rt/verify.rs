@@ -80,9 +80,10 @@ fn verify_valid_instruction(codes: &[u8]) -> VmrtRes<(Vec<u8>, Vec<isize>)> {
 // 
 fn verify_jump_dests(instable: &[u8], jumpdests: &[isize]) -> VmrtErr {
     let itlen = instable.len();
+    let right = itlen - 1;
     for jp in jumpdests {
         let j = *jp;
-        if j < 0 || j > itlen as isize {
+        if j < 0 || j > right as isize {
             return itr_err_code!(JumpOverflow)   
         }
         if 0 == instable[j as usize] {

@@ -5,13 +5,14 @@ use std::collections::*;
 // Contract Head
 combi_struct!{ ContractMeta, 
     vrsn: Fixed1 // 4bit16 = version
-	marks: Fixed3
-	mexts: Fixed1
+	mark: Fixed3
+	mext: Fixed4
 }
 
 // Contract Abst Call
 combi_struct!{ ContractAbstCall, 
 	sign: Fixed1
+	mark: Fixed2
 	cdty: Fixed1 // 3bit8 = codetype
     code: BytesW2
 }
@@ -19,10 +20,10 @@ combi_struct!{ ContractAbstCall,
 // Contract User Func
 combi_struct!{ ContractUserFunc, 
 	sign: Fixed4
+	mark: Fixed3
 	cdty: Fixed1 // 1bit = is_public, 3bit8 = codetype
     code: BytesW2
 }
-
 
 // Contract address list
 combi_list!(ContractAddrsssListW1, Uint1, ContractAddress);

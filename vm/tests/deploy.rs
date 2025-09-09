@@ -22,7 +22,7 @@ mod deploy {
     fn verify_codes() {
 
         verify_bytecodes(&build_codes!(
-            PU8 1 JMPL 0 2 RET
+            PU8 1 JMPL 0 8 JMPL 0 2 RET
         )).unwrap()
 
     }
@@ -72,10 +72,10 @@ mod deploy {
         Contract::new()
         .call(Abst::new(PermitHAC).bytecode(permithac_codes))
         .call(Abst::new(PayableHAC).bytecode(build_codes!(
-            PU8 1 JMPL 0 RET
+            P1 RET
         )))
         .func(Func::new("recursion").irnode(recursion_fnstr).unwrap())
-        .testnet_deploy_print("15:244");    
+        .testnet_deploy_print("18:244");    
 
     }
 
