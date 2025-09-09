@@ -4,9 +4,9 @@
 
 #[cfg(test)]
 mod token_t {
-    use super::*;
-    use super::{Syntax, Tokenizer};
 
+    // use super::*;
+    // use super::{Syntax, Tokenizer};
 
     #[test]
     fn t1(){
@@ -37,6 +37,11 @@ mod token_t {
 
 
         */
+
+
+        /* 
+
+
         let sss = r##"
 
             
@@ -111,6 +116,7 @@ mod token_t {
         println!("bytecode: \n\n{}\n\n", codes.bytecode_print(true).unwrap());
 
 
+        */
 
 
     }

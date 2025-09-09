@@ -223,12 +223,12 @@ pub fn execute_code(
     // start run
     let exit;
     loop {
-        // debug_println!("-------- pc = {}\noperds = {}\nlocals = {}", pc,  &ops.print_stack(), &locals.print_stack());
-
         // read inst
         let instbyte = codes[*pc as usize]; // u8
         let instruction: Bytecode = std_mem_transmute!(instbyte.clone());
         *pc += 1; // next
+
+        // debug_println!("operds = {}\nlocals = {}\n-------- pc = {}, nbt = {:?}", &ops.print_stack(), &locals.print_stack(), pc, instruction);
 
         // do execute
         let mut gas: i64 = 0;
@@ -285,7 +285,7 @@ pub fn execute_code(
             POPX   => ops.popx(pu8!())?,
             SWAP   => ops.swap()?,
             REV    => ops.reverse()?, // reverse
-            CHIOSE => { if ops.pop()?.is_zero() { ops.swap()? } ops.pop()?; }, /* x ? a : b */
+            CHOISE => { if ops.pop()?.not_zero() { ops.swap()? } ops.pop()?; }, /* x ? a : b */
             SIZE   => *ops.peek()? = U16(ops.peek()?.val_size() as u16),
             CAT    => ops.cat(cap)?,
             JOIN   => ops.join(cap)?,
@@ -293,6 +293,7 @@ pub fn execute_code(
             CUT    => { let (l, o) = (ops.pop()?, ops.pop()?); ops.peek()?.cutout(l, o)?; },
             LEFT   => ops.peek()?.cutleft( pu8_as_u16!() + 1)?,
             RIGHT  => ops.peek()?.cutright(pu8_as_u16!() + 1)?,
+            LDROP  => ops.peek()?.dropleft(pu8_as_u16!() + 1)?,
             // locals & heap & global & memory
             ALLOC => { let num = pu8!(); locals.alloc(num)?; 
                 gas += num as i64 * gst.local_one_alloc; },
@@ -302,7 +303,7 @@ pub fn execute_code(
             GETX  => ops.push(locals.load(pu8!() as usize)?)?,
             PUTX  => { locals.save(pu8_as_u16!(), ops.pop()?)?; 
                 gas += gst.local_put; },
-            MOVE => locals.append(ops.popn(pu8!())?)?,
+            MOVE => { let v = locals.edit(pu8!())?; *v = ops.pop()?; }
             XOP   => local_operand(pu8!(), locals, ops.pop()?)?,
             XLG   => local_logic(pu8!(), locals, ops.peek()?)?,
             HGROW    => gas += heap.grow(pu8!())?,

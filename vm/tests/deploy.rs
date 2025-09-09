@@ -7,7 +7,9 @@ mod common;
 
 #[cfg(test)]
 mod deploy {
-     use field::interface::*;
+    use field::*;
+    use field::interface::*;
+    use protocol::action::*;
 
     use vm::*;
     use vm::rt::*;
@@ -23,7 +25,7 @@ mod deploy {
             VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
         */
 
-        let ircodestr = r##"
+        let recursion_fnstr= r##"
             local_move(0)
             bytecode {
                 PU8 1
@@ -38,21 +40,49 @@ mod deploy {
             return foo + bar
         "##;
 
-        let codes = lang_to_bytecodes(ircodestr).unwrap();
+
+        let permithac_codes = lang_to_bytecodes(r##"
+            local_move(0)
+            let argv = $0
+            let mei  = $1
+            argv = buffer_left_drop(21, argv)
+            mei = amount_to_mei(argv)
+            return choise(mei<=4, true, false)
+        "##).unwrap();
+
+
+
+        let codes = lang_to_bytecodes(recursion_fnstr).unwrap();
         println!("{}", codes.bytecode_print(false).unwrap());
         println!("{} {}", codes.len(), codes.to_hex());
 
+        println!("permithac: \n{}", permithac_codes.bytecode_print(true).unwrap());
+
+
         Contract::new()
+        .call(Abst::new(PermitHAC).bytecode(permithac_codes))
         .call(Abst::new(PayableHAC).bytecode(build_codes!(
-            CU16 DUP ADD RET
+            PU8 1 RET
         )))
-        .func(Func::new("recursion").irnode(ircodestr).unwrap())
-        .testnet_deploy_print("8:246");
-        
+        .func(Func::new("recursion").irnode(recursion_fnstr).unwrap())
+        .testnet_deploy_print("15:244");    
 
     }
 
 
+    #[test]
+    // fn call_recursion() {
+    fn call_transfer() {
+
+        let adr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
+
+        let mut act = HacFromTrs::new();
+        act.from = AddrOrPtr::from_addr(adr);
+        act.hacash = Amount::mei(19);
+
+        curl_trs_1(vec![Box::new(act.clone())]);
+
+    }
 
 
 

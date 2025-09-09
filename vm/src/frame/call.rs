@@ -50,7 +50,7 @@ impl CallFrame {
                     let (chgsrcadr, fnobj) = r.load_must_call(env.sta, fnptr.clone(), 
                         &curr_frame.ctxadr, &curr_frame.curadr, adrlist)?;
                     let fnobj = fnobj.as_ref().clone();
-                    let fn_is_public = fnobj.check_conf(FnConf::IsPublic);
+                    let fn_is_public = fnobj.check_conf(FnConf::Public);
                     // check gas
                     self.check_load_new_contract_and_gas(r, env)?;
                     // if call code
@@ -127,7 +127,7 @@ impl CallFrame {
             let (srcadr, fnobj) = r.load_must_call(env.sta, fnptr.clone(), 
                 &curr_frame.ctxadr, &curr_frame.curadr, None)?;
             let fnobj = fnobj.as_ref().clone();
-            let is_public = fnobj.check_conf(FnConf::IsPublic);
+            let is_public = fnobj.check_conf(FnConf::Public);
             // check gas
             self.check_load_new_contract_and_gas(r, env)?;
             // if call code

@@ -49,6 +49,8 @@ keyword_define!{
     Throw     : "throw"
     Assert    : "assert"
     Bool      : "bool"
+    True      : "true"
+    False     : "false"
     Bytes     : "bytes"
     CallCode  : "callcode"
     ByteCode  : "bytecode"
@@ -188,13 +190,14 @@ irfn_define!{
     MOVE       : 1, 0, 0,     local_move   
 
     TYPEID     : 0, 1, 1,     type_id        
-    CHIOSE     : 0, 3, 1,     chiose         
+    CHOISE     : 0, 3, 1,     choise         
     SIZE       : 0, 1, 1,     size           
     CAT        : 0, 2, 1,     concat         
     BYTE       : 0, 2, 1,     byte           
     CUT        : 0, 3, 1,     buffer_cut     
     LEFT       : 1, 1, 1,     buffer_left    
-    RIGHT      : 1, 1, 1,     buffer_right   
+    RIGHT      : 1, 1, 1,     buffer_right  
+    LDROP      : 1, 1, 1,     buffer_left_drop 
     INC        : 1, 1, 1,     increase       
     DEC        : 1, 1, 1,     decrease       
 

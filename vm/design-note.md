@@ -96,6 +96,7 @@ Add Opcode must Modified:
     2. Bytecode metadata table  `./rt/bytecode.rs`
     3. Gas table                `./rt/gas.rs`
     4. lang func define         `./rt/lang.rs`
+    5. interpreter              `./interpreter/execute.rs`
 
 
 

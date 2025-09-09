@@ -3,9 +3,15 @@ use space::{CtcKVMap, GKVMap, Heap, Stack};
 
 #[allow(dead_code)]
 fn execute_test_maincall(gas: i64, codes: Vec<u8>) -> VmrtRes<(i64, Vec<Value>, CallExit)> {
+    execute_test_with_argv(gas, codes, None)
+}
+
+
+#[allow(dead_code)]
+fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Vec<u8>>) -> VmrtRes<(i64, Vec<Value>, CallExit)> {
 
     let mut pc: usize = 0;
-    let mut gas_limit: i64 = gas; // 2000
+    let mut gas: i64 = gas_limit; // 2000
     // let addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
     let cadr = ContractAddress::default();
 
@@ -15,13 +21,17 @@ fn execute_test_maincall(gas: i64, codes: Vec<u8>) -> VmrtRes<(i64, Vec<Value>, 
     let mut ctx = ExtCalTest::default(); 
 
     let mut ops = Stack::new(256);
+    if let Some(v) = argv {
+        ops.push(Value::bytes(v)).unwrap();
+    }
+
     // do execute
     super::interpreter::execute_code(
         &mut pc,
         &codes,
         CallMode::Main,
         0,
-        &mut gas_limit,
+        &mut gas,
         &GasTable::new(1),
         &GasExtra::new(1),
         &SpaceCap::new(1),
@@ -35,7 +45,9 @@ fn execute_test_maincall(gas: i64, codes: Vec<u8>) -> VmrtRes<(i64, Vec<Value>, 
         &cadr,
         &cadr,
     ).map(|r|{
-        (gas - gas_limit, ops.release(), r)
+        (gas_limit - gas, ops.release(), r)
     })
+
+
 
 }

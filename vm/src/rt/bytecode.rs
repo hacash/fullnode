@@ -97,7 +97,7 @@ pub enum Bytecode {
     POPX                = 0x53, // *a...b pop n
     SWAP                = 0x54, // a,b++  swap  b,a = a,b
     REV                 = 0x55, // a...b  reverse u8
-    CHIOSE              = 0x56, // a,b,c+ (x ? a : b)
+    CHOISE              = 0x56, // a,b,c+ (x ? a : b)
     SIZE                = 0x57, // &      size
     CAT                 = 0x58, // a,b+   buf: b + a
     JOIN                = 0x59, // a...bn+
@@ -105,7 +105,7 @@ pub enum Bytecode {
     CUT                 = 0x5b, // a,b,c+ cut buf (v, ost, len)+
     LEFT                = 0x5c, // *&     cut left  buf *
     RIGHT               = 0x5d, // *&     cut right buf *
-    ________________94  = 0x5e,
+    LDROP               = 0x5e, // *&     drop buf left *
     ________________95  = 0x5f,
     ________________96  = 0x60,
     ________________97  = 0x61,
@@ -362,7 +362,7 @@ bytecode_metadata_define!{
     POPX       : 1, 255, 0,   pop_stack_num
     SWAP       : 0, 2, 2,     swap_stack
     REV        : 0, 255, 255, reverse_stace
-    CHIOSE     : 0, 3, 1,     chiose
+    CHOISE     : 0, 3, 1,     choise
     SIZE       : 0, 1, 1,     size
     CAT        : 0, 2, 1,     concat
     JOIN       : 0, 255, 1,   join_bytes
@@ -370,6 +370,7 @@ bytecode_metadata_define!{
     CUT        : 0, 3, 1,     buffer_cut
     LEFT       : 1, 1, 1,     buffer_left
     RIGHT      : 1, 1, 1,     buffer_right
+    LDROP      : 1, 1, 1,     buffer_left_drop
 
     BAND       : 0, 2, 1,     bit_and
     BOR        : 0, 2, 1,     bit_or

@@ -24,6 +24,7 @@ use super::lang::{Tokenizer, Syntax};
 include!{"util.rs"}
 include!{"function.rs"}
 include!{"contract.rs"}
+include!{"maincall.rs"}
 
 
 

@@ -2,6 +2,16 @@
 
 
 
+fn amount_to_mei(v: &Value) -> VmrtRes<Value> {
+    let buf = v.to_bytes();
+    let hacash = map_err_itr!(NativeCallError, Amount::build(&buf))?;
+    let Some(mei) = hacash.to_mei_u64() else {
+        return itr_err_fmt!(NativeCallError, "call amount_to_mei overflow")
+    };
+    Ok(Value::U64( mei ))
+}
+
+
 fn amount_to_zhu(v: &Value) -> VmrtRes<Value> {
     let buf = v.to_bytes();
     let hacash = map_err_itr!(NativeCallError, Amount::build(&buf))?;

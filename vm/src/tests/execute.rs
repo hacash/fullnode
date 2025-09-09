@@ -1,6 +1,6 @@
 
 #[allow(dead_code)]
-fn execute1() {
+pub fn execute1() {
     /*
 
     */
@@ -23,7 +23,7 @@ fn execute1() {
 
 
 #[allow(dead_code)]
-fn execute2() {
+pub fn execute2() {
     /*
 
     */
@@ -37,6 +37,30 @@ fn execute2() {
     let codes = compile_irs_to_bytecodes(&irnds).unwrap();
     println!("{}", codes.bytecode_print(true).unwrap());
     let exec_res = execute_test_maincall(65535, codes);
+    println!("exec res: {:?}", exec_res);
+
+}
+
+
+#[allow(dead_code)]
+pub fn execute3() {
+
+    let permithac_codes = lang_to_bytecodes(r##"
+        local_move(0)
+        let argv = $0
+        let mei  = $1
+        argv = buffer_left_drop(21, argv)
+        mei = amount_to_mei(argv)
+        return choise(mei<=4, true, false)
+    "##).unwrap();
+
+    let argv = vec![
+        Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap().serialize(),
+        Amount::from("6:248").unwrap().serialize(),
+    ].concat();
+
+    println!("{}", permithac_codes.bytecode_print(true).unwrap());
+    let exec_res = execute_test_with_argv(65535, permithac_codes, Some(argv));
     println!("exec res: {:?}", exec_res);
 
 }

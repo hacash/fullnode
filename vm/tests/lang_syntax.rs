@@ -1,8 +1,8 @@
-use sys::*;
-use vm::IRNode;
-use vm::rt::BytecodePrint;
-use vm::ir::IRNodePrint;
-use vm::lang::{Tokenizer, Syntax};
+// use sys::*;
+// use vm::IRNode;
+// use vm::rt::BytecodePrint;
+// use vm::ir::IRNodePrint;
+// use vm::lang::{Tokenizer, Syntax};
 
 
 
@@ -34,6 +34,8 @@ fn t1(){
 
 
     */
+
+    /*
     let sss = r##"
 
         
@@ -110,6 +112,8 @@ fn t1(){
     println!("bytecode: \n\n{}\n\n", codes.bytecode_print(true).unwrap());
 
 
+
+    */
 
 
 }

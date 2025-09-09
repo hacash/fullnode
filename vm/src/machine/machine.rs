@@ -29,16 +29,16 @@ impl MachineBox {
         }
     }
 
-    fn check_gas(&mut self, ctx: &mut dyn Context) -> Ret<i64> {
+    fn check_gas(&mut self, ctx: &mut dyn Context) -> Rerr {        
         const L: i64 = i64::MIN;
         match self.gas {
             L     => self.init_gas(ctx),
             L..=0 => errf!("gas has run out"),
-            g     => Ok(g) // gas > 0
+            _     => Ok(()) // gas > 0
         }
     }
 
-    fn init_gas(&mut self, ctx: &mut dyn Context) -> Ret<i64> {
+    fn init_gas(&mut self, ctx: &mut dyn Context) -> Rerr {
         // init gas
         let spscp = &self.machine.as_mut().unwrap().r.space_cap;
         let gas_limit = spscp.max_gas_of_tx as i64;
@@ -52,33 +52,33 @@ impl MachineBox {
         up_in_range!(gas, 0, gas_limit);  // max 65535
         self.gas = gas;
         self.gas_price = Self::gas_price(ctx);
-        Ok(gas)
+        Ok(())
     }
 
-
-    fn spend_gas(&mut self, cty: CallMode, ctx: &mut dyn Context, gas_rem: i64) -> Ret<i64>{
+    fn check_cost(&self, cty: CallMode, mut cost: i64) -> Ret<i64> {
         use CallMode::*;
-        assert!(self.gas_price > 0, "gas price error");
-        assert!(gas_rem >= 0, "gas use error");
-        let mut cost = self.gas - gas_rem;
-        assert!(cost > 0, "gas use error");
+        assert!(cost > 0, "gas cost error");
         // min use
-        let gsext = &self.machine.as_mut().unwrap().r.gas_extra;
+        let gsext = &self.machine.as_ref().unwrap().r.gas_extra;
         let min_use = match cty {
             Main => gsext.main_call_min,
             Abst => gsext.abst_call_min,
             _ => unreachable!()
         };
         up_in_range!(cost, min_use, i64::MAX);
+        Ok(cost)
+    }
+
+
+    fn spend_gas(&self, ctx: &mut dyn Context, cost: i64) -> Rerr {
+        assert!(self.gas_price > 0, "gas price error");
         // do spend
         let cost_per = cost * (self.gas_price / GSCU as i64);
         assert!(cost_per > 0, "gas cost error");
         let cost_amt = Amount::unit238(cost_per as u64);
         let main = ctx.env().tx.main;
         protocol::operate::hac_sub(ctx, &main, &cost_amt)?;
-        // reset gas
-        self.gas = gas_rem;
-        Ok(cost)
+        Ok(())
     }
 
     fn gas_price(ctx: &dyn Context) -> i64 {
@@ -97,9 +97,12 @@ impl VM for MachineBox {
     ) -> Ret<(i64, Vec<u8>)> {
         use CallMode::*;
         // init gas & check balance
-        let gas = &mut self.check_gas(ctx)?;
+        self.check_gas(ctx)?;
+        let gas = &mut self.gas;
+        let gas_record = *gas;
         // env & do call
         let machine = self.machine.as_mut().unwrap();
+        let not_in_calling = ! machine.is_in_calling();
         let sta = &mut VMState::wrap(sta);
         let exenv = &mut ExecEnv{ ctx, sta, gas };
         let cty: CallMode = std_mem_transmute!(ty);
@@ -115,11 +118,13 @@ impl VM for MachineBox {
             }
             _ => unreachable!()
         }.map(|a|a.to_bytes())?;
+        let gas_current = *gas;
+        let mut cost = gas_record - gas_current;
+        cost = self.check_cost(cty, cost)?;
         // spend gas, but in calling do not spend
-        let cost = maybe!( machine.is_in_calling(),
-            self.gas - *gas,
-            self.spend_gas(cty, ctx, *gas)?
-        );
+        if not_in_calling {
+            self.spend_gas(ctx, cost)?;
+        }
         // ok
         Ok((cost, resv))
     }
@@ -163,7 +168,7 @@ impl Machine {
     pub fn abst_call(&mut self, env: &mut ExecEnv, cty: AbstCall, contract_addr: ContractAddress, param: Vec<u8>) -> Ret<Value> {
         let Some(fnobj) = map_itr_err!(self.r.load_abstfn(env.sta, &contract_addr, cty))? else {
             // return Ok(Value::Nil) // not find call
-            return errf!("abst func {} not find", cty as u8) // not find call
+            return errf!("abst func {:?} not find on contract {}", cty, contract_addr.readable()) // not find call
         };
         let fnobj = fnobj.as_ref().clone();
         let param =  Some(Value::bytes(param));

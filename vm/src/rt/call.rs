@@ -80,7 +80,7 @@ pub enum FnKey {
 #[repr(u8)]
 #[derive(Debug, Copy, Clone)]
 pub enum FnConf {
-    IsPublic = 0b10000000,
+    Public = 0b10000000,
 }
 
 

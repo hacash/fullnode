@@ -61,7 +61,8 @@ native_call_define!{
     sha2              = 1,   32
     sha3              = 2,   32
     ripemd160         = 3,   32
-    amount_to_zhu     = 21,   8
+    amount_to_mei     = 21,   8
+    amount_to_zhu     = 22,   8
 }
 
 

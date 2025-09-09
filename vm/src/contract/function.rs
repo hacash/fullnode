@@ -64,5 +64,10 @@ impl Func {
 
     define_func_codes!{}
 
+    pub fn public(mut self) -> Self {
+        self.func.cdty[0] |= FnConf::Public as u8;
+        self
+    }
+
 
 }

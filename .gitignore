@@ -22,6 +22,7 @@ vm/testnet/poworker
 hascan*
 hacash_*
 
+*.loc.*
 *.local.*
 *.ini
 *.exe

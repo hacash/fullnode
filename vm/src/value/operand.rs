@@ -78,6 +78,18 @@ impl Value {
         Ok(())
     }
 
+    pub fn dropleft(&mut self, n: u16) -> VmrtErr {
+        let buf = self.checked_bytes()?;
+        let spx = n as usize;
+        if spx == 0 {
+            return itr_err_fmt!(StackError, "cannot drop buf left length 0")
+        }
+        if spx > buf.len() {
+            return itr_err_fmt!(StackError, "drop buf left overflow")
+        }
+        *self = Self::Bytes(buf[spx-1..].to_vec());
+        Ok(())
+    }
 
     /*
         return buf: b + a

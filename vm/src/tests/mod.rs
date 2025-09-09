@@ -1,5 +1,6 @@
 use super::*;
 use super::rt::*;
+use super::lang::*;
 
 
 include!{"util.rs"}
@@ -10,12 +11,15 @@ include!{"execute.rs"}
 
 
 
+#[allow(dead_code)]
 pub fn do_all_test () {
     codegen1();
     codegen2();
     benchmark1();
     benchmark2();
     execute1();
+    execute2();
+    execute3();
 }
 
 

@@ -67,11 +67,12 @@ macro_rules! action_define {
                 let mut $pgas: u32 = $pself.size() as u32 * burn90fee10times;
                 // execute action body
                 let res: Ret<Vec<u8>> = $exec;
+                let res = res?;
                 // call action hook
                 unsafe {
                     ACTION_HOOK_FUNC($pself.kind(), $pself as &dyn Any, $pctx, &mut $pgas)?;
                 }
-                Ok(($pgas, res?))
+                Ok(($pgas, res))
             }
         }
 

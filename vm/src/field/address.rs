@@ -69,6 +69,9 @@ impl ContractAddress {
         ContractAddress::from_addr(cadr)
     } 
 
+    pub fn readable(&self) -> String {
+        self.addr.readable()
+    }
 
     
 

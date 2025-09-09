@@ -13,12 +13,12 @@ impl Contract {
         }
     }
 
-    pub fn call(&mut self, a: Abst) -> &mut Self {
+    pub fn call(mut self, a: Abst) -> Self {
         self.ctrt.abstcalls.push(a.func).unwrap();
         self
     }
 
-    pub fn func(&mut self, a: Func) -> &mut Self {
+    pub fn func(mut self, a: Func) -> Self {
         self.ctrt.userfuncs.push(a.func).unwrap();
         self
     }

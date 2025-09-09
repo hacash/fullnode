@@ -519,6 +519,8 @@ impl Syntax {
                 }
                 Box::new(IRNodeBytecodes{inst: IRCODE, codes})
             }
+            Keyword(True)   => Box::new(IRNodeLeaf{hrtv: true,  inst: P1}),
+            Keyword(False)  => Box::new(IRNodeLeaf{hrtv: true,  inst: P0}),
             Keyword(Abort)  => Box::new(IRNodeLeaf{hrtv: false, inst: ABT}),
             Keyword(Finish) => Box::new(IRNodeLeaf{hrtv: false, inst: END}),
             Keyword(Assert) => Box::new(IRNodeSingle{hrtv: false, inst: AST, subx: self.item_must(0)?}),

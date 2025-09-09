@@ -10,6 +10,7 @@ mod tests;
 
 pub fn main() {
 
-    tests::do_all_test();
+    // tests::do_all_test();
+    tests::execute3();
 
 }
