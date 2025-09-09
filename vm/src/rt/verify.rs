@@ -6,6 +6,9 @@ pub fn verify_bytecodes(codes: &[u8]) -> VmrtErr {
     if cl <= 0 {
         return itr_err_code!(CodeEmpty)
     }
+    if cl > u16::MAX as usize {
+        return itr_err_code!(CodeTooLong)
+    }
     // check end
     let tail: Bytecode = std_mem_transmute!(codes[cl - 1]);
     if let RET | END | ERR | ABT = tail {} else {

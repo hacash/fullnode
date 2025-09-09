@@ -5,22 +5,10 @@
 
 
 
-
-macro_rules! checkcodetail {
-    ($pc: expr, $tail: expr) => {
-        if $pc >= $tail {
-            return itr_err_code!(CodeOverflow)
-        }
-    }
-}
-
 macro_rules! itrbuf {
-    ($codes: expr, $pc: expr, $tail: expr, $l: expr) => {
+    ($codes: expr, $pc: expr, $l: expr) => {
         { 
             let r = $pc + $l;
-            if r > $tail {
-                return itr_err_code!(CodeOverflow)
-            }
             let v: [u8; $l] = $codes[$pc..r].try_into().unwrap();
             $pc = r;
             v
@@ -29,12 +17,9 @@ macro_rules! itrbuf {
 }
 
 macro_rules! itrparam {
-    ($codes: expr, $pc: expr, $tail: expr, $l: expr, $t: ty) => {
+    ($codes: expr, $pc: expr, $l: expr, $t: ty) => {
         { 
-            let r = $pc + $l; 
-            if r > $tail {
-                return itr_err_code!(CodeOverflow)
-            }
+            let r = $pc + $l;
             let v = <$t>::from_be_bytes($codes[$pc..r].try_into().unwrap());
             $pc = r;
             v
@@ -43,26 +28,23 @@ macro_rules! itrparam {
 }
 
 macro_rules! itrparamu8 {
-    ($codes: expr, $pc: expr, $tail: expr) => {
-        itrparam!{$codes, $pc, $tail, 1, u8}
+    ($codes: expr, $pc: expr) => {
+        itrparam!{$codes, $pc, 1, u8}
     }
 }
 
 macro_rules! itrparamu16 {
-    ($codes: expr, $pc: expr, $tail: expr) => {
-        itrparam!{$codes, $pc, $tail, 2, u16}
+    ($codes: expr, $pc: expr) => {
+        itrparam!{$codes, $pc, 2, u16}
     }
 }
 
 macro_rules! itrparambufex {
-    ($codes: expr, $pc: expr, $tail: expr, $l: expr, $t: ty) => {
+    ($codes: expr, $pc: expr, $l: expr, $t: ty) => {
         {
-            let s = itrparam!{$codes, $pc, $tail, $l, $t} as usize + 1;
+            let s = itrparam!{$codes, $pc, $l, $t} as usize + 1;
             let l = $pc;
             let r = l + s;
-            if r > $tail {
-                return itr_err_code!(CodeOverflow)
-            }
             $pc = r;
             Value::Bytes( $codes[l..r].into() )
         }
@@ -70,53 +52,51 @@ macro_rules! itrparambufex {
 }
 
 macro_rules! itrparambuf {
-    ($codes: expr, $pc: expr, $tail: expr) => {
-        itrparambufex!($codes, $pc, $tail, 1, u8)
+    ($codes: expr, $pc: expr) => {
+        itrparambufex!($codes, $pc, 1, u8)
     }
 }
 
 macro_rules! itrparambufl {
-    ($codes: expr, $pc: expr, $tail: expr) => {
-        itrparambufex!($codes, $pc, $tail, 2, u16)
+    ($codes: expr, $pc: expr) => {
+        itrparambufex!($codes, $pc, 2, u16)
     }
 }
 
 macro_rules! jump {
-    ($codes: expr, $pc: expr, $tail: expr, $l: expr) => {
+    ($codes: expr, $pc: expr, $l: expr) => {
         {
             let tpc = match $l {
-                1 =>  itrparamu8!($codes, $pc, $tail) as usize,
-                2 => itrparamu16!($codes, $pc, $tail) as usize,
+                1 =>  itrparamu8!($codes, $pc) as usize,
+                2 => itrparamu16!($codes, $pc) as usize,
                 _ => return itr_err_code!(CodeOverflow),
             };
-            checkcodetail!(tpc, $tail);
             $pc = tpc; // jump to
         }
     }
 }
 
 macro_rules! ostjump {
-    ($codes: expr, $pc: expr, $tail: expr, $l: expr) => {
+    ($codes: expr, $pc: expr, $l: expr) => {
         {
             let tpc = match $l {
-                1 => itrparam!{$codes, $pc, $tail, 1, i8} as isize,
-                2 => itrparam!{$codes, $pc, $tail, 2, i16} as isize,
+                1 => itrparam!{$codes, $pc, 1, i8} as isize,
+                2 => itrparam!{$codes, $pc, 2, i16} as isize,
                 _ => return itr_err_code!(CodeOverflow),
             };
             let tpc = ($pc as isize + tpc);
             if tpc < 0 {
                 return itr_err_code!(CodeOverflow)
             }
-            checkcodetail!(tpc as usize, $tail);
             $pc = tpc as usize; // jump to
         }
     }
 }
 
 macro_rules! branch {
-    ( $ops: expr, $codes: expr, $pc: expr, $tail: expr, $l: expr) => {
+    ( $ops: expr, $codes: expr, $pc: expr, $l: expr) => {
         if $ops.pop()?.checked_bool()? {
-            jump!($codes, $pc, $tail, $l);
+            jump!($codes, $pc, $l);
         }else{
             $pc += $l;
         }
@@ -124,9 +104,9 @@ macro_rules! branch {
 }
 
 macro_rules! ostbranchex {
-    ( $ops: expr, $codes: expr, $pc: expr, $tail: expr, $l: expr, $cond: ident) => {
+    ( $ops: expr, $codes: expr, $pc: expr, $l: expr, $cond: ident) => {
         if $ops.pop()?.$cond()? {
-            ostjump!($codes, $pc, $tail, $l);
+            ostjump!($codes, $pc, $l);
         }else{
             $pc += $l;
         }
@@ -134,16 +114,16 @@ macro_rules! ostbranchex {
 }
 // is_not_zero
 macro_rules! ostbranch {
-    ( $ops: expr, $codes: expr, $pc: expr, $tail: expr, $l: expr) => {
-        ostbranchex!($ops, $codes, $pc, $tail, $l, checked_bool)
+    ( $ops: expr, $codes: expr, $pc: expr, $l: expr) => {
+        ostbranchex!($ops, $codes, $pc, $l, checked_bool)
     }
 }
 
 macro_rules! funcptr {
-    ($codes: expr, $pc: expr, $tail: expr, $mode: expr) => {
+    ($codes: expr, $pc: expr, $mode: expr) => {
         {
-            let idx = itrparamu8!($codes, $pc, $tail);
-            let sig = itrbuf!($codes, $pc, $tail, FN_SIGN_WIDTH);
+            let idx = itrparamu8!($codes, $pc);
+            let sig = itrbuf!($codes, $pc, FN_SIGN_WIDTH);
             Call(Funcptr{
                 mode: $mode,
                 target: CallTarget::Libidx(idx),
@@ -200,22 +180,16 @@ pub fn execute_code(
     let hei: u64 = ctx.height();
 
     // check code length
-    let codelen = codes.len();
-    if codelen == 0 {
-        return itr_err_code!(CodeEmpty)
-    }
-    if codelen > u16::MAX as usize {
-        return itr_err_code!(CodeTooLong)
-    }
-    let tail = codelen;
+    // let codelen = codes.len();
+    // let tail = codelen;
 
     macro_rules! check_gas { () => { if *gas_usable < 0 { return itr_err_code!(OutOfGas) } } }
-    macro_rules! pu8 { () => { itrparamu8!(codes, *pc, tail) } }
+    macro_rules! pu8 { () => { itrparamu8!(codes, *pc) } }
     macro_rules! pu8_as_u16 { () => { pu8!() as u16 } }
-    macro_rules! pu16 { () => { itrparamu16!(codes, *pc, tail) } }
-    macro_rules! pbuf { () => { itrparambuf!(codes, *pc, tail) } }
-    macro_rules! pbufl { () => { itrparambufl!(codes, *pc, tail) } }
-    macro_rules! pcutbuf { ($w: expr) => { itrbuf!(codes, *pc, tail, $w) } }
+    macro_rules! pu16 { () => { itrparamu16!(codes, *pc) } }
+    macro_rules! pbuf { () => { itrparambuf!(codes, *pc) } }
+    macro_rules! pbufl { () => { itrparambufl!(codes, *pc) } }
+    macro_rules! pcutbuf { ($w: expr) => { itrbuf!(codes, *pc, $w) } }
     macro_rules! _pctrtaddr { () => { ContractAddress::parse(&pcutbuf!(CONTRACT_ADDRESS_WIDTH)).map_err(|e|ItrErr(ContractAddrErr, e))? }}
     macro_rules! ops_pop_to_u16 { () => { ops.pop()?.checked_u16()? } }
     macro_rules! ops_peek_to_u16 { () => { ops.peek()?.checked_u16()? } }
@@ -374,13 +348,13 @@ pub fn execute_code(
             INC => ops.peek()?.inc(pu8!())?,
             DEC => ops.peek()?.dec(pu8!())?,
             // workflow control
-            JMPL  =>        jump!(codes, *pc, tail, 2),
-            JMPS  =>     ostjump!(codes, *pc, tail, 1),
-            JMPSL =>     ostjump!(codes, *pc, tail, 2),
-            BRL   =>      branch!(ops, codes, *pc, tail, 2),
-            BRS   =>   ostbranch!(ops, codes, *pc, tail, 1),
-            BRSL  =>   ostbranch!(ops, codes, *pc, tail, 2),   
-            BRSLN => ostbranchex!(ops, codes, *pc, tail, 2, checked_bool_not),   
+            JMPL  =>        jump!(codes, *pc, 2),
+            JMPS  =>     ostjump!(codes, *pc, 1),
+            JMPSL =>     ostjump!(codes, *pc, 2),
+            BRL   =>      branch!(ops, codes, *pc, 2),
+            BRS   =>   ostbranch!(ops, codes, *pc, 1),
+            BRSL  =>   ostbranch!(ops, codes, *pc, 2),   
+            BRSLN => ostbranchex!(ops, codes, *pc, 2, checked_bool_not),   
             // other
             NT   => return itr_err_code!(InstNeverTouch), // never touch
             NOP  => {}, // do nothing
@@ -397,10 +371,10 @@ pub fn execute_code(
                 check_call_mode(mode, ist)?;
                 // ok return
                 match ist {
-                    CALLCODE =>   exit = funcptr!(codes, *pc, tail, CodeCopy),
-                    CALLSTATIC => exit = funcptr!(codes, *pc, tail, Static),
-                    CALLLIB =>    exit = funcptr!(codes, *pc, tail, Library),
-                    CALL =>       exit = funcptr!(codes, *pc, tail, Outer),
+                    CALLCODE =>   exit = funcptr!(codes, *pc, CodeCopy),
+                    CALLSTATIC => exit = funcptr!(codes, *pc, Static),
+                    CALLLIB =>    exit = funcptr!(codes, *pc, Library),
+                    CALL =>       exit = funcptr!(codes, *pc, Outer),
                     CALLINR =>    exit = Call(Funcptr{
                         mode: Inner,
                         target: CallTarget::Inner,
