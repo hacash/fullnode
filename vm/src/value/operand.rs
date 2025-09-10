@@ -16,6 +16,7 @@ macro_rules! inc_dec_opt_define {
 impl Value {
 
     // must uint
+    #[inline(always)]
     pub fn inc(&mut self, n: u8) -> VmrtErr {
         inc_dec_opt_define!{self,   U8,   u8, checked_add, n}
         inc_dec_opt_define!{self,  U16,  u16, checked_add, n}
@@ -26,6 +27,7 @@ impl Value {
     }
 
     // must uint
+    #[inline(always)]
     pub fn dec(&mut self, n: u8) -> VmrtErr {
         inc_dec_opt_define!{self,   U8,   u8, checked_sub, n}
         inc_dec_opt_define!{self,  U16,  u16, checked_sub, n}
@@ -36,6 +38,7 @@ impl Value {
     }
 
     // ret u8
+    #[inline(always)]
     pub fn cutbyte(&mut self, n: u16) -> VmrtErr {
         let buf = self.checked_bytes()?;
         let idx = n as usize;
@@ -46,6 +49,7 @@ impl Value {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn cutleft(&mut self, n: u16) -> VmrtErr {
         let buf = self.checked_bytes()?;
         let spx = n as usize;
@@ -56,6 +60,7 @@ impl Value {
         Ok(())
     }
     
+    #[inline(always)]
     pub fn cutright(&mut self, n: u16) -> VmrtErr {
         let buf = self.checked_bytes()?;
         let spx = buf.len() as isize - n as isize;
@@ -66,6 +71,7 @@ impl Value {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn cutout(&mut self, len: Value, ost: Value) -> VmrtErr {
         let len = len.checked_u16()? as usize;
         let ost = ost.checked_u16()? as usize;
@@ -78,6 +84,7 @@ impl Value {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn dropleft(&mut self, n: u16) -> VmrtErr {
         let buf = self.checked_bytes()?;
         let spx = n as usize;
@@ -94,6 +101,7 @@ impl Value {
     /*
         return buf: b + a
     */
+    #[inline(always)]
     pub fn concat(a: &Value, b: &Value, cap: &SpaceCap) -> VmrtRes<Value> {
         let v = vec![b.checked_bytes()?, a.checked_bytes()?].concat();
         Ok(Value::bytes(v).valid(cap)?)

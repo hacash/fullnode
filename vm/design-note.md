@@ -27,7 +27,16 @@ Contract Deploy & Store:
     1. contract max size is 65535 byte = 64kb
     2. function max size is 65535 byte = 64kb
     3. deploy or update contract burn 90 fee
-    6. 
+
+
+Contract Verify:
+
+    1. irnode compile
+    3. bytecode finish with END|RET inst
+    3. bytecode inst valid
+    3. bytecode param check
+    4. bytecode jump dest
+    5. 
 
 
 Storage Ban:

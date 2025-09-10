@@ -42,12 +42,12 @@ fn verify_valid_instruction(codes: &[u8]) -> VmrtRes<(Vec<u8>, Vec<isize>)> {
         instable[i] = 1; // yes is valid instruction
         i += 1;
         macro_rules! pu8 { () => {{
-            if i >= cdlen { return itr_err_code!(CodeOverflow) }
+            if i >= cdlen { return itr_err_code!(InstParamsErr) }
             codes[i as usize]
         }}}
         macro_rules! pu16 { () => {{
             let r = i + 2;
-            if r > cdlen { return itr_err_code!(CodeOverflow) }
+            if r > cdlen { return itr_err_code!(InstParamsErr) }
             u16::from_be_bytes(codes[i as usize..r as usize].try_into().unwrap())
         }}}
         macro_rules! pi8 { () => {

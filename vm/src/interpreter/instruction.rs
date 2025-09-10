@@ -131,6 +131,7 @@ fn max_checked(x: &Value, y: &Value) -> VmrtRes<Value> {
     Ok(maybe!(a > b, x.clone(), y.clone()))
 }
 
+
 fn min_checked(x: &Value, y: &Value) -> VmrtRes<Value> {
     let a = x.checked_uint()?;
     let b = y.checked_uint()?;

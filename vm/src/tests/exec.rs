@@ -11,11 +11,12 @@ fn test_codes() -> Vec<u8> {
 
 fn benchmark(appcodes: Vec<u8>) {
 
+    // let codes = vec![appcodes].concat();
     let codes = vec![test_codes(), appcodes].concat();
-    let cdlen = codes.len() * 1725;
+    let cdlen = codes.len();
 
     let sy_time = SystemTime::now();
-    let exec_res = execute_test_maincall(65535, codes);
+    let exec_res = execute_test_maincall(65535 / 2 * 999, codes);
     let us_time = SystemTime::now().duration_since(sy_time).unwrap().as_millis();
 
     println!("use time: {} millis, codes sizes: {}, exec res: {:?}", us_time, cdlen, exec_res);
@@ -23,13 +24,13 @@ fn benchmark(appcodes: Vec<u8>) {
 }
 
 #[allow(dead_code)]
-fn benchmark1() {
+pub fn benchmark1() {
     benchmark(build_codes!( RET ));
 }
 
 #[allow(dead_code)]
-fn benchmark2() {
+pub fn benchmark2() {
     benchmark(build_codes!(
-        POP JMPL 0 0 RET
+        P1 P0 ADD DUP POP POP JMPL 0 0 RET
     ));
 }

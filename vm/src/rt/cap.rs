@@ -2,8 +2,8 @@
 #[derive(Debug, Clone, Default)]
 pub struct SpaceCap {
     pub max_gas_of_tx: usize, // 65535
-    pub call_depth: usize,    // 16 max 127        
     pub load_contract: usize, // 20
+    pub call_depth: usize,    // 32
 
     pub max_value_size: usize,
 
@@ -15,7 +15,8 @@ pub struct SpaceCap {
     pub max_global: usize, // 32
     pub max_memory: usize, // 12
 
-    pub max_contract_size: usize, // 65535
+    pub max_contract_size: usize, // 65535 * 2
+    pub one_function_size: usize, // 65535 / 4
     pub inherits_parent: usize, // 4
     pub librarys_link:   usize, // 250
 
@@ -28,20 +29,22 @@ pub struct SpaceCap {
 impl SpaceCap {
 
     pub fn new(_hei: u64) -> SpaceCap {
+        const U16M: usize = u16::MAX as usize; // 65535
 
         SpaceCap {
-            max_gas_of_tx:   65535,
-            call_depth:      16,
+            max_gas_of_tx:   U16M / 2,
             load_contract:   20,
-            max_value_size:  2048, 
+            call_depth:      32,
+            max_value_size:  1024, 
             total_stack:     256,
             total_local:     256,
             max_heap_seg:    64,
             max_global:      20,
             max_memory:      12,
-            max_contract_size: (u16::MAX as usize) * 2, // 65535*2
+            max_contract_size: U16M * 2, // 65535*2
+            one_function_size: U16M / 4, // 65535/4
             inherits_parent: 4,
-            librarys_link:   250,
+            librarys_link:   100,
             // max_ctl_func:   200,
             // max_ctl_libx:   100,
             // max_ctl_body:   50,

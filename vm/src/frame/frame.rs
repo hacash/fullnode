@@ -115,19 +115,11 @@ impl Frame {
     */
     pub fn prepare(&mut self, mode: CallMode, codes: FnObj, param: Option<Value>) -> VmrtErr {
         use CodeType::*;
-        use rt::Bytecode::{END, BURN};
         self.pc = 0;
         self.mode = mode;
         self.codes = match codes.ctype {
-            Bytecode => iter::empty().chain(codes.into_array())
-                .chain([END as u8]).collect(),
-            IRNode => {
-                // burn gas = code size / 3
-                let cdl = ((codes.codes.len() / 3) as u16).to_be_bytes().to_vec(); // burn gas = size / 2
-                let c = compile_irs_to_bytecodes(&codes.codes)?;
-                iter::once(BURN as u8).chain(cdl).chain(c)
-                .chain([END as u8]).collect()
-            },
+            Bytecode => codes.into_array(),
+            IRNode => runtime_convert_irs_to_bytecodes(&codes.codes)?,
         };
         if let Some(p) = param {
             self.oprnds.push(p)?; // param into stack

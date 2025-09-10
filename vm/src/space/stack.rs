@@ -57,6 +57,7 @@ impl Stack {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn peek<'a>(&'a mut self) -> VmrtRes<&'a mut Value> {
         let n = self.datas.len();
         if n <= 0 {
@@ -65,6 +66,7 @@ impl Stack {
         Ok(unsafe { self.datas.get_unchecked_mut(n - 1) })
     }
 
+    #[inline(always)]
     pub fn edit<'a>(&'a mut self, idx: u8) -> VmrtRes<&'a mut Value> {
         // let opt = mark > 5; // 0b00000111; (mark & 0b00011111)
         let idx = idx as usize;
@@ -75,10 +77,12 @@ impl Stack {
         Ok(unsafe { self.datas.get_unchecked_mut(idx) })
     }
 
+    #[inline(always)]
     pub fn pop(&mut self) -> VmrtRes<Value> {
         self.datas.pop().ok_or_else(||ItrErr::new(StackError, "Pop empty stack"))
     }
 
+    #[inline(always)]
     pub fn popn(&mut self, n: u8) -> VmrtRes<Vec<Value>> {
         let n = n as usize;
         if n == 0 {
@@ -93,6 +97,7 @@ impl Stack {
         Ok(res)
     }
 
+    #[inline(always)]
     pub fn popx(&mut self, x: u8) -> VmrtErr {
         let x = x as usize;
         if x < 2 {
@@ -107,6 +112,7 @@ impl Stack {
 
     }
 
+    #[inline(always)]
     pub fn dupx(&mut self, x: u8) -> VmrtErr {
         let x = x as usize;
         let idx = self.datas.len() as i32 - x as i32 - 1;
@@ -117,6 +123,7 @@ impl Stack {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn reverse(&mut self) -> VmrtErr {
         let x = self.pop()?.checked_u8()? as usize;
         if x < 2 {
@@ -142,6 +149,7 @@ impl Stack {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn join(&mut self, cap: &SpaceCap) -> VmrtErr {
         let x = self.pop()?.checked_u8()? as usize;
         if x < 3 {
@@ -154,6 +162,7 @@ impl Stack {
         self.push(value.valid(cap)?)
     }
 
+    #[inline(always)]
     pub fn push(&mut self, it: Value) -> VmrtErr {
         if self.datas.len() >= self.limit {
             return itr_err_code!(OutOfStack)
@@ -162,6 +171,7 @@ impl Stack {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn save(&mut self, idx: u16, it: Value) -> VmrtErr {
         let idx = idx as usize;
         if idx >= self.datas.len() {
@@ -171,6 +181,7 @@ impl Stack {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn load(&self, idx: usize) -> VmrtRes<Value> {
         if idx >= self.datas.len() {
             return itr_err_fmt!(LocalError, "Read local overflow")
@@ -178,10 +189,12 @@ impl Stack {
         Ok(self.datas[idx].clone())
     }
     
+    #[inline(always)]
     pub fn last(&self) -> VmrtRes<Value> {
         self.lastn(0)
     }
 
+    #[inline(always)]
     pub fn lastn(&self, n: u16) -> VmrtRes<Value> {
         let n = n as usize;
         let l = self.datas.len();
@@ -191,6 +204,7 @@ impl Stack {
         Ok(self.datas[l-n-1].clone())
     }
 
+    #[inline(always)]
     pub fn swap(&mut self) -> VmrtErr {
         let l = self.datas.len();
         if l < 2 {
@@ -202,6 +216,7 @@ impl Stack {
         Ok(())
     }
 
+    #[inline(always)]
     pub fn append(&mut self, mut vs: Vec<Value>) -> VmrtErr {
         let s = vs.len();
         if s + self.datas.len() > self.limit {

@@ -128,6 +128,14 @@ impl ContractSto {
 	pub fn check(&self, hei: u64) -> VmrtErr {
 		use ItrErrCode::*;
 		let cap = SpaceCap::new(hei);
+		// check size
+		if self.size() > cap.max_contract_size {
+			return itr_err_fmt!(ContractError, "contract size overflow, max {}", cap.max_contract_size)
+		}
+		if 0 != *self.morextend {
+			return itr_err_fmt!(ContractError, "extend data format error")
+		}
+		// inherits_parent and librarys
 		if self.inherits.length() > cap.inherits_parent {
 			return itr_err_fmt!(InheritsError, "inherits number overflow")
 		}
@@ -138,19 +146,12 @@ impl ContractSto {
 		for a in self.abstcalls.list() {
 			AbstCall::check(a.sign[0])?;
 			let ctype = CodeType::parse(a.cdty[0])?;
-			try_compile_check(ctype, &a.code)?; // // check compile
+			convert_and_check(&cap, ctype, &a.code)?; // // check compile
 		}
 		// usrfun call
 		for a in self.userfuncs.list() {
 			let ctype = CodeType::parse(a.cdty[0])?;
-			try_compile_check(ctype, &a.code)?; // check compile
-		}
-		// check size
-		if self.size() > cap.max_contract_size {
-			return itr_err_fmt!(ContractError, "contract size overflow, max {}", cap.max_contract_size)
-		}
-		if 0 != *self.morextend {
-			return itr_err_fmt!(ContractError, "extend data format error")
+			convert_and_check(&cap, ctype, &a.code)?; // check compile
 		}
 		// ok
 		Ok(())

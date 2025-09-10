@@ -4,31 +4,31 @@
 #[repr(u8)]
 #[derive(Default, PartialEq, Debug, Clone, Copy)]
 pub enum ItrErrCode {
-    ContractError      = 1u8,
-    NotFindContract    = 2,
-    AbstTypeError      = 3,
-    CodeTypeError      = 4,
-    InheritsError      = 5,
-    LibrarysError      = 6,
-    ComplieError       = 7, 
-    ContractAddrErr    = 8,
-    ContractUpgradeErr = 9,
+    ContractError        = 1u8,
+    NotFindContract      = 2,
+    AbstTypeError        = 3,
+    CodeTypeError        = 4,
+    InheritsError        = 5,
+    LibrarysError        = 6,
+    ComplieError         = 7, 
+    ContractAddrErr      = 8,
+    ContractUpgradeErr   = 9,
 
-    CodeError       = 11,
-    CodeTooLong     = 12, // code length
-    CodeOverflow    = 13, // pc out of limit
-    CodeEmpty       = 14,
-    CodeNotWithEnd  = 15,
-    JumpOverflow    = 16,
-    JumpInDataSeg   = 17,
+    CodeError         = 11,
+    CodeTooLong       = 12, // code length
+    CodeOverflow      = 13, // pc out of limit
+    CodeEmpty         = 14,
+    CodeNotWithEnd    = 15,
+    JumpOverflow      = 16,
+    JumpInDataSeg     = 17,
 
-    IRNodeOverDepth = 20,
+    IRNodeOverDepth   = 20,
     
-    InstInvalid    = 21, // 
-    InstDisabled   = 22, // 
-    ExtActDisabled = 23, // 
-    InstNeverTouch = 24, // 
-    InstParamsErr  = 25, // 
+    InstInvalid       = 21, // 
+    InstDisabled      = 22, // 
+    ExtActDisabled    = 23, // 
+    InstNeverTouch    = 24, // 
+    InstParamsErr     = 25, // 
     
     OutOfGas          = 31,
     OutOfStack        = 32,
@@ -40,28 +40,28 @@ pub enum ItrErrCode {
     OutOfLoadContract = 38,
     OutOfValueSize    = 39,
     
-    GasError     = 41,
-    StackError   = 42,
-    LocalError   = 43,
-    HeapError    = 44,
-    MemoryError  = 45,
-    GlobalError  = 46,
-    StorageError = 47,
+    GasError          = 41,
+    StackError        = 42,
+    LocalError        = 43,
+    HeapError         = 44,
+    MemoryError       = 45,
+    GlobalError       = 46,
+    StorageError      = 47,
     
-    CallNotExist     = 51,
-    CallLibOverflow  = 52,
-    CallInvalid      = 53,
-    CallExitInvalid  = 54,
-    CallInCodeCopy   = 55,
-    CallInAbst       = 56,
-    CallOtherInMain  = 57,
-    CallLocInLib     = 58,
-    CallLibInStatic  = 59,
-    CallNoReturn     = 60,
-    CallNotPublic    = 61,
+    CallNotExist      = 51,
+    CallLibOverflow   = 52,
+    CallInvalid       = 53,
+    CallExitInvalid   = 54,
+    CallInCodeCopy    = 55,
+    CallInAbst        = 56,
+    CallOtherInMain   = 57,
+    CallLocInLib      = 58,
+    CallLibInStatic   = 59,
+    CallNoReturn      = 60,
+    CallNotPublic     = 61,
     
-    CastFail         = 71,
-    CastParamFail    = 72,
+    CastFail          = 71,
+    CastParamFail     = 72,
     
     Arithmetic        = 81,
     BytesHandle       = 82,
