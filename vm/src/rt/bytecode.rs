@@ -246,11 +246,11 @@ pub enum Bytecode {
     ________________232 = 0xe8,
     ________________233 = 0xe9,
     ________________234 = 0xea,
-    RET                 = 0xeb, // a     func return (DATA)
-    END                 = 0xec, //       func return nil
-    AST                 = 0xed, // c     assert throw
-    ERR                 = 0xee, // a     throw (ERR)
-    ABT                 = 0xef, //       abord
+    AST                 = 0xeb, // c     assert throw
+    ERR                 = 0xec, // a     throw (ERR)
+    ABT                 = 0xed, //       abord
+    RET                 = 0xee, // a     func return (DATA)
+    END                 = 0xef, //       func return nil
     IRCODE              = 0xf0, // <IR NODE>
     IRBLOCK             = 0xf1, // <IR NODE>
     IRIF                = 0xf2, // <IR NODE>

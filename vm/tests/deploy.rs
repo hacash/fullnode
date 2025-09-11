@@ -90,6 +90,28 @@ mod deploy {
 
     #[test]
     // fn call_recursion() {
+    fn maincall1() {
+
+        use vm::action::*;
+
+        let maincodes = lang_to_bytecodes(r##"
+            throw "1"
+        "##).unwrap();
+
+        println!("{}", maincodes.bytecode_print(true).unwrap());
+
+        let mut act = ContractMainCall::new();
+        act.ctype = Uint1::from(0);
+        act.codes = BytesW2::from(maincodes).unwrap();
+
+        // print
+        curl_trs_1(vec![Box::new(act)]);
+
+    }
+
+
+    #[test]
+    // fn call_recursion() {
     fn call_transfer() {
 
         let adr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();

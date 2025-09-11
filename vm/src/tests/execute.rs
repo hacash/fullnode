@@ -64,3 +64,16 @@ pub fn execute3() {
     println!("exec res: {:?}", exec_res);
 
 }
+
+
+#[allow(dead_code)]
+pub fn execute4() {
+    let codes = lang_to_bytecodes(r##"
+        throw "1"
+    "##).unwrap();
+
+    println!("{}", codes.bytecode_print(true).unwrap());
+    let exec_res = execute_test_maincall(65535, codes);
+    println!("exec res: {:?}", exec_res);
+
+}

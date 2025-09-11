@@ -10,8 +10,8 @@ pub struct Syntax {
     tokens: Vec<Token>,
     idx: usize,
     locals: HashMap<String, u8>,
-    bduses: HashMap<String, Address>,
-    bdlibs: HashMap<String, (Address, u8)>,
+    // bduses: HashMap<String, Address>,
+    bdlibs: HashMap<String, (u8, Address)>,
     local_alloc: u8,
     // leftv: Box<dyn AST>,
     irnode: IRNodeBlock,
@@ -22,6 +22,7 @@ pub struct Syntax {
 impl Syntax {
 
 
+    /*
     pub fn bind_uses(&mut self, s: String, adr: Vec<u8>) -> Rerr {
         if let Some(..) = self.bduses.get(&s) {
             return errf!("<use> cannot repeat bind the symbol '{}'", s)
@@ -38,21 +39,21 @@ impl Syntax {
             _ =>  errf!("cannot find any use bind '{}'", s)
         }
     }
+    */
 
     pub fn link_lib(&self, s: &String) -> Ret<u8> {
-        match self.bdlibs.get(s).map(|d|d.1) {
+        match self.bdlibs.get(s).map(|d|d.0) {
             Some(i) => Ok(i),
             _ =>  errf!("cannot find any lib bind '{}'", s)
         }
     }
 
-    pub fn bind_libs(&mut self, s: String, adr: Vec<u8>, idx: u8) -> Rerr {
+    pub fn bind_lib(&mut self, s: String, idx: u8, adr: Address) -> Rerr {
         if let Some(..) = self.bdlibs.get(&s) {
             return errf!("<use> cannot repeat bind the symbol '{}'", s)
         }
-        let addr = Address::from_vec(adr);
-        addr.must_contract()?;
-        self.bdlibs.insert(s, (addr, idx));
+        adr.must_contract()?;
+        self.bdlibs.insert(s, (idx, adr));
         Ok(())
     }
 
@@ -281,8 +282,8 @@ impl Syntax {
                         Box::new(IRNodeParamsSingle{hrtv: true, inst: CALLINR, para, subx})
                     },
                     false => { // CALL
-                        let usadr = self.link_use(&id)?;
-                        let para: Vec<u8> = iter::empty().chain(usadr).chain(fnsg).collect();
+                        let usadr = self.link_lib(&id)?;
+                        let para: Vec<u8> = iter::once(usadr).chain(fnsg).collect();
                         Box::new(IRNodeParamsSingle{hrtv: true, inst: CALL, para, subx})
                     },
                 })
@@ -338,6 +339,9 @@ impl Syntax {
             self.idx += 1;
             nxt
         }}}
+        macro_rules! back { () => {
+            self.idx -= 1;
+        }}
         macro_rules! push_uint { ($n:expr, $t:expr) => {{
             let buf = buf_drop_left_zero(&$n.to_be_bytes(), 0);
             let numv = iter::once(buf.len() as u8 - 1).chain(buf).collect::<Vec<_>>();
@@ -426,6 +430,7 @@ impl Syntax {
                 self.bind_local(id.clone(), idx)?;
                 Box::new(IRNodeEmpty{})
             }
+            /*
             Keyword(Use) => { // use AnySwap = VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
                 let e = errf!("use statement format error");
                 nxt = next!();
@@ -443,36 +448,26 @@ impl Syntax {
                 self.bind_uses(id.clone(), addr.clone())?;
                 Box::new(IRNodeEmpty{})
             }
+            */
             Keyword(Lib) => { // lib AnySwap = VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa(1)
                 let e = errf!("lib statement format error");
                 nxt = next!();
-                let Identifier(id) = nxt else {
-                    return e
-                };
+                let Identifier(id) = nxt else { return e };
                 nxt = next!();
-                let Keyword(Assign) = nxt else {
-                    return e
-                };
+                let Keyword(Assign) = nxt else { return e };
                 nxt = next!();
-                let Token::Bytes(addr) = nxt else {
-                    return e
-                };
+                let Integer(idx) = nxt else { return e };
                 nxt = next!();
-                let Partition('(') = nxt else {
-                    return e
-                };
-                nxt = next!();
-                let Integer(idx) = nxt else {
-                    return e
-                };
-                nxt = next!();
-                let Partition(')') = nxt else {
-                    return e
-                };
-                if *idx > u8::MAX as u128 {
-                    return errf!("<lib> statement link index overflow")
+                let mut adr = Address::new();
+                if let Partition(':') = nxt {
+                    let Token::Addr(a) = nxt else { return e };
+                    adr = *a;
                 }
-                self.bind_libs(id.clone(), addr.clone(), *idx as u8)?;
+                back!();
+                if *idx > u8::MAX as u128 {
+                    return errf!("lib statement link index overflow")
+                }
+                self.bind_lib(id.clone(), *idx as u8, adr.clone())?;
                 Box::new(IRNodeEmpty{})
             }
             Keyword(CallCode) => {

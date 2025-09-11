@@ -58,7 +58,7 @@ impl Tokenizer<'_> {
             return None
         }
         match Address::from_readable(s) {
-            Ok(a) => Some(Bytes(a.to_vec())),
+            Ok(a) => Some(Addr(a)),
             _ => None,
         }
     }

@@ -264,8 +264,7 @@ pub enum Token {
     Identifier(String),
     Integer(u128),
     Bytes(Vec<u8>),
+    Addr(Address),
 }
-
-
 
 

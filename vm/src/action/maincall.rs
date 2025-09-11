@@ -14,6 +14,10 @@ action_define!{ContractMainCall, 121,
         if self.marks.not_zero() {
             return errf!("marks bytes format error")
         }
+        // check codes
+        let cap = SpaceCap::new(ctx.env().block.height);
+        let cty = map_itr_err!(CodeType::parse(self.ctype.to_uint()))?;
+        map_itr_err!(convert_and_check(&cap, cty, &self.codes))?;
         let depth = 0; // main call depth is 0
         setup_vm_run(depth, ctx, CallMode::Main as u8, *self.ctype, &self.codes, vec![])?;
         Ok(vec![])

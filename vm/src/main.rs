@@ -11,6 +11,6 @@ mod tests;
 pub fn main() {
 
     // tests::do_all_test();
-    tests::benchmark2();
+    tests::execute4();
 
 }
