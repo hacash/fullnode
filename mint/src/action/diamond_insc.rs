@@ -22,14 +22,14 @@ fn diamond_inscription(this: &DiamondInscription, ctx: &mut dyn Context) -> Ret<
 
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
-    let pcost = &this.protocol_cost;
-    if pcost.is_negative() {
-		return errf!("protocol cost cannot be negative")
+    let pfee = &this.protocol_cost;
+    if pfee.is_negative() {
+		return errf!("protocol fee cannot be negative")
     }
     // check
     this.diamonds.check()?;
-	if pcost.size() > 4 {
-		return errf!("protocol cost amount size cannot over 4 bytes")
+	if pfee.size() > 4 {
+		return errf!("protocol fee amount size cannot over 4 bytes")
 	}
 	// check insc size and visible
     let insc_len = this.engraved_content.length();
@@ -55,17 +55,17 @@ fn diamond_inscription(this: &DiamondInscription, ctx: &mut dyn Context) -> Ret<
         ttcost = ttcost.add_mode_u64(&cc)?;
     }
 	// check cost
-	if pcost < &ttcost {
-		return errf!("diamond inscription cost error need {:?} but got {:?}", ttcost, pcost)
+	if pfee < &ttcost {
+		return errf!("diamond inscription cost error need {:?} but got {:?}", ttcost, pfee)
 	}
     // change count
     let mut ttcount = state.get_total_count();
     ttcount.diamond_engraved += this.diamonds.length() as u64;
-    ttcount.diamond_insc_burn_zhu += pcost.to_zhu_u64().unwrap();
+    ttcount.diamond_insc_burn_zhu += pfee.to_zhu_u64().unwrap();
     state.set_total_count(&ttcount);
 	// sub main addr balance
-	if pcost.is_positive() {
-        hac_sub(ctx, &main_addr, &pcost)?;
+	if pfee.is_positive() {
+        hac_sub(ctx, &main_addr, &pfee)?;
 	}
     // ok
     Ok(vec![])
@@ -97,13 +97,13 @@ fn diamond_inscription_clean(this: &DiamondInscriptionClear, ctx: &mut dyn Conte
 
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
-    let pcost = &this.protocol_cost;
-    if pcost.is_negative() {
+    let pfee = &this.protocol_cost;
+    if pfee.is_negative() {
 		return errf!("protocol cost cannot be negative")
     }
     // check
     this.diamonds.check()?;
-	if pcost.size() > 4 {
+	if pfee.size() > 4 {
 		return errf!("protocol cost amount size cannot over 4 bytes")
 	}
     // cost
@@ -116,16 +116,16 @@ fn diamond_inscription_clean(this: &DiamondInscriptionClear, ctx: &mut dyn Conte
         ttcost = ttcost.add_mode_u64(&cc)?;
     }
 	// check cost
-	if pcost < &ttcost {
-		return errf!("diamond inscription cost error need {:?} but got {:?}", ttcost, pcost)
+	if pfee < &ttcost {
+		return errf!("diamond inscription cost error need {:?} but got {:?}", ttcost, pfee)
 	}
     // change count and sub hac
-    if pcost.is_positive() {
+    if pfee.is_positive() {
         let mut ttcount = state.get_total_count();
-        ttcount.diamond_insc_burn_zhu += pcost.to_zhu_u64().unwrap();
+        ttcount.diamond_insc_burn_zhu += pfee.to_zhu_u64().unwrap();
         state.set_total_count(&ttcount);
 	    // sub main addr balance
-        hac_sub(ctx, &main_addr, &pcost)?;
+        hac_sub(ctx, &main_addr, &pfee)?;
 	}
     // finish
     Ok(vec![])

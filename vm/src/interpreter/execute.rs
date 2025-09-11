@@ -277,7 +277,7 @@ pub fn execute_code(
             GETX  => ops.push(locals.load(pu8!() as usize)?)?,
             PUTX  => { locals.save(pu8_as_u16!(), ops.pop()?)?; 
                 gas += gst.local_put; },
-            MOVE => { let v = locals.edit(pu8!())?; *v = ops.pop()?; }
+            MOVE => { locals.save(pu8_as_u16!(), ops.pop()?)?; }
             XOP   => local_operand(pu8!(), locals, ops.pop()?)?,
             XLG   => local_logic(pu8!(), locals, ops.peek()?)?,
             HGROW    => gas += heap.grow(pu8!())?,

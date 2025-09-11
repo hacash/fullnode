@@ -36,7 +36,16 @@ Contract Verify:
     3. bytecode inst valid
     3. bytecode param check
     4. bytecode jump dest
-    5. 
+
+
+Contract Code Store Rent:
+
+    1. 50x tx fee
+
+
+Contract KV State Rent:
+
+    1. 
 
 
 Storage Ban:

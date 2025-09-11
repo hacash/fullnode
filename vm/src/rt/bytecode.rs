@@ -197,11 +197,11 @@ pub enum Bytecode {
     ________________183 = 0xb7,
     XLG                 = 0xb8, // *&    local logic
     XOP                 = 0xb9, // *a    local operand
-    MOVE                = 0xba, // *v... local move from ops
-    GETX                = 0xbb, // *+    local getx
-    PUTX                = 0xbc, // *a    local putx
-    GET                 = 0xbd, // &     local get
-    PUT                 = 0xbe, // a,b   local put
+    GET                 = 0xba, // &     local get       
+    PUT                 = 0xbb, // a,b   local put      
+    GETX                = 0xbc, // *+    local getx 
+    PUTX                = 0xbd, // *a    local putx       
+    MOVE                = 0xbe, // *     move one to local from ops
     ALLOC               = 0xbf, // *     local alloc
     SRENT               = 0xc0, // a     storage time rent
     SRCV                = 0xc1, // a,b   storage data recover
@@ -407,14 +407,14 @@ bytecode_metadata_define!{
     HREADU     : 1, 0, 1,     head_read_uint
     HREADUL    : 2, 0, 1,     head_read_uint_long
 
-    XLG        : 1, 1, 1,     local_logic
-    XOP        : 1, 1, 0,     local_operand
-    MOVE       : 1, 255, 0,   local_move
-    GETX       : 1, 0, 1,     get_x
-    PUTX       : 1, 1, 0,     put_x
-    GET        : 0, 1, 1,     get
-    PUT        : 0, 2, 0,     put
-    ALLOC      : 1, 0 ,0,     local_alloc
+    XLG        : 1, 1, 1,     logic       //  local_      
+    XOP        : 1, 1, 0,     operand     //  local_      
+    GETX       : 1, 0, 1,     get_x       //  local_        
+    PUTX       : 1, 1, 0,     put_x       //  local_     
+    GET        : 0, 1, 1,     get         //  local_       
+    PUT        : 0, 2, 0,     put         //  local_     
+    MOVE       : 1, 0, 0,     local_move  //  local_         
+    ALLOC      : 1, 0 ,0,     local_alloc //  local_        
     SRENT      : 0, 1, 0,     storage_rent
     SRCV       : 0, 2, 0,     storage_recover
     SDEL       : 0, 1, 0,     storage_delete

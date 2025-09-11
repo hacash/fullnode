@@ -187,7 +187,14 @@ irfn_define!{
 
     CALLDYN    : 0, 3, 1,     call_dynamic
     
-    MOVE       : 1, 0, 0,     local_move   
+    XLG        : 1, 1, 1,     logic       //  local_      
+    XOP        : 1, 1, 0,     operand     //  local_      
+    GET        : 0, 1, 1,     get         //  local_       
+    PUT        : 0, 2, 0,     put         //  local_  
+    GETX       : 1, 0, 1,     get_x       //  local_        
+    PUTX       : 1, 1, 0,     put_x       //  local_        
+    MOVE       : 1, 0, 0,     local_move  //  local_         
+    ALLOC      : 1, 0 ,0,     local_alloc //  local_  
 
     TYPEID     : 0, 1, 1,     type_id        
     CHOISE     : 0, 3, 1,     choise         
@@ -205,7 +212,6 @@ irfn_define!{
     HWRITE     : 0, 2, 0,     heap_write     
     HREAD      : 0, 2, 1,     heap_read      
 
-    ALLOC      : 1, 0 ,0,     local_alloc
 
     SRENT      : 0, 1, 0,     storage_rent   
     SRCV       : 0, 2, 0,     storage_recover

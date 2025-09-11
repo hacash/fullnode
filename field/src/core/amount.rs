@@ -149,7 +149,7 @@ macro_rules! ret_amtfmte {
 
 macro_rules! coin_with {
     ($fn:ident, $ty:ty) => {
-        fn $fn(mut v: $ty, mut u: u8) -> Amount {
+        pub fn $fn(mut v: $ty, mut u: u8) -> Amount {
             if v == 0 || u == 0 {
                 return Self::zero()
             }

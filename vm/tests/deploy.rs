@@ -75,7 +75,7 @@ mod deploy {
             P1 RET
         )))
         .func(Func::new("recursion").irnode(recursion_fnstr).unwrap())
-        .testnet_deploy_print("18:244");    
+        .testnet_deploy_print("2:244");    
 
     }
 

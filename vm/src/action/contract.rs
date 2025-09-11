@@ -1,5 +1,8 @@
 
 
+pub const CONTRACT_STORE_FEE_MUL: u64 = 50;
+
+
 macro_rules! vmsto {
     ($ctx: expr) => {
         VMState::wrap($ctx.state())
@@ -10,11 +13,12 @@ macro_rules! vmsto {
 
 action_define!{ContractDeploy, 122, 
     ActLv::TopOnly, // level
-    true, [], // burn 90% fee
+    false, [], // burn 90% fee
     {   
         marks: Fixed4 // zero
         nonce: Uint4 
         contract: ContractSto
+        protocol_cost: Amount
     },
     (self, ctx, _gas {
         if self.marks.not_zero() {
@@ -28,6 +32,8 @@ action_define!{ContractDeploy, 122,
         if vmsto!(ctx).contract_exist(&caddr) {
             return errf!("contract {} already exist", (*caddr).readable())
         }
+        // spend protocol fee
+        check_sub_contract_protocol_fee(ctx, self.contract.size(), &self.protocol_cost)?;
         // check
         map_itr_err!(self.contract.check(hei))?;
         // save the contract
@@ -39,11 +45,12 @@ action_define!{ContractDeploy, 122,
 
 action_define!{ContractUpdate, 123, 
     ActLv::TopOnly, // level
-    true, [], // burn 90% fee
+    false, [], // burn 90% fee
     {   
         marks: Fixed2 // zero
         address: Address // contract address
         contract: ContractSto
+        protocol_fee: Amount
     },
     (self, ctx, _gas {
         use AbstCall::*;
@@ -56,6 +63,8 @@ action_define!{ContractUpdate, 123,
         let Some(mut contract) = vmsto!(ctx).contract(&caddr) else {
             return errf!("contract {} not exist", (*caddr).readable())
         };
+        // spend protocol fee
+        check_sub_contract_protocol_fee(ctx, self.contract.size(), &self.protocol_fee)?;
         // merge and check
 		map_itr_err!(self.contract.check(hei))?;
         let is_edit = map_itr_err!(contract.merge(&self.contract, hei))?;
@@ -72,21 +81,59 @@ action_define!{ContractUpdate, 123,
 
 
 
+/**************************************/
+
+
+fn check_sub_contract_protocol_fee(ctx: &mut dyn Context, _ctlsz: usize, pfee: &Amount) -> Rerr {
+    if pfee.is_negative() {
+		return errf!("protocol fee cannot be negative")
+    }
+	if pfee.size() > 4 {
+		return errf!("protocol fee amount size cannot over 4 bytes")
+	}
+    // let _hei = ctx.env().block.height;
+    // let e = errf!("contract protocol fee calculate failed");
+    let mul = CONTRACT_STORE_FEE_MUL as u128; // 50
+    let tx50fee = ctx.tx().fee().dist_mul(mul)?;
+    let maddr = ctx.env().tx.main;
+    // println!("{}, {}, {}, {}", ctx.tx().size(), _ctlsz, ctx.tx().fee(), tx50fee);
+    // check fee
+    if pfee < &tx50fee { 
+        return errf!("protocol fee must need at least {} but just got {}", &tx50fee, pfee)
+    }
+    operate::hac_sub(ctx, &maddr, pfee)?;
+    Ok(())
+}
+
+
+
+
 /**************************************
 
-
-fn checked_sub_contract_protocol_fee(ctx: &mut dyn Context, ptcfee: &Amount) -> Rerr {
-
-    let _hei = ctx.env().block.height;
+fn check_sub_contract_protocol_fee(ctx: &mut dyn Context, ctlsz: usize, ptcfee: &Amount) -> Rerr {
+    // let _hei = ctx.env().block.height;
+    let e = errf!("contract protocol fee calculate failed");
+    let mul = CONTRACT_STORE_FEE_MUL as u128; // 30
+    let feep = ctx.tx().fee_purity() as u128 / GSCU as u128;
+    let Some(rlfe) = feep.checked_mul(ctlsz as u128) else {
+        return e
+    };
+    let Some(rlfe) = rlfe.checked_mul(mul) else {
+        return e
+    };
+    let tx50fee = &Amount::coin_u128(rlfe, UNIT_238).compress(2, AmtCpr::Grow)?;
+    if tx50fee <= ctx.tx().fee() {
+        return e
+    }
+    println!("{}, {}, {}, {}", ctx.tx().size(), ctlsz, ctx.tx().fee(), tx50fee);
     let maddr = ctx.env().tx.main;
-    let tx9fee = &ctx.env().tx.fee.dist_mul(9)?;
     // check fee
-    if ptcfee < tx9fee { 
-        return errf!("protocol fee must need at least {} but just got {}", tx9fee, ptcfee)
+    if ptcfee < tx50fee { 
+        return errf!("protocol fee must need at least {} but just got {}", tx50fee, ptcfee)
     }
     operate::hac_sub(ctx, &maddr, ptcfee)?;
     Ok(())
 }
 
 
-***********************************/
+*/
