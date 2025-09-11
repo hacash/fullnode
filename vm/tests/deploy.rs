@@ -12,6 +12,7 @@ mod deploy {
     use protocol::action::*;
 
     use vm::*;
+    use vm::ir::*;
     use vm::rt::*;
     use vm::lang::*;
     use vm::rt::Bytecode::*;
@@ -57,7 +58,7 @@ mod deploy {
             var mei  = $1
             argv = buffer_left_drop(21, argv)
             mei = amount_to_mei(argv)
-            return choise(mei<=4, 1, 0)
+            return choise(mei<=4, 0, 1)
         "##).unwrap();
 
 
@@ -75,9 +76,12 @@ mod deploy {
             CU8 RET
         )))
         .call(Abst::new(PermitHAC).bytecode(permithac_codes))
-        .call(Abst::new(PayableHAC).bytecode(build_codes!(
-            END
-        )))
+        .call(Abst::new(PayableHAC).bytecode(convert_irs_to_bytecodes(&build_codes!(
+            RET CHOISE
+                GT CU64 EXTENV 1 PU8 10
+                PU8 99
+                PU8 0 
+        )).unwrap()))
         .func(Func::new("recursion").irnode(recursion_fnstr).unwrap())
         .testnet_deploy_print("2:244");    
 
@@ -90,9 +94,9 @@ mod deploy {
 
         let adr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
 
-        let mut act = HacFromTrs::new();
-        act.from = AddrOrPtr::from_addr(adr);
-        act.hacash = Amount::mei(1);
+        let mut act = HacToTrs::new();
+        act.to = AddrOrPtr::from_addr(adr);
+        act.hacash = Amount::mei(5);
 
         curl_trs_1(vec![Box::new(act.clone())]);
 

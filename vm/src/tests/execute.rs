@@ -14,7 +14,7 @@ pub fn execute1() {
                 PUTX 1 P1
         RET GETX 0
     );
-    let codes = runtime_convert_irs_to_bytecodes(&irnds).unwrap();
+    let codes = convert_irs_to_bytecodes(&irnds).unwrap();
     println!("{}", codes.bytecode_print(true).unwrap());
     let exec_res = execute_test_maincall(65535, codes);
     println!("exec res: {:?}", exec_res);
@@ -34,7 +34,7 @@ pub fn execute2() {
             PUTX 0 ADD P1 GETX 0
         RET GETX 0
     );
-    let codes = runtime_convert_irs_to_bytecodes(&irnds).unwrap();
+    let codes = convert_irs_to_bytecodes(&irnds).unwrap();
     println!("{}", codes.bytecode_print(true).unwrap());
     let exec_res = execute_test_maincall(65535, codes);
     println!("exec res: {:?}", exec_res);

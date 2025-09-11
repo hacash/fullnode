@@ -2,7 +2,7 @@
 pub fn convert_and_check(cap: &SpaceCap, ctype: CodeType, codes: &[u8]) -> VmrtErr {
     use CodeType::*;
     let bytecodes = match ctype {
-        IRNode =>  &runtime_convert_irs_to_bytecodes(codes)?,
+        IRNode =>  &runtime_irs_to_bytecodes(codes)?,
         Bytecode => codes
     };
     // check size
@@ -13,10 +13,13 @@ pub fn convert_and_check(cap: &SpaceCap, ctype: CodeType, codes: &[u8]) -> VmrtE
     verify_bytecodes(bytecodes)
 }
 
-pub fn runtime_convert_irs_to_bytecodes(bytes: &[u8]) -> VmrtRes<Vec<u8>> {
-    use Bytecode::*;
+pub fn convert_irs_to_bytecodes(bytes: &[u8]) -> VmrtRes<Vec<u8>> {
     let irs = parse_ir_block(bytes, &mut 0)?;
-    let mut codes = irs.codegen()?;
+    irs.codegen()
+}
+
+pub fn runtime_irs_to_bytecodes(bytes: &[u8]) -> VmrtRes<Vec<u8>> {
+    let mut codes = convert_irs_to_bytecodes(bytes)?;
     // append burn gas & end
     let cdl = ((codes.len() / 4) as u16).to_be_bytes(); // burn gas = size / 4
     let mut tail = vec![BURN as u8, cdl[0], cdl[1], END as u8];

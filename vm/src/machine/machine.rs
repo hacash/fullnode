@@ -174,7 +174,7 @@ impl Machine {
         let param =  Some(Value::bytes(param));
         let rv = map_itr_err!(self.do_call(env, CallMode::Abst, fnobj, param))?;
         if rv.check_true() {
-            return errf!("call {}.{:?}() return error code {}", contract_addr.readable(), cty, rv.to_uint())
+            return errf!("call {}.{:?} return error code {}", contract_addr.readable(), cty, rv.to_uint())
         }
         Ok(rv)
     }

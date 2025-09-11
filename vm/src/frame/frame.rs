@@ -119,7 +119,7 @@ impl Frame {
         self.mode = mode;
         self.codes = match codes.ctype {
             Bytecode => codes.into_array(),
-            IRNode => runtime_convert_irs_to_bytecodes(&codes.codes)?,
+            IRNode => runtime_irs_to_bytecodes(&codes.codes)?,
         };
         if let Some(p) = param {
             self.oprnds.push(p)?; // param into stack
