@@ -40,6 +40,7 @@ keyword_define!{
     Use       : "use"
     Lib       : "lib"
     Let       : "let"
+    Var       : "var"
     If        : "if"
     Else      : "else"
     While     : "while"

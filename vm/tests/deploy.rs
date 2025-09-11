@@ -40,11 +40,11 @@ mod deploy {
             bytecode {
                 PU8 1
             }
-            let foo = $0
+            var foo = $0
+            var bar = $1
             if foo > 10 {
                 return 10
             }
-            let bar = $1
             bar = 1 as u16
             bar = self.recursion(foo + bar)
             return foo + bar
@@ -53,8 +53,8 @@ mod deploy {
 
         let permithac_codes = lang_to_bytecodes(r##"
             local_move(0)
-            let argv = $0
-            let mei  = $1
+            var argv = $0
+            var mei  = $1
             argv = buffer_left_drop(21, argv)
             mei = amount_to_mei(argv)
             return choise(mei<=4, 1, 0)

@@ -403,8 +403,8 @@ impl Syntax {
                 ifobj.subz = elseifobj;
                 Box::new(ifobj)
             }
-            Keyword(Let) => { // let foo = $0
-                let e = errf!("let statement format error");
+            Keyword(Var) => { // let foo = $0
+                let e = errf!("var statement format error");
                 nxt = next!();
                 let Identifier(id) = nxt else {
                     return e
