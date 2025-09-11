@@ -95,7 +95,7 @@ macro_rules! ostjump {
 
 macro_rules! branch {
     ( $ops: expr, $codes: expr, $pc: expr, $l: expr) => {
-        if $ops.pop()?.checked_bool()? {
+        if $ops.pop()?.check_true() {
             jump!($codes, $pc, $l);
         }else{
             $pc += $l;
@@ -105,7 +105,7 @@ macro_rules! branch {
 
 macro_rules! ostbranchex {
     ( $ops: expr, $codes: expr, $pc: expr, $l: expr, $cond: ident) => {
-        if $ops.pop()?.$cond()? {
+        if $ops.pop()?.$cond() {
             ostjump!($codes, $pc, $l);
         }else{
             $pc += $l;
@@ -115,7 +115,7 @@ macro_rules! ostbranchex {
 // is_not_zero
 macro_rules! ostbranch {
     ( $ops: expr, $codes: expr, $pc: expr, $l: expr) => {
-        ostbranchex!($ops, $codes, $pc, $l, checked_bool)
+        ostbranchex!($ops, $codes, $pc, $l, check_true)
     }
 }
 
@@ -259,7 +259,7 @@ pub fn execute_code(
             POPX   => ops.popx(pu8!())?,
             SWAP   => ops.swap()?,
             REV    => ops.reverse()?, // reverse
-            CHOISE => { if ops.pop()?.not_zero() { ops.swap()? } ops.pop()?; }, /* x ? a : b */
+            CHOISE => { if ops.pop()?.check_true() { ops.swap()? } ops.pop()?; }, /* x ? a : b */
             SIZE   => *ops.peek()? = U16(ops.peek()?.val_size() as u16),
             CAT    => ops.cat(cap)?,
             JOIN   => ops.join(cap)?,
@@ -354,7 +354,7 @@ pub fn execute_code(
             BRL   =>      branch!(ops, codes, *pc, 2),
             BRS   =>   ostbranch!(ops, codes, *pc, 1),
             BRSL  =>   ostbranch!(ops, codes, *pc, 2),   
-            BRSLN => ostbranchex!(ops, codes, *pc, 2, checked_bool_not),   
+            BRSLN => ostbranchex!(ops, codes, *pc, 2, check_false),   
             // other
             NT   => return itr_err_code!(InstNeverTouch), // never touch
             NOP  => {}, // do nothing

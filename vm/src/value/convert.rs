@@ -105,17 +105,21 @@ impl Value {
         !self.to_bool()
     }
 
+    /*
+
     pub fn checked_bool(&self) -> VmrtRes<bool> {
         let canto = self.is_nil() || self.is_uint() || self.is_bytes();
         match canto {
             true => Ok(self.to_bool()),
-            _ => itr_err_fmt!(CastParamFail, "cannot cast {:?} to buf", self)
+            _ => itr_err_fmt!(CastParamFail, "cannot cast {:?} to bool", self)
         }
     }
 
     pub fn checked_bool_not(&self) -> VmrtRes<bool> {
         Ok(!self.checked_bool()?)
     }
+
+    */
 
     pub fn checked_address(&self) -> VmrtRes<Address> {
         match self {

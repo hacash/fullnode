@@ -196,7 +196,8 @@ impl AbstCall {
 
 
 abst_call_type_define! {
-    Change       : 1u8
+    Construct    : 0u8
+    Change       : 1
     Append       : 2
 
     PermitHAC    : 15

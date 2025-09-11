@@ -19,12 +19,12 @@ macro_rules! lgcdo {
 }
 
 fn lgc_and(x: &Value, y: &Value) -> VmrtRes<Value> {
-    let ok = x.checked_bool()? && y.checked_bool()?;
+    let ok = x.check_true() && y.check_true();
     lgcv!(ok)
 }
 
 fn lgc_or(x: &Value, y: &Value) -> VmrtRes<Value> {
-    let ok = x.checked_bool()? || y.checked_bool()?;
+    let ok = x.check_true() || y.check_true();
     lgcv!(ok)
 }
 

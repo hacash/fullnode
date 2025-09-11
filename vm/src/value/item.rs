@@ -92,6 +92,24 @@ impl Value {
             _ => false,
         }
     }
+
+    pub fn check_false(&self) -> bool {
+        match self {
+            Nil => true,
+            Bool(n) => *n == false,
+            U8(n)   => *n == 0,
+            U16(n)  => *n == 0,
+            U32(n)  => *n == 0,
+            U64(n)  => *n == 0,
+            U128(n) => *n == 0,
+            Bytes(b)  => buf_is_zero(b),
+        }
+    }
+    
+    pub fn check_true(&self) -> bool {
+        ! self.check_false()
+    }
+
     pub fn ty_num(&self) -> u8 {
         match self {
             Nil          => Self::TID_NIL,

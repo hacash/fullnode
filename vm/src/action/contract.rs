@@ -15,13 +15,14 @@ action_define!{ContractDeploy, 122,
     ActLv::TopOnly, // level
     false, [], // burn 90% fee
     {   
-        marks: Fixed4 // zero
         nonce: Uint4 
-        contract: ContractSto
         protocol_cost: Amount
+        construct_argv: BytesW1 // max 1024
+        _marks_:   Fixed4 // zero
+        contract: ContractSto
     },
     (self, ctx, _gas {
-        if self.marks.not_zero() {
+        if self._marks_.not_zero() {
             // compatibility for future
             return errf!("marks byte error")
         }
@@ -38,9 +39,28 @@ action_define!{ContractDeploy, 122,
         map_itr_err!(self.contract.check(hei))?;
         // save the contract
         vmsto!(ctx).contract_set(&caddr, &self.contract);
+        // call the construct function
+        let casz = self.construct_argv.length();
+        if casz > SpaceCap::new(hei).max_value_size {
+            return errf!("construct argv length overflow")
+        }
+        if casz > 0 {
+            let depth = 1; // sys call depth is 1
+            let cty = CallMode::Abst as u8;
+            let abf = AbstCall::Construct as u8;
+            let (_, rv) = setup_vm_run(depth, ctx, cty, abf, caddr.as_bytes(), self.construct_argv.to_vec())?;
+            if rv.check_false() {
+                return errf!("construct call error")
+            }
+        }
+        // ok finish
         Ok(vec![])
     })
 }
+
+
+
+
 
 
 action_define!{ContractUpdate, 123, 

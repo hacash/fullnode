@@ -100,7 +100,7 @@ fn coin_asset_transfer_call(abstfrom: AbstCall, abstto: AbstCall, action: &dyn A
     if fc {
         let param = vec![to.serialize(), amtargv.clone()].concat();
         let (_, rtv) = setup_vm_run(calldpt, ctx, absty, abstfrom as u8, from.as_bytes(), param)?;
-        if rtv.is_zero() {
+        if rtv.check_false() {
             return errf!("transfer from {} not allow", from.readable())
         }
     }
@@ -109,7 +109,7 @@ fn coin_asset_transfer_call(abstfrom: AbstCall, abstto: AbstCall, action: &dyn A
     if tc {
         let param = vec![from.serialize(), amtargv].concat();
         let (_, rtv) = setup_vm_run(calldpt, ctx, absty, abstto as u8, to.as_bytes(), param)?;
-        if rtv.is_zero() {
+        if rtv.check_false() {
             return errf!("transfer to {} not allow", to.readable())
         }
     }

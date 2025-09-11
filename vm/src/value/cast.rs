@@ -52,29 +52,12 @@ fn cannot_cast_err(v: &Value, ty: &str) -> VmrtErr {
 
 impl Value {
 
-    pub fn is_zero(&self) -> bool {
-        match self {
-            Nil => true,
-            Bool(n) => *n == false,
-            U8(n)   => *n == 0,
-            U16(n)  => *n == 0,
-            U32(n)  => *n == 0,
-            U64(n)  => *n == 0,
-            U128(n) => *n == 0,
-            Bytes(b)  => buf_is_zero(b),
-        }
-    }
-    
-    pub fn not_zero(&self) -> bool {
-        ! self.is_zero()
-    }
-
     pub fn cast_bool(&mut self) {
-        *self = Bool(maybe!(self.not_zero(), true, false));
+        *self = Bool(maybe!(self.check_true(), true, false));
     }
 
     pub fn cast_bool_not(&mut self) {
-        *self = Bool(maybe!(self.not_zero(), false, true));
+        *self = Bool(maybe!(self.check_true(), false, true));
     }
 
     pub fn cast_u8(&mut self) -> VmrtErr {
