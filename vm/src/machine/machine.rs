@@ -117,7 +117,7 @@ impl VM for MachineBox {
                 machine.abst_call(exenv, kid, cadr, param)
             }
             _ => unreachable!()
-        }.map(|a|a.to_bytes())?;
+        }.map(|a|a.raw())?;
         let gas_current = *gas;
         let mut cost = gas_record - gas_current;
         cost = self.check_cost(cty, cost)?;
@@ -168,11 +168,15 @@ impl Machine {
     pub fn abst_call(&mut self, env: &mut ExecEnv, cty: AbstCall, contract_addr: ContractAddress, param: Vec<u8>) -> Ret<Value> {
         let Some(fnobj) = map_itr_err!(self.r.load_abstfn(env.sta, &contract_addr, cty))? else {
             // return Ok(Value::Nil) // not find call
-            return errf!("abst func {:?} not find on contract {}", cty, contract_addr.readable()) // not find call
+            return errf!("abst call {:?} not find in {}", cty, contract_addr.readable()) // not find call
         };
         let fnobj = fnobj.as_ref().clone();
         let param =  Some(Value::bytes(param));
-        map_itr_err!(self.do_call(env, CallMode::Abst, fnobj, param))
+        let rv = map_itr_err!(self.do_call(env, CallMode::Abst, fnobj, param))?;
+        if rv.check_true() {
+            return errf!("call {}.{:?}() return error code {}", contract_addr.readable(), cty, rv.to_uint())
+        }
+        Ok(rv)
     }
 
     fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, param: Option<Value>) -> VmrtRes<Value> {

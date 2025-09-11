@@ -40,7 +40,8 @@ action_define!{ContractDeploy, 122,
         // save the contract
         vmsto!(ctx).contract_set(&caddr, &self.contract);
         // call the construct function
-        let casz = self.construct_argv.length();
+        let cargv = self.construct_argv.to_vec();
+        let casz = cargv.len();
         if casz > SpaceCap::new(hei).max_value_size {
             return errf!("construct argv length overflow")
         }
@@ -48,10 +49,7 @@ action_define!{ContractDeploy, 122,
             let depth = 1; // sys call depth is 1
             let cty = CallMode::Abst as u8;
             let abf = AbstCall::Construct as u8;
-            let (_, rv) = setup_vm_run(depth, ctx, cty, abf, caddr.as_bytes(), self.construct_argv.to_vec())?;
-            if rv.check_false() {
-                return errf!("construct call error")
-            }
+            setup_vm_run(depth, ctx, cty, abf, caddr.as_bytes(), cargv)?;
         }
         // ok finish
         Ok(vec![])

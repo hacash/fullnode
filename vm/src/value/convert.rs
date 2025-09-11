@@ -66,43 +66,13 @@ impl Value {
         self.checked_u128()
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        match &self {
-            Nil => vec![],
-            Bool(n) => vec![maybe!(n, 1, 0)],
-            U8(n) =>   n.to_be_bytes().into(),
-            U16(n) =>  n.to_be_bytes().into(),
-            U32(n) =>  n.to_be_bytes().into(),
-            U64(n) =>  n.to_be_bytes().into(),
-            U128(n) => n.to_be_bytes().into(),
-            Bytes(buf) => buf.clone(),
-        }
-    }
 
     pub fn checked_bytes(&self) -> VmrtRes<Vec<u8>> {
         let canto = self.is_bytes() || self.is_uint();
         match canto {
-            true => Ok(self.to_bytes()),
+            true => Ok(self.raw()),
             _ => itr_err_fmt!(CastParamFail, "cannot cast {:?} to buf", self)
         }
-    }
-
-    pub fn to_bool(&self) -> bool {
-        match self {
-            Nil     => false,
-            Bool(b) => *b,
-            U8(n)   => *n!=0,
-            U16(n)  => *n!=0,
-            U32(n)  => *n!=0,
-            U64(n)  => *n!=0,
-            U128(n) => *n!=0,
-            // U256(n)   => *n!=0,
-            Bytes(b)=> buf_not_zero(b),
-        }
-    }
-
-    pub fn to_bool_not(&self) -> bool {
-        !self.to_bool()
     }
 
     /*

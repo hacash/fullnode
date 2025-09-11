@@ -33,7 +33,7 @@ pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u
         vmimut.call(ctxmut2, stamut, ty, mk, cd, pm)?
     };
     ctx.depth_set(old_depth);
-    Ok((cost, Value::bytes(rv)))
+    Ok((cost,  Value::bytes(rv)))
 }
 
 

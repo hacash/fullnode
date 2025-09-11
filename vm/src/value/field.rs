@@ -59,7 +59,7 @@ impl Parse for Value {
 impl Serialize for Value {
     fn serialize(&self) -> Vec<u8> {
         let ty = self.ty_num();
-        let mut buf = self.to_bytes();
+        let mut buf = self.raw();
         if self.is_uint() { // Uint
             buf = buf_drop_left_zero(&buf, 0)
         }

@@ -53,7 +53,7 @@ pub fn sandbox_call(ctx: &mut dyn Context, contract: ContractAddress, funcname: 
         let mut vmb = MACHINE_MANAGER.assign(hei);
         vmb.machine.as_mut().unwrap().main_call(&mut exenv, CodeType::Bytecode, codes)
     }.map(|v|(
-        gas_limit-*gas, v.to_bytes()
+        gas_limit-*gas, v.raw()
     ))
 
 }

@@ -6,6 +6,7 @@ fn buf_not_zero(buf: &[u8]) -> bool {
     buf.iter().any(|a|*a>0)
 }
 
+#[allow(dead_code)]
 fn buf_is_zero(buf: &[u8]) -> bool {
     ! buf_not_zero(buf)
 }

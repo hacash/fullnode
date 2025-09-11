@@ -57,7 +57,7 @@ mod deploy {
             let mei  = $1
             argv = buffer_left_drop(21, argv)
             mei = amount_to_mei(argv)
-            return choise(mei<=4, true, false)
+            return choise(mei<=4, 1, 0)
         "##).unwrap();
 
 
@@ -70,9 +70,13 @@ mod deploy {
 
 
         Contract::new()
+        .cargv(vec![0])
+        .call(Abst::new(Construct).bytecode(build_codes!(
+            CU8 RET
+        )))
         .call(Abst::new(PermitHAC).bytecode(permithac_codes))
         .call(Abst::new(PayableHAC).bytecode(build_codes!(
-            P1 RET
+            END
         )))
         .func(Func::new("recursion").irnode(recursion_fnstr).unwrap())
         .testnet_deploy_print("2:244");    
@@ -88,7 +92,7 @@ mod deploy {
 
         let mut act = HacFromTrs::new();
         act.from = AddrOrPtr::from_addr(adr);
-        act.hacash = Amount::mei(19);
+        act.hacash = Amount::mei(1);
 
         curl_trs_1(vec![Box::new(act.clone())]);
 

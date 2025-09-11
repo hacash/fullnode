@@ -94,20 +94,34 @@ impl Value {
     }
 
     pub fn check_false(&self) -> bool {
-        match self {
-            Nil => true,
-            Bool(n) => *n == false,
-            U8(n)   => *n == 0,
-            U16(n)  => *n == 0,
-            U32(n)  => *n == 0,
-            U64(n)  => *n == 0,
-            U128(n) => *n == 0,
-            Bytes(b)  => buf_is_zero(b),
-        }
+        ! self.check_true()
     }
     
     pub fn check_true(&self) -> bool {
-        ! self.check_false()
+        match self {
+            Nil     => false,
+            Bool(b) => *b,
+            U8(n)   => *n!=0,
+            U16(n)  => *n!=0,
+            U32(n)  => *n!=0,
+            U64(n)  => *n!=0,
+            U128(n) => *n!=0,
+            // U256(n)   => *n!=0,
+            Bytes(b)=> buf_not_zero(b),
+        }
+    }
+
+    pub fn raw(&self) -> Vec<u8> {
+        match &self {
+            Nil => vec![],
+            Bool(n) => vec![maybe!(n, 1, 0)],
+            U8(n) =>   n.to_be_bytes().into(),
+            U16(n) =>  n.to_be_bytes().into(),
+            U32(n) =>  n.to_be_bytes().into(),
+            U64(n) =>  n.to_be_bytes().into(),
+            U128(n) => n.to_be_bytes().into(),
+            Bytes(buf) => buf.clone(),
+        }
     }
 
     pub fn ty_num(&self) -> u8 {
@@ -145,6 +159,24 @@ impl Value {
             return itr_err_code!(OutOfValueSize)
         }
         Ok(self)
+    }
+
+    pub fn to_uint(&self) -> u128 {
+        match self {
+            Nil =>          0,
+            Bool(true) =>   1,
+            Bool(false) =>  0,
+            U8(n) =>   *n as u128,
+            U16(n) =>  *n as u128,
+            U32(n) =>  *n as u128,
+            U64(n) =>  *n as u128,
+            U128(n) => *n as u128,
+            // U256(n) => format!("{}u256", n),
+            Bytes(b) => match buf_to_uint(b) {
+                Ok(b) => b.to_uint(),
+                _ => 0
+            },
+        }
     }
 
     pub fn to_string(&self) -> String {

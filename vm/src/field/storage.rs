@@ -15,7 +15,7 @@ combi_option!{ ValueData,
 #[allow(dead_code)]
 impl ValueData {
     fn cast_zip(&mut self) {
-        let vbuf = self.clone().must_value().to_bytes();
+        let vbuf = self.clone().must_value().raw();
         let length = vbuf.len();
         let hxh = Hash::from(sys::sha2(vbuf)).half();
         *self = Self::Val2(ValueZip{

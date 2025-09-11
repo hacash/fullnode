@@ -214,7 +214,7 @@ pub fn execute_code(
             let kid = u16::from_be_bytes(vec![instbyte, pu8!()].try_into().unwrap());
             let mut actbody = vec![];
             if $ifv {
-                let mut bdv = ops.peek()?.to_bytes();
+                let mut bdv = ops.peek()?.raw();
                 actbody.append(&mut bdv);
             }
             let (bgasu, cres) = ctx.action_call(kid, actbody).map_err(|e|
@@ -364,7 +364,7 @@ pub fn execute_code(
             END => { exit = Finish; break }, // func end
             ERR => { exit = Throw;  break },  // throw <ERROR>
             ABT => { exit = Abort;  break },  // panic
-            AST => { if !ops.pop()?.to_bool() { exit = Abort;  break } }, // assert(..)
+            AST => { if ops.pop()?.check_false() { exit = Abort;  break } }, // assert(..)
             // call
             CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL | CALLDYN => {
                 let ist = instruction;
