@@ -27,7 +27,7 @@ pub fn verify_bytecodes(codes: &[u8]) -> VmrtErr {
     // check end
     let tail: Bytecode = std_mem_transmute!(codes[cl - 1]);
     if let RET | END | ERR | ABT |
-        CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL | CALLDYN
+        CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL // CALLDYN
     = tail {} else {
         return itr_err_code!(CodeNotWithEnd)
     };

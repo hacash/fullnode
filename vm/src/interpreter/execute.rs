@@ -296,21 +296,11 @@ pub fn execute_code(
             MGET => { *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?;
                 gas += gst.memory_get; },
             // storage
-            SRENT => {
-                let (period, k) = (ops_pop_to_u16!(), ops.pop()?);
-                let addgas = state.renew(gst, hei, period, context_addr, k)?;
-                gas += addgas; },
-            SRCV  => { state.restore(hei, context_addr, ops.pop()?, ops.pop()?)?;
-                gas += gst.storage_recover; },
-            SDEL  => state.delete(context_addr, ops.pop()?)?,
-            SSAVE => { let period = pu8_as_u16!();
-                let (k, v) = (ops.pop()?, ops.pop()?);
-                let v_size = v.val_size() as i64;
-                state.save(hei, period, context_addr, k, v)?;
-                gas += (gst.storage_save_base + v_size ) * period as i64;
-            },
-            SLOAD => { *ops.peek()? = state.load(hei, context_addr, ops.peek()?)?;
-                gas += gst.storage_read; },
+            SRENT => gas += state.srent(gst, hei, context_addr, ops.pop()?, ops.pop()?)?,
+            SDEL  => state.sdel(context_addr, ops.pop()?)?,
+            SSAVE => state.ssave(hei, context_addr,ops.pop()?, ops.pop()?)?,
+            SLOAD => *ops.peek()? = state.sload(hei, context_addr, ops.peek()?)?,
+            STIME => *ops.peek()? = state.stime(hei, context_addr, ops.peek()?)?,
             // cast
             CU8   => ops.peek()?.cast_u8()?,
             CU16  => ops.peek()?.cast_u16()?,
@@ -365,8 +355,8 @@ pub fn execute_code(
             ERR => { exit = Throw;  break },  // throw <ERROR>
             ABT => { exit = Abort;  break },  // panic
             AST => { if ops.pop()?.check_false() { exit = Abort;  break } }, // assert(..)
-            // call
-            CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL | CALLDYN => {
+            // call CALLDYN
+            CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL => {
                 let ist = instruction;
                 check_call_mode(mode, ist)?;
                 // ok return
@@ -380,11 +370,11 @@ pub fn execute_code(
                         target: CallTarget::Inner,
                         fnsign: pcutbuf!(FN_SIGN_WIDTH),
                     }),
-                    CALLDYN =>    exit = Call(Funcptr{ // Outer
+                    /* CALLDYN =>    exit = Call(Funcptr{ // Outer
                         mode: Outer,
                         target: CallTarget::Addr(ops.pop()?.checked_contract_address()?),
                         fnsign: ops.pop()?.checked_fnsign()?,
-                    }),
+                    }), */
                     _ => unreachable!()
                 };
                 break
@@ -416,7 +406,7 @@ fn check_call_mode(mode: CallMode, inst: Bytecode) -> VmrtErr {
         }
     }
     match mode {
-        Main    if not_ist!(CALL, CALLDYN, CALLSTATIC, CALLCODE)
+        Main    if not_ist!(CALL, CALLSTATIC, CALLCODE) // CALLDYN
             => itr_err_code!(CallOtherInMain),
         Abst    if not_ist!(CALLINR, CALLLIB, CALLSTATIC, CALLCODE)
             => itr_err_code!(CallInAbst),

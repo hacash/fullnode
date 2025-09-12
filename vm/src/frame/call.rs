@@ -26,7 +26,7 @@ impl CallFrame {
                     };
                     curr_frame.reclaim(r); // reclaim resource
                     match exit {
-                        Abort | Throw => return itr_err_fmt!(ThrowAbort, "vm end with error: {}", retv),
+                        Abort | Throw => return itr_err_fmt!(ThrowAbort, "VM return error: {}", retv),
                         Finish | Return => {
                             match self.pop() {
                                 Some(mut prev) => {
@@ -88,6 +88,7 @@ impl CallFrame {
 
 
 
+    /*
     pub fn _start_call_old(&mut self, r: &mut Resoure, env: &mut ExecEnv, mode: CallMode, code: FnObj, param: Option<Value>) -> VmrtRes<Value> {
         self.contract_count = r.contracts.len();
         use CallExit::*;
@@ -108,7 +109,7 @@ impl CallFrame {
             // throw error 
             if let Abort | Throw = exit {
                 curr_frame.reclaim(r); // reclaim resource
-                return itr_err_fmt!(ThrowAbort, "vm end with error: {}", retv)
+                return itr_err_fmt!(ThrowAbort, "VM return error: {}", retv)
             }
             if let Finish | Return = exit {
                 curr_frame.reclaim(r); // reclaim resource
@@ -167,7 +168,7 @@ impl CallFrame {
         
     
     }
-
+    */
 
 
     fn check_load_new_contract_and_gas(&mut self, r: &mut Resoure, env: &mut ExecEnv) -> VmrtErr {

@@ -186,7 +186,7 @@ impl IrFn {
 
 irfn_define!{
 
-    CALLDYN    : 0, 3, 1,     call_dynamic
+    // CALLDYN    : 0, 3, 1,     call_dynamic
     
     XLG        : 1, 1, 1,     logic       //  local_      
     XOP        : 1, 1, 0,     operand     //  local_      
@@ -213,12 +213,11 @@ irfn_define!{
     HWRITE     : 0, 2, 0,     heap_write     
     HREAD      : 0, 2, 1,     heap_read      
 
-
-    SRENT      : 0, 1, 0,     storage_rent   
-    SRCV       : 0, 2, 0,     storage_recover
-    SDEL       : 0, 1, 0,     storage_delete 
-    SSAVE      : 0, 2, 0,     storage_save   
-    SLOAD      : 0, 1, 1,     storage_load   
+    SRENT      : 0, 2, 0,     storage_rent
+    SSAVE      : 0, 2, 0,     storage_save
+    SDEL       : 0, 1, 0,     storage_del
+    SLOAD      : 0, 1, 1,     storage_load
+    STIME      : 0, 1, 1,     storage_time
 
     MGET       : 0, 1, 1,     memory_get     
     MPUT       : 0, 2, 0,     memory_put     

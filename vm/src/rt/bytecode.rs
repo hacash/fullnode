@@ -43,15 +43,15 @@ pub enum Bytecode {
     ________________29  = 0x1d,
     ________________30  = 0x1e,
     ________________31  = 0x1f,
-    CALLDYN             = 0x20, // arg,fnsg,addr +     
+    ________________32  = 0x20, // CALLDYN arg,fnsg,addr +     
     CALL                = 0x21, // *,****@       
     CALLINR             = 0x22, //   ****@       
     CALLLIB             = 0x23, // *,****@          
     CALLSTATIC          = 0x24, // *,****@          
     CALLCODE            = 0x25, // *,****    
     ________________38  = 0x26,
-    NTCALL              = 0x27, // *@  native call
-    ________________40  = 0x28,
+    ________________39  = 0x27,
+    NTCALL              = 0x28, // *@  native call
     ________________41  = 0x29,
     ________________42  = 0x2a,
     ________________43  = 0x2b,
@@ -66,7 +66,7 @@ pub enum Bytecode {
     ________________52  = 0x34,
     ________________53  = 0x35,
     ________________54  = 0x36,
-    ________________55  = 0x37,
+    TNIL                = 0x37, // & is nil push Bool(true)
     ________________56  = 0x38,
     ________________57  = 0x39,
     ________________58  = 0x3a,
@@ -203,11 +203,11 @@ pub enum Bytecode {
     PUTX                = 0xbd, // *a    local putx       
     MOVE                = 0xbe, // *     move one to local from ops
     ALLOC               = 0xbf, // *     local alloc
-    SRENT               = 0xc0, // a     storage time rent
-    SRCV                = 0xc1, // a,b   storage data recover
+    SRENT               = 0xc0, // a,b   storage time rent
+    SSAVE               = 0xc1, // a,b   storage save
     SDEL                = 0xc2, // a     storage delete
-    SSAVE               = 0xc3, // a,b   storage save
-    SLOAD               = 0xc4, // &     storage load
+    SLOAD               = 0xc3, // &     storage load
+    STIME               = 0xc4, // &     storage expire block
     ________________197 = 0xc5,
     ________________198 = 0xc6,
     ________________199 = 0xc7,
@@ -331,7 +331,7 @@ bytecode_metadata_define!{
     EXTFUNC    : 1, 1, 1,     ext_func
     EXTENV     : 1, 0, 1,     ext_env
 
-    CALLDYN    :   0, 3, 1,   call_dynamic
+    // CALLDYN    :   0, 3, 1,   call_dynamic
     CALL       : 1+4, 1, 1,   call
     CALLINR    :   4, 1, 1,   call_inner
     CALLLIB    : 1+4, 1, 1,   call_library
@@ -415,11 +415,11 @@ bytecode_metadata_define!{
     PUT        : 0, 2, 0,     put         //  local_     
     MOVE       : 1, 0, 0,     local_move  //  local_         
     ALLOC      : 1, 0 ,0,     local_alloc //  local_        
-    SRENT      : 0, 1, 0,     storage_rent
-    SRCV       : 0, 2, 0,     storage_recover
-    SDEL       : 0, 1, 0,     storage_delete
+    SRENT      : 0, 2, 0,     storage_rent
     SSAVE      : 0, 2, 0,     storage_save
+    SDEL       : 0, 1, 0,     storage_del
     SLOAD      : 0, 1, 1,     storage_load
+    STIME      : 0, 1, 1,     storage_time
 
     MGET       : 0, 1, 1,     memory_get
     MPUT       : 0, 2, 0,     memory_put

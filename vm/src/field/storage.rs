@@ -1,95 +1,80 @@
 
-pub const STORAGE_PERIOD: u64 = 100; // 100 block = 8hour = 0.3day
-pub const STORAGE_PERIOD_MAX: u32 = 256*256*256 - 1; // max = 62*256 = 15960 years
+pub const STORAGE_PERIOD: u64 = 300; // 300 block = 24hour = 1day
+pub const STORAGE_PERIOD_MAX: u64  = 3600; // about 10 years
+pub const STORAGE_SAVE_MAX: u64    = STORAGE_PERIOD * STORAGE_PERIOD_MAX; // about 10 years
+pub const STORAGE_RETAIN: u64 = STORAGE_PERIOD * 10;   // about 30 days
 
-
-combi_struct!{ ValueZip,
-    length: Uint2 // old data len
-    hashdt: HashHalf // sha256[0..16]
-}
-
-combi_option!{ ValueData,
-    Value, ValueZip
-}
-
-#[allow(dead_code)]
-impl ValueData {
-    fn cast_zip(&mut self) {
-        let vbuf = self.clone().must_value().raw();
-        let length = vbuf.len();
-        let hxh = Hash::from(sys::sha2(vbuf)).half();
-        *self = Self::Val2(ValueZip{
-            length: Uint2::from(length as u16),
-            hashdt: hxh
-        });
-    }
-    fn do_restore(&mut self, v: Value) -> VmrtErr {
-        if v.val_size() != self.val_size() {
-            return itr_err_code!(StorageValSizeErr)
-        }
-        match self {
-            Self::Val1(v1) => {
-                if v != *v1 {
-                    return itr_err_code!(StorageRestoreNotMatch)
-                }
-            },
-            Self::Val2(_) => {
-                let mut zip = Self::Val1(v.clone());
-                zip.cast_zip();
-                if zip != *self {
-                    return itr_err_code!(StorageRestoreNotMatch)
-                }
-                // data value recover
-                *self = Self::Val1(v); // update
-            }
-        }
-        Ok(())
-    }
-    fn must_value(self) -> Value {
-        match self {
-            Self::Val1(v) => v,
-            _ => unreachable!()
-        }
-    }
-    fn must_zip(self) -> ValueZip {
-        match self {
-            Self::Val2(v) => v,
-            _ => unreachable!()
-        }
-    }
-    fn is_zip(self) -> bool {
-        match self {
-            Self::Val2(..) => true,
-            _ => false,
-        }
-    }
-    fn val_size(&self) -> usize {
-        match self {
-            Self::Val1(v) => v.val_size(),
-            Self::Val2(v) => v.length.uint() as usize,
-        }
-
-    }
-}
 
 combi_struct!{ ValueSto,
-    start: BlockHeight
-    period: Uint3      // 62*256 = 15960years
-    data: ValueData
+    expire: BlockHeight
+    data: Value
 }
+
 
 impl ValueSto {
 
-    fn add_period(&mut self, period: u16) -> VmrtErr {
-        let Some(np) = (*self.period).checked_add(period as u32) else {
-            return itr_err_code!(StoragePeriodErr)
-        };
-        if np > STORAGE_PERIOD_MAX {
-            return itr_err_code!(StoragePeriodErr)
+    fn new(chei: u64, v: Value) -> Self {
+        Self {
+            expire: BlockHeight::from(chei + STORAGE_PERIOD),
+            data: v,
         }
-        self.period = Uint3::from(np);
-        Ok(())
     }
+
+    // return (expire, delete, height)
+    fn check(&self, chei: u64) -> (bool, bool, u64) {
+        let due = self.expire.uint();
+        (chei > due, chei > due + STORAGE_RETAIN, due)
+    }
+
+    fn update(mut self, chei: u64, v: Value) -> Self {
+        let (is_expire, _, due) = self.check(chei);
+        // save new
+        if is_expire || due <= STORAGE_PERIOD {
+            self.data = v;
+            self.expire = BlockHeight::from( chei + STORAGE_PERIOD );
+            return self
+        }
+        // update
+        let (ml, vl) = (v.val_size() as u64, self.data.val_size() as u64);
+        if ml != vl {
+            let mut rest = (due - chei) * ml / vl;
+            up_in_range!(rest, STORAGE_PERIOD, u64::MAX); // at least 300
+            self.expire = BlockHeight::from(chei + rest);
+        }
+        self.data = v;
+        self
+    }
+
+    // return gas cost
+    fn rent(&mut self, gst: &GasExtra, chei: u64, v: Value) -> VmrtRes<i64> {
+        let ( _, is_delete, _) = self.check(chei);
+        if is_delete {
+            return itr_err_fmt!(StorageError, "renewal failed, data invalid")
+        }
+        if ! v.is_uint() {
+            return itr_err_fmt!(StorageError, "period value {:?} is not uint type", v)
+        }
+        let period = v.to_uint();
+        if period < 1 {
+            return itr_err_fmt!(StorageError, "period min is 1")
+        }
+        if period > u16::MAX as u128 {
+            return itr_err_fmt!(StorageError, "period value overflow")
+        }
+        let period = period as u64;
+        if period > STORAGE_PERIOD_MAX {
+            return itr_err_fmt!(StorageError, "period value max is {} but got {}",
+                STORAGE_PERIOD_MAX, period)
+        }
+        // save
+        let exp = self.expire.uint() + (period * STORAGE_PERIOD);
+        self.expire = BlockHeight::from(exp);
+        // gas
+        let vbasesz = gst.storege_value_base_size;
+        let gas = (self.data.val_size() as i64 + vbasesz) * period as i64;
+        Ok(gas)
+    }
+
 }
 
 
@@ -114,7 +99,7 @@ inst_state_define!{ VMState,
 #[allow(dead_code)]
 impl VMState<'_> {
 
-    fn key(cadr: &Address, key: &Value) -> VmrtRes<ValueKey> {
+    fn skey(cadr: &Address, key: &Value) -> VmrtRes<ValueKey> {
         if ! cadr.is_contract() {
             return itr_err_fmt!(StorageError, "storage use must in contract")
         }
@@ -129,126 +114,76 @@ impl VMState<'_> {
         Ok(ValueKey::from(k))
     }
 
-    fn period(v: &ValueSto) -> (u64, u64) {
-        let period = *v.period as u64;
-        let mut recovr = period / 10;
-        set_in_range!(recovr, 1, 2222);
-        let expire = *v.start + period * STORAGE_PERIOD;
-        let delete =   expire + recovr * STORAGE_PERIOD;
-        (expire, delete)
-    }
-
-    fn expire(height: u64, v: &ValueSto) -> (bool, bool) {
-        let (e, d) = Self::period(v);
-        (height>e, height>d)
-    }
-    
-    fn cast_zip(v: &mut ValueSto) -> bool {
-        let ValueData::Val1(ref val) = v.data else {
-            return false
+    /*
+        if not find return Nil  
+    */
+    fn sread(&mut self, curhei: u64, cadr: &ContractAddress, k: &Value) -> VmrtRes<Option<ValueSto>> {
+        let k = Self::skey(cadr, k)?;
+        let Some(v) = self.ctrtkvdb(&k) else {
+            return Ok(None) // not find
         };
-        if val.val_size() <= HashHalf::SIZE {
-            return false // not need zip
+        let (is_expire, is_delete, _) = v.check(curhei);
+        if is_delete {
+            self.ctrtkvdb_del(&k);
+            return Ok(None) // over delete
         }
-        v.data.cast_zip(); // change data
-        true // yes do
+        if is_expire {
+            return Ok(None) // time expire
+        }
+        Ok(Some(v))
     }
 
 
     /*
         if not find return Nil  
     */
-    fn load(&mut self, height: u64, cadr: &ContractAddress, k: &Value) -> VmrtRes<Value> {
-        let k = Self::key(cadr, k)?;
-        let Some(mut v) = self.ctrtkvdb(&k) else {
-            return Ok(Value::Nil) // not find
+    fn sload(&mut self, curhei: u64, cadr: &ContractAddress, k: &Value) -> VmrtRes<Value> {
+        let Some(v) = self.sread(curhei, cadr, k)? else {
+            return Ok(Value::Nil)
         };
-        let (is_expire, is_delete) = Self::expire(height, &v);
-        if is_delete {
-            self.ctrtkvdb_del(&k);
-            return Ok(Value::Nil) // over delete
-        }
-        if is_expire {
-            if Self::cast_zip(&mut v) {
-                self.ctrtkvdb_set(&k, &v); // save zip
-            }
-            return Ok(Value::Nil) // time expire
-        }
-        Ok(v.data.must_value())
+        Ok(v.data)
+    }
+
+    /*
+        if not find return Nil  
+    */
+    fn stime(&mut self, curhei: u64, cadr: &ContractAddress, k: &Value) -> VmrtRes<Value> {
+        let Some(v) = self.sread(curhei, cadr, k)? else {
+            return Ok(Value::Nil)
+        };
+        Ok(Value::U64(v.expire.uint() - curhei))
     }
 
     /*
         read old value 
     */
-    fn save(&mut self, height: u64, period: u16, cadr: &ContractAddress, k: Value, v: Value) -> VmrtErr {
-        if period < 1 {
-            return itr_err_code!(StoragePeriodErr)
-        }
-        let mut period = period as u32;
-        let vl = v.val_size();
-        let k = Self::key(cadr, &k)?;
-        if let Some(vold) = self.ctrtkvdb(&k) {
-            let (exp, _) = Self::period(&vold);
-            if height <= exp {
-                let vl_old = vold.data.val_size();
-                let leftoverhei = (exp - height) as u128 * vl_old as u128 / vl as u128;
-                period += (leftoverhei / STORAGE_PERIOD as u128) as u32
-            }
-        }
-        if period > STORAGE_PERIOD_MAX {
-            return itr_err_code!(StoragePeriodErr)
-        }
-        let vsto = ValueSto {
-            start: BlockHeight::from(height),
-            period: Uint3::from(period),
-            data: ValueData::Val1(v),
+    fn ssave(&mut self, curhei: u64, cadr: &ContractAddress, k: Value, v: Value) -> VmrtErr {
+        let k = Self::skey(cadr, &k)?;
+        let vobj = match self.ctrtkvdb(&k) {
+            Some(vold) => vold.update(curhei, v), // update
+            _ => ValueSto::new(curhei, v) // new
         };
-        self.ctrtkvdb_set(&k, &vsto);
+        self.ctrtkvdb_set(&k, &vobj);
         Ok(())
     }
 
     // return gas use
-    fn renew(&mut self, gst: &GasExtra, height: u64, period: u16, cadr: &ContractAddress, k: Value) -> VmrtRes<i64> {
-        if period < 1 {
-            return itr_err_code!(StoragePeriodErr)
-        }
-        let k = Self::key(cadr, &k)?;
+    fn srent(&mut self, gst: &GasExtra, curhei: u64, cadr: &ContractAddress, k: Value,  p: Value) -> VmrtRes<i64> {
+        let k = Self::skey(cadr, &k)?;
         let Some(mut v) = self.ctrtkvdb(&k) else {
             return itr_err_code!(StorageKeyNotFind)
         };
-        let (is_expire, _) = Self::expire(height, &v);
-        if is_expire {
-            return itr_err_code!(StorageExpired)
+        let (_, is_delete, _) = v.check(curhei);
+        if is_delete {
+            return itr_err_fmt!(StorageExpired, "data deleted")
         }
-        // update sto
-        v.add_period(period)?;
-        // gas = (42 + vl) * period
-        let gas = period as i64 * (gst.storage_save_base + v.data.val_size() as i64);
+        let gas = v.rent(gst, curhei, p)?;
+        self.ctrtkvdb_set(&k, &v);
         Ok(gas)
     }
 
-    fn restore(&mut self, height: u64, cadr: &ContractAddress, k: Value, v: Value) -> VmrtErr {
-        let k = Self::key(cadr, &k)?;
-        let Some(mut oldv) = self.ctrtkvdb(&k) else {
-            return itr_err_code!(StorageKeyNotFind)
-        };
-        let (is_expire, is_delete) = Self::expire(height, &oldv);
-        if is_delete {
-            self.ctrtkvdb_del(&k);
-            return itr_err_code!(StorageKeyNotFind)
-        }
-        if ! is_expire {
-            return itr_err_code!(StorageNotExpired)
-        }
-        // do re store
-        oldv.data.do_restore(v)?;
-        oldv.start = BlockHeight::from(height);
-        oldv.period = Uint3::from(1);
-        Ok(())
-    }
-
-    fn delete(&mut self, cadr: &ContractAddress, k: Value) -> VmrtErr {
-        let k = Self::key(cadr, &k)?;
+    fn sdel(&mut self, cadr: &ContractAddress, k: Value) -> VmrtErr {
+        let k = Self::skey(cadr, &k)?;
         self.ctrtkvdb_del(&k);
         Ok(())
     }
