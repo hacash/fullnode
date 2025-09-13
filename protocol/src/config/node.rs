@@ -107,7 +107,7 @@ fn read_node_key(ini: &IniObj, sec: &HashMap<String, Option<String>>) -> [u8; 16
         let ndn = ini_must_maxlen(&sec, "name", "hx8888", 16); // max len = 16
         let sst = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos();
         let stuff = format!("{}-{}-{}", kph.unwrap().display(), ndn, sst);
-        println!("build node key by: {}", stuff);
+        // println!("build node key by: {}", stuff);
         node_key = sys::sha2(&stuff)[0..16].try_into().unwrap();
         nidfile.write_all(hex::encode(&node_key).as_bytes()).unwrap();
     }

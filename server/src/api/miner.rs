@@ -367,10 +367,16 @@ async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoR
     }
 
     // get highest bid tx from other node
-    let gotdmintx = ctx.hcshnd.txpool().first_at(TXGID_DIAMINT).unwrap().is_some();
-    if  ctx.engine.config().is_mainnet() && ! gotdmintx && curtimes() < ctx.launch_time + 30 {
-        return api_error("miner worker need launch after 30 secs for node start")
+
+    // just for test develop
+    #[cfg(not(debug_assertions))] 
+    { 
+        let gotdmintx = ctx.hcshnd.txpool().first_at(TXGID_DIAMINT).unwrap().is_some();
+        if  ctx.engine.config().is_mainnet() && ! gotdmintx && curtimes() < ctx.launch_time + 30 {
+            return api_error("miner worker need launch after 30 secs for node start")
+        }
     }
+
 
     let lasthei = ctx.engine.latest_block().height().uint();
 
