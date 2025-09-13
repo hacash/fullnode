@@ -23,7 +23,9 @@ impl ValueSto {
     // return (expire, delete, height)
     fn check(&self, chei: u64) -> (bool, bool, u64) {
         let due = self.expire.uint();
-        (chei > due, chei > due + STORAGE_RETAIN, due)
+        let isexp = chei > due;
+        let isdel = chei > due + STORAGE_RETAIN;
+        (isexp, isdel, due)
     }
 
     fn update(mut self, chei: u64, v: Value) -> Self {
