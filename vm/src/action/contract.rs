@@ -37,19 +37,19 @@ action_define!{ContractDeploy, 122,
         check_sub_contract_protocol_fee(ctx, self.contract.size(), &self.protocol_cost)?;
         // check
         map_itr_err!(self.contract.check(hei))?;
+        let accf  = AbstCall::Construct;
+        let hvaccf = self.contract.have_abst_call(accf);
         // save the contract
         vmsto!(ctx).contract_set(&caddr, &self.contract);
         // call the construct function
         let cargv = self.construct_argv.to_vec();
-        let casz = cargv.len();
-        if casz > SpaceCap::new(hei).max_value_size {
-            return errf!("construct argv length overflow")
+        if cargv.len() > SpaceCap::new(hei).max_value_size {
+            return errf!("construct argv size overflow")
         }
-        if casz > 0 {
+        if hvaccf { // have Construct func
             let depth = 1; // sys call depth is 1
             let cty = CallMode::Abst as u8;
-            let abf = AbstCall::Construct as u8;
-            setup_vm_run(depth, ctx, cty, abf, caddr.as_bytes(), cargv)?;
+            setup_vm_run(depth, ctx, cty, accf as u8, caddr.as_bytes(), cargv)?;
         }
         // ok finish
         Ok(vec![])

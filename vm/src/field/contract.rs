@@ -90,6 +90,16 @@ combi_struct!{ ContractSto,
 
 impl ContractSto {
 
+
+	pub fn have_abst_call(&self, ac: AbstCall) -> bool {
+		for a in self.abstcalls.list() {
+			if ac as u8 == a.sign[0] {
+				return true
+			}
+		}
+		false
+	}
+
 	/*
     	return Upgrade or Append for check
 	*/

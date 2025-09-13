@@ -43,8 +43,8 @@ impl GasTable {
         gst.set(12, &[MPUT, CALLINR]);
         gst.set(16, &[GGET, CALLCODE]);
         gst.set(24, &[GPUT, CALLLIB, CALLSTATIC]);
-        gst.set(32, &[SLOAD, CALL]); // CALLDYN
-        gst.set(64, &[SSAVE]);
+        gst.set(32, &[SLOAD, STIME, CALL]); // CALLDYN
+        gst.set(64, &[SSAVE, SRENT]);
         gst
     }
 
@@ -69,11 +69,6 @@ impl GasTable {
 #[derive(Default)]
 pub struct GasExtra {
     pub local_one_alloc: i64,
-    pub local_put: i64,
-    pub memory_put: i64, 
-    pub memory_get: i64, 
-    pub global_put: i64, 
-    pub global_get: i64, 
     pub storege_value_base_size: i64,
     pub load_new_contract: i64,
     pub main_call_min: i64,
@@ -84,11 +79,6 @@ impl GasExtra {
     pub fn new(_hei: u64) -> Self {
         Self {
             local_one_alloc: 5, // 5 * num
-            local_put: 1,   // 3
-            memory_get: 6,  // 8
-            memory_put: 10, // 12
-            global_get: 14, // 16
-            global_put: 22, // 24
             storege_value_base_size: 32,
             load_new_contract: 2 * GSCU as i64, // 64
             main_call_min:     1 * GSCU as i64, // 64

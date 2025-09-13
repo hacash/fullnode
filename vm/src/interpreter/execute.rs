@@ -272,12 +272,10 @@ pub fn execute_code(
             ALLOC => { let num = pu8!(); locals.alloc(num)?; 
                 gas += num as i64 * gst.local_one_alloc; },
             GET   => *ops.peek()? = locals.load(ops_peek_to_u16!() as usize)?,
-            PUT   => { locals.save(ops_pop_to_u16!(), ops.pop()?)?; 
-                gas += gst.local_put; },
+            PUT   => locals.save(ops_pop_to_u16!(), ops.pop()?)?,
             GETX  => ops.push(locals.load(pu8!() as usize)?)?,
-            PUTX  => { locals.save(pu8_as_u16!(), ops.pop()?)?; 
-                gas += gst.local_put; },
-            MOVE => { locals.save(pu8_as_u16!(), ops.pop()?)?; }
+            PUTX  => locals.save(pu8_as_u16!(), ops.pop()?)?,
+            MOVE  => locals.save(pu8_as_u16!(), ops.pop()?)?,
             XOP   => local_operand(pu8!(), locals, ops.pop()?)?,
             XLG   => local_logic(pu8!(), locals, ops.peek()?)?,
             HGROW    => gas += heap.grow(pu8!())?,
@@ -287,14 +285,10 @@ pub fn execute_code(
             HWRITEXL => heap.write_xl(pu16!(), ops.pop()?)?,
             HREADU   => ops.push(heap.read_u(  pu8!())?)?,
             HREADUL  => ops.push(heap.read_ul(pu16!())?)?,
-            GPUT => { globals.put(ops.pop()?, ops.pop()?)?;
-                gas += gst.global_put; },
-            GGET => { *ops.peek()? = globals.get(ops.peek()?)?;
-                gas += gst.global_get; },
-            MPUT => { memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?;
-                gas += gst.memory_put; },
-            MGET => { *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?;
-                gas += gst.memory_get; },
+            GPUT => globals.put(ops.pop()?, ops.pop()?)?,
+            GGET => *ops.peek()? = globals.get(ops.peek()?)?,
+            MPUT => memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?,
+            MGET => *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?,
             // storage
             SRENT => gas += state.srent(gst, hei, context_addr, ops.pop()?, ops.pop()?)?,
             SDEL  => state.sdel(context_addr, ops.pop()?)?,
@@ -310,33 +304,33 @@ pub fn execute_code(
             /*CASTU256 => ops.peek()?.cast_u256()?,*/
             CBUF  => ops.peek()?.cast_buf()?,
             TYPEID => *ops.peek()? = U8(ops.peek()?.ty_num()),
+            // logic
+            NOT  => ops.peek()?.cast_bool_not(),
+            AND  => binop_btw(ops, lgc_and)?,
+            OR   => binop_btw(ops, lgc_or)?,
+            EQ   => binop_btw(ops, lgc_equal)?,
+            NEQ  => binop_btw(ops, lgc_not_equal)?,
+            LT   => binop_btw(ops, lgc_less)?,
+            GT   => binop_btw(ops, lgc_greater)?,
+            LE   => binop_btw(ops, lgc_less_equal)?,
+            GE   => binop_btw(ops, lgc_greater_equal)?,
             // bitop
             BAND => binop_arithmetic(ops, bit_and)?,
             BOR  => binop_arithmetic(ops, bit_or)?,
             BXOR => binop_arithmetic(ops, bit_xor)?,
             BSHL => binop_arithmetic(ops, bit_shl)?,
             BSHR => binop_arithmetic(ops, bit_shr)?,
-            // logic
-            NOT => ops.peek()?.cast_bool_not(),
-            AND => binop_btw(ops, lgc_and)?,
-            OR  => binop_btw(ops, lgc_or)?,
-            EQ  => binop_btw(ops, lgc_equal)?,
-            NEQ => binop_btw(ops, lgc_not_equal)?,
-            LT  => binop_btw(ops, lgc_less)?,
-            GT  => binop_btw(ops, lgc_greater)?,
-            LE  => binop_btw(ops, lgc_less_equal)?,
-            GE  => binop_btw(ops, lgc_greater_equal)?,
             // arithmetic
-            ADD => binop_arithmetic(ops, add_checked)?,
-            SUB => binop_arithmetic(ops, sub_checked)?,
-            MUL => binop_arithmetic(ops, mul_checked)?,
-            DIV => binop_arithmetic(ops, div_checked)?,
-            MOD => binop_arithmetic(ops, mod_checked)?,
-            POW => binop_arithmetic(ops, pow_checked)?,
-            MAX => binop_arithmetic(ops, max_checked)?,
-            MIN => binop_arithmetic(ops, min_checked)?,
-            INC => ops.peek()?.inc(pu8!())?,
-            DEC => ops.peek()?.dec(pu8!())?,
+            ADD  => binop_arithmetic(ops, add_checked)?,
+            SUB  => binop_arithmetic(ops, sub_checked)?,
+            MUL  => binop_arithmetic(ops, mul_checked)?,
+            DIV  => binop_arithmetic(ops, div_checked)?,
+            MOD  => binop_arithmetic(ops, mod_checked)?,
+            POW  => binop_arithmetic(ops, pow_checked)?,
+            MAX  => binop_arithmetic(ops, max_checked)?,
+            MIN  => binop_arithmetic(ops, min_checked)?,
+            INC  => ops.peek()?.inc(pu8!())?,
+            DEC  => ops.peek()?.dec(pu8!())?,
             // workflow control
             JMPL  =>        jump!(codes, *pc, 2),
             JMPS  =>     ostjump!(codes, *pc, 1),
