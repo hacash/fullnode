@@ -210,7 +210,7 @@ pub fn execute_code(
         // println!("gas usable {} cp: {}, inst: {:?}", *gas_usable, gas_table.gas(instbyte), instruction);
 
 
-        macro_rules! extcall { ($ifv: expr) => { 
+        macro_rules! extcall { ($ifv: expr, $ivt: expr) => { 
             let idx = pu8!();
             let kid = u16::from_be_bytes(vec![instbyte, idx].try_into().unwrap());
             let mut actbody = vec![];
@@ -221,13 +221,18 @@ pub fn execute_code(
             let (bgasu, cres) = ctx.action_call(kid, actbody).map_err(|e|
                 ItrErr::new(ExtActCallError, e.as_str()))?;
             gas += bgasu as i64;
+            let resv;
             let vid = idx as usize;
-            let vty = match instruction {
-                EXTENV  => CALL_EXTEND_ENV_DEFS[vid],
-                EXTFUNC => CALL_EXTEND_FUNC_DEFS[vid],
-                _ => never!(),
-            }.1;
-            let resv = Value::type_from(vty, cres)?;
+            if $ivt {
+                let vty = match instruction {
+                    EXTENV  => CALL_EXTEND_ENV_DEFS[vid],
+                    EXTFUNC => CALL_EXTEND_FUNC_DEFS[vid],
+                    _ => never!(),
+                }.1;
+                resv = Value::type_from(vty, cres)?; //  from ty
+            } else {
+                resv = Value::Bytes(cres); // only bytes
+            }
             if $ifv {
                 *ops.peek()? = resv;
             } else {
@@ -241,13 +246,13 @@ pub fn execute_code(
                 if mode != Main || depth > 0 {
                     return itr_err_fmt!(ExtActDisabled, "extend action just can use in main call")
                 }
-                extcall!(true); },
-            EXTFUNC   => { extcall!(true); },
+                extcall!(true, false); },
+            EXTFUNC   => { extcall!(true, true); },
             EXTENV    => { 
                 if mode == Static {
                     return itr_err_fmt!(ExtActDisabled, "extend env not support in static call")
                 }
-                extcall!(false); },
+                extcall!(false, true); },
             // native call
             NTCALL => { let (r, g) = NativeCall::call(pu8!(), ops.peek()?)?;
                 *ops.peek()? = r; gas += g; },
