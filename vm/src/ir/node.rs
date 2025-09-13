@@ -186,7 +186,7 @@ impl IRNode for IRNodeParam1 {
                     let ary = CALL_EXTEND_ENV_DEFS;
                     let mut idx = self.para as usize;
                     if idx >= ary.len() { idx = 0; }
-                    buf.push_str(&format!("{}()", ary[idx]));
+                    buf.push_str(&format!("{}()", ary[idx].0));
                 },
                 _ => {
                     buf.push_str(&format!("{}({})", meta.intro, self.para));
@@ -677,7 +677,7 @@ impl IRNode for IRNodeParam1Single {
                     let ary = CALL_EXTEND_FUNC_DEFS;
                     let mut idx = self.para as usize;
                     if idx >= ary.len() { idx = 0; }
-                    buf.push_str(&format!("{}({})", ary[idx], substr));
+                    buf.push_str(&format!("{}({})", ary[idx].0, substr));
                 }
                 NTCALL => {
                     let substr = &print_sub_inline!(suo, self.subx, desc);

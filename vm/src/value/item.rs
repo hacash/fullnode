@@ -12,8 +12,9 @@ pub enum Value {
     /*U512(u512),*/   //           8
     /*U1024(u1024),*/ //           9
     Bytes(Vec<u8>),   //           10
-    /*Array(),*/      //           11
-    /*Struct(),*/     //           12
+    // Addr(Address),    //          11
+    /*Array(),*/      //           21
+    /*Struct(),*/     //           22
 }
 
 impl std::fmt::Display for Value {
@@ -38,9 +39,14 @@ impl Value {
     // pub const TID_U512:  u8 = 8;
     // pub const TID_U1024: u8 = 9;
     pub const TID_BYTES: u8 = 10;
+    // pub const TID_ADDR:  u8 = 11;
 
     pub fn nil() -> Self {
         Nil
+    }
+
+    pub fn bool(b: bool) -> Self {
+        Bool(b)
     }
 
     pub fn bool_true() -> Self {
@@ -49,6 +55,10 @@ impl Value {
 
     pub fn bool_false() -> Self {
         Bool(false)
+    }
+
+    pub fn u8(n: u8) -> Self {
+        U8(n)
     }
 
     pub fn empty_bytes() -> Self {

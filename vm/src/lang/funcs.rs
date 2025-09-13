@@ -159,13 +159,13 @@ fn concat_func_argvs(mut list: Vec<Box<dyn IRNode>>) -> Box<dyn IRNode> {
 
 
 fn pick_ext_func(id: &str) -> Option<(bool, Bytecode, u8)> {
-    if let Some(x) = CALL_EXTEND_ENV_DEFS.iter().position(|f|*f==id) {
+    if let Some(x) = CALL_EXTEND_ENV_DEFS.iter().position(|f|f.0==id) {
         if x > 255 { unreachable!() }
         if x > 0 {
             return Some((false, Bytecode::EXTENV, x as u8))
         }
     }
-    if let Some(x) = CALL_EXTEND_FUNC_DEFS.iter().position(|f|*f==id) {
+    if let Some(x) = CALL_EXTEND_FUNC_DEFS.iter().position(|f|f.0==id) {
         if x > 255 { unreachable!() }
         if x > 0 {
             return Some((true, Bytecode::EXTFUNC, x as u8))

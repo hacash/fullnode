@@ -211,7 +211,8 @@ pub fn execute_code(
 
 
         macro_rules! extcall { ($ifv: expr) => { 
-            let kid = u16::from_be_bytes(vec![instbyte, pu8!()].try_into().unwrap());
+            let idx = pu8!();
+            let kid = u16::from_be_bytes(vec![instbyte, idx].try_into().unwrap());
             let mut actbody = vec![];
             if $ifv {
                 let mut bdv = ops.peek()?.raw();
@@ -220,7 +221,13 @@ pub fn execute_code(
             let (bgasu, cres) = ctx.action_call(kid, actbody).map_err(|e|
                 ItrErr::new(ExtActCallError, e.as_str()))?;
             gas += bgasu as i64;
-            let resv = Value::bytes(cres);
+            let vid = idx as usize;
+            let vty = match instruction {
+                EXTENV  => CALL_EXTEND_ENV_DEFS[vid],
+                EXTFUNC => CALL_EXTEND_FUNC_DEFS[vid],
+                _ => never!(),
+            }.1;
+            let resv = Value::type_from(vty, cres)?;
             if $ifv {
                 *ops.peek()? = resv;
             } else {

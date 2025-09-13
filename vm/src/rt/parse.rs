@@ -81,7 +81,7 @@ impl BytecodePrint for Vec<u8> {
                         let ary = CALL_EXTEND_ENV_DEFS;
                         let mut idx = self[i] as usize;
                         if idx >= ary.len() { idx = 0; }
-                        pms.push(format!(" {}() ", ary[idx]));
+                        pms.push(format!(" {}() ", ary[idx].0));
                     }else if let XOP = inst {
                         let (opt, idx) = local_operand_param_parse(self[i]);
                         pms.push(format!("{}, {}", idx, opt));
@@ -92,7 +92,7 @@ impl BytecodePrint for Vec<u8> {
                         let ary = CALL_EXTEND_FUNC_DEFS;
                         let mut idx = self[i] as usize;
                         if idx >= ary.len() { idx = 0; }
-                        pms.push(format!(" {}(..) ", ary[idx]));
+                        pms.push(format!(" {}(..) ", ary[idx].0));
                     }else if let CALL = inst {
                         let lx = Address::SIZE;
                         let addr = Address::from_vec(self[i..i+lx].to_vec());

@@ -1,3 +1,12 @@
+Comparison Reference:
+
+    1. Move VM
+    2. Ethereum VM
+    3. Solana VM
+    4. Ton VM
+    5. CKB VM
+    6. EOS VM
+    7. NEO VM
 
 
 Call Entry:

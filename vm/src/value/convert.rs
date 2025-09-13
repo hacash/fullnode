@@ -91,6 +91,26 @@ impl Value {
 
     */
 
+    pub fn type_from(ty: u8, stuff: Vec<u8>) -> VmrtRes<Self> {
+        let vlen = stuff.len();
+        macro_rules! val {()=>{ Self::Bytes(stuff.clone()) }}
+        macro_rules! cst {($c: ident)=>{ {let mut v = val!(); v.$c()?; v } }}
+        macro_rules! err {()=>{ itr_err_fmt!(CastParamFail, "cannot cast 0x{} to type id {}", stuff.clone().to_hex(), ty) }}
+        let cklen = |l, v| maybe!(vlen==l, Ok(v), err!());
+        match ty {
+            Self::TID_NIL   => cklen(0,  Self::Nil),
+            Self::TID_BOOL  => cklen(1,  Self::bool(stuff[0]==1)),
+            Self::TID_U8    => cklen(1,  Self::u8(stuff[0])),
+            Self::TID_U16   => cklen(2,  cst!(cast_u16) ),
+            Self::TID_U32   => cklen(4,  cst!(cast_u32) ),
+            Self::TID_U64   => cklen(8,  cst!(cast_u64) ),
+            Self::TID_U128  => cklen(16, cst!(cast_u128) ),
+            Self::TID_BYTES => Ok(Self::Bytes(stuff)),
+            _ => return err!()
+        }
+    }
+    
+
     pub fn checked_address(&self) -> VmrtRes<Address> {
         match self {
             Bytes(adr) => map_err_itr!(CastParamFail, Address::from_bytes(adr)),
