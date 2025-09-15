@@ -297,6 +297,7 @@ pub fn execute_code(
             HWRITEXL => heap.write_xl(pu16!(), ops.pop()?)?,
             HREADU   => ops.push(heap.read_u(  pu8!())?)?,
             HREADUL  => ops.push(heap.read_ul(pu16!())?)?,
+            HSLICE   => *ops.peek()? = heap.slice(ops.pop()?, ops.peek()?)?,
             GPUT => globals.put(ops.pop()?, ops.pop()?)?,
             GGET => *ops.peek()? = globals.get(ops.peek()?)?,
             MPUT => memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?,

@@ -209,9 +209,14 @@ irfn_define!{
     INC        : 1, 1, 1,     increase       
     DEC        : 1, 1, 1,     decrease       
 
-    HGROW      : 1, 0, 0,     heap_grow      
-    HWRITE     : 0, 2, 0,     heap_write     
-    HREAD      : 0, 2, 1,     heap_read      
+    HGROW      : 1, 0, 0,     heap_grow
+    HWRITE     : 0, 2, 0,     heap_write
+    HREAD      : 0, 2, 1,     heap_read
+    HWRITEX    : 1, 0, 1,     heap_write_x
+    HWRITEXL   : 2, 0, 1,     heap_write_xl
+    HREADU     : 1, 0, 1,     heap_read_uint
+    HREADUL    : 2, 0, 1,     heap_read_uint_long
+    HSLICE     : 0, 2, 1,     heap_create_slice
 
     SRENT      : 0, 2, 0,     storage_rent
     SSAVE      : 0, 2, 0,     storage_save

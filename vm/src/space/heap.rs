@@ -90,9 +90,19 @@ impl Heap {
 
     // return Value::bytes
     pub fn read(&self, k: Value, n: &Value) -> VmrtRes<Value> {
-        let start = k.checked_u32()? as usize;
+        let start  = k.checked_u32()? as usize;
         let length = n.checked_u16()? as usize;
         self.do_read(start, length)
+    }
+
+    pub fn slice(&self, s: Value, l: &Value) -> VmrtRes<Value> {
+        let start  = s.checked_u32()?;
+        let length = l.checked_u32()?;
+        let max = start + length;
+        if max as usize > self.datas.len() {
+            return itr_err_fmt!(HeapError, "create slice overflow")
+        }
+        Ok(Value::HeapSlice((start, length)))
     }
 
     /*

@@ -123,14 +123,14 @@ pub enum Bytecode {
     ________________109 = 0x6d,
     ________________110 = 0x6e,
     ________________111 = 0x6f,
-    HGROW               = 0x70, // *      heap grow
-    HWRITE              = 0x71, // a,b    heap write
-    HREAD               = 0x72, // a,b+   heap read
-    HWRITEX             = 0x73, // *+     heap write x
-    HWRITEXL            = 0x74, // **+    heap write xl
-    HREADU              = 0x75, // *+     heap read u
-    HREADUL             = 0x76, // **+    heap read ul
-    ________________119 = 0x77,
+    HGROW               = 0x70, // *     heap grow
+    HWRITE              = 0x71, // a,b   heap write
+    HREAD               = 0x72, // a,b+  heap read
+    HWRITEX             = 0x73, // *+    heap write x
+    HWRITEXL            = 0x74, // **+   heap write xl
+    HREADU              = 0x75, // *+    heap read u
+    HREADUL             = 0x76, // **+   heap read ul
+    HSLICE              = 0x77, // a,b+  create heap slice
     XLG                 = 0x78, // *&    local logic
     XOP                 = 0x79, // *a    local operand
     GET                 = 0x7a, // &     local get       
@@ -401,11 +401,12 @@ bytecode_metadata_define!{
 
     HGROW      : 1, 0, 0,     heap_grow
     HWRITE     : 0, 2, 0,     heap_write
-    HREAD      : 0, 2, 1,     head_read
+    HREAD      : 0, 2, 1,     heap_read
     HWRITEX    : 1, 0, 1,     heap_write_x
     HWRITEXL   : 2, 0, 1,     heap_write_xl
-    HREADU     : 1, 0, 1,     head_read_uint
-    HREADUL    : 2, 0, 1,     head_read_uint_long
+    HREADU     : 1, 0, 1,     heap_read_uint
+    HREADUL    : 2, 0, 1,     heap_read_uint_long
+    HSLICE     : 0, 2, 1,     heap_create_slice
 
     XLG        : 1, 1, 1,     logic       //  local_      
     XOP        : 1, 1, 0,     operand     //  local_      
