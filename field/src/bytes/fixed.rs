@@ -134,7 +134,7 @@ macro_rules! fixed_define {
                 self.bytes.to_vec()
             }
 
-            pub fn from_vec(v: Vec<u8>) -> Self where Self: Sized {
+            pub fn must_vec(v: Vec<u8>) -> Self where Self: Sized {
                 Self::from(v.try_into().unwrap())
             }
 

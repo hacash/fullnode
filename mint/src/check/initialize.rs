@@ -18,9 +18,9 @@ fn do_initialize(db: &mut dyn State) -> Rerr {
     { 
         println!("\n[Debug Mint] 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9 => 1000HAC + 50BTC");
 	    let addr1 = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
-	    let amt1 = Amount::small(1, 251);
-        let mut bls1 = Balance::hac(amt1);
-        bls1.satoshi = Fold64::from(5000000000)?;
+	    let amt1 = Amount::small(1, 254); // 1000000 HAC
+        let mut bls1 = Balance::hac(amt1); 
+        bls1.satoshi = Fold64::from(50000000000)?; // 500 BTC
         state.balance_set(&addr1, &bls2);
     }
 

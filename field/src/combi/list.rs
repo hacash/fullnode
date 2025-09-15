@@ -93,6 +93,16 @@ impl $class {
         Ok(())
     }
 
+    pub fn drop(&mut self, i: usize) -> Rerr {
+        let tl = self.length();
+        if i >= tl {
+            return errf!("list index overflow")
+        }
+        self.count -= 1;
+        self.lists.remove(i);
+        Ok(())
+    }
+
 	pub fn push(&mut self, v: $vty) -> Rerr {
         if *self.count as usize + 1 > <$cty>::MAX as usize {
             return errf!("append size overflow")
