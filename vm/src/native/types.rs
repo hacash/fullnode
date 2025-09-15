@@ -15,7 +15,7 @@ pub enum NativeCall {
 
 impl NativeCall {
 
-    pub fn call(idx: u8, v: &Value) -> VmrtRes<(Value, i64)> {
+    pub fn call(idx: u8, v: &[u8]) -> VmrtRes<(Value, i64)> {
         let cty: NativeCall = std_mem_transmute!(idx);
         match cty {
             $(

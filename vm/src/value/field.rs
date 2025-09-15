@@ -34,25 +34,38 @@ impl ValueKey {
 
 
 impl Parse for Value {
-    fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
-        let ty = Uint1::build(buf)?;
-        let buf = &buf[1..];
-        macro_rules! buf_to_uint_unwrap { ($ty:ty, $n:expr) => {
-            <$ty>::from_be_bytes(buf_fill_left_zero(buf, $n).try_into().unwrap())
-        }}
-        *self = match *ty {
-            Self::TID_NIL   => Nil,
-            Self::TID_BOOL  => Bool(maybe!(buf[0]==0, false, true)),
-            Self::TID_U8    => U8(buf[0]),
-            Self::TID_U16   => U16(buf_to_uint_unwrap!(u16, 2)),
-            Self::TID_U32   => U32(buf_to_uint_unwrap!(u32, 4)),
-            Self::TID_U64   => U64(buf_to_uint_unwrap!(u64, 8)),
-            Self::TID_U128  => U128(buf_to_uint_unwrap!(u128, 16)),
-            // Self::TID_U256 => Bytes(buf.to_vec()),
-            Self::TID_BYTES => Bytes(buf.to_vec()),
-            _ => unreachable!()
+    fn parse(&mut self, mut buf: &[u8]) -> Ret<usize>{
+        let err = errf!("value buf too short");
+        let bl = buf.len();
+        if bl < 1 {
+            return err
+        }
+        let ty = ValueTy::build(buf[0])?;
+        buf = &buf[1..];
+        macro_rules! buf_to_uint { ($ty:ty, $buf:expr, $l:expr) => {{
+            if buf.len() < $l {
+                return err
+            }
+            <$ty>::from_be_bytes(buf_fill_left_zero(buf, $l).try_into().unwrap())
+        }}}
+        *self = match ty {
+            ValueTy::Nil       => Nil,
+            ValueTy::Bool      => Bool(maybe!(buf[0]==0, false, true)),
+            ValueTy::U8        => U8(buf[0]),
+            ValueTy::U16       => U16(buf_to_uint!(u16, buf, 2)),
+            ValueTy::U32       => U32(buf_to_uint!(u32, buf, 4)),
+            ValueTy::U64       => U64(buf_to_uint!(u64, buf, 8)),
+            ValueTy::U128      => U128(buf_to_uint!(u128, buf, 16)),
+            ValueTy::Bytes     => Bytes(buf.to_vec()),
+            ValueTy::Addr      => Addr(Address::from_bytes(&buf)?),
+            ValueTy::HeapSlice => {
+                let s = buf_to_uint!(u32, buf, 4);
+                buf = &buf[4..];
+                let l = buf_to_uint!(u32, buf, 4);
+                HeapSlice((s, l))
+            }
         };
-        Ok(buf.len())
+        Ok(bl)
     }
 }
 
