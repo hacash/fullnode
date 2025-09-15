@@ -5,7 +5,7 @@
 
 
 
-action_define!{EnvHeight, 0x0801, 
+action_define!{EnvHeight, 0x0b01, 
     ActLv::Any, false, [], {},
     (self, ctx, _gas {
         Ok(ctx.env().block.height.to_be_bytes().to_vec())
@@ -13,7 +13,7 @@ action_define!{EnvHeight, 0x0801,
 }
 
 
-action_define!{EnvMainAddr, 0x0802, 
+action_define!{EnvMainAddr, 0x0b02, 
     ActLv::Any, false, [], {},
     (self, ctx, _gas {
         Ok(ctx.env().tx.main.to_vec())
@@ -21,7 +21,7 @@ action_define!{EnvMainAddr, 0x0802,
 }
 
 
-action_define!{EnvCoinbaseAddr, 0x0803, 
+action_define!{EnvCoinbaseAddr, 0x0b03, 
     ActLv::Any, false, [], {},
     (self, ctx, _gas {
         let cbadr = ctx.env().block.coinbase.clone();

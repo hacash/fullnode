@@ -50,6 +50,10 @@ action_define!{ContractDeploy, 122,
             let depth = 1; // sys call depth is 1
             let cty = CallMode::Abst as u8;
             setup_vm_run(depth, ctx, cty, accf as u8, caddr.as_bytes(), cargv)?;
+            // drop Construct func
+            let mut contract = self.contract.clone();
+            contract.drop_abst_call(accf);
+            vmsto!(ctx).contract_set(&caddr, &contract);
         }
         // ok finish
         Ok(vec![])

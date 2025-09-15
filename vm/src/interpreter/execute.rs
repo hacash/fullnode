@@ -215,7 +215,7 @@ pub fn execute_code(
             let kid = u16::from_be_bytes(vec![instbyte, idx].try_into().unwrap());
             let mut actbody = vec![];
             if $ifv {
-                let mut bdv = ops.peek()?.raw();
+                let mut bdv = ops.peek()?.deval(heap)?;
                 actbody.append(&mut bdv);
             }
             let (bgasu, cres) = ctx.action_call(kid, actbody).map_err(|e|
@@ -254,7 +254,7 @@ pub fn execute_code(
                 }
                 extcall!(false, true); },
             // native call
-            NTCALL => { let (r, g) = NativeCall::call(pu8!(), ops.peek()?)?;
+            NTCALL => { let (r, g) = NativeCall::call(pu8!(), &ops.peek()?.deval(heap)?)?;
                 *ops.peek()? = r; gas += g; },
             // constant
             P0    => ops.push(U8(0))?,

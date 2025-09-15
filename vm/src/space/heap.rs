@@ -54,45 +54,45 @@ impl Heap {
         Ok(gas)
     }
 
-    fn do_write(&mut self, index: usize, v: Value) -> VmrtErr {
+    fn do_write(&mut self, start: usize, v: Value) -> VmrtErr {
         let data = v.checked_bytes()?;
-        let right = index + data.len();
+        let right = start + data.len();
         if right > self.datas.len() {
             return itr_err_fmt!(HeapError, "write overflow")
         }
-        let (_, right) = self.datas.split_at_mut(index);
+        let (_, right) = self.datas.split_at_mut(start);
         let (left, _) = right.split_at_mut(data.len());
         left.copy_from_slice(&data);
         Ok(())
     }
 
     pub fn write(&mut self, k: Value, v: Value) -> VmrtErr {
-        let index = k.checked_u32()? as usize;
-        self.do_write(index, v)
+        let start = k.checked_u32()? as usize;
+        self.do_write(start, v)
     }
 
-    pub fn write_x(&mut self, idx: u8, v: Value) -> VmrtErr {
-        self.do_write(idx as usize, v)
+    pub fn write_x(&mut self, start: u8, v: Value) -> VmrtErr {
+        self.do_write(start as usize, v)
     }
 
-    pub fn write_xl(&mut self, idx: u16, v: Value) -> VmrtErr {
-        self.do_write(idx as usize, v)
+    pub fn write_xl(&mut self, start: u16, v: Value) -> VmrtErr {
+        self.do_write(start as usize, v)
     }
 
-    fn do_read(&self, idx: usize, len: usize) -> VmrtRes<Value> {
-        let max = idx + len;
+    pub fn do_read(&self, start: usize, len: usize) -> VmrtRes<Value> {
+        let max = start + len;
         if max > self.datas.len() {
             return itr_err_fmt!(HeapError, "read overflow")
         }
-        let data = &self.datas[idx..len+len];
+        let data = &self.datas[start..start+len];
         Ok(Value::Bytes(data.to_vec()))
     }
 
     // return Value::bytes
     pub fn read(&self, k: Value, n: &Value) -> VmrtRes<Value> {
-        let index = k.checked_u32()? as usize;
+        let start = k.checked_u32()? as usize;
         let length = n.checked_u16()? as usize;
-        self.do_read(index, length)
+        self.do_read(start, length)
     }
 
     /*

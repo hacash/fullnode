@@ -300,7 +300,7 @@ fn print_data_bytes(this: &IRNodeParams, buf: &mut String) {
     }
     // check address
     if data.len() == Address::SIZE {
-        let addr = Address::from_vec(data.clone());
+        let addr = Address::must_vec(data.clone());
         if let Ok(..) = addr.check_version() {
             buf.push_str(&format!("{}", addr.readable()));
             return 
@@ -351,7 +351,7 @@ impl IRNode for IRNodeParamsSingle {
             match self.inst {
                 CALL => {
                     let lx = Address::SIZE;
-                    let adr = Address::from_vec(self.para[0..lx].to_vec());
+                    let adr = Address::must_vec(self.para[0..lx].to_vec());
                     let fun = hex::encode(&self.para[lx..]);
                     buf.push_str(&format!("{}.<{}>({})", adr.readable(), fun, substr));
                 }

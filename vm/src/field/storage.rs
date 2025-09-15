@@ -40,7 +40,7 @@ impl ValueSto {
         let (ml, vl) = (v.val_size() as u64, self.data.val_size() as u64);
         if ml != vl {
             let mut rest = (due - chei) * ml / vl;
-            up_in_range!(rest, STORAGE_PERIOD, u64::MAX); // at least 300
+            up_in_range!(rest, STORAGE_PERIOD, STORAGE_SAVE_MAX); // at least 1 day, less than 10 years
             self.expire = BlockHeight::from(chei + rest);
         }
         self.data = v;
