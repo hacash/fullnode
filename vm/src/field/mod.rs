@@ -19,5 +19,6 @@ use ir::*;
 
 
 include!{"address.rs"}
+include!{"func.rs"}
 include!{"contract.rs"}
 include!{"storage.rs"}

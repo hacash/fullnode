@@ -23,24 +23,38 @@ pub enum ValueTy {
 }
 
 impl ValueTy {
+
+    pub fn canbe_argv(&self) -> Rerr {
+        use ValueTy::*;
+        match self {
+            Nil | HeapSlice | Compo => errf!("Value Type {:?} cannot be func argv", self),
+            _ => Ok(())
+        }
+    }
+
+
     pub fn build(t: u8) -> Ret<Self> {
+        use ValueTy::*;
         Ok(match t {
-            0  => Self::Nil       ,
-            1  => Self::Bool      ,
-            2  => Self::U8        ,
-            3  => Self::U16       ,
-            4  => Self::U32       ,
-            5  => Self::U64       ,
-            6  => Self::U128      ,
+            0  => Nil       ,
+            1  => Bool      ,
+            2  => U8        ,
+            3  => U16       ,
+            4  => U32       ,
+            5  => U64       ,
+            6  => U128      ,
             /* */
-            10 => Self::Bytes     ,
-            11 => Self::Addr      ,
+            10 => Bytes     ,
+            11 => Addr      ,
             /* */
-            14 => Self::HeapSlice ,
-            15 => Self::Compo     ,
+            14 => HeapSlice ,
+            15 => Compo     ,
             _ => return errf!("ValueTy {} not find", t)
         })
     }
+
+
+
 }
 
 
@@ -164,6 +178,14 @@ impl Value {
             Addr(..) => true,
             _ => false,
         }
+    }
+
+
+    pub fn compo_ref(&self) -> VmrtRes<&CompoItem> {
+        let Value::Compo(compo) = self else {
+            return itr_err_code!(CompoOpNotMatch)
+        };
+        Ok(compo)
     }
 
     pub fn check_false(&self) -> bool {

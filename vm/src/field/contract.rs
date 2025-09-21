@@ -22,6 +22,7 @@ combi_struct!{ ContractUserFunc,
 	sign: Fixed4
 	mark: Fixed3
 	cdty: Fixed1 // 1bit = is_public, 3bit8 = codetype
+	pmdf: FuncArgvTypes // params type define
     code: BytesW2
 }
 
@@ -209,13 +210,13 @@ impl ContractSto {
 		};
 		// parse sytmcalls
 		for a in obj.sto.abstcalls.list() {
-			let code = FnObj::create(a.cdty[0], a.code.to_vec())?;
+			let code = FnObj::create(a.cdty[0], a.code.to_vec(), None)?;
 			let cty = std_mem_transmute!( a.sign[0] );
 			obj.abstfns.insert(cty, code.into());
 		}
 		// parse userfuncs
 		for a in obj.sto.userfuncs.list() {
-			let code = FnObj::create(a.cdty[0], a.code.to_vec())?;
+			let code = FnObj::create(a.cdty[0], a.code.to_vec(), Some(a.pmdf.clone()))?;
 			let cty = a.sign.to_array();
 			obj.userfns.insert(cty, code.into());
 		}

@@ -26,7 +26,7 @@ pub fn bufeat(buf: &[u8], n: usize) -> Ret<Vec<u8>> {
 /*
 * 
 */
-pub fn bufeatone(buf: &[u8],) -> Ret<u8> {
+pub fn bufeatone(buf: &[u8]) -> Ret<u8> {
     match buf.len() >= 1 {
         true => Ok(buf[0]),
         false => Err(s!("buf length too short"))

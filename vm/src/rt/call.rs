@@ -88,6 +88,7 @@ pub enum FnConf {
 #[derive(Debug, Clone, Default)]
 pub struct FnObj {
     pub confs: u8, // binary switch
+    pub agvty: Option<FuncArgvTypes>,
     pub ctype: CodeType,
     pub codes: Vec<u8>,
 }
@@ -99,9 +100,9 @@ impl FnObj {
         self.confs & cnfset == cnfset
     } 
 
-    pub fn create(mks: u8, codes: Vec<u8>) -> VmrtRes<Self> {
+    pub fn create(mks: u8, codes: Vec<u8>, agvty: Option<FuncArgvTypes>) -> VmrtRes<Self> {
         let ctype = CodeType::parse(mks)?;
-        Ok(Self {confs: mks, ctype, codes })
+        Ok(Self {confs: mks, agvty, ctype, codes })
     }
 
     pub fn into_array(self) -> Vec<u8> {
