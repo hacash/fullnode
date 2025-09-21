@@ -5,7 +5,7 @@ pub struct SpaceCap {
     pub load_contract: usize, // 20
     pub call_depth: usize,    // 32
 
-    pub max_value_size: usize,
+    pub max_value_size: usize, // 2048
     pub max_compo_length: usize,
 
     pub total_stack: usize, // 16*16 = 256
@@ -36,7 +36,7 @@ impl SpaceCap {
             max_gas_of_tx:   U16M / 2,
             load_contract:   20,
             call_depth:      32,
-            max_value_size:  1024, 
+            max_value_size:  2048, // diamond name list: 200*6 = 1200 
             max_compo_length: 256,
             total_stack:     512,
             total_local:     512,

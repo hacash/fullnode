@@ -49,7 +49,7 @@ action_define!{ContractDeploy, 122,
         if hvaccf { // have Construct func
             let depth = 1; // sys call depth is 1
             let cty = CallMode::Abst as u8;
-            setup_vm_run(depth, ctx, cty, accf as u8, caddr.as_bytes(), cargv)?;
+            setup_vm_run(depth, ctx, cty, accf as u8, caddr.as_bytes(), Value::Bytes(cargv))?;
             // drop Construct func
             let mut contract = self.contract.clone();
             contract.drop_abst_call(accf);
@@ -93,7 +93,7 @@ action_define!{ContractUpdate, 123,
         let depth = 1; // sys call depth is 1
         let cty = CallMode::Abst as u8;
         let sys = maybe!(is_edit, Change, Append) as u8; // Upgrade or Append
-        setup_vm_run(depth, ctx, cty, sys, caddr.as_bytes(), vec![])?;
+        setup_vm_run(depth, ctx, cty, sys, caddr.as_bytes(), Value::Nil)?;
         // save the new
         vmsto!(ctx).contract_set(&caddr, &contract);
         Ok(vec![]) 

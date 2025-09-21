@@ -206,6 +206,7 @@ impl Value {
         }
     }
 
+    /*
     pub fn _____deval(&self, heap: &Heap) -> VmrtRes<Vec<u8>> {
         match self {
             Compo(..) => itr_err_code!(CompoToSerialize),
@@ -218,6 +219,7 @@ impl Value {
             _ => Ok(self.raw())
         }
     }
+    */
 
 
     pub fn raw(&self) -> Vec<u8> {
@@ -232,7 +234,8 @@ impl Value {
             Bytes(buf) => buf.clone(),
             Addr(a)    => a.serialize(),
             HeapSlice((s, l)) => vec![s.to_be_bytes(), l.to_be_bytes()].concat(),
-            _ => never!(),
+            // not support
+            Compo(..) => "{compo value ...}".to_owned().into_bytes(),
         }
     }
 
@@ -259,6 +262,7 @@ impl Value {
             Bytes(b) => b.len(),
             Addr(..) => Address::SIZE,
             HeapSlice(..) => 4 + 4,
+            // not support
             Compo(..) => usize::MAX,
         }
     }

@@ -32,61 +32,67 @@ fn coin_asset_transfer_call(abstfrom: AbstCall, abstto: AbstCall, action: &dyn A
     let addrs = &ctx.env().tx.addrs;
     let mut from = ctx.env().tx.main;
     let mut to = from.clone();
-    let amtargv: Vec<u8>;
+    let mut argvs: VecDeque<Value>;
     let calldpt: isize = CallDepth::new(1).into();
     let absty = CallMode::Abst as u8;
     let asset_param = |asset: &AssetAmt| {
-        vec![asset.serial.uint().to_be_bytes(), 
-            asset.amount.uint().to_be_bytes()
-        ].concat()
+        VecDeque::from([ 
+            Value::U64(asset.serial.uint()), 
+            Value::U64(asset.amount.uint()),
+        ])
     };
+    macro_rules! diamonds_param {
+        ($act: expr) => {
+            VecDeque::from([ Value::U32($act.diamonds.length() as u32), Value::Bytes($act.diamonds.form()) ])
+        };
+    }
     // HAC
     if let Some(act) = action.downcast_ref::<HacToTrs>() {
         to = act.to.real(addrs)?;
-        amtargv = act.hacash.serialize();
+        argvs = VecDeque::from([Value::Bytes(act.hacash.serialize())]);
     }else if let Some(act) = action.downcast_ref::<HacFromTrs>() {
         from = act.from.real(addrs)?;
-        amtargv = act.hacash.serialize();
+        argvs = VecDeque::from([Value::Bytes(act.hacash.serialize())]);
     }else if let Some(act) = action.downcast_ref::<HacFromToTrs>() {
         from = act.from.real(addrs)?;
         to = act.to.real(addrs)?;
-        amtargv = act.hacash.serialize();
+        argvs = VecDeque::from([Value::Bytes(act.hacash.serialize())]);
     // SAT
     }else if let Some(act) = action.downcast_ref::<SatToTrs>() {
         to = act.to.real(addrs)?;
-        amtargv = act.satoshi.serialize();
+        argvs = VecDeque::from([Value::U64(act.satoshi.uint())]);
     }else if let Some(act) = action.downcast_ref::<SatFromTrs>() {
         from = act.from.real(addrs)?;
-        amtargv = act.satoshi.serialize();
+        argvs = VecDeque::from([Value::U64(act.satoshi.uint())]);
     }else if let Some(act) = action.downcast_ref::<SatFromToTrs>() {
         from = act.from.real(addrs)?;
         to = act.to.real(addrs)?;
-        amtargv = act.satoshi.serialize();
+        argvs = VecDeque::from([Value::U64(act.satoshi.uint())]);
     // HACD
     }else if let Some(act) = action.downcast_ref::<DiaSingleTrs>() {
         to = act.to.real(addrs)?;
-        amtargv = vec![vec![1], act.diamond.serialize()].concat();
+        argvs = VecDeque::from([ Value::U32(1),  Value::Bytes(act.diamond.to_vec())]);
     }else if let Some(act) = action.downcast_ref::<DiaToTrs>() {
         to = act.to.real(addrs)?;
-        amtargv = act.diamonds.serialize();
+        argvs = diamonds_param!(act);
     }else if let Some(act) = action.downcast_ref::<DiaFromTrs>() {
         from = act.from.real(addrs)?;
-        amtargv = act.diamonds.serialize();
+        argvs = diamonds_param!(act);
     }else if let Some(act) = action.downcast_ref::<DiaFromToTrs>() {
         from = act.from.real(addrs)?;
         to = act.to.real(addrs)?;
-        amtargv = act.diamonds.serialize();
+        argvs = diamonds_param!(act);
     // Asset
     }else if let Some(act) = action.downcast_ref::<AssetToTrs>() {
         to = act.to.real(addrs)?;
-        amtargv = asset_param(&act.asset);
+        argvs = asset_param(&act.asset);
     }else if let Some(act) = action.downcast_ref::<AssetFromTrs>() {
         from = act.from.real(addrs)?;
-        amtargv = asset_param(&act.asset);
+        argvs = asset_param(&act.asset);
     }else if let Some(act) = action.downcast_ref::<AssetFromToTrs>() {
         from = act.from.real(addrs)?;
         to = act.to.real(addrs)?;
-        amtargv = asset_param(&act.asset);
+        argvs = asset_param(&act.asset);
     }else {
         unreachable!()
     }
@@ -98,13 +104,16 @@ fn coin_asset_transfer_call(abstfrom: AbstCall, abstto: AbstCall, action: &dyn A
 
     // call from contract
     if fc {
-        let param = vec![to.serialize(), amtargv.clone()].concat();
+        let mut argvs = argvs.clone();
+        argvs.push_front( Value::Addr(to) );
+        let param = Value::Compo(CompoItem::list(argvs));
         setup_vm_run(calldpt, ctx, absty, abstfrom as u8, from.as_bytes(), param)?;
     }
 
     // call to contract
     if tc {
-        let param = vec![from.serialize(), amtargv].concat();
+        argvs.push_front( Value::Addr(from) );
+        let param = Value::Compo(CompoItem::list(argvs));
         setup_vm_run(calldpt, ctx, absty, abstto as u8, to.as_bytes(), param)?;
     }
 

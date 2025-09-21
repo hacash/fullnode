@@ -80,7 +80,7 @@ impl Serialize for Value {
         iter::once(ty).chain(buf).collect()
     }
     fn size(&self) -> usize {
-        self.val_size() + 1 // + ty id
+        1 + self.val_size() // + ty id
     }
 }
 

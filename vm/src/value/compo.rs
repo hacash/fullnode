@@ -165,6 +165,18 @@ macro_rules! get_compo_inner_mut {
 
 impl CompoItem {
 
+    pub fn list(l: VecDeque<Value>) -> Self {
+        Self {
+            compo: Rc::new(UnsafeCell::new(Compo::List(l))),
+        }
+    }
+
+    pub fn map(m: HashMap<Vec<u8>, Value>) -> Self {
+        Self {
+            compo: Rc::new(UnsafeCell::new(Compo::Map(m))),
+        }
+    }
+
     pub fn is_list(&self) -> bool {
         match get_compo_inner_ref!(self) {
             Compo::List(..) => true,

@@ -3,7 +3,7 @@
 /*
     return gas, val
 */
-pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u8], pm: Vec<u8>) -> Ret<(i64, Value)> {
+pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u8], pm: Value) -> Ret<(i64, Value)> {
     // check tx type
     const TY3: u8 = TransactionType3::TYPE;
     let txty = ctx.env().tx.ty;
@@ -30,7 +30,7 @@ pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u
         let vmiptr = ctxmut1.vm() as *mut dyn VM;
         let vmimut: &mut dyn VM = &mut *vmiptr;  
         // do call
-        vmimut.call(ctxmut2, stamut, ty, mk, cd, pm)?
+        vmimut.call(ctxmut2, stamut, ty, mk, cd, Box::new(pm))?
     };
     ctx.depth_set(old_depth);
     Ok((cost,  Value::bytes(rv)))

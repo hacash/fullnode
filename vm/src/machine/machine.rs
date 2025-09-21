@@ -1,5 +1,3 @@
-use value::Value;
-
 
 
 #[allow(dead_code)]
@@ -93,7 +91,7 @@ impl VM for MachineBox {
     fn usable(&self) -> bool { true }
     fn call(&mut self, 
         ctx: &mut dyn Context, sta: &mut dyn State,
-        ty: u8, kd: u8, data: &[u8], param: Vec<u8>
+        ty: u8, kd: u8, data: &[u8], param: Box<dyn Any>
     ) -> Ret<(i64, Vec<u8>)> {
         use CallMode::*;
         // init gas & check balance
@@ -114,7 +112,10 @@ impl VM for MachineBox {
             Abst => {
                 let kid: AbstCall = std_mem_transmute!(kd);
                 let cadr = ContractAddress::parse(data)?;
-                machine.abst_call(exenv, kid, cadr, param)
+                let Ok(param) = param.downcast::<Value>() else {
+                    return errf!("argv type not match")
+                };
+                machine.abst_call(exenv, kid, cadr, *param)
             }
             _ => unreachable!()
         }.map(|a|a.raw())?;
@@ -165,13 +166,13 @@ impl Machine {
         map_itr_err!(self.do_call(env, CallMode::Main, fnobj, None))
     }
 
-    pub fn abst_call(&mut self, env: &mut ExecEnv, cty: AbstCall, contract_addr: ContractAddress, param: Vec<u8>) -> Ret<Value> {
+    pub fn abst_call(&mut self, env: &mut ExecEnv, cty: AbstCall, contract_addr: ContractAddress, param: Value) -> Ret<Value> {
         let Some(fnobj) = map_itr_err!(self.r.load_abstfn(env.sta, &contract_addr, cty))? else {
             // return Ok(Value::Nil) // not find call
             return errf!("abst call {:?} not find in {}", cty, contract_addr.readable()) // not find call
         };
         let fnobj = fnobj.as_ref().clone();
-        let param =  Some(Value::bytes(param));
+        let param =  Some(param);
         let rv = map_itr_err!(self.do_call(env, CallMode::Abst, fnobj, param))?;
         if rv.check_true() {
             return errf!("call {}.{:?} return error code {}", contract_addr.readable(), cty, rv.to_uint())
