@@ -40,7 +40,7 @@ impl Value {
     // ret u8
     #[inline(always)]
     pub fn cutbyte(&mut self, n: u16) -> VmrtErr {
-        let buf = self.checked_bytes()?;
+        let buf = self.canbe_bytes_ec(BytesHandle)?;
         let idx = n as usize;
         if idx > buf.len() {
             return itr_err_fmt!(StackError, "read buf byte overflow")
@@ -51,7 +51,7 @@ impl Value {
 
     #[inline(always)]
     pub fn cutleft(&mut self, n: u16) -> VmrtErr {
-        let buf = self.checked_bytes()?;
+        let buf = self.canbe_bytes_ec(BytesHandle)?;
         let spx = n as usize;
         if spx > buf.len() {
             return itr_err_fmt!(StackError, "cut buf left overflow")
@@ -62,7 +62,7 @@ impl Value {
     
     #[inline(always)]
     pub fn cutright(&mut self, n: u16) -> VmrtErr {
-        let buf = self.checked_bytes()?;
+        let buf = self.canbe_bytes_ec(BytesHandle)?;
         let spx = buf.len() as isize - n as isize;
         if spx < 0 {
             return itr_err_fmt!(StackError, "cut buf right overflow")
@@ -75,7 +75,7 @@ impl Value {
     pub fn cutout(&mut self, len: Value, ost: Value) -> VmrtErr {
         let len = len.checked_u16()? as usize;
         let ost = ost.checked_u16()? as usize;
-        let val = self.checked_bytes()?;
+        let val = self.canbe_bytes_ec(BytesHandle)?;
         let end = len + ost;
         if end > val.len() {
             return itr_err_fmt!(StackError, "cutout buf overflow")
@@ -86,7 +86,7 @@ impl Value {
 
     #[inline(always)]
     pub fn dropleft(&mut self, n: u16) -> VmrtErr {
-        let buf = self.checked_bytes()?;
+        let buf = self.canbe_bytes_ec(BytesHandle)?;
         let spx = n as usize;
         if spx == 0 {
             return itr_err_fmt!(StackError, "cannot drop buf left length 0")
@@ -103,7 +103,8 @@ impl Value {
     */
     #[inline(always)]
     pub fn concat(a: &Value, b: &Value, cap: &SpaceCap) -> VmrtRes<Value> {
-        let v = vec![b.checked_bytes()?, a.checked_bytes()?].concat();
+        let e = BytesHandle;
+        let v = vec![b.canbe_bytes_ec(e)?, a.canbe_bytes_ec(e)?].concat();
         Ok(Value::bytes(v).valid(cap)?)
     }
 

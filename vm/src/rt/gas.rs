@@ -33,13 +33,13 @@ impl GasTable {
     pub fn new(_hei: u64) -> Self {
         use Bytecode::*;
         let mut gst = Self { table : [2; 256] };
-        gst.set(1,  &[CU8, CU16, CU32, CU64, CU128, CBUF, TYPEID, PU8, PU16, P0, P1, PNBUF, DUP, POP, NOP, RET, END, AST, ERR, ABT]);
+        gst.set(1,  &[CU8, CU16, CU32, CU64, CU128, CBUF, CTO, TID, TIS, TNIL, PU8, PU16, P0, P1, PNBUF, DUP, POP, NOP, RET, END, AST, ERR, ABT]);
         // gst.set(2,  &[...]); // all other bytecode
         gst.set(3,  &[XLG, PUT, PUTX, MOVE, CHOISE, BRL, BRS, BRSL, BRSLN]);
         gst.set(4,  &[XOP, HREAD, HREADU, HREADUL, MOD, MUL, DIV]);
         gst.set(5,  &[POW]);
-        gst.set(6,  &[HWRITE, HWRITEX, HWRITEXL]);
-        gst.set(8,  &[MGET, JOIN, REV]);
+        gst.set(6,  &[HWRITE, HWRITEX, HWRITEXL, INSERT, APPEND]);
+        gst.set(8,  &[MGET, JOIN, REV, NEWLIST, NEWMAP]);
         gst.set(12, &[MPUT, CALLINR]);
         gst.set(16, &[GGET, CALLCODE]);
         gst.set(24, &[GPUT, CALLLIB, CALLSTATIC]);

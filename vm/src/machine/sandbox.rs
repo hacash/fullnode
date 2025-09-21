@@ -50,7 +50,7 @@ pub fn sandbox_call(ctx: &mut dyn Context, contract: ContractAddress, funcname: 
         let sta = &mut VMState::wrap(sta);
         let mut exenv = ExecEnv{ ctx, sta, gas };
         // do execute
-        let mut vmb = MACHINE_MANAGER.assign(hei);
+        let mut vmb = global_machine_manager().assign(hei);
         vmb.machine.as_mut().unwrap().main_call(&mut exenv, CodeType::Bytecode, codes)
     }.map(|v|(
         gas_limit-*gas, v.raw()

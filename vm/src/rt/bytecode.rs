@@ -43,14 +43,14 @@ pub enum Bytecode {
     ________________29  = 0x1d,
     ________________30  = 0x1e,
     NTCALL              = 0x1f, // *@  native call
-    ________________32  = 0x20, // CALLDYN arg,fnsg,addr + 
-    ________________33  = 0x21, // *,****@    
-    ________________34  = 0x22, //   ****@ 
-    ________________35  = 0x23, // *,****@ 
-    ________________36  = 0x24, // *,****@     
-    ________________37  = 0x25, // *,****  
-    ________________38  = 0x26,
-    TNIL                = 0x27, // & is nil push Bool(true)
+    ________________32  = 0x20,
+    ________________33  = 0x21, 
+    ________________34  = 0x22,
+    ________________35  = 0x23,
+    ________________36  = 0x24, 
+    TNIL                = 0x25, // &   is nil push Bool(true)
+    TIS                 = 0x26, // *&  is type id
+    TID                 = 0x27, // &   type id
     ________________40  = 0x28,   
     ________________41  = 0x29,
     ________________42  = 0x2a,       
@@ -66,7 +66,7 @@ pub enum Bytecode {
     CU128               = 0x34, // &      cast u128
     ________________53  = 0x35,
     CBUF                = 0x36, // &      cast buf
-    TYPEID              = 0x37, // &      type id
+    CTO                 = 0x37, // *&     cast to
     PU8                 = 0x38, // *+     push u8
     PU16                = 0x39, // **+    push u16
     P0                  = 0x3a, // +      push u8 0
@@ -107,22 +107,22 @@ pub enum Bytecode {
     ________________93  = 0x5d,
     ________________94  = 0x5e,
     ________________95  = 0x5f,
-    ________________96  = 0x60,
-    ________________97  = 0x61,
+    NEWLIST             = 0x60, // + new compo list
+    NEWMAP              = 0x61, // + new compo map
     ________________98  = 0x62,
     ________________99  = 0x63,
-    ________________100 = 0x64,
-    ________________101 = 0x65,
-    ________________102 = 0x66,
-    ________________103 = 0x67,
-    ________________104 = 0x68,
-    ________________105 = 0x69,
-    ________________106 = 0x6a,
-    ________________107 = 0x6b,
-    ________________108 = 0x6c,
-    ________________109 = 0x6d,
-    ________________110 = 0x6e,
-    ________________111 = 0x6f,
+    INSERT              = 0x64, // t,k,v+  compo insert
+    REMOVE              = 0x65, // t,k+    compo remove
+    CLEAR               = 0x66, // t+      compo clear
+    FIND                = 0x67, // t,k+    compo find
+    LENGTH              = 0x68, // t+      compo length
+    HASKEY              = 0x69, // t,k+    compo check has key
+    KEYS                = 0x6a, // &       compo keys
+    VALUES              = 0x6b, // &       compo values
+    LAST                = 0x6c, // &       compo pick last
+    APPEND              = 0x6d, // &       compo append
+    MERGE               = 0x6e, // a,b+    compo merge
+    CLONE               = 0x6f, // a++     compo clone
     HGROW               = 0x70, // *     heap grow
     HWRITE              = 0x71, // a,b   heap write
     HREAD               = 0x72, // a,b+  heap read
@@ -340,14 +340,18 @@ bytecode_metadata_define!{
 
     NTCALL     : 1, 1, 1,     native_call
 
+    TNIL       : 0, 1, 1,     type_is_nil
+    TIS        : 1, 1, 1,     type_is
+    TID        : 0, 1, 1,     type_id
+
     CU8        : 0, 1, 1,     cast_u8
     CU16       : 0, 1, 1,     cast_u16
     CU32       : 0, 1, 1,     cast_u32
     CU64       : 0, 1, 1,     cast_u64
     CU128      : 0, 1, 1,     cast_u128
-
     CBUF       : 0, 1, 1,     cast_bytes
-    TYPEID     : 0, 1, 1,     type_id
+    CTO        : 1, 1, 1,     cast_to
+
     PU8        : 1, 0, 1,     push_u8
     PU16       : 2, 0, 1,     push_u16
     P0         : 0, 0, 1,     push_0
@@ -398,6 +402,19 @@ bytecode_metadata_define!{
     MIN        : 0, 2, 1,     min
     INC        : 1, 1, 1,     increase
     DEC        : 1, 1, 1,     decrease
+
+    NEWLIST    : 0, 0, 1,     new_list
+    NEWMAP     : 0, 0, 1,     new_map
+    INSERT     : 0, 3, 1,     insert
+    REMOVE     : 0, 2, 1,     remove
+    CLEAR      : 0, 1, 1,     clear
+    FIND       : 0, 2, 1,     find
+    HASKEY     : 0, 2, 1,     has_key
+    LENGTH     : 0, 1, 1,     length
+    KEYS       : 0, 1, 1,     keys
+    VALUES     : 0, 1, 1,     values
+    APPEND     : 0, 2, 1,     append
+    CLONE      : 0, 0, 1,     clone
 
     HGROW      : 1, 0, 0,     heap_grow
     HWRITE     : 0, 2, 0,     heap_write

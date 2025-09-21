@@ -1,4 +1,53 @@
 
+
+#[repr(u8)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ValueTy {
+    #[default]
+    Nil         = 0,
+    Bool        = 1,
+    U8          = 2,
+    U16         = 3,
+    U32         = 4,
+    U64         = 5,
+    U128        = 6,
+    // U256     = 7
+    // ...      = 8 
+    // ...      = 9 
+    Bytes       = 10,
+    Addr        = 11,
+    // ...      = 12
+    // ...      = 13
+    HeapSlice   = 14,
+    Compo       = 15
+}
+
+impl ValueTy {
+    pub fn build(t: u8) -> Ret<Self> {
+        Ok(match t {
+            0  => Self::Nil       ,
+            1  => Self::Bool      ,
+            2  => Self::U8        ,
+            3  => Self::U16       ,
+            4  => Self::U32       ,
+            5  => Self::U64       ,
+            6  => Self::U128      ,
+            /* */
+            10 => Self::Bytes     ,
+            11 => Self::Addr      ,
+            /* */
+            14 => Self::HeapSlice ,
+            15 => Self::Compo     ,
+            _ => return errf!("ValueTy {} not find", t)
+        })
+    }
+}
+
+
+/**********************************************/
+
+
+
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub enum Value {
     #[default] Nil,        // type_id = 0
@@ -17,47 +66,7 @@ pub enum Value {
     HeapSlice((u32, u32)), //           21
     /*Array(),*/           //           22
     /*Struct(),*/          //           23
-}
-
-
-#[repr(u8)]
-#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ValueTy {
-    #[default]
-    Nil         = 0,
-    Bool        = 1,
-    U8          = 2,
-    U16         = 3,
-    U32         = 4,
-    U64         = 5,
-    U128        = 6,
-    // U256     = 7
-    // U512     = 8 
-    // U1024    = 9 
-    Bytes       = 11,
-    Addr        = 12,
-    // ...
-    HeapSlice   = 21,
-    // List     = 22
-    // Map      = 23
-}
-
-impl ValueTy {
-    pub fn build(t: u8) -> Ret<Self> {
-        Ok(match t {
-            0  => Self::Nil       ,
-            1  => Self::Bool      ,
-            2  => Self::U8        ,
-            3  => Self::U16       ,
-            4  => Self::U32       ,
-            5  => Self::U64       ,
-            6  => Self::U128      ,
-            11 => Self::Bytes     ,
-            12 => Self::Addr      ,
-            21 => Self::HeapSlice ,
-            _ => return errf!("ValueTy {} not find", t)
-        })
-    }
+    Compo(CompoItem),      //           25
 }
 
 
@@ -72,20 +81,6 @@ use Value::*;
 
 impl Value {
 
-    // pub const TID_NIL:    u8 =  0;
-    // pub const TID_BOOL:   u8 =  1;
-    // pub const TID_U8:     u8 =  2;
-    // pub const TID_U16:    u8 =  3;
-    // pub const TID_U32:    u8 =  4;
-    // pub const TID_U64:    u8 =  5;
-    // pub const TID_U128:   u8 =  6;
-    // // pub const TID_U256:  u8 = 7;
-    // // pub const TID_U512:  u8 = 8;
-    // // pub const TID_U1024: u8 = 9;
-    // pub const TID_HSLICE: u8 = 10;
-    // pub const TID_BYTES:  u8 = 11;
-    // pub const TID_ADDR:   u8 = 12;
-
     pub fn ty(&self) -> ValueTy {
         match self {
             Nil           => ValueTy::Nil,
@@ -98,6 +93,7 @@ impl Value {
             Bytes(..)     => ValueTy::Bytes,
             Addr(..)      => ValueTy::Addr,
             HeapSlice(..) => ValueTy::HeapSlice,
+            Compo(..)     => ValueTy::Compo,
         }
     }
 
@@ -163,6 +159,13 @@ impl Value {
         }
     }
 
+    pub fn is_addr(&self) -> bool {
+        match self {
+            Addr(..) => true,
+            _ => false,
+        }
+    }
+
     pub fn check_false(&self) -> bool {
         ! self.check_true()
     }
@@ -176,14 +179,14 @@ impl Value {
             U32(n)  => *n!=0,
             U64(n)  => *n!=0,
             U128(n) => *n!=0,
-            HeapSlice(..) => true,
             Bytes(b)=> buf_not_zero(b),
-            Addr(..)=> true,
+            _       => true, // Addr Compo ....
         }
     }
 
-    pub fn deval(&self, heap: &Heap) -> VmrtRes<Vec<u8>> {
+    pub fn _____deval(&self, heap: &Heap) -> VmrtRes<Vec<u8>> {
         match self {
+            Compo(..) => itr_err_code!(CompoToSerialize),
             HeapSlice((s, l)) => {
                 match heap.do_read(*s as usize, *l as usize)? {
                     Bytes(buf) => Ok(buf),
@@ -194,6 +197,7 @@ impl Value {
         }
     }
 
+
     pub fn raw(&self) -> Vec<u8> {
         match &self {
             Nil => vec![],
@@ -203,10 +207,18 @@ impl Value {
             U32(n) =>  n.to_be_bytes().into(),
             U64(n) =>  n.to_be_bytes().into(),
             U128(n) => n.to_be_bytes().into(),
-            HeapSlice((s, l)) => vec![s.to_be_bytes(), l.to_be_bytes()].concat(),
             Bytes(buf) => buf.clone(),
             Addr(a)    => a.serialize(),
+            HeapSlice((s, l)) => vec![s.to_be_bytes(), l.to_be_bytes()].concat(),
+            _ => never!(),
         }
+    }
+
+    pub fn compo(&mut self) -> VmrtRes<&mut CompoItem> {
+        let Value::Compo(compo) = self else {
+            return itr_err_code!(CompoOpNotMatch)
+        };
+        Ok(compo)
     }
 
     pub fn ty_num(&self) -> u8 {
@@ -225,6 +237,7 @@ impl Value {
             Bytes(b) => b.len(),
             Addr(..) => Address::SIZE,
             HeapSlice(..) => 4 + 4,
+            Compo(..) => usize::MAX,
         }
     }
 
@@ -249,8 +262,7 @@ impl Value {
                 Ok(b) => b.to_uint(),
                 _ => 0
             },
-            Addr(..) => 0,
-            HeapSlice(..) => 0,
+            _ => 0,
         }
     }
 
@@ -270,6 +282,7 @@ impl Value {
             },
             Addr(a) => a.to_readable(),
             HeapSlice((s, l)) => format!("heap[{},{}]", s, l),
+            Compo(a) => format!("compo[{}]", a.len()),
         }
     }
 

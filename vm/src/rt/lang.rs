@@ -197,7 +197,12 @@ irfn_define!{
     MOVE       : 1, 0, 0,     local_move  //  local_         
     ALLOC      : 1, 0 ,0,     local_alloc //  local_  
 
-    TYPEID     : 0, 1, 1,     type_id        
+    TNIL       : 0, 1, 1,     type_is_nil
+    TIS        : 1, 1, 1,     type_is
+    TID        : 0, 1, 1,     type_id
+
+    CTO        : 1, 1, 1,     cast_to
+
     CHOISE     : 0, 3, 1,     choise         
     SIZE       : 0, 1, 1,     size           
     CAT        : 0, 2, 1,     concat         
@@ -207,7 +212,13 @@ irfn_define!{
     RIGHT      : 1, 1, 1,     buffer_right  
     LDROP      : 1, 1, 1,     buffer_left_drop 
     INC        : 1, 1, 1,     increase       
-    DEC        : 1, 1, 1,     decrease       
+    DEC        : 1, 1, 1,     decrease    
+    
+    NEWLIST    : 0, 0, 1,     new_list
+    NEWMAP     : 0, 0, 1,     new_map
+    HASKEY     : 0, 2, 1,     has_key
+    INSERT     : 0, 3, 1,     insert
+    APPEND     : 0, 2, 1,     append
 
     HGROW      : 1, 0, 0,     heap_grow
     HWRITE     : 0, 2, 0,     heap_write

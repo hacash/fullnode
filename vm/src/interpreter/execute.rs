@@ -185,6 +185,7 @@ pub fn execute_code(
 
     macro_rules! check_gas { () => { if *gas_usable < 0 { return itr_err_code!(OutOfGas) } } }
     macro_rules! pu8 { () => { itrparamu8!(codes, *pc) } }
+    macro_rules! pty { () => { ops.peek()?.ty_num() } }
     macro_rules! pu8_as_u16 { () => { pu8!() as u16 } }
     macro_rules! pu16 { () => { itrparamu16!(codes, *pc) } }
     macro_rules! pbuf { () => { itrparambuf!(codes, *pc) } }
@@ -215,7 +216,7 @@ pub fn execute_code(
             let kid = u16::from_be_bytes(vec![instbyte, idx].try_into().unwrap());
             let mut actbody = vec![];
             if $ifv {
-                let mut bdv = ops.peek()?.deval(heap)?;
+                let mut bdv = ops.peek()?.canbe_call_data(heap)?;
                 actbody.append(&mut bdv);
             }
             let (bgasu, cres) = ctx.action_call(kid, actbody).map_err(|e|
@@ -254,7 +255,7 @@ pub fn execute_code(
                 }
                 extcall!(false, true); },
             // native call
-            NTCALL => { let (r, g) = NativeCall::call(pu8!(), &ops.peek()?.deval(heap)?)?;
+            NTCALL => { let (r, g) = NativeCall::call(pu8!(), &ops.peek()?.canbe_call_data(heap)?)?;
                 *ops.peek()? = r; gas += g; },
             // constant
             P0    => ops.push(U8(0))?,
@@ -302,12 +303,29 @@ pub fn execute_code(
             GGET => *ops.peek()? = globals.get(ops.peek()?)?,
             MPUT => memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?,
             MGET => *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?,
+            // compo
+            NEWLIST => ops.push(Compo(CompoItem::new_list()))?,
+            NEWMAP  => ops.push(Compo(CompoItem::new_map()))?,
+            APPEND  => { let v = ops.pop()?; ops.compo()?.append(cap, v)? }
+            INSERT  => { let v = ops.pop()?; let k = ops.pop()?; ops.compo()?.insert(cap, k, v)? }
+            REMOVE  => { let k = ops.pop()?; ops.compo()?.remove(k)?; }
+            FIND    => { let k = ops.pop()?; ops.compo()?.remove(k)?; }
+            LENGTH  => { let l = ops.compo()?.length(cap)?; *ops.peek()? = l; }
+            HASKEY  => { let k = ops.pop()?; let h = ops.compo()?.haskey(k)?; *ops.peek()? = h; }
+            KEYS    => { ops.compo()?.keys()?; }
+            VALUES  => { ops.compo()?.values()?; }
+            CLEAR   => { ops.compo()?.clear() }
+            CLONE   => { let c = ops.compo()?.copy(); ops.push(Compo(c))?; }
             // storage
             SRENT => gas += state.srent(gst, hei, context_addr, ops.pop()?, ops.pop()?)?,
             SDEL  => state.sdel(context_addr, ops.pop()?)?,
             SSAVE => state.ssave(hei, context_addr,ops.pop()?, ops.pop()?)?,
             SLOAD => *ops.peek()? = state.sload(hei, context_addr, ops.peek()?)?,
             STIME => *ops.peek()? = state.stime(hei, context_addr, ops.peek()?)?,
+            // type
+            TNIL => *ops.peek()? = Bool(pty!() == 0),
+            TIS  => *ops.peek()? = Bool(pty!() == pu8!()),
+            TID  => *ops.peek()? =   U8(pty!()),
             // cast
             CU8   => ops.peek()?.cast_u8()?,
             CU16  => ops.peek()?.cast_u16()?,
@@ -316,9 +334,9 @@ pub fn execute_code(
             CU128 => ops.peek()?.cast_u128()?,
             /*CASTU256 => ops.peek()?.cast_u256()?,*/
             CBUF  => ops.peek()?.cast_buf()?,
-            TYPEID => *ops.peek()? = U8(ops.peek()?.ty_num()),
+            CTO   => ops.peek()?.cast_to(pu8!())?,
             // logic
-            NOT  => ops.peek()?.cast_bool_not(),
+            NOT  => ops.peek()?.cast_bool_not()?,
             AND  => binop_btw(ops, lgc_and)?,
             OR   => binop_btw(ops, lgc_or)?,
             EQ   => binop_btw(ops, lgc_equal)?,

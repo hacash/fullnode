@@ -12,7 +12,7 @@ pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u
     }
     // setup the vm
     if false == ctx.vm().usable() {
-        let vmb = MACHINE_MANAGER.assign(ctx.env().block.height);
+        let vmb = global_machine_manager().assign(ctx.env().block.height);
         ctx.vm_replace(Box::new(vmb));
     }
     // depth

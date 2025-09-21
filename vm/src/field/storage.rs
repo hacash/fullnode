@@ -105,11 +105,11 @@ impl VMState<'_> {
         if ! cadr.is_contract() {
             return itr_err_fmt!(StorageError, "storage use must in contract")
         }
-        let ks = key.checked_bytes()?;
-        if ks.is_empty() {
+        let k = key.canbe_key()?;
+        if k.is_empty() {
             return itr_err_code!(StorageKeyInvalid)
         }
-        let mut k = vec![cadr.to_vec(), ks].concat();
+        let mut k = vec![cadr.to_vec(), k].concat();
         if k.len() > Hash::SIZE {
             k = sys::sha3(k).to_vec();
         }
@@ -160,6 +160,7 @@ impl VMState<'_> {
         read old value 
     */
     fn ssave(&mut self, curhei: u64, cadr: &ContractAddress, k: Value, v: Value) -> VmrtErr {
+        v.canbe_store()?; // check can store
         let k = Self::skey(cadr, &k)?;
         let vobj = match self.ctrtkvdb(&k) {
             Some(vold) => vold.update(curhei, v), // update

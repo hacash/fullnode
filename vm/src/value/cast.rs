@@ -52,12 +52,14 @@ fn cannot_cast_err(v: &Value, ty: &str) -> VmrtErr {
 
 impl Value {
 
-    pub fn cast_bool(&mut self) {
+    pub fn cast_bool(&mut self) -> VmrtErr {
         *self = Bool(maybe!(self.check_true(), true, false));
+        Ok(())
     }
 
-    pub fn cast_bool_not(&mut self) {
+    pub fn cast_bool_not(&mut self) -> VmrtErr {
         *self = Bool(maybe!(self.check_true(), false, true));
+        Ok(())
     }
 
     pub fn cast_u8(&mut self) -> VmrtErr {
@@ -112,17 +114,46 @@ impl Value {
 
     pub fn cast_buf(&mut self) -> VmrtErr {
         match &self {
+            Bool(b) => *self = Bytes(vec![maybe!(b, 1, 0)]),
             U8(n) =>   *self = Bytes(n.to_be_bytes().into()),
             U16(n) =>  *self = Bytes(n.to_be_bytes().into()),
             U32(n) =>  *self = Bytes(n.to_be_bytes().into()),
             U64(n) =>  *self = Bytes(n.to_be_bytes().into()),
             U128(n) => *self = Bytes(n.to_be_bytes().into()),
-            Bytes(_buf) => {},
+            Bytes(..) => {},
             a => return itr_err_fmt!(CastFail, "cannot cast {} to bytes", a)
         };
         Ok(())
     }
 
+    pub fn cast_addr(&mut self) -> VmrtErr {
+        self.cast_buf()?;
+        let Bytes(buf) = self else {
+            never!()
+        };
+        let adr = map_err_itr!(CastFail, Address::from_bytes(buf))?;
+        *self = Addr(adr);
+        Ok(())
+    }
+
+
+
+    pub fn cast_to(&mut self, ty: u8) -> VmrtErr {
+        let ty = map_err_itr!(CastFail ,ValueTy::build(ty))?;
+        match ty {
+            ValueTy::Bool => self.cast_bool(),
+            ValueTy::U8   => self.cast_u8(),
+            ValueTy::U16   => self.cast_u16(),
+            ValueTy::U32   => self.cast_u32(),
+            ValueTy::U64   => self.cast_u64(),
+            ValueTy::U128  => self.cast_u128(),
+            ValueTy::Bytes => self.cast_buf(),
+            ValueTy::Addr  => self.cast_addr(),
+            _ => itr_err_code!(CastFail),
+        }
+    }
+
+    
 
 
 

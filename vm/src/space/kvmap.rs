@@ -30,7 +30,7 @@ macro_rules! memory_kvmap_define {
             }
 
             fn key(k: &Value) -> VmrtRes<Vec<u8>> {
-                let key = k.checked_bytes()?;
+                let key = k.canbe_key()?;
                 if key.is_empty() {
                     return itr_err_fmt!($er1, "key {} cannot empty", k)
                 }
@@ -38,6 +38,7 @@ macro_rules! memory_kvmap_define {
             }
 
             pub fn put(&mut self, k: Value, v: Value) -> VmrtErr {
+                v.canbe_value()?;
                 self.datas.insert(Self::key(&k)?, v);
                 if self.datas.len() > self.limit {
                     return itr_err_code!($er2) // out of limit

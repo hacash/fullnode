@@ -122,6 +122,7 @@ impl Frame {
             IRNode => runtime_irs_to_bytecodes(&codes.codes)?,
         };
         if let Some(p) = param {
+            p.canbe_func_argv()?;
             self.oprnds.push(p)?; // param into stack
         }
         Ok(())

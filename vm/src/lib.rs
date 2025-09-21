@@ -18,10 +18,14 @@ use machine::*;
 include!{"field/mod.rs"}
 include!{"interface/mod.rs"}
 
-lazy_static::lazy_static! {
-    pub static ref MACHINE_MANAGER: MachineManage = MachineManage::new();
+
+use std::sync::OnceLock;
+static MACHINE_MANAGER_INSTANCE: OnceLock<MachineManage> = OnceLock::new();
+
+pub fn global_machine_manager() -> &'static MachineManage {
+    MACHINE_MANAGER_INSTANCE.get_or_init(||
+        MachineManage::new()
+    )
 }
-
-
 
 
