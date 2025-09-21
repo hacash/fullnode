@@ -71,9 +71,9 @@ const MINING_INTERVAL: f64 = 3.0; // 3 secs
 
 // current mining diamond number
 static MINING_DIAMOND_NUM: AtomicU32 = AtomicU32::new(0);
-lazy_static::lazy_static!{
-    static ref MINING_DIAMOND_STUFF: RwLock<Hash> = RwLock::default();
-}
+
+use std::sync::LazyLock;
+static MINING_DIAMOND_STUFF: LazyLock<RwLock<Hash>> = LazyLock::new(|| RwLock::default() );
 
 
 

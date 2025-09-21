@@ -12,5 +12,4 @@ protocol = {path = "../protocol"}
 hex = "0.4.3"
 num-bigint = "0.4.6"
 num-traits = "0.2.19"
-lazy_static = "1.5.0"
 concat-idents = "1.1.5"

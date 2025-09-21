@@ -1,11 +1,9 @@
 
-use lazy_static::lazy_static;
 
-
-lazy_static! {
-    static ref GENESIS_BLOCK: BlockV1 = create_genesis_block();
-    static ref GENESIS_BLOCK_PKG: Arc<BlockPkg> = Arc::new(BlockPkg::create(Box::new(create_genesis_block().clone())));
-}
+use std::sync::LazyLock;
+static GENESIS_BLOCK: LazyLock<BlockV1> = LazyLock::new(|| create_genesis_block() );
+static GENESIS_BLOCK_PKG: LazyLock<Arc<BlockPkg>> 
+    = LazyLock::new(||Arc::new(BlockPkg::create(Box::new(create_genesis_block().clone()))));
 
 pub fn genesis_block() -> &'static BlockV1 {
     &GENESIS_BLOCK

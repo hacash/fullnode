@@ -11,9 +11,6 @@ use axum::{
 };
 use serde_json::json;
 
-use lazy_static::lazy_static;
-
-
 use sys::*;
 use field::*;
 use field::interface::*;

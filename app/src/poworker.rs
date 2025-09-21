@@ -66,9 +66,9 @@ const ONEDAY_BLOCK_NUM: f64 = 288.0; // one day block
 
 // current mining diamond number
 static MINING_BLOCK_HEIGHT: AtomicU64 = AtomicU64::new(0);
-lazy_static::lazy_static!{
-    static ref MINING_BLOCK_STUFF: RwLock<Arc<BlockMiningStuff>> = RwLock::default();
-}
+
+use std::sync::LazyLock;
+static MINING_BLOCK_STUFF: LazyLock<RwLock<Arc<BlockMiningStuff>>> = LazyLock::new(|| RwLock::default() );
 
 
 

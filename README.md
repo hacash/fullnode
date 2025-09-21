@@ -40,7 +40,7 @@ cp target/x86_64-unknown-linux-musl/release/poworker   ./hacash_poworker_ubuntu_
 cp target/x86_64-unknown-linux-musl/release/diaworker ./hacash_diaworker_ubuntu_16.04
 
 # or for db-sled
-RUSTFLAGS="-C target-feature=+crt-static" RUST_BACKTRACE="full" cargo build --release --target=x86_64-unknown-linux-musl --no-default-features --features "db-sled"
+RUSTFLAGS="-C target-feature=+crt-static" RUST_BACKTRACE="full" cargo build --bin fullnode --release --target=x86_64-unknown-linux-musl --no-default-features --features "db-sled"
 cp target/x86_64-unknown-linux-musl/release/fullnode   ./hacash_fullnode_ubuntu_dbsled
 
 

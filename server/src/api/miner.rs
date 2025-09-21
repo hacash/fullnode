@@ -12,9 +12,9 @@ pub struct MinerBlockStuff {
 }
 
 
-lazy_static! {
-    static ref MINER_PENDING_BLOCK: Arc<Mutex<VecDeque<MinerBlockStuff>>> = Arc::default();
-}
+use std::sync::LazyLock;
+static MINER_PENDING_BLOCK: LazyLock<Arc<Mutex<VecDeque<MinerBlockStuff>>>> 
+    = LazyLock::new(|| { Arc::default()});
 
 fn update_miner_pending_block(block: BlockV1, cbtx: TransactionCoinbase) {
     let mkrluphxs = calculate_mrkl_coinbase_modify(&block.transaction_hash_list(true));
