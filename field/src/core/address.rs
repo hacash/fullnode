@@ -20,9 +20,9 @@ impl Address {
 
     pub fn check_version(&self) -> Rerr {
         let v = self.version();
-        match [$($num,)+].contains(&v) {
-            true => Ok(()),
-            false => errf!("address version {} not support", v)
+        match v {
+            $( $num )|+ => Ok(()),
+            _ => errf!("address version {} not support", v)
         }
     }
 

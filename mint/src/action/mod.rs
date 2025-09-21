@@ -10,7 +10,7 @@ use protocol::state::*;
 use protocol::operate::*;
 
 use super::oprate::*;
-use super::genesis::*;
+// use super::genesis::*;
 
 
 
@@ -18,7 +18,7 @@ include!{"channel.rs"}
 include!{"diamond_util.rs"}
 include!{"diamond_mint.rs"}
 include!{"diamond_insc.rs"}
-include!{"asset.rs"}
+// include!{"asset.rs"}
 include!{"util.rs"}
 
 
@@ -34,7 +34,7 @@ action_register!{
     DiamondMint           // 4
 
     // asset
-    AssetCreate           // 16
+    // AssetCreate           // 16
 
     // inscription
     DiamondInscription         // 32

@@ -20,7 +20,7 @@ inst_state_define!{ CoreState,
     14, diamond_name ,  DiamondNumber    : DiamondName
     15, diamond_smelt,  DiamondName      : DiamondSmelt
     16, diamond_owned,  Address          : DiamondOwnedForm
-    // 17, asset,          Fold64           : AssetSmelt
+    17, asset,          Fold64           : AssetSmelt
 
 }
 
