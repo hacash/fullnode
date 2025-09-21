@@ -55,7 +55,7 @@ impl Heap {
     }
 
     fn do_write(&mut self, start: usize, v: Value) -> VmrtErr {
-        let data = v.checked_bytes()?;
+        let data = v.canbe_bytes_ec(HeapError)?;
         let right = start + data.len();
         if right > self.datas.len() {
             return itr_err_fmt!(HeapError, "write overflow")

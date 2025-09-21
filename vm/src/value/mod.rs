@@ -1,5 +1,8 @@
 use std::fmt;
 use std::iter;
+use std::rc::*;
+use std::cell::*;
+
 
 use sys::*;
 use field::*;
@@ -13,6 +16,8 @@ use super::rt::ItrErrCode::*;
 
 include!("util.rs");
 include!("convert.rs");
+include!("compo.rs");
+include!("canbe.rs");
 include!("item.rs");
 include!("cast.rs");
 include!("cast_param.rs");

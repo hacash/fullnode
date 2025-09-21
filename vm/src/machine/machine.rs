@@ -13,7 +13,7 @@ impl Drop for MachineBox {
     fn drop(&mut self) {
         // println!("\n---------------\n[MachineBox Drop] Reclaim resoure))\n---------------\n");
         match self.machine.take() {
-            Some(m) => MACHINE_MANAGER.reclaim(m.r),
+            Some(m) => global_machine_manager().reclaim(m.r),
             _ => ()
         }
     }

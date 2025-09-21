@@ -1,5 +1,6 @@
 use std::sync::*;
 use std::collections::*;
+use std::cell::*;
 
 use sys::*;
 use protocol::interface::*;

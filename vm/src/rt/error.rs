@@ -39,6 +39,7 @@ pub enum ItrErrCode {
     OutOfCallDepth    = 37,
     OutOfLoadContract = 38,
     OutOfValueSize    = 39,
+    OutOfCompoLen     = 40,
     
     GasError          = 41,
     StackError        = 42,
@@ -60,14 +61,24 @@ pub enum ItrErrCode {
     CallNoReturn      = 60,
     CallNotPublic     = 61,
     
-    CastFail          = 71,
-    CastParamFail     = 72,
-    
-    Arithmetic        = 81,
-    BytesHandle       = 82,
-    NativeCallError   = 83,
+    CastFail           = 71,
+    CastParamFail      = 72,
+    CastBeKeyFail      = 73,
+    CastBeUintFail     = 74,
+    CastBeBytesFail    = 75,
+    CastBeValueFail    = 76,
+    CastBeFnArgvFail   = 77,
+    CastBeCallDataFail = 78,
 
-    ExtActCallError   = 91,
+    CompoOpInvalid    = 80,
+    CompoOpOverflow   = 81,
+    CompoToSerialize  = 82,
+    CompoOpNotMatch   = 83,
+    
+    Arithmetic        = 90,
+    BytesHandle       = 91,
+    NativeCallError   = 92,
+    ExtActCallError   = 93,
 
     StorageKeyInvalid       = 101,
     StorageKeyNotFind       = 102,

@@ -6,6 +6,7 @@ pub struct SpaceCap {
     pub call_depth: usize,    // 32
 
     pub max_value_size: usize,
+    pub max_compo_length: usize,
 
     pub total_stack: usize, // 16*16 = 256
     pub total_local: usize, // 16*16 = 256
@@ -36,6 +37,7 @@ impl SpaceCap {
             load_contract:   20,
             call_depth:      32,
             max_value_size:  1024, 
+            max_compo_length: 256,
             total_stack:     512,
             total_local:     512,
             max_heap_seg:    64,

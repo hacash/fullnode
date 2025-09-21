@@ -14,6 +14,11 @@ impl Stack {
         self.datas
     }
 
+    pub fn clear(&mut self) {
+        self.datas.clear();
+        self.limit = 0;
+    }
+
     pub fn new(lmt: usize) -> Stack {
         Stack {
             limit: lmt,
@@ -64,6 +69,14 @@ impl Stack {
             return itr_err_fmt!(StackError, "Read empty stack")
         }
         Ok(unsafe { self.datas.get_unchecked_mut(n - 1) })
+    }
+
+    pub fn compo<'a>(&'a mut self) -> VmrtRes<&'a mut CompoItem> {
+        let pk = self.peek()?;
+        let Value::Compo(compo) = pk else {
+            return itr_err_code!(CompoOpNotMatch)
+        };
+        Ok(compo)
     }
 
     #[inline(always)]
