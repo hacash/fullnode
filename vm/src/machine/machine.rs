@@ -161,7 +161,7 @@ impl Machine {
     }
 
     pub fn main_call(&mut self, env: &mut ExecEnv, ctype: CodeType, codes: Vec<u8>) -> Ret<Value> {
-        let fnobj = FnObj{confs: 0, ctype, codes};
+        let fnobj = FnObj{ ctype, codes, confs: 0, agvty: None};
         map_itr_err!(self.do_call(env, CallMode::Main, fnobj, None))
     }
 

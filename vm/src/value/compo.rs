@@ -1,7 +1,7 @@
 
 #[derive(Debug, Clone)]
 enum Compo {
-    List(Vec<Value>),
+    List(VecDeque<Value>),
     Map(HashMap<Vec<u8>, Value>),
 }
 
@@ -15,7 +15,7 @@ impl Eq for Compo {}
 
 impl Default for Compo {
     fn default() -> Self {
-        Self::List(Vec::new())
+        Self::List(VecDeque::new())
     }
 }
 
@@ -54,7 +54,7 @@ impl Compo {
     fn append(&mut self, v: Value) -> VmrtErr {
         v.canbe_value()?;
         match self {
-            Self::List(a) => a.push(v),
+            Self::List(a) => a.push_back(v),
             _ => ret_invalid_compo_op!{},
         }
         Ok(())
@@ -165,9 +165,32 @@ macro_rules! get_compo_inner_mut {
 
 impl CompoItem {
 
+    pub fn is_list(&self) -> bool {
+        match get_compo_inner_ref!(self) {
+            Compo::List(..) => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_map(&self) -> bool {
+        match get_compo_inner_ref!(self) {
+            Compo::Map(..) => true,
+            _ => false,
+        }
+    }
+
+    pub fn list_ref(&self) -> VmrtRes<&VecDeque<Value>> {
+        let r = get_compo_inner_ref!(self);
+        let Compo::List(list) = r else {
+            return itr_err_code!(CompoOpNotMatch)
+        };
+        Ok(list)
+    }
+
+
     pub fn new_list() -> Self {
         Self {
-            compo: Rc::new(UnsafeCell::new(Compo::List(Vec::new()))),
+            compo: Rc::new(UnsafeCell::new(Compo::List(VecDeque::new()))),
         }
     }
 
