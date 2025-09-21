@@ -113,18 +113,21 @@ impl Frame {
     /*
         compile irnode
     */
-    pub fn prepare(&mut self, mode: CallMode, codes: FnObj, param: Option<Value>) -> VmrtErr {
+    pub fn prepare(&mut self, mode: CallMode, fnobj: FnObj, param: Option<Value>) -> VmrtErr {
         use CodeType::*;
-        self.pc = 0;
-        self.mode = mode;
-        self.codes = match codes.ctype {
-            Bytecode => codes.into_array(),
-            IRNode => runtime_irs_to_bytecodes(&codes.codes)?,
-        };
         if let Some(p) = param {
             p.canbe_func_argv()?;
+            if let Some(vtys) = &fnobj.agvty {
+                vtys.check_params(&p)?; // check func argv types
+            }
             self.oprnds.push(p)?; // param into stack
         }
+        self.pc = 0;
+        self.mode = mode;
+        self.codes = match fnobj.ctype {
+            Bytecode => fnobj.into_array(),
+            IRNode => runtime_irs_to_bytecodes(&fnobj.codes)?,
+        };
         Ok(())
     }
 

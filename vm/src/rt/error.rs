@@ -60,6 +60,7 @@ pub enum ItrErrCode {
     CallLibInStatic   = 59,
     CallNoReturn      = 60,
     CallNotPublic     = 61,
+    CallArgvTypeFail  = 62,
     
     CastFail           = 71,
     CastParamFail      = 72,
