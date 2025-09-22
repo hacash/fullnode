@@ -28,7 +28,7 @@ pub fn sandbox_call(ctx: &mut dyn Context, contract: ContractAddress, funcname: 
     // push param to operand stack
     if param_len > 0 {
         codes.push(PBUFL as u8);
-        codes.append(&mut (param_len as u16 - 1).to_be_bytes().to_vec());
+        codes.append(&mut (param_len as u16).to_be_bytes().to_vec());
         codes.append(&mut param);
     }else {
         codes.push(PNBUF as u8);

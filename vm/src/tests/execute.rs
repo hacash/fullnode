@@ -6,13 +6,13 @@ pub fn execute1() {
     */
     let irnds = build_codes!(
         ALLOC 2
-        PUTX 0 P0
-        IRIF NEQ P1 GETX 0
-            PUTX 1 P0
+        PUT 0 P0
+        IRIF NEQ P1 GET 0
+            PUT 1 P0
             IRBLOCK 0 2
-                PUTX 0 P1
-                PUTX 1 P1
-        RET GETX 0
+                PUT 0 P1
+                PUT 1 P1
+        RET GET 0
     );
     let codes = convert_irs_to_bytecodes(&irnds).unwrap();
     println!("{}", codes.bytecode_print(true).unwrap());
@@ -29,10 +29,10 @@ pub fn execute2() {
     */
     let irnds = build_codes!(
         ALLOC 1
-        PUTX 0 P0
-        IRWHILE GT PU8 50 GETX 0
-            PUTX 0 ADD P1 GETX 0
-        RET GETX 0
+        PUT 0 P0
+        IRWHILE GT PU8 50 GET 0
+            PUT 0 ADD P1 GET 0
+        RET GET 0
     );
     let codes = convert_irs_to_bytecodes(&irnds).unwrap();
     println!("{}", codes.bytecode_print(true).unwrap());

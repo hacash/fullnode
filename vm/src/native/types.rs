@@ -7,7 +7,7 @@
 
 
 macro_rules! native_call_define {
-    ( $( $name:ident = $v:expr, $gas:expr )+ ) => {
+    ( $( $name:ident = $v:expr, $gas:expr, $vsz: expr, $rty: expr)+ ) => {
         
 #[allow(non_camel_case_types)]
 #[repr(u8)]
@@ -25,7 +25,11 @@ impl NativeCall {
         let cty: NativeCall = std_mem_transmute!(idx);
         match cty {
             $(
-                Self::$name => $name(v).map(|r|(r,$gas)),
+                Self::$name => $name(v).map(|r|{
+                    assert_eq!($rty, r.ty());
+                    assert_eq!($vsz, r.val_size());
+                    (r, $gas)
+                }),
             )+
             _ => return itr_err_fmt!(NativeCallError, "notfind native call func idx {}", idx),
         }

@@ -32,14 +32,7 @@ use crate::VmrtRes;
 
 impl Heap {
 
-    pub fn grow(&mut self, seg: u8) -> VmrtRes<i64> {
-        if seg < 1 {
-            return itr_err_fmt!(HeapError, "heap grow cannot empty")
-        }
-        if seg > 16 {
-            return itr_err_fmt!(HeapError, "heap grow cannot more than 16")
-        }
-        let seg = seg as usize;
+    fn calc_grow_gas(&self, seg: usize) -> VmrtRes<i64> {
         let oldseg = self.datas.len() / Self::SEGLEN;
         if oldseg + seg > self.limit {
             return itr_err_code!(OutOfHeap)
@@ -50,8 +43,19 @@ impl Heap {
             gas += adgs;
             adgs *= 2;
         } 
-        self.datas.reserve(seg * Self::SEGLEN);
         Ok(gas)
+    }
+
+    pub fn grow(&mut self, seg: u8) -> VmrtRes<i64> {
+        if seg < 1 {
+            return itr_err_fmt!(HeapError, "heap grow cannot empty")
+        }
+        if seg > 16 {
+            return itr_err_fmt!(HeapError, "heap grow cannot more than 16")
+        }
+        let seg = seg as usize;
+        self.datas.reserve(seg * Self::SEGLEN);
+        self.calc_grow_gas(seg)
     }
 
     fn do_write(&mut self, start: usize, v: Value) -> VmrtErr {
@@ -95,7 +99,7 @@ impl Heap {
         self.do_read(start, length)
     }
 
-    pub fn slice(&self, s: Value, l: &Value) -> VmrtRes<Value> {
+    pub fn slice(&self, l: Value, s: &Value) -> VmrtRes<Value> {
         let start  = s.checked_u32()?;
         let length = l.checked_u32()?;
         let max = start + length;

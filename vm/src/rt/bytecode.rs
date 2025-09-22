@@ -28,10 +28,10 @@ pub enum Bytecode {
     ________________14  = 0x0e,
     EXTFUNC             = 0x0f, // *@  call extend action
     ________________16  = 0x10,
-    CALL                = 0x11, // *,****@    
+    CALL                = 0x11, // *,****@ 
     CALLINR             = 0x12, //   ****@ 
     CALLLIB             = 0x13, // *,****@ 
-    CALLSTATIC          = 0x14, // *,****@     
+    CALLSTATIC          = 0x14, // *,****@ 
     CALLCODE            = 0x15, // *,****  
     ________________22  = 0x16,
     ________________23  = 0x17,
@@ -46,8 +46,8 @@ pub enum Bytecode {
     ________________32  = 0x20,
     ________________33  = 0x21, 
     ________________34  = 0x22,
-    ________________35  = 0x23,
-    ________________36  = 0x24, 
+    TLIST               = 0x23, // &   is compo list push Bool(true)
+    TMAP                = 0x24, // &   is compo map  push Bool(true)
     TNIL                = 0x25, // &   is nil push Bool(true)
     TIS                 = 0x26, // *&  is type id
     TID                 = 0x27, // &   type id
@@ -72,9 +72,9 @@ pub enum Bytecode {
     P0                  = 0x3a, // +      push u8 0
     P1                  = 0x3b, // +      push 8 1
     PNBUF               = 0x3c, // +      push buf empty
-    PBUFL               = 0x3d, // **+    push buf long
-    PBUF                = 0x3e, // *+     push buf
-    ________________63  = 0x3f,
+    PBUF                = 0x3d, // *+     push buf
+    PBUFL               = 0x3e, // **+    push buf long
+    PNIL                = 0x3f, // +      push nil
     DUP                 = 0x40, // +      copy 0
     DUPX                = 0x41, // *+     copy u8
     POP                 = 0x42, // a      pop top
@@ -82,7 +82,7 @@ pub enum Bytecode {
     SWAP                = 0x44, // a,b++  swap  b,a = a,b
     REV                 = 0x45, // a...b  reverse u8
     CHOISE              = 0x46, // a,b,c+ (x ? a : b)
-    SIZE                = 0x47, // &      size
+    SIZE                = 0x47, // &      size (u16)
     CAT                 = 0x48, // a,b+   buf: b + a
     JOIN                = 0x49, // a...bn+
     BYTE                = 0x4a, // a,b+   val[n] = u8
@@ -90,7 +90,7 @@ pub enum Bytecode {
     LEFT                = 0x4c, // *&     cut left  buf *
     RIGHT               = 0x4d, // *&     cut right buf *
     LDROP               = 0x4e, // *&     drop buf left *
-    ________________79  = 0x4f,
+    RDROP               = 0x4f, // *&     drop buf right *
     ________________80  = 0x50,
     ________________81  = 0x51,
     ________________82  = 0x52,
@@ -109,116 +109,116 @@ pub enum Bytecode {
     ________________95  = 0x5f,
     NEWLIST             = 0x60, // + new compo list
     NEWMAP              = 0x61, // + new compo map
-    ________________98  = 0x62,
-    ________________99  = 0x63,
+    PACKLIST            = 0x62, // (v...,n)+ pack compo list
+    PACKMAP             = 0x63, // (v...,n)+ pack compo map
     INSERT              = 0x64, // t,k,v+  compo insert
     REMOVE              = 0x65, // t,k+    compo remove
     CLEAR               = 0x66, // t+      compo clear
-    FIND                = 0x67, // t,k+    compo find
+    MERGE               = 0x67, // a,b+    compo merge
     LENGTH              = 0x68, // t+      compo length
     HASKEY              = 0x69, // t,k+    compo check has key
-    KEYS                = 0x6a, // &       compo keys
-    VALUES              = 0x6b, // &       compo values
-    LAST                = 0x6c, // &       compo pick last
-    APPEND              = 0x6d, // &       compo append
-    MERGE               = 0x6e, // a,b+    compo merge
-    CLONE               = 0x6f, // a++     compo clone
-    HGROW               = 0x70, // *     heap grow
-    HWRITE              = 0x71, // a,b   heap write
-    HREAD               = 0x72, // a,b+  heap read
-    HWRITEX             = 0x73, // *+    heap write x
-    HWRITEXL            = 0x74, // **+   heap write xl
-    HREADU              = 0x75, // *+    heap read u
-    HREADUL             = 0x76, // **+   heap read ul
-    HSLICE              = 0x77, // a,b+  create heap slice
-    XLG                 = 0x78, // *&    local logic
-    XOP                 = 0x79, // *a    local operand
-    GET                 = 0x7a, // &     local get       
-    PUT                 = 0x7b, // a,b   local put      
-    GETX                = 0x7c, // *+    local getx 
-    PUTX                = 0x7d, // *a    local putx       
-    MOVE                = 0x7e, // *     move one to local from ops
-    ALLOC               = 0x7f, // *     local alloc
-    SRENT               = 0x80, // a,b   storage time rent
-    SSAVE               = 0x81, // a,b   storage save
-    SDEL                = 0x82, // a     storage delete
-    SLOAD               = 0x83, // &     storage load
-    STIME               = 0x84, // &     storage expire block
-    ________________133 = 0x85,
-    ________________134 = 0x86,
-    ________________135 = 0x87,
-    ________________236 = 0x88,
-    ________________237 = 0x89,
-    ________________238 = 0x8a,
-    ________________239 = 0x8b,
-    MGET                = 0x8c, // &     memory get
-    MPUT                = 0x8d, // a,b   memory put
-    GGET                = 0x8e, // &     global get
-    GPUT                = 0x8f, // a,b   global put
-    AND                 = 0x90, // a,b+   amd
-    OR                  = 0x91, // a,b+   or
-    EQ                  = 0x92, // a,b+   equal
-    NEQ                 = 0x93, // a,b+   not equal
-    LT                  = 0x94, // a,b+   less than
-    GT                  = 0x95, // a,b+   great than
-    LE                  = 0x96, // a,b+   less and eq
-    GE                  = 0x97, // a,b+   great and eq
-    NOT                 = 0x98, // a+   not
-    ________________121 = 0x99,
-    ________________122 = 0x9a,
-    BSHR                = 0x9b, // a,b+   shr: >>
-    BSHL                = 0x9c, // a,b+   shl: <<
-    BXOR                = 0x9d, // a,b+   xor: ^
-    BOR                 = 0x9e, // a,b+   or:  |
-    BAND                = 0x9f, // a,b+   and: &
-    ADD                 = 0xa0, // a,b+   +
-    SUB                 = 0xa1, // a,b+   -
-    MUL                 = 0xa2, // a,b+   *
-    DIV                 = 0xa3, // a,b+   /
-    MOD                 = 0xa4, // a,b+   mod
-    POW                 = 0xa5, // a,b+   pow
-    MAX                 = 0xa6, // a,b+   max
-    MIN                 = 0xa7, // a,b+   min
-    INC                 = 0xa8, // *&     += u8
-    DEC                 = 0xa9, // *&     -= u8
-    ________________138 = 0xaa, // a,b,c+ x+y%z
-    ________________139 = 0xab, // a,b,c+ x*y%z
-    ________________140 = 0xac,
-    ________________141 = 0xad,
-    ________________142 = 0xae,
-    ________________143 = 0xaf,
-    ________________144 = 0xb0,
-    ________________145 = 0xb1,
-    ________________146 = 0xb2,
-    ________________147 = 0xb3,
-    ________________148 = 0xb4,
-    ________________149 = 0xb5,
-    ________________150 = 0xb6,
-    ________________151 = 0xb7,
-    ________________152 = 0xb8,
-    ________________153 = 0xb9,
-    ________________154 = 0xba,
-    ________________155 = 0xbb,
-    ________________156 = 0xbc,
-    ________________157 = 0xbd,
-    ________________158 = 0xbe,
-    ________________159 = 0xbf,
-    ________________160 = 0xc0,
-    ________________161 = 0xc1,
-    ________________162 = 0xc2,
-    ________________163 = 0xc3,
-    ________________164 = 0xc4,
-    ________________165 = 0xc5,
-    ________________166 = 0xc6,
-    ________________167 = 0xc7,
-    ________________168 = 0xc8,
-    ________________169 = 0xc9,
-    ________________170 = 0xca,
-    ________________171 = 0xcb,
-    ________________172 = 0xcc,
-    ________________173 = 0xcd,
-    ________________174 = 0xce,
-    ________________175 = 0xcf,
+    ITEMGET             = 0x6a, // t,k+    compo iten get
+    KEYS                = 0x6b, // &       compo keys
+    VALUES              = 0x6c, // &       compo values
+    HEAD                = 0x6d, // &       compo pick last
+    TAIL                = 0x6e, // &       compo pick last
+    APPEND              = 0x6f, // &       compo append
+    CLONE               = 0x70, // a++     compo clone
+    _______________113  = 0x71,
+    _______________114  = 0x72,
+    _______________115  = 0x73,
+    _______________116  = 0x74,
+    _______________117  = 0x75,
+    _______________118  = 0x76,
+    _______________119  = 0x77,
+    _______________120  = 0x78,
+    _______________121  = 0x79,
+    _______________122  = 0x7a,
+    _______________123  = 0x7b,
+    _______________124  = 0x7c,
+    _______________125  = 0x7d,
+    XLG                 = 0x7e, // *&    local logic
+    XOP                 = 0x7f, // *a    local operand
+    HGROW               = 0x80, // *     heap grow
+    HWRITE              = 0x81, // a,b   heap write
+    HREAD               = 0x82, // a,b+  heap read
+    HWRITEX             = 0x83, // *+    heap write x
+    HWRITEXL            = 0x84, // **+   heap write xl
+    HREADU              = 0x85, // *+    heap read u
+    HREADUL             = 0x86, // **+   heap read ul
+    HSLICE              = 0x87, // a,b+  create heap slice
+    GET3                = 0x88, // +     local get idx 3
+    GET2                = 0x89, // +     local get idx 2
+    GET1                = 0x8a, // +     local get idx 1    
+    GET0                = 0x8b, // +     local get idx 0       
+    GET                 = 0x8c, // *+    local get
+    PUT                 = 0x8d, // *a,b  local put       
+    MOVE                = 0x8e, // *     move ops one to local
+    ALLOC               = 0x8f, // *     local alloc
+    SRENT               = 0x90, // a,b   storage time rent
+    SSAVE               = 0x91, // a,b   storage save
+    SDEL                = 0x92, // a     storage delete
+    SLOAD               = 0x93, // &     storage load
+    STIME               = 0x94, // &     storage expire block
+    ________________149 = 0x95,
+    ________________150 = 0x96,
+    ________________151 = 0x97,
+    ________________152 = 0x98,
+    ________________153 = 0x99,
+    ________________154 = 0x9a,
+    ________________155 = 0x9b,
+    MGET                = 0x9c, // &     memory get
+    MPUT                = 0x9d, // a,b   memory put
+    GGET                = 0x9e, // &     global get
+    GPUT                = 0x9f, // a,b   global put
+    AND                 = 0xa0, // a,b+   amd
+    OR                  = 0xa1, // a,b+   or
+    EQ                  = 0xa2, // a,b+   equal
+    NEQ                 = 0xa3, // a,b+   not equal
+    LT                  = 0xa4, // a,b+   less than
+    GT                  = 0xa5, // a,b+   great than
+    LE                  = 0xa6, // a,b+   less and eq
+    GE                  = 0xa7, // a,b+   great and eq
+    NOT                 = 0xa8, // a+   not
+    ________________169 = 0xa9,
+    ________________170 = 0xaa,
+    BSHR                = 0xab, // a,b+   shr: >>
+    BSHL                = 0xac, // a,b+   shl: <<
+    BXOR                = 0xad, // a,b+   xor: ^
+    BOR                 = 0xae, // a,b+   or:  |
+    BAND                = 0xaf, // a,b+   and: &
+    ADD                 = 0xb0, // a,b+   +
+    SUB                 = 0xb1, // a,b+   -
+    MUL                 = 0xb2, // a,b+   *
+    DIV                 = 0xb3, // a,b+   /
+    MOD                 = 0xb4, // a,b+   mod
+    POW                 = 0xb5, // a,b+   pow
+    MAX                 = 0xb6, // a,b+   max
+    MIN                 = 0xb7, // a,b+   min
+    INC                 = 0xb8, // *&     += u8
+    DEC                 = 0xb9, // *&     -= u8
+    ________________186 = 0xba, // a,b,c+ x+y%z
+    ________________187 = 0xbb, // a,b,c+ x*y%z
+    ________________188 = 0xbc,
+    ________________189 = 0xbd,
+    ________________190 = 0xbe,
+    ________________191 = 0xbf,
+    ________________192 = 0xc0,
+    ________________193 = 0xc1,
+    ________________194 = 0xc2,
+    ________________195 = 0xc3,
+    ________________196 = 0xc4,
+    ________________197 = 0xc5,
+    ________________198 = 0xc6,
+    ________________199 = 0xc7,
+    ________________200 = 0xc8,
+    ________________201 = 0xc9,
+    ________________202 = 0xca,
+    ________________203 = 0xcb,
+    ________________204 = 0xcc,
+    ________________205 = 0xcd,
+    ________________206 = 0xce,
+    ________________207 = 0xcf,
     ________________208 = 0xd0,
     ________________209 = 0xd1,
     ________________210 = 0xd2,
@@ -328,18 +328,20 @@ impl Bytecode {
 */
 bytecode_metadata_define!{
     EXTACTION  : 1, 1, 1,     ext_action
-    EXTFUNC    : 1, 1, 1,     ext_func
     EXTENV     : 1, 0, 1,     ext_env
+    EXTFUNC    : 1, 1, 1,     ext_func
 
     // CALLDYN    :   0, 3, 1,   call_dynamic
     CALL       : 1+4, 1, 1,   call
     CALLINR    :   4, 1, 1,   call_inner
     CALLLIB    : 1+4, 1, 1,   call_library
     CALLSTATIC : 1+4, 1, 1,   call_static
-    CALLCODE   : 1+4, 0, 0,   call_codecopy
+    CALLCODE   : 1+4, 0, 0,   call_code
 
     NTCALL     : 1, 1, 1,     native_call
 
+    TLIST      : 0, 1, 1,     type_is_list
+    TMAP       : 0, 1, 1,     type_is_map
     TNIL       : 0, 1, 1,     type_is_nil
     TIS        : 1, 1, 1,     type_is
     TID        : 0, 1, 1,     type_id
@@ -356,33 +358,72 @@ bytecode_metadata_define!{
     PU16       : 2, 0, 1,     push_u16
     P0         : 0, 0, 1,     push_0
     P1         : 0, 0, 1,     push_1
-    PNBUF      : 0, 0, 1,     push_empty_bytes
-    PBUFL      : 2, 0, 1,     push_bytes_long
-    PBUF       : 1, 0, 1,     push_bytes
+    PNBUF      : 0, 0, 1,     push_empty_buf
+    PBUFL      : 2, 0, 1,     push_buf_long
+    PBUF       : 1, 0, 1,     push_buf
+    PNIL       : 0, 0, 1,     push_nil
 
     DUP        : 0, 0, 1,     dump
-    DUPX       : 1, 0, 1,     dump_stack
-    POP        : 0, 1, 0,     pop_stack
-    POPX       : 1, 255, 0,   pop_stack_num
-    SWAP       : 0, 2, 2,     swap_stack
+    DUPX       : 1, 0, 1,     dump_x
+    POP        : 0, 255, 0,   pop
+    POPX       : 1, 255, 0,   pop_x
+    SWAP       : 0, 2, 2,     swap
     REV        : 0, 255, 255, reverse_stace
     CHOISE     : 0, 3, 1,     choise
     SIZE       : 0, 1, 1,     size
     CAT        : 0, 2, 1,     concat
-    JOIN       : 0, 255, 1,   join_bytes
+    JOIN       : 0, 255, 1,   join
     BYTE       : 0, 2, 1,     byte
-    CUT        : 0, 3, 1,     buffer_cut
-    LEFT       : 1, 1, 1,     buffer_left
-    RIGHT      : 1, 1, 1,     buffer_right
-    LDROP      : 1, 1, 1,     buffer_left_drop
+    CUT        : 0, 3, 1,     buf_cut
+    LEFT       : 1, 1, 1,     buf_left
+    RIGHT      : 1, 1, 1,     buf_right
+    LDROP      : 1, 1, 1,     buf_left_drop
+    RDROP      : 1, 1, 1,     buf_right_drop
 
-    BAND       : 0, 2, 1,     bit_and
-    BOR        : 0, 2, 1,     bit_or
-    BXOR       : 0, 2, 1,     bit_xor
-    BSHL       : 0, 2, 1,     bit_shl
-    BSHR       : 0, 2, 1,     bit_shr
+    NEWLIST    : 0, 0, 1,     new_list
+    NEWMAP     : 0, 0, 1,     new_map
+    PACKLIST   : 0, 255, 1,   new_list
+    PACKMAP    : 0, 255, 1,   new_map
+    INSERT     : 0, 3, 1,     insert
+    REMOVE     : 0, 2, 1,     remove
+    CLEAR      : 0, 1, 1,     clear
+    ITEMGET    : 0, 2, 1,     item_get
+    HASKEY     : 0, 2, 1,     has_key
+    LENGTH     : 0, 1, 1,     length
+    KEYS       : 0, 1, 1,     keys
+    VALUES     : 0, 1, 1,     values
+    HEAD       : 0, 1, 1,     head
+    TAIL       : 0, 1, 1,     tail
+    APPEND     : 0, 2, 1,     append
+    CLONE      : 0, 1, 1,     clone
 
-    NOT        : 0, 1, 1,     not
+    HGROW      : 1, 0, 0,     heap_grow
+    HWRITE     : 0, 2, 0,     heap_write
+    HREAD      : 0, 2, 1,     heap_read
+    HWRITEX    : 1, 0, 1,     heap_write_x
+    HWRITEXL   : 2, 0, 1,     heap_write_xl
+    HREADU     : 1, 0, 1,     heap_read_uint
+    HREADUL    : 2, 0, 1,     heap_read_uint_long
+    HSLICE     : 0, 2, 1,     heap_slice
+
+    XLG        : 1, 1, 1,     logic       //  local_      
+    XOP        : 1, 1, 0,     operand     //  local_          
+    GET        : 1, 0, 1,     get         //  local_       
+    PUT        : 1, 1, 0,     put         //  local_     
+    MOVE       : 1, 0, 0,     local_move  //  local_         
+    ALLOC      : 1, 0 ,0,     local_alloc //  local_    
+        
+    SRENT      : 0, 2, 0,     storage_rent
+    SSAVE      : 0, 2, 0,     storage_save
+    SDEL       : 0, 1, 0,     storage_del
+    SLOAD      : 0, 1, 1,     storage_load
+    STIME      : 0, 1, 1,     storage_time
+
+    MGET       : 0, 1, 1,     memory_get
+    MPUT       : 0, 2, 0,     memory_put
+    GGET       : 0, 1, 1,     global_get
+    GPUT       : 0, 2, 0,     global_put
+
     AND        : 0, 2, 1,     and
     OR         : 0, 2, 1,     or
     EQ         : 0, 2, 1,     equal
@@ -391,6 +432,13 @@ bytecode_metadata_define!{
     GT         : 0, 2, 1,     more_than  
     LE         : 0, 2, 1,     less_equal
     GE         : 0, 2, 1,     more_equal
+    NOT        : 0, 1, 1,     not
+
+    BSHR       : 0, 2, 1,     bit_shr
+    BSHL       : 0, 2, 1,     bit_shl
+    BXOR       : 0, 2, 1,     bit_xor
+    BOR        : 0, 2, 1,     bit_or
+    BAND       : 0, 2, 1,     bit_and
 
     ADD        : 0, 2, 1,     add
     SUB        : 0, 2, 1,     sub
@@ -402,47 +450,6 @@ bytecode_metadata_define!{
     MIN        : 0, 2, 1,     min
     INC        : 1, 1, 1,     increase
     DEC        : 1, 1, 1,     decrease
-
-    NEWLIST    : 0, 0, 1,     new_list
-    NEWMAP     : 0, 0, 1,     new_map
-    INSERT     : 0, 3, 1,     insert
-    REMOVE     : 0, 2, 1,     remove
-    CLEAR      : 0, 1, 1,     clear
-    FIND       : 0, 2, 1,     find
-    HASKEY     : 0, 2, 1,     has_key
-    LENGTH     : 0, 1, 1,     length
-    KEYS       : 0, 1, 1,     keys
-    VALUES     : 0, 1, 1,     values
-    APPEND     : 0, 2, 1,     append
-    CLONE      : 0, 0, 1,     clone
-
-    HGROW      : 1, 0, 0,     heap_grow
-    HWRITE     : 0, 2, 0,     heap_write
-    HREAD      : 0, 2, 1,     heap_read
-    HWRITEX    : 1, 0, 1,     heap_write_x
-    HWRITEXL   : 2, 0, 1,     heap_write_xl
-    HREADU     : 1, 0, 1,     heap_read_uint
-    HREADUL    : 2, 0, 1,     heap_read_uint_long
-    HSLICE     : 0, 2, 1,     heap_create_slice
-
-    XLG        : 1, 1, 1,     logic       //  local_      
-    XOP        : 1, 1, 0,     operand     //  local_      
-    GETX       : 1, 0, 1,     get_x       //  local_        
-    PUTX       : 1, 1, 0,     put_x       //  local_     
-    GET        : 0, 1, 1,     get         //  local_       
-    PUT        : 0, 2, 0,     put         //  local_     
-    MOVE       : 1, 0, 0,     local_move  //  local_         
-    ALLOC      : 1, 0 ,0,     local_alloc //  local_        
-    SRENT      : 0, 2, 0,     storage_rent
-    SSAVE      : 0, 2, 0,     storage_save
-    SDEL       : 0, 1, 0,     storage_del
-    SLOAD      : 0, 1, 1,     storage_load
-    STIME      : 0, 1, 1,     storage_time
-
-    MGET       : 0, 1, 1,     memory_get
-    MPUT       : 0, 2, 0,     memory_put
-    GGET       : 0, 1, 1,     global_get
-    GPUT       : 0, 2, 0,     global_put
 
     JMPL       : 2, 0, 0,     jump_long
     JMPS       : 1, 0, 0,     jump_offset

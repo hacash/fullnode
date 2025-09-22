@@ -75,6 +75,7 @@ pub enum ItrErrCode {
     CompoOpOverflow   = 81,
     CompoToSerialize  = 82,
     CompoOpNotMatch   = 83,
+    CompoNoSize       = 84,
     
     Arithmetic        = 90,
     BytesHandle       = 91,

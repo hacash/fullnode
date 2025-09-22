@@ -41,8 +41,8 @@ pub fn _codes_verify(codes: &[u8]) -> VmrtErr {
         vrf!(meta);
         pc += 1;
         match inst {
-            PBUF  => pc += (pu8!() +1) as isize,
-            PBUFL => pc += (pu16!()+1) as isize,
+            PBUF  => pc += (pu8!() ) as isize,
+            PBUFL => pc += (pu16!()) as isize,
             JMPL  | BRL  => jmpvrf!(pu16!() + 2),
             JMPS  | BRS  => jmpvrf!(pc + pi8!() as isize + 1),
             JMPSL | BRSL | BRSLN => jmpvrf!(pc + pi16!() as isize + 2),

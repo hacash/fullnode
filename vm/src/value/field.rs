@@ -29,9 +29,11 @@ impl ValueKey {
     }
 }
 
+
+
 /*************************/
 
-
+// just for storage
 
 impl Parse for Value {
     fn parse(&mut self, mut buf: &[u8]) -> Ret<usize>{
@@ -58,13 +60,7 @@ impl Parse for Value {
             ValueTy::U128      => U128(buf_to_uint!(u128, buf, 16)),
             ValueTy::Bytes     => Bytes(buf.to_vec()),
             ValueTy::Addr      => Addr(Address::from_bytes(&buf)?),
-            _ => return errf!("Compo value item cannot be parse"),
-            /*ValueTy::HeapSlice => {
-                let s = buf_to_uint!(u32, buf, 4);
-                buf = &buf[4..];
-                let l = buf_to_uint!(u32, buf, 4);
-                HeapSlice((s, l))
-            }*/
+            _ => panic!("Compo value item cannot be parse"),
         };
         Ok(bl)
     }
@@ -80,7 +76,7 @@ impl Serialize for Value {
         iter::once(ty).chain(buf).collect()
     }
     fn size(&self) -> usize {
-        1 + self.val_size() // + ty id
+        1 + self.can_get_size().unwrap() as usize // + ty id
     }
 }
 

@@ -52,14 +52,14 @@ impl Stack {
 */
 impl Stack {
 
-    pub fn alloc(&mut self, num: u8) -> VmrtErr {
+    pub fn alloc(&mut self, num: u8) -> VmrtRes<u8> {
         let osz = self.datas.len();
         let tsz = osz + num as usize;
         if tsz >= self.limit {
             return itr_err_code!(OutOfStack)
         }
         self.datas.resize(tsz, Value::nil());
-        Ok(())
+        Ok(num)
     }
 
     #[inline(always)]

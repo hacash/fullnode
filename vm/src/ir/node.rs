@@ -181,7 +181,7 @@ impl IRNode for IRNodeParam1 {
             let meta = self.inst.metadata();
             match self.inst {
                 PU8 =>  buf.push_str(&format!("{}", self.para)),
-                GETX => buf.push_str(&format!("${}", self.para)),
+                GET => buf.push_str(&format!("${}", self.para)),
                 EXTENV => {
                     let ary = CALL_EXTEND_ENV_DEFS;
                     let mut idx = self.para as usize;
@@ -655,7 +655,7 @@ impl IRNode for IRNodeParam1Single {
         if desc {
             let meta = self.inst.metadata();
             match self.inst {
-                PUTX => {
+                PUT => {
                     let substr = &print_sub_inline!(suo, self.subx, desc);
                     let line = format!("${} = {}", self.para, substr);
                     buf.push_str(&line);

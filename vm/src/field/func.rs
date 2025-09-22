@@ -9,7 +9,10 @@ impl FuncArgvTypes {
 
     fn def_size(&self) -> usize {
         let n = self.number.uint() as usize;
-        n / 2 + 1
+        match n {
+            0 => 0,
+            _ => n / 2 + 1
+        }
     }
 
     pub fn check_params(&self, v: &Value) -> VmrtErr {
@@ -100,7 +103,7 @@ impl Parse for FuncArgvTypes {
 
 impl Serialize for FuncArgvTypes {
     fn serialize(&self) -> Vec<u8> {
-        let z =  self.def_size();
+        let z = self.def_size();
         vec![
             self.number.serialize(),
             self.define[0..z].to_vec(),

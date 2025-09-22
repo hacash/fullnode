@@ -105,17 +105,17 @@ impl BytecodePrint for Vec<u8> {
                     nmpm();
                 }
                 if let PBUF = inst {
-                    let n = self[i] as usize + 1;
+                    let n = self[i] as usize;
                     i += 1;
                     let r = i + n;
                     pms.push(format!("0x{}", hex::encode(&self[i..r])));
-                    i += n-1;
+                    i += n;
                 } else if let PBUFL = inst {
-                    let n = u16::from_be_bytes(self[i..i+2].try_into().unwrap()) as usize + 1;
-                    i += 2;
+                    let n = u16::from_be_bytes(self[i..i+2].try_into().unwrap()) as usize;
+                    i += 1;
                     let r = i + n;
                     pms.push(format!("0x{}", hex::encode(&self[i..r])));
-                    i += n-1;
+                    i += n;
                 }
                 if desc {
                     res.push_str(&pms.join(","));
@@ -163,8 +163,8 @@ fn scan_jump_dests(codes: &[u8]) -> Vec<usize> {
         let meta = inst.metadata();
         i += 1;
         match inst {
-            PBUF  => i += (pu8!() +1+1) as usize,
-            PBUFL => i += (pu16!()+2+1) as usize,
+            PBUF  => i += (pu8!() +1) as usize,
+            PBUFL => i += (pu16!()+2) as usize,
             JMPL  | BRL  => adddest!(pu16!() + 2),
             JMPS  | BRS  => adddest!(i as isize + pi8!() as isize + 1),
             JMPSL | BRSL | BRSLN => adddest!(i as isize + pi16!() as isize + 2),

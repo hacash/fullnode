@@ -69,7 +69,7 @@ impl Syntax {
         use Bytecode::*;
         match self.locals.get(s) {
             None => return errf!("cannot find symbol '{}'", s),
-            Some(i) => Ok(Box::new(IRNodeParam1{hrtv: true, inst: GETX, para: *i, text: s.clone() })),
+            Some(i) => Ok(Box::new(IRNodeParam1{hrtv: true, inst: GET, para: *i, text: s.clone() })),
         }
     }
 
@@ -77,7 +77,7 @@ impl Syntax {
         use Bytecode::*;
         match self.locals.get(s) {
             None => return errf!("cannot find symbol '{}'", s),
-            Some(i) => Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: PUTX, para: *i, subx: v })),
+            Some(i) => Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: PUT, para: *i, subx: v })),
         }
     }
     
@@ -98,7 +98,7 @@ impl Syntax {
                     return Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: XOP, para: mark, subx: v }))
                 }
                 // $0 = $0 + 1
-                let getv = Box::new(IRNodeParam1{hrtv: true, inst: GETX, para: *i, text: s!("")});
+                let getv = Box::new(IRNodeParam1{hrtv: true, inst: GET, para: *i, text: s!("")});
                 let opsv = Box::new(IRNodeDouble{hrtv: true, inst: match op {
                     Keyword(AsgAdd) => ADD,
                     Keyword(AsgSub) => SUB,
@@ -106,7 +106,7 @@ impl Syntax {
                     Keyword(AsgDiv) => DIV,
                     _ => unreachable!()
                 }, subx: getv, suby: v});
-                Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: PUTX, para: *i, subx: opsv }))
+                Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: PUT, para: *i, subx: opsv }))
             },
         }
     }

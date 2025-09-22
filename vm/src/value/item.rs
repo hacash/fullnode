@@ -246,6 +246,13 @@ impl Value {
         Ok(compo)
     }
 
+    pub fn compo_get(self) -> VmrtRes<CompoItem> {
+        let Value::Compo(compo) = self else {
+            return itr_err_code!(CompoOpNotMatch)
+        };
+        Ok(compo)
+    }
+
     pub fn ty_num(&self) -> u8 {
         self.ty() as u8
     }
@@ -267,10 +274,22 @@ impl Value {
         }
     }
 
-    pub fn valid(self, cap: &SpaceCap) -> VmrtRes<Self> {
-        if self.val_size() > cap.max_value_size {
-            return itr_err_code!(OutOfValueSize)
+    pub fn can_get_size(&self) -> VmrtRes<u16> {
+        if let Compo(..) = self {
+            return itr_err_code!(CompoNoSize)
         }
+        let n = self.val_size();
+        assert!(n < u16::MAX as usize);
+        Ok(n as u16)
+    }
+
+    pub fn valid(self, cap: &SpaceCap) -> VmrtRes<Self> {
+        let cansz = self.can_get_size();
+        match cansz {
+            Ok(n) if n as usize > cap.max_value_size
+                => return itr_err_code!(OutOfValueSize),
+            _ => {}
+        };
         Ok(self)
     }
 

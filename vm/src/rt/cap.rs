@@ -5,7 +5,7 @@ pub struct SpaceCap {
     pub load_contract: usize, // 20
     pub call_depth: usize,    // 32
 
-    pub max_value_size: usize, // 2048
+    pub max_value_size: usize, // 1280
     pub max_compo_length: usize,
 
     pub total_stack: usize, // 16*16 = 256
@@ -33,20 +33,20 @@ impl SpaceCap {
         const U16M: usize = u16::MAX as usize; // 65535
 
         SpaceCap {
-            max_gas_of_tx:   U16M / 2,
-            load_contract:   20,
-            call_depth:      32,
-            max_value_size:  2048, // diamond name list: 200*6 = 1200 
-            max_compo_length: 256,
-            total_stack:     512,
-            total_local:     512,
-            max_heap_seg:    64,
-            max_global:      20,
-            max_memory:      12,
+            max_gas_of_tx:     U16M / 2,
+            load_contract:       20,
+            call_depth:          32,
+            max_value_size:    1280, // = 32 * 40, diamond name list max bytes: 200*6 = 1200 
+            max_compo_length:   256,
+            total_stack:        512,
+            total_local:        512,
+            max_heap_seg:        64,
+            max_global:          20,
+            max_memory:          12,
             max_contract_size: U16M * 2, // 65535*2
             one_function_size: U16M / 4, // 65535/4
-            inherits_parent: 4,
-            librarys_link:   100,
+            inherits_parent:      4,
+            librarys_link:      100,
             // max_ctl_func:   200,
             // max_ctl_libx:   100,
             // max_ctl_body:   50,

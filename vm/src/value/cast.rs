@@ -141,8 +141,8 @@ impl Value {
     pub fn cast_to(&mut self, ty: u8) -> VmrtErr {
         let ty = map_err_itr!(CastFail ,ValueTy::build(ty))?;
         match ty {
-            ValueTy::Bool => self.cast_bool(),
-            ValueTy::U8   => self.cast_u8(),
+            ValueTy::Bool  => self.cast_bool(),
+            ValueTy::U8    => self.cast_u8(),
             ValueTy::U16   => self.cast_u16(),
             ValueTy::U32   => self.cast_u32(),
             ValueTy::U64   => self.cast_u64(),

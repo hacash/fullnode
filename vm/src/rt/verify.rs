@@ -78,8 +78,8 @@ fn verify_valid_instruction(codes: &[u8]) -> VmrtRes<(Vec<u8>, Vec<isize>)> {
         }}}
         match inst {
             // push buf
-            PBUF  => i += ( pu8!() + 1) as usize,
-            PBUFL => i += (pu16!() + 1) as usize,
+            PBUF  => i += ( pu8!()) as usize,
+            PBUFL => i += (pu16!()) as usize,
             // jump record
             JMPL  | BRL  => adddest!(pu16!() as isize),
             JMPS  | BRS  => adddest!(i as isize + pi8!() as isize + 1),

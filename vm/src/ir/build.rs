@@ -7,9 +7,12 @@ pub fn convert_irs_to_bytecodes(bytes: &[u8]) -> VmrtRes<Vec<u8>> {
 
 pub fn runtime_irs_to_bytecodes(bytes: &[u8]) -> VmrtRes<Vec<u8>> {
     let mut codes = convert_irs_to_bytecodes(bytes)?;
+    let mut rescodes = Vec::with_capacity(codes.len() + 4);
     // append burn gas & end
     let cdl = ((codes.len() / 4) as u16).to_be_bytes(); // burn gas = size / 4
-    let mut tail = vec![BURN as u8, cdl[0], cdl[1], END as u8];
-    codes.append(&mut tail);
-    Ok(codes)
+    let mut bgas = vec![BURN as u8, cdl[0], cdl[1]];
+    rescodes.append(&mut bgas);
+    rescodes.append(&mut codes); // code body
+    rescodes.push(END as u8);
+    Ok(rescodes)
 }

@@ -11,25 +11,25 @@ fn test_irnds() -> Vec<u8> {
     */
     build_codes!(
         ALLOC 2
-        PUTX 0 P0
-        IRWHILE GT PU8 100 GETX 0
-            PUTX 0 ADD P1 GETX 0 
-        PUTX 0
+        PUT 0 P0
+        IRWHILE GT PU8 100 GET 0
+            PUT 0 ADD P1 GET 0 
+        PUT 0
             CALLINR 0 0 0 0 GET 
-                EXTACTION 1 GETX 0
-        PUTX 1
-            EXTACTION 1 GETX 0
-        IRIF EQ P1 GETX 0
-            PUTX 1 P0
+                EXTACTION 1 GET 0
+        PUT 1
+            EXTACTION 1 GET 0
+        IRIF EQ P1 GET 0
+            PUT 1 P0
             IRBLOCK 0 2
-                PUTX 0 P1
-                PUTX 1 P1
-        GETX 0
-        GETX 0
-        GETX 0
-        GETX 0
+                PUT 0 P1
+                PUT 1 P1
+        GET 0
+        GET 0
+        GET 0
+        GET 0
         RET 
-            GETX 1
+            GET 1
     )
 }
 

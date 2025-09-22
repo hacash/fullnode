@@ -37,7 +37,7 @@ impl ValueSto {
             return self
         }
         // update
-        let (ml, vl) = (v.val_size() as u64, self.data.val_size() as u64);
+        let (ml, vl) = (v.can_get_size().unwrap() as u64, self.data.can_get_size().unwrap() as u64);
         if ml != vl {
             let mut rest = (due - chei) * ml / vl;
             up_in_range!(rest, STORAGE_PERIOD, STORAGE_SAVE_MAX); // at least 1 day, less than 10 years
@@ -73,7 +73,7 @@ impl ValueSto {
         self.expire = BlockHeight::from(exp);
         // gas
         let vbasesz = gst.storege_value_base_size;
-        let gas = (self.data.val_size() as i64 + vbasesz) * period as i64;
+        let gas = (self.data.can_get_size().unwrap() as i64 + vbasesz) * period as i64;
         Ok(gas)
     }
 

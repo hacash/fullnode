@@ -145,10 +145,10 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
         PBUF | PBUFL => {
             let (bl, size) = maybe!(PBUF==inst, {
                 let p1 = itrp1!();
-                (p1 as usize + 1, vec![p1])
+                (p1 as usize, vec![p1])
             },{
                 let p2 = itrp2!();
-                (u16::from_be_bytes(p2) as usize + 1, p2.to_vec())
+                (u16::from_be_bytes(p2) as usize, p2.to_vec())
             }); 
             let buf = itrbuf!(bl);
             let para: Vec<u8> = iter::empty().chain(size).chain(buf).collect();

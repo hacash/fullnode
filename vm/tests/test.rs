@@ -76,7 +76,7 @@ mod maincall {
 
         use field::interface::*;
         use protocol::action::*;
-        use mint::action::*;
+        // use mint::action::*;
 
         let addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
         let caddr = ContractAddress::calculate(&addr, &Uint4::default());

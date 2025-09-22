@@ -190,13 +190,13 @@ irfn_define!{
     
     XLG        : 1, 1, 1,     logic       //  local_      
     XOP        : 1, 1, 0,     operand     //  local_      
-    GET        : 0, 1, 1,     get         //  local_       
-    PUT        : 0, 2, 0,     put         //  local_  
-    GETX       : 1, 0, 1,     get_x       //  local_        
-    PUTX       : 1, 1, 0,     put_x       //  local_        
+    GET        : 1, 1, 1,     local       //  local_       
+    PUT        : 1, 2, 0,     local_put   //  local_         
     MOVE       : 1, 0, 0,     local_move  //  local_         
     ALLOC      : 1, 0 ,0,     local_alloc //  local_  
 
+    TLIST      : 0, 1, 1,     type_is_list
+    TMAP       : 0, 1, 1,     type_is_map
     TNIL       : 0, 1, 1,     type_is_nil
     TIS        : 1, 1, 1,     type_is
     TID        : 0, 1, 1,     type_id

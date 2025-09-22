@@ -39,8 +39,7 @@ impl Value {
             U64(..)   |
             U128(..)  |
             Bytes(..) |
-            Addr(..) 
-            => Ok(()),
+            Addr(..) => Ok(()),
             _ => itr_err_code!(ec)
         }
     }
@@ -60,7 +59,7 @@ impl Value {
         }
     }
 
-    pub fn canbe_call_data(&self, heap: &Heap) -> VmrtRes<Vec<u8>> {
+    pub fn canbe_ext_call_data(&self, heap: &Heap) -> VmrtRes<Vec<u8>> {
         let ec = CastBeCallDataFail;
         match self {
             Nil => Ok(vec![]),

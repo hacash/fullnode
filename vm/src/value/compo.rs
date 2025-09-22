@@ -177,6 +177,14 @@ impl CompoItem {
         }
     }
 
+    pub fn pack_list(_ops: &mut Stack) -> VmrtRes<Value> {
+        unimplemented!()
+    }
+
+    pub fn pack_map(_ops: &mut Stack) -> VmrtRes<Value> {
+        unimplemented!()
+    }
+
     pub fn is_list(&self) -> bool {
         match get_compo_inner_ref!(self) {
             Compo::List(..) => true,
@@ -219,6 +227,9 @@ impl CompoItem {
         }
     }
 
+    pub fn merge(&mut self, _compo: CompoItem) -> VmrtErr {
+        unimplemented!()
+    }
 
 
 }
@@ -284,6 +295,14 @@ impl CompoItem {
     }
 
     pub fn values(&mut self) -> VmrtErr {
+        unimplemented!()
+    }
+
+    pub fn head(&mut self) -> VmrtErr {
+        unimplemented!()
+    }
+
+    pub fn tail(&mut self) -> VmrtErr {
         unimplemented!()
     }
 

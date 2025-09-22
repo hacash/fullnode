@@ -42,7 +42,7 @@ macro_rules! itrparamu16 {
 macro_rules! itrparambufex {
     ($codes: expr, $pc: expr, $l: expr, $t: ty) => {
         {
-            let s = itrparam!{$codes, $pc, $l, $t} as usize + 1;
+            let s = itrparam!{$codes, $pc, $l, $t} as usize;
             let l = $pc;
             let r = l + s;
             $pc = r;
@@ -185,7 +185,8 @@ pub fn execute_code(
 
     macro_rules! check_gas { () => { if *gas_usable < 0 { return itr_err_code!(OutOfGas) } } }
     macro_rules! pu8 { () => { itrparamu8!(codes, *pc) } }
-    macro_rules! pty { () => { ops.peek()?.ty_num() } }
+    macro_rules! pty { () => { ops.peek()?.ty() } }
+    macro_rules! ptyn { () => { ops.peek()?.ty_num() } }
     macro_rules! pu8_as_u16 { () => { pu8!() as u16 } }
     macro_rules! pu16 { () => { itrparamu16!(codes, *pc) } }
     macro_rules! pbuf { () => { itrparambuf!(codes, *pc) } }
@@ -193,7 +194,8 @@ pub fn execute_code(
     macro_rules! pcutbuf { ($w: expr) => { itrbuf!(codes, *pc, $w) } }
     macro_rules! _pctrtaddr { () => { ContractAddress::parse(&pcutbuf!(CONTRACT_ADDRESS_WIDTH)).map_err(|e|ItrErr(ContractAddrErr, e))? }}
     macro_rules! ops_pop_to_u16 { () => { ops.pop()?.checked_u16()? } }
-    macro_rules! ops_peek_to_u16 { () => { ops.peek()?.checked_u16()? } }
+    macro_rules! _ops_peek_to_u16 { () => { ops.peek()?.checked_u16()? } }
+    macro_rules! check_compo_type { ($m: ident) => { match ops.compo() { Ok(c) => c.$m(), _ => false, } } }
 
     // start run
     let exit;
@@ -210,13 +212,18 @@ pub fn execute_code(
         *gas_usable -= gas_table.gas(instbyte); // 
         // println!("gas usable {} cp: {}, inst: {:?}", *gas_usable, gas_table.gas(instbyte), instruction);
 
-
-        macro_rules! extcall { ($ifv: expr, $ivt: expr) => { 
+        macro_rules! extcall { ($is_action: expr, $pass_body: expr, $have_retv: expr) => {
+            if $is_action && (mode != Main || depth > 0)  {
+                return itr_err_fmt!(ExtActDisabled, "extend action just can use in main call")
+            }
+            if mode == Static {
+                return itr_err_fmt!(ExtActDisabled, "extend call not support in static call")
+            }
             let idx = pu8!();
             let kid = u16::from_be_bytes(vec![instbyte, idx].try_into().unwrap());
             let mut actbody = vec![];
-            if $ifv {
-                let mut bdv = ops.peek()?.canbe_call_data(heap)?;
+            if $pass_body {
+                let mut bdv = ops.peek()?.canbe_ext_call_data(heap)?;
                 actbody.append(&mut bdv);
             }
             let (bgasu, cres) = ctx.action_call(kid, actbody).map_err(|e|
@@ -224,7 +231,7 @@ pub fn execute_code(
             gas += bgasu as i64;
             let resv;
             let vid = idx as usize;
-            if $ivt {
+            if $have_retv {
                 let vty = match instruction {
                     EXTENV  => CALL_EXTEND_ENV_DEFS[vid],
                     EXTFUNC => CALL_EXTEND_FUNC_DEFS[vid],
@@ -234,29 +241,40 @@ pub fn execute_code(
             } else {
                 resv = Value::Bytes(cres); // only bytes
             }
-            if $ifv {
+            if $pass_body && $have_retv {
                 *ops.peek()? = resv;
-            } else {
+            } else if !$pass_body &&  $have_retv {
                 ops.push(resv)?;
+            } else if  $pass_body && !$have_retv {
+                ops.pop()?;
+            } else {
+                never!()
             }
         }}
 
         match instruction {
             // ext action
-            EXTACTION => {
-                if mode != Main || depth > 0 {
-                    return itr_err_fmt!(ExtActDisabled, "extend action just can use in main call")
-                }
-                extcall!(true, false); },
-            EXTFUNC   => { extcall!(true, true); },
-            EXTENV    => { 
-                if mode == Static {
-                    return itr_err_fmt!(ExtActDisabled, "extend env not support in static call")
-                }
-                extcall!(false, true); },
+            EXTACTION => { extcall!(true,  true,  false); },
+            EXTENV    => { extcall!(false, false, true);  },
+            EXTFUNC   => { extcall!(false, true,  true);  },
             // native call
-            NTCALL => { let (r, g) = NativeCall::call(pu8!(), &ops.peek()?.canbe_call_data(heap)?)?;
+            NTCALL => { let (r, g) = NativeCall::call(pu8!(), &ops.peek()?.canbe_ext_call_data(heap)?)?;
                 *ops.peek()? = r; gas += g; },
+            // type
+            TLIST => *ops.peek()? = Bool(check_compo_type!(is_list)),
+            TMAP  => *ops.peek()? = Bool(check_compo_type!(is_map)),
+            TNIL  => *ops.peek()? = Bool(pty!() == ValueTy::Nil),
+            TIS   => *ops.peek()? = Bool(ptyn!() == pu8!()),
+            TID   => *ops.peek()? =   U8(ptyn!()),
+            // cast
+            CU8   => ops.peek()?.cast_u8()?,
+            CU16  => ops.peek()?.cast_u16()?,
+            CU32  => ops.peek()?.cast_u32()?,
+            CU64  => ops.peek()?.cast_u64()?,
+            CU128 => ops.peek()?.cast_u128()?,
+            /* CU256 => ops.peek()?.cast_u256()?, */
+            CBUF  => ops.peek()?.cast_buf()?,
+            CTO   => ops.peek()?.cast_to(pu8!())?,
             // constant
             P0    => ops.push(U8(0))?,
             P1    => ops.push(U8(1))?,
@@ -268,29 +286,39 @@ pub fn execute_code(
             // stack & buffer operand
             DUP    => ops.push(ops.last()?)?,
             DUPX   => ops.dupx(pu8!())?,
-            POP    => { ops.pop()?; }, // drop
+            POP    => { ops.pop()?; } // drop
             POPX   => ops.popx(pu8!())?,
             SWAP   => ops.swap()?,
             REV    => ops.reverse()?, // reverse
-            CHOISE => { if ops.pop()?.check_true() { ops.swap()? } ops.pop()?; }, /* x ? a : b */
-            SIZE   => *ops.peek()? = U16(ops.peek()?.val_size() as u16),
+            CHOISE => { if ops.pop()?.check_true() { ops.swap()? } ops.pop()?; } /* x ? a : b */
+            SIZE   => { *ops.peek()? = U16(ops.peek()?.can_get_size()?) }
             CAT    => ops.cat(cap)?,
             JOIN   => ops.join(cap)?,
-            BYTE   => { let i = ops_pop_to_u16!(); ops.peek()?.cutbyte(i)?; },
-            CUT    => { let (l, o) = (ops.pop()?, ops.pop()?); ops.peek()?.cutout(l, o)?; },
-            LEFT   => ops.peek()?.cutleft( pu8_as_u16!() + 1)?,
-            RIGHT  => ops.peek()?.cutright(pu8_as_u16!() + 1)?,
-            LDROP  => ops.peek()?.dropleft(pu8_as_u16!() + 1)?,
-            // locals & heap & global & memory
-            ALLOC => { let num = pu8!(); locals.alloc(num)?; 
-                gas += num as i64 * gst.local_one_alloc; },
-            GET   => *ops.peek()? = locals.load(ops_peek_to_u16!() as usize)?,
-            PUT   => locals.save(ops_pop_to_u16!(), ops.pop()?)?,
-            GETX  => ops.push(locals.load(pu8!() as usize)?)?,
-            PUTX  => locals.save(pu8_as_u16!(), ops.pop()?)?,
-            MOVE  => locals.save(pu8_as_u16!(), ops.pop()?)?,
-            XOP   => local_operand(pu8!(), locals, ops.pop()?)?,
-            XLG   => local_logic(pu8!(), locals, ops.peek()?)?,
+            BYTE   => { let i = ops_pop_to_u16!(); ops.peek()?.cutbyte(i)?; }
+            CUT    => { let (l, o) = (ops.pop()?, ops.pop()?); ops.peek()?.cutout(l, o)?; }
+            LEFT   => ops.peek()?.cutleft(  pu8_as_u16!())?,
+            RIGHT  => ops.peek()?.cutright( pu8_as_u16!())?,
+            LDROP  => ops.peek()?.dropleft( pu8_as_u16!())?,
+            RDROP  => ops.peek()?.dropright(pu8_as_u16!())?,
+            // compo
+            NEWLIST  => ops.push(Compo(CompoItem::new_list()))?,
+            NEWMAP   => ops.push(Compo(CompoItem::new_map()))?,
+            PACKLIST => { let l = CompoItem::pack_list(ops)?; ops.push(l)? }
+            PACKMAP  => { let m = CompoItem::pack_map(ops)?;  ops.push(m)? }
+            INSERT   => { let v = ops.pop()?; let k = ops.pop()?; ops.compo()?.insert(cap, k, v)? }
+            REMOVE   => { let k = ops.pop()?; ops.compo()?.remove(k)?; }
+            CLEAR    => { ops.compo()?.clear() }
+            MERGE    => { let p = ops.pop()?; ops.compo()?.merge(p.compo_get()?)?; }
+            LENGTH   => { let l = ops.compo()?.length(cap)?; *ops.peek()? = l; }
+            HASKEY   => { let k = ops.pop()?; let h = ops.compo()?.haskey(k)?; *ops.peek()? = h; }
+            ITEMGET  => { let k = ops.pop()?; ops.compo()?.remove(k)?; }
+            KEYS     => { ops.compo()?.keys()?; }
+            VALUES   => { ops.compo()?.values()?; }
+            HEAD     => { ops.compo()?.head()?; }
+            TAIL     => { ops.compo()?.tail()?; }
+            APPEND   => { let v = ops.pop()?; ops.compo()?.append(cap, v)? }
+            CLONE    => { let c = ops.compo()?.copy(); *ops.peek()? = Compo(c); }
+            // heap
             HGROW    => gas += heap.grow(pu8!())?,
             HWRITE   => heap.write(ops.pop()?, ops.pop()?)?,
             HREAD    => *ops.peek()? = heap.read(ops.pop()?, ops.peek()?)?,
@@ -299,44 +327,31 @@ pub fn execute_code(
             HREADU   => ops.push(heap.read_u(  pu8!())?)?,
             HREADUL  => ops.push(heap.read_ul(pu16!())?)?,
             HSLICE   => *ops.peek()? = heap.slice(ops.pop()?, ops.peek()?)?,
-            GPUT => globals.put(ops.pop()?, ops.pop()?)?,
-            GGET => *ops.peek()? = globals.get(ops.peek()?)?,
-            MPUT => memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?,
-            MGET => *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?,
-            // compo
-            NEWLIST => ops.push(Compo(CompoItem::new_list()))?,
-            NEWMAP  => ops.push(Compo(CompoItem::new_map()))?,
-            APPEND  => { let v = ops.pop()?; ops.compo()?.append(cap, v)? }
-            INSERT  => { let v = ops.pop()?; let k = ops.pop()?; ops.compo()?.insert(cap, k, v)? }
-            REMOVE  => { let k = ops.pop()?; ops.compo()?.remove(k)?; }
-            FIND    => { let k = ops.pop()?; ops.compo()?.remove(k)?; }
-            LENGTH  => { let l = ops.compo()?.length(cap)?; *ops.peek()? = l; }
-            HASKEY  => { let k = ops.pop()?; let h = ops.compo()?.haskey(k)?; *ops.peek()? = h; }
-            KEYS    => { ops.compo()?.keys()?; }
-            VALUES  => { ops.compo()?.values()?; }
-            CLEAR   => { ops.compo()?.clear() }
-            CLONE   => { let c = ops.compo()?.copy(); ops.push(Compo(c))?; }
+            // locals & heap & global & memory
+            // GETX   => *ops.peek()? = locals.load(ops_peek_to_u16!() as usize)?,
+            // PUTX   => locals.save(ops_pop_to_u16!(), ops.pop()?)?,
+            GET3  => ops.push(locals.load(3)?)?,
+            GET2  => ops.push(locals.load(2)?)?,
+            GET1  => ops.push(locals.load(1)?)?,
+            GET0  => ops.push(locals.load(0)?)?,
+            GET   => ops.push(locals.load(pu8!() as usize)?)?,
+            PUT   => locals.save(pu8_as_u16!(), ops.pop()?)?,
+            MOVE  => locals.save(pu8_as_u16!(), ops.pop()?)?,
+            ALLOC => { gas += gst.local_one_alloc * locals.alloc(pu8!())? as i64 } 
+            XOP   => local_operand(pu8!(), locals, ops.pop()?)?,
+            XLG   => local_logic(pu8!(), locals, ops.peek()?)?,
             // storage
             SRENT => gas += state.srent(gst, hei, context_addr, ops.pop()?, ops.pop()?)?,
             SDEL  => state.sdel(context_addr, ops.pop()?)?,
             SSAVE => state.ssave(hei, context_addr,ops.pop()?, ops.pop()?)?,
             SLOAD => *ops.peek()? = state.sload(hei, context_addr, ops.peek()?)?,
             STIME => *ops.peek()? = state.stime(hei, context_addr, ops.peek()?)?,
-            // type
-            TNIL => *ops.peek()? = Bool(pty!() == 0),
-            TIS  => *ops.peek()? = Bool(pty!() == pu8!()),
-            TID  => *ops.peek()? =   U8(pty!()),
-            // cast
-            CU8   => ops.peek()?.cast_u8()?,
-            CU16  => ops.peek()?.cast_u16()?,
-            CU32  => ops.peek()?.cast_u32()?,
-            CU64  => ops.peek()?.cast_u64()?,
-            CU128 => ops.peek()?.cast_u128()?,
-            /*CASTU256 => ops.peek()?.cast_u256()?,*/
-            CBUF  => ops.peek()?.cast_buf()?,
-            CTO   => ops.peek()?.cast_to(pu8!())?,
+            // memory & global
+            MGET => *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?,
+            MPUT => memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?,
+            GGET => *ops.peek()? = globals.get(ops.peek()?)?,
+            GPUT => globals.put(ops.pop()?, ops.pop()?)?,
             // logic
-            NOT  => ops.peek()?.cast_bool_not()?,
             AND  => binop_btw(ops, lgc_and)?,
             OR   => binop_btw(ops, lgc_or)?,
             EQ   => binop_btw(ops, lgc_equal)?,
@@ -345,12 +360,13 @@ pub fn execute_code(
             GT   => binop_btw(ops, lgc_greater)?,
             LE   => binop_btw(ops, lgc_less_equal)?,
             GE   => binop_btw(ops, lgc_greater_equal)?,
+            NOT  => ops.peek()?.cast_bool_not()?,
             // bitop
-            BAND => binop_arithmetic(ops, bit_and)?,
-            BOR  => binop_arithmetic(ops, bit_or)?,
-            BXOR => binop_arithmetic(ops, bit_xor)?,
-            BSHL => binop_arithmetic(ops, bit_shl)?,
             BSHR => binop_arithmetic(ops, bit_shr)?,
+            BSHL => binop_arithmetic(ops, bit_shl)?,
+            BXOR => binop_arithmetic(ops, bit_xor)?,
+            BOR  => binop_arithmetic(ops, bit_or)?,
+            BAND => binop_arithmetic(ops, bit_and)?,
             // arithmetic
             ADD  => binop_arithmetic(ops, add_checked)?,
             SUB  => binop_arithmetic(ops, sub_checked)?,

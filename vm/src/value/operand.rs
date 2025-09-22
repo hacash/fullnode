@@ -51,6 +51,9 @@ impl Value {
 
     #[inline(always)]
     pub fn cutleft(&mut self, n: u16) -> VmrtErr {
+        if n == 0 {
+            return itr_err_fmt!(StackError, "length cannot be 0")
+        }
         let buf = self.canbe_bytes_ec(BytesHandle)?;
         let spx = n as usize;
         if spx > buf.len() {
@@ -62,6 +65,9 @@ impl Value {
     
     #[inline(always)]
     pub fn cutright(&mut self, n: u16) -> VmrtErr {
+        if n == 0 {
+            return itr_err_fmt!(StackError, "length cannot be 0")
+        }
         let buf = self.canbe_bytes_ec(BytesHandle)?;
         let spx = buf.len() as isize - n as isize;
         if spx < 0 {
@@ -75,6 +81,9 @@ impl Value {
     pub fn cutout(&mut self, len: Value, ost: Value) -> VmrtErr {
         let len = len.checked_u16()? as usize;
         let ost = ost.checked_u16()? as usize;
+        if len == 0 {
+            return itr_err_fmt!(StackError, "length cannot be 0")
+        }
         let val = self.canbe_bytes_ec(BytesHandle)?;
         let end = len + ost;
         if end > val.len() {
@@ -86,15 +95,28 @@ impl Value {
 
     #[inline(always)]
     pub fn dropleft(&mut self, n: u16) -> VmrtErr {
+        if n == 0 {
+            return itr_err_fmt!(StackError, "length cannot be 0")
+        }
         let buf = self.canbe_bytes_ec(BytesHandle)?;
         let spx = n as usize;
-        if spx == 0 {
-            return itr_err_fmt!(StackError, "cannot drop buf left length 0")
-        }
         if spx > buf.len() {
             return itr_err_fmt!(StackError, "drop buf left overflow")
         }
-        *self = Self::Bytes(buf[spx-1..].to_vec());
+        *self = Self::Bytes(buf[spx..].to_vec());
+        Ok(())
+    }
+
+    pub fn dropright(&mut self, n: u16) -> VmrtErr {
+        if n == 0 {
+            return itr_err_fmt!(StackError, "length cannot be 0")
+        }
+        let buf = self.canbe_bytes_ec(BytesHandle)?;
+        let spx = buf.len() as isize - n as isize;
+        if spx < 0 {
+            return itr_err_fmt!(StackError, "drop buf right overflow")
+        }
+        *self = Self::Bytes(buf[0..spx as usize].to_vec());
         Ok(())
     }
 
