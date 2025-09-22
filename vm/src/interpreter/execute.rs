@@ -303,19 +303,19 @@ pub fn execute_code(
             // compo
             NEWLIST  => ops.push(Compo(CompoItem::new_list()))?,
             NEWMAP   => ops.push(Compo(CompoItem::new_map()))?,
-            PACKLIST => { let l = CompoItem::pack_list(ops)?; ops.push(l)? }
-            PACKMAP  => { let m = CompoItem::pack_map(ops)?;  ops.push(m)? }
+            PACKLIST => { let l = CompoItem::pack_list(cap, ops)?; ops.push(l)? }
+            PACKMAP  => { let m = CompoItem::pack_map( cap, ops)?; ops.push(m)? }
             INSERT   => { let v = ops.pop()?; let k = ops.pop()?; ops.compo()?.insert(cap, k, v)? }
             REMOVE   => { let k = ops.pop()?; ops.compo()?.remove(k)?; }
             CLEAR    => { ops.compo()?.clear() }
             MERGE    => { let p = ops.pop()?; ops.compo()?.merge(p.compo_get()?)?; }
             LENGTH   => { let l = ops.compo()?.length(cap)?; *ops.peek()? = l; }
             HASKEY   => { let k = ops.pop()?; let h = ops.compo()?.haskey(k)?; *ops.peek()? = h; }
-            ITEMGET  => { let k = ops.pop()?; ops.compo()?.remove(k)?; }
+            ITEMGET  => { let k = ops.pop()?; ops.compo()?.itemget(k)?; }
             KEYS     => { ops.compo()?.keys()?; }
             VALUES   => { ops.compo()?.values()?; }
-            HEAD     => { ops.compo()?.head()?; }
-            TAIL     => { ops.compo()?.tail()?; }
+            HEAD     => { let v = ops.pop()?.compo()?.head()?; ops.push(v)?; }
+            TAIL     => { let v = ops.pop()?.compo()?.tail()?; ops.push(v)?; }
             APPEND   => { let v = ops.pop()?; ops.compo()?.append(cap, v)? }
             CLONE    => { let c = ops.compo()?.copy(); *ops.peek()? = Compo(c); }
             // heap

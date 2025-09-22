@@ -90,6 +90,15 @@ impl Stack {
         Ok(unsafe { self.datas.get_unchecked_mut(idx) })
     }
 
+    pub fn taken(&mut self, n: usize) -> VmrtRes<Vec<Value>> {
+        let m = self.datas.len();
+        if n > m {
+            return Err(ItrErr::new(StackError, "Pop empty stack"))
+        }
+        let x = m - n;
+        Ok(self.datas.split_off(x))
+    }
+
     #[inline(always)]
     pub fn pop(&mut self) -> VmrtRes<Value> {
         self.datas.pop().ok_or_else(||ItrErr::new(StackError, "Pop empty stack"))

@@ -105,20 +105,21 @@ impl Compo {
         Ok(Value::Bool(hsk))
     }
 
-    fn find(&mut self, k: Value) -> VmrtRes<Value> {
+    fn itemget(&mut self, k: Value) -> VmrtRes<Value> {
+        let nfer = || itr_err_code!(CompoNoFindItem);
         let v = match self {
             Self::List(a) => {
                 let i = k.checked_u32()?;
                 match a.get(i as usize) {
                     Some(a) => a.clone(),
-                    _ => Value::Nil,
+                    _ => return nfer(),  // error not find
                 }
             }
             Self::Map(b) => {
                 let k = k.canbe_key()?;
                 match b.get(&k) {
                     Some(b) => b.clone(),
-                    _ => Value::Nil,
+                    _ => return nfer(), // error not find
                 }
             }
         };
@@ -163,6 +164,41 @@ macro_rules! get_compo_inner_mut {
 }
 
 
+macro_rules! get_compo_inner_by {
+    ($self: ident, $ty: ident, $inner: ident) => {{
+        let r = $inner!($self);
+        let Compo::$ty(obj) = r else {
+            return itr_err_code!(CompoOpNotMatch)
+        };
+        Ok(obj)
+    }};
+
+}
+
+macro_rules! take_items_from_ops {
+    ($is_map: expr, $cap: expr, $ops: expr) => {{
+        let n = $ops.pop()?.checked_u16()? as usize;
+        if n == 0 {
+            return itr_err_code!(CompoPackError)
+        }
+        let mut max = $cap.max_compo_length;
+        if $is_map {
+            max *= 2; // for k => v
+        }
+        if n > max {
+            return itr_err_code!(OutOfCompoLen)
+        }
+        let items = $ops.taken(n)?;
+        items
+    }}
+}
+
+
+
+
+
+
+
 impl CompoItem {
 
     pub fn list(l: VecDeque<Value>) -> Self {
@@ -177,12 +213,27 @@ impl CompoItem {
         }
     }
 
-    pub fn pack_list(_ops: &mut Stack) -> VmrtRes<Value> {
-        unimplemented!()
+    pub fn pack_list(cap: &SpaceCap, ops: &mut Stack) -> VmrtRes<Value> {
+        let items = take_items_from_ops!(false, cap, ops);
+        Ok(Value::Compo(Self::list(VecDeque::from(items))))
     }
 
-    pub fn pack_map(_ops: &mut Stack) -> VmrtRes<Value> {
-        unimplemented!()
+    pub fn pack_map(cap: &SpaceCap, ops: &mut Stack) -> VmrtRes<Value> {
+        let mut items: Vec<_> = take_items_from_ops!(true, cap, ops).into_iter().map(|a|Some(a)).collect();
+        let m = items.len();
+        if m % 2 != 0 {
+            return itr_err_code!(CompoPackError) // map must k => v
+        }
+        let sz = m / 2;
+        let mut mapobj = HashMap::with_capacity(sz);
+        for i in 0 .. sz {
+            let k = items[i * 2].take().unwrap();
+            let v = items[i * 2 + 1].take().unwrap();
+            let k = k.canbe_key()?;
+            v.canbe_value()?;
+            mapobj.insert(k, v);
+        }
+        Ok(Value::Compo(Self::map(mapobj)))
     }
 
     pub fn is_list(&self) -> bool {
@@ -200,13 +251,20 @@ impl CompoItem {
     }
 
     pub fn list_ref(&self) -> VmrtRes<&VecDeque<Value>> {
-        let r = get_compo_inner_ref!(self);
-        let Compo::List(list) = r else {
-            return itr_err_code!(CompoOpNotMatch)
-        };
-        Ok(list)
+        get_compo_inner_by!(self, List, get_compo_inner_ref)
     }
 
+    pub fn map_ref(&self) -> VmrtRes<&HashMap<Vec<u8>, Value>> {
+        get_compo_inner_by!(self, Map, get_compo_inner_ref)
+    }
+
+    pub fn list_mut(&self) -> VmrtRes<&mut VecDeque<Value>> {
+        get_compo_inner_by!(self, List, get_compo_inner_mut)
+    }
+
+    pub fn map_mut(&self) -> VmrtRes<&mut HashMap<Vec<u8>, Value>> {
+        get_compo_inner_by!(self, Map, get_compo_inner_mut)
+    }
 
     pub fn new_list() -> Self {
         Self {
@@ -227,8 +285,12 @@ impl CompoItem {
         }
     }
 
-    pub fn merge(&mut self, _compo: CompoItem) -> VmrtErr {
-        unimplemented!()
+    pub fn merge(&mut self, compo: CompoItem) -> VmrtErr {
+        match get_compo_inner_mut!(self) {
+            Compo::List(l) => l.append( compo.list_mut()? ),
+            Compo::Map(m)  => m.extend( compo.map_mut()?.clone() ),
+        };
+        Ok(())
     }
 
 
@@ -285,27 +347,40 @@ impl CompoItem {
         Ok(())
     }
 
-    pub fn find(&self, k: Value) -> VmrtRes<Value> {
+    pub fn itemget(&self, k: Value) -> VmrtRes<Value> {
         let compo = get_compo_inner_mut!(self);
-        compo.find(k)
+        compo.itemget(k)
     }
 
     pub fn keys(&mut self) -> VmrtErr {
-        unimplemented!()
+        let map = self.map_ref()?;
+        let keys = map.keys().map(|k| Value::Bytes(k.clone())).collect();
+        *self = Self::list(keys);
+        Ok(())
     }
 
     pub fn values(&mut self) -> VmrtErr {
-        unimplemented!()
+        let map = self.map_ref()?;
+        let keys = map.values().map(|v|v.clone()).collect();
+        *self = Self::list(keys);
+        Ok(())
     }
 
-    pub fn head(&mut self) -> VmrtErr {
-        unimplemented!()
+    pub fn head(&mut self) -> VmrtRes<Value> {
+        let list = self.list_mut()?;
+        match list.pop_front() {
+            Some(v) => Ok(v),
+            _ => itr_err_code!(CompoOpOverflow),
+        }
     }
 
-    pub fn tail(&mut self) -> VmrtErr {
-        unimplemented!()
+    pub fn tail(&mut self) -> VmrtRes<Value> {
+        let list = self.list_mut()?;
+        match list.pop_back() {
+            Some(v) => Ok(v),
+            _ => itr_err_code!(CompoOpOverflow),
+        }
     }
-
 
 
 

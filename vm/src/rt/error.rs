@@ -76,6 +76,8 @@ pub enum ItrErrCode {
     CompoToSerialize  = 82,
     CompoOpNotMatch   = 83,
     CompoNoSize       = 84,
+    CompoPackError    = 85,
+    CompoNoFindItem   = 86,
     
     Arithmetic        = 90,
     BytesHandle       = 91,
