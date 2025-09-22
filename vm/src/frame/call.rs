@@ -24,6 +24,7 @@ impl CallFrame {
                         Return | Throw => curr_frame.pop_value()?,
                         _ => Value::Nil,
                     };
+                    curr_frame.check_output_type(&retv)?;
                     curr_frame.reclaim(r); // reclaim resource
                     match exit {
                         Abort | Throw => return itr_err_fmt!(ThrowAbort, "VM return error: {}", retv),

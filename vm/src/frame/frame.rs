@@ -59,6 +59,7 @@ pub struct Frame {
     pub pc: usize,
     pub mode: CallMode,
     pub depth: isize,
+    pub types: Option<FuncArgvTypes>,
     pub codes: Vec<u8>,
     pub oprnds: Stack,
     pub locals: Stack,
@@ -110,6 +111,13 @@ impl Frame {
         self.oprnds.push(v)
     }
 
+    pub fn check_output_type(&self, v: &Value) -> VmrtErr {
+        match &self.types {
+            Some(ty) => ty.check_output(v),
+            _ => Ok(())
+        }
+    }
+
     /*
         compile irnode
     */
@@ -122,6 +130,7 @@ impl Frame {
             }
             self.oprnds.push(p)?; // param into stack
         }
+        self.types = fnobj.agvty.clone(); // func argv types define
         self.pc = 0;
         self.mode = mode;
         self.codes = match fnobj.ctype {
