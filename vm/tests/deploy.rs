@@ -62,6 +62,7 @@ mod deploy {
             assert type_id(param) == 15
             assert type_is_list(param)
             addr = item_get(0, param)
+            addr = param[3]
             assert type_is(12, addr)
 
             let bdt = param + addr

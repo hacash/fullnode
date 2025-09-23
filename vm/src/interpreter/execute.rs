@@ -278,11 +278,14 @@ pub fn execute_code(
             // constant
             P0    => ops.push(U8(0))?,
             P1    => ops.push(U8(1))?,
+            P2    => ops.push(U8(2))?,
+            P3    => ops.push(U8(3))?,
             PU8   => ops.push(U8(pu8!()))?,
             PU16  => ops.push(U16(pu16!()))?,
-            PNBUF => ops.push(Value::empty_bytes())?,
             PBUF  => ops.push(pbuf!())?,
             PBUFL => ops.push(pbufl!().valid(cap)?)?, // buf long
+            PNBUF => ops.push(Value::empty_bytes())?,
+            PNIL  => ops.push(Value::Nil)?,
             // stack & buffer operand
             DUP    => ops.push(ops.last()?)?,
             DUPX   => ops.dupx(pu8!())?,

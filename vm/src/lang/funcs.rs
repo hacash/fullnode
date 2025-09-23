@@ -2,13 +2,28 @@
 
 impl Syntax {
 
+    pub fn item_get(&mut self, id: String) -> Ret<Box<dyn IRNode>> {
+        use Bytecode::*;
+        let Some(_) = self.locals.get(&id) else {
+            return errf!("cannot find '{}' object in item get", id)
+        };
+        let k = self.item_must(1)?;  // over [
+        let Partition(']') = self.next()? else {
+            return errf!("item get statement format error")
+        };
+        let obj = self.link_local(&id)?;
+        let nd = IRNodeDouble{hrtv: true, inst: ITEMGET, subx: k, suby: obj};
+        Ok(Box::new(nd))
+    }
+
+
+
 
     pub fn must_get_func_argv(&mut self) -> Ret<Box<dyn IRNode>> {
         let argvs = self.item_may_block()?.into_vec();
         let argvs = deal_may_func_argvs(argvs);
         Ok(argvs)
     }
-
 
     pub fn item_func_call(&mut self, id: String) -> Ret<Box<dyn IRNode>> {
         // ir func

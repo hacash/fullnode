@@ -44,6 +44,8 @@ impl BytecodePrint for Vec<u8> {
                 match inst {
                     P0 => line += &format!("{} · ", 0),
                     P1 => line += &format!("{} · ", 1),
+                    P2 => line += &format!("{} · ", 2),
+                    P3 => line += &format!("{} · ", 3),
                     PU8 => line += &format!("{} · ", self[i+1]),
                     PU16 => line += &format!("{} · ", pu16!(i+1)),
                     RET | END | ERR | ABT => line += "--",

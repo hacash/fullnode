@@ -199,11 +199,16 @@ irfn_define!{
 
     // NTCALL     : 1, 1, 1,     native_call
 
-    TLIST      : 0, 1, 1,     type_is_list
-    TMAP       : 0, 1, 1,     type_is_map
-    TNIL       : 0, 1, 1,     type_is_nil
-    TIS        : 1, 1, 1,     type_is
-    TID        : 0, 1, 1,     type_id
+    P0         : 0, 0, 1,     push_0
+    P1         : 0, 0, 1,     push_1
+    P2         : 0, 0, 1,     push_2
+    P3         : 0, 0, 1,     push_3
+    PU8        : 1, 0, 1,     push_u8
+    PU16       : 2, 0, 1,     push_u16
+    PBUF       : 1, 0, 1,     push_buf
+    PBUFL      : 2, 0, 1,     push_buf_long
+    PNBUF      : 0, 0, 1,     push_empty_buf
+    PNIL       : 0, 0, 1,     push_nil
 
     CU8        : 0, 1, 1,     cast_u8
     CU16       : 0, 1, 1,     cast_u16
@@ -212,15 +217,11 @@ irfn_define!{
     CU128      : 0, 1, 1,     cast_u128
     CBUF       : 0, 1, 1,     cast_bytes
     CTO        : 1, 1, 1,     cast_to
-
-    PU8        : 1, 0, 1,     push_u8
-    PU16       : 2, 0, 1,     push_u16
-    P0         : 0, 0, 1,     push_0
-    P1         : 0, 0, 1,     push_1
-    PNBUF      : 0, 0, 1,     push_empty_buf
-    PBUFL      : 2, 0, 1,     push_buf_long
-    PBUF       : 1, 0, 1,     push_buf
-    PNIL       : 0, 0, 1,     push_nil
+    TID        : 0, 1, 1,     type_id
+    TIS        : 1, 1, 1,     type_is
+    TNIL       : 0, 1, 1,     type_is_nil
+    TLIST      : 0, 1, 1,     type_is_list
+    TMAP       : 0, 1, 1,     type_is_map
 
     // DUP        : 0, 0, 1,     dump
     // DUPX       : 1, 0, 1,     dump_x
@@ -365,7 +366,7 @@ pub enum TokenType {
 
 
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub enum Token {
     Keyword(KwTy),
     Operator(OpTy),

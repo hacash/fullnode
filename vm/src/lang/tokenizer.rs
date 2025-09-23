@@ -78,7 +78,7 @@ impl Tokenizer<'_> {
                 let mut d = s.as_bytes()[1..].to_vec();
                 d.pop(); d
             }),
-            '{'|'}'|'('|')' => Partition(c),
+            '{'|'}'|'('|')'|'['|']' => Partition(c),
             _ => match KwTy::build(s) {
                 Ok(k) => Keyword(k),
                 _ => Operator(OpTy::build(s)?)

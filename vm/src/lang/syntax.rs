@@ -40,6 +40,16 @@ impl Syntax {
         }
     }
     */
+    
+
+    fn next(&mut self) -> Ret<Token> {
+        if self.idx >= self.tokens.len() {
+            return errf!("item_with_left get next token error")
+        }
+        let nxt = &self.tokens[self.idx];
+        self.idx += 1;
+        Ok(nxt.clone())
+    }
 
     pub fn link_lib(&self, s: &String) -> Ret<u8> {
         match self.bdlibs.get(s).map(|d|d.0) {
@@ -298,11 +308,14 @@ impl Syntax {
                 return e1
             }
             &self.tokens[self.idx]
-        }}}
+        }}}           
         if self.idx < max {
             let mut nxt = &self.tokens[self.idx];
             if let Partition('(') = nxt { // function call
                 return self.item_func_call(id)
+            } else if let Partition('[') = nxt { // item get
+                // println!("---------item_identifier---------- self.tokens[self.idx]= {:?}", nxt); 
+                return self.item_get(id)
             } else if let Keyword(Dot) = nxt {
                 nxt = next!();
                 let Identifier(func) = nxt else {
@@ -390,7 +403,9 @@ impl Syntax {
             Integer(n) => match n {
                 0 => Box::new(IRNodeLeaf::notext(true, P0)),
                 1 => Box::new(IRNodeLeaf::notext(true, P1)),
-                2..256 => Box::new(IRNodeParam1{hrtv: true, inst: PU8, para: *n as u8, text: s!("")}),
+                2 => Box::new(IRNodeLeaf::notext(true, P2)),
+                3 => Box::new(IRNodeLeaf::notext(true, P3)),
+                4..256 => Box::new(IRNodeParam1{hrtv: true, inst: PU8, para: *n as u8, text: s!("")}),
                 256..65536 => Box::new(IRNodeParam2{hrtv: true, inst: PU16, para: (*n as u16).to_be_bytes() }),
                 65536..4294967296 => push_uint!(n, CU32),
                 4294967296..18446744073709551616 => push_uint!(n, CU64),

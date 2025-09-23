@@ -43,22 +43,22 @@ pub enum Bytecode {
     ________________29  = 0x1d,
     ________________30  = 0x1e,
     NTCALL              = 0x1f, // *@  native call
-    ________________32  = 0x20,
-    ________________33  = 0x21, 
-    ________________34  = 0x22,
-    TLIST               = 0x23, // &   is compo list push Bool(true)
-    TMAP                = 0x24, // &   is compo map  push Bool(true)
-    TNIL                = 0x25, // &   is nil push Bool(true)
-    TIS                 = 0x26, // *&  is type id
-    TID                 = 0x27, // &   type id
-    ________________40  = 0x28,   
-    ________________41  = 0x29,
-    ________________42  = 0x2a,       
-    ________________43  = 0x2b,       
-    ________________44  = 0x2c,          
-    ________________45  = 0x2d,          
-    ________________46  = 0x2e,   
-    ________________47  = 0x2f,
+    P0                  = 0x20, // +      push u8 0
+    P1                  = 0x21, // +      push u8 1
+    P2                  = 0x22, // +      push u8 2
+    P3                  = 0x23, // +      push u8 3
+    ________________36  = 0x24,
+    ________________37  = 0x25,       
+    ________________38  = 0x26,       
+    ________________39  = 0x27,          
+    PU8                 = 0x28, // *+     push u8
+    PU16                = 0x29, // **+    push u16
+    PBUF                = 0x2a, // *+     push buf
+    PBUFL               = 0x2b, // **+    push buf long  
+    ________________44  = 0x2c,       
+    ________________45  = 0x2d,     
+    PNBUF               = 0x2e, // +      push buf empty
+    PNIL                = 0x2f, // +      push nil
     CU8                 = 0x30, // &      cast u8
     CU16                = 0x31, // &      cast u16
     CU32                = 0x32, // &      cast u32
@@ -67,14 +67,14 @@ pub enum Bytecode {
     ________________53  = 0x35,
     CBUF                = 0x36, // &      cast buf
     CTO                 = 0x37, // *&     cast to
-    PU8                 = 0x38, // *+     push u8
-    PU16                = 0x39, // **+    push u16
-    P0                  = 0x3a, // +      push u8 0
-    P1                  = 0x3b, // +      push 8 1
-    PNBUF               = 0x3c, // +      push buf empty
-    PBUFL               = 0x3d, // **+    push buf long
-    PBUF                = 0x3e, // *+     push buf
-    PNIL                = 0x3f, // +      push nil
+    TID                 = 0x38, // &   type id
+    TIS                 = 0x39, // *&  is type id
+    TNIL                = 0x3a, // &   is nil push Bool(true)
+    TLIST               = 0x3b, // &   is compo list push Bool(true)
+    TMAP                = 0x3c, // &   is compo map  push Bool(true)
+    ________________61  = 0x3d,
+    ________________62  = 0x3e,       
+    ________________63  = 0x3f,   
     DUP                 = 0x40, // +      copy 0
     DUPX                = 0x41, // *+     copy u8
     POP                 = 0x42, // a      pop top
@@ -340,11 +340,16 @@ bytecode_metadata_define!{
 
     NTCALL     : 1, 1, 1,     native_call
 
-    TLIST      : 0, 1, 1,     type_is_list
-    TMAP       : 0, 1, 1,     type_is_map
-    TNIL       : 0, 1, 1,     type_is_nil
-    TIS        : 1, 1, 1,     type_is
-    TID        : 0, 1, 1,     type_id
+    P0         : 0, 0, 1,     push_0
+    P1         : 0, 0, 1,     push_1
+    P2         : 0, 0, 1,     push_2
+    P3         : 0, 0, 1,     push_3
+    PU8        : 1, 0, 1,     push_u8
+    PU16       : 2, 0, 1,     push_u16
+    PBUF       : 1, 0, 1,     push_buf
+    PBUFL      : 2, 0, 1,     push_buf_long
+    PNBUF      : 0, 0, 1,     push_empty_buf
+    PNIL       : 0, 0, 1,     push_nil
 
     CU8        : 0, 1, 1,     cast_u8
     CU16       : 0, 1, 1,     cast_u16
@@ -353,15 +358,11 @@ bytecode_metadata_define!{
     CU128      : 0, 1, 1,     cast_u128
     CBUF       : 0, 1, 1,     cast_bytes
     CTO        : 1, 1, 1,     cast_to
-
-    PU8        : 1, 0, 1,     push_u8
-    PU16       : 2, 0, 1,     push_u16
-    P0         : 0, 0, 1,     push_0
-    P1         : 0, 0, 1,     push_1
-    PNBUF      : 0, 0, 1,     push_empty_buf
-    PBUFL      : 2, 0, 1,     push_buf_long
-    PBUF       : 1, 0, 1,     push_buf
-    PNIL       : 0, 0, 1,     push_nil
+    TID        : 0, 1, 1,     type_id
+    TIS        : 1, 1, 1,     type_is
+    TNIL       : 0, 1, 1,     type_is_nil
+    TLIST      : 0, 1, 1,     type_is_list
+    TMAP       : 0, 1, 1,     type_is_map
 
     DUP        : 0, 0, 1,     dump
     DUPX       : 1, 0, 1,     dump_x
@@ -409,10 +410,10 @@ bytecode_metadata_define!{
     HREADUL    : 2, 0, 1,     heap_read_uint_long
     HSLICE     : 0, 2, 1,     heap_slice
         
-    GET3       : 0, 0, 1,     local3        
-    GET2       : 0, 0, 1,     local2        
-    GET1       : 0, 0, 1,     local1        
-    GET0       : 0, 0, 1,     local0         
+    GET3       : 0, 0, 1,     local_3        
+    GET2       : 0, 0, 1,     local_2        
+    GET1       : 0, 0, 1,     local_1        
+    GET0       : 0, 0, 1,     local_0         
     GET        : 1, 0, 1,     local             
     PUT        : 1, 1, 0,     local_put       
     MOVE       : 1, 0, 0,     local_move          
