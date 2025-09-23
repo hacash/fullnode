@@ -10,7 +10,7 @@ pub struct Syntax {
     tokens: Vec<Token>,
     idx: usize,
     locals: HashMap<String, u8>,
-    // bduses: HashMap<String, Address>,
+    bdlets: HashMap<String, Box<dyn IRNode>>,
     bdlibs: HashMap<String, (u8, Address)>,
     local_alloc: u8,
     // leftv: Box<dyn AST>,
@@ -65,12 +65,41 @@ impl Syntax {
         Ok(())
     }
 
+    pub fn bind_let(&mut self, s: String, v: Box<dyn IRNode>) -> Rerr {
+        if let Some(..) = self.bdlets.get(&s) {
+            return errf!("<let> cannot repeat bind the symbol '{}'", s)
+        }
+        self.bdlets.insert(s, v);
+        Ok(())
+    }
+
     pub fn link_local(&self, s: &String) -> Ret<Box<dyn IRNode>> {
         use Bytecode::*;
+        let text = s.clone();
         match self.locals.get(s) {
             None => return errf!("cannot find symbol '{}'", s),
-            Some(i) => Ok(Box::new(IRNodeParam1{hrtv: true, inst: GET, para: *i, text: s.clone() })),
+            Some(i) => Ok(match i {
+                0 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET0, text }),
+                1 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET1, text }),
+                2 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET2, text }),
+                3 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET3, text }),
+                _ => Box::new(IRNodeParam1{hrtv: true, inst: GET, para: *i, text })
+            }),
         }
+    }
+
+    pub fn link_let(&mut self, s: &String) -> Ret<Box<dyn IRNode>> {
+        match self.bdlets.remove(s) {
+            None => return errf!("cannot find or relink symbol '{}'", s),
+            Some(d) => Ok(d),
+        }
+    }
+
+    pub fn link_symbol(&mut self, s: &String) -> Ret<Box<dyn IRNode>> {
+        if let Ok(d) = self.link_let(s) {
+            return Ok(d)
+        }
+        self.link_local(s)
     }
 
     pub fn save_local(&self, s: &String, v: Box<dyn IRNode>) -> Ret<Box<dyn IRNode>> {
@@ -168,16 +197,22 @@ impl Syntax {
             | Keyword(AsgMul)
             | Keyword(AsgDiv) => {
                 let e = errf!("assign statement format error");
-                let Some(ir) = left.as_any().downcast_ref::<IRNodeParam1>() else {
+                let mut id: Option<String> = None; 
+                if let Some(ir) = left.as_any().downcast_ref::<IRNodeParam1>() {
+                    id = Some(ir.as_text().clone());
+                };
+                if let Some(ir) = left.as_any().downcast_ref::<IRNodeLeaf>() {
+                    id = Some(ir.as_text().clone());
+                };
+                let Some(id) = id else {
                     return e
                 };
                 let v = unsafe { (&mut *sfptr).item_must(0)? };
                 v.checkretval()?; // must retv
-                let id = ir.as_text();
                 match nxt {
-                    Keyword(Assign) => self.save_local(id, v)?,
-                    _ => self.assign_local(id, v, nxt)?,
-                } 
+                    Keyword(Assign) => self.save_local(&id, v)?,
+                    _ => self.assign_local(&id, v, nxt)?,
+                }
             }
             Keyword(As) => {
                 let e = errf!("<as> express format error");
@@ -302,14 +337,14 @@ impl Syntax {
                 return Ok(Box::new(IRNodeParamsSingle{hrtv: true, inst, para, subx}))
             }
         }
-        self.link_local(&id)
+        self.link_symbol(&id)
     }
 
     fn item_bytes(b: &Vec<u8>) -> Ret<Box<dyn IRNode>> {
         use Bytecode::*;
         let bl = b.len();
         if bl == 0 {
-            return Ok(Box::new(IRNodeLeaf{hrtv: true, inst: PNBUF}))
+            return Ok(Box::new(IRNodeLeaf::notext(true, PNBUF)))
         }
         if bl > u16::MAX as usize {
             return errf!("bytes data too long")
@@ -353,8 +388,8 @@ impl Syntax {
         let mut item: Box<dyn IRNode> = match nxt {
             Identifier(id) => self.item_identifier(id.clone())?,
             Integer(n) => match n {
-                0 => Box::new(IRNodeLeaf{hrtv: true, inst: P0}),
-                1 => Box::new(IRNodeLeaf{hrtv: true, inst: P1}),
+                0 => Box::new(IRNodeLeaf::notext(true, P0)),
+                1 => Box::new(IRNodeLeaf::notext(true, P1)),
                 2..256 => Box::new(IRNodeParam1{hrtv: true, inst: PU8, para: *n as u8, text: s!("")}),
                 256..65536 => Box::new(IRNodeParam2{hrtv: true, inst: PU16, para: (*n as u16).to_be_bytes() }),
                 65536..4294967296 => push_uint!(n, CU32),
@@ -428,6 +463,22 @@ impl Syntax {
                     return e
                 };
                 self.bind_local(id.clone(), idx)?;
+                Box::new(IRNodeEmpty{})
+            }
+            Keyword(Let) => { // let foo = $0
+                let e = errf!("let statement format error");
+                nxt = next!();
+                let Identifier(id) = nxt else {
+                    return e
+                };
+                let id = id.clone();
+                nxt = next!();
+                let Keyword(Assign) = nxt else {
+                    return e
+                };
+                let exp = self.item_must(0)?;
+                exp.checkretval()?; // must retv
+                self.bind_let(id, exp)?;
                 Box::new(IRNodeEmpty{})
             }
             /*
@@ -514,10 +565,10 @@ impl Syntax {
                 }
                 Box::new(IRNodeBytecodes{inst: IRCODE, codes})
             }
-            Keyword(True)   => Box::new(IRNodeLeaf{hrtv: true,  inst: P1}),
-            Keyword(False)  => Box::new(IRNodeLeaf{hrtv: true,  inst: P0}),
-            Keyword(Abort)  => Box::new(IRNodeLeaf{hrtv: false, inst: ABT}),
-            Keyword(Finish) => Box::new(IRNodeLeaf{hrtv: false, inst: END}),
+            Keyword(True)   => Box::new(IRNodeLeaf::notext(true, P1)),
+            Keyword(False)  => Box::new(IRNodeLeaf::notext(true, P0)),
+            Keyword(Abort)  => Box::new(IRNodeLeaf::notext(false, ABT)),
+            Keyword(Finish) => Box::new(IRNodeLeaf::notext(false, END)),
             Keyword(Assert) => Box::new(IRNodeSingle{hrtv: false, inst: AST, subx: self.item_must(0)?}),
             Keyword(Throw)  => Box::new(IRNodeSingle{hrtv: false, inst: ERR, subx: self.item_must(0)?}),
             Keyword(Return) => Box::new(IRNodeSingle{hrtv: false, inst: RET, subx: self.item_must(0)?}),

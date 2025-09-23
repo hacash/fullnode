@@ -72,8 +72,8 @@ pub enum Bytecode {
     P0                  = 0x3a, // +      push u8 0
     P1                  = 0x3b, // +      push 8 1
     PNBUF               = 0x3c, // +      push buf empty
-    PBUF                = 0x3d, // *+     push buf
-    PBUFL               = 0x3e, // **+    push buf long
+    PBUFL               = 0x3d, // **+    push buf long
+    PBUF                = 0x3e, // *+     push buf
     PNIL                = 0x3f, // +      push nil
     DUP                 = 0x40, // +      copy 0
     DUPX                = 0x41, // *+     copy u8
@@ -397,6 +397,9 @@ bytecode_metadata_define!{
     APPEND     : 0, 2, 1,     append
     CLONE      : 0, 1, 1,     clone
 
+    XLG        : 1, 1, 1,     local_logic    
+    XOP        : 1, 1, 0,     local_operand  
+
     HGROW      : 1, 0, 0,     heap_grow
     HWRITE     : 0, 2, 0,     heap_write
     HREAD      : 0, 2, 1,     heap_read
@@ -405,13 +408,15 @@ bytecode_metadata_define!{
     HREADU     : 1, 0, 1,     heap_read_uint
     HREADUL    : 2, 0, 1,     heap_read_uint_long
     HSLICE     : 0, 2, 1,     heap_slice
-
-    XLG        : 1, 1, 1,     logic       //  local_      
-    XOP        : 1, 1, 0,     operand     //  local_          
-    GET        : 1, 0, 1,     get         //  local_       
-    PUT        : 1, 1, 0,     put         //  local_     
-    MOVE       : 1, 0, 0,     local_move  //  local_         
-    ALLOC      : 1, 0 ,0,     local_alloc //  local_    
+        
+    GET3       : 0, 0, 1,     local3        
+    GET2       : 0, 0, 1,     local2        
+    GET1       : 0, 0, 1,     local1        
+    GET0       : 0, 0, 1,     local0         
+    GET        : 1, 0, 1,     local             
+    PUT        : 1, 1, 0,     local_put       
+    MOVE       : 1, 0, 0,     local_move          
+    ALLOC      : 1, 0 ,0,     local_alloc     
         
     SRENT      : 0, 2, 0,     storage_rent
     SSAVE      : 0, 2, 0,     storage_save

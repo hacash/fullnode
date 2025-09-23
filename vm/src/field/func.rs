@@ -1,15 +1,14 @@
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct FuncArgvTypes {
-    output: Uint1, // output
-    number: Uint1, // inputs num
+    typnum: Uint1, // [ 4bit: output type, 4bit: inputs num]
     define: Vec<u8>,
 }
 
 impl FuncArgvTypes {
 
     fn def_size(&self) -> usize {
-        let n = self.number.uint() as usize;
+        let n = bit4r!(self.typnum.uint()) as usize;
         match n {
             0 => 0,
             _ => n / 2 + 1
@@ -55,17 +54,18 @@ impl FuncArgvTypes {
         }
     }
 
-    pub fn from_types(otp: ValueTy, tys: Vec<ValueTy>) -> Ret<Self> {
-        otp.canbe_argv()?;
-        let output = Uint1::from(otp as u8);
+    pub fn from_types(otp: Option<ValueTy>, tys: Vec<ValueTy>) -> Ret<Self> {
+        let output_ty = match otp {
+            Some(o) => { o.canbe_argv()?; o as u8}
+            _ => 0,
+        };
         let n = tys.len();
-        if n > 200 {
-            return errf!("func types cannot more than 200")
+        if n > 15 {
+            return errf!("func types cannot more than 15")
         }
         if 0 == n {
             return Ok(Self{
-                output,
-                number: Uint1::from(0),
+                typnum: Uint1::from(output_ty),
                 define: vec![],
             })
         }
@@ -78,23 +78,27 @@ impl FuncArgvTypes {
             let tn = maybe!( i % 2 == 0, ty << 4, ty);
             dfs[i/2] = dfs[i/2] | tn; 
         }
+        let typnum = output_ty << 4 | n as u8;
         Ok(Self {
-            output,
-            number: Uint1::from(n as u8),
+            typnum: Uint1::from(typnum),
             define: dfs,
         })
     }
 
     pub fn output_type(&self) -> Ret<Option<ValueTy>> {
-        let ty = ValueTy::build(self.output.uint())?;
+        let tn = bit4l!(self.typnum.uint());
+        let ty = ValueTy::build(tn)?;
         Ok(match ty {
             ValueTy::Nil => None,
-            _ => Some(ty),
+            _ => {
+                ty.canbe_argv()?;
+                Some(ty)
+            }
         })
     }
 
     pub fn param_types(&self) -> Ret<Vec<ValueTy>> {
-        let n = self.number.uint() as usize;
+        let n = bit4r!(self.typnum.uint()) as usize;
         if 0 == n {
             return Ok(vec![])
         }
@@ -105,11 +109,10 @@ impl FuncArgvTypes {
         }
         for i in 0..n {
             let tn = self.define[i/2];
-            let t = match i % 2 == 0 {
-                true  => tn >> 4,
-                false => tn & 0b00001111,
-            };
-            tys[i] = ValueTy::build(t)?;
+            let t = maybe!( i % 2 == 0, bit4l!(tn), bit4r!(tn) );
+            let ty = ValueTy::build(t)?;
+            ty.canbe_argv()?;
+            tys[i] = ty;
         }
         Ok(tys)
     }
@@ -118,13 +121,11 @@ impl FuncArgvTypes {
 
 impl Parse for FuncArgvTypes {
     fn parse(&mut self, mut buf: &[u8]) -> Ret<usize> {
-        self.output.parse(buf)?;
-        buf = &buf[1..];
-        self.number.parse(buf)?;
+        self.typnum.parse(buf)?;
         buf = &buf[1..];
         let z =  self.def_size();
         self.define = bufeat(buf, z)?;
-        Ok(2 + z)
+        Ok(1 + z)
     }
 }
 
@@ -132,13 +133,12 @@ impl Serialize for FuncArgvTypes {
     fn serialize(&self) -> Vec<u8> {
         let z = self.def_size();
         vec![
-            self.output.serialize(),
-            self.number.serialize(),
+            self.typnum.serialize(),
             self.define[0..z].to_vec(),
         ].concat()
     }
     fn size(&self) -> usize {
-        1 + 1 + self.def_size()
+        1 + self.def_size()
     }
 }
 

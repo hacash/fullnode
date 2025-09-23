@@ -186,14 +186,18 @@ impl IrFn {
 
 irfn_define!{
 
-    // CALLDYN    : 0, 3, 1,     call_dynamic
-    
-    XLG        : 1, 1, 1,     logic       //  local_      
-    XOP        : 1, 1, 0,     operand     //  local_      
-    GET        : 1, 1, 1,     local       //  local_       
-    PUT        : 1, 2, 0,     local_put   //  local_         
-    MOVE       : 1, 0, 0,     local_move  //  local_         
-    ALLOC      : 1, 0 ,0,     local_alloc //  local_  
+    EXTACTION  : 1, 1, 1,     ext_action
+    // EXTENV     : 1, 0, 1,     ext_env
+    // EXTFUNC    : 1, 1, 1,     ext_func
+
+    // CALLDYN    :   0, 3, 1,   call_dynamic
+    // CALL       : 1+4, 1, 1,   call
+    // CALLINR    :   4, 1, 1,   call_inner
+    // CALLLIB    : 1+4, 1, 1,   call_library
+    // CALLSTATIC : 1+4, 1, 1,   call_static
+    // CALLCODE   : 1+4, 0, 0,   call_code
+
+    // NTCALL     : 1, 1, 1,     native_call
 
     TLIST      : 0, 1, 1,     type_is_list
     TMAP       : 0, 1, 1,     type_is_map
@@ -201,24 +205,59 @@ irfn_define!{
     TIS        : 1, 1, 1,     type_is
     TID        : 0, 1, 1,     type_id
 
+    CU8        : 0, 1, 1,     cast_u8
+    CU16       : 0, 1, 1,     cast_u16
+    CU32       : 0, 1, 1,     cast_u32
+    CU64       : 0, 1, 1,     cast_u64
+    CU128      : 0, 1, 1,     cast_u128
+    CBUF       : 0, 1, 1,     cast_bytes
     CTO        : 1, 1, 1,     cast_to
 
-    CHOISE     : 0, 3, 1,     choise         
-    SIZE       : 0, 1, 1,     size           
-    CAT        : 0, 2, 1,     concat         
-    BYTE       : 0, 2, 1,     byte           
-    CUT        : 0, 3, 1,     buffer_cut     
-    LEFT       : 1, 1, 1,     buffer_left    
-    RIGHT      : 1, 1, 1,     buffer_right  
-    LDROP      : 1, 1, 1,     buffer_left_drop 
-    INC        : 1, 1, 1,     increase       
-    DEC        : 1, 1, 1,     decrease    
-    
+    PU8        : 1, 0, 1,     push_u8
+    PU16       : 2, 0, 1,     push_u16
+    P0         : 0, 0, 1,     push_0
+    P1         : 0, 0, 1,     push_1
+    PNBUF      : 0, 0, 1,     push_empty_buf
+    PBUFL      : 2, 0, 1,     push_buf_long
+    PBUF       : 1, 0, 1,     push_buf
+    PNIL       : 0, 0, 1,     push_nil
+
+    // DUP        : 0, 0, 1,     dump
+    // DUPX       : 1, 0, 1,     dump_x
+    // POP        : 0, 255, 0,   pop
+    // POPX       : 1, 255, 0,   pop_x
+    SWAP       : 0, 2, 2,     swap
+    // REV        : 0, 255, 255, reverse_stace
+    CHOISE     : 0, 3, 1,     choise
+    SIZE       : 0, 1, 1,     size
+    CAT        : 0, 2, 1,     concat
+    // JOIN       : 0, 255, 1,   join
+    BYTE       : 0, 2, 1,     byte
+    CUT        : 0, 3, 1,     buf_cut
+    LEFT       : 1, 1, 1,     buf_left
+    RIGHT      : 1, 1, 1,     buf_right
+    LDROP      : 1, 1, 1,     buf_left_drop
+    RDROP      : 1, 1, 1,     buf_right_drop
+
     NEWLIST    : 0, 0, 1,     new_list
     NEWMAP     : 0, 0, 1,     new_map
-    HASKEY     : 0, 2, 1,     has_key
+    // PACKLIST   : 0, 255, 1,   new_list
+    // PACKMAP    : 0, 255, 1,   new_map
     INSERT     : 0, 3, 1,     insert
+    REMOVE     : 0, 2, 1,     remove
+    CLEAR      : 0, 1, 1,     clear
+    ITEMGET    : 0, 2, 1,     item_get
+    HASKEY     : 0, 2, 1,     has_key
+    LENGTH     : 0, 1, 1,     length
+    KEYS       : 0, 1, 1,     keys
+    VALUES     : 0, 1, 1,     values
+    HEAD       : 0, 1, 1,     head
+    TAIL       : 0, 1, 1,     tail
     APPEND     : 0, 2, 1,     append
+    CLONE      : 0, 1, 1,     clone
+
+    XLG        : 1, 1, 1,     local_logic    
+    XOP        : 1, 1, 0,     local_operand  
 
     HGROW      : 1, 0, 0,     heap_grow
     HWRITE     : 0, 2, 0,     heap_write
@@ -227,22 +266,77 @@ irfn_define!{
     HWRITEXL   : 2, 0, 1,     heap_write_xl
     HREADU     : 1, 0, 1,     heap_read_uint
     HREADUL    : 2, 0, 1,     heap_read_uint_long
-    HSLICE     : 0, 2, 1,     heap_create_slice
-
+    HSLICE     : 0, 2, 1,     heap_slice
+        
+    GET3       : 0, 0, 1,     local3        
+    GET2       : 0, 0, 1,     local2        
+    GET1       : 0, 0, 1,     local1        
+    GET0       : 0, 0, 1,     local0         
+    GET        : 1, 0, 1,     local             
+    PUT        : 1, 1, 0,     local_put       
+    MOVE       : 1, 0, 0,     local_move          
+    ALLOC      : 1, 0 ,0,     local_alloc        
+        
     SRENT      : 0, 2, 0,     storage_rent
     SSAVE      : 0, 2, 0,     storage_save
     SDEL       : 0, 1, 0,     storage_del
     SLOAD      : 0, 1, 1,     storage_load
     STIME      : 0, 1, 1,     storage_time
 
-    MGET       : 0, 1, 1,     memory_get     
-    MPUT       : 0, 2, 0,     memory_put     
-    GGET       : 0, 1, 1,     global_get     
-    GPUT       : 0, 2, 0,     global_put     
+    MGET       : 0, 1, 1,     memory_get
+    MPUT       : 0, 2, 0,     memory_put
+    GGET       : 0, 1, 1,     global_get
+    GPUT       : 0, 2, 0,     global_put
 
-    BURN       : 2, 0, 0,     gas_burn     
+    // AND        : 0, 2, 1,     and
+    // OR         : 0, 2, 1,     or
+    // EQ         : 0, 2, 1,     equal
+    // NEQ        : 0, 2, 1,     not_equal
+    // LT         : 0, 2, 1,     less_than
+    // GT         : 0, 2, 1,     more_than  
+    // LE         : 0, 2, 1,     less_equal
+    // GE         : 0, 2, 1,     more_equal
+    // NOT        : 0, 1, 1,     not
 
-    END        : 0, 0, 0,     end
+    BSHR       : 0, 2, 1,     bit_shr
+    BSHL       : 0, 2, 1,     bit_shl
+    BXOR       : 0, 2, 1,     bit_xor
+    BOR        : 0, 2, 1,     bit_or
+    BAND       : 0, 2, 1,     bit_and
+
+    // ADD        : 0, 2, 1,     add
+    // SUB        : 0, 2, 1,     sub
+    // MUL        : 0, 2, 1,     mul
+    // DIV        : 0, 2, 1,     div
+    // MOD        : 0, 2, 1,     mod
+    // POW        : 0, 2, 1,     pow
+    MAX        : 0, 2, 1,     max
+    MIN        : 0, 2, 1,     min
+    INC        : 1, 1, 1,     increase
+    DEC        : 1, 1, 1,     decrease
+
+    // JMPL       : 2, 0, 0,     jump_long
+    // JMPS       : 1, 0, 0,     jump_offset
+    // JMPSL      : 2, 0, 0,     jump_offset_long
+    // BRL        : 2, 1, 0,     branch_long
+    // BRS        : 1, 1, 0,     branch_offset
+    // BRSL       : 2, 1, 0,     branch_offset_long
+    // BRSLN      : 2, 1, 0,     branch_offset_long_not
+
+    // RET        : 0, 1, 0,     return
+    // END        : 0, 0, 0,     end
+    // AST        : 0, 1, 0,     assert
+    // ERR        : 0, 1, 0,     throw
+    // ABT        : 0, 0, 0,     abort
+
+    // IRCODE     : 2, 255, 0,   ir_code
+    // IRBLOCK    : 2, 255, 0,   ir_block
+    // IRIF       : 0, 3, 0,     ir_if
+    // IRWHILE    : 0, 2, 0,     ir_while
+
+    // BURN       : 2, 0, 0,     gas_burn
+    // NOP        : 0, 0, 0,     nop
+    // NT         : 0, 0, 0,     never_touch
 
 }
 

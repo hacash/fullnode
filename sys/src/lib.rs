@@ -8,6 +8,7 @@ pub type Error = String;
 
 
 include!{"panic.rs"}
+include!{"bit.rs"}
 include!{"stdout.rs"}
 include!{"buffer.rs"}
 include!{"string.rs"}

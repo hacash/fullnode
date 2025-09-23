@@ -163,7 +163,7 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
                 return itr_err_fmt!(InstInvalid, "invalid irnode {}", inst as u8)
             }
             match (meta.param, meta.input) {
-                (0, 0) => Box::new(IRNodeLeaf{hrtv, inst}), // leaf
+                (0, 0) => Box::new(IRNodeLeaf::notext(hrtv, inst)), // leaf
                 (0, 1) => Box::new(IRNodeSingle{hrtv, inst, subx: submust!()}),
                 (0, 2) => Box::new(IRNodeDouble{hrtv, inst, subx: submust!(), suby: submust!()}),
                 (0, 3) => Box::new(IRNodeTriple{hrtv, inst, subx: submust!(), suby: submust!(), subz: submust!()}),

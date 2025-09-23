@@ -34,6 +34,8 @@ mod deploy {
 
         /*
             VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
+
+
         */
 
         let recursion_fnstr= r##"
@@ -52,13 +54,21 @@ mod deploy {
         "##;
 
 
-        let permithac_codes = lang_to_bytecodes(r##"
+        let payable_hac_codes = lang_to_bytecodes(r##"
             local_move(0)
-            var argv = $0
-            var mei  = $1
-            argv = buffer_left_drop(21, argv)
-            mei = amount_to_mei(argv)
-            return choise(mei<=4, 0, 1)
+            var param = $0
+            var addr  = $1
+            var res   = $2
+            assert type_id(param) == 15
+            assert type_is_list(param)
+            addr = item_get(0, param)
+            assert type_is(12, addr)
+
+            let bdt = param + addr
+            res = 1 + 2
+            assert bdt
+
+            return res
         "##).unwrap();
 
 
@@ -67,21 +77,24 @@ mod deploy {
         println!("{}", codes.bytecode_print(false).unwrap());
         println!("{} {}", codes.len(), codes.to_hex());
 
-        println!("permithac: \n{}", permithac_codes.bytecode_print(true).unwrap());
+        println!("payable_hac: \n{}", payable_hac_codes.bytecode_print(true).unwrap());
+        println!("payable_hac codes: {}", payable_hac_codes.to_hex());
 
+
+        let permit_hac = convert_irs_to_bytecodes(&build_codes!(
+            RET CHOISE
+                GT CU64 EXTENV 1 PU8 10
+                PU8 99
+                PU8 0 
+        )).unwrap();
 
         Contract::new()
         .cargv(vec![0])
         .call(Abst::new(Construct).bytecode(build_codes!(
             CU8 RET
         )))
-        .call(Abst::new(PermitHAC).bytecode(permithac_codes))
-        .call(Abst::new(PayableHAC).bytecode(convert_irs_to_bytecodes(&build_codes!(
-            RET CHOISE
-                GT CU64 EXTENV 1 PU8 10
-                PU8 99
-                PU8 0 
-        )).unwrap()))
+        .call(Abst::new(PermitHAC).bytecode(permit_hac))
+        .call(Abst::new(PayableHAC).bytecode(payable_hac_codes))
         .func(Func::new("recursion").irnode(recursion_fnstr).unwrap())
         .testnet_deploy_print("2:244");    
 

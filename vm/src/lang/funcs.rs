@@ -67,7 +67,7 @@ fn build_ir_func(inst: Bytecode, pms: usize, args: usize, rs: usize, argvs: Vec<
     let hrtv = maybe!(rs==1, true, false);
     let ttv = pms + args;
     if ttv == 0 {
-        return Ok(Box::new(IRNodeLeaf{hrtv, inst}))
+        return Ok(Box::new(IRNodeLeaf::notext(hrtv, inst)))
     }
     macro_rules! avg {() => {
         argvs.pop_front().unwrap()       
@@ -139,7 +139,7 @@ fn pick_native_call(id: &str) -> Option<u8> {
 
 fn deal_may_func_argvs(mut argvs: Vec<Box<dyn IRNode>>) -> Box<dyn IRNode> {
     match argvs.len() {
-        0 => Box::new(IRNodeLeaf{hrtv: true, inst: Bytecode::PNBUF}),
+        0 => Box::new(IRNodeLeaf::notext(true, Bytecode::PNBUF)),
         1 => argvs.pop().unwrap(),
         _ => concat_func_argvs(argvs) // concat all
     }

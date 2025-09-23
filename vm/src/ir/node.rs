@@ -113,6 +113,7 @@ impl IRNodeText {
 pub struct IRNodeLeaf {
     pub hrtv: bool, 
     pub inst: Bytecode,
+    pub text: String,
 }
 
 impl IRNode for IRNodeLeaf {
@@ -144,10 +145,16 @@ impl IRNode for IRNodeLeaf {
 
 impl IRNodeLeaf {
     pub fn nop() -> Self {
-        Self { hrtv: false, inst: Bytecode::NOP }
+        Self { hrtv: false, inst: Bytecode::NOP, text: "".to_owned() }
+    }
+    pub fn notext(hrtv: bool, inst: Bytecode) -> Self {
+        Self { hrtv, inst, text: "".to_owned() }
     }
     pub fn nop_box() -> Box<dyn IRNode> {
         Box::new(Self::nop())
+    }
+    pub fn as_text(&self) -> &String {
+        &self.text
     }
 }
 
