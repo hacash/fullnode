@@ -30,7 +30,7 @@
  * @author   Thomas Pornin <thomas.pornin@cryptolog.com>
  */
 
-__constant const sph_u32 IV224[] = {
+/*__constant const sph_u32 IV224[] = {
   SPH_C32(0xf4c9120d), SPH_C32(0x6286f757), SPH_C32(0xee39e01c),
   SPH_C32(0xe074e3cb), SPH_C32(0xa1127c62), SPH_C32(0x9a43d215),
   SPH_C32(0xbd8d679a)
@@ -56,7 +56,7 @@ __constant const sph_u32 IV512[] = {
   SPH_C32(0xddb21398), SPH_C32(0xcae65838), SPH_C32(0x437f203f),
   SPH_C32(0x25ea78e7), SPH_C32(0x951fddd6), SPH_C32(0xda6ed11d),
   SPH_C32(0xe13e3567)
-};
+};*/
 
 __constant const sph_u32 mixtab0_c[] = {
   SPH_C32(0x63633297), SPH_C32(0x7c7c6feb), SPH_C32(0x77775ec7),

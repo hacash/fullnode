@@ -1,9 +1,12 @@
 #ifndef X16RX_UTIL_CL
 #define X16RX_UTIL_CL
 
+#define ALIGN8 __attribute__((aligned(8)))
 #define ALIGN __attribute__((aligned(16)))
+#define ALIGN32 __attribute__((aligned(32)))
+#define ALIGN64 __attribute__((aligned(64)))
 
-typedef union ALIGN {
+typedef union ALIGN8 {
   unsigned char h1[88];
   ulong h8[11];
 } block_t;
@@ -24,7 +27,7 @@ typedef union ALIGN {
 
 #endif
 
-__inline__ void write_nonce_to_bytes(int offset, unsigned char* bytes, unsigned int nonce) {
+__inline__ void write_nonce_to_bytes(const int offset, unsigned char* bytes, unsigned int nonce) {
     // nonce bytes
     unsigned char *nonce_ptr = (unsigned char *)&nonce;
     WRITE_NONCE_BYTE4;

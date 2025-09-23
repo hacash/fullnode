@@ -39,9 +39,8 @@ pub struct PoWorkConf {
     pub workgroups: u32, // opencl work groups
     pub localsize: u32, // opencl work units per work group
     pub unitsize: u32, // opencl hashes per work unit
-    pub itemloop: u32, // opencl loops per work unit
     pub opencldir: String, // opencl source dir
-    pub debug: u32, // opencl source dir
+    pub debug: u32, // enable debug mode
     pub deviceid: u32, // opencl device id
 }
 
@@ -60,7 +59,6 @@ impl PoWorkConf {
             workgroups: ini_must_u64(sec, "work_groups", 128) as u32,
             localsize: ini_must_u64(sec, "local_size", 64) as u32,
             unitsize: ini_must_u64(sec, "unit_size", 32) as u32,
-            itemloop: ini_must_u64(sec, "item_loop", 1) as u32,
             opencldir: ini_must(sec, "opencl_dir", "opencl/"),
             debug: ini_must_u64(sec, "debug", 0) as u32,
             deviceid: ini_must_u64(sec, "device_id", 0) as u32,
@@ -191,7 +189,7 @@ fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
     let mut nonce_space: u32 = if !_cnf.useopencl {
         100000
     } else {
-        _cnf.workgroups * _cnf.localsize * _cnf.unitsize * _cnf.itemloop
+        _cnf.workgroups * _cnf.localsize * _cnf.unitsize
     };
     // stuff data
     let stuff = { MINING_BLOCK_STUFF.read().unwrap().clone() };
@@ -214,7 +212,6 @@ fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
                 _cnf.workgroups,
                 _cnf.localsize,
                 _cnf.unitsize,
-                _cnf.itemloop,
             )
         } else {
             do_group_block_mining(height, block_intro.serialize(), nonce_start, nonce_space)
@@ -283,10 +280,9 @@ fn do_group_block_mining_opencl(
     num_work_groups: u32,
     local_work_size: u32,
     unit_size: u32,
-    item_loop: u32,
 ) -> (u32, [u8; 32]) {
     let mut most_nonce = 0u32;
-    let mut most_hash = [254u8; 32];
+    let mut most_hash = [255u8; 32];
     let global_work_size = num_work_groups * local_work_size;
     let repeat = x16rs::block_hash_repeat(height) as u32;
 
@@ -307,10 +303,8 @@ fn do_group_block_mining_opencl(
         .arg(&buffer_block_intro)
         .arg(nonce_start)
         .arg(repeat)
-        .arg(item_loop)
         .arg(unit_size)
         .arg(&opencl.buffer_global_hashes[thrid])
-        .arg(&opencl.buffer_global_nonces[thrid])
         .arg(&opencl.buffer_global_order[thrid])
         .arg(&opencl.buffer_best_hashes[thrid])
         .arg(&opencl.buffer_best_nonces[thrid])
@@ -335,8 +329,6 @@ fn do_group_block_mining_opencl(
         .ewait(&kernel_event)
         .enq()
         .expect("Can't read buffer_best_nonces");
-
-    //println!("leyendo:");
 
     for i in 0..num_work_groups as usize {
         let hash_bytes = &hashes[i * 32..(i * 32) + 32];

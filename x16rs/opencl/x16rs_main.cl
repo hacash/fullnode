@@ -2,7 +2,7 @@
 #include "x16rs.cl"
 #include "sha3_256.cl"
 
-inline int diff_big_hash(__generic hash_32 *src, __generic hash_32 *tar)
+inline int diff_big_hash(const hash_32 *src, const hash_32 *tar)
 {
     #pragma unroll 32
     for (int i = 0; i < 32; i++) {
@@ -17,13 +17,11 @@ inline int diff_big_hash(__generic hash_32 *src, __generic hash_32 *tar)
 
 __attribute__((work_group_size_hint(256, 1, 1)))
 __kernel void x16rs_main(
-    __constant block_t* input_stuff_89,
+    __constant const block_t* input_stuff_89,
     const unsigned int nonce_start,
     const unsigned int x16rs_repeat,
-    const unsigned int item_loop,
     const unsigned int unit_size,
     __global hash_32* global_hashes,
-    __global unsigned int* global_nonces,
     __global unsigned int* global_order,
     __global hash_32* best_hashes,
     __global unsigned int* best_nonces
@@ -33,23 +31,24 @@ __kernel void x16rs_main(
     const unsigned int group_id = get_group_id(0);
     const unsigned int index = local_id * unit_size;
     hash_32* local_hashes = global_hashes + (group_id * local_size * unit_size);
-    unsigned int* local_nonces = global_nonces + (group_id * local_size * unit_size);
-    unsigned int* local_order = global_order + (group_id * local_size * unit_size);
-    __local unsigned int histogram[16];
-    __local unsigned int starting_index[16];
-    __local unsigned int offset[16];
+    __local unsigned int local_nonces[256];
+    __global unsigned int* local_order = global_order + (group_id * local_size * unit_size);
+    __local unsigned int ALIGN histogram[16];
+    __local unsigned int ALIGN starting_index[16];
+    __local unsigned int ALIGN offset[16];
 
     // Setup x16 local shared vars
-    __constant sph_u64 H_blake[8] = {
+    __constant sph_u64 ALIGN H_blake[8] = {
         SPH_C64(0x6A09E667F3BCC908), SPH_C64(0xBB67AE8584CAA73B),
         SPH_C64(0x3C6EF372FE94F82B), SPH_C64(0xA54FF53A5F1D36F1),
         SPH_C64(0x510E527FADE682D1), SPH_C64(0x9B05688C2B3E6C1F),
         SPH_C64(0x1F83D9ABFB41BD6B), SPH_C64(0x5BE0CD19137E2179)
     };
-    __local ulong T0[256], T1[256], T2[256], T3[256];
-    __local sph_u32 AES0[256], AES1[256], AES2[256], AES3[256];
-    __local sph_u64 LT0[256], LT1[256], LT2[256], LT3[256], LT4[256], LT5[256], LT6[256], LT7[256];
-    __local sph_u32 mixtab0[256], mixtab1[256], mixtab2[256], mixtab3[256];
+    
+    __local ulong ALIGN8 T0[256], T1[256], T2[256], T3[256];
+    __local sph_u32 ALIGN32 AES0[256], AES1[256], AES2[256], AES3[256];
+    __local sph_u64 ALIGN64 LT0[256], LT1[256], LT2[256], LT3[256], LT4[256], LT5[256], LT6[256], LT7[256];
+    __local sph_u32 ALIGN64 mixtab0[256], mixtab1[256], mixtab2[256], mixtab3[256];
     for (unsigned i = local_id; i < 256; i += local_size) {
         T0[i] = T0_G[i];
         T1[i] = rotate(T0[i], 8UL);
@@ -79,122 +78,116 @@ __kernel void x16rs_main(
 
     block_t base_stuff = input_stuff_89[0];
     
-    hash_32 best_hash = { 0 };
-    unsigned int best_nonce = 0;
-    const unsigned int global_offset = nonce_start + (get_global_id(0) * unit_size * item_loop);
-    for(unsigned char loop = 0; loop < item_loop; loop++) {
-        for (unsigned int i = 0; i < unit_size; i++) {
-            // Insert Nonce
-            local_nonces[index + i] = global_offset + (unit_size * loop) + i;
-            write_nonce_to_bytes(79, base_stuff.h1, local_nonces[index + i]);
-            // Hash Block
-            sha3_256_hash(base_stuff.h8, local_hashes[index + i].h8);
-        }
+    const unsigned int global_offset = nonce_start + (get_global_id(0) * unit_size);
+    for (unsigned int i = 0; i < unit_size; i++) {
+        // Insert Nonce
+        volatile const unsigned int nonce = global_offset + i;
+        write_nonce_to_bytes(79, base_stuff.h1, nonce);
+        // Hash Block
+        sha3_256_hash(base_stuff.h8, local_hashes[index + i].h8);
+    }          
+    barrier(CLK_LOCAL_MEM_FENCE);
 
+    for (unsigned char r = 0; r < x16rs_repeat; r++) {
+
+        // Reset sorting indices
+        if (local_id < 16) {
+            histogram[local_id] = 0;
+            offset[local_id] = 0;
+        }
         barrier(CLK_LOCAL_MEM_FENCE);
 
-        for (unsigned char r = 0; r < x16rs_repeat; r++) {
-
-            // Reset sorting indices
-            if (local_id < 16) {
-                histogram[local_id] = 0;
-                offset[local_id] = 0;
-            }
-            barrier(CLK_LOCAL_MEM_FENCE);
-
-            // Sumarize by algo
-            for (unsigned int h = 0; h < unit_size; h++) {
-                unsigned char mod = local_hashes[index + h].h4[7] % 16;
-                atomic_inc(&histogram[mod]);
-            }
-            barrier(CLK_LOCAL_MEM_FENCE);
-
-            // Calculate start index
-            if (local_id == 0) {
-                starting_index[0] = 0;
-                for (unsigned char i = 1; i < 16; i++) {
-                    starting_index[i] = starting_index[i - 1] + histogram[i - 1];
-                }
-            }
-            barrier(CLK_LOCAL_MEM_FENCE);
-
-            // Save each hash position
-            for (unsigned int h = 0; h < unit_size; h++) {
-                unsigned int mod = local_hashes[index + h].h4[7] % 16;
-                unsigned int pos = starting_index[mod] + atomic_inc(&offset[mod]);
-                local_order[pos] = index + h;
-            }
-            barrier(CLK_LOCAL_MEM_FENCE);
-
-            for(unsigned int h = 0; h < unit_size; h++) {
-                const unsigned int hash_pos = local_order[(local_size * h) + local_id];
-                switch(local_hashes[hash_pos].h4[7] % 16) {
-                    case 0:
-                        hash_x16rs_func_0(&local_hashes[hash_pos], H_blake);
-                        break;
-                    case 1:
-                        hash_x16rs_func_1(&local_hashes[hash_pos]);
-                        break;
-                    case 2:
-                        hash_x16rs_func_2(&local_hashes[hash_pos], T0, T1, T2, T3);
-                        break;
-                    case 3:
-                        hash_x16rs_func_3(&local_hashes[hash_pos]);
-                        break;
-                    case 4:
-                        hash_x16rs_func_4(&local_hashes[hash_pos]);
-                        break;
-                    case 5:
-                        hash_x16rs_func_5(&local_hashes[hash_pos]);
-                        break;
-                    case 6:
-                        hash_x16rs_func_6(&local_hashes[hash_pos]);
-                        break;
-                    case 7:
-                        hash_x16rs_func_7(&local_hashes[hash_pos]);
-                        break;
-                    case 8:
-                        hash_x16rs_func_8(&local_hashes[hash_pos], AES0, AES1, AES2, AES3);
-                        break;
-                    case 9:
-                        hash_x16rs_func_9(&local_hashes[hash_pos]);
-                        break;
-                    case 10:
-                        hash_x16rs_func_10(&local_hashes[hash_pos], AES0, AES1, AES2, AES3);
-                        break;
-                    case 11:
-                        hash_x16rs_func_11(&local_hashes[hash_pos]);
-                        break;
-                    case 12:
-                        hash_x16rs_func_12(&local_hashes[hash_pos], mixtab0, mixtab1, mixtab2, mixtab3);
-                        break;
-                    case 13:
-                        hash_x16rs_func_13(&local_hashes[hash_pos]);
-                        break;
-                    case 14:
-                        hash_x16rs_func_14(&local_hashes[hash_pos], LT0, LT1, LT2, LT3, LT4, LT5, LT6, LT7);
-                        break;
-                    case 15:
-                        hash_x16rs_func_15(&local_hashes[hash_pos]);
-                        break;
-                }
-                barrier(CLK_LOCAL_MEM_FENCE);
-            }
+        // Sumarize by algo
+        for (unsigned int h = 0; h < unit_size; h++) {
+            unsigned char mod = local_hashes[index + h].h4[7] % 16;
+            atomic_inc(&histogram[mod]);
         }
+        barrier(CLK_LOCAL_MEM_FENCE);
 
-        for (unsigned int i = 0; i < unit_size; i++) {
-            unsigned int idx = index + i;
-            if ((loop == 0 && i == 0) || diff_big_hash(&best_hash, &local_hashes[idx]) == 1) {
-                best_hash = local_hashes[idx];
-                best_nonce = local_nonces[idx];
+        // Calculate start index
+        if (local_id == 0) {
+            starting_index[0] = 0;
+            #pragma unroll 15
+            for (unsigned char i = 1; i < 16; i++) {
+                starting_index[i] = starting_index[i - 1] + histogram[i - 1];
             }
         }
         barrier(CLK_LOCAL_MEM_FENCE);
+
+        // Save each hash position
+        for (unsigned int h = 0; h < unit_size; h++) {
+            unsigned int mod = local_hashes[index + h].h4[7] % 16;
+            unsigned int pos = starting_index[mod] + atomic_inc(&offset[mod]);
+            local_order[pos] = index + h;
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+
+        for(unsigned int h = 0; h < unit_size; h++) {
+            const unsigned int* hash_pos = &local_order[(local_size * h) + local_id];
+            switch(local_hashes[hash_pos[0]].h4[7] % 16) {
+                case 0:
+                    hash_x16rs_func_0(&local_hashes[hash_pos[0]], H_blake);
+                    break;
+                case 1:
+                    hash_x16rs_func_1(&local_hashes[hash_pos[0]]);
+                    break;
+                case 2:
+                    hash_x16rs_func_2(&local_hashes[hash_pos[0]], T0, T1, T2, T3);
+                    break;
+                case 3:
+                    hash_x16rs_func_3(&local_hashes[hash_pos[0]]);
+                    break;
+                case 4:
+                    hash_x16rs_func_4(&local_hashes[hash_pos[0]]);
+                    break;
+                case 5:
+                    hash_x16rs_func_5(&local_hashes[hash_pos[0]]);
+                    break;
+                case 6:
+                    hash_x16rs_func_6(&local_hashes[hash_pos[0]]);
+                    break;
+                case 7:
+                    hash_x16rs_func_7(&local_hashes[hash_pos[0]]);
+                    break;
+                case 8:
+                    hash_x16rs_func_8(&local_hashes[hash_pos[0]], AES0, AES1, AES2, AES3);
+                    break;
+                case 9:
+                    hash_x16rs_func_9(&local_hashes[hash_pos[0]]);
+                    break;
+                case 10:
+                    hash_x16rs_func_10(&local_hashes[hash_pos[0]], AES0, AES1, AES2, AES3);
+                    break;
+                case 11:
+                    hash_x16rs_func_11(&local_hashes[hash_pos[0]]);
+                    break;
+                case 12:
+                    hash_x16rs_func_12(&local_hashes[hash_pos[0]], mixtab0, mixtab1, mixtab2, mixtab3);
+                    break;
+                case 13:
+                    hash_x16rs_func_13(&local_hashes[hash_pos[0]]);
+                    break;
+                case 14:
+                    hash_x16rs_func_14(&local_hashes[hash_pos[0]], LT0, LT1, LT2, LT3, LT4, LT5, LT6, LT7);
+                    break;
+                case 15:
+                    hash_x16rs_func_15(&local_hashes[hash_pos[0]]);
+                    break;
+            }
+            barrier(CLK_LOCAL_MEM_FENCE);
+        }
     }
+    
+    unsigned int best_hash = 0;
+    for (unsigned int i = 1; i < unit_size; i++) {
+        if (diff_big_hash(&local_hashes[best_hash], &local_hashes[index + i]) == 1) {
+            best_hash = index + i;
+        }
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
 
-    // Store the best hash at the start of the block
-    local_hashes[index] = best_hash;
-    local_nonces[index] = best_nonce;
+    local_hashes[index] = local_hashes[best_hash];
+    local_nonces[local_id] = global_offset + best_hash - index;
     
     barrier(CLK_LOCAL_MEM_FENCE);
 
@@ -205,14 +198,16 @@ __kernel void x16rs_main(
             unsigned int idx_pair = (local_id + smax) * unit_size;
             if (diff_big_hash(&local_hashes[idx_current], &local_hashes[idx_pair]) == 1) {
                 local_hashes[idx_current] = local_hashes[idx_pair];
-                local_nonces[idx_current] = local_nonces[idx_pair];
+                local_nonces[local_id] = local_nonces[local_id + smax];
             }
         }
         barrier(CLK_LOCAL_MEM_FENCE);
     }
 
     if(local_id == 0) {
-        best_hashes[group_id] = local_hashes[0];
         best_nonces[group_id] = local_nonces[0];
+    }
+    if(local_id < 32) {
+        best_hashes[group_id].h1[local_id] = local_hashes[0].h1[local_id];
     }
 }

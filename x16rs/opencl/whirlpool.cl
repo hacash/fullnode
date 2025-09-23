@@ -1109,7 +1109,7 @@ __constant static const sph_u64 plain_T7[256] = {
 /*
  * Round constants.
  */
-__constant static const sph_u64 plain_RC[10] = {
+__constant static const sph_u64 ALIGN64 plain_RC[10] = {
 	SPH_C64(0x4F01B887E8C62318),
 	SPH_C64(0x52916F79F5D2A636),
 	SPH_C64(0x357B0CA38E9BBC60),
@@ -1137,21 +1137,21 @@ __constant static const sph_u64 plain_RC[10] = {
 	^ table ## 7[BYTE(in ## i7, 7)])
 
 #define ROUND(table, in, out, c0, c1, c2, c3, c4, c5, c6, c7)   do { \
-		out ## 0 = ROUND_ELT(table, in, 0, 7, 6, 5, 4, 3, 2, 1) ^ c0; \
-		out ## 1 = ROUND_ELT(table, in, 1, 0, 7, 6, 5, 4, 3, 2) ^ c1; \
-		out ## 2 = ROUND_ELT(table, in, 2, 1, 0, 7, 6, 5, 4, 3) ^ c2; \
-		out ## 3 = ROUND_ELT(table, in, 3, 2, 1, 0, 7, 6, 5, 4) ^ c3; \
-		out ## 4 = ROUND_ELT(table, in, 4, 3, 2, 1, 0, 7, 6, 5) ^ c4; \
-		out ## 5 = ROUND_ELT(table, in, 5, 4, 3, 2, 1, 0, 7, 6) ^ c5; \
-		out ## 6 = ROUND_ELT(table, in, 6, 5, 4, 3, 2, 1, 0, 7) ^ c6; \
-		out ## 7 = ROUND_ELT(table, in, 7, 6, 5, 4, 3, 2, 1, 0) ^ c7; \
+		out[0] = ROUND_ELT(table, in, 0, 7, 6, 5, 4, 3, 2, 1) ^ c0; \
+		out[1] = ROUND_ELT(table, in, 1, 0, 7, 6, 5, 4, 3, 2) ^ c1; \
+		out[2] = ROUND_ELT(table, in, 2, 1, 0, 7, 6, 5, 4, 3) ^ c2; \
+		out[3] = ROUND_ELT(table, in, 3, 2, 1, 0, 7, 6, 5, 4) ^ c3; \
+		out[4] = ROUND_ELT(table, in, 4, 3, 2, 1, 0, 7, 6, 5) ^ c4; \
+		out[5] = ROUND_ELT(table, in, 5, 4, 3, 2, 1, 0, 7, 6) ^ c5; \
+		out[6] = ROUND_ELT(table, in, 6, 5, 4, 3, 2, 1, 0, 7) ^ c6; \
+		out[7] = ROUND_ELT(table, in, 7, 6, 5, 4, 3, 2, 1, 0) ^ c7; \
 	} while (0)
 
-#define ROUND_LAST(table, in, out, c0, c1, c2, c3, c4, c5, c6, c7)   do { \
-		out ## 0 = ROUND_ELT(table, in, 0, 7, 6, 5, 4, 3, 2, 1) ^ c0; \
-		out ## 1 = ROUND_ELT(table, in, 1, 0, 7, 6, 5, 4, 3, 2) ^ c1; \
-		out ## 2 = ROUND_ELT(table, in, 2, 1, 0, 7, 6, 5, 4, 3) ^ c2; \
-		out ## 3 = ROUND_ELT(table, in, 3, 2, 1, 0, 7, 6, 5, 4) ^ c3; \
+#define ROUND_LAST(table, in, out, c0, c1, c2, c3)   do { \
+		out[0] = ROUND_ELT(table, in, 0, 7, 6, 5, 4, 3, 2, 1) ^ c0; \
+		out[1] = ROUND_ELT(table, in, 1, 0, 7, 6, 5, 4, 3, 2) ^ c1; \
+		out[2] = ROUND_ELT(table, in, 2, 1, 0, 7, 6, 5, 4, 3) ^ c2; \
+		out[3] = ROUND_ELT(table, in, 3, 2, 1, 0, 7, 6, 5, 4) ^ c3; \
 	} while (0)
 
 #define ROUND_KSCHED(table, in, out, c) \
@@ -1163,24 +1163,24 @@ __constant static const sph_u64 plain_RC[10] = {
 
 #define ROUND_WENC_LAST(table, in, key, out) \
 	ROUND_LAST(table, in, out, key ## 0, key ## 1, key ## 2, \
-		key ## 3, key ## 4, key ## 5, key ## 6, key ## 7)
+		key ## 3)
 
 #define TRANSFER(dst, src)   do { \
-		dst ## 0 = src ## 0; \
-		dst ## 1 = src ## 1; \
-		dst ## 2 = src ## 2; \
-		dst ## 3 = src ## 3; \
-		dst ## 4 = src ## 4; \
-		dst ## 5 = src ## 5; \
-		dst ## 6 = src ## 6; \
-		dst ## 7 = src ## 7; \
+		dst ## 0 = src[0]; \
+		dst ## 1 = src[1]; \
+		dst ## 2 = src[2]; \
+		dst ## 3 = src[3]; \
+		dst ## 4 = src[4]; \
+		dst ## 5 = src[5]; \
+		dst ## 6 = src[6]; \
+		dst ## 7 = src[7]; \
 	} while (0)
 
 #define TRANSFER_LAST(dst, src)   do { \
-		dst ## 0 = src ## 0; \
-		dst ## 1 = src ## 1; \
-		dst ## 2 = src ## 2; \
-		dst ## 3 = src ## 3; \
+		dst ## 0 = src[0]; \
+		dst ## 1 = src[1]; \
+		dst ## 2 = src[2]; \
+		dst ## 3 = src[3]; \
 	} while (0)
 
 #endif

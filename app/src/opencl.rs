@@ -3,15 +3,14 @@ use std::path::Path;
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use ocl::core::QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE;
-use ocl::enums::{ProgramBuildInfo, ProgramBuildInfoResult, ProgramInfoResult, ProgramInfo};
-use ocl::{Buffer, Context, Device, Error, EventList, Kernel, Platform, Program, Queue};
+use ocl::enums::{ProgramInfoResult, ProgramInfo};
+use ocl::{Buffer, Context, Device, EventList, Kernel, Platform, Program, Queue};
 
 struct OpenCLResources {
     program: Program,
     queue: Queue,
     buffer_best_nonces: Vec<Buffer::<u32>>,
     buffer_global_hashes: Vec<Buffer::<u8>>,
-    buffer_global_nonces: Vec<Buffer::<u32>>,
     buffer_global_order: Vec<Buffer::<u32>>,
     buffer_best_hashes: Vec<Buffer::<u8>>,
 }
@@ -55,9 +54,9 @@ fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
         .devices(device.clone())
         .build()
         .expect("Can't create OpenCL context");
-    let deviceName = device.name().expect("Can't get device name");
+    let device_name = device.name().expect("Can't get device name");
 
-    let binary_file = format!(r"{}{}.bin", cnf.opencldir, deviceName);
+    let binary_file = format!(r"{}{}_{}.bin", cnf.opencldir, device_name, cnf.deviceid);
     let binary_path = Path::new(&binary_file);
 
     // Check if kernel was changed since last time (and need recompile)
@@ -106,7 +105,6 @@ fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
 
     let mut buffer_best_nonces = Vec::with_capacity(cnf.supervene as usize);
     let mut buffer_global_hashes = Vec::with_capacity(cnf.supervene as usize);
-    let mut buffer_global_nonces = Vec::with_capacity(cnf.supervene as usize);
     let mut buffer_global_order = Vec::with_capacity(cnf.supervene as usize);
     let mut buffer_best_hashes = Vec::with_capacity(cnf.supervene as usize);
     for _ in 0..cnf.supervene {
@@ -123,13 +121,6 @@ fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
             .len(HASH_WIDTH * cnf.unitsize as usize * global_work_size as usize)
             .build()
             .expect("Can't create buffer_global_hashes"));
-
-        buffer_global_nonces.push(Buffer::<u32>::builder()
-            .queue(queue.clone())
-            .flags(ocl::core::MEM_READ_WRITE)
-            .len(cnf.unitsize as usize * global_work_size as usize)
-            .build()
-            .expect("Can't create buffer_global_nonces"));
 
         buffer_global_order.push(Buffer::<u32>::builder()
             .queue(queue.clone())
@@ -151,7 +142,6 @@ fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
         queue,
         buffer_best_nonces,
         buffer_global_hashes,
-        buffer_global_nonces,
         buffer_global_order,
         buffer_best_hashes,
     }
@@ -191,7 +181,7 @@ fn compile_program_from_source(
         .info(ProgramInfo::Binaries)
         .expect("Can't read binary data from compiled kernel");
 
-    // Extraer Vec<Vec<u8>> del enum ProgramInfoResult
+    // Extract Vec<Vec<u8>> from ProgramInfoResult enum
     let binaries = match program_info_result {
         ProgramInfoResult::Binaries(binaries) => binaries,
         _ => {

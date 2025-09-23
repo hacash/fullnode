@@ -67,27 +67,10 @@
  * This function assumes that "msg" is aligned for 32-bit access.
  */
 #define c512(msg)  do { \
-  sph_u32 p0, p1, p2, p3, p4, p5, p6, p7; \
-  sph_u32 p8, p9, pA, pB, pC, pD, pE, pF; \
+  sph_u32 p0= SPH_C32(0x72FCCDD8), p1 = SPH_C32(0x79CA4727), p2 = SPH_C32(0x128A077B), p3 = SPH_C32(0x40D55AEC), p4 = SPH_C32(0xD1901A06), p5 = SPH_C32(0x430AE307), p6 = SPH_C32(0xB29F5CD1), p7 = SPH_C32(0xDF07FBFC); \
+  sph_u32 p8 = SPH_C32(0x8E45D73D), p9 = SPH_C32(0x681AB538), pA = SPH_C32(0xBDE86578), pB = SPH_C32(0xDD577E47), pC = SPH_C32(0xE275EADE), pD = SPH_C32(0x502D9FCD), pE = SPH_C32(0xB9357178), pF = SPH_C32(0x022A4B9A); \
   sph_u32 x0, x1, x2, x3; \
   int r; \
- \
-  p0 = h0; \
-  p1 = h1; \
-  p2 = h2; \
-  p3 = h3; \
-  p4 = h4; \
-  p5 = h5; \
-  p6 = h6; \
-  p7 = h7; \
-  p8 = h8; \
-  p9 = h9; \
-  pA = hA; \
-  pB = hB; \
-  pC = hC; \
-  pD = hD; \
-  pE = hE; \
-  pF = hF; \
   /* round 0 */ \
   x0 = p4 ^ rk00; \
   x1 = p5 ^ rk01; \
@@ -99,39 +82,22 @@
   x2 ^= rk06; \
   x3 ^= rk07; \
   AES_ROUND_NOKEY(x0, x1, x2, x3); \
-  x0 ^= rk08; \
-  x1 ^= rk09; \
-  x2 ^= rk0A; \
-  x3 ^= rk0B; \
+  x0 ^= SPH_C32(0x00000080); \
   AES_ROUND_NOKEY(x0, x1, x2, x3); \
-  x0 ^= rk0C; \
-  x1 ^= rk0D; \
-  x2 ^= rk0E; \
-  x3 ^= rk0F; \
   AES_ROUND_NOKEY(x0, x1, x2, x3); \
   p0 ^= x0; \
   p1 ^= x1; \
   p2 ^= x2; \
   p3 ^= x3; \
-  x0 = pC ^ rk10; \
-  x1 = pD ^ rk11; \
-  x2 = pE ^ rk12; \
-  x3 = pF ^ rk13; \
+  x0 = pC; \
+  x1 = pD; \
+  x2 = pE; \
+  x3 = pF; \
   AES_ROUND_NOKEY(x0, x1, x2, x3); \
-  x0 ^= rk14; \
-  x1 ^= rk15; \
-  x2 ^= rk16; \
-  x3 ^= rk17; \
   AES_ROUND_NOKEY(x0, x1, x2, x3); \
-  x0 ^= rk18; \
-  x1 ^= rk19; \
-  x2 ^= rk1A; \
-  x3 ^= rk1B; \
+  x3 ^= SPH_C32(0x01000000); \
   AES_ROUND_NOKEY(x0, x1, x2, x3); \
-  x0 ^= rk1C; \
-  x1 ^= rk1D; \
-  x2 ^= rk1E; \
-  x3 ^= rk1F; \
+  x3 ^= SPH_C32(0x02000000); \
   AES_ROUND_NOKEY(x0, x1, x2, x3); \
   p8 ^= x0; \
   p9 ^= x1; \
@@ -141,14 +107,14 @@
   for (r = 0; r < 3; r ++) { \
     /* round 1, 5, 9 */ \
     KEY_EXPAND_ELT(rk00, rk01, rk02, rk03); \
-    rk00 ^= rk1C; \
-    rk01 ^= rk1D; \
-    rk02 ^= rk1E; \
+    if (r > 0) { \
+      rk00 ^= rk1C; \
+      rk01 ^= rk1D; \
+      rk02 ^= rk1E; \
+    } \
     rk03 ^= rk1F; \
     if (r == 0) { \
-      rk00 ^= sc_count0; \
-      rk01 ^= 0; \
-      rk02 ^= 0; \
+      rk00 ^= 256; \
       rk03 ^= SPH_T32(~0); \
     } \
     x0 = p0 ^ rk00; \
@@ -162,9 +128,6 @@
     rk06 ^= rk02; \
     rk07 ^= rk03; \
     if (r == 1) { \
-      rk04 ^= 0; \
-      rk05 ^= 0; \
-      rk06 ^= 0; \
       rk07 ^= SPH_T32(~sc_count0); \
     } \
     x0 ^= rk04; \
@@ -232,9 +195,7 @@
     rk1E ^= rk1A; \
     rk1F ^= rk1B; \
     if (r == 2) { \
-      rk1C ^= 0; \
-      rk1D ^= 0; \
-      rk1E ^= sc_count0; \
+      rk1E ^= 256; \
       rk1F ^= SPH_T32(~0); \
     } \
     x0 ^= rk1C; \
@@ -564,9 +525,9 @@
   x3 ^= rk17; \
   AES_ROUND_NOKEY(x0, x1, x2, x3); \
   KEY_EXPAND_ELT(rk18, rk19, rk1A, rk1B); \
-  rk18 ^= rk14 ^ 0; \
-  rk19 ^= rk15 ^ sc_count0; \
-  rk1A ^= rk16 ^ 0; \
+  rk18 ^= rk14; \
+  rk19 ^= rk15 ^ 256; \
+  rk1A ^= rk16; \
   rk1B ^= rk17 ^ SPH_T32(~0); \
   x0 ^= rk18; \
   x1 ^= rk19; \
@@ -609,14 +570,14 @@
   sph_u32 p0, p1, p2, p3, p4, p5, p6, p7; \
   sph_u32 x0, x1, x2, x3; \
     \
-  p0 = h[0x0]; \
-  p1 = h[0x1]; \
-  p2 = h[0x2]; \
-  p3 = h[0x3]; \
-  p4 = h[0x4]; \
-  p5 = h[0x5]; \
-  p6 = h[0x6]; \
-  p7 = h[0x7]; \
+  p0 = h[0]; \
+  p1 = h[1]; \
+  p2 = h[2]; \
+  p3 = h[3]; \
+  p4 = h[4]; \
+  p5 = h[5]; \
+  p6 = h[6]; \
+  p7 = h[7]; \
   /* round 0 */ \
   x0 = p4 ^ rk0; \
   x1 = p5 ^ rk1; \
@@ -1001,13 +962,13 @@
   p5 ^= x1; \
   p6 ^= x2; \
   p7 ^= x3; \
-  h[0x0] ^= p0; \
-  h[0x1] ^= p1; \
-  h[0x2] ^= p2; \
-  h[0x3] ^= p3; \
-  h[0x4] ^= p4; \
-  h[0x5] ^= p5; \
-  h[0x6] ^= p6; \
-  h[0x7] ^= p7; \
+  h[0] ^= p0; \
+  h[1] ^= p1; \
+  h[2] ^= p2; \
+  h[3] ^= p3; \
+  h[4] ^= p4; \
+  h[5] ^= p5; \
+  h[6] ^= p6; \
+  h[7] ^= p7; \
     } while(0)
 
