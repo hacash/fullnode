@@ -89,7 +89,7 @@ pub fn execute5() {
         addr = argv[0]
         mei = hac_to_mei(argv[1])
         mei = choise(5, mei, mei > 5)
-        let amt = mei_to_hac(mei)
+        let amt = zhu_to_hac(mei * 100000000)
         transfer_hac_to(addr, amt)
         return 0
     "##).unwrap();

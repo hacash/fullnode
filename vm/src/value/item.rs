@@ -325,7 +325,7 @@ impl Value {
                 Some(s) => format!("\"{}\"", s),
                 _ => "0x".to_owned() + &hex::encode(b),
             },
-            Addr(a) => a.to_readable(),
+            Addr(a) => a.readable(),
             HeapSlice((s, l)) => format!("heap[{},{}]", s, l),
             Compo(a) => format!("compo[{}]", a.len()),
         }

@@ -392,7 +392,7 @@ impl Syntax {
         }}
         macro_rules! push_uint { ($n:expr, $t:expr) => {{
             let buf = buf_drop_left_zero(&$n.to_be_bytes(), 0);
-            let numv = iter::once(buf.len() as u8 - 1).chain(buf).collect::<Vec<_>>();
+            let numv = iter::once(buf.len() as u8).chain(buf).collect::<Vec<_>>();
             Box::new(IRNodeSingle{hrtv: true, inst: $t, subx: Box::new(IRNodeParams{
                 hrtv: true, inst: PBUF, para: numv,
             })})
