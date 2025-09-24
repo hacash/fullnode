@@ -323,7 +323,7 @@ impl Syntax {
                 };
                 self.idx += 1;
                 let fnsg = calc_func_sign(func);
-                let subx = self.must_get_func_argv()?;
+                let (_, subx) = self.must_get_func_argv(ArgvMode::PackList)?;
                 return Ok(match &id=="self" {
                     true => { // CALLINR
                         let para: Vec<u8> = fnsg.to_vec();
@@ -343,7 +343,7 @@ impl Syntax {
                 };
                 self.idx += 1;
                 let fnsg = calc_func_sign(func);
-                let subx = self.must_get_func_argv()?;
+                let (_, subx) = self.must_get_func_argv(ArgvMode::PackList)?;
                 let inst = maybe!(is_static, CALLSTATIC, CALLLIB);
                 let libi = self.link_lib(&id)?;
                 let para: Vec<u8> = iter::once(libi).chain(fnsg).collect();

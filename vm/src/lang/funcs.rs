@@ -19,10 +19,15 @@ impl Syntax {
 
 
 
-    pub fn must_get_func_argv(&mut self) -> Ret<Box<dyn IRNode>> {
+    pub fn must_get_func_argv(&mut self, md: ArgvMode) -> Ret<(usize, Box<dyn IRNode>)> {
         let argvs = self.item_may_block()?.into_vec();
-        let argvs = deal_may_func_argvs(argvs);
-        Ok(argvs)
+        let alen = argvs.len();
+        let argv = match md {
+            ArgvMode::Concat => concat_func_argvs(argvs)?,
+            ArgvMode::PackList => pack_func_argvs(argvs)?,
+        };
+        Ok((alen, argv))
+
     }
 
     pub fn item_func_call(&mut self, id: String) -> Ret<Box<dyn IRNode>> {
@@ -40,30 +45,24 @@ impl Syntax {
 
         // native call
         if let Some(id) = pick_native_call(&id) {
-            let argvs = self.must_get_func_argv()?;
+            let (_, argvs) = self.must_get_func_argv(ArgvMode::Concat)?;
             return Ok(Box::new(IRNodeParam1Single{
                 hrtv: true, inst: Bytecode::NTCALL, para: id, subx: argvs
             }))
         }
 
         // extend action
-        if let Some((argv, inst, para)) = pick_ext_func(&id) {
-            let mut argvs = self.item_may_block()?.into_vec();
-            let hrtv = true;
+        if let Some((hrtv, argv, inst, para)) = pick_ext_func(&id) {
+            let (num, argvres) = self.must_get_func_argv(ArgvMode::Concat)?;
             return Ok(match argv {
                 false => {
-                    if argvs.len() > 0 {
+                    if num > 0 {
                         return errf!("function '{}' cannot give argv", id)
                     }
-                    Box::new(IRNodeParam1{hrtv,inst,para,text:s!("")})
+                    Box::new(IRNodeParam1{hrtv, inst, para, text: s!("")})
                 },
                 true => {
-                    let argv = match argvs.len() {
-                        0 => return errf!("function '{}' must give argv", id),
-                        1 => argvs.pop().unwrap(),
-                        _ => concat_func_argvs(argvs) // concat all
-                    };
-                    Box::new(IRNodeParam1Single{hrtv,inst,para,subx: argv})
+                    Box::new(IRNodeParam1Single{hrtv, inst, para, subx: argvres})
                 },
             })
         }
@@ -152,39 +151,58 @@ fn pick_native_call(id: &str) -> Option<u8> {
     NativeCall::from_name(id).map(|d|d.0) // only id
 }
 
-fn deal_may_func_argvs(mut argvs: Vec<Box<dyn IRNode>>) -> Box<dyn IRNode> {
-    match argvs.len() {
-        0 => Box::new(IRNodeLeaf::notext(true, Bytecode::PNBUF)),
-        1 => argvs.pop().unwrap(),
-        _ => concat_func_argvs(argvs) // concat all
+
+fn concat_func_argvs(mut list: Vec<Box<dyn IRNode>>) -> Ret<Box<dyn IRNode>> {
+    // list.reverse();
+    let Some(mut res) = list.pop() else {
+        return Ok(Box::new(IRNodeLeaf::notext(true, Bytecode::PNBUF))) // not pass argv
+    };
+    while let Some(x) = list.pop() {
+        res = Box::new(IRNodeDouble{hrtv:true, inst:Bytecode::CAT, subx: x, suby: res});
     }
+    Ok(res)
 }
 
 
-fn concat_func_argvs(mut list: Vec<Box<dyn IRNode>>) -> Box<dyn IRNode> {
+fn pack_func_argvs(mut list: Vec<Box<dyn IRNode>>) -> Ret<Box<dyn IRNode>> {
+    use Bytecode::*;
     // list.reverse();
+    let argv_len = list.len();
+    match argv_len {
+        0 => errf!("function argv length cannot be 0"),
+        1 => Ok(list.pop().unwrap()),
+        2..=15 => Ok({
+            let num = IRNodeParam1{ hrtv: true, inst: PU8, para: argv_len as u8, text:s!("")};
+            let pklist = IRNodeLeaf::notext(true, PACKLIST);
+            list.push(Box::new(num));
+            list.push(Box::new(pklist));
+            Box::new(IRNodeBlock{hrtv: true, inst: IRBLOCK, subs: list})
+        }),
+        _ => errf!("function argv length cannot more than 15"),
+    }
+    /* 
     let mut res = list.pop().unwrap();
     while let Some(x) = list.pop() {
         res = Box::new(IRNodeDouble{hrtv:true, inst:Bytecode::CAT, subx: x, suby: res});
     }
     res
+    */
 }
 
 
 
-
-fn pick_ext_func(id: &str) -> Option<(bool, Bytecode, u8)> {
-    if let Some(x) = CALL_EXTEND_ENV_DEFS.iter().position(|f|f.0==id) {
-        if x > 255 { unreachable!() }
-        if x > 0 {
-            return Some((false, Bytecode::EXTENV, x as u8))
-        }
+/*
+    return (hav_revt, hav_argv, code, )
+*/
+fn pick_ext_func(id: &str) -> Option<(bool, bool, Bytecode, u8)> {
+    if let Some(x) = CALL_EXTEND_ENV_DEFS.iter().find(|f|f.1==id) {
+        return Some((true, false, Bytecode::EXTENV,  x.0))
     }
-    if let Some(x) = CALL_EXTEND_FUNC_DEFS.iter().position(|f|f.0==id) {
-        if x > 255 { unreachable!() }
-        if x > 0 {
-            return Some((true, Bytecode::EXTFUNC, x as u8))
-        }
+    if let Some(x) = CALL_EXTEND_FUNC_DEFS.iter().find(|f|f.1==id) {
+        return Some((true, true,  Bytecode::EXTFUNC, x.0))
+    }
+    if let Some(x) = CALL_EXTEND_ACTION_DEFS.iter().find(|f|f.1==id) {
+        return Some((false, true,  Bytecode::EXTACTION, x.0))
     }
     None
 }

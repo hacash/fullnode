@@ -11,16 +11,21 @@ include!("types.rs");
 
 
 
+use ValueTy::*;
 
 /*
     Native call define
 */
-native_call_define!{  // idx, gas,   vsize, ValueType
-    sha2               = 1,   32,    32, ValueTy::Bytes // Bytes[32]
-    sha3               = 2,   32,    32, ValueTy::Bytes // Bytes[32]
-    ripemd160          = 3,   32,    32, ValueTy::Bytes // Bytes[32]
-    hac_to_mei         = 21,   8,     8, ValueTy::U64   // U64
-    hac_to_zhu         = 22,   8,    16, ValueTy::U128  // U128
+native_call_define!{  // idx, gas,   ValueType
+    sha2               = 1,   32,    Bytes  
+    sha3               = 2,   32,    Bytes 
+    ripemd160          = 3,   32,    Bytes
+    hac_to_mei         = 21,   8,    U64 
+    hac_to_zhu         = 22,   8,    U128 
+    // hac_to_suo         = 23,   8,    U128
+    mei_to_hac         = 25,   8,    Bytes
+    zhu_to_hac         = 26,   8,    Bytes
+    
 }
 
 

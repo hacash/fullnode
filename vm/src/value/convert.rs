@@ -1,6 +1,6 @@
 
 
-fn buf_to_uint(buf: &[u8]) -> VmrtRes<Value> {
+pub fn buf_to_uint(buf: &[u8]) -> VmrtRes<Value> {
     let rlbts = buf_drop_left_zero(buf, 0);
     let sizen = rlbts.len();
     match sizen {

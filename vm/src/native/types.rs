@@ -7,7 +7,7 @@
 
 
 macro_rules! native_call_define {
-    ( $( $name:ident = $v:expr, $gas:expr, $vsz: expr, $rty: expr)+ ) => {
+    ( $( $name:ident = $v:expr, $gas:expr, $rty: expr)+ ) => {
         
 #[allow(non_camel_case_types)]
 #[repr(u8)]
@@ -27,7 +27,7 @@ impl NativeCall {
             $(
                 Self::$name => $name(v).map(|r|{
                     assert_eq!($rty, r.ty());
-                    assert_eq!($vsz, r.val_size());
+                    // assert_eq!($vsz, r.val_size());
                     (r, $gas)
                 }),
             )+

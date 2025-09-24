@@ -15,6 +15,12 @@ use super::rt::TokenType::*;
 use super::native::*;
 
 
+pub enum ArgvMode {
+    Concat,
+    PackList,
+}
+
+
 include!{"interface.rs"}
 include!{"tokenizer.rs"}
 // include!{"ast.rs"}

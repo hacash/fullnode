@@ -84,14 +84,14 @@ pub fn execute5() {
     let permithac_codes = lang_to_bytecodes(r##"
         local_move(0)
         var argv = $0
-        var mei  = $1
+        var addr = $1
+        var mei  = $2
+        addr = argv[0]
         mei = hac_to_mei(argv[1])
-        if mei > 5 {
-            return 0
-        } else {
-            return mei
-        }
-        return choise(true, false, mei<=4)
+        mei = choise(5, mei, mei > 5)
+        let amt = mei_to_hac(mei)
+        transfer_hac_to(addr, amt)
+        return 0
     "##).unwrap();
 
     let argv = Value::Compo(CompoItem::list(VecDeque::from([

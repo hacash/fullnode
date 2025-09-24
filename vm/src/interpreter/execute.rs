@@ -236,7 +236,7 @@ pub fn execute_code(
                     EXTENV  => CALL_EXTEND_ENV_DEFS[vid],
                     EXTFUNC => CALL_EXTEND_FUNC_DEFS[vid],
                     _ => never!(),
-                }.1;
+                }.2;
                 resv = Value::type_from(vty, cres)?; //  from ty
             } else {
                 resv = Value::Bytes(cres); // only bytes
