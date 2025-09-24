@@ -12,7 +12,7 @@ impl Syntax {
             return errf!("item get statement format error")
         };
         let obj = self.link_local(&id)?;
-        let nd = IRNodeDouble{hrtv: true, inst: ITEMGET, subx: k, suby: obj};
+        let nd = IRNodeDouble{hrtv: true, inst: ITEMGET, subx: obj, suby: k};
         Ok(Box::new(nd))
     }
 

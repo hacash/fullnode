@@ -242,8 +242,8 @@ impl Syntax {
             }
             Operator(op) => {
                 let inst;
-                let mut subx = left;
-                let mut suby = unsafe { (&mut *sfptr).item_must(0)? };
+                let mut suby = left;
+                let mut subx = unsafe { (&mut *sfptr).item_must(0)? };
                 subx.checkretval()?; // must retv
                 suby.checkretval()?; // must retv
                 (inst, subx, suby) = Self::may_swap_op_level(*op, subx, suby)?;

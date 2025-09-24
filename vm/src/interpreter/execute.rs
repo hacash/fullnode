@@ -293,7 +293,7 @@ pub fn execute_code(
             POPX   => ops.popx(pu8!())?,
             SWAP   => ops.swap()?,
             REV    => ops.reverse()?, // reverse
-            CHOISE => { if ops.pop()?.check_true() { ops.swap()? } ops.pop()?; } /* x ? a : b */
+            CHOISE => { if ops.pop()?.check_false() { ops.swap()? } ops.pop()?; } /* x ? a : b */
             SIZE   => { *ops.peek()? = U16(ops.peek()?.can_get_size()?) }
             CAT    => ops.cat(cap)?,
             JOIN   => ops.join(cap)?,
@@ -314,7 +314,7 @@ pub fn execute_code(
             MERGE    => { let p = ops.pop()?; ops.compo()?.merge(p.compo_get()?)?; }
             LENGTH   => { let l = ops.compo()?.length(cap)?; *ops.peek()? = l; }
             HASKEY   => { let k = ops.pop()?; let h = ops.compo()?.haskey(k)?; *ops.peek()? = h; }
-            ITEMGET  => { let k = ops.pop()?; ops.compo()?.itemget(k)?; }
+            ITEMGET  => { let k = ops.pop()?; *ops.peek()? = ops.compo()?.itemget(k)?; }
             KEYS     => { ops.compo()?.keys()?; }
             VALUES   => { ops.compo()?.values()?; }
             HEAD     => { let v = ops.pop()?.compo()?.head()?; ops.push(v)?; }

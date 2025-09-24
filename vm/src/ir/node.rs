@@ -504,8 +504,8 @@ impl IRNode for IRNodeDouble {
             return Ok(c)
         }
         iter::empty::<u8>()
-        .chain(self.suby.codegen()?)
         .chain(self.subx.codegen()?)
+        .chain(self.suby.codegen()?)
         .chain([self.bytecode()])
         .collect::<Vec<u8>>().into_vmrt()
     }
@@ -583,9 +583,9 @@ impl IRNode for IRNodeTriple {
             return Ok(c)
         }
         iter::empty::<u8>()
-        .chain(self.subz.codegen()?)
-        .chain(self.suby.codegen()?)
         .chain(self.subx.codegen()?)
+        .chain(self.suby.codegen()?)
+        .chain(self.subz.codegen()?)
         .chain([self.bytecode()])
         .collect::<Vec<u8>>().into_vmrt()
     }

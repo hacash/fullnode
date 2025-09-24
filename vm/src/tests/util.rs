@@ -8,7 +8,7 @@ fn execute_test_maincall(gas: i64, codes: Vec<u8>) -> VmrtRes<(i64, Vec<Value>, 
 
 
 #[allow(dead_code)]
-fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Vec<u8>>) -> VmrtRes<(i64, Vec<Value>, CallExit)> {
+fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Value>) -> VmrtRes<(i64, Vec<Value>, CallExit)> {
 
     let mut pc: usize = 0;
     let mut gas: i64 = gas_limit; // 2000
@@ -22,7 +22,7 @@ fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Vec<u8>>)
 
     let mut ops = Stack::new(256);
     if let Some(v) = argv {
-        ops.push(Value::bytes(v)).unwrap();
+        ops.push(v).unwrap();
     }
 
     // do execute
