@@ -117,7 +117,7 @@ pub enum Bytecode {
     MERGE               = 0x67, // a,b+    compo merge
     LENGTH              = 0x68, // t+      compo length
     HASKEY              = 0x69, // t,k+    compo check has key
-    ITEMGET             = 0x6a, // t,k+    compo iten get
+    ITEM                = 0x6a, // t,k+    compo iten get
     KEYS                = 0x6b, // &       compo keys
     VALUES              = 0x6c, // &       compo values
     HEAD                = 0x6d, // &       compo pick last
@@ -278,7 +278,7 @@ impl Into<u8> for Bytecode {
 }
 
 
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Debug, Copy, Clone)]
 pub struct BytecodeMetadata {
     pub valid: bool,
     pub param: u8,
@@ -295,7 +295,7 @@ impl Bytecode {
     pub fn metadata(&self) -> BytecodeMetadata {
         match self {
             $(
-            $inst => BytecodeMetadata { valid: true, param: $p, input: $i, otput: $o, intro: stringify!($s) },
+            $inst => BytecodeMetadata {valid: true, param: $p, input: $i, otput: $o, intro: stringify!($s)},
             )+
             _ => BytecodeMetadata::default(),
         }
@@ -388,7 +388,7 @@ bytecode_metadata_define!{
     INSERT     : 0, 3, 1,     insert
     REMOVE     : 0, 2, 1,     remove
     CLEAR      : 0, 1, 1,     clear
-    ITEMGET    : 0, 2, 1,     item_get
+    ITEM       : 0, 2, 1,     item
     HASKEY     : 0, 2, 1,     has_key
     LENGTH     : 0, 1, 1,     length
     KEYS       : 0, 1, 1,     keys

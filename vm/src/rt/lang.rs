@@ -15,10 +15,9 @@ pub enum KwTy {
 
 impl KwTy {
 
-    pub fn build(s: &str) -> Ret<KwTy> {
-        use KwTy::*;
+    pub fn build(s: &str) -> Ret<Self> {
         Ok(match s {
-            $( $s => $k, )+
+            $( $s => Self::$k, )+
             _ => return errf!("unsupport Keyword '{}'", s)
         })
     }
@@ -37,6 +36,7 @@ keyword_define!{
     AsgSub    : "-="
     AsgMul    : "*="
     AsgDiv    : "/="
+    Progma    : "progma"
     Use       : "use"
     Lib       : "lib"
     Let       : "let"
@@ -49,18 +49,28 @@ keyword_define!{
     Abort     : "abort"
     Throw     : "throw"
     Assert    : "assert"
-    Bool      : "bool"
-    True      : "true"
-    False     : "false"
-    Bytes     : "bytes"
     CallCode  : "callcode"
     ByteCode  : "bytecode"
     As        : "as"
+    Is        : "is"
+    Nil       : "nil"
+    Bool      : "bool"
+    True      : "true"
+    False     : "false"
     U8        : "u8"
     U16       : "u16"
     U32       : "u32"
     U64       : "u64"
     U128      : "u128"
+    U256      : "u256"
+    Uint      : "uint"
+    Bytes     : "bytes"
+    Address   : "address"
+    List      : "list"
+    Map       : "map"
+    Struct    : "struct"
+    Tuple     : "tuple"
+
 }   
 
 
@@ -247,7 +257,7 @@ irfn_define!{
     INSERT     : 0, 3, 1,     insert
     REMOVE     : 0, 2, 1,     remove
     CLEAR      : 0, 1, 1,     clear
-    ITEMGET    : 0, 2, 1,     item_get
+    ITEM       : 0, 2, 1,     item
     HASKEY     : 0, 2, 1,     has_key
     LENGTH     : 0, 1, 1,     length
     KEYS       : 0, 1, 1,     keys

@@ -130,16 +130,16 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
         IRIF => {
             let ndp = depth + 1;
             Box::new(IRNodeTriple{ hrtv, inst,
-                subx: subdph!(ndp, false),
+                subx: subdph!(ndp, true),
                 suby: subdph!(ndp, false),
-                subz: subdph!(ndp, true),
+                subz: subdph!(ndp, false),
             })
         }
         IRWHILE => {
             let ndp = depth + 1;
             Box::new(IRNodeDouble{ hrtv, inst,
-                subx: subdph!(ndp, false),
-                suby: subdph!(ndp, true),
+                subx: subdph!(ndp, true),
+                suby: subdph!(ndp, false),
             })
         }
         PBUF | PBUFL => {

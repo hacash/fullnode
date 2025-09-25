@@ -6,13 +6,13 @@ mod common;
 
 
 #[cfg(test)]
-mod deploy {
+mod amm {
     use field::*;
     use field::interface::*;
     use protocol::action::*;
 
     use vm::*;
-    use vm::ir::*;
+    // use vm::ir::*;
     use vm::rt::*;
     use vm::lang::*;
     use vm::rt::Bytecode::*;
@@ -30,7 +30,8 @@ mod deploy {
 
 
     #[test]
-    fn recursion() {
+    fn deploy() {
+        use vm::ir::IRNodePrint;
 
         /*
             VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
@@ -38,23 +39,51 @@ mod deploy {
 
         */
 
-        let recursion_fnstr= r##"
+
+
+        let payable_hac = lang_to_ircode(r##"
             local_move(0)
-            bytecode {
-                PU8 1
+            var argv = $0
+            var addr = $1 
+            var zhu =  $2
+            addr = argv[0]
+            let mei = hac_to_mei(argv[1])
+            assert mei < 100
+            zhu = hac_to_zhu(argv[1])
+            assert zhu > 0
+
+            var akey = $3
+            var hkey = $4
+            hkey = "zhu"
+            akey = "addr"
+
+            let hamt = memory_get(hkey)
+            assert hamt is nil
+            memory_put(hkey, zhu)
+
+            var hadr = $5
+            hadr = memory_get(akey)
+            if hadr is nil {
+                memory_put(akey, addr)
+            } else {
+                assert hadr == addr
             }
-            var foo = $0
-            var bar = $1
-            if foo > 10 {
-                return 10
-            }
-            bar = 1 as u16
-            bar = self.recursion(foo + bar)
-            return foo + bar
-        "##;
+
+            return 0
+
+        "##).unwrap();
 
 
-        let payable_hac_codes = lang_to_bytecode(r##"
+        println!("payable_hac ir code len {} : {}\n{}", 
+            payable_hac.len(), 
+            payable_hac.to_hex(), 
+            payable_hac.irnode_print(true).unwrap(),
+        );
+
+
+
+
+        let deposit_codes = lang_to_bytecode(r##"
             local_move(0)
             var param = $0
             var addr  = $1
@@ -74,29 +103,12 @@ mod deploy {
 
 
 
-        let codes = lang_to_bytecode(recursion_fnstr).unwrap();
-        println!("{}", codes.bytecode_print(false).unwrap());
-        println!("{} {}", codes.len(), codes.to_hex());
 
-        println!("payable_hac: \n{}", payable_hac_codes.bytecode_print(true).unwrap());
-        println!("payable_hac codes: {}", payable_hac_codes.to_hex());
-
-
-        let permit_hac = convert_ir_to_bytecode(&build_codes!(
-            RET CHOISE
-                GT CU64 EXTENV 1 PU8 10
-                PU8 99
-                PU8 0 
-        )).unwrap();
 
         Contract::new()
-        .cargv(vec![0])
-        .call(Abst::new(Construct).bytecode(build_codes!(
-            CU8 RET
-        )))
-        .call(Abst::new(PermitHAC).bytecode(permit_hac))
-        .call(Abst::new(PayableHAC).bytecode(payable_hac_codes))
-        .func(Func::new("recursion").fitsh(recursion_fnstr).unwrap())
+        // .call(Abst::new(PermitHAC).bytecode(permit_hac))
+        .call(Abst::new(PayableHAC).ircode(payable_hac).unwrap())
+        .func(Func::new("deposit").bytecode(deposit_codes))
         .testnet_deploy_print("2:244");    
 
     }
@@ -104,7 +116,7 @@ mod deploy {
 
     #[test]
     // fn call_recursion() {
-    fn maincall1() {
+    fn maincall() {
 
         use vm::action::*;
 
@@ -126,7 +138,7 @@ mod deploy {
 
     #[test]
     // fn call_recursion() {
-    fn call_transfer() {
+    fn transfer() {
 
         let adr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
 

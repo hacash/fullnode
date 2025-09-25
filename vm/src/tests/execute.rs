@@ -14,7 +14,7 @@ pub fn execute1() {
                 PUT 1 P1
         RET GET 0
     );
-    let codes = convert_irs_to_bytecodes(&irnds).unwrap();
+    let codes = convert_ir_to_bytecode(&irnds).unwrap();
     println!("{}", codes.bytecode_print(true).unwrap());
     let exec_res = execute_test_maincall(65535, codes);
     println!("exec res: {:?}", exec_res);
@@ -34,7 +34,7 @@ pub fn execute2() {
             PUT 0 ADD P1 GET 0
         RET GET 0
     );
-    let codes = convert_irs_to_bytecodes(&irnds).unwrap();
+    let codes = convert_ir_to_bytecode(&irnds).unwrap();
     println!("{}", codes.bytecode_print(true).unwrap());
     let exec_res = execute_test_maincall(65535, codes);
     println!("exec res: {:?}", exec_res);
@@ -45,7 +45,7 @@ pub fn execute2() {
 #[allow(dead_code)]
 pub fn execute3() {
 
-    let permithac_codes = lang_to_bytecodes(r##"
+    let permithac_codes = lang_to_bytecode(r##"
         local_move(0)
         var argv = $0
         var mei  = $1
@@ -68,7 +68,7 @@ pub fn execute3() {
 
 #[allow(dead_code)]
 pub fn execute4() {
-    let codes = lang_to_bytecodes(r##"
+    let codes = lang_to_bytecode(r##"
         throw "1"
     "##).unwrap();
 
@@ -81,7 +81,7 @@ pub fn execute4() {
 #[allow(dead_code)]
 pub fn execute5() {
 
-    let permithac_codes = lang_to_bytecodes(r##"
+    let permithac_codes = lang_to_bytecode(r##"
         local_move(0)
         var argv = $0
         var addr = $1

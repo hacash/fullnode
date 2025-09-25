@@ -30,7 +30,7 @@ include!{"test.rs"}
 
 
 
-pub fn lang_to_ir(langscript: &str) -> Ret<IRNodeBlock> {
+pub fn lang_to_irnode(langscript: &str) -> Ret<IRNodeBlock> {
     let tkr = Tokenizer::new(langscript.as_bytes());
     let tks = tkr.parse()?;
     let syx = Syntax::new(tks);
@@ -38,14 +38,14 @@ pub fn lang_to_ir(langscript: &str) -> Ret<IRNodeBlock> {
 }
 
 
-pub fn lang_to_irnodes(langscript: &str) -> Ret<Vec<u8>> {
-    let ir = lang_to_ir(langscript)?;
+pub fn lang_to_ircode(langscript: &str) -> Ret<Vec<u8>> {
+    let ir = lang_to_irnode(langscript)?;
     Ok(ir.serialize().split_off(3))
 }
 
 
-pub fn lang_to_bytecodes(langscript: &str) -> Ret<Vec<u8>> {
-    let ir = lang_to_ir(langscript)?;
+pub fn lang_to_bytecode(langscript: &str) -> Ret<Vec<u8>> {
+    let ir = lang_to_irnode(langscript)?;
     let codes = map_itr_err!(ir.codegen())?;
     Ok(codes)
 }

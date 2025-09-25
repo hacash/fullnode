@@ -127,8 +127,14 @@ impl IRNode for IRNodeLeaf {
             let meta = self.inst.metadata();
             match self.inst {
                 NOP => {}, 
-                P0 => buf.push('0'),
+                GET3 => buf.push_str("$3"),
+                GET2 => buf.push_str("$2"),
+                GET1 => buf.push_str("$1"),
+                GET0 => buf.push_str("$0"),
+                P3 => buf.push('3'),
+                P2 => buf.push('2'),
                 P1 => buf.push('1'),
+                P0 => buf.push('0'),
                 PNBUF => buf.push_str("\"\""),
                 _ => {
                     buf.push_str(meta.intro);
@@ -451,6 +457,15 @@ impl IRNode for IRNodeSingle {
         if desc {
             let meta = self.inst.metadata();
             match self.inst {
+                TNIL | TLIST | TMAP => {
+                    let substr = print_sub_inline!(suo, self.subx, desc);
+                    match self.inst {
+                        TNIL  => buf.push_str(&format!("{} is nil", substr)),
+                        TLIST => buf.push_str(&format!("{} is list", substr)),
+                        TMAP  => buf.push_str(&format!("{} is map", substr)),
+                        _ => never!()
+                    }
+                }
                 CU8 | CU16 | CU32 | CU64 | CU128 | NOT | RET | ERR | AST => {
                     let substr = print_sub_inline!(suo, self.subx, desc);
                     match self.inst {
@@ -461,7 +476,7 @@ impl IRNode for IRNodeSingle {
                         CU128 => buf.push_str(&format!("{} as u128", substr)),
                         NOT   => buf.push_str(&format!("! {}", substr)),
                         RET | ERR | AST => buf.push_str(&format!("{} {}", meta.intro, substr)),
-                        _ => {}
+                        _ => never!()
                     };
                 },
                 _ => {
@@ -548,6 +563,11 @@ impl IRNode for IRNodeDouble {
                     let subxstr = print_sub_inline!(suo, self.subx, desc);
                     let subystr = print_sub!(suo, self.suby, tab, desc);
                     buf.push_str(&format!("while {} {{{}}}", subxstr, subystr))
+                }
+                ITEM => {
+                    let subxstr = print_sub!(suo, self.subx, tab, desc);
+                    let subystr = print_sub_inline!(suo, self.suby, desc);
+                    buf.push_str(&format!("{}[{}]", subxstr, subystr))
                 }
                 _ => {
                     let subxstr = print_sub!(suo, self.subx, tab, desc);
@@ -662,6 +682,22 @@ impl IRNode for IRNodeParam1Single {
         if desc {
             let meta = self.inst.metadata();
             match self.inst {
+                TIS => {
+                    let substr = print_sub_inline!(suo, self.subx, desc);
+                    let ty = match self.para {
+                        0 => "nil",
+                        1 => "bool",
+                        2 => "u8",
+                        3 => "u16",
+                        4 => "u32",
+                        5 => "u64",
+                        6 => "u128",
+                        10 => "bytes",
+                        11 => "address",
+                        _ => "?",
+                    };
+                    buf.push_str(&format!("{} is {}", substr, ty));
+                }
                 PUT => {
                     let substr = &print_sub_inline!(suo, self.subx, desc);
                     let line = format!("${} = {}", self.para, substr);

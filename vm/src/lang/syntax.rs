@@ -240,6 +240,26 @@ impl Syntax {
                 obj.checkretval()?; // must retv
                 Box::new(obj)
             }
+            Keyword(Is) => {
+                let e = errf!("<is> express format error");
+                nxt = next!();
+                let hrtv = true;
+                let subx = left;
+                match nxt {
+                    Keyword(Nil)     => Box::new(IRNodeSingle{hrtv, subx, inst: TNIL   }),
+                    Keyword(List)    => Box::new(IRNodeSingle{hrtv, subx, inst: TLIST  }),
+                    Keyword(Map)     => Box::new(IRNodeSingle{hrtv, subx, inst: TMAP   }),
+                    Keyword(Bool)    => Box::new(IRNodeParam1Single{para: ValueTy::Bool  as u8, hrtv, subx, inst: TIS}),
+                    Keyword(U8)      => Box::new(IRNodeParam1Single{para: ValueTy::U8    as u8, hrtv, subx, inst: TIS}),
+                    Keyword(U16)     => Box::new(IRNodeParam1Single{para: ValueTy::U16   as u8, hrtv, subx, inst: TIS}),
+                    Keyword(U32)     => Box::new(IRNodeParam1Single{para: ValueTy::U32   as u8, hrtv, subx, inst: TIS}),
+                    Keyword(U64)     => Box::new(IRNodeParam1Single{para: ValueTy::U64   as u8, hrtv, subx, inst: TIS}),
+                    Keyword(U128)    => Box::new(IRNodeParam1Single{para: ValueTy::U128  as u8, hrtv, subx, inst: TIS}),
+                    Keyword(Bytes)   => Box::new(IRNodeParam1Single{para: ValueTy::Bytes as u8, hrtv, subx, inst: TIS}),
+                    Keyword(Address) => Box::new(IRNodeParam1Single{para: ValueTy::Addr  as u8, hrtv, subx, inst: TIS}),
+                    _ => return e
+                }
+            }
             Operator(op) => {
                 let inst;
                 let mut suby = left;
@@ -365,8 +385,8 @@ impl Syntax {
         let isl = bl > u8::MAX as usize;
         let inst = maybe!(isl, PBUFL, PBUF);
         let size = maybe!(isl, 
-            (bl as u16 - 1).to_be_bytes().to_vec(),
-            vec![bl as u8 - 1]
+            (bl as u16).to_be_bytes().to_vec(),
+            vec![bl as u8]
         );
         let para = iter::empty().chain(size).chain(b.clone()).collect::<Vec<_>>();
         Ok(Box::new(IRNodeParams{hrtv: true, inst, para}))
@@ -524,7 +544,7 @@ impl Syntax {
                 nxt = next!();
                 let Integer(idx) = nxt else { return e };
                 nxt = next!();
-                let mut adr = Address::new();
+                let mut adr = field::Address::new();
                 if let Partition(':') = nxt {
                     let Token::Addr(a) = nxt else { return e };
                     adr = *a;

@@ -4,22 +4,31 @@
 macro_rules! define_func_codes {
     () => {
         
+        pub fn fitsh(self, irs: &str) -> Ret<Self> {
+            let tks = Tokenizer::new(irs.as_bytes());
+            let sytax = Syntax::new(tks.parse()?);
+            let irnodes = sytax.parse()?;
+            self.irnode(irnodes)
+        }
+
+        pub fn irnode(self, irnodes: IRNodeBlock) -> Ret<Self> {
+            let ircodes = irnodes.serialize();
+            self.ircode(ircodes)
+        }
+
+        pub fn ircode(mut self, ircodes: Vec<u8>) -> Ret<Self> {
+            // debug_println!("{}", ircodes.irnode_print(true).unwrap());
+            self.func.cdty = Fixed1::from([CodeType::IRNode as u8]);
+            self.func.code = BytesW2::from(ircodes)?;
+            Ok(self)
+        }
+        
         pub fn bytecode(mut self, cds: Vec<u8>) -> Self {
             self.func.cdty = Fixed1::from([CodeType::Bytecode as u8]);
             self.func.code = BytesW2::from(cds).unwrap();
             self
         }
 
-        pub fn irnode(mut self, irs: &str) -> Ret<Self> {
-            let tks = Tokenizer::new(irs.as_bytes());
-            let sytax = Syntax::new(tks.parse()?);
-            let irnodes = sytax.parse()?;
-            let ircodes = irnodes.serialize();
-            // debug_println!("{}", ircodes.irnode_print(true).unwrap());
-            self.func.cdty = Fixed1::from([CodeType::IRNode as u8]);
-            self.func.code = BytesW2::from(ircodes)?;
-            Ok(self)
-        }
     };
 } 
 

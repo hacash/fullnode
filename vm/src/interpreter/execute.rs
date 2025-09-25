@@ -314,7 +314,7 @@ pub fn execute_code(
             MERGE    => { let p = ops.pop()?; ops.compo()?.merge(p.compo_get()?)?; }
             LENGTH   => { let l = ops.compo()?.length(cap)?; *ops.peek()? = l; }
             HASKEY   => { let k = ops.pop()?; let h = ops.compo()?.haskey(k)?; *ops.peek()? = h; }
-            ITEMGET  => { let k = ops.pop()?; *ops.peek()? = ops.compo()?.itemget(k)?; }
+            ITEM     => { let k = ops.pop()?; *ops.peek()? = ops.compo()?.itemget(k)?; }
             KEYS     => { ops.compo()?.keys()?; }
             VALUES   => { ops.compo()?.values()?; }
             HEAD     => { let v = ops.pop()?.compo()?.head()?; ops.push(v)?; }

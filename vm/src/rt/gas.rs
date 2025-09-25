@@ -36,7 +36,7 @@ impl GasTable {
         gst.set(1,  &[CU8, CU16, CU32, CU64, CU128, CBUF, CTO, TID, TIS, TNIL, TMAP, TLIST, PU8, PU16, P0, P1, P2, P3, PNBUF, PNIL, DUP, POP, NOP, NT, END, RET, ABT, ERR, AST]);
         // gst.set(2,  &[...]); // all other bytecode
         gst.set(3,  &[XLG, PUT, MOVE, CHOISE, BRL, BRS, BRSL, BRSLN]);
-        gst.set(4,  &[XOP, HREAD, HREADU, HREADUL, MOD, MUL, DIV, ITEMGET, HASKEY, LENGTH]);
+        gst.set(4,  &[XOP, HREAD, HREADU, HREADUL, MOD, MUL, DIV, ITEM, HASKEY, LENGTH]);
         gst.set(5,  &[POW, KEYS, VALUES]);
         gst.set(6,  &[HWRITE, HWRITEX, HWRITEXL, INSERT, REMOVE, CLEAR, APPEND]);
         gst.set(8,  &[MGET, JOIN, REV, NEWLIST, NEWMAP]);
