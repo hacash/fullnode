@@ -320,7 +320,7 @@ pub fn execute_code(
             TAIL     => { let v = ops.pop()?.compo()?.tail()?; ops.push(v)?; }
             APPEND   => { let v = ops.pop()?; ops.compo()?.append(cap, v)? }
             CLONE    => { let c = ops.compo()?.copy(); *ops.peek()? = Compo(c); }
-            UPLIST   => unpack_list(pu8!(), locals, ops.pop()?.compo()?.list_mut()?)?,
+            UPLIST   => { let i = ops.pop()?.checked_u8()?; unpack_list(i, locals, ops.pop()?.compo()?.list_mut()?)?; }
             // heap
             HGROW    => gas += heap.grow(pu8!())?,
             HWRITE   => heap.write(ops.pop()?, ops.pop()?)?,

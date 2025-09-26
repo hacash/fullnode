@@ -399,7 +399,7 @@ bytecode_metadata_define!{
     TAIL       : 0, 1, 1,     tail
     APPEND     : 0, 2, 1,     append
     CLONE      : 0, 1, 1,     clone
-    UPLIST     : 1, 1, 0,     unpack_list
+    UPLIST     : 0, 2, 0,     unpack_list
 
     XLG        : 1, 1, 1,     local_logic    
     XOP        : 1, 1, 0,     local_operand         

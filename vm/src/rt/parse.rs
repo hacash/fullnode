@@ -42,11 +42,11 @@ impl BytecodePrint for Vec<u8> {
             if desc {
                 let mut line = maybe!(jpdests.contains(&i), format!("#{}:\n    ", i), s!("    "));
                 match inst {
-                    P0 => line += &format!("{} · ", 0),
-                    P1 => line += &format!("{} · ", 1),
-                    P2 => line += &format!("{} · ", 2),
-                    P3 => line += &format!("{} · ", 3),
-                    PU8 => line += &format!("{} · ", self[i+1]),
+                    P0 =>   line += &format!("{} · ", 0),
+                    P1 =>   line += &format!("{} · ", 1),
+                    P2 =>   line += &format!("{} · ", 2),
+                    P3 =>   line += &format!("{} · ", 3),
+                    PU8 =>  line += &format!("{} · ",  self[i+1]),
                     PU16 => line += &format!("{} · ", pu16!(i+1)),
                     RET | END | ERR | ABT => line += "--",
                     JMPL | JMPS | JMPSL => line += "# ",
@@ -57,7 +57,10 @@ impl BytecodePrint for Vec<u8> {
             }else{
                 res.push_str(&format!("{:?} ", inst));
             }
+            // debug_println!("i ------------------- {:?}", i);
             if ! meta.valid {
+                // debug_println!("{}", res);
+                // debug_println!("{:?}, {}, {}, {}, {}, {}", self, self[i-2], self[i-1], self[i], self[i+1], self[i+2], );
                 return itr_err_fmt!(InstInvalid, "bytecode_print err of inst {}", byte)
             }
             i += 1;
@@ -111,13 +114,13 @@ impl BytecodePrint for Vec<u8> {
                     i += 1;
                     let r = i + n;
                     pms.push(format!("0x{}", hex::encode(&self[i..r])));
-                    i += n;
+                    i = r - 1;
                 } else if let PBUFL = inst {
                     let n = u16::from_be_bytes(self[i..i+2].try_into().unwrap()) as usize;
-                    i += 1;
+                    i += 2;
                     let r = i + n;
                     pms.push(format!("0x{}", hex::encode(&self[i..r])));
-                    i += n;
+                    i = r - 1;
                 }
                 if desc {
                     res.push_str(&pms.join(","));

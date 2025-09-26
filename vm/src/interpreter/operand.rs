@@ -1,12 +1,12 @@
 
 
-fn locop_arithmetic<F>(y: &mut Value, x: &mut Value, f: F) -> VmrtErr
+fn locop_arithmetic<F>(x: &mut Value, y: &mut Value, f: F) -> VmrtErr
 where
     F: FnOnce(&Value, &Value) -> VmrtRes<Value>
 {
     cast_arithmetic(x, y)?;
     let v = f(&x, &y)?;
-    *y = v;
+    *x = v;
     Ok(())
 }
 
@@ -18,9 +18,9 @@ fn binop_arithmetic<F>(operand_stack: &mut Stack, f: F) -> VmrtErr
 where
     F: FnOnce(&Value, &Value) -> VmrtRes<Value>
 {
-    let mut x = operand_stack.pop()?;
-    let y = operand_stack.peek()?;
-    locop_arithmetic(y, &mut x, f)
+    let mut y = operand_stack.pop()?;
+    let x = operand_stack.peek()?;
+    locop_arithmetic(x, &mut y, f)
 }
 
 
@@ -29,12 +29,12 @@ where
 *   such as: v = x && y
 */
 
-fn locop_btw<F>(y: &mut Value, x: &mut Value, f: F) -> VmrtErr
+fn locop_btw<F>(x: &mut Value, y: &mut Value, f: F) -> VmrtErr
 where
     F: FnOnce(&Value, &Value) -> VmrtRes<Value>
 {
     let v = f(&x, &y)?;
-    *y = v;
+    *x = v;
     Ok(())
 }
 
@@ -42,9 +42,9 @@ fn binop_btw<F>(operand_stack: &mut Stack, f: F) -> VmrtErr
 where
     F: FnOnce(&Value, &Value) -> VmrtRes<Value>
 {
-    let mut x = operand_stack.pop()?;
-    let y = operand_stack.peek()?;
-    locop_btw(y, &mut x, f)
+    let mut y = operand_stack.pop()?;
+    let x = operand_stack.peek()?;
+    locop_btw(x, &mut y, f)
 }
 
 

@@ -82,7 +82,7 @@ pub fn execute4() {
 pub fn execute5() {
 
     let permithac_codes = lang_to_bytecode(r##"
-        unpack_list(0, pick(0))
+        unpack_list(pick(0), 0)
         var addr = $0
         var mei  = $1
         mei = hac_to_mei(mei)
