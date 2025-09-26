@@ -31,7 +31,7 @@ mod amm {
 
     #[test]
     fn deploy() {
-        use vm::ir::IRNodePrint;
+        // use vm::ir::IRNodePrint;
 
         /*
             VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
@@ -42,14 +42,13 @@ mod amm {
 
 
         let payable_hac = lang_to_ircode(r##"
-            local_move(0)
-            var argv = $0
-            var addr = $1 
+            unpack_list(0, pick(0))
+            var addr = $0
+            var amt =  $1
             var zhu =  $2
-            addr = argv[0]
-            let mei = hac_to_mei(argv[1])
+            let mei = hac_to_mei(amt)
             assert mei < 100
-            zhu = hac_to_zhu(argv[1])
+            zhu = hac_to_zhu(amt)
             assert zhu > 0
 
             var akey = $3
@@ -84,14 +83,9 @@ mod amm {
 
 
         let deposit_codes = lang_to_bytecode(r##"
-            local_move(0)
-            var param = $0
-            var addr  = $1
-            var res   = $2
-            assert type_id(param) == 15
-            assert param is list
-            addr = item_get(0, param)
-            addr = param[3]
+            unpack_list(0, pick(0))
+            var addr  = $0
+            var res   = $1
             assert addr is address
 
             return res

@@ -82,12 +82,10 @@ pub fn execute4() {
 pub fn execute5() {
 
     let permithac_codes = lang_to_bytecode(r##"
-        local_move(0)
-        var argv = $0
-        var addr = $1
-        var mei  = $2
-        addr = argv[0]
-        mei = hac_to_mei(argv[1])
+        unpack_list(0, pick(0))
+        var addr = $0
+        var mei  = $1
+        mei = hac_to_mei(mei)
         mei = choise(5, mei, mei > 5)
         let amt = zhu_to_hac(mei * 100000000)
         transfer_hac_to(addr, amt)
