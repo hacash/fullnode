@@ -51,6 +51,9 @@ keyword_define!{
     Assert    : "assert"
     CallCode  : "callcode"
     ByteCode  : "bytecode"
+    And       : "and"
+    Or        : "or"
+    Not       : "not"
     As        : "as"
     Is        : "is"
     Nil       : "nil"
@@ -209,14 +212,14 @@ irfn_define!{
 
     // NTCALL     : 1, 1, 1,     native_call
 
-    P0         : 0, 0, 1,     push_0
-    P1         : 0, 0, 1,     push_1
-    P2         : 0, 0, 1,     push_2
-    P3         : 0, 0, 1,     push_3
     PU8        : 1, 0, 1,     push_u8
     PU16       : 2, 0, 1,     push_u16
     PBUF       : 1, 0, 1,     push_buf
     PBUFL      : 2, 0, 1,     push_buf_long
+    P0         : 0, 0, 1,     push_0
+    P1         : 0, 0, 1,     push_1
+    P2         : 0, 0, 1,     push_2
+    P3         : 0, 0, 1,     push_3
     PNBUF      : 0, 0, 1,     push_empty_buf
     PNIL       : 0, 0, 1,     push_nil
 
@@ -227,28 +230,29 @@ irfn_define!{
     CU128      : 0, 1, 1,     cast_u128
     CBUF       : 0, 1, 1,     cast_bytes
     CTO        : 1, 1, 1,     cast_to
-    TID        : 0, 1, 1,     type_id
-    TIS        : 1, 1, 1,     type_is
     TNIL       : 0, 1, 1,     type_is_nil
     TLIST      : 0, 1, 1,     type_is_list
     TMAP       : 0, 1, 1,     type_is_map
+    TIS        : 1, 1, 1,     type_is
+    TID        : 0, 1, 1,     type_id
 
-    // DUP        : 0, 0, 1,     dump
-    // DUPX       : 1, 0, 1,     dump_x
+    DUP        : 0, 0, 1,     dump
+    DUPX       : 1, 0, 1,     dump_x
     // POP        : 0, 255, 0,   pop
-    // POPX       : 1, 255, 0,   pop_x
+    // POPN       : 1, 255, 0,   pop_n
+    PICK       : 1, 0, 1,     pick
     SWAP       : 0, 2, 2,     swap
     // REV        : 0, 255, 255, reverse_stace
     CHOISE     : 0, 3, 1,     choise
     SIZE       : 0, 1, 1,     size
     CAT        : 0, 2, 1,     concat
     // JOIN       : 0, 255, 1,   join
-    BYTE       : 0, 2, 1,     byte
     CUT        : 0, 3, 1,     buf_cut
     LEFT       : 1, 1, 1,     buf_left
     RIGHT      : 1, 1, 1,     buf_right
     LDROP      : 1, 1, 1,     buf_left_drop
     RDROP      : 1, 1, 1,     buf_right_drop
+    BYTE       : 0, 2, 1,     byte
 
     NEWLIST    : 0, 0, 1,     new_list
     NEWMAP     : 0, 0, 1,     new_map
@@ -257,47 +261,49 @@ irfn_define!{
     INSERT     : 0, 3, 1,     insert
     REMOVE     : 0, 2, 1,     remove
     CLEAR      : 0, 1, 1,     clear
-    ITEM       : 0, 2, 1,     item
-    HASKEY     : 0, 2, 1,     has_key
+    MERGE      : 0, 2, 1,     merge
     LENGTH     : 0, 1, 1,     length
+    HASKEY     : 0, 2, 1,     has_key
+    ITEMGET    : 0, 2, 1,     item_get
     KEYS       : 0, 1, 1,     keys
     VALUES     : 0, 1, 1,     values
     HEAD       : 0, 1, 1,     head
     TAIL       : 0, 1, 1,     tail
     APPEND     : 0, 2, 1,     append
     CLONE      : 0, 1, 1,     clone
+    UPLIST     : 1, 1, 0,     unpack_list
 
     XLG        : 1, 1, 1,     local_logic    
-    XOP        : 1, 1, 0,     local_operand  
+    XOP        : 1, 1, 0,     local_operand         
+    ALLOC      : 1, 0 ,0,     local_alloc       
+    PUTX       : 0, 2, 0,     local_x_put          
+    GETX       : 0, 1, 1,     local_x              
+    PUT        : 1, 1, 0,     local_put          
+    GET        : 1, 0, 1,     local          
+    GET0       : 0, 0, 1,     local_0        
+    GET1       : 0, 0, 1,     local_1        
+    GET2       : 0, 0, 1,     local_2   
+    GET3       : 0, 0, 1,     local_3    
 
-    HGROW      : 1, 0, 0,     heap_grow
-    HWRITE     : 0, 2, 0,     heap_write
-    HREAD      : 0, 2, 1,     heap_read
-    HWRITEX    : 1, 0, 1,     heap_write_x
-    HWRITEXL   : 2, 0, 1,     heap_write_xl
-    HREADU     : 1, 0, 1,     heap_read_uint
-    HREADUL    : 2, 0, 1,     heap_read_uint_long
     HSLICE     : 0, 2, 1,     heap_slice
-        
-    GET3       : 0, 0, 1,     local3        
-    GET2       : 0, 0, 1,     local2        
-    GET1       : 0, 0, 1,     local1        
-    GET0       : 0, 0, 1,     local0         
-    GET        : 1, 0, 1,     local             
-    PUT        : 1, 1, 0,     local_put       
-    MOVE       : 1, 0, 0,     local_move          
-    ALLOC      : 1, 0 ,0,     local_alloc        
-        
-    SRENT      : 0, 2, 0,     storage_rent
-    SSAVE      : 0, 2, 0,     storage_save
-    SDEL       : 0, 1, 0,     storage_del
-    SLOAD      : 0, 1, 1,     storage_load
-    STIME      : 0, 1, 1,     storage_time
+    HREADUL    : 2, 0, 1,     heap_read_uint_long
+    HREADU     : 1, 0, 1,     heap_read_uint
+    HWRITEXL   : 2, 0, 1,     heap_write_xl
+    HWRITEX    : 1, 0, 1,     heap_write_x
+    HREAD      : 0, 2, 1,     heap_read
+    HWRITE     : 0, 2, 0,     heap_write
+    HGROW      : 1, 0, 0,     heap_grow
 
-    MGET       : 0, 1, 1,     memory_get
-    MPUT       : 0, 2, 0,     memory_put
-    GGET       : 0, 1, 1,     global_get
     GPUT       : 0, 2, 0,     global_put
+    GGET       : 0, 1, 1,     global_get
+    MPUT       : 0, 2, 0,     memory_put
+    MGET       : 0, 1, 1,     memory_get
+        
+    STIME      : 0, 1, 1,     storage_time
+    SLOAD      : 0, 1, 1,     storage_load
+    SDEL       : 0, 1, 0,     storage_del
+    SSAVE      : 0, 2, 0,     storage_save
+    SRENT      : 0, 2, 0,     storage_rent
 
     // AND        : 0, 2, 1,     and
     // OR         : 0, 2, 1,     or

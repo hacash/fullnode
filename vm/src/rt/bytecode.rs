@@ -43,22 +43,22 @@ pub enum Bytecode {
     ________________29  = 0x1d,
     ________________30  = 0x1e,
     NTCALL              = 0x1f, // *@  native call
-    P0                  = 0x20, // +      push u8 0
-    P1                  = 0x21, // +      push u8 1
-    P2                  = 0x22, // +      push u8 2
-    P3                  = 0x23, // +      push u8 3
-    ________________36  = 0x24,
-    ________________37  = 0x25,       
-    ________________38  = 0x26,       
-    ________________39  = 0x27,          
-    PU8                 = 0x28, // *+     push u8
-    PU16                = 0x29, // **+    push u16
-    PBUF                = 0x2a, // *+     push buf
-    PBUFL               = 0x2b, // **+    push buf long  
+    PU8                 = 0x20, // *+     push u8
+    PU16                = 0x21, // **+    push u16
+    PBUF                = 0x22, // *+     push buf
+    PBUFL               = 0x23, // **+    push buf long  
+    P0                  = 0x24, // +      push u8 0
+    P1                  = 0x25, // +      push u8 1
+    P2                  = 0x26, // +      push u8 2
+    P3                  = 0x27, // +      push u8 3
+    PNIL                = 0x28, // +      push nil
+    PNBUF               = 0x29, // +      push buf empty
+    ________________42  = 0x2a,
+    ________________43  = 0x2b,       
     ________________44  = 0x2c,       
-    ________________45  = 0x2d,     
-    PNBUF               = 0x2e, // +      push buf empty
-    PNIL                = 0x2f, // +      push nil
+    ________________45  = 0x2d,          
+    ________________46  = 0x2e,       
+    ________________47  = 0x2f,     
     CU8                 = 0x30, // &      cast u8
     CU16                = 0x31, // &      cast u16
     CU32                = 0x32, // &      cast u32
@@ -67,31 +67,31 @@ pub enum Bytecode {
     ________________53  = 0x35,
     CBUF                = 0x36, // &      cast buf
     CTO                 = 0x37, // *&     cast to
-    TID                 = 0x38, // &   type id
-    TIS                 = 0x39, // *&  is type id
-    TNIL                = 0x3a, // &   is nil push Bool(true)
-    TLIST               = 0x3b, // &   is compo list push Bool(true)
-    TMAP                = 0x3c, // &   is compo map  push Bool(true)
+    TNIL                = 0x38, // &   is nil push Bool(true)
+    TLIST               = 0x39, // &   is compo list push Bool(true)
+    TMAP                = 0x3a, // &   is compo map  push Bool(true)
+    TIS                 = 0x3b, // *&  is type id
+    TID                 = 0x3c, // &   type id
     ________________61  = 0x3d,
     ________________62  = 0x3e,       
     ________________63  = 0x3f,   
     DUP                 = 0x40, // +      copy 0
     DUPX                = 0x41, // *+     copy u8
     POP                 = 0x42, // a      pop top
-    POPX                = 0x43, // *a...b pop n
-    SWAP                = 0x44, // a,b++  swap  b,a = a,b
-    REV                 = 0x45, // a...b  reverse u8
-    CHOISE              = 0x46, // a,b,c+ (x ? a : b)
-    SIZE                = 0x47, // &      size (u16)
-    CAT                 = 0x48, // a,b+   buf: b + a
-    JOIN                = 0x49, // a...bn+
-    BYTE                = 0x4a, // a,b+   val[n] = u8
+    POPN                = 0x43, // *a...b pop n
+    PICK                = 0x44, // *      pick
+    SWAP                = 0x45, // a,b++  swap  b,a = a,b
+    REV                 = 0x46, // a...b  reverse u8
+    CHOISE              = 0x47, // a,b,c+ (x ? a : b)
+    SIZE                = 0x48, // &      size (u16)
+    CAT                 = 0x49, // a,b+   buf: b + a
+    JOIN                = 0x4a, // a...bn+
     CUT                 = 0x4b, // a,b,c+ cut buf (v, ost, len)+
     LEFT                = 0x4c, // *&     cut left  buf *
     RIGHT               = 0x4d, // *&     cut right buf *
     LDROP               = 0x4e, // *&     drop buf left *
     RDROP               = 0x4f, // *&     drop buf right *
-    ________________80  = 0x50,
+    BYTE                = 0x50, // a,b+   val[n] = u8
     ________________81  = 0x51,
     ________________82  = 0x52,
     ________________83  = 0x53,
@@ -117,7 +117,7 @@ pub enum Bytecode {
     MERGE               = 0x67, // a,b+    compo merge
     LENGTH              = 0x68, // t+      compo length
     HASKEY              = 0x69, // t,k+    compo check has key
-    ITEM                = 0x6a, // t,k+    compo iten get
+    ITEMGET             = 0x6a, // t,k+    compo iten get
     KEYS                = 0x6b, // &       compo keys
     VALUES              = 0x6c, // &       compo values
     HEAD                = 0x6d, // &       compo pick last
@@ -125,7 +125,7 @@ pub enum Bytecode {
     APPEND              = 0x6f, // &       compo append
     CLONE               = 0x70, // a++     compo clone
     _______________113  = 0x71,
-    _______________114  = 0x72,
+    UPLIST              = 0x72, // a       up pack list to local
     _______________115  = 0x73,
     _______________116  = 0x74,
     _______________117  = 0x75,
@@ -136,41 +136,41 @@ pub enum Bytecode {
     _______________122  = 0x7a,
     _______________123  = 0x7b,
     _______________124  = 0x7c,
-    _______________125  = 0x7d,
-    XLG                 = 0x7e, // *&    local logic
-    XOP                 = 0x7f, // *a    local operand
-    HGROW               = 0x80, // *     heap grow
-    HWRITE              = 0x81, // a,b   heap write
-    HREAD               = 0x82, // a,b+  heap read
-    HWRITEX             = 0x83, // *+    heap write x
-    HWRITEXL            = 0x84, // **+   heap write xl
-    HREADU              = 0x85, // *+    heap read u
-    HREADUL             = 0x86, // **+   heap read ul
-    HSLICE              = 0x87, // a,b+  create heap slice
-    GET3                = 0x88, // +     local get idx 3
-    GET2                = 0x89, // +     local get idx 2
-    GET1                = 0x8a, // +     local get idx 1    
-    GET0                = 0x8b, // +     local get idx 0       
-    GET                 = 0x8c, // *+    local get
-    PUT                 = 0x8d, // *a,b  local put       
-    MOVE                = 0x8e, // *     move ops one to local
-    ALLOC               = 0x8f, // *     local alloc
-    SRENT               = 0x90, // a,b   storage time rent
-    SSAVE               = 0x91, // a,b   storage save
-    SDEL                = 0x92, // a     storage delete
-    SLOAD               = 0x93, // &     storage load
-    STIME               = 0x94, // &     storage expire block
+    XLG                 = 0x7d, // *&    local logic
+    XOP                 = 0x7e, // *a    local operand
+    ALLOC               = 0x7f, // *     local allocQ 
+    PUTX                = 0x80, // v,i   local x put     
+    GETX                = 0x81, // &     local x get  
+    PUT                 = 0x82, // *a,b  local put       
+    GET                 = 0x83, // *+    local get  
+    GET0                = 0x84, // +     local get idx 0    
+    GET1                = 0x85, // +     local get idx 1     
+    GET2                = 0x86, // +     local get idx 2
+    GET3                = 0x87, // +     local get idx 3
+    HSLICE              = 0x88, // a,b+  create heap slice
+    HREADUL             = 0x89, // **+   heap read ul
+    HREADU              = 0x8a, // *+    heap read u
+    HWRITEXL            = 0x8b, // **+   heap write xl
+    HWRITEX             = 0x8c, // *+    heap write x
+    HREAD               = 0x8d, // a,b+  heap read
+    HWRITE              = 0x8e, // a,b   heap write
+    HGROW               = 0x8f, // *     heap grow
+    GGET                = 0x90, // &     global get
+    GPUT                = 0x91, // a,b   global put
+    MGET                = 0x92, // &     memory get
+    MPUT                = 0x93, // a,b   memory put
+    ________________148 = 0x94,
     ________________149 = 0x95,
     ________________150 = 0x96,
     ________________151 = 0x97,
     ________________152 = 0x98,
     ________________153 = 0x99,
     ________________154 = 0x9a,
-    ________________155 = 0x9b,
-    MGET                = 0x9c, // &     memory get
-    MPUT                = 0x9d, // a,b   memory put
-    GGET                = 0x9e, // &     global get
-    GPUT                = 0x9f, // a,b   global put
+    STIME               = 0x9b, // &     storage expire block
+    SLOAD               = 0x9c, // &     storage load
+    SDEL                = 0x9d, // a     storage delete
+    SSAVE               = 0x9e, // a,b   storage save
+    SRENT               = 0x9f, // a,b   storage time rent
     AND                 = 0xa0, // a,b+   amd
     OR                  = 0xa1, // a,b+   or
     EQ                  = 0xa2, // a,b+   equal
@@ -340,14 +340,14 @@ bytecode_metadata_define!{
 
     NTCALL     : 1, 1, 1,     native_call
 
-    P0         : 0, 0, 1,     push_0
-    P1         : 0, 0, 1,     push_1
-    P2         : 0, 0, 1,     push_2
-    P3         : 0, 0, 1,     push_3
     PU8        : 1, 0, 1,     push_u8
     PU16       : 2, 0, 1,     push_u16
     PBUF       : 1, 0, 1,     push_buf
     PBUFL      : 2, 0, 1,     push_buf_long
+    P0         : 0, 0, 1,     push_0
+    P1         : 0, 0, 1,     push_1
+    P2         : 0, 0, 1,     push_2
+    P3         : 0, 0, 1,     push_3
     PNBUF      : 0, 0, 1,     push_empty_buf
     PNIL       : 0, 0, 1,     push_nil
 
@@ -358,28 +358,29 @@ bytecode_metadata_define!{
     CU128      : 0, 1, 1,     cast_u128
     CBUF       : 0, 1, 1,     cast_bytes
     CTO        : 1, 1, 1,     cast_to
-    TID        : 0, 1, 1,     type_id
-    TIS        : 1, 1, 1,     type_is
     TNIL       : 0, 1, 1,     type_is_nil
     TLIST      : 0, 1, 1,     type_is_list
     TMAP       : 0, 1, 1,     type_is_map
+    TIS        : 1, 1, 1,     type_is
+    TID        : 0, 1, 1,     type_id
 
     DUP        : 0, 0, 1,     dump
     DUPX       : 1, 0, 1,     dump_x
     POP        : 0, 255, 0,   pop
-    POPX       : 1, 255, 0,   pop_x
+    POPN       : 1, 255, 0,   pop_n
+    PICK       : 1, 0, 1,     pick
     SWAP       : 0, 2, 2,     swap
     REV        : 0, 255, 255, reverse_stace
     CHOISE     : 0, 3, 1,     choise
     SIZE       : 0, 1, 1,     size
     CAT        : 0, 2, 1,     concat
     JOIN       : 0, 255, 1,   join
-    BYTE       : 0, 2, 1,     byte
     CUT        : 0, 3, 1,     buf_cut
     LEFT       : 1, 1, 1,     buf_left
     RIGHT      : 1, 1, 1,     buf_right
     LDROP      : 1, 1, 1,     buf_left_drop
     RDROP      : 1, 1, 1,     buf_right_drop
+    BYTE       : 0, 2, 1,     byte
 
     NEWLIST    : 0, 0, 1,     new_list
     NEWMAP     : 0, 0, 1,     new_map
@@ -388,47 +389,49 @@ bytecode_metadata_define!{
     INSERT     : 0, 3, 1,     insert
     REMOVE     : 0, 2, 1,     remove
     CLEAR      : 0, 1, 1,     clear
-    ITEM       : 0, 2, 1,     item
-    HASKEY     : 0, 2, 1,     has_key
+    MERGE      : 0, 2, 1,     merge
     LENGTH     : 0, 1, 1,     length
+    HASKEY     : 0, 2, 1,     has_key
+    ITEMGET    : 0, 2, 1,     item_get
     KEYS       : 0, 1, 1,     keys
     VALUES     : 0, 1, 1,     values
     HEAD       : 0, 1, 1,     head
     TAIL       : 0, 1, 1,     tail
     APPEND     : 0, 2, 1,     append
     CLONE      : 0, 1, 1,     clone
+    UPLIST     : 1, 1, 0,     unpack_list
 
     XLG        : 1, 1, 1,     local_logic    
-    XOP        : 1, 1, 0,     local_operand  
-
-    HGROW      : 1, 0, 0,     heap_grow
-    HWRITE     : 0, 2, 0,     heap_write
-    HREAD      : 0, 2, 1,     heap_read
-    HWRITEX    : 1, 0, 1,     heap_write_x
-    HWRITEXL   : 2, 0, 1,     heap_write_xl
-    HREADU     : 1, 0, 1,     heap_read_uint
-    HREADUL    : 2, 0, 1,     heap_read_uint_long
-    HSLICE     : 0, 2, 1,     heap_slice
-        
-    GET3       : 0, 0, 1,     local_3        
-    GET2       : 0, 0, 1,     local_2        
+    XOP        : 1, 1, 0,     local_operand         
+    ALLOC      : 1, 0 ,0,     local_alloc       
+    PUTX       : 0, 2, 0,     local_x_put          
+    GETX       : 0, 1, 1,     local_x              
+    PUT        : 1, 1, 0,     local_put          
+    GET        : 1, 0, 1,     local          
+    GET0       : 0, 0, 1,     local_0        
     GET1       : 0, 0, 1,     local_1        
-    GET0       : 0, 0, 1,     local_0         
-    GET        : 1, 0, 1,     local             
-    PUT        : 1, 1, 0,     local_put       
-    MOVE       : 1, 0, 0,     local_move          
-    ALLOC      : 1, 0 ,0,     local_alloc     
-        
-    SRENT      : 0, 2, 0,     storage_rent
-    SSAVE      : 0, 2, 0,     storage_save
-    SDEL       : 0, 1, 0,     storage_del
-    SLOAD      : 0, 1, 1,     storage_load
-    STIME      : 0, 1, 1,     storage_time
+    GET2       : 0, 0, 1,     local_2   
+    GET3       : 0, 0, 1,     local_3    
 
-    MGET       : 0, 1, 1,     memory_get
-    MPUT       : 0, 2, 0,     memory_put
-    GGET       : 0, 1, 1,     global_get
+    HSLICE     : 0, 2, 1,     heap_slice
+    HREADUL    : 2, 0, 1,     heap_read_uint_long
+    HREADU     : 1, 0, 1,     heap_read_uint
+    HWRITEXL   : 2, 0, 1,     heap_write_xl
+    HWRITEX    : 1, 0, 1,     heap_write_x
+    HREAD      : 0, 2, 1,     heap_read
+    HWRITE     : 0, 2, 0,     heap_write
+    HGROW      : 1, 0, 0,     heap_grow
+
     GPUT       : 0, 2, 0,     global_put
+    GGET       : 0, 1, 1,     global_get
+    MPUT       : 0, 2, 0,     memory_put
+    MGET       : 0, 1, 1,     memory_get
+        
+    STIME      : 0, 1, 1,     storage_time
+    SLOAD      : 0, 1, 1,     storage_load
+    SDEL       : 0, 1, 0,     storage_del
+    SSAVE      : 0, 2, 0,     storage_save
+    SRENT      : 0, 2, 0,     storage_rent
 
     AND        : 0, 2, 1,     and
     OR         : 0, 2, 1,     or

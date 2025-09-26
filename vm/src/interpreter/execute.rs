@@ -194,7 +194,7 @@ pub fn execute_code(
     macro_rules! pcutbuf { ($w: expr) => { itrbuf!(codes, *pc, $w) } }
     macro_rules! _pctrtaddr { () => { ContractAddress::parse(&pcutbuf!(CONTRACT_ADDRESS_WIDTH)).map_err(|e|ItrErr(ContractAddrErr, e))? }}
     macro_rules! ops_pop_to_u16 { () => { ops.pop()?.checked_u16()? } }
-    macro_rules! _ops_peek_to_u16 { () => { ops.peek()?.checked_u16()? } }
+    macro_rules!    ops_peek_to_u16 { () => { ops.peek()?.checked_u16()? } }
     macro_rules! check_compo_type { ($m: ident) => { match ops.compo() { Ok(c) => c.$m(), _ => false, } } }
 
     // start run
@@ -260,49 +260,48 @@ pub fn execute_code(
             // native call
             NTCALL => { let (r, g) = NativeCall::call(pu8!(), &ops.peek()?.canbe_ext_call_data(heap)?)?;
                 *ops.peek()? = r; gas += g; },
-            // type
-            TLIST => *ops.peek()? = Bool(check_compo_type!(is_list)),
-            TMAP  => *ops.peek()? = Bool(check_compo_type!(is_map)),
-            TNIL  => *ops.peek()? = Bool(pty!() == ValueTy::Nil),
-            TIS   => *ops.peek()? = Bool(ptyn!() == pu8!()),
-            TID   => *ops.peek()? =   U8(ptyn!()),
-            // cast
-            CU8   => ops.peek()?.cast_u8()?,
-            CU16  => ops.peek()?.cast_u16()?,
-            CU32  => ops.peek()?.cast_u32()?,
-            CU64  => ops.peek()?.cast_u64()?,
-            CU128 => ops.peek()?.cast_u128()?,
-            /* CU256 => ops.peek()?.cast_u256()?, */
-            CBUF  => ops.peek()?.cast_buf()?,
-            CTO   => ops.peek()?.cast_to(pu8!())?,
             // constant
-            P0    => ops.push(U8(0))?,
-            P1    => ops.push(U8(1))?,
-            P2    => ops.push(U8(2))?,
-            P3    => ops.push(U8(3))?,
             PU8   => ops.push(U8(pu8!()))?,
             PU16  => ops.push(U16(pu16!()))?,
             PBUF  => ops.push(pbuf!())?,
             PBUFL => ops.push(pbufl!().valid(cap)?)?, // buf long
+            P0    => ops.push(U8(0))?,
+            P1    => ops.push(U8(1))?,
+            P2    => ops.push(U8(2))?,
+            P3    => ops.push(U8(3))?,
             PNBUF => ops.push(Value::empty_bytes())?,
             PNIL  => ops.push(Value::Nil)?,
-            // stack & buffer operand
+            // cast & type
+            CU8   => ops.peek()?.cast_u8()?,
+            CU16  => ops.peek()?.cast_u16()?,
+            CU32  => ops.peek()?.cast_u32()?,
+            CU64  => ops.peek()?.cast_u64()?,
+            CU128 => ops.peek()?.cast_u128()?, /* CU256 => ops.peek()?.cast_u256()?, */
+            CBUF  => ops.peek()?.cast_buf()?,
+            CTO   => ops.peek()?.cast_to(pu8!())?,
+            TNIL  => *ops.peek()? = Bool(pty!() == ValueTy::Nil),
+            TLIST => *ops.peek()? = Bool(check_compo_type!(is_list)),
+            TMAP  => *ops.peek()? = Bool(check_compo_type!(is_map)),
+            TIS   => *ops.peek()? = Bool(ptyn!() == pu8!()),
+            TID   => *ops.peek()? =   U8(ptyn!()),
+            // stack & buffer
             DUP    => ops.push(ops.last()?)?,
             DUPX   => ops.dupx(pu8!())?,
             POP    => { ops.pop()?; } // drop
-            POPX   => ops.popx(pu8!())?,
+            POPN   => ops.popx(pu8!())?,
+            PICK   => ops.pick(pu8!())?,
             SWAP   => ops.swap()?,
             REV    => ops.reverse()?, // reverse
             CHOISE => { if ops.pop()?.check_false() { ops.swap()? } ops.pop()?; } /* x ? a : b */
             SIZE   => { *ops.peek()? = U16(ops.peek()?.can_get_size()?) }
             CAT    => ops.cat(cap)?,
             JOIN   => ops.join(cap)?,
-            BYTE   => { let i = ops_pop_to_u16!(); ops.peek()?.cutbyte(i)?; }
             CUT    => { let (l, o) = (ops.pop()?, ops.pop()?); ops.peek()?.cutout(l, o)?; }
             LEFT   => ops.peek()?.cutleft(  pu8_as_u16!())?,
             RIGHT  => ops.peek()?.cutright( pu8_as_u16!())?,
             LDROP  => ops.peek()?.dropleft( pu8_as_u16!())?,
             RDROP  => ops.peek()?.dropright(pu8_as_u16!())?,
+            BYTE   => { let i = ops_pop_to_u16!(); ops.peek()?.cutbyte(i)?; }
             // compo
             NEWLIST  => ops.push(Compo(CompoItem::new_list()))?,
             NEWMAP   => ops.push(Compo(CompoItem::new_map()))?,
@@ -314,13 +313,14 @@ pub fn execute_code(
             MERGE    => { let p = ops.pop()?; ops.compo()?.merge(p.compo_get()?)?; }
             LENGTH   => { let l = ops.compo()?.length(cap)?; *ops.peek()? = l; }
             HASKEY   => { let k = ops.pop()?; let h = ops.compo()?.haskey(k)?; *ops.peek()? = h; }
-            ITEM     => { let k = ops.pop()?; *ops.peek()? = ops.compo()?.itemget(k)?; }
+            ITEMGET  => { let k = ops.pop()?; *ops.peek()? = ops.compo()?.itemget(k)?; }
             KEYS     => { ops.compo()?.keys()?; }
             VALUES   => { ops.compo()?.values()?; }
             HEAD     => { let v = ops.pop()?.compo()?.head()?; ops.push(v)?; }
             TAIL     => { let v = ops.pop()?.compo()?.tail()?; ops.push(v)?; }
             APPEND   => { let v = ops.pop()?; ops.compo()?.append(cap, v)? }
             CLONE    => { let c = ops.compo()?.copy(); *ops.peek()? = Compo(c); }
+            UPLIST   => unpack_list(pu8!(), locals, ops.pop()?.compo()?.list_mut()?)?,
             // heap
             HGROW    => gas += heap.grow(pu8!())?,
             HWRITE   => heap.write(ops.pop()?, ops.pop()?)?,
@@ -331,29 +331,28 @@ pub fn execute_code(
             HREADUL  => ops.push(heap.read_ul(pu16!())?)?,
             HSLICE   => *ops.peek()? = heap.slice(ops.pop()?, ops.peek()?)?,
             // locals & heap & global & memory
-            // GETX   => *ops.peek()? = locals.load(ops_peek_to_u16!() as usize)?,
-            // PUTX   => locals.save(ops_pop_to_u16!(), ops.pop()?)?,
-            GET3  => ops.push(locals.load(3)?)?,
-            GET2  => ops.push(locals.load(2)?)?,
-            GET1  => ops.push(locals.load(1)?)?,
-            GET0  => ops.push(locals.load(0)?)?,
-            GET   => ops.push(locals.load(pu8!() as usize)?)?,
-            PUT   => locals.save(pu8_as_u16!(), ops.pop()?)?,
-            MOVE  => locals.save(pu8_as_u16!(), ops.pop()?)?,
-            ALLOC => { gas += gst.local_one_alloc * locals.alloc(pu8!())? as i64 } 
-            XOP   => local_operand(pu8!(), locals, ops.pop()?)?,
             XLG   => local_logic(pu8!(), locals, ops.peek()?)?,
+            XOP   => local_operand(pu8!(), locals, ops.pop()?)?,
+            ALLOC => { gas += gst.local_one_alloc * locals.alloc(pu8!())? as i64 } 
+            PUTX   => locals.save(ops_pop_to_u16!(), ops.pop()?)?,
+            GETX   => *ops.peek()? = locals.load(ops_peek_to_u16!() as usize)?,
+            PUT   => locals.save(pu8_as_u16!(), ops.pop()?)?,
+            GET   => ops.push(locals.load(pu8!() as usize)?)?,
+            GET0  => ops.push(locals.load(0)?)?,
+            GET1  => ops.push(locals.load(1)?)?,
+            GET2  => ops.push(locals.load(2)?)?,
+            GET3  => ops.push(locals.load(3)?)?,
             // storage
-            SRENT => gas += state.srent(gst, hei, context_addr, ops.pop()?, ops.pop()?)?,
+            STIME => *ops.peek()? = state.stime(hei, context_addr, ops.peek()?)?,
+            SLOAD => *ops.peek()? = state.sload(hei, context_addr, ops.peek()?)?,
             SDEL  => state.sdel(context_addr, ops.pop()?)?,
             SSAVE => state.ssave(hei, context_addr,ops.pop()?, ops.pop()?)?,
-            SLOAD => *ops.peek()? = state.sload(hei, context_addr, ops.peek()?)?,
-            STIME => *ops.peek()? = state.stime(hei, context_addr, ops.peek()?)?,
-            // memory & global
-            MGET => *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?,
-            MPUT => memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?,
-            GGET => *ops.peek()? = globals.get(ops.peek()?)?,
+            SRENT => gas += state.srent(gst, hei, context_addr, ops.pop()?, ops.pop()?)?,
+            // global & memory
             GPUT => globals.put(ops.pop()?, ops.pop()?)?,
+            GGET => *ops.peek()? = globals.get(ops.peek()?)?,
+            MPUT => memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?,
+            MGET => *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?,
             // logic
             AND  => binop_btw(ops, lgc_and)?,
             OR   => binop_btw(ops, lgc_or)?,
@@ -497,3 +496,18 @@ fn local_logic(mark: u8, locals: &mut Stack, value: &mut Value) -> VmrtErr {
     }?;
     Ok(())
 }
+
+
+fn unpack_list(mut i: u8, locals: &mut Stack, list: &mut VecDeque<Value>) -> VmrtErr {
+    let start = i as usize;
+    if locals.len() < start + list.len() {
+        return itr_err_code!(OutOfLocal)
+    }
+    // replace
+    while let Some(item) = list.pop_front() {
+        *locals.edit(i)? = item;
+        i += 1;
+    }
+    Ok(())
+}
+

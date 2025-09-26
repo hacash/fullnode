@@ -146,6 +146,19 @@ impl Stack {
     }
 
     #[inline(always)]
+    pub fn pick(&mut self, x: u8) -> VmrtErr {
+        let x = x as usize;
+        let idx = self.datas.len() as i32 - x as i32 - 1;
+        if idx < 0 {
+            return itr_err_code!(OutOfStack)
+        }
+        let item = self.datas.remove(idx as usize);
+        self.push(item)?;
+        Ok(())
+    }
+    
+
+    #[inline(always)]
     pub fn reverse(&mut self) -> VmrtErr {
         let x = self.pop()?.checked_u8()? as usize;
         if x < 2 {

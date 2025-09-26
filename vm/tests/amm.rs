@@ -73,13 +73,13 @@ mod amm {
 
         "##).unwrap();
 
-
+        /*
         println!("payable_hac ir code len {} : {}\n{}", 
             payable_hac.len(), 
             payable_hac.to_hex(), 
             payable_hac.irnode_print(true).unwrap(),
         );
-
+        */
 
 
 
@@ -89,14 +89,10 @@ mod amm {
             var addr  = $1
             var res   = $2
             assert type_id(param) == 15
-            assert type_is_list(param)
+            assert param is list
             addr = item_get(0, param)
             addr = param[3]
-            assert type_is(12, addr)
-
-            let bdt = param + addr
-            res = 1 + 2
-            assert bdt
+            assert addr is address
 
             return res
         "##).unwrap();

@@ -564,7 +564,7 @@ impl IRNode for IRNodeDouble {
                     let subystr = print_sub!(suo, self.suby, tab, desc);
                     buf.push_str(&format!("while {} {{{}}}", subxstr, subystr))
                 }
-                ITEM => {
+                ITEMGET => {
                     let subxstr = print_sub!(suo, self.subx, tab, desc);
                     let subystr = print_sub_inline!(suo, self.suby, desc);
                     buf.push_str(&format!("{}[{}]", subxstr, subystr))
