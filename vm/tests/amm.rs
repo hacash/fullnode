@@ -70,8 +70,7 @@ mod amm {
             var addr = $0
             var amt  = $1
             unpack_list(pick(0), 0)
-            var zhu  = $1
-            zhu = hac_to_zhu(amt) as u128
+            var zhu $1 = hac_to_zhu(amt) as u128
             assert zhu > 10000
             // SAT
             var sat = memory_get("sat") as u128

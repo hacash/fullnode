@@ -68,8 +68,12 @@ impl Syntax {
     }
 
     pub fn bind_local_assign(&mut self, s: String, v: Box<dyn IRNode>) -> Ret<Box<dyn IRNode>> {
-        use Bytecode::*;
         let idx = self.local_alloc;
+        self.bind_local_assign_replace(s, idx, v)
+    }
+
+    pub fn bind_local_assign_replace(&mut self, s: String, idx: u8, v: Box<dyn IRNode>) -> Ret<Box<dyn IRNode>> {
+        use Bytecode::*;
         self.bind_local(s, idx)?;
         Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: PUT, para: idx, subx: v}))
     }
@@ -498,25 +502,33 @@ impl Syntax {
             }
             Keyword(Var) => { // let foo = $0
                 let e = errf!("var statement format error");
+                let gidx = |nxt: &Token| {
+                    let mut lcalc: Option<u8> = None;
+                    if let Identifier(num) = nxt.clone() {
+                        if '$' == num.as_bytes()[0] as char {
+                            if let Ok(idx) = num.trim_start_matches('$').parse::<u8>() {
+                                lcalc = Some(idx);
+                            };
+                        }
+                    }
+                    lcalc
+                };
                 nxt = next!();
                 let Identifier(id) = nxt else {
                     return e
                 };
                 nxt = next!();
+                let mut reset_idx = None;
+                if let Some(idx) = gidx(nxt) {
+                    reset_idx = Some(idx);
+                    nxt = next!();
+                }
                 let Keyword(Assign) = nxt else {
                     return e
                 };
                 nxt = next!();
-                let mut lcalc: Option<u8> = None;
-                if let Identifier(num) = nxt {
-                    if '$' == num.as_bytes()[0] as char {
-                        if let Ok(idx) = num.trim_start_matches('$').parse::<u8>() {
-                            lcalc = Some(idx);
-                        };
-                    }
-                }
                 let vk = id.clone();
-                match lcalc {
+                match gidx(nxt) {
                     Some(idx) => {
                         self.bind_local(vk, idx)?;
                         Box::new(IRNodeEmpty{})
@@ -524,7 +536,10 @@ impl Syntax {
                     _ => {
                         self.idx -= 1;
                         let v = self.item_must(0)?;
-                        self.bind_local_assign(vk, v)?
+                        match reset_idx {
+                            Some(idx) => self.bind_local_assign_replace(vk, idx, v)?,
+                            _ => self.bind_local_assign(vk, v)?,
+                        }
                     }
                 }
             }
