@@ -66,20 +66,23 @@ mod amm {
             /* 
                 dddddd   /8 "" 
             */ 
+
             var addr = $0
-            var amt =  $1
+            var amt  = $1
             unpack_list(pick(0), 0)
-            var zhu =  $2
-            var sat =  $3
-            zhu = hac_to_zhu(amt)
+            var zhu  = $1
+            zhu = hac_to_zhu(amt) as u128
             assert zhu > 10000
-            var hkey = $4
-            hkey = "zhu"
-            let akey = "addr"
-            sat = memory_get("sat")
+            // SAT
+            var sat = memory_get("sat") as u128
             assert sat is not nil
+
+            let akey = "addr"
             let adr = memory_get(akey)
             assert adr == addr
+
+            var zhu_key = "zhu"
+
 
             return 0
 

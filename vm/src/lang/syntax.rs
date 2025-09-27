@@ -67,10 +67,20 @@ impl Syntax {
         Ok(())
     }
 
+    pub fn bind_local_assign(&mut self, s: String, v: Box<dyn IRNode>) -> Ret<Box<dyn IRNode>> {
+        use Bytecode::*;
+        let idx = self.local_alloc;
+        self.bind_local(s, idx)?;
+        Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: PUT, para: idx, subx: v}))
+    }
+
     pub fn bind_local(&mut self, s: String, idx: u8) -> Rerr {
-        if let Some(..) = self.locals.get(&s) {
-            return errf!("<let> cannot repeat bind the symbol '{}'", s)
+        if idx >= self.local_alloc {
+            self.local_alloc = idx + 1;
         }
+        /* if let Some(..) = self.locals.get(&s) {
+            return errf!("<let> cannot repeat bind the symbol '{}'", s)
+        } */
         self.locals.insert(s, idx);
         Ok(())
     }
@@ -497,17 +507,26 @@ impl Syntax {
                     return e
                 };
                 nxt = next!();
-                let Identifier(num) = nxt else {
-                    return e
-                };
-                if '$' != num.as_bytes()[0] as char {
-                    return e
+                let mut lcalc: Option<u8> = None;
+                if let Identifier(num) = nxt {
+                    if '$' == num.as_bytes()[0] as char {
+                        if let Ok(idx) = num.trim_start_matches('$').parse::<u8>() {
+                            lcalc = Some(idx);
+                        };
+                    }
                 }
-                let Ok(idx) = num.trim_start_matches('$').parse::<u8>() else {
-                    return e
-                };
-                self.bind_local(id.clone(), idx)?;
-                Box::new(IRNodeEmpty{})
+                let vk = id.clone();
+                match lcalc {
+                    Some(idx) => {
+                        self.bind_local(vk, idx)?;
+                        Box::new(IRNodeEmpty{})
+                    }
+                    _ => {
+                        self.idx -= 1;
+                        let v = self.item_must(0)?;
+                        self.bind_local_assign(vk, v)?
+                    }
+                }
             }
             Keyword(Let) => { // let foo = $0
                 let e = errf!("let statement format error");
@@ -632,10 +651,10 @@ impl Syntax {
         }
         // local alloc
         if let Some(m) = self.locals.values().max() {
-            let local_alloc = Box::new(IRNodeParam1{
+            let allocs = Box::new(IRNodeParam1{
                 hrtv: false, inst: Bytecode::ALLOC, para: *m+1, text: s!("")
             });
-            self.irnode.subs[0] = local_alloc;
+            self.irnode.subs[0] = allocs;
         }
         Ok(self.irnode)
     }
