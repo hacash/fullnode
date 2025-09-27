@@ -40,48 +40,62 @@ mod amm {
         */
 
 
+        let payable_sat_fitsh = r##"
+            var addr = $0
+            var sat =  $1
+            unpack_list(pick(0), 0)
+            assert sat > 1000
+            var akey = $3
+            akey = "addr"
+            let adr = memory_get(akey)
+            assert adr is nil
+            memory_put(akey, addr)
+            memory_put("sat", sat)
+            return 0
+        "##;
+
+        let payable_sat = lang_to_ircode(&payable_sat_fitsh).unwrap();
+
+        println!("\n{}\n", payable_sat.irnode_print(true).unwrap());
+
 
         let payable_hac_fitsh = r##"
+            // HAC Pay
+            //
+            //
+            /* 
+                dddddd   /8 "" 
+            */ 
             var addr = $0
             var amt =  $1
             unpack_list(pick(0), 0)
             var zhu =  $2
-            let mei = hac_to_mei(amt)
-            assert mei < 100
+            var sat =  $3
             zhu = hac_to_zhu(amt)
-            assert zhu > 0
-
-            var akey = $3
+            assert zhu > 10000
             var hkey = $4
             hkey = "zhu"
-            akey = "addr"
-
-            let hamt = memory_get(hkey)
-            assert hamt is nil
-            memory_put(hkey, zhu)
-
-            var hadr = $5
-            hadr = memory_get(akey)
-            if hadr is nil {
-                memory_put(akey, addr)
-            } else {
-                assert hadr == addr
-            }
+            let akey = "addr"
+            sat = memory_get("sat")
+            assert sat is not nil
+            let adr = memory_get(akey)
+            assert adr == addr
 
             return 0
+
 
         "##;
 
         let payable_hac = lang_to_ircode(&payable_hac_fitsh).unwrap();
 
+        println!("\n{}\n", payable_hac.irnode_print(true).unwrap());
         
-        println!("payable_hac byte code len {} : {}\n\n{}\n\n{}", 
+        /* println!("payable_hac byte code len {} : {}\n\n{}\n\n{}", 
             payable_hac.len(), 
             payable_hac.to_hex(), 
             lang_to_bytecode(&payable_hac_fitsh).unwrap().bytecode_print(true).unwrap(),
             payable_hac.irnode_print(true).unwrap()
-        );
-        // 
+        ); */
         
 
 
@@ -102,6 +116,7 @@ mod amm {
 
         Contract::new()
         // .call(Abst::new(PermitHAC).bytecode(permit_hac))
+        .call(Abst::new(PayableSAT).ircode(payable_sat).unwrap())
         .call(Abst::new(PayableHAC).ircode(payable_hac).unwrap())
         .func(Func::new("deposit").bytecode(deposit_codes))
         .testnet_deploy_print("2:244");    

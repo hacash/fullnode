@@ -243,9 +243,14 @@ impl Syntax {
             Keyword(Is) => {
                 let e = errf!("<is> express format error");
                 nxt = next!();
+                let mut is_not = false;
+                if let Keyword(Not) = nxt {
+                    is_not = true;
+                    nxt = next!();
+                }
                 let hrtv = true;
                 let subx = left;
-                match nxt {
+                let mut res: Box<dyn IRNode> = match nxt {
                     Keyword(Nil)     => Box::new(IRNodeSingle{hrtv, subx, inst: TNIL   }),
                     Keyword(List)    => Box::new(IRNodeSingle{hrtv, subx, inst: TLIST  }),
                     Keyword(Map)     => Box::new(IRNodeSingle{hrtv, subx, inst: TMAP   }),
@@ -258,7 +263,11 @@ impl Syntax {
                     Keyword(Bytes)   => Box::new(IRNodeParam1Single{para: ValueTy::Bytes as u8, hrtv, subx, inst: TIS}),
                     Keyword(Address) => Box::new(IRNodeParam1Single{para: ValueTy::Addr  as u8, hrtv, subx, inst: TIS}),
                     _ => return e
+                };
+                if is_not {
+                    res = Box::new(IRNodeSingle{hrtv: true, inst: NOT, subx: res})
                 }
+                res
             }
             Operator(op) => {
                 let inst;

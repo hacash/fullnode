@@ -143,11 +143,44 @@ impl Tokenizer<'_> {
         Ok(())
     }
 
+    pub fn parse_comments(&mut self, max: usize, c: char) -> bool {
+        macro_rules! gtc { ($n: expr) => { self.texts[self.idx + $n] as char } }
+        match c {
+            '/' => { // single line comments
+                self.idx += 2;
+                while self.idx < max && gtc!(0) != '\n' {
+                    self.idx += 1;
+                }
+                true         
+            }
+            '*' => { // multiple line comments
+                self.idx += 2;
+                while self.idx < max - 1 {
+                    if gtc!(0) == '*' && gtc!(1) == '/' {
+                        self.idx += 2;
+                        break
+                    }
+                    self.idx += 1;
+                }
+                true
+            }
+            _ => false
+        }
+    } 
+
     pub fn parse(mut self) -> Ret<Vec<Token>> {
         use TokenType::*;
         let max = self.texts.len();
         while self.idx < max {
             let c = self.texts[self.idx] as char;
+            match c { // check comments
+                '/' if self.idx < max - 1  => {
+                    if self.parse_comments(max, self.texts[self.idx + 1] as char) {
+                        continue;
+                    }
+                },
+                _ => {}
+            }
             match c {
                 ' '|','|';'|'\n'|'\r'|'\t'   => self.push(Blank, c)?,
                 '_'|'$'|'a'..='z'|'A'..='Z'  => self.push(Word, c)?,
