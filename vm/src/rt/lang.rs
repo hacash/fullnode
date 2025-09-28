@@ -259,8 +259,8 @@ irfn_define!{
 
     NEWLIST    : 0, 0, 1,     new_list
     NEWMAP     : 0, 0, 1,     new_map
-    // PACKLIST   : 0, 255, 1,   new_list
-    // PACKMAP    : 0, 255, 1,   new_map
+    // PACKLIST   : 0, 255, 1,   pack_list
+    // PACKMAP    : 0, 255, 1,   pack_map
     INSERT     : 0, 3, 1,     insert
     REMOVE     : 0, 2, 1,     remove
     CLEAR      : 0, 1, 1,     clear

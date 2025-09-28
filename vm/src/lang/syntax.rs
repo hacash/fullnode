@@ -11,7 +11,7 @@ pub struct Syntax {
     idx: usize,
     locals: HashMap<String, u8>,
     bdlets: HashMap<String, Box<dyn IRNode>>,
-    bdlibs: HashMap<String, (u8, Address)>,
+    bdlibs: HashMap<String, (u8, Option<Address>)>,
     local_alloc: u8,
     check_op: bool,
     // leftv: Box<dyn AST>,
@@ -59,11 +59,13 @@ impl Syntax {
         }
     }
 
-    pub fn bind_lib(&mut self, s: String, idx: u8, adr: Address) -> Rerr {
+    pub fn bind_lib(&mut self, s: String, idx: u8, adr: Option<Address>) -> Rerr {
         if let Some(..) = self.bdlibs.get(&s) {
             return errf!("<use> cannot repeat bind the symbol '{}'", s)
         }
-        adr.must_contract()?;
+        if let Some(adr) = adr {
+            adr.must_contract()?;
+        }
         self.bdlibs.insert(s, (idx, adr));
         Ok(())
     }
@@ -268,16 +270,6 @@ impl Syntax {
                 let res = self.parse_next_op(left, *op)?;
                 self.check_op = true;
                 res
-                /*
-                let inst;
-                let mut subx = left;
-                let mut suby = unsafe { (&mut *sfptr).item_must(0)? };
-                subx.checkretval()?; // must retv
-                suby.checkretval()?; // must retv
-                (inst, subx, suby) = Self::may_swap_op_level(*op, subx, suby)?;
-                Box::new(IRNodeDouble{ hrtv: true, inst, subx, suby })
-                */
-
             }
             _ => { self.idx -= 1; left }
         })
@@ -301,34 +293,6 @@ impl Syntax {
         Ok(c_node(op, left, right))
     }
 
-
-    fn may_swap_op_level(_op1: OpTy, _op2: OpTy, mut _left: Box<dyn IRNode>, mut _right: Box<dyn IRNode>) -> Ret<IRNodeDouble> {
-        
-
-        unimplemented!()
-        /* let mut inst = lop.bytecode();
-        let mut change = false;
-        if let Some(y) = right.as_any().downcast_ref::<IRNodeDouble>() {
-            let rlv = OpTy::from_bytecode(y.inst)?.level();
-            let llv = lop.level();
-            change = llv >= rlv;
-            if change {
-                left = Box::new(IRNodeDouble{ hrtv: true, inst, subx: left, suby: y.subx.clone() });
-                inst = y.inst;
-            }
-        }
-        if change {
-            if let Some(y) = right.as_any().downcast_ref::<IRNodeDouble>() {
-                right = y.suby.clone();
-            }else{
-                unreachable!()
-            }
-        }
-        Ok((inst, left, right))
-        */
-    }
-
-
     pub fn item_must(&mut self, jp: usize) -> Ret<Box<dyn IRNode>> {
         self.idx += jp;
         match self.item_may()? {
@@ -340,7 +304,7 @@ impl Syntax {
     pub fn item_may_list(&mut self) -> Ret<Box<dyn IRNode>> {
         let block = self.item_may_block()?;
         Ok(match block.len() {
-            0 => IRNodeLeaf::nop_box(),
+            0 => Box::new(IRNodeEmpty{}),
             1 => block.into_one(),
             _ => Box::new(block)
         })
@@ -402,12 +366,12 @@ impl Syntax {
                 let (_, subx) = self.must_get_func_argv(ArgvMode::PackList)?;
                 return Ok(match &id=="self" {
                     true => { // CALLINR
-                        let para: Vec<u8> = fnsg.to_vec();
+                        let para: Vec<u8> = fnsg.to_vec(); // fnsig
                         Box::new(IRNodeParamsSingle{hrtv: true, inst: CALLINR, para, subx})
                     },
                     false => { // CALL
-                        let usadr = self.link_lib(&id)?;
-                        let para: Vec<u8> = iter::once(usadr).chain(fnsg).collect();
+                        let lib = self.link_lib(&id)?;
+                        let para: Vec<u8> = iter::once(lib).chain(fnsg).collect();
                         Box::new(IRNodeParamsSingle{hrtv: true, inst: CALL, para, subx})
                     },
                 })
@@ -623,16 +587,19 @@ impl Syntax {
                 nxt = next!();
                 let Integer(idx) = nxt else { return e };
                 nxt = next!();
-                let mut adr = field::Address::new();
-                if let Partition(':') = nxt {
+                let mut adr = None;
+                if let Keyword(Colon) = nxt {
+                    nxt = next!();
                     let Token::Addr(a) = nxt else { return e };
-                    adr = *a;
+                    adr = Some(*a as field::Address);
+                }else{
+                    back!();
                 }
-                back!();
                 if *idx > u8::MAX as u128 {
                     return errf!("lib statement link index overflow")
                 }
-                self.bind_lib(id.clone(), *idx as u8, adr.clone())?;
+                // debug_println!("lib statement {}, {:?}", *idx, adr);
+                self.bind_lib(id.clone(), *idx as u8, adr)?;
                 Box::new(IRNodeEmpty{})
             }
             Keyword(CallCode) => {

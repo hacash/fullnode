@@ -21,6 +21,7 @@ impl Syntax {
 
     pub fn must_get_func_argv(&mut self, md: ArgvMode) -> Ret<(usize, Box<dyn IRNode>)> {
         let argvs = self.item_may_block()?.into_vec();
+        println!("must_get_func_argv: {:?}", argvs);
         let alen = argvs.len();
         let argv = match md {
             ArgvMode::Concat => concat_func_argvs(argvs)?,
@@ -176,7 +177,7 @@ fn pack_func_argvs(mut list: Vec<Box<dyn IRNode>>) -> Ret<Box<dyn IRNode>> {
             let pklist = IRNodeLeaf::notext(true, PACKLIST);
             list.push(Box::new(num));
             list.push(Box::new(pklist));
-            Box::new(IRNodeBlock{hrtv: true, inst: IRBLOCK, subs: list})
+            Box::new(IRNodeList{subs: list})
         }),
         _ => errf!("function argv length cannot more than 15"),
     }

@@ -30,14 +30,14 @@ impl Contract {
         self
     }
 
-    pub fn testnet_deploy_print(&self, fe: &str) {
-        let txfee = Amount::from(fe).unwrap();
+    pub fn testnet_deploy_print(&self, fee: &str) {
+        let txfee = Amount::from(fee).unwrap();
         let mut act = ContractDeploy::new();
         act.contract = self.ctrt.clone();
         act.construct_argv = self.cargv.clone();
         act.protocol_cost = txfee.dist_mul(CONTRACT_STORE_FEE_MUL as u128).unwrap();
         // print
-        curl_trs_fee(vec![Box::new(act)], txfee);
+        curl_trs_2(vec![Box::new(act)], fee);
     } 
 
 

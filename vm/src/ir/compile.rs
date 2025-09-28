@@ -18,6 +18,14 @@ fn compile_block(list: &Vec<Box<dyn IRNode>>) -> VmrtRes<Vec<u8>> {
     Ok(codes)
 }
 
+fn compile_list(list: &Vec<Box<dyn IRNode>>) -> VmrtRes<Vec<u8>> {
+    let mut codes = vec![];
+    for one in list {
+        codes.append( &mut one.codegen()? );
+    }
+    Ok(codes)
+}
+
 
 fn compile_double(btcd: Bytecode, x: IRNRef, y: IRNRef) -> VmrtRes<Option<Vec<u8>>> {
     Ok(match btcd {

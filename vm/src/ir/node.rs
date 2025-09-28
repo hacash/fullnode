@@ -822,40 +822,45 @@ impl IRNode for IRNodeBytecodes {
 
 /*************************************/
 
+macro_rules! define_ir_list_or_block { ($name: ident, $inst: expr, $compile_fn: ident) => {
+     
 
 #[derive(Default, Debug, Clone)]
-pub struct IRNodeBlock {
-    pub hrtv: bool, 
-    pub inst: Bytecode,
+pub struct $name {
     pub subs: Vec<Box<dyn IRNode>>,
 }
 
-impl std::ops::Deref for IRNodeBlock {
+impl std::ops::Deref for $name {
     type Target = Vec<Box<dyn IRNode>>;
     fn deref(&self) -> &Vec<Box<dyn IRNode>> {
         &self.subs
     }
 }
 
-impl DerefMut for IRNodeBlock {
+impl DerefMut for $name {
     fn deref_mut(&mut self) -> &mut Vec<Box<dyn IRNode>> {
         &mut self.subs
     }
 }
 
-impl IRNode for IRNodeBlock {
+impl IRNode for $name {
     fn as_any(&self) -> &dyn Any { self }
     fn subs(&self) -> usize { self.subs.len() }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
+    fn hasretval(&self) -> bool {
+        match self.subs.last() {
+            None => false,
+            Some(s) => s.hasretval(),
+        }
+    }
+    fn bytecode(&self) -> u8 { $inst as u8 }
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
-        compile_block(&self.subs)
+        $compile_fn(&self.subs)
     }
     fn serialize(&self) -> Vec<u8> {
         if self.subs.len() > u16::MAX as usize {
-            panic!("IRNodeBlock length overflow")
+            panic!("IRNode list length overflow")
         }
-        let mut bytes = iter::once(self.inst as u8)
+        let mut bytes = iter::once($inst as u8)
             .chain((self.subs.len() as u16).to_be_bytes()).collect::<Vec<_>>();
         for a in &self.subs {
             bytes.append(&mut a.serialize());
@@ -868,7 +873,7 @@ impl IRNode for IRNodeBlock {
         let mut buf = String::new();
         if desc {
         }else{
-            buf.push_str(&format!("{}{:?} {} :\n", pre, self.inst, num));
+            buf.push_str(&format!("{}{:?} {} :\n", pre, $inst, num));
         }
         if num == 0 {
             return buf
@@ -888,20 +893,19 @@ impl IRNode for IRNodeBlock {
 
 
 #[allow(dead_code)]
-impl IRNodeBlock {
-    pub fn new() -> IRNodeBlock {
-        IRNodeBlock{
-            hrtv: false, 
-            inst: IRBLOCK,
+impl $name {
+    pub fn new() -> Self {
+        Self {
             subs: vec![],
         }
     }
-    pub fn with_capacity(n: usize) -> IRNodeBlock {
-        IRNodeBlock{
-            hrtv: false, 
-            inst: IRBLOCK,
-            subs: Vec::with_capacity(n),
+    pub fn with_capacity(n: usize) -> Ret<Self> {
+        if n > u16::MAX as usize {
+            return errf!("IRBlock length max {}", u16::MAX)
         }
+        Ok(Self{
+            subs: Vec::with_capacity(n),
+        })
     }
     pub fn into_vec(self) -> Vec<Box<dyn IRNode>> {
         self.subs
@@ -912,17 +916,25 @@ impl IRNodeBlock {
 }
 
 
+   
+} }
+
+
+define_ir_list_or_block!{ IRNodeList,  IRLIST,  compile_list }
+define_ir_list_or_block!{ IRNodeBlock, IRBLOCK, compile_block }
+
+
 /*******************************/
 
 
 
-pub trait IRNodePrint {
-    fn irnode_print(&self, desc: bool) -> VmrtRes<String>;
+pub trait IRCodePrint {
+    fn ircode_print(&self, desc: bool) -> VmrtRes<String>;
 }
 
-impl IRNodePrint for Vec<u8> {
+impl IRCodePrint for Vec<u8> {
 
-    fn irnode_print(&self, desc: bool) -> VmrtRes<String> {
+    fn ircode_print(&self, desc: bool) -> VmrtRes<String> {
         let irs = parse_ir_block(self, &mut 0)?;
         let res = irs.print("    ", 0, desc);
         Ok(res)

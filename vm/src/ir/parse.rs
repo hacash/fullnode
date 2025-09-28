@@ -8,7 +8,7 @@ pub fn parse_ir_list(number: usize, stuff: &[u8]) -> VmrtRes<IRNodeBlock> {
     if codelen > u16::MAX as usize {
         return itr_err_code!(CodeTooLong)
     }
-    let mut block = IRNodeBlock::with_capacity(number);
+    let mut block = IRNodeBlock::with_capacity(number).unwrap();
     let mut seek = 0;
     for _i in 0..number {
         let irnode = parse_ir_node_must(stuff, &mut seek, 0, false)?;

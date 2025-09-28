@@ -129,6 +129,12 @@ impl AddrOrList {
         }
     }
 
+    pub fn from_list(list: Vec<Address>) -> Ret<Self> {
+        let mut v = AddressListW1::new();
+        v.append(list)?;
+        Ok(Self::Val2(v))
+    }
+
     pub fn from_addr(v: Address) -> Self {
         Self::Val1(v)
     } 

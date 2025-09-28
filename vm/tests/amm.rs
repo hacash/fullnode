@@ -6,6 +6,7 @@ mod common;
 
 
 #[cfg(test)]
+#[allow(unused)]
 mod amm {
     use field::*;
     use field::interface::*;
@@ -21,7 +22,7 @@ mod amm {
 
     #[test]
     fn op() {
-        use vm::ir::IRNodePrint;
+        use vm::ir::*;
 
         println!("\n{}\n", lang_to_bytecode(r##"
             var foo = (1 + 2) * 3 * (4 * 5) / (6 / (7 + 8))
@@ -32,7 +33,7 @@ mod amm {
 
     #[test]
     fn deploy() {
-        use vm::ir::IRNodePrint;
+        use vm::ir::*;
 
         /*
             VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
@@ -57,7 +58,7 @@ mod amm {
 
         let payable_sat = lang_to_ircode(&payable_sat_fitsh).unwrap();
 
-        println!("\n{}\n", payable_sat.irnode_print(true).unwrap());
+        println!("\n{}\n", payable_sat.ircode_print(true).unwrap());
 
 
         let payable_hac_fitsh = r##"
@@ -91,17 +92,17 @@ mod amm {
 
         let payable_hac = lang_to_ircode(&payable_hac_fitsh).unwrap();
 
-        println!("\n{}\n", payable_hac.irnode_print(true).unwrap());
+        println!("\n{}\n", payable_hac.ircode_print(true).unwrap());
         
         /* println!("payable_hac byte code len {} : {}\n\n{}\n\n{}", 
             payable_hac.len(), 
             payable_hac.to_hex(), 
             lang_to_bytecode(&payable_hac_fitsh).unwrap().bytecode_print(true).unwrap(),
-            payable_hac.irnode_print(true).unwrap()
+            payable_hac.ircode_print(true).unwrap()
         ); */
         
 
-        let deposit_codes = lang_to_bytecode(r##"
+        let deposit_codes = lang_to_ircode(r##"
             // check param
             var sat  = $0
             var zhu  = $1
@@ -125,16 +126,16 @@ mod amm {
         "##).unwrap();
 
 
-        println!("\n{}\n{}\n", deposit_codes.bytecode_print(true).unwrap(), deposit_codes.to_hex());
+        println!("\n{}\n{}\n", deposit_codes.ircode_print(true).unwrap(), deposit_codes.to_hex());
 
-
+        let deposit_codes = convert_ir_to_bytecode(&deposit_codes).unwrap();
 
         Contract::new()
         // .call(Abst::new(PermitHAC).bytecode(permit_hac))
         .call(Abst::new(PayableSAT).ircode(payable_sat).unwrap())
         .call(Abst::new(PayableHAC).ircode(payable_hac).unwrap())
-        .func(Func::new("deposit").bytecode(deposit_codes))
-        .testnet_deploy_print("2:244");    
+        .func(Func::new("deposit").public().bytecode(deposit_codes))
+        .testnet_deploy_print("4:244");    
 
     }
 
@@ -146,7 +147,11 @@ mod amm {
         use vm::action::*;
 
         let maincodes = lang_to_bytecode(r##"
-            throw "1"
+            lib HacSwap = 1: VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
+            var sat = 50000
+            var hac = HacSwap.deposit(sat, 100000, 15)
+            // transfer_sat_to()
+
         "##).unwrap();
 
         println!("{}", maincodes.bytecode_print(true).unwrap());
@@ -156,7 +161,7 @@ mod amm {
         act.codes = BytesW2::from(maincodes).unwrap();
 
         // print
-        curl_trs_1(vec![Box::new(act)]);
+        curl_trs_3(vec![Box::new(act)], "22:244");
 
     }
 

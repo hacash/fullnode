@@ -252,10 +252,10 @@ pub enum Bytecode {
     RET                 = 0xee, // a     func return (DATA)
     END                 = 0xef, //       func return nil
     IRCODE              = 0xf0, // <IR NODE>
-    IRBLOCK             = 0xf1, // <IR NODE>
-    IRIF                = 0xf2, // <IR NODE>
-    IRWHILE             = 0xf3, // <IR NODE>
-    ________________244 = 0xf4,
+    IRLIST              = 0xf1, // <IR NODE>
+    IRBLOCK             = 0xf2, // <IR NODE>
+    IRIF                = 0xf3, // <IR NODE>
+    IRWHILE             = 0xf4, // <IR NODE>
     ________________245 = 0xf5,
     ________________246 = 0xf6,
     ________________247 = 0xf7,
@@ -384,8 +384,8 @@ bytecode_metadata_define!{
 
     NEWLIST    : 0, 0, 1,     new_list
     NEWMAP     : 0, 0, 1,     new_map
-    PACKLIST   : 0, 255, 1,   new_list
-    PACKMAP    : 0, 255, 1,   new_map
+    PACKLIST   : 0, 255, 1,   pack_list
+    PACKMAP    : 0, 255, 1,   pack_map
     INSERT     : 0, 3, 1,     insert
     REMOVE     : 0, 2, 1,     remove
     CLEAR      : 0, 1, 1,     clear

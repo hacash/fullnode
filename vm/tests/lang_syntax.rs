@@ -1,7 +1,7 @@
 // use sys::*;
 // use vm::IRNode;
 // use vm::rt::BytecodePrint;
-// use vm::ir::IRNodePrint;
+// use vm::ir::IRCodePrint;
 // use vm::lang::{Tokenizer, Syntax};
 
 
@@ -104,8 +104,8 @@ fn t1(){
     println!("asts len: {}", astblock.len());
 
     println!("irnodes: \n\n{}  len: {}\n\n", irnodes.hex(), irnodes.len());
-    println!("irnodes: \n\n{}\n\n{}\n\n", astblock.print("  ", 0, false), irnodes.irnode_print(false).unwrap());
-    println!("irnodes: \n\n{}\n\n{}\n\n{}\n", sss, astblock.print("    ", 0, true), irnodes.irnode_print(true).unwrap());
+    println!("irnodes: \n\n{}\n\n{}\n\n", astblock.print("  ", 0, false), irnodes.ircode_print(false).unwrap());
+    println!("irnodes: \n\n{}\n\n{}\n\n{}\n", sss, astblock.print("    ", 0, true), irnodes.ircode_print(true).unwrap());
     let codes = astblock.codegen().unwrap();
     println!("bytecode: \n\n{}  len: {}\n\n", codes.hex(), codes.len());
     println!("bytecode: \n\n{}\n\n", codes.bytecode_print(false).unwrap());
