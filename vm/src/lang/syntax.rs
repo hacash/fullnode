@@ -13,6 +13,7 @@ pub struct Syntax {
     bdlets: HashMap<String, Box<dyn IRNode>>,
     bdlibs: HashMap<String, (u8, Address)>,
     local_alloc: u8,
+    check_op: bool,
     // leftv: Box<dyn AST>,
     irnode: IRNodeBlock,
 }
@@ -170,30 +171,9 @@ impl Syntax {
         Self {
             tokens,
             irnode: IRNodeBlock::new(),
+            check_op: true,
             ..Default::default()
         }
-    }
-
-    fn may_swap_op_level(lop: OpTy, mut left: Box<dyn IRNode>, mut right: Box<dyn IRNode>) -> Ret<(Bytecode, Box<dyn IRNode>, Box<dyn IRNode>)> {
-        let mut inst = lop.bytecode();
-        let mut change = false;
-        if let Some(y) = right.as_any().downcast_ref::<IRNodeDouble>() {
-            let rlv = OpTy::from_bytecode(y.inst)?.level();
-            let llv = lop.level();
-            change = llv > rlv;
-            if change {
-                left = Box::new(IRNodeDouble{ hrtv: true, inst, subx: left, suby: y.subx.clone() });
-                inst = y.inst;
-            }
-        }
-        if change {
-            if let Some(y) = right.clone().as_any().downcast_ref::<IRNodeDouble>() {
-                right = y.suby.clone();
-            }else{
-                unreachable!()
-            }
-        }
-        Ok((inst, left, right))
     }
 
 
@@ -207,7 +187,7 @@ impl Syntax {
         }
         macro_rules! next { () => {{
             if self.idx >= max {
-                return errf!("item_with_left get next token error")
+                return errf!("item with left get next token error")
             }
             let nxt = &self.tokens[self.idx];
             self.idx += 1;
@@ -283,7 +263,12 @@ impl Syntax {
                 }
                 res
             }
-            Operator(op) => {
+            Operator(op) if self.check_op => {
+                self.check_op = false;
+                let res = self.parse_next_op(left, *op)?;
+                self.check_op = true;
+                res
+                /*
                 let inst;
                 let mut subx = left;
                 let mut suby = unsafe { (&mut *sfptr).item_must(0)? };
@@ -291,10 +276,58 @@ impl Syntax {
                 suby.checkretval()?; // must retv
                 (inst, subx, suby) = Self::may_swap_op_level(*op, subx, suby)?;
                 Box::new(IRNodeDouble{ hrtv: true, inst, subx, suby })
+                */
+
             }
             _ => { self.idx -= 1; left }
         })
     }
+
+    fn parse_next_op(&mut self, mut left: Box<dyn IRNode>, op: OpTy) -> Ret<Box<dyn IRNode>> {
+        let mut right = self.item_must(0)?;
+        let c_node = |op: OpTy, l, r| { Box::new(IRNodeDouble{hrtv: true, inst: op.bytecode(), subx: l, suby: r}) };
+        if let Ok(nxt) = self.next() {
+            if let Operator(op2) = nxt {
+                if op.level() >= op2.level() {
+                    left = c_node(op, left, right);
+                    return self.parse_next_op(left, op2)
+                }else{
+                    right = self.parse_next_op(right, op2)?;
+                }
+            }else{
+                self.idx -= 1; // back
+            }
+        }
+        Ok(c_node(op, left, right))
+    }
+
+
+    fn may_swap_op_level(_op1: OpTy, _op2: OpTy, mut _left: Box<dyn IRNode>, mut _right: Box<dyn IRNode>) -> Ret<IRNodeDouble> {
+        
+
+        unimplemented!()
+        /* let mut inst = lop.bytecode();
+        let mut change = false;
+        if let Some(y) = right.as_any().downcast_ref::<IRNodeDouble>() {
+            let rlv = OpTy::from_bytecode(y.inst)?.level();
+            let llv = lop.level();
+            change = llv >= rlv;
+            if change {
+                left = Box::new(IRNodeDouble{ hrtv: true, inst, subx: left, suby: y.subx.clone() });
+                inst = y.inst;
+            }
+        }
+        if change {
+            if let Some(y) = right.as_any().downcast_ref::<IRNodeDouble>() {
+                right = y.suby.clone();
+            }else{
+                unreachable!()
+            }
+        }
+        Ok((inst, left, right))
+        */
+    }
+
 
     pub fn item_must(&mut self, jp: usize) -> Ret<Box<dyn IRNode>> {
         self.idx += jp;
@@ -456,7 +489,10 @@ impl Syntax {
             }
             Token::Bytes(b) => Self::item_bytes(b)?,
             Partition('(') => {
+                let ckop = self.check_op;
+                self.check_op = true;
                 let exp = self.item_must(0)?;
+                self.check_op = ckop; // recover
                 exp.checkretval()?; // must retv
                 let e = errf!("(..) expression format error");
                 nxt = next!();

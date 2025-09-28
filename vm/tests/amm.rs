@@ -20,11 +20,12 @@ mod amm {
     use vm::contract::*;
 
     #[test]
-    fn verify_codes() {
+    fn op() {
+        use vm::ir::IRNodePrint;
 
-        verify_bytecodes(&build_codes!(
-            PU8 1 JMPL 0 8 JMPL 0 2 RET
-        )).unwrap()
+        println!("\n{}\n", lang_to_bytecode(r##"
+            var foo = (1 + 2) * 3 * (4 * 5) / (6 / (7 + 8))
+        "##).unwrap().bytecode_print(true).unwrap());
 
     }
 
@@ -44,7 +45,7 @@ mod amm {
             var addr = $0
             var sat =  $1
             unpack_list(pick(0), 0)
-            assert sat > 1000
+            assert sat >= 1000
             var akey = $3
             akey = "addr"
             let adr = memory_get(akey)
@@ -71,7 +72,7 @@ mod amm {
             var amt  = $1
             unpack_list(pick(0), 0)
             var zhu $1 = hac_to_zhu(amt) as u128
-            assert zhu > 10000
+            assert zhu >= 10000
             // SAT
             var sat = memory_get("sat") as u128
             assert sat is not nil
@@ -100,19 +101,31 @@ mod amm {
         ); */
         
 
-
-
         let deposit_codes = lang_to_bytecode(r##"
-            var addr  = $0
-            var res   = $1
+            // check param
+            var sat  = $0
+            var zhu  = $1
+            var exp  = $2
             unpack_list(pick(0), 0)
+            assert sat >= 1000 && zhu >= 10000
+            assert block_height() < exp
+            // 
+            var tt_sk $2 = "total_sat"
+            var tt_hk    = "total_hac"
+            var tt_sat = storage_load(tt_sk)
+            if tt_sat is nil {
+                return zhu // first deposit
+            }
+            var tt_hac = storage_load(tt_hk)
+            assert tt_hac is not nil
 
-            assert addr is address
-
-            return res
+            let in_hac = (sat as u128) * tt_hac * 1000 / tt_sat / 997
+            
+            return in_hac
         "##).unwrap();
 
 
+        println!("\n{}\n{}\n", deposit_codes.bytecode_print(true).unwrap(), deposit_codes.to_hex());
 
 
 
