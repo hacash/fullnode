@@ -2,8 +2,9 @@
 use protocol::action::*;
 use ValueTy::*;
 
-pub const CALL_EXTEND_ACTION_DEFS: [(u8, &'static str, ValueTy); 1] = [
+pub const CALL_EXTEND_ACTION_DEFS: [(u8, &'static str, ValueTy); 2] = [
     (HacToTrs::KIND as u8, "transfer_hac_to",    Nil),
+    (SatToTrs::KIND as u8, "transfer_sat_to",    Nil),
 ];
 
 

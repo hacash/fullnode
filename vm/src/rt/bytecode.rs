@@ -251,7 +251,7 @@ pub enum Bytecode {
     ABT                 = 0xed, //       abord
     RET                 = 0xee, // a     func return (DATA)
     END                 = 0xef, //       func return nil
-    IRCODE              = 0xf0, // <IR NODE>
+    IRBYTECODE          = 0xf0, // <IR NODE>
     IRLIST              = 0xf1, // <IR NODE>
     IRBLOCK             = 0xf2, // <IR NODE>
     IRIF                = 0xf3, // <IR NODE>
@@ -474,7 +474,8 @@ bytecode_metadata_define!{
     ERR        : 0, 1, 0,     throw
     ABT        : 0, 0, 0,     abort
 
-    IRCODE     : 2, 255, 0,   ir_code
+    IRBYTECODE : 2, 255, 0,   ir_bytecode
+    IRLIST     : 2, 255, 1,   ir_list
     IRBLOCK    : 2, 255, 0,   ir_block
     IRIF       : 0, 3, 0,     ir_if
     IRWHILE    : 0, 2, 0,     ir_while

@@ -68,7 +68,6 @@ mod amm {
             /* 
                 dddddd   /8 "" 
             */ 
-
             var addr = $0
             var amt  = $1
             unpack_list(pick(0), 0)
@@ -77,22 +76,20 @@ mod amm {
             // SAT
             var sat = memory_get("sat") as u128
             assert sat is not nil
-
             let akey = "addr"
             let adr = memory_get(akey)
             assert adr == addr
-
-            var zhu_key = "zhu"
-
-
+            var in_zhu = memory_get("zhu") as u128
+            assert in_zhu == zhu
+            // do deposit
+            self.deposit(addr, sat, zhu)
             return 0
-
 
         "##;
 
         let payable_hac = lang_to_ircode(&payable_hac_fitsh).unwrap();
 
-        println!("\n{}\n", payable_hac.ircode_print(true).unwrap());
+        println!("\n{}\n", lang_to_ircode(&payable_hac_fitsh).unwrap().ircode_print(true).unwrap());
         
         /* println!("payable_hac byte code len {} : {}\n\n{}\n\n{}", 
             payable_hac.len(), 
@@ -102,7 +99,7 @@ mod amm {
         ); */
         
 
-        let deposit_codes = lang_to_ircode(r##"
+        let prepare_codes = lang_to_ircode(r##"
             // check param
             var sat  = $0
             var zhu  = $1
@@ -112,29 +109,52 @@ mod amm {
             assert block_height() < exp
             // 
             var tt_sk $2 = "total_sat"
-            var tt_hk    = "total_hac"
+            var tt_zk    = "total_zhu"
             var tt_sat = storage_load(tt_sk)
             if tt_sat is nil {
                 return zhu // first deposit
             }
-            var tt_hac = storage_load(tt_hk)
-            assert tt_hac is not nil
+            var tt_zhu = storage_load(tt_zk)
+            assert tt_zhu is not nil
 
-            let in_hac = (sat as u128) * tt_hac * 1000 / tt_sat / 997
-            
-            return in_hac
+            var  in_zhu = (sat as u128) * tt_zhu * 1000 / tt_sat / 997
+            assert in_zhu <= zhu
+
+            memory_put("zhu", in_zhu)
+
+            return in_zhu
         "##).unwrap();
+        println!("prepare_codes:\n{}\n{}\n", prepare_codes.ircode_print(true).unwrap(), prepare_codes.to_hex());
+        let prepare_codes = convert_ir_to_bytecode(&prepare_codes).unwrap();
 
 
-        println!("\n{}\n{}\n", deposit_codes.ircode_print(true).unwrap(), deposit_codes.to_hex());
 
+        let deposit_codes = lang_to_ircode(r##"
+            // check param
+            var addr = $0
+            var sat  = $1
+            var zhu  = $2
+            unpack_list(pick(0), 0)
+
+
+
+
+            return 0
+        "##).unwrap();
+        println!("deposit_codes:\n{}\n{}\n", deposit_codes.ircode_print(true).unwrap(), deposit_codes.to_hex());
         let deposit_codes = convert_ir_to_bytecode(&deposit_codes).unwrap();
+
+
+
+
+
 
         Contract::new()
         // .call(Abst::new(PermitHAC).bytecode(permit_hac))
         .call(Abst::new(PayableSAT).ircode(payable_sat).unwrap())
         .call(Abst::new(PayableHAC).ircode(payable_hac).unwrap())
-        .func(Func::new("deposit").public().bytecode(deposit_codes))
+        .func(Func::new("prepare").public().bytecode(prepare_codes))
+        .func(Func::new("deposit").bytecode(deposit_codes))
         .testnet_deploy_print("4:244");    
 
     }
@@ -145,13 +165,15 @@ mod amm {
     fn maincall() {
 
         use vm::action::*;
-
+        
         let maincodes = lang_to_bytecode(r##"
             lib HacSwap = 1: VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
-            var sat = 50000
-            var hac = HacSwap.deposit(sat, 100000, 15)
-            // transfer_sat_to()
-
+            var sat = 50000 as u64
+            var zhu = HacSwap.deposit(sat, 100000, 15)
+            var adr = address_ptr(1)
+            transfer_sat_to(adr, sat)
+            transfer_hac_to(adr, zhu_to_hac(zhu))
+            end
         "##).unwrap();
 
         println!("{}", maincodes.bytecode_print(true).unwrap());

@@ -3,19 +3,22 @@
 /*
     parse ir list
 */
-pub fn parse_ir_list(number: usize, stuff: &[u8]) -> VmrtRes<IRNodeBlock> {
+pub fn parse_ir_list(stuff: &[u8], seek: &mut usize) -> VmrtRes<IRNodeList> {
+    let u16max = u16::MAX as usize;
     let codelen = stuff.len();
-    if codelen > u16::MAX as usize {
+    if codelen > u16max {
         return itr_err_code!(CodeTooLong)
     }
-    let mut block = IRNodeBlock::with_capacity(number).unwrap();
-    let mut seek = 0;
-    for _i in 0..number {
-        let irnode = parse_ir_node_must(stuff, &mut seek, 0, false)?;
-        block.push(irnode);
+    let mut list = IRNodeList::new();
+    loop {
+        let pres = parse_ir_node(stuff, seek)?;
+        let Some(irnode) = pres else {
+            break // end
+        };
+        list.push(irnode);
     }
     // finish
-    Ok(block)
+    Ok(list)
 }
 
 
@@ -95,7 +98,6 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
         bts
     }}}
 
-
     macro_rules! itrbuf { ($l: expr) => { {
         let _r = *seek + $l;
         if _r > codesz {
@@ -116,7 +118,24 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
     let meta = inst.metadata();
     let hrtv = meta.otput == 1;
     irnode = match inst {
-        // BLOCK IF WHILE
+        // BYTECODE LIST BLOCK IF WHILE
+        IRBYTECODE => {
+            let mut bts = IRNodeBytecodes::default();
+            let p = itrbuf!(2);
+            let n = u16::from_be_bytes(p.try_into().unwrap());
+            bts.codes = itrbuf!(n as usize);
+            Box::new(bts)
+        }
+        IRLIST => {
+            let mut list = IRNodeList::new();
+            let p = itrbuf!(2);
+            let n = u16::from_be_bytes(p.try_into().unwrap());
+            let ndp = depth + 1;
+            for _i in 0..n {
+                list.push( subdph!(ndp, false) );
+            }
+            Box::new(list)
+        }
         IRBLOCK => {
             let mut block = IRNodeBlock::new();
             let p = itrbuf!(2);
@@ -163,17 +182,18 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
                 return itr_err_fmt!(InstInvalid, "invalid irnode {}", inst as u8)
             }
             match (meta.param, meta.input) {
-                (0, 0) => Box::new(IRNodeLeaf::notext(hrtv, inst)), // leaf
+                // (0, 0) => Box::new(IRNodeLeaf::notext(hrtv, inst)), // leaf
                 (0, 1) => Box::new(IRNodeSingle{hrtv, inst, subx: submust!()}),
                 (0, 2) => Box::new(IRNodeDouble{hrtv, inst, subx: submust!(), suby: submust!()}),
                 (0, 3) => Box::new(IRNodeTriple{hrtv, inst, subx: submust!(), suby: submust!(), subz: submust!()}),
+                (0, 0|255) => Box::new(IRNodeLeaf::notext(hrtv, inst)), // leaf
                 (1, 0|255) => Box::new(IRNodeParam1{hrtv, inst, para: itrp1!(), text:s!("")}), // params one
                 (2, 0|255) => Box::new(IRNodeParam2{hrtv, inst, para: itrp2!()}), // params two
                 (1, 1) => Box::new(IRNodeParam1Single{hrtv, inst, para: itrp1!(), subx: submust!()}), // params one
                 (2, 1) => Box::new(IRNodeParam2Single{hrtv, inst, para: itrp2!(), subx: submust!()}), // params two
                 (a, 0) => Box::new(IRNodeParams{hrtv, inst, para: itrbuf!(a as usize)}), // params
                 (a, 1) => Box::new(IRNodeParamsSingle{hrtv, inst, para: itrbuf!(a as usize), subx: submust!()}),
-                _ => return itr_err_fmt!(InstInvalid, "invalid irnode of ps {} i {}", meta.param, meta.input)
+                _ => return itr_err_fmt!(InstInvalid, "invalid irnode {:?} of ps {} i {}", inst, meta.param, meta.input)
             }
         }
     };

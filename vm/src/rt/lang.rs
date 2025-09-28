@@ -47,7 +47,7 @@ keyword_define!{
     If        : "if"
     Else      : "else"
     While     : "while"
-    Finish    : "finish"
+    End       : "end"
     Return    : "return"
     Abort     : "abort"
     Throw     : "throw"
@@ -349,7 +349,8 @@ irfn_define!{
     // ERR        : 0, 1, 0,     throw
     // ABT        : 0, 0, 0,     abort
 
-    // IRCODE     : 2, 255, 0,   ir_code
+    // IRBYTECODE : 2, 255, 0,   ir_bytecode
+    // IRLIST     : 2, 255, 1,   ir_list
     // IRBLOCK    : 2, 255, 0,   ir_block
     // IRIF       : 0, 3, 0,     ir_if
     // IRWHILE    : 0, 2, 0,     ir_while

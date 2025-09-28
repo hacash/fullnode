@@ -100,9 +100,7 @@ impl BytecodePrint for Vec<u8> {
                         pms.push(format!(" {}(..) ", ary[idx].0));
                     }else if let CALL = inst {
                         let lib = self[i];
-                        i += 1;
-                        let func = hex::encode(&self[i..i+4]);
-                        i += 4;
+                        let func = hex::encode(&self[i+1..i+1+4]);
                         pms.push(format!(" {}.<{}> ", lib, func));
                         /* let lx = Address::SIZE;1` FA `Aq1    ``
                         let addr = Address::must_vec(self[i..i+lx].to_vec());

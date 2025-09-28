@@ -251,8 +251,8 @@ impl IRNode for IRNodeParam2 {
             match self.inst {
                 PU16 => buf.push_str(&format!("{}", u16::from_be_bytes(self.para))) ,
                 _ => {
-                    buf.push_str(meta.intro);
-                    buf.push_str(&format!("(0x{})", hex::encode(self.para)));
+                    let para = hex::encode(self.para);
+                    buf.push_str(&format!("{}(0x{})", meta.intro, para));
                 }
             };
         } else {
@@ -366,17 +366,20 @@ impl IRNode for IRNodeParamsSingle {
                     let lx = Address::SIZE;
                     let adr = Address::must_vec(self.para[0..lx].to_vec());
                     let fun = hex::encode(&self.para[lx..]);
-                    buf.push_str(&format!("{}.<{}>({})", adr.readable(), fun, substr));
+                    let ss = substr.replace(" ", "").replace("\n", ", ");
+                    buf.push_str(&format!("{}.<{}>({})", adr.readable(), fun, ss));
                 }
                 CALLINR => {
                     let f = hex::encode(&self.para);
-                    buf.push_str(&format!("self.<{}>({})", f, substr));
+                    let ss = substr.replace(" ", "").replace("\n", ", ");
+                    buf.push_str(&format!("self.<{}>({})", f, ss));
                 }
                 CALLLIB | CALLSTATIC => {
                     let clt = maybe!(CALLLIB==self.inst, ":", "::");
                     let i = self.para[0];
                     let f = hex::encode(&self.para[1..]);
-                    buf.push_str(&format!("<{}>{}<{}>({})", i, clt, f, substr));
+                    let ss = substr.replace(" ", "").replace("\n", ", ");
+                    buf.push_str(&format!("<{}>{}<{}>({})", i, clt, f, ss));
                 }
                 _ => {
                     buf.push_str(&format!("{}(0x{}, {})", meta.intro, parastr, substr));
@@ -787,7 +790,6 @@ impl IRNode for IRNodeParam2Single {
 
 #[derive(Default, Debug, Clone)]
 pub struct IRNodeBytecodes {
-    pub inst: Bytecode,
     pub codes: Vec<u8>,
 }
 
@@ -795,12 +797,12 @@ impl IRNode for IRNodeBytecodes {
     fn as_any(&self) -> &dyn Any { self }
     fn subs(&self) -> usize { 0 }
     fn hasretval(&self) -> bool { false }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
+    fn bytecode(&self) -> u8 { IRBYTECODE as u8 }
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
         Ok(self.codes.clone())
     }
     fn serialize(&self) -> Vec<u8> {
-        iter::once(self.inst as u8)
+        iter::once(IRBYTECODE as u8)
             .chain((self.codes.len() as u16).to_be_bytes())
             .chain(self.codes.clone())
             .collect::<Vec<_>>()
@@ -858,7 +860,7 @@ impl IRNode for $name {
     }
     fn serialize(&self) -> Vec<u8> {
         if self.subs.len() > u16::MAX as usize {
-            panic!("IRNode list length overflow")
+            panic!("IRNode list or block length overflow")
         }
         let mut bytes = iter::once($inst as u8)
             .chain((self.subs.len() as u16).to_be_bytes()).collect::<Vec<_>>();

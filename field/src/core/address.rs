@@ -1,6 +1,6 @@
 use base58check::*;
 
-const ADDR_OR_PTR_DIV_NUM: u8 = 10;
+pub const ADDR_OR_PTR_DIV_NUM: u8 = 20;
 
 pub type Address = Fixed21;
 pub type Addrptr = Uint1;
