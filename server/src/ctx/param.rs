@@ -4,34 +4,26 @@
 macro_rules! ctx_state{
     ($ctx:expr, $state:ident) => (
         let _s1_db = $ctx.engine.state();
+        let _s1_db = _s1_db.as_ref();
         let $state = CoreStateRead::wrap(_s1_db);
     )
 }
 
 #[macro_export]
-macro_rules! ctx_store{
-    ($ctx:expr, $disk:ident) => (
-        let _s2_db = $ctx.engine.disk();
-        let $disk = BlockDisk::wrap(_s2_db);
-    )
-}
-
-#[macro_export]
-macro_rules! ctx_mintstate{
+macro_rules! ctx_mint_state{
     ($ctx:expr, $state:ident) => (
-        let _s3_db = $ctx.engine.state();
-        let $state = CoreStateRead::wrap(_s3_db);
+        let _s1_db = $ctx.engine.state();
+        let _s1_db = _s1_db.as_ref();
+        let $state = MintStateRead::wrap(_s1_db);
     )
 }
 
 #[macro_export]
-macro_rules! ctx_mintstore{
-    ($ctx:expr, $disk:ident) => (
-        let _s4_db = $ctx.engine.disk();
-        let $disk = BlockDisk::wrap(_s4_db);
+macro_rules! ctx_store{
+    ($ctx:expr, $sto:ident) => (
+        let $sto = $ctx.engine.store();
     )
 }
-
 
 #[macro_export]
 macro_rules! ctx_mintcnf{
@@ -183,7 +175,7 @@ macro_rules! q_data_hash {
 
 
 #[macro_export]
-macro_rules! defineQueryObject{
+macro_rules! api_querys_define {
     ( $name: ident, $( $item: ident, $ty: ty, $dv: expr,)+ ) => (
 
         #[derive(serde::Deserialize)]
@@ -198,6 +190,7 @@ macro_rules! defineQueryObject{
             base64body: Option<bool>,
             hex: Option<bool>,
             base64: Option<bool>,
+            extendpath: Option<String>,
         }
 
         impl Default for $name {
@@ -212,6 +205,7 @@ macro_rules! defineQueryObject{
                     base64body: None,
                     hex: None,
                     base64: None,
+                    extendpath: None,
                 }
             }
         }

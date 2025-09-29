@@ -1,7 +1,7 @@
 
 pub struct MsgHandler {
     engine: Arc<dyn Engine>,
-    txpool: Arc<MemTxPool>,
+    txpool: Arc<dyn TxPool>,
     p2pmng: StdMutex<Option<Box<dyn PeerManage>>>,
 
     blktx: Sender<BlockTxArrive>,
@@ -9,14 +9,14 @@ pub struct MsgHandler {
 
     doing_sync: AtomicU64,
     knows: Knowledge,
-    exiter: Exiter,
+    // exiter: Exiter,
 
     inserting: StdMutex<bool>, // is exited
 }
 
 impl MsgHandler {
 
-    pub fn new(engine: Arc<dyn Engine>, txpool: Arc<MemTxPool>) -> MsgHandler {
+    pub fn new(engine: Arc<dyn Engine>, txpool: Arc<dyn TxPool>) -> MsgHandler {
         let (tx, rx): (Sender<BlockTxArrive>, Receiver<BlockTxArrive>) = mpsc::channel(4000);
         MsgHandler{
             engine: engine,
@@ -26,7 +26,7 @@ impl MsgHandler {
             blktxch: Some(rx).into(),
             doing_sync: AtomicU64::new(0),
             knows: Knowledge::new(200),
-            exiter: Exiter::new(),
+            // exiter: Exiter::new(),
             inserting: StdMutex::new(false),
         }
     }
@@ -51,7 +51,7 @@ impl MsgHandler {
     pub fn exit(&self) {
         // wait block inserting finish
         let lk = self.inserting.lock().unwrap();
-        self.exiter.exit();
+        // self.exiter.exit();
         drop(lk)
     }
 
@@ -65,7 +65,15 @@ impl MsgHandler {
 
     pub async fn on_connect(&self, peer: Arc<Peer>) {
         // println!("on_connect peer={}", peer.nick());
+        // println!("&&&& peer.send_msg(MSG_REQ_STATUS, vec![]) ...");
         let _ = peer.send_msg(MSG_REQ_STATUS, vec![]).await;
+        // println!("&&&& peer.send_msg(MSG_REQ_STATUS, vec![]) ok.");
+        // if peer.is_cntome { // peer is connect to me
+        if let Ok(Some(txp)) = self.txpool.first_at(TXGID_DIAMINT) {
+            // send highest bidding diamond mint tx
+            let _ = peer.send_msg(MSG_TX_SUBMIT, txp.data).await;
+        }
+        // }
     }
     
     pub async fn on_disconnect(&self, _peer: Arc<Peer>) {
@@ -74,7 +82,7 @@ impl MsgHandler {
     }
     
     pub async fn on_message(&self, peer: Arc<Peer>, ty: u16, body: Vec<u8>) {
-        // println!("on_message peer={} ty={} len={}", peer.nick(), ty, body.len());
+        // println!("&&&& on_message peer={} ty={} len={}", peer.nick(), ty, body.len());
 
         match ty {
             MSG_TX_SUBMIT =>      { let _ = self.blktx.send(BlockTxArrive::Tx(Some(peer.clone()), body)).await; },

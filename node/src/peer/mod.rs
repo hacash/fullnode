@@ -19,8 +19,8 @@ pub const PEER_KEY_SIZE: usize = 16;
 pub type PeerKey = [u8; PEER_KEY_SIZE];
 
 
-include!("trait.rs");
-include!("know.rs");
-include!("peer.rs");
-include!("send.rs");
+include!{"trait.rs"}
+include!{"know.rs"}
+include!{"peer.rs"}
+include!{"send.rs"}
 

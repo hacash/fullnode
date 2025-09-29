@@ -78,11 +78,11 @@ macro_rules! fixed_define {
 
 
         impl Hex for $class {
-            fn from_hex(buf: &[u8]) -> Self {
-                let bts = bytes_from_hex(buf, $size).unwrap();
-                Self {
+            fn from_hex(buf: &[u8]) -> Ret<Self> {
+                let bts = bytes_from_hex(buf, $size)?;
+                Ok(Self {
                     bytes: bts.try_into().unwrap()
-                }
+                })
             }
             fn to_hex(&self) -> String {
                 hex::encode(&self.bytes)
@@ -96,10 +96,10 @@ macro_rules! fixed_define {
         }
 
         impl Readable for $class {
-            fn from_readable(v: &[u8]) -> Self {
-                Self {
+            fn from_readable(v: &[u8]) -> Ret<Self> {
+                Ok(Self {
                     bytes: bytes_from_readable_string(v, $size).try_into().unwrap()
-                }
+                })
             }
             fn to_readable(&self) -> String {
                 bytes_to_readable_string(&self.bytes)
@@ -122,7 +122,7 @@ macro_rules! fixed_define {
             pub const SIZE: usize = $size as usize;
             pub const DEFAULT: Self = Self{ bytes: [0u8; $size] };
 
-            pub fn is_not_zero(&self) -> bool {
+            pub fn not_zero(&self) -> bool {
                 self.bytes.iter().any(|a|*a>0)
             }
 
@@ -134,17 +134,21 @@ macro_rules! fixed_define {
                 self.bytes.to_vec()
             }
 
-            pub fn from_vec(v: Vec<u8>) -> Self where Self: Sized {
+            pub fn must_vec(v: Vec<u8>) -> Self where Self: Sized {
                 Self::from(v.try_into().unwrap())
             }
 
-            pub fn from(v: [u8; $size]) -> Self where Self: Sized {
-                Self{
+            pub const fn from(v: [u8; $size]) -> Self where Self: Sized {
+                Self {
                     bytes: v
                 }
             }
 
             pub fn into_array(self) -> [u8; $size] {
+                self.bytes
+            }
+
+            pub fn to_array(self) -> [u8; $size] {
                 self.bytes
             }
 
@@ -197,12 +201,8 @@ impl Bool {
     }
 
     pub fn new(v: bool) -> Self where Self: Sized {
-        let v = match v {
-            true => 1u8,
-            false => 0u8,
-        };
-        Self{
-            bytes: [v]
+        Self {
+            bytes: [ maybe!(v, 1, 0)]
         }
     }
 

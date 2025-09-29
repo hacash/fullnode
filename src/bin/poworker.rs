@@ -1,6 +1,6 @@
 
-include!{"../version.rs"}
 
+use app::*;
 
 
 fn main() {

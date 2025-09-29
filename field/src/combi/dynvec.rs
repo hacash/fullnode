@@ -127,7 +127,7 @@ pub trait Test78756388732645 : Field + DynClone {
 clone_trait_object!{Test78756388732645}
 
 fn test_create_838464857639363(_a:&[u8])->Ret<(Box<dyn Test78756388732645>, usize)>{errf!("")}
-combi_dynlist!{ Test294635492624,
+combi_dynvec!{ Test294635492624,
     Uint1, Test78756388732645, test_create_838464857639363
 }
 

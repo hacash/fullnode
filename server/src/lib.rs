@@ -2,15 +2,14 @@
 
 use sys::*;
 
-include!("config.rs");
-include!("util.rs");
+include!{"config.rs"}
 
 
 #[macro_use]
 pub mod ctx;
-mod extend;
+pub mod extend;
 mod unstable;
-mod api;
+pub mod api;
 pub mod http;
 
 // extend

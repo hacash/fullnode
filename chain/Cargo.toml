@@ -2,13 +2,12 @@
 name = "chain"
 version = "0.1.0"
 edition = "2021"
+resolver = "2"
 
 [dependencies]
-sys = {path = "../sys"}
-field = {path = "../field"}
-protocol = {path = "../protocol"}
-debug_print = "1.0.0"
+sys = { path = "../sys" }
+field = { path = "../field" }
+protocol = { path = "../protocol" }
 hex = "0.4.3"
 dyn-clone = "1.0.17"
-
 

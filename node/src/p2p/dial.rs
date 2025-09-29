@@ -2,8 +2,15 @@
 /////////////////// DIAL ///////////////////
 
 
+pub async fn tcp_dial_connect(addr: SocketAddr, outsec: u64) -> Ret<TcpStream> {
+    let Ok(res) = timeout(secs(outsec), TcpStream::connect(addr)).await else {
+        return errf!("tcp_dial_connect addr {} timeout.", addr)
+    };
+    errunbox!( res )
+}
+
 pub async fn tcp_dial_handshake(addr: SocketAddr, outsec: u64) -> Ret<TcpStream> {
-    let mut stream = errunbox!( TcpStream::connect(addr).await )?;
+    let mut stream = tcp_dial_connect(addr, outsec).await?;
     let conn = &mut stream;
     tcp_check_handshake(conn, outsec).await?;
     Ok(stream)
@@ -18,8 +25,8 @@ pub async fn tcp_dial_handshake_send_msg_and_read_all(addr: SocketAddr, msgty: u
 }
 
 pub async fn tcp_dial_to_check_is_public_id(addr: SocketAddr, pid: &PeerKey, outsec: u64) -> Ret<bool> {
-    let mut conn = errunbox!( TcpStream::connect(addr).await )?;
-    let conn = &mut conn;
+    let mut stream = tcp_dial_connect(addr, outsec).await?;
+    let conn = &mut stream;
     tcp_check_handshake(conn, outsec).await?;
     tcp_send_msg(conn, MSG_REQUEST_NODE_KEY_FOR_PUBLIC_CHECK, vec![]).await?;
     let retmsg = tcp_read(conn, PEER_KEY_SIZE, 3).await?;
@@ -81,12 +88,18 @@ pub async fn tcp_send(conn: &mut (impl AsyncWrite + Unpin), body: &Vec<u8>) -> R
 
 // return: ty body
 pub async fn tcp_read_msg(conn: &mut (impl AsyncRead + std::marker::Unpin), outsec: u64) -> Ret<(u8, Vec<u8>)> {
+    // println!("&&&& tcp_read_msg outsec={} ...", outsec);
+    // println!("&&&& tcp_read(conn, 4, outsec) ...");
     let size = tcp_read(conn, 4, outsec).await?;
+    // println!("&&&& tcp_read(conn, 4, outsec) ok. size={}", size.hex());
     let size = u32::from_be_bytes( bufcut!(size, 0, 4) );
     if size < 1 || size > P2P_MSG_DATA_MAX_SIZE {
         return errf!("tcp msg size error")
     }
+    // println!("&&&& tcp_read(conn, size as usize, outsec) ... size={}", size);
     let tybody = tcp_read(conn, size as usize, outsec).await?;
+    // println!("&&&& tcp_read(conn, size as usize, outsec) ok. body len={}", tybody.len());
+    // println!("&&&& tcp_read_msg ok.");
     // ok
     Ok((tybody[0], tybody[1..].to_vec()))
 }

@@ -2,16 +2,16 @@
 
 
 
-pub struct Chunk {
+struct Chunk {
 
-    pub height: u64, // block height
-    pub hash: Hash,
+    height: u64, // block height
+    hash: Hash,
 
-    pub block: Arc<dyn Block>,
-    pub state: Arc<dyn State>,
+    block: Arc<dyn Block>,
+    state: Arc<dyn State>,
 
-    pub childs: Mutex<Vec<Arc<Chunk>>>,
-    pub parent: Weak<Chunk>,
+    childs: Vec<Arc<Chunk>>,
+    parent: Weak<Chunk>,
 
 }
 
@@ -26,24 +26,30 @@ impl Drop for Chunk {
 
 impl Chunk {
 
-    pub fn create(b: Arc<dyn Block>, s: Arc<dyn State>) -> Self {
+    fn create(h: Hash, b: Arc<dyn Block>, s: Arc<dyn State>) -> Self {
         Self {
             height: b.height().uint(),
-            hash: b.hash(),
+            hash: h,
             block: b,
             state: s,
-            childs: Mutex::default(),
+            childs: Vec::new(),
             parent: Weak::new(), // none
         }
     }
 
-    pub fn push_child(&self, c: Arc<Chunk>) {
-        self.childs.lock().unwrap().push(c);
+    fn push_child(&mut self, c: Arc<Chunk>) {
+        self.childs.push(c);
     }
 
-    pub fn set_parent(&mut self, p: Arc<Chunk>) {
+    fn set_parent(&mut self, p: Arc<Chunk>) {
         self.parent = Arc::downgrade(&p).into();
     }
 
+}
+
+
+fn chunk_push_child(p: Arc<Chunk>, c: Arc<Chunk>) {
+    let parent = unsafe { &mut *(Arc::as_ptr(&p) as *mut Chunk) };
+    parent.push_child(c);
 }
 

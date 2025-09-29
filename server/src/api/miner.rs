@@ -12,9 +12,9 @@ pub struct MinerBlockStuff {
 }
 
 
-lazy_static! {
-    static ref MINER_PENDING_BLOCK: Arc<Mutex<VecDeque<MinerBlockStuff>>> = Arc::default();
-}
+use std::sync::LazyLock;
+static MINER_PENDING_BLOCK: LazyLock<Arc<Mutex<VecDeque<MinerBlockStuff>>>> 
+    = LazyLock::new(|| { Arc::default()});
 
 fn update_miner_pending_block(block: BlockV1, cbtx: TransactionCoinbase) {
     let mkrluphxs = calculate_mrkl_coinbase_modify(&block.transaction_hash_list(true));
@@ -108,6 +108,7 @@ fn get_miner_pending_block_stuff(is_detail: bool, is_transaction: bool, is_stuff
     api_data(data)
 }
 
+/*
 pub fn create_coinbase_tx(hei: u64, msg: Fixed16, adr: Address) -> TransactionCoinbase {
     let rwdamt = block_reward(hei);
     TransactionCoinbase {
@@ -121,8 +122,25 @@ pub fn create_coinbase_tx(hei: u64, msg: Fixed16, adr: Address) -> TransactionCo
         })
     }
 }
+*/
 
-fn miner_reset_next_new_block(sto: &BlockDisk, engine: ChainEngine, hnode: ChainNode) {
+fn miner_reset_next_new_block(engine: ChainEngine, txpool: &dyn TxPool) {
+
+    let block = engine.mint_checker().packing_next_block(engine.as_read(), txpool);
+    let block = *block.downcast::<BlockV1>().unwrap(); //
+    let cbtx: Box<dyn Transaction> = block.transactions()[0].clone();
+    let cbtx: TransactionCoinbase = match cbtx.ty() == 0 {
+        true => TransactionCoinbase::must(&cbtx.serialize()),
+        false => never!(),
+    };
+    update_miner_pending_block(block, cbtx);
+}
+
+
+
+
+/*
+fn miner_reset_next_new_block(sto: &BlockStore, engine: ChainEngine, hnode: ChainNode) {
 
     let engcnf = engine.config();
 
@@ -185,22 +203,24 @@ fn miner_reset_next_new_block(sto: &BlockDisk, engine: ChainEngine, hnode: Chain
     let block = BlockV1 { intro, transactions};
     update_miner_pending_block(block, cbtx);
 }
-
+*/
 
 
 /*
     park txs to block
-*/
-fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &mut Vec<Hash>, 
+*
+fn append_valid_tx_pick_from_txpool(pending_hei: u64, trslen: &mut usize, trshxs: &mut Vec<Hash>, 
     trs: &mut DynVecTransaction, engine: ChainEngine, txpool: Arc<dyn TxPool>,
 ) {
     let engcnf = engine.config();
     let txmaxn = engcnf.max_block_txs;
     let txmaxsz = engcnf.max_block_size;
     let mut allfee = Amount::zero();
-    let mut txallsz: usize = 80; // coinbase tx size
+    let mut txallsz: usize = 80; // 80 is coinbase tx size
     let txallsz = &mut txallsz;
     let mut invalidtxhxs = Vec::new();
+
+    let mut sub_state = engine.fork_sub_state();
 
     macro_rules! ok_push_one_tx {
         ($a: expr) => {
@@ -217,10 +237,10 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
                 invalidtxhxs.push(txr.hash());
                 return true // sign fail, ignore, next
             }
-            if let Err(..) = engine.try_execute_tx(txr) {
+            if let Err(..) = engine.try_execute_tx_by(txr, pending_hei, &mut sub_state) {
                 invalidtxhxs.push(txr.hash());
                 return true // execute fail, ignore, next
-            }
+            };
             let Ok(nf) = allfee.add_mode_u64(&$a.objc.fee_got()) else {
                 invalidtxhxs.push(txr.hash());
                 return true; // fee size err, ignore, next
@@ -231,7 +251,7 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
     }
 
     // pick one diamond mint tx
-    if nexthei % 5 == 0 {
+    if pending_hei % 5 == 0 {
         let mut pick_dmint = |a: &TxPkg| {
             // check tx
             check_pick_one_tx!(a);
@@ -239,7 +259,7 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
             ok_push_one_tx!(a);
             false // end
         };
-        txpool.iter_at(&mut pick_dmint, TXPOOL_GROUP_DIAMOND_MINT).unwrap();
+        txpool.iter_at(TXGID_DIAMINT, &mut pick_dmint).unwrap();
     }
 
     // pick normal tx
@@ -254,7 +274,7 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
         ok_push_one_tx!(a);
         true // next
     };
-    txpool.iter_at(&mut pick_normal_tx, TXPOOL_GROUP_NORMAL).unwrap();
+    txpool.iter_at(TXGID_NORMAL, &mut pick_normal_tx).unwrap();
 
     // delete invalid txs
     if invalidtxhxs.len() > 0 {
@@ -262,7 +282,7 @@ fn append_valid_tx_pick_from_txpool(nexthei: u64, trslen: &mut usize, trshxs: &m
     }
     // ok
 }
-
+*/
 
 
 
@@ -294,14 +314,13 @@ impl Drop for MWNCount {
 
 
 
-defineQueryObject!{ Q4391,
+api_querys_define!{ Q4391,
     height, u64, 0,
     rqid, String, s!(""), // must random query id
     wait, Option<u64>, None,
 }
 
 async fn miner_notice(State(ctx): State<ApiCtx>, q: Query<Q4391>) -> impl IntoResponse {
-    // ctx_mintstate!(ctx, mintstate);
     q_must!(q, wait, 45); // 45 sec
     set_in_range!(wait, 1, 300);
     let mut lasthei = 0;
@@ -315,7 +334,7 @@ async fn miner_notice(State(ctx): State<ApiCtx>, q: Query<Q4391>) -> impl IntoRe
         if getlasthei() >= q.height {
             break // finish!
         }
-        asleep(1).await; // sleep 1 dec
+        asleep(1.0).await; // sleep 1 dec
     }
     drop(mwnc); // count - 1
     getlasthei();
@@ -330,7 +349,7 @@ async fn miner_notice(State(ctx): State<ApiCtx>, q: Query<Q4391>) -> impl IntoRe
 ///////////////////////////////////////////////////
 
 
-defineQueryObject!{ Q2954,
+api_querys_define!{ Q2954,
     detail, Option<bool>, None,
     transaction, Option<bool>, None,
     stuff, Option<bool>, None,
@@ -338,7 +357,6 @@ defineQueryObject!{ Q2954,
 
 
 async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoResponse {
-    // ctx_mintstate!(ctx, mintstate);
     q_must!(q, detail, false);
     q_must!(q, transaction, false);
     q_must!(q, stuff, false); // coinbase and mkrl
@@ -347,6 +365,18 @@ async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoR
     if ! ctx.engine.config().miner_enable {
         return api_error("miner not enable")
     }
+
+    // get highest bid tx from other node
+
+    // just for test develop
+    #[cfg(not(debug_assertions))] 
+    { 
+        let gotdmintx = ctx.hcshnd.txpool().first_at(TXGID_DIAMINT).unwrap().is_some();
+        if  ctx.engine.config().is_mainnet() && ! gotdmintx && curtimes() < ctx.launch_time + 30 {
+            return api_error("miner worker need launch after 30 secs for node start")
+        }
+    }
+
 
     let lasthei = ctx.engine.latest_block().height().uint();
 
@@ -366,9 +396,8 @@ async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoR
     if is_need_create_new() {
         // create next block
         miner_reset_next_new_block(
-            &BlockDisk::wrap(ctx.engine.disk()),
             ctx.engine.clone(),
-            ctx.hcshnd.clone(),
+            ctx.hcshnd.txpool().as_ref(),
         );
     }
 
@@ -382,7 +411,7 @@ async fn miner_pending(State(ctx): State<ApiCtx>, q: Query<Q2954>) -> impl IntoR
 ///////////////////////////////////////////////////
 
 
-defineQueryObject!{ Q9347,
+api_querys_define!{ Q9347,
     height, u64, 0,
     block_nonce, u32, 0,
     coinbase_nonce, String, s!(""),
@@ -390,7 +419,6 @@ defineQueryObject!{ Q9347,
 
 
 async fn miner_success(State(ctx): State<ApiCtx>, q: Query<Q9347>) -> impl IntoResponse {
-    // ctx_mintstate!(ctx, mintstate);
     if ! ctx.engine.config().miner_enable {
         return api_error("miner not enable")
     }

@@ -26,7 +26,7 @@ impl TransactionRead for TransactionCoinbase {
 
     fn hash(&self) -> Hash { 
         let stuff = self.serialize();
-        let hx = x16rs::calculate_hash(stuff);
+        let hx = sys::calculate_hash(stuff);
         Hash::must(&hx[..])
     }
     
@@ -40,6 +40,10 @@ impl TransactionRead for TransactionCoinbase {
 
     fn fee_got(&self) -> Amount {
         Amount::zero()
+    }
+
+    fn fee_extend(&self) -> Ret<(u16, Amount)> {
+        errf!("cannot get fee extend on coinbase tx")
     }
 
     fn ty(&self) -> u8 {
@@ -64,7 +68,7 @@ impl TransactionRead for TransactionCoinbase {
 
     // call ret error
     fn verify_signature(&self) -> Rerr {
-        Ok(())
+        errf!("cannot verify signature on coinbase tx")
     }
     
 }
@@ -76,7 +80,7 @@ impl Transaction for TransactionCoinbase {
 
     fn set_nonce(&mut self, nonce: Hash) { 
         match &mut self.extend.extend {
-            Some(ref mut d) => d.miner_nonce = nonce,
+            Some(d) => d.miner_nonce = nonce,
             _ => (), // do nothing
         };
     }

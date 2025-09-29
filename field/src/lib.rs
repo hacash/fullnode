@@ -39,6 +39,7 @@ include!{"bytes/datas.rs"}
 include!{"combi/struct.rs"}
 include!{"combi/list.rs"}
 include!{"combi/optional.rs"}
+include!{"combi/option.rs"}
 include!{"combi/revenum.rs"}
 include!{"combi/dynlist.rs"}
 include!{"combi/dynvec.rs"}
@@ -48,16 +49,16 @@ include!{"core/define.rs"}
 include!{"core/address.rs"}
 include!{"core/amount.rs"}
 include!{"core/diamond.rs"}
-include!{"core/sign.rs"}
+include!{"core/diamond_smelt.rs"}
 include!{"core/status.rs"}
+include!{"core/asset.rs"}
 
 // component
+include!{"component/sign.rs"}
+include!{"component/asset.rs"}
 include!{"component/balance.rs"}
-include!{"component/status.rs"}
 include!{"component/total.rs"}
-include!{"component/diamond.rs"}
 include!{"component/channel.rs"}
-include!{"component/contract.rs"}
 
 
 

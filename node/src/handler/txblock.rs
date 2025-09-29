@@ -3,8 +3,9 @@
 async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec<u8>) {
     // println!("1111111 handle_txblock_arrive Tx, peer={} len={}", peer.nick(), body.clone().len());
     let engcnf = this.engine.config();
+    let minter = this.engine.mint_checker();
     // parse
-    let Ok(txpkg) = TxPkg::build(body) else {
+    let Ok(txpkg) = protocol::transaction::build_tx_package(body) else {
         return // parse tx error
     };
     // tx hash with fee
@@ -13,7 +14,7 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
     if already {
         return  // alreay know it
     }
-    // println!("p2p recv new tx: {}, {}", txpkg.objc().hash().half(), hxfe.nonce());
+    // println!("- devtest p2p recv new tx: {}, {}", txpkg.objc.hash().half(), hxfe.nonce());
     // check fee purity
     if txpkg.fepr < engcnf.lowest_fee_purity {
         return // tx fee purity too low to broadcast
@@ -22,14 +23,16 @@ async fn handle_new_tx(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: Vec
         return // tx size overflow
     }
     let txdatas = txpkg.data.clone();
-    if engcnf.is_open_miner() {
-        // try execute tx
-        if let Err(..) = this.engine.try_execute_tx(txpkg.objc.as_read()) {
-            return // tx execute fail
-        }
-        // add to pool
-        let _ = this.txpool.insert(txpkg);
+    let txpr = txpkg.objc.as_read();
+    // try execute and check tx
+    if let Err(..) = this.engine.try_execute_tx(txpr) {
+        return // tx execute fail
     }
+    if let Err(..) = minter.tx_submit(this.engine.as_read(), &txpkg) {
+        return // tx check fail
+    }
+    // add to tx pool
+    let _ = this.txpool.insert_by(txpkg, &|tx|minter.tx_pool_group(tx));
     // broadcast
     let p2p = this.p2pmng.lock().unwrap();
     let p2p = p2p.as_ref().unwrap();
@@ -55,7 +58,6 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         return  // alreay know it
     }
     // check height and difficulty (mint consensus)
-    let is_open_miner = engcnf.is_open_miner();
     let heispan = engcnf.unstable_block;
     let latest = eng.latest_block();
     let lathei = latest.height().uint();
@@ -63,11 +65,11 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         return // height too late
     }
     let mintckr = eng.mint_checker();
-    let stoptr = BlockDisk::wrap(eng.disk().clone());
+    let sto = eng.store();
     // may insert
     if blkhei <= lathei + 1 {
-        // prepare check
-        if let Err(_) = mintckr.prepare(&blkhead, &stoptr) {
+        // check block found
+        if let Err(_) = mintckr.blk_found(&blkhead, sto.as_ref()) {
             return  // difficulty check fail
         }
         // do insert  ◆ ◇ ⊙ ■ □ △ ▽ ❏ ❐ ❑ ❒  ▐ ░ ▒ ▓ ▔ ▕ ■ □ ▢ ▣ ▤ ▥ ▦ ▧ ▨ ▩ ▪ ▫    
@@ -83,19 +85,20 @@ async fn handle_new_block(this: Arc<MsgHandler>, peer: Option<Arc<Peer>>, body: 
         let engptr = eng.clone();
         let txpool = this.txpool.clone();
         // create block
-        let blkpkg = BlockPkg::build(bodycp);
+        let blkpkg =protocol::block::build_block_package(bodycp);
         if let Err(..) = blkpkg {
             return // parse error
         }
-        let blkp = blkpkg.unwrap();
+        let mut blkp = blkpkg.unwrap();
+        blkp.set_origin( BlkOrigin::Discover );
+        may_show_miner_detail(mintckr, &blkp);
         let thsx = blkp.objc.transaction_hash_list(false); // hash no fee
-        if let Err(e) = engptr.insert(blkp) {
-            println!("Error: {}", e);
+        if let Err(e) = engptr.discover(blkp) {
+            println!("Error: {}, failed.", e);
+            // println!("- error block data hex: {}", body.hex());
         }else{
             println!("ok.");
-            if is_open_miner {
-                drain_all_block_txs(engptr.as_ref().as_read(), txpool.as_ref(), thsx, blkhei);
-            }
+            mintckr.tx_pool_refresh(engptr.as_ref().as_read(), txpool.as_ref(), thsx, blkhei);
         }
         drop(isrlk); // close lock
     }else{
@@ -127,61 +130,19 @@ fn check_know(mine: &Knowledge, hxkey: &Hash, peer: Option<Arc<Peer>>) -> (bool,
 }
 
 
-// drain_all_block_txs
-fn drain_all_block_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, txs: Vec<Hash>, blkhei: u64) {
-    if blkhei % 15 == 0 {
-        println!("{}.", txpool.print());
+fn may_show_miner_detail(minter: &dyn Minter, blkp: &BlockPkg) {
+    let Ok(cnf) = minter.config().downcast::<MintConf>() else {
+        return
+    };
+    if !cnf.show_miner_name {
+        return
     }
-    // drop all exist normal tx
-    if txs.len() > 1 {
-        let _ = txpool.drain(&txs[1..]); // over coinbase tx
-    }
-    // drop all overdue diamond mint tx
-    if blkhei % 5 == 0 {
-        clean_invalid_diamond_mint_txs(eng, txpool, blkhei);
-    }
-    // drop invalid normal
-    if blkhei % 24 == 0 { // 2 hours
-        clean_invalid_normal_txs(eng, txpool, blkhei);
-    }
+    // devtest start
+    let Ok(cbtx) = blkp.objc.coinbase_transaction() else {
+        return
+    };
+    let adrt = cbtx.main().readable().drain(..9).collect::<String>();
+    print!("miner: {}...<{}> ", adrt, cbtx.message().to_readable_left());
+    // devtest end
 }
 
-
-// clean_
-fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _blkhei: u64) {
-    // already minted hacd number
-    let _ = txpool.drain_filter_at(&|a: &TxPkg| {
-        match eng.try_execute_tx( a.objc.as_read() ) {
-            Err(..) => true, // delete
-            _ => false,
-        }
-    }, TXPOOL_GROUP_NORMAL);
-}
-
-
-// clean_
-fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _blkhei: u64) {
-    // already minted hacd number
-    let sta = eng.state();
-    let curdn = CoreStateRead::wrap(sta).get_latest_diamond().number.uint();
-    let _ = txpool.drain_filter_at(&|a: &TxPkg| {
-        let tx = a.objc.as_read();
-        let dn = get_diamond_mint_number(tx);
-        // println!("TXPOOL: drain_filter_at dmint, tx: {}, dn: {}, last dn: {}", tx.hash().hex(), dn, ldn);
-        dn <= curdn // is not next diamond, delete
-    }, TXPOOL_GROUP_DIAMOND_MINT);
-}
-
-
-
-// for diamond create action
-fn get_diamond_mint_number(tx: &dyn TransactionRead) -> u32 {
-    const DMINT: u16 = DiamondMint::KIND;
-    for act in tx.actions() {
-        if act.kind() == DMINT {
-            let dm = DiamondMint::must(&act.serialize());
-            return *dm.d.number;
-        }
-    }
-    0
-}

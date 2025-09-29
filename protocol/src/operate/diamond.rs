@@ -5,6 +5,7 @@ macro_rules! diamond_operate_define {
     ($func_name: ident, $addr:ident, $hacd:ident, $oldhacd:ident, $newhacdblock:block) => (
 
 pub fn $func_name(state: &mut CoreState, $addr: &Address, $hacd: &DiamondNumber) -> Ret<DiamondNumber> {
+    $addr.check_version()?;
     let mut userbls = state.balance( $addr ).unwrap_or_default();
     let $oldhacd = &userbls.diamond.to_diamond();
     /* -------- */
@@ -43,19 +44,15 @@ diamond_operate_define!(hacd_sub, addr, hacd, oldhacd, {
 
 
 pub fn hacd_transfer(state: &mut CoreState,
-    addr_from: &Address, addr_to: &Address, hacd: &DiamondNumber, _dlist: &DiamondNameListMax200
+    from: &Address, to: &Address, hacd: &DiamondNumber, _dlist: &DiamondNameListMax200
 ) -> Ret<Vec<u8>> {
-    if addr_from == addr_to {
+    if from == to {
 		return errf!("cannot transfer to self")
     }
-    // check contract
-    /*use vm::rt::SystemCallType::*;
-    let amtv = dlist.form(); // name bytes vec
-    ctx.syscall_check_true(addr_from, PermitHACD  as u8, amtv.clone())?;
-    ctx.syscall_check_true(addr_to,   PayableHACD as u8, amtv)?;*/
     // do transfer
-    hacd_sub(state, addr_from, hacd)?;
-    hacd_add(state, addr_to, hacd)?;
+    hacd_sub(state, from, hacd)?;
+    hacd_add(state, to,   hacd)?;
+    blackhole_engulf(state, to);
     // ok
     Ok(vec![])
 }
@@ -65,6 +62,8 @@ pub fn hacd_transfer(state: &mut CoreState,
 
 
 pub fn hacd_move_one_diamond(state: &mut CoreState, addr_from: &Address, addr_to: &Address, hacd_name: &DiamondName) -> Rerr {
+    addr_from.check_version()?;
+    addr_to.check_version()?;
     if addr_from == addr_to {
 		return errf!("cannot transfer to self")
     }
@@ -79,6 +78,7 @@ pub fn hacd_move_one_diamond(state: &mut CoreState, addr_from: &Address, addr_to
 
 
 pub fn check_diamond_status(state: &mut CoreState, addr_from: &Address, hacd_name: &DiamondName) -> Ret<DiamondSto> {
+    addr_from.check_version()?;
     // query
     let diaitem = must_have!(
         format!("diamond {}", hacd_name.to_readable()),
@@ -100,9 +100,7 @@ pub fn check_diamond_status(state: &mut CoreState, addr_from: &Address, hacd_nam
 * return total cost
 */
 pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&Address, diamond: &DiamondName, content: &BytesW1) -> Ret<Amount> {
-
     let mut diasto = check_diamond_status(state, addr, diamond)?;
-    
     // check height
     let prev_insc_hei = *diasto.prev_engraved_height;
     let check_prev_block = 1000u64;
@@ -111,7 +109,7 @@ pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&A
     }
 
     // check insc
-    let haveng = diasto.inscripts.count().uint();
+    let haveng = diasto.inscripts.length();
     if haveng >= 200 {
         return errf!("maximum inscriptions for one diamond is 200")
     }
@@ -143,7 +141,7 @@ pub fn engraved_clean_one_diamond(_pending_height: u64, state: &mut CoreState, a
     let mut diasto = check_diamond_status(state, addr, diamond)?;
     let diaslt = must_have!(format!("diamond {}", diamond.to_readable()), state.diamond_smelt(&diamond));
     // check
-    if diasto.inscripts.count().uint() <= 0 {
+    if diasto.inscripts.length() <= 0 {
         return errf!("cannot find any inscriptions in HACD {}", diamond.to_readable())    }
 
     // burning cost bid fee

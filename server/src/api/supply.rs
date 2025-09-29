@@ -1,17 +1,17 @@
 
 
-defineQueryObject!{ Q9364,
+api_querys_define!{ Q9364,
     __nnn_, Option<bool>, None,
 }
 
 async fn supply(State(ctx): State<ApiCtx>, _q: Query<Q9364>) -> impl IntoResponse {
-    ctx_mintstate!(ctx, mintstate);
+    ctx_state!(ctx, state);
     //
     let lasthei = ctx.engine.latest_block().height().uint();
-    let lastdia = mintstate.get_latest_diamond();
+    let lastdia = state.get_latest_diamond();
     // total supply
     const ZHU: u64 = 1_0000_0000;
-    let supply = mintstate.get_total_count();
+    let supply = state.get_total_count();
     let blk_rwd = cumulative_block_reward(lasthei) * ZHU;
     let burn_fee = *supply.hacd_bid_burn_zhu + *supply.diamond_insc_burn_zhu;
     let curr_ccl = blk_rwd + *supply.channel_interest_zhu - burn_fee;

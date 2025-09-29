@@ -1,6 +1,6 @@
 
 
-defineQueryObject!{ Q8936,
+api_querys_define!{ Q8936,
     quantity, Option<u64>, None,
 }
 
@@ -14,7 +14,11 @@ async fn account(State(_ctx): State<ApiCtx>, q: Query<Q8936>) -> impl IntoRespon
     }
     let mut resbls = Vec::with_capacity(quantity as usize);
     for _ in 0..quantity {
-        let acc = Account::create_randomly();
+        // fill the random data
+        let acc = Account::create_randomly(&|data|{
+            getrandom::fill(data).map_err(|e|e.to_string())?;
+            Ok(())
+        });
         if let Err(e) = acc {
             return api_error(&e)
         }

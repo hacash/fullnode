@@ -46,7 +46,7 @@ impl P2PManage {
         tokio::spawn(async move {
             if delay > 0 {
                 // may sleep to avoid duplicate broadcasts
-                asleep(delay).await; 
+                asleep(delay as f32).await; 
             }
             p2p.broadcast_unaware(&key, ty, body).await;
         });

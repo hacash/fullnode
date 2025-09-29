@@ -1,26 +1,31 @@
-use std::sync::*;
+use std::collections::*;
+use std::convert::Into;
+
 
 use sys::*;
 use field::*;
-use field::interface::*;
-use block::*;
-use transaction::*;
-use interface::*;
+
+// use field::interface::*;
+// // use block::*;
+// use transaction::*;
+// use interface::*;
+
+
+include!{"define.rs"}
+include!{"env.rs"}
+include!{"config/mod.rs"}
+
 
 
 pub mod interface;
-pub mod context;
+pub mod component;
+pub mod difficulty;
+pub mod state;
+pub mod operate;
 pub mod action;
 pub mod transaction;
 pub mod block;
-pub mod state;
-pub mod operate;
-pub mod genesis;
-pub mod difficulty;
-
-include!{"define.rs"}
-include!{"data/tx.rs"}
-include!{"data/block.rs"}
+pub mod context;
 
 
 

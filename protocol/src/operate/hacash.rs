@@ -9,11 +9,12 @@ macro_rules! check_amount_is_positive {
 }
 
 
-macro_rules! amount_op_unsafe_func_define {
+macro_rules! amount_op_func_define {
     ($fn:ident, $hac:ident, $addr:ident, $amt:ident, $exec:block) => (
 
         fn $fn(ctx: &mut dyn Context, $addr: &Address, $amt: &Amount) -> Ret<Amount> {
-            let mut state = CoreState::wrap(ctx.state());
+            $addr.check_version()?;
+            let state = &mut CoreState::wrap(ctx.state());
             let mut bls = state.balance( $addr ).unwrap_or_default();
             let $hac = bls.hacash;
             let newhac = $exec; // do add or sub
@@ -30,7 +31,7 @@ macro_rules! amount_op_unsafe_func_define {
 
 }
 
-amount_op_unsafe_func_define!{hac_sub_unsafe, hac, addr, amt, {
+amount_op_func_define!{do_hac_sub, hac, addr, amt, {
     if hac < *amt {
         return errf!("address {} balance {} is insufficient, at least {}", 
             addr.readable(), hac, amt)
@@ -38,7 +39,7 @@ amount_op_unsafe_func_define!{hac_sub_unsafe, hac, addr, amt, {
     hac.sub_mode_u128(amt)?
 }}
 
-amount_op_unsafe_func_define!{hac_add_unsafe, hac, addr, amt, {
+amount_op_func_define!{do_hac_add, hac, addr, amt, {
     hac.add_mode_u128(amt)?
 }}
 
@@ -52,10 +53,17 @@ pub fn hac_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, amt: &A
         }
         return Ok(vec![]);
     }
+    /*test debug
+    let tadr = Address::from_readable("1EuGe2GU8tDKnHLNfBsgyffx66buK7PP6g").unwrap();
+    if *from == tadr || *to == tadr {
+        println!("-------- {} ---- {} => {}  {}", ctx.env().block.height, from.readable(), to.readable(), amt);
+    }*/
     // do trs
     check_amount_is_positive!(amt);
-    hac_sub_unsafe(ctx, from, amt)?;
-    hac_add_unsafe(ctx, to, amt)?;
+    do_hac_sub(ctx, from, amt)?;
+    do_hac_add(ctx, to,   amt)?;
+    let state = &mut CoreState::wrap(ctx.state());
+    blackhole_engulf(state, to);
     Ok(vec![])
 }
 
@@ -63,6 +71,7 @@ pub fn hac_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, amt: &A
 
 pub fn hac_check(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> Ret<Amount> {
     check_amount_is_positive!(amt);
+    addr.check_version()?;
     let state = CoreState::wrap(ctx.state());
     if let Some(bls) = state.balance( addr ) {
         // println!("address {} balance {}", addr.readable(), bls.hacash );
@@ -76,14 +85,14 @@ pub fn hac_check(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> Ret<Amo
 
 pub fn hac_add(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> Ret<Vec<u8>> {
     check_amount_is_positive!(amt);
-    hac_add_unsafe(ctx, addr, amt)?;
+    do_hac_add(ctx, addr, amt)?;
     Ok(vec![])
 }
 
 
 pub fn hac_sub(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> Ret<Vec<u8>> {
     check_amount_is_positive!(amt);
-    hac_sub_unsafe(ctx, addr, amt)?;
+    do_hac_sub(ctx, addr, amt)?;
     Ok(vec![])
 }
 

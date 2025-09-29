@@ -11,7 +11,7 @@ field::combi_struct!{ $class,
     timestamp  : Timestamp
     addrlist   : AddrOrList
     fee        : Amount
-    actions    : DynListAction
+    actions    : DynListActionW2
     signs      : SignListW2
     gas_max    : Uint1
     ano_mark   : Fixed1
@@ -51,6 +51,7 @@ impl TransactionRead for $class {
     fn action_count(&self) -> &Uint2 {
         self.actions.count()
     }
+    
     fn actions(&self) -> &Vec<Box<dyn Action>> {
         self.actions.list()
     }
@@ -67,15 +68,22 @@ impl TransactionRead for $class {
     fn fee_pay(&self) -> Amount {
         self.fee().clone()
     }
-
     // fee_miner_received
     fn fee_got(&self) -> Amount {
         let mut gfee = self.fee().clone();
         if self.burn_90() && gfee.unit() > 1 {
-            gfee.unit_sub(1); // burn 90
+            gfee = gfee.unit_sub(1).unwrap(); // burn 90
         }
         gfee
-    } 
+    }
+
+    fn fee_extend(&self) -> Ret<(u16, Amount)> {
+        let par = (*self.gas_max) as u16;
+        let bei = par * par;
+        let fee = self.fee_got().dist_mul(bei as u128)?;
+        Ok((bei, fee))
+    }
+
 
     fn req_sign(&self) -> Ret<HashSet<Address>> {
         let addrs = &self.addrs();
@@ -83,7 +91,7 @@ impl TransactionRead for $class {
         for act in self.actions() {
             for ptr in act.req_sign() {
                 let adr = ptr.real(addrs)?; 
-                if adr.version() == Address::PRIVAKEY {
+                if adr.is_privakey() {
                     adrsets.insert(adr); // just PRIVAKEY
                 }
             }
@@ -95,10 +103,12 @@ impl TransactionRead for $class {
         verify_tx_signature(self)
     }
     
+    // fee_purity is gas_price
 	fn fee_purity(&self) -> u64 {
 		let txsz = self.size() as u64;
-		let feeshuo = self.fee_got().to_shuo_unsafe() as u64;
-		feeshuo / txsz
+        assert!(txsz > GSCU, "Tx size cannot less than {} bytes", GSCU);
+		let fee238 = self.fee_got().to_238_u64().unwrap_or_default();
+		fee238 / (txsz / GSCU)
 	}
 
 }
@@ -152,13 +162,13 @@ impl TxExec for $class {
 impl $class {
     pub const TYPE: u8 = $tyid;
 
-    pub fn new_by(addr: Address, fee: Amount) -> $class {
+    pub fn new_by(addr: Address, fee: Amount, ts: u64) -> $class {
         $class{
             ty: Uint1::from($tyid),
-            timestamp: Timestamp::from(curtimes()),
+            timestamp: Timestamp::from(ts),
             addrlist: AddrOrList::from_addr(addr),
             fee: fee,
-            actions: DynListAction::default(),
+            actions: DynListActionW2::default(),
             signs: SignListW2::default(),
             gas_max : Uint1::default(),
             ano_mark: Fixed1::default(),
@@ -178,12 +188,12 @@ impl $class {
             stuff.append(&mut self.gas_max.serialize());
             stuff.append(&mut self.ano_mark.serialize());
         }
-        let hx = x16rs::calculate_hash(stuff);
+        let hx = sys::calculate_hash(stuff);
         Hash::must(&hx[..])
     }
 
     fn insert_sign(&mut self, signobj: Sign) -> Rerr {
-        let plen = self.signs.count().uint() as usize;
+        let plen = self.signs.length();
         if plen >= u16::MAX as usize - 1 {
             return errf!("sign object too much")
         }
@@ -216,15 +226,6 @@ impl $class {
     }
 
 
-
-
-
-
-
-
-
-
-
 }
 
 
@@ -250,8 +251,11 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
     let mut state = CoreState::wrap(ctx.state());
     // may fast_sync
     if not_fast_sync {
+        if tx.action_count().uint() == 0 {
+            return errf!("tx actions cannot empty.")
+        }
         // main check
-        if main.version() != Address::PRIVAKEY {
+        if ! main.is_privakey() {
             return errf!("tx fee address version must be PRIVAKEY type.")
         }
         let mty = tx.ty();
@@ -265,7 +269,7 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
         // check tx exist
         if let Some(exhei) = state.tx_exist(&hx) { // have tx !!!
             // handle hacash block chain bug start
-            let bugtx = Hash::from_hex(b"f22deb27dd2893397c2bc203ddc9bc9034e455fe630d8ee310e8b5ecc6dc5628");
+            let bugtx = Hash::from_hex(b"f22deb27dd2893397c2bc203ddc9bc9034e455fe630d8ee310e8b5ecc6dc5628").unwrap();
             if *exhei != 63448 || hx != bugtx {
                 return errf!("tx {} already exist in height {}", hx, *exhei)
             }
@@ -286,9 +290,11 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
         }
     }
     */
+    // reset the vm
+    ctx.vm_replace(VMNil::empty());
     // execute actions
-    ctx.depth_set(1); // set depth
     for action in tx.actions() {
+        ctx.depth_set(CallDepth::new(-1)); // set depth
         action.execute(ctx)?;
     }
     // spend fee

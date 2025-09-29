@@ -2,7 +2,7 @@
 
 impl P2PManage {
 
-    pub async fn event_loop(this: Arc<P2PManage>) -> Rerr {
+    pub async fn event_loop(this: Arc<P2PManage>, mut worker: Worker) -> Rerr {
         let mut printpeer_tkr = new_ticker(60*97).await; // 97mins print peers
         let mut reconnect_tkr = new_ticker(51*33).await; // 30mins check reconnect
         let mut findnodes_tkr = new_ticker(52*60*4).await; // 4hour find nodes or boot
@@ -10,12 +10,12 @@ impl P2PManage {
         let mut boostndes_tkr = new_ticker(54*5).await; // 5mins boost public nodes form offshoots table
 
         let server_listener = this.server().await;
-        let mut closech = this.exiter.signal();
+        // let mut closech = this.exiter.signal();
 
         loop {
             tokio::select! {
-                _ = closech.recv() => {
-                    break
+                _ = worker.wait() => {
+                    break // end the work
                 }
                 _ = printpeer_tkr.tick() => {
                     this.print_conn_peers();
@@ -45,6 +45,9 @@ impl P2PManage {
                     let Ok((client, _)) = errunbox!( client ) else {
                         continue
                     };
+                    if !this.cnf.acceptnodes {
+                        continue // not accept nodes
+                    }
                     let tobj = this.clone();
                     tokio::spawn(async move {
                         tobj.handle_conn(client, false).await // not report me
@@ -53,9 +56,10 @@ impl P2PManage {
                 else => break
             }
         }
-        // println!("[P2P] event loop end.");
         // close all peer
         this.disconnect_all_peers().await;
+        println!("[P2P] Event loop end.");
+        worker.end();
         Ok(())
     }
 

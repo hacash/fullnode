@@ -24,7 +24,7 @@ async fn do_insert_new_nodes(this: &P2PManage, mearest_addrs: Vec<SocketAddr>, f
     // try connect for each
     let mut cncount = 0;
     for addr in &mearest_addrs {
-        if let Err(e) = this.connect_node(addr).await {
+        if let Err(e) = this.connect_node(*addr).await {
             println!("failed connect to {}, {}.", addr, e);
             continue
         }

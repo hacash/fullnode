@@ -4,6 +4,7 @@ macro_rules! satoshi_operate_define {
     ($func_name: ident, $addr:ident, $sat:ident, $oldsat:ident,  $newsatblock:block) => (
 
         pub fn $func_name(ctx: &mut dyn Context, $addr: &Address, $sat: &Satoshi) -> Ret<Satoshi> {
+            $addr.check_version()?;
             if $sat.uint() == 0 {
                 return errf!("satoshi value cannot zore")
             }    
@@ -45,25 +46,23 @@ satoshi_operate_define!(sat_sub, addr, sat, oldsat, {
 /**************************** */
 
 
-pub fn sat_transfer(ctx: &mut dyn Context, addr_from: &Address, addr_to: &Address, sat: &Satoshi
+pub fn sat_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, sat: &Satoshi
 ) -> Ret<Vec<u8>> {
-    if addr_from == addr_to {
+    if from == to {
 		return errf!("cannot trs to self")
     }
-    // check contract
-    /*use vm::rt::SystemCallType::*;
-    let amtv = sat.value().to_be_bytes().to_vec();
-    ctx.syscall_check_true(addr_from, PermitSAT  as u8, amtv.clone())?;
-    ctx.syscall_check_true(addr_to,   PayableSAT as u8, amtv)?;*/
     // do transfer
-    sat_sub(ctx, addr_from, sat)?;
-    sat_add(ctx, addr_to, sat)?;
+    sat_sub(ctx, from, sat)?;
+    sat_add(ctx, to,   sat)?;
+    let state = &mut CoreState::wrap(ctx.state());
+    blackhole_engulf(state, to);
     // ok
     Ok(vec![])
 }
 
 
 pub fn sat_check(ctx: &mut dyn Context, addr: &Address, sat: &Satoshi) -> Ret<Satoshi> {
+    addr.check_version()?;
     if sat.uint() == 0 {
         return errf!("check satoshi is cannot empty")
     }

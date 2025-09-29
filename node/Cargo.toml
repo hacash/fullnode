@@ -1,15 +1,15 @@
 [package]
 name = "node"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-sys = {path = "../sys"}
-field = {path = "../field"}
-protocol = {path = "../protocol"}
-chain = {path = "../chain"}
-mint = {path = "../mint"}
+sys = { path = "../sys" }
+field = { path = "../field" }
+protocol = { path = "../protocol" }
+# chain = { path = "../chain" }
+mint = { path = "../mint" }
 hex = "0.4.3"
 chrono = "0.4.38"
-getrandom = "0.2.15"
+getrandom = "0.3.2"
 tokio = { version = "1.41.1", features = ["rt", "rt-multi-thread", "sync", "time", "io-util", "net", "macros"] }

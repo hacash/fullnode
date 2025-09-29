@@ -3,13 +3,22 @@
     Extend action
 */
 
+
+
 pub type FnExtendActionsTryCreateFunc = fn(u16, &[u8]) -> Ret<Option<(Box<dyn Action>, usize)>>;
 
-static mut EXTEND_ACTIONS_TRY_CREATE_FUNC: FnExtendActionsTryCreateFunc = |t,_|errf!("action kind '{}' not find", t).to_owned();
+macro_rules! fneatcf {
+    () => {
+        |_,_|Ok(None)
+    };
+}
+pub static mut EXTEND_ACTIONS_TRY_CREATE_FUNCS: [FnExtendActionsTryCreateFunc; 3] = [try_create, fneatcf!(), fneatcf!()];
 
-pub fn setup_extend_actions_try_create(f: FnExtendActionsTryCreateFunc) {
+
+pub fn setup_extend_actions_try_create(idx: usize, f: FnExtendActionsTryCreateFunc) {
     unsafe {
-        EXTEND_ACTIONS_TRY_CREATE_FUNC = f;
+        // println!("================= EXTEND_ACTIONS_TRY_CREATE_FUNCS[idx] = f = {}", idx);
+        EXTEND_ACTIONS_TRY_CREATE_FUNCS[idx] = f;
     }
 }
 
@@ -19,9 +28,9 @@ pub fn setup_extend_actions_try_create(f: FnExtendActionsTryCreateFunc) {
     Action hook
 */
 
-pub type FnActionHookFunc = fn(u16, _: &dyn Any, _: &mut dyn Context) -> Rerr ;
+pub type FnActionHookFunc = fn(u16, _act: &dyn Any, _ctx: &mut dyn Context, _gas: &mut u32) -> Rerr ;
 
-static mut ACTION_HOOK_FUNC: FnActionHookFunc = |_,_,_|Ok(());
+pub static mut ACTION_HOOK_FUNC: FnActionHookFunc = |_,_,_,_|Ok(());
 
 pub fn setup_action_hook(f: FnActionHookFunc) {
     unsafe {

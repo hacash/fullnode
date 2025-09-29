@@ -6,7 +6,7 @@ pub struct Empty {}
 impl Serialize for Empty {
 
     fn serialize(&self) -> Vec<u8> {
-        vec![]
+        Vec::new()
     }
 
     fn size(&self) -> usize {
@@ -24,7 +24,11 @@ impl Parse for Empty {
 
 }
 
-impl Field for Empty {}
+impl Field for Empty {
+    fn new() -> Self {
+        Self{}
+    }
+}
 
 
 
@@ -48,4 +52,23 @@ impl Serialize for VecWrap {
         self.data.len()
     }
 
+}
+
+
+impl Parse for VecWrap {
+
+    fn parse(&mut self, s: &[u8]) -> Ret<usize> {
+        self.data.parse(s)
+    }
+
+}
+
+
+
+impl Field for VecWrap {
+    fn new() -> Self {
+        Self {
+            data: Vec::new()
+        }
+    }
 }

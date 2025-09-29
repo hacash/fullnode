@@ -1,0 +1,151 @@
+
+<!DOCTYPE html>
+    <head>
+        <title>Hacash WASM SDK test</title>
+        <script src="./hacashsdk_bg.js"></script>
+        <style>
+            #print {
+                padding: 20px;
+                background-color: #eee;
+            }
+            #print p {
+                font-size: 16px;
+                line-height: 20px;
+                margin: 0;
+                padding: 0;  
+                word-break: break-all;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Hacash SDK test</h1>
+        <div id="print">
+            <p>...</p>
+        </div>
+
+        
+<script>
+    // Like with the `--target web` output the exports are immediately
+    // available but they won't work until we initialize the module. Unlike
+    // `--target web`, however, the globals are all stored on a
+    // `wasm_bindgen` global. The global itself is the initialization
+    // function and then the properties of the global are all the exported
+    // functions.
+    //
+    // Note that the name `wasm_bindgen` can be configured with the
+    // `--no-modules-global` CLI flag
+
+
+    
+    // console.log(__Hacash_WASM_SDK_Buffer)
+
+
+    async function do_test(sdk){
+        console.log(sdk)
+
+        // util
+
+        print(sdk.hac_to_mei("12:244"))
+        print(sdk.hac_to_unit("12:244", 240))
+        
+        try {
+            print(sdk.hac_to_mei("0.0.012"))
+        } catch (error) {
+            print(error)
+        }
+
+        // create account
+        let acc1 = sdk.create_account("123456")
+        let acc2 = sdk.create_account("8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92")
+        print(acc1)
+        print(acc1.pubkey === acc2.pubkey)
+
+        // verify address
+        print(sdk.verify_address("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"))
+        let vrf2 = sdk.verify_address("2MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9")
+        prints(vrf2, vrf2.ok, vrf2.error)
+
+
+        // create coin transfer
+        let trsobj = new sdk.CoinTransferParam()
+        // print(trsobj.timestamp.toString())
+        trsobj.timestamp = BigInt(1755223764)
+        trsobj.main_prikey = "123456"
+        trsobj.to_address = "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"
+        trsobj.fee = "1:244"
+        trsobj.hacash = "12.0"
+        trsobj.satoshi = BigInt(12000000)
+        // prints(trsobj, trsobj.timestamp.toString())
+        let res = sdk.create_coin_transfer(trsobj)
+        print(res.body)
+        // console.log(res.body)
+
+        // sign tx
+        let stps = new sdk.SignTxParam()
+        stps.prikey = "abc123"
+        stps.body = res.body
+
+        try {
+            let resg = sdk.sign_tx(stps)
+            prints("sign res:", resg)
+            prints("tx body:", resg.body)
+        }catch(e) {
+            console.log(e)
+        }
+
+    }
+
+
+    /********************************/
+
+
+    // get sdk
+    // hacash_sdk().then(do_test)
+
+    // or use by async
+    async function run() {
+        let sdk = await hacash_sdk()
+        do_test(sdk)
+    };
+    run().then()
+
+
+
+
+    /********************************/
+
+
+    const $p = document.getElementById("print")
+
+    function prints(a,b,c,d,e,f,g) {
+        let list = [a,b,c,d,e,f,g]
+        for(let i in list) {
+            let x = list[i]
+            if(x !== undefined) print(x)
+        }
+    }
+
+    function print(s) {
+        console.log(s)
+        let p = document.createElement("p")
+        p.innerText = s.toString()
+        // p.innerText = typeof s === "object"
+        //     ? JSON.stringify(s)
+        //     : s ? s.toString() : s
+        $p.appendChild(p)
+    }
+
+
+    BigInt.prototype.toJSON = function () {
+        return this.toString();
+    };
+
+
+</script>
+
+
+
+
+
+    </body>
+</html>

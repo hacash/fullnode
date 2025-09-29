@@ -46,7 +46,7 @@ pub fn routes(ctx: ApiCtx) -> Router {
     .route(&submit("diamondminer/success"), post(diamondminer_success))
 
     // operate
-    .route(&operate("fee/raise"), post(raise_fee))
+    .route(&operate("fee/raise"), post(fee_raise))
 
     // util
     .route(&util("transaction/check"), post(transaction_check))

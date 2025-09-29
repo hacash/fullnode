@@ -3,22 +3,32 @@
 /******************** fee average ********************/
 
 
-defineQueryObject!{ Q7365,
-    consumption, Option<u64>, None, // tx size or gas use
+api_querys_define!{ Q7365,
+    consumption, Option<u64>, None,  // tx size or gas use
+    burn90,      Option<bool>, None, // if tx burn 90% fee
 }
 
 async fn fee_average(State(ctx): State<ApiCtx>, q: Query<Q7365>) -> impl IntoResponse {
     q_unit!(q, unit);
     q_must!(q, consumption, 0);
+    q_must!(q, burn90, false);
 
-    let avgfeep = ctx.engine.average_fee_purity(); // unit: shuo
+    let avgfeep = ctx.engine.average_fee_purity(); // unit: 238
 
     let mut data = jsondata!{
-        "purity", avgfeep, // shuo
+        "purity", avgfeep, // 238
     };
 
     if consumption > 0 {
-        let setfee = Amount::shuo(avgfeep * consumption);
+        let mut setfee = Amount::unit238(avgfeep / GSCU * consumption); // unit: 238
+        if setfee.is_zero() {
+            setfee = Amount::zhu(1);
+        }
+        if burn90 {
+            if let Ok(f) = setfee.dist_mul(10) {
+                setfee = f;
+            }
+        }
         data.insert("feasible", json!(setfee.to_unit_string(&unit)));
     }
     // ok
@@ -28,13 +38,13 @@ async fn fee_average(State(ctx): State<ApiCtx>, q: Query<Q7365>) -> impl IntoRes
 
 /******************** raise fee ********************/
 
-defineQueryObject!{ Q5396,
+api_querys_define!{ Q5396,
     fee, String, s!(""),
     fee_prikey, String, s!(""),
     hash, Option<String>, None, // find by tx hash
 }
 
-async fn raise_fee(State(ctx): State<ApiCtx>, q: Query<Q5396>, body: Bytes) -> impl IntoResponse {
+async fn fee_raise(State(ctx): State<ApiCtx>, q: Query<Q5396>, body: Bytes) -> impl IntoResponse {
     // ctx_store!(ctx, store);
     q_must!(q, hash, s!(""));
     let fee = q_data_amt!(q, fee);

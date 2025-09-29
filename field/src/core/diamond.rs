@@ -7,7 +7,16 @@ impl DiamondName {
     }
 
     pub fn is_valid(stuff: &[u8]) -> bool {
-        x16rs::is_valid_diamond_name(stuff)
+        const DIAMOND_NAME_VALID_CHARS: [u8; 16] =  *b"WTYUIAHXVMEKBSZN";
+        if 6 != stuff.len() {
+            return false // length not match
+        }
+        // all 6 char is in "WTYUIAHXVMEKBSZN"
+        let rrr = stuff.iter().all(|&x|
+            DIAMOND_NAME_VALID_CHARS.iter().position(|&a|a==x).is_some()
+        );
+        // println!("DiamondName::is_valid({}) => {}", std::str::from_utf8(&stuff).unwrap(), rrr);
+        rrr
     }
 }
 
@@ -25,7 +34,7 @@ impl DiamondNumberAuto {
 		DiamondNumber::from( self.uint() as u32 )
 	}
 	pub fn from_diamond(dia: &DiamondNumber) -> DiamondNumberAuto {
-		DiamondNumberAuto::from( dia.uint() as u64 )
+		DiamondNumberAuto::from( dia.uint() as u64 ).unwrap()
 	}
 }
 
@@ -34,6 +43,19 @@ impl DiamondNumberAuto {
 */
 combi_list!{ DiamondNameListMax200, 
 	Uint1, DiamondName
+}
+
+impl Iterator for DiamondNameListMax200 {
+    type Item = DiamondName;
+    fn next(&mut self) -> Option<DiamondName> {
+        match self.pop() {
+            Some(d) => {
+                self.count -= 1;
+                Some(d)
+            }
+            _ => None,
+        }
+    }
 }
 
 

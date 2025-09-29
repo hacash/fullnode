@@ -1,0 +1,18 @@
+[package]
+name = "db"
+version = "0.1.0"
+edition = "2024"
+resolver = "2"
+
+[dependencies]
+protocol = {path = "../protocol"}
+sled = { version = "0.34.7", optional = true }
+rusty-leveldb = { version = "3.0.2", optional = true }
+libc = { version = "0.2.4", optional = true }
+leveldb-sys = { version = "2.0.9", optional = true }
+
+[features]
+default = ["db-sled"]
+db-sled = ["dep:sled"]
+db-rusty-leveldb = ["dep:rusty-leveldb"]
+db-leveldb-sys = ["dep:libc", "dep:leveldb-sys"]

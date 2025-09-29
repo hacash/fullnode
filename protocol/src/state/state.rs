@@ -1,7 +1,7 @@
 
 
 /*
-* test
+* 
 */
 inst_state_define!{ CoreState,
 
@@ -15,11 +15,12 @@ inst_state_define!{ CoreState,
     10, tx_exist,       Hash             : BlockHeight
 
     11, balance,        Address          : Balance
-    12, channel,        ChannelId        : ChannelSto
+    // 12, channel,        ChannelId        : ChannelSto
     13, diamond,        DiamondName      : DiamondSto
-    13, diamond_name ,  DiamondNumber    : DiamondName
-    14, diamond_smelt,  DiamondName      : DiamondSmelt
-    15, diamond_owned,  Address          : DiamondOwnedForm
+    14, diamond_name ,  DiamondNumber    : DiamondName
+    15, diamond_smelt,  DiamondName      : DiamondSmelt
+    16, diamond_owned,  Address          : DiamondOwnedForm
+    17, asset,          Fold64           : AssetSmelt
 
 }
 

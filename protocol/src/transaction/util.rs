@@ -76,3 +76,4 @@ fn verify_one_sign(hash: &Hash, addr: &Address, signs: &Vec<Sign>) -> Ret<bool> 
     }
     errf!("{} verify signature failed", addr.readable())
 }
+

@@ -6,7 +6,7 @@
 
 
 
-defineQueryObject!{ Q86489,
+api_querys_define!{ Q86489,
     name, Option<String>, None,
 }
 

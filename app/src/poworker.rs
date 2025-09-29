@@ -13,11 +13,11 @@ use serde_json::Value as JV;
 use sys::*;
 use field::*;
 use field::interface::*;
+use protocol::interface::*;
 use protocol::block::*;
 use protocol::transaction::*;
 use protocol::difficulty::*;
-use protocol::genesis::*;
-use protocol::interface::*;
+use mint::genesis::*;
 
 
 
@@ -81,9 +81,9 @@ const ONEDAY_BLOCK_NUM: f64 = 288.0; // one day block
 
 // current mining diamond number
 static MINING_BLOCK_HEIGHT: AtomicU64 = AtomicU64::new(0);
-lazy_static::lazy_static!{
-    static ref MINING_BLOCK_STUFF:  RwLock<Arc<BlockMiningStuff>> = RwLock::default();
-}
+
+use std::sync::LazyLock;
+static MINING_BLOCK_STUFF: LazyLock<RwLock<Arc<BlockMiningStuff>>> = LazyLock::new(|| RwLock::default() );
 
 
 
@@ -184,7 +184,7 @@ fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
     }
 
     let mut coinbase_nonce = Hash::default();
-    getrandom::getrandom(coinbase_nonce.as_mut()).unwrap();
+    getrandom::fill(coinbase_nonce.as_mut()).unwrap();
     let mut nonce_start: u32 = 0;
     let mut nonce_space: u32 = if !_cnf.useopencl {
         100000
@@ -259,7 +259,7 @@ fn do_group_block_mining(height: u64, mut block_intro: Vec<u8>,
     let mut most_nonce = 0u32;
     let mut most_hash = [255u8; 32];
     for nonce in nonce_start .. nonce_start + nonce_space {
-        // std::thread::sleep(std::time::Duration::from_micros(333)); // test
+        // std::thread::sleep(std::time::Duration::from_millis(1)); // test
         block_intro[79..83].copy_from_slice(&nonce.to_be_bytes());
         let reshx = x16rs::block_hash(height, &block_intro);
         if hash_more_power(&reshx, &most_hash) {
@@ -446,7 +446,7 @@ fn pull_pending_block_stuff(cnf: &PoWorkConf) {
     let curr_hei = MINING_BLOCK_HEIGHT.load(Relaxed);
 
     // query pending
-    let urlapi_pending = format!("http://{}/query/miner/pending?stuff=true", &cnf.rpcaddr);
+    let urlapi_pending = format!("http://{}/query/miner/pending?stuff=true&t={}", &cnf.rpcaddr, sys::curtimes());
     let res = HttpClient::new().get(&urlapi_pending).send();
     let Ok(repv) = res else {
         println!("Error: cannot get block data at {}\n", &urlapi_pending);
@@ -473,7 +473,7 @@ fn pull_pending_block_stuff(cnf: &PoWorkConf) {
     let mut rpid = vec![0].repeat(16);
     loop {
 
-        getrandom::getrandom(&mut rpid).unwrap();
+        getrandom::fill(&mut rpid).unwrap();
         let urlapi_notice = format!("http://{}/query/miner/notice?wait={}&height={}&rqid={}", 
             &cnf.rpcaddr, &cnf.noticewait, pending_height, &hex::encode(&rpid)
         );
@@ -507,8 +507,8 @@ fn pull_pending_block_stuff(cnf: &PoWorkConf) {
 
 fn push_block_mining_success(cnf: &PoWorkConf, success: &BlockMiningResult) {
     let urlapi_success = format!(
-        "http://{}/submit/miner/success?height={}&block_nonce={}&coinbase_nonce={}", 
-        &cnf.rpcaddr, success.height, success.head_nonce, success.coinbase_nonce.hex()
+        "http://{}/submit/miner/success?height={}&block_nonce={}&coinbase_nonce={}&t={}", 
+        &cnf.rpcaddr, success.height, success.head_nonce, success.coinbase_nonce.hex(), sys::curtimes()
     );
     let _ = HttpClient::new().get(&urlapi_success).send();
     println!("{} {}", &urlapi_success, HttpClient::new().get(&urlapi_success).send().unwrap().text().unwrap());

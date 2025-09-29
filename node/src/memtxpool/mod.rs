@@ -4,18 +4,15 @@ use std::collections::*;
 
 use sys::*;
 use field::*;
-use protocol::*;
-use protocol::action::*;
-
-use super::interface::*;
+use protocol::interface::*;
+use protocol::component::*;
 
 
-
-include!("def.rs");
-include!("group.rs");
-include!("pool.rs");
-include!("util.rs");
-include!("find.rs");
-include!("add.rs");
-include!("rm.rs");
+include!{"def.rs"}
+include!{"group.rs"}
+include!{"pool.rs"}
+include!{"util.rs"}
+include!{"find.rs"}
+include!{"add.rs"}
+include!{"rm.rs"}
 

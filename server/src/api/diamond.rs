@@ -4,19 +4,19 @@
 
 
 
-defineQueryObject!{ Q3946,
+api_querys_define!{ Q3946,
     name, Option<String>, None,
     number, Option<u32>, None,
 }
 
 async fn diamond(State(ctx): State<ApiCtx>, q: Query<Q3946>) -> impl IntoResponse {
-    ctx_mintstate!(ctx, mintstate);
+    ctx_state!(ctx, state);
     q_unit!(q, unit);
     q_must!(q, name, s!(""));
     q_must!(q, number, 0);
     // id
     if number > 0 {
-        let dian = mintstate.diamond_name(&DiamondNumber::from(number));
+        let dian = state.diamond_name(&DiamondNumber::from(number));
         if let None = dian {
             return api_error("cannot find diamond")
         }
@@ -26,13 +26,13 @@ async fn diamond(State(ctx): State<ApiCtx>, q: Query<Q3946>) -> impl IntoRespons
     }
     // data
     let dian = DiamondName::from(name.as_bytes().try_into().unwrap());
-    let diaobj = mintstate.diamond(&dian);
+    let diaobj = state.diamond(&dian);
     if let None = diaobj {
         return api_error("cannot find diamond")
     }
     let diaobj = diaobj.unwrap();
     // load smelt
-    let diasmelt = mintstate.diamond_smelt(&dian);
+    let diasmelt = state.diamond_smelt(&dian);
     if let None = diasmelt {
         return api_error("cannot find diamond")
     }
@@ -62,7 +62,7 @@ async fn diamond(State(ctx): State<ApiCtx>, q: Query<Q3946>) -> impl IntoRespons
 /******************* diamond bidding *******************/
 
 
-defineQueryObject!{ Q8346,
+api_querys_define!{ Q8346,
     limit, Option<usize>, None,
     number, Option<usize>, None,
     since, Option<bool>, None,
@@ -70,8 +70,8 @@ defineQueryObject!{ Q8346,
 
 async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl IntoResponse {
     ctx_store!(ctx, store);
-    ctx_mintstate!(ctx, mintstate);
-    let lastdia = mintstate.get_latest_diamond();
+    ctx_state!(ctx, state);
+    let lastdia = state.get_latest_diamond();
     q_unit!(q, unit);
     q_must!(q, limit, 20);
     q_must!(q, number, 0);
@@ -90,7 +90,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
         }
         let txhx = a.hash;
         let txr = a.objc.as_ref().as_read();
-        let Some(diamtact) = pickout_diamond_mint_action(txr) else {
+        let Some(diamtact) = mint::action::pickout_diamond_mint_action(txr) else {
             return true // continue
         };
         let act = diamtact.d;
@@ -113,7 +113,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
         true // next
 
     };
-    txpool.iter_at(&mut pick_dmint, TXPOOL_GROUP_DIAMOND_MINT).unwrap();
+    txpool.iter_at(TXGID_DIAMINT, &mut pick_dmint).unwrap();
 
     let mut data = jsondata!{
         "number", *lastdia.number + 1, // current bidding diamond
@@ -122,7 +122,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
 
     if since {
         // let mut acution_start = curtimes(); 
-        if let Ok(blk) = ctx.load_block( &store, &lastdia.born_height.to_string() ) {
+        if let Ok(blk) = ctx.load_block(store.as_ref(), &lastdia.born_height.to_string()) {
             let acution_start = blk.objc.timestamp().uint();
             data.insert("since", json!(acution_start));
         }
@@ -137,7 +137,7 @@ async fn diamond_bidding(State(ctx): State<ApiCtx>, q: Query<Q8346>) -> impl Int
 /******************* diamond views *******************/
 
 
-defineQueryObject!{ Q5395,
+api_querys_define!{ Q5395,
     name, Option<String>, None,
     limit, Option<i64>, None,
     page, Option<i64>, None,
@@ -146,8 +146,8 @@ defineQueryObject!{ Q5395,
 }
 
 async fn diamond_views(State(ctx): State<ApiCtx>, q: Query<Q5395>) -> impl IntoResponse {
-    ctx_mintstate!(ctx, mintstate);
-    let lastdianum = *mintstate.get_latest_diamond().number as i64;
+    ctx_state!(ctx, state);
+    let lastdianum = *state.get_latest_diamond().number as i64;
     q_unit!(q, unit);
     q_must!(q, limit, 20);
     q_must!(q, page, 1);
@@ -163,10 +163,10 @@ async fn diamond_views(State(ctx): State<ApiCtx>, q: Query<Q5395>) -> impl IntoR
     let mut datalist = vec![];
 
     let mut query_item = |dian: &DiamondName|{
-        let Some(..) = mintstate.diamond(dian) else {
+        let Some(..) = state.diamond(dian) else {
             return
         };
-        let Some(diasmelt) = mintstate.diamond_smelt(dian) else {
+        let Some(diasmelt) = state.diamond_smelt(dian) else {
             return
         };
         let data = jsondata!{
@@ -195,7 +195,7 @@ async fn diamond_views(State(ctx): State<ApiCtx>, q: Query<Q5395>) -> impl IntoR
         let diarng = get_id_range(lastdianum, page, limit, start, desc);
         // println!("{:?}", diarng);
         for id in diarng {
-            let Some(dian) = mintstate.diamond_name(&DiamondNumber::from(id as u32)) else {
+            let Some(dian) = state.diamond_name(&DiamondNumber::from(id as u32)) else {
                 continue
             };
             query_item(&dian);
@@ -215,7 +215,7 @@ async fn diamond_views(State(ctx): State<ApiCtx>, q: Query<Q5395>) -> impl IntoR
 /******************* diamond engrave *******************/
 
 
-defineQueryObject!{ Q5733,
+api_querys_define!{ Q5733,
     height, u64, 0,
     txposi, Option<isize>, None, // -1,
     tx_hash, Option<bool>, None, // if return txhash
@@ -229,7 +229,7 @@ async fn diamond_engrave(State(ctx): State<ApiCtx>, q: Query<Q5733>) -> impl Int
     let mut datalist = vec![];
 
     // load block
-    let blkpkg = ctx.load_block(&store, &q.height.to_string());
+    let blkpkg = ctx.load_block(store.as_ref(), &q.height.to_string());
     if let Err(e) = blkpkg {
         return api_error(&e)
     }
@@ -295,12 +295,12 @@ async fn diamond_engrave(State(ctx): State<ApiCtx>, q: Query<Q5733>) -> impl Int
 /******************* diamond inscription protocol cost *******************/
 
 
-defineQueryObject!{ Q5543,
+api_querys_define!{ Q5543,
     name, String, s!(""), // diamond names
 }
 
 async fn diamond_inscription_protocol_cost(State(ctx): State<ApiCtx>, q: Query<Q5543>) -> impl IntoResponse {
-    ctx_mintstate!(ctx, mintstate);
+    ctx_state!(ctx, state);
     q_unit!(q, unit);
 
     let Ok(names) = DiamondNameListMax200::from_readable(&q.name) else {
@@ -309,13 +309,13 @@ async fn diamond_inscription_protocol_cost(State(ctx): State<ApiCtx>, q: Query<Q
 
     let mut cost = Amount::new();
     for dia in names.list() {
-        let Some(diaobj) = mintstate.diamond(dia) else {
+        let Some(diaobj) = state.diamond(dia) else {
             return api_error(&format!("cannot find diamond {}", dia))
         };
-        if diaobj.inscripts.count().uint() < 10 {
+        if diaobj.inscripts.length() < 10 {
             continue // no need cost
         }
-        let Some(diasmelt) = mintstate.diamond_smelt(dia) else {
+        let Some(diasmelt) = state.diamond_smelt(dia) else {
             return api_error(&format!("cannot find diamond {}", dia))
         };
         let camt = Amount::coin(*diasmelt.average_bid_burn as u64, 247);
@@ -332,20 +332,3 @@ async fn diamond_inscription_protocol_cost(State(ctx): State<ApiCtx>, q: Query<Q
 
 }
 
-
-
-
-/*****************************************/
-
-
-fn pickout_diamond_mint_action(tx: &dyn TransactionRead) -> Option<DiamondMint> {
-    let mut res: Option<DiamondMint> = None;
-    for a in tx.actions() {
-        if a.kind() == DiamondMint::KIND {
-            let act = DiamondMint::must(&a.serialize());
-            res = Some(act);
-            break // find ok
-        }
-    }
-    res
-}

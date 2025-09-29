@@ -33,7 +33,7 @@ combi_optional!{ ChallengePeriodDataOptional,
 // FinalDistributionData
 combi_struct!{ ClosedDistributionData, 
 	// Status = 2 or 3 
-	left_bill : HacSat
+	left_bill : Balance
 }
 
 combi_optional!{ ClosedDistributionDataOptional, closed_distribution : ClosedDistributionData }
@@ -53,8 +53,8 @@ combi_struct!{ ChannelSto,
 	arbitration_lock_block        : Uint2           // Number of blocks to be locked for unilateral end channel
 	interest_attribution          : Uint1           // Interest attribution of 1% annualized: 0 Press end to assign 1 All to left 2 Give it all right
 	
-    left_bill                     : AddrHacSat     
-    right_bill                    : AddrHacSat     
+    left_bill                     : AddrBalance     
+    right_bill                    : AddrBalance     
 
     // status = 1
     if_challenging                : ChallengePeriodDataOptional 

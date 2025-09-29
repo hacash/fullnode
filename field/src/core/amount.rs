@@ -8,6 +8,7 @@ const U64S:  usize =  u64::BITS as usize / 8;
 
 pub const UNIT_MEI:  u8 = 248;
 pub const UNIT_ZHU:  u8 = 240;
+pub const UNIT_238:  u8 = 238;
 pub const UNIT_SHUO: u8 = 232;
 pub const UNIT_AI:   u8 = 224;
 pub const UNIT_MIAO: u8 = 216;
@@ -22,6 +23,11 @@ pub enum AmtMode {
     BIGINT,
 }
 
+pub enum AmtCpr {
+    Discard,
+    Grow,
+}
+
 
 
 #[derive(Default, Hash, Clone, PartialEq, Eq)]
@@ -31,8 +37,8 @@ pub struct Amount {
 	byte: Vec<u8>,
 }
 
-impl Display for Amount {
-    fn fmt(&self,f: &mut Formatter) -> Result{
+impl std::fmt::Display for Amount {
+    fn fmt(&self,f: &mut Formatter) -> Result {
         write!(f,"{}", self.to_fin_string())
     }
 }
@@ -45,13 +51,7 @@ impl Debug for Amount {
 
 impl Ord for Amount {
     fn cmp(&self, other: &Self) -> Ordering {
-        if self.equal(other) {
-            return Ordering::Equal
-        }
-        if self.greater(other) {
-            return Ordering::Greater
-        }
-        return Ordering::Less
+        self.cmp(other)
     }
 }
 
@@ -121,21 +121,21 @@ impl Amount {
     }
 
     pub fn is_zero(&self) -> bool {
-        self.unit == 0 || self.dist == 0
+        self.unit == 0 || self.dist == 0 || bytes_is_zero(&self.byte)
     }
 
     pub fn not_zero(&self) -> bool {
-        self.unit > 0 && self.dist != 0
+        !self.is_zero()
     }
 
     // check must be positive and cannot be zero
     pub fn is_positive(&self) -> bool {
-        self.unit > 0 && self.dist > 0
-    }   
+        self.unit > 0 && self.dist > 0 && bytes_not_zero(&self.byte)
+    }
 
     // check must be negative and cannot be zero
     pub fn is_negative(&self) -> bool {
-        self.unit > 0 && self.dist < 0
+        self.unit > 0 && self.dist < 0 && bytes_not_zero(&self.byte)
     }
     
 }
@@ -149,7 +149,10 @@ macro_rules! ret_amtfmte {
 
 macro_rules! coin_with {
     ($fn:ident, $ty:ty) => {
-        fn $fn(mut v: $ty, mut u: u8) -> Amount {
+        pub fn $fn(mut v: $ty, mut u: u8) -> Amount {
+            if v == 0 || u == 0 {
+                return Self::zero()
+            }
             while v % 10 == 0 {
                 if u == 255 {
                     break // unit max
@@ -158,7 +161,7 @@ macro_rules! coin_with {
                 u += 1;
             }
             let bts = drop_left_zero(&v.to_be_bytes());
-            Self{
+            Self {
                 unit: u,
                 dist: bts.len() as i8,
                 byte: bts
@@ -202,6 +205,9 @@ impl Amount {
     }
     pub fn miao(v: u64) -> Amount {
         Self::coin(v, UNIT_MIAO)
+    }
+    pub fn unit238(v: u64) -> Amount {
+        Self::coin(v, UNIT_238)
     }
 
     coin_with!{coin_u128, u128}
@@ -365,6 +371,16 @@ impl Amount {
         bignum * powv
     }
 
+    pub fn to_biguint(&self) -> BigUint {
+        assert!(!self.is_negative());
+        if self.is_zero() {
+            return 0u64.into();
+        }
+        let numv = BigUint::from_bytes_be(&self.byte[..]);
+        let powv = BigUint::from(10u64).pow(self.unit as u64);
+        numv * powv
+    }
+
 
     pub fn to_unit_string(&self, unit_str: &str) -> String {
         let unit;
@@ -381,7 +397,7 @@ impl Amount {
             }
         }
         match unit > 0 {
-            true => self.to_unit_unsafe(unit).to_string(),
+            true => unsafe { self.to_unit_float(unit).to_string() },
             false => self.to_fin_string(),
         }
     }
@@ -389,19 +405,44 @@ impl Amount {
 }
 
 
+macro_rules! to_unit_define {
+    ($fu64:ident, $fu128:ident, $unit:expr) => {
+        
+    pub fn $fu128(&self) -> Option<u128> {
+        self.to_unit_biguint($unit).to_u128()
+    }
+    
+    pub fn $fu64(&self) -> Option<u64> {
+        let Some(u) = self.$fu128() else {
+            return None
+        };
+        if u > u64::MAX as u128 {
+            return None
+        }
+        Some(u as u64)
+    }
+    };
+}
+
 
 
 impl Amount {
 
-    pub fn to_zhu_unsafe(&self) -> f64 {
-        self.to_unit_unsafe(UNIT_ZHU)
+    to_unit_define!{ to_mei_u64, to_mei_u128, UNIT_MEI }
+    to_unit_define!{ to_zhu_u64, to_zhu_u128, UNIT_ZHU }
+    to_unit_define!{ to_238_u64, to_238_u128, UNIT_238 } // for fee_purity
+
+    pub fn to_unit_biguint(&self, base_unit: u8) -> BigUint {
+        assert!(!self.is_negative());
+        if self.is_zero() {
+            return 0u64.into()
+        }
+        let bigu = self.to_biguint();
+        let powv: BigUint = BigUint::from(10u64).pow(base_unit as u64);
+        bigu / powv
     }
 
-    pub fn to_shuo_unsafe(&self) -> f64 {
-        self.to_unit_unsafe(UNIT_SHUO)
-    }
-
-    pub fn to_unit_unsafe(&self, base_unit: u8) -> f64 {
+    pub unsafe fn to_unit_float(&self, base_unit: u8) -> f64 {
         if self.is_zero() {
             return 0f64
         }
@@ -430,9 +471,10 @@ impl Amount {
 }
 
 
-macro_rules! greater_with {
+macro_rules! cmp_with {
     ($fn:ident, $ty:ty) => {
-        fn $fn(&self, src: &Amount) -> bool {
+        fn $fn(&self, src: &Amount) -> Ordering {
+            use Ordering::*;
             concat_idents!{ tail_u = tail_, $ty {
                 let mut tns1 = self.tail_u().unwrap().to_string();
                 let mut tns2 =  src.tail_u().unwrap().to_string();
@@ -444,9 +486,9 @@ macro_rules! greater_with {
             let rlunit1 = us1 + ts1;
             let rlunit2 = us2 + ts2;
             if rlunit1 > rlunit2 {
-                return true
+                return Greater
             } else if rlunit1 < rlunit2 {
-                return false
+                return Less
             }
             // byte width is same
             if us1 > us2 {
@@ -461,12 +503,12 @@ macro_rules! greater_with {
                 let a1 = tns1.as_bytes()[i];
                 let a2 = tns2.as_bytes()[i];
                 if a1 > a2 {
-                    return true // more
+                    return Greater // more
                 }else if a1 < a2 {
-                    return false // less
+                    return Less // less
                 }
             }
-            return false // all same
+            return Equal // all same
         }
         
     };
@@ -480,42 +522,45 @@ impl Amount {
         self.unit == src.unit &&
         self.dist == src.dist &&
         self.byte == src.byte
+        ||
+        self.is_zero() && src.is_zero()
     }
 
-    greater_with!{greater_mode_u128, u128}
-    greater_with!{greater_mode_u64,  u64}
+    cmp_with!{cmp_mode_u128, u128}
+    cmp_with!{cmp_mode_u64,  u64}
 
-    pub fn greater_mode_bigint(&self, src: &Amount) -> bool {
+    pub fn cmp_mode_bigint(&self, src: &Amount) -> Ordering {
         let db = self.to_bigint();
         let sb =  src.to_bigint();
-        db > sb
+        db.cmp(&sb)
     }
 
-    pub fn greater(&self, src: &Amount) -> bool {
+    pub fn cmp(&self, src: &Amount) -> Ordering {
+        use Ordering::*;
         if self.dist < 0 || src.dist < 0 {
             panic!("cannot compare between with negative")
         }
         if self.equal(src) {
-            return false // a == b
+            return Equal // a == b
         }
         let dzro = self.is_zero();
         let szro =  src.is_zero();
         if dzro && szro {
-            return false // both(0
+            return Equal // both(0
         } else if dzro {
-            return false // left(0) < right(+)
+            return Less // left(0) < right(+)
         } else if szro {
-            return true // left(+) > right(0)
+            return Greater // left(+) > right(0)
         }
         // U128 or U64
         let dtl = self.tail_len();
         let stl =  src.tail_len();
         if dtl <= U64S && stl <= U64S {
-            return self.greater_mode_u64(src)
+            return self.cmp_mode_u64(src)
         } else if dtl <= U128S && stl <= U128S {
-            return self.greater_mode_u128(src)
+            return self.cmp_mode_u128(src)
         }else {
-            return self.greater_mode_bigint(src)
+            return self.cmp_mode_bigint(src)
         }
         // UBIG
     }
@@ -526,9 +571,30 @@ impl Amount {
 // compute 
 impl Amount {
 
-    pub fn unit_sub(&mut self, sub: u8) {
-        assert!(sub < self.unit, "unit_sub error: unit must big than {}", sub);
-        self.unit -= sub;
+    pub fn dist_mul(&self, n: u128) -> Ret<Amount> {
+        if self.is_zero() {
+            return Ok(Self::zero())
+        }
+        if self.dist < 0 {
+            return errf!("cannot dist_mul for negative")
+        }
+        if self.byte.len() > U128S {
+            return errf!("dist_mul error: dist overflow")
+        }
+        let du = u128::from_be_bytes(add_left_padding(&self.byte, U128S).try_into().unwrap());
+        let Some(du) = du.checked_mul(n) else {
+            return errf!("dist_mul error: u128 overflow")
+        };
+        Ok(Self::coin_u128(du, self.unit))
+    }
+
+    pub fn unit_sub(&self, sub: u8) -> Ret<Amount> {
+        if sub >= self.unit {
+            return errf!("unit_sub error: unit must big than {}", sub)
+        }
+        let mut res = self.clone();
+        res.unit -= sub;
+        Ok(res)
     }
 
     pub fn add_mode_bigint(&self, src: &Amount) -> Ret<Amount> {
@@ -561,7 +627,7 @@ impl Amount {
         }
     }
 
-    pub fn compress(&self, btn: usize, upvalue: bool) -> Ret<Amount> {
+    pub fn compress(&self, btn: usize, cpr: AmtCpr) -> Ret<Amount> {
         if self.dist < 0 {
             return errf!("cannot compress negative amount")
         }
@@ -574,7 +640,7 @@ impl Amount {
                 return errf!("amount uint too big to compress")
             }
             let mut numpls = u128::from_be_bytes(add_left_padding(&amt.byte, U128S).try_into().unwrap()) / 10;
-            if upvalue {
+            if let AmtCpr::Grow = cpr {
                 numpls += 1;
             }
             let nbts = drop_left_zero(&numpls.to_be_bytes());
@@ -603,6 +669,14 @@ macro_rules! rte_cneg {
     ($tip: expr) => {
         return Err(format!("amount {} cannot between negative", $tip));
     };
+}
+
+fn bytes_not_zero(v: &[u8]) -> bool {
+    v.iter().any(|a|*a>0)
+}
+
+fn bytes_is_zero(v: &[u8]) -> bool {
+    !bytes_not_zero(v)
 }
 
 fn add_left_padding(v: &Vec<u8>, n: usize) -> Vec<u8> {
@@ -847,6 +921,23 @@ mod amount_tests {
         }
         println!("{}  {}", aa, now.elapsed().as_secs_f32());
 
+
+    }
+
+
+    #[test]
+    fn test9() {
+
+        let a1 = Amount::zero();
+        let a2 = Amount{
+            unit: 0,
+            dist: 1,
+            byte: vec![0],
+        };
+
+        println!("bytes_not_zero  {} {} {}", bytes_not_zero(&[]), bytes_not_zero(&[0]), bytes_not_zero(&[0,0,0,0]));
+
+        println!("a1 = {:?}, a2 = {:?}, a1 < a2 = {}", a1, a2, a1 < a2);
 
     }
 

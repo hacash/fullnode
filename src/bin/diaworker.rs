@@ -1,7 +1,5 @@
 
-
-include!{"../version.rs"}
-
+use app::*;
 
 fn main() {
     println!("[Version] Diamond miner worker v{}, build time: {}.", 

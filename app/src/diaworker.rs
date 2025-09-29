@@ -13,9 +13,9 @@ use serde_json::Value as JV;
 use sys::*;
 use field::*;
 use field::interface::*;
-use protocol::action::*;
 use protocol::difficulty::*;
-use protocol::genesis::*;
+use mint::genesis::*;
+use mint::action::*;
 
 
 
@@ -71,9 +71,9 @@ const MINING_INTERVAL: f64 = 3.0; // 3 secs
 
 // current mining diamond number
 static MINING_DIAMOND_NUM: AtomicU32 = AtomicU32::new(0);
-lazy_static::lazy_static!{
-    static ref MINING_DIAMOND_STUFF: RwLock<Hash> = RwLock::default();
-}
+
+use std::sync::LazyLock;
+static MINING_DIAMOND_STUFF: LazyLock<RwLock<Hash>> = LazyLock::new(|| RwLock::default() );
 
 
 
@@ -218,7 +218,7 @@ fn run_diamond_worker_thread(cnf: &DiaWorkConf, _thrid: usize,
 
     // start mining
     let mut custom_nonce = Hash::default();
-    getrandom::getrandom(custom_nonce.as_mut()).unwrap(); 
+    getrandom::fill(custom_nonce.as_mut()).unwrap(); 
     let mut nonce_start = 0;
 
     loop {

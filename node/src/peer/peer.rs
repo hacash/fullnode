@@ -92,18 +92,22 @@ impl Peer {
             return  errf!("cannot connect to self")
         }
         // dial to check is public ip
-        if !is_public && MSG_REPORT_PEER == ty {
-            // to answer mys node info
-            // report my node info: mark+port+id+name
+        if MSG_REPORT_PEER == ty {
+            // to answer mys node info, report my node info: mark+port+id+name
+            // println!("&&&& MSG_ANSWER_PEER to answer mys node info, report my node info: mark+port+id+name");
             tcp_send_msg(conn, MSG_ANSWER_PEER, mykeyname.clone()).await?;
             // check is public
-            let mut pubaddr = addr.clone();
-            pubaddr.set_port(oginport);
-            if let Ok(pb) = tcp_dial_to_check_is_public_id(pubaddr, &peerkey, 4).await {
-                if pb {
-                    is_public = true; // public connect to me
-                    addr.set_port(oginport);
-                    // println!("public connect to me!!!")
+            if oginport > 0 {
+                let mut pubaddr = addr.clone();
+                pubaddr.set_port(oginport);
+                if let Ok(pb) = tcp_dial_to_check_is_public_id(pubaddr, &peerkey, 3).await {
+                    if pb {
+                        is_public = true; // public connect to me
+                        addr.set_port(oginport);
+                        // println!("&&&& public connect to me!!!")
+                    }
+                }else{
+                    // println!("&&&& tcp_dial_to_check_is_public_id error !!!!!!!!!!!11!!!!!!!!!!")
                 }
             }
         }

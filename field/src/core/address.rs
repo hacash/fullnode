@@ -1,44 +1,95 @@
 use base58check::*;
 
-const ADDR_OR_PTR_DIV_NUM: u8 = 10;
+pub const ADDR_OR_PTR_DIV_NUM: u8 = 20;
 
 pub type Address = Fixed21;
 pub type Addrptr = Uint1;
 
+macro_rules! address_version_define {
+    ( $($key:ident : $name:ident , $num:expr)+ ) => {
+
 impl Address {
     
-    pub const PRIVAKEY: u8 = 0;
-    pub const MULTISIG: u8 = 1;
-    pub const CONTRACT: u8 = 2;
-
-    pub const UNKNOWN: Self = Fixed21::DEFAULT;
-
-    pub fn must_privakey(&self) -> Rerr {
-        match self.version() == Self::PRIVAKEY {
-            true => Ok(()),
-            false => errf!("address {} is not PRIVAKEY type", self.readable())
-        }
-    }
+    $(
+    pub const $key: u8 = $num; // leading symbol: 1
+    )+
 
     pub fn version(&self) -> u8 {
         self[0]
     }
 
+    pub fn check_version(&self) -> Rerr {
+        let v = self.version();
+        match v {
+            $( $num )|+ => Ok(()),
+            _ => errf!("address version {} not support", v)
+        }
+    }
+
+    $(
+    concat_idents::concat_idents!{ is_version = is_, $name {
+    pub fn is_version(&self) -> bool {
+        self.version() == Self::$key
+    }
+    }}
+    concat_idents::concat_idents!{ must_version = must_, $name {
+    pub fn must_version(&self) -> Rerr {
+        match self.version() == Self::$key {
+            true => Ok(()),
+            false => errf!("address {} is not {} type", self.readable(), stringify!($key))
+        }
+    }
+    }}
+    )+
+
+    pub fn from_bytes(stuff: &[u8]) -> Ret<Self> {
+        if stuff.len() != Self::SIZE {
+            return errf!("address size not match")
+        }
+        let addr = Self::from(stuff.to_vec().try_into().unwrap());
+        addr.check_version()?;
+        Ok(addr)
+    }
+
+}   
+
+    }
+}
+
+/*
+    version
+    https://en.bitcoin.it/wiki/List_of_address_prefixes
+*/
+#[cfg(feature = "hvm")]
+address_version_define!{
+    PRIVAKEY : privakey, 0 // leading symbol: 1
+    CONTRACT : contract, 1 // leading symbol: Q-Z, a-k, m-o
+    MULTISIG : multisig, 5 // leading symbol: 3
+}
+
+
+#[cfg(not(feature = "hvm"))]
+address_version_define!{
+    PRIVAKEY : privakey, 0 // leading symbol: 1
+    MULTISIG : multisig, 5 // leading symbol: 3
+}
+
+
+/*
+    readable
+*/
+impl Address {
+    
+    pub const UNKNOWN: Self = Fixed21::DEFAULT;
+
     pub fn readable(&self) -> String {
-        let btcon = self.serialize();
-        let bts: [u8; Self::SIZE] = btcon.try_into().unwrap();
-        Account::to_readable(&bts)
+        Account::to_readable(&*self)
     }
     
     pub fn from_readable(addr: &str) -> Ret<Self> {
-        let res = addr.from_base58check();
-        if let Err(_) = res {
-            return Err("base58check error".to_string())
-        }
-        let (version, body) = res.unwrap();
-        if version > Self::CONTRACT { // > 3
-            return Err("address version error".to_string())
-        }
+        let Ok((version, body)) = addr.from_base58check() else {
+            return errf!("base58check error")
+        };
         if body.len() != Self::SIZE - 1 {
             return Err("address length error".to_string())
         }
@@ -47,6 +98,7 @@ impl Address {
         for i in 1..Self::SIZE {
             address[i] = body[i-1];
         }
+        address.check_version()?;
         Ok(address)
     }
     
@@ -75,6 +127,12 @@ impl AddrOrList {
             Self::Val1(v) => vec![*v],
             Self::Val2(v) => v.list().clone(),
         }
+    }
+
+    pub fn from_list(list: Vec<Address>) -> Ret<Self> {
+        let mut v = AddressListW1::new();
+        v.append(list)?;
+        Ok(Self::Val2(v))
     }
 
     pub fn from_addr(v: Address) -> Self {

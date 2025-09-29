@@ -8,6 +8,13 @@ combi_struct!{ BlockPtr,
 }
 
 
+// BlockHeadOnlyHeight
+combi_struct!{ BlockHeadOnlyHeight, 
+	version           : Uint1
+	height            : BlockHeight
+}
+
+
 // BlockHead
 combi_struct!{ BlockHead, 
 	// head
@@ -50,7 +57,9 @@ impl BlockRead for BlockHeadMeta {
 
     fn hash(&self) -> Hash {
         let intro = vec![ self.head.serialize(), self.meta.serialize() ].concat();
-        let hx = x16rs::block_hash(self.height().uint(), intro);
+		let hx = unsafe {
+			EXTEND_BLOCK_HASHER_FUNC(self.head.height.uint(), &intro)
+		};
         Hash::must(&hx[..])
     }
 
@@ -77,6 +86,8 @@ impl BlockRead for BlockHeadMeta {
 	fn transaction_count(&self) -> &Uint4 {
 		self.head.transaction_count()
 	}
+
+	
 
 
 	fn nonce(&self) -> &Uint4 {

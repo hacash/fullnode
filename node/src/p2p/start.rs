@@ -2,7 +2,7 @@
 
 impl P2PManage {
 
-    pub async fn start(this: Arc<P2PManage>) -> Rerr {
+    pub async fn start(this: Arc<P2PManage>, worker: Worker) -> Rerr {
 
         // start p2p listen
         // let p2p = this.clone();
@@ -13,6 +13,8 @@ impl P2PManage {
         // connect boot nodes
         let p2p = this.clone();
         tokio::spawn(async move{
+            asleep(0.25).await;
+            // println!("&&&& connect_boot_nodes");
             p2p.connect_boot_nodes().await
         });
 
@@ -20,14 +22,14 @@ impl P2PManage {
         if this.cnf.findnodes {
             let p2p = this.clone();
             tokio::spawn(async move{
-                asleep(15).await;
+                asleep(15.0).await;
                 p2p.find_nodes().await
             });
         }
 
         // event loop
         // this.event_loop().await;
-        let _ = P2PManage::event_loop(this).await;
+        let _ = P2PManage::event_loop(this, worker).await;
         Ok(())
     }
 

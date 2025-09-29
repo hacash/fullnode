@@ -4,7 +4,7 @@
 
 
 
-defineQueryObject!{ Q8375,
+api_querys_define!{ Q8375,
     // do sign
     prikey, Option<String>, None,
     // append
@@ -88,7 +88,7 @@ async fn transaction_sign(State(ctx): State<ApiCtx>, q: Query<Q8375>, body: Byte
 
 
 
-defineQueryObject!{ Q2856,
+api_querys_define!{ Q2856,
     action, Option<bool>, None,
     signature, Option<bool>, None,
     description, Option<bool>, None,
@@ -143,7 +143,7 @@ async fn transaction_build(State(_ctx): State<ApiCtx>, q: Query<Q2856>, body: By
 
     // create trs
     let main_addr = j_addr!("main_address");
-    let mut tx = TransactionType2::new_by(main_addr.clone(), j_hac!("fee"));
+    let mut tx = TransactionType2::new_by(main_addr.clone(), j_hac!("fee"), curtimes());
     if let Some(ts) = jsonv["timestamp"].as_u64() {
         tx.timestamp = Timestamp::from(ts);
     }
@@ -178,7 +178,7 @@ async fn transaction_build(State(_ctx): State<ApiCtx>, q: Query<Q2856>, body: By
 
 
 
-defineQueryObject!{ Q9764,
+api_querys_define!{ Q9764,
     set_fee, Option<String>, None,
     sign_address, Option<String>, None,
     body, Option<bool>, None,
@@ -232,7 +232,7 @@ async fn transaction_check(State(_ctx): State<ApiCtx>, q: Query<Q9764>, bodydata
 
 
 
-defineQueryObject!{ Q3457,
+api_querys_define!{ Q3457,
     hash, Option<String>, None,
     body, Option<bool>, None,
     action, Option<bool>, None,
@@ -283,7 +283,7 @@ async fn transaction_exist(State(ctx): State<ApiCtx>, q: Query<Q3457>) -> impl I
         return api_error("transaction not find")
     };
     let bkey = txp.to_string();
-    let blkpkg = ctx.load_block(&store, &bkey);
+    let blkpkg = ctx.load_block(store.as_ref(), &bkey);
     if let Err(_) = blkpkg {
         return api_error("cannot find block by transaction ptr")
     }

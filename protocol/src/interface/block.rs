@@ -1,36 +1,36 @@
 
 pub trait BlockExec {
-    fn execute(&self, _: context::Chain, _: Box<dyn State>) -> Ret<Box<dyn State>> { unimplemented!() }
+    fn execute(&self, _: ChainInfo, _: Box<dyn State>) -> Ret<Box<dyn State>> { never!() }
 }
 
 pub trait BlockRead : BlockExec + Serialize + Send + Sync + DynClone {
 
-    fn hash(&self) -> Hash { unimplemented!() }
+    fn hash(&self) -> Hash { never!() }
 
-    fn version(&self) -> &Uint1 { unimplemented!() }
-    fn height(&self) -> &BlockHeight { unimplemented!() }
-    fn timestamp(&self) -> &Timestamp { unimplemented!() }
-    fn nonce(&self) -> &Uint4 { unimplemented!() }
-    fn difficulty(&self) -> &Uint4 { unimplemented!() } 
-    fn prevhash(&self) -> &Hash { unimplemented!() }
-    fn mrklroot(&self) -> &Hash { unimplemented!() }
-    fn coinbase_transaction(&self) ->  Ret<&dyn Transaction> { unimplemented!() } // must have
-    fn transaction_count(&self) -> &Uint4 { unimplemented!() }
-    fn transactions(&self) -> &Vec<Box<dyn Transaction>> { unimplemented!() }
-    fn transaction_hash_list(&self, _hash_with_fee: bool) -> Vec<Hash> { unimplemented!() }
+    fn version(&self) -> &Uint1 { never!() }
+    fn height(&self) -> &BlockHeight { never!() }
+    fn timestamp(&self) -> &Timestamp { never!() }
+    fn nonce(&self) -> &Uint4 { never!() }
+    fn difficulty(&self) -> &Uint4 { never!() } 
+    fn prevhash(&self) -> &Hash { never!() }
+    fn mrklroot(&self) -> &Hash { never!() }
+    fn coinbase_transaction(&self) ->  Ret<&dyn TransactionRead> { never!() } // must have
+    fn transaction_count(&self) -> &Uint4 { never!() }
+    fn transactions(&self) -> &Vec<Box<dyn Transaction>> { never!() }
+    fn transaction_hash_list(&self, _hash_with_fee: bool) -> Vec<Hash> { never!() }
 
 }
 
 pub trait Block : BlockRead + Field + Send + Sync + DynClone {
 
-    fn as_read(&self) -> &dyn BlockRead { unimplemented!() }
+    fn as_read(&self) -> &dyn BlockRead { never!() }
 
-    fn update_mrklroot(&mut self) { unimplemented!() }
-    fn set_nonce(&mut self, _: Uint4) { unimplemented!() }
-    fn set_mrklroot(&mut self, _: Hash) { unimplemented!() }
+    fn update_mrklroot(&mut self) { never!() }
+    fn set_nonce(&mut self, _: Uint4) { never!() }
+    fn set_mrklroot(&mut self, _: Hash) { never!() }
     
-    fn replace_transaction(&mut self, _: usize, _: Box<dyn Transaction>) -> Rerr { unimplemented!() }
-    fn push_transaction(&mut self, _: Box<dyn Transaction>) -> Rerr { unimplemented!() }
+    fn replace_transaction(&mut self, _: usize, _: Box<dyn Transaction>) -> Rerr { never!() }
+    fn push_transaction(&mut self, _: Box<dyn Transaction>) -> Rerr { never!() }
 
 }
 

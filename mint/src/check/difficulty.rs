@@ -23,11 +23,11 @@ impl DifficultyGnr {
 
 impl DifficultyGnr {
 
-    pub fn req_cycle_block(&self, hei: u64, sto: &BlockDisk) -> (u64, u32, [u8; HXS]) {
+    pub fn req_cycle_block(&self, hei: u64, sto: &dyn Store) -> (u64, u32, [u8; HXS]) {
         let cylnum = self.cnf.difficulty_adjust_blocks; // 288
         if hei < cylnum {
-            let cyltime = genesis_block().timestamp().uint();
-            let diffcty = genesis_block().difficulty().uint();
+            let cyltime = genesis::genesis_block().timestamp().uint();
+            let diffcty = genesis::genesis_block().difficulty().uint();
             let diffhx = u32_to_hash(diffcty);
             return (cyltime, diffcty, diffhx)
         }
@@ -58,7 +58,7 @@ impl DifficultyGnr {
     /*
     *
     */
-    pub fn target(&self, mcnf: &MintConf, prevdiff: u32, prevblkt: u64, hei: u64, sto: &BlockDisk) -> (u32, [u8;32], BigUint) {
+    pub fn target(&self, mcnf: &MintConf, prevdiff: u32, prevblkt: u64, hei: u64, sto: &dyn Store) -> (u32, [u8;32], BigUint) {
         let cylnum = self.cnf.difficulty_adjust_blocks;
         if hei < cylnum * 2 {
             let dn = LOWEST_DIFFICULTY;
@@ -73,7 +73,7 @@ impl DifficultyGnr {
         let target_time_span = cylnum * blk_span; // 288 * 300
         let (prevcltime, _, _) = self.req_cycle_block(hei - cylnum, sto);
         let mut real_time_span = blk_span + prevblkt - prevcltime; // +300: 287+1block
-        if mcnf.chain_id==0 && hei < 288*450 {
+        if mcnf.is_mainnet() && hei < cylnum*450 {
             // in mainnet chain id = 0
             // -300 = 287block, compatible history code
             real_time_span -= blk_span; 
@@ -91,6 +91,18 @@ impl DifficultyGnr {
         let tarhash = biguint_to_hash(&targetbign);
         let tarnum = hash_to_u32(&tarhash);
         (tarnum, tarhash, targetbign)
+    }
+
+}
+
+
+impl HacashMinter {
+
+    fn next_difficulty(&self, prev: &dyn BlockRead, sto: &dyn Store) -> (u32, [u8;32], BigUint) {
+        let pdif = prev.difficulty().uint();
+        let ptim = prev.timestamp().uint();
+        let nhei = prev.height().uint() + 1;
+        self.difficulty.target(&self.cnf, pdif, ptim, nhei, sto)
     }
 
 }

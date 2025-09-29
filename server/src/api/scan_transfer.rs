@@ -1,5 +1,5 @@
 
-defineQueryObject!{ Q4538,
+api_querys_define!{ Q4538,
     height, u64, 1,
     txposi, isize, -1,
     filter_from, Option<String>, None,
@@ -10,7 +10,7 @@ async fn scan_coin_transfer(State(ctx): State<ApiCtx>, q: Query<Q4538>) -> impl 
     ctx_store!(ctx, store);
     q_unit!(q, unit);
     q_coinkind!(q, coinkind);
-    let blkpkg = ctx.load_block(&store, &q.height.to_string());
+    let blkpkg = ctx.load_block(store.as_ref(), &q.height.to_string());
     if let Err(e) = blkpkg {
         return  api_error(&e)
     }
@@ -54,27 +54,18 @@ fn append_transfer_scan(tx: &dyn TransactionRead, act: &dyn Action,
 ) {
     let trace = match act.kind() {
 
-        /*
-        HacToTransfer:     1
-        HacFromTransfer:   13
-        HacFromToTransfer: 14
-        */
-        1 | 13 | 14 => ck.hacash,
+        HacToTrs::KIND |
+        HacFromTrs::KIND |
+        HacFromToTrs::KIND => ck.hacash,
 
-        /*
-        DiamondSingleTransfer: 5
-        DiamondFromToTransfer: 6
-        DiamondToTransfer:     7
-        DiamondFromTransfer:   8
-        */
-        5 ..= 8 =>     ck.diamond,
+        DiaSingleTrs::KIND |
+        DiaFromToTrs::KIND |
+        DiaToTrs::KIND |
+        DiaFromTrs::KIND => ck.diamond,
 
-        /*
-        SatoshiToTransfer:     9
-        SatoshiFromTransfer:   10
-        SatoshiFromToTransfer: 11
-        */
-        9 ..= 11 =>    ck.satoshi,
+        SatToTrs::KIND |
+        SatFromTrs::KIND |
+        SatFromToTrs::KIND => ck.satoshi,
 
         _ => false,
     };

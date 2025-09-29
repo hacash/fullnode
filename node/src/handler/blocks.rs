@@ -15,8 +15,7 @@ impl MsgHandler {
         let mut totalnum = 0;
         let mut endhei = 0;
         // load data
-        let stoptr = self.engine.disk();
-        let store = BlockDisk::wrap(stoptr);
+        let store = self.engine.store();
         let mut blkdtsary = vec![];
         for hei in starthei ..= lathei {
             let Some((_, blkdts)) = store.block_data_by_height(&BlockHeight::from(hei)) else {
@@ -43,15 +42,17 @@ impl MsgHandler {
     }
     
     async fn receive_blocks(&self, peer: Arc<Peer>, mut buf: Vec<u8>) {
+        // println!("&&&& receive_blocks ...");
         if buf.len() < 3 * 8 {
             println!("check data failed.");
             return
         }
         let blocks = buf.split_off(3*8);
         let latest_hei = u64::from_be_bytes( bufcut!(buf, 0, 8) );
-        let start_hei = u64::from_be_bytes( bufcut!(buf, 8, 16) );
+        let _start_hei = u64::from_be_bytes( bufcut!(buf, 8, 16) );
         let end_hei = u64::from_be_bytes( bufcut!(buf, 16, 24) );
         let persent =  end_hei as f64 / latest_hei as f64 * 100.0;
+        // println!("&&&& receive_blocks start_hei={}, latest_hei={}, end_hei={} ...", start_hei, latest_hei, end_hei);
         {
             let isrlk = self.inserting.lock().unwrap();
             flush!("{}({:.2}%) inserting...", end_hei, persent);
@@ -60,7 +61,8 @@ impl MsgHandler {
                 engine.insert_sync(start_hei, blocks)
             }).await.unwrap(); */
             // try insert
-            let res = self.engine.insert_sync(start_hei, blocks);
+            // let res = self.engine.insert_sync(start_hei blocks);
+            let res = self.engine.synchronize(blocks);
             if let Err(e) = res {
                 println!("{}", e); // show err
                 return

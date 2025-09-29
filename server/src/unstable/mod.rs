@@ -11,7 +11,7 @@ use serde_json::json;
 use super::ctx::*;
 
 
-include!("test.rs");
+include!{"test.rs"}
 
 
 pub fn routes() -> Router<ApiCtx> {

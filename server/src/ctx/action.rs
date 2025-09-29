@@ -147,17 +147,17 @@ pub fn action_from_json(_main_addr: &Address, jsonv: &serde_json::Value) -> Ret<
 
     /*********** Hacash ***********/
 
-    if_ret_act_ns!{ HacToTransfer,
+    if_ret_act_ns!{ HacToTrs,
         to,       j_addr
         hacash,   j_hac
     }
 
-    if_ret_act_ns!{ HacFromTransfer, 
+    if_ret_act_ns!{ HacFromTrs, 
         from,     j_addr
         hacash,   j_hac
     }
 
-    if_ret_act_ns!{ HacFromToTransfer, 
+    if_ret_act_ns!{ HacFromToTrs, 
         from,     j_addr
         to,       j_addr
         hacash,   j_hac
@@ -165,17 +165,17 @@ pub fn action_from_json(_main_addr: &Address, jsonv: &serde_json::Value) -> Ret<
 
     /*********** Satoshi ***********/
 
-    if_ret_act_ns!{ SatoshiToTransfer,
+    if_ret_act_ns!{ SatToTrs,
         to,       j_addr
         satoshi,  j_sat
     }
 
-    if_ret_act_ns!{ SatoshiFromTransfer, 
+    if_ret_act_ns!{ SatFromTrs, 
         from,     j_addr
         satoshi,  j_sat
     }
 
-    if_ret_act_ns!{ SatoshiFromToTransfer, 
+    if_ret_act_ns!{ SatFromToTrs, 
         from,     j_addr
         to,       j_addr
         satoshi,  j_sat
@@ -183,22 +183,22 @@ pub fn action_from_json(_main_addr: &Address, jsonv: &serde_json::Value) -> Ret<
 
     /*********** Diamond ***********/
 
-    if_ret_act!{ DiamondSingleTransfer,
+    if_ret_act!{ DiaSingleTrs,
         to,       j_addr!("to")
         diamond,  j_dias!("diamonds")[0]
     }
 
-    if_ret_act_ns!{ DiamondToTransfer,
+    if_ret_act_ns!{ DiaToTrs,
         to,       j_addr
         diamonds, j_dias
     }
 
-    if_ret_act_ns!{ DiamondFromTransfer, 
+    if_ret_act_ns!{ DiaFromTrs, 
         from,     j_addr
         diamonds, j_dias
     }
 
-    if_ret_act_ns!{ DiamondFromToTransfer, 
+    if_ret_act_ns!{ DiaFromToTrs, 
         from,     j_addr
         to,       j_addr
         diamonds, j_dias
@@ -238,7 +238,7 @@ pub fn action_from_json(_main_addr: &Address, jsonv: &serde_json::Value) -> Ret<
 
 // json string
 pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action, 
-    unit: &String, ret_kind: bool, ret_desc: bool
+    unit: &str, ret_kind: bool, ret_desc: bool
 ) -> JsonObject {
 
     let adrs = &tx.addrs();
@@ -249,14 +249,322 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
         "kind", kind,
     };
 
+    let mut scan_by_any = |actany: &dyn Any| {
+
+        let mut description: String = "".to_owned();
+        macro_rules! set_jsonobj { ( $( $p:expr, )+ ) => {
+            resjsonobj = jsondata!{ $($p,)+ };
+        }}
+        macro_rules! must_addr { ( $k:expr ) => {
+            $k.real(adrs).unwrap().readable()
+        }}
+        macro_rules! append_description { ($( $p:expr ),+) => {
+            if ret_desc { description = format!( $( $p ),+); }
+        }}
+
+        if let Some(action) = actany.downcast_ref::<HacToTrs>() {
+
+            let to_addr = must_addr!(action.to);
+            let amt_str = action.hacash.to_unit_string(unit);
+            set_jsonobj!{
+                "from", main_addr,
+                "to", to_addr,
+                "hacash", amt_str,
+            };
+            append_description!(
+                "Transfer {} HAC from {} to {}",
+                amt_str, main_addr, to_addr
+            );
+
+        }else if let Some(action) = actany.downcast_ref::<HacFromTrs>() {
+
+            let from_addr = must_addr!(action.from);
+            let amt_str = action.hacash.to_unit_string(unit);
+            set_jsonobj!{
+                "from", from_addr,
+                "to", main_addr,
+                "hacash", amt_str,
+            };
+            append_description!(
+                "Transfer {} HAC from {} to {}",
+                amt_str, from_addr, main_addr
+            );
+
+        }else if let Some(action) = actany.downcast_ref::<HacFromToTrs>() {
+
+            let from_addr = must_addr!(action.from);
+            let to_addr = must_addr!(action.to);
+            let amt_str = action.hacash.to_unit_string(unit);
+            set_jsonobj!{
+                "from", from_addr,
+                "to", to_addr,
+                "hacash", amt_str,
+            };
+            append_description!(
+                "Transfer {} HAC from {} to {}",
+                amt_str, from_addr, to_addr
+            );
+        
+
+        /*************** satoshi ***************/
 
 
-    /*************** Hacash ***************/
+        }else if let Some(action) = actany.downcast_ref::<SatToTrs>() {
+
+            let to_addr = must_addr!(action.to);
+            let amt_str = *action.satoshi;
+            set_jsonobj!{
+                "from", main_addr,
+                "to", to_addr,
+                "satoshi", amt_str,
+            };
+            append_description!(
+                "Transfer {} SAT from {} to {}",
+                amt_str, main_addr, to_addr
+            );
+
+        }else if let Some(action) = actany.downcast_ref::<SatFromTrs>() {
+
+            let from_addr = must_addr!(action.from);
+            let amt_str = *action.satoshi;
+            set_jsonobj!{
+                "from", from_addr,
+                "to", main_addr,
+                "satoshi", amt_str,
+            };
+            append_description!(
+                "Transfer {} SAT from {} to {}",
+                amt_str, from_addr, main_addr
+            );
+
+        }else if let Some(action) = actany.downcast_ref::<SatFromToTrs>() {
+
+            let from_addr = must_addr!(action.from);
+            let to_addr = must_addr!(action.to);
+            let amt_str = *action.satoshi;
+            set_jsonobj!{
+                "from", from_addr,
+                "to", to_addr,
+                "satoshi", amt_str,
+            };
+            append_description!(
+                "Transfer {} SAT from {} to {}",
+                amt_str, from_addr, to_addr
+            );
+        
+
+        /*************** Diamonds ***************/
 
 
-    if kind == HacToTransfer::KIND {
+        }else if let Some(action) = actany.downcast_ref::<DiaSingleTrs>() {
 
-        let action = HacToTransfer::must(&act.serialize());
+            let to_addr = must_addr!(action.to);
+            let dia_num = 1u32;
+            let dia_names = action.diamond.to_readable();
+            set_jsonobj!{
+                "from", main_addr,
+                "to", to_addr,
+                "diamond", dia_num,
+                "diamonds", dia_names,
+            };
+            append_description!(
+                "Transfer {} HACD ({}) from {} to {}",
+                dia_num, dia_names, main_addr, to_addr
+            );
+
+        }else if let Some(action) = actany.downcast_ref::<DiaToTrs>() {
+
+            let to_addr = must_addr!(action.to);
+            let dia_num = action.diamonds.length();
+            let dia_names = action.diamonds.readable();
+            set_jsonobj!{
+                "from", main_addr,
+                "to", to_addr,
+                "diamond", dia_num,
+                "diamonds", dia_names,
+            };
+            append_description!(
+                "Transfer {} HACD ({}) from {} to {}",
+                dia_num, action.diamonds.splitstr(), main_addr, to_addr
+            );
+
+        }else if let Some(action) = actany.downcast_ref::<DiaFromTrs>() {
+            
+            let from_addr = must_addr!(action.from);
+            let dia_num = action.diamonds.length();
+            let dia_names = action.diamonds.readable();
+            set_jsonobj!{
+                "from", from_addr,
+                "to", main_addr,
+                "diamond", dia_num,
+                "diamonds", dia_names,
+            };
+            append_description!(
+                "Transfer {} HACD ({}) from {} to {}",
+                dia_num, action.diamonds.splitstr(), from_addr, main_addr
+            );
+
+        }else if let Some(action) = actany.downcast_ref::<DiaFromToTrs>() {
+
+            let from_addr = must_addr!(action.from);
+            let to_addr = must_addr!(action.to);
+            let dia_num = action.diamonds.length();
+            let dia_names = action.diamonds.readable();
+            set_jsonobj!{
+                "from", from_addr,
+                "to", to_addr,
+                "diamond", dia_num,
+                "diamonds", dia_names,
+            };
+            append_description!(
+                "Transfer {} HACD ({}) from {} to {}",
+                dia_num, action.diamonds.splitstr(), from_addr, to_addr
+            );
+
+
+        /*************** Diamond mint & inscription ***************/
+
+
+        }else if let Some(action) = actany.downcast_ref::<DiamondMint>() {
+
+            let act = &action.d;
+            let name = act.diamond.to_readable();
+            let miner = act.address.readable();
+            set_jsonobj!{
+                "name", name,
+                "number", *act.number,
+                "miner", miner,
+                "nonce", act.nonce.hex(),
+                "prev_hash", act.prev_hash.hex(), // prev block hash
+                "custom_message", act.custom_message.hex(),
+            };
+            append_description!(
+                "Mint HACD ({}) to {}", name, miner
+            );
+
+        }else if let Some(action) = actany.downcast_ref::<DiamondInscription>() {
+
+            let dia_num = action.diamonds.length();
+            let dia_names = action.diamonds.readable();
+            let cost_str = action.protocol_cost.to_unit_string(unit);
+            let ins_str = action.engraved_content.to_readable_or_hex();
+            set_jsonobj!{
+                "diamond", dia_num,
+                "diamonds", dia_names,
+                "protocol_cost", cost_str,
+                "engraved_type", *action.engraved_type,
+                "engraved_content", ins_str,
+            };
+            if ret_desc {
+                let mut desc = format!("Inscript {} HACD ({}) with \"{}\"",
+                    dia_num, action.diamonds.splitstr(), ins_str);
+                if action.protocol_cost.is_positive() {
+                    desc += &format!("  cost {} HAC fee", cost_str);
+                }
+                description = desc;
+            }
+
+        }else if let Some(action) = actany.downcast_ref::<DiamondInscriptionClear>() {
+
+            let dia_num = action.diamonds.length();
+            let dia_names = action.diamonds.readable();
+            let cost_str = action.protocol_cost.to_unit_string(unit);
+            set_jsonobj!{
+                "diamond", dia_num,
+                "diamonds", dia_names,
+                "protocol_cost", cost_str,
+            };
+            append_description!(
+                "Clean inscript {} HACD ({}) cost {} HAC fee",
+                dia_num, action.diamonds.splitstr(), cost_str
+            );
+
+
+
+        /*************** Channel ***************/
+
+        }else if let Some(action) = actany.downcast_ref::<ChannelOpen>() {
+
+            let cid = action.channel_id.hex();
+            let l_adr = action.left_bill.address.readable();
+            let l_amt = action.left_bill.amount.to_unit_string(unit);
+            let r_adr = action.right_bill.address.readable();
+            let r_amt = action.right_bill.amount.to_unit_string(unit);
+            set_jsonobj!{
+                "channel_id", cid,
+                "left", jsondata!{
+                    "address", l_adr,
+                    "hacash", l_amt,
+                },
+                "right", jsondata!{
+                    "address", r_adr,
+                    "hacash", r_amt,
+                },
+            };
+            append_description!(
+                "Open channel {} with left {}: {}, right {}: {}",
+                cid, l_adr, l_amt, r_adr, r_amt
+            );
+
+
+        }else if let Some(action) = actany.downcast_ref::<ChannelClose>() {
+
+            let cid = action.channel_id.hex();
+            set_jsonobj!{
+                "channel_id", cid,
+            };
+            append_description!(
+                "Close channel {}", cid
+            );
+
+
+        /*************** Others ***************/
+
+        }else if let Some(action) = actany.downcast_ref::<SubmitHeightLimit>() {
+            
+            let s_hei = *action.start;
+            let e_hei = *action.end;
+            set_jsonobj!{
+                "start_height", s_hei,
+                "end_height", e_hei,
+            };
+            let e_hei = maybe!(e_hei== 0, 
+                "Unlimited".to_owned(), 
+                e_hei.to_string()
+            );
+            append_description!(
+                "Limit height range ({}, {}) ",
+                s_hei, e_hei
+            );
+
+        }else if let Some(action) = actany.downcast_ref::<SubChainID>() {
+            
+            let cid = *action.chain_id;
+            set_jsonobj!{
+                "chain_id", cid,
+            };
+            append_description!(
+                "Valid chain ID {}", cid
+            );
+
+        }else{
+
+        }
+        
+
+        if ret_desc {
+            resjsonobj.insert("description", json!(description));
+        }
+
+    };
+
+
+    /*************** Hacash 
+
+
+    if kind == HacToTrs::KIND {
+
+        let action = HacToTrs::must(&act.serialize());
         let to_addr = action.to.real(adrs).unwrap().readable();
         let amt_str = action.hacash.to_unit_string(unit);
         resjsonobj = jsondata!{
@@ -271,9 +579,9 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
             )));
         }
 
-    }else if kind == HacFromTransfer::KIND {
+    }else if kind == HacFromTrs::KIND {
 
-        let action = HacFromTransfer::must(&act.serialize());
+        let action = HacFromTrs::must(&act.serialize());
         let from_addr = action.from.real(adrs).unwrap().readable();
         let amt_str = action.hacash.to_unit_string(unit);
         resjsonobj = jsondata!{
@@ -288,9 +596,9 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
             )));
         }
 
-    }else if kind == HacFromToTransfer::KIND {
+    }else if kind == HacFromToTrs::KIND {
 
-        let action = HacFromToTransfer::must(&act.serialize());
+        let action = HacFromToTrs::must(&act.serialize());
         let from_addr = action.from.real(adrs).unwrap().readable();
         let to_addr = action.to.real(adrs).unwrap().readable();
         let amt_str = action.hacash.to_unit_string(unit);
@@ -310,9 +618,9 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
     /*************** Hacash ***************/
 
 
-    }else if kind == SatoshiToTransfer::KIND {
+    }else if kind == SatToTrs::KIND {
 
-        let action = SatoshiToTransfer::must(&act.serialize());
+        let action = SatToTrs::must(&act.serialize());
         let to_addr = action.to.real(adrs).unwrap().readable();
         let amt_str = *action.satoshi;
         resjsonobj = jsondata!{
@@ -327,9 +635,9 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
             )));
         }
 
-    }else if kind == SatoshiFromTransfer::KIND {
+    }else if kind == SatFromTrs::KIND {
 
-        let action = SatoshiFromTransfer::must(&act.serialize());
+        let action = SatFromTrs::must(&act.serialize());
         let from_addr = action.from.real(adrs).unwrap().readable();
         let amt_str = *action.satoshi;
         resjsonobj = jsondata!{
@@ -344,9 +652,9 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
             )));
         }
 
-    }else if kind == SatoshiFromToTransfer::KIND {
+    }else if kind == SatFromToTrs::KIND {
 
-        let action = SatoshiFromToTransfer::must(&act.serialize());
+        let action = SatFromToTrs::must(&act.serialize());
         let from_addr = action.from.real(adrs).unwrap().readable();
         let to_addr = action.to.real(adrs).unwrap().readable();
         let amt_str = *action.satoshi;
@@ -366,9 +674,9 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
     /*************** Diamonds ***************/
 
 
-    }else if kind == DiamondSingleTransfer::KIND {
+    }else if kind == DiaSingleTrs::KIND {
 
-        let action = DiamondSingleTransfer::must(&act.serialize());
+        let action = DiaSingleTrs::must(&act.serialize());
         let to_addr = action.to.real(adrs).unwrap().readable();
         let dia_num = 1u32;
         let dia_names = action.diamond.to_readable();
@@ -385,11 +693,11 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
             )));
         }
 
-    }else if kind == DiamondToTransfer::KIND {
+    }else if kind == DiaToTrs::KIND {
 
-        let action = DiamondToTransfer::must(&act.serialize());
+        let action = DiaToTrs::must(&act.serialize());
         let to_addr = action.to.real(adrs).unwrap().readable();
-        let dia_num = action.diamonds.count().uint();
+        let dia_num = action.diamonds.length();
         let dia_names = action.diamonds.readable();
         resjsonobj =  jsondata!{
             "from", main_addr,
@@ -404,11 +712,11 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
             )));
         }
 
-    }else if kind == DiamondFromTransfer::KIND {
+    }else if kind == DiaFromTrs::KIND {
         
-        let action = DiamondFromTransfer::must(&act.serialize());
+        let action = DiaFromTrs::must(&act.serialize());
         let from_addr = action.from.real(adrs).unwrap().readable();
-        let dia_num = action.diamonds.count().uint();
+        let dia_num = action.diamonds.length();
         let dia_names = action.diamonds.readable();
         resjsonobj = jsondata!{
             "from", from_addr,
@@ -423,12 +731,12 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
             )));
         }
 
-    }else if kind == DiamondFromToTransfer::KIND {
+    }else if kind == DiaFromToTrs::KIND {
 
-        let action = DiamondFromToTransfer::must(&act.serialize());
+        let action = DiaFromToTrs::must(&act.serialize());
         let from_addr = action.from.real(adrs).unwrap().readable();
         let to_addr = action.to.real(adrs).unwrap().readable();
-        let dia_num = action.diamonds.count().uint();
+        let dia_num = action.diamonds.length();
         let dia_names = action.diamonds.readable();
         resjsonobj = jsondata!{
             "from", from_addr,
@@ -471,7 +779,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
     }else if kind == DiamondInscription::KIND {
 
         let action = DiamondInscription::must(&act.serialize());
-        let dia_num = action.diamonds.count().uint();
+        let dia_num = action.diamonds.length();
         let dia_names = action.diamonds.readable();
         let cost_str = action.protocol_cost.to_unit_string(unit);
         let ins_str = action.engraved_content.to_readable_or_hex();
@@ -494,7 +802,7 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
     }else if kind == DiamondInscriptionClear::KIND {
 
         let action = DiamondInscriptionClear::must(&act.serialize());
-        let dia_num = action.diamonds.count().uint();
+        let dia_num = action.diamonds.length();
         let dia_names = action.diamonds.readable();
         let cost_str = action.protocol_cost.to_unit_string(unit);
         resjsonobj = jsondata!{
@@ -593,6 +901,11 @@ pub fn action_to_json_desc(tx: &dyn TransactionRead, act: &dyn Action,
     }else{
 
     }
+    
+    
+    ***************/
+
+    scan_by_any(act.as_any());
 
     // ok
     if ret_kind {
