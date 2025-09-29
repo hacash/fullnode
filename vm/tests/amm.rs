@@ -135,11 +135,29 @@ mod amm {
             var sat  = $1
             var zhu  = $2
             unpack_list(pick(0), 0)
-
-
-
-
-            return 0
+            var tt_k = "total"
+            var total = storage_load(tt_k)
+            var tt_shares = 0 as u128
+            var tt_sat    = 0 as u128
+            var tt_zhu    = 0 as u128
+            if total is not nil {
+                tt_shares = buf_left(16, total) as u128
+                tt_sat    = buf_cut(total, 16, 16) as u128
+                tt_zhu    = buf_right(16, total) as u128
+            }
+            tt_shares += sat as u128
+            tt_sat += sat as u128
+            tt_zhu += zhu as u128
+            storage_save(tt_k, tt_shares ++ tt_sat ++ tt_zhu)
+            // 
+            var lq_k $0 = addr ++ "_shares"
+            var my_shares $4 = storage_load(lq_k)
+            if my_shares is nil {
+                my_shares = 0 as u128
+            }
+            my_shares += sat as u128
+            storage_save(lq_k, my_shares)
+            end
         "##).unwrap();
         println!("deposit_codes:\n{}\n{}\n", deposit_codes.ircode_print(true).unwrap(), deposit_codes.to_hex());
         let deposit_codes = convert_ir_to_bytecode(&deposit_codes).unwrap();
@@ -147,15 +165,19 @@ mod amm {
 
 
 
+        use vm::value::ValueTy as VT;
 
-
-        Contract::new()
+        let contract = Contract::new()
         // .call(Abst::new(PermitHAC).bytecode(permit_hac))
-        .call(Abst::new(PayableSAT).ircode(payable_sat).unwrap())
-        .call(Abst::new(PayableHAC).ircode(payable_hac).unwrap())
-        .func(Func::new("prepare").public().bytecode(prepare_codes))
-        .func(Func::new("deposit").bytecode(deposit_codes))
-        .testnet_deploy_print("4:244");    
+        .syst(Abst::new(PayableSAT).ircode(payable_sat).unwrap())
+        .syst(Abst::new(PayableHAC).ircode(payable_hac).unwrap())
+        .func(Func::new("prepare").public()
+            .types(Some(VT::U64), vec![VT::U64, VT::U64, VT::U64]).bytecode(prepare_codes))
+        .func(Func::new("deposit")
+            .types(None, vec![VT::Addr, VT::U64, VT::U64]).bytecode(deposit_codes))
+        ;
+        println!("\n{} bytes:\n{}\n\n", contract.serialize().len(), contract.serialize().to_hex());
+        contract.testnet_deploy_print("4:244");    
 
     }
 
@@ -169,14 +191,15 @@ mod amm {
         let maincodes = lang_to_bytecode(r##"
             lib HacSwap = 1: VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
             var sat = 50000 as u64
-            var zhu = HacSwap.deposit(sat, 100000, 15)
+            var zhu = HacSwap.prepare(sat, 100000, 15)
             var adr = address_ptr(1)
             transfer_sat_to(adr, sat)
             transfer_hac_to(adr, zhu_to_hac(zhu))
             end
         "##).unwrap();
 
-        println!("{}", maincodes.bytecode_print(true).unwrap());
+        println!("{}\n", maincodes.bytecode_print(true).unwrap());
+        println!("{}\n", maincodes.to_hex());
 
         let mut act = ContractMainCall::new();
         act.ctype = Uint1::from(0);

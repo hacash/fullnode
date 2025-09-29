@@ -89,15 +89,17 @@ mod deploy {
                 PU8 0 
         )).unwrap();
 
-        Contract::new()
-        .cargv(vec![0])
-        .call(Abst::new(Construct).bytecode(build_codes!(
+        let contract = Contract::new()
+        .argv(vec![0])
+        .syst(Abst::new(Construct).bytecode(build_codes!(
             CU8 RET
         )))
-        .call(Abst::new(PermitHAC).bytecode(permit_hac))
-        .call(Abst::new(PayableHAC).bytecode(payable_hac_codes))
+        .syst(Abst::new(PermitHAC).bytecode(permit_hac))
+        .syst(Abst::new(PayableHAC).bytecode(payable_hac_codes))
         .func(Func::new("recursion").fitsh(recursion_fnstr).unwrap())
-        .testnet_deploy_print("2:244");    
+        ;
+        // println!("\n\n{}\n\n", contract.serialize().to_hex());
+        contract.testnet_deploy_print("2:244");    
 
     }
 

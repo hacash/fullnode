@@ -78,5 +78,12 @@ impl Func {
         self
     }
 
+    pub fn types(mut self, ret: Option<ValueTy>, params: Vec<ValueTy>) -> Self {
+        self.func.pmdf = FuncArgvTypes::from_types(ret, params).unwrap();
+        self
+    }
+
+
+
 
 }
