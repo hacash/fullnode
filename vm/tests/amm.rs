@@ -36,8 +36,9 @@ mod amm {
         use vm::ir::*;
 
         /*
+            1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9
+            18dekVcACnj6Tbd69SsexVMQ5KLBZZfn5K
             VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
-
 
         */
 
@@ -47,10 +48,9 @@ mod amm {
             var sat =  $1
             unpack_list(pick(0), 0)
             assert sat >= 1000
-            let in_sat = memory_get("in_sat")
+            var in_sat = memory_get("in_sat")
             assert sat == in_sat
-            var akey = $3
-            akey = "in_addr"
+            var akey = "in_addr"
             let adr = memory_get(akey)
             assert adr is nil
             memory_put(akey, addr)
@@ -74,7 +74,8 @@ mod amm {
             let akey = "in_addr"
             let adr = memory_get(akey)
             assert adr == addr
-            let sat = memory_get("in_sat")
+            var sat = memory_get("in_sat")
+            assert sat >= 1000
             // do deposit
             memory_put("in_sat", nil)
             memory_put("in_zhu", nil)
@@ -101,24 +102,18 @@ mod amm {
             var zhu      = $1
             var deadline = $2
             unpack_list(pick(0), 0)
-            assert deadline <= block_height()
+            assert deadline >= block_height()
             assert sat >= 1000 && zhu >= 10000
-            // 
+            // get total
+            var tt_shares = $3
+            var tt_sat    = $4
+            var tt_zhu    = $5
+            unpack_list(self.total(nil), 3)
+            // check
             var k_in_sat = "in_sat"
             var k_in_zhu = "in_zhu"
-            var tt_sk $2 = "total_sat"
-            var tt_zk    = "total_zhu"
-            var tt_sat = storage_load(tt_sk)
-            if tt_sat is nil {
-                memory_put(k_in_sat, sat)
-                memory_put(k_in_zhu, zhu)
-                return zhu // first deposit
-            }
-            var tt_zhu = storage_load(tt_zk)
-            assert tt_zhu is not nil
-            if tt_zhu == 0 {
-                storage_del(tt_sk)
-                storage_del(tt_zk)
+            if tt_shares == 0 ||  tt_sat == 0 || tt_zhu == 0  {
+                storage_del("total")
                 memory_put(k_in_sat, sat)
                 memory_put(k_in_zhu, zhu)
                 return zhu // first deposit
@@ -210,7 +205,7 @@ mod amm {
             var min_sat  = $1
             var deadline = $2
             unpack_list(pick(0), 0)
-            assert deadline <= block_height()
+            assert deadline >= block_height()
             // get total
             var tt_shares = $3
             var tt_sat    = $4
@@ -233,7 +228,7 @@ mod amm {
             var min_zhu  = $1
             var deadline = $2
             unpack_list(pick(0), 0)
-            assert deadline <= block_height()
+            assert deadline >= block_height()
             // get total
             var tt_shares = $3
             var tt_sat    = $4
@@ -242,7 +237,7 @@ mod amm {
             assert tt_shares>0 && tt_sat>0 && tt_zhu>0 
             // 0.3% fee
             var out_zhu = tt_zhu * sat * 997 / (tt_sat + sat) / 1000
-            memory_put("out_zhu", out_zhu)
+            memory_put("out_hac", zhu_to_hac(out_zhu))
             assert out_zhu >= min_zhu
             return out_zhu
         "##).unwrap();
@@ -297,7 +292,18 @@ mod amm {
         "##).unwrap();
 
 
-        println!("total_codes:\n{}\n{}\n", total_codes.bytecode_print(true).unwrap(), total_codes.to_hex());
+        let shares_codes = lang_to_bytecode(r##"
+            // get shares
+            var lq_k = pick(0) ++ "_shares"
+            var my_shares = storage_load(lq_k)
+            if my_shares is nil {
+                return nil
+            }
+            return my_shares as u128
+        "##).unwrap();
+
+
+        println!("shares_codes:\n{}\n{}\n", shares_codes.bytecode_print(true).unwrap(), shares_codes.to_hex());
 
 
 
@@ -320,9 +326,15 @@ mod amm {
             .types(Some(VT::U64), vec![VT::U64, VT::U64, VT::U64]).bytecode(sell_codes))
         .func(Func::new("total").public()
             .types(None, vec![]).bytecode(total_codes))
+        .func(Func::new("shares").public()
+            .types(Some(VT::U128), vec![VT::Addr]).bytecode(shares_codes))
         ;
         println!("\n{} bytes:\n{}\n\n", contract.serialize().len(), contract.serialize().to_hex());
         contract.testnet_deploy_print("8:244");    
+
+
+        let acc = sys::Account::create_by("123457").unwrap();
+        println!("\n{}", acc.readable());
 
     }
 
@@ -337,9 +349,10 @@ mod amm {
         
         let maincodes = lang_to_bytecode(r##"
             lib HacSwap = 1: VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
-            var sat = 50000 as u64
-            var zhu = HacSwap.prepare(sat, 100000, 15)
+            var sat = 100000000 as u64 // 1 BTC
+            var zhu = HacSwap.prepare(sat, 100000000000, 50) // 1k HAC
             var adr = address_ptr(1)
+            // throw concat(adr, sat)
             transfer_sat_to(adr, sat)
             transfer_hac_to(adr, zhu_to_hac(zhu))
             end
@@ -359,8 +372,7 @@ mod amm {
 
 
     #[test]
-    // fn call_recursion() {
-    fn transfer() {
+    fn transfer1() {
 
         let adr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
 
@@ -369,6 +381,26 @@ mod amm {
         act.hacash = Amount::mei(5);
 
         curl_trs_1(vec![Box::new(act.clone())]);
+
+    }
+
+
+
+    #[test]
+    fn transfer2() {
+
+        let adr = Address::from_readable("18dekVcACnj6Tbd69SsexVMQ5KLBZZfn5K").unwrap();
+
+        let mut act1 = HacToTrs::new();
+        act1.to = AddrOrPtr::from_addr(adr);
+        act1.hacash = Amount::mei(15000);
+        
+        let mut act2 = SatToTrs::new();
+        act2.to = AddrOrPtr::from_addr(adr);
+        act2.satoshi = Satoshi::from(500000000);
+        
+
+        curl_trs_1(vec![Box::new(act1.clone()), Box::new(act2.clone())]);
 
     }
 

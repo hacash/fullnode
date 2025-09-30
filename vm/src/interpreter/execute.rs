@@ -230,13 +230,13 @@ pub fn execute_code(
                 ItrErr::new(ExtActCallError, e.as_str()))?;
             gas += bgasu as i64;
             let resv;
-            let vid = idx as usize;
             if $have_retv {
                 let vty = match instruction {
-                    EXTENV  => CALL_EXTEND_ENV_DEFS[vid],
-                    EXTFUNC => CALL_EXTEND_FUNC_DEFS[vid],
+                    EXTENV  => search_ext_by_id(idx, &CALL_EXTEND_ENV_DEFS),
+                    EXTFUNC => search_ext_by_id(idx, &CALL_EXTEND_FUNC_DEFS),
                     _ => never!(),
-                }.2;
+                }.unwrap().2;
+                // debug_println!("Value::type_from(vty, cres) {:?} {}", vty, cres.to_hex());
                 resv = Value::type_from(vty, cres)?; //  from ty
             } else {
                 resv = Value::Bytes(cres); // only bytes
@@ -346,12 +346,12 @@ pub fn execute_code(
             STIME => *ops.peek()? = state.stime(hei, context_addr, ops.peek()?)?,
             SLOAD => *ops.peek()? = state.sload(hei, context_addr, ops.peek()?)?,
             SDEL  => state.sdel(context_addr, ops.pop()?)?,
-            SSAVE => state.ssave(hei, context_addr,ops.pop()?, ops.pop()?)?,
-            SRENT => gas += state.srent(gst, hei, context_addr, ops.pop()?, ops.pop()?)?,
+            SSAVE => { let v = ops.pop()?; state.ssave(hei, context_addr, ops.pop()?, v)?; },
+            SRENT => { let t = ops.pop()?; gas += state.srent(gst, hei, context_addr, ops.pop()?, t)?; },
             // global & memory
-            GPUT => globals.put(ops.pop()?, ops.pop()?)?,
+            GPUT => { let v = ops.pop()?; globals.put(ops.pop()?, v)?; },
             GGET => *ops.peek()? = globals.get(ops.peek()?)?,
-            MPUT => memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?,
+            MPUT => { let v = ops.pop()?; memorys.entry(context_addr)?.put(ops.pop()?, v)?; },
             MGET => *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?,
             // logic
             AND  => binop_btw(ops, lgc_and)?,

@@ -71,7 +71,7 @@ impl Resoure {
         use ItrErrCode::*;
         let librarys = adrlist;
         let libidx = lib as usize;
-        if libidx <= librarys.len() {
+        if libidx >= librarys.len() {
             return itr_err_code!(CallLibOverflow)
         }
         let taradr = librarys.get(libidx).unwrap();

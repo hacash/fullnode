@@ -111,7 +111,7 @@ impl Frame {
         self.oprnds.push(v)
     }
 
-    pub fn check_output_type(&self, v: &Value) -> VmrtErr {
+    pub fn check_output_type(&self, v: &mut Value) -> VmrtErr {
         match &self.types {
             Some(ty) => ty.check_output(v),
             _ => Ok(())
@@ -123,10 +123,10 @@ impl Frame {
     */
     pub fn prepare(&mut self, mode: CallMode, fnobj: FnObj, param: Option<Value>) -> VmrtErr {
         use CodeType::*;
-        if let Some(p) = param {
+        if let Some(mut p) = param {
             p.canbe_func_argv()?;
             if let Some(vtys) = &fnobj.agvty {
-                vtys.check_params(&p)?; // check func argv types
+                vtys.check_params(&mut p)?; // check func argv types
             }
             self.oprnds.push(p)?; // param into stack
         }

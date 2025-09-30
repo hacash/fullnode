@@ -61,6 +61,10 @@ impl ContractAddress {
         self.addr
     }
 
+    pub fn into_addr(self) -> Address {
+        self.addr
+    }
+
     pub fn parse(dts: &[u8]) -> Ret<Self> {
         if dts.len() != Address::SIZE {
             return errf!("contract address length error")

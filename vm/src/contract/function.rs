@@ -18,13 +18,13 @@ macro_rules! define_func_codes {
 
         pub fn ircode(mut self, ircodes: Vec<u8>) -> Ret<Self> {
             // debug_println!("{}", ircodes.ircode_print(true).unwrap());
-            self.func.cdty = Fixed1::from([CodeType::IRNode as u8]);
+            self.func.cdty[0] |= CodeType::IRNode as u8;
             self.func.code = BytesW2::from(ircodes)?;
             Ok(self)
         }
         
         pub fn bytecode(mut self, cds: Vec<u8>) -> Self {
-            self.func.cdty = Fixed1::from([CodeType::Bytecode as u8]);
+            self.func.cdty[0] |= CodeType::Bytecode as u8;
             self.func.code = BytesW2::from(cds).unwrap();
             self
         }

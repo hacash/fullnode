@@ -96,13 +96,16 @@ pub struct FnObj {
 impl FnObj {
     
     pub fn check_conf(&self, cnf: FnConf) -> bool {
+        // let x = self.confs;
+        // let y = cnf as u8;
+        // debug_println!("check_conf: x={x:b}, y={y:b}");
         let cnfset = cnf as u8;
         self.confs & cnfset == cnfset
     } 
 
     pub fn create(mks: u8, codes: Vec<u8>, agvty: Option<FuncArgvTypes>) -> VmrtRes<Self> {
         let ctype = CodeType::parse(mks)?;
-        Ok(Self {confs: mks, agvty, ctype, codes })
+        Ok(Self {confs: mks & 0b11111000, agvty, ctype, codes })
     }
 
     pub fn into_array(self) -> Vec<u8> {

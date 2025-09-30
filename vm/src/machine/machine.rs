@@ -163,26 +163,27 @@ impl Machine {
 
     pub fn main_call(&mut self, env: &mut ExecEnv, ctype: CodeType, codes: Vec<u8>) -> Ret<Value> {
         let fnobj = FnObj{ ctype, codes, confs: 0, agvty: None};
-        map_itr_err!(self.do_call(env, CallMode::Main, fnobj, None))
+        map_itr_err!(self.do_call(env, CallMode::Main, fnobj, None, None))
     }
 
     pub fn abst_call(&mut self, env: &mut ExecEnv, cty: AbstCall, contract_addr: ContractAddress, param: Value) -> Ret<Value> {
+        let adr = contract_addr.readable();
         let Some(fnobj) = map_itr_err!(self.r.load_abstfn(env.sta, &contract_addr, cty))? else {
             // return Ok(Value::Nil) // not find call
-            return errf!("abst call {:?} not find in {}", cty, contract_addr.readable()) // not find call
+            return errf!("abst call {:?} not find in {}", cty, adr) // not find call
         };
         let fnobj = fnobj.as_ref().clone();
         let param =  Some(param);
-        let rv = map_itr_err!(self.do_call(env, CallMode::Abst, fnobj, param))?;
+        let rv = map_itr_err!(self.do_call(env, CallMode::Abst, fnobj, Some(contract_addr), param))?;
         if rv.check_true() {
-            return errf!("call {}.{:?} return error code {}", contract_addr.readable(), cty, rv.to_uint())
+            return errf!("call {}.{:?} return error code {}", adr, cty, rv.to_uint())
         }
         Ok(rv)
     }
 
-    fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, param: Option<Value>) -> VmrtRes<Value> {
+    fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, ctxadr: Option<ContractAddress>, param: Option<Value>) -> VmrtRes<Value> {
         self.frames.push(CallFrame::new()); // for reclaim
-        let res = self.frames.last_mut().unwrap().start_call(&mut self.r, env, mode, code, param);
+        let res = self.frames.last_mut().unwrap().start_call(&mut self.r, env, mode, code, ctxadr, param);
         self.frames.pop().unwrap().reclaim(&mut self.r); // do reclaim
         res
     }

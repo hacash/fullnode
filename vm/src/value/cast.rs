@@ -154,6 +154,25 @@ impl Value {
         }
     }
 
+
+    pub fn checked_param_cast(&mut self, ty: ValueTy) -> VmrtErr {
+        use ValueTy::*;
+        let ec = CallArgvTypeFail;
+        let err = |t1, t2| itr_err_fmt!(ec, "need {:?} but got {:?}", t1, t2);
+        let mty = self.ty();
+        let t = ty as u8;
+        macro_rules! cts { () => { {self.cast_to(t)?; ()} } }
+        Ok(match ty {
+            _ if ty == mty => (),
+            U16   => if let             U8 = mty { cts!() },
+            U32   => if let         U16|U8 = mty { cts!() },
+            U64   => if let     U32|U16|U8 = mty { cts!() },
+            U128  => if let U64|U32|U16|U8 = mty { cts!() },
+            Addr  => if let          Bytes = mty { cts!() },
+            Bytes => if let           Addr = mty { cts!() },
+            _ => return err(ty, mty)
+        })
+    }
     
 
 

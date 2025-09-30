@@ -420,6 +420,10 @@ impl Syntax {
         Self::push_inst(PNIL)
     }
 
+    pub fn push_inst_noret(inst: Bytecode) -> Box<dyn IRNode> {
+        Box::new(IRNodeLeaf::notext(false, inst))
+    }
+
     pub fn push_inst(inst: Bytecode) -> Box<dyn IRNode> {
         Box::new(IRNodeLeaf::notext(true, inst))
     }
@@ -685,8 +689,8 @@ impl Syntax {
             Keyword(Nil)    => Self::push_nil(),
             Keyword(True)   => Self::push_inst(P1),
             Keyword(False)  => Self::push_inst(P0),
-            Keyword(Abort)  => Self::push_inst(ABT),
-            Keyword(End)    => Self::push_inst(END),
+            Keyword(Abort)  => Self::push_inst_noret(ABT),
+            Keyword(End)    => Self::push_inst_noret(END),
             Keyword(Assert) => Box::new(IRNodeSingle{hrtv: false, inst: AST, subx: self.item_must(0)?}),
             Keyword(Throw)  => Box::new(IRNodeSingle{hrtv: false, inst: ERR, subx: self.item_must(0)?}),
             Keyword(Return) => Box::new(IRNodeSingle{hrtv: false, inst: RET, subx: self.item_must(0)?}),

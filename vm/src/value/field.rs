@@ -45,9 +45,9 @@ impl Parse for Value {
         let ty = ValueTy::build(buf[0])?;
         buf = &buf[1..];
         macro_rules! buf_to_uint { ($ty:ty, $buf:expr, $l:expr) => {{
-            if buf.len() < $l {
-                return err
-            }
+            // if buf.len() < $l {
+            //     return err
+            // }
             <$ty>::from_be_bytes(buf_fill_left_zero(buf, $l).try_into().unwrap())
         }}}
         *self = match ty {
@@ -60,7 +60,7 @@ impl Parse for Value {
             ValueTy::U128      => U128(buf_to_uint!(u128, buf, 16)),
             ValueTy::Bytes     => Bytes(buf.to_vec()),
             ValueTy::Addr      => Addr(Address::from_bytes(&buf)?),
-            _ => panic!("Compo value item cannot be parse"),
+            _ => panic!("Compo or slice value item cannot be parse"),
         };
         Ok(bl)
     }

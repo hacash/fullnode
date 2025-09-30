@@ -28,7 +28,7 @@ impl Tokenizer<'_> {
                 Ok(d) => Bytes(d),
                 _ => return errf!("hex data format error '{}'", s),
             })
-        } else if s.starts_with("0b") || s.len() >= 10 {
+        } else if s.starts_with("0b") && s.len() >= 10 {
             // 0b11110000
             let e = errf!("binary data '{}' format error ", s);
             let v = s.to_owned().split_off(2);

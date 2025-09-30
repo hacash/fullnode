@@ -15,38 +15,38 @@ impl FuncArgvTypes {
         }
     }
 
-    pub fn check_output(&self, v: &Value) -> VmrtErr {
+    pub fn check_output(&self, v: &mut Value) -> VmrtErr {
         let Some(oty) = map_err_itr!(CallArgvTypeFail, self.output_type())? else {
             return Ok(())
         };
-        if v.ty() != oty {
-            return itr_err_code!(CallArgvTypeFail);
+        if let Err(e) = v.checked_param_cast(oty) {
+            return itr_err_fmt!(CallArgvTypeFail, "check output failed: {:?}", e);
         }
         // pass
         Ok(())
     }
 
 
-    pub fn check_params(&self, v: &Value) -> VmrtErr {
-        let err = || itr_err_code!(CallArgvTypeFail);
-        let types = map_err_itr!(CallArgvTypeFail, self.param_types())?;
+    pub fn check_params(&self, v: &mut Value) -> VmrtErr {
+        // debug_println!("check_params------");
+        let ec = CallArgvTypeFail;
+        // let err = |t1, t2| itr_err_fmt!(ec, "need {:?} but got {:?}", t1, t2);
+        let types = map_err_itr!(ec, self.param_types())?;
         let tn = types.len();
         match tn {
             // do not check
             0 => Ok(()),
             // check one argv
-            1 => maybe!(v.ty()==types[0], Ok(()), err() ),
+            1 => v.checked_param_cast(types[0]),
             // check list
             _ => {
-                let vs = v.compo_ref()?.list_ref()?;
+                let vs = v.compo()?.list_mut()?;
                 let vn = vs.len();
                 if tn != vn {
-                    return err()
+                    return itr_err_fmt!(ec, "param length error need {} but got {}", tn, vn)
                 }
                 for i in 0..vn {
-                    if vs[i].ty() != types[i] {
-                        return err()
-                    }
+                    vs[i].checked_param_cast(types[i])?;
                 }
                 // all pass
                 Ok(())
@@ -104,7 +104,8 @@ impl FuncArgvTypes {
         }
         let mut tys = vec![ValueTy::Nil; n];
         let z = n / 2 + 1;
-        if z >= self.define.len() {
+        if z > self.define.len() {
+            // debug_println!("--------- {} {} {:?}", n, z, self.define);
             return errf!("FuncArgvTypes to bytes error")
         }
         for i in 0..n {

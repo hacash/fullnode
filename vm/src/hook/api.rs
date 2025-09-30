@@ -25,7 +25,7 @@ use super::ContractAddress;
 
 api_querys_define!{ Q8365,
     contract, String, s!(""),
-    funcname, String, s!(""),
+    function, String, s!(""),
     paramhex, Option<String>, None,
     rtvabi, Option<String>, None, // U1 U2 .. U16, S1, S2, S3 ... S32, STR, B1. .. B32, BUF  [a:U1,b:U3,C:BUF]
 
@@ -66,7 +66,7 @@ async fn contract_sandbox_call(State(ctx): State<ApiCtx>, q: Query<Q8365>) -> im
         return api_error("contract address version error")
     };
     let param = hex::decode(q.paramhex.clone().unwrap_or(s!(""))).unwrap_or(vec![]);
-    let callres = machine::sandbox_call(&mut ctxobj, ctrladdr, q.funcname.clone(), param);
+    let callres = machine::sandbox_call(&mut ctxobj, ctrladdr, q.function.clone(), param);
     if let Err(e) = callres {
         return api_error(&format!("contract call error: {}", e))
     }

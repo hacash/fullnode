@@ -22,6 +22,7 @@ impl Resoure {
         Self {
             height,
             global_vals: GKVMap::new(cap.max_global),
+            memory_vals: CtcKVMap::new(cap.max_memory),
             space_cap: cap,
             gas_extra: GasExtra::new(height),
             gas_table: GasTable::new(height),

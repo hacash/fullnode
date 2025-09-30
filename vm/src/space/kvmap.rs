@@ -38,6 +38,7 @@ macro_rules! memory_kvmap_define {
             }
 
             pub fn put(&mut self, k: Value, v: Value) -> VmrtErr {
+                // debug_println!("++++++++++++++ kv get put: {}", Self::key(&k)?.to_hex());
                 v.canbe_value()?;
                 self.datas.insert(Self::key(&k)?, v);
                 if self.datas.len() > self.limit {
@@ -47,6 +48,7 @@ macro_rules! memory_kvmap_define {
             }
 
             pub fn get(&self, k: &Value) -> VmrtRes<Value> {
+                // debug_println!("------------- kv get key: {}", Self::key(k)?.to_hex());
                 Ok(match self.datas.get(&Self::key(k)?) {
                     Some(v) => v.clone(),
                     None => Value::Nil,
@@ -97,7 +99,7 @@ impl CtcKVMap {
 
     pub fn entry(&mut self, addr: &Address) -> VmrtRes<&mut MKVMap> {
         if ! addr.is_contract() {
-            return itr_err_fmt!(MemoryError, "memory use must in contract")
+            return itr_err_fmt!(MemoryError, "memory use must in contract but in {}", addr.readable())
         }
         Ok(self.datas.entry(addr.clone()).or_insert_with(||MKVMap::new(self.limit)))
     }

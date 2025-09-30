@@ -8,6 +8,16 @@ pub fn sandbox_call(ctx: &mut dyn Context, contract: ContractAddress, funcname: 
 
     let hei = ctx.env().block.height;
 
+    let mainaddr = ctx.env().tx.main.clone();
+    let txinfo = &ctx.env().tx as *const TxInfo;
+    let txinfo = txinfo as *mut TxInfo;
+    unsafe {
+        (*txinfo).swap_addrs(&mut vec![mainaddr, contract.into_addr()]);
+    }
+
+
+
+
     // let mut pc: usize = 0;
     // let mut gas_limit: i64 = 65535; // 2000
 
@@ -33,10 +43,20 @@ pub fn sandbox_call(ctx: &mut dyn Context, contract: ContractAddress, funcname: 
     }else {
         codes.push(PNBUF as u8);
     }
+    // test 
+    
+    let mut param = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap().to_vec();
+    codes.push(PBUF as u8);
+    codes.push(param.len() as u8);
+    codes.append(&mut param);
+    codes.push(CTO as u8);
+    codes.push(ValueTy::Addr as u8);
+
+
     // call contract
     let fnsg = calc_func_sign(&funcname);
     codes.push(CALL as u8);
-    codes.append(&mut contract.into_vec());
+    codes.push(1); // lib idx
     codes.append(&mut fnsg.to_vec());
     codes.push(RET as u8); // return the value
     // println!("call codes: {}", codes.hex());
