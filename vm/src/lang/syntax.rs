@@ -363,7 +363,10 @@ impl Syntax {
                 };
                 self.idx += 1;
                 let fnsg = calc_func_sign(func);
-                let (_, subx) = self.must_get_func_argv(ArgvMode::PackList)?;
+                let (args, mut subx) = self.must_get_func_argv(ArgvMode::PackList)?;
+                if 0 == args {
+                    subx = Self::push_nil()
+                }
                 return Ok(match &id=="self" {
                     true => { // CALLINR
                         let para: Vec<u8> = fnsg.to_vec(); // fnsig
@@ -397,7 +400,7 @@ impl Syntax {
         use Bytecode::*;
         let bl = b.len();
         if bl == 0 {
-            return Ok(Box::new(IRNodeLeaf::notext(true, PNBUF)))
+            return Ok(Self::push_inst(PNBUF))
         }
         if bl > u16::MAX as usize {
             return errf!("bytes data too long")
@@ -412,6 +415,15 @@ impl Syntax {
         Ok(Box::new(IRNodeParams{hrtv: true, inst, para}))
     }
 
+    pub fn push_nil() -> Box<dyn IRNode> {
+        use Bytecode::*;
+        Self::push_inst(PNIL)
+    }
+
+    pub fn push_inst(inst: Bytecode) -> Box<dyn IRNode> {
+        Box::new(IRNodeLeaf::notext(true, inst))
+    }
+
     pub fn push_num(n: u128) -> Box<dyn IRNode> {
         use Bytecode::*;
         macro_rules! push_uint { ($n:expr, $t:expr) => {{
@@ -422,10 +434,10 @@ impl Syntax {
             })})
         }}}
         match n {
-            0 => Box::new(IRNodeLeaf::notext(true, P0)),
-            1 => Box::new(IRNodeLeaf::notext(true, P1)),
-            2 => Box::new(IRNodeLeaf::notext(true, P2)),
-            3 => Box::new(IRNodeLeaf::notext(true, P3)),
+            0 => Self::push_inst(P0),
+            1 => Self::push_inst(P1),
+            2 => Self::push_inst(P2),
+            3 => Self::push_inst(P3),
             4..256 => Box::new(IRNodeParam1{hrtv: true, inst: PU8, para: n as u8, text: s!("")}),
             256..65536 => Box::new(IRNodeParam2{hrtv: true, inst: PU16, para: (n as u16).to_be_bytes() }),
             65536..4294967296 => push_uint!(n, CU32),
@@ -472,6 +484,24 @@ impl Syntax {
                     Box::new(IRNodeWrapOne{node: exp}),
                     exp
                 )
+            }
+            Partition('[') => { // pack_list
+                let mut subs = vec![];
+                loop {
+                    nxt = next!();
+                    if let Partition(']') = nxt {
+                        break
+                    };
+                    self.idx -= 1;
+                    let item = self.item_must(0)?;
+                    item.checkretval()?; // must retv
+                    subs.push(item);
+                }
+                let num = subs.len();
+                let mut list = IRNodeList{subs};
+                list.push(Self::push_num(num as u128));
+                list.push(Self::push_inst(PACKLIST));
+                Box::new(list)
             }
             Keyword(While) => {
                 let exp = self.item_must(0)?;
@@ -652,10 +682,11 @@ impl Syntax {
                 }
                 Box::new(IRNodeBytecodes{codes})
             }
-            Keyword(True)   => Box::new(IRNodeLeaf::notext(true, P1)),
-            Keyword(False)  => Box::new(IRNodeLeaf::notext(true, P0)),
-            Keyword(Abort)  => Box::new(IRNodeLeaf::notext(false, ABT)),
-            Keyword(End)    => Box::new(IRNodeLeaf::notext(false, END)),
+            Keyword(Nil)    => Self::push_nil(),
+            Keyword(True)   => Self::push_inst(P1),
+            Keyword(False)  => Self::push_inst(P0),
+            Keyword(Abort)  => Self::push_inst(ABT),
+            Keyword(End)    => Self::push_inst(END),
             Keyword(Assert) => Box::new(IRNodeSingle{hrtv: false, inst: AST, subx: self.item_must(0)?}),
             Keyword(Throw)  => Box::new(IRNodeSingle{hrtv: false, inst: ERR, subx: self.item_must(0)?}),
             Keyword(Return) => Box::new(IRNodeSingle{hrtv: false, inst: RET, subx: self.item_must(0)?}),

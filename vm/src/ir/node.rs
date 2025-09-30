@@ -197,9 +197,8 @@ impl IRNode for IRNodeParam1 {
                 GET => buf.push_str(&format!("${}", self.para)),
                 EXTENV => {
                     let ary = CALL_EXTEND_ENV_DEFS;
-                    let mut idx = self.para as usize;
-                    if idx >= ary.len() { idx = 0; }
-                    buf.push_str(&format!("{}()", ary[idx].0));
+                    let f = search_ext_name_by_id(self.para, &ary);
+                    buf.push_str(&format!("{}()", f));
                 },
                 _ => {
                     buf.push_str(&format!("{}({})", meta.intro, self.para));
@@ -721,9 +720,14 @@ impl IRNode for IRNodeParam1Single {
                 EXTFUNC => {
                     let substr = &print_sub_inline!(suo, self.subx, desc);
                     let ary = CALL_EXTEND_FUNC_DEFS;
-                    let mut idx = self.para as usize;
-                    if idx >= ary.len() { idx = 0; }
-                    buf.push_str(&format!("{}({})", ary[idx].0, substr));
+                    let f = search_ext_name_by_id(self.para, &ary);
+                    buf.push_str(&format!("{}({})", f, substr));
+                }
+                EXTACTION => {
+                    let substr = &print_sub_inline!(suo, self.subx, desc);
+                    let ary = CALL_EXTEND_ACTION_DEFS;
+                    let f = search_ext_name_by_id(self.para, &ary);
+                    buf.push_str(&format!("{}({})", f, substr));
                 }
                 NTCALL => {
                     let substr = &print_sub_inline!(suo, self.subx, desc);

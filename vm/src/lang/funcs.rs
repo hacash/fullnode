@@ -22,9 +22,6 @@ impl Syntax {
         let argvs = self.item_may_block()?.into_vec();
         // debug_println!("must_get_func_argv: {:?}", argvs);
         let alen = argvs.len();
-        // if 0 == alen {
-        //     return Ok((1, Box::new(IRNodeLeaf::notext(true, PNIL))))
-        // }
         let argv = match md {
             ArgvMode::Concat => concat_func_argvs(argvs)?,
             ArgvMode::PackList => pack_func_argvs(argvs)?,
@@ -158,7 +155,7 @@ fn pick_native_call(id: &str) -> Option<u8> {
 fn concat_func_argvs(mut list: Vec<Box<dyn IRNode>>) -> Ret<Box<dyn IRNode>> {
     // list.reverse();
     let Some(mut res) = list.pop() else {
-        return Ok(Box::new(IRNodeLeaf::notext(true, Bytecode::PNBUF))) // not pass argv
+        return Ok(Syntax::push_inst(Bytecode::PNBUF)) // not pass argv
     };
     while let Some(x) = list.pop() {
         res = Box::new(IRNodeDouble{hrtv:true, inst:Bytecode::CAT, subx: x, suby: res});
@@ -167,19 +164,19 @@ fn concat_func_argvs(mut list: Vec<Box<dyn IRNode>>) -> Ret<Box<dyn IRNode>> {
 }
 
 
-fn pack_func_argvs(mut list: Vec<Box<dyn IRNode>>) -> Ret<Box<dyn IRNode>> {
+fn pack_func_argvs(mut subs: Vec<Box<dyn IRNode>>) -> Ret<Box<dyn IRNode>> {
     use Bytecode::*;
     // list.reverse();
-    let argv_len = list.len();
+    let argv_len = subs.len();
     Ok(match argv_len {
         0 => Box::new(IRNodeEmpty{}),// errf!("function argv length cannot be 0"),
-        1 => list.pop().unwrap(),
+        1 => subs.pop().unwrap(),
         2..=15 => {
             let num = Syntax::push_num(argv_len as u128);
-            let pklist = IRNodeLeaf::notext(true, PACKLIST);
-            list.push(num);
-            list.push(Box::new(pklist));
-            Box::new(IRNodeList{subs: list})
+            let pklist = Syntax::push_inst(PACKLIST);
+            subs.push(num);
+            subs.push(pklist);
+            Box::new(IRNodeList{subs})
         },
         _ => return errf!("function argv length cannot more than 15"),
     })
