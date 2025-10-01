@@ -106,22 +106,22 @@ impl Value {
             ValueTy::U64       => cklen(8,  cst!(cast_u64) ),
             ValueTy::U128      => cklen(16, cst!(cast_u128) ),
             ValueTy::Bytes     => Ok(Self::Bytes(stuff)),
-            ValueTy::Addr      => {
-                if vlen != Address::SIZE {
+            ValueTy::Address   => {
+                if vlen != field::Address::SIZE {
                     return err!()
                 }
-                let addr = Address::must_vec(stuff);
+                let addr = field::Address::must_vec(stuff);
                 map_err_itr!(CastFail, addr.check_version())?;
-                Ok(Self::Addr(addr))
+                Ok(Self::Address(addr))
             },
             _ => err!(),
         }
     }
     
 
-    pub fn checked_address(&self) -> VmrtRes<Address> {
+    pub fn checked_address(&self) -> VmrtRes<field::Address> {
         match self {
-            Bytes(adr) => map_err_itr!(CastParamFail, Address::from_bytes(adr)),
+            Bytes(adr) => map_err_itr!(CastParamFail, field::Address::from_bytes(adr)),
             _ => itr_err_fmt!(CastParamFail, "cannot cast {:?} to address", self)
         }
     }

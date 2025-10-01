@@ -51,15 +51,15 @@ impl Parse for Value {
             <$ty>::from_be_bytes(buf_fill_left_zero(buf, $l).try_into().unwrap())
         }}}
         *self = match ty {
-            ValueTy::Nil       => Nil,
-            ValueTy::Bool      => Bool(maybe!(buf[0]==0, false, true)),
-            ValueTy::U8        => U8(buf[0]),
-            ValueTy::U16       => U16(buf_to_uint!(u16, buf, 2)),
-            ValueTy::U32       => U32(buf_to_uint!(u32, buf, 4)),
-            ValueTy::U64       => U64(buf_to_uint!(u64, buf, 8)),
-            ValueTy::U128      => U128(buf_to_uint!(u128, buf, 16)),
-            ValueTy::Bytes     => Bytes(buf.to_vec()),
-            ValueTy::Addr      => Addr(Address::from_bytes(&buf)?),
+            ValueTy::Nil     => Nil,
+            ValueTy::Bool    => Bool(maybe!(buf[0]==0, false, true)),
+            ValueTy::U8      => U8(buf[0]),
+            ValueTy::U16     => U16(buf_to_uint!(u16, buf, 2)),
+            ValueTy::U32     => U32(buf_to_uint!(u32, buf, 4)),
+            ValueTy::U64     => U64(buf_to_uint!(u64, buf, 8)),
+            ValueTy::U128    => U128(buf_to_uint!(u128, buf, 16)),
+            ValueTy::Bytes   => Bytes(buf.to_vec()),
+            ValueTy::Address => Address(field::Address::from_bytes(&buf)?),
             _ => panic!("Compo or slice value item cannot be parse"),
         };
         Ok(bl)

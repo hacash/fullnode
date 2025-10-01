@@ -131,8 +131,8 @@ impl Value {
         let Bytes(buf) = self else {
             never!()
         };
-        let adr = map_err_itr!(CastFail, Address::from_bytes(buf))?;
-        *self = Addr(adr);
+        let adr = map_err_itr!(CastFail, field::Address::from_bytes(buf))?;
+        *self = Address(adr);
         Ok(())
     }
 
@@ -142,14 +142,14 @@ impl Value {
         use ValueTy::*;
         let ty = map_err_itr!(CastFail, ValueTy::build(ty))?;
         match ty {
-            Bool  => self.cast_bool(),
-            U8    => self.cast_u8(),
-            U16   => self.cast_u16(),
-            U32   => self.cast_u32(),
-            U64   => self.cast_u64(),
-            U128  => self.cast_u128(),
-            Bytes => self.cast_buf(),
-            Addr  => self.cast_addr(),
+            Bool    => self.cast_bool(),
+            U8      => self.cast_u8(),
+            U16     => self.cast_u16(),
+            U32     => self.cast_u32(),
+            U64     => self.cast_u64(),
+            U128    => self.cast_u128(),
+            Bytes   => self.cast_buf(),
+            Address => self.cast_addr(),
             _ => itr_err_code!(CastFail),
         }
     }
@@ -164,12 +164,12 @@ impl Value {
         macro_rules! cts { () => { {self.cast_to(t)?; ()} } }
         Ok(match ty {
             _ if ty == mty => (),
-            U16   => if let             U8 = mty { cts!() },
-            U32   => if let         U16|U8 = mty { cts!() },
-            U64   => if let     U32|U16|U8 = mty { cts!() },
-            U128  => if let U64|U32|U16|U8 = mty { cts!() },
-            Addr  => if let          Bytes = mty { cts!() },
-            Bytes => if let           Addr = mty { cts!() },
+            U16     => if let             U8 = mty { cts!() },
+            U32     => if let         U16|U8 = mty { cts!() },
+            U64     => if let     U32|U16|U8 = mty { cts!() },
+            U128    => if let U64|U32|U16|U8 = mty { cts!() },
+            Address => if let          Bytes = mty { cts!() },
+            Bytes   => if let        Address = mty { cts!() },
             _ => return err(ty, mty)
         })
     }

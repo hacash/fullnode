@@ -57,8 +57,8 @@ impl Tokenizer<'_> {
         if sl < 30 || sl > 34 {
             return None
         }
-        match Address::from_readable(s) {
-            Ok(a) => Some(Addr(a)),
+        match field::Address::from_readable(s) {
+            Ok(a) => Some(Address(a)),
             _ => None,
         }
     }

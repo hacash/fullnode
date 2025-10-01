@@ -11,7 +11,7 @@ pub struct Syntax {
     idx: usize,
     locals: HashMap<String, u8>,
     bdlets: HashMap<String, Box<dyn IRNode>>,
-    bdlibs: HashMap<String, (u8, Option<Address>)>,
+    bdlibs: HashMap<String, (u8, Option<field::Address>)>,
     local_alloc: u8,
     check_op: bool,
     // leftv: Box<dyn AST>,
@@ -59,7 +59,7 @@ impl Syntax {
         }
     }
 
-    pub fn bind_lib(&mut self, s: String, idx: u8, adr: Option<Address>) -> Rerr {
+    pub fn bind_lib(&mut self, s: String, idx: u8, adr: Option<field::Address>) -> Rerr {
         if let Some(..) = self.bdlibs.get(&s) {
             return errf!("<use> cannot repeat bind the symbol '{}'", s)
         }
@@ -250,14 +250,14 @@ impl Syntax {
                     Keyword(Nil)     => Box::new(IRNodeSingle{hrtv, subx, inst: TNIL   }),
                     Keyword(List)    => Box::new(IRNodeSingle{hrtv, subx, inst: TLIST  }),
                     Keyword(Map)     => Box::new(IRNodeSingle{hrtv, subx, inst: TMAP   }),
-                    Keyword(Bool)    => Box::new(IRNodeParam1Single{para: ValueTy::Bool  as u8, hrtv, subx, inst: TIS}),
-                    Keyword(U8)      => Box::new(IRNodeParam1Single{para: ValueTy::U8    as u8, hrtv, subx, inst: TIS}),
-                    Keyword(U16)     => Box::new(IRNodeParam1Single{para: ValueTy::U16   as u8, hrtv, subx, inst: TIS}),
-                    Keyword(U32)     => Box::new(IRNodeParam1Single{para: ValueTy::U32   as u8, hrtv, subx, inst: TIS}),
-                    Keyword(U64)     => Box::new(IRNodeParam1Single{para: ValueTy::U64   as u8, hrtv, subx, inst: TIS}),
-                    Keyword(U128)    => Box::new(IRNodeParam1Single{para: ValueTy::U128  as u8, hrtv, subx, inst: TIS}),
-                    Keyword(Bytes)   => Box::new(IRNodeParam1Single{para: ValueTy::Bytes as u8, hrtv, subx, inst: TIS}),
-                    Keyword(Address) => Box::new(IRNodeParam1Single{para: ValueTy::Addr  as u8, hrtv, subx, inst: TIS}),
+                    Keyword(Bool)    => Box::new(IRNodeParam1Single{para: ValueTy::Bool    as u8, hrtv, subx, inst: TIS}),
+                    Keyword(U8)      => Box::new(IRNodeParam1Single{para: ValueTy::U8      as u8, hrtv, subx, inst: TIS}),
+                    Keyword(U16)     => Box::new(IRNodeParam1Single{para: ValueTy::U16     as u8, hrtv, subx, inst: TIS}),
+                    Keyword(U32)     => Box::new(IRNodeParam1Single{para: ValueTy::U32     as u8, hrtv, subx, inst: TIS}),
+                    Keyword(U64)     => Box::new(IRNodeParam1Single{para: ValueTy::U64     as u8, hrtv, subx, inst: TIS}),
+                    Keyword(U128)    => Box::new(IRNodeParam1Single{para: ValueTy::U128    as u8, hrtv, subx, inst: TIS}),
+                    Keyword(Bytes)   => Box::new(IRNodeParam1Single{para: ValueTy::Bytes   as u8, hrtv, subx, inst: TIS}),
+                    Keyword(Address) => Box::new(IRNodeParam1Single{para: ValueTy::Address as u8, hrtv, subx, inst: TIS}),
                     _ => return e
                 };
                 if is_not {
@@ -630,7 +630,7 @@ impl Syntax {
                 let mut adr = None;
                 if let Keyword(Colon) = nxt {
                     nxt = next!();
-                    let Token::Addr(a) = nxt else { return e };
+                    let Token::Address(a) = nxt else { return e };
                     adr = Some(*a as field::Address);
                 }else{
                     back!();

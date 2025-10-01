@@ -15,7 +15,7 @@ pub enum ValueTy {
     // ...      = 8 
     // ...      = 9 
     Bytes       = 10,
-    Addr        = 11,
+    Address     = 11,
     // ...      = 12
     // ...      = 13
     HeapSlice   = 14,
@@ -32,6 +32,24 @@ impl ValueTy {
         }
     }
 
+    pub fn from_name(s: &str) -> Ret<Self> {
+        use ValueTy::*;
+        Ok(match s {
+            "nil"       => Nil,
+            "bool"      => Bool,
+            "u8"        => U8,
+            "u16"       => U16,
+            "u32"       => U32,
+            "u64"       => U64,
+            "u128"      => U128,
+            "bytes"     => Bytes,
+            "address"   => Address,
+            "heapslice" => HeapSlice,
+            "compo"     => Compo,
+            a => return errf!("not find value type '{}'", a)
+        })
+    }
+
 
     pub fn build(t: u8) -> Ret<Self> {
         use ValueTy::*;
@@ -45,7 +63,7 @@ impl ValueTy {
             6  => U128      ,
             /* */
             10 => Bytes     ,
-            11 => Addr      ,
+            11 => Address   ,
             /* */
             14 => HeapSlice ,
             15 => Compo     ,
@@ -64,23 +82,20 @@ impl ValueTy {
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub enum Value {
-    #[default] Nil,        // type_id = 0
-    Bool(bool),            //           1
-    U8(u8),                //           2
-    U16(u16),              //           3
-    U32(u32),              //           4
-    U64(u64),              //           5
-    U128(u128),            //           6
-    /*U256(u256),*/        //           7
-    /*U512(u512),*/        //           8
-    /*U1024(u1024),*/      //           9
-    Bytes(Vec<u8>),        //           11
-    Addr(Address),         //           12
-    /*...*/                //           ..
-    HeapSlice((u32, u32)), //           21
-    /*Array(),*/           //           22
-    /*Struct(),*/          //           23
-    Compo(CompoItem),      //           25
+    #[default] Nil,          // type_id = 0
+    Bool(bool),              //           1
+    U8(u8),                  //           2
+    U16(u16),                //           3
+    U32(u32),                //           4
+    U64(u64),                //           5
+    U128(u128),              //           6
+    /*U256(u256),*/          //           7
+    /*...*/                  //           ..
+    Bytes(Vec<u8>),          //           10
+    Address(field::Address), //           11
+    /*...*/                  //           ..
+    HeapSlice((u32, u32)),   //           14
+    Compo(CompoItem),        //           15
 }
 
 
@@ -105,7 +120,7 @@ impl Value {
             U64(..)       => ValueTy::U64,
             U128(..)      => ValueTy::U128,
             Bytes(..)     => ValueTy::Bytes,
-            Addr(..)      => ValueTy::Addr,
+            Address(..)   => ValueTy::Address,
             HeapSlice(..) => ValueTy::HeapSlice,
             Compo(..)     => ValueTy::Compo,
         }
@@ -175,7 +190,7 @@ impl Value {
 
     pub fn is_addr(&self) -> bool {
         match self {
-            Addr(..) => true,
+            Address(..) => true,
             _ => false,
         }
     }
@@ -232,7 +247,7 @@ impl Value {
             U64(n) =>  n.to_be_bytes().into(),
             U128(n) => n.to_be_bytes().into(),
             Bytes(buf) => buf.clone(),
-            Addr(a)    => a.serialize(),
+            Address(a) => a.serialize(),
             HeapSlice((s, l)) => vec![s.to_be_bytes(), l.to_be_bytes()].concat(),
             // not support
             Compo(..) => "{compo value ...}".to_owned().into_bytes(),
@@ -267,7 +282,7 @@ impl Value {
             U64(..)  => 8,
             U128(..) => 16,
             Bytes(b) => b.len(),
-            Addr(..) => Address::SIZE,
+            Address(..) => field::Address::SIZE,
             HeapSlice(..) => 4 + 4,
             // not support
             Compo(..) => usize::MAX,
@@ -325,9 +340,27 @@ impl Value {
                 Some(s) => format!("\"{}\"", s),
                 _ => "0x".to_owned() + &hex::encode(b),
             },
-            Addr(a) => a.readable(),
+            Address(a) => a.readable(),
             HeapSlice((s, l)) => format!("heap[{},{}]", s, l),
             Compo(a) => format!("compo[{}]", a.len()),
+        }
+    }
+
+
+    pub fn to_json(&self) -> String {
+        match self {
+            Nil =>          s!("null"),
+            Bool(true) =>   s!("true"),
+            Bool(false) =>  s!("false"),
+            U8(n) =>   format!("{}", n),
+            U16(n) =>  format!("{}", n),
+            U32(n) =>  format!("{}", n),
+            U64(n) =>  format!("{}", n),
+            U128(n) => format!("{}", n),
+            Bytes(b) => format!("\"{}\"", &hex::encode(b)),
+            Address(a) =>  format!("\"{}\"", a.readable()),
+            HeapSlice((s, l)) => format!("[{},{}]", s, l),
+            Compo(a) => a.to_json(),
         }
     }
 

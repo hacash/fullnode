@@ -5,7 +5,6 @@ use std::cell::*;
 
 
 use sys::*;
-use field::*;
 use field::interface::*;
 
 use super::*;

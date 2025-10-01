@@ -59,7 +59,11 @@ pub fn api_data(jsdts: HashMap<&'static str, Value>) -> (HeaderMap, String){
     let resjson = jsdts.iter().map(|(k,v)|
         format!(r#""{}":{}"#, k, v.to_string())
     ).collect::<Vec<String>>().join(",");
-    (json_headers(), format!(r#"{{"ret":0,{}}}"#, resjson))
+   api_data_raw(resjson)
+}
+
+pub fn api_data_raw(s: String) -> (HeaderMap, String){
+    (json_headers(), format!(r#"{{"ret":0,{}}}"#, s))
 }
 
 

@@ -55,7 +55,7 @@ pub fn execute3() {
     "##).unwrap();
 
     let argv = Value::Compo(CompoItem::list(VecDeque::from([
-        Value::Addr(Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap()),
+        Value::Address(field::Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap()),
         Value::Bytes(Amount::from("6:248").unwrap().serialize()),
     ])));
 
@@ -93,7 +93,7 @@ pub fn execute5() {
     "##).unwrap();
 
     let argv = Value::Compo(CompoItem::list(VecDeque::from([
-        Value::Addr(Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap()),
+        Value::Address(field::Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap()),
         Value::Bytes(Amount::from("6:248").unwrap().serialize()),
     ])));
 

@@ -37,6 +37,22 @@ macro_rules! checked_compo_op_len {
 
 impl Compo {
 
+    fn to_json(&self) -> String {
+        match self {
+            Self::List(a) => {
+                let sss: Vec<_> = a.iter().map(|a|a.to_json()).collect();
+                format!("[{}]", sss.join(","))
+            },
+            Self::Map(b)  => { 
+                let mmm: Vec<_> = b.iter().map(|(k,v)|{
+                    format!("\"{}\":{}", bytes_to_readable_string(&k), v.to_json())
+                }).collect();
+                format!("{{{}}}", mmm.join(","))
+            }
+        }
+    }
+
+
     fn len(&self) -> usize {
         match self {
             Self::List(a) => a.len(),
@@ -193,8 +209,14 @@ macro_rules! take_items_from_ops {
     }}
 }
 
+impl CompoItem {
 
 
+    pub fn to_json(&self) -> String {
+        get_compo_inner_ref!(self).to_json()
+    }
+
+}
 
 
 

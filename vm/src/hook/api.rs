@@ -8,7 +8,7 @@ use axum::{
 };
 
 use protocol::block::create_tx_info;
-use serde_json::json;
+// use serde_json::json;
 
 use server::*;
 use server::ctx::*;
@@ -26,8 +26,8 @@ use super::ContractAddress;
 api_querys_define!{ Q8365,
     contract, String, s!(""),
     function, String, s!(""),
-    paramhex, Option<String>, None,
-    rtvabi, Option<String>, None, // U1 U2 .. U16, S1, S2, S3 ... S32, STR, B1. .. B32, BUF  [a:U1,b:U3,C:BUF]
+    params,   Option<String>, None,
+    rtvabi,   Option<String>, None, // U1 U2 .. U16, S1, S2, S3 ... S32, STR, B1. .. B32, BUF  [a:U1,b:U3,C:BUF]
 
 }
 
@@ -65,19 +65,17 @@ async fn contract_sandbox_call(State(ctx): State<ApiCtx>, q: Query<Q8365>) -> im
     let Ok(ctrladdr) = ContractAddress::from_addr(addr) else {
         return api_error("contract address version error")
     };
-    let param = hex::decode(q.paramhex.clone().unwrap_or(s!(""))).unwrap_or(vec![]);
-    let callres = machine::sandbox_call(&mut ctxobj, ctrladdr, q.function.clone(), param);
+    let pmempty = s!("");
+    let params = q.params.as_ref().unwrap_or(&pmempty);
+    let callres = machine::sandbox_call(&mut ctxobj, ctrladdr, q.function.clone(), params);
     if let Err(e) = callres {
         return api_error(&format!("contract call error: {}", e))
     }
     let (gasuse, retval) = callres.unwrap();
 
     // return
-    let data = jsondata!{
-        "gasuse", gasuse,
-        "return", retval.hex(),
-    };
-    api_data(data)
+    let data = format!(r##""gasuse":{},"return":{}"##, gasuse, retval);
+    api_data_raw(data)
 }
 
 

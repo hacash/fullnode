@@ -14,7 +14,7 @@ pub const CALL_EXTEND_ACTION_DEFS: [ExtDefTy; 2] = [
 
 pub const CALL_EXTEND_ENV_DEFS: [ExtDefTy; 2] = [
     (1, "block_height",            U64),
-    (2, "tx_main_address",         Addr)
+    (2, "tx_main_address",         Address)
 ];
 
 
