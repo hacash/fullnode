@@ -47,6 +47,7 @@ mod amm {
             var addr = $0
             var sat =  $1
             unpack_list(pick(0), 0)
+            memory_put("sat_in", sat)
             if sat == memory_get("sell_sat") {
                 return 0 // ok for sell sat
             }
@@ -69,6 +70,7 @@ mod amm {
             var addr = $0
             var amt  = $1
             unpack_list(pick(0), 0)
+            memory_put("hac_in", amt)
             if amt == memory_get("buy_hac") {
                 return 0 // ok for buy sat
             }
@@ -182,8 +184,6 @@ mod amm {
             var my_zhu = my_per * tt_zhu / 1000
             assert my_sat>0 && my_zhu>0
             memory_put("out_sat", my_sat)
-            // print my_zhu
-            // print zhu_to_hac(my_zhu)
             memory_put("out_hac", zhu_to_hac(my_zhu))
             // update total
             tt_shares -= shares
@@ -213,12 +213,12 @@ mod amm {
 
         let buy_codes = lang_to_ircode(r##"
             // check param
-            var zhu      = $0
-            var min_sat  = $1
+            var sat      = $0
+            var max_zhu  = $1
             var deadline = $2
             unpack_list(pick(0), 0)
             assert deadline >= block_height()
-            assert zhu>0 && min_sat>0
+            assert sat>0 && max_zhu>0
             // get total
             var tt_shares = $3
             var tt_sat    = $4
@@ -226,12 +226,11 @@ mod amm {
             unpack_list(self.total(nil), 3)
             assert tt_shares>0 && tt_sat>0 && tt_zhu>0 
             // 0.3% fee
-            var out_sat = ((tt_sat as u128) * zhu * 997 / (tt_zhu + zhu) / 1000) as u64
-            // print out_sat
-            assert out_sat >= min_sat
+            var zhu = ((tt_zhu as u128) * sat * 997 / (tt_sat - sat) / 1000) as u64 
+            assert zhu <= max_zhu
             memory_put("buy_hac", zhu_to_hac(zhu))
-            memory_put("out_sat", out_sat)
-            return out_sat
+            memory_put("out_sat", sat)
+            return zhu
         "##).unwrap();
         println!("buy_codes:\n{}\n{}\n", buy_codes.ircode_print(true).unwrap(), buy_codes.to_hex());
         let buy_codes = convert_ir_to_bytecode(&buy_codes).unwrap();
@@ -252,8 +251,9 @@ mod amm {
             assert tt_shares>0 && tt_sat>0 && tt_zhu>0 
             // 0.3% fee
             var out_zhu = ((tt_zhu as u128) * sat * 997 / (tt_sat + sat) / 1000) as u64
-            memory_put("out_hac", zhu_to_hac(out_zhu))
             assert out_zhu >= min_zhu
+            memory_put("sell_sat", sat)
+            memory_put("out_hac", zhu_to_hac(out_zhu))
             return out_zhu
         "##).unwrap();
         println!("sell_codes:\n{}\n{}\n", sell_codes.ircode_print(true).unwrap(), sell_codes.to_hex());
@@ -262,6 +262,7 @@ mod amm {
 
 
         let permit_sat = lang_to_bytecode(r##"
+            assert memory_get("hac_in")
             // check param
             var addr = $0
             var sat  = $1
@@ -274,17 +275,15 @@ mod amm {
             return 0
         "##).unwrap();
 
-
         let permit_hac = lang_to_bytecode(r##"
+            assert memory_get("sat_in")
             // check param
             var addr = $0
             var hac  = $1
             unpack_list(pick(0), 0)
+
             var ot_k = "out_hac"
             var out_hac $0 = memory_get(ot_k)
-            // print hac
-            // print out_hac
-            // print hac ++ out_hac
             assert hac_to_zhu(hac) > 0 && hac == out_hac
             memory_put(ot_k, nil)
             // ok
@@ -322,9 +321,9 @@ mod amm {
             var lq_k = pick(0) ++ "_shares"
             var my_shares = storage_load(lq_k)
             if my_shares is nil {
-                return nil
+                return 0
             }
-            return my_shares as u128
+            return my_shares
         "##).unwrap();
 
 
@@ -431,11 +430,39 @@ mod amm {
         
         let maincodes = lang_to_bytecode(r##"
             lib HacSwap = 1: VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
-            var zhu = 5000000000 as u64 // 50HAC
-            var sat = HacSwap.buy(zhu, 1000000, 300)
+            var sat = 10963 as u64 // 50HAC
+            var zhu = HacSwap.buy(sat, 10000000000, 300)
             var adr = address_ptr(1)
-            transfer_sat_from(adr, sat)
             transfer_hac_to(adr, zhu_to_hac(zhu))
+            transfer_sat_from(adr, sat)
+            end
+        "##).unwrap();
+
+        println!("{}\n", maincodes.bytecode_print(true).unwrap());
+        println!("{}\n", maincodes.to_hex());
+
+        let mut act = ContractMainCall::new();
+        act.ctype = Uint1::from(0);
+        act.codes = BytesW2::from(maincodes).unwrap();
+
+        curl_trs_3(vec![Box::new(act)], "22:244");
+
+    }
+
+
+
+    #[test]
+    fn maincall_sell() {
+
+        use vm::action::*;
+        
+        let maincodes = lang_to_bytecode(r##"
+            lib HacSwap = 1: VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
+            var sat = 4626909 as u64
+            var zhu = HacSwap.sell(sat, 100000, 300)
+            var adr = address_ptr(1)
+            transfer_sat_to(adr, sat)
+            transfer_hac_from(adr, zhu_to_hac(zhu))
             end
         "##).unwrap();
 
