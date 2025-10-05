@@ -164,16 +164,16 @@ mod amm {
             var addr   = $0
             var shares = $1
             unpack_list(pick(0), 0)
+            // get total
+            var tt_shares = $2
+            var tt_sat    = $3
+            var tt_zhu    = $4
+            unpack_list(self.total(nil), 2)
             var lq_k = addr ++ "_shares"
             var my_shares = storage_load(lq_k)
             assert shares <= my_shares
-            // get total
-            var tt_shares = $3
-            var tt_sat    = $4
-            var tt_zhu    = $5
-            unpack_list(self.total(nil), 3)
             assert tt_shares>0 && my_shares <= tt_shares
-            var my_per = (my_shares as u128) * 1000 / tt_shares
+            var my_per = (shares as u128) * 1000 / tt_shares
             var my_sat = my_per * tt_sat / 1000
             var my_zhu = my_per * tt_zhu / 1000
             assert my_sat>0 && my_zhu>0
@@ -182,7 +182,7 @@ mod amm {
             // print zhu_to_hac(my_zhu)
             memory_put("out_hac", zhu_to_hac(my_zhu))
             // update total
-            tt_shares -= my_shares
+            tt_shares -= shares
             tt_sat    -= my_sat
             tt_zhu    -= my_zhu
             var tt_k = "total"

@@ -101,17 +101,10 @@ impl Syntax {
     }
 
     pub fn link_local(&self, s: &String) -> Ret<Box<dyn IRNode>> {
-        use Bytecode::*;
         let text = s.clone();
         match self.locals.get(s) {
             None => return errf!("cannot find symbol '{}'", s),
-            Some(i) => Ok(match i {
-                0 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET0, text }),
-                1 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET1, text }),
-                2 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET2, text }),
-                3 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET3, text }),
-                _ => Box::new(IRNodeParam1{hrtv: true, inst: GET, para: *i, text })
-            }),
+            Some(i) => Ok(Self::push_local_get(*i, text)),
         }
     }
 
@@ -143,18 +136,20 @@ impl Syntax {
         match self.locals.get(s) {
             None => return errf!("cannot find symbol '{}'", s),
             Some(i) => {
-                if *i < 64 {
-                    let mark = *i & match op {
-                        Keyword(AsgAdd) => 0b00111111,
-                        Keyword(AsgSub) => 0b01111111,
-                        Keyword(AsgMul) => 0b10111111,
-                        Keyword(AsgDiv) => 0b11111111,
+                let i = *i;
+                if i < 64 {
+                    let mark = i | match op {
+                        Keyword(AsgAdd) => 0b00000000,
+                        Keyword(AsgSub) => 0b01000000,
+                        Keyword(AsgMul) => 0b10000000,
+                        Keyword(AsgDiv) => 0b11000000,
                         _ => unreachable!(),
                     };
+                    // debug_println!("------------XOP {:?} assign_local: i={}, mark={}, v={:?}", op, i, mark, v);
                     return Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: XOP, para: mark, subx: v }))
                 }
                 // $0 = $0 + 1
-                let getv = Box::new(IRNodeParam1{hrtv: true, inst: GET, para: *i, text: s!("")});
+                let getv = Self::push_local_get(i, s!(""));
                 let opsv = Box::new(IRNodeDouble{hrtv: true, inst: match op {
                     Keyword(AsgAdd) => ADD,
                     Keyword(AsgSub) => SUB,
@@ -162,7 +157,7 @@ impl Syntax {
                     Keyword(AsgDiv) => DIV,
                     _ => unreachable!()
                 }, subx: getv, suby: v});
-                Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: PUT, para: *i, subx: opsv }))
+                Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: PUT, para: i, subx: opsv }))
             },
         }
     }
@@ -418,6 +413,17 @@ impl Syntax {
     pub fn push_nil() -> Box<dyn IRNode> {
         use Bytecode::*;
         Self::push_inst(PNIL)
+    }
+
+    pub fn push_local_get(i: u8, text: String) -> Box<dyn IRNode> {
+        use Bytecode::*;
+        match i {
+            0 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET0, text }),
+            1 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET1, text }),
+            2 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET2, text }),
+            3 => Box::new(IRNodeLeaf{  hrtv: true, inst: GET3, text }),
+            _ => Box::new(IRNodeParam1{hrtv: true, inst: GET,  text, para: i })
+        }
     }
 
     pub fn push_inst_noret(inst: Bytecode) -> Box<dyn IRNode> {
