@@ -28,6 +28,7 @@ native_call_define!{  // idx, gas,   ValueType
     zhu_to_hac         = 26,   8,    Bytes
     // shuo_to_suo         = 27,   8,    Bytes
     address_ptr        = 30,   4,    U8
+    context_address    = 31,   6,    Address  
     
 }
 

@@ -49,6 +49,8 @@ action_register! {
 
     EnvHeight           
     EnvMainAddr        
-    FuncHacToZhu       
+    
+    FuncCheckSign  
+    FuncBalance      
 }
 

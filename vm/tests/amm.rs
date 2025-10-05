@@ -47,6 +47,9 @@ mod amm {
             var addr = $0
             var sat =  $1
             unpack_list(pick(0), 0)
+            if sat == memory_get("sell_sat") {
+                return 0 // ok for sell sat
+            }
             assert sat >= 1000
             var in_sat = memory_get("in_sat")
             assert sat == in_sat
@@ -58,7 +61,6 @@ mod amm {
         "##;
 
         let payable_sat = lang_to_ircode(&payable_sat_fitsh).unwrap();
-
         println!("\n{}\n", payable_sat.ircode_print(true).unwrap());
 
 
@@ -67,6 +69,10 @@ mod amm {
             var addr = $0
             var amt  = $1
             unpack_list(pick(0), 0)
+            if amt == memory_get("buy_hac") {
+                return 0 // ok for buy sat
+            }
+            // deal deposit
             var zhu $1 = hac_to_zhu(amt) as u128
             assert zhu >= 10000
             let in_zhu = memory_get("in_zhu") as u128
@@ -141,10 +147,8 @@ mod amm {
             var tt_zhu    = $5
             unpack_list(self.total(nil), 3)
             tt_shares += zhu as u64
-            tt_sat    += sat as u64
-            tt_zhu    += zhu as u64
-            let tt_k = "total"
-            storage_save(tt_k, tt_shares ++ tt_sat ++ tt_zhu)
+            let tt_k = "total_shares"
+            storage_save(tt_k, tt_shares)
             // 
             var lq_k $0 = addr ++ "_shares"
             var my_shares $4 = storage_load(lq_k)
@@ -183,12 +187,9 @@ mod amm {
             memory_put("out_hac", zhu_to_hac(my_zhu))
             // update total
             tt_shares -= shares
-            tt_sat    -= my_sat
-            tt_zhu    -= my_zhu
-            var tt_k = "total"
-            let tt_save = (tt_shares as u64) ++ (tt_sat as u64) ++ (tt_zhu as u64)
+            var tt_k = "total_shares"
             if tt_shares > 0 {
-                storage_save(tt_k, tt_save)
+                storage_save(tt_k, tt_shares as u64)
             } else {
                 storage_del(tt_k)
             }
@@ -210,8 +211,6 @@ mod amm {
 
 
 
-
-
         let buy_codes = lang_to_ircode(r##"
             // check param
             var zhu      = $0
@@ -219,15 +218,18 @@ mod amm {
             var deadline = $2
             unpack_list(pick(0), 0)
             assert deadline >= block_height()
+            assert zhu>0 && min_sat>0
             // get total
             var tt_shares = $3
             var tt_sat    = $4
             var tt_zhu    = $5
             unpack_list(self.total(nil), 3)
-            assert tt_shares>0 && tt_sat>0  && tt_zhu>0 
+            assert tt_shares>0 && tt_sat>0 && tt_zhu>0 
             // 0.3% fee
-            var out_sat = (tt_zhu + zhu) * tt_sat * 997 / tt_zhu / 1000
+            var out_sat = ((tt_sat as u128) * zhu * 997 / (tt_zhu + zhu) / 1000) as u64
+            // print out_sat
             assert out_sat >= min_sat
+            memory_put("buy_hac", zhu_to_hac(zhu))
             memory_put("out_sat", out_sat)
             return out_sat
         "##).unwrap();
@@ -249,7 +251,7 @@ mod amm {
             unpack_list(self.total(nil), 3)
             assert tt_shares>0 && tt_sat>0 && tt_zhu>0 
             // 0.3% fee
-            var out_zhu = tt_zhu * sat * 997 / (tt_sat + sat) / 1000
+            var out_zhu = ((tt_zhu as u128) * sat * 997 / (tt_sat + sat) / 1000) as u64
             memory_put("out_hac", zhu_to_hac(out_zhu))
             assert out_zhu >= min_zhu
             return out_zhu
@@ -294,16 +296,23 @@ mod amm {
 
         let total_codes = lang_to_bytecode(r##"
             // get total
-            var tt_k = "total"
+            var tt_k = "total_shares"
             var total = storage_load(tt_k)
-            var tt_shares = 0 as u64
-            var tt_sat    = 0 as u64
-            var tt_zhu    = 0 as u64
-            if 3 * 8 == size(total) {
-                tt_shares = buf_left(8, total)    as u64
-                tt_sat    = buf_cut(total, 8, 8)  as u64
-                tt_zhu    = buf_right(8, total)   as u64
+            if total is nil {
+                var exp = storage_time(tt_k)
+                if exp is not nil {
+                    if exp < block_height() {
+                        throw "storage expire"
+                    }
+                }
             }
+            var tt_shares = 0 as u64
+            if 8 == size(total) {
+                tt_shares = total as u64
+            }
+            var ctxadr = buf_left_drop(4, balance(context_address(nil)))
+            let tt_sat = buf_left(8, ctxadr) as u64
+            let tt_zhu = hac_to_zhu(buf_left_drop(8, ctxadr))
             return [tt_shares, tt_sat, tt_zhu]
         "##).unwrap();
 
@@ -413,6 +422,35 @@ mod amm {
         curl_trs_3(vec![Box::new(act)], "22:244");
 
     }
+
+
+    #[test]
+    fn maincall_buy() {
+
+        use vm::action::*;
+        
+        let maincodes = lang_to_bytecode(r##"
+            lib HacSwap = 1: VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
+            var zhu = 5000000000 as u64 // 50HAC
+            var sat = HacSwap.buy(zhu, 1000000, 300)
+            var adr = address_ptr(1)
+            transfer_sat_from(adr, sat)
+            transfer_hac_to(adr, zhu_to_hac(zhu))
+            end
+        "##).unwrap();
+
+        println!("{}\n", maincodes.bytecode_print(true).unwrap());
+        println!("{}\n", maincodes.to_hex());
+
+        let mut act = ContractMainCall::new();
+        act.ctype = Uint1::from(0);
+        act.codes = BytesW2::from(maincodes).unwrap();
+
+        curl_trs_3(vec![Box::new(act)], "22:244");
+
+    }
+
+
 
     #[test]
     fn transfer1() {

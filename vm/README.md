@@ -77,6 +77,8 @@ cargo test deploy::recursion -- --nocapture
 cargo test amm::deploy -- --nocapture
 cargo test amm::maincall_add -- --nocapture
 cargo test amm::maincall_remove -- --nocapture
+cargo test amm::maincall_buy -- --nocapture
+cargo test amm::maincall_sell -- --nocapture
 ```
 
 This will result in a POST submission command line containing the contract deployment transaction:

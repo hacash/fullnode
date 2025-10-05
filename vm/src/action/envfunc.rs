@@ -48,15 +48,17 @@ action_define!{FuncCheckSign, 0x0f01,
 }
 
 
-action_define!{FuncHacToZhu, 0x0f02, 
+action_define!{FuncBalance, 0x0f02, 
     ActLv::Any, false, [], {
-        hacash: Amount
+        addr: Address
     },
     (self, ctx, _gas {
-        let Some(zhu) = self.hacash.to_zhu_u64() else {
-            return errf!("call FuncHacToZhu overflow")
-        };
-        Ok(zhu.to_be_bytes().to_vec())
+        let bls = CoreState::wrap(ctx.state()).balance(&self.addr).unwrap_or_default();
+        let mut res = Vec::with_capacity(4+8+8);
+        res.append(&mut Vec::from((bls.diamond.uint() as u32).to_be_bytes()));
+        res.append(&mut Vec::from(bls.satoshi.uint().to_be_bytes()));
+        res.append(&mut bls.hacash.serialize());
+        Ok(res)
     })
 }
 

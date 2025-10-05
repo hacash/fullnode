@@ -12,4 +12,10 @@ fn address_ptr(buf: &[u8]) -> VmrtRes<Value> {
     Ok(Value::U8( idx + DVN ))
 }
 
+fn context_address(buf: &[u8]) -> VmrtRes<Value> {
+    let ctxadr = field::Address::from_bytes(buf).unwrap();
+    Ok(Value::Address(ctxadr))
+}
+
+
 

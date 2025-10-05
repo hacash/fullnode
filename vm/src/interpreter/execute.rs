@@ -194,7 +194,7 @@ pub fn execute_code(
     macro_rules! pcutbuf { ($w: expr) => { itrbuf!(codes, *pc, $w) } }
     macro_rules! _pctrtaddr { () => { ContractAddress::parse(&pcutbuf!(CONTRACT_ADDRESS_WIDTH)).map_err(|e|ItrErr(ContractAddrErr, e))? }}
     macro_rules! ops_pop_to_u16 { () => { ops.pop()?.checked_u16()? } }
-    macro_rules!    ops_peek_to_u16 { () => { ops.peek()?.checked_u16()? } }
+    macro_rules! ops_peek_to_u16 { () => { ops.peek()?.checked_u16()? } }
     macro_rules! check_compo_type { ($m: ident) => { match ops.compo() { Ok(c) => c.$m(), _ => false, } } }
 
     // start run
@@ -252,14 +252,23 @@ pub fn execute_code(
             }
         }}
 
+        let mut ntcall = |idx: u8| -> VmrtErr {
+            let argv = match idx {
+                31 => context_addr.serialize(), // context_address
+                _ => ops.peek()?.canbe_ext_call_data(heap)?
+            };
+            let (r, g) = NativeCall::call(idx, &argv)?;
+            *ops.peek()? = r; gas += g; 
+            Ok(())
+        };
+
         match instruction {
             // ext action
             EXTACTION => { extcall!(true,  true,  false); },
             EXTENV    => { extcall!(false, false, true);  },
             EXTFUNC   => { extcall!(false, true,  true);  },
             // native call
-            NTCALL => { let (r, g) = NativeCall::call(pu8!(), &ops.peek()?.canbe_ext_call_data(heap)?)?;
-                *ops.peek()? = r; gas += g; },
+            NTCALL => ntcall(pu8!())?,
             // constant
             PU8   => ops.push(U8(pu8!()))?,
             PU16  => ops.push(U16(pu16!()))?,
