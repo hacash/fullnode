@@ -1,8 +1,8 @@
 
-pub const STORAGE_PERIOD: u64 = 300; // 300 block = 24hour = 1day
-pub const STORAGE_PERIOD_MAX: u64  = 3600; // about 10 years
-pub const STORAGE_SAVE_MAX: u64    = STORAGE_PERIOD * STORAGE_PERIOD_MAX; // about 10 years
-pub const STORAGE_RETAIN: u64 = STORAGE_PERIOD * 10;   // about 30 days
+pub const STORAGE_PERIOD: u64     = 300; // 300 block = 24hour = 1day
+pub const STORAGE_PERIOD_MAX: u64 = 10000; // about 30 years
+pub const STORAGE_SAVE_MAX: u64   = STORAGE_PERIOD * STORAGE_PERIOD_MAX; // about 30 years
+pub const STORAGE_RETAIN: u64     = STORAGE_PERIOD * 100;   // about 100 days
 
 
 combi_struct!{ ValueSto,

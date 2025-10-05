@@ -47,7 +47,8 @@ action_register! {
     ContractUpdate       // 123
     ContractMainCall     // 124
 
-    EnvHeight            // 0x0b01 ~
-    FuncHacToZhu         // 0x0f01 ~
+    EnvHeight           
+    EnvMainAddr        
+    FuncHacToZhu       
 }
 

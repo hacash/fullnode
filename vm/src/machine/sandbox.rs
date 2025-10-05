@@ -83,6 +83,7 @@ pub fn sandbox_call(ctx: &mut dyn Context, contract: ContractAddress, funcname: 
 
 
 fn parse_push_params(codes: &mut Vec<u8>, pms: &str) -> Rerr {
+    macro_rules! push { ( $( $a: expr ),+) => { $( codes.push($a as u8) );+ } }
     use Bytecode::*;
     let pms: Vec<_> = pms.split(",").collect();
     let pms: usize = pms.iter().map(|a|{
@@ -92,16 +93,12 @@ fn parse_push_params(codes: &mut Vec<u8>, pms: &str) -> Rerr {
         let t = maybe!(n>=2, s[1], "nil");
         parse_one_param(codes, t, v)
     }).sum();
-    // if pack the argv
-    if pms > 255 {
-        return errf!("param number is too much")
+    match pms {
+        0      => { push!(PNIL); } // none argv
+        1      => { /* already push in parse_one_param */ }
+        2..255 => { push!(PU8, pms, PACKLIST); } 
+        255..  => return errf!("param number is too much"),
     }
-    if pms > 1 {
-        codes.push(PU8 as u8);
-        codes.push(pms as u8);
-        codes.push(PACKLIST as u8);
-    }
-
     Ok(())
 }
 

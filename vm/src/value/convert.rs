@@ -10,17 +10,17 @@ pub fn buf_to_uint(buf: &[u8]) -> VmrtRes<Value> {
             Ok(Value::U16(v))
         },
         3..=4 => {
-            let bts = buf_fill_left_zero(buf, 4);
+            let bts = buf_fill_left_zero(&rlbts, 4);
             let v = u32::from_be_bytes(bts.try_into().unwrap());
             Ok(Value::U32(v))
         },
         5..=8 => {
-            let bts = buf_fill_left_zero(buf, 8);
+            let bts = buf_fill_left_zero(&rlbts, 8);
             let v = u64::from_be_bytes(bts.try_into().unwrap());
             Ok(Value::U64(v))
         },
         9..=16 => {
-            let bts = buf_fill_left_zero(buf, 16);
+            let bts = buf_fill_left_zero(&rlbts, 16);
             let v = u128::from_be_bytes(bts.try_into().unwrap());
             Ok(Value::U128(v))
         },

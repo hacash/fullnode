@@ -140,18 +140,18 @@ mod amm {
             var tt_sat    = $4
             var tt_zhu    = $5
             unpack_list(self.total(nil), 3)
-            tt_shares += zhu as u128
-            tt_sat    += sat as u128
-            tt_zhu    += zhu as u128
+            tt_shares += zhu as u64
+            tt_sat    += sat as u64
+            tt_zhu    += zhu as u64
             let tt_k = "total"
             storage_save(tt_k, tt_shares ++ tt_sat ++ tt_zhu)
             // 
             var lq_k $0 = addr ++ "_shares"
             var my_shares $4 = storage_load(lq_k)
             if my_shares is nil {
-                my_shares = 0 as u128
+                my_shares = 0 as u64
             }
-            my_shares += zhu as u128
+            my_shares += zhu as u64
             storage_save(lq_k, my_shares)
             end
         "##).unwrap();
@@ -161,9 +161,9 @@ mod amm {
 
         let withdraw_codes = lang_to_ircode(r##"
             // check param
-            unpack_list(pick(0), 0)
             var addr   = $0
             var shares = $1
+            unpack_list(pick(0), 0)
             var lq_k = addr ++ "_shares"
             var my_shares = storage_load(lq_k)
             assert shares <= my_shares
@@ -172,24 +172,37 @@ mod amm {
             var tt_sat    = $4
             var tt_zhu    = $5
             unpack_list(self.total(nil), 3)
-            assert my_shares <= tt_shares
-            var my_per = my_shares * 1000 / tt_shares
+            assert tt_shares>0 && my_shares <= tt_shares
+            var my_per = (my_shares as u128) * 1000 / tt_shares
             var my_sat = my_per * tt_sat / 1000
             var my_zhu = my_per * tt_zhu / 1000
-            // update
+            assert my_sat>0 && my_zhu>0
+            memory_put("out_sat", my_sat)
+            // print my_zhu
+            // print zhu_to_hac(my_zhu)
+            memory_put("out_hac", zhu_to_hac(my_zhu))
+            // update total
             tt_shares -= my_shares
             tt_sat    -= my_sat
             tt_zhu    -= my_zhu
             var tt_k = "total"
+            let tt_save = (tt_shares as u64) ++ (tt_sat as u64) ++ (tt_zhu as u64)
             if tt_shares > 0 {
-                storage_save(tt_k, tt_shares ++ tt_sat ++ tt_zhu)
+                storage_save(tt_k, tt_save)
             } else {
                 storage_del(tt_k)
             }
+            // update my shares
+            my_shares -= shares
+            if my_shares > 0 {
+                storage_save(lq_k, my_shares as u64)
+            } else {
+                storage_del(lq_k)
+            }
             // return
             var reslist = new_list()
-            append(reslist, my_sat)
-            append(reslist, my_zhu)
+            append(reslist, my_sat as u64)
+            append(reslist, my_zhu as u64)
             return reslist
         "##).unwrap();
         println!("withdraw_codes:\n{}\n{}\n", withdraw_codes.ircode_print(true).unwrap(), withdraw_codes.to_hex());
@@ -266,8 +279,11 @@ mod amm {
             var hac  = $1
             unpack_list(pick(0), 0)
             var ot_k = "out_hac"
-            var out_hac $0 = memory_get("out_hac")
-            assert hac > 0 && hac == out_hac
+            var out_hac $0 = memory_get(ot_k)
+            // print hac
+            // print out_hac
+            // print hac ++ out_hac
+            assert hac_to_zhu(hac) > 0 && hac == out_hac
             memory_put(ot_k, nil)
             // ok
             return 0
@@ -280,13 +296,13 @@ mod amm {
             // get total
             var tt_k = "total"
             var total = storage_load(tt_k)
-            var tt_shares = 0 as u128
-            var tt_sat    = 0 as u128
-            var tt_zhu    = 0 as u128
-            if 3 * 64 == size(total) {
-                tt_shares = buf_left(16, total)    as u128
-                tt_sat    = buf_cut(total, 16, 16) as u128
-                tt_zhu    = buf_right(16, total)   as u128
+            var tt_shares = 0 as u64
+            var tt_sat    = 0 as u64
+            var tt_zhu    = 0 as u64
+            if 3 * 8 == size(total) {
+                tt_shares = buf_left(8, total)    as u64
+                tt_sat    = buf_cut(total, 8, 8)  as u64
+                tt_zhu    = buf_right(8, total)   as u64
             }
             return [tt_shares, tt_sat, tt_zhu]
         "##).unwrap();
@@ -317,9 +333,9 @@ mod amm {
         .func(Func::new("prepare").public()
             .types(Some(VT::U64), vec![VT::U64, VT::U64, VT::U64]).bytecode(prepare_codes))
         .func(Func::new("deposit")
-            .types(None, vec![VT::Addr, VT::U64, VT::U64]).bytecode(deposit_codes))
+            .types(None, vec![VT::Address, VT::U64, VT::U64]).bytecode(deposit_codes))
         .func(Func::new("withdraw").public()
-            .types(None, vec![VT::Addr, VT::U128]).bytecode(withdraw_codes))
+            .types(None, vec![VT::Address, VT::U128]).bytecode(withdraw_codes))
         .func(Func::new("buy").public()
             .types(Some(VT::U64), vec![VT::U64, VT::U64, VT::U64]).bytecode(buy_codes))
         .func(Func::new("sell").public()
@@ -327,7 +343,7 @@ mod amm {
         .func(Func::new("total").public()
             .types(None, vec![]).bytecode(total_codes))
         .func(Func::new("shares").public()
-            .types(Some(VT::U128), vec![VT::Addr]).bytecode(shares_codes))
+            .types(Some(VT::U128), vec![VT::Address]).bytecode(shares_codes))
         ;
         println!("\n{} bytes:\n{}\n\n", contract.serialize().len(), contract.serialize().to_hex());
         contract.testnet_deploy_print("8:244");    
@@ -365,11 +381,38 @@ mod amm {
         act.ctype = Uint1::from(0);
         act.codes = BytesW2::from(maincodes).unwrap();
 
-        // print
         curl_trs_3(vec![Box::new(act)], "22:244");
 
     }
 
+
+    #[test]
+    fn maincall_remove() {
+
+        use vm::action::*;
+        
+        let maincodes = lang_to_bytecode(r##"
+            lib HacSwap = 1: VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
+            var shares = 50000000000 as u64 // 500HAC
+            var coins = HacSwap.withdraw(tx_main_address(), shares) // 1k HAC
+            let sat = item_get(coins, 0)
+            let zhu = item_get(coins, 1)
+            var adr = address_ptr(1)
+            transfer_sat_from(adr, sat)
+            transfer_hac_from(adr, zhu_to_hac(zhu))
+            end
+        "##).unwrap();
+
+        println!("{}\n", maincodes.bytecode_print(true).unwrap());
+        println!("{}\n", maincodes.to_hex());
+
+        let mut act = ContractMainCall::new();
+        act.ctype = Uint1::from(0);
+        act.codes = BytesW2::from(maincodes).unwrap();
+
+        curl_trs_3(vec![Box::new(act)], "22:244");
+
+    }
 
     #[test]
     fn transfer1() {

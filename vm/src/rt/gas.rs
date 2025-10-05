@@ -33,7 +33,7 @@ impl GasTable {
     pub fn new(_hei: u64) -> Self {
         use Bytecode::*;
         let mut gst = Self { table : [2; 256] };
-        gst.set(1,  &[CU8, CU16, CU32, CU64, CU128, CBUF, CTO, TID, TIS, TNIL, TMAP, TLIST, PU8, PU16, P0, P1, P2, P3, PNBUF, PNIL, DUP, POP, NOP, NT, END, RET, ABT, ERR, AST]);
+        gst.set(1,  &[CU8, CU16, CU32, CU64, CU128, CBUF, CTO, TID, TIS, TNIL, TMAP, TLIST, PU8, PU16, P0, P1, P2, P3, PNBUF, PNIL, DUP, POP, NOP, NT, END, RET, ABT, ERR, AST, PRT]);
         // gst.set(2,  &[...]); // all other bytecode
         gst.set(3,  &[XLG, PUT, CHOISE, BRL, BRS, BRSL, BRSLN]);
         gst.set(4,  &[XOP, HREAD, HREADU, HREADUL, MOD, MUL, DIV, ITEMGET, HASKEY, LENGTH]);

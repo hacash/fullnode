@@ -30,11 +30,11 @@ pub fn buf_drop_left_zero(buf: &[u8], minl: usize) -> Vec<u8> {
 }
 
 pub fn buf_fill_left_zero(buf: &[u8], zn: usize) -> Vec<u8> {
-    let res = buf[..].into();
     let sz = buf.len();
     if sz >= zn {
-        return res
+        return buf[0..zn].into()
     }
+    let res = buf[..].into();
     let pdn = zn - sz;
     [vec![0].repeat(pdn), res].concat()
 }

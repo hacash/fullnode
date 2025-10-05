@@ -12,6 +12,7 @@ pub fn create(buf: &[u8]) -> Ret<(Box<dyn Action>, usize)> {
     unsafe {
         for create_action in EXTEND_ACTIONS_TRY_CREATE_FUNCS {
             let cres = create_action(kid, buf)?;
+            // debug_println!("--------- do create_action: {:?}, res.is_some: {}, act data: {}", create_action, cres.is_some(), hex::encode(buf));
             match cres {
                 Some(a) => return Ok(a),
                 _ => continue, // next

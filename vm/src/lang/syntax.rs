@@ -691,6 +691,7 @@ impl Syntax {
             Keyword(False)  => Self::push_inst(P0),
             Keyword(Abort)  => Self::push_inst_noret(ABT),
             Keyword(End)    => Self::push_inst_noret(END),
+            Keyword(Print)  => Box::new(IRNodeSingle{hrtv: false, inst: PRT, subx: self.item_must(0)?}),
             Keyword(Assert) => Box::new(IRNodeSingle{hrtv: false, inst: AST, subx: self.item_must(0)?}),
             Keyword(Throw)  => Box::new(IRNodeSingle{hrtv: false, inst: ERR, subx: self.item_must(0)?}),
             Keyword(Return) => Box::new(IRNodeSingle{hrtv: false, inst: RET, subx: self.item_must(0)?}),

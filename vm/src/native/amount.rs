@@ -1,7 +1,5 @@
 
 
-
-
 fn mei_to_hac(buf: &[u8]) -> VmrtRes<Value> {
     let num = buf_to_uint(buf)?.to_uint();
     if num > u64::MAX as u128 {
@@ -30,6 +28,10 @@ fn hac_to_zhu(buf: &[u8]) -> VmrtRes<Value> {
 
 fn zhu_to_hac(buf: &[u8]) -> VmrtRes<Value> {
     let num = buf_to_uint(buf)?.to_uint();
+    // debug_println!("NativeCall(zhu_to_hac): {:?}, {:?}, {}", buf, buf_to_uint(buf)?, num);
+    if num > u64::MAX as u128 {
+        return itr_err_fmt!(NativeCallError, "call zhu_to_hac overflow")
+    }
     Ok(Value::Bytes( Amount::zhu(num as u64).serialize() ))
 }
 

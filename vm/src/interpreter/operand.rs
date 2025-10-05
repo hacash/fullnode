@@ -80,7 +80,7 @@ macro_rules! ahmtdo {
 }
 
 
-macro_rules! lgcuintmatch {
+macro_rules! lgcyuintmatch {
     ($op: ident, $x: expr, $y: expr) => {
         match ($x, $y) {
             (U8(l), U8(r)) =>     lgcdo!($op, l, r, u8),
@@ -112,9 +112,6 @@ macro_rules! lgcuintmatch {
             (U128(l), U32(r)) =>   lgcdo!($op, l, r, u128),
             (U128(l), U64(r)) =>   lgcdo!($op, l, r, u128),
             (U128(l), U128(r)) =>  lgcdo!($op, l, r, u128),
-
-            (Address(l), Address(r))   => Ok(Value::bool(l==r)),
-            (Bytes(l), Bytes(r)) => Ok(Value::bool(l==r)),
 
             (_l, _r) => return itr_err_fmt!(Arithmetic, 
                 "cannot do logic operand <{}> between {:?} and {:?}", stringify!($op), $x, $y),

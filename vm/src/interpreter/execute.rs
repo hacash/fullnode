@@ -398,6 +398,7 @@ pub fn execute_code(
             ERR => { exit = Throw;  break },  // throw <ERROR>
             ABT => { exit = Abort;  break },  // panic
             AST => { if ops.pop()?.check_false() { exit = Abort;  break } }, // assert(..)
+            PRT => { debug_println!("{:?}", ops.pop()?) }
             // call CALLDYN
             CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL => {
                 let ist = instruction;

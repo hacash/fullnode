@@ -52,6 +52,7 @@ keyword_define!{
     Abort     : "abort"
     Throw     : "throw"
     Assert    : "assert"
+    Print     : "print"
     CallCode  : "callcode"
     ByteCode  : "bytecode"
     And       : "and"
@@ -348,6 +349,7 @@ irfn_define!{
     // AST        : 0, 1, 0,     assert
     // ERR        : 0, 1, 0,     throw
     // ABT        : 0, 0, 0,     abort
+    // PRT        : 0, 1, 0,     print
 
     // IRBYTECODE : 2, 255, 0,   ir_bytecode
     // IRLIST     : 2, 255, 1,   ir_list

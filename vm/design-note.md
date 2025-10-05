@@ -54,7 +54,7 @@ Contract Code Store Rent:
 
 Contract KV State Rent:
 
-    1. 
+    1. fee = period * (32 + datasize)
 
 
 Storage Ban:

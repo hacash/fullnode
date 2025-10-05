@@ -86,6 +86,7 @@ macro_rules! action_define {
 
         impl $class {
             pub const KIND: u16 = $kid;
+            pub const IDX: u8   = ($kid % 256) as u8;
         }
 
         

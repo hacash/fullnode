@@ -76,6 +76,7 @@ Here's a simple and usable contract to test: [vm/src/hook/test.rs](vm/src/hook/t
 cargo test deploy::recursion -- --nocapture
 cargo test amm::deploy -- --nocapture
 cargo test amm::maincall_add -- --nocapture
+cargo test amm::maincall_remove -- --nocapture
 ```
 
 This will result in a POST submission command line containing the contract deployment transaction:

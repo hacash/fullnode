@@ -245,7 +245,7 @@ pub enum Bytecode {
     ________________231 = 0xe7, 
     ________________232 = 0xe8,
     ________________233 = 0xe9,
-    ________________234 = 0xea,
+    PRT                 = 0xea, // s     print for debug
     AST                 = 0xeb, // c     assert throw
     ERR                 = 0xec, // a     throw (ERR)
     ABT                 = 0xed, //       abord
@@ -473,6 +473,7 @@ bytecode_metadata_define!{
     AST        : 0, 1, 0,     assert
     ERR        : 0, 1, 0,     throw
     ABT        : 0, 0, 0,     abort
+    PRT        : 0, 1, 0,     print
 
     IRBYTECODE : 2, 255, 0,   ir_bytecode
     IRLIST     : 2, 255, 1,   ir_list
