@@ -336,7 +336,7 @@ fn render_tx_info(tx: &dyn TransactionRead,
         "fee", fee_str,
         "fee_got", tx.fee_got().to_unit_string(unit),
         "main_address", main_addr,
-        "action", tx.action_count().uint(),
+        "action", tx.action_count(),
     };
 
     if body {

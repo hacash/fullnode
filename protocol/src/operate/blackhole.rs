@@ -2,8 +2,7 @@
 
 
 
-
-pub const BLACKHOLE_ADDR: Address = Address::from([0u8; 21]);
+pub const BLACKHOLE_ADDR: Address = ADDRESS_ZERO;
 
 fn blackhole_engulf(sta: &mut CoreState, addr: &Address) {
     if *addr != BLACKHOLE_ADDR {

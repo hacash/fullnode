@@ -94,7 +94,6 @@ impl CallDepth {
 
 
 
-
 #[derive(Default, PartialEq, Copy, Clone)]
 pub enum BlkOrigin {
     #[default] Unknown, 
@@ -111,5 +110,33 @@ pub enum TxOrigin {
     Sync,
     Broadcast, // other find
     Submit,    // mine miner find
+}
+
+
+
+/*********************************/
+
+
+#[allow(dead_code)]
+#[derive(Default)]
+pub struct TexState {
+    pub zhu: i64,
+    pub sat: i64,
+    pub dia: i32,
+    pub diamonds: DiamondNameListMax60000,
+    pub assets:   HashMap<Fold64, i128>,
+    pub diatrs:   Vec<(Address, usize)>,
+}
+
+impl TexState {
+
+    pub fn record_diamond_input(&mut self, dias: DiamondNameListMax200) -> Rerr {
+        self.diamonds.checked_append(dias.into_list())
+    }
+    
+    pub fn record_diamond_output(&mut self, addr: &Address, num: usize) {
+        self.diatrs.push((addr.clone(), num))
+    }
+
 }
 

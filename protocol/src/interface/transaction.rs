@@ -25,7 +25,7 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
     fn message(&self) -> &Fixed16 { never!() }
     fn reward(&self) -> &Amount { never!() }
 
-    fn action_count(&self) -> &Uint2 { never!() }
+    fn action_count(&self) -> usize { never!() }
     fn actions(&self) -> &Vec<Box<dyn Action>> { never!() }
     fn signs(&self) -> &Vec<Sign> { never!() }
     

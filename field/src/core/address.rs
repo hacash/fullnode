@@ -4,6 +4,12 @@ pub const ADDR_OR_PTR_DIV_NUM: u8 = 20;
 
 pub type Address = Fixed21;
 pub type Addrptr = Uint1;
+ 
+
+pub static ADDRESS_ZERO: Address = Fixed21::from([0u8; Address::SIZE]);
+pub static ADDRESS_ONEX: Address = Fixed21::from([0u8, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]);
+pub static ADDRESS_TWOX: Address = Fixed21::from([0u8, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]);
+
 
 macro_rules! address_version_define {
     ( $($key:ident : $name:ident , $num:expr)+ ) => {

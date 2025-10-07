@@ -48,8 +48,8 @@ impl TransactionRead for $class {
         &self.timestamp
     }
 
-    fn action_count(&self) -> &Uint2 {
-        self.actions.count()
+    fn action_count(&self) -> usize {
+        self.actions.length()
     }
     
     fn actions(&self) -> &Vec<Box<dyn Action>> {
@@ -251,7 +251,7 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
     let mut state = CoreState::wrap(ctx.state());
     // may fast_sync
     if not_fast_sync {
-        if tx.action_count().uint() == 0 {
+        if tx.action_count() == 0 {
             return errf!("tx actions cannot empty.")
         }
         // main check
@@ -297,6 +297,10 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
         ctx.depth_set(CallDepth::new(-1)); // set depth
         action.execute(ctx)?;
     }
+    
+    #[cfg(feature = "tex")]
+    super::tex::do_settlement(ctx)?;
+
     // spend fee
     operate::hac_sub(ctx, &main, fee)?;
     // ok finish

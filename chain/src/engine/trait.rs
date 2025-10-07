@@ -96,7 +96,7 @@ impl EngineRead for ChainEngine {
         if tx.ty() == TransactionCoinbase::TYPE {
             return errf!("cannot submit coinbase tx");
         }
-        let an = tx.action_count().uint() as usize;
+        let an = tx.action_count();
         if an != tx.actions().len() {
             return errf!("tx action count not match")
         }

@@ -10,6 +10,8 @@ pub struct ContextInst<'a> {
 
     pub vmi: Box<dyn VM>,
 
+    pub tex_state: TexState,
+
     sta: Box<dyn State>,
     check_sign_cache: HashMap<Address, Ret<bool>>,
 }
@@ -22,6 +24,7 @@ impl ContextInst<'_> {
             depth: CallDepth::new(0),
             check_sign_cache: HashMap::new(),
             vmi: VMNil::empty(),
+            tex_state: TexState::default(),
         }
     }
 
@@ -38,6 +41,13 @@ impl ExtActCal for ContextInst<'_> {
 }
 
 impl Context for ContextInst<'_> {
+
+    fn clone_mut(&self) -> &mut dyn Context {
+        let ptr: *const ContextInst<'_> = self as *const ContextInst<'_>;
+        let ptr_mut = ptr as *mut ContextInst<'_>;
+        #[allow(invalid_reference_casting)]
+        unsafe{ &mut *ptr_mut }
+    }
     fn as_ext_caller(&mut self) -> &mut dyn ExtActCal { self }
     fn env(&self) -> &Env { &self.env }
     fn state(&mut self) -> &mut dyn State { self.sta.as_mut() }
@@ -74,5 +84,10 @@ impl Context for ContextInst<'_> {
         self.check_sign_cache.insert(*adr, isok.clone());
         isok.map(|_|())
     }
+    // tex
+    fn tex_state(&mut self) -> &mut TexState {
+        &mut self.tex_state
+    }
+
 }
 

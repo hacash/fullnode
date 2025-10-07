@@ -11,6 +11,20 @@ pub struct $class {
     vlist: Vec<Box<dyn $dynty>>
 }
 
+impl Iterator for $class {
+    type Item = Box<dyn $dynty>;
+    fn next(&mut self) -> Option<Box<dyn $dynty>> {
+        match self.pop() {
+            Some(d) => {
+                self.count -= 1;
+                Some(d)
+            }
+            _ => None,
+        }
+    }
+}
+
+
 impl std::fmt::Debug for $class {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f,"[dyn list {}]", *self.count)

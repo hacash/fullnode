@@ -67,7 +67,7 @@ impl ChainEngine {
             if txty == CBTY {
                 continue // igonre coinbase other check
             }
-            let an = tx.action_count().uint() as usize;
+            let an = tx.action_count();
             if an != tx.actions().len() {
                 return errf!("tx action count not match")
             }
@@ -167,7 +167,7 @@ impl ChainEngine {
             if txty == CBTY {
                 continue // igonre coinbase other check
             }
-            let an = tx.action_count().uint() as usize;
+            let an = tx.action_count();
             if an != tx.actions().len() {
                 return errf!("tx action count not match")
             }

@@ -42,9 +42,14 @@ pub fn run_with_scaner(cnfpath: &str, scan: Box<dyn Scaner>) {
     protocol::block::setup_block_hasher( x16rs::block_hash );
     protocol::action::setup_extend_actions_try_create(1, mint::action::try_create);
     // vm hook
+    #[cfg(feature = "tex")]
+    {
+        protocol::action::setup_extend_actions_try_create(1, protocol::tex::try_create);
+    }
+    // vm hook
     #[cfg(feature = "hvm")]
     {
-        protocol::action::setup_extend_actions_try_create(2, vm::action::try_create);
+        protocol::action::setup_extend_actions_try_create(3, vm::action::try_create);
         protocol::action::setup_action_hook(vm::hook::try_action_hook);
         server::extend::setup_extend_api_routes(vm::hook::extend_api_routes);
     }

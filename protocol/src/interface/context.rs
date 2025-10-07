@@ -5,6 +5,7 @@ pub trait ExtActCal {
 }
 
 pub trait Context : ExtActCal {
+    fn clone_mut(&self) -> &mut dyn Context;
     fn as_ext_caller(&mut self) -> &mut dyn ExtActCal;
     fn env(&self) -> &Env;
     fn addr(&self, _:&AddrOrPtr) -> Ret<Address>;
@@ -20,6 +21,8 @@ pub trait Context : ExtActCal {
     fn tx(&self) -> &dyn TransactionRead;
     fn vm(&mut self) -> &mut dyn VM;
     fn vm_replace(&mut self, _: Box<dyn VM>) -> Box<dyn VM>;
+    // tex
+    fn tex_state(&mut self) -> &mut TexState;
     
 }
 
