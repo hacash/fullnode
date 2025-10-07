@@ -23,8 +23,25 @@ fn tex_cell_create(buf: &[u8])->Ret<(Box<dyn TexCell>, usize)>{
 
 define_tex_cell_create!{ tex_cell_create, 
 
-    CellTrsZhuIn
-    CellTrsZhuOut
+    CellTrsZhuIn       // 1
+    CellTrsZhuOut      // 2
+    CellTrsSatIn       // 3
+    CellTrsSatOut      // 4
+    CellTrsDiaIn       // 5
+    CellTrsDiaOut      // 6
+    CellTrsAssetIn     // 7
+    CellTrsAssetOut    // 8
+
+    CellCondZhuLess    // 11
+    CellCondZhuMore    // 12
+    CellCondSatLess    // 13
+    CellCondSatMore    // 14
+    CellCondDiaLess    // 15
+    CellCondDiaMore    // 16
+    CellCondAssetLess  // 17
+    CellCondAssetMore  // 18
+    CellCondHeightLess // 19
+    CellCondHeightMore // 20
 
 }
 

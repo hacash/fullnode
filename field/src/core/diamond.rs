@@ -58,10 +58,10 @@ impl $class {
         obj
     }
 
-    pub fn check(&self) -> Ret<u8> {
+    pub fn check(&self) -> Ret<usize> {
         // check len
-        let setlen = *self.count as u64;
-        let reallen = self.lists.len() as u64 ;
+        let setlen = *self.count as usize;
+        let reallen = self.lists.len() as usize ;
         if setlen != reallen {
             return errf!("check fail: length need {} but got {}", setlen, reallen)
         }
@@ -78,7 +78,7 @@ impl $class {
             }
         }
         // success
-        Ok(reallen as u8)
+        Ok(reallen)
     }
     
     pub fn contains(&self, x: &[u8]) -> bool {

@@ -2,6 +2,7 @@
 * type 
 */
 
+
 /*
     one package for
     -> fee purity
@@ -124,18 +125,26 @@ pub struct TexState {
     pub sat: i64,
     pub dia: i32,
     pub diamonds: DiamondNameListMax60000,
-    pub assets:   HashMap<Fold64, i128>,
     pub diatrs:   Vec<(Address, usize)>,
+    pub assets:   HashMap<Fold64, i128>,
 }
 
 impl TexState {
 
-    pub fn record_diamond_input(&mut self, dias: DiamondNameListMax200) -> Rerr {
+    pub fn record_diamond_out(&mut self, dias: DiamondNameListMax200) -> Rerr {
         self.diamonds.checked_append(dias.into_list())
     }
     
-    pub fn record_diamond_output(&mut self, addr: &Address, num: usize) {
-        self.diatrs.push((addr.clone(), num))
+    pub fn record_diamond_in(&mut self, addr: &Address, num: usize) -> Rerr {
+        if num > 200 {
+            return errf!("Tex state diamond trs num cannot over 200")
+        }
+        self.diatrs.push((addr.clone(), num));
+        let Some(diares) = self.dia.checked_sub(num as i32) else {
+            return errf!("cell state diamond overflow")
+        };
+        self.dia = diares;
+        Ok(())
     }
 
 }

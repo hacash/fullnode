@@ -18,6 +18,7 @@ static SETTLEMENT_ADDR: Address = ADDRESS_ONEX;
 
 include!{"interface.rs"}
 include!{"transfer.rs"}
+include!{"condition.rs"}
 include!{"check.rs"}
 include!{"cell.rs"}
 include!{"action.rs"}
