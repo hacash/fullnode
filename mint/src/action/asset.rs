@@ -14,6 +14,7 @@ action_define!{AssetCreate, 16,
         let chei = ctx.env().block.height;
         let is_mainnet = ctx.env().chain.id==0 && chei > 600000;
         if is_mainnet {
+            #[cfg(not(feature = "hip20"))]
             return err!("asset just for test chain now")
         }
         let alive_blk_hei: u64 = maybe!(is_mainnet, 600000, 0);
@@ -41,7 +42,7 @@ action_define!{AssetCreate, 16,
             return err!("serial cannot less than 1024")
         }
         // check fee and burn
-        let blkrw = block_reward(chei);
+        let blkrw = super::genesis::block_reward(chei);
         let pfee = self.protocol_fee.clone();
         if pfee != blkrw {
             return errf!("Protocol fee need {} but got {}", blkrw, pfee)

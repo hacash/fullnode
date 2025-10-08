@@ -204,8 +204,9 @@ impl IrFn {
 irfn_define!{
 
     EXTACTION  : 1, 1, 1,     ext_action
-    // EXTENV     : 1, 0, 1,     ext_env
     // EXTFUNC    : 1, 1, 1,     ext_func
+    // EXTENV     : 1, 0, 1,     ext_env
+    // NTCALL     : 1, 1, 1,     native_call
 
     // CALLDYN    :   0, 3, 1,   call_dynamic
     // CALL       : 1+4, 1, 1,   call
@@ -213,8 +214,6 @@ irfn_define!{
     // CALLLIB    : 1+4, 1, 1,   call_library
     // CALLSTATIC : 1+4, 1, 1,   call_static
     // CALLCODE   : 1+4, 0, 0,   call_code
-
-    // NTCALL     : 1, 1, 1,     native_call
 
     PU8        : 1, 0, 1,     push_u8
     PU16       : 2, 0, 1,     push_u16

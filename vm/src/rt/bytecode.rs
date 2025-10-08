@@ -17,16 +17,16 @@ pub enum Bytecode {
     ________________3   = 0x03,
     ________________4   = 0x04,
     ________________5   = 0x05,
-    ________________6   = 0x06,
-    ________________7   = 0x07,
-    ________________8   = 0x08,
+    EXTFUNC             = 0x06, // *@  call extend action
+    EXTENV              = 0x07, // *+  call extend action
+    NTCALL              = 0x08, // *@  native call
     ________________9   = 0x09,
     ________________10  = 0x0a,
-    EXTENV              = 0x0b, // *+  call extend action
+    ________________11  = 0x0b,
     ________________12  = 0x0c,
     ________________13  = 0x0d,
     ________________14  = 0x0e,
-    EXTFUNC             = 0x0f, // *@  call extend action
+    ________________15  = 0x0f,
     ________________16  = 0x10,
     CALL                = 0x11, // *,****@ 
     CALLINR             = 0x12, //   ****@ 
@@ -42,7 +42,7 @@ pub enum Bytecode {
     ________________28  = 0x1c,
     ________________29  = 0x1d,
     ________________30  = 0x1e,
-    NTCALL              = 0x1f, // *@  native call
+    ________________31  = 0x1f, // *@  native call
     PU8                 = 0x20, // *+     push u8
     PU16                = 0x21, // **+    push u16
     PBUF                = 0x22, // *+     push buf
@@ -328,8 +328,9 @@ impl Bytecode {
 */
 bytecode_metadata_define!{
     EXTACTION  : 1, 1, 1,     ext_action
-    EXTENV     : 1, 0, 1,     ext_env
     EXTFUNC    : 1, 1, 1,     ext_func
+    EXTENV     : 1, 0, 1,     ext_env
+    NTCALL     : 1, 1, 1,     native_call
 
     // CALLDYN    :   0, 3, 1,   call_dynamic
     CALL       : 1+4, 1, 1,   call
@@ -337,8 +338,6 @@ bytecode_metadata_define!{
     CALLLIB    : 1+4, 1, 1,   call_library
     CALLSTATIC : 1+4, 1, 1,   call_static
     CALLCODE   : 1+4, 0, 0,   call_code
-
-    NTCALL     : 1, 1, 1,     native_call
 
     PU8        : 1, 0, 1,     push_u8
     PU16       : 2, 0, 1,     push_u16
