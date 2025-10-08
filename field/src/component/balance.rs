@@ -48,6 +48,8 @@ combi_struct!{ Balance,
 	assets: AssetAmtW1
 }
 
+pub const BALANCE_ASSET_MAX: usize = 20;
+
 impl Balance {
 
 	pub fn hac(amt: Amount) -> Self {
@@ -73,8 +75,8 @@ impl Balance {
 			}
 		}
 		self.assets.push(amt)?;
-		if self.assets.length() > 20 {
-			return errf!("balance asset item quantity cannot big than 20")
+		if self.assets.length() > BALANCE_ASSET_MAX {
+			return errf!("balance asset item quantity cannot big than {}", BALANCE_ASSET_MAX)
 		}
 		Ok(())
 	}

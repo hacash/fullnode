@@ -12,6 +12,7 @@ action_define!{ TexCellAct, 35,
         sign  : Sign
     },
     (self, ctx, _gas {
+        self.addr.must_privakey()?;
         // check signature
         let stf = vec![self.addr.serialize(), self.cells.serialize()].concat();
         let thx = Hash::from(sha3(&stf));

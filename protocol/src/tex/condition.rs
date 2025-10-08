@@ -34,10 +34,8 @@ impl CellExec for $class {
             return err();
         }
         let zhu = zhu as u64;
-        match self.haczhu.uint().$check_op(&zhu) {
-            true => Ok(()),
-            false => err(),
-        }
+        let cnd = self.haczhu.uint().$check_op(&zhu);
+        maybe!(cnd, Ok(()), err())
     }
 }
 
@@ -48,8 +46,9 @@ impl TexCell for $class {}
 
 
 
-define_cell_cond_zhu!{ 11, CellCondZhuLess, le }
-define_cell_cond_zhu!{ 12, CellCondZhuMore, ge }
+define_cell_cond_zhu!{ 11, CellCondZhuLe, le }
+define_cell_cond_zhu!{ 12, CellCondZhuGe, ge }
+define_cell_cond_zhu!{ 13, CellCondZhuEq, eq }
 
 
 
@@ -85,10 +84,8 @@ impl CellExec for $class {
         let sta = ctx.clone_mut().state();
         let sat = CoreState::wrap(sta).balance(taradr).unwrap_or_default().satoshi.uint();
         let err = ||errf!("cell condition sat check failed");
-        match self.satoshi.uint().$check_op(&sat) {
-            true => Ok(()),
-            false => err(),
-        }
+        let cnd = self.satoshi.uint().$check_op(&sat);
+        maybe!(cnd, Ok(()), err())
     }
 }
 
@@ -99,8 +96,9 @@ impl TexCell for $class {}
 
 
 
-define_cell_cond_sat!{ 13, CellCondSatLess, le }
-define_cell_cond_sat!{ 14, CellCondSatMore, ge }
+define_cell_cond_sat!{ 14, CellCondSatLe, le }
+define_cell_cond_sat!{ 15, CellCondSatGe, ge }
+define_cell_cond_sat!{ 16, CellCondSatEq, eq }
 
 
 
@@ -136,10 +134,8 @@ impl CellExec for $class {
         let sta = ctx.clone_mut().state();
         let dia = CoreState::wrap(sta).balance(taradr).unwrap_or_default().diamond.uint();
         let err = ||errf!("cell condition dia check failed");
-        match self.diamond.uint().$check_op(&dia) {
-            true => Ok(()),
-            false => err(),
-        }
+        let cnd = self.diamond.uint().$check_op(&dia);
+        maybe!(cnd, Ok(()), err())
     }
 }
 
@@ -150,8 +146,9 @@ impl TexCell for $class {}
 
 
 
-define_cell_cond_dia!{ 15, CellCondDiaLess, le }
-define_cell_cond_dia!{ 16, CellCondDiaMore, ge }
+define_cell_cond_dia!{ 17, CellCondDiaLe, le }
+define_cell_cond_dia!{ 18, CellCondDiaGe, ge }
+define_cell_cond_dia!{ 19, CellCondDiaEq, eq }
 
 
 
@@ -194,10 +191,8 @@ impl CellExec for $class {
         let aid = self.asset.serial;
         let ast = bls.asset_must(aid);
         let err = ||errf!("cell condition asset <{}> check failed", aid.uint());
-        match self.asset.amount.uint().$check_op(&ast.amount.uint()) {
-            true => Ok(()),
-            false => err(),
-        }
+        let cnd = self.asset.amount.uint().$check_op(&ast.amount.uint());
+        maybe!(cnd, Ok(()), err())
     }
 }
 
@@ -208,8 +203,9 @@ impl TexCell for $class {}
 
 
 
-define_cell_cond_asset!{ 17, CellCondAssetLess, le }
-define_cell_cond_asset!{ 18, CellCondAssetMore, ge }
+define_cell_cond_asset!{ 20, CellCondAssetLe, le }
+define_cell_cond_asset!{ 21, CellCondAssetGe, ge }
+define_cell_cond_asset!{ 22, CellCondAssetEq, eq }
 
 
 
@@ -243,10 +239,9 @@ impl CellExec for $class {
 
     fn execute(&self, ctx: &mut dyn Context, _: &Address) -> Rerr {
         let chei = ctx.env().block.height;
-        match self.height.uint().$check_op(&chei) {
-            true => Ok(()),
-            false => errf!("cell condition check failed")
-        }
+        let err = ||errf!("cell condition check failed");
+        let cnd = self.height.uint().$check_op(&chei);
+        maybe!(cnd, Ok(()), err())
     }
 }
 
@@ -257,8 +252,8 @@ impl TexCell for $class {}
 
 
 
-define_cell_cond_height!{ 19, CellCondHeightLess, le }
-define_cell_cond_height!{ 20, CellCondHeightMore, ge }
+define_cell_cond_height!{ 23, CellCondHeightLe, le }
+define_cell_cond_height!{ 24, CellCondHeightGe, ge }
 
 
 

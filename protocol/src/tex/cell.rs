@@ -30,18 +30,23 @@ define_tex_cell_create!{ tex_cell_create,
     CellTrsDiaIn       // 5
     CellTrsDiaOut      // 6
     CellTrsAssetIn     // 7
-    CellTrsAssetOut    // 8
-
-    CellCondZhuLess    // 11
-    CellCondZhuMore    // 12
-    CellCondSatLess    // 13
-    CellCondSatMore    // 14
-    CellCondDiaLess    // 15
-    CellCondDiaMore    // 16
-    CellCondAssetLess  // 17
-    CellCondAssetMore  // 18
-    CellCondHeightLess // 19
-    CellCondHeightMore // 20
+    CellTrsAssetOut    // G    CellCondZhuLe    // 11
+    
+    CellCondZhuLe    // 11
+    CellCondZhuGe    // 12
+    CellCondZhuEq    // 13
+    CellCondSatLe    // 14
+    CellCondSatGe    // 15
+    CellCondSatEq    // 16
+    CellCondDiaLe    // 17
+    CellCondDiaGe    // 18
+    CellCondDiaEq    // 19
+    CellCondAssetLe  // 20
+    CellCondAssetGe  // 21
+    CellCondAssetEq  // 22
+    CellCondHeightLe // 23
+    CellCondHeightGe // 24
+    
 
 }
 
