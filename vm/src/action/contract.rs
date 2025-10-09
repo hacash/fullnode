@@ -12,7 +12,7 @@ macro_rules! vmsto {
 
 
 action_define!{ContractDeploy, 122, 
-    ActLv::TopOnly, // level
+    ActLv::TopUnique, // level
     false, [], // burn 90% fee
     {   
         nonce: Uint4 
@@ -66,7 +66,7 @@ action_define!{ContractDeploy, 122,
 
 
 action_define!{ContractUpdate, 123, 
-    ActLv::TopOnly, // level
+    ActLv::TopUnique, // level
     false, [], // burn 90% fee
     {   
         marks: Fixed2 // zero

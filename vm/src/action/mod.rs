@@ -7,8 +7,6 @@ use protocol::*;
 use protocol::interface::*;
 use protocol::state::*;
 use protocol::action::*;
-use protocol::operate::*;
-use mint::genesis::*;
 
 use super::*;
 use super::rt::*;
@@ -22,7 +20,6 @@ use super::rt::*;
 
 
 
-include!{"asset.rs"}
 include!{"astselect.rs"}
 include!{"astif.rs"}
 include!{"blob.rs"}
@@ -37,7 +34,6 @@ include!{"envfunc.rs"}
     action register
 */
 action_register! {
-    AssetCreate          // 16
     
     AstIf                // 101
     AstSelect            // 102

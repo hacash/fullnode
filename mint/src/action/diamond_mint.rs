@@ -18,7 +18,7 @@ combi_struct_field_more_than_condition!{ DiamondMintData, {
 * simple hac to
 */
 action_define!{ DiamondMint, 4, 
-    ActLv::TopOnly, // level
+    ActLv::TopUnique, // level
     *self.d.number > DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES, // burn 90 fee
     [], // need sign,
     {
