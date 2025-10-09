@@ -4,7 +4,7 @@
 #[allow(unused)]
 mod tex {
     use field::*;
-    use vm::contract::*;
+    // use vm::contract::*;
 
 
     #[test]
