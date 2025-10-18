@@ -32,7 +32,7 @@ pub fn curl_trs_fee(mut trs: TransactionType3, acts: Vec<Box<dyn Action>>, acc: 
         trs.push_action(act).unwrap();
     }
 
-    trs.gas_max = Uint1::from(4);
+    trs.gas_max = Uint1::from(8);
     trs.fill_sign(&acc).unwrap();
 
     println!("txsize:{}, feepay: {}, feegot: {}, feepurity: {}", 

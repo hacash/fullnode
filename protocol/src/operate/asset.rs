@@ -13,6 +13,7 @@ macro_rules! asset_operate_define {
             /* -------- */
             let newast = $newsatblock;// operate
             /* -------- */
+            // debug_println!("-------- asset_operate_define {} $oldamt = {:?}, newast = {:?}", stringify!($func_name), $oldamt, newast);
             // save
             userbls.asset_set(newast.clone())?;
             state.balance_set($addr, &userbls);

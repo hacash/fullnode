@@ -620,17 +620,11 @@ impl Syntax {
                 } else {
                     self.idx -= 1;
                 }
-                match idx {
-                    Some(idx) => {
-                        match val {
-                            Some(v) => self.bind_local_assign_replace(vk, idx, v),
-                            _ => self.bind_local(vk, idx)
-                        }   
-                    }
-                    _ => match val {
-                        Some(v) => self.bind_local_assign(vk, v),
-                        _ => return e
-                    } 
+                match (idx, val) {
+                    (Some(i), Some(v)) => self.bind_local_assign_replace(vk, i, v),
+                    (.., Some(v))      => self.bind_local_assign(vk, v),
+                    (Some(i), ..)      => self.bind_local(vk, i),
+                    _ => return e
                 }?
             }
             Keyword(Let) => { // let foo = $0

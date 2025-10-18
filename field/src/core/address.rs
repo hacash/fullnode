@@ -172,9 +172,13 @@ impl AddrOrPtr {
         match self {
             Self::Val1(v) => Ok(*v),
             Self::Val2(v) => {
-                let ix = v.uint() as usize;
-                match ix < addrs.len() {
-                    true => Ok(addrs[ix].clone()),
+                let ix = v.uint();
+                if ix < ADDR_OR_PTR_DIV_NUM {
+                    return errf!("addr ptr index error")
+                }
+                let i = (ix - ADDR_OR_PTR_DIV_NUM) as usize;
+                match i < addrs.len() {
+                    true => Ok(addrs[i].clone()),
                     false => errf!("addr ptr index overflow")
                 }
             },
@@ -183,6 +187,10 @@ impl AddrOrPtr {
 
     pub fn from_addr(v: Address) -> Self {
         Self::Val1(v)
+    } 
+
+    pub fn from_ptr(i: u8) -> Self {
+        Self::Val2(Addrptr::from(i + ADDR_OR_PTR_DIV_NUM))
     } 
 
 }

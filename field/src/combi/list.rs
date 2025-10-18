@@ -16,13 +16,7 @@ pub struct $class  {
 impl Iterator for $class {
     type Item = $vty;
     fn next(&mut self) -> Option<$vty> {
-        match self.pop() {
-            Some(d) => {
-                self.count -= 1;
-                Some(d)
-            }
-            _ => None,
-        }
+        self.pop()
     }
 }
 

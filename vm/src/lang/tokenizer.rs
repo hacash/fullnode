@@ -168,23 +168,40 @@ impl Tokenizer<'_> {
         }
     } 
 
+    pub fn parse_number(&mut self) -> Rerr {
+        let max = self.texts.len();
+        while self.idx < max {
+            let c = self.texts[self.idx] as char;
+            match c {
+                // check number
+                '0'..='9' => self.push(Number, c)?,
+                '_' => {}
+                _ => break
+            }
+            self.idx += 1; // next
+        }
+        Ok(())
+    }
+
     pub fn parse(mut self) -> Ret<Vec<Token>> {
         use TokenType::*;
         let max = self.texts.len();
         while self.idx < max {
             let c = self.texts[self.idx] as char;
-            match c { // check comments
+            match c {
+                // check comments
                 '/' if self.idx < max - 1  => {
                     if self.parse_comments(max, self.texts[self.idx + 1] as char) {
                         continue;
                     }
                 },
+                // check number
+                '0'..='9' => { self.parse_number()?; continue; }
                 _ => {}
             }
             match c {
                 ' '|','|';'|'\n'|'\r'|'\t'   => self.push(Blank, c)?,
                 '_'|'$'|'a'..='z'|'A'..='Z'  => self.push(Word, c)?,
-                '0'..='9'                    => self.push(Number, c)?,
                 '('|')'|'{'|'}'|'['|']'      => self.push(Split, c)?,
                 '+'|'-'|'*'|'/'|'='|'!'|
                 '.'|':'|

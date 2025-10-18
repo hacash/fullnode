@@ -31,7 +31,7 @@ macro_rules! checked_opt {
             if *self.serial != *other.serial {
                 return err
             }
-            match self.amount.$name(*self.amount) {
+            match self.amount.uint().$name(other.amount.uint()) {
                 Some(v) => Self{
                     serial: self.serial,
                     amount: Fold64::from(v)?,
@@ -66,6 +66,13 @@ impl AssetAmt {
             serial,
             ..Default::default()
         }
+    }
+
+    pub fn from(s: u64, a: u64) -> Ret<Self> {
+        Ok(Self {
+            serial: Fold64::from(s)?,
+            amount: Fold64::from(a)?,
+        })
     }
 
 }
