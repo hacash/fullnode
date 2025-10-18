@@ -39,12 +39,12 @@ mod deploy {
         */
 
         let recursion_fnstr= r##"
-            local_move(0)
             bytecode {
                 PU8 1
+                PU8 2
             }
-            var foo = $0
-            var bar = $1
+            var foo $0
+            var bar $1
             if foo > 10 {
                 return 10
             }
@@ -55,17 +55,16 @@ mod deploy {
 
 
         let payable_hac_codes = lang_to_bytecode(r##"
-            local_move(0)
-            var param = $0
-            var addr  = $1
-            var res   = $2
-            assert type_id(param) == 15
-            assert type_is_list(param)
-            addr = item_get(0, param)
-            addr = param[3]
-            assert type_is(12, addr)
+            var pms $0 = pick(0)
+            var adr $1
+            var res $2
+            assert type_id(pms) == 15
+            assert type_is_list(pms)
+            adr = item_get(0, pms)
+            adr = pms[3]
+            assert type_is(12, adr)
 
-            let bdt = param + addr
+            let bdt = pms + adr
             res = 1 + 2
             assert bdt
 

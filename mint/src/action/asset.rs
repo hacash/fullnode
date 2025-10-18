@@ -3,15 +3,16 @@
 pub const ASSET_ALIVE_HEIGHT: u64 = 600000;
 
 
-fn alive_blk_hei(ctx: &mut dyn Context) -> Ret<u64> {
+#[allow(unused)]
+fn check_alive_blk_hei(ctx: &mut dyn Context) -> Ret<(u64, u64)> {
+    #[cfg(not(feature = "hip20"))]
+    return err!("HIP20 asset just for test chain now");
+    // open hip20 feature
     let chei = ctx.env().block.height;
     let is_mainnet = ctx.env().chain.id==0 && chei > ASSET_ALIVE_HEIGHT;
-    if is_mainnet {
-        #[cfg(not(feature = "hip20"))]
-        return err!("HIP20 asset just for test chain now")
-    }
     let alive_hei: u64 = maybe!(is_mainnet, ASSET_ALIVE_HEIGHT, 0);
-    Ok(alive_hei)
+    let minsri:    u64 = maybe!(is_mainnet, 1025, 0);
+    Ok((alive_hei, minsri))
 }
 
 
@@ -24,14 +25,18 @@ action_define!{AssetCreate, 16,
     },
     (self, ctx, _gas {
         let amd = self.metadata.clone();
+        let serial = *amd.serial;
         // check serial
         let chei = ctx.env().block.height;
-        let alive_hei: u64 = alive_blk_hei(ctx)?;
-        if chei <= alive_hei {
+        let (alive_hei, minsri) = check_alive_blk_hei(ctx)?;
+        if alive_hei > chei {
             return err!("The asset issuance has not yet begun")
         }
+        if serial < minsri {
+            return errf!("serial cannot less than {}", minsri)
+        }
         let serial_limit = chei - alive_hei;
-        if *amd.serial > serial_limit {
+        if serial > serial_limit {
             return err!("The asset serial overflow")
         }
         // check meta
@@ -47,11 +52,6 @@ action_define!{AssetCreate, 16,
         if *amd.decimal > 16 {
             return err!("decimal cannot more than 16")
         }
-        // support debug test
-        let minsr = maybe!(chei>ASSET_ALIVE_HEIGHT, 1024, 0);
-        if *amd.serial <= minsr {
-            return errf!("serial cannot less than {}", minsr)
-        }
         // check fee and burn
         let blkrw = super::genesis::block_reward(chei);
         let pfee = self.protocol_fee.clone();
@@ -63,8 +63,8 @@ action_define!{AssetCreate, 16,
         hac_sub(ctx, &main_addr, &pfee)?;
         // state and check exists
         let mut sta = MintState::wrap(ctx.state());
-        if let Some(_) = sta.asset(&amd.serial) {
-            return errf!("Asset serial {} already exists", amd.serial)
+        if let Some(..) = sta.asset(&amd.serial) {
+            return errf!("Asset serial {} already exists", serial)
         }
         sta.asset_set(&amd.serial, &amd); // store asset object
         // total count update

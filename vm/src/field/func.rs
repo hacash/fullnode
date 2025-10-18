@@ -56,7 +56,7 @@ impl FuncArgvTypes {
 
     pub fn from_types(otp: Option<ValueTy>, tys: Vec<ValueTy>) -> Ret<Self> {
         let output_ty = match otp {
-            Some(o) => { o.canbe_argv()?; o as u8}
+            Some(o) => { o.canbe_argv()?; (o as u8) << 4}
             _ => 0,
         };
         let n = tys.len();
@@ -78,7 +78,7 @@ impl FuncArgvTypes {
             let tn = maybe!( i % 2 == 0, ty << 4, ty);
             dfs[i/2] = dfs[i/2] | tn; 
         }
-        let typnum = output_ty << 4 | n as u8;
+        let typnum = output_ty | (n as u8);
         Ok(Self {
             typnum: Uint1::from(typnum),
             define: dfs,
@@ -133,8 +133,9 @@ impl Parse for FuncArgvTypes {
 impl Serialize for FuncArgvTypes {
     fn serialize(&self) -> Vec<u8> {
         let z = self.def_size();
-        vec![
-            self.typnum.serialize(),
+        println!("FuncArgvTypes Serialize z = {}", z);
+        let nvs = self.typnum.serialize();
+        vec![nvs,
             self.define[0..z].to_vec(),
         ].concat()
     }

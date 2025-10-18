@@ -1,11 +1,11 @@
 use protocol::component::*;
 
 #[derive(Default)]
-pub struct StateTest {
+pub struct StateMem {
     mem: MemKV
 }
 
-impl State for StateTest {
+impl State for StateMem {
     fn get(&self, k: Vec<u8>) -> Option<Vec<u8>> {
         match self.mem.get(&k) {
             Some(v) => v,
@@ -22,11 +22,11 @@ impl State for StateTest {
 
 
 #[derive(Default)]
-pub struct ExtCalTest {
+pub struct ExtCallMem {
     hei: u64,
 }
 
-impl ExtActCal for ExtCalTest {
+impl ExtActCal for ExtCallMem {
     fn height(&self) -> u64 {
         self.hei
     }

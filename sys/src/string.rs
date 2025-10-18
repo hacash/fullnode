@@ -5,6 +5,12 @@ macro_rules! s {
 }
 
 
+pub fn start_with_char(s: &str, c: char) -> bool {
+    match s.len() > 0 {
+        true => s.as_bytes()[0] == c as u8,
+        _ => false
+    }
+}
 
 pub fn bytes_to_readable_string(bts: &[u8]) -> String {
     let ss: Vec<u8> = bts.iter().map(|x|match x {

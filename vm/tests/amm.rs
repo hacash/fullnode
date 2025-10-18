@@ -36,17 +36,15 @@ mod amm {
         use vm::ir::*;
 
         /*
-            1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9
-            18dekVcACnj6Tbd69SsexVMQ5KLBZZfn5K
+            1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9   123456
+            18dekVcACnj6Tbd69SsexVMQ5KLBZZfn5K   123457
             VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
 
         */
 
 
         let payable_sat_fitsh = r##"
-            var addr = $0
-            var sat =  $1
-            unpack_list(pick(0), 0)
+            param { addr, sat }
             memory_put("sat_in", sat)
             if sat == memory_get("sell_sat") {
                 return 0 // ok for sell sat
@@ -67,9 +65,7 @@ mod amm {
 
         let payable_hac_fitsh = r##"
             // HAC Pay
-            var addr = $0
-            var amt  = $1
-            unpack_list(pick(0), 0)
+            param { addr, amt }
             memory_put("hac_in", amt)
             if amt == memory_get("buy_hac") {
                 return 0 // ok for buy sat
@@ -105,17 +101,13 @@ mod amm {
         
 
         let prepare_codes = lang_to_ircode(r##"
-            // check param
-            var sat      = $0
-            var zhu      = $1
-            var deadline = $2
-            unpack_list(pick(0), 0)
+            param { sat, zhu, deadline }
             assert deadline >= block_height()
             assert sat >= 1000 && zhu >= 10000
             // get total
-            var tt_shares = $3
-            var tt_sat    = $4
-            var tt_zhu    = $5
+            var tt_shares $3
+            var tt_sat    $4
+            var tt_zhu    $5
             unpack_list(self.total(nil), 3)
             // check
             var k_in_sat = "in_sat"
@@ -138,15 +130,11 @@ mod amm {
 
 
         let deposit_codes = lang_to_ircode(r##"
-            // check param
-            var addr = $0
-            var sat  = $1
-            var zhu  = $2
-            unpack_list(pick(0), 0)
+            param { addr, sat, zhu }
             // get total
-            var tt_shares = $3
-            var tt_sat    = $4
-            var tt_zhu    = $5
+            var tt_shares $3
+            var tt_sat    $4
+            var tt_zhu    $5
             unpack_list(self.total(nil), 3)
             tt_shares += zhu as u64
             let tt_k = "total_shares"
@@ -166,14 +154,11 @@ mod amm {
 
 
         let withdraw_codes = lang_to_ircode(r##"
-            // check param
-            var addr   = $0
-            var shares = $1
-            unpack_list(pick(0), 0)
+            param { addr, shares }
             // get total
-            var tt_shares = $2
-            var tt_sat    = $3
-            var tt_zhu    = $4
+            var tt_shares $2
+            var tt_sat    $3
+            var tt_zhu    $4
             unpack_list(self.total(nil), 2)
             var lq_k = addr ++ "_shares"
             var my_shares = storage_load(lq_k)
@@ -212,17 +197,13 @@ mod amm {
 
 
         let buy_codes = lang_to_ircode(r##"
-            // check param
-            var sat      = $0
-            var max_zhu  = $1
-            var deadline = $2
-            unpack_list(pick(0), 0)
+            param { sat, max_zhu, deadline }
             assert deadline >= block_height()
             assert sat>0 && max_zhu>0
             // get total
-            var tt_shares = $3
-            var tt_sat    = $4
-            var tt_zhu    = $5
+            var tt_shares $3
+            var tt_sat    $4
+            var tt_zhu    $5
             unpack_list(self.total(nil), 3)
             assert tt_shares>0 && tt_sat>0 && tt_zhu>0 
             // 0.3% fee
@@ -237,16 +218,12 @@ mod amm {
 
 
         let sell_codes = lang_to_ircode(r##"
-            // check param
-            var sat      = $0
-            var min_zhu  = $1
-            var deadline = $2
-            unpack_list(pick(0), 0)
+            param { sat, min_zhu, deadline }
             assert deadline >= block_height()
             // get total
-            var tt_shares = $3
-            var tt_sat    = $4
-            var tt_zhu    = $5
+            var tt_shares $3
+            var tt_sat    $4
+            var tt_zhu    $5
             unpack_list(self.total(nil), 3)
             assert tt_shares>0 && tt_sat>0 && tt_zhu>0 
             // 0.3% fee
@@ -262,11 +239,8 @@ mod amm {
 
 
         let permit_sat = lang_to_bytecode(r##"
+            param { addr, sat}
             assert memory_get("hac_in")
-            // check param
-            var addr = $0
-            var sat  = $1
-            unpack_list(pick(0), 0)
             var ot_k = "out_sat"
             var out_sat $0 = memory_get(ot_k)
             assert sat > 0 && sat == out_sat
@@ -276,12 +250,8 @@ mod amm {
         "##).unwrap();
 
         let permit_hac = lang_to_bytecode(r##"
+            param { addr, hac}
             assert memory_get("sat_in")
-            // check param
-            var addr = $0
-            var hac  = $1
-            unpack_list(pick(0), 0)
-
             var ot_k = "out_hac"
             var out_hac $0 = memory_get(ot_k)
             assert hac_to_zhu(hac) > 0 && hac == out_hac

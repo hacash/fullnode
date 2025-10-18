@@ -4,6 +4,7 @@
 /*****************************************/
 
 
+
 #[allow(dead_code)]
 #[derive(Default)]
 pub struct Syntax {
@@ -81,7 +82,8 @@ impl Syntax {
         Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: PUT, para: idx, subx: v}))
     }
 
-    pub fn bind_local(&mut self, s: String, idx: u8) -> Rerr {
+    // ret empty
+    pub fn bind_local(&mut self, s: String, idx: u8) -> Ret<Box<dyn IRNode>> {
         if idx >= self.local_alloc {
             self.local_alloc = idx + 1;
         }
@@ -89,7 +91,7 @@ impl Syntax {
             return errf!("<let> cannot repeat bind the symbol '{}'", s)
         } */
         self.locals.insert(s, idx);
-        Ok(())
+        Ok(Self::empty())
     }
 
     pub fn bind_let(&mut self, s: String, v: Box<dyn IRNode>) -> Rerr {
@@ -299,7 +301,7 @@ impl Syntax {
     pub fn item_may_list(&mut self) -> Ret<Box<dyn IRNode>> {
         let block = self.item_may_block()?;
         Ok(match block.len() {
-            0 => Box::new(IRNodeEmpty{}),
+            0 => Self::empty(),
             1 => block.into_one(),
             _ => Box::new(block)
         })
@@ -332,10 +334,43 @@ impl Syntax {
         Ok(block)
     }
 
+    pub fn item_param(&mut self) -> Ret<Box<dyn IRNode>> {
+        let e = errf!("param format error");
+        let mut nxt = self.next()?;
+        if let Partition('{')= nxt {} else {
+            return e
+        };
+        let mut params = 0;
+        loop {
+            nxt = self.next()?;
+            if let Partition('}') = nxt {
+                break // all finish
+            };
+            if let Identifier(id) = nxt {
+                self.bind_local(id, params)?;
+                params += 1;
+            } 
+        }
+        // unpack list
+        use Bytecode::*;
+        Ok(Box::new(IRNodeDouble{
+            hrtv: true, 
+            inst: UPLIST,
+            subx: Box::new(IRNodeParam1{
+                hrtv: true, 
+                inst: PICK,
+                para: 0,
+                text: s!("")
+            }),
+            suby: Self::push_inst(P0),
+        }))
+    }
+
     pub fn item_identifier(&mut self, id: String) -> Ret<Box<dyn IRNode>> {
         use Bytecode::*;
         use KwTy::*;
         let max = self.tokens.len() - 1;
+        // let e0 = errf!("not find identifier '{}'", id);
         let e1 = errf!("call express after identifier format error");
         macro_rules! next {() => {{
             self.idx += 1;
@@ -344,6 +379,13 @@ impl Syntax {
             }
             &self.tokens[self.idx]
         }}}           
+        /* if start_with_char(&id, '$') {
+            let k = id.trim_start_matches('$');
+            return match k {
+                "param" => self.item_param(),
+                _ => e0
+            }
+        } */
         if self.idx < max {
             let mut nxt = &self.tokens[self.idx];
             if let Partition('(') = nxt { // function call
@@ -408,6 +450,10 @@ impl Syntax {
         );
         let para = iter::empty().chain(size).chain(b.clone()).collect::<Vec<_>>();
         Ok(Box::new(IRNodeParams{hrtv: true, inst, para}))
+    }
+
+    pub fn empty() -> Box<dyn IRNode> {
+        Box::new(IRNodeEmpty{})
     }
 
     pub fn push_nil() -> Box<dyn IRNode> {
@@ -550,7 +596,7 @@ impl Syntax {
                 let gidx = |nxt: &Token| {
                     let mut lcalc: Option<u8> = None;
                     if let Identifier(num) = nxt.clone() {
-                        if '$' == num.as_bytes()[0] as char {
+                        if start_with_char(&num, '$') {
                             if let Ok(idx) = num.trim_start_matches('$').parse::<u8>() {
                                 lcalc = Some(idx);
                             };
@@ -558,36 +604,34 @@ impl Syntax {
                     }
                     lcalc
                 };
-                nxt = next!();
-                let Identifier(id) = nxt else {
+                let Identifier(id) = next!() else {
                     return e
                 };
+                let vk = id.clone();
                 nxt = next!();
-                let mut reset_idx = None;
-                if let Some(idx) = gidx(nxt) {
-                    reset_idx = Some(idx);
+                let mut idx = None;
+                let mut val = None;
+                if let Some(i) = gidx(nxt) {
+                    idx = Some(i);
                     nxt = next!();
                 }
-                let Keyword(Assign) = nxt else {
-                    return e
-                };
-                nxt = next!();
-                let vk = id.clone();
-                match gidx(nxt) {
-                    Some(idx) => {
-                        self.bind_local(vk, idx)?;
-                        Box::new(IRNodeEmpty{})
-                    }
-                    _ => {
-                        self.idx -= 1;
-                        let v = self.item_must(0)?;
-                        // debug_println!("------------ var {} {:?} = {:?}", vk, reset_idx, v);
-                        match reset_idx {
-                            Some(idx) => self.bind_local_assign_replace(vk, idx, v)?,
-                            _ => self.bind_local_assign(vk, v)?,
-                        }
-                    }
+                if let Keyword(Assign) = nxt {
+                    val = Some(self.item_must(0)?);
+                } else {
+                    self.idx -= 1;
                 }
+                match idx {
+                    Some(idx) => {
+                        match val {
+                            Some(v) => self.bind_local_assign_replace(vk, idx, v),
+                            _ => self.bind_local(vk, idx)
+                        }   
+                    }
+                    _ => match val {
+                        Some(v) => self.bind_local_assign(vk, v),
+                        _ => return e
+                    } 
+                }?
             }
             Keyword(Let) => { // let foo = $0
                 let e = errf!("let statement format error");
@@ -603,7 +647,7 @@ impl Syntax {
                 let exp = self.item_must(0)?;
                 exp.checkretval()?; // must retv
                 self.bind_let(id, exp)?;
-                Box::new(IRNodeEmpty{})
+                Self::empty()
             }
             /*
             Keyword(Use) => { // use AnySwap = VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
@@ -621,7 +665,7 @@ impl Syntax {
                     return e
                 };
                 self.bind_uses(id.clone(), addr.clone())?;
-                Box::new(IRNodeEmpty{})
+                Self::empty()
             }
             */
             Keyword(Lib) => { // lib AnySwap = VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa(1)
@@ -646,7 +690,10 @@ impl Syntax {
                 }
                 // debug_println!("lib statement {}, {:?}", *idx, adr);
                 self.bind_lib(id.clone(), *idx as u8, adr)?;
-                Box::new(IRNodeEmpty{})
+                Self::empty()
+            }
+            Keyword(Param) => {
+                self.item_param()?
             }
             Keyword(CallCode) => {
                 let e = errf!("callcode statement format error");
@@ -709,7 +756,7 @@ impl Syntax {
 
 
     pub fn parse(mut self) -> Ret<IRNodeBlock> {
-        self.irnode.push(Box::new(IRNodeEmpty{}));
+        self.irnode.push(Self::empty());
         while let Some(item) = self.item_may()? {
             if let Some(..) = item.as_any().downcast_ref::<IRNodeEmpty>() {} else {
                 self.irnode.push(item);

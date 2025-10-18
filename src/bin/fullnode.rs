@@ -44,7 +44,7 @@ pub fn run_with_scaner(cnfpath: &str, scan: Box<dyn Scaner>) {
     // tex feature
     #[cfg(feature = "tex")]
     {
-        protocol::action::setup_extend_actions_try_create(1, protocol::tex::try_create);
+        protocol::action::setup_extend_actions_try_create(2, protocol::tex::try_create);
     }
     // hvm feature
     #[cfg(feature = "hvm")]

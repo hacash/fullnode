@@ -5,7 +5,7 @@
 
 
 
-action_define!{EnvHeight, 0x0b01, 
+action_define!{EnvHeight, 0x0701, 
     ActLv::Any, false, [], {},
     (self, ctx, _gas {
         Ok(ctx.env().block.height.to_be_bytes().to_vec())
@@ -13,7 +13,7 @@ action_define!{EnvHeight, 0x0b01,
 }
 
 
-action_define!{EnvMainAddr, 0x0b02, 
+action_define!{EnvMainAddr, 0x0702, 
     ActLv::Any, false, [], {},
     (self, ctx, _gas {
         Ok(ctx.env().tx.main.to_vec())
@@ -21,7 +21,7 @@ action_define!{EnvMainAddr, 0x0b02,
 }
 
 
-action_define!{EnvCoinbaseAddr, 0x0b03, 
+action_define!{EnvCoinbaseAddr, 0x0703, 
     ActLv::Any, false, [], {},
     (self, ctx, _gas {
         let cbadr = ctx.env().block.coinbase.clone();
@@ -35,7 +35,7 @@ action_define!{EnvCoinbaseAddr, 0x0b03,
 
 
 
-action_define!{FuncCheckSign, 0x0f01, 
+action_define!{FuncCheckSign, 0x0601, 
     ActLv::Any, false, [], {
         addr: Address
     },
@@ -48,7 +48,7 @@ action_define!{FuncCheckSign, 0x0f01,
 }
 
 
-action_define!{FuncBalance, 0x0f02, 
+action_define!{FuncBalance, 0x0602, 
     ActLv::Any, false, [], {
         addr: Address
     },
@@ -63,7 +63,7 @@ action_define!{FuncBalance, 0x0f02,
 }
 
 
-action_define!{FuncDiamondInscNum, 0x0f03, 
+action_define!{FuncDiamondInscNum, 0x0603, 
     ActLv::Any, false, [], {
         diamond: DiamondName
     },
@@ -81,7 +81,7 @@ action_define!{FuncDiamondInscNum, 0x0f03,
 }
 
 
-action_define!{FuncDiamondInscGet, 0x0f04, 
+action_define!{FuncDiamondInscGet, 0x0604, 
     ActLv::Any, false, [], {
         diamond: DiamondName
         inscidx: Uint1

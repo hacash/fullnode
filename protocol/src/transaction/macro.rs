@@ -258,6 +258,9 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
         if ! main.is_privakey() {
             return errf!("tx fee address version must be PRIVAKEY type.")
         }
+        for adr in tx.addrs() {
+            adr.check_version()?; // check all address version
+        }
         let mty = tx.ty();
         // check BlockHeight more than 20w trs.Fee.Size() must less than 6 bytes.
         if blkhei > 20_0000 && fee.size() > 2+4 {

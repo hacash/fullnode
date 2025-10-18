@@ -15,10 +15,10 @@ fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Value>) -
     // let addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
     let cadr = ContractAddress::default();
 
-    let mut statest = StateTest::default();
+    let mut statest = StateMem::default();
     let mut sta = VMState::wrap(&mut statest);
 
-    let mut ctx = ExtCalTest::default(); 
+    let mut ctx = ExtCallMem::default(); 
 
     let mut ops = Stack::new(256);
     if let Some(v) = argv {

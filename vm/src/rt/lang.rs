@@ -55,6 +55,7 @@ keyword_define!{
     Print     : "print"
     CallCode  : "callcode"
     ByteCode  : "bytecode"
+    Param     : "param"
     And       : "and"
     Or        : "or"
     Not       : "not"

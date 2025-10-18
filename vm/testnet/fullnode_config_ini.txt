@@ -21,5 +21,5 @@ diamond_form = true
 
 [miner]
 enable = true
-reward = 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9
+reward = 18dekVcACnj6Tbd69SsexVMQ5KLBZZfn5K ; 123457
 message = hvm_dev
