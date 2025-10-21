@@ -83,6 +83,16 @@ impl_field_only_new!{$class}
 
 impl $class {
 
+    pub fn from_list(list: Vec<Box<dyn $dynty>>) -> Ret<Self> {
+        let n = list.len();
+        if n > <$lenty>::MAX as usize {
+            return errf!("list data length overflow")
+        }
+        Ok(Self{
+            count: <$lenty>::from_usize(n)?,
+            vlist: list,
+        })
+    }
 
     pub fn replace(&mut self, i: usize, v: Box<dyn $dynty>) -> Rerr {
         let tl = self.length() as usize;
@@ -124,6 +134,7 @@ impl $class {
     pub fn list(&self) -> &Vec<Box<dyn $dynty>> {
         &self.vlist
     }
+
 
 
 }

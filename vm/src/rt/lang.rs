@@ -241,22 +241,22 @@ irfn_define!{
     TID        : 0, 1, 1,     type_id
 
     DUP        : 0, 0, 1,     dump
-    DUPX       : 1, 0, 1,     dump_x
+    DUPN       : 1, 0, 1,     dump_n
     // POP        : 0, 255, 0,   pop
     // POPN       : 1, 255, 0,   pop_n
     PICK       : 1, 0, 1,     pick
     SWAP       : 0, 2, 2,     swap
-    // REV        : 0, 255, 255, reverse_stace
+    // REV        : 1, 255, 255, reverse
     CHOISE     : 0, 3, 1,     choise
-    SIZE       : 0, 1, 1,     size
     CAT        : 0, 2, 1,     concat
-    // JOIN       : 0, 255, 1,   join
+    // JOIN       : 1, 255, 1,   join
+    BYTE       : 0, 2, 1,     byte
     CUT        : 0, 3, 1,     buf_cut
     LEFT       : 1, 1, 1,     buf_left
     RIGHT      : 1, 1, 1,     buf_right
     LDROP      : 1, 1, 1,     buf_left_drop
     RDROP      : 1, 1, 1,     buf_right_drop
-    BYTE       : 0, 2, 1,     byte
+    SIZE       : 0, 1, 1,     size
 
     NEWLIST    : 0, 0, 1,     new_list
     NEWMAP     : 0, 0, 1,     new_map

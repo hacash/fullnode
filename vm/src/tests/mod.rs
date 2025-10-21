@@ -5,6 +5,7 @@ use super::lang::*;
 
 include!{"util.rs"}
 include!{"state.rs"}
+include!{"stack.rs"}
 include!{"benchmark.rs"}
 include!{"ir.rs"}
 include!{"execute.rs"}

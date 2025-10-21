@@ -29,3 +29,12 @@ action_define!{AstIf, 101,
 }
 
 
+pub fn create_ast_if(cond: AstSelect, br_if: AstSelect, br_else: AstSelect) -> AstIf {
+    AstIf {
+        cond,
+        br_if,
+        br_else,
+        ..AstIf::new()
+    }
+}
+

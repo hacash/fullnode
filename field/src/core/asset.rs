@@ -31,7 +31,7 @@ macro_rules! checked_opt {
             if *self.serial != *other.serial {
                 return err
             }
-            match self.amount.uint().$name(other.amount.uint()) {
+            match (*self.amount).$name(*other.amount) {
                 Some(v) => Self{
                     serial: self.serial,
                     amount: Fold64::from(v)?,

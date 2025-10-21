@@ -68,9 +68,10 @@ pub fn asset_check(ctx: &mut dyn Context, addr: &Address, ast: &AssetAmt) -> Ret
     addr.check_version()?;
     let state = CoreState::wrap(ctx.state());
     if let Some(bls) = state.balance( addr ) {
-        let usrasset = bls.asset_must(ast.serial);
-        if usrasset >= *ast {
-            return Ok(usrasset)
+        if let Some(uast) = bls.asset(ast.serial) {
+            if uast >= *ast {
+                return Ok(uast)
+            }
         }
     }
     errf!("address {} asset is insufficient, at least {}", addr.readable(), ast)

@@ -1,14 +1,16 @@
 
 use space::{CtcKVMap, GKVMap, Heap, Stack};
 
+pub type VmTestExecRes = (CallExit, i64, Vec<Value>, Heap);
+
 #[allow(dead_code)]
-fn execute_test_maincall(gas: i64, codes: Vec<u8>) -> VmrtRes<(i64, Vec<Value>, CallExit)> {
+fn execute_test_maincall(gas: i64, codes: Vec<u8>) -> VmrtRes<VmTestExecRes> {
     execute_test_with_argv(gas, codes, None)
 }
 
 
 #[allow(dead_code)]
-fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Value>) -> VmrtRes<(i64, Vec<Value>, CallExit)> {
+fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Value>) -> VmrtRes<VmTestExecRes> {
 
     let mut pc: usize = 0;
     let mut gas: i64 = gas_limit; // 2000
@@ -25,6 +27,8 @@ fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Value>) -
         ops.push(v).unwrap();
     }
 
+    let mut heap = Heap::new(64);
+
     // do execute
     super::interpreter::execute_code(
         &mut pc,
@@ -37,7 +41,7 @@ fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Value>) -
         &SpaceCap::new(1),
         &mut ops,
         &mut Stack::new(256),
-        &mut Heap::new(64),
+        &mut heap,
         &mut GKVMap::new(20),
         &mut CtcKVMap::new(12),
         &mut ctx,
@@ -45,7 +49,7 @@ fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Value>) -
         &cadr,
         &cadr,
     ).map(|r|{
-        (gas_limit - gas, ops.release(), r)
+        (r, gas_limit - gas, ops.release(), heap)
     })
 
 

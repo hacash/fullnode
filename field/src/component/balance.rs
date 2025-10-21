@@ -68,9 +68,15 @@ impl Balance {
 	}
 
 	pub fn asset_set(&mut self, amt: AssetAmt) -> Rerr {
-		for ast in self.assets.as_mut() {
+		let assets = self.assets.as_mut();
+		for i in 0..assets.len() {
+			let ast = assets.get_mut(i).unwrap();
 			if ast.serial == amt.serial {
-				*ast = amt;
+				if 0 == *amt.amount {
+					self.assets.drop(i).unwrap();// delete
+				} else {
+					*ast = amt; // update
+				}
 				return Ok(())
 			}
 		}

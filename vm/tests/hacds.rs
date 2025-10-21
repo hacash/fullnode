@@ -119,8 +119,6 @@ curl "http://127.0.0.1:8088/submit/transaction?hexbody=true" -X POST -d "030068f
 
         curl_trs_3(vec![Box::new(act1), Box::new(act2)], "12:244");
 
-
-
     }
 
 
@@ -140,9 +138,6 @@ curl "http://127.0.0.1:8088/submit/transaction?hexbody=true" -X POST -d "030068f
         act2.diamonds = DiamondNameListMax200::from_readable("UETWNK,WYUKKZ,EYWTUK").unwrap();
         
         curl_trs_3(vec![Box::new(act1), Box::new(act2)], "12:244");
-
-
-
     }
 
 

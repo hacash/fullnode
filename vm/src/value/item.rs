@@ -106,6 +106,8 @@ impl std::fmt::Display for Value {
 }
 
 
+use std::usize;
+
 use Value::*;
 
 impl Value {
@@ -283,15 +285,15 @@ impl Value {
             U128(..) => 16,
             Bytes(b) => b.len(),
             Address(..) => field::Address::SIZE,
-            HeapSlice(..) => 4 + 4,
+            HeapSlice((_, n)) => *n as usize,
             // not support
             Compo(..) => usize::MAX,
         }
     }
 
     pub fn can_get_size(&self) -> VmrtRes<u16> {
-        if let Compo(..) = self {
-            return itr_err_code!(CompoNoSize)
+        if let Compo(..) | HeapSlice(..) = self {
+            return itr_err_code!(ItemNoSize)
         }
         let n = self.val_size();
         assert!(n < u16::MAX as usize);
@@ -341,8 +343,8 @@ impl Value {
                 _ => "0x".to_owned() + &hex::encode(b),
             },
             Address(a) => a.readable(),
-            HeapSlice((s, l)) => format!("heap[{},{}]", s, l),
-            Compo(a) => format!("compo[{}]", a.len()),
+            HeapSlice((s, l)) => format!("heap({},{})", s, l),
+            Compo(a) => format!("compo({}){}", a.len(), a.to_string()),
         }
     }
 

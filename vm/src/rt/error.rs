@@ -75,14 +75,14 @@ pub enum ItrErrCode {
     CompoOpOverflow   = 81,
     CompoToSerialize  = 82,
     CompoOpNotMatch   = 83,
-    CompoNoSize       = 84,
-    CompoPackError    = 85,
-    CompoNoFindItem   = 86,
+    CompoPackError    = 84,
+    CompoNoFindItem   = 85,
     
     Arithmetic        = 90,
     BytesHandle       = 91,
     NativeCallError   = 92,
     ExtActCallError   = 93,
+    ItemNoSize        = 94,
 
     StorageKeyInvalid       = 101,
     StorageKeyNotFind       = 102,

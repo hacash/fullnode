@@ -76,22 +76,22 @@ pub enum Bytecode {
     ________________62  = 0x3e,       
     ________________63  = 0x3f,   
     DUP                 = 0x40, // +      copy 0
-    DUPX                = 0x41, // *+     copy u8
+    DUPN                = 0x41, // *+     copy u8
     POP                 = 0x42, // a      pop top
     POPN                = 0x43, // *a...b pop n
     PICK                = 0x44, // *      pick
     SWAP                = 0x45, // a,b++  swap  b,a = a,b
     REV                 = 0x46, // a...b  reverse u8
     CHOISE              = 0x47, // a,b,c+ (x ? a : b)
-    SIZE                = 0x48, // &      size (u16)
-    CAT                 = 0x49, // a,b+   buf: b + a
-    JOIN                = 0x4a, // a...bn+
+    CAT                 = 0x48, // a,b+   buf: b + a
+    JOIN                = 0x49, // a...bn+
+    BYTE                = 0x4a, // a,b+   val[n] = u8
     CUT                 = 0x4b, // a,b,c+ cut buf (v, ost, len)+
     LEFT                = 0x4c, // *&     cut left  buf *
     RIGHT               = 0x4d, // *&     cut right buf *
     LDROP               = 0x4e, // *&     drop buf left *
     RDROP               = 0x4f, // *&     drop buf right *
-    BYTE                = 0x50, // a,b+   val[n] = u8
+    SIZE                = 0x50, // &      size (u16)
     ________________81  = 0x51,
     ________________82  = 0x52,
     ________________83  = 0x53,
@@ -364,22 +364,22 @@ bytecode_metadata_define!{
     TID        : 0, 1, 1,     type_id
 
     DUP        : 0, 0, 1,     dump
-    DUPX       : 1, 0, 1,     dump_x
+    DUPN       : 1, 0, 1,     dump_n
     POP        : 0, 255, 0,   pop
     POPN       : 1, 255, 0,   pop_n
     PICK       : 1, 0, 1,     pick
     SWAP       : 0, 2, 2,     swap
-    REV        : 0, 255, 255, reverse_stace
+    REV        : 1, 255, 255, reverse
     CHOISE     : 0, 3, 1,     choise
-    SIZE       : 0, 1, 1,     size
     CAT        : 0, 2, 1,     concat
-    JOIN       : 0, 255, 1,   join
+    JOIN       : 1, 255, 1,   join
+    BYTE       : 0, 2, 1,     byte
     CUT        : 0, 3, 1,     buf_cut
     LEFT       : 1, 1, 1,     buf_left
     RIGHT      : 1, 1, 1,     buf_right
     LDROP      : 1, 1, 1,     buf_left_drop
     RDROP      : 1, 1, 1,     buf_right_drop
-    BYTE       : 0, 2, 1,     byte
+    SIZE       : 0, 1, 1,     size
 
     NEWLIST    : 0, 0, 1,     new_list
     NEWMAP     : 0, 0, 1,     new_map

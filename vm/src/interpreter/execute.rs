@@ -205,7 +205,7 @@ pub fn execute_code(
         let instruction: Bytecode = std_mem_transmute!(instbyte.clone());
         *pc += 1; // next
 
-        // debug_println!("operds = {}\nlocals = {}\n-------- pc = {}, nbt = {:?}", &ops.print_stack(), &locals.print_stack(), pc, instruction);
+        // debug_print_stack(ops, locals, pc, instruction);
 
         // do execute
         let mut gas: i64 = 0;
@@ -295,28 +295,29 @@ pub fn execute_code(
             TID   => *ops.peek()? =   U8(ptyn!()),
             // stack & buffer
             DUP    => ops.push(ops.last()?)?,
-            DUPX   => ops.dupx(pu8!())?,
+            DUPN   => ops.dupn(pu8!())?,
             POP    => { ops.pop()?; } // drop
-            POPN   => ops.popx(pu8!())?,
+            POPN   => { ops.popn(pu8!())?; },
             PICK   => ops.pick(pu8!())?,
             SWAP   => ops.swap()?,
-            REV    => ops.reverse()?, // reverse
+            REV    => ops.reverse(pu8!())?, // reverse
             CHOISE => { if ops.pop()?.check_false() { ops.swap()? } ops.pop()?; } /* x ? a : b */
-            SIZE   => { *ops.peek()? = U16(ops.peek()?.can_get_size()?) }
             CAT    => ops.cat(cap)?,
-            JOIN   => ops.join(cap)?,
+            JOIN   => ops.join(pu8!(), cap)?,
+            BYTE   => { let i = ops_pop_to_u16!(); ops.peek()?.cutbyte(i)?; }  
             CUT    => { let (l, o) = (ops.pop()?, ops.pop()?); ops.peek()?.cutout(l, o)?; }
             LEFT   => ops.peek()?.cutleft(  pu8_as_u16!())?,
             RIGHT  => ops.peek()?.cutright( pu8_as_u16!())?,
             LDROP  => ops.peek()?.dropleft( pu8_as_u16!())?,
             RDROP  => ops.peek()?.dropright(pu8_as_u16!())?,
-            BYTE   => { let i = ops_pop_to_u16!(); ops.peek()?.cutbyte(i)?; }
+            SIZE   => { *ops.peek()? = U16(ops.peek()?.can_get_size()?) }
+
             // compo
             NEWLIST  => ops.push(Compo(CompoItem::new_list()))?,
             NEWMAP   => ops.push(Compo(CompoItem::new_map()))?,
             PACKLIST => { let l = CompoItem::pack_list(cap, ops)?; ops.push(l)? }
             PACKMAP  => { let m = CompoItem::pack_map( cap, ops)?; ops.push(m)? }
-            INSERT   => { let v = ops.pop()?; let k = ops.pop()?; ops.compo()?.insert(cap, k, v)? }
+            INSERT   => { let k = ops.pop()?; let v = ops.pop()?; ops.compo()?.insert(cap, k, v)? }
             REMOVE   => { let k = ops.pop()?; ops.compo()?.remove(k)?; }
             CLEAR    => { ops.compo()?.clear() }
             MERGE    => { let p = ops.pop()?; ops.compo()?.merge(p.compo_get()?)?; }
@@ -332,10 +333,10 @@ pub fn execute_code(
             UPLIST   => { let i = ops.pop()?.checked_u8()?; unpack_list(i, locals, ops.pop()?.compo()?.list_mut()?)?; }
             // heap
             HGROW    => gas += heap.grow(pu8!())?,
-            HWRITE   => heap.write(ops.pop()?, ops.pop()?)?,
-            HREAD    => *ops.peek()? = heap.read(ops.pop()?, ops.peek()?)?,
-            HWRITEX  => heap.write_x(  pu8!(), ops.pop()?)?,
-            HWRITEXL => heap.write_xl(pu16!(), ops.pop()?)?,
+            HWRITE   => heap.write(ops_pop_to_u16!(), ops.pop()?)?,
+            HREAD    => { let n = ops.pop()?; *ops.peek()? = heap.read(ops.peek()?, n)? }
+            HWRITEX  => heap.write(pu8_as_u16!(),  ops.pop()?)?,
+            HWRITEXL => heap.write(pu16!(), ops.pop()?)?,
             HREADU   => ops.push(heap.read_u(  pu8!())?)?,
             HREADUL  => ops.push(heap.read_ul(pu16!())?)?,
             HSLICE   => *ops.peek()? = heap.slice(ops.pop()?, ops.peek()?)?,
@@ -521,3 +522,10 @@ fn unpack_list(mut i: u8, locals: &mut Stack, list: &mut VecDeque<Value>) -> Vmr
     Ok(())
 }
 
+
+fn debug_print_stack(ops: &Stack, lcs: &Stack, pc: &usize, inst: Bytecode) {
+    debug_println!("operds({})={}\nlocals({})={}\n-------- pc = {}, nbt = {:?}", 
+    ops.len(), &ops.print_stack(), lcs.len(), &lcs.print_stack(), 
+    *pc, inst);
+
+}
