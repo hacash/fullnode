@@ -130,11 +130,11 @@ impl Transaction for $class {
             fhx = self.hash_with_fee();
         }
         // do sign
-        let apbk = acc.public_key().serialize_compressed();
-        let signobj = Sign{
+        // let apbk = acc.public_key().serialize_compressed();
+        let signobj = Sign::create_by(acc, &fhx);/*{
             publickey: Fixed33::from( apbk ),
             signature: Fixed64::from( acc.do_sign(&fhx) ),
-        };
+        };*/
         // insert
         self.insert_sign(signobj.clone())?;
         Ok(signobj)

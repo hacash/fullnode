@@ -5,6 +5,15 @@ combi_struct!{ Sign,
 	signature: Fixed64
 }
 
+impl Sign {
+	pub fn create_by(acc: &Account, stuff: &Hash) -> Self {
+		Self{
+			publickey: Fixed33::from(acc.public_key().serialize_compressed()),
+			signature: Fixed64::from( acc.do_sign(&stuff) ),
+		}
+	}
+}
+
 
 // SignCheckData
 combi_struct!{ SignCheckData, 

@@ -53,13 +53,18 @@ action_define!{AstSelect, 100,
 }
 
 
-pub fn create_ast_select(min: u8, max: u8, acts: Vec<Box<dyn Action>>) -> AstSelect {
-    AstSelect {
-        exe_min: Uint1::from(min),
-        exe_max: Uint1::from(max),
-        actions: DynListActionW1::from_list(acts).unwrap(),
-        ..AstSelect::new()
+
+impl AstSelect {
+
+    pub fn create_by(min: u8, max: u8, acts: Vec<Box<dyn Action>>) -> Self {
+        Self {
+            exe_min: Uint1::from(min),
+            exe_max: Uint1::from(max),
+            actions: DynListActionW1::from_list(acts).unwrap(),
+            ..Self::new()
+        }
     }
+
 }
 
 

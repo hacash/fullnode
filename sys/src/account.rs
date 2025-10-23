@@ -19,6 +19,13 @@ pub struct Account {
 
 
 impl Account {
+    pub fn check_addr(&self, addr: &[u8]) -> Rerr {
+        match &self.address != addr {
+            true => Ok(()),
+            false => errf!("Account check failed, need {} but got 0x{}", 
+                self.address_readable, Self::to_base58check(addr))
+        }
+    }
     pub fn secret_key(&self) -> &SecretKey {
         &self.secret_key
     }
@@ -112,6 +119,11 @@ impl Account {
         addr[1..].to_base58check(version)
     }
 
+    pub fn to_base58check(s: &[u8]) -> String {
+        let v = maybe!(s.len() > 0, s[0], 0);
+        let b = maybe!(s.len() > 1, &s[1..], &s[..]);
+        b.to_base58check(v)
+    }
 
 }
 

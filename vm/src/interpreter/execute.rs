@@ -523,6 +523,7 @@ fn unpack_list(mut i: u8, locals: &mut Stack, list: &mut VecDeque<Value>) -> Vmr
 }
 
 
+#[allow(unused)]
 fn debug_print_stack(ops: &Stack, lcs: &Stack, pc: &usize, inst: Bytecode) {
     debug_println!("operds({})={}\nlocals({})={}\n-------- pc = {}, nbt = {:?}", 
     ops.len(), &ops.print_stack(), lcs.len(), &lcs.print_stack(), 

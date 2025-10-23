@@ -6,7 +6,7 @@ combi_struct!{ AssetAmt,
 
 impl std::fmt::Display for AssetAmt {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f,"({}:{})", self.serial, self.amount)
+        write!(f,"{{{}:{}}}", self.serial, self.amount)
     }
 }
 
@@ -27,16 +27,16 @@ impl std::cmp::PartialOrd for AssetAmt {
 macro_rules! checked_opt {
     ($name : ident) => {
         pub fn $name(&self, other: &Self) -> Ret<Self> {
-            let err = errf!("cannot do {} with asset {} and {}", stringify!($name), self, other);
+            let err = ||errf!("cannot do {} with asset {} and {}", stringify!($name), self, other);
             if *self.serial != *other.serial {
-                return err
+                return err()
             }
             match (*self.amount).$name(*other.amount) {
                 Some(v) => Self{
                     serial: self.serial,
                     amount: Fold64::from(v)?,
                 }.checked(),
-                _ => err,
+                _ => err(),
             }
         }
         
@@ -49,6 +49,9 @@ impl AssetAmt {
     checked_opt!{ checked_sub }
 
     pub fn checked(self) -> Ret<Self> {
+        if *self.serial == 0 {
+            return errf!("AssetAmt.serial cannot be zero")
+        }
         Ok(Self{
             serial: self.serial.checked()?,
             amount: self.amount.checked()?,

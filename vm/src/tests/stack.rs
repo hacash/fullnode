@@ -70,10 +70,26 @@ pub fn stack_test_1() {
 
 
     let res = execute_test_maincall(65535, _codes);
-    debug_println!("res: {:?}", res)
+    debug_println!("res: {:?}", res);
+
+
+
+
 }
 
 /*
 
 
 */
+
+
+
+#[allow(unused)]
+pub fn stack_test_2() {
+
+    let a1 = AssetAmt::from(1,  230_58430092_13693950).unwrap();
+    let a2 = AssetAmt::from(1, 20).unwrap();
+
+    debug_println!("{:?}", a1.checked_sub(&a2).unwrap());
+
+}
