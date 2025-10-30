@@ -137,11 +137,17 @@ impl Stack {
     #[inline(always)]
     pub fn dupn(&mut self, n: u8) -> VmrtErr {
         let n = n as usize;
-        let idx = self.datas.len() as isize - (n as isize) - 1;
-        if idx < 0 {
-            return itr_err_code!(OutOfStack)
+        if n < 2 {
+            return itr_err_fmt!(StackError, "inst dupn param cannot less than 2")
         }
-        self.push(self.datas[idx as usize].clone())?;
+        let m = self.datas.len();
+        if n > m {
+            return itr_err_fmt!(StackError, "dupn length overflow")
+        }
+        let s = m - n;
+        for i in s .. m {
+            self.push(self.datas[i].clone())?;
+        }
         Ok(())
     }
 

@@ -93,7 +93,7 @@ curl "http://127.0.0.1:8088/submit/transaction?hexbody=true" -X POST -d "030068f
         .syst(Abst::new(PermitHACD).ircode(permit_hacd).unwrap())
         .syst(Abst::new(PermitAsset).ircode(permit_asset).unwrap())
         ;
-        // println!("\n{} bytes:\n{}\n\n", contract.serialize().len(), contract.serialize().to_hex());
+        println!("\n{} bytes:\n{}\n\n", contract.serialize().len(), contract.serialize().to_hex());
         contract.testnet_deploy_print("8:244");    
 
 

@@ -13,9 +13,7 @@ pub fn convert_and_check(cap: &SpaceCap, ctype: CodeType, codes: &[u8]) -> VmrtE
 }
 
 
-
 pub fn verify_bytecodes(codes: &[u8]) -> VmrtErr {
-    use Bytecode::*;
     // check empty
     let cl = codes.len();
     if cl <= 0 {
@@ -25,13 +23,8 @@ pub fn verify_bytecodes(codes: &[u8]) -> VmrtErr {
         return itr_err_code!(CodeTooLong)
     }
     // check end
-    let tail: Bytecode = std_mem_transmute!(codes[cl - 1]);
-    if let RET | END | ERR | ABT |
-        CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL // CALLDYN
-    = tail {} else {
-        return itr_err_code!(CodeNotWithEnd)
-    };
-    // check valid
+    check_tail_end(codes[cl - 1])?;
+    // check inst valid
     let (instable, jumpdests) = verify_valid_instruction(codes)?;
     // check jump dests
     verify_jump_dests(&instable, &jumpdests)?;
@@ -40,24 +33,36 @@ pub fn verify_bytecodes(codes: &[u8]) -> VmrtErr {
 }
 
 
+fn check_tail_end(c: u8) -> VmrtErr {
+    let tail: Bytecode = std_mem_transmute!(c);
+    if let RET | END | ERR | ABT |
+        CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL // CALLDYN
+    = tail {
+        return Ok(())
+    };
+    // error
+    itr_err_code!(CodeNotWithEnd)
+}
+
 
 /*
 
 */   
 fn verify_valid_instruction(codes: &[u8]) -> VmrtRes<(Vec<u8>, Vec<isize>)> {
     // use Bytecode::*;
-    let cdlen = codes.len();
+    let cdlen = codes.len(); // end/ret/err/abt in tail
     let mut instable = vec![0u8; cdlen];
     let mut jumpdest = vec![];
     let mut i = 0;
+    let mut cur = 0u8;
     while i < cdlen {
-        let inst: Bytecode = std_mem_transmute!(codes[i]);
+        cur = codes[i];
+        let inst: Bytecode = std_mem_transmute!(cur);
         let meta = inst.metadata();
         if ! meta.valid {
             return itr_err_fmt!(InstInvalid, "{}", inst as u8)
         }
         instable[i] = 1; // yes is valid instruction
-        i += 1;
         macro_rules! pu8 { () => {{
             if i >= cdlen { return itr_err_code!(InstParamsErr) }
             codes[i as usize]
@@ -76,6 +81,7 @@ fn verify_valid_instruction(codes: &[u8]) -> VmrtRes<(Vec<u8>, Vec<isize>)> {
         macro_rules! adddest { ($jt:expr) => {{
             jumpdest.push($jt)
         }}}
+        i += meta.param as usize;
         match inst {
             // push buf
             PBUF  => i += ( pu8!()) as usize,
@@ -86,9 +92,13 @@ fn verify_valid_instruction(codes: &[u8]) -> VmrtRes<(Vec<u8>, Vec<isize>)> {
             JMPSL | BRSL | BRSLN => adddest!(i as isize + pi16!() as isize + 2),
             _ => {}
         };
-        i += meta.param as usize;
+        if i >= cdlen {
+            return itr_err_code!(InstParamsErr)
+        }
         // next
+        i += 1;
     }
+    check_tail_end(cur)?; // check end
     // finish orr
     Ok((instable, jumpdest))
 }
@@ -97,10 +107,10 @@ fn verify_valid_instruction(codes: &[u8]) -> VmrtRes<(Vec<u8>, Vec<isize>)> {
 // 
 fn verify_jump_dests(instable: &[u8], jumpdests: &[isize]) -> VmrtErr {
     let itlen = instable.len();
-    let right = itlen - 1;
+    let right = itlen as isize - 1;
     for jp in jumpdests {
         let j = *jp;
-        if j < 0 || j > right as isize {
+        if j < 0 || j > right {
             return itr_err_code!(JumpOverflow)   
         }
         if 0 == instable[j as usize] {

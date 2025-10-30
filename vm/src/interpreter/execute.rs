@@ -311,7 +311,6 @@ pub fn execute_code(
             LDROP  => ops.peek()?.dropleft( pu8_as_u16!())?,
             RDROP  => ops.peek()?.dropright(pu8_as_u16!())?,
             SIZE   => { *ops.peek()? = U16(ops.peek()?.can_get_size()?) }
-
             // compo
             NEWLIST  => ops.push(Compo(CompoItem::new_list()))?,
             NEWMAP   => ops.push(Compo(CompoItem::new_map()))?,

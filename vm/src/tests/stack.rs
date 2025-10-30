@@ -65,7 +65,7 @@ pub fn stack_test_1() {
         HREADUL 0b00100000 0b00000001 END
     };
     let _codes = build_codes!{
-        P2 PNIL NOT END
+        P0 P1 P2 P3 DUPN 2 END
     };
 
 

@@ -356,12 +356,7 @@ impl Syntax {
         Ok(Box::new(IRNodeDouble{
             hrtv: true, 
             inst: UPLIST,
-            subx: Box::new(IRNodeParam1{
-                hrtv: true, 
-                inst: PICK,
-                para: 0,
-                text: s!("")
-            }),
+            subx: Self::push_inst(DUP),
             suby: Self::push_inst(P0),
         }))
     }

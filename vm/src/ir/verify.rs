@@ -1,5 +1,5 @@
 
-
+/* 
 pub fn _codes_verify(codes: &[u8]) -> VmrtErr {
     let mut pc: isize = 0;
     let max = codes.len() as isize;
@@ -52,3 +52,5 @@ pub fn _codes_verify(codes: &[u8]) -> VmrtErr {
     }
     Ok(())
 }
+
+*/
