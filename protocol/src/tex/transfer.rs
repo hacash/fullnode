@@ -27,11 +27,15 @@ impl $class {
 impl CellExec for $class {
 
     fn execute(&self, ctx: &mut dyn Context, taradr: &Address) -> Rerr {
-        let amt = Amount::zhu(self.haczhu.uint());
+        let zhu = self.haczhu.uint();
+        if zhu > 100000000_00000000 {
+            return errf!("cell zhu too big")
+        }
+        let amt = Amount::zhu(zhu);
         $zhu_op(ctx, taradr, &amt)?;
         // tex add
         let tex = ctx.tex_state();
-        let Some(zhures) = tex.zhu.$state_op(self.haczhu.uint() as i64) else {
+        let Some(zhures) = tex.zhu.$state_op(zhu as i64) else {
             return errf!("cell state coin zhu overflow")
         };
         tex.zhu = zhures;
@@ -50,8 +54,8 @@ impl TexCell for $class {}
 
 
 
-define_cell_trs_zhu!{ 1, CellTrsZhuIn,  hac_add, checked_sub } 
-define_cell_trs_zhu!{ 2, CellTrsZhuOut, hac_sub, checked_add } 
+define_cell_trs_zhu!{ 1, CellTrsZhuPay, hac_sub, checked_add } 
+define_cell_trs_zhu!{ 2, CellTrsZhuGet, hac_add, checked_sub } 
 
 
 
@@ -108,8 +112,8 @@ impl TexCell for $class {}
 
 
 
-define_cell_trs_sat!{ 3, CellTrsSatIn,  sat_add, checked_sub } 
-define_cell_trs_sat!{ 4, CellTrsSatOut, sat_sub, checked_add } 
+define_cell_trs_sat!{ 3, CellTrsSatPay, sat_sub, checked_add } 
+define_cell_trs_sat!{ 4, CellTrsSatGet, sat_add, checked_sub } 
 
 
 
@@ -117,48 +121,14 @@ define_cell_trs_sat!{ 4, CellTrsSatOut, sat_sub, checked_add }
 /*****************************************************/
 
 
-
-combi_struct!{ CellTrsDiaIn,
-    cellid: Uint1
-    dianum: DiamondNumber
-}
-
-impl CellTrsDiaIn {
-    
-    pub const CID: u8 = 5;
-
-    pub fn new(dianum: DiamondNumber) -> Self {
-        Self {
-            cellid: Uint1::from(Self::CID),
-            dianum,
-        }
-    }
-}
-
-
-
-impl CellExec for CellTrsDiaIn {
-
-    fn execute(&self, ctx: &mut dyn Context, taradr: &Address) -> Rerr {
-        // tex add
-        let tex = ctx.tex_state();
-        tex.record_diamond_in(taradr, self.dianum.uint() as usize)
-    }
-}
-
-
-impl TexCell for CellTrsDiaIn {}
-
-
-
-combi_struct!{ CellTrsDiaOut,
+combi_struct!{ CellTrsDiaPay,
     cellid: Uint1
     diamonds: DiamondNameListMax200
 }
 
-impl CellTrsDiaOut {
+impl CellTrsDiaPay {
     
-    pub const CID: u8 = 6;
+    pub const CID: u8 = 5;
 
     pub fn new(diamonds: DiamondNameListMax200) -> Self {
         Self {
@@ -170,23 +140,53 @@ impl CellTrsDiaOut {
 
 
 
-impl CellExec for CellTrsDiaOut {
+impl CellExec for CellTrsDiaPay {
 
     fn execute(&self, ctx: &mut dyn Context, taradr: &Address) -> Rerr {
-        let dn = self.diamonds.check()?;
-        let sta = ctx.clone_mut().state();
-        let state = &mut CoreState::wrap(sta);
-        let dian = DiamondNumber::from_usize(dn)?;
-        let dlist = self.diamonds.clone();
-        hacd_transfer(state, taradr, &SETTLEMENT_ADDR, &dian, &dlist)?;
+        self.diamonds.check()?;
+        do_diamonds_transfer(&self.diamonds, taradr, &SETTLEMENT_ADDR, ctx)?;
         // tex add
         let tex = ctx.tex_state();
-        tex.record_diamond_out(self.diamonds.clone())
+        tex.record_diamond_pay(self.diamonds.clone())
     }
 }
 
 
-impl TexCell for CellTrsDiaOut {}
+impl TexCell for CellTrsDiaPay {}
+
+
+
+
+combi_struct!{ CellTrsDiaGet,
+    cellid: Uint1
+    dianum: DiamondNumber
+}
+
+impl CellTrsDiaGet {
+    
+    pub const CID: u8 = 6;
+
+    pub fn new(dianum: DiamondNumber) -> Self {
+        Self {
+            cellid: Uint1::from(Self::CID),
+            dianum,
+        }
+    }
+}
+
+
+
+impl CellExec for CellTrsDiaGet {
+
+    fn execute(&self, ctx: &mut dyn Context, taradr: &Address) -> Rerr {
+        // tex add
+        let tex = ctx.tex_state();
+        tex.record_diamond_get(taradr, self.dianum.uint() as usize)
+    }
+}
+
+
+impl TexCell for CellTrsDiaGet {}
 
 
 
@@ -246,7 +246,7 @@ impl TexCell for $class {}
 
 
 
-define_cell_trs_asset!{ 7, CellTrsAssetIn,  asset_add, checked_sub } 
-define_cell_trs_asset!{ 8, CellTrsAssetOut, asset_sub, checked_add } 
+define_cell_trs_asset!{ 7, CellTrsAssetPay, asset_sub, checked_add } 
+define_cell_trs_asset!{ 8, CellTrsAssetGet, asset_add, checked_sub } 
 
 

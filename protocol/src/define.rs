@@ -131,11 +131,15 @@ pub struct TexState {
 
 impl TexState {
 
-    pub fn record_diamond_out(&mut self, dias: DiamondNameListMax200) -> Rerr {
+    pub fn record_diamond_pay(&mut self, dias: DiamondNameListMax200) -> Rerr {
+        let Some(newdia) = self.dia.checked_add(dias.length() as i32) else {
+            return errf!("cell state diamond record overflow")
+        };
+        self.dia = newdia;
         self.diamonds.checked_append(dias.into_list())
     }
     
-    pub fn record_diamond_in(&mut self, addr: &Address, num: usize) -> Rerr {
+    pub fn record_diamond_get(&mut self, addr: &Address, num: usize) -> Rerr {
         if num > 200 {
             return errf!("Tex state diamond trs num cannot over 200")
         }

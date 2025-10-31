@@ -16,8 +16,9 @@ fn do_initialize(db: &mut dyn State) -> Rerr {
     // just for test develop
     #[cfg(debug_assertions)] 
     { 
-        println!("\n[Debug Mint] 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9 => 1000000HAC + 5000BTC + 360HACD");
-	    let addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
+        let tadr = "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9";
+        println!("\n[Debug Mint] {} => 1000000HAC + 5000BTC + 360HACD", tadr);
+	    let addr = Address::from_readable(tadr).unwrap();
 	    let amt = Amount::small(1, 254); // 1000000 HAC
         let mut bls = Balance::hac(amt); 
         bls.satoshi = Fold64::from(500000000000)?; // 500 BTC

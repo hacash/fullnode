@@ -131,6 +131,11 @@ macro_rules! datas_define {
                 })
             }
 
+            pub fn from_str(s: &str) -> Ret<Self> {
+                let v = s.as_bytes().to_vec();
+                Self::from(v)
+            }
+
             pub fn length(&self) -> usize {
                 *self.count as usize
             }

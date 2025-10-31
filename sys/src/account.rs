@@ -20,11 +20,12 @@ pub struct Account {
 
 impl Account {
     pub fn check_addr(&self, addr: &[u8]) -> Rerr {
-        match &self.address != addr {
-            true => Ok(()),
-            false => errf!("Account check failed, need {} but got 0x{}", 
-                self.address_readable, Self::to_base58check(addr))
+        if self.address == *addr {
+            return Ok(())
         }
+        // not match
+        errf!("Account check failed, need {} but got {}", 
+            self.address_readable, Self::to_base58check(addr))
     }
     pub fn secret_key(&self) -> &SecretKey {
         &self.secret_key

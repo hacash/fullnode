@@ -1,6 +1,6 @@
 
 
-pub const ASSET_ALIVE_HEIGHT: u64 = 600000;
+pub const ASSET_ALIVE_HEIGHT: u64 = 700000;
 
 
 #[allow(unused)]
@@ -11,7 +11,7 @@ fn check_alive_blk_hei(ctx: &mut dyn Context) -> Ret<(u64, u64)> {
     let chei = ctx.env().block.height;
     let is_mainnet = ctx.env().chain.id==0 && chei > ASSET_ALIVE_HEIGHT;
     let alive_hei: u64 = maybe!(is_mainnet, ASSET_ALIVE_HEIGHT, 0);
-    let minsri:    u64 = maybe!(is_mainnet, 1025, 0);
+    let minsri:    u64 = maybe!(is_mainnet, 1025, 5);
     Ok((alive_hei, minsri))
 }
 

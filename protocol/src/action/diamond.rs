@@ -79,7 +79,7 @@ action_define!{ DiaFromTrs, 8,
 /**************************/
 
 
-fn do_diamonds_transfer(diamonds: &DiamondNameListMax200, from: &Address, to: &Address, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
+pub fn do_diamonds_transfer(diamonds: &DiamondNameListMax200, from: &Address, to: &Address, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     // check
     let dianum = diamonds.check()?;
     let isdf = ctx.env().chain.diamond_form;
