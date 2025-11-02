@@ -20,6 +20,24 @@ mod deploy {
     use vm::contract::*;
 
     #[test]
+    fn deploy_update_2() {
+
+        let _cadr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
+
+        let contract = Contract::new()
+        .func(Func::new("f1").public().fitsh(" return 1 ").unwrap())
+        .func(Func::new("f2").public().fitsh(" return 2 ").unwrap());
+        contract.testnet_deploy_print("8:244");  
+
+        let contract = Contract::new()  
+        .syst(Abst::new(AbstCall::Change).bytecode(build_codes!(P1 RET)).unwrap())
+        .func(Func::new("f4").public().fitsh(" return 4 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+    }
+
+
+    #[test]
     fn deploy_update() {
 
 
@@ -31,14 +49,38 @@ mod deploy {
 
         let contract = Contract::new()
         .syst(Abst::new(AbstCall::Append).bytecode(build_codes!(P0 RET)).unwrap())
-        .syst(Abst::new(AbstCall::Change).bytecode(build_codes!(P1 RET)).unwrap())
+        .syst(Abst::new(AbstCall::Change).bytecode(build_codes!(P0 RET)).unwrap())
         .func(Func::new("f1").public().fitsh(" return 1 ").unwrap())
         .func(Func::new("f2").public().fitsh(" return 2 ").unwrap());
         contract.testnet_deploy_print("8:244");    
 
         let contract = Contract::new()        
-        .func(Func::new("f2").public().fitsh(" return 21 ").unwrap());
+        .func(Func::new("f2").public().fitsh(" return 2 ").unwrap())
+        .func(Func::new("f3").public().fitsh(" return 3 ").unwrap());
         contract.testnet_update_print(_cadr, "8:244");
+
+        let contract = Contract::new()  
+        .syst(Abst::new(AbstCall::Append).bytecode(build_codes!(P1 RET)).unwrap())
+        .func(Func::new("f4").public().fitsh(" return 4 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+        let contract = Contract::new()  
+        .func(Func::new("f5").public().fitsh(" return 5 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+        let contract = Contract::new()  
+        .func(Func::new("f4").public().fitsh(" return 41 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+        let contract = Contract::new()  
+        .syst(Abst::new(AbstCall::Change).bytecode(build_codes!(P1 RET)).unwrap())
+        .func(Func::new("f6").public().fitsh(" return 6 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+        let contract = Contract::new()  
+        .func(Func::new("f4").public().fitsh(" return 42 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
 
     }
 

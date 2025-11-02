@@ -53,7 +53,7 @@ impl Heap {
         let mut gas = 0;
         for s in oldseg+1 .. oldseg+seg+1 {
             gas += 2i64.pow(s as u32);
-            debug_println!("gas += {}", 2i64.pow(s as u32));
+            // debug_println!("gas += {}", 2i64.pow(s as u32));
         } 
         Ok(gas)
     }

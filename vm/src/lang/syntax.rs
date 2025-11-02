@@ -351,14 +351,30 @@ impl Syntax {
                 params += 1;
             } 
         }
-        // unpack list
+        // match
         use Bytecode::*;
-        Ok(Box::new(IRNodeDouble{
-            hrtv: true, 
-            inst: UPLIST,
-            subx: Self::push_inst(DUP),
-            suby: Self::push_inst(P0),
-        }))
+        Ok(match params {
+            0 => return errf!("param must need at least one"),
+            // var num = pick(0)
+            1 => Box::new(IRNodeParam1Single{
+                hrtv: true,
+                inst: PUT,
+                para: 0,
+                subx: Box::new(IRNodeParam1{
+                    hrtv: true,
+                    inst: PICK,
+                    para: 0,
+                    text: s!("")
+                })
+            }),
+            // unpack list
+            _ => Box::new(IRNodeDouble{
+                hrtv: true, 
+                inst: UPLIST,
+                subx: Self::push_inst(DUP),
+                suby: Self::push_inst(P0),
+            })
+        })
     }
 
     pub fn item_identifier(&mut self, id: String) -> Ret<Box<dyn IRNode>> {

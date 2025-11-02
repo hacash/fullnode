@@ -49,7 +49,7 @@ macro_rules! func_list_merge_define {
 			for i in 0..self.length() {
 				if list[i].sign == func.sign {
 					self.replace(i, func)?;
-					return Ok(false)
+					return Ok(true)
 				}
 			}
 			// push
