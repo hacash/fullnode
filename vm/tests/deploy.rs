@@ -20,11 +20,25 @@ mod deploy {
     use vm::contract::*;
 
     #[test]
-    fn verify_codes() {
+    fn deploy_update() {
 
-        verify_bytecodes(&build_codes!(
-            PU8 1 JMPL 0 8 JMPL 0 2 RET
-        )).unwrap()
+
+        let irnode = lang_to_irnode(" return 1 ").unwrap();
+        println!("{:?}", irnode);
+
+
+        let _cadr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
+
+        let contract = Contract::new()
+        .syst(Abst::new(AbstCall::Append).bytecode(build_codes!(P0 RET)).unwrap())
+        .syst(Abst::new(AbstCall::Change).bytecode(build_codes!(P1 RET)).unwrap())
+        .func(Func::new("f1").public().fitsh(" return 1 ").unwrap())
+        .func(Func::new("f2").public().fitsh(" return 2 ").unwrap());
+        contract.testnet_deploy_print("8:244");    
+
+        let contract = Contract::new()        
+        .func(Func::new("f2").public().fitsh(" return 21 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
 
     }
 

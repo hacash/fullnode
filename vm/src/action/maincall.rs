@@ -16,8 +16,8 @@ action_define!{ContractMainCall, 124,
         }
         // check codes
         let cap = SpaceCap::new(ctx.env().block.height);
-        let cty = map_itr_err!(CodeType::parse(self.ctype.to_uint()))?;
-        map_itr_err!(convert_and_check(&cap, cty, &self.codes))?;
+        let cty = CodeType::parse(self.ctype.to_uint())?;
+        convert_and_check(&cap, cty, &self.codes)?;
         let depth = 0; // main call depth is 0
         setup_vm_run(depth, ctx, CallMode::Main as u8, *self.ctype, &self.codes, Value::Nil)?;
         Ok(vec![])

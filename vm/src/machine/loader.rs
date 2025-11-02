@@ -75,7 +75,7 @@ impl Resoure {
             return itr_err_code!(CallLibOverflow)
         }
         let taradr = librarys.get(libidx).unwrap();
-        map_err_itr!(ContractAddrErr, taradr.check())?; // check must contract addr
+        taradr.check().map_ire(ContractAddrErr)?; // check must contract addr
         let csto = self.load_contract(vmsta, taradr)?;
         Ok((taradr.clone(), csto.userfns.get(&fnsg).map(|f|f.clone())))
     }

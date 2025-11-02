@@ -16,7 +16,7 @@ impl FuncArgvTypes {
     }
 
     pub fn check_output(&self, v: &mut Value) -> VmrtErr {
-        let Some(oty) = map_err_itr!(CallArgvTypeFail, self.output_type())? else {
+        let Some(oty) = self.output_type().map_ire(CallArgvTypeFail)? else {
             return Ok(())
         };
         if let Err(e) = v.checked_param_cast(oty) {
@@ -31,7 +31,7 @@ impl FuncArgvTypes {
         // debug_println!("check_params------");
         let ec = CallArgvTypeFail;
         // let err = |t1, t2| itr_err_fmt!(ec, "need {:?} but got {:?}", t1, t2);
-        let types = map_err_itr!(ec, self.param_types())?;
+        let types = self.param_types().map_ire(ec)?;
         let tn = types.len();
         match tn {
             // do not check

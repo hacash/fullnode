@@ -131,7 +131,7 @@ impl Value {
         let Bytes(buf) = self else {
             never!()
         };
-        let adr = map_err_itr!(CastFail, field::Address::from_bytes(buf))?;
+        let adr = field::Address::from_bytes(buf).map_ire(CastFail)?;
         *self = Address(adr);
         Ok(())
     }
@@ -140,7 +140,7 @@ impl Value {
 
     pub fn cast_to(&mut self, ty: u8) -> VmrtErr {
         use ValueTy::*;
-        let ty = map_err_itr!(CastFail, ValueTy::build(ty))?;
+        let ty = ValueTy::build(ty).map_ire(CastFail)?;
         match ty {
             Bool    => self.cast_bool(),
             U8      => self.cast_u8(),

@@ -111,7 +111,7 @@ impl Value {
                     return err!()
                 }
                 let addr = field::Address::must_vec(stuff);
-                map_err_itr!(CastFail, addr.check_version())?;
+                addr.check_version().map_ire(CastFail)?;
                 Ok(Self::Address(addr))
             },
             _ => err!(),
@@ -121,14 +121,14 @@ impl Value {
 
     pub fn checked_address(&self) -> VmrtRes<field::Address> {
         match self {
-            Bytes(adr) => map_err_itr!(CastParamFail, field::Address::from_bytes(adr)),
+            Bytes(adr) => field::Address::from_bytes(adr).map_ire(CastParamFail),
             _ => itr_err_fmt!(CastParamFail, "cannot cast {:?} to address", self)
         }
     }
 
     pub fn checked_contract_address(&self) -> VmrtRes<ContractAddress> {
         let addr = self.checked_address()?;
-        map_err_itr!(ContractAddrErr, ContractAddress::from_addr(addr))
+        ContractAddress::from_addr(addr).map_ire(ContractAddrErr)
     }
 
     pub fn checked_fnsign(&self) -> VmrtRes<FnSign> {

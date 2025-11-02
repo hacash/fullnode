@@ -17,7 +17,6 @@ macro_rules! define_func_codes {
         }
 
         pub fn ircode(mut self, ircodes: Vec<u8>) -> Ret<Self> {
-            // debug_println!("{}", ircodes.ircode_print(true).unwrap());
             let cds = convert_ir_to_bytecode(&ircodes)?;
             verify_bytecodes(&cds)?;
             self.func.cdty[0] |= CodeType::IRNode as u8;

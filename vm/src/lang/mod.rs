@@ -46,7 +46,7 @@ pub fn lang_to_ircode(langscript: &str) -> Ret<Vec<u8>> {
 
 pub fn lang_to_bytecode(langscript: &str) -> Ret<Vec<u8>> {
     let ir = lang_to_irnode(langscript)?;
-    let codes = map_itr_err!(ir.codegen())?;
+    let codes = ir.codegen()?;
     Ok(codes)
 }
 

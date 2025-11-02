@@ -106,7 +106,7 @@ impl VM for MachineBox {
         let cty: CallMode = std_mem_transmute!(ty);
         let resv = match cty {
             Main => {
-                let cty = map_itr_err!(CodeType::parse(kd))?;
+                let cty = CodeType::parse(kd)?;
                 machine.main_call(exenv, cty, data.to_vec())
             },
             Abst => {
@@ -163,18 +163,19 @@ impl Machine {
 
     pub fn main_call(&mut self, env: &mut ExecEnv, ctype: CodeType, codes: Vec<u8>) -> Ret<Value> {
         let fnobj = FnObj{ ctype, codes, confs: 0, agvty: None};
-        map_itr_err!(self.do_call(env, CallMode::Main, fnobj, None, None))
+        let v = self.do_call(env, CallMode::Main, fnobj, None, None)?;
+        Ok(v)
     }
 
     pub fn abst_call(&mut self, env: &mut ExecEnv, cty: AbstCall, contract_addr: ContractAddress, param: Value) -> Ret<Value> {
         let adr = contract_addr.readable();
-        let Some(fnobj) = map_itr_err!(self.r.load_abstfn(env.sta, &contract_addr, cty))? else {
+        let Some(fnobj) = self.r.load_abstfn(env.sta, &contract_addr, cty)? else {
             // return Ok(Value::Nil) // not find call
             return errf!("abst call {:?} not find in {}", cty, adr) // not find call
         };
         let fnobj = fnobj.as_ref().clone();
         let param =  Some(param);
-        let rv = map_itr_err!(self.do_call(env, CallMode::Abst, fnobj, Some(contract_addr), param))?;
+        let rv = self.do_call(env, CallMode::Abst, fnobj, Some(contract_addr), param)?;
         if rv.check_true() {
             return errf!("call {}.{:?} return error code {}", adr, cty, rv.to_uint())
         }

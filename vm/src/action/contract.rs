@@ -35,7 +35,7 @@ action_define!{ContractDeploy, 122,
         // spend protocol fee
         check_sub_contract_protocol_fee(ctx, &self.protocol_cost)?;
         // check
-        map_itr_err!(self.contract.check(hei))?;
+        self.contract.check(hei)?;
         let accf  = AbstCall::Construct;
         let hvaccf = self.contract.have_abst_call(accf);
         // save the contract
@@ -87,8 +87,8 @@ action_define!{ContractUpdate, 123,
         // spend protocol fee
         check_sub_contract_protocol_fee(ctx, &self.protocol_cost)?;
         // merge and check
-		map_itr_err!(self.contract.check(hei))?;
-        let is_edit = map_itr_err!(contract.merge(&self.contract, hei))?;
+		self.contract.check(hei)?;
+        let is_edit = contract.merge(&self.contract, hei)?;
         let depth = 1; // sys call depth is 1
         let cty = CallMode::Abst as u8;
         let sys = maybe!(is_edit, Change, Append) as u8; // Upgrade or Append

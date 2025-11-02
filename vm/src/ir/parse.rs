@@ -121,15 +121,15 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
         // BYTECODE LIST BLOCK IF WHILE
         IRBYTECODE => {
             let mut bts = IRNodeBytecodes::default();
-            let p = itrbuf!(2);
-            let n = u16::from_be_bytes(p.try_into().unwrap());
+            let p = itrp2!();
+            let n = u16::from_be_bytes(p);
             bts.codes = itrbuf!(n as usize);
             Box::new(bts)
         }
         IRLIST => {
             let mut list = IRNodeList::new();
-            let p = itrbuf!(2);
-            let n = u16::from_be_bytes(p.try_into().unwrap());
+            let p = itrp2!();
+            let n = u16::from_be_bytes(p);
             let ndp = depth + 1;
             for _i in 0..n {
                 list.push( subdph!(ndp, false) );
@@ -138,8 +138,8 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
         }
         IRBLOCK => {
             let mut block = IRNodeBlock::new();
-            let p = itrbuf!(2);
-            let n = u16::from_be_bytes(p.try_into().unwrap());
+            let p = itrp2!();
+            let n = u16::from_be_bytes(p);
             let ndp = depth + 1;
             for _i in 0..n {
                 block.push( subdph!(ndp, false) );

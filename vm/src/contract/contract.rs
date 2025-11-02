@@ -44,5 +44,15 @@ impl Contract {
         curl_trs_2(vec![Box::new(act)], fee);
     } 
 
+    pub fn testnet_update_print(&self, cadr: Address, fee: &str) {
+        let txfee = Amount::from(fee).unwrap();
+        let mut act = ContractUpdate::new();
+        act.contract = self.ctrt.clone();
+        act.address = cadr;
+        act.protocol_cost = txfee.dist_mul(CONTRACT_STORE_FEE_MUL as u128).unwrap();
+        // print
+        curl_trs_2(vec![Box::new(act)], fee);
+    } 
+
 
 }

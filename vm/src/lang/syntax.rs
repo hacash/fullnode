@@ -745,7 +745,9 @@ impl Syntax {
 
 
     pub fn parse(mut self) -> Ret<IRNodeBlock> {
+        // for local alloc
         self.irnode.push(Self::empty());
+        // bodys
         while let Some(item) = self.item_may()? {
             if let Some(..) = item.as_any().downcast_ref::<IRNodeEmpty>() {} else {
                 self.irnode.push(item);
@@ -757,6 +759,8 @@ impl Syntax {
                 hrtv: false, inst: Bytecode::ALLOC, para: *m+1, text: s!("")
             });
             self.irnode.subs[0] = allocs;
+        }else{
+            self.irnode.subs.remove(0); // no local var
         }
         Ok(self.irnode)
     }
