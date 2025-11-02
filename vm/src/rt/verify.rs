@@ -63,6 +63,7 @@ fn verify_valid_instruction(codes: &[u8]) -> VmrtRes<(Vec<u8>, Vec<isize>)> {
             return itr_err_fmt!(InstInvalid, "{}", inst as u8)
         }
         instable[i] = 1; // yes is valid instruction
+        i += 1;
         macro_rules! pu8 { () => {{
             if i >= cdlen { return itr_err_code!(InstParamsErr) }
             codes[i as usize]
@@ -81,7 +82,6 @@ fn verify_valid_instruction(codes: &[u8]) -> VmrtRes<(Vec<u8>, Vec<isize>)> {
         macro_rules! adddest { ($jt:expr) => {{
             jumpdest.push($jt)
         }}}
-        i += meta.param as usize;
         match inst {
             // push buf
             PBUF  => i += ( pu8!()) as usize,
@@ -92,11 +92,11 @@ fn verify_valid_instruction(codes: &[u8]) -> VmrtRes<(Vec<u8>, Vec<isize>)> {
             JMPSL | BRSL | BRSLN => adddest!(i as isize + pi16!() as isize + 2),
             _ => {}
         };
-        if i >= cdlen {
+        i += meta.param as usize;
+        if i > cdlen {            
             return itr_err_code!(InstParamsErr)
         }
         // next
-        i += 1;
     }
     check_tail_end(cur)?; // check end
     // finish orr

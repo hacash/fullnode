@@ -106,6 +106,13 @@ impl ToString for ItrErr {
     }
 }
 
+impl From<ItrErr> for Error {
+    fn from(e: ItrErr) -> Error {
+        e.to_string()
+    }
+}
+
+
 
 impl ItrErr {
     pub fn new(n: ItrErrCode, tip: &str) -> ItrErr {

@@ -25,3 +25,13 @@ action_define!{ContractMainCall, 124,
 }
 
 
+impl ContractMainCall {
+    pub fn from_bytecode(codes: Vec<u8>) -> Ret<Self> {
+        let mut s = Self::new();
+        s.ctype = Uint1::from(CodeType::Bytecode as u8);
+        s.codes = BytesW2::from(codes)?;
+        Ok(s)
+    }
+}
+
+

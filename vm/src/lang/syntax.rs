@@ -657,7 +657,7 @@ impl Syntax {
                 Self::empty()
             }
             */
-            Keyword(Lib) => { // lib AnySwap = VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa(1)
+            Keyword(Lib) => { // lib AnySwap = 1 : VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
                 let e = errf!("lib statement format error");
                 nxt = next!();
                 let Identifier(id) = nxt else { return e };

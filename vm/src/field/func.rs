@@ -133,7 +133,6 @@ impl Parse for FuncArgvTypes {
 impl Serialize for FuncArgvTypes {
     fn serialize(&self) -> Vec<u8> {
         let z = self.def_size();
-        println!("FuncArgvTypes Serialize z = {}", z);
         let nvs = self.typnum.serialize();
         vec![nvs,
             self.define[0..z].to_vec(),

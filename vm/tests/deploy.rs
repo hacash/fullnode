@@ -92,9 +92,9 @@ mod deploy {
         .argv(vec![0])
         .syst(Abst::new(Construct).bytecode(build_codes!(
             CU8 RET
-        )))
-        .syst(Abst::new(PermitHAC).bytecode(permit_hac))
-        .syst(Abst::new(PayableHAC).bytecode(payable_hac_codes))
+        )).unwrap())
+        .syst(Abst::new(PermitHAC).bytecode(permit_hac).unwrap())
+        .syst(Abst::new(PayableHAC).bytecode(payable_hac_codes).unwrap())
         .func(Func::new("recursion").fitsh(recursion_fnstr).unwrap())
         ;
         // println!("\n\n{}\n\n", contract.serialize().to_hex());
