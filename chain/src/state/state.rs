@@ -44,7 +44,6 @@ impl State for StateInst {
     }
     
     fn write_to_disk(&self) {
-        // debug_println!("write_to_disk !!!!!!");
         self.disk.write(&self.mem); // must
     }
 

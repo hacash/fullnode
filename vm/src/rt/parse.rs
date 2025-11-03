@@ -57,10 +57,7 @@ impl BytecodePrint for Vec<u8> {
             }else{
                 res.push_str(&format!("{:?} ", inst));
             }
-            // debug_println!("i ------------------- {:?}", i);
             if ! meta.valid {
-                // debug_println!("{}", res);
-                // debug_println!("{:?}, {}, {}, {}, {}, {}", self, self[i-2], self[i-1], self[i], self[i+1], self[i+2], );
                 return itr_err_fmt!(InstInvalid, "bytecode_print err of inst {}", byte)
             }
             i += 1;

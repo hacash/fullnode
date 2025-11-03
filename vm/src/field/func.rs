@@ -28,7 +28,6 @@ impl FuncArgvTypes {
 
 
     pub fn check_params(&self, v: &mut Value) -> VmrtErr {
-        // debug_println!("check_params------");
         let ec = CallArgvTypeFail;
         // let err = |t1, t2| itr_err_fmt!(ec, "need {:?} but got {:?}", t1, t2);
         let types = self.param_types().map_ire(ec)?;
@@ -105,7 +104,6 @@ impl FuncArgvTypes {
         let mut tys = vec![ValueTy::Nil; n];
         let z = n / 2 + 1;
         if z > self.define.len() {
-            // debug_println!("--------- {} {} {:?}", n, z, self.define);
             return errf!("FuncArgvTypes to bytes error")
         }
         for i in 0..n {

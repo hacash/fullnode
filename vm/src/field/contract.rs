@@ -142,9 +142,8 @@ impl ContractSto {
 		// append inherits and librarys
 		self.inherits.append(src.inherits.lists.clone()).unwrap();
 		self.librarys.append(src.librarys.lists.clone()).unwrap();
-		// merge abst call
+		// merge abstcall & usrfun 
 		let edit1 = self.abstcalls.check_merge(&src.abstcalls)?;
-		// merge usrfun call
 		let edit2 = self.userfuncs.check_merge(&src.userfuncs)?;
 		// check size
 		if self.size() > cap.max_contract_size {

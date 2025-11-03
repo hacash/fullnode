@@ -86,6 +86,17 @@ impl Tokenizer<'_> {
         })
     }
 
+    fn finish(&mut self) -> Rerr {
+        let tk = &mut self.token;
+        let tks = &mut self.tokens;
+        // next
+        if tk.len() > 0 {
+            tks.push(Self::conv(tk)?);
+            tk.clear();
+        }
+        Ok(())
+    }
+
     fn push(&mut self, t: TokenType, c: char) -> Rerr {
         let tk = &mut self.token;
         let tks = &mut self.tokens;
@@ -212,6 +223,7 @@ impl Tokenizer<'_> {
             // next
             self.idx += 1;
         }
+        self.finish()?;
         Ok(self.tokens)
     } 
 

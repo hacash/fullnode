@@ -15,44 +15,12 @@ pub fn sandbox_call(ctx: &mut dyn Context, contract: ContractAddress, funcname: 
         (*txinfo).swap_addrs(&mut vec![mainaddr, contract.into_addr()]);
     }
 
-    // let mut pc: usize = 0;
-    // let mut gas_limit: i64 = 65535; // 2000
-
-    // let addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
-    // let cadr = contract;
-    
-
     let cap = SpaceCap::new(hei);
-    // let param_len = param.len();
-    // if param_len > cap.max_value_size {
-    //     return errf!("call param size overflow")
-    // }
-
     let gas_limit = cap.max_gas_of_tx as i64;
     let gas = &mut gas_limit.clone();
 
     let mut codes: Vec<u8> = vec![];
     parse_push_params(&mut codes, params)?;
-
-    /* 
-    // push param to operand stack
-    if param_len > 0 {
-        codes.push(PBUFL as u8);
-        codes.append(&mut (param_len as u16).to_be_bytes().to_vec());
-        codes.append(&mut param);
-    }else {
-        codes.push(PNBUF as u8);
-    }
-    // test 
-    
-    let mut param = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap().to_vec();
-    codes.push(PBUF as u8);
-    codes.push(param.len() as u8);
-    codes.append(&mut param);
-    codes.push(CTO as u8);
-    codes.push(ValueTy::Addr as u8);
-
-    */
 
     // call contract
     let fnsg = calc_func_sign(&funcname);
@@ -60,8 +28,6 @@ pub fn sandbox_call(ctx: &mut dyn Context, contract: ContractAddress, funcname: 
     codes.push(1); // lib idx
     codes.append(&mut fnsg.to_vec());
     codes.push(RET as u8); // return the value
-
-    // debug_println!("sandbox call codes: {}", codes.bytecode_print(true).unwrap_or_default());
 
     // do callparam_len
     unsafe {
@@ -104,7 +70,6 @@ fn parse_push_params(codes: &mut Vec<u8>, pms: &str) -> Rerr {
 
 
 fn parse_one_param(codes: &mut Vec<u8>, t: &str, v: &str) -> usize {
-    // debug_println!("parse_one_param {}, {}", t, v);
     use Bytecode::*;
     use ValueTy::*;
     macro_rules! push { ( $( $a: expr ),+) => { $( codes.push($a as u8) );+ } }

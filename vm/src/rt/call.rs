@@ -96,9 +96,6 @@ pub struct FnObj {
 impl FnObj {
     
     pub fn check_conf(&self, cnf: FnConf) -> bool {
-        // let x = self.confs;
-        // let y = cnf as u8;
-        // debug_println!("check_conf: x={x:b}, y={y:b}");
         let cnfset = cnf as u8;
         self.confs & cnfset == cnfset
     } 

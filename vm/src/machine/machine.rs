@@ -163,7 +163,8 @@ impl Machine {
 
     pub fn main_call(&mut self, env: &mut ExecEnv, ctype: CodeType, codes: Vec<u8>) -> Ret<Value> {
         let fnobj = FnObj{ ctype, codes, confs: 0, agvty: None};
-        let v = self.do_call(env, CallMode::Main, fnobj, None, None)?;
+        let entry_addr = ContractAddress::new(env.ctx.tx().main());
+        let v = self.do_call(env, CallMode::Main, fnobj, entry_addr, None)?;
         Ok(v)
     }
 
@@ -175,16 +176,16 @@ impl Machine {
         };
         let fnobj = fnobj.as_ref().clone();
         let param =  Some(param);
-        let rv = self.do_call(env, CallMode::Abst, fnobj, Some(contract_addr), param)?;
+        let rv = self.do_call(env, CallMode::Abst, fnobj, contract_addr, param)?;
         if rv.check_true() {
             return errf!("call {}.{:?} return error code {}", adr, cty, rv.to_uint())
         }
         Ok(rv)
     }
 
-    fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, ctxadr: Option<ContractAddress>, param: Option<Value>) -> VmrtRes<Value> {
+    fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, ctxadr: ContractAddress, param: Option<Value>) -> VmrtRes<Value> {
         self.frames.push(CallFrame::new()); // for reclaim
-        let res = self.frames.last_mut().unwrap().start_call(&mut self.r, env, mode, code, ctxadr, param);
+        let res = self.frames.last_mut().unwrap().start_call(&mut self.r, env, mode, code, ctxadr.into(), param);
         self.frames.pop().unwrap().reclaim(&mut self.r); // do reclaim
         res
     }

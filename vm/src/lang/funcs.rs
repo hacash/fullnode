@@ -20,7 +20,6 @@ impl Syntax {
     pub fn must_get_func_argv(&mut self, md: ArgvMode) -> Ret<(usize, Box<dyn IRNode>)> {
         // use Bytecode::*;
         let argvs = self.item_may_block()?.into_vec();
-        // debug_println!("must_get_func_argv: {:?}", argvs);
         let alen = argvs.len();
         let argv = match md {
             ArgvMode::Concat => concat_func_argvs(argvs)?,

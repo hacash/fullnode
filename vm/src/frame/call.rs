@@ -1,7 +1,7 @@
 
 impl CallFrame {
 
-    pub fn start_call(&mut self, r: &mut Resoure, env: &mut ExecEnv, mode: CallMode, code: FnObj, ctxadr: Option<ContractAddress>, param: Option<Value>) -> VmrtRes<Value> {
+    pub fn start_call(&mut self, r: &mut Resoure, env: &mut ExecEnv, mode: CallMode, code: FnObj, entry_addr: ContractAddress, param: Option<Value>) -> VmrtRes<Value> {
         use CallExit::*;
         use CallMode::*;
         // to spend gas
@@ -12,12 +12,8 @@ impl CallFrame {
             Abst => 1,
             _ => never!(),
         };
-        if let Abst = mode {
-            if let Some(adr) = ctxadr {
-                curr_frame.ctxadr = adr.clone();
-                curr_frame.curadr = adr;
-            }
-        }
+        curr_frame.ctxadr = entry_addr.clone();
+        curr_frame.curadr = entry_addr;
         // compile irnode and push func argv ...
         curr_frame.prepare(mode, code, param)?;
         // exec codes
@@ -56,7 +52,6 @@ impl CallFrame {
                         Main => Some(env.ctx.env().tx.addrs.iter().map(|a|ContractAddress::new(*a)).collect()),
                         _ => None,
                     };
-                    // debug_println!("-------  Call(fnptr) {:?}", adrlist);
                     let (chgsrcadr, fnobj) = r.load_must_call(env.sta, fnptr.clone(), 
                         ctxadr, curadr, adrlist)?;
                     let fnobj = fnobj.as_ref().clone();

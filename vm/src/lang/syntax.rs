@@ -147,7 +147,6 @@ impl Syntax {
                         Keyword(AsgDiv) => 0b11000000,
                         _ => unreachable!(),
                     };
-                    // debug_println!("------------XOP {:?} assign_local: i={}, mark={}, v={:?}", op, i, mark, v);
                     return Ok(Box::new(IRNodeParam1Single{hrtv: false, inst: XOP, para: mark, subx: v }))
                 }
                 // $0 = $0 + 1
@@ -693,7 +692,6 @@ impl Syntax {
                 if *idx > u8::MAX as u128 {
                     return errf!("lib statement link index overflow")
                 }
-                // debug_println!("lib statement {}, {:?}", *idx, adr);
                 self.bind_lib(id.clone(), *idx as u8, adr)?;
                 Self::empty()
             }

@@ -34,7 +34,8 @@ pub fn lang_to_irnode(langscript: &str) -> Ret<IRNodeBlock> {
     let tkr = Tokenizer::new(langscript.as_bytes());
     let tks = tkr.parse()?;
     let syx = Syntax::new(tks);
-    syx.parse()
+    let block = syx.parse()?;
+    Ok(block)
 }
 
 

@@ -18,22 +18,24 @@ mod main {
         let _fn1 = r##"
             param { num }
             var data = memory_get("k")
-            if data is not nil {
-                return 0 
+            if data is nil {
+                data = self.f2()
             }
+            print data
             return num * 2 + 1
         "##;
 
 
         let _fn2 = r##"
-            print global_get("k")
-            end
+            var gn = global_get("k")
+            print gn
+            return gn
         "##;
 
         // println!("{}", lang_to_ircode(&recursion_fn).unwrap().ircode_print(false).unwrap());
 
         let contract = Contract::new()
-        .func(Func::new("f1").fitsh(_fn1).unwrap())
+        .func(Func::new("f1").public().fitsh(_fn1).unwrap())
         .func(Func::new("f2").fitsh(_fn2).unwrap())
         ;
         // println!("\n\n{}\n\n", contract.serialize().to_hex());
@@ -49,8 +51,9 @@ mod main {
         let maincodes = lang_to_bytecode(r##"
             lib C = 1: VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa
             global_put("k", 123 as u32)
+            var n = C.f1(3)
+            print n
             callcode C::f2
-            end
         "##).unwrap();
 
         let act = ContractMainCall::from_bytecode(maincodes).unwrap();

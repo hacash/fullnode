@@ -161,7 +161,7 @@ pub fn execute_code(
     state: &mut VMState,
 
     context_addr: &ContractAddress, 
-    _current_addr: &ContractAddress, 
+    current_addr: &ContractAddress, 
 
     // _is_sys_call: bool,
     // _call_depth: usize,
@@ -236,7 +236,6 @@ pub fn execute_code(
                     EXTFUNC => search_ext_by_id(idx, &CALL_EXTEND_FUNC_DEFS),
                     _ => never!(),
                 }.unwrap().2;
-                // debug_println!("Value::type_from(vty, cres) {:?} {}", vty, cres.to_hex());
                 resv = Value::type_from(vty, cres)?; //  from ty
             } else {
                 resv = Value::Bytes(cres); // only bytes
@@ -407,7 +406,7 @@ pub fn execute_code(
             ERR => { exit = Throw;  break },  // throw <ERROR>
             ABT => { exit = Abort;  break },  // panic
             AST => { if ops.pop()?.check_false() { exit = Abort;  break } }, // assert(..)
-            PRT => { debug_println!("{:?}", ops.pop()?) }
+            PRT => { debug_print_value(context_addr, current_addr, mode, depth, ops.pop()?) }
             // call CALLDYN
             CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL => {
                 let ist = instruction;
@@ -519,6 +518,17 @@ fn unpack_list(mut i: u8, locals: &mut Stack, list: &mut VecDeque<Value>) -> Vmr
         i += 1;
     }
     Ok(())
+}
+
+
+fn debug_print_value(ctx: &ContractAddress, cur: &ContractAddress 
+, mode: CallMode, depth: isize, val: Value) {
+    let mut adr1 = ctx.readable();
+    let _ = adr1.split_off(7);
+    let mut adr2 = cur.readable();
+    let _ = adr2.split_off(7);
+    debug_println!("{}-{} {} {:?} => {:?}", 
+        adr1, adr2, depth, mode, val);
 }
 
 
