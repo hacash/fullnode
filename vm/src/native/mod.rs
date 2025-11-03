@@ -32,7 +32,3 @@ native_call_define!{  // idx, gas,   ValueType
     context_address    = 31,   6,    Address  
     
 }
-
-
-
-

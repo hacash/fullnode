@@ -19,7 +19,7 @@ pub struct SpaceCap {
     pub max_contract_size: usize, // 65535 * 2
     pub one_function_size: usize, // 65535 / 4
     pub inherits_parent: usize, // 4
-    pub librarys_link:   usize, // 250
+    pub librarys_link:   usize, // 100
 
     // pub max_ctl_func: usize, // 200 cache
     // pub max_ctl_libx: usize, // 100 cache

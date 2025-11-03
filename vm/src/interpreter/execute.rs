@@ -253,10 +253,10 @@ pub fn execute_code(
 
         let mut ntcall = |idx: u8| -> VmrtErr {
             let argv = match idx {
-                31 => context_addr.serialize(), // context_address
+                NativeCall::idx_context_address => context_addr.serialize(), // context_address
                 _ => ops.peek()?.canbe_ext_call_data(heap)?
             };
-            let (r, g) = NativeCall::call(idx, &argv)?;
+            let (r, g) = NativeCall::call(hei, idx, &argv)?;
             *ops.peek()? = r; gas += g; 
             Ok(())
         };

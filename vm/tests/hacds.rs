@@ -34,6 +34,11 @@ curl "http://127.0.0.1:8088/submit/transaction?hexbody=true" -X POST -d "030068f
 
     */
 
+    
+    fn addr(s: &str) -> Address {
+        Address::from_readable(s).unwrap()
+    }
+
     #[test]
     fn deploy() {
         use vm::rt::AbstCall::*;
@@ -106,8 +111,8 @@ curl "http://127.0.0.1:8088/submit/transaction?hexbody=true" -X POST -d "030068f
     fn deposit() {
         use protocol::action::*;
         
-        let _addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
-        let _cadr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
+        let _addr = addr("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9");
+        let _cadr = addr("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa");
 
         let mut act1 = DiaToTrs::new();
         act1.to = AddrOrPtr::from_ptr(1);
@@ -126,8 +131,8 @@ curl "http://127.0.0.1:8088/submit/transaction?hexbody=true" -X POST -d "030068f
     fn withdraw() {
         use protocol::action::*;
         
-        let _addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
-        let _cadr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
+        let _addr = addr("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9");
+        let _cadr = addr("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa");
 
         let mut act1 = AssetToTrs::new();
         act1.to = AddrOrPtr::from_ptr(1);
@@ -151,12 +156,12 @@ curl "http://127.0.0.1:8088/submit/transaction?hexbody=true" -X POST -d "030068f
         // use protocol::action::*;
         // use mint::action::*;
 
-        let addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
-        let caddr = ContractAddress::calculate(&addr, &Uint4::default());
+        let addr1 = addr("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9");
+        let caddr = ContractAddress::calculate(&addr1, &Uint4::default());
 
         println!("ContractAddress: {}", caddr.readable());
 
-        let cadr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
+        let cadr = addr("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa");
         assert!(caddr == ContractAddress::from_addr(cadr).unwrap());
 
         let mut act = mint::action::AssetCreate::new();

@@ -117,6 +117,11 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
     // parse
     let meta = inst.metadata();
     let hrtv = meta.otput == 1;
+    // check return value
+    if isrtv && !hrtv {
+        return itr_err_fmt!(InstInvalid, "irnode {} check return value failed", inst as u8)
+    }
+    // parse
     irnode = match inst {
         // BYTECODE LIST BLOCK IF WHILE
         IRBYTECODE => {
@@ -197,10 +202,6 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
             }
         }
     };
-    // check return value
-    if isrtv && meta.otput != 1  {
-        return itr_err_fmt!(InstInvalid, "irnode {} check return value failed", inst as u8)
-    }
     // ok
     Ok(irnode)
 }

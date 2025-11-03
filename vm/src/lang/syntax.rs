@@ -376,6 +376,15 @@ impl Syntax {
         })
     }
 
+    fn deal_func_argv(&mut self) -> Ret<Box<dyn IRNode>> {
+        let (pms, mut subx) = self.must_get_func_argv(ArgvMode::PackList)?;
+        if 0 == pms {
+            // func() == func(nil)
+            subx = Self::push_nil()
+        }
+        Ok(subx)
+    }
+
     pub fn item_identifier(&mut self, id: String) -> Ret<Box<dyn IRNode>> {
         use Bytecode::*;
         use KwTy::*;
@@ -410,19 +419,16 @@ impl Syntax {
                 };
                 self.idx += 1;
                 let fnsg = calc_func_sign(func);
-                let (args, mut subx) = self.must_get_func_argv(ArgvMode::PackList)?;
-                if 0 == args {
-                    subx = Self::push_nil()
-                }
+                let fnpm = self.deal_func_argv()?;
                 return Ok(match &id=="self" {
                     true => { // CALLINR
                         let para: Vec<u8> = fnsg.to_vec(); // fnsig
-                        Box::new(IRNodeParamsSingle{hrtv: true, inst: CALLINR, para, subx})
+                        Box::new(IRNodeParamsSingle{hrtv: true, inst: CALLINR, para, subx: fnpm})
                     },
                     false => { // CALL
-                        let lib = self.link_lib(&id)?;
-                        let para: Vec<u8> = iter::once(lib).chain(fnsg).collect();
-                        Box::new(IRNodeParamsSingle{hrtv: true, inst: CALL, para, subx})
+                        let libi = self.link_lib(&id)?;
+                        let para: Vec<u8> = iter::once(libi).chain(fnsg).collect();
+                        Box::new(IRNodeParamsSingle{hrtv: true, inst: CALL, para,  subx: fnpm})
                     },
                 })
             }else if Keyword(Colon) == *nxt || Keyword(DColon) == *nxt {
@@ -433,11 +439,11 @@ impl Syntax {
                 };
                 self.idx += 1;
                 let fnsg = calc_func_sign(func);
-                let (_, subx) = self.must_get_func_argv(ArgvMode::PackList)?;
+                let fnpm = self.deal_func_argv()?;
                 let inst = maybe!(is_static, CALLSTATIC, CALLLIB);
                 let libi = self.link_lib(&id)?;
                 let para: Vec<u8> = iter::once(libi).chain(fnsg).collect();
-                return Ok(Box::new(IRNodeParamsSingle{hrtv: true, inst, para, subx}))
+                return Ok(Box::new(IRNodeParamsSingle{hrtv: true, inst, para, subx: fnpm}))
             }
         }
         self.link_symbol(&id)

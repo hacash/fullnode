@@ -1,7 +1,7 @@
 
 
 // sha3
-fn sha3(buf: &[u8]) -> VmrtRes<Value> {
+fn sha3(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     if buf.is_empty() {
         return itr_err_fmt!(NativeCallError, "cannot do sha3 with empty bytes")
     }
@@ -12,7 +12,7 @@ fn sha3(buf: &[u8]) -> VmrtRes<Value> {
 
 // sha2
 #[allow(dead_code)]
-fn sha2(buf: &[u8]) -> VmrtRes<Value> {
+fn sha2(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     if buf.is_empty() {
         return itr_err_fmt!(NativeCallError, "cannot do sha2 with empty bytes")
     }
@@ -23,7 +23,7 @@ fn sha2(buf: &[u8]) -> VmrtRes<Value> {
 
 // ripemd160
 #[allow(dead_code)]
-fn ripemd160(buf: &[u8]) -> VmrtRes<Value> {
+fn ripemd160(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     if buf.is_empty() {
         return itr_err_fmt!(NativeCallError, "cannot do ripemd160 with empty bytes")
     }

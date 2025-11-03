@@ -14,6 +14,10 @@ mod inherit {
     use vm::contract::*;
     use vm::ContractAddress;
 
+    fn addr(s: &str) -> Address {
+        Address::from_readable(s).unwrap()
+    }
+
     #[test]
     fn addrs() {
         /*
@@ -30,7 +34,7 @@ mod inherit {
         SckiYHndzCkKApYhAa9fK2vLfkAunN3w3
         Td6MYJaoEbwo9JdebnCfcZs9qPAKuJz8A
         */
-        let addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
+        let addr = addr("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9");
         for i in 0 .. 12 {        
             let caddr = ContractAddress::calculate(&addr, &Uint4::from(i));
             println!("{}", caddr.readable());
@@ -53,7 +57,7 @@ mod inherit {
 
         // nakxhQZ2bhKDwKhowM18wyPTDkTDL1yNK
         let contract = Contract::new()
-        .inh(Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap())
+        .inh(addr("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa"))
         .func(Func::new("f3").fitsh("return 31").unwrap())
         .func(Func::new("f4").fitsh("return 4").unwrap())
         .func(Func::new("f5").public().fitsh(r##"
@@ -87,8 +91,8 @@ mod inherit {
 
         // hXMHE4TjtUvvuzyevjjRruxiz2yxuT1zH
         Contract::new()
-        .inh(Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap())
-        .inh(Address::from_readable("nakxhQZ2bhKDwKhowM18wyPTDkTDL1yNK").unwrap())
+        .inh(addr("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa"))
+        .inh(addr("nakxhQZ2bhKDwKhowM18wyPTDkTDL1yNK"))
         .syst(Abst::new(AbstCall::Append).fitsh("return 0").unwrap())
         .func(Func::new("f5").public().fitsh("
             print self.f1()
@@ -115,10 +119,11 @@ mod inherit {
         .testnet_deploy_print_by_nonce("8:244", 5);
         
         // 
-        let adr = Address::from_readable("hXMHE4TjtUvvuzyevjjRruxiz2yxuT1zH").unwrap();
+        let adr = addr("hXMHE4TjtUvvuzyevjjRruxiz2yxuT1zH");
         Contract::new()
-        .inh(Address::from_readable("oSPKj5vT2qkrS2ZWL2AMB6AHS5e9mi77L").unwrap())
-        .inh(Address::from_readable("cmhfWCVLLosyQujfPnf86spZVW4exD2yr").unwrap())
+        .inh(addr("oSPKj5vT2qkrS2ZWL2AMB6AHS5e9mi77L"))
+        .inh(addr("cmhfWCVLLosyQujfPnf86spZVW4exD2yr"))
+        // .inh(addr("WzK23CAKQFzoPpMEioBztv9yaASvJxNZM"))
         .func(Func::new("f9").public().fitsh("
             print self.f1()
             print self.f2()
