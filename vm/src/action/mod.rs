@@ -5,6 +5,7 @@ use field::*;
 use field::interface::*;
 use protocol::*;
 use protocol::interface::*;
+use protocol::context::*;
 use protocol::state::*;
 use protocol::action::*;
 

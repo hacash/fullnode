@@ -51,10 +51,10 @@ impl Context for ContextInst<'_> {
     fn as_ext_caller(&mut self) -> &mut dyn ExtActCal { self }
     fn env(&self) -> &Env { &self.env }
     fn state(&mut self) -> &mut dyn State { self.sta.as_mut() }
-    fn state_fork(&mut self) -> Box<dyn State> {
+    fn state_fork(&mut self) -> Arc<Box<dyn State>> {
         ctx_state_fork_sub(self)
     }
-    fn state_merge(&mut self, old: Box<dyn State>){
+    fn state_merge(&mut self, old: Arc<Box<dyn State>>){
         ctx_state_merge_sub(self, old)
     }
     fn state_replace(&mut self, sta: Box<dyn State>) -> Box<dyn State> {

@@ -17,6 +17,16 @@ action_define!{ HacToTrs, 1,
     })
 }
 
+impl HacToTrs {
+    pub fn create_by(to: Address, hacash: Amount) -> Self {
+        Self{
+            to: AddrOrPtr::from_addr(to), 
+            hacash,
+            ..Self::new()
+        }
+    }
+}
+
 
 action_define!{ HacFromTrs, 13, 
     ActLv::MainCall, // level
@@ -31,6 +41,16 @@ action_define!{ HacFromTrs, 13,
         let to   = ctx.env().tx.main; 
         hac_transfer(ctx, &from, &to, &self.hacash)
     })
+}
+
+impl HacFromTrs {
+    pub fn create_by(from: Address, hacash: Amount) -> Self {
+        Self{
+            from: AddrOrPtr::from_addr(from), 
+            hacash,
+            ..Self::new()
+        }
+    }
 }
 
 

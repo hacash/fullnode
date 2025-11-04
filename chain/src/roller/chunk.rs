@@ -8,7 +8,7 @@ struct Chunk {
     hash: Hash,
 
     block: Arc<dyn Block>,
-    state: Arc<dyn State>,
+    state: Arc<Box<dyn State>>,
 
     childs: Vec<Arc<Chunk>>,
     parent: Weak<Chunk>,
@@ -26,7 +26,7 @@ impl Drop for Chunk {
 
 impl Chunk {
 
-    fn create(h: Hash, b: Arc<dyn Block>, s: Arc<dyn State>) -> Self {
+    fn create(h: Hash, b: Arc<dyn Block>, s: Arc<Box<dyn State>>) -> Self {
         Self {
             height: b.height().uint(),
             hash: h,

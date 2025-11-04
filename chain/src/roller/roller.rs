@@ -13,7 +13,7 @@ struct Roller {
 #[allow(dead_code)]
 impl Roller {
 
-    fn create(alive: u64, blk: Arc<dyn Block>, state: Arc<dyn State>) -> Roller {
+    fn create(alive: u64, blk: Arc<dyn Block>, state: Arc<Box<dyn State>>) -> Roller {
         let chunk = Chunk::create(blk.hash(), blk, state.clone());
         let ckptr = Arc::new(chunk);
         Roller {

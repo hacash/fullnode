@@ -51,14 +51,12 @@ impl EngineRead for ChainEngine {
     fn latest_block(&self) -> Arc<dyn Block> {
         self.roller.lock().unwrap().head.upgrade().unwrap().block.clone()
     }
-
     
     fn mint_checker(&self) -> &dyn Minter {
         self.minter.as_ref()
     }
 
-    
-    fn state(&self) -> Arc<dyn State> {
+    fn state(&self) -> Arc<Box<dyn State>> {
         self.roller.lock().unwrap().head.upgrade().unwrap().state.clone()
     }
 

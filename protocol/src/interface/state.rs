@@ -1,8 +1,10 @@
 
 
 pub trait State : Send + Sync {
-    fn fork_sub(&self, _: Weak<dyn State>) -> Box<dyn State> { never!() }
+    fn fork_sub(&self, _: Weak<Box<dyn State>>) -> Box<dyn State> { never!() }
     fn merge_sub(&mut self, _: Box<dyn State>) { never!() }
+    fn detach(&mut self) { never!() }
+    fn clone_state(&self) -> Box<dyn State> { never!() }
     fn as_mem(&self) -> &MemMap { never!() }
 
     // fn set_parent(&mut self, _: Arc<dyn State>) { never!() }

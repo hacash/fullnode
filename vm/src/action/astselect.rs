@@ -40,7 +40,9 @@ action_define!{AstSelect, 100,
                 ok += 1;
                 ctx.state_merge(oldsta); // merge sub state
             } else {
-                ctx.state_replace(oldsta); // drop sub state
+                ctx.state().detach();
+                let old = ctx_state_into_box(oldsta);
+                ctx.state_replace(old); // drop sub state
             }
         }
         // check at least
@@ -55,6 +57,22 @@ action_define!{AstSelect, 100,
 
 
 impl AstSelect {
+
+    pub fn nop() -> Self {
+        Self::new()
+    }
+
+    pub fn create_list(acts: Vec<Box<dyn Action>>) -> Self {
+        let num = acts.len();
+        assert!(num < u8::MAX as usize);
+        let num = num as u8;
+        Self {
+            exe_min: Uint1::from(num),
+            exe_max: Uint1::from(num),
+            actions: DynListActionW1::from_list(acts).unwrap(),
+            ..Self::new()
+        }
+    }
 
     pub fn create_by(min: u8, max: u8, acts: Vec<Box<dyn Action>>) -> Self {
         Self {

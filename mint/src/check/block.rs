@@ -204,6 +204,7 @@ fn clean_invalid_normal_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, blkhei: u
 fn clean_invalid_diamond_mint_txs(eng: &dyn EngineRead, txpool: &dyn TxPool, _blkhei: u64) {
     // already minted hacd number
     let sta = eng.state();
+    let sta = sta.as_ref();
     let curdn = CoreStateRead::wrap(sta.as_ref()).get_latest_diamond().number.uint();
     let nextdn = curdn + 1;
     let _ = txpool.retain_at(TXGID_DIAMINT, &mut |a: &TxPkg| {

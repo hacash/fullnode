@@ -1,14 +1,14 @@
 
 pub struct StateInst {
     disk: Arc<dyn DiskDB>,
+    parent: Weak<Box<dyn State>>,
     mem: MemKV,
-    parent: Weak<dyn State>,
 }
 
 
 impl StateInst {
 
-    fn build(d: Arc<dyn DiskDB>, p: Weak<dyn State>) -> Self where Self: Sized {
+    fn build(d: Arc<dyn DiskDB>, p: Weak<Box<dyn State>>) -> Self where Self: Sized {
         Self {
             disk: d,
             parent: p,
@@ -27,7 +27,7 @@ impl State for StateInst {
         self.disk.clone()
     }
     
-    fn fork_sub(&self, p: Weak<dyn State>) -> Box<dyn State> {
+    fn fork_sub(&self, p: Weak<Box<dyn State>>) -> Box<dyn State> {
         Box::new(Self{
             disk: self.disk.clone(),
             mem: MemKV::new(),
@@ -37,6 +37,18 @@ impl State for StateInst {
 
     fn merge_sub(&mut self, sta: Box<dyn State>) {
         self.mem.memry.extend(sta.as_mem().clone())
+    }
+
+    fn detach(&mut self) {
+        self.parent = Weak::<Box<dyn State>>::new();
+    }
+
+    fn clone_state(&self) -> Box<dyn State> {
+        Box::new(Self {
+            disk: self.disk.clone(),
+            parent: self.parent.clone(),
+            mem: self.mem.clone(),
+        })
     }
 
     fn as_mem(&self) -> &MemMap {

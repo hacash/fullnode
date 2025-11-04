@@ -3,28 +3,35 @@ pub struct EmptyState {}
 impl State for EmptyState {}
 
 
-
 /*
 * return old and parent state
 */
-fn ctx_state_fork_sub(ctx: &mut dyn Context) -> Box<dyn State> {
+
+pub fn ctx_state_fork_sub(ctx: &mut dyn Context) -> Arc<Box<dyn State>> {
     let nil = Box::new(EmptyState{});
-    let mut old: Arc<dyn State> = ctx.state_replace(nil).into();
+    let old: Arc<Box<dyn State>> = ctx.state_replace(nil).into();
     let sub = old.fork_sub(Arc::downgrade(&old));
-    ctx.state_replace(sub);
-    // arc => box
-    Arc::get_mut(&mut old).map(|p| {
-        unsafe { Box::from_raw(p as *mut dyn State) }
-    }).unwrap()
+    ctx.state_replace(sub); // drop nil
+    old
 }
 
 
 /*
+
 */
-fn ctx_state_merge_sub(ctx: &mut dyn Context, mut old: Box<dyn State>) {
+pub fn ctx_state_merge_sub(ctx: &mut dyn Context, old: Arc<Box<dyn State>>) {
     let nil = Box::new(EmptyState{});
-    let sub = ctx.state_replace(nil);
+    let mut sub = ctx.state_replace(nil);
+    sub.detach();
+    let mut old = ctx_state_into_box(old);
     old.merge_sub(sub);
     ctx.state_replace(old);
 }
 
+
+pub fn ctx_state_into_box(a: Arc<Box<dyn State>>) -> Box<dyn State> {
+    // debug_println!("strong_count={}, weak_count={}", Arc::strong_count(&a), Arc::weak_count(&a));
+    assert_eq!(1, Arc::strong_count(&a));
+    assert_eq!(0, Arc::weak_count(&a));
+    Arc::into_inner(a).unwrap()
+}

@@ -42,7 +42,7 @@ impl ChainEngine {
         // execute block
         sub_state = blk.objc.execute(chain_option, sub_state)?;
         if !fast_sync {
-            self.minter.blk_insert(&blk, sub_state.as_ref(), prev_state.as_ref())?;
+            self.minter.blk_insert(&blk, sub_state.as_ref(), prev_state.as_ref().as_ref())?;
         }
         // create chunk
         let (hx, objc, data) = blk.apart();

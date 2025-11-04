@@ -6,9 +6,6 @@ cp hacash.config.ini ./target/debug/ && rm -rf ./target/debug/hacash_mainnet_dat
 
 */
 
-
-
-
 /*
 * main fullnode
 */
