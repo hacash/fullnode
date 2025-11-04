@@ -41,7 +41,7 @@ action_define!{AstSelect, 100,
                 ctx.state_merge(oldsta); // merge sub state
             } else {
                 ctx_state_recover(ctx, oldsta);
-            }
+            }   
         }
         // check at least
         if ok < slt_min {

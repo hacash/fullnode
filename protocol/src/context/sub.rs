@@ -35,7 +35,6 @@ pub fn ctx_state_recover(ctx: &mut dyn Context, old: Arc<Box<dyn State>>) {
 }
 
 pub fn ctx_state_into_box(a: Arc<Box<dyn State>>) -> Box<dyn State> {
-    // debug_println!("strong_count={}, weak_count={}", Arc::strong_count(&a), Arc::weak_count(&a));
     assert_eq!(1, Arc::strong_count(&a));
     assert_eq!(0, Arc::weak_count(&a));
     Arc::into_inner(a).unwrap()
