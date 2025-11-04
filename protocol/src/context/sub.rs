@@ -28,6 +28,11 @@ pub fn ctx_state_merge_sub(ctx: &mut dyn Context, old: Arc<Box<dyn State>>) {
     ctx.state_replace(old);
 }
 
+pub fn ctx_state_recover(ctx: &mut dyn Context, old: Arc<Box<dyn State>>) {
+    ctx.state().detach();
+    let old = ctx_state_into_box(old);
+    ctx.state_replace(old); // drop sub state
+}
 
 pub fn ctx_state_into_box(a: Arc<Box<dyn State>>) -> Box<dyn State> {
     // debug_println!("strong_count={}, weak_count={}", Arc::strong_count(&a), Arc::weak_count(&a));

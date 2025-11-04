@@ -4,17 +4,19 @@ pub trait ExtActCal {
     fn action_call(&mut self, _: u16, _: Vec<u8>) -> Ret<(u32, Vec<u8>)>;
 }
 
-pub trait Context : ExtActCal {
+pub trait StateOperat {
+    fn state(&mut self) -> &mut dyn State;
+    fn state_fork(&mut self) -> Arc<Box<dyn State>>;
+    fn state_merge(&mut self, _: Arc<Box<dyn State>>);
+    fn state_recover(&mut self, _: Arc<Box<dyn State>>);
+    fn state_replace(&mut self, _: Box<dyn State>) -> Box<dyn State>;
+}
+
+pub trait Context : StateOperat + ExtActCal {
     fn clone_mut(&self) -> &mut dyn Context;
     fn as_ext_caller(&mut self) -> &mut dyn ExtActCal;
     fn env(&self) -> &Env;
     fn addr(&self, _:&AddrOrPtr) -> Ret<Address>;
-    fn state(&mut self) -> &mut dyn State;
-    
-    fn state_fork(&mut self) -> Arc<Box<dyn State>>;
-    fn state_merge(&mut self, _: Arc<Box<dyn State>>);
-    fn state_replace(&mut self, _: Box<dyn State>) -> Box<dyn State>;
-
     fn check_sign(&mut self, _: &Address) -> Rerr;
     fn depth(&mut self) -> &mut CallDepth;
     fn depth_set(&mut self, _: CallDepth);

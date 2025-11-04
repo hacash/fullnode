@@ -40,9 +40,7 @@ action_define!{AstSelect, 100,
                 ok += 1;
                 ctx.state_merge(oldsta); // merge sub state
             } else {
-                ctx.state().detach();
-                let old = ctx_state_into_box(oldsta);
-                ctx.state_replace(old); // drop sub state
+                ctx_state_recover(ctx, oldsta);
             }
         }
         // check at least

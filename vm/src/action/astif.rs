@@ -21,9 +21,7 @@ action_define!{AstIf, 101,
             },
             // else br
             Err(..) => {
-                ctx.state().detach();
-                let old = ctx_state_into_box(oldsta);
-                ctx.state_replace(old); // drop sub state
+                ctx_state_recover(ctx, oldsta);
                 self.br_else.execute(ctx)
             }
         }.map(|(_,b)|b)

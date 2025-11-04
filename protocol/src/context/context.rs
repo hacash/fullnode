@@ -40,6 +40,23 @@ impl ExtActCal for ContextInst<'_> {
     }
 }
 
+impl StateOperat for ContextInst<'_> {
+
+    fn state(&mut self) -> &mut dyn State { self.sta.as_mut() }
+    fn state_fork(&mut self) -> Arc<Box<dyn State>> {
+        ctx_state_fork_sub(self)
+    }
+    fn state_merge(&mut self, old: Arc<Box<dyn State>>){
+        ctx_state_merge_sub(self, old)
+    }
+    fn state_recover(&mut self, old: Arc<Box<dyn State>>) {
+        ctx_state_recover(self, old)
+    }
+    fn state_replace(&mut self, sta: Box<dyn State>) -> Box<dyn State> {
+        std::mem::replace(&mut self.sta, sta)
+    }
+}
+
 impl Context for ContextInst<'_> {
 
     fn clone_mut(&self) -> &mut dyn Context {
@@ -50,16 +67,7 @@ impl Context for ContextInst<'_> {
     }
     fn as_ext_caller(&mut self) -> &mut dyn ExtActCal { self }
     fn env(&self) -> &Env { &self.env }
-    fn state(&mut self) -> &mut dyn State { self.sta.as_mut() }
-    fn state_fork(&mut self) -> Arc<Box<dyn State>> {
-        ctx_state_fork_sub(self)
-    }
-    fn state_merge(&mut self, old: Arc<Box<dyn State>>){
-        ctx_state_merge_sub(self, old)
-    }
-    fn state_replace(&mut self, sta: Box<dyn State>) -> Box<dyn State> {
-        std::mem::replace(&mut self.sta, sta)
-    }
+    
     fn depth(&mut self) -> &mut CallDepth { &mut self.depth }
     fn depth_set(&mut self, cd: CallDepth) { self.depth = cd }
     /*
