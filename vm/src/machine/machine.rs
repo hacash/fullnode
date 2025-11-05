@@ -170,7 +170,7 @@ impl Machine {
 
     pub fn abst_call(&mut self, env: &mut ExecEnv, cty: AbstCall, contract_addr: ContractAddress, param: Value) -> Ret<Value> {
         let adr = contract_addr.readable();
-        let Some(fnobj) = self.r.load_abstfn(env.sta, &contract_addr, cty)? else {
+        let Some((.., fnobj)) = self.r.load_abstfn(env.sta, &contract_addr, cty)? else {
             // return Ok(Value::Nil) // not find call
             return errf!("abst call {:?} not find in {}", cty, adr) // not find call
         };

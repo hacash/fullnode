@@ -27,7 +27,7 @@ impl Resoure {
 
 
     fn load_fn_by_search_inherits(&mut self, vmsta: &mut VMState, addr: &ContractAddress, fnkey: FnKey) 
-    -> VmrtRes<Option<Arc<FnObj>>> {
+    -> VmrtRes<Option<(Option<ContractAddress>, Arc<FnObj>)>> {
         let csto = self.load_contract(vmsta, addr)?;
         macro_rules! do_get {($csto : expr) => (
             match fnkey {
@@ -36,7 +36,7 @@ impl Resoure {
             }
         )}
         if let Some(c) = do_get!(csto) {
-            return Ok(Some(c.clone()))
+            return Ok(Some((None, c.clone())))
         }
         let inherits = csto.sto.inherits.list();
         if inherits.is_empty() {
@@ -46,7 +46,7 @@ impl Resoure {
         for ih in inherits {
             let csto = self.load_contract(vmsta, ih)?;
             if let Some(c) = do_get!(csto) {
-                return Ok(Some(c.clone()))
+                return Ok(Some((Some(ih.clone()), c.clone())))
             }
         }
         // not find
@@ -80,12 +80,12 @@ impl Resoure {
         Ok((taradr.clone(), csto.userfns.get(&fnsg).map(|f|f.clone())))
     }
 
-    pub fn load_userfn(&mut self, vmsta: &mut VMState, addr: &ContractAddress, fnsg: FnSign) -> VmrtRes<Option<Arc<FnObj>>> {
+    pub fn load_userfn(&mut self, vmsta: &mut VMState, addr: &ContractAddress, fnsg: FnSign) -> VmrtRes<Option<(Option<ContractAddress>, Arc<FnObj>)>> {
         self.load_fn_by_search_inherits(vmsta, addr, FnKey::User(fnsg))
     }
 
 
-    pub fn load_abstfn(&mut self, vmsta: &mut VMState, addr: &ContractAddress, scty: AbstCall) -> VmrtRes<Option<Arc<FnObj>>> {
+    pub fn load_abstfn(&mut self, vmsta: &mut VMState, addr: &ContractAddress, scty: AbstCall) -> VmrtRes<Option<(Option<ContractAddress>, Arc<FnObj>)>> {
         self.load_fn_by_search_inherits(vmsta, addr, FnKey::Abst(scty))
     }
 
@@ -100,8 +100,13 @@ impl Resoure {
         use CallTarget::*;
         use ItrErrCode::*;
         match match fptr.target {
-            Inner         => (None, self.load_userfn(vmsta, dstadr, fptr.fnsign)?),
-            Addr(ctxadr)  => (Some(ctxadr.clone()), self.load_userfn(vmsta, &ctxadr, fptr.fnsign)?),
+            Inner         => {
+                let Some((a, b)) = self.load_userfn(vmsta, dstadr, fptr.fnsign)? else {
+                    return itr_err_code!(CallNotExist)
+                };
+                (a, Some(b))
+            }
+            // Addr(ctxadr)  => (Some(ctxadr.clone()), self.load_userfn(vmsta, &ctxadr, fptr.fnsign)?),
             Libidx(lib)   => match adrlibs {
                 Some(ads) => self.load_fn_by_search_list(vmsta, &ads, lib, fptr.fnsign),
                 _ => self.load_fn_by_search_librarys(vmsta, srcadr, lib, fptr.fnsign),

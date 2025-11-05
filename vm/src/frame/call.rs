@@ -60,23 +60,22 @@ impl CallFrame {
                     self.check_load_new_contract_and_gas(r, env)?;
                     // if call code
                     if let CodeCopy = fnptr.mode {
+                        // println!("CodeCopy() ctxadr={}, curadr={}", ctxadr.prefix(7), curadr.prefix(7));
                         curr_frame.prepare(CodeCopy, fnobj, None)?; // no param
                         continue // do execute
                     }
-                    // call next frame
+                    // call next frame                    
+                    // println!("{:?}() ctxadr={}, curadr={}", fnptr.mode, ctxadr.prefix(7), curadr.prefix(7));
                     let param = Some(curr_frame.pop_value()?);
                     self.push(curr_frame);
                     let next_frame = self.increase(r)?;
                     curr_frame = next_frame;
                     curr_frame.prepare(fnptr.mode, fnobj, param)?;
                     match fnptr.mode {
-                        Inner => {
-                            /* not change chgsrcadr */
-                            // continue to do next call
-                        }
-                        Library | Static => {
-                            let cadr = chgsrcadr.unwrap();
-                            curr_frame.curadr = cadr;
+                        Inner | Library | Static => {
+                            if let Some(cadr) = chgsrcadr {
+                                curr_frame.curadr = cadr; // may change cur adr
+                            }
                             // continue to do next call
                         }
                         Outer => {

@@ -37,6 +37,13 @@ pub fn curl_trs_3(acts: Vec<Box<dyn Action>>, fee: &str) {
         Address::from_readable("hXMHE4TjtUvvuzyevjjRruxiz2yxuT1zH").unwrap(),
         Address::from_readable("oSPKj5vT2qkrS2ZWL2AMB6AHS5e9mi77L").unwrap(),
         Address::from_readable("cmhfWCVLLosyQujfPnf86spZVW4exD2yr").unwrap(),
+        Address::from_readable("WzK23CAKQFzoPpMEioBztv9yaASvJxNZM").unwrap(),
+        Address::from_readable("ezFkqc6Smyk5DGvMY6bMoYx6vsU4gs7ba").unwrap(),
+        Address::from_readable("UJ7Ypo4SpQibMudmEjJKbMUN7Zy9viyKS").unwrap(),
+        Address::from_readable("cCBdc3vTmsBzPXbn2SaQy6dfbpvM6aJmK").unwrap(),
+        Address::from_readable("bX96F9rJNYSBi3iE7vj2bQ75ChaTq5KsU").unwrap(),
+        Address::from_readable("SckiYHndzCkKApYhAa9fK2vLfkAunN3w3").unwrap(),
+        Address::from_readable("Td6MYJaoEbwo9JdebnCfcZs9qPAKuJz8A").unwrap(),
     ];
     let fee = Amount::from(maybe!(fee.len()>0 ,fee, "8:244")).unwrap();
     let mut trs = TransactionType3::new_by(addrs[0], fee, curtimes());

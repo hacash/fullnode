@@ -91,6 +91,12 @@ impl Address {
     pub fn readable(&self) -> String {
         Account::to_readable(&*self)
     }
+
+    pub fn prefix(&self, n: usize) -> String {
+        let mut s = self.readable();
+        let _ = s.split_off(n);
+        s
+    }
     
     pub fn from_readable(addr: &str) -> Ret<Self> {
         let Ok((version, body)) = addr.from_base58check() else {

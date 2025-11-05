@@ -128,7 +128,7 @@ pub enum CallExit {
 pub enum CallTarget {
     Inner,
     Libidx(u8),
-    Addr(ContractAddress),
+    // Addr(ContractAddress),
 }
 
 impl CallTarget {

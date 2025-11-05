@@ -1,13 +1,3 @@
-Comparison Reference:
-
-    1. Move VM
-    2. Ethereum VM
-    3. Solana VM
-    4. Ton VM
-    5. CKB VM
-    6. EOS VM
-    7. NEO VM
-
 
 Call Entry:
 
@@ -89,18 +79,18 @@ Call Kind:
 
 Call Privileges:
 
-    - Main           => Outer, OuterDyn, Static, Code
-    - Abst           => Inner, Lib, Static, Code
-    - Library        => Lib, Static, Code
-    - Static         => Static, Code
-    - Code           => ()
-    - Outer | Inner  => Outer, OuterDyn, Inner, Lib, Static, Code (support all types)
+    - Main           => Outer,             Static, Code
+    - Abst           =>        Inner, Lib, Static, Code
+    - Library        =>               Lib, Static, Code
+    - Static         =>                    Static, Code
+    - Code           =>                               -
+    - Outer | Inner  => Outer, Inner, Lib, Static, Code (All types)
 
 
 Call Context Change:
 
-    - move context => Outer, OuterDyn
-    - move current => Outer, OuterDyn, Lib, Static
+    - move context => Outer
+    - move current => Outer, Lib, Static
 
 
 Abst Call Param:
@@ -124,6 +114,17 @@ Add Opcode must Modified:
     3. Gas table                `./rt/gas.rs`
     4. lang func define         `./rt/lang.rs`
     5. interpreter              `./interpreter/execute.rs`
+
+
+Comparison Reference:
+
+    1. Move VM
+    2. Ethereum VM
+    3. Solana VM
+    4. Ton VM
+    5. CKB VM
+    6. EOS VM
+    7. NEO VM
 
 
 

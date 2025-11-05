@@ -458,7 +458,7 @@ fn check_call_mode(mode: CallMode, inst: Bytecode) -> VmrtErr {
         }
     }
     match mode {
-        Main    if not_ist!(CALL, CALLSTATIC, CALLCODE) // CALLDYN
+        Main    if not_ist!(CALL, CALLSTATIC, CALLCODE)
             => itr_err_code!(CallOtherInMain),
         Abst    if not_ist!(CALLINR, CALLLIB, CALLSTATIC, CALLCODE)
             => itr_err_code!(CallInAbst),
@@ -523,12 +523,8 @@ fn unpack_list(mut i: u8, locals: &mut Stack, list: &mut VecDeque<Value>) -> Vmr
 
 fn debug_print_value(ctx: &ContractAddress, cur: &ContractAddress 
 , mode: CallMode, depth: isize, val: Value) {
-    let mut adr1 = ctx.readable();
-    let _ = adr1.split_off(7);
-    let mut adr2 = cur.readable();
-    let _ = adr2.split_off(7);
     debug_println!("{}-{} {} {:?} => {:?}", 
-        adr1, adr2, depth, mode, val);
+        ctx.prefix(7), cur.prefix(7), depth, mode, val);
 }
 
 
