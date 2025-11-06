@@ -1,7 +1,6 @@
 
 #[derive(Debug, Clone, Default)]
 pub struct SpaceCap {
-    pub max_gas_of_tx: usize, // 65535
     pub load_contract: usize, // 20
     pub call_depth: usize,    // 32
 
@@ -33,7 +32,6 @@ impl SpaceCap {
         const U16M: usize = u16::MAX as usize; // 65535
 
         SpaceCap {
-            max_gas_of_tx:     U16M / 4, // 65535/4
             load_contract:       20,
             call_depth:          32,
             max_value_size:    1280, // = 32 * 40, diamond name list max bytes: 200*6 = 1200 

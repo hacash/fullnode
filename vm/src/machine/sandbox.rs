@@ -15,8 +15,8 @@ pub fn sandbox_call(ctx: &mut dyn Context, contract: ContractAddress, funcname: 
         (*txinfo).swap_addrs(&mut vec![mainaddr, contract.into_addr()]);
     }
 
-    let cap = SpaceCap::new(hei);
-    let gas_limit = cap.max_gas_of_tx as i64;
+    let gascp = GasExtra::new(hei);
+    let gas_limit = gascp.max_gas_of_tx;
     let gas = &mut gas_limit.clone();
 
     let mut codes: Vec<u8> = vec![];

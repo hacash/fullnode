@@ -68,6 +68,7 @@ impl GasTable {
 
 #[derive(Default)]
 pub struct GasExtra {
+    pub max_gas_of_tx: i64,
     pub local_one_alloc: i64,
     pub storege_value_base_size: i64,
     pub load_new_contract: i64,
@@ -77,12 +78,14 @@ pub struct GasExtra {
 
 impl GasExtra {
     pub fn new(_hei: u64) -> Self {
+        const U16M: i64 = u16::MAX as i64; // 65535
         Self {
-            local_one_alloc: 5, // 5 * num
+            max_gas_of_tx:     U16M / 4, // 65535/4
+            local_one_alloc:          5, // 5 * num
             storege_value_base_size: 32,
             load_new_contract: 2 * GSCU as i64, // 64
-            main_call_min:     1 * GSCU as i64, // 64
-            abst_call_min:     4 * GSCU as i64,     // 32
+            main_call_min:     1 * GSCU as i64, // 32
+            abst_call_min:     3 * GSCU as i64, // 96
         }
     }
 }

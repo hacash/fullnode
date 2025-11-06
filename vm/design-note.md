@@ -37,14 +37,20 @@ Contract Verify:
     4. bytecode jump dest
 
 
-Contract Code Store Rent:
+Contract Code Store Fee:
 
     1. 50x tx fee
 
 
 Contract KV State Rent:
 
-    1. fee = period * (32 + datasize)
+    1. rent fee = period * (32 + datasize)
+    2. one period = 300 block ( one day )
+    3. period max = 10000 (about 30 years)
+    4. ratain = 300 * 100 (about 100 days)
+    5. data recover = rent it again before expire
+    6. data len max = 1280 bytes = 32 * 40
+    7. data type can store = Nil, Bool, Uint, Address, Bytes
 
 
 Storage Ban:
@@ -59,12 +65,13 @@ Gas Calculation:
 
     - 1 gas = 1 byte
     - gas price = fee purity = txfeegot / txsize
-    - 1 gcu = 32 gas / 32 byte
-    - gas limit is 65535 for one tx
+    - 1 gcu = 32 gas or 32 byte
+    - tx gas limit is 65535 / 4 = 16383
     - a machine execution charges at least 1 gcu of gas (32 gas) = gas / GSCU + 1
     - load a contract for call cost 2 * gcu = 64gas
     - call main cost gas at least 1 * gcu =  32gas
-    - call abst cost gas at least 4 * gcu = 128gas
+    - call abst cost gas at least 3 * gcu =  96gas
+    - 
 
 
 Call Kind:
@@ -90,18 +97,19 @@ Call Privileges:
 Call Context Change:
 
     - move context => Outer
-    - move current => Outer, Lib, Static
+    - move current => Outer, Inner of inherit, Lib, Static
 
 
 Abst Call Param:
 
-    - Change( bytes[0] )
-    - Append( bytes[0] )
-    - PermitHAC(      to_addr[21], amount[3~] )
+    - Construct( bytes[?] )
+    - Change( nil )
+    - Append( nil )
+    - PermitHAC(      to_addr[21], hacash[3~] )
     - PermitSAT(      to_addr[21], satoshi[8] )
     - PermitHACD(     to_addr[21], dianum[1], diamonds[6~] )
     - PermitAsset(    to_addr[21], serial[8], amount[8] )
-    - PayableHAC(   from_addr[21], amount[3~] )
+    - PayableHAC(   from_addr[21], hacash[3~] )
     - PayableSAT(   from_addr[21], satoshi[8] )
     - PayableHACD(  from_addr[21], dianum[1], diamonds[6~] )
     - PayableAsset( from_addr[21], serial[8], amount[8] )

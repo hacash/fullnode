@@ -38,8 +38,8 @@ impl MachineBox {
 
     fn init_gas(&mut self, ctx: &mut dyn Context) -> Rerr {
         // init gas
-        let spscp = &self.machine.as_mut().unwrap().r.space_cap;
-        let gas_limit = spscp.max_gas_of_tx as i64;
+        let gascp = &self.machine.as_mut().unwrap().r.gas_extra;
+        let gas_limit = gascp.max_gas_of_tx;
         let (feer, gasfee) = ctx.tx().fee_extend()?;
         if feer == 0 {
             return errf!("gas extend cannot empty on contract call")
@@ -61,7 +61,7 @@ impl MachineBox {
         let min_use = match cty {
             Main => gsext.main_call_min,
             Abst => gsext.abst_call_min,
-            _ => unreachable!()
+            _ => never!()
         };
         up_in_range!(cost, min_use, i64::MAX);
         Ok(cost)

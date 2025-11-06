@@ -108,7 +108,7 @@ mod amm {
             var tt_shares $3
             var tt_sat    $4
             var tt_zhu    $5
-            unpack_list(self.total(nil), 3)
+            unpack_list(self.total(), 3)
             // check
             var k_in_sat = "in_sat"
             var k_in_zhu = "in_zhu"
@@ -135,7 +135,7 @@ mod amm {
             var tt_shares $3
             var tt_sat    $4
             var tt_zhu    $5
-            unpack_list(self.total(nil), 3)
+            unpack_list(self.total(), 3)
             tt_shares += zhu as u64
             let tt_k = "total_shares"
             storage_save(tt_k, tt_shares)
@@ -159,7 +159,7 @@ mod amm {
             var tt_shares $2
             var tt_sat    $3
             var tt_zhu    $4
-            unpack_list(self.total(nil), 2)
+            unpack_list(self.total(), 2)
             var lq_k = addr ++ "_shares"
             var my_shares = storage_load(lq_k)
             assert shares <= my_shares
@@ -204,7 +204,7 @@ mod amm {
             var tt_shares $3
             var tt_sat    $4
             var tt_zhu    $5
-            unpack_list(self.total(nil), 3)
+            unpack_list(self.total(), 3)
             assert tt_shares>0 && tt_sat>0 && tt_zhu>0 
             // 0.3% fee
             var zhu = ((tt_zhu as u128) * sat * 997 / (tt_sat - sat) / 1000) as u64 
@@ -224,7 +224,7 @@ mod amm {
             var tt_shares $3
             var tt_sat    $4
             var tt_zhu    $5
-            unpack_list(self.total(nil), 3)
+            unpack_list(self.total(), 3)
             assert tt_shares>0 && tt_sat>0 && tt_zhu>0 
             // 0.3% fee
             var out_zhu = ((tt_zhu as u128) * sat * 997 / (tt_sat + sat) / 1000) as u64
@@ -279,7 +279,7 @@ mod amm {
             if 8 == size(total) {
                 tt_shares = total as u64
             }
-            var ctxadr = buf_left_drop(4, balance(context_address(nil)))
+            var ctxadr = buf_left_drop(4, balance(context_address()))
             let tt_sat = buf_left(8, ctxadr) as u64
             let tt_zhu = hac_to_zhu(buf_left_drop(8, ctxadr))
             return [tt_shares, tt_sat, tt_zhu]
