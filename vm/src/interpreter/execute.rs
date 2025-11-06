@@ -315,7 +315,7 @@ pub fn execute_code(
             NEWMAP   => ops.push(Compo(CompoItem::new_map()))?,
             PACKLIST => { let l = CompoItem::pack_list(cap, ops)?; ops.push(l)? }
             PACKMAP  => { let m = CompoItem::pack_map( cap, ops)?; ops.push(m)? }
-            INSERT   => { let k = ops.pop()?; let v = ops.pop()?; ops.compo()?.insert(cap, k, v)? }
+            INSERT   => { let v = ops.pop()?; let k = ops.pop()?; ops.compo()?.insert(cap, k, v)? }
             REMOVE   => { let k = ops.pop()?; ops.compo()?.remove(k)?; }
             CLEAR    => { ops.compo()?.clear() }
             MERGE    => { let p = ops.pop()?; ops.compo()?.merge(p.compo_get()?)?; }

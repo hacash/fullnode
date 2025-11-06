@@ -359,7 +359,7 @@ impl Value {
             U32(n) =>  format!("{}", n),
             U64(n) =>  format!("{}", n),
             U128(n) => format!("{}", n),
-            Bytes(b) => format!("\"{}\"", &hex::encode(b)),
+            Bytes(b) => format!("\"{}\"", &to_readable_or_base64(b)),
             Address(a) =>  format!("\"{}\"", a.readable()),
             HeapSlice((s, l)) => format!("[{},{}]", s, l),
             Compo(a) => a.to_json(),

@@ -217,20 +217,30 @@ impl Syntax {
                 }
             }
             Keyword(As) => {
+                left.checkretval()?; // must retv
                 let e = errf!("<as> express format error");
                 nxt = next!();
-                let mut obj = IRNodeSingle{hrtv: true, inst: CU8, subx: left};
-                match nxt {
-                    Keyword(U8)    => obj.inst = CU8   ,
-                    Keyword(U16)   => obj.inst = CU16  ,
-                    Keyword(U32)   => obj.inst = CU32  ,
-                    Keyword(U64)   => obj.inst = CU64  ,
-                    Keyword(U128)  => obj.inst = CU128 ,
-                    Keyword(Bytes) => obj.inst = CBUF  ,
+                let hrtv = true;
+                if let Keyword(Address) = nxt {
+
+                }
+                macro_rules! cuto {($inst: expr) => { 
+                    Box::new(IRNodeSingle{hrtv, inst: $inst, subx: left} )
+                }}
+                let v: Box<dyn IRNode> = match nxt {
+                    Keyword(U8)    => cuto!(CU8)  ,
+                    Keyword(U16)   => cuto!(CU16) ,
+                    Keyword(U32)   => cuto!(CU32) ,
+                    Keyword(U64)   => cuto!(CU64) ,
+                    Keyword(U128)  => cuto!(CU128),
+                    Keyword(Bytes) => cuto!(CBUF) ,
+                    Keyword(Address) => {
+                        let para = ValueTy::Address as u8;
+                        Box::new(IRNodeParam1Single{hrtv, inst: CTO, para, subx: left })       
+                    }
                     _ => return e
                 };
-                obj.checkretval()?; // must retv
-                Box::new(obj)
+                v
             }
             Keyword(Is) => {
                 let e = errf!("<is> express format error");
@@ -518,6 +528,14 @@ impl Syntax {
         }
     }
 
+    pub fn push_addr(a: field::Address) -> Box<dyn IRNode> {
+        use Bytecode::*;
+        let para = vec![vec![field::Address::SIZE as u8], a.serialize()].concat();
+        Box::new(IRNodeParam1Single{hrtv: true, inst: CTO, para: ValueTy::Address as u8, subx: Box::new(IRNodeParams{
+            hrtv: true, inst: PBUF, para,
+        })})
+    }
+
     pub fn item_may(&mut self) -> Ret<Option<Box<dyn IRNode>>> {
         use Bytecode::*;
         use KwTy::*;
@@ -540,6 +558,7 @@ impl Syntax {
         let mut item: Box<dyn IRNode> = match nxt {
             Identifier(id) => self.item_identifier(id.clone())?,
             Integer(n) => Self::push_num(*n),
+            Token::Address(a) => Self::push_addr(*a),
             Token::Bytes(b) => Self::item_bytes(b)?,
             Partition('(') => {
                 let ckop = self.check_op;

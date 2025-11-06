@@ -121,6 +121,7 @@ impl Value {
             U64(n) =>  *self = Bytes(n.to_be_bytes().into()),
             U128(n) => *self = Bytes(n.to_be_bytes().into()),
             Bytes(..) => {},
+            Address(a) => *self = Bytes(a.to_vec()),
             a => return itr_err_fmt!(CastFail, "cannot cast {} to bytes", a)
         };
         Ok(())

@@ -61,6 +61,9 @@ impl Syntax {
                     Box::new(IRNodeParam1{hrtv, inst, para, text: s!("")})
                 },
                 true => {
+                    if num == 0 {
+                        return errf!("function '{}' must give argv", id)
+                    }
                     Box::new(IRNodeParam1Single{hrtv, inst, para, subx: argvres})
                 },
             })

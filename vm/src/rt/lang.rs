@@ -367,10 +367,7 @@ irfn_define!{
 
 
 
-/********************************/
-
-
-
+/********************************
 #[derive(Default, Eq, PartialEq)]
 #[repr(u8)]
 pub enum TokenType {
@@ -381,8 +378,11 @@ pub enum TokenType {
     Str,
     StrEsc,
     Split,  // () {} []
-    Symbol, // +-*/|&
+    Symbol, // +-* /|&
 }
+*/
+
+
 
 /********************************/
 
