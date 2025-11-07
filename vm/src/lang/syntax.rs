@@ -221,9 +221,6 @@ impl Syntax {
                 let e = errf!("<as> express format error");
                 nxt = next!();
                 let hrtv = true;
-                if let Keyword(Address) = nxt {
-
-                }
                 macro_rules! cuto {($inst: expr) => { 
                     Box::new(IRNodeSingle{hrtv, inst: $inst, subx: left} )
                 }}
@@ -324,16 +321,23 @@ impl Syntax {
             return e
         }
         let nxt = &self.tokens[self.idx];
-        if let Partition('{')|Partition('(') = nxt {} else {
-            return e
+        let se = match nxt {
+            Partition('{') => '}',
+            Partition('(') => ')',
+            Partition('[') => ']',
+            _ => return e
         };
         self.idx += 1;
         loop {
             if self.idx >= max { break }
             let nxt = &self.tokens[self.idx];
-            if let Partition('}')|Partition(')') = nxt {
-                self.idx += 1;
-                break
+            if let Partition(sp) = nxt {
+                if *sp == se {
+                    self.idx += 1;
+                    break
+                }else {
+                    return e
+                }
             }
             let Some(li) = self.item_may()? else {
                 break
@@ -766,6 +770,55 @@ impl Syntax {
                     codes.push(inst as u8);
                 }
                 Box::new(IRNodeBytecodes{codes})
+            },
+            Keyword(List) => {
+                // let e = errf!("list format error");
+                let block = self.item_may_block()?;
+                let num = block.subs.len();
+                match num {
+                    0 => Self::push_inst(NEWLIST),
+                    _ => {
+                        let mut subs = block.subs;
+                        subs.push(Self::push_num(num as u128));
+                        subs.push(Self::push_inst(PACKLIST));
+                        let arys = IRNodeList::from_vec(subs)?;
+                        Box::new(arys)
+                    }
+                }
+            }
+            Keyword(Map) => {
+                let e = errf!("map format error");
+                nxt = next!();
+                let Partition('{') = nxt else {
+                    return e
+                };
+                let mut subs = Vec::new();
+                loop {
+                    nxt = next!();
+                    if let Partition('}') = nxt {
+                        break
+                    } else {
+                        self.idx -= 1;
+                    }
+                    let Some(k) = self.item_may()? else {
+                        break
+                    };
+                    k.checkretval()?;
+                    nxt = next!();
+                    let Keyword(Colon) = nxt else {
+                        return e
+                    };
+                    let Some(v) = self.item_may()? else {
+                        return e
+                    };
+                    v.checkretval()?;
+                    subs.push(k);
+                    subs.push(v);
+                }
+                subs.push(Self::push_num(subs.len() as u128));
+                subs.push(Self::push_inst(PACKMAP));
+                let arys = IRNodeList::from_vec(subs)?;
+                Box::new(arys)
             }
             Keyword(Nil)    => Self::push_nil(),
             Keyword(True)   => Self::push_inst(P1),

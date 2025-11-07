@@ -103,7 +103,7 @@ fn build_ir_func(inst: Bytecode, pms: usize, args: usize, rs: usize, argvs: Vec<
                 _ => return e
             }
         }
-        if para == -1 || para > 255{
+        if para == -1 || para > 255 {
             return e
         }
         para as u8

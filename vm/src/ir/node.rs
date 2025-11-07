@@ -907,11 +907,17 @@ impl $name {
     }
     pub fn with_capacity(n: usize) -> Ret<Self> {
         if n > u16::MAX as usize {
-            return errf!("IRBlock length max {}", u16::MAX)
+            return errf!("{} length max {}", stringify!($name), u16::MAX)
         }
         Ok(Self{
             subs: Vec::with_capacity(n),
         })
+    }
+    pub fn from_vec(subs: Vec<Box<dyn IRNode>>) -> Ret<Self> {
+        if subs.len() > u16::MAX as usize {
+            return errf!("{} length max {}", stringify!($name), u16::MAX)
+        }
+        Ok(Self{subs})
     }
     pub fn into_vec(self) -> Vec<Box<dyn IRNode>> {
         self.subs

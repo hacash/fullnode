@@ -46,11 +46,18 @@ mod hrc20 {
 
         // info
         .func(Func::new("info").public().fitsh(r##"
-            var infos = new_map()
-            insert(infos, "name",     "Test HRC20 Token")
-            insert(infos, "symbol",   "THT")
-            insert(infos, "decimals", 8 as u8)
-            return infos
+            var ary1 = list[1, 2, 3, 4]
+            var inf2 = map{
+                "symbol":  "THT",
+                "name":    "Test HRC20 Token",
+                "decimals": 8 as u8,
+            }
+            return inf2
+            // var infos = new_map()
+            // insert(infos, "name",     "Test HRC20 Token")
+            // insert(infos, "symbol",   "THT")
+            // insert(infos, "decimals", 8 as u8)
+            // return infos
         "##).unwrap())
 
         // total_supply

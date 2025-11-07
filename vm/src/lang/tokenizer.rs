@@ -226,7 +226,7 @@ impl Tokenizer<'_> {
                 'A'..='Z'|'a'..='z'|'$'|'_' => self.parse_identifier(max, c)?,
                 '{'|'}'|'('|')'|'['|']' => self.tokens.push(Partition(c)),
                 '+'|'-'|'*'|'/'|'='|'!'| '.'|':'| '>'|'<'|'|'|'&'|'%'|'^' 
-                    => self.parse_symbol(max, c)?,
+                    =>  self.parse_symbol(max, c)?,
                 '"' =>  self.parse_bytes(max, c)?,
                 '\'' => self.parse_char(max, c)?,
                 ' '|','|';'|'\n'|'\r'|'\t' => {}, // ignore
