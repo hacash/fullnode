@@ -351,7 +351,7 @@ pub fn execute_code(
             GET2  => ops.push(locals.load(2)?)?,
             GET3  => ops.push(locals.load(3)?)?,
             // storage
-            STIME => *ops.peek()? = state.stime(hei, context_addr, ops.peek()?)?,
+            SREST => *ops.peek()? = state.srest(hei, context_addr, ops.peek()?)?,
             SLOAD => *ops.peek()? = state.sload(hei, context_addr, ops.peek()?)?,
             SDEL  => state.sdel(context_addr, ops.pop()?)?,
             SSAVE => { let v = ops.pop()?; state.ssave(hei, context_addr, ops.pop()?, v)?; },

@@ -303,7 +303,7 @@ irfn_define!{
     MPUT       : 0, 2, 0,     memory_put
     MGET       : 0, 1, 1,     memory_get
         
-    STIME      : 0, 1, 1,     storage_time
+    SREST      : 0, 1, 1,     storage_rest
     SLOAD      : 0, 1, 1,     storage_load
     SDEL       : 0, 1, 0,     storage_del
     SSAVE      : 0, 2, 0,     storage_save

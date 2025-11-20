@@ -88,25 +88,28 @@ macro_rules! jsondata{
 
 
 // auto drop <= 0
-pub fn get_id_range(max: i64, page: i64, limit: i64, _instart: i64, decs: bool) -> Vec<i64> {
+pub fn get_id_range(max: i64, page: i64, limit: i64, instart: i64, desc: bool) -> Vec<i64> {
     let mut start = 1;
-    if decs {
+    if instart != i64::MAX {
+        start = instart
+    }
+    if desc && instart == i64::MAX{
         start = max;
     }
     if page > 1 {
-        if decs {
+        if desc {
             start -= (page - 1) * limit;
         }else{
             start += (page - 1) * limit;
         }
     }
     let mut end = start + limit;
-    if decs {
+    if desc {
         end = start - limit;
     }
     // rev
     let mut rng: Vec<_> = (start..end).collect();
-    if decs {
+    if desc {
         rng = (end+1..start+1).rev().collect();
     }
     // ok

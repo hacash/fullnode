@@ -166,7 +166,7 @@ pub enum Bytecode {
     ________________152 = 0x98,
     ________________153 = 0x99,
     ________________154 = 0x9a,
-    STIME               = 0x9b, // &     storage expire block
+    SREST               = 0x9b, // &     storage expire rest block
     SLOAD               = 0x9c, // &     storage load
     SDEL                = 0x9d, // a     storage delete
     SSAVE               = 0x9e, // a,b   storage save
@@ -426,7 +426,7 @@ bytecode_metadata_define!{
     MPUT       : 0, 2, 0,     memory_put
     MGET       : 0, 1, 1,     memory_get
         
-    STIME      : 0, 1, 1,     storage_time
+    SREST      : 0, 1, 1,     storage_rest
     SLOAD      : 0, 1, 1,     storage_load
     SDEL       : 0, 1, 0,     storage_del
     SSAVE      : 0, 2, 0,     storage_save

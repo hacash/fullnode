@@ -43,7 +43,7 @@ impl GasTable {
         gst.set(12, &[EXTENV, MPUT, CALLINR, PACKLIST, PACKMAP, UPLIST, CLONE]);
         gst.set(16, &[EXTFUNC,GGET, CALLCODE]);
         gst.set(24, &[EXTACTION, GPUT, CALLLIB, CALLSTATIC]);
-        gst.set(32, &[SLOAD, STIME, CALL]); // CALLDYN
+        gst.set(32, &[SLOAD, SREST, CALL]); // CALLDYN
         gst.set(64, &[SSAVE, SRENT]);
         gst
     }

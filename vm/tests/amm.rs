@@ -268,7 +268,7 @@ mod amm {
             var tt_k = "total_shares"
             var total = storage_load(tt_k)
             if total is nil {
-                var exp = storage_time(tt_k)
+                var exp = storage_rest(tt_k)
                 if exp is not nil {
                     if exp < block_height() {
                         throw "storage expire"

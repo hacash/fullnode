@@ -20,8 +20,8 @@ pub const CALL_EXTEND_ACTION_DEFS: [ExtDefTy; 4] = [
 
 
 pub const CALL_EXTEND_ENV_DEFS: [ExtDefTy; 2] = [
-    (EnvHeight::IDX,   "block_height",            U64),
-    (EnvMainAddr::IDX, "tx_main_address",         Address),
+    (EnvHeight::IDX,   "block_height",             U64),
+    (EnvMainAddr::IDX, "tx_main_address", ValueTy::Address),
 ];
 
 

@@ -147,9 +147,9 @@ impl VMState<'_> {
     }
 
     /*
-        if not find return Nil  
+        if not find or expire return Nil  
     */
-    fn stime(&mut self, curhei: u64, cadr: &ContractAddress, k: &Value) -> VmrtRes<Value> {
+    fn srest(&mut self, curhei: u64, cadr: &ContractAddress, k: &Value) -> VmrtRes<Value> {
         let Some(v) = self.sread(curhei, cadr, k)? else {
             return Ok(Value::Nil)
         };

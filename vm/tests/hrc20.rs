@@ -53,11 +53,13 @@ mod hrc20 {
                 "decimals": 8 as u8,
             }
             return inf2
-            // var infos = new_map()
-            // insert(infos, "name",     "Test HRC20 Token")
-            // insert(infos, "symbol",   "THT")
-            // insert(infos, "decimals", 8 as u8)
-            // return infos
+            /* 
+                var infos = new_map()
+                insert(infos, "name",     "Test HRC20 Token")
+                insert(infos, "symbol",   "THT")
+                insert(infos, "decimals", 8 as u8)
+                return infos
+            */
         "##).unwrap())
 
         // total_supply
@@ -85,12 +87,27 @@ mod hrc20 {
         // transfer
         .func(Func::new("transfer").public().fitsh(r##"
             param { addr_to, amount }
-            var addr_from = tx_main_address() as address
+            var addr_from = tx_main_address()
             // print addr_from
             return self.do_transfer(addr_from, addr_to, amount)
         "##).unwrap())
 
         // extend
+
+        .func(Func::new("renewal").public().fitsh(r##"
+            param{ period }
+            assert period is u64
+            
+            let addr = tx_main_address()
+            let bk = "b_" ++ addr
+            let bkr = storage_rest(bk)
+            assert bkr is not nil
+            var new_bkr = bkr + period * 300
+            storage_rent(bk, period)
+            let tk = "total"
+            storage_rent(tk, period)
+            end
+        "##).unwrap())
 
         .func(Func::new("offering").public().fitsh(r##"
             var addr = tx_main_address()
@@ -107,7 +124,7 @@ mod hrc20 {
             let bk = "b_" ++ addr
             storage_save(bk, bls + 1000000000) // give 10 token
             storage_save(phk, cur_hei)
-            return 0
+            end
         "##).unwrap())
 
 
@@ -149,7 +166,7 @@ mod hrc20 {
             }
             // print 7
             // finish
-            return 0
+            end
         "##).unwrap())
         .testnet_deploy_print_by_nonce("12:244", 0);
     
