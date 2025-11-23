@@ -158,6 +158,7 @@ pub fn execute_code(
     memorys: &mut CtcKVMap,
 
     ctx: &mut dyn ExtActCal,
+    log: &mut dyn Logs,
     state: &mut VMState,
 
     context_addr: &ContractAddress, 
@@ -361,6 +362,11 @@ pub fn execute_code(
             GGET => *ops.peek()? = globals.get(ops.peek()?)?,
             MPUT => { let v = ops.pop()?; memorys.entry(context_addr)?.put(ops.pop()?, v)?; },
             MGET => *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?,
+            // log (t1,[t2,t3,t4,]d)
+            LOG1 => record_log(context_addr, log, ops.popn(2)?)?,
+            LOG2 => record_log(context_addr, log, ops.popn(3)?)?,
+            LOG3 => record_log(context_addr, log, ops.popn(4)?)?,
+            LOG4 => record_log(context_addr, log, ops.popn(5)?)?,
             // logic
             AND  => binop_btw(ops, lgc_and)?,
             OR   => binop_btw(ops, lgc_or)?,
@@ -517,6 +523,21 @@ fn unpack_list(mut i: u8, locals: &mut Stack, list: &mut VecDeque<Value>) -> Vmr
         *locals.edit(i)? = item;
         i += 1;
     }
+    Ok(())
+}
+
+
+fn record_log(adr: &ContractAddress, log: &mut dyn Logs, tds: Vec<Value>) -> VmrtErr {
+    /*
+    print!("record_log: ");
+    for i in (0 .. tds.len()).rev() {
+        print!("{}: {}, ", i, tds[i].to_string());
+    }
+    println!("tds: {}", tds.len());
+    */
+    // save
+    let lgdt = VmLog::new(adr.to_addr(), tds)?;
+    log.push(&lgdt); // record
     Ok(())
 }
 

@@ -12,6 +12,9 @@ listen = 3033
 ; difficulty_adjust_blocks = 10
 ; each_block_target_time = 10
 
+[vmlog]
+enable = true
+can_delete = true
 
 [server]
 enable = true

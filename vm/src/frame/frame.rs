@@ -141,6 +141,8 @@ impl Frame {
     }
 
     pub fn execute(&mut self, r: &mut Resoure, env: &mut ExecEnv) -> VmrtRes<CallExit> {
+        let ctx1 = env.ctx.clone_mut();
+        let ctx2 = env.ctx.clone_mut();
         execute_code(
             &mut self.pc,
             &self.codes,
@@ -155,7 +157,8 @@ impl Frame {
             &mut self.heap,
             &mut r.global_vals,
             &mut r.memory_vals,
-            env.ctx.as_ext_caller(),
+            ctx1.as_ext_caller(),
+            ctx2.logs(),
             env.sta,
             &self.ctxadr,
             &self.curadr,

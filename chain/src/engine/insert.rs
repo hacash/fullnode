@@ -40,13 +40,15 @@ impl ChainEngine {
             id: c.chain_id,
         };
         // execute block
-        sub_state = blk.objc.execute(chain_option, sub_state)?;
+        let open_vmlog = self.cnf.vmlogs_enable && hei >= self.cnf.vmlogs_open_height;
+        let logs = Box::new(self.logs.next( maybe!(open_vmlog, hei, 0) )); // maybe not push logs
+        let (sub_state, sub_log) = blk.objc.execute(chain_option, sub_state, logs)?;
         if !fast_sync {
             self.minter.blk_insert(&blk, sub_state.as_ref(), prev_state.as_ref().as_ref())?;
         }
         // create chunk
         let (hx, objc, data) = blk.apart();
-        let chunk = Chunk::create(hx, objc.into(), sub_state.into());
+        let chunk = Chunk::create(hx, objc.into(), sub_state.into(), sub_log.into());
         // insert chunk
         roller.insert(prev_chunk, chunk).map(|(a,b)|(
             a, b, hx, data, roller.root.height
@@ -89,6 +91,10 @@ impl ChainEngine {
         if let Some(new_root) = root_change.clone() {
             // write state data to disk
             new_root.state.write_to_disk();
+            let open_vmlog = self.cnf.vmlogs_enable && new_root.blogs.height() >= self.cnf.vmlogs_open_height;
+            if open_vmlog {
+                new_root.blogs.write_to_disk();
+            }
             // println!("----  new_root.state.write_to_disk() for height {}", new_root.height);
             // scaner do roll
             self.scaner.roll(new_root.block.clone(), new_root.state.clone(), self.disk.clone());

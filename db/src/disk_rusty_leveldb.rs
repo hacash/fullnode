@@ -23,7 +23,7 @@ impl DiskKV {
 
 impl DiskDB for DiskKV {
 
-    fn drop(&self, k: &[u8]) {
+    fn remove(&self, k: &[u8]) {
         let mut ldb =  self.ldb.lock().unwrap();
         ldb.delete(k).unwrap();
         ldb.flush().unwrap();

@@ -16,6 +16,11 @@ pub struct EngineConf {
     pub data_dir: String,
     pub block_data_dir: PathBuf, // block data
     pub state_data_dir: PathBuf, // chain state
+    pub blogs_data_dir: PathBuf, // logs  state
+    // block logs
+    pub vmlogs_enable: bool,
+    pub vmlogs_open_height: u64,
+    pub vmlogs_can_delete: bool,
     // dev count
     pub dev_count_switch: usize,
     // data service
@@ -75,8 +80,13 @@ impl EngineConf {
             sync_maxh: 0,
             block_data_dir: join_path(&data_dir, "block"),
             state_data_dir: state_data_dir,
+            blogs_data_dir: join_path(&data_dir, "logs"),
             data_dir: data_dir.to_str().unwrap().to_owned(),
             dev_count_switch: 0,
+            // logs
+            vmlogs_enable: false,
+            vmlogs_open_height: 0,
+            vmlogs_can_delete: false,
             //
             diamond_form: ini_must_bool(sec_server, "diamond_form", true),
             recent_blocks: ini_must_bool(sec_server, "recent_blocks", false),
@@ -111,6 +121,11 @@ impl EngineConf {
         cnf.chain_id = ini_must_u64(sec_mint, "chain_id", 0) as u32;
         cnf.sync_maxh = ini_must_u64(sec_mint, "height_max", 0);
         cnf.dev_count_switch = ini_must_u64(sec_mint, "dev_count_switch", 0) as usize;
+
+        let sec_vmlog = &ini_section(ini, "vmlog");
+        cnf.vmlogs_enable = ini_must_bool(sec_vmlog, "enable", false);
+        cnf.vmlogs_can_delete = ini_must_bool(sec_vmlog, "can_delete", false);
+        cnf.vmlogs_open_height = ini_must_u64(sec_vmlog, "open_height", 0) as u64;
 
         // HAC miner
         let sec_miner = &ini_section(ini, "miner");

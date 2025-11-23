@@ -1,4 +1,5 @@
 
+use protocol::state::EmptyLogs;
 use space::{CtcKVMap, GKVMap, Heap, Stack};
 
 pub type VmTestExecRes = (CallExit, i64, Vec<Value>, Heap);
@@ -45,6 +46,7 @@ fn execute_test_with_argv(gas_limit: i64, codes: Vec<u8>, argv: Option<Value>) -
         &mut GKVMap::new(20),
         &mut CtcKVMap::new(12),
         &mut ctx,
+        &mut EmptyLogs{},
         &mut sta,
         &cadr,
         &cadr,

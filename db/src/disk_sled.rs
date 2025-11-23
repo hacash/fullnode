@@ -19,7 +19,7 @@ impl DiskKV {
 
 impl DiskDB for DiskKV {
 
-    fn drop(&self, k: &[u8]) {
+    fn remove(&self, k: &[u8]) {
         self.ldb.remove(k).unwrap();
         self.ldb.flush().unwrap();
     }

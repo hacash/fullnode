@@ -27,6 +27,8 @@ pub trait Context : StateOperat + ExtActCal {
     fn vm_replace(&mut self, _: Box<dyn VM>) -> Box<dyn VM>;
     // tex
     fn tex_state(&mut self) -> &mut TexState;
+    // log
+    fn logs(&mut self) -> &mut dyn Logs;
     
 }
 

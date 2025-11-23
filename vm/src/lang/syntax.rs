@@ -820,6 +820,27 @@ impl Syntax {
                 let arys = IRNodeList::from_vec(subs)?;
                 Box::new(arys)
             }
+            Keyword(Log) => {
+                let e = errf!("log argv number error");
+                let block = self.item_may_block()?;
+                let num = block.subs.len();
+                match num {
+                    2 | 3 | 4 | 5 => {
+                        let inst = match num {
+                            2 => LOG1,
+                            3 => LOG2,
+                            4 => LOG3,
+                            5 => LOG4,
+                            _ => never!()
+                        };
+                        let mut subs = block.subs;
+                        subs.push(Self::push_inst_noret(inst));
+                        let arys = IRNodeList::from_vec(subs)?;
+                        Box::new(arys)
+                    }
+                    _ => return e
+                }
+            }
             Keyword(Nil)    => Self::push_nil(),
             Keyword(True)   => Self::push_inst(P1),
             Keyword(False)  => Self::push_inst(P0),

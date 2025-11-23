@@ -103,6 +103,19 @@ macro_rules! q_body_data_may_hex {
 }
 
 #[macro_export]
+macro_rules! q_hex {
+    ( $d: expr) => (
+        {
+            let res = hex::decode(&$d);
+            if let Err(_) = res {
+                return api_error("hex format error")
+            }
+            res.unwrap()
+        }
+    )
+}
+
+#[macro_export]
 macro_rules! q_addr {
     ($adr: expr) => ({
         let adr = Address::from_readable(&$adr);
