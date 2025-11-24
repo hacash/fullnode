@@ -17,6 +17,7 @@ use super::interface::*;
 include!{"macro.rs"}
 include!{"store.rs"}
 include!{"state.rs"}
+include!{"logs.rs"}
 
 
 

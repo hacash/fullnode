@@ -60,6 +60,11 @@ Storage Ban:
     - Library Call (can read)
 
 
+VM Logs:
+
+    - Op:  Log1, Log2, Log3, Log4
+    - Gas:   20,   24,   28,   32
+    - 
 
 Gas Calculation:
 

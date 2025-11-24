@@ -22,7 +22,7 @@ impl DiskKV {
 
 impl DiskDB for DiskKV {
 
-    fn drop(&self, k: &[u8]) {
+    fn remove(&self, k: &[u8]) {
         self.ldb.rm(k)
     }
 

@@ -21,7 +21,7 @@ pub trait DiskDB : Send + Sync {
     // fn open(dir: &Path) -> Self where Self: Sized;
     fn read(&self, _: &[u8]) -> Option<Vec<u8>> { None }
     fn save(&self, _: &[u8], _: &[u8] ) {}
-    fn drop(&self, _: &[u8]) {}
+    fn remove(&self, _: &[u8]) {}
     fn write(&self, _: &dyn MemDB) {} // dyn MemDB
     // fn write_batch(&self, _: Box<dyn Any>) {} // dyn MemBatch
     // debug

@@ -44,6 +44,7 @@ keyword_define!{
     Lib       : "lib"
     Let       : "let"
     Var       : "var"
+    Log       : "log"
     If        : "if"
     Else      : "else"
     While     : "while"
@@ -302,6 +303,11 @@ irfn_define!{
     GGET       : 0, 1, 1,     global_get
     MPUT       : 0, 2, 0,     memory_put
     MGET       : 0, 1, 1,     memory_get
+
+    // LOG1       : 0, 255, 0,     log_1
+    // LOG2       : 0, 255, 0,     log_2
+    // LOG3       : 0, 255, 0,     log_3
+    // LOG4       : 0, 255, 0,     log_4
         
     SREST      : 0, 1, 1,     storage_rest
     SLOAD      : 0, 1, 1,     storage_load

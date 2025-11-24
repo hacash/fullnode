@@ -198,7 +198,7 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
                 (2, 1) => Box::new(IRNodeParam2Single{hrtv, inst, para: itrp2!(), subx: submust!()}), // params two
                 (a, 0) => Box::new(IRNodeParams{hrtv, inst, para: itrbuf!(a as usize)}), // params
                 (a, 1) => Box::new(IRNodeParamsSingle{hrtv, inst, para: itrbuf!(a as usize), subx: submust!()}),
-                _ => return itr_err_fmt!(InstInvalid, "invalid irnode {:?} of ps {} i {}", inst, meta.param, meta.input)
+                _ => return itr_err_fmt!(InstInvalid, "invalid irnode {:?} of ps={} i={}", inst, meta.param, meta.input)
             }
         }
     };

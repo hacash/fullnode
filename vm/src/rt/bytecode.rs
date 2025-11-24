@@ -159,10 +159,10 @@ pub enum Bytecode {
     GPUT                = 0x91, // a,b   global put
     MGET                = 0x92, // &     memory get
     MPUT                = 0x93, // a,b   memory put
-    ________________148 = 0x94,
-    ________________149 = 0x95,
-    ________________150 = 0x96,
-    ________________151 = 0x97,
+    LOG1                = 0x94,
+    LOG2                = 0x95,
+    LOG3                = 0x96,
+    LOG4                = 0x97,
     ________________152 = 0x98,
     ________________153 = 0x99,
     ________________154 = 0x9a,
@@ -425,6 +425,11 @@ bytecode_metadata_define!{
     GGET       : 0, 1, 1,     global_get
     MPUT       : 0, 2, 0,     memory_put
     MGET       : 0, 1, 1,     memory_get
+
+    LOG1       : 0, 255, 0,   log_1
+    LOG2       : 0, 255, 0,   log_2
+    LOG3       : 0, 255, 0,   log_3
+    LOG4       : 0, 255, 0,   log_4
         
     SREST      : 0, 1, 1,     storage_rest
     SLOAD      : 0, 1, 1,     storage_load

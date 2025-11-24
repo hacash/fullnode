@@ -1,4 +1,4 @@
-use crate::CallDepth;
+use crate::{CallDepth};
 
 
 /*
@@ -12,6 +12,7 @@ pub struct ContextInst<'a> {
 
     pub tex_state: TexState,
 
+    log: Box<dyn Logs>,
     sta: Box<dyn State>,
     check_sign_cache: HashMap<Address, Ret<bool>>,
 }
@@ -19,8 +20,8 @@ pub struct ContextInst<'a> {
 
 impl ContextInst<'_> {
 
-    pub fn new<'a>(env: Env, sta: Box<dyn State>, txr: &'a dyn TransactionRead) -> ContextInst<'a> {
-        ContextInst{ env, sta, txr,
+    pub fn new<'a>(env: Env, sta: Box<dyn State>, log: Box<dyn Logs>, txr: &'a dyn TransactionRead) -> ContextInst<'a> {
+        ContextInst{ env, sta, log, txr,
             depth: CallDepth::new(0),
             check_sign_cache: HashMap::new(),
             vmi: VMNil::empty(),
@@ -28,8 +29,8 @@ impl ContextInst<'_> {
         }
     }
 
-    pub fn into_state(self) -> Box<dyn State> {
-        self.sta
+    pub fn release(self) -> (Box<dyn State>, Box<dyn Logs>) {
+        (self.sta, self.log)
     }
 }
 
@@ -58,6 +59,10 @@ impl StateOperat for ContextInst<'_> {
 }
 
 impl Context for ContextInst<'_> {
+
+    fn logs(&mut self) -> &mut dyn Logs {
+        self.log.as_mut()
+    }
 
     fn clone_mut(&self) -> &mut dyn Context {
         let ptr: *const ContextInst<'_> = self as *const ContextInst<'_>;

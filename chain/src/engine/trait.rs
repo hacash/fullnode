@@ -70,6 +70,10 @@ impl EngineRead for ChainEngine {
         Arc::new(BlockStore::wrap(self.disk.clone()))
     }
 
+    fn logs(&self) -> Arc<dyn Logs> {
+        self.logs.clone()
+    }
+
     fn recent_blocks(&self) -> Vec<Arc<RecentBlockInfo>> {
         let vs = self.rctblks.lock().unwrap();   
         let res: Vec<_> = vs.iter().map(|x|x.clone()).collect();
@@ -127,11 +131,13 @@ impl EngineRead for ChainEngine {
         };
         // cast mut to box
         let sub = unsafe { Box::from_raw(sub_state.as_mut() as *mut dyn State) };
-        let mut ctxobj = ctx::ContextInst::new(env, sub, tx);
+        let log = self.logs.next(0); // do not push & write 
+        let mut ctxobj = ctx::ContextInst::new(env, sub, Box::new(log), tx);
         // do tx exec
         let exec_res = tx.execute(&mut ctxobj);
         // drop the box, back to mut ptr do manage
-        let _ = Box::into_raw( ctxobj.into_state() ); 
+        let (sta, _) = ctxobj.release(); 
+        let _ = Box::into_raw(sta ); 
         // return execute result
         exec_res
     }

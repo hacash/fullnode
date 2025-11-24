@@ -81,7 +81,7 @@ impl BlockRead for BlockV1 {
 }
 
 impl BlockExec for BlockV1 {
-    fn execute(&self, ccnf: ChainInfo, state: Box<dyn State>) -> Ret<Box<dyn State>> {
+    fn execute(&self, ccnf: ChainInfo, state: Box<dyn State>, logs: Box<dyn Logs>) -> Ret<(Box<dyn State>, Box<dyn Logs>)> {
         // create env
         let mut env = Env {
             chain: ccnf,
@@ -97,7 +97,7 @@ impl BlockExec for BlockV1 {
         let base_addr = cbtx.main();
         env.block.coinbase = base_addr.clone();
         // create ctx
-        let mut ctxobj = context::ContextInst::new(env, state, cbtx);
+        let mut ctxobj = context::ContextInst::new(env, state, logs, cbtx);
         let ctx = &mut ctxobj;
         let txs = self.transactions();
         let mut total_fee = Amount::zero();
@@ -112,7 +112,7 @@ impl BlockExec for BlockV1 {
         if total_fee.is_positive() { // amt > 0
             operate::hac_add(ctx, &base_addr, &total_fee)?;
         }
-        Ok(ctxobj.into_state())
+        Ok(ctxobj.release())
 
     }
 }

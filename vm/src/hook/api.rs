@@ -18,7 +18,73 @@ use super::ContractAddress;
 
 
 
-////////////////// test //////////////////
+////////////////// contract logs read & del//////////////////
+
+
+
+api_querys_define!{ Q9264,
+    height,  u64, 0,
+    index,   usize, 0,
+    address, Option<String>, None,
+    topic0,  Option<String>, None,
+    topic1,  Option<String>, None,
+    topic2,  Option<String>, None,
+    topic3,  Option<String>, None,
+}
+
+async fn vm_logs_read(State(ctx): State<ApiCtx>, q: Query<Q9264>) -> impl IntoResponse {
+
+    let logs = ctx.engine.logs();
+    let Some(itdts) = logs.load(q.height, q.index) else {
+        return api_data_raw(s!(r#""end":true"#))
+    };
+    let Ok(item) = VmLog::build(&itdts).map_ire(LogError) else {
+        return api_error("log format error")
+    };
+    let ignore = api_data_raw(s!(r#""ignore":true,"end":false"#));
+    // filter address
+    if let Some(qadr) = &q.address {
+        if q_addr!(qadr) != item.addr {
+            return ignore
+        }
+    }
+    // filter topic
+    macro_rules! filter_topic { ($k: ident) => {
+        if let Some(tp) = &q.$k {
+            if q_hex!(tp) != item.$k.raw() {
+                return ignore
+            }
+        }
+    }}
+
+    filter_topic!{ topic0 }
+    filter_topic!{ topic1 }
+    filter_topic!{ topic2 }
+    filter_topic!{ topic3 }
+
+    // ok
+    let res = item.render(r#""ignore":false"#);
+    api_data_raw(res)
+
+}
+
+api_querys_define!{ Q8375,
+    height,  u64, 0,
+}
+
+async fn vm_logs_del(State(ctx): State<ApiCtx>, q: Query<Q8375>) -> impl IntoResponse {
+    let logs = ctx.engine.logs();
+    logs.remove(q.height);
+    // return
+    let data = r##""ok":true""##.to_owned();
+    api_data_raw(data)
+
+}
+
+
+
+
+////////////////// contract sandbox call //////////////////
 
 
 
@@ -56,7 +122,7 @@ async fn contract_sandbox_call(State(ctx): State<ApiCtx>, q: Query<Q8365>) -> im
         },
         tx: create_tx_info(&tx),
     };
-    let mut ctxobj = ContextInst::new(env, substa, &tx);
+    let mut ctxobj = ContextInst::new(env, substa, Box::new(EmptyLogs{}) ,&tx);
 
     // call contract
     let Ok(addr) = Address::from_readable(&q.contract) else {
@@ -82,9 +148,16 @@ async fn contract_sandbox_call(State(ctx): State<ApiCtx>, q: Query<Q8365>) -> im
 
 
 
+////////////////// api routes //////////////////
+
+
+
 
 pub fn extend_api_routes() -> Router<ApiCtx> {
 
-    Router::new().route(&query("contract/sandboxcall"), get(contract_sandbox_call))
+    Router::new()
+        .route(&query("contract/sandboxcall"), get(contract_sandbox_call))
+        .route(&query("contract/logs"), get(vm_logs_read))
+        .route(&operate("contract/logs/delete"), get(vm_logs_del))
 
 }
