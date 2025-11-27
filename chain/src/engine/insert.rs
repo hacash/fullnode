@@ -40,7 +40,7 @@ impl ChainEngine {
             id: c.chain_id,
         };
         // execute block
-        let open_vmlog = self.cnf.vmlogs_enable && hei >= self.cnf.vmlogs_open_height;
+        let open_vmlog = self.is_open_vmlog(hei);
         let logs = Box::new(self.logs.next( maybe!(open_vmlog, hei, 0) )); // maybe not push logs
         let (sub_state, sub_log) = blk.objc.execute(chain_option, sub_state, logs)?;
         if !fast_sync {
@@ -91,8 +91,7 @@ impl ChainEngine {
         if let Some(new_root) = root_change.clone() {
             // write state data to disk
             new_root.state.write_to_disk();
-            let open_vmlog = self.cnf.vmlogs_enable && new_root.blogs.height() >= self.cnf.vmlogs_open_height;
-            if open_vmlog {
+            if self.is_open_vmlog(new_root.blogs.height()) {
                 new_root.blogs.write_to_disk();
             }
             // println!("----  new_root.state.write_to_disk() for height {}", new_root.height);
@@ -102,6 +101,10 @@ impl ChainEngine {
         Ok(())
     }
 
+    fn is_open_vmlog(&self, ck_hei: u64) -> bool {
+        let open_vmlog = self.cnf.vmlogs_enable && ck_hei >= self.cnf.vmlogs_open_height;
+        open_vmlog
+    }
 
 }
 

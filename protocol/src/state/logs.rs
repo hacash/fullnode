@@ -38,10 +38,13 @@ impl Logs for BlockLogs {
     }
 
     fn write_to_disk(&self) {
-        for i in 0 .. self.logs.len() {
+        let m = self.logs.len();
+        for i in 0 .. m {
             self.disk.save(&self.nk(i), &self.logs[i]);
         }
-        self.update_len(self.logs.len());
+        if m > 0 {
+            self.update_len(self.logs.len());
+        }
     }
 
 }
@@ -77,7 +80,7 @@ impl BlockLogs {
 impl BlockLogs {
 
     fn read_len(&self, lnk: &Vec<u8>) -> usize {
-        let mut num = Uint8::default();
+        let mut num = Uint8::from(0);
         match self.disk.read(lnk) {
             None => num,
             Some(v) => {

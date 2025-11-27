@@ -11,7 +11,7 @@ macro_rules! vmsto {
 
 
 
-action_define!{ContractDeploy, 122, 
+action_define!{ContractDeploy, 99, 
     ActLv::TopUnique,
     false, [],
     {   
@@ -64,7 +64,7 @@ action_define!{ContractDeploy, 122,
 
 
 
-action_define!{ContractUpdate, 123, 
+action_define!{ContractUpdate, 98, 
     ActLv::TopUnique, // level
     false, [], // burn 90% fee
     {   

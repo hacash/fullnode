@@ -1,7 +1,7 @@
 
 
 
-action_define!{AstSelect, 100, 
+action_define!{AstSelect, 21, 
     ActLv::Ast, // level
     // burn 90 fee, check any sub child action
     self.actions.list().iter().any(|a|a.burn_90()),
@@ -12,6 +12,10 @@ action_define!{AstSelect, 100,
         actions: DynListActionW1
     },
     (self, ctx, gas {
+        #[cfg(not(feature = "ast"))]
+        if true {
+            return errf!("ast select not open")
+        }
         let slt_min = *self.exe_min as usize;
         let slt_max = *self.exe_max as usize;
         let slt_num = self.actions.length();

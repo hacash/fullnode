@@ -1,7 +1,7 @@
 
 
 
-action_define!{AstIf, 101, 
+action_define!{AstIf, 22, 
     ActLv::Ast, // level
     // burn 90 fee , check child burn 90
     self.cond.burn_90() || self.br_if.burn_90() || self.br_else.burn_90(), 
@@ -12,6 +12,11 @@ action_define!{AstIf, 101,
         br_else: AstSelect
     },
     (self, ctx, gas {
+        #[cfg(not(feature = "ast"))]
+        if true {
+            return errf!("ast if not open")
+        }
+        // 
         let oldsta = ctx.state_fork();
         match self.cond.execute(ctx) {
             // if br

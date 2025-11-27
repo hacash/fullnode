@@ -8,6 +8,7 @@ use field::*;
 use super::*;
 use super::interface::*;
 use super::operate::*;
+use super::context::*;
 use super::state::*;
 
 
@@ -27,6 +28,8 @@ include!{"asset.rs"}
 // include!{"channel.rs"}
 include!{"chainlimit.rs"}
 
+include!{"astselect.rs"}
+include!{"astif.rs"}
 
 /*
 * register
@@ -62,8 +65,12 @@ action_register!{
     AssetFromTrs          // 18
     AssetFromToTrs        // 19
 
+    AstSelect             // 21
+    AstIf                 // 22
+
     // inscription
     // DiamondInscription         // 32
     // DiamondInscriptionClear    // 33
+
 
 }

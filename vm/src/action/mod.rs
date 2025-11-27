@@ -5,7 +5,6 @@ use field::*;
 use field::interface::*;
 use protocol::*;
 use protocol::interface::*;
-use protocol::context::*;
 use protocol::state::*;
 use protocol::action::*;
 
@@ -20,9 +19,6 @@ use super::rt::*;
 // }
 
 
-
-include!{"astselect.rs"}
-include!{"astif.rs"}
 include!{"blob.rs"}
 include!{"contract.rs"}
 include!{"maincall.rs"}
@@ -36,8 +32,6 @@ include!{"envfunc.rs"}
 */
 action_register! {
     
-    AstIf                // 101
-    AstSelect            // 102
     TxMessage            // 120
     TxBlob               // 121
     ContractDeploy       // 122

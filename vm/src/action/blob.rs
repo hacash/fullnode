@@ -1,6 +1,6 @@
 
 
-action_define!{TxMessage, 120, 
+action_define!{TxMessage, 96, 
     ActLv::TopUnique, // level
     false, [],
     {
@@ -12,7 +12,7 @@ action_define!{TxMessage, 120,
 }
 
 
-action_define!{TxBlob, 121, 
+action_define!{TxBlob, 97, 
     ActLv::TopUnique, // level
     false, [],
     {

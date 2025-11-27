@@ -34,14 +34,20 @@ api_querys_define!{ Q9264,
 
 async fn vm_logs_read(State(ctx): State<ApiCtx>, q: Query<Q9264>) -> impl IntoResponse {
 
+    let ck_hei = q.height;
+    let rc_hei = ctx.engine.latest_block().height().uint() - ctx.engine.config().unstable_block;
+    if ck_hei > rc_hei {
+        return api_data_raw(s!(r#""unstable":true"#))
+    }
+    // find logs
     let logs = ctx.engine.logs();
-    let Some(itdts) = logs.load(q.height, q.index) else {
+    let Some(itdts) = logs.load(ck_hei, q.index) else {
         return api_data_raw(s!(r#""end":true"#))
     };
     let Ok(item) = VmLog::build(&itdts).map_ire(LogError) else {
         return api_error("log format error")
     };
-    let ignore = api_data_raw(s!(r#""ignore":true,"end":false"#));
+    let ignore = api_data_raw(s!(r#""ignore":true"#));
     // filter address
     if let Some(qadr) = &q.address {
         if q_addr!(qadr) != item.addr {
@@ -63,7 +69,7 @@ async fn vm_logs_read(State(ctx): State<ApiCtx>, q: Query<Q9264>) -> impl IntoRe
     filter_topic!{ topic3 }
 
     // ok
-    let res = item.render(r#""ignore":false"#);
+    let res = item.render("");
     api_data_raw(res)
 
 }
