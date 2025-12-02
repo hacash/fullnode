@@ -23,30 +23,21 @@ fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
     // Context creation for OpenCL instance
     let platform = Platform::default();
 
-    let platforms = Platform::list();
-    // Iterate OpenCL platforms
-    for plt in platforms {
-        let name = plt.name().expect("Error");
-        let vendor = plt.vendor().expect("Error");
-        let version = plt.version().expect("Error");
-        println!("Platform name: {}", name);
-        println!("Manufacturer: {}", vendor);
-        println!("Version: {}", version);
-        println!("-----------------------------------------");
-    }
+    let name = platform.name().expect("Error");
+    let vendor = platform.vendor().expect("Error");
+    let version: String = platform.version().expect("Error");
+    println!("Platform name: {}", name);
+    println!("Manufacturer: {}", vendor);
+    println!("Version: {}", version);
+    println!("-----------------------------------------");
 
     let devices = Device::list_all(&platform).expect("Error");
-
     // Iterate OpenCL devices
-    for device in devices {
+    for (idx, device) in devices.iter().enumerate() {
         let name = device.name().expect("Error");
-        let vendor = device.vendor().expect("Error");
-        let version = device.version().expect("Error");
-        println!("Device name: {}", name);
-        println!("Manufacturer: {}", vendor);
-        println!("Version: {}", version);
-        println!("-----------------------------------------");
+        println!("Device {}: {}", idx, name);
     }
+    println!("-----------------------------------------");
 
     let device = Device::by_idx_wrap(platform, cnf.deviceid.try_into().unwrap()).expect("Can't find OpenCL device");
     let context = Context::builder()
