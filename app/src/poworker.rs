@@ -50,18 +50,19 @@ impl PoWorkConf {
 
     pub fn new(ini: &IniObj) -> PoWorkConf {
         let sec = &ini_section(ini, "default"); // default = root
+        let sec_gpu = &ini_section(ini, "gpu");
         let cnf = PoWorkConf{
             rpcaddr: ini_must(sec, "connect", "127.0.0.1:8081"),
             supervene: ini_must_u64(sec, "supervene", 2) as u32,
             noncemax: ini_must_u64(sec, "nonce_max", u32::MAX as u64) as u32,
             noticewait: ini_must_u64(sec, "notice_wait", 45),
-            useopencl: ini_must_bool(sec, "use_opencl", false) as bool,
-            workgroups: ini_must_u64(sec, "work_groups", 1024) as u32,
-            localsize: ini_must_u64(sec, "local_size", 256) as u32,
-            unitsize: ini_must_u64(sec, "unit_size", 128) as u32,
-            opencldir: ini_must(sec, "opencl_dir", "opencl/"),
-            debug: ini_must_u64(sec, "debug", 0) as u32,
-            deviceid: ini_must_u64(sec, "device_id", 0) as u32,
+            useopencl: ini_must_bool(sec_gpu, "use_opencl", false) as bool,
+            workgroups: ini_must_u64(sec_gpu, "work_groups", 1024) as u32,
+            localsize: ini_must_u64(sec_gpu, "local_size", 256) as u32,
+            unitsize: ini_must_u64(sec_gpu, "unit_size", 128) as u32,
+            opencldir: ini_must(sec_gpu, "opencl_dir", "opencl/"),
+            debug: ini_must_u64(sec_gpu, "debug", 0) as u32,
+            deviceid: ini_must_u64(sec_gpu, "device_id", 0) as u32,
         };
         cnf
     }
