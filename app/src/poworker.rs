@@ -147,21 +147,33 @@ pub fn poworker() {
         }
     });
 
-    // start worker thread
-    let thrnum = cnf.supervene as usize;
-    // Initialize OpenCL
-    let opencl_resources = Arc::new(initialize_opencl(&cnf.clone()));
-    println!("\n[Start] Create #{} block miner worker thread.", thrnum);
-    for thrid in 0 .. thrnum {
+    if cnf.useopencl { // opencl is enabled
+        // Initialize OpenCL
+        let opencl_resources = Arc::new(initialize_opencl(&cnf.clone()));
+        println!("\n[Start] Create GPU block miner worker.");
         let cnf2 = cnf.clone();
-        let rstx = res_tx.clone();
-        let opencl_clone = Arc::clone(&opencl_resources);
-        spawn(move || {
-            loop {
-                run_block_mining_item(&cnf2, thrid, rstx.clone(), opencl_clone.clone());
-                delay_continue_ms!(9);
-            }
-        });
+            let rstx: mpsc::Sender<Arc<BlockMiningResult>> = res_tx.clone();
+            let opencl_clone = Arc::clone(&opencl_resources);
+            spawn(move || {
+                loop {
+                    run_block_mining_item(&cnf2, 0, rstx.clone(), Some(opencl_clone.clone()));
+                    delay_continue_ms!(9);
+                }
+            });
+    } else {
+        // start worker thread
+        let thrnum = cnf.supervene as usize;
+        println!("\n[Start] Create #{} block miner worker thread.", thrnum);
+        for thrid in 0 .. thrnum {
+            let cnf2 = cnf.clone();
+            let rstx = res_tx.clone();
+            spawn(move || {
+                loop {
+                    run_block_mining_item(&cnf2, thrid, rstx.clone(), None);
+                    delay_continue_ms!(9);
+                }
+            });
+        }
     }
 
     // loop
@@ -175,7 +187,7 @@ pub fn poworker() {
 
 fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
     result_ch_tx: mpsc::Sender<Arc<BlockMiningResult>>,
-    opencl: Arc<OpenCLResources>,
+    opencl: Option<Arc<OpenCLResources>>,
 ) {
 
     let mining_hei = MINING_BLOCK_HEIGHT.load(Relaxed);
@@ -203,8 +215,10 @@ fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
     loop {
         let ctn = Instant::now();
         let (head_nonce, result_hash) = if _cnf.useopencl {
+            let opencl = opencl
+                .as_ref()
+                .expect("OpenCL miner is disabled");
              do_group_block_mining_opencl(
-                _thrid,
                 &opencl,
                 height,
                 block_intro.serialize(),
@@ -272,7 +286,6 @@ fn do_group_block_mining(height: u64, mut block_intro: Vec<u8>,
 }
 
 fn do_group_block_mining_opencl(
-    thrid: usize,
     opencl: &OpenCLResources,
     height: u64,
     block_intro: Vec<u8>,
@@ -304,10 +317,10 @@ fn do_group_block_mining_opencl(
         .arg(nonce_start)
         .arg(repeat)
         .arg(unit_size)
-        .arg(&opencl.buffer_global_hashes[thrid])
-        .arg(&opencl.buffer_global_order[thrid])
-        .arg(&opencl.buffer_best_hashes[thrid])
-        .arg(&opencl.buffer_best_nonces[thrid])
+        .arg(&opencl.buffer_global_hashes)
+        .arg(&opencl.buffer_global_order)
+        .arg(&opencl.buffer_best_hashes)
+        .arg(&opencl.buffer_best_nonces)
         .build()
         .unwrap();
 
@@ -316,15 +329,15 @@ fn do_group_block_mining_opencl(
         kernel.cmd().enew(&mut kernel_event).enq().expect("Unable to queue OpenCL kernel");
     }
 
-    let mut hashes = vec![0u8; opencl.buffer_best_hashes[thrid].len()];
-    opencl.buffer_best_hashes[thrid]
+    let mut hashes = vec![0u8; opencl.buffer_best_hashes.len()];
+    opencl.buffer_best_hashes
         .read(&mut hashes)
         .ewait(&kernel_event)
         .enq()
         .expect("Can't read buffer_best_hashes");
 
-    let mut nonces = vec![0u32; opencl.buffer_best_nonces[thrid].len()];
-    opencl.buffer_best_nonces[thrid]
+    let mut nonces = vec![0u32; opencl.buffer_best_nonces.len()];
+    opencl.buffer_best_nonces
         .read(&mut nonces)
         .ewait(&kernel_event)
         .enq()
@@ -344,7 +357,11 @@ fn do_group_block_mining_opencl(
 fn deal_block_mining_results(cnf: &PoWorkConf, most_hash: &mut Vec<u8>,
     result_ch_rx: &mut mpsc::Receiver<Arc<BlockMiningResult>>,
 ) {
-    let vene = cnf.supervene;
+    let vene = if cnf.useopencl {
+        1 // Single thread with GPU
+    } else {
+        cnf.supervene
+    };
     // deal
     let mut deal_hei = 0u64;
     let mut most = Arc::new(BlockMiningResult::new());

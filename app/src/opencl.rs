@@ -9,10 +9,10 @@ use ocl::{Buffer, Context, Device, EventList, Kernel, Platform, Program, Queue};
 struct OpenCLResources {
     program: Program,
     queue: Queue,
-    buffer_best_nonces: Vec<Buffer::<u32>>,
-    buffer_global_hashes: Vec<Buffer::<u8>>,
-    buffer_global_order: Vec<Buffer::<u32>>,
-    buffer_best_hashes: Vec<Buffer::<u8>>,
+    buffer_best_nonces: Buffer::<u32>,
+    buffer_global_hashes: Buffer::<u8>,
+    buffer_global_order: Buffer::<u32>,
+    buffer_best_hashes: Buffer::<u8>,
 }
 
 fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
@@ -72,15 +72,13 @@ fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
             .expect("Can't read binary file");
         println!("Loading OpenCL from the binary...");
         let binaries = [&binary_data[..]];
-        unsafe {
-            Program::with_binary(
-                &context,
-                &[device.clone()],
-                &binaries,
-                &CString::new("").unwrap(),
-            )
-            .expect("Can't create OpenCL program with the binary file")
-        }
+        Program::with_binary(
+            &context,
+            &[device.clone()],
+            &binaries,
+            &CString::new("").unwrap(),
+        )
+        .expect("Can't create OpenCL program with the binary file")
     } else {
         println!("Compiling...");
         // Compile from source
@@ -94,39 +92,33 @@ fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
     let num_work_items = cnf.workgroups * cnf.localsize;
     let global_work_size = num_work_items;
 
-    let mut buffer_best_nonces = Vec::with_capacity(cnf.supervene as usize);
-    let mut buffer_global_hashes = Vec::with_capacity(cnf.supervene as usize);
-    let mut buffer_global_order = Vec::with_capacity(cnf.supervene as usize);
-    let mut buffer_best_hashes = Vec::with_capacity(cnf.supervene as usize);
-    for _ in 0..cnf.supervene {
-        buffer_best_nonces.push(Buffer::<u32>::builder()
-            .queue(queue.clone())
-            .flags(ocl::core::MEM_WRITE_ONLY)
-            .len(cnf.workgroups)
-            .build()
-            .expect("Can't create buffer_best_nonces"));
+    let buffer_best_nonces = Buffer::<u32>::builder()
+        .queue(queue.clone())
+        .flags(ocl::core::MEM_WRITE_ONLY)
+        .len(cnf.workgroups)
+        .build()
+        .expect("Can't create buffer_best_nonces");
 
-        buffer_global_hashes.push(Buffer::<u8>::builder()
-            .queue(queue.clone())
-            .flags(ocl::core::MEM_READ_WRITE)
-            .len(HASH_WIDTH * cnf.unitsize as usize * global_work_size as usize)
-            .build()
-            .expect("Can't create buffer_global_hashes"));
+    let buffer_global_hashes = Buffer::<u8>::builder()
+        .queue(queue.clone())
+        .flags(ocl::core::MEM_READ_WRITE)
+        .len(HASH_WIDTH * cnf.unitsize as usize * global_work_size as usize)
+        .build()
+        .expect("Can't create buffer_global_hashes");
 
-        buffer_global_order.push(Buffer::<u32>::builder()
-            .queue(queue.clone())
-            .flags(ocl::core::MEM_READ_WRITE)
-            .len(cnf.unitsize as usize * global_work_size as usize)
-            .build()
-            .expect("Can't create buffer_global_order"));
+    let buffer_global_order = Buffer::<u32>::builder()
+        .queue(queue.clone())
+        .flags(ocl::core::MEM_READ_WRITE)
+        .len(cnf.unitsize as usize * global_work_size as usize)
+        .build()
+        .expect("Can't create buffer_global_order");
 
-        buffer_best_hashes.push(Buffer::<u8>::builder()
-            .queue(queue.clone())
-            .flags(ocl::core::MEM_WRITE_ONLY)
-            .len(HASH_WIDTH * cnf.workgroups as usize )
-            .build()
-            .expect("Can't create buffer_best_hashes"));
-    }
+    let buffer_best_hashes = Buffer::<u8>::builder()
+        .queue(queue.clone())
+        .flags(ocl::core::MEM_WRITE_ONLY)
+        .len(HASH_WIDTH * cnf.workgroups as usize )
+        .build()
+        .expect("Can't create buffer_best_hashes");
 
     OpenCLResources {
         program,
