@@ -25,6 +25,12 @@ pub struct TxInfo {
     pub addrs: Vec<Address>,
 }
 
+impl TxInfo {
+    pub fn swap_addrs(&mut self,  adrs: &mut Vec<Address>) {
+        std::mem::swap(&mut self.addrs, adrs);
+    }
+}
+
 
 
 #[derive(Default, Clone)]

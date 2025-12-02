@@ -20,12 +20,18 @@ pub enum NativeCall {
 }
 
 impl NativeCall {
+    $(
 
-    pub fn call(idx: u8, v: &[u8]) -> VmrtRes<(Value, i64)> {
+    concat_idents::concat_idents!{ const_name = idx_, $name {
+    #[allow(non_upper_case_globals)]
+    pub const const_name: u8 = $v;
+    }}
+    )+
+    pub fn call(hei: u64, idx: u8, v: &[u8]) -> VmrtRes<(Value, i64)> {
         let cty: NativeCall = std_mem_transmute!(idx);
         match cty {
             $(
-                Self::$name => $name(v).map(|r|{
+                Self::$name => $name(hei, v).map(|r|{
                     assert_eq!($rty, r.ty());
                     // assert_eq!($vsz, r.val_size());
                     (r, $gas)

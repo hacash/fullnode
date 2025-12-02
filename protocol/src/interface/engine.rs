@@ -6,9 +6,10 @@ pub trait EngineRead: Send + Sync {
     // fn tx(&self, _: &dyn Serialize) -> Option<Box<dyn TxPkg>>;
     fn config(&self) -> &EngineConf { never!() }
 
-    fn state(&self) -> Arc<dyn State> { never!() }
+    fn state(&self) -> Arc<Box<dyn State>> { never!() }
     fn fork_sub_state(&self) -> Box<dyn State> { never!() }
     fn store(&self) -> Arc<dyn Store> { never!() }
+    fn logs(&self) -> Arc<dyn Logs> { never!() }
 
     // fn confirm_state(&self) -> (Arc<dyn State>, Arc<dyn BlockPkg>);
     fn latest_block(&self) -> Arc<dyn Block> { never!() }

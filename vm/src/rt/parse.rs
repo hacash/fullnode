@@ -57,10 +57,7 @@ impl BytecodePrint for Vec<u8> {
             }else{
                 res.push_str(&format!("{:?} ", inst));
             }
-            // debug_println!("i ------------------- {:?}", i);
             if ! meta.valid {
-                // debug_println!("{}", res);
-                // debug_println!("{:?}, {}, {}, {}, {}, {}", self, self[i-2], self[i-1], self[i], self[i+1], self[i+2], );
                 return itr_err_fmt!(InstInvalid, "bytecode_print err of inst {}", byte)
             }
             i += 1;
@@ -84,9 +81,8 @@ impl BytecodePrint for Vec<u8> {
                         pms.push(format!(" -#{}- ", i as isize + s as isize + 2));
                     }else if let EXTENV = inst {
                         let ary = CALL_EXTEND_ENV_DEFS;
-                        let mut idx = self[i] as usize;
-                        if idx >= ary.len() { idx = 0; }
-                        pms.push(format!(" {}() ", ary[idx].0));
+                        let f = search_ext_name_by_id(self[i], &ary);
+                        pms.push(format!(" {}() ", f));
                     }else if let XOP = inst {
                         let (opt, idx) = local_operand_param_parse(self[i]);
                         pms.push(format!("{}, {}", idx, opt));
@@ -95,9 +91,8 @@ impl BytecodePrint for Vec<u8> {
                         pms.push(format!("{}, {}", opt, idx));
                     }else if let EXTFUNC = inst {
                         let ary = CALL_EXTEND_FUNC_DEFS;
-                        let mut idx = self[i] as usize;
-                        if idx >= ary.len() { idx = 0; }
-                        pms.push(format!(" {}(..) ", ary[idx].0));
+                        let f = search_ext_name_by_id(self[i], &ary);
+                        pms.push(format!(" {}(..) ", f));
                     }else if let CALL = inst {
                         let lib = self[i];
                         let func = hex::encode(&self[i+1..i+1+4]);

@@ -12,6 +12,7 @@ use field::*;
 
 
 include!{"define.rs"}
+include!{"util.rs"}
 include!{"env.rs"}
 include!{"config/mod.rs"}
 
@@ -23,6 +24,8 @@ pub mod difficulty;
 pub mod state;
 pub mod operate;
 pub mod action;
+#[cfg(feature = "tex")]
+pub mod tex;
 pub mod transaction;
 pub mod block;
 pub mod context;

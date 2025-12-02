@@ -102,7 +102,7 @@ impl FnObj {
 
     pub fn create(mks: u8, codes: Vec<u8>, agvty: Option<FuncArgvTypes>) -> VmrtRes<Self> {
         let ctype = CodeType::parse(mks)?;
-        Ok(Self {confs: mks, agvty, ctype, codes })
+        Ok(Self {confs: mks & 0b11111000, agvty, ctype, codes })
     }
 
     pub fn into_array(self) -> Vec<u8> {
@@ -128,7 +128,7 @@ pub enum CallExit {
 pub enum CallTarget {
     Inner,
     Libidx(u8),
-    Addr(ContractAddress),
+    // Addr(ContractAddress),
 }
 
 impl CallTarget {

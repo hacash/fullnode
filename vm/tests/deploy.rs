@@ -20,11 +20,67 @@ mod deploy {
     use vm::contract::*;
 
     #[test]
-    fn verify_codes() {
+    fn deploy_update_2() {
 
-        verify_bytecodes(&build_codes!(
-            PU8 1 JMPL 0 8 JMPL 0 2 RET
-        )).unwrap()
+        let _cadr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
+
+        let contract = Contract::new()
+        .func(Func::new("f1").public().fitsh(" return 1 ").unwrap())
+        .func(Func::new("f2").public().fitsh(" return 2 ").unwrap());
+        contract.testnet_deploy_print("8:244");  
+
+        let contract = Contract::new()  
+        .syst(Abst::new(AbstCall::Change).bytecode(build_codes!(P1 RET)).unwrap())
+        .func(Func::new("f4").public().fitsh(" return 4 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+    }
+
+
+    #[test]
+    fn deploy_update() {
+
+
+        let irnode = lang_to_irnode(" return 1 ").unwrap();
+        println!("{:?}", irnode);
+
+
+        let _cadr = Address::from_readable("VFE6Zu4Wwee1vjEkQLxgVbv3c6Ju9iTaa").unwrap();
+
+        let contract = Contract::new()
+        .syst(Abst::new(AbstCall::Append).bytecode(build_codes!(P0 RET)).unwrap())
+        .syst(Abst::new(AbstCall::Change).bytecode(build_codes!(P0 RET)).unwrap())
+        .func(Func::new("f1").public().fitsh(" return 1 ").unwrap())
+        .func(Func::new("f2").public().fitsh(" return 2 ").unwrap());
+        contract.testnet_deploy_print("8:244");    
+
+        let contract = Contract::new()        
+        .func(Func::new("f2").public().fitsh(" return 2 ").unwrap())
+        .func(Func::new("f3").public().fitsh(" return 3 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+        let contract = Contract::new()  
+        .syst(Abst::new(AbstCall::Append).bytecode(build_codes!(P1 RET)).unwrap())
+        .func(Func::new("f4").public().fitsh(" return 4 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+        let contract = Contract::new()  
+        .func(Func::new("f5").public().fitsh(" return 5 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+        let contract = Contract::new()  
+        .func(Func::new("f4").public().fitsh(" return 41 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+        let contract = Contract::new()  
+        .syst(Abst::new(AbstCall::Change).bytecode(build_codes!(P1 RET)).unwrap())
+        .func(Func::new("f6").public().fitsh(" return 6 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
+        let contract = Contract::new()  
+        .func(Func::new("f4").public().fitsh(" return 42 ").unwrap());
+        contract.testnet_update_print(_cadr, "8:244");
+
 
     }
 
@@ -39,12 +95,12 @@ mod deploy {
         */
 
         let recursion_fnstr= r##"
-            local_move(0)
             bytecode {
                 PU8 1
+                PU8 2
             }
-            var foo = $0
-            var bar = $1
+            var foo $0
+            var bar $1
             if foo > 10 {
                 return 10
             }
@@ -55,17 +111,16 @@ mod deploy {
 
 
         let payable_hac_codes = lang_to_bytecode(r##"
-            local_move(0)
-            var param = $0
-            var addr  = $1
-            var res   = $2
-            assert type_id(param) == 15
-            assert type_is_list(param)
-            addr = item_get(0, param)
-            addr = param[3]
-            assert type_is(12, addr)
+            var pms $0 = pick(0)
+            var adr $1
+            var res $2
+            assert type_id(pms) == 15
+            assert type_is_list(pms)
+            adr = item_get(0, pms)
+            adr = pms[3]
+            assert type_is(12, adr)
 
-            let bdt = param + addr
+            let bdt = pms + adr
             res = 1 + 2
             assert bdt
 
@@ -89,15 +144,17 @@ mod deploy {
                 PU8 0 
         )).unwrap();
 
-        Contract::new()
-        .cargv(vec![0])
-        .call(Abst::new(Construct).bytecode(build_codes!(
+        let contract = Contract::new()
+        .argv(vec![0])
+        .syst(Abst::new(Construct).bytecode(build_codes!(
             CU8 RET
-        )))
-        .call(Abst::new(PermitHAC).bytecode(permit_hac))
-        .call(Abst::new(PayableHAC).bytecode(payable_hac_codes))
+        )).unwrap())
+        .syst(Abst::new(PermitHAC).bytecode(permit_hac).unwrap())
+        .syst(Abst::new(PayableHAC).bytecode(payable_hac_codes).unwrap())
         .func(Func::new("recursion").fitsh(recursion_fnstr).unwrap())
-        .testnet_deploy_print("2:244");    
+        ;
+        // println!("\n\n{}\n\n", contract.serialize().to_hex());
+        contract.testnet_deploy_print("2:244");    
 
     }
 

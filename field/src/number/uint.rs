@@ -66,6 +66,13 @@ macro_rules! uint_define {
                 Self{ value: v }
             }
 
+            pub fn from_usize(v: usize) -> Ret<Self> {
+                if v > Self::MAX as usize {
+                    return errf!("combi list overflow")
+                }
+                Ok(Self{value: v as $vty})
+            }
+
             pub fn uint(&self) -> $vty {
                 self.value
             }

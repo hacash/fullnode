@@ -10,7 +10,7 @@ use super::ir::*;
 use super::value::*;
 
 use super::rt::Token::*;
-use super::rt::TokenType::*;
+// use super::rt::TokenType::*;
 
 use super::native::*;
 
@@ -34,7 +34,8 @@ pub fn lang_to_irnode(langscript: &str) -> Ret<IRNodeBlock> {
     let tkr = Tokenizer::new(langscript.as_bytes());
     let tks = tkr.parse()?;
     let syx = Syntax::new(tks);
-    syx.parse()
+    let block = syx.parse()?;
+    Ok(block)
 }
 
 
@@ -46,7 +47,7 @@ pub fn lang_to_ircode(langscript: &str) -> Ret<Vec<u8>> {
 
 pub fn lang_to_bytecode(langscript: &str) -> Ret<Vec<u8>> {
     let ir = lang_to_irnode(langscript)?;
-    let codes = map_itr_err!(ir.codegen())?;
+    let codes = ir.codegen()?;
     Ok(codes)
 }
 

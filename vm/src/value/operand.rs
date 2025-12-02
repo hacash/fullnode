@@ -42,7 +42,7 @@ impl Value {
     pub fn cutbyte(&mut self, n: u16) -> VmrtErr {
         let buf = self.canbe_bytes_ec(BytesHandle)?;
         let idx = n as usize;
-        if idx > buf.len() {
+        if idx >= buf.len() {
             return itr_err_fmt!(StackError, "read buf byte overflow")
         }
         *self = Self::U8(buf[idx]);
@@ -126,7 +126,7 @@ impl Value {
     #[inline(always)]
     pub fn concat(a: &Value, b: &Value, cap: &SpaceCap) -> VmrtRes<Value> {
         let e = BytesHandle;
-        let v = vec![b.canbe_bytes_ec(e)?, a.canbe_bytes_ec(e)?].concat();
+        let v = vec![a.canbe_bytes_ec(e)?, b.canbe_bytes_ec(e)?].concat();
         Ok(Value::bytes(v).valid(cap)?)
     }
 

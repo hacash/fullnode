@@ -97,7 +97,7 @@ impl CtcKVMap {
 
     pub fn entry(&mut self, addr: &Address) -> VmrtRes<&mut MKVMap> {
         if ! addr.is_contract() {
-            return itr_err_fmt!(MemoryError, "memory use must in contract")
+            return itr_err_fmt!(MemoryError, "memory use must in contract but in {}", addr.readable())
         }
         Ok(self.datas.entry(addr.clone()).or_insert_with(||MKVMap::new(self.limit)))
     }

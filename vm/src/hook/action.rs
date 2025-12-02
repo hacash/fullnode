@@ -105,14 +105,14 @@ fn coin_asset_transfer_call(abstfrom: AbstCall, abstto: AbstCall, action: &dyn A
     // call from contract
     if fc {
         let mut argvs = argvs.clone();
-        argvs.push_front( Value::Addr(to) );
+        argvs.push_front( Value::Address(to) );
         let param = Value::Compo(CompoItem::list(argvs));
         setup_vm_run(calldpt, ctx, absty, abstfrom as u8, from.as_bytes(), param)?;
     }
 
     // call to contract
     if tc {
-        argvs.push_front( Value::Addr(from) );
+        argvs.push_front( Value::Address(from) );
         let param = Value::Compo(CompoItem::list(argvs));
         setup_vm_run(calldpt, ctx, absty, abstto as u8, to.as_bytes(), param)?;
     }

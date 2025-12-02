@@ -1,6 +1,6 @@
 
 pub trait BlockExec {
-    fn execute(&self, _: ChainInfo, _: Box<dyn State>) -> Ret<Box<dyn State>> { never!() }
+    fn execute(&self, _: ChainInfo, _: Box<dyn State>, _: Box<dyn Logs>) -> Ret<(Box<dyn State>, Box<dyn Logs>)> { never!() }
 }
 
 pub trait BlockRead : BlockExec + Serialize + Send + Sync + DynClone {

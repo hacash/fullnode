@@ -158,10 +158,11 @@ pub fn execute_code(
     memorys: &mut CtcKVMap,
 
     ctx: &mut dyn ExtActCal,
+    log: &mut dyn Logs,
     state: &mut VMState,
 
     context_addr: &ContractAddress, 
-    _current_addr: &ContractAddress, 
+    current_addr: &ContractAddress, 
 
     // _is_sys_call: bool,
     // _call_depth: usize,
@@ -194,7 +195,7 @@ pub fn execute_code(
     macro_rules! pcutbuf { ($w: expr) => { itrbuf!(codes, *pc, $w) } }
     macro_rules! _pctrtaddr { () => { ContractAddress::parse(&pcutbuf!(CONTRACT_ADDRESS_WIDTH)).map_err(|e|ItrErr(ContractAddrErr, e))? }}
     macro_rules! ops_pop_to_u16 { () => { ops.pop()?.checked_u16()? } }
-    macro_rules!    ops_peek_to_u16 { () => { ops.peek()?.checked_u16()? } }
+    macro_rules! ops_peek_to_u16 { () => { ops.peek()?.checked_u16()? } }
     macro_rules! check_compo_type { ($m: ident) => { match ops.compo() { Ok(c) => c.$m(), _ => false, } } }
 
     // start run
@@ -205,7 +206,7 @@ pub fn execute_code(
         let instruction: Bytecode = std_mem_transmute!(instbyte.clone());
         *pc += 1; // next
 
-        // debug_println!("operds = {}\nlocals = {}\n-------- pc = {}, nbt = {:?}", &ops.print_stack(), &locals.print_stack(), pc, instruction);
+        // debug_print_stack(ops, locals, pc, instruction);
 
         // do execute
         let mut gas: i64 = 0;
@@ -230,13 +231,12 @@ pub fn execute_code(
                 ItrErr::new(ExtActCallError, e.as_str()))?;
             gas += bgasu as i64;
             let resv;
-            let vid = idx as usize;
             if $have_retv {
                 let vty = match instruction {
-                    EXTENV  => CALL_EXTEND_ENV_DEFS[vid],
-                    EXTFUNC => CALL_EXTEND_FUNC_DEFS[vid],
+                    EXTENV  => search_ext_by_id(idx, &CALL_EXTEND_ENV_DEFS),
+                    EXTFUNC => search_ext_by_id(idx, &CALL_EXTEND_FUNC_DEFS),
                     _ => never!(),
-                }.2;
+                }.unwrap().2;
                 resv = Value::type_from(vty, cres)?; //  from ty
             } else {
                 resv = Value::Bytes(cres); // only bytes
@@ -252,14 +252,23 @@ pub fn execute_code(
             }
         }}
 
+        let mut ntcall = |idx: u8| -> VmrtErr {
+            let argv = match idx {
+                NativeCall::idx_context_address => context_addr.serialize(), // context_address
+                _ => ops.peek()?.canbe_ext_call_data(heap)?
+            };
+            let (r, g) = NativeCall::call(hei, idx, &argv)?;
+            *ops.peek()? = r; gas += g; 
+            Ok(())
+        };
+
         match instruction {
             // ext action
             EXTACTION => { extcall!(true,  true,  false); },
             EXTENV    => { extcall!(false, false, true);  },
             EXTFUNC   => { extcall!(false, true,  true);  },
             // native call
-            NTCALL => { let (r, g) = NativeCall::call(pu8!(), &ops.peek()?.canbe_ext_call_data(heap)?)?;
-                *ops.peek()? = r; gas += g; },
+            NTCALL => ntcall(pu8!())?,
             // constant
             PU8   => ops.push(U8(pu8!()))?,
             PU16  => ops.push(U16(pu16!()))?,
@@ -286,22 +295,22 @@ pub fn execute_code(
             TID   => *ops.peek()? =   U8(ptyn!()),
             // stack & buffer
             DUP    => ops.push(ops.last()?)?,
-            DUPX   => ops.dupx(pu8!())?,
+            DUPN   => ops.dupn(pu8!())?,
             POP    => { ops.pop()?; } // drop
-            POPN   => ops.popx(pu8!())?,
+            POPN   => { ops.popn(pu8!())?; },
             PICK   => ops.pick(pu8!())?,
             SWAP   => ops.swap()?,
-            REV    => ops.reverse()?, // reverse
+            REV    => ops.reverse(pu8!())?, // reverse
             CHOISE => { if ops.pop()?.check_false() { ops.swap()? } ops.pop()?; } /* x ? a : b */
-            SIZE   => { *ops.peek()? = U16(ops.peek()?.can_get_size()?) }
             CAT    => ops.cat(cap)?,
-            JOIN   => ops.join(cap)?,
+            JOIN   => ops.join(pu8!(), cap)?,
+            BYTE   => { let i = ops_pop_to_u16!(); ops.peek()?.cutbyte(i)?; }  
             CUT    => { let (l, o) = (ops.pop()?, ops.pop()?); ops.peek()?.cutout(l, o)?; }
             LEFT   => ops.peek()?.cutleft(  pu8_as_u16!())?,
             RIGHT  => ops.peek()?.cutright( pu8_as_u16!())?,
             LDROP  => ops.peek()?.dropleft( pu8_as_u16!())?,
             RDROP  => ops.peek()?.dropright(pu8_as_u16!())?,
-            BYTE   => { let i = ops_pop_to_u16!(); ops.peek()?.cutbyte(i)?; }
+            SIZE   => { *ops.peek()? = U16(ops.peek()?.can_get_size()?) }
             // compo
             NEWLIST  => ops.push(Compo(CompoItem::new_list()))?,
             NEWMAP   => ops.push(Compo(CompoItem::new_map()))?,
@@ -323,10 +332,10 @@ pub fn execute_code(
             UPLIST   => { let i = ops.pop()?.checked_u8()?; unpack_list(i, locals, ops.pop()?.compo()?.list_mut()?)?; }
             // heap
             HGROW    => gas += heap.grow(pu8!())?,
-            HWRITE   => heap.write(ops.pop()?, ops.pop()?)?,
-            HREAD    => *ops.peek()? = heap.read(ops.pop()?, ops.peek()?)?,
-            HWRITEX  => heap.write_x(  pu8!(), ops.pop()?)?,
-            HWRITEXL => heap.write_xl(pu16!(), ops.pop()?)?,
+            HWRITE   => heap.write(ops_pop_to_u16!(), ops.pop()?)?,
+            HREAD    => { let n = ops.pop()?; *ops.peek()? = heap.read(ops.peek()?, n)? }
+            HWRITEX  => heap.write(pu8_as_u16!(),  ops.pop()?)?,
+            HWRITEXL => heap.write(pu16!(), ops.pop()?)?,
             HREADU   => ops.push(heap.read_u(  pu8!())?)?,
             HREADUL  => ops.push(heap.read_ul(pu16!())?)?,
             HSLICE   => *ops.peek()? = heap.slice(ops.pop()?, ops.peek()?)?,
@@ -343,16 +352,21 @@ pub fn execute_code(
             GET2  => ops.push(locals.load(2)?)?,
             GET3  => ops.push(locals.load(3)?)?,
             // storage
-            STIME => *ops.peek()? = state.stime(hei, context_addr, ops.peek()?)?,
+            SREST => *ops.peek()? = state.srest(hei, context_addr, ops.peek()?)?,
             SLOAD => *ops.peek()? = state.sload(hei, context_addr, ops.peek()?)?,
             SDEL  => state.sdel(context_addr, ops.pop()?)?,
-            SSAVE => state.ssave(hei, context_addr,ops.pop()?, ops.pop()?)?,
-            SRENT => gas += state.srent(gst, hei, context_addr, ops.pop()?, ops.pop()?)?,
+            SSAVE => { let v = ops.pop()?; state.ssave(hei, context_addr, ops.pop()?, v)?; },
+            SRENT => { let t = ops.pop()?; gas += state.srent(gst, hei, context_addr, ops.pop()?, t)?; },
             // global & memory
-            GPUT => globals.put(ops.pop()?, ops.pop()?)?,
+            GPUT => { let v = ops.pop()?; globals.put(ops.pop()?, v)?; },
             GGET => *ops.peek()? = globals.get(ops.peek()?)?,
-            MPUT => memorys.entry(context_addr)?.put(ops.pop()?, ops.pop()?)?,
+            MPUT => { let v = ops.pop()?; memorys.entry(context_addr)?.put(ops.pop()?, v)?; },
             MGET => *ops.peek()? = memorys.entry(context_addr)?.get(ops.peek()?)?,
+            // log (t1,[t2,t3,t4,]d)
+            LOG1 => record_log(context_addr, log, ops.popn(2)?)?,
+            LOG2 => record_log(context_addr, log, ops.popn(3)?)?,
+            LOG3 => record_log(context_addr, log, ops.popn(4)?)?,
+            LOG4 => record_log(context_addr, log, ops.popn(5)?)?,
             // logic
             AND  => binop_btw(ops, lgc_and)?,
             OR   => binop_btw(ops, lgc_or)?,
@@ -398,6 +412,7 @@ pub fn execute_code(
             ERR => { exit = Throw;  break },  // throw <ERROR>
             ABT => { exit = Abort;  break },  // panic
             AST => { if ops.pop()?.check_false() { exit = Abort;  break } }, // assert(..)
+            PRT => { debug_print_value(context_addr, current_addr, mode, depth, ops.pop()?) }
             // call CALLDYN
             CALLCODE | CALLSTATIC | CALLLIB | CALLINR | CALL => {
                 let ist = instruction;
@@ -449,7 +464,7 @@ fn check_call_mode(mode: CallMode, inst: Bytecode) -> VmrtErr {
         }
     }
     match mode {
-        Main    if not_ist!(CALL, CALLSTATIC, CALLCODE) // CALLDYN
+        Main    if not_ist!(CALL, CALLSTATIC, CALLCODE)
             => itr_err_code!(CallOtherInMain),
         Abst    if not_ist!(CALLINR, CALLLIB, CALLSTATIC, CALLCODE)
             => itr_err_code!(CallInAbst),
@@ -511,3 +526,33 @@ fn unpack_list(mut i: u8, locals: &mut Stack, list: &mut VecDeque<Value>) -> Vmr
     Ok(())
 }
 
+
+fn record_log(adr: &ContractAddress, log: &mut dyn Logs, tds: Vec<Value>) -> VmrtErr {
+    /*
+    print!("record_log: ");
+    for i in (0 .. tds.len()).rev() {
+        print!("{}: {}, ", i, tds[i].to_string());
+    }
+    println!("tds: {}", tds.len());
+    */
+    // save
+    let lgdt = VmLog::new(adr.to_addr(), tds)?;
+    log.push(&lgdt); // record
+    Ok(())
+}
+
+
+fn debug_print_value(ctx: &ContractAddress, cur: &ContractAddress 
+, mode: CallMode, depth: isize, val: Value) {
+    debug_println!("{}-{} {} {:?} => {:?}", 
+        ctx.prefix(7), cur.prefix(7), depth, mode, val);
+}
+
+
+#[allow(unused)]
+fn debug_print_stack(ops: &Stack, lcs: &Stack, pc: &usize, inst: Bytecode) {
+    println!("operds({})={}\nlocals({})={}\n-------- pc = {}, nbt = {:?}", 
+    ops.len(), &ops.print_stack(), lcs.len(), &lcs.print_stack(), 
+    *pc, inst);
+
+}

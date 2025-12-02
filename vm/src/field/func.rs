@@ -15,38 +15,37 @@ impl FuncArgvTypes {
         }
     }
 
-    pub fn check_output(&self, v: &Value) -> VmrtErr {
-        let Some(oty) = map_err_itr!(CallArgvTypeFail, self.output_type())? else {
+    pub fn check_output(&self, v: &mut Value) -> VmrtErr {
+        let Some(oty) = self.output_type().map_ire(CallArgvTypeFail)? else {
             return Ok(())
         };
-        if v.ty() != oty {
-            return itr_err_code!(CallArgvTypeFail);
+        if let Err(e) = v.checked_param_cast(oty) {
+            return itr_err_fmt!(CallArgvTypeFail, "check output failed: {:?}", e);
         }
         // pass
         Ok(())
     }
 
 
-    pub fn check_params(&self, v: &Value) -> VmrtErr {
-        let err = || itr_err_code!(CallArgvTypeFail);
-        let types = map_err_itr!(CallArgvTypeFail, self.param_types())?;
+    pub fn check_params(&self, v: &mut Value) -> VmrtErr {
+        let ec = CallArgvTypeFail;
+        // let err = |t1, t2| itr_err_fmt!(ec, "need {:?} but got {:?}", t1, t2);
+        let types = self.param_types().map_ire(ec)?;
         let tn = types.len();
         match tn {
             // do not check
             0 => Ok(()),
             // check one argv
-            1 => maybe!(v.ty()==types[0], Ok(()), err() ),
+            1 => v.checked_param_cast(types[0]),
             // check list
             _ => {
-                let vs = v.compo_ref()?.list_ref()?;
+                let vs = v.compo()?.list_mut()?;
                 let vn = vs.len();
                 if tn != vn {
-                    return err()
+                    return itr_err_fmt!(ec, "param length error need {} but got {}", tn, vn)
                 }
                 for i in 0..vn {
-                    if vs[i].ty() != types[i] {
-                        return err()
-                    }
+                    vs[i].checked_param_cast(types[i])?;
                 }
                 // all pass
                 Ok(())
@@ -56,7 +55,7 @@ impl FuncArgvTypes {
 
     pub fn from_types(otp: Option<ValueTy>, tys: Vec<ValueTy>) -> Ret<Self> {
         let output_ty = match otp {
-            Some(o) => { o.canbe_argv()?; o as u8}
+            Some(o) => { o.canbe_argv()?; (o as u8) << 4}
             _ => 0,
         };
         let n = tys.len();
@@ -78,7 +77,7 @@ impl FuncArgvTypes {
             let tn = maybe!( i % 2 == 0, ty << 4, ty);
             dfs[i/2] = dfs[i/2] | tn; 
         }
-        let typnum = output_ty << 4 | n as u8;
+        let typnum = output_ty | (n as u8);
         Ok(Self {
             typnum: Uint1::from(typnum),
             define: dfs,
@@ -104,7 +103,7 @@ impl FuncArgvTypes {
         }
         let mut tys = vec![ValueTy::Nil; n];
         let z = n / 2 + 1;
-        if z >= self.define.len() {
+        if z > self.define.len() {
             return errf!("FuncArgvTypes to bytes error")
         }
         for i in 0..n {
@@ -132,8 +131,8 @@ impl Parse for FuncArgvTypes {
 impl Serialize for FuncArgvTypes {
     fn serialize(&self) -> Vec<u8> {
         let z = self.def_size();
-        vec![
-            self.typnum.serialize(),
+        let nvs = self.typnum.serialize();
+        vec![nvs,
             self.define[0..z].to_vec(),
         ].concat()
     }

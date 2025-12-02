@@ -81,7 +81,7 @@ pub fn check_diamond_status(state: &mut CoreState, addr_from: &Address, hacd_nam
     addr_from.check_version()?;
     // query
     let diaitem = must_have!(
-        format!("diamond {}", hacd_name.to_readable()),
+        format!("diamond status {}", hacd_name.to_readable()),
         state.diamond(hacd_name));
     if diaitem.status != DIAMOND_STATUS_NORMAL {
         return errf!("diamond {} has been mortgaged and cannot be transferred", hacd_name.to_readable())
@@ -114,7 +114,7 @@ pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&A
         return errf!("maximum inscriptions for one diamond is 200")
     }
 
-    let diaslt = must_have!(format!("diamond {}", diamond.to_readable()), state.diamond_smelt(&diamond));
+    let diaslt = must_have!(format!("diamond smelt {}", diamond.to_readable()), state.diamond_smelt(&diamond));
 
     // cost
     let mut cost = Amount::default(); // zero
@@ -139,7 +139,7 @@ pub fn engraved_one_diamond(pending_height: u64, state: &mut CoreState, addr :&A
 pub fn engraved_clean_one_diamond(_pending_height: u64, state: &mut CoreState, addr :&Address, diamond: &DiamondName) -> Ret<Amount> {
 
     let mut diasto = check_diamond_status(state, addr, diamond)?;
-    let diaslt = must_have!(format!("diamond {}", diamond.to_readable()), state.diamond_smelt(&diamond));
+    let diaslt = must_have!(format!("diamond smelt {}", diamond.to_readable()), state.diamond_smelt(&diamond));
     // check
     if diasto.inscripts.length() <= 0 {
         return errf!("cannot find any inscriptions in HACD {}", diamond.to_readable())    }
@@ -165,6 +165,19 @@ pub fn diamond_owned_push_one(state: &mut CoreState, address: &Address, name: &D
     owned.push_one(name);
     state.diamond_owned_set(address, &owned);
 }
+
+
+/**
+* diamond owned push or drop
+*/
+pub fn diamond_owned_append(state: &mut CoreState, address: &Address, list: DiamondNameListMax60000) {
+    let mut owned = state.diamond_owned(address).unwrap_or_default();
+    for name in list.into_iter() {
+        owned.push_one(&name);
+    }
+    state.diamond_owned_set(address, &owned);
+}
+
 
 pub fn diamond_owned_move(state: &mut CoreState, from: &Address, to: &Address, list: &DiamondNameListMax200) -> Rerr {
     // do drop

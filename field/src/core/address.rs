@@ -4,6 +4,12 @@ pub const ADDR_OR_PTR_DIV_NUM: u8 = 20;
 
 pub type Address = Fixed21;
 pub type Addrptr = Uint1;
+ 
+
+pub static ADDRESS_ZERO: Address = Fixed21::from([0u8; Address::SIZE]);
+pub static ADDRESS_ONEX: Address = Fixed21::from([0u8, 1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]);
+pub static ADDRESS_TWOX: Address = Fixed21::from([0u8, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2]);
+
 
 macro_rules! address_version_define {
     ( $($key:ident : $name:ident , $num:expr)+ ) => {
@@ -84,6 +90,12 @@ impl Address {
 
     pub fn readable(&self) -> String {
         Account::to_readable(&*self)
+    }
+
+    pub fn prefix(&self, n: usize) -> String {
+        let mut s = self.readable();
+        let _ = s.split_off(n);
+        s
     }
     
     pub fn from_readable(addr: &str) -> Ret<Self> {
@@ -166,9 +178,13 @@ impl AddrOrPtr {
         match self {
             Self::Val1(v) => Ok(*v),
             Self::Val2(v) => {
-                let ix = v.uint() as usize;
-                match ix < addrs.len() {
-                    true => Ok(addrs[ix].clone()),
+                let ix = v.uint();
+                if ix < ADDR_OR_PTR_DIV_NUM {
+                    return errf!("addr ptr index error")
+                }
+                let i = (ix - ADDR_OR_PTR_DIV_NUM) as usize;
+                match i < addrs.len() {
+                    true => Ok(addrs[i].clone()),
                     false => errf!("addr ptr index overflow")
                 }
             },
@@ -177,6 +193,10 @@ impl AddrOrPtr {
 
     pub fn from_addr(v: Address) -> Self {
         Self::Val1(v)
+    } 
+
+    pub fn from_ptr(i: u8) -> Self {
+        Self::Val2(Addrptr::from(i + ADDR_OR_PTR_DIV_NUM))
     } 
 
 }

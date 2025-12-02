@@ -5,7 +5,7 @@ macro_rules! ctx_state{
     ($ctx:expr, $state:ident) => (
         let _s1_db = $ctx.engine.state();
         let _s1_db = _s1_db.as_ref();
-        let $state = CoreStateRead::wrap(_s1_db);
+        let $state = CoreStateRead::wrap(_s1_db.as_ref());
     )
 }
 
@@ -14,7 +14,7 @@ macro_rules! ctx_mint_state{
     ($ctx:expr, $state:ident) => (
         let _s1_db = $ctx.engine.state();
         let _s1_db = _s1_db.as_ref();
-        let $state = MintStateRead::wrap(_s1_db);
+        let $state = MintStateRead::wrap(_s1_db.as_ref());
     )
 }
 
@@ -98,6 +98,19 @@ macro_rules! q_body_data_may_hex {
                     res.unwrap()
                 }
             }
+        }
+    )
+}
+
+#[macro_export]
+macro_rules! q_hex {
+    ( $d: expr) => (
+        {
+            let res = hex::decode(&$d);
+            if let Err(_) = res {
+                return api_error("hex format error")
+            }
+            res.unwrap()
         }
     )
 }

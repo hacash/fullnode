@@ -20,6 +20,7 @@ pub struct ChainEngine {
 
     // data
     disk: Arc<dyn DiskDB>,
+    logs: Arc<BlockLogs>,
     store: BlockStore,
 
     roller: Mutex<Roller>,
@@ -46,19 +47,23 @@ impl ChainEngine {
         // cnf
         let blk_dir = &cnf.block_data_dir;
         let sta_dir = &cnf.state_data_dir;
+        let log_dir = &cnf.blogs_data_dir;
         let is_state_upgrade = !sta_dir.exists(); // not find new dir
         std::fs::create_dir_all(blk_dir).unwrap();
         std::fs::create_dir_all(sta_dir).unwrap();
+        std::fs::create_dir_all(log_dir).unwrap();
         // build
         let disk: Arc<dyn DiskDB> = dbopfn(blk_dir).into();
+        let logd: Arc<dyn DiskDB> = dbopfn(log_dir).into();
         // if state database upgrade
         let sta_db = dbopfn(sta_dir);
         dev_count_switch_print(cnf.dev_count_switch, sta_db.as_ref()); // dev test
-        let state = StateInst::build(sta_db.into(), Weak::<StateInst>::new());
-        let staptr = Arc::new(state);
+        let state = StateInst::build(sta_db.into(), Weak::<Box<dyn State>>::new());
+        let staptr: Arc<Box<dyn State>> = Arc::new(Box::new(state));
+        let logs: Arc<BlockLogs> = Arc::new(BlockLogs::wrap(logd));
         // base or genesis block
         let bsblk =  load_root_block(minter.as_ref(), disk.clone(), is_state_upgrade);
-        let roller = Roller::create(cnf.unstable_block, bsblk, staptr);
+        let roller = Roller::create(cnf.unstable_block, bsblk, staptr, logs.clone());
         let roller = Mutex::new(roller);
         // engine
         let d1 = disk.clone();
@@ -67,6 +72,7 @@ impl ChainEngine {
             minter,
             scaner,
             roller,
+            logs,
             disk,
             rctblks: Mutex::default(),
             avgfees: Mutex::default(),

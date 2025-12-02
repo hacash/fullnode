@@ -1,5 +1,5 @@
 
-fn address_ptr(buf: &[u8]) -> VmrtRes<Value> {
+fn address_ptr(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     if buf.len() != 1 {
         return itr_err_fmt!(NativeCallError, "param error")
     }
@@ -11,5 +11,11 @@ fn address_ptr(buf: &[u8]) -> VmrtRes<Value> {
     }
     Ok(Value::U8( idx + DVN ))
 }
+
+fn context_address(_: u64, buf: &[u8]) -> VmrtRes<Value> {
+    let ctxadr = field::Address::from_bytes(buf).unwrap();
+    Ok(Value::Address(ctxadr))
+}
+
 
 

@@ -44,6 +44,7 @@ keyword_define!{
     Lib       : "lib"
     Let       : "let"
     Var       : "var"
+    Log       : "log"
     If        : "if"
     Else      : "else"
     While     : "while"
@@ -52,8 +53,10 @@ keyword_define!{
     Abort     : "abort"
     Throw     : "throw"
     Assert    : "assert"
+    Print     : "print"
     CallCode  : "callcode"
     ByteCode  : "bytecode"
+    Param     : "param"
     And       : "and"
     Or        : "or"
     Not       : "not"
@@ -203,8 +206,9 @@ impl IrFn {
 irfn_define!{
 
     EXTACTION  : 1, 1, 1,     ext_action
-    // EXTENV     : 1, 0, 1,     ext_env
     // EXTFUNC    : 1, 1, 1,     ext_func
+    // EXTENV     : 1, 0, 1,     ext_env
+    // NTCALL     : 1, 1, 1,     native_call
 
     // CALLDYN    :   0, 3, 1,   call_dynamic
     // CALL       : 1+4, 1, 1,   call
@@ -212,8 +216,6 @@ irfn_define!{
     // CALLLIB    : 1+4, 1, 1,   call_library
     // CALLSTATIC : 1+4, 1, 1,   call_static
     // CALLCODE   : 1+4, 0, 0,   call_code
-
-    // NTCALL     : 1, 1, 1,     native_call
 
     PU8        : 1, 0, 1,     push_u8
     PU16       : 2, 0, 1,     push_u16
@@ -240,22 +242,22 @@ irfn_define!{
     TID        : 0, 1, 1,     type_id
 
     DUP        : 0, 0, 1,     dump
-    DUPX       : 1, 0, 1,     dump_x
+    DUPN       : 1, 0, 1,     dump_n
     // POP        : 0, 255, 0,   pop
     // POPN       : 1, 255, 0,   pop_n
     PICK       : 1, 0, 1,     pick
     SWAP       : 0, 2, 2,     swap
-    // REV        : 0, 255, 255, reverse_stace
+    // REV        : 1, 255, 255, reverse
     CHOISE     : 0, 3, 1,     choise
-    SIZE       : 0, 1, 1,     size
     CAT        : 0, 2, 1,     concat
-    // JOIN       : 0, 255, 1,   join
+    // JOIN       : 1, 255, 1,   join
+    BYTE       : 0, 2, 1,     byte
     CUT        : 0, 3, 1,     buf_cut
     LEFT       : 1, 1, 1,     buf_left
     RIGHT      : 1, 1, 1,     buf_right
     LDROP      : 1, 1, 1,     buf_left_drop
     RDROP      : 1, 1, 1,     buf_right_drop
-    BYTE       : 0, 2, 1,     byte
+    SIZE       : 0, 1, 1,     size
 
     NEWLIST    : 0, 0, 1,     new_list
     NEWMAP     : 0, 0, 1,     new_map
@@ -301,8 +303,13 @@ irfn_define!{
     GGET       : 0, 1, 1,     global_get
     MPUT       : 0, 2, 0,     memory_put
     MGET       : 0, 1, 1,     memory_get
+
+    // LOG1       : 0, 255, 0,     log_1
+    // LOG2       : 0, 255, 0,     log_2
+    // LOG3       : 0, 255, 0,     log_3
+    // LOG4       : 0, 255, 0,     log_4
         
-    STIME      : 0, 1, 1,     storage_time
+    SREST      : 0, 1, 1,     storage_rest
     SLOAD      : 0, 1, 1,     storage_load
     SDEL       : 0, 1, 0,     storage_del
     SSAVE      : 0, 2, 0,     storage_save
@@ -348,6 +355,7 @@ irfn_define!{
     // AST        : 0, 1, 0,     assert
     // ERR        : 0, 1, 0,     throw
     // ABT        : 0, 0, 0,     abort
+    // PRT        : 0, 1, 0,     print
 
     // IRBYTECODE : 2, 255, 0,   ir_bytecode
     // IRLIST     : 2, 255, 1,   ir_list
@@ -365,10 +373,7 @@ irfn_define!{
 
 
 
-/********************************/
-
-
-
+/********************************
 #[derive(Default, Eq, PartialEq)]
 #[repr(u8)]
 pub enum TokenType {
@@ -379,8 +384,11 @@ pub enum TokenType {
     Str,
     StrEsc,
     Split,  // () {} []
-    Symbol, // +-*/|&
+    Symbol, // +-* /|&
 }
+*/
+
+
 
 /********************************/
 
@@ -394,7 +402,7 @@ pub enum Token {
     Identifier(String),
     Integer(u128),
     Bytes(Vec<u8>),
-    Addr(Address),
+    Address(field::Address),
 }
 
 

@@ -33,7 +33,7 @@ impl GasTable {
     pub fn new(_hei: u64) -> Self {
         use Bytecode::*;
         let mut gst = Self { table : [2; 256] };
-        gst.set(1,  &[CU8, CU16, CU32, CU64, CU128, CBUF, CTO, TID, TIS, TNIL, TMAP, TLIST, PU8, PU16, P0, P1, P2, P3, PNBUF, PNIL, DUP, POP, NOP, NT, END, RET, ABT, ERR, AST]);
+        gst.set(1,  &[CU8, CU16, CU32, CU64, CU128, CBUF, CTO, TID, TIS, TNIL, TMAP, TLIST, PU8, P0, P1, P2, P3, PNBUF, PNIL, DUP, POP, NOP, NT, END, RET, ABT, ERR, AST, PRT]);
         // gst.set(2,  &[...]); // all other bytecode
         gst.set(3,  &[XLG, PUT, CHOISE, BRL, BRS, BRSL, BRSLN]);
         gst.set(4,  &[XOP, HREAD, HREADU, HREADUL, MOD, MUL, DIV, ITEMGET, HASKEY, LENGTH]);
@@ -42,8 +42,10 @@ impl GasTable {
         gst.set(8,  &[MGET, JOIN, REV, NEWLIST, NEWMAP]);
         gst.set(12, &[EXTENV, MPUT, CALLINR, PACKLIST, PACKMAP, UPLIST, CLONE]);
         gst.set(16, &[EXTFUNC,GGET, CALLCODE]);
-        gst.set(24, &[EXTACTION, GPUT, CALLLIB, CALLSTATIC]);
-        gst.set(32, &[SLOAD, STIME, CALL]); // CALLDYN
+        gst.set(20, &[LOG1]);
+        gst.set(24, &[LOG2, EXTACTION, GPUT, CALLLIB, CALLSTATIC]);
+        gst.set(28, &[LOG3]);
+        gst.set(32, &[LOG4, SLOAD, SREST, CALL]); // CALLDYN
         gst.set(64, &[SSAVE, SRENT]);
         gst
     }
@@ -68,6 +70,7 @@ impl GasTable {
 
 #[derive(Default)]
 pub struct GasExtra {
+    pub max_gas_of_tx: i64,
     pub local_one_alloc: i64,
     pub storege_value_base_size: i64,
     pub load_new_contract: i64,
@@ -77,12 +80,14 @@ pub struct GasExtra {
 
 impl GasExtra {
     pub fn new(_hei: u64) -> Self {
+        const U16M: i64 = u16::MAX as i64; // 65535
         Self {
-            local_one_alloc: 5, // 5 * num
+            max_gas_of_tx:     U16M / 4, // 65535/4
+            local_one_alloc:          5, // 5 * num
             storege_value_base_size: 32,
             load_new_contract: 2 * GSCU as i64, // 64
-            main_call_min:     1 * GSCU as i64, // 64
-            abst_call_min:     4 * GSCU as i64,     // 32
+            main_call_min:     1 * GSCU as i64, // 32
+            abst_call_min:     3 * GSCU as i64, // 96
         }
     }
 }

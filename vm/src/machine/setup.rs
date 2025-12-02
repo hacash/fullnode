@@ -18,7 +18,12 @@ pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u
     // depth
     let old_depth = ctx.depth().clone();
     ctx.depth_set(CallDepth::new(depth));
-    let (cost, rv) = unsafe {
+
+    let sta = ctx.clone_mut().state();
+    let vmi = ctx.clone_mut().vm();
+    let ctx = ctx.clone_mut();
+    let (cost, rv) = vmi.call(ctx, sta, ty, mk, cd, Box::new(pm))?;
+    /*let (cost, rv) = unsafe {
         // ctx
         let ctxptr = ctx as *mut dyn Context;
         let ctxmut1: &mut dyn Context = &mut *ctxptr;
@@ -31,7 +36,7 @@ pub fn setup_vm_run(depth: isize, ctx: &mut dyn Context, ty: u8, mk: u8, cd: &[u
         let vmimut: &mut dyn VM = &mut *vmiptr;  
         // do call
         vmimut.call(ctxmut2, stamut, ty, mk, cd, Box::new(pm))?
-    };
+    }; */
     ctx.depth_set(old_depth);
     Ok((cost,  Value::bytes(rv)))
 }

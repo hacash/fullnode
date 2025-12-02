@@ -1,12 +1,25 @@
 
 #[allow(dead_code)]
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Heap {
     // bsgas: i64,   // 1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 
     // segln: usize, // 256
     limit: usize, // 64 seg
     datas: Vec<u8>,
 }
+
+impl Display for Heap {
+    fn fmt(&self,f: &mut Formatter) -> Result {
+        write!(f,"0x{}", self.datas.to_hex())
+    }
+}
+
+impl Debug for Heap {
+    fn fmt(&self,f: &mut Formatter) -> Result {
+        write!(f,"heap({}):0x{}", self.datas.len(), self.datas.to_hex())
+    }
+}
+
 
 impl Heap {
 
@@ -37,25 +50,25 @@ impl Heap {
         if oldseg + seg > self.limit {
             return itr_err_code!(OutOfHeap)
         }
-        let mut gas = 2u64.pow(oldseg as u32) as i64;
-        let mut adgs = gas;
-        for _ in 0..seg-1 {
-            gas += adgs;
-            adgs *= 2;
+        let mut gas = 0;
+        for s in oldseg+1 .. oldseg+seg+1 {
+            gas += 2i64.pow(s as u32);
         } 
         Ok(gas)
     }
 
     pub fn grow(&mut self, seg: u8) -> VmrtRes<i64> {
+        let seg = seg as usize;
         if seg < 1 {
             return itr_err_fmt!(HeapError, "heap grow cannot empty")
         }
         if seg > 16 {
             return itr_err_fmt!(HeapError, "heap grow cannot more than 16")
         }
-        let seg = seg as usize;
-        self.datas.reserve(seg * Self::SEGLEN);
-        self.calc_grow_gas(seg)
+        let gas = self.calc_grow_gas(seg)?;
+        let newsz = self.datas.len() + seg * Self::SEGLEN;
+        self.datas.resize(newsz, 0u8);
+        Ok(gas)
     }
 
     fn do_write(&mut self, start: usize, v: Value) -> VmrtErr {
@@ -70,6 +83,7 @@ impl Heap {
         Ok(())
     }
 
+    /*
     pub fn write(&mut self, k: Value, v: Value) -> VmrtErr {
         let start = k.checked_u32()? as usize;
         self.do_write(start, v)
@@ -77,9 +91,9 @@ impl Heap {
 
     pub fn write_x(&mut self, start: u8, v: Value) -> VmrtErr {
         self.do_write(start as usize, v)
-    }
+    } */
 
-    pub fn write_xl(&mut self, start: u16, v: Value) -> VmrtErr {
+    pub fn write(&mut self, start: u16, v: Value) -> VmrtErr {
         self.do_write(start as usize, v)
     }
 
@@ -93,8 +107,8 @@ impl Heap {
     }
 
     // return Value::bytes
-    pub fn read(&self, k: Value, n: &Value) -> VmrtRes<Value> {
-        let start  = k.checked_u32()? as usize;
+    pub fn read(&self, i: &Value, n: Value) -> VmrtRes<Value> {
+        let start  = i.checked_u32()? as usize;
         let length = n.checked_u16()? as usize;
         self.do_read(start, length)
     }
@@ -134,7 +148,7 @@ impl Heap {
         5+8 bit = seg max 64 (u8:64, u16:128, u32:256, u64:512)
     */
     pub fn read_ul(&self, mark: u16) -> VmrtRes<Value> {
-        let uty = mark >> 6+8;
+        let uty = mark >> 5+8;
         if uty > 4 {
             return itr_err_fmt!(HeapError, "uint type {} not support", uty)
         }
@@ -158,5 +172,22 @@ impl Heap {
 
 
 
+
+}
+
+#[cfg(test)]
+mod heaptest {
+    use super::*;
+
+    /*
+    cargo test --test space::heaptest::calc_grow_gas -- --nocapture
+    */
+    #[test]
+    fn calc_grow_gas() {
+        let mut heap = Heap::default();
+        heap.limit = 64;
+
+        println!("{}", heap.calc_grow_gas(3).unwrap())
+    }
 
 }

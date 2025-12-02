@@ -35,10 +35,51 @@ impl ContractAddrsssListW1 {
 	}
 }
 
-
 // Func List
 combi_list!(ContractAbstCallList, Uint1, ContractAbstCall);
 combi_list!(ContractUserFuncList, Uint2, ContractUserFunc);
+
+
+impl ContractMeta {
+
+	fn check(&self, _hei: u64) -> VmrtErr {
+		let e = itr_err_fmt!(ContractError, "contract format error");
+		if self.vrsn.not_zero() |
+			self.mark.not_zero() |
+			self.mext.not_zero()
+		{
+			return e
+		}
+
+		Ok(())
+	}
+}
+
+impl ContractAbstCall {
+	
+	fn check(&self, _hei: u64) -> VmrtErr {
+		let e = itr_err_fmt!(ContractError, "contract ContractAbstCall format error");
+		if self.mark.not_zero() {
+			return e
+		}
+		let c = self.cdty[0] >> 3;
+		if c > 0 {
+			return e
+		}
+		Ok(())
+	}
+}
+
+impl ContractUserFunc {
+	
+	fn check(&self, _hei: u64) -> VmrtErr {
+		let e = itr_err_fmt!(ContractError, "contract ContractUserFunc format error");
+		if self.mark.not_zero() {
+			return e
+		}
+		Ok(())
+	}
+}
 
 
 macro_rules! func_list_merge_define {
@@ -49,7 +90,7 @@ macro_rules! func_list_merge_define {
 			for i in 0..self.length() {
 				if list[i].sign == func.sign {
 					self.replace(i, func)?;
-					return Ok(false)
+					return Ok(true)
 				}
 			}
 			// push
@@ -60,7 +101,7 @@ macro_rules! func_list_merge_define {
 		fn check_merge(&mut self, src: &Self) -> VmrtRes<bool> {
 			let mut edit = false;
 			for a in src.list() {
-				if map_err_itr!(ContractUpgradeErr, self.addition(a.clone()))? {
+				if self.addition(a.clone()).map_ire(ContractUpgradeErr)? {
 					edit = true;
 				}
 			}
@@ -142,9 +183,8 @@ impl ContractSto {
 		// append inherits and librarys
 		self.inherits.append(src.inherits.lists.clone()).unwrap();
 		self.librarys.append(src.librarys.lists.clone()).unwrap();
-		// merge abst call
+		// merge abstcall & usrfun 
 		let edit1 = self.abstcalls.check_merge(&src.abstcalls)?;
-		// merge usrfun call
 		let edit2 = self.userfuncs.check_merge(&src.userfuncs)?;
 		// check size
 		if self.size() > cap.max_contract_size {
@@ -155,8 +195,14 @@ impl ContractSto {
 	}
 
 	pub fn check(&self, hei: u64) -> VmrtErr {
+		self.metas.check(hei)?;
 		use ItrErrCode::*;
+		let e = itr_err_fmt!(ContractError, "contract format error");
 		let cap = SpaceCap::new(hei);
+		// check
+		if self.morextend.uint() > 0 {
+			return e
+		}
 		// check size
 		if self.size() > cap.max_contract_size {
 			return itr_err_fmt!(ContractError, "contract size overflow, max {}", cap.max_contract_size)
@@ -173,12 +219,14 @@ impl ContractSto {
 		}
 		// abst call
 		for a in self.abstcalls.list() {
+			a.check(hei)?;
 			AbstCall::check(a.sign[0])?;
 			let ctype = CodeType::parse(a.cdty[0])?;
 			convert_and_check(&cap, ctype, &a.code)?; // // check compile
 		}
 		// usrfun call
 		for a in self.userfuncs.list() {
+			a.check(hei)?;
 			let ctype = CodeType::parse(a.cdty[0])?;
 			convert_and_check(&cap, ctype, &a.code)?; // check compile
 		}

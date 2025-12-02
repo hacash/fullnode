@@ -23,3 +23,11 @@ impl ToBase64 for Vec<u8> {
     }
 
 }
+
+
+pub fn to_readable_or_base64(s: &[u8]) -> String {
+    match bytes_try_to_readable_string(s) {
+        Some(s) => s,
+        _ => BASE64_STANDARD.encode(s)
+    }
+}

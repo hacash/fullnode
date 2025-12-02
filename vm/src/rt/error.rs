@@ -48,6 +48,7 @@ pub enum ItrErrCode {
     MemoryError       = 45,
     GlobalError       = 46,
     StorageError      = 47,
+    LogError          = 48,
     
     CallNotExist      = 51,
     CallLibOverflow   = 52,
@@ -75,14 +76,14 @@ pub enum ItrErrCode {
     CompoOpOverflow   = 81,
     CompoToSerialize  = 82,
     CompoOpNotMatch   = 83,
-    CompoNoSize       = 84,
-    CompoPackError    = 85,
-    CompoNoFindItem   = 86,
+    CompoPackError    = 84,
+    CompoNoFindItem   = 85,
     
     Arithmetic        = 90,
     BytesHandle       = 91,
     NativeCallError   = 92,
     ExtActCallError   = 93,
+    ItemNoSize        = 94,
 
     StorageKeyInvalid       = 101,
     StorageKeyNotFind       = 102,
@@ -100,11 +101,20 @@ pub enum ItrErrCode {
 #[derive(Debug)]
 pub struct ItrErr(pub ItrErrCode, pub String);
 
+
 impl ToString for ItrErr {
     fn to_string(&self) -> String {
         format!("{:?}({}): {}", self.0, self.0 as u8, self.1)
     }
 }
+
+impl From<ItrErr> for Error {
+    fn from(e: ItrErr) -> Error {
+        e.to_string()
+    }
+}
+
+
 
 
 impl ItrErr {
@@ -130,24 +140,16 @@ impl IntoVmrt for Vec<u8> {
     }
 }
 
-
-
-#[allow(unused)]
-macro_rules! map_itr_err {
-    ($e: expr) => {
-        $e.map_err(|a|a.to_string())
-    }
+pub trait MapItrErr<T> {
+    fn map_ire(self, ec: ItrErrCode) -> Result<T, ItrErr>;   
 }
 
 
-#[allow(unused)]
-macro_rules! map_err_itr {
-    ($c: expr, $e: expr) => {
-        $e.map_err(|e|ItrErr($c, e.to_string()))
+impl<T> MapItrErr<T> for Ret<T> {
+    fn map_ire(self, ec: ItrErrCode) -> Result<T, ItrErr> {
+        self.map_err(|e|ItrErr::new(ec, &e.to_string()))
     }
 }
-
-
 
 #[allow(unused)]
 macro_rules! itr_err {

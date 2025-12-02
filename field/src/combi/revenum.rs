@@ -35,11 +35,18 @@ macro_rules! combi_revenum {
                     *self = Self::Val1( v );
                     Ok(sk)
                 }else{
-                    let mut nbuf = buf[1..].to_vec();
-                    nbuf[0] -= $swtv;
-                    let (v, sk) = <$t2>::create(&nbuf)?;
+                    // For performance, we directly modify the raw data in an unsafe way.
+                    let old = buf[0];
+                    let chg = old - $swtv;
+                    let head = buf.as_ptr() as *mut u8;
+                    macro_rules! modify_head{ ($chg: expr) => { 
+                        unsafe { *head = $chg; } } 
+                    }
+                    modify_head!{ chg } // change
+                    let (v, sk) = <$t2>::create(buf)?;
+                    modify_head!{ old } // recover
                     *self = Self::Val2( v );
-                    Ok(sk + 1)
+                    Ok(sk)
                 }
             }
         }

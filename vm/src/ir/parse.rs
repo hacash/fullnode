@@ -117,19 +117,24 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
     // parse
     let meta = inst.metadata();
     let hrtv = meta.otput == 1;
+    // check return value
+    if isrtv && !hrtv {
+        return itr_err_fmt!(InstInvalid, "irnode {} check return value failed", inst as u8)
+    }
+    // parse
     irnode = match inst {
         // BYTECODE LIST BLOCK IF WHILE
         IRBYTECODE => {
             let mut bts = IRNodeBytecodes::default();
-            let p = itrbuf!(2);
-            let n = u16::from_be_bytes(p.try_into().unwrap());
+            let p = itrp2!();
+            let n = u16::from_be_bytes(p);
             bts.codes = itrbuf!(n as usize);
             Box::new(bts)
         }
         IRLIST => {
             let mut list = IRNodeList::new();
-            let p = itrbuf!(2);
-            let n = u16::from_be_bytes(p.try_into().unwrap());
+            let p = itrp2!();
+            let n = u16::from_be_bytes(p);
             let ndp = depth + 1;
             for _i in 0..n {
                 list.push( subdph!(ndp, false) );
@@ -138,8 +143,8 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
         }
         IRBLOCK => {
             let mut block = IRNodeBlock::new();
-            let p = itrbuf!(2);
-            let n = u16::from_be_bytes(p.try_into().unwrap());
+            let p = itrp2!();
+            let n = u16::from_be_bytes(p);
             let ndp = depth + 1;
             for _i in 0..n {
                 block.push( subdph!(ndp, false) );
@@ -193,14 +198,10 @@ fn parse_ir_node_must(stuff: &[u8], seek: &mut usize, depth: usize, isrtv: bool)
                 (2, 1) => Box::new(IRNodeParam2Single{hrtv, inst, para: itrp2!(), subx: submust!()}), // params two
                 (a, 0) => Box::new(IRNodeParams{hrtv, inst, para: itrbuf!(a as usize)}), // params
                 (a, 1) => Box::new(IRNodeParamsSingle{hrtv, inst, para: itrbuf!(a as usize), subx: submust!()}),
-                _ => return itr_err_fmt!(InstInvalid, "invalid irnode {:?} of ps {} i {}", inst, meta.param, meta.input)
+                _ => return itr_err_fmt!(InstInvalid, "invalid irnode {:?} of ps={} i={}", inst, meta.param, meta.input)
             }
         }
     };
-    // check return value
-    if isrtv && meta.otput != 1  {
-        return itr_err_fmt!(InstInvalid, "irnode {} check return value failed", inst as u8)
-    }
     // ok
     Ok(irnode)
 }

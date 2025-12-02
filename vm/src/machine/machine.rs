@@ -38,8 +38,8 @@ impl MachineBox {
 
     fn init_gas(&mut self, ctx: &mut dyn Context) -> Rerr {
         // init gas
-        let spscp = &self.machine.as_mut().unwrap().r.space_cap;
-        let gas_limit = spscp.max_gas_of_tx as i64;
+        let gascp = &self.machine.as_mut().unwrap().r.gas_extra;
+        let gas_limit = gascp.max_gas_of_tx;
         let (feer, gasfee) = ctx.tx().fee_extend()?;
         if feer == 0 {
             return errf!("gas extend cannot empty on contract call")
@@ -61,7 +61,7 @@ impl MachineBox {
         let min_use = match cty {
             Main => gsext.main_call_min,
             Abst => gsext.abst_call_min,
-            _ => unreachable!()
+            _ => never!()
         };
         up_in_range!(cost, min_use, i64::MAX);
         Ok(cost)
@@ -106,7 +106,7 @@ impl VM for MachineBox {
         let cty: CallMode = std_mem_transmute!(ty);
         let resv = match cty {
             Main => {
-                let cty = map_itr_err!(CodeType::parse(kd))?;
+                let cty = CodeType::parse(kd)?;
                 machine.main_call(exenv, cty, data.to_vec())
             },
             Abst => {
@@ -163,26 +163,29 @@ impl Machine {
 
     pub fn main_call(&mut self, env: &mut ExecEnv, ctype: CodeType, codes: Vec<u8>) -> Ret<Value> {
         let fnobj = FnObj{ ctype, codes, confs: 0, agvty: None};
-        map_itr_err!(self.do_call(env, CallMode::Main, fnobj, None))
+        let entry_addr = ContractAddress::new(env.ctx.tx().main());
+        let v = self.do_call(env, CallMode::Main, fnobj, entry_addr, None)?;
+        Ok(v)
     }
 
     pub fn abst_call(&mut self, env: &mut ExecEnv, cty: AbstCall, contract_addr: ContractAddress, param: Value) -> Ret<Value> {
-        let Some(fnobj) = map_itr_err!(self.r.load_abstfn(env.sta, &contract_addr, cty))? else {
+        let adr = contract_addr.readable();
+        let Some((.., fnobj)) = self.r.load_abstfn(env.sta, &contract_addr, cty)? else {
             // return Ok(Value::Nil) // not find call
-            return errf!("abst call {:?} not find in {}", cty, contract_addr.readable()) // not find call
+            return errf!("abst call {:?} not find in {}", cty, adr) // not find call
         };
         let fnobj = fnobj.as_ref().clone();
         let param =  Some(param);
-        let rv = map_itr_err!(self.do_call(env, CallMode::Abst, fnobj, param))?;
+        let rv = self.do_call(env, CallMode::Abst, fnobj, contract_addr, param)?;
         if rv.check_true() {
-            return errf!("call {}.{:?} return error code {}", contract_addr.readable(), cty, rv.to_uint())
+            return errf!("call {}.{:?} return error code {}", adr, cty, rv.to_uint())
         }
         Ok(rv)
     }
 
-    fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, param: Option<Value>) -> VmrtRes<Value> {
+    fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, ctxadr: ContractAddress, param: Option<Value>) -> VmrtRes<Value> {
         self.frames.push(CallFrame::new()); // for reclaim
-        let res = self.frames.last_mut().unwrap().start_call(&mut self.r, env, mode, code, param);
+        let res = self.frames.last_mut().unwrap().start_call(&mut self.r, env, mode, code, ctxadr.into(), param);
         self.frames.pop().unwrap().reclaim(&mut self.r); // do reclaim
         res
     }

@@ -28,36 +28,42 @@ fn lgc_or(x: &Value, y: &Value) -> VmrtRes<Value> {
     lgcv!(ok)
 }
 
-fn lgc_equal(x: &Value, y: &Value) -> VmrtRes<Value> {
-    match (x, y) {
-        (Bool(l), Bool(r)) => lgcv!(l.eq(r)) ,
-        (Bytes(l), Bytes(r)) => lgcv!(l.eq(r)) ,
-        _ => lgcuintmatch!(eq, x, y)
+
+macro_rules! lgc_equal_or_not_equal { ($op: ident, $x: expr, $y: expr ) => {
+    match ($x, $y) {
+        (Nil, Nil)                => Ok(Value::bool(true.$op(&true))),
+        (Nil, ..)                 => Ok(Value::bool(false.$op(&true))),
+        (.. , Nil)                => Ok(Value::bool(false.$op(&true))),
+        (Bool(l), Bool(r))        => Ok(Value::bool(l.$op(r))),
+        (Address(l), Address(r))  => Ok(Value::bool(l.$op(r))),
+        (Bytes(l), Bytes(r))      => Ok(Value::bool(l.$op(r))),
+        (..) => lgcyuintmatch!($op, $x, $y)
     }
+} }
+
+
+fn lgc_equal(x: &Value, y: &Value) -> VmrtRes<Value> {
+    lgc_equal_or_not_equal!(eq, x, y)
 }
 
 fn lgc_not_equal(x: &Value, y: &Value) -> VmrtRes<Value> {
-    match (x, y) {
-        (Bool(l), Bool(r)) => lgcv!(l.ne(r)) ,
-        (Bytes(l), Bytes(r)) => lgcv!(l.ne(r)) ,
-        _ => lgcuintmatch!(ne, x, y)
-    }
+    lgc_equal_or_not_equal!(ne, x, y)
 }
 
 fn lgc_less(x: &Value, y: &Value) -> VmrtRes<Value> {
-    lgcuintmatch!(lt, x, y)
+    lgcyuintmatch!(lt, x, y)
 }
 
 fn lgc_less_equal(x: &Value, y: &Value) -> VmrtRes<Value> {
-    lgcuintmatch!(le, x, y)
+    lgcyuintmatch!(le, x, y)
 }
 
 fn lgc_greater(x: &Value, y: &Value) -> VmrtRes<Value> {
-    lgcuintmatch!(gt, x, y)
+    lgcyuintmatch!(gt, x, y)
 }
 
 fn lgc_greater_equal(x: &Value, y: &Value) -> VmrtRes<Value> {
-    lgcuintmatch!(ge, x, y)
+    lgcyuintmatch!(ge, x, y)
 }
 
 

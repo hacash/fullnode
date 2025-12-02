@@ -15,7 +15,7 @@ use super::action::*;
 use super::IRNode;
 // use super::rt::BytecodePrint;
 // use super::ir::IRCodePrint;
-use super::lang::{Tokenizer, Syntax};
+use super::lang::*;
 
 
 

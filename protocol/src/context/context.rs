@@ -1,4 +1,4 @@
-use crate::CallDepth;
+use crate::{CallDepth};
 
 
 /*
@@ -10,6 +10,9 @@ pub struct ContextInst<'a> {
 
     pub vmi: Box<dyn VM>,
 
+    pub tex_state: TexState,
+
+    log: Box<dyn Logs>,
     sta: Box<dyn State>,
     check_sign_cache: HashMap<Address, Ret<bool>>,
 }
@@ -17,16 +20,17 @@ pub struct ContextInst<'a> {
 
 impl ContextInst<'_> {
 
-    pub fn new<'a>(env: Env, sta: Box<dyn State>, txr: &'a dyn TransactionRead) -> ContextInst<'a> {
-        ContextInst{ env, sta, txr,
+    pub fn new<'a>(env: Env, sta: Box<dyn State>, log: Box<dyn Logs>, txr: &'a dyn TransactionRead) -> ContextInst<'a> {
+        ContextInst{ env, sta, log, txr,
             depth: CallDepth::new(0),
             check_sign_cache: HashMap::new(),
             vmi: VMNil::empty(),
+            tex_state: TexState::default(),
         }
     }
 
-    pub fn into_state(self) -> Box<dyn State> {
-        self.sta
+    pub fn release(self) -> (Box<dyn State>, Box<dyn Logs>) {
+        (self.sta, self.log)
     }
 }
 
@@ -37,19 +41,38 @@ impl ExtActCal for ContextInst<'_> {
     }
 }
 
-impl Context for ContextInst<'_> {
-    fn as_ext_caller(&mut self) -> &mut dyn ExtActCal { self }
-    fn env(&self) -> &Env { &self.env }
+impl StateOperat for ContextInst<'_> {
+
     fn state(&mut self) -> &mut dyn State { self.sta.as_mut() }
-    fn state_fork(&mut self) -> Box<dyn State> {
+    fn state_fork(&mut self) -> Arc<Box<dyn State>> {
         ctx_state_fork_sub(self)
     }
-    fn state_merge(&mut self, old: Box<dyn State>){
+    fn state_merge(&mut self, old: Arc<Box<dyn State>>){
         ctx_state_merge_sub(self, old)
+    }
+    fn state_recover(&mut self, old: Arc<Box<dyn State>>) {
+        ctx_state_recover(self, old)
     }
     fn state_replace(&mut self, sta: Box<dyn State>) -> Box<dyn State> {
         std::mem::replace(&mut self.sta, sta)
     }
+}
+
+impl Context for ContextInst<'_> {
+
+    fn logs(&mut self) -> &mut dyn Logs {
+        self.log.as_mut()
+    }
+
+    fn clone_mut(&self) -> &mut dyn Context {
+        let ptr: *const ContextInst<'_> = self as *const ContextInst<'_>;
+        let ptr_mut = ptr as *mut ContextInst<'_>;
+        #[allow(invalid_reference_casting)]
+        unsafe{ &mut *ptr_mut }
+    }
+    fn as_ext_caller(&mut self) -> &mut dyn ExtActCal { self }
+    fn env(&self) -> &Env { &self.env }
+    
     fn depth(&mut self) -> &mut CallDepth { &mut self.depth }
     fn depth_set(&mut self, cd: CallDepth) { self.depth = cd }
     /*
@@ -74,5 +97,10 @@ impl Context for ContextInst<'_> {
         self.check_sign_cache.insert(*adr, isok.clone());
         isok.map(|_|())
     }
+    // tex
+    fn tex_state(&mut self) -> &mut TexState {
+        &mut self.tex_state
+    }
+
 }
 

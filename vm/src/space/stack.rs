@@ -120,7 +120,7 @@ impl Stack {
     }
 
     #[inline(always)]
-    pub fn popx(&mut self, x: u8) -> VmrtErr {
+    pub fn __popx(&mut self, x: u8) -> VmrtErr {
         let x = x as usize;
         if x < 2 {
             return itr_err_fmt!(StackError, "inst popn param cannot less than 2")
@@ -135,13 +135,19 @@ impl Stack {
     }
 
     #[inline(always)]
-    pub fn dupx(&mut self, x: u8) -> VmrtErr {
-        let x = x as usize;
-        let idx = self.datas.len() as i32 - x as i32 - 1;
-        if idx < 0 {
-            return itr_err_code!(OutOfStack)
+    pub fn dupn(&mut self, n: u8) -> VmrtErr {
+        let n = n as usize;
+        if n < 2 {
+            return itr_err_fmt!(StackError, "inst dupn param cannot less than 2")
         }
-        self.push(self.datas[idx as usize].clone())?;
+        let m = self.datas.len();
+        if n > m {
+            return itr_err_fmt!(StackError, "dupn length overflow")
+        }
+        let s = m - n;
+        for i in s .. m {
+            self.push(self.datas[i].clone())?;
+        }
         Ok(())
     }
 
@@ -159,16 +165,16 @@ impl Stack {
     
 
     #[inline(always)]
-    pub fn reverse(&mut self) -> VmrtErr {
-        let x = self.pop()?.checked_u8()? as usize;
+    pub fn reverse(&mut self, x: u8) -> VmrtErr {
+        let x = x as usize;
         if x < 2 {
             return itr_err_fmt!(StackError, "inst reverse param cannot less than 2")
         }
-        let mut list = Vec::new();
+        let mut list = VecDeque::with_capacity(x);
         for _ in 0..x {
-            list.push(self.pop()?);
+            list.push_front(self.pop()?);
         }
-        while let Some(a) = list.pop() {
+        while let Some(a) = list.pop_back() {
             self.push(a)?;
         }
         Ok(())
@@ -185,13 +191,13 @@ impl Stack {
     }
 
     #[inline(always)]
-    pub fn join(&mut self, cap: &SpaceCap) -> VmrtErr {
-        let x = self.pop()?.checked_u8()? as usize;
-        if x < 3 {
+    pub fn join(&mut self, n: u8, cap: &SpaceCap) -> VmrtErr {
+        let n = n as usize;
+        if n < 3 {
             return itr_err_fmt!(StackError, "inst join param cannot less than 3")
         }
         let mut value = Value::empty_bytes();
-        for _ in 0..x {
+        for _ in 0..n {
             value = Value::concat(&self.pop()?, &value, cap)?;
         }
         self.push(value.valid(cap)?)

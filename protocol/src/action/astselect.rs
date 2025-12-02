@@ -1,7 +1,7 @@
 
 
 
-action_define!{AstSelect, 100, 
+action_define!{AstSelect, 21, 
     ActLv::Ast, // level
     // burn 90 fee, check any sub child action
     self.actions.list().iter().any(|a|a.burn_90()),
@@ -12,6 +12,10 @@ action_define!{AstSelect, 100,
         actions: DynListActionW1
     },
     (self, ctx, gas {
+        #[cfg(not(feature = "ast"))]
+        if true {
+            return errf!("ast select not open")
+        }
         let slt_min = *self.exe_min as usize;
         let slt_max = *self.exe_max as usize;
         let slt_num = self.actions.length();
@@ -40,8 +44,8 @@ action_define!{AstSelect, 100,
                 ok += 1;
                 ctx.state_merge(oldsta); // merge sub state
             } else {
-                ctx.state_replace(oldsta); // drop sub state
-            }
+                ctx_state_recover(ctx, oldsta);
+            }   
         }
         // check at least
         if ok < slt_min {
@@ -51,5 +55,38 @@ action_define!{AstSelect, 100,
         Ok(rv)
     })
 }
+
+
+
+impl AstSelect {
+
+    pub fn nop() -> Self {
+        Self::new()
+    }
+
+    pub fn create_list(acts: Vec<Box<dyn Action>>) -> Self {
+        let num = acts.len();
+        assert!(num < u8::MAX as usize);
+        let num = num as u8;
+        Self {
+            exe_min: Uint1::from(num),
+            exe_max: Uint1::from(num),
+            actions: DynListActionW1::from_list(acts).unwrap(),
+            ..Self::new()
+        }
+    }
+
+    pub fn create_by(min: u8, max: u8, acts: Vec<Box<dyn Action>>) -> Self {
+        Self {
+            exe_min: Uint1::from(min),
+            exe_max: Uint1::from(max),
+            actions: DynListActionW1::from_list(acts).unwrap(),
+            ..Self::new()
+        }
+    }
+
+}
+
+
 
 

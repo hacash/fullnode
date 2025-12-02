@@ -38,28 +38,19 @@ impl DiamondNumberAuto {
 	}
 }
 
+
+
+macro_rules! define_diamond_name_list { ( $class: ident, $nty: ty, $max: expr ) => {
+
 /*
 * Diamond Name List
 */
-combi_list!{ DiamondNameListMax200, 
-	Uint1, DiamondName
-}
-
-impl Iterator for DiamondNameListMax200 {
-    type Item = DiamondName;
-    fn next(&mut self) -> Option<DiamondName> {
-        match self.pop() {
-            Some(d) => {
-                self.count -= 1;
-                Some(d)
-            }
-            _ => None,
-        }
-    }
+combi_list!{ $class, 
+	$nty, DiamondName
 }
 
 
-impl DiamondNameListMax200 {
+impl $class {
 
     pub fn one(dia: DiamondName) -> Self {        
         let mut obj = Self::default();
@@ -67,18 +58,18 @@ impl DiamondNameListMax200 {
         obj
     }
 
-    pub fn check(&self) -> Ret<u8> {
+    pub fn check(&self) -> Ret<usize> {
         // check len
-        let setlen = *self.count as u64;
-        let reallen = self.lists.len() as u64 ;
+        let setlen = *self.count as usize;
+        let reallen = self.lists.len() as usize ;
         if setlen != reallen {
             return errf!("check fail: length need {} but got {}", setlen, reallen)
         }
         if reallen == 0 {
             return errf!("diamonds quantity cannot be zero")
         }
-        if reallen > 200 {
-            return errf!("diamonds quantity cannot over 200")
+        if reallen > $max {
+            return errf!("diamonds quantity cannot over {}", $max)
         }
         // check name
         for v in &self.lists {
@@ -87,7 +78,7 @@ impl DiamondNameListMax200 {
             }
         }
         // success
-        Ok(reallen as u8)
+        Ok(reallen)
     }
     
     pub fn contains(&self, x: &[u8]) -> bool {
@@ -115,7 +106,7 @@ impl DiamondNameListMax200 {
         self.lists.iter().map(|a|a.clone()).collect::<HashSet<_>>()
     }
 
-    pub fn from_readable(stuff: &str) -> Ret<DiamondNameListMax200> {
+    pub fn from_readable(stuff: &str) -> Ret<$class> {
         let s = stuff.replace(" ","").replace("\n","").replace("|","").replace(",","");
         if s.len() == 0 {
             return errf!("diamond list empty")
@@ -124,10 +115,10 @@ impl DiamondNameListMax200 {
             return errf!("diamond list format error")
         }
         let num = s.len() / 6;
-        if num > 200  {
-            return errf!("diamond list max 200 overflow")
+        if num > $max  {
+            return errf!("diamond list max {} overflow", $max)
         }
-        let mut obj = DiamondNameListMax200::default();
+        let mut obj = $class::default();
         let bs = s.as_bytes();
         for i in 0 .. num {
             let x = i*6;
@@ -138,4 +129,28 @@ impl DiamondNameListMax200 {
         Ok(obj)
     }
 
+    
+    pub fn checked_append(&mut self, dias: Vec<DiamondName>) -> Rerr {
+        let n = self.lists.len() + dias.len();
+        if n > $max {
+            return errf!("diamond list max {} overflow", $max)
+        }
+        self.append(dias)?;
+        // check repeat
+        if self.hashset().len() != self.length() {
+            return errf!("diamond name list contains duplicates")
+        }
+        Ok(())
+    }
+    
+
 }
+
+}}
+
+
+
+define_diamond_name_list!{ DiamondNameListMax200,   Uint1, 200 }
+define_diamond_name_list!{ DiamondNameListMax60000, Uint2, 60000 }
+
+

@@ -17,16 +17,16 @@ pub enum Bytecode {
     ________________3   = 0x03,
     ________________4   = 0x04,
     ________________5   = 0x05,
-    ________________6   = 0x06,
-    ________________7   = 0x07,
-    ________________8   = 0x08,
+    EXTFUNC             = 0x06, // *@  call extend action
+    EXTENV              = 0x07, // *+  call extend action
+    NTCALL              = 0x08, // *@  native call
     ________________9   = 0x09,
     ________________10  = 0x0a,
-    EXTENV              = 0x0b, // *+  call extend action
+    ________________11  = 0x0b,
     ________________12  = 0x0c,
     ________________13  = 0x0d,
     ________________14  = 0x0e,
-    EXTFUNC             = 0x0f, // *@  call extend action
+    ________________15  = 0x0f,
     ________________16  = 0x10,
     CALL                = 0x11, // *,****@ 
     CALLINR             = 0x12, //   ****@ 
@@ -42,7 +42,7 @@ pub enum Bytecode {
     ________________28  = 0x1c,
     ________________29  = 0x1d,
     ________________30  = 0x1e,
-    NTCALL              = 0x1f, // *@  native call
+    ________________31  = 0x1f, // *@  native call
     PU8                 = 0x20, // *+     push u8
     PU16                = 0x21, // **+    push u16
     PBUF                = 0x22, // *+     push buf
@@ -76,22 +76,22 @@ pub enum Bytecode {
     ________________62  = 0x3e,       
     ________________63  = 0x3f,   
     DUP                 = 0x40, // +      copy 0
-    DUPX                = 0x41, // *+     copy u8
+    DUPN                = 0x41, // *+     copy u8
     POP                 = 0x42, // a      pop top
     POPN                = 0x43, // *a...b pop n
     PICK                = 0x44, // *      pick
     SWAP                = 0x45, // a,b++  swap  b,a = a,b
     REV                 = 0x46, // a...b  reverse u8
     CHOISE              = 0x47, // a,b,c+ (x ? a : b)
-    SIZE                = 0x48, // &      size (u16)
-    CAT                 = 0x49, // a,b+   buf: b + a
-    JOIN                = 0x4a, // a...bn+
+    CAT                 = 0x48, // a,b+   buf: b + a
+    JOIN                = 0x49, // a...bn+
+    BYTE                = 0x4a, // a,b+   val[n] = u8
     CUT                 = 0x4b, // a,b,c+ cut buf (v, ost, len)+
     LEFT                = 0x4c, // *&     cut left  buf *
     RIGHT               = 0x4d, // *&     cut right buf *
     LDROP               = 0x4e, // *&     drop buf left *
     RDROP               = 0x4f, // *&     drop buf right *
-    BYTE                = 0x50, // a,b+   val[n] = u8
+    SIZE                = 0x50, // &      size (u16)
     ________________81  = 0x51,
     ________________82  = 0x52,
     ________________83  = 0x53,
@@ -159,14 +159,14 @@ pub enum Bytecode {
     GPUT                = 0x91, // a,b   global put
     MGET                = 0x92, // &     memory get
     MPUT                = 0x93, // a,b   memory put
-    ________________148 = 0x94,
-    ________________149 = 0x95,
-    ________________150 = 0x96,
-    ________________151 = 0x97,
+    LOG1                = 0x94,
+    LOG2                = 0x95,
+    LOG3                = 0x96,
+    LOG4                = 0x97,
     ________________152 = 0x98,
     ________________153 = 0x99,
     ________________154 = 0x9a,
-    STIME               = 0x9b, // &     storage expire block
+    SREST               = 0x9b, // &     storage expire rest block
     SLOAD               = 0x9c, // &     storage load
     SDEL                = 0x9d, // a     storage delete
     SSAVE               = 0x9e, // a,b   storage save
@@ -245,7 +245,7 @@ pub enum Bytecode {
     ________________231 = 0xe7, 
     ________________232 = 0xe8,
     ________________233 = 0xe9,
-    ________________234 = 0xea,
+    PRT                 = 0xea, // s     print for debug
     AST                 = 0xeb, // c     assert throw
     ERR                 = 0xec, // a     throw (ERR)
     ABT                 = 0xed, //       abord
@@ -328,8 +328,9 @@ impl Bytecode {
 */
 bytecode_metadata_define!{
     EXTACTION  : 1, 1, 1,     ext_action
-    EXTENV     : 1, 0, 1,     ext_env
     EXTFUNC    : 1, 1, 1,     ext_func
+    EXTENV     : 1, 0, 1,     ext_env
+    NTCALL     : 1, 1, 1,     native_call
 
     // CALLDYN    :   0, 3, 1,   call_dynamic
     CALL       : 1+4, 1, 1,   call
@@ -337,8 +338,6 @@ bytecode_metadata_define!{
     CALLLIB    : 1+4, 1, 1,   call_library
     CALLSTATIC : 1+4, 1, 1,   call_static
     CALLCODE   : 1+4, 0, 0,   call_code
-
-    NTCALL     : 1, 1, 1,     native_call
 
     PU8        : 1, 0, 1,     push_u8
     PU16       : 2, 0, 1,     push_u16
@@ -365,22 +364,22 @@ bytecode_metadata_define!{
     TID        : 0, 1, 1,     type_id
 
     DUP        : 0, 0, 1,     dump
-    DUPX       : 1, 0, 1,     dump_x
+    DUPN       : 1, 0, 1,     dump_n
     POP        : 0, 255, 0,   pop
     POPN       : 1, 255, 0,   pop_n
     PICK       : 1, 0, 1,     pick
     SWAP       : 0, 2, 2,     swap
-    REV        : 0, 255, 255, reverse_stace
+    REV        : 1, 255, 255, reverse
     CHOISE     : 0, 3, 1,     choise
-    SIZE       : 0, 1, 1,     size
     CAT        : 0, 2, 1,     concat
-    JOIN       : 0, 255, 1,   join
+    JOIN       : 1, 255, 1,   join
+    BYTE       : 0, 2, 1,     byte
     CUT        : 0, 3, 1,     buf_cut
     LEFT       : 1, 1, 1,     buf_left
     RIGHT      : 1, 1, 1,     buf_right
     LDROP      : 1, 1, 1,     buf_left_drop
     RDROP      : 1, 1, 1,     buf_right_drop
-    BYTE       : 0, 2, 1,     byte
+    SIZE       : 0, 1, 1,     size
 
     NEWLIST    : 0, 0, 1,     new_list
     NEWMAP     : 0, 0, 1,     new_map
@@ -426,8 +425,13 @@ bytecode_metadata_define!{
     GGET       : 0, 1, 1,     global_get
     MPUT       : 0, 2, 0,     memory_put
     MGET       : 0, 1, 1,     memory_get
+
+    LOG1       : 0, 255, 0,   log_1
+    LOG2       : 0, 255, 0,   log_2
+    LOG3       : 0, 255, 0,   log_3
+    LOG4       : 0, 255, 0,   log_4
         
-    STIME      : 0, 1, 1,     storage_time
+    SREST      : 0, 1, 1,     storage_rest
     SLOAD      : 0, 1, 1,     storage_load
     SDEL       : 0, 1, 0,     storage_del
     SSAVE      : 0, 2, 0,     storage_save
@@ -473,6 +477,7 @@ bytecode_metadata_define!{
     AST        : 0, 1, 0,     assert
     ERR        : 0, 1, 0,     throw
     ABT        : 0, 0, 0,     abort
+    PRT        : 0, 1, 0,     print
 
     IRBYTECODE : 2, 255, 0,   ir_bytecode
     IRLIST     : 2, 255, 1,   ir_list

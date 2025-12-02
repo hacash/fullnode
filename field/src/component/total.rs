@@ -15,6 +15,8 @@ combi_struct!(TotalCount,
 	// diamond
 	diamond_engraved         : Uint8
 	diamond_insc_burn_zhu    : Uint8 // HAC zhu
-	asset_issue_burn_mei     : Uint5 // HAC mei
+	// asset
+	created_asset            : Uint4
+	asset_issue_burn_mei     : Uint4 // HAC mei
 );
 

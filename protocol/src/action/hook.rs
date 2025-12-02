@@ -12,7 +12,7 @@ macro_rules! fneatcf {
         |_,_|Ok(None)
     };
 }
-pub static mut EXTEND_ACTIONS_TRY_CREATE_FUNCS: [FnExtendActionsTryCreateFunc; 3] = [try_create, fneatcf!(), fneatcf!()];
+pub static mut EXTEND_ACTIONS_TRY_CREATE_FUNCS: [FnExtendActionsTryCreateFunc; 4] = [try_create, fneatcf!(), fneatcf!(), fneatcf!()];
 
 
 pub fn setup_extend_actions_try_create(idx: usize, f: FnExtendActionsTryCreateFunc) {

@@ -4,7 +4,7 @@
 
 
 #[cfg(test)]
-mod maincall {
+mod other {
 
 
     use vm::*;
@@ -72,7 +72,7 @@ mod maincall {
     }
 
     #[test]
-    fn test3() {
+    fn asset_issue() {
 
         use field::interface::*;
         use protocol::action::*;
@@ -87,13 +87,14 @@ mod maincall {
         assert!(caddr == ContractAddress::from_addr(cadr).unwrap());
 
 
-        let mut act = AssetCreate::new();
+        let mut act = mint::action::AssetCreate::new();
         act.metadata.issuer = cadr;
-        act.metadata.serial = Fold64::from(32).unwrap();
+        act.metadata.serial = Fold64::from(11).unwrap();
         act.metadata.supply = Fold64::from(20_00000000_0000).unwrap();
         act.metadata.decimal = Uint1::from(4);
         act.metadata.ticket = BytesW1::from(b"USDT".to_vec()).unwrap();
         act.metadata.name = BytesW1::from(b"USD Tether".to_vec()).unwrap();
+        act.protocol_fee = Amount::mei(1);
         curl_trs_1(vec![Box::new(act)]);
 
         let mut act = HacToTrs::new();

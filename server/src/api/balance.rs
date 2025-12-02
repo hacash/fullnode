@@ -5,6 +5,7 @@ api_querys_define!{ Q8364,
     address, String, s!(""),
     diamonds, Option<bool>, None,
     asset, Option<String>, None,
+    assets, Option<bool>, None,
 }
 
 async fn balance(State(ctx): State<ApiCtx>, q: Query<Q8364>) -> impl IntoResponse  {
@@ -54,6 +55,17 @@ async fn balance(State(ctx): State<ApiCtx>, q: Query<Q8364>) -> impl IntoRespons
             };
             let mut assets = vec![];
             for a in astptr {
+                assets.push(json!({
+                    "serial": *a.serial,
+                    "amount": *a.amount,
+                }));
+            }
+            resj["assets"] = assets.into();
+        }
+        // asset
+        if let Some(true) = &q.assets {
+            let mut assets = vec![];
+            for a in bls.assets.list() {
                 assets.push(json!({
                     "serial": *a.serial,
                     "amount": *a.amount,

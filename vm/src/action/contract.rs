@@ -11,19 +11,18 @@ macro_rules! vmsto {
 
 
 
-action_define!{ContractDeploy, 122, 
-    ActLv::TopOnly, // level
-    false, [], // burn 90% fee
+action_define!{ContractDeploy, 99, 
+    ActLv::TopUnique,
+    false, [],
     {   
-        nonce: Uint4 
         protocol_cost: Amount
+        nonce: Uint4 
         construct_argv: BytesW1 // max 1024
         _marks_:   Fixed4 // zero
         contract: ContractSto
     },
     (self, ctx, _gas {
-        if self._marks_.not_zero() {
-            // compatibility for future
+        if self._marks_.not_zero() { // compatibility for future
             return errf!("marks byte error")
         }
         let hei = ctx.env().block.height;
@@ -34,9 +33,9 @@ action_define!{ContractDeploy, 122,
             return errf!("contract {} already exist", (*caddr).readable())
         }
         // spend protocol fee
-        check_sub_contract_protocol_fee(ctx, self.contract.size(), &self.protocol_cost)?;
+        check_sub_contract_protocol_fee(ctx, &self.protocol_cost)?;
         // check
-        map_itr_err!(self.contract.check(hei))?;
+        self.contract.check(hei)?;
         let accf  = AbstCall::Construct;
         let hvaccf = self.contract.have_abst_call(accf);
         // save the contract
@@ -65,18 +64,18 @@ action_define!{ContractDeploy, 122,
 
 
 
-action_define!{ContractUpdate, 123, 
-    ActLv::TopOnly, // level
+action_define!{ContractUpdate, 98, 
+    ActLv::TopUnique, // level
     false, [], // burn 90% fee
     {   
-        marks: Fixed2 // zero
+        protocol_cost: Amount
         address: Address // contract address
+        _marks_: Fixed2 // zero
         contract: ContractSto
-        protocol_fee: Amount
     },
     (self, ctx, _gas {
         use AbstCall::*;
-        if self.marks.not_zero() {
+        if self._marks_.not_zero() {
             return errf!("marks byte error")
         }
         let hei = ctx.env().block.height;
@@ -86,10 +85,10 @@ action_define!{ContractUpdate, 123,
             return errf!("contract {} not exist", (*caddr).readable())
         };
         // spend protocol fee
-        check_sub_contract_protocol_fee(ctx, self.contract.size(), &self.protocol_fee)?;
+        check_sub_contract_protocol_fee(ctx, &self.protocol_cost)?;
         // merge and check
-		map_itr_err!(self.contract.check(hei))?;
-        let is_edit = map_itr_err!(contract.merge(&self.contract, hei))?;
+		self.contract.check(hei)?;
+        let is_edit = contract.merge(&self.contract, hei)?;
         let depth = 1; // sys call depth is 1
         let cty = CallMode::Abst as u8;
         let sys = maybe!(is_edit, Change, Append) as u8; // Upgrade or Append
@@ -106,7 +105,8 @@ action_define!{ContractUpdate, 123,
 /**************************************/
 
 
-fn check_sub_contract_protocol_fee(ctx: &mut dyn Context, _ctlsz: usize, pfee: &Amount) -> Rerr {
+
+fn check_sub_contract_protocol_fee(ctx: &mut dyn Context, pfee: &Amount) -> Rerr {
     if pfee.is_negative() {
 		return errf!("protocol fee cannot be negative")
     }

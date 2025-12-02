@@ -37,6 +37,37 @@ macro_rules! checked_compo_op_len {
 
 impl Compo {
 
+    fn to_string(&self) -> String {
+        match self {
+            Self::List(a) => {
+                let sss: Vec<_> = a.iter().map(|a|a.to_string()).collect();
+                format!("[{}]", sss.join(","))
+            },
+            Self::Map(b)  => { 
+                let mmm: Vec<_> = b.iter().map(|(k,v)|{
+                    format!("0x{}:{}", k.hex(), v.to_string())
+                }).collect();
+                format!("{{{}}}", mmm.join(","))
+            }
+        }
+    }
+
+    fn to_json(&self) -> String {
+        match self {
+            Self::List(a) => {
+                let sss: Vec<_> = a.iter().map(|a|a.to_json()).collect();
+                format!("[{}]", sss.join(","))
+            },
+            Self::Map(b)  => { 
+                let mmm: Vec<_> = b.iter().map(|(k,v)|{
+                    format!("\"{}\":{}", bytes_to_readable_string(&k), v.to_json())
+                }).collect();
+                format!("{{{}}}", mmm.join(","))
+            }
+        }
+    }
+
+
     fn len(&self) -> usize {
         match self {
             Self::List(a) => a.len(),
@@ -137,9 +168,21 @@ impl Compo {
 
 
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Clone)]
 pub struct CompoItem {
     compo: Rc<UnsafeCell<Compo>>,
+}
+
+impl Display for CompoItem {
+    fn fmt(&self,f: &mut Formatter) -> Result {
+        write!(f,"{}", self.to_json())
+    }
+}
+
+impl Debug for CompoItem {
+    fn fmt(&self,f: &mut Formatter) -> Result {
+        write!(f,"{}", self.to_string())
+    }
 }
 
 impl PartialEq for CompoItem {
@@ -193,8 +236,17 @@ macro_rules! take_items_from_ops {
     }}
 }
 
+impl CompoItem {
 
+    pub fn to_string(&self) -> String {
+        get_compo_inner_ref!(self).to_string()
+    }
 
+    pub fn to_json(&self) -> String {
+        get_compo_inner_ref!(self).to_json()
+    }
+
+}
 
 
 

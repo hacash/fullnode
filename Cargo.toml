@@ -17,9 +17,11 @@ server = {path = "./server"}
 app = {path = "./app"}
 vm = {path = "./vm", optional = true }
 
-
 [features]
-default = ["db-sled"]
+default = ["db-sled"] #, "hip20", "tex", "ast", "hvm"]
+hip20 = ["mint/hip20"]
+tex = ["protocol/tex"]
+ast = ["protocol/ast"]
 hvm = ["dep:vm", "field/hvm"]
 db-sled = ["db/db-sled"]
 db-rusty-leveldb = ["db/db-rusty-leveldb"]

@@ -11,6 +11,20 @@ pub struct $class {
     vlist: Vec<Box<dyn $dynty>>
 }
 
+impl Iterator for $class {
+    type Item = Box<dyn $dynty>;
+    fn next(&mut self) -> Option<Box<dyn $dynty>> {
+        match self.pop() {
+            Some(d) => {
+                self.count -= 1;
+                Some(d)
+            }
+            _ => None,
+        }
+    }
+}
+
+
 impl std::fmt::Debug for $class {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f,"[dyn list {}]", *self.count)
@@ -69,6 +83,16 @@ impl_field_only_new!{$class}
 
 impl $class {
 
+    pub fn from_list(list: Vec<Box<dyn $dynty>>) -> Ret<Self> {
+        let n = list.len();
+        if n > <$lenty>::MAX as usize {
+            return errf!("list data length overflow")
+        }
+        Ok(Self{
+            count: <$lenty>::from_usize(n)?,
+            vlist: list,
+        })
+    }
 
     pub fn replace(&mut self, i: usize, v: Box<dyn $dynty>) -> Rerr {
         let tl = self.length() as usize;
@@ -110,6 +134,7 @@ impl $class {
     pub fn list(&self) -> &Vec<Box<dyn $dynty>> {
         &self.vlist
     }
+
 
 
 }

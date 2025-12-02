@@ -10,17 +10,17 @@ pub fn buf_to_uint(buf: &[u8]) -> VmrtRes<Value> {
             Ok(Value::U16(v))
         },
         3..=4 => {
-            let bts = buf_fill_left_zero(buf, 4);
+            let bts = buf_fill_left_zero(&rlbts, 4);
             let v = u32::from_be_bytes(bts.try_into().unwrap());
             Ok(Value::U32(v))
         },
         5..=8 => {
-            let bts = buf_fill_left_zero(buf, 8);
+            let bts = buf_fill_left_zero(&rlbts, 8);
             let v = u64::from_be_bytes(bts.try_into().unwrap());
             Ok(Value::U64(v))
         },
         9..=16 => {
-            let bts = buf_fill_left_zero(buf, 16);
+            let bts = buf_fill_left_zero(&rlbts, 16);
             let v = u128::from_be_bytes(bts.try_into().unwrap());
             Ok(Value::U128(v))
         },
@@ -106,29 +106,29 @@ impl Value {
             ValueTy::U64       => cklen(8,  cst!(cast_u64) ),
             ValueTy::U128      => cklen(16, cst!(cast_u128) ),
             ValueTy::Bytes     => Ok(Self::Bytes(stuff)),
-            ValueTy::Addr      => {
-                if vlen != Address::SIZE {
+            ValueTy::Address   => {
+                if vlen != field::Address::SIZE {
                     return err!()
                 }
-                let addr = Address::must_vec(stuff);
-                map_err_itr!(CastFail, addr.check_version())?;
-                Ok(Self::Addr(addr))
+                let addr = field::Address::must_vec(stuff);
+                addr.check_version().map_ire(CastFail)?;
+                Ok(Self::Address(addr))
             },
             _ => err!(),
         }
     }
     
 
-    pub fn checked_address(&self) -> VmrtRes<Address> {
+    pub fn checked_address(&self) -> VmrtRes<field::Address> {
         match self {
-            Bytes(adr) => map_err_itr!(CastParamFail, Address::from_bytes(adr)),
+            Bytes(adr) => field::Address::from_bytes(adr).map_ire(CastParamFail),
             _ => itr_err_fmt!(CastParamFail, "cannot cast {:?} to address", self)
         }
     }
 
     pub fn checked_contract_address(&self) -> VmrtRes<ContractAddress> {
         let addr = self.checked_address()?;
-        map_err_itr!(ContractAddrErr, ContractAddress::from_addr(addr))
+        ContractAddress::from_addr(addr).map_ire(ContractAddrErr)
     }
 
     pub fn checked_fnsign(&self) -> VmrtRes<FnSign> {

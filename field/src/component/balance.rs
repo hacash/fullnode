@@ -48,6 +48,8 @@ combi_struct!{ Balance,
 	assets: AssetAmtW1
 }
 
+pub const BALANCE_ASSET_MAX: usize = 20;
+
 impl Balance {
 
 	pub fn hac(amt: Amount) -> Self {
@@ -62,19 +64,25 @@ impl Balance {
 	}
 
 	pub fn asset_must(&self, seri: Fold64) -> AssetAmt {
-		self.asset(seri).unwrap_or_else(||AssetAmt::new(seri))
+		self.asset(seri).unwrap_or(AssetAmt::new(seri))
 	}
 
 	pub fn asset_set(&mut self, amt: AssetAmt) -> Rerr {
-		for ast in self.assets.as_mut() {
+		let assets = self.assets.as_mut();
+		for i in 0..assets.len() {
+			let ast = assets.get_mut(i).unwrap();
 			if ast.serial == amt.serial {
-				*ast = amt;
+				if 0 == *amt.amount {
+					self.assets.drop(i).unwrap();// delete
+				} else {
+					*ast = amt; // update
+				}
 				return Ok(())
 			}
 		}
 		self.assets.push(amt)?;
-		if self.assets.length() > 20 {
-			return errf!("balance asset item quantity cannot big than 20")
+		if self.assets.length() > BALANCE_ASSET_MAX {
+			return errf!("balance asset item quantity cannot big than {}", BALANCE_ASSET_MAX)
 		}
 		Ok(())
 	}

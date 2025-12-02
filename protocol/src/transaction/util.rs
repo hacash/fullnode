@@ -63,17 +63,11 @@ pub fn verify_target_signature(adr: &Address, tx: &dyn TransactionRead) -> Ret<b
 }
 
 
-fn verify_one_sign(hash: &Hash, addr: &Address, signs: &Vec<Sign>) -> Ret<bool> {
-    let adrary = addr.into_array();
+pub fn verify_one_sign(hash: &Hash, addr: &Address, signs: &Vec<Sign>) -> Ret<bool> {
     for sig in signs {
-        let curpubkey = sig.publickey.into_array();
-        let curaddr = Account::get_address_by_public_key(curpubkey);
-        if adrary == curaddr {
-            if Account::verify_signature(&hash.into_array(), &curpubkey, &sig.signature.into_array()) {
-                return Ok(true)
-            }
+        if verify_signature(hash, addr, sig) {
+            return Ok(true)
         }
     }
     errf!("{} verify signature failed", addr.readable())
 }
-

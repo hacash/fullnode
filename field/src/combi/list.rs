@@ -13,6 +13,14 @@ pub struct $class  {
 	lists: Vec<$vty>,
 }
 
+impl Iterator for $class {
+    type Item = $vty;
+    fn next(&mut self) -> Option<$vty> {
+        self.pop()
+    }
+}
+
+
 impl std::fmt::Debug for $class {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f,"[list {}]", *self.count)
@@ -84,6 +92,10 @@ impl $class {
 		&self.lists
 	}
 
+	pub fn into_list(self) -> Vec<$vty> {
+		self.lists
+	}
+
     pub fn replace(&mut self, i: usize, v: $vty) -> Rerr {
         let tl = self.length();
         if i >= tl {
@@ -113,13 +125,32 @@ impl $class {
 	}
 
 	pub fn append(&mut self, mut list: Vec<$vty>) -> Rerr {
-        if *self.count as usize + list.len() > <$cty>::MAX as usize {
+        let num = *self.count as usize + list.len();
+        if num > <$cty>::MAX as usize {
             return errf!("append size overflow")
         }
-		self.count += list.len() as u8;
+		self.count = <$cty>::from_usize(num)?;
         self.lists.append(&mut list);
         Ok(())
 	}
+
+    pub fn fetch_list(&mut self, n: usize) -> Ret<Vec<$vty>> {
+        let m = *self.count as usize;
+        if n > m {
+            return errf!("list data length is {} but will fetch {}", m, n)
+        }
+        let l = m - n;
+		self.count = <$cty>::from_usize(l)?;
+        Ok(self.lists.split_off(l))
+    }
+
+    pub fn fetch(&mut self, n: usize) -> Ret<Self> {
+        let v = self.fetch_list(n)?;
+        Ok(Self{
+            count: <$cty>::from_usize(v.len())?,
+            lists: v,
+        })
+    }
 
 	pub fn pop(&mut self) -> Option<$vty> {
         let n = *self.count;
@@ -134,6 +165,17 @@ impl $class {
 
 	pub fn as_mut(&mut self) -> &mut Vec<$vty> {
 	    &mut self.lists
+    }
+
+    pub fn from_list(v: Vec<$vty>) -> Ret<Self> {
+        let num = v.len();
+        if num > <$cty>::MAX as usize {
+            return errf!("list data size overflow")
+        }
+		Ok(Self{
+            count: <$cty>::from_usize(num)?,
+            lists: v,
+        })
     }
 
 }

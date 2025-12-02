@@ -51,14 +51,12 @@ impl EngineRead for ChainEngine {
     fn latest_block(&self) -> Arc<dyn Block> {
         self.roller.lock().unwrap().head.upgrade().unwrap().block.clone()
     }
-
     
     fn mint_checker(&self) -> &dyn Minter {
         self.minter.as_ref()
     }
 
-    
-    fn state(&self) -> Arc<dyn State> {
+    fn state(&self) -> Arc<Box<dyn State>> {
         self.roller.lock().unwrap().head.upgrade().unwrap().state.clone()
     }
 
@@ -70,6 +68,10 @@ impl EngineRead for ChainEngine {
     
     fn store(&self) -> Arc::<dyn Store> {
         Arc::new(BlockStore::wrap(self.disk.clone()))
+    }
+
+    fn logs(&self) -> Arc<dyn Logs> {
+        self.logs.clone()
     }
 
     fn recent_blocks(&self) -> Vec<Arc<RecentBlockInfo>> {
@@ -96,7 +98,7 @@ impl EngineRead for ChainEngine {
         if tx.ty() == TransactionCoinbase::TYPE {
             return errf!("cannot submit coinbase tx");
         }
-        let an = tx.action_count().uint() as usize;
+        let an = tx.action_count();
         if an != tx.actions().len() {
             return errf!("tx action count not match")
         }
@@ -129,11 +131,13 @@ impl EngineRead for ChainEngine {
         };
         // cast mut to box
         let sub = unsafe { Box::from_raw(sub_state.as_mut() as *mut dyn State) };
-        let mut ctxobj = ctx::ContextInst::new(env, sub, tx);
+        let log = self.logs.next(0); // do not push & write 
+        let mut ctxobj = ctx::ContextInst::new(env, sub, Box::new(log), tx);
         // do tx exec
         let exec_res = tx.execute(&mut ctxobj);
         // drop the box, back to mut ptr do manage
-        let _ = Box::into_raw( ctxobj.into_state() ); 
+        let (sta, _) = ctxobj.release(); 
+        let _ = Box::into_raw(sta ); 
         // return execute result
         exec_res
     }

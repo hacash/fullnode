@@ -2,15 +2,14 @@
 
 
 
+pub const BLACKHOLE_ADDR: Address = ADDRESS_ZERO;
 
-pub const BLACKHOLE_ADDR: Address = Address::from([0u8; 21]);
-
+#[inline(always)]
 fn blackhole_engulf(sta: &mut CoreState, addr: &Address) {
-    if *addr != BLACKHOLE_ADDR {
-        return
+    if *addr == BLACKHOLE_ADDR {
+        // set balance = empty
+        sta.balance_set(addr, &Balance::new());
     }
-    // set balance = empty
-    sta.balance_set(addr, &Balance::new());
 }
 
 

@@ -48,8 +48,8 @@ impl TransactionRead for $class {
         &self.timestamp
     }
 
-    fn action_count(&self) -> &Uint2 {
-        self.actions.count()
+    fn action_count(&self) -> usize {
+        self.actions.length()
     }
     
     fn actions(&self) -> &Vec<Box<dyn Action>> {
@@ -130,11 +130,11 @@ impl Transaction for $class {
             fhx = self.hash_with_fee();
         }
         // do sign
-        let apbk = acc.public_key().serialize_compressed();
-        let signobj = Sign{
+        // let apbk = acc.public_key().serialize_compressed();
+        let signobj = Sign::create_by(acc, &fhx);/*{
             publickey: Fixed33::from( apbk ),
             signature: Fixed64::from( acc.do_sign(&fhx) ),
-        };
+        };*/
         // insert
         self.insert_sign(signobj.clone())?;
         Ok(signobj)
@@ -251,12 +251,15 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
     let mut state = CoreState::wrap(ctx.state());
     // may fast_sync
     if not_fast_sync {
-        if tx.action_count().uint() == 0 {
+        if tx.action_count() == 0 {
             return errf!("tx actions cannot empty.")
         }
         // main check
         if ! main.is_privakey() {
             return errf!("tx fee address version must be PRIVAKEY type.")
+        }
+        for adr in tx.addrs() {
+            adr.check_version()?; // check all address version
         }
         let mty = tx.ty();
         // check BlockHeight more than 20w trs.Fee.Size() must less than 6 bytes.
@@ -297,6 +300,10 @@ fn do_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Rerr {
         ctx.depth_set(CallDepth::new(-1)); // set depth
         action.execute(ctx)?;
     }
+    
+    #[cfg(feature = "tex")]
+    super::tex::do_settlement(ctx)?;
+
     // spend fee
     operate::hac_sub(ctx, &main, fee)?;
     // ok finish

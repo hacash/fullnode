@@ -17,6 +17,15 @@ action_define!{ SatToTrs, 10,
     })
 }
 
+impl SatToTrs {
+    pub fn create_by(to: Address, satoshi: Satoshi) -> Self {
+        Self{
+            to: AddrOrPtr::from_addr(to), 
+            satoshi,
+            ..Self::new()
+        }
+    }
+}
 
 
 action_define!{ SatFromTrs, 11, 
@@ -34,6 +43,16 @@ action_define!{ SatFromTrs, 11,
     })
 }
 
+
+impl SatFromTrs {
+    pub fn create_by(from: Address, satoshi: Satoshi) -> Self {
+        Self{
+            from: AddrOrPtr::from_addr(from), 
+            satoshi,
+            ..Self::new()
+        }
+    }
+}
 
 
 action_define!{ SatFromToTrs, 12, 

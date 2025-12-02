@@ -4,14 +4,14 @@ impl Value {
 
     pub fn canbe_bytes_ec(&self, ec: ItrErrCode) -> VmrtRes<Vec<u8>> {
         Ok(match self {
-            Bool(b)  => vec![maybe!(b, 1, 0)],
-            U8(n)    => n.to_be_bytes().into(),
-            U16(n)   => n.to_be_bytes().into(),
-            U32(n)   => n.to_be_bytes().into(),
-            U64(n)   => n.to_be_bytes().into(),
-            U128(n)  => n.to_be_bytes().into(),
-            Bytes(b) => b.clone(),
-            Addr(a)  => a.to_vec(),
+            Bool(b)    => vec![maybe!(b, 1, 0)],
+            U8(n)      => n.to_be_bytes().into(),
+            U16(n)     => n.to_be_bytes().into(),
+            U32(n)     => n.to_be_bytes().into(),
+            U64(n)     => n.to_be_bytes().into(),
+            U128(n)    => n.to_be_bytes().into(),
+            Bytes(b)   => b.clone(),
+            Address(a) => a.to_vec(),
             _ => return itr_err_code!(ec)
         })
     }
@@ -39,7 +39,7 @@ impl Value {
             U64(..)   |
             U128(..)  |
             Bytes(..) |
-            Addr(..) => Ok(()),
+            Address(..) => Ok(()),
             _ => itr_err_code!(ec)
         }
     }

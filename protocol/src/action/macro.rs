@@ -86,6 +86,7 @@ macro_rules! action_define {
 
         impl $class {
             pub const KIND: u16 = $kid;
+            pub const IDX: u8   = ($kid % 256) as u8;
         }
 
         
@@ -117,13 +118,16 @@ pub fn check_action_level(depth: CallDepth, act: &dyn Action, actions: &Vec<Box<
         if depth > 8 {
             return errf!("action depth cannot over {}", 8)
         }
-        let actlen = actions.len();
-        if actlen < 1 || actlen > 200 {
-            return errf!("one transaction max actions is 200")
-        }
         let kid = act.kind();
         let alv = act.level();
         let alvn: isize = alv.clone().into();
+        if alv == ActLv::Any {
+            return Ok(()) // any depth can call
+        }
+        let actlen = actions.len();
+        if actlen < 1 || actlen > 200 {
+            return errf!("action length {} is 0 or one transaction max actions is 200", actlen)
+        }
         if alv == ActLv::TopOnly {
             if actlen > 1 {
                 return errf!("action {} just can execute on TOP_ONLY", kid)

@@ -197,9 +197,8 @@ impl IRNode for IRNodeParam1 {
                 GET => buf.push_str(&format!("${}", self.para)),
                 EXTENV => {
                     let ary = CALL_EXTEND_ENV_DEFS;
-                    let mut idx = self.para as usize;
-                    if idx >= ary.len() { idx = 0; }
-                    buf.push_str(&format!("{}()", ary[idx].0));
+                    let f = search_ext_name_by_id(self.para, &ary);
+                    buf.push_str(&format!("{}()", f));
                 },
                 _ => {
                     buf.push_str(&format!("{}({})", meta.intro, self.para));
@@ -721,9 +720,14 @@ impl IRNode for IRNodeParam1Single {
                 EXTFUNC => {
                     let substr = &print_sub_inline!(suo, self.subx, desc);
                     let ary = CALL_EXTEND_FUNC_DEFS;
-                    let mut idx = self.para as usize;
-                    if idx >= ary.len() { idx = 0; }
-                    buf.push_str(&format!("{}({})", ary[idx].0, substr));
+                    let f = search_ext_name_by_id(self.para, &ary);
+                    buf.push_str(&format!("{}({})", f, substr));
+                }
+                EXTACTION => {
+                    let substr = &print_sub_inline!(suo, self.subx, desc);
+                    let ary = CALL_EXTEND_ACTION_DEFS;
+                    let f = search_ext_name_by_id(self.para, &ary);
+                    buf.push_str(&format!("{}({})", f, substr));
                 }
                 NTCALL => {
                     let substr = &print_sub_inline!(suo, self.subx, desc);
@@ -903,11 +907,17 @@ impl $name {
     }
     pub fn with_capacity(n: usize) -> Ret<Self> {
         if n > u16::MAX as usize {
-            return errf!("IRBlock length max {}", u16::MAX)
+            return errf!("{} length max {}", stringify!($name), u16::MAX)
         }
         Ok(Self{
             subs: Vec::with_capacity(n),
         })
+    }
+    pub fn from_vec(subs: Vec<Box<dyn IRNode>>) -> Ret<Self> {
+        if subs.len() > u16::MAX as usize {
+            return errf!("{} length max {}", stringify!($name), u16::MAX)
+        }
+        Ok(Self{subs})
     }
     pub fn into_vec(self) -> Vec<Box<dyn IRNode>> {
         self.subs

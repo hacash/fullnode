@@ -11,26 +11,26 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
     fn hash(&self) -> Hash { never!() }
     fn hash_with_fee(&self) -> Hash { never!() }
 
-    fn main(&self) -> Address { never!() }
-    fn addrs(&self) -> Vec<Address> { never!() }
+    fn main(&self) -> Address { ADDRESS_ZERO }
+    fn addrs(&self) -> Vec<Address> { vec![] }
 
     fn timestamp(&self) -> &Timestamp { never!() }
 
     fn fee(&self) -> &Amount { never!() }
-    fn fee_pay(&self) -> Amount { never!() }
-    fn fee_got(&self) -> Amount { never!() }
-    fn fee_extend(&self) -> Ret<(u16, Amount)> { never!() }
-    fn fee_purity(&self) -> u64 { never!() }
+    fn fee_pay(&self) -> Amount { Amount::zero() }
+    fn fee_got(&self) -> Amount { Amount::zero() }
+    fn fee_extend(&self) -> Ret<(u16, Amount)> { err!("cannot get fee extend") }
+    fn fee_purity(&self) -> u64 { 0 }
     
     fn message(&self) -> &Fixed16 { never!() }
     fn reward(&self) -> &Amount { never!() }
 
-    fn action_count(&self) -> &Uint2 { never!() }
+    fn action_count(&self) -> usize { never!() }
     fn actions(&self) -> &Vec<Box<dyn Action>> { never!() }
     fn signs(&self) -> &Vec<Sign> { never!() }
     
-    fn req_sign(&self) -> Ret<HashSet<Address>> { never!() }
-    fn verify_signature(&self) -> Rerr { never!() }
+    fn req_sign(&self) -> Ret<HashSet<Address>> { errf!("cannot req sign") }
+    fn verify_signature(&self) -> Rerr { errf!("failed") }
 
 
     // burn_90_percent_fee
