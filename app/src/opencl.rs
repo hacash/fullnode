@@ -47,6 +47,10 @@ fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
         .expect("Can't create OpenCL context");
     let device_name = device.name().expect("Can't get device name");
 
+    if !Path::new(&cnf.opencldir).is_dir() {
+        panic!("OpenCL dir not found: {}", cnf.opencldir);
+    }
+
     let binary_file = format!(r"{}{}_{}.bin", cnf.opencldir, device_name, cnf.deviceid);
     let binary_path = Path::new(&binary_file);
 
