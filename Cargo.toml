@@ -18,10 +18,11 @@ app = {path = "./app"}
 vm = {path = "./vm", optional = true }
 
 [features]
-default = ["db-sled"] #, "hip20", "tex", "ast", "hvm"]
+default = ["db-sled"] #, "hip20", "tex", "ast", "p2sh", "hvm"]
 hip20 = ["mint/hip20"]
 tex = ["protocol/tex"]
 ast = ["protocol/ast"]
+p2sh = ["protocol/p2sh"]
 hvm = ["dep:vm", "field/hvm"]
 db-sled = ["db/db-sled"]
 db-rusty-leveldb = ["db/db-rusty-leveldb"]

@@ -15,4 +15,5 @@ num-traits = "0.2.19"
 [features]
 tex = []
 ast = []
+p2sh = []
 

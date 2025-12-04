@@ -5,6 +5,7 @@ use std::ops::{
     Deref, Index, IndexMut, Add, Sub, Mul, Div, 
     AddAssign, SubAssign, MulAssign, DivAssign
 };
+use std::sync::*;
 
 use concat_idents::concat_idents;
 use base64::prelude::*;

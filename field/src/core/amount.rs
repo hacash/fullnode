@@ -37,6 +37,8 @@ pub struct Amount {
 	byte: Vec<u8>,
 }
 
+static ZERO: OnceLock<Amount> = OnceLock::new();
+
 impl std::fmt::Display for Amount {
     fn fmt(&self,f: &mut Formatter) -> Result {
         write!(f,"{}", self.to_fin_string())
@@ -173,7 +175,9 @@ macro_rules! coin_with {
 // from
 impl Amount {
 
-
+    pub fn zero_ref() -> &'static Amount {
+        ZERO.get_or_init(||Amount::zero())
+    }
     pub fn zero() -> Amount {
         Self::default()
     }

@@ -16,7 +16,7 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
 
     fn timestamp(&self) -> &Timestamp { never!() }
 
-    fn fee(&self) -> &Amount { never!() }
+    fn fee(&self) -> &Amount { Amount::zero_ref() }
     fn fee_pay(&self) -> Amount { Amount::zero() }
     fn fee_got(&self) -> Amount { Amount::zero() }
     fn fee_extend(&self) -> Ret<(u16, Amount)> { err!("cannot get fee extend") }
