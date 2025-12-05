@@ -21,7 +21,11 @@ fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
     let kernel_path = Path::new(&kernel_file);
 
     // Context creation for OpenCL instance
-    let platform = Platform::default();
+    let platforms = Platform::list();
+    let platform = platforms
+        .get(cnf.platformid as usize)
+        .expect("The specified platform id is invalid")
+        .clone();
 
     let name = platform.name().expect("Error");
     let vendor = platform.vendor().expect("Error");

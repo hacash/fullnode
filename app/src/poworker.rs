@@ -41,6 +41,7 @@ pub struct PoWorkConf {
     pub unitsize: u32, // opencl hashes per work unit
     pub opencldir: String, // opencl source dir
     pub debug: u32, // enable debug mode
+    pub platformid: u32, // opencl platform id
     pub deviceid: u32, // opencl device id
 }
 
@@ -62,6 +63,7 @@ impl PoWorkConf {
             unitsize: ini_must_u64(sec_gpu, "unit_size", 128) as u32,
             opencldir: ini_must(sec_gpu, "opencl_dir", "opencl/"),
             debug: ini_must_u64(sec_gpu, "debug", 0) as u32,
+            platformid: ini_must_u64(sec_gpu, "platform_id", 0) as u32,
             deviceid: ini_must_u64(sec_gpu, "device_id", 0) as u32,
         };
         cnf
