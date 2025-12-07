@@ -59,9 +59,10 @@ pub enum ItrErrCode {
     CallOtherInMain   = 57,
     CallLocInLib      = 58,
     CallLibInStatic   = 59,
-    CallNoReturn      = 60,
-    CallNotPublic     = 61,
-    CallArgvTypeFail  = 62,
+    CallOtherInP2sh   = 60,
+    CallNoReturn      = 61,
+    CallNotPublic     = 62,
+    CallArgvTypeFail  = 63,
     
     CastFail           = 71,
     CastParamFail      = 72,
@@ -144,10 +145,20 @@ pub trait MapItrErr<T> {
     fn map_ire(self, ec: ItrErrCode) -> Result<T, ItrErr>;   
 }
 
+pub trait MapItrStrErr<T> {
+    fn map_ires(self, ec: ItrErrCode, es: Error) -> Result<T, ItrErr>;   
+}
+
 
 impl<T> MapItrErr<T> for Ret<T> {
     fn map_ire(self, ec: ItrErrCode) -> Result<T, ItrErr> {
         self.map_err(|e|ItrErr::new(ec, &e.to_string()))
+    }
+}
+
+impl<T> MapItrStrErr<T> for Ret<T> {
+    fn map_ires(self, ec: ItrErrCode, es: Error) -> Result<T, ItrErr> {
+        self.map_err(|e|ItrErr::new(ec, &(es + &e.to_string())))
     }
 }
 

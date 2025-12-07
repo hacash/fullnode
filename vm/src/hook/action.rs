@@ -97,12 +97,22 @@ fn coin_asset_transfer_call(abstfrom: AbstCall, abstto: AbstCall, action: &dyn A
         unreachable!()
     }
 
-    let (fc, tc) = (from.is_contract(), to.is_contract());
-    if !(fc || tc) {
-        return Ok(()) // no contract address
+    let (fs, fc, tc) = (from.is_scriptmh(), from.is_contract(), to.is_contract());
+    if !(fs || fc || tc) {
+        return Ok(()) // no script or contract address
     }
 
-    // call from contract
+    // call from p2sh script
+    if fs {
+        let mut argvs = argvs.clone();
+        argvs.push_front( Value::Address(to) );
+        let param = Value::Compo(CompoItem::list(argvs));
+        let codes = ctx.p2sh(&from)?.code_stuff();
+        let cm = CallMode::P2sh as u8;
+        setup_vm_run(calldpt, ctx.clone_mut(), cm, 0, codes, param)?;
+    }
+
+    // call from contract abstract
     if fc {
         let mut argvs = argvs.clone();
         argvs.push_front( Value::Address(to) );
@@ -110,7 +120,7 @@ fn coin_asset_transfer_call(abstfrom: AbstCall, abstto: AbstCall, action: &dyn A
         setup_vm_run(calldpt, ctx, absty, abstfrom as u8, from.as_bytes(), param)?;
     }
 
-    // call to contract
+    // call to contract abstract
     if tc {
         argvs.push_front( Value::Address(from) );
         let param = Value::Compo(CompoItem::list(argvs));

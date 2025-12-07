@@ -102,9 +102,7 @@ inst_state_define!{ VMState,
 impl VMState<'_> {
 
     fn skey(cadr: &Address, key: &Value) -> VmrtRes<ValueKey> {
-        if ! cadr.is_contract() {
-            return itr_err_fmt!(StorageError, "storage use must in contract")
-        }
+        cadr.check_version().map_ires(StorageError, format!("storage must in dffective address but in {}", cadr.readable()))?;
         let k = key.canbe_key()?;
         if k.is_empty() {
             return itr_err_code!(StorageKeyInvalid)

@@ -1,4 +1,8 @@
-pub fn convert_and_check(cap: &SpaceCap, ctype: CodeType, codes: &[u8]) -> VmrtErr {
+
+/*
+    return: inst table
+*/
+pub fn convert_and_check(cap: &SpaceCap, ctype: CodeType, codes: &[u8]) -> VmrtRes<Vec<u8>> {
     use CodeType::*;
     let bytecodes = match ctype {
         IRNode =>  &runtime_irs_to_bytecodes(codes)?,
@@ -13,7 +17,7 @@ pub fn convert_and_check(cap: &SpaceCap, ctype: CodeType, codes: &[u8]) -> VmrtE
 }
 
 
-pub fn verify_bytecodes(codes: &[u8]) -> VmrtErr {
+pub fn verify_bytecodes(codes: &[u8]) -> VmrtRes<Vec<u8>> {
     // check empty
     let cl = codes.len();
     if cl <= 0 {
@@ -29,7 +33,7 @@ pub fn verify_bytecodes(codes: &[u8]) -> VmrtErr {
     // check jump dests
     verify_jump_dests(&instable, &jumpdests)?;
     // ok finish
-    Ok(())
+    Ok(instable)
 }
 
 

@@ -464,16 +464,12 @@ fn check_call_mode(mode: CallMode, inst: Bytecode) -> VmrtErr {
         }
     }
     match mode {
-        Main    if not_ist!(CALL, CALLSTATIC, CALLCODE)
-            => itr_err_code!(CallOtherInMain),
-        Abst    if not_ist!(CALLINR, CALLLIB, CALLSTATIC, CALLCODE)
-            => itr_err_code!(CallInAbst),
-        Library if not_ist!(CALLLIB, CALLSTATIC, CALLCODE)
-            => itr_err_code!(CallLocInLib),
-        Static  if not_ist!(CALLSTATIC, CALLCODE)
-            => itr_err_code!(CallLibInStatic),
-        CodeCopy // not allowed any call
-            => itr_err_code!(CallInCodeCopy),
+        Main    if not_ist!(CALL,             CALLSTATIC, CALLCODE) => itr_err_code!(CallOtherInMain),
+        P2sh    if not_ist!(                  CALLSTATIC, CALLCODE) => itr_err_code!(CallOtherInP2sh),
+        Abst    if not_ist!(CALLINR, CALLLIB, CALLSTATIC, CALLCODE) => itr_err_code!(CallInAbst),
+        Library if not_ist!(         CALLLIB, CALLSTATIC, CALLCODE) => itr_err_code!(CallLocInLib),
+        Static  if not_ist!(                  CALLSTATIC, CALLCODE) => itr_err_code!(CallLibInStatic),
+        CodeCopy                         /* not allowed any call */ => itr_err_code!(CallInCodeCopy),
         _ => Ok(()), // Outer | Inner support all call instructions
     }
 }

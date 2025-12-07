@@ -19,6 +19,7 @@ use super::component::*;
 include!{"db.rs"}
 include!{"state.rs"}
 include!{"logs.rs"}
+include!{"p2sh.rs"}
 include!{"dyn.rs"}
 include!{"context.rs"}
 include!{"vm.rs"}

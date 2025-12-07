@@ -50,6 +50,11 @@ pub fn asset_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, asset
     if from == to {
 		return errf!("cannot trs to self")
     }
+    /*p2sh check*/
+    #[cfg(not(feature = "p2sh"))]
+    if from.is_scriptmh() {
+        return errf!("scriptmh address cannot be from yet")
+    }
     // do transfer
     let state = &mut CoreState::wrap(ctx.state());
     asset_sub(state, from, asset)?;
