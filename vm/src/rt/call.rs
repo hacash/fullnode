@@ -140,12 +140,16 @@ impl CallTarget {
     }
 }
 
-
+/*
+    Entry mode: Main, P2sh, Abst 
+    Call  mode: Outer, Inner, Library, Static, CodeCopy
+*/
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum CallMode {
-    #[default] Main,
-    Abst,
-    Outer,
+    #[default] Main, // tx main call
+    P2sh, // p2sh script verify
+    Abst, // contract abstract call
+    Outer, 
     Inner,
     Library,
     Static,

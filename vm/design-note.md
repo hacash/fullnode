@@ -53,9 +53,16 @@ Contract KV State Rent:
     7. data type can store = Nil, Bool, Uint, Address, Bytes
 
 
+Storage Entry Address:
+
+    - Main => 1Mzbf...
+    - P2sh => 3DrTG...
+    - Abst => vFgHm...
+
+
+
 Storage Ban:
 
-    - Main
     - Static Call
     - Library Call (can read)
 
@@ -93,6 +100,7 @@ Call Privileges:
 
     - Main           => Outer,             Static, Code
     - Abst           =>        Inner, Lib, Static, Code
+    - P2sh           =>                    Static, Code
     - Library        =>               Lib, Static, Code
     - Static         =>                    Static, Code
     - Code           =>                               -

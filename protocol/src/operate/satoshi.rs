@@ -51,6 +51,11 @@ pub fn sat_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, sat: &S
     if from == to {
 		return errf!("cannot trs to self")
     }
+    /*p2sh check*/
+    #[cfg(not(feature = "p2sh"))]
+    if from.is_scriptmh() {
+        return errf!("scriptmh address cannot be from yet")
+    }
     // do transfer
     sat_sub(ctx, from, sat)?;
     sat_add(ctx, to,   sat)?;

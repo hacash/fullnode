@@ -23,11 +23,11 @@ combi_struct!{ SignCheckData,
 
 
 // SignList MaxLen 255
-combi_list!(SignListW1, Uint1, Sign);
+combi_list!(SignW1, Uint1, Sign);
 
 
 // SignList MaxLen 65535
-combi_list!(SignListW2, Uint2, Sign);
+combi_list!(SignW2, Uint2, Sign);
 
 
 

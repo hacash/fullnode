@@ -52,11 +52,11 @@ define_tex_cell_create!{ tex_cell_create,
 
 
 
-combi_dynlist!{ DnyTexCellListW1, Uint1, TexCell, tex_cell_create}
+combi_dynlist!{ DnyTexCellW1, Uint1, TexCell, tex_cell_create}
 
 
 
-impl CellExec for DnyTexCellListW1 {
+impl CellExec for DnyTexCellW1 {
     fn execute(&self, ctx: &mut dyn Context, main: &Address) -> Rerr {        
         for cell in self.list() {
             cell.execute(ctx, main)?;

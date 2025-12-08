@@ -14,6 +14,8 @@ pub struct ContextInst<'a> {
 
     log: Box<dyn Logs>,
     sta: Box<dyn State>,
+    psh: HashMap<Address, Box<dyn P2sh>>,
+
     check_sign_cache: HashMap<Address, Ret<bool>>,
 }
 
@@ -25,6 +27,7 @@ impl ContextInst<'_> {
             depth: CallDepth::new(0),
             check_sign_cache: HashMap::new(),
             vmi: VMNil::empty(),
+            psh: HashMap::default(), 
             tex_state: TexState::default(),
         }
     }
@@ -101,6 +104,17 @@ impl Context for ContextInst<'_> {
     fn tex_state(&mut self) -> &mut TexState {
         &mut self.tex_state
     }
+    // p2sh
+    fn p2sh(&self, adr: &Address) -> Ret<&Box<dyn P2sh>> {
+        let e = format!("p2sh '{}' not find", adr.readable());  
+        self.psh.get(adr).ok_or(e)
+    }
+    fn p2sh_set(&mut self, adr: Address, p2sh: Box<dyn P2sh>) -> Rerr {
+        adr.must_scriptmh()?;
+        self.psh.insert(adr, p2sh);
+        Ok(())
+    }
+    // psh: HashMap<Address, Box<dyn P2sh>>,
 
 }
 

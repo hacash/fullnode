@@ -10,6 +10,7 @@ use protocol::action::*;
 
 use super::*;
 use super::rt::*;
+// use super::space::*;
 // use super::util::*;
 
 // 
@@ -23,6 +24,7 @@ include!{"blob.rs"}
 include!{"contract.rs"}
 include!{"maincall.rs"}
 include!{"envfunc.rs"}
+include!{"p2sh.rs"}
 
 
 

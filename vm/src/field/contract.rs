@@ -27,9 +27,9 @@ combi_struct!{ ContractUserFunc,
 }
 
 // Contract address list
-combi_list!(ContractAddrsssListW1, Uint1, ContractAddress);
+combi_list!(ContractAddrsssW1, Uint1, ContractAddress);
 
-impl ContractAddrsssListW1 {
+impl ContractAddrsssW1 {
 	pub fn check_repeat(&self, src: &Self) -> bool {
 		self.lists.iter().any(|a|src.lists.contains(a))
 	}
@@ -122,8 +122,8 @@ impl ContractUserFuncList {
 // Contract
 combi_struct!{ ContractSto, 
 	metas: ContractMeta
-	inherits:  ContractAddrsssListW1
-    librarys:  ContractAddrsssListW1
+	inherits:  ContractAddrsssW1
+    librarys:  ContractAddrsssW1
 	abstcalls: ContractAbstCallList
 	userfuncs: ContractUserFuncList
     morextend: Uint8

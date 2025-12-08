@@ -53,6 +53,11 @@ pub fn hac_transfer(ctx: &mut dyn Context, from: &Address, to: &Address, amt: &A
         }
         return Ok(vec![]);
     }
+    /*p2sh check*/
+    #[cfg(not(feature = "p2sh"))]
+    if from.is_scriptmh() {
+        return errf!("scriptmh address cannot be from yet")
+    }
     /*test debug
     let tadr = Address::from_readable("1EuGe2GU8tDKnHLNfBsgyffx66buK7PP6g").unwrap();
     if *from == tadr || *to == tadr {
