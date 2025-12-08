@@ -156,17 +156,17 @@ pub fn poworker() {
         // Initialize OpenCL
         #[cfg(feature = "ocl")]
         {
-        let opencl_resources = Arc::new(initialize_opencl(&cnf.clone()));
-        println!("\n[Start] Create GPU block miner worker.");
-        let cnf2 = cnf.clone();
-        let rstx: mpsc::Sender<Arc<BlockMiningResult>> = res_tx.clone();
-        let opencl_clone = Arc::clone(&opencl_resources);
-        spawn(move || {
-            loop {
-                run_block_mining_item(&cnf2, 0, rstx.clone(), Some(opencl_clone.clone()));
-                delay_continue_ms!(9);
-            }
-        });
+            let opencl_resources = Arc::new(initialize_opencl(&cnf.clone()));
+            println!("\n[Start] Create GPU block miner worker.");
+            let cnf2 = cnf.clone();
+            let rstx: mpsc::Sender<Arc<BlockMiningResult>> = res_tx.clone();
+            let opencl_clone = Arc::clone(&opencl_resources);
+            spawn(move || {
+                loop {
+                    run_block_mining_item(&cnf2, 0, rstx.clone(), Some(opencl_clone.clone()));
+                    delay_continue_ms!(9);
+                }
+            });
         }
     } else {
         // start worker thread
@@ -198,7 +198,7 @@ struct OpenCLResources {}
 
 fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
     result_ch_tx: mpsc::Sender<Arc<BlockMiningResult>>,
-    opencl: Option<Arc<OpenCLResources>>,
+    _opencl: Option<Arc<OpenCLResources>>,
 ) {
 
     let mining_hei = MINING_BLOCK_HEIGHT.load(Relaxed);
@@ -225,12 +225,16 @@ fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
     let mut nonce_finish = false;
     loop {
         let ctn = Instant::now();
+
+        #[cfg(not(feature = "ocl"))]
+        let (head_nonce, result_hash) = do_group_block_mining(height, block_intro.serialize(), nonce_start, nonce_space);
+
+        #[cfg(feature = "ocl")]
         let (head_nonce, result_hash) = if _cnf.useopencl {
-            let _opencl = opencl
+            let _opencl = _opencl
                 .as_ref()
                 .expect("OpenCL miner is disabled");
-            #[cfg(feature = "ocl")]
-            return do_group_block_mining_opencl(
+            do_group_block_mining_opencl(
                 &_opencl,
                 height,
                 block_intro.serialize(),
@@ -238,12 +242,11 @@ fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
                 _cnf.workgroups,
                 _cnf.localsize,
                 _cnf.unitsize,
-            );
-            #[cfg(not(feature = "ocl"))]
-            never!()
+            )
         } else {
             do_group_block_mining(height, block_intro.serialize(), nonce_start, nonce_space)
         };
+        
         let use_secs = Instant::now().duration_since(ctn).as_millis() as f64 / 1000.0;
         // record result
         let mlres = BlockMiningResult {
