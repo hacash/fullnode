@@ -12,7 +12,7 @@ field::combi_struct!{ $class,
     addrlist   : AddrOrList
     fee        : Amount
     actions    : DynListActionW2
-    signs      : SignListW2
+    signs      : SignW2
     gas_max    : Uint1
     ano_mark   : Fixed1
 }
@@ -169,7 +169,7 @@ impl $class {
             addrlist: AddrOrList::from_addr(addr),
             fee: fee,
             actions: DynListActionW2::default(),
-            signs: SignListW2::default(),
+            signs: SignW2::default(),
             gas_max : Uint1::default(),
             ano_mark: Fixed1::default(),
         }

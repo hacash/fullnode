@@ -108,12 +108,21 @@ impl VM for MachineBox {
             Main => {
                 let cty = CodeType::parse(kd)?;
                 machine.main_call(exenv, cty, data.to_vec())
-            },
+            }
+            P2sh => {
+                let (ctxadr, mv) = Address::create(data)?;
+                let (calibs, mv) = ContractAddressW1::create(&data[mv..])?;
+                let realcodes = data[mv..].to_vec();
+                let Ok(param) = param.downcast::<Value>() else {
+                    return errf!("p2sh argv type not match")
+                };
+                machine.p2sh_call(exenv, ctxadr, calibs.into_list(), realcodes, *param)
+            }
             Abst => {
                 let kid: AbstCall = std_mem_transmute!(kd);
                 let cadr = ContractAddress::parse(data)?;
                 let Ok(param) = param.downcast::<Value>() else {
-                    return errf!("argv type not match")
+                    return errf!("abst argv type not match")
                 };
                 machine.abst_call(exenv, kid, cadr, *param)
             }
@@ -163,9 +172,10 @@ impl Machine {
 
     pub fn main_call(&mut self, env: &mut ExecEnv, ctype: CodeType, codes: Vec<u8>) -> Ret<Value> {
         let fnobj = FnObj{ ctype, codes, confs: 0, agvty: None};
-        let entry_addr = ContractAddress::new(env.ctx.tx().main());
-        let v = self.do_call(env, CallMode::Main, fnobj, entry_addr, None)?;
-        Ok(v)
+        let ctx_adr = ContractAddress::new(env.ctx.tx().main());
+        let lib_adr = env.ctx.env().tx.addrs.iter().map(|a|ContractAddress::new(*a)).collect();
+        let rv = self.do_call(env, CallMode::Main, fnobj, ctx_adr, Some(lib_adr), None)?;
+        Ok(rv)
     }
 
     pub fn abst_call(&mut self, env: &mut ExecEnv, cty: AbstCall, contract_addr: ContractAddress, param: Value) -> Ret<Value> {
@@ -175,17 +185,27 @@ impl Machine {
             return errf!("abst call {:?} not find in {}", cty, adr) // not find call
         };
         let fnobj = fnobj.as_ref().clone();
-        let param =  Some(param);
-        let rv = self.do_call(env, CallMode::Abst, fnobj, contract_addr, param)?;
+        let rv = self.do_call(env, CallMode::Abst, fnobj, contract_addr, None, Some(param))?;
         if rv.check_true() {
             return errf!("call {}.{:?} return error code {}", adr, cty, rv.to_uint())
         }
         Ok(rv)
     }
 
-    fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, ctxadr: ContractAddress, param: Option<Value>) -> VmrtRes<Value> {
+    fn p2sh_call(&mut self, env: &mut ExecEnv, p2sh_addr: Address, libs: Vec<ContractAddress>, codes: Vec<u8>, param: Value) -> Ret<Value> {
+        let ctype = CodeType::Bytecode;
+        let fnobj = FnObj{ ctype, codes, confs: 0, agvty: None};
+        let ctx_adr = ContractAddress::new(p2sh_addr);
+        let rv = self.do_call(env, CallMode::P2sh, fnobj, ctx_adr, Some(libs), Some(param))?;
+        if rv.check_true() {
+            return errf!("p2sh call return error code {}", rv.to_uint())
+        }
+        Ok(rv)
+    }
+
+    fn do_call(&mut self, env: &mut ExecEnv, mode: CallMode, code: FnObj, entry_addr: ContractAddress, libs: Option<Vec<ContractAddress>>, param: Option<Value>) -> VmrtRes<Value> {
         self.frames.push(CallFrame::new()); // for reclaim
-        let res = self.frames.last_mut().unwrap().start_call(&mut self.r, env, mode, code, ctxadr.into(), param);
+        let res = self.frames.last_mut().unwrap().start_call(&mut self.r, env, mode, code, entry_addr, libs, param);
         self.frames.pop().unwrap().reclaim(&mut self.r); // do reclaim
         res
     }

@@ -95,7 +95,7 @@ impl Resoure {
     pub fn load_must_call(&mut self, 
         vmsta: &mut VMState, fptr: Funcptr, 
         dstadr: &ContractAddress, srcadr: &ContractAddress,
-        adrlibs: Option<Vec<ContractAddress>>
+        adrlibs: &Option<Vec<ContractAddress>>
     ) -> VmrtRes<(Option<ContractAddress>, Arc<FnObj>)> {
         use CallTarget::*;
         use ItrErrCode::*;

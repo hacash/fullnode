@@ -27,10 +27,10 @@ impl ContractAddress {
     // https://en.bitcoin.it/wiki/List_of_address_prefixes
 	pub fn calculate(addr: &Address, nonce: &Uint4) -> Self {
 		let dts = vec![addr.serialize(), nonce.serialize()].concat();
-		let hx32 = sys::sha2(dts);
-		let hx20 = sys::ripemd160(hx32);
-		let addr = vec![vec![Address::CONTRACT], hx20.to_vec()].concat();
-		ContractAddress::must(addr.try_into().unwrap())
+		let hx32 = sha3(dts);
+		let hx20 = ripemd160(hx32);
+        let addr = Address::create_contract(hx20);
+		ContractAddress::from_addr(addr).unwrap()
 	}
 
     pub fn must(bts: [u8; CONTRACT_ADDRESS_WIDTH]) -> Self {
@@ -82,6 +82,7 @@ impl ContractAddress {
 }
 
 
-
-
+combi_list!{ContractAddressW1,
+    Uint1, ContractAddress
+}
 

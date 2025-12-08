@@ -8,7 +8,7 @@ action_define!{ TexCellAct, 35,
     [], // need sign
     {
         addr  : Address
-        cells : DnyTexCellListW1
+        cells : DnyTexCellW1
         sign  : Sign
     },
     (self, ctx, _gas {

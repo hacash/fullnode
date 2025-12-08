@@ -1,7 +1,11 @@
 
 impl CallFrame {
 
-    pub fn start_call(&mut self, r: &mut Resoure, env: &mut ExecEnv, mode: CallMode, code: FnObj, entry_addr: ContractAddress, param: Option<Value>) -> VmrtRes<Value> {
+    pub fn start_call(&mut self, r: &mut Resoure, env: &mut ExecEnv, mode: CallMode, code: FnObj, 
+        entry_addr: ContractAddress, 
+        libs: Option<Vec<ContractAddress>>, 
+        param: Option<Value>
+    ) -> VmrtRes<Value> {
         use CallExit::*;
         use CallMode::*;
         // to spend gas
@@ -48,12 +52,8 @@ impl CallFrame {
                 Call(fnptr) => {
                     let ctxadr = &curr_frame.ctxadr;
                     let curadr = &curr_frame.curadr;
-                    let adrlist: Option<Vec<_>> = match curr_frame.mode {
-                        Main => Some(env.ctx.env().tx.addrs.iter().map(|a|ContractAddress::new(*a)).collect()),
-                        _ => None,
-                    };
                     let (chgsrcadr, fnobj) = r.load_must_call(env.sta, fnptr.clone(), 
-                        ctxadr, curadr, adrlist)?;
+                        ctxadr, curadr, &libs)?;
                     let fnobj = fnobj.as_ref().clone();
                     let fn_is_public = fnobj.check_conf(FnConf::Public);
                     // check gas

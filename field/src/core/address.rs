@@ -46,6 +46,12 @@ impl Address {
         }
     }
     }}
+    concat_idents::concat_idents!{ creat_by_version = create_, $name {
+    pub fn creat_by_version(hx: [u8; 20]) -> Self {
+        let data = vec![vec![Self::$key], hx.to_vec()].concat();
+        Self::from(data.try_into().unwrap())
+    }
+    }}
     )+
 
     pub fn from_bytes(stuff: &[u8]) -> Ret<Self> {
@@ -89,6 +95,10 @@ impl Address {
     
     pub const UNKNOWN: Self = Fixed21::DEFAULT;
 
+    pub const fn zero() -> Self {
+        Self::UNKNOWN
+    }
+
     pub fn readable(&self) -> String {
         Account::to_readable(&*self)
     }
@@ -124,13 +134,13 @@ impl Address {
 /*
 *
 */
-combi_list!{ AddressListW1, Uint1, Address }
+combi_list!{ AddressW1, Uint1, Address }
 
 
 /*
 *
 */
-combi_revenum!{ AddrOrList, Address, AddressListW1, ADDR_OR_PTR_DIV_NUM }
+combi_revenum!{ AddrOrList, Address, AddressW1, ADDR_OR_PTR_DIV_NUM }
 
 impl AddrOrList {
 
@@ -143,7 +153,7 @@ impl AddrOrList {
     }
 
     pub fn from_list(list: Vec<Address>) -> Ret<Self> {
-        let mut v = AddressListW1::new();
+        let mut v = AddressW1::new();
         v.append(list)?;
         Ok(Self::Val2(v))
     }
