@@ -37,7 +37,7 @@ pub struct Amount {
 	byte: Vec<u8>,
 }
 
-static ZERO: OnceLock<Amount> = OnceLock::new();
+static ZERO_AMT: OnceLock<Amount> = OnceLock::new();
 
 impl std::fmt::Display for Amount {
     fn fmt(&self,f: &mut Formatter) -> Result {
@@ -151,7 +151,7 @@ macro_rules! ret_amtfmte {
 
 macro_rules! coin_with {
     ($fn:ident, $ty:ty) => {
-        pub fn $fn(mut v: $ty, mut u: u8) -> Amount {
+        pub fn $fn(mut v: $ty, mut u: u8) -> Self {
             if v == 0 || u == 0 {
                 return Self::zero()
             }
@@ -175,53 +175,53 @@ macro_rules! coin_with {
 // from
 impl Amount {
 
-    pub fn zero_ref() -> &'static Amount {
-        ZERO.get_or_init(||Amount::zero())
+    pub fn zero_ref() -> &'static Self {
+        ZERO_AMT.get_or_init(||Self::zero())
     }
-    pub fn zero() -> Amount {
+    pub fn zero() -> Self {
         Self::default()
     }
-    pub fn small(v: u8, u: u8) -> Amount {
+    pub fn small(v: u8, u: u8) -> Self {
         Self {
             unit: u,
             dist: 1i8,
             byte: vec![v],
         }
     }
-    pub fn small_mei(v: u8) -> Amount {
+    pub fn small_mei(v: u8) -> Self {
         Self {
             unit: UNIT_MEI,
             dist: 1i8,
             byte: vec![v],
         }
     }
-    pub fn mei(v: u64) -> Amount {
+    pub fn mei(v: u64) -> Self {
         Self::coin(v, UNIT_MEI)
     }
-    pub fn zhu(v: u64) -> Amount {
+    pub fn zhu(v: u64) -> Self {
         Self::coin(v, UNIT_ZHU)
     }
-    pub fn shuo(v: u64) -> Amount {
+    pub fn shuo(v: u64) -> Self {
         Self::coin(v, UNIT_SHUO)
     }
-    pub fn ai(v: u64) -> Amount {
+    pub fn ai(v: u64) -> Self {
         Self::coin(v, UNIT_AI)
     }
-    pub fn miao(v: u64) -> Amount {
+    pub fn miao(v: u64) -> Self {
         Self::coin(v, UNIT_MIAO)
     }
-    pub fn unit238(v: u64) -> Amount {
+    pub fn unit238(v: u64) -> Self {
         Self::coin(v, UNIT_238)
     }
 
     coin_with!{coin_u128, u128}
     coin_with!{coin_u64,  u64}
 
-    pub fn coin(v: u64, u: u8) -> Amount {
+    pub fn coin(v: u64, u: u8) -> Self {
         Self::coin_u64(v, u)
     }
 
-    pub fn from(v: &str) -> Ret<Amount> {
+    pub fn from(v: &str) -> Ret<Self> {
         let v = v.replace(",", "").replace(" ", "").replace("\n", "");
         for a in v.chars() {
             if ! FROM_CHARS.contains(&(a as u8)) {
@@ -234,7 +234,7 @@ impl Amount {
         } 
     }
 
-    fn from_fin(v: String) -> Ret<Amount> {
+    fn from_fin(v: String) -> Ret<Self> {
         let amt: Vec<&str> = v.split(":").collect();
         let Ok(u) = amt[1].parse::<u8>() else {
             ret_amtfmte!{"unit", amt[1]}
@@ -256,7 +256,7 @@ impl Amount {
         Ok(amt)
     }
     
-    fn from_mei(v: String) -> Ret<Amount> {
+    fn from_mei(v: String) -> Ret<Self> {
         let mut u: u8 = UNIT_MEI;
         let Ok(mut f) = v.parse::<f64>() else {
             ret_amtfmte!{"value", v}
@@ -279,7 +279,7 @@ impl Amount {
         Ok(amt)
     }
 
-    pub fn from_bigint( bignum: &BigInt ) -> Ret<Amount> {
+    pub fn from_bigint( bignum: &BigInt ) -> Ret<Self> {
         let numstr = bignum.to_string();
         if numstr == "0" {
             return Ok(Amount::zero())
@@ -313,7 +313,7 @@ impl Amount {
     }
 
 
-    pub fn from_unit_byte(unit: u8, byte: Vec<u8>) -> Ret<Amount> {
+    pub fn from_unit_byte(unit: u8, byte: Vec<u8>) -> Ret<Self> {
         let bl = byte.len();
         if bl > 127 {
             return Err("amount bytes len overflow 127.".to_string())
@@ -575,7 +575,7 @@ impl Amount {
 // compute 
 impl Amount {
 
-    pub fn dist_mul(&self, n: u128) -> Ret<Amount> {
+    pub fn dist_mul(&self, n: u128) -> Ret<Self> {
         if self.is_zero() {
             return Ok(Self::zero())
         }
@@ -592,7 +592,7 @@ impl Amount {
         Ok(Self::coin_u128(du, self.unit))
     }
 
-    pub fn unit_sub(&self, sub: u8) -> Ret<Amount> {
+    pub fn unit_sub(&self, sub: u8) -> Ret<Self> {
         if sub >= self.unit {
             return errf!("unit_sub error: unit must big than {}", sub)
         }
@@ -601,21 +601,21 @@ impl Amount {
         Ok(res)
     }
 
-    pub fn add_mode_bigint(&self, src: &Amount) -> Ret<Amount> {
+    pub fn add_mode_bigint(&self, src: &Amount) -> Ret<Self> {
         let mut db = self.to_bigint();
         let ds =  src.to_bigint();
         db = db + ds;
         Self::from_bigint(&db)
     }
 
-    pub fn sub_mode_bigint(&self, src: &Amount) -> Ret<Amount> {
+    pub fn sub_mode_bigint(&self, src: &Amount) -> Ret<Self> {
         let mut db = self.to_bigint();
         let ds =  src.to_bigint();
         db = db - ds;
         Self::from_bigint(&db)
     }
 
-    pub fn add(&self, amt: &Amount, mode: AmtMode) -> Ret<Amount> {
+    pub fn add(&self, amt: &Amount, mode: AmtMode) -> Ret<Self> {
         match mode {
             AmtMode::U64 => self.add_mode_u64(amt),
             AmtMode::U128 => self.add_mode_u128(amt),
@@ -623,7 +623,7 @@ impl Amount {
         }
     }
 
-    pub fn sub(&self, amt: &Amount, mode: AmtMode) -> Ret<Amount> {
+    pub fn sub(&self, amt: &Amount, mode: AmtMode) -> Ret<Self> {
         match mode {
             AmtMode::U64 => self.sub_mode_u64(amt),
             AmtMode::U128 => self.sub_mode_u128(amt),
@@ -631,7 +631,7 @@ impl Amount {
         }
     }
 
-    pub fn compress(&self, btn: usize, cpr: AmtCpr) -> Ret<Amount> {
+    pub fn compress(&self, btn: usize, cpr: AmtCpr) -> Ret<Self> {
         if self.dist < 0 {
             return errf!("cannot compress negative amount")
         }
@@ -702,7 +702,7 @@ fn drop_left_zero(v: &[u8]) -> Vec<u8> {
 macro_rules! compute_mode_define {
     ($fun:ident, $op:ident, $ty:ty, $ts:expr, $add_or_sub:expr) => {
 
-        pub fn $fun(&self, src: &Amount) -> Ret<Amount> {
+        pub fn $fun(&self, src: &Amount) -> Ret<Self> {
             let dst: &Amount = self;
             if dst.dist < 0 || src.dist < 0 {
                 rte_cneg!{stringify!($op)}

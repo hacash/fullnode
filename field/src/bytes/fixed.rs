@@ -5,6 +5,11 @@
 macro_rules! fixed_define {
     ($class:ident, $size: expr) => {
 
+        concat_idents!{ fixed_zero = ZERO_, $class {
+        #[allow(non_upper_case_globals)]
+        static fixed_zero: OnceLock<$class> = OnceLock::new();
+        }}
+
         #[derive(Debug, Hash, Copy, Clone, PartialEq, Eq)]
         pub struct $class {
             bytes: [u8; $size],
@@ -121,6 +126,12 @@ macro_rules! fixed_define {
 
             pub const SIZE: usize = $size as usize;
             pub const DEFAULT: Self = Self{ bytes: [0u8; $size] };
+
+            pub fn zero_ref() -> &'static Self {
+                concat_idents!{ fixed_zero = ZERO_, $class {
+                fixed_zero.get_or_init(||Self::DEFAULT)
+                }}
+            }
 
             pub fn not_zero(&self) -> bool {
                 self.bytes.iter().any(|a|*a>0)

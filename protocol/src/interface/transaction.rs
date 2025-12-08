@@ -5,16 +5,15 @@ pub trait TxExec {
 
 
 pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone { 
-    fn ty(&self) -> u8 { never!() }
+    fn ty(&self) -> u8;
 
-
-    fn hash(&self) -> Hash { never!() }
-    fn hash_with_fee(&self) -> Hash { never!() }
+    fn hash(&self) -> Hash;
+    fn hash_with_fee(&self) -> Hash;
 
     fn main(&self) -> Address { ADDRESS_ZERO }
     fn addrs(&self) -> Vec<Address> { vec![] }
 
-    fn timestamp(&self) -> &Timestamp { never!() }
+    fn timestamp(&self) -> &Timestamp { Timestamp::zero_ref() }
 
     fn fee(&self) -> &Amount { Amount::zero_ref() }
     fn fee_pay(&self) -> Amount { Amount::zero() }
@@ -22,10 +21,10 @@ pub trait TransactionRead : Serialize + TxExec + Send + Sync + DynClone {
     fn fee_extend(&self) -> Ret<(u16, Amount)> { err!("cannot get fee extend") }
     fn fee_purity(&self) -> u64 { 0 }
     
-    fn message(&self) -> &Fixed16 { never!() }
-    fn reward(&self) -> &Amount { never!() }
+    fn message(&self) -> &Fixed16 { Fixed16::zero_ref() }
+    fn reward(&self) -> &Amount { Amount::zero_ref() }
 
-    fn action_count(&self) -> usize { never!() }
+    fn action_count(&self) -> usize { 0 }
     fn actions(&self) -> &Vec<Box<dyn Action>> { never!() }
     fn signs(&self) -> &Vec<Sign> { never!() }
     

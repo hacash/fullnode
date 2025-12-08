@@ -2,12 +2,16 @@
 
 macro_rules! uint_define {
     ($class:ident, $size:expr, $numlen:expr, $vty:ty ) => {
+
+        concat_idents!{ uint_zero = ZERO_, $class {
+        #[allow(non_upper_case_globals)]
+        static uint_zero: OnceLock<$class> = OnceLock::new();
+        }}
                 
         #[derive(Default, Debug, Hash, Copy, Clone, PartialEq, Eq)]
         pub struct $class {
             value: $vty,
         }
-
 
         impl Display for $class {
             fn fmt(&self,f: &mut std::fmt::Formatter) -> std::fmt::Result{
@@ -61,6 +65,12 @@ macro_rules! uint_define {
 
             pub const MAX: $vty = <$vty>::MAX;
             pub const SIZE: usize = $size as usize;
+
+            pub fn zero_ref() -> &'static Self {
+                concat_idents!{ uint_zero = ZERO_, $class {
+                uint_zero.get_or_init(||Self::from(0))
+                }}
+            }
 
             pub const fn from(v: $vty) -> Self {
                 Self{ value: v }
