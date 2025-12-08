@@ -22,6 +22,8 @@ use mint::genesis::*;
 
 
 include!{"util.rs"}
+
+#[cfg(feature = "ocl")]
 include!{"opencl.rs"}
 
 
@@ -152,17 +154,20 @@ pub fn poworker() {
 
     if cnf.useopencl { // opencl is enabled
         // Initialize OpenCL
+        #[cfg(feature = "ocl")]
+        {
         let opencl_resources = Arc::new(initialize_opencl(&cnf.clone()));
         println!("\n[Start] Create GPU block miner worker.");
         let cnf2 = cnf.clone();
-            let rstx: mpsc::Sender<Arc<BlockMiningResult>> = res_tx.clone();
-            let opencl_clone = Arc::clone(&opencl_resources);
-            spawn(move || {
-                loop {
-                    run_block_mining_item(&cnf2, 0, rstx.clone(), Some(opencl_clone.clone()));
-                    delay_continue_ms!(9);
-                }
-            });
+        let rstx: mpsc::Sender<Arc<BlockMiningResult>> = res_tx.clone();
+        let opencl_clone = Arc::clone(&opencl_resources);
+        spawn(move || {
+            loop {
+                run_block_mining_item(&cnf2, 0, rstx.clone(), Some(opencl_clone.clone()));
+                delay_continue_ms!(9);
+            }
+        });
+        }
     } else {
         // start worker thread
         let thrnum = cnf.supervene as usize;
@@ -186,6 +191,9 @@ pub fn poworker() {
     }
 }
 
+
+#[cfg(not(feature = "ocl"))]
+struct OpenCLResources {}
 
 
 fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
@@ -218,18 +226,21 @@ fn run_block_mining_item(_cnf: &PoWorkConf, _thrid: usize,
     loop {
         let ctn = Instant::now();
         let (head_nonce, result_hash) = if _cnf.useopencl {
-            let opencl = opencl
+            let _opencl = opencl
                 .as_ref()
                 .expect("OpenCL miner is disabled");
-             do_group_block_mining_opencl(
-                &opencl,
+            #[cfg(feature = "ocl")]
+            return do_group_block_mining_opencl(
+                &_opencl,
                 height,
                 block_intro.serialize(),
                 nonce_start,
                 _cnf.workgroups,
                 _cnf.localsize,
                 _cnf.unitsize,
-            )
+            );
+            #[cfg(not(feature = "ocl"))]
+            never!()
         } else {
             do_group_block_mining(height, block_intro.serialize(), nonce_start, nonce_space)
         };
@@ -285,75 +296,6 @@ fn do_group_block_mining(height: u64, mut block_intro: Vec<u8>,
         }
     }
     // end
-    (most_nonce, most_hash)
-}
-
-fn do_group_block_mining_opencl(
-    opencl: &OpenCLResources,
-    height: u64,
-    block_intro: Vec<u8>,
-    nonce_start: u32,
-    num_work_groups: u32,
-    local_work_size: u32,
-    unit_size: u32,
-) -> (u32, [u8; 32]) {
-    let mut most_nonce = 0u32;
-    let mut most_hash = [255u8; 32];
-    let global_work_size = num_work_groups * local_work_size;
-    let repeat = x16rs::block_hash_repeat(height) as u32;
-
-    let buffer_block_intro = Buffer::<u8>::builder()
-        .queue(opencl.queue.clone())
-        .flags(ocl::core::MEM_READ_ONLY)
-        .len(block_intro.len())
-        .copy_host_slice(&block_intro)
-        .build()
-        .expect("Unable to create buffer_block_intro");
-
-    let kernel = Kernel::builder()
-        .program(&opencl.program)
-        .name("x16rs_main")
-        .queue(opencl.queue.clone())
-        .global_work_size(global_work_size)
-        .local_work_size(local_work_size)
-        .arg(&buffer_block_intro)
-        .arg(nonce_start)
-        .arg(repeat)
-        .arg(unit_size)
-        .arg(&opencl.buffer_global_hashes)
-        .arg(&opencl.buffer_global_order)
-        .arg(&opencl.buffer_best_hashes)
-        .arg(&opencl.buffer_best_nonces)
-        .build()
-        .unwrap();
-
-    let mut kernel_event = EventList::new();
-    unsafe {
-        kernel.cmd().enew(&mut kernel_event).enq().expect("Unable to queue OpenCL kernel");
-    }
-
-    let mut hashes = vec![0u8; opencl.buffer_best_hashes.len()];
-    opencl.buffer_best_hashes
-        .read(&mut hashes)
-        .ewait(&kernel_event)
-        .enq()
-        .expect("Can't read buffer_best_hashes");
-
-    let mut nonces = vec![0u32; opencl.buffer_best_nonces.len()];
-    opencl.buffer_best_nonces
-        .read(&mut nonces)
-        .ewait(&kernel_event)
-        .enq()
-        .expect("Can't read buffer_best_nonces");
-
-    for i in 0..num_work_groups as usize {
-        let hash_bytes = &hashes[i * 32..(i * 32) + 32];
-        if hash_more_power(hash_bytes, &most_hash) {
-            most_hash.copy_from_slice(hash_bytes);
-            most_nonce = nonces[i];
-        }
-    }
-    
     (most_nonce, most_hash)
 }
 
