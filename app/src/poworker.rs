@@ -44,7 +44,7 @@ pub struct PoWorkConf {
     pub opencldir: String, // opencl source dir
     pub debug: u32, // enable debug mode
     pub platformid: u32, // opencl platform id
-    pub deviceid: u32, // opencl device id
+    pub deviceids: String, // opencl device id list
 }
 
 
@@ -66,7 +66,7 @@ impl PoWorkConf {
             opencldir: ini_must(sec_gpu, "opencl_dir", "opencl/"),
             debug: ini_must_u64(sec_gpu, "debug", 0) as u32,
             platformid: ini_must_u64(sec_gpu, "platform_id", 0) as u32,
-            deviceid: ini_must_u64(sec_gpu, "device_id", 0) as u32,
+            deviceids: ini_must(sec_gpu, "device_ids", "")
         };
         cnf
     }
@@ -141,32 +141,45 @@ pub fn poworker() {
 
     let (res_tx, res_rx) = mpsc::channel();
 
+    // Initialize OpenCL
+    let opencl_resources: Vec<OpenCLResources> = if cnf.useopencl {
+        #[cfg(feature = "ocl")]
+        { initialize_opencl(&cnf.clone()) }
+        #[cfg(not(feature = "ocl"))]
+        Vec::new()
+    } else {
+        // No OpenCL miners
+        Vec::new()
+    };
+
     // deal results
     let cnf1 = cnf.clone();
+    let opencl_device_qty = opencl_resources.len();
     spawn(move || {
         let mut most_hash = vec![255u8; 32];
         let mut rstx = res_rx;
         loop {
-            deal_block_mining_results(&cnf1, &mut most_hash, &mut rstx);
+            deal_block_mining_results(&cnf1, &mut most_hash, &mut rstx, opencl_device_qty);
             delay_continue_ms!(123);
         }
     });
 
     if cnf.useopencl { // opencl is enabled
-        // Initialize OpenCL
         #[cfg(feature = "ocl")]
         {
-            let opencl_resources = Arc::new(initialize_opencl(&cnf.clone()));
-            println!("\n[Start] Create GPU block miner worker.");
-            let cnf2 = cnf.clone();
-            let rstx: mpsc::Sender<Arc<BlockMiningResult>> = res_tx.clone();
-            let opencl_clone = Arc::clone(&opencl_resources);
-            spawn(move || {
-                loop {
-                    run_block_mining_item(&cnf2, 0, rstx.clone(), Some(opencl_clone.clone()));
-                    delay_continue_ms!(9);
-                }
-            });
+            // Initialize OpenCL
+            println!("\n[Start] Create GPU block miner worker");
+            for (thrid, opencl_thread) in opencl_resources.into_iter().enumerate() {
+                let opencl_clone = Arc::new(opencl_thread);
+                let cnf2 = cnf.clone();
+                let rstx: mpsc::Sender<Arc<BlockMiningResult>> = res_tx.clone();
+                spawn(move || {
+                    loop {
+                        run_block_mining_item(&cnf2, thrid, rstx.clone(), Some(opencl_clone.clone()));
+                        delay_continue_ms!(9);
+                    }
+                });
+            }
         }
     } else {
         // start worker thread
@@ -304,9 +317,10 @@ fn do_group_block_mining(height: u64, mut block_intro: Vec<u8>,
 
 fn deal_block_mining_results(cnf: &PoWorkConf, most_hash: &mut Vec<u8>,
     result_ch_rx: &mut mpsc::Receiver<Arc<BlockMiningResult>>,
+    opencl_device_qty: usize
 ) {
     let vene = if cnf.useopencl {
-        1 // Single thread with GPU
+        opencl_device_qty as u32
     } else {
         cnf.supervene
     };
