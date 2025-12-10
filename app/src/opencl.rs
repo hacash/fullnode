@@ -117,7 +117,7 @@ fn initialize_opencl(cnf: &PoWorkConf) -> Vec<OpenCLResources> {
         };
         
         // Create new queue
-        let queue = Queue::new(&context, device.clone(), Some(QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE))
+        let queue = Queue::new(&context, device.clone(), None)
         .expect("Can't create OpenCL event queue");
 
         opencl_resource_devices.push(OpenCLResources {
