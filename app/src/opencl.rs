@@ -15,7 +15,7 @@ struct OpenCLResources {
     buffer_best_hashes: Buffer::<u8>,
 }
 
-fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
+fn initialize_opencl(cnf: &PoWorkConf) -> Vec<OpenCLResources> {
     // Binary file location
     let kernel_file = format!(r"{}x16rs_main.cl", cnf.opencldir);
     let kernel_path = Path::new(&kernel_file);
@@ -33,109 +33,124 @@ fn initialize_opencl(cnf: &PoWorkConf) -> OpenCLResources {
     println!("Platform name: {}", name);
     println!("Manufacturer: {}", vendor);
     println!("Version: {}", version);
-    println!("-----------------------------------------");
 
-    let devices = Device::list_all(&platform).expect("Error");
-    // Iterate OpenCL devices
-    for (idx, device) in devices.iter().enumerate() {
-        let name = device.name().expect("Error");
-        println!("Device {}: {}", idx, name);
-    }
-    println!("-----------------------------------------");
+    let mut cnf_devices: Vec<u32> = cnf.deviceids.split(',')
+        .filter(|s| !s.trim().is_empty())
+        .filter_map(|s| s.trim().parse::<u32>().ok())
+        .collect();
 
-    let device = Device::by_idx_wrap(platform, cnf.deviceid.try_into().unwrap()).expect("Can't find OpenCL device");
-    let context = Context::builder()
-        .platform(platform)
-        .devices(device.clone())
-        .build()
-        .expect("Can't create OpenCL context");
-    let device_name = device.name().expect("Can't get device name");
-
-    if !Path::new(&cnf.opencldir).is_dir() {
-        panic!("OpenCL dir not found: {}", cnf.opencldir);
+    // Set all devices when empty
+    if cnf_devices.is_empty() {
+        let platform_devices = Device::list_all(&platform).expect("Error getting device list");
+        // Iterate all OpenCL devices
+        for (idx, _) in platform_devices.iter().enumerate() {
+            cnf_devices.push(idx as u32);
+        }
     }
 
-    let binary_file = format!(r"{}{}_{}.bin", cnf.opencldir, device_name, cnf.deviceid);
-    let binary_path = Path::new(&binary_file);
-
-    // Check if kernel was changed since last time (and need recompile)
-    let need_recompile = if binary_path.exists() {
-        let binary_modified = fs::metadata(&binary_path)
-            .and_then(|meta| meta.modified())
-            .expect("Can't find binary file last edit time");
-        let kernel_modified = fs::metadata(&kernel_path)
-            .and_then(|meta| meta.modified())
-            .expect("Can't find kernel file last edit time");
-        kernel_modified > binary_modified
-    } else {
-        true
-    };
-
-    let program = if !need_recompile {
-        // Read program from binary file
-        let mut binary_file = File::open(&binary_path).expect("No se pudo abrir el archivo binario");
-        let mut binary_data = Vec::new();
-        binary_file
-            .read_to_end(&mut binary_data)
-            .expect("Can't read binary file");
-        println!("Loading OpenCL from the binary...");
-        let binaries = [&binary_data[..]];
-        Program::with_binary(
-            &context,
-            &[device.clone()],
-            &binaries,
-            &CString::new("").unwrap(),
-        )
-        .expect("Can't create OpenCL program with the binary file")
-    } else {
-        println!("Compiling...");
-        // Compile from source
-        compile_program_from_source(&context, &device, &kernel_path, &binary_path, cnf.opencldir.clone())
-    };
-
-    // Create new queue
-    let queue = Queue::new(&context, device.clone(), Some(QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE))
-    .expect("Can't create OpenCL event queue");
+    // Create Device vector
+    let mut devices: Vec<Device> = [].to_vec();
+    for (_, &device_id) in cnf_devices.iter().enumerate() {
+        let device = Device::by_idx_wrap(platform, device_id.try_into().unwrap()).expect("Can't find OpenCL device");
+        devices.push(device);
+    }
 
     let num_work_items = cnf.workgroups * cnf.localsize;
     let global_work_size = num_work_items;
 
-    let buffer_best_nonces = Buffer::<u32>::builder()
-        .queue(queue.clone())
-        .flags(ocl::core::MEM_WRITE_ONLY)
-        .len(cnf.workgroups)
-        .build()
-        .expect("Can't create buffer_best_nonces");
+    let mut opencl_resource_devices = Vec::with_capacity(devices.len() as usize);
+    for (idx, &device) in devices.iter().enumerate() {
+        
+        println!("-----------------------------------------");
+        let name = device.name().expect("Error");
+        println!("Device {}: {}", cnf_devices[idx], name);
+        println!("-----------------------------------------");
+        
+        // Create context
+        let context = Context::builder()
+            .platform(platform)
+            .devices(device)
+            .build()
+            .expect("Can't create OpenCL context");
 
-    let buffer_global_hashes = Buffer::<u8>::builder()
-        .queue(queue.clone())
-        .flags(ocl::core::MEM_READ_WRITE)
-        .len(HASH_WIDTH * cnf.unitsize as usize * global_work_size as usize)
-        .build()
-        .expect("Can't create buffer_global_hashes");
+        if !Path::new(&cnf.opencldir).is_dir() {
+            panic!("OpenCL dir not found: {}", cnf.opencldir);
+        }
 
-    let buffer_global_order = Buffer::<u32>::builder()
-        .queue(queue.clone())
-        .flags(ocl::core::MEM_READ_WRITE)
-        .len(cnf.unitsize as usize * global_work_size as usize)
-        .build()
-        .expect("Can't create buffer_global_order");
+        let device_name = device.name().expect("Can't get device name");
+        let binary_file = format!(r"{}{}_{}.bin", cnf.opencldir, device_name, cnf_devices[idx]);
+        let binary_path = Path::new(&binary_file);
 
-    let buffer_best_hashes = Buffer::<u8>::builder()
-        .queue(queue.clone())
-        .flags(ocl::core::MEM_WRITE_ONLY)
-        .len(HASH_WIDTH * cnf.workgroups as usize )
-        .build()
-        .expect("Can't create buffer_best_hashes");
+        // Check if kernel was changed since last time (and need recompile)
+        let need_recompile = if binary_path.exists() {
+            let binary_modified = fs::metadata(&binary_path)
+                .and_then(|meta| meta.modified())
+                .expect("Can't find binary file last edit time");
+            let kernel_modified = fs::metadata(&kernel_path)
+                .and_then(|meta| meta.modified())
+                .expect("Can't find kernel file last edit time");
+            kernel_modified > binary_modified
+        } else {
+            true
+        };
 
-    OpenCLResources {
-        program,
-        queue,
-        buffer_best_nonces,
-        buffer_global_hashes,
-        buffer_global_order,
-        buffer_best_hashes,
+        let program = if !need_recompile {
+            // Read program from binary file
+            let mut binary_file = File::open(&binary_path).expect("No se pudo abrir el archivo binario");
+            let mut binary_data = Vec::new();
+            binary_file
+                .read_to_end(&mut binary_data)
+                .expect("Can't read binary file");
+            println!("Loading OpenCL from the binary...");
+            let binaries = [&binary_data[..]];
+            Program::with_binary(
+                &context,
+                &[device],
+                &binaries,
+                &CString::new("").unwrap(),
+            )
+            .expect("Can't create OpenCL program with the binary file")
+        } else {
+            println!("Compiling...");
+            // Compile from source
+            compile_program_from_source(&context, &device, &kernel_path, &binary_path, cnf.opencldir.clone())
+        };
+        
+        // Create new queue
+        let queue = Queue::new(&context, device.clone(), None)
+        .expect("Can't create OpenCL event queue");
+
+        opencl_resource_devices.push(OpenCLResources {
+            program: program.clone(),
+            queue: queue.clone(),
+            buffer_best_nonces: Buffer::<u32>::builder()
+                .queue(queue.clone())
+                .flags(ocl::core::MEM_WRITE_ONLY)
+                .len(cnf.workgroups)
+                .build()
+                .expect("Can't create buffer_best_nonces"),
+            buffer_global_hashes: Buffer::<u8>::builder()
+                .queue(queue.clone())
+                .flags(ocl::core::MEM_READ_WRITE)
+                .len(HASH_WIDTH * cnf.unitsize as usize * global_work_size as usize)
+                .build()
+                .expect("Can't create buffer_global_hashes"),
+            buffer_global_order: Buffer::<u32>::builder()
+                .queue(queue.clone())
+                .flags(ocl::core::MEM_READ_WRITE)
+                .len(cnf.unitsize as usize * global_work_size as usize)
+                .build()
+                .expect("Can't create buffer_global_order"),
+            buffer_best_hashes: Buffer::<u8>::builder()
+                .queue(queue.clone())
+                .flags(ocl::core::MEM_WRITE_ONLY)
+                .len(HASH_WIDTH * cnf.workgroups as usize )
+                .build()
+                .expect("Can't create buffer_best_hashes")
+        });
     }
+
+    opencl_resource_devices
 }
 
 fn compile_program_from_source(
@@ -153,7 +168,7 @@ fn compile_program_from_source(
     let compile_options = format!(r"-cl-std=CL2.0 -I {}", opencldir);
     let program_build = Program::builder()
         .src(&kernel_src)
-        .devices(device.clone())
+        .devices(device)
         .cmplr_opt(compile_options)
         .build(context);
 
