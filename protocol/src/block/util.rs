@@ -34,6 +34,9 @@ fn mrkl_merge(list: &Vec<Hash>) -> Vec<Hash> {
 * 
 */
 pub fn calculate_mrklroot(list: &Vec<Hash>) -> Hash {
+    if list.len() == 0 {
+        return Hash::DEFAULT
+    }
     let mut reslist = list;
     let mut tmp: Vec<Hash>;
     loop {

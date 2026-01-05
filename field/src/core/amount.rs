@@ -860,8 +860,8 @@ mod amount_tests {
         let stf = "340282366920938463463374607431768211455";
         let a0 = Amount::from(&format!("{}:100", stf)).unwrap();
         for i in 1 .. 16 {
-            let a1 = a0.compress(16-i,  true).unwrap();
-            let a2 = a0.compress(16-i, false).unwrap();
+            let a1 = a0.compress(16-i, AmtCpr::Grow).unwrap();
+            let a2 = a0.compress(16-i, AmtCpr::Discard).unwrap();
             println!("{}", a1);
             println!("{}", a2);
         }

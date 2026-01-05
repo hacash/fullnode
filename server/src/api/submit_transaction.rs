@@ -19,6 +19,11 @@ async fn submit_transaction(State(ctx): State<ApiCtx>, q: Query<Q4396>, body: By
         return api_error(&format!("transaction parse error: {}", &e))
     }
     let txpkg = txpkg.unwrap();
+    // check sign
+    if let Err(e) = txpkg.objc.verify_signature() {
+        return api_error(&format!("transaction sign error: {}", &e))
+    }
+    // check fee
     if txpkg.fepr < engcnf.lowest_fee_purity { // fee_purity
         return api_error(&format!("The transaction fee purity {} is too low, the node minimum configuration is {}.", 
             txpkg.fepr, engcnf.lowest_fee_purity))

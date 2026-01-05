@@ -8,7 +8,6 @@ use concat_idents::concat_idents;
 use field::*;
 use field::interface::*;
 
-use super::*;
 use super::interface::*;
 
 

@@ -28,11 +28,8 @@ impl ChainEngine {
         // try execute
         // create sub state 
         let prev_state = prev_chunk.state.clone();
-        let mut sub_state = prev_state.fork_sub(Arc::downgrade(&prev_state));
-        // initialize on first block
-        if hei == 1 {
-            self.minter.initialize(sub_state.as_mut())?;
-        }
+        let sub_state = prev_state.fork_sub(Arc::downgrade(&prev_state));
+        // cnf
         let c = &self.cnf;
         let chain_option = ChainInfo {
             fast_sync,

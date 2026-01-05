@@ -17,7 +17,7 @@ fn do_initialize(db: &mut dyn State) -> Rerr {
     #[cfg(debug_assertions)] 
     { 
         let tadr = "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9";
-        println!("\n[Debug Mint] {} => 1000000HAC + 5000BTC + 360HACD", tadr);
+        println!("[Debug Mint] {} => 1000000HAC + 5000BTC + 360HACD", tadr);
 	    let addr = Address::from_readable(tadr).unwrap();
 	    let amt = Amount::small(1, 254); // 1000000 HAC
         let mut bls = Balance::hac(amt); 

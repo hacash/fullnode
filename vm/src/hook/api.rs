@@ -82,7 +82,7 @@ async fn vm_logs_del(State(ctx): State<ApiCtx>, q: Query<Q8375>) -> impl IntoRes
     let logs = ctx.engine.logs();
     logs.remove(q.height);
     // return
-    let data = r##""ok":true""##.to_owned();
+    let data = r#""ok":true"#.to_owned();
     api_data_raw(data)
 
 }
@@ -146,7 +146,7 @@ async fn contract_sandbox_call(State(ctx): State<ApiCtx>, q: Query<Q8365>) -> im
     let (gasuse, retval) = callres.unwrap();
 
     // return
-    let data = format!(r##""gasuse":{},"return":{}"##, gasuse, retval);
+    let data = format!(r#""gasuse":{},"return":{}"#, gasuse, retval);
     api_data_raw(data)
 }
 

@@ -80,6 +80,9 @@ impl Balance {
 				return Ok(())
 			}
 		}
+		if amt.amount.is_zero() {
+			return Ok(()) // zero do nothing
+		}
 		self.assets.push(amt)?;
 		if self.assets.length() > BALANCE_ASSET_MAX {
 			return errf!("balance asset item quantity cannot big than {}", BALANCE_ASSET_MAX)
