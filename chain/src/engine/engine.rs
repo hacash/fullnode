@@ -60,11 +60,7 @@ impl ChainEngine {
         dev_count_switch_print(cnf.dev_count_switch, sta_db.as_ref()); // dev test
         // base or genesis block
         let bsblk =  load_root_block(minter.as_ref(), disk.clone(), is_state_upgrade);
-        let mut state = StateInst::build(sta_db.into(), Weak::<Box<dyn State>>::new());
-        // initialize on first block
-        if bsblk.height().uint() == 0 {
-            minter.initialize(&mut state).unwrap();
-        }
+        let state = StateInst::build(sta_db.into(), Weak::<Box<dyn State>>::new());
         let staptr: Arc<Box<dyn State>> = Arc::new(Box::new(state));
         let logs: Arc<BlockLogs> = Arc::new(BlockLogs::wrap(logd));
         let roller = Roller::create(cnf.unstable_block, bsblk, staptr, logs.clone());

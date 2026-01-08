@@ -26,13 +26,13 @@ impl DiskDB for DiskKV {
     fn remove(&self, k: &[u8]) {
         let mut ldb =  self.ldb.lock().unwrap();
         ldb.delete(k).unwrap();
-        ldb.flush().unwrap();
+        // ldb.flush().unwrap();
     }
 
     fn save(&self, k: &[u8], v: &[u8]) {
         let mut ldb =  self.ldb.lock().unwrap();
         ldb.put(k, v).unwrap();
-        ldb.flush().unwrap();
+        // ldb.flush().unwrap();
     }
 
     fn read(&self, k: &[u8]) -> Option<Vec<u8>> {
@@ -43,7 +43,7 @@ impl DiskDB for DiskKV {
         let wb = Membatch::from_memkv(memkv);
         let mut ldb =  self.ldb.lock().unwrap();
         ldb.write(wb.into_batch().obj, true).unwrap(); // must
-        ldb.flush().unwrap();
+        // ldb.flush().unwrap();
     }
 
     /*
@@ -51,7 +51,7 @@ impl DiskDB for DiskKV {
         let wb = batch.downcast::<Membatch>().unwrap().into_batch();
         let mut ldb =  self.ldb.lock().unwrap();
         ldb.write(wb.obj, true).unwrap(); // must
-        ldb.flush().unwrap();
+        // ldb.flush().unwrap();
     }
     */
 

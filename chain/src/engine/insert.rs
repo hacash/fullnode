@@ -5,7 +5,9 @@ impl ChainEngine {
 
 
     fn insert_by(&self, roller: &mut Roller, blk: BlockPkg) -> Ret<RollerInsertData> {
-
+        // if blk.objc.height().uint() > 10 {
+        //     return errf!("debug not over height 10")
+        // }
         let fast_sync = (self.cnf.fast_sync&&blk.orgi==BlkOrigin::Sync) || blk.orgi==BlkOrigin::Rebuild;
         // search prev chunk in roller tree
         let hei = blk.hein;
@@ -28,7 +30,11 @@ impl ChainEngine {
         // try execute
         // create sub state 
         let prev_state = prev_chunk.state.clone();
-        let sub_state = prev_state.fork_sub(Arc::downgrade(&prev_state));
+        let mut sub_state = prev_state.fork_sub(Arc::downgrade(&prev_state));
+        // initialize on first block
+        if hei == 1 {
+            self.minter.initialize(sub_state.as_mut()).unwrap();
+        }
         // cnf
         let c = &self.cnf;
         let chain_option = ChainInfo {

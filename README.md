@@ -23,6 +23,7 @@ cargo build --target x86_64-unknown-linux-musl --no-default-features --features 
 --no-default-features --features "db-sled"               # rust
 --no-default-features --features "db-rusty-leveldb"      # rust
 --no-default-features --features "db-leveldb-sys"        # c++
+--no-default-features --features "db-rocksdb"            # c++
 
 # or
 RUSTFLAGS="-C target-feature=-crt-static" RUST_BACKTRACE="full" cargo build --release --no-default-features --features "db-leveldb-sys"
