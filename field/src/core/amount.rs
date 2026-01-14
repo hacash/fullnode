@@ -7,6 +7,7 @@ const U128S: usize = u128::BITS as usize / 8;
 const U64S:  usize =  u64::BITS as usize / 8;
 
 pub const UNIT_MEI:  u8 = 248;
+pub const UNIT_244:  u8 = 244;
 pub const UNIT_ZHU:  u8 = 240;
 pub const UNIT_238:  u8 = 238;
 pub const UNIT_SHUO: u8 = 232;
@@ -433,6 +434,7 @@ macro_rules! to_unit_define {
 impl Amount {
 
     to_unit_define!{ to_mei_u64, to_mei_u128, UNIT_MEI }
+    to_unit_define!{ to_244_u64, to_244_u128, UNIT_244 }
     to_unit_define!{ to_zhu_u64, to_zhu_u128, UNIT_ZHU }
     to_unit_define!{ to_238_u64, to_238_u128, UNIT_238 } // for fee_purity
 

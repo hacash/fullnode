@@ -369,7 +369,7 @@ fn render_tx_info(tx: &dyn TransactionRead,
         let acts = tx.actions();
         let mut actobjs = Vec::with_capacity(acts.len());
         for act in acts {
-            actobjs.push( action_to_json_desc(tx, act.as_ref(), unit, true, description) );
+            actobjs.push( action_to_json_desc(tx, act, unit, true, description) );
         }
         data.insert("actions", json!(actobjs));
     }

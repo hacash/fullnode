@@ -18,7 +18,7 @@ app = {path = "./app"}
 vm = {path = "./vm", optional = true }
 
 [features]
-default = ["db-sled"] #, "hip20", "tex", "ast", "hvm", "p2sh"] #, "ocl"]
+default = ["db-sled"]# , "hip20", "tex", "ast", "hvm", "p2sh"] #, "ocl"]
 hip20 = ["mint/hip20"]
 tex = ["protocol/tex"]
 ast = ["protocol/ast"]
@@ -28,6 +28,7 @@ ocl = ["app/ocl"]
 db-sled = ["db/db-sled"]
 db-rusty-leveldb = ["db/db-rusty-leveldb"]
 db-leveldb-sys = ["db/db-leveldb-sys"]
+db-rocksdb = ["db/db-rocksdb"]
 
 
 [profile.release]

@@ -6,6 +6,7 @@ pub struct MintConf {
     pub show_miner_name: bool,
     pub difficulty_adjust_blocks: u64, // height : 288
     pub each_block_target_time: u64, // secs : 300
+    pub test_coin: bool
     // pub _test_mul: u64,
 }
 
@@ -27,6 +28,7 @@ impl MintConf {
             show_miner_name: ini_must_bool(&sec, "show_miner_name", false),
             difficulty_adjust_blocks: ini_must_u64(&sec, "difficulty_adjust_blocks", 288), // 1 day
             each_block_target_time: ini_must_u64(&sec, "each_block_target_time", 300), // 5 mins
+            test_coin: ini_must_bool(&sec, "test_coin", false),
             // _test_mul: ini_must_u64(&sec, "_test_mul", 1), // test
         };
 

@@ -57,7 +57,7 @@ impl Minter for HacashMinter {
     }
 
     fn initialize(&self, sta: &mut dyn State) -> Rerr {
-        do_initialize(sta)
+        do_initialize(self, sta)
     }
 
     // <dyn Block> == BlockV1

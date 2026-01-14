@@ -256,16 +256,14 @@ async fn diamond_engrave(State(ctx): State<ApiCtx>, q: Query<Q5733>) -> impl Int
             res.push(json!(engobj));
         };
         for act in tx.actions() {
-            if act.kind() == DiamondInscription::KIND {
-                let action = DiamondInscription::must(&act.serialize());
+            if let Some(a) = DiamondInscription::downcast(act) {
                 append_one(jsondata!{
-                    "diamonds", action.diamonds.readable(),
-                    "inscription", action.engraved_content.to_readable_or_hex(),
+                    "diamonds", a.diamonds.readable(),
+                    "inscription", a.engraved_content.to_readable_or_hex(),
                 });
-            }else if act.kind() == DiamondInscriptionClear::KIND {
-                let action = DiamondInscriptionClear::must(&act.serialize());
+            } else if let Some(a) = DiamondInscriptionClear::downcast(act) {
                 append_one(jsondata!{
-                    "diamonds", action.diamonds.readable(),
+                    "diamonds", a.diamonds.readable(),
                     "clear", true,
                 });
             }

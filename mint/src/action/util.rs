@@ -8,15 +8,12 @@ pub fn pickout_diamond_mint_action(tx: &dyn TransactionRead) -> Option<DiamondMi
     if tx.ty() == TransactionCoinbase::TYPE {
         return None // ignore coinbase tx
     }
-    let mut res: Option<DiamondMint> = None;
-    for a in tx.actions() {
-        if a.kind() == DiamondMint::KIND {
-            let act = DiamondMint::must(&a.serialize());
-            res = Some(act);
-            break // find ok
+    for act in tx.actions() {
+        if let Some(dm) = DiamondMint::downcast(act) {
+            return Some(dm.clone());
         }
     }
-    res
+    None
 }
 
 
@@ -34,10 +31,8 @@ pub fn pickout_diamond_mint_action_from_block(blk: &dyn BlockRead) -> Option<(us
 
 // for diamond create action
 pub fn get_diamond_mint_number(tx: &dyn TransactionRead) -> u32 {
-    const DMINT: u16 = DiamondMint::KIND;
     for act in tx.actions() {
-        if act.kind() == DMINT {
-            let dm = DiamondMint::must(&act.serialize());
+        if let Some(dm) = DiamondMint::downcast(act) {
             return *dm.d.number;
         }
     }

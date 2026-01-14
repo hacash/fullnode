@@ -1,5 +1,5 @@
 
-fn do_initialize(db: &mut dyn State) -> Rerr {
+fn do_initialize(this: &HacashMinter, db: &mut dyn State) -> Rerr {
     
 	let addr1 = Address::from_readable("12vi7DEZjh6KrK5PVmmqSgvuJPCsZMmpfi").unwrap();
 	let addr2 = Address::from_readable("1LsQLqkd8FQDh3R7ZhxC5fndNf92WfhM19").unwrap();
@@ -15,7 +15,7 @@ fn do_initialize(db: &mut dyn State) -> Rerr {
 
     // just for test develop
     #[cfg(debug_assertions)] 
-    { 
+    if this.cnf.test_coin {
         let tadr = "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9";
         println!("[Debug Mint] {} => 1000000HAC + 5000BTC + 360HACD", tadr);
 	    let addr = Address::from_readable(tadr).unwrap();

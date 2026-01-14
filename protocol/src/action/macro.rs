@@ -1,4 +1,15 @@
 
+
+#[macro_export]
+macro_rules! action_downcast {
+    () => {
+        pub fn downcast(a: &Box<dyn Action>) -> Option<&Self> {
+            let a: &dyn Any = a.as_ref().as_any();
+            a.downcast_ref::<Self>()
+        }
+    }
+}
+
 #[macro_export]
 macro_rules! action_define {
     ($class:ident, $kid:expr, $lv:expr, $burn90:expr, $reqsign:expr, 
@@ -87,6 +98,8 @@ macro_rules! action_define {
         impl $class {
             pub const KIND: u16 = $kid;
             pub const IDX: u8   = ($kid % 256) as u8;
+
+            action_downcast!{}
         }
 
         

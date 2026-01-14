@@ -33,7 +33,7 @@ async fn scan_coin_transfer(State(ctx): State<ApiCtx>, q: Query<Q4538>) -> impl 
     let mut dtlist = Vec::new();
     // scan actions
     for act in tartrs.actions()  {
-        append_transfer_scan(tartrs, act.as_ref(), &mut dtlist, &unit, &coinkind );
+        append_transfer_scan(tartrs, act, &mut dtlist, &unit, &coinkind );
     }
     // ok
     let data = jsondata!{
@@ -49,7 +49,7 @@ async fn scan_coin_transfer(State(ctx): State<ApiCtx>, q: Query<Q4538>) -> impl 
 
 
 
-fn append_transfer_scan(tx: &dyn TransactionRead, act: &dyn Action, 
+fn append_transfer_scan(tx: &dyn TransactionRead, act: &Box<dyn Action>, 
     transfers: &mut Vec<JsonObject>, unit: &String, ck: &CoinKind,
 ) {
     let trace = match act.kind() {
