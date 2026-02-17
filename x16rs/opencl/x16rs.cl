@@ -99,6 +99,10 @@ typedef union ALIGN {
   ulong h8[4];
 } hash_32;
 
+typedef union ALIGN {
+  unsigned char h1[16];
+} diamond_t;
+
 // blake
 void hash_x16rs_func_0(hash_32* hash, __constant sph_u64* H_blake)
 {
