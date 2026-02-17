@@ -144,7 +144,7 @@ pub fn poworker() {
     // Initialize OpenCL
     let opencl_resources: Vec<OpenCLResources> = if cnf.useopencl {
         #[cfg(feature = "ocl")]
-        { initialize_opencl(&cnf.clone()) }
+        { initialize_opencl(false, &cnf.opencldir, &cnf.platformid, &cnf.deviceids, &cnf.workgroups, &cnf.localsize, &cnf.unitsize) }
         #[cfg(not(feature = "ocl"))]
         Vec::new()
     } else {

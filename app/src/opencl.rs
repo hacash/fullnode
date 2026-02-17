@@ -2,7 +2,6 @@ use std::ffi::CString;
 use std::path::Path;
 use std::fs::{self, File};
 use std::io::{Read, Write};
-use ocl::core::QUEUE_OUT_OF_ORDER_EXEC_MODE_ENABLE;
 use ocl::enums::{ProgramInfoResult, ProgramInfo};
 use ocl::{Buffer, Context, Device, EventList, Kernel, Platform, Program, Queue};
 
@@ -10,20 +9,29 @@ struct OpenCLResources {
     program: Program,
     queue: Queue,
     buffer_best_nonces: Buffer::<u32>,
+    buffer_best_nonces_diamond: Buffer::<u64>,
     buffer_global_hashes: Buffer::<u8>,
     buffer_global_order: Buffer::<u32>,
     buffer_best_hashes: Buffer::<u8>,
 }
 
-fn initialize_opencl(cnf: &PoWorkConf) -> Vec<OpenCLResources> {
+fn initialize_opencl(
+    diamond_mining: bool,
+    opencldir: &String,
+    platformid: &u32,
+    deviceids: &String,
+    workgroups: &u32,
+    localsize: &u32,
+    unitsize: &u32,
+) -> Vec<OpenCLResources> {
     // Binary file location
-    let kernel_file = format!(r"{}x16rs_main.cl", cnf.opencldir);
+    let kernel_file = if diamond_mining { format!(r"{}x16rs_diamond.cl", opencldir) } else { format!(r"{}x16rs_main.cl", opencldir) };
     let kernel_path = Path::new(&kernel_file);
 
     // Context creation for OpenCL instance
     let platforms = Platform::list();
     let platform = platforms
-        .get(cnf.platformid as usize)
+        .get(*platformid as usize)
         .expect("The specified platform id is invalid")
         .clone();
 
@@ -34,7 +42,7 @@ fn initialize_opencl(cnf: &PoWorkConf) -> Vec<OpenCLResources> {
     println!("Manufacturer: {}", vendor);
     println!("Version: {}", version);
 
-    let mut cnf_devices: Vec<u32> = cnf.deviceids.split(',')
+    let mut cnf_devices: Vec<u32> = deviceids.split(',')
         .filter(|s| !s.trim().is_empty())
         .filter_map(|s| s.trim().parse::<u32>().ok())
         .collect();
@@ -55,7 +63,7 @@ fn initialize_opencl(cnf: &PoWorkConf) -> Vec<OpenCLResources> {
         devices.push(device);
     }
 
-    let num_work_items = cnf.workgroups * cnf.localsize;
+    let num_work_items = workgroups * localsize;
     let global_work_size = num_work_items;
 
     let mut opencl_resource_devices = Vec::with_capacity(devices.len() as usize);
@@ -73,12 +81,12 @@ fn initialize_opencl(cnf: &PoWorkConf) -> Vec<OpenCLResources> {
             .build()
             .expect("Can't create OpenCL context");
 
-        if !Path::new(&cnf.opencldir).is_dir() {
-            panic!("OpenCL dir not found: {}", cnf.opencldir);
+        if !Path::new(&opencldir).is_dir() {
+            panic!("OpenCL dir not found: {}", opencldir);
         }
 
         let device_name = device.name().expect("Can't get device name");
-        let binary_file = format!(r"{}{}_{}.bin", cnf.opencldir, device_name, cnf_devices[idx]);
+        let binary_file = format!(r"{}{}_{}{}.bin", opencldir, device_name, cnf_devices[idx], if diamond_mining { "_diamond" } else { "" });
         let binary_path = Path::new(&binary_file);
 
         // Check if kernel was changed since last time (and need recompile)
@@ -113,7 +121,7 @@ fn initialize_opencl(cnf: &PoWorkConf) -> Vec<OpenCLResources> {
         } else {
             println!("Compiling...");
             // Compile from source
-            compile_program_from_source(&context, &device, &kernel_path, &binary_path, cnf.opencldir.clone())
+            compile_program_from_source(&context, &device, &kernel_path, &binary_path, opencldir.clone())
         };
         
         // Create new queue
@@ -126,25 +134,31 @@ fn initialize_opencl(cnf: &PoWorkConf) -> Vec<OpenCLResources> {
             buffer_best_nonces: Buffer::<u32>::builder()
                 .queue(queue.clone())
                 .flags(ocl::core::MEM_WRITE_ONLY)
-                .len(cnf.workgroups)
+                .len(*workgroups)
                 .build()
                 .expect("Can't create buffer_best_nonces"),
+            buffer_best_nonces_diamond: Buffer::<u64>::builder()
+                .queue(queue.clone())
+                .flags(ocl::core::MEM_WRITE_ONLY)
+                .len(*workgroups)
+                .build()
+                .expect("Can't create buffer_best_nonces_diamond"),
             buffer_global_hashes: Buffer::<u8>::builder()
                 .queue(queue.clone())
                 .flags(ocl::core::MEM_READ_WRITE)
-                .len(HASH_WIDTH * cnf.unitsize as usize * global_work_size as usize)
+                .len(HASH_WIDTH * *unitsize as usize * global_work_size as usize)
                 .build()
                 .expect("Can't create buffer_global_hashes"),
             buffer_global_order: Buffer::<u32>::builder()
                 .queue(queue.clone())
                 .flags(ocl::core::MEM_READ_WRITE)
-                .len(cnf.unitsize as usize * global_work_size as usize)
+                .len(*unitsize as usize * global_work_size as usize)
                 .build()
                 .expect("Can't create buffer_global_order"),
             buffer_best_hashes: Buffer::<u8>::builder()
                 .queue(queue.clone())
                 .flags(ocl::core::MEM_WRITE_ONLY)
-                .len(HASH_WIDTH * cnf.workgroups as usize )
+                .len(HASH_WIDTH * *workgroups as usize )
                 .build()
                 .expect("Can't create buffer_best_hashes")
         });
