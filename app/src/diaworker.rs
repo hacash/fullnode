@@ -1,4 +1,6 @@
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{RwLock, mpsc};
+#[cfg(feature = "ocl")]
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering::*};
 
 use std::time::*;
@@ -16,12 +18,14 @@ use field::interface::*;
 use protocol::difficulty::*;
 use mint::genesis::*;
 use mint::action::*;
-use x16rs::diamond_hash;
 
 
 
 include!{"util.rs"}
-include!{"opencl.rs"}
+#[cfg(feature = "ocl")]
+include!{"opencl_common.rs"}
+#[cfg(feature = "ocl")]
+include!{"opencl_dia.rs"}
 
 
 
@@ -131,15 +135,19 @@ pub fn diaworker() {
     load_init(&mut cnf);
 
     // Initialize OpenCL
+    #[cfg(feature = "ocl")]
     let opencl_resources: Vec<OpenCLResources> = if cnf.useopencl {
         #[cfg(feature = "ocl")]
         { initialize_opencl(true, &cnf.opencldir, &cnf.platformid, &cnf.deviceids, &cnf.workgroups, &cnf.localsize, &cnf.unitsize) }
-        #[cfg(not(feature = "ocl"))]
-        Vec::new()
     } else {
         // No OpenCL miners
         Vec::new()
     };
+    // Calculate device/cpu quantity
+    #[cfg(feature = "ocl")]
+    let vene: u32 = if cnf.useopencl { opencl_resources.len() as u32 } else { cnf.supervene };
+    #[cfg(not(feature = "ocl"))]
+    let vene: u32 = cnf.supervene;
 
     // deal results
     let cnf1 = cnf.clone();
@@ -147,7 +155,7 @@ pub fn diaworker() {
         let mut most_dia_str = [b'W'; 16];
         let mut rstx = res_rx;
         loop {
-            deal_diamond_mining_results(&cnf1, &mut most_dia_str, &mut rstx);
+            deal_diamond_mining_results(&cnf1, &mut most_dia_str, &mut rstx, vene);
             delay_continue_ms!(77);
         }
     });
@@ -163,7 +171,23 @@ pub fn diaworker() {
                 let rstx: mpsc::Sender<DiamondMiningResult> = res_tx.clone();
                 spawn(move || {
                     loop {
-                        run_diamond_worker_thread(&cnf2, thrid, rstx.clone(), Some(opencl_clone.clone()));
+                        run_diamond_worker_thread_opencl(&cnf2, thrid, rstx.clone(), opencl_clone.clone());
+                        delay_continue_ms!(9);
+                    }
+                });
+            }
+        }
+        #[cfg(not(feature = "ocl"))]
+        {
+            println!("[Warning] use_opencl=true but app built without feature 'ocl'; fallback to CPU mining.");
+            let thrnum = cnf.supervene as usize;
+            println!("\n[Start] Create #{} diamond miner worker thread.", thrnum);
+            for thrid in 0 .. thrnum {
+                let cnf2: DiaWorkConf = cnf.clone();
+                let rstx: mpsc::Sender<DiamondMiningResult> = res_tx.clone();
+                spawn(move || {
+                    loop {
+                        run_diamond_worker_thread(&cnf2, thrid, rstx.clone());
                         delay_continue_ms!(9);
                     }
                 });
@@ -177,7 +201,7 @@ pub fn diaworker() {
             let rstx: mpsc::Sender<DiamondMiningResult> = res_tx.clone();
             spawn(move || {
                 loop {
-                    run_diamond_worker_thread(&cnf2, thrid, rstx.clone(), None);
+                    run_diamond_worker_thread(&cnf2, thrid, rstx.clone());
                     delay_continue_ms!(9);
                 }
             });
@@ -195,13 +219,8 @@ pub fn diaworker() {
 
 
 fn deal_diamond_mining_results(cnf: &DiaWorkConf, most_dia_str: &mut [u8; 16], 
-    result_ch_rx: &mut mpsc::Receiver<DiamondMiningResult>,
+    result_ch_rx: &mut mpsc::Receiver<DiamondMiningResult>, vene: u32,
 ) {
-    let vene = if cnf.useopencl {
-        1 // Single thread with GPU
-    } else {
-        cnf.supervene
-    };
     let mut deal_number = 0u32;
     let mut most = DiamondMiningResult::default();
     most.dia_str = [b'w'; 16];
@@ -262,7 +281,6 @@ fn may_print_turn_to_nex_diamond_mining(curr_number: u32, most_dia_str: Option<&
 // 
 fn run_diamond_worker_thread(cnf: &DiaWorkConf, _thrid: usize,
     result_ch_tx: mpsc::Sender<DiamondMiningResult>,
-    opencl: Option<Arc<OpenCLResources>>,
 ) {
     let cmdn = MINING_DIAMOND_NUM.load(Relaxed);
     if cmdn == 0 {
@@ -271,11 +289,7 @@ fn run_diamond_worker_thread(cnf: &DiaWorkConf, _thrid: usize,
 
     let rwd_addr = cnf.rewardaddr.clone();
 
-    let mut nonce_space: u64 = if !cnf.useopencl {
-        15000
-    } else {
-        (cnf.workgroups * cnf.localsize * cnf.unitsize) as u64
-    };
+    let mut nonce_space: u64 = 15000;
     let current_mining_number: u32 = cmdn;
     let current_mining_block_hash: Hash = {
         MINING_DIAMOND_STUFF.read().unwrap().clone()
@@ -289,53 +303,20 @@ fn run_diamond_worker_thread(cnf: &DiaWorkConf, _thrid: usize,
     loop {
 
         let ctn = Instant::now();
-
-        #[cfg(not(feature = "ocl"))]
-        let mut result = do_diamond_group_mining(current_mining_number, &current_mining_block_hash,
-                &rwd_addr, &custom_nonce,
-                nonce_start, nonce_space, 
-            );
-
         // println!("- nonce_start: {}", nonce_start);
-        #[cfg(feature = "ocl")]
-        let mut result = if cnf.useopencl {
-            let opencl = opencl
-                .as_ref()
-                .expect("OpenCL miner is disabled");
-            do_diamond_group_mining_opencl(
-                &opencl,
-                current_mining_number,
-                &current_mining_block_hash,
-                &rwd_addr,
-                &custom_nonce,
-                nonce_start,
-                nonce_space,
-                cnf.workgroups,
-                cnf.localsize,
-                cnf.unitsize,
-            )
-        } else {
-           do_diamond_group_mining(current_mining_number, &current_mining_block_hash,
-                &rwd_addr, &custom_nonce,
-                nonce_start, nonce_space, 
-            )
-        };
+        let result = do_diamond_group_mining(current_mining_number, &current_mining_block_hash,
+            &rwd_addr, &custom_nonce,
+            nonce_start, nonce_space, 
+        );
+        // println!("do_diamond_group_mining: {:?}", &result);
         let use_secs = Instant::now().duration_since(ctn).as_millis() as f64 / 1000.0;
-        result.use_secs = use_secs;
         result_ch_tx.send(result).unwrap(); // channel send
-        if !cnf.useopencl { // nonce space is always the same in opencl
-            // update space
-            nonce_space = (nonce_space as f64 * MINING_INTERVAL / use_secs) as u64;
-        }
         let ns = nonce_start.checked_add(nonce_space);
         if let None = ns {
             break // u64 nonce end
         }
         nonce_start = ns.unwrap();
-         if !cnf.useopencl { // nonce space is always the same in opencl
-            // update space
-            nonce_space = ( nonce_space as f64 / use_secs * MINING_INTERVAL ) as u64;
-        }
+        nonce_space = ( nonce_space as f64 / use_secs * MINING_INTERVAL ) as u64;
 
         // check next
         if current_mining_number < MINING_DIAMOND_NUM.load(Relaxed) {
@@ -344,6 +325,57 @@ fn run_diamond_worker_thread(cnf: &DiaWorkConf, _thrid: usize,
 
     }
 
+}
+
+#[cfg(feature = "ocl")]
+fn run_diamond_worker_thread_opencl(cnf: &DiaWorkConf, _thrid: usize,
+    result_ch_tx: mpsc::Sender<DiamondMiningResult>,
+    opencl: Arc<OpenCLResources>,
+) {
+    let cmdn = MINING_DIAMOND_NUM.load(Relaxed);
+    if cmdn == 0 {
+        delay_return_ms!(99); // not yet
+    }
+
+    let rwd_addr = cnf.rewardaddr.clone();
+    let nonce_space: u64 = (cnf.workgroups * cnf.localsize * cnf.unitsize) as u64;
+    let current_mining_number: u32 = cmdn;
+    let current_mining_block_hash: Hash = {
+        MINING_DIAMOND_STUFF.read().unwrap().clone()
+    };
+
+    let mut custom_nonce = Hash::default();
+    getrandom::fill(custom_nonce.as_mut()).unwrap();
+    let mut nonce_start = 0;
+
+    loop {
+        let ctn = Instant::now();
+        let mut result = do_diamond_group_mining_opencl(
+            &opencl,
+            current_mining_number,
+            &current_mining_block_hash,
+            &rwd_addr,
+            &custom_nonce,
+            nonce_start,
+            nonce_space,
+            cnf.workgroups,
+            cnf.localsize,
+            cnf.unitsize,
+        );
+        let use_secs = Instant::now().duration_since(ctn).as_millis() as f64 / 1000.0;
+        result.use_secs = use_secs;
+        result_ch_tx.send(result).unwrap();
+
+        let ns = nonce_start.checked_add(nonce_space);
+        if let None = ns {
+            break
+        }
+        nonce_start = ns.unwrap();
+
+        if current_mining_number < MINING_DIAMOND_NUM.load(Relaxed) {
+            return
+        }
+    }
 }
 
 
@@ -398,123 +430,6 @@ fn do_diamond_group_mining(number: u32, prevblockhash: &Hash,
         diamint.d.address = rwdaddr.clone();
         diamint.d.custom_message = custom_message.clone();
         most.is_success = Some(diamint); // mark success
-    }
-    // ok
-    most
-}
-
-fn do_diamond_group_mining_opencl(
-    opencl: &OpenCLResources,
-    number: u32,
-    prevblockhash: &Hash, 
-    rwdaddr: &Address,
-    custom_message: &Hash,
-    nonce_start: u64,
-    nonce_space: u64,
-    num_work_groups: u32,
-    local_work_size: u32,
-    unit_size: u32,
-) -> DiamondMiningResult {
-    let empthbytes = [0u8; 0];
-    let prevhash: &[u8; HASH_WIDTH] = prevblockhash;
-    let address: &[u8; 21] = rwdaddr;
-    let custom_nonce: &[u8] = match number > DIAMOND_ABOVE_NUMBER_OF_CREATE_BY_CUSTOM_MESSAGE {
-        true => custom_message.as_bytes(),
-        false => &empthbytes,
-    };
-    let mut most = DiamondMiningResult {
-        number,
-        nonce_start,
-        nonce_space,
-        u64_nonce: 0,
-        msg_nonce: custom_nonce.to_vec(),
-        dia_str: [b'W'; 16],
-        is_success: None,
-        use_secs: 0.0,
-    };
-    let global_work_size = num_work_groups * local_work_size;
-    let repeat = x16rs::mine_diamond_hash_repeat(number) as u32;
-    let stuff = [
-        prevhash.to_vec(),
-        [0u8; 8].to_vec(),
-        address.to_vec(),
-        custom_nonce.as_ref().to_vec(),
-    ].concat();
-
-    let buffer_block_intro = Buffer::<u8>::builder()
-        .queue(opencl.queue.clone())
-        .flags(ocl::core::MEM_READ_ONLY)
-        .len(stuff.len())
-        .copy_host_slice(&stuff)
-        .build()
-        .expect("Unable to create buffer_block_intro");
-
-    let kernel = Kernel::builder()
-        .program(&opencl.program)
-        .name("x16rs_diamond")
-        .queue(opencl.queue.clone())
-        .global_work_size(global_work_size)
-        .local_work_size(local_work_size)
-        .arg(&buffer_block_intro)
-        .arg(nonce_start)
-        .arg(repeat)
-        .arg(unit_size)
-        .arg(&opencl.buffer_global_hashes)
-        .arg(&opencl.buffer_global_order)
-        .arg(&opencl.buffer_best_hashes)
-        .arg(&opencl.buffer_best_nonces_diamond)
-        .build()
-        .unwrap();
-
-    let mut kernel_event = EventList::new();
-    unsafe {
-        kernel.cmd().enew(&mut kernel_event).enq().expect("Unable to queue OpenCL kernel");
-    }
-
-    let mut hashes = vec![0u8; opencl.buffer_best_hashes.len()];
-    opencl.buffer_best_hashes
-        .read(&mut hashes)
-        .ewait(&kernel_event)
-        .enq()
-        .expect("Can't read buffer_best_hashes");
-
-    let mut nonces = vec![0u64; opencl.buffer_best_nonces_diamond.len()];
-    opencl.buffer_best_nonces_diamond
-        .read(&mut nonces)
-        .ewait(&kernel_event)
-        .enq()
-        .expect("Can't read buffer_best_nonces_diamond");
-
-    for i in 0..num_work_groups as usize {
-        let hash_bytes = &hashes[i * 32..(i * 32) + 32].try_into().unwrap();
-        let dia_str = diamond_hash(&hash_bytes);
-        let nonce_bytes = nonces[i].to_be_bytes(); // [u8; 4]
-        // println!("nonce_bytes: {:?}", nonce_bytes);
-        let stuff = [
-            prevblockhash.as_slice(),
-            nonce_bytes.as_slice(),
-            address.as_slice(),
-            custom_message.as_ref(),
-        ].concat();
-        // get ssshash by sha3 algrotithm
-        let ssshash: [u8; 32] = calculate_hash(stuff); // SHA3
-        
-        if let Some(dia_name) = check_diamer_success(number, ssshash, *hash_bytes, dia_str) {
-            let name = DiamondName::from(dia_name);
-            let number = DiamondNumber::from(number);
-            let mut diamint = DiamondMint::with(name, number);
-            diamint.d.prev_hash = prevblockhash.clone();
-            diamint.d.nonce = Fixed8::from(nonces[i].to_be_bytes());
-            diamint.d.address = rwdaddr.clone();
-            diamint.d.custom_message = custom_message.clone();
-            most.dia_str = dia_str;
-            most.u64_nonce = nonces[i];
-            most.is_success = Some(diamint); // mark success
-            return most; // already found
-        } else if diamond_more_power(&dia_str, &most.dia_str) {
-            most.dia_str = dia_str;
-            most.u64_nonce = nonces[i];
-        }
     }
     // ok
     most
