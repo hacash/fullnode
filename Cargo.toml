@@ -1,41 +1,67 @@
-[package]
-name = "hacash"
-default-run = "hacash"
-version = "0.3.0"
+[workspace]
+resolver = "2"
+members = [
+    "sys",
+    "field",
+    "base",
+    "protocol",
+    "vm",
+    "mint",
+    "chain",
+    "node",
+    "server",
+    "api",
+    "app",
+    "sdk",
+    "db",
+    "x16rs",
+]
+
+default-members = [
+    "sys",
+    "field",
+    "base",
+    "protocol",
+    "vm",
+    "mint",
+    "chain",
+    "node",
+    "server",
+    "api",
+    "app",
+    "sdk",
+    "db",
+    "x16rs",
+]
+
+[workspace.package]
+version = "1.0.0"
 edition = "2024"
 
-[dependencies]
-x16rs = {path = "./x16rs"}
-sys = {path = "./sys"}
-field = {path = "./field"}
-protocol = {path = "./protocol"}
-db = {path = "./db", default-features = false}
-mint = {path = "./mint"}
-chain = {path = "./chain"}
-node = {path = "./node"}
-server = {path = "./server"}
-app = {path = "./app"}
-vm = {path = "./vm", optional = true }
-
-[features]
-default = ["db-sled"]# , "hip20", "tex", "ast", "hvm", "p2sh"] #, "ocl"]
-hip20 = ["mint/hip20"]
-tex = ["protocol/tex"]
-ast = ["protocol/ast"]
-hvm = ["dep:vm", "field/hvm"]
-p2sh = ["dep:vm", "protocol/p2sh", "vm/p2sh"]
-ocl = ["app/ocl"]
-db-sled = ["db/db-sled"]
-db-rusty-leveldb = ["db/db-rusty-leveldb"]
-db-leveldb-sys = ["db/db-leveldb-sys"]
-db-rocksdb = ["db/db-rocksdb"]
-
+[workspace.dependencies]
+sys        = { path = "sys" }
+field      = { path = "field" }
+base       = { path = "base" }
+protocol   = { path = "protocol" }
+vm         = { path = "vm" }
+mint       = { path = "mint" }
+chain      = { path = "chain" }
+node       = { path = "node" }
+server     = { path = "server" }
+api        = { path = "api" }
+app        = { path = "app" }
+sdk        = { path = "sdk" }
+db         = { path = "db", default-features = false }
+x16rs      = { path = "x16rs" }
 
 [profile.release]
-debug = false       # for RUST_BACKTRACE=1 
-opt-level = 3       # Optimize for size.
-lto = true          # Enable Link Time Optimization
-codegen-units = 1   # Reduce number of codegen units to increase optimizations.
-panic = 'abort'     # Abort on panic
-strip = true        # Strip symbols from binary
+debug = false
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
 
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"

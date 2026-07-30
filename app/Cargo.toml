@@ -1,22 +1,34 @@
 [package]
 name = "app"
-version = "0.1.0"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
+default-run = "fullnode"
 
 [dependencies]
-x16rs = { path = "../x16rs" }
-sys = { path = "../sys" }
-field = { path = "../field" }
-protocol = { path = "../protocol" }
-mint = { path = "../mint" }
-hex = "0.4.3"
-serde = "1.0.215"
-serde_json = "1.0.133"
-reqwest = { version = "0.11.27", default-features = false, features = ["blocking", "rustls"] }
-getrandom = "0.3.2"
-ctrlc = "3.4.5"
-ocl = { version = "0.19.7", optional = true }
+sys = { workspace = true }
+field = { workspace = true }
+base = { workspace = true }
+protocol = { workspace = true }
+db = { workspace = true, default-features = false }
+vm = { workspace = true }
+mint = { workspace = true }
+chain = { workspace = true }
+node = { workspace = true }
+server = { workspace = true }
+api = { workspace = true }
+x16rs = { workspace = true }
+ctrlc = "3"
+serde_json = "1.0"
+serde = { version = "1", features = ["derive"] }
+reqwest = { version = "0.11", default-features = false, features = ["blocking", "rustls-tls"] }
+getrandom = "0.3"
+hex = "0.4"
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros"] }
 
 [features]
-ocl = ["dep:ocl"]
-
+default = ["db-sled"]
+db-sled = ["db/db-sled"]
+db-rusty-leveldb = ["db/db-rusty-leveldb"]
+db-leveldb-sys = ["db/db-leveldb-sys"]
+db-rocksdb = ["db/db-rocksdb"]
+ocl = ["mint/ocl"]

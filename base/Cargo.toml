@@ -1,0 +1,13 @@
+[package]
+name = "base"
+version.workspace = true
+edition.workspace = true
+
+#
+[dependencies]
+sys = { workspace = true }
+field = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

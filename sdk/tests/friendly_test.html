@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<head>
+    <meta charset="utf-8">
+    <title>Hacash WASM SDK smoke test</title>
+    <script src="./hacashsdk_bg.js"></script>
+    <script src="../js/hacashsdk.global.js"></script>
+</head>
+<body>
+    <h1>Hacash WASM SDK smoke test</h1>
+    <pre id="output"></pre>
+    <script>
+        const output = document.getElementById("output");
+        const write = (value) => {
+            output.textContent += `${String(value)}\n`;
+        };
+
+        (async () => {
+            const sdk = await create_hacash_sdk();
+            const account = sdk.create_account("123456");
+            write(`address=${account.address}`);
+            const transaction = sdk.create_coin_transfer({
+                main_prikey: "123456",
+                to_address: "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
+                fee: "1:244",
+                hacash: "12.0",
+                satoshi: 12000000,
+                timestamp: 1755223764,
+            });
+            write(`hash=${transaction.hash}`);
+            write("OK");
+        })().catch((error) => write(error.message || error));
+    </script>
+</body>
+</html>

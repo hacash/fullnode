@@ -1,26 +1,18 @@
 [package]
 name = "vm"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
+#
 [dependencies]
-sys = {path = "../sys"}
-field = {path = "../field", features = ["hvm"]}
-protocol = {path = "../protocol"}
-server = {path = "../server"}
-concat-idents = "1.1.5"
-dyn-clone = "1.0.17"
-hex = "0.4.3"
-sha2 = "0.10.2"
-sha3 = "0.10.1"
-ripemd = "0.1.1"
-axum = "0.7.9"
-serde = "1.0.215"
-serde_json = "1.0.133"
-
-[features]
-p2sh = []
-
-
-[dev-dependencies]
-mint = {path = "../mint"}
+sys = { workspace = true }
+field = { workspace = true }
+base = { workspace = true }
+hex = "0.4"
+serde_json = "1.0"
+dyn-clone = "1.0"
+ripemd = "0.1"
+sha2 = "0.10"
+sha3 = "0.10"
+blake2 = "0.10"
+tiny-keccak = { version = "2.0", features = ["keccak"] }

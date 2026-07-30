@@ -1,84 +1,6 @@
+use std::usize;
 
-
-#[repr(u8)]
-#[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
-pub enum ValueTy {
-    #[default]
-    Nil         = 0,
-    Bool        = 1,
-    U8          = 2,
-    U16         = 3,
-    U32         = 4,
-    U64         = 5,
-    U128        = 6,
-    // U256     = 7
-    // ...      = 8 
-    // ...      = 9 
-    Bytes       = 10,
-    Address     = 11,
-    // ...      = 12
-    // ...      = 13
-    HeapSlice   = 14,
-    Compo       = 15
-}
-
-impl ValueTy {
-
-    pub fn canbe_argv(&self) -> Rerr {
-        use ValueTy::*;
-        match self {
-            Nil | HeapSlice | Compo => errf!("Value Type {:?} cannot be func argv", self),
-            _ => Ok(())
-        }
-    }
-
-    pub fn from_name(s: &str) -> Ret<Self> {
-        use ValueTy::*;
-        Ok(match s {
-            "nil"       => Nil,
-            "bool"      => Bool,
-            "u8"        => U8,
-            "u16"       => U16,
-            "u32"       => U32,
-            "u64"       => U64,
-            "u128"      => U128,
-            "bytes"     => Bytes,
-            "address"   => Address,
-            "heapslice" => HeapSlice,
-            "compo"     => Compo,
-            a => return errf!("not find value type '{}'", a)
-        })
-    }
-
-
-    pub fn build(t: u8) -> Ret<Self> {
-        use ValueTy::*;
-        Ok(match t {
-            0  => Nil       ,
-            1  => Bool      ,
-            2  => U8        ,
-            3  => U16       ,
-            4  => U32       ,
-            5  => U64       ,
-            6  => U128      ,
-            /* */
-            10 => Bytes     ,
-            11 => Address   ,
-            /* */
-            14 => HeapSlice ,
-            15 => Compo     ,
-            _ => return errf!("ValueTy {} not find", t)
-        })
-    }
-
-
-
-}
-
-
-/**********************************************/
-
-
+use Value::*;
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub enum Value {
@@ -89,13 +11,14 @@ pub enum Value {
     U32(u32),                //           4
     U64(u64),                //           5
     U128(u128),              //           6
-    /*U256(u256),*/          //           7
-    /*...*/                  //           ..
-    Bytes(Vec<u8>),          //           10
-    Address(field::Address), //           11
-    /*...*/                  //           ..
-    HeapSlice((u32, u32)),   //           14
-    Compo(CompoItem),        //           15
+    Bytes(Vec<u8>),          //           8
+    Address(field::Address), //           9
+    // reserved              //           10
+    // reserved              //           11  (formerly HeapSlice)
+    // reserved              //           12
+    Tuple(TupleItem),        //           13
+    Compo(CompoItem),        //           14
+    Handle(HandleItem),      //           15
 }
 
 
@@ -105,10 +28,84 @@ impl std::fmt::Display for Value {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum CallArgsPack {
+    Nil,
+    Raw,
+    Tuple,
+}
 
-use std::usize;
+pub fn classify_call_args_len(len: usize) -> VmrtRes<CallArgsPack> {
+    if len > crate::MAX_FUNC_PARAM_LEN {
+        return itr_err_fmt!(
+            CastBeFnArgvFail,
+            "func argv length cannot more than {}",
+            crate::MAX_FUNC_PARAM_LEN
+        );
+    }
+    Ok(match len {
+        0 => CallArgsPack::Nil,
+        1 => CallArgsPack::Raw,
+        _ => CallArgsPack::Tuple,
+    })
+}
 
-use Value::*;
+#[inline(always)]
+pub(crate) fn add_size_saturating(total: usize, add: usize) -> usize {
+    total.checked_add(add).unwrap_or(usize::MAX)
+}
+
+// VM/runtime semantic equality. Use this for contract-visible value comparison.
+// IMPORTANT: this is intentionally different from Rust `PartialEq` on `Value`.
+// - uint values compare by numeric value across widths (e.g. U8(1) == U64(1))
+// - Tuple/Compo compare by content
+// - Handle and some cross-type comparisons are invalid and return an error
+// Therefore, do NOT infer VM-level bugs from raw Rust `==` on `Value`/`CompoItem`
+// without first checking whether the surrounding code needs identity semantics or
+// true VM semantic equality.
+//
+// Map-key pitfalls (see `vm/doc/value-cast.md` §9): uint keys are value-normalized via
+// `extract_key_bytes` / `uint_key_bytes`; `scalar_bytes` below is for field serialization
+// only and keeps fixed-width uint encoding. Cross-type key collision (Address vs Bytes)
+// remains possible when raw bytes match.
+pub(crate) fn value_content_eq(lhs: &Value, rhs: &Value) -> VmrtRes<bool> {
+    if lhs.is_uint() && rhs.is_uint() {
+        return Ok(lhs.extract_u128()? == rhs.extract_u128()?);
+    }
+    if lhs.ty() != rhs.ty() {
+        return itr_err_fmt!(
+            Arithmetic,
+            "cannot compare different types {:?} and {:?}",
+            lhs,
+            rhs
+        );
+    }
+    match (lhs, rhs) {
+        (Nil, Nil) => Ok(true),
+        (Bool(l), Bool(r)) => Ok(l == r),
+        (Bytes(l), Bytes(r)) => Ok(l == r),
+        (Address(l), Address(r)) => Ok(l == r),
+        (Tuple(l), Tuple(r)) => l.content_eq(r),
+        (Compo(l), Compo(r)) => l.content_eq(r),
+        (Handle(..), Handle(..)) => {
+            itr_err_fmt!(Arithmetic, "cannot compare {:?} and {:?}", lhs, rhs)
+        }
+        (U8(l), U8(r)) => Ok(l == r),
+        (U16(l), U16(r)) => Ok(l == r),
+        (U32(l), U32(r)) => Ok(l == r),
+        (U64(l), U64(r)) => Ok(l == r),
+        (U128(l), U128(r)) => Ok(l == r),
+        _ => itr_err_fmt!(Arithmetic, "cannot compare {:?} and {:?}", lhs, rhs),
+    }
+}
+
+pub(crate) fn value_compare_fee(lhs: &Value, rhs: &Value, container_header_fee: usize) -> usize {
+    match (lhs, rhs) {
+        (Tuple(l), Tuple(r)) => l.compare_fee(r, container_header_fee),
+        (Compo(l), Compo(r)) => l.compare_fee(r, container_header_fee),
+        _ => add_size_saturating(lhs.dup_size(), rhs.dup_size()),
+    }
+}
 
 impl Value {
 
@@ -123,8 +120,9 @@ impl Value {
             U128(..)      => ValueTy::U128,
             Bytes(..)     => ValueTy::Bytes,
             Address(..)   => ValueTy::Address,
-            HeapSlice(..) => ValueTy::HeapSlice,
+            Tuple(..)     => ValueTy::Tuple,
             Compo(..)     => ValueTy::Compo,
+            Handle(..)    => ValueTy::Handle,
         }
     }
 
@@ -134,14 +132,6 @@ impl Value {
 
     pub fn bool(b: bool) -> Self {
         Bool(b)
-    }
-
-    pub fn bool_true() -> Self {
-        Bool(true)
-    }
-
-    pub fn bool_false() -> Self {
-        Bool(false)
     }
 
     pub fn u8(n: u8) -> Self {
@@ -172,15 +162,7 @@ impl Value {
 
 
     pub fn is_uint(&self) -> bool {
-        match self {
-            U8(..) | 
-            U16(..) | 
-            U32(..) | 
-            U64(..) | 
-            U128(..) 
-            /*| U256(_)*/ => true,
-            _ => false,
-        }
+        self.ty().is_uint()
     }
 
     pub fn is_bytes(&self) -> bool {
@@ -197,78 +179,171 @@ impl Value {
         }
     }
 
+    pub fn match_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Bytes(buf) => Some(buf.as_slice()),
+            _ => None,
+        }
+    }
+
+    pub fn match_bytes_mut(&mut self) -> Option<&mut Vec<u8>> {
+        match self {
+            Bytes(buf) => Some(buf),
+            _ => None,
+        }
+    }
+
+    pub fn match_compo(&self) -> Option<&CompoItem> {
+        match self {
+            Compo(compo) => Some(compo),
+            _ => None,
+        }
+    }
+
+    pub fn match_compo_mut(&mut self) -> Option<&mut CompoItem> {
+        match self {
+            Compo(compo) => Some(compo),
+            _ => None,
+        }
+    }
+
+    pub fn match_tuple(&self) -> Option<&TupleItem> {
+        match self {
+            Tuple(tuple) => Some(tuple),
+            _ => None,
+        }
+    }
+
+    pub fn container_len(&self) -> VmrtRes<usize> {
+        if let Some(tuple) = self.match_tuple() {
+            return Ok(tuple.len())
+        }
+        if let Some(compo) = self.match_compo() {
+            return Ok(compo.len())
+        }
+        itr_err_code!(CompoOpNotMatch)
+    }
+
+    pub fn length(&self, cap: &SpaceCap) -> VmrtRes<Value> {
+        if let Some(tuple) = self.match_tuple() {
+            return tuple.length(cap)
+        }
+        if let Some(compo) = self.match_compo() {
+            return compo.length(cap)
+        }
+        itr_err_code!(CompoOpNotMatch)
+    }
+
+    pub fn haskey(&self, k: Value) -> VmrtRes<Value> {
+        if let Some(tuple) = self.match_tuple() {
+            return tuple.haskey(k)
+        }
+        if let Some(compo) = self.match_compo() {
+            return compo.haskey(k)
+        }
+        itr_err_code!(CompoOpNotMatch)
+    }
+
+    pub fn itemget(&self, k: Value) -> VmrtRes<Value> {
+        if let Some(tuple) = self.match_tuple() {
+            return tuple.itemget(k)
+        }
+        if let Some(compo) = self.match_compo() {
+            return compo.itemget(k)
+        }
+        itr_err_code!(CompoOpNotMatch)
+    }
+
+    pub fn clone_unpack_items(&self) -> VmrtRes<Vec<Value>> {
+        // UNPACK is a neutral sequence op: it can unpack Tuple or a plain Compo::List value.
+        if let Some(tuple) = self.match_tuple() {
+            return Ok(tuple.to_vec())
+        }
+        if let Some(compo) = self.match_compo() {
+            return Ok(compo.list_ref()?.iter().cloned().collect())
+        }
+        itr_err_code!(CompoOpNotMatch)
+    }
+
+    pub fn pack_call_args<I>(items: I) -> VmrtRes<Self>
+    where
+        I: IntoIterator<Item = Value>,
+    {
+        Self::pack_tuple(items)
+    }
+
+    pub fn pack_tuple<I>(items: I) -> VmrtRes<Self>
+    where
+        I: IntoIterator<Item = Value>,
+    {
+        let mut items: Vec<_> = items.into_iter().collect();
+        Ok(match classify_call_args_len(items.len())? {
+            CallArgsPack::Nil => Self::Nil,
+            CallArgsPack::Raw => items.pop().unwrap(),
+            CallArgsPack::Tuple => Self::Tuple(TupleItem::new(items)?),
+        })
+    }
+
+    pub fn into_compo(self) -> Option<CompoItem> {
+        match self {
+            Compo(compo) => Some(compo),
+            _ => None,
+        }
+    }
 
     pub fn compo_ref(&self) -> VmrtRes<&CompoItem> {
-        let Value::Compo(compo) = self else {
+        let Some(compo) = self.match_compo() else {
             return itr_err_code!(CompoOpNotMatch)
         };
         Ok(compo)
-    }
-
-    pub fn check_false(&self) -> bool {
-        ! self.check_true()
-    }
-    
-    pub fn check_true(&self) -> bool {
-        match self {
-            Nil     => false,
-            Bool(b) => *b,
-            U8(n)   => *n!=0,
-            U16(n)  => *n!=0,
-            U32(n)  => *n!=0,
-            U64(n)  => *n!=0,
-            U128(n) => *n!=0,
-            Bytes(b)=> buf_not_zero(b),
-            _       => true, // Addr Compo ....
-        }
-    }
-
-    /*
-    pub fn _____deval(&self, heap: &Heap) -> VmrtRes<Vec<u8>> {
-        match self {
-            Compo(..) => itr_err_code!(CompoToSerialize),
-            HeapSlice((s, l)) => {
-                match heap.do_read(*s as usize, *l as usize)? {
-                    Bytes(buf) => Ok(buf),
-                    _ => never!()
-                }
-            }
-            _ => Ok(self.raw())
-        }
-    }
-    */
-
-
-    pub fn raw(&self) -> Vec<u8> {
-        match &self {
-            Nil => vec![],
-            Bool(n) => vec![maybe!(n, 1, 0)],
-            U8(n) =>   n.to_be_bytes().into(),
-            U16(n) =>  n.to_be_bytes().into(),
-            U32(n) =>  n.to_be_bytes().into(),
-            U64(n) =>  n.to_be_bytes().into(),
-            U128(n) => n.to_be_bytes().into(),
-            Bytes(buf) => buf.clone(),
-            Address(a) => a.serialize(),
-            HeapSlice((s, l)) => vec![s.to_be_bytes(), l.to_be_bytes()].concat(),
-            // not support
-            Compo(..) => "{compo value ...}".to_owned().into_bytes(),
-        }
     }
 
     pub fn compo(&mut self) -> VmrtRes<&mut CompoItem> {
-        let Value::Compo(compo) = self else {
+        let Some(compo) = self.match_compo_mut() else {
             return itr_err_code!(CompoOpNotMatch)
         };
         Ok(compo)
     }
 
-    pub fn compo_get(self) -> VmrtRes<CompoItem> {
-        let Value::Compo(compo) = self else {
+    pub fn take_compo(self) -> VmrtRes<CompoItem> {
+        let Some(compo) = self.into_compo() else {
             return itr_err_code!(CompoOpNotMatch)
         };
         Ok(compo)
     }
+
+
+    /// Representation bytes for field serialization (fixed-width uint BE).
+    /// Map keys use `extract_key_bytes` / `uint_key_bytes` instead — see `vm/doc/value-cast.md` §9.
+    pub(crate) fn scalar_bytes(&self) -> Option<Vec<u8>> {
+        match self {
+            Nil => Some(vec![]),
+            Bool(n) => Some(vec![encode_canonical_bool_byte(*n)]),
+            U8(n) => Some(n.to_be_bytes().into()),
+            U16(n) => Some(n.to_be_bytes().into()),
+            U32(n) => Some(n.to_be_bytes().into()),
+            U64(n) => Some(n.to_be_bytes().into()),
+            U128(n) => Some(n.to_be_bytes().into()),
+            Bytes(buf) => Some(buf.clone()),
+            Address(a) => Some(a.encode()),
+            _ => None,
+        }
+    }
+
+    pub fn raw(&self) -> Vec<u8> {
+        if let Some(bytes) = self.scalar_bytes() {
+            return bytes;
+        }
+        match &self {
+            // not support
+            Tuple(..) => "{tuple value ...}".to_owned().into_bytes(),
+            Compo(..) => "{compo value ...}".to_owned().into_bytes(),
+            Handle(..) => "{handle value ...}".to_owned().into_bytes(),
+            _ => unreachable!(),
+
+        }
+    }
+
 
     pub fn ty_num(&self) -> u8 {
         self.ty() as u8
@@ -285,46 +360,49 @@ impl Value {
             U128(..) => 16,
             Bytes(b) => b.len(),
             Address(..) => field::Address::SIZE,
-            HeapSlice((_, n)) => *n as usize,
-            // not support
-            Compo(..) => usize::MAX,
+            Tuple(a) => a.val_size(),
+            Compo(c) => c.val_size(),
+            Handle(..) => REF_DUP_SIZE,
+        }
+    }
+
+    pub fn dup_size(&self) -> usize {
+        match self {
+            Nil      => 0,
+            Bool(..) => 1,
+            U8(..)   => 1,
+            U16(..)  => 2,
+            U32(..)  => 4,
+            U64(..)  => 8,
+            U128(..) => 16,
+            Bytes(b) => b.len(),
+            Address(..) => field::Address::SIZE,
+            Tuple(..) | Compo(..) | Handle(..) => REF_DUP_SIZE,
         }
     }
 
     pub fn can_get_size(&self) -> VmrtRes<u16> {
-        if let Compo(..) | HeapSlice(..) = self {
+        if let Tuple(..) | Compo(..) | Handle(..) = self {
             return itr_err_code!(ItemNoSize)
         }
         let n = self.val_size();
-        assert!(n < u16::MAX as usize);
+        if n >= u16::MAX as usize {
+            return itr_err_code!(OutOfValueSize)
+        }
         Ok(n as u16)
     }
 
     pub fn valid(self, cap: &SpaceCap) -> VmrtRes<Self> {
-        let cansz = self.can_get_size();
-        match cansz {
-            Ok(n) if n as usize > cap.max_value_size
-                => return itr_err_code!(OutOfValueSize),
-            _ => {}
-        };
-        Ok(self)
-    }
-
-    pub fn to_uint(&self) -> u128 {
-        match self {
-            Nil =>          0,
-            Bool(true) =>   1,
-            Bool(false) =>  0,
-            U8(n) =>   *n as u128,
-            U16(n) =>  *n as u128,
-            U32(n) =>  *n as u128,
-            U64(n) =>  *n as u128,
-            U128(n) => *n as u128,
-            Bytes(b) => match buf_to_uint(b) {
-                Ok(b) => b.to_uint(),
-                _ => 0
-            },
-            _ => 0,
+        match self.can_get_size() {
+            Ok(n) => {
+                if (n as usize) > cap.value_size {
+                    itr_err_code!(OutOfValueSize)
+                } else {
+                    Ok(self)
+                }
+            }
+            Err(ItrErr(ItrErrCode::ItemNoSize, _)) => Ok(self),
+            Err(e) => Err(e),
         }
     }
 
@@ -342,12 +420,12 @@ impl Value {
                 Some(s) => format!("\"{}\"", s),
                 _ => "0x".to_owned() + &hex::encode(b),
             },
-            Address(a) => a.readable(),
-            HeapSlice((s, l)) => format!("heap({},{})", s, l),
+            Address(a) => a.to_readable(),
+            Tuple(a) => a.to_string(),
             Compo(a) => format!("compo({}){}", a.len(), a.to_string()),
+            Handle(..) => s!("handle"),
         }
     }
-
 
     pub fn to_json(&self) -> String {
         match self {
@@ -359,15 +437,35 @@ impl Value {
             U32(n) =>  format!("{}", n),
             U64(n) =>  format!("{}", n),
             U128(n) => format!("{}", n),
-            Bytes(b) => format!("\"{}\"", &to_readable_or_base64(b)),
-            Address(a) =>  format!("\"{}\"", a.readable()),
-            HeapSlice((s, l)) => format!("[{},{}]", s, l),
+            Bytes(b) => serde_json::to_string(&to_readable_or_base64(b)).unwrap(),
+            Address(a) =>  format!("\"{}\"", a.to_readable()),
+            Tuple(a) => a.to_json(),
             Compo(a) => a.to_json(),
+            Handle(..) => s!(r#"{"$handle":true}"#),
+        }
+    }
+
+    pub fn to_debug_json(&self) -> String {
+        match self {
+            Nil => s!("null"),
+            Bool(true) => s!("true"),
+            Bool(false) => s!("false"),
+            U8(n) => format!("{}", n),
+            U16(n) => format!("{}", n),
+            U32(n) => format!("{}", n),
+            U64(n) => format!("{}", n),
+            U128(n) => format!("{}", n),
+            Bytes(b) => match bytes_try_to_readable_string(b) {
+                Some(s) => serde_json::to_string(&s).unwrap(),
+                None => format!(r#"{{"$bytes_hex":"{}"}}"#, b.to_hex()),
+            },
+            Address(a) => serde_json::to_string(&a.to_readable()).unwrap(),
+            Tuple(a) => a.to_debug_json(),
+            Compo(a) => a.to_debug_json(),
+            Handle(..) => s!(r#"{"$handle":true}"#),
         }
     }
 
 
 }
-
-
 

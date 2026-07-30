@@ -1,44 +1,34 @@
-const fs = require("fs")
+const fs = require("fs");
+const path = require("path");
 
-
-const utilfn = `function base64ToBuffer(b) {
-    let str = window.atob(b);
-    let buffer = new Uint8Array(str.length);
-    for (let i=0; i < str.length; i++) {
-        buffer[i] = str.charCodeAt(i);
+const base64ToBuffer = `function base64ToBuffer(base64) {
+    const text = window.atob(base64);
+    const buffer = new Uint8Array(text.length);
+    for (let i = 0; i < text.length; i++) {
+        buffer[i] = text.charCodeAt(i);
     }
     return buffer;
-}`
+}`;
 
+const distDir = path.join(__dirname, "dist");
+const wasmBase64 = fs
+    .readFileSync(path.join(distDir, "hacashsdk_bg.wasm"))
+    .toString("base64");
+let output = fs.readFileSync(path.join(distDir, "hacashsdk.js")).toString();
 
-// wasm code 2 base64
-const wasmBase64  = fs.readFileSync("dist/hacashsdk_bg.wasm").toString('base64')
-
-// replace WebAssembly.Instance
-// const instanceLine = "module = new WebAssembly.Module(module);"
-let wasm2jscon = fs.readFileSync("dist/hacashsdk.js").toString()
-/*
-    .replace(instanceLine,
-    `${utilfn}\nmodule = new WebAssembly.Module(base64ToBuffer("${wasmBase64}"));`
-)
-*/
-
-wasm2jscon += `
+output += `
 let __sdk_ok;
-const hacash_sdk = async function() {
-    if(!__sdk_ok) {
-        await wasm_bindgen({ module_or_path: base64ToBuffer(__Hacash_WASM_SDK_Stuff)});
+globalThis.hacash_sdk = async function() {
+    if (!__sdk_ok) {
+        await wasm_bindgen({ module_or_path: base64ToBuffer(__Hacash_WASM_SDK_Stuff) });
         __sdk_ok = true;
     }
-    return wasm_bindgen
-}
+    return wasm_bindgen;
+};
 
-${utilfn}
+${base64ToBuffer}
 
 const __Hacash_WASM_SDK_Stuff = "${wasmBase64}";
-`
+`;
 
-// output js file
-fs.writeFileSync("dist/hacashsdk_bg.js", wasm2jscon)
-
-// ok finish
+fs.writeFileSync(path.join(distDir, "hacashsdk_bg.js"), output);

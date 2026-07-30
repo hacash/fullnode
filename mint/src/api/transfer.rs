@@ -1,0 +1,374 @@
+//! Hacash-specific transfer-build / transfer-scan API.
+//!
+//! These handlers formerly lived in the generic `api` crate; they were moved
+//! here because they encode Hacash transfer semantics (TransactionType2 +
+//! the 13 standard transfer actions of `protocol::action_std`). The scan
+//! handler no longer `downcast_ref`s each concrete action -- instead it
+//! dispatches through `base::TransferLike` (via `act.as_transfer_like()`),
+//! so the JSON shape is derived solely from the `TransferPayload` variant.
+
+use base::{
+    Action, AddrOrPtr, ApiExecCtx, ApiRequest, ApiResponse, BlkPkg, Transaction, TransferPayload,
+};
+use field::{Address, Amount, Decode, DiamondName, DiamondNameListMax200, Encode, Satoshi};
+use protocol::action_std::{
+    DiaFromToTrs, DiaSingleTrs, DiaToTrs, HacFromToTrs, HacToTrs, SatFromToTrs, SatToTrs,
+};
+use protocol::tx_std::TransactionType2;
+use sys::ToHex;
+
+use super::util::{api_error, json_string, q_string};
+
+// =============================================================
+// CoinKind
+// =============================================================
+
+#[derive(Clone)]
+pub(crate) struct CoinKind {
+    hacash: bool,
+    satoshi: bool,
+    diamond: bool,
+    assets_all: bool,
+    assets: Vec<u64>,
+}
+
+impl CoinKind {
+    pub(crate) fn parse(raw: &str) -> sys::Ret<Self> {
+        let compact = raw.to_ascii_lowercase().replace([' ', ',', ';', '|'], "");
+        if compact.is_empty() || compact == "all" || compact == "hsda" {
+            return Ok(Self {
+                hacash: true,
+                satoshi: true,
+                diamond: true,
+                assets_all: true,
+                assets: Vec::new(),
+            });
+        }
+        let (kind_part, asset_part) = if let Some(start) = compact.find('(') {
+            let Some(end) = compact.rfind(')') else {
+                return sys::errf!("coinkind assets list format invalid");
+            };
+            (&compact[..start], Some(&compact[start + 1..end]))
+        } else {
+            (compact.as_str(), None)
+        };
+        if !kind_part
+            .chars()
+            .all(|c| c == 'h' || c == 's' || c == 'd' || c == 'a')
+        {
+            return sys::errf!("coinkind format invalid");
+        }
+        let mut assets = Vec::new();
+        if let Some(asset_part) = asset_part {
+            if !kind_part.contains('a') {
+                return sys::errf!("coinkind assets list requires 'a'");
+            }
+            for item in asset_part.split(',').filter(|s| !s.is_empty()) {
+                assets.push(item.parse::<u64>().map_err(|_| {
+                    sys::Error::fault(format!("asset serial {} format invalid", item))
+                })?);
+            }
+        }
+        Ok(Self {
+            hacash: kind_part.contains('h'),
+            satoshi: kind_part.contains('s'),
+            diamond: kind_part.contains('d'),
+            assets_all: kind_part.contains('a') && assets.is_empty(),
+            assets,
+        })
+    }
+}
+
+// =============================================================
+// shared helpers (moved from api util.rs)
+// =============================================================
+
+pub(crate) fn load_block_by_height(ctx: &ApiExecCtx, height: u64) -> sys::Ret<BlkPkg> {
+    let Some((_hash, data)) = ctx.engine.store().block_data_by_height(height) else {
+        return sys::errf!("block not found");
+    };
+    BlkPkg::from_bytes(
+        ctx.engine.services().as_ref(),
+        data.to_vec(),
+        base::PkgSource::new(base::PkgOrigin::Api),
+    )
+    .map_err(|e| sys::Error::fault(format!("block parse failed: {}", e)))
+}
+
+fn real_addr(ptr: &AddrOrPtr, addrs: &[Address]) -> sys::Ret<Address> {
+    ptr.real(addrs)
+}
+
+/// Reconstruct the readable diamond-name string from the raw payload bytes.
+///
+/// For `DiaSingleTrs` the payload carries the single 6-byte name; for the
+/// list variants it carries the encoded `DiamondNameListMax200` minus its
+/// 1-byte length prefix -- i.e. the concatenation of the names. In both
+/// cases the bytes chunk cleanly into `DiamondName::SIZE`-sized names. The
+/// names are concatenated without separators, mirroring
+/// `DiamondNameListMax200::readable()` (the shape the previous
+/// `downcast_ref`-based code emitted).
+fn diamond_names_readable(names: &[u8]) -> String {
+    json_string(
+        &names
+            .chunks_exact(DiamondName::SIZE)
+            .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+            .collect::<String>(),
+    )
+}
+
+// =============================================================
+// transfer_json -- dispatched via TransferLike, no downcast_ref
+// =============================================================
+
+/// Build the JSON for a single transfer action, or `None` if the action is
+/// not a transfer (or is filtered out by `CoinKind` / from / to filters).
+///
+/// The coin kind, amounts, satoshi, diamonds and asset serial are all
+/// derived from `TransferPayload` -- there is no `downcast_ref` onto the
+/// concrete `protocol::action_std` types. The `from` address is resolved
+/// from `transfer_from()` (falling back to the tx main address when the
+/// action has no explicit payer, e.g. `*ToTrs`); the `to` address comes
+/// from `transfer_to()`.
+///
+/// Note on `Ptr` destinations: `TransferLike::transfer_to()` returns the
+/// resolved `Address` for an `Addr` destination but yields the default
+/// address for a `Ptr` destination (the trait lacks access to `tx.addrs()`
+/// to resolve pointers). Standard transactions build these actions with a
+/// concrete `to` address, so this is a non-issue on the common path; a
+/// `Ptr` destination would show as the zero address.
+fn transfer_json(
+    tx: &dyn Transaction,
+    act: &dyn Action,
+    unit: &str,
+    ck: &CoinKind,
+    from_filter: Option<&str>,
+    to_filter: Option<&str>,
+) -> Option<String> {
+    let t = act.as_transfer_like()?;
+    let addrs = tx.addrs();
+    let main = tx.main();
+
+    let mut fields = vec![format!("\"kind\":{}", act.kind())];
+
+    let from = match t.transfer_from() {
+        Some(ptr) => real_addr(&ptr, &addrs).ok()?,
+        None => main,
+    };
+    let to = match t.transfer_to_ptr() {
+        Some(ptr) => real_addr(&ptr, &addrs).ok()?,
+        None => main,
+    };
+
+    match t.transfer_payload() {
+        TransferPayload::Hac { amount } => {
+            if !ck.hacash {
+                return None;
+            }
+            // `amount` is the wire encoding of the Amount (unit + dist + bytes);
+            // decode it back to recover the unit for `to_unit_string`.
+            let amt = match Amount::decode(&amount) {
+                Ok((a, _)) => a,
+                Err(_) => Amount::zero(),
+            };
+            fields.push(format!(
+                "\"amount\":{}",
+                json_string(&amt.to_unit_string(unit))
+            ));
+        }
+        TransferPayload::Sat { satoshi } => {
+            if !ck.satoshi {
+                return None;
+            }
+            fields.push(format!("\"satoshi\":{}", satoshi));
+        }
+        TransferPayload::Hacd { count, names } => {
+            if !ck.diamond {
+                return None;
+            }
+            fields.push(format!("\"diamond\":{}", count));
+            // Prefer the payload's raw name bytes for the readable list.
+            fields.push(format!("\"diamonds\":{}", diamond_names_readable(&names)));
+        }
+        TransferPayload::Asset { serial, amount } => {
+            if !(ck.assets_all || ck.assets.contains(&serial)) {
+                return None;
+            }
+            fields.push(format!("\"asset\":{}", serial));
+            fields.push(format!("\"amount\":{}", amount));
+        }
+    }
+
+    let from_readable = from.to_readable();
+    let to_readable = to.to_readable();
+    if from_filter.is_some_and(|v| v != from_readable) {
+        return None;
+    }
+    if to_filter.is_some_and(|v| v != to_readable) {
+        return None;
+    }
+    fields.push(format!("\"from\":{}", json_string(&from_readable)));
+    fields.push(format!("\"to\":{}", json_string(&to_readable)));
+    Some(format!("{{{}}}", fields.join(",")))
+}
+
+// =============================================================
+// /query/coin/transfer  (scan a tx's transfers)
+// =============================================================
+
+pub(crate) fn scan_coin_transfer_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
+    let height = req.query_u64("height").unwrap_or(1);
+    let txposi = req
+        .query("txposi")
+        .and_then(|v| v.parse::<isize>().ok())
+        .unwrap_or(-1);
+    if txposi < 0 {
+        return api_error("txposi error");
+    }
+    let unit = q_string(&req, "unit", "fin");
+    let ck = match CoinKind::parse(&q_string(&req, "coinkind", "hsda")) {
+        Ok(v) => v,
+        Err(e) => return api_error(&e.to_string()),
+    };
+    let pkg = match load_block_by_height(ctx, height) {
+        Ok(v) => v,
+        Err(e) => return api_error(&e.to_string()),
+    };
+    let block = pkg.block();
+    let txs = block.transactions();
+    if txs.is_empty() {
+        return api_error("transaction length invalid");
+    }
+    let normal_txs = &txs[1..];
+    let idx = txposi as usize;
+    if idx >= normal_txs.len() {
+        return api_error("txposi overflow");
+    }
+    let tx = normal_txs[idx].as_ref();
+    let from_filter = req.query("from").or_else(|| req.query("filter_from"));
+    let to_filter = req.query("to").or_else(|| req.query("filter_to"));
+    let transfers = tx
+        .actions()
+        .iter()
+        .filter_map(|act| transfer_json(tx, act.as_ref(), &unit, &ck, from_filter, to_filter))
+        .collect::<Vec<_>>()
+        .join(",");
+    ApiResponse::json(format!(
+        concat!(
+            "{{\"ret\":0,",
+            "\"tx_hash\":{},",
+            "\"tx_timestamp\":{},",
+            "\"block_hash\":{},",
+            "\"block_timestamp\":{},",
+            "\"main_address\":{},",
+            "\"transfers\":[{}]}}"
+        ),
+        json_string(&tx.hash().as_ref().to_hex()),
+        tx.timestamp().value(),
+        json_string(&block.hash().as_ref().to_hex()),
+        block.timestamp(),
+        json_string(&tx.main().to_readable()),
+        transfers,
+    ))
+}
+
+// =============================================================
+// /create/coin/transfer  (build a signed transfer tx)
+// =============================================================
+
+pub(crate) fn create_coin_transfer_handler(_ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
+    let fee = q_string(&req, "fee", "");
+    let main_prikey = q_string(&req, "main_prikey", "");
+    let from_prikey = q_string(&req, "from_prikey", "");
+    let to_address = q_string(&req, "to_address", "");
+    let hacash = q_string(&req, "hacash", "");
+    let diamonds = q_string(&req, "diamonds", "");
+    let satoshi = req.query_u64("satoshi").unwrap_or(0);
+    let timestamp = req.query_u64("timestamp").unwrap_or_else(sys::curtimes);
+
+    let to_addr = match Address::from_readable(&to_address) {
+        Ok(v) => v,
+        Err(e) => return api_error(&format!("address {} format invalid: {}", to_address, e)),
+    };
+    let fee = match Amount::from(&fee) {
+        Ok(v) => v,
+        Err(e) => return api_error(&format!("amount {} format invalid: {}", fee, e)),
+    };
+    let main_acc = match sys::Account::create_by(&main_prikey) {
+        Ok(v) => v,
+        Err(e) => return api_error(&format!("private key invalid: {}", e)),
+    };
+    let from_acc = if from_prikey.is_empty() {
+        main_acc.clone()
+    } else {
+        match sys::Account::create_by(&from_prikey) {
+            Ok(v) => v,
+            Err(e) => return api_error(&format!("private key invalid: {}", e)),
+        }
+    };
+    let is_from = from_acc != main_acc;
+    let main_addr = Address::from(*main_acc.address());
+    let from_addr = Address::from(*from_acc.address());
+    let mut tx = TransactionType2::new_by(main_addr, fee, timestamp);
+
+    if satoshi > 0 {
+        let sat = Satoshi::from(satoshi);
+        if is_from {
+            tx.push_action_in(std::sync::Arc::new(SatFromToTrs::new(
+                from_addr, to_addr, sat,
+            )));
+        } else {
+            tx.push_action_in(std::sync::Arc::new(SatToTrs::new(to_addr, sat)));
+        }
+    }
+
+    if diamonds.len() >= DiamondName::SIZE {
+        let list = match DiamondNameListMax200::from_readable(&diamonds) {
+            Ok(v) => v,
+            Err(e) => return api_error(&format!("diamonds invalid: {}", e)),
+        };
+        if is_from {
+            tx.push_action_in(std::sync::Arc::new(DiaFromToTrs::new(
+                from_addr, to_addr, list,
+            )));
+        } else if list.length() == 1 {
+            tx.push_action_in(std::sync::Arc::new(DiaSingleTrs::new(
+                list.as_list()[0],
+                to_addr,
+            )));
+        } else {
+            tx.push_action_in(std::sync::Arc::new(DiaToTrs::new(to_addr, list)));
+        }
+    }
+
+    if !hacash.is_empty() {
+        let amount = match Amount::from(&hacash) {
+            Ok(v) => v,
+            Err(e) => return api_error(&format!("hacash amount {} invalid: {}", hacash, e)),
+        };
+        if is_from {
+            tx.push_action_in(std::sync::Arc::new(HacFromToTrs::new(
+                from_addr, to_addr, amount,
+            )));
+        } else {
+            tx.push_action_in(std::sync::Arc::new(HacToTrs::new(to_addr, amount)));
+        }
+    }
+
+    if let Err(e) = tx.fill_sign_account(&main_acc) {
+        return api_error(&format!("fill main sign failed: {}", e));
+    }
+    if is_from {
+        if let Err(e) = tx.fill_sign_account(&from_acc) {
+            return api_error(&format!("fill from sign failed: {}", e));
+        }
+    }
+
+    ApiResponse::json(format!(
+        "{{\"ret\":0,\"hash\":{},\"hash_with_fee\":{},\"timestamp\":{},\"body\":{}}}",
+        json_string(&tx.hash().as_ref().to_hex()),
+        json_string(&tx.hash_with_fee().as_ref().to_hex()),
+        tx.timestamp.value(),
+        json_string(&tx.encode().to_hex()),
+    ))
+}

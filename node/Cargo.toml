@@ -1,15 +1,10 @@
 [package]
 name = "node"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-sys = { path = "../sys" }
-field = { path = "../field" }
-protocol = { path = "../protocol" }
-# chain = { path = "../chain" }
-mint = { path = "../mint" }
-hex = "0.4.3"
-chrono = "0.4.38"
-getrandom = "0.3.2"
-tokio = { version = "1.41.1", features = ["rt", "rt-multi-thread", "sync", "time", "io-util", "net", "macros"] }
+sys = { workspace = true }
+field = { workspace = true }
+base = { workspace = true }
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros"] }

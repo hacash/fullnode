@@ -1,29 +1,42 @@
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::collections::HashMap;
+//! `sys` -- foundational primitives shared by all crates.
+//!
+//! - `Error { Decode, Revert, Fault }` + `Ret<T>` / `Rerr`: unified error system
+//! - `Bytes`: refcounted byte buffer (`Arc<Vec<u8>>` + slice range)
+//! - `Waiter`: graceful-shutdown coordination token (sync + async + barrier)
+//! - `Account`: secp256k1 keypair + address generation
+//! - hash/hex/base64/time/ini/string: utility functions
+//!
+//! Dependency spine: `sys -> field -> base -> {protocol, chain, node, server, api, db}`;
+//! `protocol -> {vm, mint}`; `app` assembles all. (`chain` does not depend on `protocol`.)
 
-// use concat_idents::concat_idents;
+mod account;
+mod base64;
+mod bytes;
+mod error;
+mod hash;
+mod hex;
+mod ini;
+mod r#match;
+mod string;
+mod time;
+mod waiter;
 
-pub type Error = String;
+pub use account::*;
+pub use base64::*;
+pub use bytes::*;
+pub use error::*;
+pub use hash::*;
+pub use hex::*;
+pub use ini::*;
+pub use string::*;
+pub use time::*;
+pub use waiter::*;
 
-
-include!{"panic.rs"}
-include!{"bit.rs"}
-include!{"stdout.rs"}
-include!{"buffer.rs"}
-include!{"string.rs"}
-include!{"error.rs"}
-include!{"number.rs"}
-include!{"slice.rs"}
-include!{"match.rs"}
-include!{"hex.rs"}
-include!{"base64.rs"}
-include!{"hash.rs"}
-include!{"ini.rs"}
-include!{"time.rs"}
-include!{"account.rs"}
-include!{"config.rs"}
-include!{"exiter.rs"}
-
-
-
+#[macro_export]
+macro_rules! flush {
+    ($($param:expr),+) => ({
+        use std::io::Write;
+        print!($($param),+);
+        let _ = std::io::stdout().flush();
+    })
+}

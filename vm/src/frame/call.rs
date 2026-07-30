@@ -1,123 +1,136 @@
+use super::*;
 
 impl CallFrame {
-
-    pub fn start_call(&mut self, r: &mut Resoure, env: &mut ExecEnv, mode: CallMode, code: FnObj, 
-        entry_addr: ContractAddress, 
-        libs: Option<Vec<ContractAddress>>, 
-        param: Option<Value>
+    pub(crate) fn start_call<M: VmMachine + ?Sized, H: VmHost + base::Context + ?Sized>(
+        &mut self,
+        machine: &mut M,
+        host: &mut H,
+        exec: ExecCtx,
+        code: &FnObj,
+        bindings: FrameBindings,
+        param: Option<Value>,
     ) -> VmrtRes<Value> {
-        use CallExit::*;
-        use CallMode::*;
-        // to spend gas
-        self.contract_count = r.contracts.len();
-        let mut curr_frame = self.increase(r)?;
-        curr_frame.depth = match mode { // set depth 0 or 1
-            Main => 0,
-            Abst => 1,
-            _ => never!(),
-        };
-        curr_frame.ctxadr = entry_addr.clone();
-        curr_frame.curadr = entry_addr;
-        // compile irnode and push func argv ...
-        curr_frame.prepare(mode, code, param)?;
-        // exec codes
-        loop {
-            let exit = curr_frame.execute(r, env)?; // call frame
-            match exit {
-                // end func
-                Abort | Throw | Finish | Return => {
-                    let mut retv = match exit {
-                        Return | Throw => curr_frame.pop_value()?,
-                        _ => Value::Nil,
+        use crate::rt::CallExit::*;
+        macro_rules! curr {
+            () => {
+                self.frames.last().unwrap()
+            };
+        }
+        macro_rules! curr_mut {
+            () => {
+                self.frames.last_mut().unwrap()
+            };
+        }
+        macro_rules! prepare_and_push {
+            ($frame:ident, $prepare:expr) => {{
+                if let Err(e) = $prepare {
+                    $frame.reclaim(machine);
+                    return Err(e);
+                }
+                self.push($frame);
+            }};
+        }
+        macro_rules! settle_return {
+            ($retv:expr) => {{
+                let mut retv = $retv;
+                let cap = machine.space_cap();
+                curr!().check_output_type(&mut retv, &cap)?;
+                self.pop().unwrap().reclaim(machine);
+                loop {
+                    let is_tail = match self.frames.last() {
+                        Some(f) => f.pc == f.codes.len(),
+                        None => return Ok(retv),
                     };
-                    curr_frame.check_output_type(&mut retv)?;
-                    curr_frame.reclaim(r); // reclaim resource
-                    match exit {
-                        Abort | Throw => return itr_err_fmt!(ThrowAbort, "VM return error: {}", retv),
-                        Finish | Return => {
-                            match self.pop() {
-                                Some(mut prev) => {
-                                    prev.push_value(retv)?; // push func call result
-                                    curr_frame = prev;
-                                    // curr_frame.pc += 1; // exec next instruction
-                                    continue // prev frame do execute
-                                }
-                                _ => return Ok(retv) // all call finish
+                    if !is_tail {
+                        curr_mut!().push_value(retv)?;
+                        break;
+                    }
+                    let cap = machine.space_cap();
+                    self.frames
+                        .last()
+                        .unwrap()
+                        .check_output_type(&mut retv, &cap)?;
+                    self.pop().unwrap().reclaim(machine);
+                }
+            }};
+        }
+
+        assert!(self.len() == 0);
+        let height = machine.height();
+        let gas_extra = machine.gas_extra();
+        let cap = machine.space_cap();
+
+        exec.ensure_call_depth(&cap)?;
+        let mut root = self.increase(machine)?;
+        prepare_and_push!(
+            root,
+            root.prepare(exec, bindings, code, height, &gas_extra, param, &cap)
+        );
+
+        loop {
+            machine.check_deadline()?;
+            let exit = curr_mut!().execute(machine, host)?;
+            match exit {
+                Call(spec) => {
+                    let curr_exec = curr!().exec;
+                    let curr_bindings = curr!().bindings.clone();
+                    let next_effect = spec.callee_effect(curr_exec.effect);
+                    let cap = machine.space_cap();
+                    let next_exec = curr_exec.enter_call(next_effect, &cap)?;
+                    curr_mut!().oprnds.peek()?.check_func_argv()?;
+                    curr_mut!().oprnds.peek()?.check_boundary_value_cap(&cap)?;
+                    curr_mut!().oprnds.peek()?.check_container_cap(&cap)?;
+                    let mut plan = machine.plan_user_call(host, &spec, &curr_bindings)?;
+                    plan.next_bindings.intent_scope = curr!().intent_state.current_scope();
+
+                    match spec {
+                        CallSpec::Splice { .. } => {
+                            let mut param = curr_mut!().pop_value()?;
+                            if let Some(vtys) = plan.fnobj.agvty.as_ref() {
+                                vtys.check_params(&mut param)?;
                             }
+                            curr_mut!().push_value(param.clone())?;
+                            curr_mut!().prepare_splice(
+                                next_exec,
+                                plan.next_bindings,
+                                plan.fnobj.as_ref(),
+                                height,
+                                &gas_extra,
+                                param,
+                                &cap,
+                            )?;
+                            continue;
                         }
-                        _ => unreachable!()
+                        CallSpec::Invoke { .. } => {
+                            let param = curr_mut!().pop_value()?;
+                            let mut next = self.increase(machine)?;
+                            prepare_and_push!(
+                                next,
+                                next.prepare_invoke_unchecked_shape(
+                                    next_exec,
+                                    plan.next_bindings,
+                                    plan.fnobj.as_ref(),
+                                    height,
+                                    &gas_extra,
+                                    param,
+                                    &cap,
+                                )
+                            );
+                        }
                     }
                 }
-                // next call
-                Call(fnptr) => {
-                    let ctxadr = &curr_frame.ctxadr;
-                    let curadr = &curr_frame.curadr;
-                    let (chgsrcadr, fnobj) = r.load_must_call(env.sta, fnptr.clone(), 
-                        ctxadr, curadr, &libs)?;
-                    let fnobj = fnobj.as_ref().clone();
-                    let fn_is_public = fnobj.check_conf(FnConf::Public);
-                    // check gas
-                    self.check_load_new_contract_and_gas(r, env)?;
-                    // if call code
-                    if let CodeCopy = fnptr.mode {
-                        // println!("CodeCopy() ctxadr={}, curadr={}", ctxadr.prefix(7), curadr.prefix(7));
-                        curr_frame.prepare(CodeCopy, fnobj, None)?; // no param
-                        continue // do execute
+
+                Abort | Throw | Finish | Return => {
+                    let mut retv = Value::Nil;
+                    if matches!(exit, Return | Throw) {
+                        retv = curr_mut!().pop_value()?;
                     }
-                    // call next frame                    
-                    // println!("{:?}() ctxadr={}, curadr={}", fnptr.mode, ctxadr.prefix(7), curadr.prefix(7));
-                    let param = Some(curr_frame.pop_value()?);
-                    self.push(curr_frame);
-                    let next_frame = self.increase(r)?;
-                    curr_frame = next_frame;
-                    curr_frame.prepare(fnptr.mode, fnobj, param)?;
-                    match fnptr.mode {
-                        Inner | Library | Static => {
-                            if let Some(cadr) = chgsrcadr {
-                                curr_frame.curadr = cadr; // may change cur adr
-                            }
-                            // continue to do next call
-                        }
-                        Outer => {
-                            let cadr = chgsrcadr.unwrap();
-                            if ! fn_is_public {
-                                curr_frame.reclaim(r); // reclaim resource
-                                return itr_err_fmt!(CallNotPublic, "contract {} func sign {}", cadr.readable(), fnptr.fnsign.hex())
-                            }
-                            curr_frame.ctxadr = cadr.clone(); 
-                            curr_frame.curadr = cadr; 
-                            // continue to do next call
-                        }
-                        _ => unreachable!()
+                    if matches!(exit, Abort | Throw) {
+                        return itr_err_fmt!(ItrErrCode::ThrowAbort, "VM return failed: {}", retv);
                     }
-                    continue
+                    settle_return!(retv);
                 }
             }
-            // panic!("unreachable exit {:?}", exit);
-            // unreachable!()
         }
     }
-
-
-    fn check_load_new_contract_and_gas(&mut self, r: &mut Resoure, env: &mut ExecEnv) -> VmrtErr {
-        let ctlnum = &mut self.contract_count;
-        // check gas
-        let ctln = r.contracts.len();
-        match ctln - *ctlnum {
-            0 => {},
-            1 => {
-                // check and sub gas
-                *env.gas -= r.gas_extra.load_new_contract;
-                if *env.gas < 0 {
-                    return itr_err_code!(OutOfGas)
-                }
-                // update count
-                *ctlnum = ctln;
-            },
-            _ => unreachable!() // just load one or zero
-        };
-        Ok(())
-    }
-    
-
 }

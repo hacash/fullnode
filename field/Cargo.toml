@@ -1,19 +1,13 @@
 [package]
 name = "field"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-sys = {path = "../sys"}
-concat-idents = "1.1.5"
-hex = "0.4.3"
-base64 = "0.22.1"
-base58check = "0.1.0"
-num-bigint = "0.4.6"
-num-traits = "0.2.19"
-dyn-clone = "1.0.17"
-
-
-[features]
-hvm = []
-
+sys = { workspace = true }
+num-bigint = "0.4"
+num-traits = "0.2"
+base64 = "0.22"
+hex = "0.4"
+base58check = "0.1"
+serde_json = "1"

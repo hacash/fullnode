@@ -1,14 +1,10 @@
+use crate::interpreter::execute_code_in_frame;
+use crate::machine::{VmHost, VmMachine};
+use crate::rt::*;
+use crate::space::*;
+use crate::value::*;
 
-use super::*;
-use super::rt::*;
-use super::ir::*;
-use super::value::*;
-use super::space::*;
-use super::interpreter::*;
+mod call;
+mod frame;
 
-use super::rt::ItrErrCode::*;
-
-include!{"env.rs"}
-include!{"frame.rs"}
-include!{"call.rs"}
-
+pub use frame::{CallFrame, IntentScopeState};

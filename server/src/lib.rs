@@ -1,18 +1,7 @@
+//! HTTP transport: routing and ApiService dispatch only.
+//!
+//! Chain-specific routes live in the `api` crate.
 
+mod http;
 
-use sys::*;
-
-include!{"config.rs"}
-
-
-#[macro_use]
-pub mod ctx;
-pub mod extend;
-mod unstable;
-pub mod api;
-pub mod http;
-
-// extend
-pub type HttpServer = http::HttpServer;
-
-
+pub use http::HttpServer;

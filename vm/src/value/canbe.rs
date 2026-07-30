@@ -1,87 +1,250 @@
+fn is_scalar_value(value: &Value) -> bool {
+    matches!(
+        value,
+        Nil | Bool(..) | U8(..) | U16(..) | U32(..) | U64(..) | U128(..) | Bytes(..) | Address(..)
+    )
+}
 
+
+fn check_scalar_as(value: &Value, ec: ItrErrCode) -> VmrtErr {
+    if is_scalar_value(value) {
+        Ok(())
+    } else {
+        itr_err_code!(ec)
+    }
+}
+
+fn check_func_tuple_item(value: &Value, ec: ItrErrCode) -> VmrtErr {
+    match value {
+        Tuple(..) => itr_err_code!(ec),
+        Compo(..) | Handle(..) => Ok(()),
+        _ => check_scalar_as(value, ec),
+    }
+}
+
+fn check_func_boundary(value: &Value, ec: ItrErrCode) -> VmrtErr {
+    match value {
+        Tuple(tuple) => {
+            for item in tuple.as_slice() {
+                check_func_tuple_item(item, ec)?;
+            }
+            Ok(())
+        }
+        Compo(..) | Handle(..) => Ok(()),
+        _ => check_scalar_as(value, ec),
+    }
+}
+
+fn check_vm_boundary_compo(compo: &CompoItem, ec: ItrErrCode) -> VmrtErr {
+    if let Ok(list) = compo.list_ref() {
+        for item in &*list {
+            check_scalar_as(item, ec)?;
+        }
+        return Ok(());
+    }
+    for value in compo.map_ref()?.values() {
+        check_scalar_as(value, ec)?;
+    }
+    Ok(())
+}
+
+fn check_vm_tuple_item(value: &Value, ec: ItrErrCode) -> VmrtErr {
+    match value {
+        Tuple(..) | Handle(..) => itr_err_code!(ec),
+        Compo(compo) => check_vm_boundary_compo(compo, ec),
+        _ => check_scalar_as(value, ec),
+    }
+}
+
+fn check_vm_boundary(value: &Value, ec: ItrErrCode) -> VmrtErr {
+    match value {
+        Tuple(tuple) => {
+            for item in tuple.as_slice() {
+                check_vm_tuple_item(item, ec)?;
+            }
+            Ok(())
+        }
+        Compo(compo) => check_vm_boundary_compo(compo, ec),
+        Handle(..) => itr_err_code!(ec),
+        _ => check_scalar_as(value, ec),
+    }
+}
 
 impl Value {
-
-    pub fn canbe_bytes_ec(&self, ec: ItrErrCode) -> VmrtRes<Vec<u8>> {
-        Ok(match self {
-            Bool(b)    => vec![maybe!(b, 1, 0)],
-            U8(n)      => n.to_be_bytes().into(),
-            U16(n)     => n.to_be_bytes().into(),
-            U32(n)     => n.to_be_bytes().into(),
-            U64(n)     => n.to_be_bytes().into(),
-            U128(n)    => n.to_be_bytes().into(),
-            Bytes(b)   => b.clone(),
-            Address(a) => a.to_vec(),
-            _ => return itr_err_code!(ec)
-        })
+    pub fn check_non_nil_scalar(&self, nil_ec: ItrErrCode) -> VmrtErr {
+        if matches!(self, Nil) {
+            return itr_err_code!(nil_ec);
+        }
+        check_scalar_as(self, CastBeValueFail)
     }
 
-    pub fn canbe_bytes(&self) -> VmrtRes<Vec<u8>> {
-        self.canbe_bytes_ec(CastBeBytesFail)
+    pub fn check_boundary_value_cap(&self, cap: &SpaceCap) -> VmrtErr {
+        match self {
+            Tuple(tuple) => {
+                for item in tuple.as_slice() {
+                    item.check_boundary_value_cap(cap)?;
+                }
+                Ok(())
+            }
+            Compo(compo) => {
+                if let Ok(list) = compo.list_ref() {
+                    for item in &*list {
+                        item.check_boundary_value_cap(cap)?;
+                    }
+                    return Ok(());
+                }
+                for (key, value) in &*compo.map_ref()? {
+                    if key.len() > cap.value_size {
+                        return itr_err_code!(OutOfValueSize);
+                    }
+                    value.check_boundary_value_cap(cap)?;
+                }
+                Ok(())
+            }
+            _ => {
+                self.clone().valid(cap)?;
+                Ok(())
+            }
+        }
     }
 
-    pub fn canbe_key(&self) -> VmrtRes<Vec<u8>> {
-        let ec = CastBeKeyFail;
+    pub(crate) fn extract_bytes_len_with_error_code(&self, ec: ItrErrCode) -> VmrtRes<usize> {
+        match self {
+            Bool(..) | U8(..) => Ok(1),
+            U16(..) => Ok(2),
+            U32(..) => Ok(4),
+            U64(..) => Ok(8),
+            U128(..) => Ok(16),
+            Bytes(b) => Ok(b.len()),
+            Address(..) => Ok(field::Address::SIZE),
+            _ => itr_err_code!(ec),
+        }
+    }
+
+    /// Runtime byte normalization (`extract_bytes_ec` in `vm/doc/value-cast.md`).
+    /// `Nil` is rejected here; field serialization uses [`Value::scalar_bytes`] instead.
+    /// Native call packing uses [`Self::extract_call_data`], which alone maps `Nil` to `[]`.
+    fn extract_bytes_with_error_code(&self, ec: ItrErrCode) -> VmrtRes<Vec<u8>> {
+        if matches!(self, Nil) {
+            return itr_err_code!(ec);
+        }
+        match self.scalar_bytes() {
+            Some(bytes) => Ok(bytes),
+            None => itr_err_code!(ec),
+        }
+    }
+
+    pub fn extract_bytes(&self) -> VmrtRes<Vec<u8>> {
+        self.extract_bytes_with_error_code(CastBeBytesFail)
+    }
+
+    /// Derive map key bytes from a value.
+    ///
+    /// Uint keys use value-defined minimal big-endian (`uint_key_bytes`), so equal uints
+    /// share one slot regardless of variant width. `Bytes` and `Address` use raw payload
+    /// bytes (`extract_bytes` / `scalar_bytes`). See `vm/doc/value-cast.md` §9.
+    ///
+    /// Bool, Nil, and empty `Bytes` are rejected as keys.
+    pub(crate) fn extract_key_bytes_with_error_code(&self, ec: ItrErrCode) -> VmrtRes<Vec<u8>> {
         match self {
             Bool(..) => itr_err_code!(ec),
-            _ => self.canbe_bytes_ec(ec),
+            Nil => itr_err_code!(ec),
+            U8(..) | U16(..) | U32(..) | U64(..) | U128(..) => {
+                Ok(uint_key_bytes(self.extract_u128()?))
+            }
+            _ => {
+                let key = self.extract_bytes_with_error_code(ec)?;
+                if key.is_empty() {
+                    return itr_err_code!(ec);
+                }
+                Ok(key)
+            }
         }
     }
 
-    pub fn canbe_value(&self) -> VmrtErr {
-        let ec = CastBeValueFail;
+    pub fn extract_key_bytes(&self) -> VmrtRes<Vec<u8>> {
+        self.extract_key_bytes_with_error_code(CastBeKeyFail)
+    }
+
+    pub fn check_scalar(&self) -> VmrtErr {
+        check_scalar_as(self, CastBeValueFail)
+    }
+
+    pub fn check_tuple_item(&self) -> VmrtErr {
         match self {
-            Nil |
-            Bool(..)|
-            U8(..)    |
-            U16(..)   |
-            U32(..)   |
-            U64(..)   |
-            U128(..)  |
-            Bytes(..) |
-            Address(..) => Ok(()),
-            _ => itr_err_code!(ec)
+            Tuple(..) => itr_err_code!(CastBeValueFail),
+            Compo(..) | Handle(..) => Ok(()),
+            _ => check_scalar_as(self, CastBeValueFail),
         }
     }
 
-    pub fn canbe_store(&self) -> VmrtErr {
-        self.canbe_value()
-    }
-
-    pub fn canbe_uint(&self) -> VmrtErr {
-        match self {
-            U8(..)   |
-            U16(..)  |
-            U32(..)  |
-            U64(..)  |
-            U128(..) => Ok(()),
-            _ => itr_err_code!(CastBeUintFail)
-        }
-    }
-
-    pub fn canbe_ext_call_data(&self, heap: &Heap) -> VmrtRes<Vec<u8>> {
+    pub fn extract_call_data(&self) -> VmrtRes<Vec<u8>> {
         let ec = CastBeCallDataFail;
         match self {
             Nil => Ok(vec![]),
-            HeapSlice((s, l)) => {
-                match heap.do_read(*s as usize, *l as usize)? {
-                    Bytes(buf) => Ok(buf),
-                    _ => never!()
-                }
-            },
-            _ => self.canbe_bytes_ec(ec),
+            _ => self.extract_bytes_with_error_code(ec),
         }
     }
 
-    pub fn canbe_func_argv(&self) -> VmrtErr {
+    pub fn check_func_argv(&self) -> VmrtErr {
+        check_func_boundary(self, CastBeFnArgvFail)?;
+        if let Tuple(tuple) = self {
+            if tuple.len() > crate::MAX_FUNC_PARAM_LEN {
+                return itr_err_fmt!(
+                    CastBeFnArgvFail,
+                    "func argv length cannot more than {}",
+                    crate::MAX_FUNC_PARAM_LEN
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn check_func_retv(&self) -> VmrtErr {
+        check_func_boundary(self, CastBeFnRetvFail)
+    }
+
+    pub fn check_vm_boundary_argv(&self) -> VmrtErr {
+        check_vm_boundary(self, CastBeFnArgvFail)?;
+        if let Tuple(tuple) = self {
+            if tuple.len() > crate::MAX_FUNC_PARAM_LEN {
+                return itr_err_fmt!(
+                    CastBeFnArgvFail,
+                    "func argv length cannot more than {}",
+                    crate::MAX_FUNC_PARAM_LEN
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn check_vm_boundary_retv(&self) -> VmrtErr {
         match self {
-            HeapSlice(..) => itr_err_code!(CastBeFnArgvFail),
-            _ => Ok(())
+            Value::Handle(..) => {
+                itr_err_fmt!(CastBeFnRetvFail, "return type Handle is not supported")
+            }
+            _ => check_vm_boundary(self, CastBeFnRetvFail),
         }
     }
 
-
-
-
-
+    pub fn check_container_cap(&self, cap: &SpaceCap) -> VmrtErr {
+        match self {
+            Tuple(tuple) => {
+                if tuple.len() > cap.tuple_length {
+                    return itr_err_code!(OutOfCompoLen);
+                }
+                for item in tuple.as_slice() {
+                    item.check_container_cap(cap)?;
+                }
+                Ok(())
+            }
+            Compo(compo) => {
+                if compo.len() > cap.compo_length {
+                    return itr_err_code!(OutOfCompoLen);
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
 }

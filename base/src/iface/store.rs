@@ -1,0 +1,218 @@
+//! Disk / block store / chain store facade.
+//!
+//! `BlockStore` / `DiskDB` / persist keys / `Store`
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use field::Hash;
+use sys::Rerr;
+
+use crate::state::{LogBackend, StateRead};
+use crate::store::ChainStatus;
+
+// =============================================================
+// BlockStore
+// =============================================================
+//
+// `DiskDB`state KVblock  state
+// rebuild  block
+//
+// ****`put_block`  fsync  apply
+// root marker canonical  root roll finalize
+// block bytes  root marker  /
+// canonical
+
+pub trait BlockStore: Send + Sync {
+    /// fsync
+    ///
+    /// BlockStore  forkgenesis
+    /// stable root block  hash
+    fn put_block(&self, height: u64, hash: &Hash, data: sys::Bytes) -> Rerr;
+
+    /// Persist a block body and make it the next available canonical block.
+    /// KV-backed stores override this to commit the body, height index and
+    /// available cursor in one database batch.
+    fn put_block_available(&self, height: u64, hash: &Hash, data: sys::Bytes) -> Rerr;
+
+    /// Atomically persist the new reorg tip body, rewrite the supplied
+    /// canonical height range, remove any canonical tail above `height`, and
+    /// publish the available cursor. `canonical` is ascending and ends at the
+    /// supplied `(height, hash)`.
+    fn commit_reorg(
+        &self,
+        height: u64,
+        hash: &Hash,
+        data: sys::Bytes,
+        canonical: &[(u64, Hash)],
+    ) -> Rerr;
+
+    /// canonical root roll finalize rebuild / open
+    /// `height == 0` genesis
+    fn read_by_hash(&self, hash: &Hash) -> Option<sys::Bytes>;
+    fn read_by_height(&self, height: u64) -> Option<(Hash, sys::Bytes)>;
+
+    fn available_cursor(&self) -> Option<u64>;
+}
+
+// =============================================================
+// KV DB
+// =============================================================
+
+pub type MemMap = HashMap<Vec<u8>, Option<Vec<u8>>>;
+
+pub trait MemDB: Send + Sync {
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn for_each(&self, each: &mut dyn FnMut(&[u8], Option<&[u8]>));
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct MemKV {
+    pub memry: MemMap,
+}
+
+impl MemKV {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.memry.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.memry.is_empty()
+    }
+
+    pub fn put(&mut self, key: Vec<u8>, value: Vec<u8>) {
+        self.memry.insert(key, Some(value));
+    }
+
+    pub fn del(&mut self, key: Vec<u8>) {
+        self.memry.insert(key, None);
+    }
+
+    pub fn get(&self, key: &[u8]) -> Option<&Option<Vec<u8>>> {
+        self.memry.get(key)
+    }
+}
+
+impl MemDB for MemKV {
+    fn len(&self) -> usize {
+        self.memry.len()
+    }
+
+    fn for_each(&self, each: &mut dyn FnMut(&[u8], Option<&[u8]>)) {
+        for (key, value) in &self.memry {
+            each(key, value.as_deref());
+        }
+    }
+}
+
+pub trait DiskDB: Send + Sync {
+    fn read(&self, key: &[u8]) -> Option<Vec<u8>>;
+    fn save(&self, key: &[u8], val: &[u8]);
+    fn remove(&self, key: &[u8]);
+    fn write(&self, memkv: &dyn MemDB) {
+        memkv.for_each(&mut |key, value| match value {
+            Some(value) => self.save(key, value),
+            None => self.remove(key),
+        });
+    }
+    /// Recoverable boundary for consensus-critical persistence.
+    ///
+    /// Existing backends retain an infallible `write` API
+    /// and may report I/O failures by panicking. Callers that can recover use
+    /// this wrapper so a backend panic becomes an ordinary persistence error.
+    fn try_write(&self, memkv: &dyn MemDB) -> Rerr {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.write(memkv);
+        }))
+        .map_err(|_| sys::Error::fault("disk batch write panicked"))
+    }
+    fn for_each(&self, _f: &mut dyn FnMut(&[u8], &[u8])) -> Rerr {
+        Ok(())
+    }
+    /// Clear this database. Backends with a native truncate/drop primitive can
+    /// override this; the default preserves the existing batch-delete logic.
+    fn clear(&self) -> Rerr {
+        let mut batch = MemKV::new();
+        self.for_each(&mut |key, _| batch.del(key.to_vec()))?;
+        if batch.is_empty() {
+            return Ok(());
+        }
+        self.try_write(&batch)
+    }
+}
+
+// =============================================================
+// move_root
+// =============================================================
+
+/// stable root  hash `move_root`  KV  state
+/// state batch write
+pub const PERSIST_KEY_ROOT_HASH: &[u8] = b"_chain.root_hash";
+/// stable root
+pub const PERSIST_KEY_ROOT_HEIGHT: &[u8] = b"_chain.root_height";
+
+/// Lifecycle state of the persisted canonical state.
+///
+/// A fresh state store is empty and has no root markers. A ready store has
+/// both markers decoded successfully. Implementations must reject partial,
+/// malformed, or rootless nonempty state rather than treating it as fresh.
+#[derive(Clone, Debug)]
+pub enum StateStatus {
+    Uninitialized,
+    Ready(ChainStatus),
+}
+
+// =============================================================
+// Store
+// =============================================================
+
+pub trait Store: Send + Sync {
+    fn status(&self) -> ChainStatus;
+
+    /// Distinguish a fresh state store from a valid genesis state at height
+    /// zero. Engine startup owns the resulting initialize/rebuild/replay
+    /// decision.
+    fn state_status(&self) -> sys::Ret<StateStatus>;
+
+    fn state_get(&self, key: &[u8]) -> Option<Vec<u8>>;
+    fn stable_state(&self) -> Arc<dyn StateRead>;
+
+    /// **State** disk — `move_root` / tree root KV (not the block DB).
+    ///
+    /// `store.disk()` is the state database. Block bytes live in `block_store()`;
+    /// VM logs in `log_backend()`.
+    fn disk(&self) -> Arc<dyn DiskDB>;
+
+    /// ——  state KV
+    /// apply state diff  root marker
+    /// move-root `DiskDB::write` rebuild
+    fn block_store(&self) -> Arc<dyn BlockStore>;
+
+    fn log_backend(&self) -> Arc<dyn LogBackend>;
+
+    /// state/root  block bytes
+    /// stable state  state
+    ///
+    /// state KV  BlockStore  state
+    /// column family /  KV  block
+    fn clear_state_keep_blocks(&self) -> Rerr {
+        sys::errf!("store does not support clear_state_keep_blocks")
+    }
+
+    fn block_data(&self, hash: &Hash) -> Option<sys::Bytes> {
+        self.block_store().read_by_hash(hash)
+    }
+    fn block_hash(&self, height: u64) -> Option<Hash> {
+        self.block_store().read_by_height(height).map(|(h, _)| h)
+    }
+    fn block_data_by_height(&self, height: u64) -> Option<(Hash, sys::Bytes)> {
+        self.block_store().read_by_height(height)
+    }
+}

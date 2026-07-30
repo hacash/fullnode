@@ -1,13 +1,9 @@
 [package]
 name = "chain"
-version = "0.1.0"
-edition = "2021"
-resolver = "2"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-sys = { path = "../sys" }
-field = { path = "../field" }
-protocol = { path = "../protocol" }
-hex = "0.4.3"
-dyn-clone = "1.0.17"
-
+sys = { workspace = true }
+field = { workspace = true }
+base = { workspace = true }

@@ -5,23 +5,36 @@ pub struct ValueKey {
     bytes: Vec<u8>
 } 
 
-impl Parse for ValueKey {
-    fn parse(&mut self, buf: &[u8]) -> Ret<usize> {
-        self.bytes = buf.to_vec();
-        Ok(buf.len())
+impl Decode for ValueKey {
+    fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
+        let used = buf.len();
+        Ok((Self { bytes: buf.to_vec() }, used))
     }
 }
 
-impl Serialize for ValueKey {
-    fn serialize(&self) -> Vec<u8> {
+impl Encode for ValueKey {
+    fn encode(&self) -> Vec<u8> {
         self.bytes.clone()
+    }
+    fn encode_to(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.bytes);
     }
     fn size(&self) -> usize {
         self.bytes.len()
     }
 }
 
-impl Field for ValueKey {}
+impl ToJSON for ValueKey {
+    fn to_json_fmt(&self, _fmt: &JSONFormater) -> String {
+        format!("\"0x{}\"", hex::encode(&self.bytes))
+    }
+}
+impl FromJSON for ValueKey {
+    fn from_json(&mut self, json: &str) -> Ret<()> {
+        self.bytes = field::json_decode_binary(json)?;
+        Ok(())
+    }
+}
 
 impl ValueKey {
     pub fn from(bytes: Vec<u8>) -> Self {
@@ -35,8 +48,8 @@ impl ValueKey {
 
 // just for storage
 
-impl Parse for Value {
-    fn parse(&mut self, mut buf: &[u8]) -> Ret<usize>{
+impl Decode for Value {
+    fn decode(mut buf: &[u8]) -> Ret<(Self, usize)>{
         let err = errf!("value buf too short");
         let bl = buf.len();
         if bl < 1 {
@@ -51,10 +64,16 @@ impl Parse for Value {
             <$ty>::from_be_bytes(buf[0..$l].try_into().unwrap())
         }}}
         let sz: usize;
-        (sz, *self) = match ty {
+        let out: Value;
+        (sz, out) = match ty {
             ValueTy::Nil     => (0, Nil),
-            ValueTy::Bool    => (1, Bool(maybe!(buf[0]==0, false, true))),
-            ValueTy::U8      => (1, U8(buf[0])),
+            ValueTy::Bool    => {
+                let b = buf_to_uint!(u8, buf, 1);
+                let value = Value::type_from(ValueTy::Bool, vec![b])
+                    .map_err(|_| "value bool invalid".to_owned())?;
+                (1, value)
+            },
+            ValueTy::U8      => (1, U8(buf_to_uint!(u8, buf, 1))),
             ValueTy::U16     => (2,   U16(buf_to_uint!(u16,  buf,  2))),
             ValueTy::U32     => (4,   U32(buf_to_uint!(u32,  buf,  4))),
             ValueTy::U64     => (8,   U64(buf_to_uint!(u64,  buf,  8))),
@@ -67,28 +86,76 @@ impl Parse for Value {
                 }
                 (2 + l as usize, Bytes(buf[0..l].to_vec()))
             },
-            ValueTy::Address => (field::Address::SIZE, Address(field::Address::from_bytes(&buf)?)),
-            _ => panic!("Compo or slice value item cannot be parse"),
+            ValueTy::Address => {
+                let (adr, sz) = field::Address::decode(buf)?;
+                (sz, Address(adr))
+            },
+            _ => return errf!("Tuple, handle, compo or slice value item cannot be parsed"),
         };
-        Ok(sz + 1)
+        Ok((out, sz + 1))
     }
 }
 
-impl Serialize for Value {
-    fn serialize(&self) -> Vec<u8> {
-        let ty = self.ty_num();
-        let mut buf = self.raw();
-        if self.is_bytes() { // Uint
-            buf = [(buf.len() as u16).to_be_bytes().to_vec(), buf].concat()
+impl Encode for Value {
+    fn encode(&self) -> Vec<u8> {
+        match self {
+            // Runtime-only variants are intentionally excluded from field serialization.
+            // Parse also rejects them, so serialize must keep the same type boundary.
+            Tuple(..) | Handle(..) | Compo(..) => {
+                panic!("Value::serialize does not support Tuple/Handle/Compo")
+            }
+            Bytes(buf) => {
+                assert!(
+                    buf.len() < u16::MAX as usize,
+                    "Value::serialize bytes length {} exceeds u16 field limit",
+                    buf.len()
+                );
+                let mut out = Vec::with_capacity(1 + 2 + buf.len());
+                out.push(self.ty_num());
+                out.extend_from_slice(&(buf.len() as u16).to_be_bytes());
+                out.extend_from_slice(buf);
+                out
+            }
+            _ => {
+                let buf = self.scalar_bytes().expect("non-scalar values are rejected above");
+                let mut out = Vec::with_capacity(1 + buf.len());
+                out.push(self.ty_num());
+                out.extend_from_slice(&buf);
+                out
+            }
         }
-        iter::once(ty).chain(buf).collect()
+    }
+
+    fn encode_to(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.encode());
     }
 
     fn size(&self) -> usize {
-        1 + self.can_get_size().unwrap() as usize // + ty id
+        match self {
+            Tuple(..) | Handle(..) | Compo(..) => {
+                panic!("Value::size does not support Tuple/Handle/Compo")
+            }
+            Bytes(buf) => {
+                assert!(
+                    buf.len() < u16::MAX as usize,
+                    "Value::size bytes length {} exceeds u16 field limit",
+                    buf.len()
+                );
+                1 + 2 + buf.len()
+            }
+            _ => 1 + self.scalar_bytes().expect("non-scalar values are rejected above").len(),
+        }
     }
 }
 
-
-impl Field for Value {}
+impl ToJSON for Value {
+    fn to_json_fmt(&self, _fmt: &JSONFormater) -> String {
+        Value::to_json(self)
+    }
+}
+impl FromJSON for Value {
+    fn from_json(&mut self, _json: &str) -> Ret<()> {
+        errf!("Value FromJSON not implemented")
+    }
+}
 

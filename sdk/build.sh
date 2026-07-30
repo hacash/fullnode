@@ -1,42 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
 
-## Settings
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JSTARGET="${1:-nodejs}"
+PROFILE="${WASM_PROFILE:-wasm-release}"
 
-JSTARGET=nodejs
-# echo "$1, $JSTARGET"
-if [ -n "$1" ]; then
-    JSTARGET=$1
+SDK_NAME="hacashsdk"
+LIB_NAME="sdk"
+RUST_TARGET="wasm32-unknown-unknown"
+WASM_BINDGEN_VERSION="0.2.100"
+
+if [ -n "${CARGO_TARGET_DIR:-}" ]; then
+    TARGET_DIR="$CARGO_TARGET_DIR"
+else
+    TARGET_DIR="$(cargo metadata --manifest-path "$SCRIPT_DIR/Cargo.toml" --format-version 1 --no-deps \
+        | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p' | head -n 1)"
 fi
-# echo "$1, $JSTARGET"
 
-SDKNAME=hacashsdk
-LIBNAME=sdk
-TARGET=wasm32-unknown-unknown
-BINARY=target/$TARGET/release/$LIBNAME.wasm
-BINARY2=target/$TARGET/release/$SDKNAME.wasm
+BINARY="$TARGET_DIR/$RUST_TARGET/$PROFILE/$LIB_NAME.wasm"
+DIST_DIR="$SCRIPT_DIR/dist"
 
+if ! rustup target list --installed | grep -q "^$RUST_TARGET$"; then
+    rustup target add "$RUST_TARGET"
+fi
 
-## Build WASM
-RUSTFLAGS="$RUSTFLAGS -A dead_code -A unused_imports -A unused_variables" \
-cargo build --target $TARGET --release --lib
+if ! command -v wasm-bindgen >/dev/null 2>&1; then
+    echo "wasm-bindgen CLI not found. Install with: cargo install -f wasm-bindgen-cli --version $WASM_BINDGEN_VERSION"
+    exit 1
+fi
 
-rm -f $BINARY2 && cp $BINARY $BINARY2
+WASM_BINDGEN_CLI_VERSION="$(wasm-bindgen --version | awk '{print $2}')"
+if [ "$WASM_BINDGEN_CLI_VERSION" != "$WASM_BINDGEN_VERSION" ]; then
+    echo "wasm-bindgen CLI version mismatch: expected $WASM_BINDGEN_VERSION, got $WASM_BINDGEN_CLI_VERSION"
+    echo "Install with: cargo install -f wasm-bindgen-cli --version $WASM_BINDGEN_VERSION"
+    exit 1
+fi
 
-## Reduce size (remove panic exception handling, etc.)
-# wasm-snip --snip-rust-fmt-code \
-#           --snip-rust-panicking-code \
-#           -o $BINARY $BINARY
+cargo build \
+    --manifest-path "$SCRIPT_DIR/Cargo.toml" \
+    --target "$RUST_TARGET" \
+    --profile "$PROFILE" \
+    --lib
 
-## Reduce size (remove all debugging information)
-# wasm-strip $BINARY
+mkdir -p "$DIST_DIR"
+if [ ! -f "$BINARY" ]; then
+    echo "build output not found: $BINARY"
+    exit 1
+fi
 
-## Further reduce size
-mkdir -p dist
-# wasm-opt -o dist/$SDKNAME.wasm -Oz $BINARY
+wasm-bindgen "$BINARY" \
+    --out-name "$SDK_NAME" \
+    --out-dir "$DIST_DIR" \
+    --target "$JSTARGET" \
+    --remove-name-section \
+    --remove-producers-section
 
-## 
-# wasm-bindgen dist/$SDKNAME.wasm --out-dir ./dist/ --target $JSTARGET 
-wasm-bindgen $BINARY2 --out-dir ./dist/ --target $JSTARGET
+BG_WASM="$DIST_DIR/${SDK_NAME}_bg.wasm"
+if command -v wasm-opt >/dev/null 2>&1; then
+    TMP_WASM="$(mktemp)"
+    wasm-opt -Oz --all-features --strip-debug --strip-dwarf -o "$TMP_WASM" "$BG_WASM"
+    mv "$TMP_WASM" "$BG_WASM"
+fi
 
-
-
-
+RAW_SIZE="$(wc -c < "$BG_WASM" | tr -d ' ')"
+GZIP_SIZE="$(gzip -c "$BG_WASM" | wc -c | tr -d ' ')"
+RAW_MB="$(awk -v bytes="$RAW_SIZE" 'BEGIN { printf "%.3f", bytes / 1024 / 1024 }')"
+GZIP_MB="$(awk -v bytes="$GZIP_SIZE" 'BEGIN { printf "%.3f", bytes / 1024 / 1024 }')"
+echo "[SDK wasm] target=$JSTARGET profile=$PROFILE raw=${RAW_MB}MB gzip=${GZIP_MB}MB"

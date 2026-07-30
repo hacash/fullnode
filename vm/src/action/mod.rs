@@ -1,49 +1,70 @@
-use std::any::*;
+//! VM top-level transaction actions.
+//!
+//! Implements `base::Action` for the four consensus-relevant VM entry actions:
+//! - `ContractDeploy`   (kind 40)
+//! - `ContractUpdate`   (kind 41)
+//! - `ContractMainCall` (kind 44)
+//! - `P2SHScriptProve`  (kind 46)
+//!
+//! These are top-level transaction actions (exactly like `HacToTrs` / `DiaInscEdit`),
+//! NOT VM-internal opcodes. The VM-internal host calls (`env`/`view`/`EXTACTION`) were
+//! already migrated as bytecode opcodes elsewhere.
+//!
+//! # Params
+//! Hacash VM execution params are read from `Registry.vm_params()`
+//! (selected and injected by the application). Fee floors use
+//! `VmExecutionParams::effective_fee_purity`.
+//!
+//! # Registration
+//! `crate::setup::register` calls `register_actions` to install all four action codecs.
 
-use sys::*;
-use field::*;
-use field::interface::*;
-use protocol::*;
-use protocol::interface::*;
-use protocol::state::*;
-use protocol::action::*;
+pub(crate) mod contract;
+pub(crate) mod maincall;
+pub(crate) mod p2sh;
+pub(crate) mod p2sh_tool;
 
-use super::*;
-use super::rt::*;
-// use super::space::*;
-// use super::util::*;
+pub use contract::{
+    ContractDeploy, ContractStoreAnalysis, ContractUpdate, ContractUpdateAnalysis,
+    analyze_contract_store, analyze_contract_update, contract_protocol_cost_min,
+};
+pub use maincall::ContractMainCall;
+pub use p2sh::{P2SHScriptProve, P2shEntryPayload, ScriptmhCalc, UnlockScript};
+pub use p2sh_tool::{P2shLeaf, P2shLeafSpec, P2shMerkleTree, P2shTool, P2shTreeCalc};
 
-// 
+use base::{ActionRef, RegistryWriter};
+use sys::Ret;
 
-// pub fn try_create(_kind: u16, _buf: &[u8]) -> Ret<Option<(Box<dyn Action>, usize)>> {
-//     Ok(None)
-// }
+use contract::{create_contract_deploy, create_contract_update};
+use maincall::create_contract_main_call;
+use p2sh::create_p2sh_script_prove;
 
-
-include!{"blob.rs"}
-include!{"contract.rs"}
-include!{"maincall.rs"}
-include!{"envfunc.rs"}
-include!{"p2sh.rs"}
-
-
-
-
-/*
-    action register
-*/
-action_register! {
-    
-    TxMessage            // 120
-    TxBlob               // 121
-    ContractDeploy       // 122
-    ContractUpdate       // 123
-    ContractMainCall     // 124
-
-    EnvHeight           
-    EnvMainAddr        
-    
-    FuncCheckSign  
-    FuncBalance      
+/// Register all four VM action codecs. Mirrors `mint::setup::register`'s
+/// `register_action` pattern. Idempotent per-kind (Registry rejects duplicate kinds).
+pub fn register_actions(reg: &mut dyn RegistryWriter) -> Ret<()> {
+    reg.register_action(
+        &[
+            ContractDeploy::KIND,
+            ContractUpdate::KIND,
+            ContractMainCall::KIND,
+        ],
+        create_contract_action,
+    )?;
+    reg.register_action(&[P2SHScriptProve::KIND], create_p2sh_script_prove)?;
+    Ok(())
 }
 
+/// Decoder dispatch for `ContractDeploy`/`ContractUpdate`/`ContractMainCall`.
+/// `P2SHScriptProve` uses its own `create_p2sh_script_prove` (registered separately)
+/// because it shares no decode path with the contract family.
+fn create_contract_action(
+    _reg: &dyn base::BinaryCodecs,
+    kind: u16,
+    buf: &[u8],
+) -> Ret<(ActionRef, usize)> {
+    match kind {
+        ContractDeploy::KIND => create_contract_deploy(_reg, kind, buf),
+        ContractUpdate::KIND => create_contract_update(_reg, kind, buf),
+        ContractMainCall::KIND => create_contract_main_call(_reg, kind, buf),
+        _ => sys::decodef!("create_contract_action: unknown kind {}", kind),
+    }
+}

@@ -1,101 +1,87 @@
-use native::NativeCall;
-
-
-
-macro_rules! print_sub {
-    ($suo:expr, $subx:expr, $tab:expr, $desc:ident) => {
-        match $subx.subs() {
-            0 => $subx.print($suo, 0, $desc),
-            _ => { let mut buf = s!("\n") + &$subx.print($suo, $tab+1, $desc);
-                if $desc {
-                    buf += &(s!("\n") + &$suo.repeat($tab));
-                }
-                buf
-            }
-        }
-    };
-}
-
-macro_rules! print_sub_newline {
-    ($suo:expr, $subx:expr, $tab:expr, $desc:ident) => {{
-        let sub = $subx.print($suo, $tab+1, $desc);
-        let emp = sub.replace(" ", "").replace("\n", "");
-        match emp.len() > 0 {
-            true => {
-                let mut buf = s!("\n") + &sub;
-                if $desc {
-                    buf += &(s!("\n") + &$suo.repeat($tab));
-                }
-                buf
-            },
-            false => emp,
-        }
-        
-    }}
-}
-
-macro_rules! print_sub_inline {
-    ($suo:expr, $subx:expr, $desc:ident) => {{
-        let substr = print_sub!($suo, $subx, 0, $desc);
-        match substr.contains('\n') {
-            true => substr[($suo.len()+1)..substr.len()-1].to_owned(),
-            false => substr,
-        }
-    }};
-}
-
-
-macro_rules! print_subx_suby_op {
-    ($suo:expr, $buf:ident, $self:ident, $desc:ident, $op:expr) => {
-        {
-            let mut subx = print_sub_inline!($suo, $self.subx, $desc);
-            let mut suby = print_sub_inline!($suo, $self.suby, $desc);
-            // check level
-            let clv = match OpTy::from_bytecode($self.inst) {
-                Ok(t) => t.level(),
-                _ => 0,
-            };
-            let llv = $self.subx.level();
-            let rlv = $self.suby.level();
-            if clv>0&&llv>0 && clv>llv {
-                subx = format!("({})", &subx);
-            }
-            if clv>0&&rlv>0 && clv>rlv {
-                suby = format!("({})", &suby);
-            }
-            let res = format!("{} {} {}", &subx, $op, &suby);
-            $buf.push_str(&res);
-        }
-    };
-}
-
-
+use crate::rt::Bytecode;
 
 /*************************************/
-
-
 
 #[derive(Debug, Clone)]
 pub struct IRNodeEmpty {}
 
 impl IRNode for IRNodeEmpty {
-    fn as_any(&self) -> &dyn Any { self }
-    fn hasretval(&self) -> bool { false }
-    fn bytecode(&self) -> u8 { 0 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> { Ok(vec![]) }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn hasretval(&self) -> bool {
+        false
+    }
+    fn bytecode(&self) -> u8 {
+        0
+    }
+    fn codegen(&self) -> VmrtRes<Vec<u8>> {
+        Ok(vec![])
+    }
+    fn codegen_into(&self, _buf: &mut Vec<u8>) -> VmrtRes<()> {
+        Ok(())
+    }
+    fn is_serialization_elided(&self) -> bool {
+        true
+    }
+    fn print(&self) -> String {
+        String::new()
+    }
 }
 
+#[derive(Debug, Clone)]
+pub struct IRNodeTopStackValue {}
+
+impl IRNode for IRNodeTopStackValue {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn hasretval(&self) -> bool {
+        true
+    }
+
+    // This node is an internal, codegen-only placeholder that represents: “a value is already on the top of the stack”. It must never be serialized into ircode; if it ever leaks into serialization, it would create ambiguous/shifted IR streams.
+    fn bytecode(&self) -> u8 {
+        0
+    }
+
+    fn codegen(&self) -> VmrtRes<Vec<u8>> {
+        Ok(vec![])
+    }
+    fn codegen_into(&self, _buf: &mut Vec<u8>) -> VmrtRes<()> {
+        Ok(())
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        panic!("IRNodeTopStackValue is codegen-only and cannot be serialized")
+    }
+
+    fn print(&self) -> String {
+        "<TopStackValue>".to_string()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct IRNodeText {
-    pub text: String
+    pub text: String,
 }
 
 impl IRNode for IRNodeText {
-    fn as_any(&self) -> &dyn Any { self }
-    fn hasretval(&self) -> bool { false }
-    fn bytecode(&self) -> u8 { 0 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> { Ok(vec![]) }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn hasretval(&self) -> bool {
+        false
+    }
+    fn bytecode(&self) -> u8 {
+        0
+    }
+    fn codegen(&self) -> VmrtRes<Vec<u8>> {
+        Ok(vec![])
+    }
+    fn codegen_into(&self, _buf: &mut Vec<u8>) -> VmrtRes<()> {
+        Ok(())
+    }
 }
 
 impl IRNodeText {
@@ -104,57 +90,69 @@ impl IRNodeText {
     }
 }
 
-
-
 /*************************************/
-
 
 #[derive(Debug, Clone)]
 pub struct IRNodeLeaf {
-    pub hrtv: bool, 
+    pub hrtv: bool,
     pub inst: Bytecode,
     pub text: String,
 }
 
 impl IRNode for IRNodeLeaf {
-    fn as_any(&self) -> &dyn Any { self }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
-    fn serialize(&self) -> Vec<u8> { vec![self.inst as u8] }
-    fn print(&self, sou: &str, tab: usize, desc: bool) -> String {
-        let mut buf = String::from(sou.repeat(tab));
-        if desc {
-            let meta = self.inst.metadata();
-            match self.inst {
-                NOP => {}, 
-                GET3 => buf.push_str("$3"),
-                GET2 => buf.push_str("$2"),
-                GET1 => buf.push_str("$1"),
-                GET0 => buf.push_str("$0"),
-                P3 => buf.push('3'),
-                P2 => buf.push('2'),
-                P1 => buf.push('1'),
-                P0 => buf.push('0'),
-                PNBUF => buf.push_str("\"\""),
-                _ => {
-                    buf.push_str(meta.intro);
-                    buf.push_str("()");
-                }
-            };
-        } else {
-            buf.push_str(&format!("{:?}", self.inst));
-        }
-        buf
+    fn as_any(&self) -> &dyn Any {
+        self
     }
-
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        // IRBREAK / IRCONTINUE are NEVER emitted directly. The surrounding
+        // IRWHILE installs a `LoopPatch` sink (see compile.rs) that
+        // intercepts these two opcodes through `codegen_into_with_patch` and
+        // turns them into real JMPSL instructions at loop close. If we get
+        // here for IRBREAK/IRCONTINUE it means the parser/builder allowed
+        // them outside a while body; fail loudly instead of poisoning the
+        // bytecode stream with an unmapped IR opcode.
+        if matches!(self.inst, Bytecode::IRBREAK | Bytecode::IRCONTINUE) {
+            return itr_err_fmt!(
+                CompileError,
+                "{:?} appeared outside a while-loop body",
+                self.inst
+            );
+        }
+        buf.push(self.bytecode());
+        Ok(())
+    }
+    fn serialize(&self) -> Vec<u8> {
+        // Serialized IR keeps IRBREAK/IRCONTINUE as 1-byte leaf nodes. They
+        // are lowered to JMPSL during while-loop codegen, never appear in
+        // the runtime bytecode stream, and round-trip cleanly through
+        // serialize → parse → serialize.
+        vec![self.inst as u8]
+    }
+    fn print(&self) -> String {
+        format!("{:?}", self.inst)
+    }
 }
 
 impl IRNodeLeaf {
     pub fn nop() -> Self {
-        Self { hrtv: false, inst: Bytecode::NOP, text: "".to_owned() }
+        Self {
+            hrtv: false,
+            inst: Bytecode::NOP,
+            text: "".to_owned(),
+        }
     }
     pub fn notext(hrtv: bool, inst: Bytecode) -> Self {
-        Self { hrtv, inst, text: "".to_owned() }
+        Self {
+            hrtv,
+            inst,
+            text: "".to_owned(),
+        }
     }
     pub fn nop_box() -> Box<dyn IRNode> {
         Box::new(Self::nop())
@@ -164,50 +162,37 @@ impl IRNodeLeaf {
     }
 }
 
-
 /*************************************/
-
 
 #[derive(Debug, Clone)]
 pub struct IRNodeParam1 {
-    pub hrtv: bool, 
+    pub hrtv: bool,
     pub inst: Bytecode,
     pub para: u8,
     pub text: String,
 }
 
 impl IRNode for IRNodeParam1 {
-    fn as_any(&self) -> &dyn Any { self }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> {
-        iter::once::<u8>(self.bytecode())
-        .chain([self.para])
-        .collect::<Vec<u8>>().into_vmrt()
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        buf.push(self.bytecode());
+        buf.push(self.para);
+        Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
-        self.codegen().unwrap()
+        // IR serialized form is prefix-coded: [opcode][param...]
+        vec![self.bytecode(), self.para]
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let mut buf = String::from(suo.repeat(tab));
-        if desc {
-            let meta = self.inst.metadata();
-            match self.inst {
-                PU8 =>  buf.push_str(&format!("{}", self.para)),
-                GET => buf.push_str(&format!("${}", self.para)),
-                EXTENV => {
-                    let ary = CALL_EXTEND_ENV_DEFS;
-                    let f = search_ext_name_by_id(self.para, &ary);
-                    buf.push_str(&format!("{}()", f));
-                },
-                _ => {
-                    buf.push_str(&format!("{}({})", meta.intro, self.para));
-                }
-            };
-        } else {
-            buf.push_str(&format!("{:?} {}", self.inst, self.para));
-        }
-        buf
+    fn print(&self) -> String {
+        format!("{:?} {}", self.inst, self.para)
     }
 }
 
@@ -223,178 +208,112 @@ impl IRNodeParam1 {
     }
 }
 
-
 #[derive(Debug, Clone)]
 pub struct IRNodeParam2 {
-    pub hrtv: bool, 
+    pub hrtv: bool,
     pub inst: Bytecode,
     pub para: [u8; 2],
 }
 
 impl IRNode for IRNodeParam2 {
-    fn as_any(&self) -> &dyn Any { self }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> {
-        iter::once::<u8>(self.bytecode())
-        .chain(self.para)
-        .collect::<Vec<u8>>().into_vmrt()
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        buf.push(self.bytecode());
+        buf.extend_from_slice(&self.para);
+        Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
-        self.codegen().unwrap()
+        // IR serialized form is prefix-coded: [opcode][param...]
+        iter::once(self.bytecode()).chain(self.para).collect()
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let mut buf = String::from(suo.repeat(tab));
-        if desc {
-            let meta = self.inst.metadata();
-            match self.inst {
-                PU16 => buf.push_str(&format!("{}", u16::from_be_bytes(self.para))) ,
-                _ => {
-                    let para = hex::encode(self.para);
-                    buf.push_str(&format!("{}(0x{})", meta.intro, para));
-                }
-            };
-        } else {
-            buf.push_str(&format!("{:?} {} {}", self.inst, self.para[0], self.para[1]));
-        }
-        buf
+    fn print(&self) -> String {
+        format!("{:?} {} {}", self.inst, self.para[0], self.para[1])
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct IRNodeParams {
-    pub hrtv: bool, 
+    pub hrtv: bool,
     pub inst: Bytecode,
     pub para: Vec<u8>,
 }
 
 impl IRNode for IRNodeParams {
-    fn as_any(&self) -> &dyn Any { self }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> {
-        iter::once::<u8>(self.bytecode())
-        .chain(self.para.clone())
-        .collect::<Vec<u8>>().into_vmrt()
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        buf.push(self.bytecode());
+        buf.extend_from_slice(&self.para);
+        Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
-        self.codegen().unwrap()
+        // IR serialized form is prefix-coded: [opcode][param...]
+        iter::once(self.bytecode())
+            .chain(self.para.iter().copied())
+            .collect()
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let mut buf = String::from(suo.repeat(tab));
+    fn print(&self) -> String {
         let parastr = hex::encode(&self.para);
-        if desc {
-            let meta = self.inst.metadata();
-            match self.inst {
-                PBUF | PBUFL => print_data_bytes(self, &mut buf),
-                CALLCODE => {
-                    let i = self.para[0];
-                    let f = hex::encode(&self.para[1..]);
-                    buf.push_str(&format!("{} <{}>::<{}>", meta.intro, i, f));
-                }
-                _ => {
-                    buf.push_str(&format!("{}(0x{})", meta.intro, parastr));
-                }
-            }
-        } else {
-            buf.push_str(&format!("{:?} 0x{}", self.inst, parastr));
-        }
-        buf
+        format!("{:?} 0x{}", self.inst, parastr)
     }
 }
-
-fn print_data_bytes(this: &IRNodeParams, buf: &mut String) {
-    let l = maybe!(PBUF==this.inst, 1, 2) as usize;
-    let data = this.para[l..].to_vec();
-    if let Some(s) = ascii_show_string(&data) {
-        buf.push_str(&format!("\"{}\"", literals(s)));
-        return
-    }
-    // check address
-    if data.len() == Address::SIZE {
-        let addr = Address::must_vec(data.clone());
-        if let Ok(..) = addr.check_version() {
-            buf.push_str(&format!("{}", addr.readable()));
-            return 
-        }
-    }
-    // normal data
-    buf.push_str(&format!("0x{}", hex::encode(&data)));
-}
-
-
-
-
-
-
 
 #[derive(Debug, Clone)]
 pub struct IRNodeParamsSingle {
-    pub hrtv: bool, 
+    pub hrtv: bool,
     pub inst: Bytecode,
     pub para: Vec<u8>,
     pub subx: Box<dyn IRNode>,
 }
 
 impl IRNode for IRNodeParamsSingle {
-    fn as_any(&self) -> &dyn Any { self }
-    fn subs(&self) -> usize { 1 }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>>{
-        iter::empty::<u8>()
-        .chain(self.subx.codegen()?)
-        .chain([self.bytecode()])
-        .chain(self.para.clone())
-        .collect::<Vec<u8>>().into_vmrt()
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        1
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        self.subx.codegen_into(buf)?;
+        buf.push(self.bytecode());
+        buf.extend_from_slice(&self.para);
+        Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
-        .chain(self.para.clone())
-        .chain(self.subx.serialize())
-        .collect()
+            .chain(self.para.clone())
+            .chain(self.subx.serialize())
+            .collect()
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let mut buf = String::from(suo.repeat(tab));
+    fn print(&self) -> String {
         let parastr = hex::encode(&self.para);
-        if desc {
-            let meta = self.inst.metadata();
-            let substr = print_sub_inline!(suo, self.subx, desc);
-            match self.inst {
-                CALL => {
-                    let lx = Address::SIZE;
-                    let adr = Address::must_vec(self.para[0..lx].to_vec());
-                    let fun = hex::encode(&self.para[lx..]);
-                    let ss = substr.replace(" ", "").replace("\n", ", ");
-                    buf.push_str(&format!("{}.<{}>({})", adr.readable(), fun, ss));
-                }
-                CALLINR => {
-                    let f = hex::encode(&self.para);
-                    let ss = substr.replace(" ", "").replace("\n", ", ");
-                    buf.push_str(&format!("self.<{}>({})", f, ss));
-                }
-                CALLLIB | CALLSTATIC => {
-                    let clt = maybe!(CALLLIB==self.inst, ":", "::");
-                    let i = self.para[0];
-                    let f = hex::encode(&self.para[1..]);
-                    let ss = substr.replace(" ", "").replace("\n", ", ");
-                    buf.push_str(&format!("<{}>{}<{}>({})", i, clt, f, ss));
-                }
-                _ => {
-                    buf.push_str(&format!("{}(0x{}, {})", meta.intro, parastr, substr));
-                }
-            }
-        } else {
-            let substr = print_sub!(suo, self.subx, tab, desc);
-            buf.push_str(&format!("{:?} 0x{} {}", self.inst, parastr, substr));
-        }
-        buf
+        let substr = self.subx.print();
+        format!("{:?} 0x{} {}", self.inst, parastr, substr)
     }
 }
 
-
 /*************************************/
-
 
 #[derive(Debug, Clone)]
 pub struct IRNodeWrapOne {
@@ -415,180 +334,123 @@ impl std::ops::DerefMut for IRNodeWrapOne {
 }
 
 impl IRNode for IRNodeWrapOne {
-    fn as_any(&self) -> &dyn Any { self }
-    fn subs(&self) -> usize { 0 }
-    fn hasretval(&self) -> bool { self.node.hasretval() }
-    fn bytecode(&self) -> u8 { self.node.bytecode() }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> { self.node.codegen() }
-    fn serialize(&self) -> Vec<u8> { self.node.serialize() }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let res = self.node.print(suo, tab, desc);
-        maybe!(desc, format!("({})", res), res)
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        1
+    }
+    fn hasretval(&self) -> bool {
+        self.node.hasretval()
+    }
+    fn bytecode(&self) -> u8 {
+        self.node.bytecode()
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        self.node.codegen_into(buf)
+    }
+    fn serialize(&self) -> Vec<u8> {
+        self.node.serialize()
+    }
+    fn print(&self) -> String {
+        format!("({})", self.node.print())
     }
 }
 
 /*************************************/
 
-
-
 #[derive(Debug, Clone)]
 pub struct IRNodeSingle {
-    pub hrtv: bool, 
+    pub hrtv: bool,
     pub inst: Bytecode,
     pub subx: Box<dyn IRNode>,
 }
 
 impl IRNode for IRNodeSingle {
-    fn as_any(&self) -> &dyn Any { self }
-    fn subs(&self) -> usize { 1 }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> {
-        iter::empty::<u8>()
-        .chain(self.subx.codegen()?)
-        .chain([self.bytecode()])
-        .collect::<Vec<u8>>().into_vmrt()
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        1
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
     }
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
-        .chain(self.subx.serialize())
-        .collect()
+            .chain(self.subx.serialize())
+            .collect()
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let mut buf = String::from(suo.repeat(tab));
-        if desc {
-            let meta = self.inst.metadata();
-            match self.inst {
-                TNIL | TLIST | TMAP => {
-                    let substr = print_sub_inline!(suo, self.subx, desc);
-                    match self.inst {
-                        TNIL  => buf.push_str(&format!("{} is nil", substr)),
-                        TLIST => buf.push_str(&format!("{} is list", substr)),
-                        TMAP  => buf.push_str(&format!("{} is map", substr)),
-                        _ => never!()
-                    }
-                }
-                CU8 | CU16 | CU32 | CU64 | CU128 | NOT | RET | ERR | AST => {
-                    let substr = print_sub_inline!(suo, self.subx, desc);
-                    match self.inst {
-                        CU8   => buf.push_str(&format!("{} as u8", substr)),
-                        CU16  => buf.push_str(&format!("{} as u16", substr)),
-                        CU32  => buf.push_str(&format!("{} as u32", substr)),
-                        CU64  => buf.push_str(&format!("{} as u64", substr)),
-                        CU128 => buf.push_str(&format!("{} as u128", substr)),
-                        NOT   => buf.push_str(&format!("! {}", substr)),
-                        RET | ERR | AST => buf.push_str(&format!("{} {}", meta.intro, substr)),
-                        _ => never!()
-                    };
-                },
-                _ => {
-                    let substr = print_sub_inline!(suo, self.subx, desc);
-                    buf.push_str(&format!("{}({})", meta.intro, substr));
-                }
-            };
-        } else {
-            let substr = print_sub!(suo, self.subx, tab, desc);
-            buf.push_str(&format!("{:?} {}", self.inst, substr));
-        }
-        buf
+    fn print(&self) -> String {
+        let substr = self.subx.print();
+        format!("{:?} {}", self.inst, substr)
     }
-
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        self.subx.codegen_into(buf)?;
+        buf.push(self.bytecode());
+        Ok(())
+    }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct IRNodeDouble {
-    pub hrtv: bool, 
+    pub hrtv: bool,
     pub inst: Bytecode,
     pub subx: Box<dyn IRNode>,
     pub suby: Box<dyn IRNode>,
 }
 
 impl IRNode for IRNodeDouble {
-    fn as_any(&self) -> &dyn Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
-    fn subs(&self) -> usize { 2 }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        2
+    }
     fn level(&self) -> u8 {
         match OpTy::from_bytecode(self.inst) {
             Ok(t) => t.level(),
             _ => 0,
         }
     }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> {
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         if let Some(c) = compile_double(self.inst, &self.subx, &self.suby)? {
-            return Ok(c)
+            buf.extend(c);
+            return Ok(());
         }
-        iter::empty::<u8>()
-        .chain(self.subx.codegen()?)
-        .chain(self.suby.codegen()?)
-        .chain([self.bytecode()])
-        .collect::<Vec<u8>>().into_vmrt()
+        self.subx.codegen_into(buf)?;
+        self.suby.codegen_into(buf)?;
+        buf.push(self.bytecode());
+        Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
-        .chain(self.subx.serialize())
-        .chain(self.suby.serialize())
-        .collect::<Vec<u8>>()
+            .chain(self.subx.serialize())
+            .chain(self.suby.serialize())
+            .collect::<Vec<u8>>()
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let mut buf = String::from(suo.repeat(tab));
-        if desc {
-            let meta = self.inst.metadata();
-            match self.inst {
-                ADD 
-                | SUB 
-                | MUL 
-                | DIV 
-                | POW 
-                | MOD 
-                | GT  
-                | LT  
-                | GE  
-                | LE  
-                | AND 
-                | OR  
-                | EQ  
-                | NEQ 
-                | BAND
-                | BOR 
-                | BXOR
-                | BSHL
-                | BSHR
-                | CAT 
-                => {
-                    let sg = OpTy::from_bytecode(self.inst).unwrap().symbol();
-                    print_subx_suby_op!(suo, buf, self, desc, sg)
-                }
-                IRWHILE => {
-                    let subxstr = print_sub_inline!(suo, self.subx, desc);
-                    let subystr = print_sub!(suo, self.suby, tab, desc);
-                    buf.push_str(&format!("while {} {{{}}}", subxstr, subystr))
-                }
-                ITEMGET => {
-                    let subxstr = print_sub!(suo, self.subx, tab, desc);
-                    let subystr = print_sub_inline!(suo, self.suby, desc);
-                    buf.push_str(&format!("{}[{}]", subxstr, subystr))
-                }
-                _ => {
-                    let subxstr = print_sub!(suo, self.subx, tab, desc);
-                    let subystr = print_sub!(suo, self.suby, tab, desc);
-                    buf.push_str(&format!("{}({}, {})", meta.intro, subxstr, subystr))
-                }
-            }
-        } else {
-            let subxstr = print_sub!(suo, self.subx, tab, desc);
-            let subystr = print_sub!(suo, self.suby, tab, desc);
-            buf.push_str(&format!("{:?} {} {}", self.inst, subxstr, subystr));
-        }
-        buf
+    fn print(&self) -> String {
+        let subxstr = self.subx.print();
+        let subystr = self.suby.print();
+        format!("{:?} {} {}", self.inst, subxstr, subystr)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct IRNodeTriple {
-    pub hrtv: bool, 
+    pub hrtv: bool,
     pub inst: Bytecode,
     pub subx: Box<dyn IRNode>,
     pub suby: Box<dyn IRNode>,
@@ -596,201 +458,565 @@ pub struct IRNodeTriple {
 }
 
 impl IRNode for IRNodeTriple {
-    fn as_any(&self) -> &dyn Any { self }
-    fn subs(&self) -> usize { 3 }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        3
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         if let Some(c) = compile_triple(self.inst, &self.subx, &self.suby, &self.subz)? {
-            return Ok(c)
+            buf.extend(c);
+            return Ok(());
         }
-        iter::empty::<u8>()
-        .chain(self.subx.codegen()?)
-        .chain(self.suby.codegen()?)
-        .chain(self.subz.codegen()?)
-        .chain([self.bytecode()])
-        .collect::<Vec<u8>>().into_vmrt()
+        self.subx.codegen_into(buf)?;
+        self.suby.codegen_into(buf)?;
+        self.subz.codegen_into(buf)?;
+        buf.push(self.bytecode());
+        Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
-        .chain(self.subx.serialize())
-        .chain(self.suby.serialize())
-        .chain(self.subz.serialize())
-        .collect()
+            .chain(self.subx.serialize())
+            .chain(self.suby.serialize())
+            .chain(self.subz.serialize())
+            .collect()
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let mut buf = String::from(suo.repeat(tab));
-        if desc {
-            let meta = self.inst.metadata();
-            match self.inst {
-                IRIF => {
-                    let subxstr = &print_sub_inline!(suo, self.subx, desc);
-                    let subystr = print_sub_newline!(suo, self.suby, tab, desc);
-                    let subzstr = print_sub_newline!(suo, self.subz, tab, desc);
-                    buf.push_str(&format!("if {} {{{}}}", subxstr, subystr));
-                    if subzstr.len() > 0 {
-                        buf.push_str(&format!(" else {{{}}}", subzstr));
-                    }
-                }
-                _ => {
-                    let subxstr = print_sub!(suo, self.subx, tab, desc);
-                    let subystr = print_sub!(suo, self.suby, tab, desc);
-                    let subzstr = print_sub!(suo, self.subz, tab, desc);
-                    buf.push_str(&format!("{}({}, {}, {})", meta.intro, subxstr, subystr, subzstr));
-                }
-            }
-        } else {
-            let subxstr = print_sub!(suo, self.subx, tab, desc);
-            let subystr = print_sub!(suo, self.suby, tab, desc);
-            let subzstr = print_sub!(suo, self.subz, tab, desc);
-            buf.push_str(&format!("{:?} {} {} {}", self.inst, subxstr, subystr, subzstr));
-        }
-        buf
+    fn print(&self) -> String {
+        let subxstr = self.subx.print();
+        let subystr = self.suby.print();
+        let subzstr = self.subz.print();
+        format!("{:?} {} {} {}", self.inst, subxstr, subystr, subzstr)
     }
 }
 
+/*************************************/
+
+#[derive(Debug, Clone)]
+pub struct IRNodeQuad {
+    pub hrtv: bool,
+    pub inst: Bytecode,
+    pub subx: Box<dyn IRNode>,
+    pub suby: Box<dyn IRNode>,
+    pub subz: Box<dyn IRNode>,
+    pub subw: Box<dyn IRNode>,
+}
+
+impl IRNode for IRNodeQuad {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        4
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        self.subx.codegen_into(buf)?;
+        self.suby.codegen_into(buf)?;
+        self.subz.codegen_into(buf)?;
+        self.subw.codegen_into(buf)?;
+        buf.push(self.bytecode());
+        Ok(())
+    }
+    fn serialize(&self) -> Vec<u8> {
+        iter::once(self.bytecode())
+            .chain(self.subx.serialize())
+            .chain(self.suby.serialize())
+            .chain(self.subz.serialize())
+            .chain(self.subw.serialize())
+            .collect()
+    }
+    fn print(&self) -> String {
+        let subxstr = self.subx.print();
+        let subystr = self.suby.print();
+        let subzstr = self.subz.print();
+        let subwstr = self.subw.print();
+        format!(
+            "{:?} {} {} {} {}",
+            self.inst, subxstr, subystr, subzstr, subwstr
+        )
+    }
+}
+
+/*************************************/
+
+#[derive(Debug, Clone)]
+pub struct IRNodeQuint {
+    pub hrtv: bool,
+    pub inst: Bytecode,
+    pub suba: Box<dyn IRNode>,
+    pub subb: Box<dyn IRNode>,
+    pub subc: Box<dyn IRNode>,
+    pub subd: Box<dyn IRNode>,
+    pub sube: Box<dyn IRNode>,
+}
+
+impl IRNode for IRNodeQuint {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        5
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        self.suba.codegen_into(buf)?;
+        self.subb.codegen_into(buf)?;
+        self.subc.codegen_into(buf)?;
+        self.subd.codegen_into(buf)?;
+        self.sube.codegen_into(buf)?;
+        buf.push(self.bytecode());
+        Ok(())
+    }
+    fn serialize(&self) -> Vec<u8> {
+        iter::once(self.bytecode())
+            .chain(self.suba.serialize())
+            .chain(self.subb.serialize())
+            .chain(self.subc.serialize())
+            .chain(self.subd.serialize())
+            .chain(self.sube.serialize())
+            .collect()
+    }
+    fn print(&self) -> String {
+        let substrs = [
+            self.suba.print(),
+            self.subb.print(),
+            self.subc.print(),
+            self.subd.print(),
+            self.sube.print(),
+        ];
+        format!(
+            "{:?} {} {} {} {} {}",
+            self.inst, substrs[0], substrs[1], substrs[2], substrs[3], substrs[4]
+        )
+    }
+}
 
 /*************************************/
 
 #[derive(Debug, Clone)]
 pub struct IRNodeParam1Single {
-    pub hrtv: bool, 
+    pub hrtv: bool,
     pub inst: Bytecode,
     pub para: u8,
     pub subx: Box<dyn IRNode>,
 }
 
 impl IRNode for IRNodeParam1Single {
-    fn as_any(&self) -> &dyn Any { self }
-    fn subs(&self) -> usize { 1 }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> {
-        iter::empty()
-        .chain(self.subx.codegen()?)
-        .chain([self.bytecode()])
-        .chain([self.para])
-        .collect::<Vec<u8>>().into_vmrt()
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        1
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        self.subx.codegen_into(buf)?;
+        buf.push(self.bytecode());
+        buf.push(self.para);
+        Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
-        .chain([self.para])
-        .chain(self.subx.serialize())
-        .collect()
+            .chain([self.para])
+            .chain(self.subx.serialize())
+            .collect()
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let mut buf = String::from(suo.repeat(tab));
-        let substr = print_sub!(suo, self.subx, tab, desc);
-        if desc {
-            let meta = self.inst.metadata();
-            match self.inst {
-                TIS => {
-                    let substr = print_sub_inline!(suo, self.subx, desc);
-                    let ty = match self.para {
-                        0 => "nil",
-                        1 => "bool",
-                        2 => "u8",
-                        3 => "u16",
-                        4 => "u32",
-                        5 => "u64",
-                        6 => "u128",
-                        10 => "bytes",
-                        11 => "address",
-                        _ => "?",
-                    };
-                    buf.push_str(&format!("{} is {}", substr, ty));
-                }
-                PUT => {
-                    let substr = &print_sub_inline!(suo, self.subx, desc);
-                    let line = format!("${} = {}", self.para, substr);
-                    buf.push_str(&line);
-                }
-                XOP => {
-                    let substr = &print_sub_inline!(suo, self.subx, desc);
-                    let (opt, idx) = local_operand_param_parse(self.para);
-                    let line = format!("${} {} {}", idx, opt, substr);
-                    buf.push_str(&line);
-                }
-                XLG => {
-                    let substr = &print_sub_inline!(suo, self.subx, desc);
-                    let (opt, idx) = local_logic_param_parse(self.para);
-                    let line = format!("${} {} {}", idx, opt, substr);
-                    buf.push_str(&line);
-                }
-                EXTFUNC => {
-                    let substr = &print_sub_inline!(suo, self.subx, desc);
-                    let ary = CALL_EXTEND_FUNC_DEFS;
-                    let f = search_ext_name_by_id(self.para, &ary);
-                    buf.push_str(&format!("{}({})", f, substr));
-                }
-                EXTACTION => {
-                    let substr = &print_sub_inline!(suo, self.subx, desc);
-                    let ary = CALL_EXTEND_ACTION_DEFS;
-                    let f = search_ext_name_by_id(self.para, &ary);
-                    buf.push_str(&format!("{}({})", f, substr));
-                }
-                NTCALL => {
-                    let substr = &print_sub_inline!(suo, self.subx, desc);
-                    let ntcall: NativeCall = std_mem_transmute!(self.para);
-                    buf.push_str(&format!("{}({})", ntcall.name(), substr));
-                }
-                _ => {
-                    buf.push_str(meta.intro);
-                    buf.push_str(&format!("({}, {})", self.para, substr));
-                }
-            };
-        } else {
-            buf.push_str(&format!("{:?} {} {}", self.inst, self.para, substr));
-        }
-        buf
+    fn print(&self) -> String {
+        let substr = self.subx.print();
+        format!("{:?} {} {}", self.inst, self.para, substr)
     }
 }
 
+pub(crate) fn validate_param1_multi_arity(
+    inst: Bytecode,
+    para: u8,
+    hrtv: bool,
+    argc: usize,
+) -> VmrtErr {
+    if !is_fin_family(inst) {
+        return Ok(());
+    }
+    let spec = fin_spec_lookup(inst, para)?;
+    let expected_argc = spec.argc()? as usize;
+    if expected_argc != argc {
+        return itr_err_fmt!(
+            InstInvalid,
+            "FIN IR argc mismatch: expected {} got {} for {:?}",
+            expected_argc,
+            argc,
+            inst
+        );
+    }
+    if !hrtv {
+        return itr_err_fmt!(
+            InstInvalid,
+            "FIN IR return flag mismatch: expected hrtv=true for {:?}",
+            inst
+        );
+    }
+    Ok(())
+}
+
+fn validate_param1_multi_node(
+    inst: Bytecode,
+    para: u8,
+    hrtv: bool,
+    args: &[&dyn IRNode],
+) -> VmrtErr {
+    validate_param1_multi_arity(inst, para, hrtv, args.len())?;
+    if !is_fin_family(inst) {
+        return Ok(());
+    }
+    for arg in args {
+        if arg.as_any().downcast_ref::<IRNodeTopStackValue>().is_some() {
+            return itr_err_fmt!(
+                InstInvalid,
+                "FIN IR arg cannot be codegen-only TopStackValue"
+            );
+        }
+        if !arg.hasretval() {
+            return itr_err_fmt!(InstInvalid, "FIN IR arg must have a return value");
+        }
+    }
+    Ok(())
+}
+
+fn codegen_param1_multi_into(
+    buf: &mut Vec<u8>,
+    inst: Bytecode,
+    para: u8,
+    hrtv: bool,
+    args: &[&dyn IRNode],
+) -> VmrtRes<()> {
+    validate_param1_multi_node(inst, para, hrtv, args)?;
+    for arg in args {
+        arg.codegen_into(buf)?;
+    }
+    buf.push(inst as u8);
+    buf.push(para);
+    Ok(())
+}
+
+fn serialize_param1_multi(
+    inst: Bytecode,
+    para: u8,
+    hrtv: bool,
+    args: &[&dyn IRNode],
+    invariant_name: &str,
+) -> Vec<u8> {
+    if let Err(e) = validate_param1_multi_node(inst, para, hrtv, args) {
+        panic!("{} serialize invariant: {}", invariant_name, e.1);
+    }
+    let mut out = Vec::new();
+    out.push(inst as u8);
+    out.push(para);
+    for arg in args {
+        out.extend(arg.serialize());
+    }
+    out
+}
+
+fn print_param1_multi(inst: Bytecode, para: u8, args: &[&dyn IRNode]) -> String {
+    let mut out = format!("{:?} {}", inst, para);
+    for arg in args {
+        out.push(' ');
+        out.push_str(&arg.print());
+    }
+    out
+}
+
+pub(crate) struct Param1MultiParts<'a> {
+    pub inst: Bytecode,
+    pub para: u8,
+    pub args: Vec<&'a dyn IRNode>,
+}
+
+pub(crate) fn param1_multi_parts<'a>(node: &'a dyn IRNode) -> Option<Param1MultiParts<'a>> {
+    if let Some(n) = node.as_any().downcast_ref::<IRNodeParam1Double>() {
+        return Some(Param1MultiParts {
+            inst: n.inst,
+            para: n.para,
+            args: vec![&*n.subx, &*n.suby],
+        });
+    }
+    if let Some(n) = node.as_any().downcast_ref::<IRNodeParam1Triple>() {
+        return Some(Param1MultiParts {
+            inst: n.inst,
+            para: n.para,
+            args: vec![&*n.subx, &*n.suby, &*n.subz],
+        });
+    }
+    if let Some(n) = node.as_any().downcast_ref::<IRNodeParam1Quad>() {
+        return Some(Param1MultiParts {
+            inst: n.inst,
+            para: n.para,
+            args: vec![&*n.subx, &*n.suby, &*n.subz, &*n.subw],
+        });
+    }
+    None
+}
+
+pub(crate) fn build_param1_multi_node(
+    hrtv: bool,
+    inst: Bytecode,
+    para: u8,
+    argvs: Vec<Box<dyn IRNode>>,
+) -> VmrtRes<Box<dyn IRNode>> {
+    {
+        let args = argvs
+            .iter()
+            .map(|n| &**n as &dyn IRNode)
+            .collect::<Vec<_>>();
+        validate_param1_multi_node(inst, para, hrtv, &args)?;
+    }
+    let argc = argvs.len();
+    let mut argvs = argvs.into_iter();
+    let node: Box<dyn IRNode> = match argc {
+        2 => Box::new(IRNodeParam1Double {
+            hrtv,
+            inst,
+            para,
+            subx: argvs.next().unwrap(),
+            suby: argvs.next().unwrap(),
+        }),
+        3 => Box::new(IRNodeParam1Triple {
+            hrtv,
+            inst,
+            para,
+            subx: argvs.next().unwrap(),
+            suby: argvs.next().unwrap(),
+            subz: argvs.next().unwrap(),
+        }),
+        4 => Box::new(IRNodeParam1Quad {
+            hrtv,
+            inst,
+            para,
+            subx: argvs.next().unwrap(),
+            suby: argvs.next().unwrap(),
+            subz: argvs.next().unwrap(),
+            subw: argvs.next().unwrap(),
+        }),
+        _ => {
+            return itr_err_fmt!(
+                InstInvalid,
+                "invalid param1 multi IR node argc {} for {:?}",
+                argc,
+                inst
+            )
+        }
+    };
+    Ok(node)
+}
+
+#[derive(Debug, Clone)]
+pub struct IRNodeParam1Double {
+    pub hrtv: bool,
+    pub inst: Bytecode,
+    pub para: u8,
+    pub subx: Box<dyn IRNode>,
+    pub suby: Box<dyn IRNode>,
+}
+
+impl IRNode for IRNodeParam1Double {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        2
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        codegen_param1_multi_into(
+            buf,
+            self.inst,
+            self.para,
+            self.hrtv,
+            &[&*self.subx, &*self.suby],
+        )
+    }
+    fn serialize(&self) -> Vec<u8> {
+        serialize_param1_multi(
+            self.inst,
+            self.para,
+            self.hrtv,
+            &[&*self.subx, &*self.suby],
+            "IRNodeParam1Double",
+        )
+    }
+    fn print(&self) -> String {
+        print_param1_multi(self.inst, self.para, &[&*self.subx, &*self.suby])
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IRNodeParam1Triple {
+    pub hrtv: bool,
+    pub inst: Bytecode,
+    pub para: u8,
+    pub subx: Box<dyn IRNode>,
+    pub suby: Box<dyn IRNode>,
+    pub subz: Box<dyn IRNode>,
+}
+
+impl IRNode for IRNodeParam1Triple {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        3
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        codegen_param1_multi_into(
+            buf,
+            self.inst,
+            self.para,
+            self.hrtv,
+            &[&*self.subx, &*self.suby, &*self.subz],
+        )
+    }
+    fn serialize(&self) -> Vec<u8> {
+        serialize_param1_multi(
+            self.inst,
+            self.para,
+            self.hrtv,
+            &[&*self.subx, &*self.suby, &*self.subz],
+            "IRNodeParam1Triple",
+        )
+    }
+    fn print(&self) -> String {
+        print_param1_multi(
+            self.inst,
+            self.para,
+            &[&*self.subx, &*self.suby, &*self.subz],
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct IRNodeParam1Quad {
+    pub hrtv: bool,
+    pub inst: Bytecode,
+    pub para: u8,
+    pub subx: Box<dyn IRNode>,
+    pub suby: Box<dyn IRNode>,
+    pub subz: Box<dyn IRNode>,
+    pub subw: Box<dyn IRNode>,
+}
+
+impl IRNode for IRNodeParam1Quad {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        4
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        codegen_param1_multi_into(
+            buf,
+            self.inst,
+            self.para,
+            self.hrtv,
+            &[&*self.subx, &*self.suby, &*self.subz, &*self.subw],
+        )
+    }
+    fn serialize(&self) -> Vec<u8> {
+        serialize_param1_multi(
+            self.inst,
+            self.para,
+            self.hrtv,
+            &[&*self.subx, &*self.suby, &*self.subz, &*self.subw],
+            "IRNodeParam1Quad",
+        )
+    }
+    fn print(&self) -> String {
+        print_param1_multi(
+            self.inst,
+            self.para,
+            &[&*self.subx, &*self.suby, &*self.subz, &*self.subw],
+        )
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct IRNodeParam2Single {
-    pub hrtv: bool, 
+    pub hrtv: bool,
     pub inst: Bytecode,
     pub para: [u8; 2],
     pub subx: Box<dyn IRNode>,
 }
 
 impl IRNode for IRNodeParam2Single {
-    fn as_any(&self) -> &dyn Any { self }
-    fn subs(&self) -> usize { 1 }
-    fn hasretval(&self) -> bool { self.hrtv }
-    fn bytecode(&self) -> u8 { self.inst as u8 }
-    fn codegen(&self) -> VmrtRes<Vec<u8>> {
-        iter::empty::<u8>()
-        .chain(self.subx.codegen()?)
-        .chain([self.bytecode()])
-        .chain(self.para).collect::<Vec<u8>>().into_vmrt()
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        1
+    }
+    fn hasretval(&self) -> bool {
+        self.hrtv
+    }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        self.subx.codegen_into(buf)?;
+        buf.push(self.bytecode());
+        buf.extend_from_slice(&self.para);
+        Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
-        .chain(self.para)
-        .chain(self.subx.serialize())
-        .collect()
+            .chain(self.para)
+            .chain(self.subx.serialize())
+            .collect()
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let mut buf = String::from(suo.repeat(tab));
+    fn print(&self) -> String {
         let parastr = hex::encode(&self.para);
-        let substr = print_sub!(suo, self.subx, tab, desc);
-        if desc {
-            let meta = self.inst.metadata();
-            buf.push_str(meta.intro);
-            buf.push_str(&format!("(0x{}, {})", parastr, substr));
-        } else {
-            buf.push_str(&format!("{:?} 0x{} {}", self.inst, parastr, substr));
-        }
-        buf
+        let substr = self.subx.print();
+        format!("{:?} 0x{} {}", self.inst, parastr, substr)
     }
 }
 
-
-
 /*************************************/
-
 
 #[derive(Default, Debug, Clone)]
 pub struct IRNodeBytecodes {
@@ -798,126 +1024,231 @@ pub struct IRNodeBytecodes {
 }
 
 impl IRNode for IRNodeBytecodes {
-    fn as_any(&self) -> &dyn Any { self }
-    fn subs(&self) -> usize { 0 }
-    fn hasretval(&self) -> bool { false }
-    fn bytecode(&self) -> u8 { IRBYTECODE as u8 }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        0
+    }
+    fn hasretval(&self) -> bool {
+        false
+    }
+    fn bytecode(&self) -> u8 {
+        IRBYTECODE as u8
+    }
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
+        // Codegen stays a pure splice — the runtime-safe verifier
+        // (`verify_ir_runtime_safe_bytecodes`) is the gate for the final
+        // composed stream. Constructing an `IRNodeBytecodes` through the
+        // checked `IRNodeBytecodes::new` already runs the fragment check;
+        // leaving codegen unchecked preserves test surfaces that expect
+        // "plain IR conversion still works, runtime conversion rejects".
         Ok(self.codes.clone())
     }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        buf.extend_from_slice(&self.codes);
+        Ok(())
+    }
     fn serialize(&self) -> Vec<u8> {
+        // Length must be enforced at every construction path (parse-side,
+        // `IRNodeBytecodes::new`, syntax-level `bytecode { }`). Panicking
+        // here is deliberate: a truncated serialize would silently drop
+        // trailing instructions and change program semantics, which is
+        // unacceptable in a blockchain context. Every caller should have
+        // caught the overflow before calling serialize.
+        if self.codes.len() > u16::MAX as usize {
+            panic!("IRNodeBytecodes payload too long ({} bytes)", self.codes.len());
+        }
         iter::once(IRBYTECODE as u8)
             .chain((self.codes.len() as u16).to_be_bytes())
             .chain(self.codes.clone())
             .collect::<Vec<_>>()
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let pre = suo.repeat(tab);
-        let mut buf = String::new();
-        if desc {
-        }else{
-            buf.push_str(&format!("{}bytecode {{ ", pre));
-        }
-        buf.push_str(&self.codes.bytecode_print(false).unwrap());
-        buf.push_str(" }}");
-        buf
+    fn print(&self) -> String {
+        let codes = format!("0x{}", hex::encode(&self.codes));
+        format!("bytecode {{ {} }}", codes)
     }
 }
 
-
+impl IRNodeBytecodes {
+    /// Build a new `IRNodeBytecodes` from a verified runtime-shaped payload.
+    /// Rejects payloads that exceed the IR length window or contain IR-only
+    /// opcodes / absolute jumps / misaligned params at construction time. This
+    /// is the recommended constructor for any in-process IR builder; the
+    /// `Default` + direct field write path stays for parser/decoder use, where
+    /// the surrounding parse pipeline already enforces the same invariants.
+    pub fn new(codes: Vec<u8>) -> VmrtRes<Self> {
+        if codes.len() > u16::MAX as usize {
+            return itr_err_fmt!(CompileError, "IRNodeBytecodes payload too long");
+        }
+        verify_ir_bytecode_stream_fragment(&codes)?;
+        Ok(Self { codes })
+    }
+}
 
 /*************************************/
 
-macro_rules! define_ir_list_or_block { ($name: ident, $inst: expr, $compile_fn: ident) => {
-     
-
-#[derive(Default, Debug, Clone)]
-pub struct $name {
+#[derive(Debug, Clone)]
+pub struct IRNodeArray {
     pub subs: Vec<Box<dyn IRNode>>,
+    pub inst: Bytecode,
 }
 
-impl std::ops::Deref for $name {
+impl Default for IRNodeArray {
+    fn default() -> Self {
+        Self::new_list()
+    }
+}
+
+impl std::ops::Deref for IRNodeArray {
     type Target = Vec<Box<dyn IRNode>>;
     fn deref(&self) -> &Vec<Box<dyn IRNode>> {
         &self.subs
     }
 }
 
-impl DerefMut for $name {
+impl std::ops::DerefMut for IRNodeArray {
     fn deref_mut(&mut self) -> &mut Vec<Box<dyn IRNode>> {
         &mut self.subs
     }
 }
 
-impl IRNode for $name {
-    fn as_any(&self) -> &dyn Any { self }
-    fn subs(&self) -> usize { self.subs.len() }
+impl IRNode for IRNodeArray {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn subs(&self) -> usize {
+        self.subs.len()
+    }
     fn hasretval(&self) -> bool {
-        match self.subs.last() {
-            None => false,
-            Some(s) => s.hasretval(),
+        // I-4: IRBLOCK, IRBLOCKR, and IRLIST differ in their return-value
+        // contract:
+        //   * IRBLOCK  — statement container; internally pops every child's
+        //     value and itself never yields a value.
+        //   * IRBLOCKR — block expression; the last child provides the
+        //     overall value.
+        //   * IRLIST   — sequence of standalone sub-expressions; whether it
+        //     yields a value depends solely on the last child's retval.
+        // The asymmetry is by design so that `compile_block_into` can append
+        // POPs uniformly without consulting the container type.
+        match self.inst {
+            Bytecode::IRBLOCK => false,
+            _ => match self.subs.last() {
+                None => false,
+                Some(s) => s.hasretval(),
+            },
         }
     }
-    fn bytecode(&self) -> u8 { $inst as u8 }
+    fn bytecode(&self) -> u8 {
+        self.inst as u8
+    }
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
-        $compile_fn(&self.subs)
+        match self.inst {
+            Bytecode::IRLIST => compile_list(&self.subs),
+            Bytecode::IRBLOCK | Bytecode::IRBLOCKR => compile_block(self.inst, &self.subs),
+            _ => errf!("IRNodeArray: invalid opcode {:?}", self.inst).map_ire(InstInvalid),
+        }
+    }
+    fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
+        match self.inst {
+            Bytecode::IRLIST => compile_list_into(&self.subs, buf),
+            Bytecode::IRBLOCK | Bytecode::IRBLOCKR => {
+                compile_block_into(self.inst, &self.subs, buf)
+            }
+            _ => errf!("IRNodeArray: invalid opcode {:?}", self.inst).map_ire(InstInvalid),
+        }
     }
     fn serialize(&self) -> Vec<u8> {
-        if self.subs.len() > u16::MAX as usize {
-            panic!("IRNode list or block length overflow")
+        // I-5: serialization is NOT a 1:1 mirror of construction. Children
+        // that opt into `is_serialization_elided()` (currently
+        // `IRNodeEmpty`) disappear from the emitted stream entirely, and the
+        // header `count` is recomputed from the surviving children.
+        //
+        // The visible child count must fit u16 — every construction entry
+        // point enforces this (`with_capacity`, `from_vec`), and the
+        // DedefMut push path is bounded by the vendored parse-time length
+        // header. Exceeding u16::MAX here would produce an unreadable or
+        // semantically-truncated prefix; panic loudly because silent
+        // truncation is worse.
+        let count = self
+            .subs
+            .iter()
+            .filter(|a| !a.is_serialization_elided())
+            .count();
+        if count > u16::MAX as usize {
+            panic!("IRNodeArray length overflow: {} children serialize to {} stripped", self.subs.len(), count);
         }
-        let mut bytes = iter::once($inst as u8)
-            .chain((self.subs.len() as u16).to_be_bytes()).collect::<Vec<_>>();
+        let mut children_bytes: Vec<u8> = Vec::new();
         for a in &self.subs {
-            bytes.append(&mut a.serialize());
+            if a.is_serialization_elided() {
+                continue;
+            }
+            let mut b = a.serialize();
+            if b.is_empty() {
+                panic!(
+                    "IRNodeArray child {:?} serialized to empty bytes without explicit elision",
+                    a.bytecode()
+                );
+            }
+            children_bytes.append(&mut b);
         }
+        let mut bytes = iter::once(self.inst as u8)
+            .chain((count as u16).to_be_bytes())
+            .collect::<Vec<_>>();
+        bytes.append(&mut children_bytes);
         bytes
     }
-    fn print(&self, suo: &str, tab: usize, desc: bool) -> String {
-        let pre = suo.repeat(tab);
+    fn print(&self) -> String {
         let num = self.subs.len();
-        let mut buf = String::new();
-        if desc {
-        }else{
-            buf.push_str(&format!("{}{:?} {} :\n", pre, $inst, num));
-        }
         if num == 0 {
-            return buf
+            return format!("{:?} {}:", self.inst, num);
         }
+        let mut buf = format!("{:?} {}:\n", self.inst, num);
         for a in &self.subs {
-            buf.push_str(&a.print(suo, tab, desc));
+            buf.push_str(&a.print());
             buf.push('\n');
         }
         buf.pop();
-        if desc {
-            buf.push_str(&pre);
-        }else{
-        }
         buf
     }
 }
 
-
-#[allow(dead_code)]
-impl $name {
-    pub fn new() -> Self {
+impl IRNodeArray {
+    pub fn new_list() -> Self {
         Self {
             subs: vec![],
+            inst: Bytecode::IRLIST,
         }
     }
-    pub fn with_capacity(n: usize) -> Ret<Self> {
-        if n > u16::MAX as usize {
-            return errf!("{} length max {}", stringify!($name), u16::MAX)
+    pub fn new_block() -> Self {
+        Self {
+            subs: vec![],
+            inst: Bytecode::IRBLOCK,
         }
-        Ok(Self{
+    }
+    pub fn new_block_expr() -> Self {
+        Self {
+            subs: vec![],
+            inst: Bytecode::IRBLOCKR,
+        }
+    }
+    pub fn with_opcode(inst: Bytecode) -> Self {
+        Self { subs: vec![], inst }
+    }
+    pub fn with_capacity(n: usize, inst: Bytecode) -> Ret<Self> {
+        if n > u16::MAX as usize {
+            return errf!("IRNodeArray length cannot exceed {}", u16::MAX);
+        }
+        Ok(Self {
             subs: Vec::with_capacity(n),
+            inst,
         })
     }
-    pub fn from_vec(subs: Vec<Box<dyn IRNode>>) -> Ret<Self> {
+    pub fn from_vec(subs: Vec<Box<dyn IRNode>>, inst: Bytecode) -> Ret<Self> {
         if subs.len() > u16::MAX as usize {
-            return errf!("{} length max {}", stringify!($name), u16::MAX)
+            return errf!("IRNodeArray length cannot exceed {}", u16::MAX);
         }
-        Ok(Self{subs})
+        Ok(Self { subs, inst })
     }
     pub fn into_vec(self) -> Vec<Box<dyn IRNode>> {
         self.subs
@@ -925,50 +1256,8 @@ impl $name {
     pub fn into_one(mut self) -> Box<dyn IRNode> {
         self.subs.pop().unwrap()
     }
-}
-
-
-   
-} }
-
-
-define_ir_list_or_block!{ IRNodeList,  IRLIST,  compile_list }
-define_ir_list_or_block!{ IRNodeBlock, IRBLOCK, compile_block }
-
-
-/*******************************/
-
-
-
-pub trait IRCodePrint {
-    fn ircode_print(&self, desc: bool) -> VmrtRes<String>;
-}
-
-impl IRCodePrint for Vec<u8> {
-
-    fn ircode_print(&self, desc: bool) -> VmrtRes<String> {
-        let irs = parse_ir_block(self, &mut 0)?;
-        let res = irs.print("    ", 0, desc);
-        Ok(res)
+    pub fn set_inst(&mut self, inst: Bytecode) {
+        self.inst = inst;
     }
-
 }
 
-
-
-
-
-
-
-/*************************/
-
-
-
-
-fn literals(s: String) -> String {
-    s.replace("\\", "\\\\")
-    .replace("\t", "\\t")
-    .replace("\n", "\\n")
-    .replace("\r", "\\r")
-    .replace("\"", "\\\"")
-}

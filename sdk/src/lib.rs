@@ -1,34 +1,13 @@
-// #![no_std]
-#![no_main]
+#![cfg_attr(all(target_arch = "wasm32", not(test)), no_main)]
 
-// use wasm_bindgen::prelude::wasm_bindgen;
+mod account;
+mod codec;
+mod coin;
+mod error;
+mod sign;
+mod util;
 
-// #[panic_handler]
-// fn handle_panic(_: &core::panic::PanicInfo) -> ! {
-//     loop {}
-// }
-
-#[allow(unused_macros)]
-macro_rules! panic {
-    ($s:expr) => {
-        loop {}
-    };
-    ($fmt:expr, $($s:expr),+) => {
-        loop {}
-    };
-}
-
-
-use wasm_bindgen::prelude::*;
-use sys::Account as SysAccount;
-use sys::*;
-use field::*;
-use field::interface::*;
-
-
-include!{"param.rs"}
-include!{"util.rs"}
-include!{"account.rs"}
-include!{"coin.rs"}
-include!{"sign.rs"}
-
+pub use account::{Account, VerifyAddressResult, create_account, verify_address};
+pub use coin::{CoinTransferParam, CoinTransferResult, create_coin_transfer};
+pub use sign::{SignTxParam, SignTxResult, sign_transaction};
+pub use util::{hac_to_mei, hac_to_unit};

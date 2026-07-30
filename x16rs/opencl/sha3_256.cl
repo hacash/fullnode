@@ -175,4 +175,32 @@ inline void sha3_256_hash(const ulong *input, ulong *output)
 	output[3] = hash[3];
 }
 
+inline void sha3_256_hash_diamond(const ulong *input, ulong *output)
+{	
+	ulong ALIGN hash[25] = {
+		le2me_64(input[ 0]),
+		le2me_64(input[ 1]),
+		le2me_64(input[ 2]),
+		le2me_64(input[ 3]),
+		le2me_64(input[ 4]),
+		le2me_64(input[ 5]),
+		le2me_64(input[ 6]),
+		le2me_64(input[ 7]),
+		le2me_64(input[ 8]),
+		le2me_64(input[ 9]),
+		le2me_64(input[10]),
+		(le2me_64(input[11]) & (ulong)0x000000FFFFFFFFFFUL) | (ulong)0x0000060000000000UL,
+		0,
+		0,
+		0,
+		0,
+		le2me_64(0x8000000000000000),
+	};
+	rhash_sha3_permutation(hash);
+	output[0] = hash[0];
+	output[1] = hash[1];
+	output[2] = hash[2];
+	output[3] = hash[3];
+}
+
 #endif  // SHA3_256_CL

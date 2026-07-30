@@ -11,6 +11,11 @@ typedef union ALIGN8 {
   ulong h8[11];
 } block_t;
 
+typedef union ALIGN8 {
+  unsigned char h1[96];
+  ulong h8[12];
+} block_diamond_t;
+
 #ifdef __ENDIAN_LITTLE__
 
     #define WRITE_NONCE_BYTE4 bytes[offset+0] = nonce_ptr[3]; \
@@ -31,6 +36,17 @@ __inline__ void write_nonce_to_bytes(const int offset, unsigned char* bytes, uns
     // nonce bytes
     unsigned char *nonce_ptr = (unsigned char *)&nonce;
     WRITE_NONCE_BYTE4;
+}
+
+__inline__ void write_nonce_u64_to_bytes(const int offset, unsigned char* bytes, ulong nonce) {
+    bytes[offset + 0] = (uchar)(nonce >> 56);
+    bytes[offset + 1] = (uchar)(nonce >> 48);
+    bytes[offset + 2] = (uchar)(nonce >> 40);
+    bytes[offset + 3] = (uchar)(nonce >> 32);
+    bytes[offset + 4] = (uchar)(nonce >> 24);
+    bytes[offset + 5] = (uchar)(nonce >> 16);
+    bytes[offset + 6] = (uchar)(nonce >> 8);
+    bytes[offset + 7] = (uchar)(nonce);
 }
 
 #endif

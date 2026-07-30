@@ -1,14 +1,103 @@
 
-// use std::*;
-// use num_traits::FromBytes;
+pub const ACTIVE_UINT_BITS: [u16; 5] = [8, 16, 32, 64, 128];
+pub const ACTIVE_UINT_BYTES: [usize; 5] = [1, 2, 4, 8, 16];
+pub const ACTIVE_UINT_MAX_BYTES: usize = 16;
 
-fn buf_not_zero(buf: &[u8]) -> bool {
-    buf.iter().any(|a|*a>0)
+
+#[inline(always)]
+pub fn buf_is_empty_or_all_zero(buf: &[u8]) -> bool {
+    buf.is_empty() || buf.iter().all(|&b| b == 0)
 }
 
-#[allow(dead_code)]
-fn buf_is_zero(buf: &[u8]) -> bool {
-    ! buf_not_zero(buf)
+/// Canonical bool byte decoding for typed/raw byte representations only.
+/// This is intentionally stricter than runtime truthiness (`Value::extract_bool`),
+/// which is used by control flow and explicit `as bool` coercions.
+///
+/// The divergence is intentional and stable:
+/// - `decode_canonical_bool_byte(0)` → `Some(false)`, `(1)` → `Some(true)`, all
+///   other bytes → `None`. Used by `type_from(ValueTy::Bool, ..)` and `Parse` to
+///   enforce canonical wire format.
+/// - `extract_bool` treats any non-zero byte as `true` (including `2..=255`),
+///   and also accepts `Nil`, `uint`, `Bytes`, `Address`. Used by control flow
+///   (`CHOOSE`, `BRL*`) and `as bool` casts.
+///
+/// This does not cause storage splitting — `extract_key_bytes` rejects `Bool`
+/// as a map key regardless. The two rule sets only diverge in serialization vs.
+/// runtime-cast contexts. See `vm/doc/value-cast.md` §9.4.
+#[inline(always)]
+pub fn decode_canonical_bool_byte(byte: u8) -> Option<bool> {
+    match byte {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }
+}
+
+#[inline(always)]
+pub fn encode_canonical_bool_byte(value: bool) -> u8 {
+    maybe!(value, 1, 0)
+}
+
+#[inline(always)]
+pub fn trim_leading_zero_bytes(buf: &[u8]) -> &[u8] {
+    let first_nz = buf.iter().position(|b| *b != 0).unwrap_or(buf.len());
+    &buf[first_nz..]
+}
+
+/// Canonical map-key bytes for any uint scalar (value-defined, width-independent).
+///
+/// Leading zero bytes are trimmed; numeric zero maps to `[0x00]` so empty keys are rejected.
+/// `U8(1)`, `U64(1)`, and future wider uints with the same value share one key encoding.
+/// See `vm/doc/value-cast.md` §9.1 and `Value::extract_key_bytes`.
+#[inline(always)]
+pub fn uint_key_bytes(n: u128) -> Vec<u8> {
+    let be = n.to_be_bytes();
+    let trimmed = trim_leading_zero_bytes(&be);
+    if trimmed.is_empty() {
+        vec![0u8]
+    } else {
+        trimmed.to_vec()
+    }
+}
+
+#[inline(always)]
+pub fn fit_be_bytes<const N: usize>(buf: &[u8]) -> Option<[u8; N]> {
+    if buf.len() <= N {
+        let mut out = [0u8; N];
+        out[N - buf.len()..].copy_from_slice(buf);
+        return Some(out);
+    }
+    let cut = buf.len() - N;
+    if buf[..cut].iter().any(|b| *b != 0) {
+        return None;
+    }
+    let mut out = [0u8; N];
+    out.copy_from_slice(&buf[cut..]);
+    Some(out)
+}
+
+#[inline(always)]
+pub fn minimal_active_uint_bytes(non_zero_len: usize) -> Option<usize> {
+    ACTIVE_UINT_BYTES
+        .iter()
+        .copied()
+        .find(|w| non_zero_len <= *w)
+}
+
+#[inline(always)]
+pub fn checked_value_output_len(cap: &SpaceCap, len: usize) -> VmrtRes<usize> {
+    if !cap.field_scalar_len_ok(len) {
+        return itr_err_code!(OutOfValueSize)
+    }
+    Ok(len)
+}
+
+#[inline(always)]
+pub fn checked_value_output_add(cap: &SpaceCap, left: usize, right: usize) -> VmrtRes<usize> {
+    let total = left
+        .checked_add(right)
+        .ok_or_else(|| ItrErr::code(OutOfValueSize))?;
+    checked_value_output_len(cap, total)
 }
 
 pub fn buf_drop_left_zero(buf: &[u8], minl: usize) -> Vec<u8> {
@@ -16,26 +105,20 @@ pub fn buf_drop_left_zero(buf: &[u8], minl: usize) -> Vec<u8> {
     if n == 0 {
         return vec![]
     }
-    let mut l = 0;
-    let mut m = n;
-    for i in 0..n {
-        l = i;
-        if buf[i] != 0 || m <= minl {
-            break
-        }
-        m -= 1;
-    }
-    // ok
-    buf[l..].into()
+    let keep = minl.min(n);
+    let trim_limit = n - keep;
+    let first_non_zero = buf[..trim_limit]
+        .iter()
+        .position(|b| *b != 0)
+        .unwrap_or(trim_limit);
+    buf[first_non_zero..].into()
 }
 
-pub fn buf_fill_left_zero(buf: &[u8], zn: usize) -> Vec<u8> {
-    let sz = buf.len();
-    if sz >= zn {
-        return buf[0..zn].into()
+#[inline(always)]
+pub fn length_value_by_len(cap: &SpaceCap, len: usize) -> VmrtRes<Value> {
+    if len > cap.compo_length {
+        return itr_err_code!(OutOfCompoLen)
     }
-    let res = buf[..].into();
-    let pdn = zn - sz;
-    [vec![0].repeat(pdn), res].concat()
+    Ok(Value::U32(len as u32))
 }
 

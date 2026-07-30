@@ -1,31 +1,63 @@
+//! `vm` ——
+//!
+//! `Registry`
+//! - `vm_assigner` Context  vm  VM
+//!
+//! crate  mint vm  `mint::action::DiaInscEdit`
+//! mint ——  protocol
+
+#![allow(dead_code)]
+#![allow(unused_macros)]
 
 #[macro_use]
-pub mod rt;
-pub mod value;
-pub mod space;
-pub mod ir;
-pub mod native;
-pub mod interpreter;
-pub mod frame;
-pub mod machine;
-pub mod action;
-pub mod hook;
-pub mod lang;
-pub mod contract;
+extern crate sys;
 
-use machine::*;
-
-include!{"field/mod.rs"}
-include!{"interface/mod.rs"}
-
-
-use std::sync::OnceLock;
-static MACHINE_MANAGER_INSTANCE: OnceLock<MachineManage> = OnceLock::new();
-
-pub fn global_machine_manager() -> &'static MachineManage {
-    MACHINE_MANAGER_INSTANCE.get_or_init(||
-        MachineManage::new()
-    )
+#[macro_export]
+macro_rules! s {
+    ("") => {
+        String::new()
+    };
+    ($v:expr) => {
+        ($v).to_string()
+    };
 }
 
+#[macro_export]
+macro_rules! never {
+    () => {
+        panic!("never call this")
+    };
+}
 
+#[macro_export]
+macro_rules! debug_println {
+    ($($arg:tt)*) => {
+        #[cfg(debug_assertions)]
+        {
+            println!($($arg)*);
+        }
+    };
+}
+
+pub mod action;
+pub mod api;
+#[macro_use]
+pub(crate) mod rt;
+pub(crate) mod contract;
+pub mod fitshc;
+pub(crate) mod frame;
+pub(crate) mod interpreter;
+pub(crate) mod ir;
+pub(crate) mod machine;
+pub(crate) mod native;
+pub mod setup;
+pub(crate) mod space;
+pub(crate) mod state;
+pub(crate) mod value;
+
+pub use machine::peek_vm_runtime_limits;
+pub use setup::register;
+pub use state::{StorageDebug, VMState, VMStateRead, VmLog};
+pub use value::ContractAddress;
+
+pub const MAX_FUNC_PARAM_LEN: usize = 15;
