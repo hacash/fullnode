@@ -219,16 +219,11 @@ to a timestamped backup and rebuilds state from local block history.
 | `boot_nodes` | empty | Comma-separated bootstrap `host:port` addresses. |
 | `node_name` | generated | Human-readable peer name; an empty value generates `hn` plus 8 key hex digits. |
 | `block_queue_cap` | `8` | Inbound block queue capacity. |
-| `dial_interval_secs` | `60` | Bootstrap/addrbook redial interval. |
-| `max_peers` | `204` | Total peer limit. |
 | `find_nodes` | `true` | Enable peer discovery. |
 | `accept_nodes` | `true` | Accept inbound peers. |
 | `use_stable_nodes` | `true` | Read and reuse `stable.nodes`. |
 | `backbone_peers` | `4` | Desired public/backbone peers. |
 | `offshoot_peers` | `200` | Non-backbone peer limit. |
-| `addrbook_max` | `200` | In-memory address-book limit. |
-| `stable_max_write` | `200` | Maximum persisted stable addresses. |
-| `addrbook_dial_max` | `16` | Maximum addresses dialed per discovery pass. |
 
 The node creates `node.id` and `stable.nodes` under the data directory.
 

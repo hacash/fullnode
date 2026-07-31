@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use base::{
     ApplyMode, BlockBatch, BlockSender, BlockStream, Peer, PipelineOptions, PipelineReport,
@@ -14,8 +14,8 @@ use base::{
 use sys::Rerr;
 
 use crate::P2PNode;
+use crate::p2p::msg::MSG_REQ_BLOCK;
 use crate::p2p::msg::v2::MSG_GET_BLOCKS;
-use crate::p2p::msg::{MSG_REQ_BLOCK, MSG_REQ_STATUS};
 use crate::p2p::syncwire::{DEFAULT_MAX_BLOCKS, GetBlocks, SYNC_WINDOW};
 
 const MAX_BLOCKING_ENQUEUE_TASKS: usize = 4;
@@ -142,31 +142,15 @@ pub type SyncSlot = Mutex<Option<SyncSession>>;
 
 impl P2PNode {
     pub(crate) fn mark_sync_failure(&self, peer_id: &str, reason: &str) {
-        if self.stopping.load(Ordering::Acquire) {
-            self.sync_tracker.clear_peer(peer_id);
-            self.doing_sync.store(0, Ordering::Release);
-            return;
-        }
-        let terminal = self.engine.config().fast_sync;
-        if terminal {
-            self.fast_sync_terminal.store(true, Ordering::Release);
-        }
-        self.sync_tracker.halt_peer(peer_id);
+        self.sync_tracker.clear_peer(peer_id);
         self.doing_sync.store(0, Ordering::Release);
-        if terminal {
-            eprintln!(
-                "[Block Sync Warning] peer={} stopped FastSync permanently for this run: {}",
-                peer_id, reason
-            );
-        } else {
-            eprintln!("[Block Sync Warning] peer={} stopped: {}", peer_id, reason);
+        if !self.stopping.load(Ordering::Acquire) {
+            eprintln!("[P2P] sync with peer {} ended: {}", peer_id, reason);
         }
     }
 
-    /// Stop the active downloader without issuing another STATUS request.
-    /// A malformed response or an apply failure is deterministic for the
-    /// current peer/session, so restarting it immediately only hides the
-    /// original error and can mix a late legacy response into the new stream.
+    /// Stop and release the current downloader. A later STATUS or normal peer
+    /// reconnect may acquire the tracker again, matching fullnodedev.
     pub(crate) fn stop_sync_session(&self, peer_id: &str, reason: &str) {
         let stopped = self
             .sync_session
@@ -253,7 +237,6 @@ impl P2PNode {
         let txpool = self.txpool.clone();
         let sync_session = self.sync_session.clone();
         let sync_tracker = self.sync_tracker.clone();
-        let peertable = self.peertable.clone();
         let node_for_apply = self.clone();
         let cleanup_peer_id = peer_id.clone();
         let inserting = self.inserting.clone();
@@ -323,16 +306,7 @@ impl P2PNode {
                                 report.held_blocks.len()
                             );
                         }
-                        let replay_drained = node_for_apply.drain_deferred_blocks();
-                        // A held block is intentionally not retried until the
-                        // consensus replay policy releases it. The periodic
-                        // replay drain requests STATUS after it succeeds and
-                        // starts the next sync window.
-                        if report.held_blocks.is_empty() || replay_drained {
-                            if let Some(peer) = peertable.get_snapshot(&cleanup_peer_id) {
-                                let _ = peer.send_msg(MSG_REQ_STATUS, Vec::new());
-                            }
-                        }
+                        node_for_apply.drain_deferred_blocks();
                     }
                     Err(e) => {
                         let current = sync_session.lock().ok().is_some_and(|g| {
@@ -344,10 +318,8 @@ impl P2PNode {
                             return;
                         }
                         println!("{}", e);
-                        node_for_apply.stop_sync_session(
-                            &cleanup_peer_id,
-                            "apply pipeline failure; automatic retry disabled",
-                        );
+                        node_for_apply
+                            .stop_sync_session(&cleanup_peer_id, "apply pipeline failure");
                     }
                 }
             });
@@ -358,55 +330,6 @@ impl P2PNode {
             self.mark_sync_failure(&peer_id, "failed to spawn sync apply thread");
             return sys::errf!("failed to spawn sync apply thread");
         }
-
-        let sync_session_watch = self.sync_session.clone();
-        let watch_node = self.clone();
-        let watch_peer = peer.clone();
-        let watch_peer_id = peer_id.clone();
-        std::thread::spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(5));
-                if watch_node.stopping.load(Ordering::Acquire) {
-                    return;
-                }
-                let (timed_out, refill_window) = {
-                    let mut g = sync_session_watch.lock().unwrap();
-                    let Some(session) = g.as_ref() else {
-                        return;
-                    };
-                    if session.peer_id != watch_peer_id || session.generation != generation {
-                        return;
-                    }
-                    if session.last_activity.lock().is_ok_and(|last_activity| {
-                        last_activity.elapsed() < Duration::from_secs(30)
-                    }) {
-                        (false, !session.sender.is_full())
-                    } else {
-                        let session = g.take().unwrap();
-                        session.cancel();
-                        (true, false)
-                    }
-                };
-                if timed_out {
-                    if watch_node.stopping.load(Ordering::Acquire) {
-                        return;
-                    }
-                    watch_node.mark_sync_failure(
-                        &watch_peer_id,
-                        &format!("range {}..={} timed out", start_height, remote_tip),
-                    );
-                    return;
-                }
-                if refill_window {
-                    if let Err(e) = watch_node.sync_fill_window(watch_peer.clone()) {
-                        eprintln!(
-                            "[Block Sync Warning] peer={} refill request failed: {}",
-                            watch_peer_id, e
-                        );
-                    }
-                }
-            }
-        });
 
         self.sync_fill_window(peer)
     }
@@ -584,11 +507,17 @@ impl P2PNode {
             .map(|p| p as Arc<dyn Peer>)
             .unwrap_or(peer);
         if next_peer.id() != peer_id {
-            // Peer switched mid-sync: restart session on the new peer.
             let tip = self
                 .sync_tracker
                 .active_remote_height()
                 .unwrap_or(remote_tip);
+            if let Ok(mut slot) = self.sync_session.lock() {
+                if let Some(session) = slot.take() {
+                    session.cancel();
+                }
+            }
+            self.sync_tracker.clear_peer(&peer_id);
+            self.doing_sync.store(0, Ordering::Release);
             return self
                 .start_sync_pipe(next_peer, end_height + 1, tip)
                 .map(|_| true);
@@ -743,14 +672,12 @@ impl P2PNode {
 async fn push_block_batch(sender: BlockSender, batch: BlockBatch, remote_tip: u64) -> Rerr {
     match sender.try_push_block_batch(batch.clone())? {
         true => Ok(()),
-        false => enqueue_block_batch(sender, batch)
-            .await
-            .map_err(|e| {
-                sys::Error::fault(format!(
-                    "p2p block enqueue at remote height {} failed: {}",
-                    remote_tip, e
-                ))
-            }),
+        false => enqueue_block_batch(sender, batch).await.map_err(|e| {
+            sys::Error::fault(format!(
+                "p2p block enqueue at remote height {} failed: {}",
+                remote_tip, e
+            ))
+        }),
     }
 }
 

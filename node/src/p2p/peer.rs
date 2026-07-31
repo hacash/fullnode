@@ -1,16 +1,9 @@
-//! Remote peer: dual write channels, version-aware send, rate limit.
-//!
-//! - **Control queue** (capacity 64): sync/status/ping/close — never dropped;
-//!   uses async `send` from the writer task's perspective via `try_send` first,
-//!   then `blocking`-style wait via `reserve` retry with `send`.
-//! - **Tx queue** (capacity 256): tx relays — dropped under saturation.
-//!
-//! A single writer task drains control preferentially, then tx.
+//! Remote peer: fullnodedev-compatible single writer queue with v1/v2 framing.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{Notify, mpsc};
@@ -21,15 +14,15 @@ use super::codec::create_transport_frame as v2_create_frame;
 use super::legacy::{
     create_transport_frame as v1_create_frame, encode_customer as v1_encode_customer,
 };
-use super::msg::{MSG_TX_SUBMIT, V1_MSG_CLOSE, v2 as v2msg};
+use super::msg::{V1_MSG_CLOSE, v2 as v2msg};
 use crate::knowledge::Knowledge;
 
-pub(crate) const TX_WRITER_CAPACITY: usize = 256;
-pub(crate) const CTRL_WRITER_CAPACITY: usize = 64;
-/// Soft per-peer inbound message budget per window.
-pub(crate) const RATE_LIMIT_MSGS: u32 = 2000;
-pub(crate) const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
-const WRITE_TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const PEER_WRITER_CAPACITY: usize = 128;
+static PEER_AUTO_ID_INCREASE: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn next_peer_id() -> String {
+    (PEER_AUTO_ID_INCREASE.fetch_add(1, Ordering::Relaxed) + 1).to_string()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -50,13 +43,16 @@ impl ProtocolVersion {
     }
 }
 
-pub(crate) struct PeerWriteCmd {
-    pub frame: Vec<u8>,
+pub(crate) enum PeerWriteCmd {
+    Send(Vec<u8>),
+    Close(Vec<u8>),
 }
 
 #[allow(dead_code)] // fields reserved for future P2P feature gating
 pub(crate) struct RemotePeer {
+    /// Unique TCP connection instance id, equivalent to fullnodedev's auto id.
     pub id: String,
+    /// Stable node identity used for DHT placement and same-node replacement.
     pub node_key: [u8; 16],
     pub name: String,
     pub addr: SocketAddr,
@@ -65,9 +61,6 @@ pub(crate) struct RemotePeer {
     pub is_inbound: AtomicBool,
     pub last_active: Mutex<Instant>,
     pub protocol_version: AtomicU8,
-    /// Remote chain height learned at handshake (v2: from VERSION.start_height;
-    /// v1: 0 until STATUS arrives). Used to start sync without a STATUS round-trip.
-    pub remote_height: std::sync::atomic::AtomicU64,
     /// Business relay channels the peer opted into via its advertised services
     /// mask (v2: captured from VERSION.services; v1: all channels assumed).
     /// Channel bits are named by the consensus layer; the node only checks
@@ -75,16 +68,10 @@ pub(crate) struct RemotePeer {
     pub service_mask: std::sync::atomic::AtomicU64,
     pub relay: AtomicBool,
     pub custom_types: Vec<u8>,
-    /// Prefer draining this first; never drop.
-    pub ctrl_tx: mpsc::Sender<PeerWriteCmd>,
-    /// Tx relay; droppable under load.
-    pub tx_tx: mpsc::Sender<PeerWriteCmd>,
+    pub writer_tx: mpsc::Sender<PeerWriteCmd>,
     pub close_notify: Arc<Notify>,
     pub closed: Arc<AtomicBool>,
     pub knows: Knowledge,
-    /// Inbound rate limiter state.
-    pub(crate) rate_count: AtomicU32,
-    pub(crate) rate_window_start: Mutex<Instant>,
 }
 
 impl base::Peer for RemotePeer {
@@ -110,11 +97,10 @@ impl base::Peer for RemotePeer {
             }
             ProtocolVersion::V1 => v1_encode_customer(ty, &body)?,
         };
-        if ty == MSG_TX_SUBMIT {
-            self.send_tx_frame(frame)
-        } else {
-            self.send_ctrl_frame(frame)
-        }
+        self.send_frame(frame)
+    }
+    fn disconnect(&self) {
+        RemotePeer::disconnect(self);
     }
     fn protocol_version(&self) -> u8 {
         self.protocol_version.load(Ordering::Acquire)
@@ -132,7 +118,7 @@ impl RemotePeer {
     }
 
     pub(crate) fn send_transport(&self, frame: Vec<u8>) -> Rerr {
-        self.send_ctrl_frame(frame)
+        self.send_frame(frame)
     }
 
     pub(crate) fn send_v2_transport(&self, ty: u8, body: &[u8]) -> Rerr {
@@ -140,34 +126,19 @@ impl RemotePeer {
             return sys::errf!("v2 message type 100 is reserved");
         }
         let frame = v2_create_frame(ty, body)?;
-        self.send_ctrl_frame(frame)
+        self.send_frame(frame)
     }
 
-    fn send_ctrl_frame(&self, frame: Vec<u8>) -> Rerr {
-        // Control: try_send; if full, use blocking send on a dedicated path.
-        // From sync Peer::send_msg we cannot await — use try_send then
-        // `blocking_send` via tokio's block_in_place when inside runtime.
-        match self.ctrl_tx.try_send(PeerWriteCmd { frame }) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => Err(sys::Error::fault(format!(
-                "peer {} ctrl queue saturated",
-                self.id
-            ))),
-            Err(mpsc::error::TrySendError::Closed(_)) => {
-                Err(sys::Error::fault(format!("peer {} ctrl closed", self.id)))
-            }
+    fn send_frame(&self, frame: Vec<u8>) -> Rerr {
+        if self.closed.load(Ordering::Acquire) {
+            return sys::errf!("peer may be closed");
         }
-    }
-
-    fn send_tx_frame(&self, frame: Vec<u8>) -> Rerr {
-        match self.tx_tx.try_send(PeerWriteCmd { frame }) {
+        match self.writer_tx.try_send(PeerWriteCmd::Send(frame)) {
             Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => Err(sys::Error::fault(format!(
-                "peer {} tx queue saturated, frame dropped",
-                self.id
-            ))),
+            Err(mpsc::error::TrySendError::Full(_)) => sys::errf!("peer writer queue full"),
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                Err(sys::Error::fault(format!("peer {} tx closed", self.id)))
+                self.signal_close();
+                sys::errf!("peer may be closed")
             }
         }
     }
@@ -176,20 +147,6 @@ impl RemotePeer {
         if let Ok(mut g) = self.last_active.lock() {
             *g = Instant::now();
         }
-    }
-
-    /// Returns false if peer exceeded inbound rate — caller should disconnect.
-    pub(crate) fn note_inbound_msg(&self) -> bool {
-        let now = Instant::now();
-        if let Ok(mut start) = self.rate_window_start.lock() {
-            if now.duration_since(*start) >= RATE_LIMIT_WINDOW {
-                *start = now;
-                self.rate_count.store(1, Ordering::Release);
-                return true;
-            }
-        }
-        let n = self.rate_count.fetch_add(1, Ordering::AcqRel) + 1;
-        n <= RATE_LIMIT_MSGS
     }
 
     pub(crate) fn is_public(&self) -> bool {
@@ -224,19 +181,15 @@ impl RemotePeer {
     }
 
     pub(crate) fn disconnect(&self) {
-        match self.protocol_version() {
-            ProtocolVersion::V2 => {
-                if let Ok(frame) = v2_create_frame(v2msg::MSG_CLOSE, &[]) {
-                    let _ = self.send_ctrl_frame(frame);
-                }
-            }
-            ProtocolVersion::V1 => {
-                if let Ok(frame) = v1_create_frame(V1_MSG_CLOSE, &[]) {
-                    let _ = self.send_ctrl_frame(frame);
-                }
-            }
+        let close_frame = match self.protocol_version() {
+            ProtocolVersion::V2 => v2_create_frame(v2msg::MSG_CLOSE, &[]),
+            ProtocolVersion::V1 => v1_create_frame(V1_MSG_CLOSE, &[]),
+        };
+        self.closed.store(true, Ordering::Release);
+        if let Ok(frame) = close_frame {
+            let _ = self.writer_tx.try_send(PeerWriteCmd::Close(frame));
         }
-        self.signal_close();
+        self.close_notify.notify_waiters();
     }
 
     pub(crate) fn signal_close(&self) {
@@ -245,47 +198,24 @@ impl RemotePeer {
     }
 }
 
-/// Spawn the dual-queue writer. Prefer control frames.
+/// Spawn fullnodedev's single peer writer queue.
 pub(crate) fn spawn_writer(
-    mut ctrl_rx: mpsc::Receiver<PeerWriteCmd>,
-    mut tx_rx: mpsc::Receiver<PeerWriteCmd>,
+    mut writer_rx: mpsc::Receiver<PeerWriteCmd>,
     mut writer: tokio::net::tcp::OwnedWriteHalf,
     close_notify: Arc<Notify>,
     closed: Arc<AtomicBool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                biased;
-                cmd = ctrl_rx.recv() => {
-                    let Some(cmd) = cmd else { break; };
-                    if tokio::time::timeout(WRITE_TIMEOUT, writer.write_all(&cmd.frame))
-                        .await
-                        .map_or(true, |result| result.is_err())
-                    {
-                        break;
-                    }
-                }
-                cmd = tx_rx.recv() => {
-                    let Some(cmd) = cmd else {
-                        // tx closed; keep draining control
-                        while let Some(cmd) = ctrl_rx.recv().await {
-                            if tokio::time::timeout(WRITE_TIMEOUT, writer.write_all(&cmd.frame))
-                                .await
-                                .map_or(true, |result| result.is_err())
-                            {
-                                break;
-                            }
-                        }
-                        break;
-                    };
-                    if tokio::time::timeout(WRITE_TIMEOUT, writer.write_all(&cmd.frame))
-                        .await
-                        .map_or(true, |result| result.is_err())
-                    {
-                        break;
-                    }
-                }
+        while let Some(cmd) = writer_rx.recv().await {
+            let (frame, close_after) = match cmd {
+                PeerWriteCmd::Send(frame) => (frame, false),
+                PeerWriteCmd::Close(frame) => (frame, true),
+            };
+            if writer.write_all(&frame).await.is_err() {
+                break;
+            }
+            if close_after {
+                break;
             }
         }
         closed.store(true, Ordering::Release);
@@ -294,3 +224,16 @@ pub(crate) fn spawn_writer(
 }
 
 // AsyncWriteExt used by spawn_writer
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::next_peer_id;
+
+    #[test]
+    fn connection_ids_are_unique() {
+        let ids = (0..256).map(|_| next_peer_id()).collect::<HashSet<_>>();
+        assert_eq!(ids.len(), 256);
+    }
+}

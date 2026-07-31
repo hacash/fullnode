@@ -1,7 +1,7 @@
 //! TCP listener, dialer, session loop, and P2P maintenance.
 //!
 //! Dual-protocol: accepts both v1 (legacy mainnet) and v2 (new) peers.
-//! Dialing tries v2 first, then reconnects with v1 when needed.
+//! Dialing tries v2 first, then reconnects with v1 only when magic identifies v1.
 //! Each session reads frames in the negotiated version and dispatches
 //! application messages to `handle_message` (shared, version-agnostic).
 
@@ -19,9 +19,7 @@ use crate::msgqueue::InboundMsg;
 use crate::p2p::codec::{
     accept_read_magic, dial_magic_exchange, read_transport_msg as v2_read_msg, write_v2_magic,
 };
-use crate::p2p::handshake::{
-    HANDSHAKE_TIMEOUT, PeerIdentity, VersionMessage, exchange_handshake, peer_id_from_key,
-};
+use crate::p2p::handshake::{HANDSHAKE_TIMEOUT, PeerIdentity, VersionMessage, exchange_handshake};
 use crate::p2p::legacy::{
     self, build_node_info, node_info_key_name, parse_answer_peer, parse_report_peer,
 };
@@ -32,8 +30,7 @@ use crate::p2p::msg::{
     v2 as v2msg,
 };
 use crate::p2p::peer::{
-    CTRL_WRITER_CAPACITY, PeerWriteCmd, ProtocolVersion, RemotePeer, TX_WRITER_CAPACITY,
-    spawn_writer,
+    PEER_WRITER_CAPACITY, PeerWriteCmd, ProtocolVersion, RemotePeer, next_peer_id, spawn_writer,
 };
 use crate::publiccheck::{
     maybe_mark_public_from_report, maybe_mark_public_from_version, public_from_answer,
@@ -41,6 +38,7 @@ use crate::publiccheck::{
 };
 
 const P2P_STATUS_PRINT_INTERVAL_SECS: u64 = 60 * 97;
+const V1_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn format_p2p_status(
     public_count: usize,
@@ -106,35 +104,22 @@ impl P2PNode {
         self.run_p2p(waiter)
     }
 
-    /// Dial v2 first, then always retry with v1 after a failed v2 attempt.
+    /// Dial v2 first and reconnect with v1 only after an explicit v1 magic reply.
     pub async fn connect_addr(self: &Arc<Self>, addr: SocketAddr) -> Rerr {
-        match self.connect_addr_v2(addr).await {
-            Ok(()) => return Ok(()),
-            Err(_) => {
-                // Fall through to a fresh v1 TCP connection. A v1 peer may
-                // already have closed the v2-magic probe connection.
-            }
-        }
-        self.connect_addr_v1(addr).await
-    }
-
-    /// v2 dial: connect, exchange v2 magic, run v2 handshake + session.
-    async fn connect_addr_v2(self: &Arc<Self>, addr: SocketAddr) -> Rerr {
         let stream =
             tokio::time::timeout(Duration::from_secs(6), tokio::net::TcpStream::connect(addr))
                 .await
                 .map_err(|_| sys::Error::fault(format!("v2 connect timeout {}", addr)))?
                 .map_err(|e| sys::Error::fault(format!("v2 connect {}: {}", addr, e)))?;
         let mut stream = stream;
-        // Lead with v2 magic; inspect peer reply.
         let is_v2 = tokio::time::timeout(HANDSHAKE_TIMEOUT, dial_magic_exchange(&mut stream))
             .await
             .map_err(|_| sys::Error::fault("v2 magic handshake timeout".to_owned()))??;
-        if !is_v2 {
-            // Peer is v1 - caller (connect_addr) will reconnect with v1.
-            return sys::errf!("peer {} is v1, fallback needed", addr);
+        if is_v2 {
+            return self.clone().run_v2_session(stream, addr, true).await;
         }
-        self.clone().run_v2_session(stream, addr, true).await
+        drop(stream);
+        self.connect_addr_v1(addr).await
     }
 
     /// v1 dial: connect, exchange v1 magic, run v1 handshake + session.
@@ -153,7 +138,7 @@ impl P2PNode {
     }
 
     fn p2p_socket_addr(&self) -> sys::Ret<Option<SocketAddr>> {
-        if !self.config.accept_nodes || self.config.listen_port == 0 {
+        if self.config.listen_port == 0 {
             return Ok(None);
         }
         Ok(Some(SocketAddr::new(
@@ -201,36 +186,14 @@ impl P2PNode {
         waiter: Waiter,
         listen_socket: Option<tokio::net::TcpListener>,
     ) -> Rerr {
-        let mut seed_addrs = parse_boot_addrs(&self.config.boot_nodes);
-        if self.config.use_stable_nodes {
-            self.addrbook.load_from_stable().await;
-        }
-        for a in &seed_addrs {
-            let _ = self
-                .addrbook
-                .insert(None, *a, crate::addrbook::AddrSource::Boot)
-                .await;
-        }
-        // Startup dial set: boots + nearest book candidates (capped).
-        let book_seeds = self
-            .addrbook
-            .dial_candidates(
-                &seed_addrs,
-                &[],
-                self.config
-                    .addrbook_dial_max
-                    .max(self.config.backbone_peers),
-            )
-            .await;
-        for a in book_seeds {
-            if !seed_addrs.contains(&a) {
-                seed_addrs.push(a);
-            }
-        }
+        let seed_addrs = parse_boot_addrs(&self.config.boot_nodes);
 
-        // Startup: brief delay then seed dial (mainnet ~0.25s).
-        tokio::time::sleep(Duration::from_millis(250)).await;
-        self.dial_seeds(&seed_addrs).await;
+        let startup_node = self.clone();
+        let startup_seeds = seed_addrs.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            startup_node.connect_stable_then_boot(&startup_seeds).await;
+        });
 
         let mut check_tick = tokio::time::interval(Duration::from_secs(159));
         let mut boost_tick = tokio::time::interval(Duration::from_secs(270));
@@ -240,15 +203,12 @@ impl P2PNode {
             tokio::time::interval(Duration::from_secs(P2P_STATUS_PRINT_INTERVAL_SECS));
         // Align with mainnet low-bid replay cadence (BiddingProve::LOW_BID_LOOP_SECS = 10).
         let mut replay_tick = tokio::time::interval(Duration::from_secs(10));
-        let dial_interval = Duration::from_secs(self.config.dial_interval_secs.max(10));
-        let mut empty_backbone_tick = tokio::time::interval(dial_interval);
         check_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         boost_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         find_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         reconnect_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         print_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         replay_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        empty_backbone_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         // First find_nodes after ~15s (spawn once).
         if self.config.find_nodes {
@@ -266,7 +226,6 @@ impl P2PNode {
         reconnect_tick.tick().await;
         print_tick.tick().await;
         replay_tick.tick().await;
-        empty_backbone_tick.tick().await;
 
         loop {
             tokio::select! {
@@ -276,9 +235,9 @@ impl P2PNode {
                     crate::keepalive::ping_backbones(&self).await;
                 }
                 _ = boost_tick.tick() => {
-                    crate::keepalive::refill_backbone(&self).await;
+                    crate::keepalive::boost_public(&self).await;
                     if self.peertable.backbones().await.is_empty() {
-                        self.dial_seeds(&seed_addrs).await;
+                        self.connect_stable_then_boot(&seed_addrs).await;
                     }
                 }
                 _ = find_tick.tick(), if self.config.find_nodes => {
@@ -286,14 +245,7 @@ impl P2PNode {
                 }
                 _ = reconnect_tick.tick(), if self.config.find_nodes => {
                     if self.peertable.backbones().await.len() < 2 {
-                        self.dial_seeds(&seed_addrs).await;
-                    }
-                }
-                _ = empty_backbone_tick.tick() => {
-                    // `[node].dial_interval`: re-dial seeds/addrbook when backbone is empty.
-                    if self.peertable.backbones().await.is_empty() {
-                        self.dial_seeds(&seed_addrs).await;
-                        self.refill_backbone_from_addrbook().await;
+                        self.connect_stable_then_boot(&seed_addrs).await;
                     }
                 }
                 _ = replay_tick.tick() => {
@@ -340,6 +292,9 @@ impl P2PNode {
                 } => {
                     match accept {
                         Ok((stream, peer_addr)) => {
+                            if !self.config.accept_nodes {
+                                continue;
+                            }
                             let this = self.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handle_conn_accept(this, stream, peer_addr).await {
@@ -359,22 +314,34 @@ impl P2PNode {
         Ok(())
     }
 
-    async fn dial_seeds(self: &Arc<Self>, seeds: &[SocketAddr]) {
-        for addr in seeds {
-            let addr_str = addr.to_string();
-            if self.boot_already_linked(&addr_str) {
-                continue;
+    async fn connect_stable_then_boot(self: &Arc<Self>, boots: &[SocketAddr]) {
+        if self.config.use_stable_nodes {
+            let stable = self.load_stable_nodes(boots).await;
+            self.dial_addrs(&stable, "stable").await;
+            if self.peertable.backbones().await.len() < self.config.backbone_peers {
+                self.dial_addrs(boots, "boot").await;
             }
-            if self.peertable.backbones().await.len() >= self.config.backbone_peers {
-                break;
+        } else {
+            self.dial_addrs(boots, "boot").await;
+        }
+    }
+
+    async fn load_stable_nodes(&self, boots: &[SocketAddr]) -> Vec<SocketAddr> {
+        let mut seen = boots.iter().copied().collect::<HashSet<_>>();
+        for peer in self.peertable.all_peers().await {
+            seen.insert(peer.addr);
+        }
+        crate::stable_nodes::read_stable_file(&self.config.data_dir, self.config.backbone_peers)
+            .into_iter()
+            .filter(|addr| seen.insert(*addr))
+            .collect()
+    }
+
+    async fn dial_addrs(self: &Arc<Self>, addrs: &[SocketAddr], source: &str) {
+        for addr in addrs {
+            if let Err(e) = self.connect_addr(*addr).await {
+                eprintln!("[P2P] connect {} node {} failed: {}", source, addr, e);
             }
-            let this = self.clone();
-            let addr = *addr;
-            tokio::spawn(async move {
-                if let Err(e) = this.connect_addr(addr).await {
-                    eprintln!("[P2P] dial {} failed: {}", addr, e);
-                }
-            });
         }
     }
 }
@@ -430,7 +397,7 @@ async fn handle_conn_accept(
     mut stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,
 ) -> Rerr {
-    let is_v2 = tokio::time::timeout(HANDSHAKE_TIMEOUT, accept_read_magic(&mut stream))
+    let is_v2 = tokio::time::timeout(V1_HANDSHAKE_TIMEOUT, accept_read_magic(&mut stream))
         .await
         .map_err(|_| sys::Error::fault("p2p magic handshake timeout".to_owned()))??;
     if is_v2 {
@@ -458,9 +425,12 @@ async fn handle_conn_v1(
     peer_addr: SocketAddr,
     report_me: bool,
 ) -> Rerr {
-    tokio::time::timeout(HANDSHAKE_TIMEOUT, legacy::tcp_check_handshake(&mut stream))
-        .await
-        .map_err(|_| sys::Error::fault("v1 magic handshake timeout".to_owned()))??;
+    tokio::time::timeout(
+        V1_HANDSHAKE_TIMEOUT,
+        legacy::tcp_check_handshake(&mut stream),
+    )
+    .await
+    .map_err(|_| sys::Error::fault("v1 magic handshake timeout".to_owned()))??;
     handle_conn_v1_body(node, stream, peer_addr, report_me).await
 }
 
@@ -480,10 +450,12 @@ async fn handle_conn_v1_body(
         legacy::write_transport_msg(&mut stream, V1_MSG_REPORT_PEER, &my_info).await?;
     }
 
-    let (ty, body) =
-        tokio::time::timeout(HANDSHAKE_TIMEOUT, legacy::read_transport_msg(&mut stream))
-            .await
-            .map_err(|_| sys::Error::fault("v1 identity handshake timeout".to_owned()))??;
+    let (ty, body) = tokio::time::timeout(
+        V1_HANDSHAKE_TIMEOUT,
+        legacy::read_transport_msg(&mut stream),
+    )
+    .await
+    .map_err(|_| sys::Error::fault("v1 identity handshake timeout".to_owned()))??;
     // One-shot discovery/probe messages (no session).
     if ty == V1_MSG_REMIND_ME_IS_PUBLIC {
         return Ok(());
@@ -537,7 +509,6 @@ async fn handle_conn_v1_body(
         ),
         is_inbound,
         is_public,
-        report_me,
         ProtocolVersion::V1,
     )
     .await
@@ -579,6 +550,9 @@ impl P2PNode {
             if ty == v2msg::MSG_CHECK_PUBLIC {
                 return serve_check_public_v2(&mut stream, &self.config.node_key).await;
             }
+            if ty == v2msg::MSG_GETADDR {
+                return self.serve_getaddr_v2(&mut stream).await;
+            }
             if ty != v2msg::MSG_VERSION {
                 return sys::errf!("unexpected v2 first msg type {}", ty);
             }
@@ -595,9 +569,6 @@ impl P2PNode {
             peer
         };
 
-        if peer_version.genesis_hash != genesis.into_array() {
-            return sys::errf!("v2 genesis mismatch with peer {}", peer_addr);
-        }
         if peer_version.node_key == self.config.node_key {
             return sys::errf!("cannot connect to self");
         }
@@ -605,16 +576,11 @@ impl P2PNode {
         let identity = PeerIdentity::from_version(&peer_version);
         let is_inbound = !from_dial;
         let (is_public, session_addr) = if is_inbound {
-            maybe_mark_public_from_version(
-                peer_addr,
-                identity.listen_port,
-                &identity.key,
-                peer_version.is_public(),
-            )
-            .await
+            maybe_mark_public_from_version(peer_addr, identity.listen_port, &identity.key).await
         } else {
-            // Outbound: reachable by definition (we dialed); public iff claimed + non-loopback.
-            let pub_ok = peer_version.is_public() && !peer_addr.ip().is_loopback();
+            // fullnodedev classifies a successfully dialed non-loopback peer
+            // as public; v2 capability bits do not change table placement.
+            let pub_ok = !peer_addr.ip().is_loopback();
             (pub_ok, peer_addr)
         };
 
@@ -625,7 +591,6 @@ impl P2PNode {
             identity,
             is_inbound,
             is_public,
-            from_dial,
             ProtocolVersion::V2,
         )
         .await
@@ -666,20 +631,13 @@ async fn run_peer_session(
     identity: PeerIdentity,
     is_inbound: bool,
     is_public: bool,
-    from_dial: bool,
     protocol_version: ProtocolVersion,
 ) -> Rerr {
-    let peer_id = peer_id_from_key(&identity.key);
-    if node.peertable.has_peer(&peer_id).await {
-        return Ok(());
-    }
-
+    let peer_id = next_peer_id();
     let (reader, writer) = stream.into_split();
-    let (ctrl_tx, ctrl_rx) = mpsc::channel::<PeerWriteCmd>(CTRL_WRITER_CAPACITY);
-    let (tx_tx, tx_rx) = mpsc::channel::<PeerWriteCmd>(TX_WRITER_CAPACITY);
+    let (writer_tx, writer_rx) = mpsc::channel::<PeerWriteCmd>(PEER_WRITER_CAPACITY);
     let close_notify = Arc::new(Notify::new());
     let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let start_height = identity.start_height;
     let peer = Arc::new(RemotePeer {
         id: peer_id.clone(),
         node_key: identity.key,
@@ -690,7 +648,6 @@ async fn run_peer_session(
         is_inbound: std::sync::atomic::AtomicBool::new(is_inbound),
         last_active: std::sync::Mutex::new(Instant::now()),
         protocol_version: std::sync::atomic::AtomicU8::new(protocol_version.as_u8()),
-        remote_height: std::sync::atomic::AtomicU64::new(start_height),
         // v1 has no service bits: assume the peer relays every channel we
         // know about (equivalent to an all-ones mask). v2 peers expose their
         // advertised services verbatim; the node inspects individual channel
@@ -704,23 +661,14 @@ async fn run_peer_session(
         ),
         relay: std::sync::atomic::AtomicBool::new(identity.relay),
         custom_types: identity.custom_types.clone(),
-        ctrl_tx,
-        tx_tx,
+        writer_tx,
         close_notify: close_notify.clone(),
         closed: closed.clone(),
         knows: crate::knowledge::Knowledge::new(500),
-        rate_count: std::sync::atomic::AtomicU32::new(0),
-        rate_window_start: std::sync::Mutex::new(Instant::now()),
     });
 
-    if !node.add_peer(peer.clone()).await {
-        return sys::errf!("peer capacity reached");
-    }
-    if from_dial {
-        node.note_boot_link(&peer_addr.to_string(), &peer_id);
-    }
-    // v2 sync is started inside add_peer (which reads peer.remote_height).
-    // v1 sync is also started inside add_peer via REQ_STATUS.
+    let _writer_task = spawn_writer(writer_rx, writer, close_notify.clone(), closed.clone());
+    node.add_peer(peer.clone()).await;
     println!(
         "[P2P] peer {} ({}) {} public={} v{} from {}",
         identity.name,
@@ -731,7 +679,6 @@ async fn run_peer_session(
         peer_addr
     );
 
-    let writer_task = spawn_writer(ctrl_rx, tx_rx, writer, close_notify.clone(), closed.clone());
     let node_bg = node.clone();
     let peer_bg = peer.clone();
     let peer_id_bg = peer_id.clone();
@@ -745,29 +692,28 @@ async fn run_peer_session(
                 run_v1_read_loop(node_bg.clone(), peer_bg.clone(), &mut reader, &peer_id_bg).await
             }
         };
-        peer_bg.signal_close();
-        node_bg.remove_peer(&peer_id_bg).await;
-        writer_task.abort();
+        peer_bg.disconnect();
+        node_bg.remove_peer(&peer_bg).await;
+        let disconnect_node = node_bg.clone();
+        let disconnect_peer = peer_bg.clone();
+        tokio::spawn(async move {
+            disconnect_node.on_peer_disconnect(disconnect_peer);
+        });
         println!("[P2P] peer {} disconnected", peer_id_bg);
         if let Err(e) = read_result {
             eprintln!("[P2P] peer {} session error: {}", peer_id_bg, e);
         }
     });
+    let connect_node = node.clone();
+    let connect_peer = peer.clone();
+    tokio::spawn(async move {
+        connect_node.on_peer_connect(connect_peer);
+    });
     Ok(())
 }
 
-/// Pre-dispatch bookkeeping shared by v1/v2 read loops: touch last_active
-/// and enforce per-peer inbound rate limit. Returns false if the peer should
-/// be disconnected for exceeding the rate budget.
-fn pre_dispatch(peer: &RemotePeer, peer_id: &str) -> bool {
+fn pre_dispatch(peer: &RemotePeer) {
     peer.touch();
-    if !peer.note_inbound_msg() {
-        eprintln!("[P2P] peer {} exceeded inbound rate, disconnect", peer_id);
-        peer.disconnect();
-        false
-    } else {
-        true
-    }
 }
 
 /// Dispatch an application message (u16 ty) shared by v1/v2 read loops.
@@ -786,7 +732,6 @@ async fn dispatch_app_msg(
                 "[P2P] peer {} sent unnegotiated custom message {}",
                 peer_id, ty
             );
-            peer.disconnect();
             return;
         }
         let Some(handler) = node.custom_message_handler(ty as u8) else {
@@ -794,7 +739,6 @@ async fn dispatch_app_msg(
                 "[P2P] peer {} sent unregistered custom message {}",
                 peer_id, ty
             );
-            peer.disconnect();
             return;
         };
         let peer_ext: Arc<dyn base::Peer> = peer.clone();
@@ -804,42 +748,33 @@ async fn dispatch_app_msg(
                 eprintln!("[P2P] custom message {} from {} failed: {}", ty, pid, e);
             }
         });
-    } else if ty == MSG_TX_SUBMIT {
-        let msg = InboundMsg::Tx {
-            peer: Some(peer_id.to_string()),
-            body,
-            ack: None,
-        };
-        let close_wait = peer.close_notify.notified();
-        if peer.closed.load(std::sync::atomic::Ordering::Acquire) {
-            return;
-        }
-        tokio::select! {
-            _ = close_wait => {}
-            result = node.inbound.send(msg) => {
-                if let Err(e) = result {
-                    eprintln!("[P2P] enqueue tx from {} failed: {}", peer_id, e);
-                }
+    } else if ty == MSG_TX_SUBMIT || ty == MSG_BLOCK_DISCOVER {
+        let inbound = node.inbound.clone();
+        let pid = peer_id.to_string();
+        let is_tx = ty == MSG_TX_SUBMIT;
+        let msg = if is_tx {
+            InboundMsg::Tx {
+                peer: Some(pid.clone()),
+                body,
+                ack: None,
             }
-        }
-    } else if ty == MSG_BLOCK_DISCOVER {
-        let msg = InboundMsg::Block {
-            peer: Some(peer_id.to_string()),
-            body,
-            ack: None,
-        };
-        let close_wait = peer.close_notify.notified();
-        if peer.closed.load(std::sync::atomic::Ordering::Acquire) {
-            return;
-        }
-        tokio::select! {
-            _ = close_wait => {}
-            result = node.inbound.send(msg) => {
-                if let Err(e) = result {
-                    eprintln!("[P2P] enqueue block from {} failed: {}", peer_id, e);
-                }
+        } else {
+            InboundMsg::Block {
+                peer: Some(pid.clone()),
+                body,
+                ack: None,
             }
-        }
+        };
+        tokio::spawn(async move {
+            if let Err(e) = inbound.send(msg).await {
+                eprintln!(
+                    "[P2P] enqueue {} from {} failed: {}",
+                    if is_tx { "tx" } else { "block" },
+                    pid,
+                    e
+                );
+            }
+        });
     } else {
         let node = node.clone();
         let peer_ext: Arc<dyn base::Peer> = peer.clone();
@@ -871,9 +806,7 @@ async fn run_v2_read_loop(
                 Err(_) => return Ok(()),
             },
         };
-        if !pre_dispatch(&peer, peer_id) {
-            return Ok(());
-        }
+        pre_dispatch(&peer);
         match ty {
             v2msg::MSG_PING => {
                 if let Ok(frame) = crate::p2p::codec::create_transport_frame(v2msg::MSG_PONG, &[]) {
@@ -887,16 +820,11 @@ async fn run_v2_read_loop(
                     eprintln!("[P2P] GETADDR reply to {} failed: {}", peer_id, e);
                 }
             }
-            v2msg::MSG_ADDR => {
-                let node = node.clone();
-                tokio::spawn(async move {
-                    node.handle_addr_message(body).await;
-                });
-            }
+            // Discovery responses are accepted only on the one-shot query
+            // connection created by find_nodes, as in dev.
+            v2msg::MSG_ADDR => {}
             v2msg::MSG_RESERVED => {
                 eprintln!("[P2P] peer {} sent reserved v2 message type 100", peer_id);
-                peer.disconnect();
-                return Ok(());
             }
             _ => dispatch_app_msg(&node, &peer, peer_id, ty as u16, body).await,
         }
@@ -922,12 +850,12 @@ async fn run_v1_read_loop(
                 Err(_) => return Ok(()),
             },
         };
-        if !pre_dispatch(&peer, peer_id) {
-            return Ok(());
-        }
+        pre_dispatch(&peer);
         match ty {
             V1_MSG_CUSTOMER => {
-                let (app_ty, app_body) = legacy::decode_customer(&body)?;
+                let Ok((app_ty, app_body)) = legacy::decode_customer(&body) else {
+                    continue;
+                };
                 dispatch_app_msg(&node, &peer, peer_id, app_ty, app_body).await;
             }
             V1_MSG_PING => {

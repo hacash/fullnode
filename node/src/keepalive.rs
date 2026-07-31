@@ -1,4 +1,4 @@
-//! Ping / idle eviction / backbone refill from AddrBook.
+//! Ping, idle eviction, and public offshoot promotion.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -58,9 +58,10 @@ pub async fn check_active(node: &P2PNode) {
     }
 }
 
-/// Refill backbone slots by dialing AddrBook (replaces boost-from-offshoot).
-pub async fn refill_backbone(node: &Arc<P2PNode>) {
-    node.refill_backbone_from_addrbook().await;
+pub async fn boost_public(node: &Arc<P2PNode>) {
+    if node.peertable.boost_public().await {
+        node.persist_stable_backbones().await;
+    }
 }
 
 impl P2PNode {
@@ -80,39 +81,5 @@ impl P2PNode {
                 p.disconnect();
             }
         });
-    }
-
-    pub async fn refill_backbone_from_addrbook(self: &Arc<Self>) {
-        let bbs = self.peertable.backbones().await;
-        if bbs.len() >= self.config.backbone_peers {
-            return;
-        }
-        let exclude_addrs: Vec<_> = bbs.iter().map(|p| p.addr).collect();
-        let exclude_keys: Vec<_> = bbs.iter().map(|p| p.node_key).collect();
-        let need = self.config.backbone_peers - bbs.len();
-        let limit = need.max(1).min(self.config.addrbook_dial_max);
-        let candidates = self
-            .addrbook
-            .dial_candidates(&exclude_addrs, &exclude_keys, limit)
-            .await;
-        let mut ok = 0usize;
-        for addr in candidates {
-            if self.peertable.backbones().await.len() >= self.config.backbone_peers {
-                break;
-            }
-            match self.connect_addr(addr).await {
-                Ok(()) => {
-                    self.addrbook.note_success(addr).await;
-                    ok += 1;
-                    if ok >= self.config.addrbook_dial_max {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[P2P] addrbook dial {} failed: {}", addr, e);
-                    self.addrbook.note_fail(addr).await;
-                }
-            }
-        }
     }
 }

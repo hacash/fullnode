@@ -8,7 +8,6 @@ use base::{BlkPkg, ChainListener, Engine, Node, P2PConfig, TxPkg, TxPool, TxSubm
 use field::Hash;
 use sys::{Rerr, Waiter};
 
-use crate::addrbook::AddrBook;
 use crate::knowledge::{Knowledge, RejectCache};
 use crate::msgqueue::{InboundHub, InboundMsg};
 use crate::peertable::PeerTable;
@@ -17,6 +16,12 @@ use crate::sync_tracker::SyncTracker;
 
 /// Handler for a negotiated/custom v2 top-level message type (101..=255).
 pub trait CustomMessageHandler: Send + Sync {
+    fn on_connect(&self, _peer: Arc<dyn base::Peer>) -> Rerr {
+        Ok(())
+    }
+
+    fn on_disconnect(&self, _peer: Arc<dyn base::Peer>) {}
+
     fn handle(&self, peer: Arc<dyn base::Peer>, ty: u8, body: Vec<u8>) -> Rerr;
 }
 
@@ -25,9 +30,7 @@ pub struct P2PNode {
     pub(crate) engine: Arc<dyn Engine>,
     pub(crate) config: P2PConfig,
     pub(crate) peertable: Arc<PeerTable>,
-    pub(crate) addrbook: Arc<AddrBook>,
     pub(crate) listeners: Mutex<Vec<Arc<dyn ChainListener>>>,
-    pub(crate) boot_links: Mutex<HashMap<String, String>>,
     /// Global broadcast knowledge (capacity 2000).
     pub(crate) knows: Knowledge,
     pub(crate) tx_rejects: RejectCache,
@@ -39,10 +42,6 @@ pub struct P2PNode {
     /// Unified sync: v1 serial / v2 window downloaders -> one BlockStream apply thread.
     pub(crate) sync_session: Arc<SyncSlot>,
     pub(crate) sync_generation: AtomicU64,
-    /// FastSync trusts one source for the lifetime of a session. Any source or
-    /// apply failure latches this flag so later STATUS messages cannot restart
-    /// synchronization through another peer.
-    pub(crate) fast_sync_terminal: AtomicBool,
     pub(crate) orphan_blocks: Mutex<HashMap<Hash, Vec<BlkPkg>>>,
     pub(crate) inbound: Arc<InboundHub>,
     pub(crate) stopping: AtomicBool,
@@ -57,20 +56,12 @@ impl P2PNode {
             config.backbone_peers,
             config.offshoot_peers,
         ));
-        let addrbook = Arc::new(AddrBook::new(
-            config.node_key,
-            config.addrbook_max,
-            config.data_dir.clone(),
-            config.stable_max_write,
-        ));
         Self {
             txpool,
             engine,
             config,
             peertable,
-            addrbook,
             listeners: Mutex::new(Vec::new()),
-            boot_links: Mutex::new(HashMap::new()),
             knows: Knowledge::new(2000),
             tx_rejects: RejectCache::new(2000, std::time::Duration::from_secs(30)),
             block_rejects: RejectCache::new(2000, std::time::Duration::from_secs(30)),
@@ -80,7 +71,6 @@ impl P2PNode {
             inserting: Arc::new(Mutex::new(())),
             sync_session: Arc::new(Mutex::new(None)),
             sync_generation: AtomicU64::new(0),
-            fast_sync_terminal: AtomicBool::new(false),
             orphan_blocks: Mutex::new(HashMap::new()),
             inbound: Arc::new(InboundHub::new(4000)),
             stopping: AtomicBool::new(false),
@@ -124,6 +114,19 @@ impl P2PNode {
 
     pub(crate) fn custom_message_handler(&self, ty: u8) -> Option<Arc<dyn CustomMessageHandler>> {
         self.custom_handlers.lock().ok()?.get(&ty).cloned()
+    }
+
+    pub(crate) fn custom_message_handlers(&self) -> Vec<Arc<dyn CustomMessageHandler>> {
+        let Ok(handlers) = self.custom_handlers.lock() else {
+            return Vec::new();
+        };
+        let mut unique: Vec<Arc<dyn CustomMessageHandler>> = Vec::new();
+        for handler in handlers.values() {
+            if !unique.iter().any(|current| Arc::ptr_eq(current, handler)) {
+                unique.push(handler.clone());
+            }
+        }
+        unique
     }
 
     pub(crate) fn registered_custom_message_types(&self) -> Vec<u8> {
@@ -259,7 +262,6 @@ impl P2PNode {
 impl Node for P2PNode {
     fn start(&self, waiter: Waiter) -> Rerr {
         self.stopping.store(false, Ordering::Release);
-        self.fast_sync_terminal.store(false, Ordering::Release);
         self.engine.node_hooks().start(waiter)
     }
 

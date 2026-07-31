@@ -8,7 +8,9 @@ use std::time::Duration;
 use sys::Rerr;
 
 use crate::P2PNode;
-use crate::addrbook::AddrSource;
+use crate::p2p::codec::{
+    dial_magic_exchange, read_transport_msg as read_v2_msg, write_transport_msg as write_v2_msg,
+};
 use crate::p2p::legacy::{tcp_check_handshake, write_all, write_transport_msg};
 use crate::p2p::msg::V1_MSG_REQUEST_NEAREST_PUBLIC_NODES;
 use crate::p2p::msg::v2::{MSG_ADDR, MSG_GETADDR};
@@ -19,11 +21,11 @@ const V1_ENTRY_SIZE: usize = 4 + 2 + 16;
 
 // ---- v1 MSG 202 wire ----
 
-pub fn serialize_public_nodes(peers: &[Arc<RemotePeer>], max: usize) -> Vec<u8> {
+pub fn serialize_public_nodes(peers: &[Arc<RemotePeer>], _max: usize) -> Vec<u8> {
     let mut body = Vec::new();
     let mut count = 0u8;
     for p in peers {
-        if count as usize >= max || count == 200 {
+        if count == 200 {
             break;
         }
         if !p.is_public() || p.addr.ip().is_loopback() {
@@ -105,6 +107,9 @@ pub fn decode_addr_v2(body: &[u8]) -> sys::Ret<Vec<(PeerKey, SocketAddr)>> {
         return sys::errf!("ADDR body too short");
     }
     let count = u16::from_be_bytes([body[0], body[1]]) as usize;
+    if count > 200 {
+        return sys::errf!("ADDR count too large: {}", count);
+    }
     let mut off = 2;
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
@@ -145,7 +150,43 @@ pub fn decode_addr_v2(body: &[u8]) -> sys::Ret<Vec<(PeerKey, SocketAddr)>> {
         }
         out.push((key, SocketAddr::new(ip, port)));
     }
+    if off != body.len() {
+        return sys::errf!("ADDR trailing bytes: {}", body.len() - off);
+    }
     Ok(out)
+}
+
+async fn request_public_nodes_v2(
+    addr: SocketAddr,
+    datas: &mut HashMap<PeerKey, SocketAddr>,
+) -> Rerr {
+    let mut stream =
+        tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(addr))
+            .await
+            .map_err(|_| sys::Error::fault(format!("find_nodes connect timeout {}", addr)))?
+            .map_err(|e| sys::Error::fault(format!("find_nodes connect {}: {}", addr, e)))?;
+    let is_v2 = tokio::time::timeout(Duration::from_secs(5), dial_magic_exchange(&mut stream))
+        .await
+        .map_err(|_| sys::Error::fault("find_nodes v2 magic timeout".to_owned()))??;
+    if !is_v2 {
+        return sys::errf!("find_nodes peer {} no longer speaks v2", addr);
+    }
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        write_v2_msg(&mut stream, MSG_GETADDR, &[]),
+    )
+    .await
+    .map_err(|_| sys::Error::fault("find_nodes GETADDR write timeout".to_owned()))??;
+    let (ty, body) = tokio::time::timeout(Duration::from_secs(5), read_v2_msg(&mut stream))
+        .await
+        .map_err(|_| sys::Error::fault("find_nodes ADDR read timeout".to_owned()))??;
+    if ty != MSG_ADDR {
+        return sys::errf!("find_nodes expected ADDR, got {}", ty);
+    }
+    for (key, found_addr) in decode_addr_v2(&body)? {
+        datas.insert(key, found_addr);
+    }
+    Ok(())
 }
 
 async fn request_public_nodes_v1(
@@ -157,7 +198,9 @@ async fn request_public_nodes_v1(
             .await
             .map_err(|_| sys::Error::fault(format!("find_nodes connect timeout {}", addr)))?
             .map_err(|e| sys::Error::fault(format!("find_nodes connect {}: {}", addr, e)))?;
-    tcp_check_handshake(&mut stream).await?;
+    tokio::time::timeout(Duration::from_secs(5), tcp_check_handshake(&mut stream))
+        .await
+        .map_err(|_| sys::Error::fault("find_nodes v1 magic timeout".to_owned()))??;
     write_transport_msg(&mut stream, V1_MSG_REQUEST_NEAREST_PUBLIC_NODES, &[]).await?;
     let mut buf = Vec::new();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -184,25 +227,25 @@ async fn request_public_nodes_v1(
 }
 
 impl P2PNode {
-    /// Query peers for nearer publics → AddrBook, then dial DHT-nearest (≤addrbook_dial_max).
-    ///
-    /// Topology policy stays next's (publics in AddrBook, not live offshoot); dialing
-    /// nearest finds matches old mainnet `do_insert_new_nodes` so bootstrap converges.
+    /// Query backbone peers and connect DHT-nearest results, matching fullnodedev.
     pub async fn find_nodes(self: &Arc<Self>) {
         if !self.config.find_nodes {
             return;
         }
         print!("[P2P] Searching nodes...");
         let backbones = self.peertable.backbones().await;
+        if backbones.is_empty() {
+            println!("not connected any nodes.");
+            return;
+        }
         let mut allfind: HashMap<PeerKey, SocketAddr> = HashMap::new();
-        let mut exclude: Vec<PeerKey> = vec![self.config.node_key];
+        let mut excluded = vec![self.config.node_key];
         for p in &backbones {
-            exclude.push(p.node_key);
+            excluded.push(p.node_key);
             match p.protocol_version() {
                 ProtocolVersion::V2 => {
-                    // Session GETADDR on live peer.
-                    if let Err(e) = p.send_v2_transport(MSG_GETADDR, &[]) {
-                        println!("GETADDR to {} failed: {}", p.id, e);
+                    if let Err(e) = request_public_nodes_v2(p.addr, &mut allfind).await {
+                        println!("request public nodes error: {}", e);
                     }
                 }
                 ProtocolVersion::V1 => {
@@ -212,45 +255,24 @@ impl P2PNode {
                 }
             }
         }
-        if exclude.len() <= 1 {
-            println!("not connected any nodes.");
-            return;
-        }
-        for k in &exclude {
-            allfind.remove(k);
+        for key in &excluded {
+            allfind.remove(key);
         }
         if allfind.is_empty() {
             println!("not find any new nodes.");
             return;
         }
-        // DHT-nearest relative to self, closer than farthest current backbone.
-        let compare = exclude[0];
-        let first = exclude.get(1).copied().unwrap_or(compare);
-        let least = *exclude.last().unwrap_or(&compare);
+        let first = excluded[1];
+        let least = *excluded.last().unwrap_or(&self.config.node_key);
         let mut nearest_keys: Vec<PeerKey> = Vec::new();
         let mut nearest_addrs: Vec<SocketAddr> = Vec::new();
-        let mut n = 0usize;
         for (k, addr) in &allfind {
-            if self
-                .addrbook
-                .insert(Some(*k), *addr, AddrSource::Find)
-                .await
-            {
-                n += 1;
-            }
-            if insert_nearest_key(&mut nearest_keys, &compare, &least, k) {
+            if insert_nearest_key(&mut nearest_keys, &self.config.node_key, &least, k) {
                 nearest_addrs.push(*addr);
             }
         }
-        println!(
-            "find {} nodes → addrbook (len={}), {} nearer to dial.",
-            n,
-            self.addrbook.len().await,
-            nearest_addrs.len()
-        );
-        self.maybe_persist_addrbook().await;
+        println!("find {} new nodes.", allfind.len());
         self.dial_nearest_publics(nearest_addrs, first).await;
-        self.refill_backbone_from_addrbook().await;
     }
 
     /// Dial DHT-nearest discovered publics (mainnet find_nodes behavior).
@@ -265,25 +287,18 @@ impl P2PNode {
             return;
         }
         println!("find {} nearest nodes, try connect...", addrs.len());
-        let dial_cap = self.config.addrbook_dial_max.max(1);
-        let mut ok = 0usize;
+        let mut connected = 0usize;
         for addr in addrs {
             match self.connect_addr(addr).await {
-                Ok(()) => {
-                    self.addrbook.note_success(addr).await;
-                    ok += 1;
-                }
+                Ok(()) => connected += 1,
                 Err(e) => {
                     println!("failed connect to {}, {}.", addr, e);
-                    self.addrbook.note_fail(addr).await;
                     continue;
                 }
             }
-            if ok >= dial_cap {
+            if connected >= 16 {
                 break;
             }
-            // Stop once the previous "first" backbone is no longer in table
-            // (topology reshuffled / slots filled) — same early-exit as mainnet.
             let still = self
                 .peertable
                 .backbones()
@@ -303,26 +318,36 @@ impl P2PNode {
     }
 
     pub(crate) fn handle_getaddr(&self, peer: &Arc<RemotePeer>) -> Rerr {
-        let publics = self.peertable.try_publics();
+        let publics = self
+            .peertable
+            .values_snapshot()
+            .into_iter()
+            .filter(|candidate| candidate.is_public() && !candidate.addr.ip().is_loopback())
+            .collect::<Vec<_>>();
         let body = encode_addr_v2(&publics, 100);
         peer.send_v2_transport(MSG_ADDR, &body)
     }
 
-    pub(crate) async fn handle_addr_message(&self, body: Vec<u8>) {
-        let Ok(entries) = decode_addr_v2(&body) else {
-            return;
-        };
-        let mut n = 0usize;
-        for (k, addr) in entries {
-            if k == self.config.node_key {
-                continue;
-            }
-            if self.addrbook.insert(Some(k), addr, AddrSource::Find).await {
-                n += 1;
-            }
-        }
-        if n > 0 {
-            self.maybe_persist_addrbook().await;
-        }
+    pub(crate) async fn serve_getaddr_v2(&self, stream: &mut tokio::net::TcpStream) -> Rerr {
+        let publics = self.peertable.publics().await;
+        let body = encode_addr_v2(&publics, 100);
+        write_v2_msg(stream, MSG_ADDR, &body).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_addr_v2;
+
+    #[test]
+    fn addr_rejects_more_than_two_hundred_entries() {
+        assert!(decode_addr_v2(&201u16.to_be_bytes()).is_err());
+    }
+
+    #[test]
+    fn addr_rejects_trailing_bytes() {
+        let mut body = 0u16.to_be_bytes().to_vec();
+        body.push(0);
+        assert!(decode_addr_v2(&body).is_err());
     }
 }

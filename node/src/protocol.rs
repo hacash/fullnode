@@ -16,6 +16,20 @@ use crate::p2p::msg::{
 use crate::p2p::source::OneShotBlocks;
 use crate::p2p::syncwire::{BLOCKS_HDR_VERSION, BLOCKS_HEADER_SIZE, BlocksHeader, GetBlocks};
 
+const SYNC_SESSION_TAKEOVER_IDLE: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn may_replace_sync_session(
+    active_peer: &str,
+    last_activity: &std::sync::Mutex<std::time::Instant>,
+    candidate_peer: &str,
+) -> bool {
+    active_peer == candidate_peer
+        || last_activity
+            .lock()
+            .map(|last| last.elapsed() >= SYNC_SESSION_TAKEOVER_IDLE)
+            .unwrap_or(true)
+}
+
 impl P2PNode {
     fn status_message(&self) -> Vec<u8> {
         // Mainnet HandshakeStatus (78 bytes), field order matches combi_struct.
@@ -43,19 +57,12 @@ impl P2PNode {
         start_height: u64,
         remote_height: u64,
     ) -> bool {
-        if self.fast_sync_terminal.load(Ordering::Acquire) {
-            return false;
-        }
-        let now = sys::curtimes();
-        let prev = self.doing_sync.load(Ordering::Relaxed);
-        // ~2s throttle: within window only refresh the active peer.
-        if prev + 2 > now {
-            return self
-                .sync_tracker
-                .refresh_if_active(peer_id, start_height, remote_height);
-        }
+        let node_key = self
+            .peertable
+            .get_snapshot(peer_id)
+            .map(|peer| peer.node_key);
         self.sync_tracker
-            .begin_or_refresh(peer_id, start_height, remote_height)
+            .begin_or_refresh(peer_id, node_key, start_height, remote_height)
     }
 
     pub(crate) fn mark_doing_sync(&self) {
@@ -72,15 +79,45 @@ impl P2PNode {
         self.start_sync_pipe(peer, start_height, remote_height)
     }
 
-    /// Start sync when `remote_height` is ahead of local tip (STATUS or v2 VERSION).
-    pub(crate) fn maybe_sync_from_remote_height(
+    /// Start sync when a peer STATUS reports a height ahead of the local tip.
+    fn maybe_sync_from_remote_height(
         self: &Arc<Self>,
         peer: Arc<dyn base::Peer>,
         remote_height: u64,
     ) -> Rerr {
-        if self.sync_session.lock().unwrap().is_some() {
+        if remote_height <= self.engine.latest_height() {
             return Ok(());
         }
+        let peer_id = peer.id();
+        let replaced_peer = {
+            let mut slot = self.sync_session.lock().unwrap();
+            let Some(active) = slot.as_ref() else {
+                drop(slot);
+                return self.start_sync_from_status(peer, remote_height);
+            };
+            let may_replace =
+                may_replace_sync_session(&active.peer_id, &active.last_activity, &peer_id);
+            if !may_replace {
+                return Ok(());
+            }
+            slot.take().map(|session| {
+                let old_peer = session.peer_id.clone();
+                session.cancel();
+                old_peer
+            })
+        };
+        if let Some(old_peer) = replaced_peer {
+            self.sync_tracker.clear_peer(&old_peer);
+            self.doing_sync.store(0, Ordering::Release);
+        }
+        self.start_sync_from_status(peer, remote_height)
+    }
+
+    fn start_sync_from_status(
+        self: &Arc<Self>,
+        peer: Arc<dyn base::Peer>,
+        remote_height: u64,
+    ) -> Rerr {
         let local_height = self.engine.latest_height();
         if remote_height <= local_height {
             return Ok(());
@@ -97,27 +134,20 @@ impl P2PNode {
         let mut req = Vec::with_capacity(9);
         req.push(num);
         req.extend_from_slice(&local_height.to_be_bytes());
-        if let Err(e) = peer.send_msg(MSG_REQ_BLOCK_HASH, req) {
-            self.mark_sync_failure(
-                &peer_id,
-                &format!(
-                    "fork-point request at height {} failed: {}",
-                    local_height, e
-                ),
-            );
-            return Err(e);
-        }
+        let _ = peer.send_msg(MSG_REQ_BLOCK_HASH, req);
         Ok(())
     }
 
     fn handle_status_message(self: &Arc<Self>, peer: Arc<dyn base::Peer>, body: Vec<u8>) -> Rerr {
         if body.len() != 78 {
-            return sys::errf!("p2p status message length invalid: {}", body.len());
+            peer.disconnect();
+            return Ok(());
         }
         let genesis = Hash::from(body[0..32].try_into().unwrap());
         let local_genesis = self.engine.consensus().genesis_block().hash();
         if genesis != local_genesis {
-            return sys::errf!("p2p genesis hash mismatch with peer {}", peer.id());
+            peer.disconnect();
+            return Ok(());
         }
         let mut height_buf = [0u8; 8];
         height_buf[3..8].copy_from_slice(&body[41..46]);
@@ -524,5 +554,36 @@ impl P2PNode {
             }
             _ => sys::errf!("p2p message type {} not implemented", ty),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use super::may_replace_sync_session;
+
+    #[test]
+    fn same_connection_can_restart_its_sync_session() {
+        assert!(may_replace_sync_session(
+            "peer-a",
+            &Mutex::new(Instant::now()),
+            "peer-a"
+        ));
+    }
+
+    #[test]
+    fn another_connection_can_only_take_over_a_stale_session() {
+        assert!(!may_replace_sync_session(
+            "peer-a",
+            &Mutex::new(Instant::now()),
+            "peer-b"
+        ));
+        assert!(may_replace_sync_session(
+            "peer-a",
+            &Mutex::new(Instant::now() - Duration::from_secs(10)),
+            "peer-b"
+        ));
     }
 }

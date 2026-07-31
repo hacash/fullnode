@@ -8,8 +8,6 @@ pub struct P2PConfig {
     pub listen_ip: IpAddr,
     pub block_queue_cap: usize,
     pub boot_nodes: Vec<String>,
-    pub dial_interval_secs: u64,
-    pub max_peers: usize,
     #[serde(skip)]
     pub node_key: [u8; 16],
     pub node_name: String,
@@ -21,9 +19,6 @@ pub struct P2PConfig {
     pub use_stable_nodes: bool,
     pub backbone_peers: usize,
     pub offshoot_peers: usize,
-    pub addrbook_max: usize,
-    pub stable_max_write: usize,
-    pub addrbook_dial_max: usize,
 }
 
 impl Default for P2PConfig {
@@ -32,8 +27,6 @@ impl Default for P2PConfig {
             listen_ip: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             block_queue_cap: 8,
             boot_nodes: Vec::new(),
-            dial_interval_secs: 60,
-            max_peers: 204,
             node_key: [0; 16],
             node_name: String::new(),
             listen_port: 3337,
@@ -43,9 +36,6 @@ impl Default for P2PConfig {
             use_stable_nodes: true,
             backbone_peers: 4,
             offshoot_peers: 200,
-            addrbook_max: 200,
-            stable_max_write: 200,
-            addrbook_dial_max: 16,
         }
     }
 }

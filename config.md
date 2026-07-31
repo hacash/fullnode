@@ -65,16 +65,11 @@ Struct: `base::P2PConfig`.
 | `listen_port` | u16 | `3337` | TCP port for inbound P2P connections. Set to `0` to disable inbound acceptance (outbound-only node). |
 | `node_name` | string | `""` | Human-readable peer name advertised in handshakes. If left empty, the loader assigns `"hn"` + the first 8 hex characters of the auto-generated `node_key`. Padded to 16 bytes on the wire, so keep it short. |
 | `boot_nodes` | list of strings | `[]` | Comma-separated seed peer addresses used for initial discovery, e.g. `1.2.3.4:3337,5.6.7.8:3337`. Each entry is `host:port`. |
-| `dial_interval_secs` | u64 | `60` | Interval, in seconds, between outbound dialing sweeps. Clamped to a minimum of 10 seconds at runtime. |
-| `max_peers` | usize | `204` | Reserved upper bound on the number of peers. |
 | `find_nodes` | bool | `true` | If `true`, the node runs DHT-style `find_nodes` queries to discover new peers. |
 | `accept_nodes` | bool | `true` | If `false`, the node refuses all inbound P2P connections. |
-| `use_stable_nodes` | bool | `true` | If `true`, persistent "stable" peer addresses from the addrbook are loaded and dialed. If `false` and no `boot_nodes` are configured, the node cannot bootstrap. |
-| `backbone_peers` | usize | `4` | Target number of stable "backbone" peer connections to maintain. Also acts as a floor for `addrbook_dial_max`. |
+| `use_stable_nodes` | bool | `true` | If `true`, public backbone addresses from `stable.nodes` are loaded before boot nodes. If `false` and no `boot_nodes` are configured, the node cannot bootstrap. |
+| `backbone_peers` | usize | `4` | Target number of stable "backbone" peer connections to maintain. |
 | `offshoot_peers` | usize | `200` | Target number of non-backbone ("offshoot") peer connections. Total peer capacity is `backbone_peers + offshoot_peers`. |
-| `addrbook_max` | usize | `200` | Maximum number of peer addresses stored in the persistent addrbook. |
-| `stable_max_write` | usize | `200` | Maximum number of stable peer records written back to disk per save. |
-| `addrbook_dial_max` | usize | `16` | Cap on the number of addresses dialed per discovery / keepalive sweep. |
 | `block_queue_cap` | usize | `8` | Capacity of the inbound block queue used by the sync pipeline. |
 
 > The node identity is **not** read from the INI. `node_key` (a 16-byte key) is
@@ -227,15 +222,11 @@ listen_ip = 0.0.0.0
 listen_port = 3337
 node_name =
 boot_nodes = 182.92.163.225:3337,54.193.49.59:3337,54.219.80.127:3337
-dial_interval_secs = 60
 find_nodes = true
 accept_nodes = true
 use_stable_nodes = true
 backbone_peers = 4
 offshoot_peers = 200
-addrbook_max = 200
-stable_max_write = 200
-addrbook_dial_max = 16
 block_queue_cap = 8
 
 [server]

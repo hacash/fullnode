@@ -16,6 +16,7 @@ pub trait Peer: Send + Sync {
     fn send_msg(&self, _ty: u16, _body: Vec<u8>) -> Rerr {
         Ok(())
     }
+    fn disconnect(&self) {}
     /// Wire protocol version this peer speaks: `1` = legacy (v1),
     /// `2` = v2 (crc32c frame, flat u16 namespace). Default `1` for
     /// backwards compat with any `Peer` impl that predates the dual

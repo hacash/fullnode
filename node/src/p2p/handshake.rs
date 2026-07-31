@@ -1,12 +1,13 @@
 //! v2 identity handshake: VERSION / VERACK.
 //!
-//! Replaces v1's REPORT_PEER/ANSWER_PEER + STATUS chain. The VERSION message
-//! carries node identity, genesis hash, services, and a real protocol-version
-//! field - addressing v1's inert version-negotiation gap.
+//! Replaces v1's REPORT_PEER/ANSWER_PEER identity exchange. The VERSION
+//! message carries node identity, services, and a real protocol-version field;
+//! the shared STATUS exchange still validates genesis and starts sync.
 //!
 //! Flow (both directions symmetric):
 //! 1. After magic exchange, each side sends VERSION.
-//! 2. Each side validates (genesis + protocol_version) and replies VERACK.
+//! 2. Each side validates protocol framing/version and replies VERACK.
+//!    Genesis compatibility is checked by the shared STATUS handler, as in dev.
 //! 3. After both VERSION+VERACK exchanges, the session is live.
 //!
 //! VERSION wire layout (fixed prefix **86** bytes + user_agent):
@@ -33,7 +34,7 @@ use sys::{Ret, errf};
 
 use super::codec::{read_transport_msg, write_transport_msg};
 use super::msg::v2::{MSG_VERACK, MSG_VERSION};
-use super::msg::{PEER_KEY_SIZE, PROTOCOL_VERSION_V2, services};
+use super::msg::{PEER_KEY_SIZE, PROTOCOL_VERSION_V2};
 use field::Hash;
 
 /// Whole v2 handshake budget (VERSION+VERACK both ways).
@@ -173,10 +174,6 @@ impl VersionMessage {
         Ok(())
     }
 
-    pub fn is_public(&self) -> bool {
-        self.services & services::NODE_PUBLIC != 0
-    }
-
     pub fn wants_relay(&self) -> bool {
         self.relay
     }
@@ -189,7 +186,6 @@ pub struct PeerIdentity {
     pub listen_port: u16,
     pub services: u64,
     pub relay: bool,
-    pub start_height: u64,
     pub custom_types: Vec<u8>,
 }
 
@@ -201,7 +197,6 @@ impl PeerIdentity {
             listen_port: v.listen_port,
             services: v.services,
             relay: v.wants_relay(),
-            start_height: v.start_height,
             custom_types: v.custom_types.clone(),
         }
     }
@@ -216,7 +211,6 @@ impl PeerIdentity {
             listen_port: legacy.listen_port,
             services,
             relay,
-            start_height: 0,
             custom_types: Vec::new(),
         }
     }
@@ -228,11 +222,6 @@ fn canonical_custom_types(types: &[u8]) -> Vec<u8> {
     out.dedup();
     out.retain(|ty| *ty > 100);
     out
-}
-
-pub fn peer_id_from_key(key: &[u8; 16]) -> String {
-    use sys::ToHex;
-    key.to_hex()
 }
 
 pub async fn send_version(
