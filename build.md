@@ -89,7 +89,7 @@ selecting a backend other than the default, `--no-default-features` is required:
 
 ```sh
 # sled (default, pure Rust)
-cargo build --release -p app --bin fullnode \
+cargo build --release -p app --bin fullnode --target x86_64-unknown-linux-musl \
   --no-default-features --features db-sled
 
 # rusty-leveldb (pure Rust LevelDB implementation)
@@ -122,7 +122,7 @@ HACASH_DB_SYNC=1 ./target/release/fullnode /absolute/path/hacash.config.ini
 ```
 
 `HACASH_DB_SYNC=1` requests synchronous writes. With sled,
-`HACASH_DB_SMALL_MACHINE=1` also selects its low-space mode and a 64 MiB cache.
+`HACASH_DB_SMALL_MACHINE=1` also selects its low-space mode and a 32 MiB cache.
 Accepted true values are `1`, `true`, `yes`, and `on` (case-insensitive).
 
 ## 5. Linux static build
@@ -141,6 +141,10 @@ Output:
 ```text
 target/x86_64-unknown-linux-musl/release/fullnode
 ```
+
+The musl target links the C runtime statically by default. Do not set
+`RUSTFLAGS="-C target-feature=-crt-static"` for this build: it disables static
+CRT linking and can reintroduce a runtime glibc version dependency.
 
 Native C++ backends need a matching cross C/C++ toolchain and are not covered
 by the command above.

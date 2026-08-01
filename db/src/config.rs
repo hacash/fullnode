@@ -19,3 +19,7 @@ pub(crate) fn db_sled_small_machine_enabled() -> bool {
     static DB_SLED_SMALL_MACHINE: OnceLock<bool> = OnceLock::new();
     *DB_SLED_SMALL_MACHINE.get_or_init(|| db_env_enable("HACASH_DB_SMALL_MACHINE"))
 }
+
+/*
+HACASH_DB_SMALL_MACHINE=1 HACASH_DB_SYNC=1 
+*/

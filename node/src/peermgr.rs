@@ -96,6 +96,15 @@ impl P2PNode {
         if was_backbone {
             self.persist_stable_backbones().await;
         }
+        if cancelled
+            && !self.stopping.load(Ordering::Acquire)
+            && self.request_sync_status_candidates(None) == 0
+        {
+            eprintln!(
+                "[P2P] sync peer {} disconnected with no connected STATUS candidates",
+                id
+            );
+        }
     }
 
     pub(crate) async fn persist_stable_backbones(&self) {

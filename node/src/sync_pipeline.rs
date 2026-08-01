@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base::{
     ApplyMode, BlockBatch, BlockSender, BlockStream, Peer, PipelineOptions, PipelineReport,
@@ -14,11 +14,13 @@ use base::{
 use sys::Rerr;
 
 use crate::P2PNode;
-use crate::p2p::msg::MSG_REQ_BLOCK;
 use crate::p2p::msg::v2::MSG_GET_BLOCKS;
+use crate::p2p::msg::{MSG_REQ_BLOCK, MSG_REQ_STATUS};
 use crate::p2p::syncwire::{DEFAULT_MAX_BLOCKS, GetBlocks, SYNC_WINDOW};
 
 const MAX_BLOCKING_ENQUEUE_TASKS: usize = 4;
+const SYNC_WATCH_INTERVAL: Duration = Duration::from_secs(5);
+const SYNC_STALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn blocking_enqueue_gate() -> &'static Arc<tokio::sync::Semaphore> {
     static GATE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
@@ -115,7 +117,7 @@ pub(crate) struct SyncSession {
         ),
     >,
     pub next_apply_start: u64,
-    /// Updated on either a network response or applying another 1,000 blocks.
+    /// Updated on either a network response or applying another 200 blocks.
     /// The watchdog must treat both as liveness during queue backpressure.
     pub last_activity: Arc<Mutex<Instant>>,
     /// V1 legacy sync output is serialized after each batch is applied.
@@ -136,11 +138,58 @@ impl SyncSession {
             SyncWire::V2 => SYNC_WINDOW,
         }
     }
+
+    fn can_fill_wire_window(&self) -> bool {
+        let in_flight = match self.wire {
+            SyncWire::V1 => usize::from(self.v1_waiting),
+            SyncWire::V2 => self.inflight.len(),
+        };
+        in_flight < self.window_limit() && self.next_start <= self.remote_tip
+    }
+
+    fn stall_reason(&self, timeout: Duration) -> Option<String> {
+        let elapsed = self
+            .last_activity
+            .lock()
+            .map(|last| last.elapsed())
+            .unwrap_or(timeout);
+        if elapsed < timeout {
+            return None;
+        }
+        Some(format!(
+            "no response or apply progress for {}s; wire={:?} next_request={} next_apply={} remote_tip={} in_flight={} pending={} apply_queue={}/{} v1_waiting={}",
+            elapsed.as_secs(),
+            self.wire,
+            self.next_start,
+            self.next_apply_start,
+            self.remote_tip,
+            self.inflight.len(),
+            self.pending.len(),
+            self.sender.len(),
+            self.sender.capacity(),
+            self.v1_waiting,
+        ))
+    }
 }
 
 pub type SyncSlot = Mutex<Option<SyncSession>>;
 
 impl P2PNode {
+    /// Ask connected peers to advertise their current tips after a downloader
+    /// failure. Other peers are queried before the failed source, so the first
+    /// valid STATUS normally moves the retry to a different connection.
+    pub(crate) fn request_sync_status_candidates(&self, retry_last: Option<&str>) -> usize {
+        if self.stopping.load(Ordering::Acquire) {
+            return 0;
+        }
+        let mut peers = self.peertable.values_snapshot();
+        peers.sort_by_key(|peer| retry_last.is_some_and(|id| peer.id == id));
+        peers
+            .into_iter()
+            .filter(|peer| peer.send_msg(MSG_REQ_STATUS, Vec::new()).is_ok())
+            .count()
+    }
+
     pub(crate) fn mark_sync_failure(&self, peer_id: &str, reason: &str) {
         self.sync_tracker.clear_peer(peer_id);
         self.doing_sync.store(0, Ordering::Release);
@@ -331,6 +380,66 @@ impl P2PNode {
             return sys::errf!("failed to spawn sync apply thread");
         }
 
+        let sync_session_watch = self.sync_session.clone();
+        let watch_node = self.clone();
+        let watch_peer = peer.clone();
+        let watch_peer_id = peer_id.clone();
+        let watcher_name = format!("node-sync-watch-{generation}");
+        if let Err(e) = std::thread::Builder::new()
+            .name(watcher_name)
+            .spawn(move || loop {
+                std::thread::sleep(SYNC_WATCH_INTERVAL);
+                if watch_node.stopping.load(Ordering::Acquire) {
+                    return;
+                }
+
+                let (stalled, refill) = {
+                    let mut slot = sync_session_watch.lock().unwrap();
+                    let Some(session) = slot.as_ref() else {
+                        return;
+                    };
+                    if session.peer_id != watch_peer_id || session.generation != generation {
+                        return;
+                    }
+                    if let Some(reason) = session.stall_reason(SYNC_STALL_TIMEOUT) {
+                        if let Some(session) = slot.take() {
+                            session.cancel();
+                        }
+                        (Some(reason), false)
+                    } else {
+                        (None, session.can_fill_wire_window())
+                    }
+                };
+
+                if let Some(reason) = stalled {
+                    let reason = format!(
+                        "{} local_head={}",
+                        reason,
+                        watch_node.engine.latest_height()
+                    );
+                    watch_node.mark_sync_failure(&watch_peer_id, &reason);
+                    if watch_node.request_sync_status_candidates(Some(&watch_peer_id)) == 0 {
+                        eprintln!(
+                            "[P2P] sync recovery has no connected STATUS candidates after peer {} stalled",
+                            watch_peer_id
+                        );
+                    }
+                    return;
+                }
+
+                if refill
+                    && let Err(e) = watch_node.sync_fill_window(watch_peer.clone())
+                {
+                    eprintln!(
+                        "[P2P] sync watchdog refill with peer {} failed: {}",
+                        watch_peer_id, e
+                    );
+                }
+            })
+        {
+            eprintln!("[P2P] failed to spawn sync watchdog: {}", e);
+        }
+
         self.sync_fill_window(peer)
     }
 
@@ -349,20 +458,10 @@ impl P2PNode {
                 if sess.peer_id != peer_id {
                     return Ok(());
                 }
-                let in_flight = match sess.wire {
-                    SyncWire::V1 => {
-                        if sess.v1_waiting {
-                            1
-                        } else {
-                            0
-                        }
-                    }
-                    SyncWire::V2 => sess.inflight.len(),
-                };
-                if in_flight >= sess.window_limit()
-                    || sess.next_start > sess.remote_tip
-                    || sess.sender.is_full()
-                {
+                // Response enqueueing already applies backpressure. Stopping
+                // request refill merely because that queue is currently full
+                // can strand the downloader: dequeueing has no refill callback.
+                if !sess.can_fill_wire_window() {
                     return Ok(());
                 }
                 match sess.wire {
@@ -782,6 +881,89 @@ pub(crate) fn validate_blocks_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn full_apply_queue_does_not_close_the_wire_window() {
+        let (_stream, sender) = BlockStream::with_capacity(1);
+        assert!(
+            sender
+                .try_push_block_batch(BlockBatch::raw(Arc::new(vec![1]), 10_000))
+                .unwrap()
+        );
+
+        let session = SyncSession {
+            generation: 1,
+            peer_id: "peer".into(),
+            wire: SyncWire::V2,
+            sender,
+            cancel: Arc::new(AtomicBool::new(false)),
+            next_req_id: 3,
+            next_start: 4_001,
+            remote_tip: 10_000,
+            inflight: BTreeMap::from([(2, (2_001, DEFAULT_MAX_BLOCKS))]),
+            pending: BTreeMap::new(),
+            next_apply_start: 1,
+            last_activity: Arc::new(Mutex::new(Instant::now())),
+            pending_print_batches: Arc::new(Mutex::new(VecDeque::new())),
+            v1_waiting: false,
+        };
+
+        assert!(session.sender.is_full());
+        assert!(session.can_fill_wire_window());
+    }
+
+    #[test]
+    fn stalled_session_reports_wire_and_queue_cursors() {
+        let (_stream, sender) = BlockStream::with_capacity(2);
+        let session = SyncSession {
+            generation: 1,
+            peer_id: "peer".into(),
+            wire: SyncWire::V1,
+            sender,
+            cancel: Arc::new(AtomicBool::new(false)),
+            next_req_id: 1,
+            next_start: 550_001,
+            remote_tip: 769_089,
+            inflight: BTreeMap::from([(0, (550_001, 1))]),
+            pending: BTreeMap::new(),
+            next_apply_start: 550_001,
+            last_activity: Arc::new(Mutex::new(
+                Instant::now() - SYNC_STALL_TIMEOUT - Duration::from_secs(1),
+            )),
+            pending_print_batches: Arc::new(Mutex::new(VecDeque::new())),
+            v1_waiting: true,
+        };
+
+        let reason = session.stall_reason(SYNC_STALL_TIMEOUT).unwrap();
+        assert!(reason.contains("wire=V1"));
+        assert!(reason.contains("next_request=550001"));
+        assert!(reason.contains("remote_tip=769089"));
+        assert!(reason.contains("v1_waiting=true"));
+    }
+
+    #[test]
+    fn active_session_is_not_reported_as_stalled() {
+        let (_stream, sender) = BlockStream::with_capacity(2);
+        let session = SyncSession {
+            generation: 1,
+            peer_id: "peer".into(),
+            wire: SyncWire::V1,
+            sender,
+            cancel: Arc::new(AtomicBool::new(false)),
+            next_req_id: 1,
+            next_start: 550_001,
+            remote_tip: 769_089,
+            inflight: BTreeMap::new(),
+            pending: BTreeMap::new(),
+            next_apply_start: 550_001,
+            last_activity: Arc::new(Mutex::new(Instant::now())),
+            pending_print_batches: Arc::new(Mutex::new(VecDeque::new())),
+            v1_waiting: false,
+        };
+
+        assert!(session.stall_reason(SYNC_STALL_TIMEOUT).is_none());
+        assert!(session.can_fill_wire_window());
+    }
 
     #[test]
     fn progress_does_not_start_the_next_batch_early() {
