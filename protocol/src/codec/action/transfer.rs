@@ -583,11 +583,6 @@ impl Action for HacToTrs {
         let to = ctx.addr(&self.to)?;
         check_transfer_addresses(ctx, &from, &to)?;
         hac_transfer(ctx, &from, &to, &self.hacash)?;
-        let data = self.encode();
-        ctx.emit_log(base::LogEntry {
-            topic: "hac_transfer".to_owned(),
-            data,
-        });
         Ok((gas, vec![]))
     }
     fn as_any(&self) -> &dyn Any {

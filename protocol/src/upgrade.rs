@@ -1,7 +1,8 @@
 //! Protocol activation compatibility hooks.
 //!
-//! The next node is deployed after the historical online activation height,
-//! so the old `765432` runtime gate is intentionally not enforced here.
+//! The live chain has passed the historical online activation height `765432`,
+//! so the old runtime gate is intentionally retired instead of being replayed
+//! from `fullnodedev`.
 //! These functions remain as stable call sites for the execution layers and
 //! always accept. Asset issuance keeps its independent historical start height
 //! in `mint::action::asset::ASSET_ALIVE_HEIGHT`.

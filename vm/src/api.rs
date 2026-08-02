@@ -212,6 +212,9 @@ fn contract_sandbox_call(
 
     let mut env = Env::default();
     env.chain.id = ctx.engine.consensus().chain_id();
+    // Sandbox caller is the simulated execution identity. Intentionally bind
+    // it as both tx main and block author so every caller-facing VM host read
+    // observes the same identity.
     env.block = BlockInfo {
         height,
         hash: Hash::default(),
