@@ -176,7 +176,7 @@ fn contract_sandbox_call(
             Ok(v) => v,
             Err(_) => return api_error("caller address format invalid"),
         },
-        None => Address::default(),
+        None => ctx.engine.block_producer().external_exec_author(),
     };
 
     let args = match machine::parse_sandbox_params(params) {

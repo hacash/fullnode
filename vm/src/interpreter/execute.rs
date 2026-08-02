@@ -348,11 +348,11 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                         e.as_str(),
                     )
                 })?;
-                gas_resource_raw!(bgasu);
                 if let Some(r) = routing {
                     let intent_scope = intent_state.current_scope();
                     machine.drive_transfer(host.as_context_mut(), r, intent_scope)?;
                 }
+                gas_resource_raw!(bgasu);
                 if have_retv {
                     let resv = Value::type_from(act_retv_type(host, act_kind, idx)?, cres)?.valid(cap)?;
                     gas_resource!(act_bytes, resv.val_size());

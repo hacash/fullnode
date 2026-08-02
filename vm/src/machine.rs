@@ -43,6 +43,10 @@ pub enum VmRequest {
         code_type: CodeType,
         codes: Arc<[u8]>,
     },
+    SandboxMain {
+        code_type: CodeType,
+        codes: Arc<[u8]>,
+    },
     Abst {
         kind: AbstCall,
         contract_addr: ContractAddress,

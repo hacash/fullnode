@@ -89,7 +89,7 @@ pub fn sandbox_call(ctx: &mut dyn Context, spec: SandboxSpec) -> Ret<SandboxResu
     hac_add(ctx, &caller, &Amount::unit238(SANDBOX_FUND_238))?;
     ctx.gas_initialize(gas_budget)?;
     let (gas_use, ret_box) = with_exec_from(ctx, ExecFrom::Call, |ctx| {
-        ctx.vm_call(VmEntry::Raw(Box::new(VmRequest::Main {
+        ctx.vm_call(VmEntry::Raw(Box::new(VmRequest::SandboxMain {
             code_type: CodeType::Bytecode,
             codes: Arc::from(codes),
         })))

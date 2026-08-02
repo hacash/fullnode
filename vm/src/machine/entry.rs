@@ -193,16 +193,35 @@ impl StubVm {
         }
     }
 
+    fn run_main_entry_value(
+        &mut self,
+        ctx: &mut dyn Context,
+        code_type: CodeType,
+        codes: Arc<[u8]>,
+    ) -> Ret<(GasBuckets, Value)> {
+        self.run_entry(ctx, EntryKind::Main, move |vm, ctx| {
+            vm.main_call_raw(ctx, code_type, codes)
+        })
+    }
+
     fn run_main_entry(
         &mut self,
         ctx: &mut dyn Context,
         code_type: CodeType,
         codes: Arc<[u8]>,
     ) -> Ret<(GasBuckets, Box<dyn Any>)> {
-        let (cost, rv) = self.run_entry(ctx, EntryKind::Main, move |vm, ctx| {
-            vm.main_call_raw(ctx, code_type, codes)
-        })?;
+        let (cost, rv) = self.run_main_entry_value(ctx, code_type, codes)?;
         Self::check_vm_return_value(&rv, "main call")?;
+        Ok((cost, Box::new(rv)))
+    }
+
+    fn run_sandbox_main_entry(
+        &mut self,
+        ctx: &mut dyn Context,
+        code_type: CodeType,
+        codes: Arc<[u8]>,
+    ) -> Ret<(GasBuckets, Box<dyn Any>)> {
+        let (cost, rv) = self.run_main_entry_value(ctx, code_type, codes)?;
         Ok((cost, Box::new(rv)))
     }
 
@@ -229,6 +248,9 @@ impl StubVm {
     ) -> Ret<(GasBuckets, Box<dyn Any>)> {
         match req {
             VmRequest::Main { code_type, codes } => self.run_main_entry(ctx, code_type, codes),
+            VmRequest::SandboxMain { code_type, codes } => {
+                self.run_sandbox_main_entry(ctx, code_type, codes)
+            }
             VmRequest::Abst {
                 kind,
                 contract_addr,
