@@ -58,12 +58,6 @@ fn do_diamonds_transfer(
     from: &Address,
     to: &Address,
 ) -> Ret<Vec<u8>> {
-    crate::upgrade::check_transfer_addr_online_open(
-        ctx.env().chain.id,
-        ctx.env().block.height,
-        from,
-        to,
-    )?;
     let dianum = diamonds.check()?;
     let diamond_form_flag = crate::execution_params(ctx.services().as_ref())?.diamond_form_flag;
     let diamond_form = ctx.env().chain.consensus_flags & diamond_form_flag != 0;

@@ -195,11 +195,6 @@ impl Context for ContextInst {
                 buf.len()
             );
         }
-        crate::upgrade::check_gated_action(
-            self.env.chain.id,
-            self.env.block.height,
-            action.kind(),
-        )?;
         ActionDispatcher::dispatch_call(self, &action)
     }
 

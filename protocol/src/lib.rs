@@ -18,7 +18,6 @@ pub(crate) mod exec;
 pub(crate) mod level;
 pub(crate) mod params;
 pub(crate) mod setup;
-pub mod upgrade;
 
 // ---- public nested path aliases (external crates keep using these) ----
 pub use codec::action as action_std;

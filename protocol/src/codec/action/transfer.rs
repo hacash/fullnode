@@ -16,15 +16,6 @@ use sys::Ret;
 
 use super::common::{addr_or_ptr_size, decode_addr_or_ptr, encode_addr_or_ptr};
 
-fn check_transfer_addresses(ctx: &dyn Context, from: &Address, to: &Address) -> Ret<()> {
-    crate::upgrade::check_transfer_addr_online_open(
-        ctx.env().chain.id,
-        ctx.env().block.height,
-        from,
-        to,
-    )
-}
-
 #[derive(Debug, Clone)]
 pub struct HacToTrs {
     pub kind: Uint2,
@@ -581,7 +572,6 @@ impl Action for HacToTrs {
         let gas = self.size() as u32;
         let from = ctx.env().tx.main;
         let to = ctx.addr(&self.to)?;
-        check_transfer_addresses(ctx, &from, &to)?;
         hac_transfer(ctx, &from, &to, &self.hacash)?;
         Ok((gas, vec![]))
     }
@@ -607,7 +597,6 @@ impl Action for HacFromTrs {
         let gas = self.size() as u32;
         let from = ctx.addr(&self.from)?;
         let to = ctx.env().tx.main;
-        check_transfer_addresses(ctx, &from, &to)?;
         hac_transfer(ctx, &from, &to, &self.hacash)?;
         Ok((gas, vec![]))
     }
@@ -633,7 +622,6 @@ impl Action for HacFromToTrs {
         let gas = self.size() as u32;
         let from = ctx.addr(&self.from)?;
         let to = ctx.addr(&self.to)?;
-        check_transfer_addresses(ctx, &from, &to)?;
         hac_transfer(ctx, &from, &to, &self.hacash)?;
         Ok((gas, vec![]))
     }
@@ -659,7 +647,6 @@ impl Action for SatToTrs {
         let gas = self.size() as u32;
         let from = ctx.env().tx.main;
         let to = ctx.addr(&self.to)?;
-        check_transfer_addresses(ctx, &from, &to)?;
         sat_transfer(ctx, &from, &to, &self.satoshi)?;
         Ok((gas, vec![]))
     }
@@ -688,7 +675,6 @@ impl Action for SatFromTrs {
         let gas = self.size() as u32;
         let from = ctx.addr(&self.from)?;
         let to = ctx.env().tx.main;
-        check_transfer_addresses(ctx, &from, &to)?;
         sat_transfer(ctx, &from, &to, &self.satoshi)?;
         Ok((gas, vec![]))
     }
@@ -717,7 +703,6 @@ impl Action for SatFromToTrs {
         let gas = self.size() as u32;
         let from = ctx.addr(&self.from)?;
         let to = ctx.addr(&self.to)?;
-        check_transfer_addresses(ctx, &from, &to)?;
         sat_transfer(ctx, &from, &to, &self.satoshi)?;
         Ok((gas, vec![]))
     }
@@ -812,7 +797,6 @@ impl Action for AssetToTrs {
         let gas = self.size() as u32;
         let from = ctx.env().tx.main;
         let to = ctx.addr(&self.to)?;
-        check_transfer_addresses(ctx, &from, &to)?;
         asset_transfer(ctx, &from, &to, &self.asset)?;
         Ok((gas, vec![]))
     }
@@ -844,7 +828,6 @@ impl Action for AssetFromTrs {
         let gas = self.size() as u32;
         let from = ctx.addr(&self.from)?;
         let to = ctx.env().tx.main;
-        check_transfer_addresses(ctx, &from, &to)?;
         asset_transfer(ctx, &from, &to, &self.asset)?;
         Ok((gas, vec![]))
     }
@@ -876,7 +859,6 @@ impl Action for AssetFromToTrs {
         let gas = self.size() as u32;
         let from = ctx.addr(&self.from)?;
         let to = ctx.addr(&self.to)?;
-        check_transfer_addresses(ctx, &from, &to)?;
         asset_transfer(ctx, &from, &to, &self.asset)?;
         Ok((gas, vec![]))
     }
@@ -895,7 +877,6 @@ fn do_diamonds_transfer(
     from: &Address,
     to: &Address,
 ) -> Ret<Vec<u8>> {
-    check_transfer_addresses(ctx, from, to)?;
     let dianum = diamonds.check()?;
     let diamond_form_flag = crate::execution_params(ctx.services().as_ref())?.diamond_form_flag;
     let diamond_form = ctx.env().chain.consensus_flags & diamond_form_flag != 0;

@@ -325,17 +325,11 @@ fn precheck_tx(ctx: &dyn Context, tx: &dyn Transaction, actions: &[ActionRef]) -
             TX_ACTIONS_MAX
         );
     }
-    crate::upgrade::check_gated_tx(ctx.env().chain.id, ctx.env().block.height, tx.ty())?;
-    for act in actions {
-        crate::upgrade::check_gated_action(ctx.env().chain.id, ctx.env().block.height, act.kind())?;
-    }
     let need = tx.required_flags();
     if need & !ctx.env().chain.consensus_flags != 0 {
         return errf!("tx type {} not activated (flags need {:#x})", tx.ty(), need);
     }
     crate::level::precheck_tx_actions(
-        ctx.env().chain.id,
-        ctx.env().block.height,
         tx.ty(),
         actions,
         ctx.env().chain.consensus_flags,

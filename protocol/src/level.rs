@@ -30,8 +30,6 @@ fn children(act: &dyn Action) -> Option<(usize, Vec<&dyn Action>)> {
 }
 
 fn visit(
-    chain_id: base::ChainId,
-    height: u64,
     tx_type: u8,
     act: &dyn Action,
     from: ExecFrom,
@@ -40,7 +38,6 @@ fn visit(
     max_depth: usize,
     stats: &mut Stats,
 ) -> Rerr {
-    crate::upgrade::check_gated_action(chain_id, height, act.kind())?;
     if !act.scope().allows(from) {
         return errf!(
             "action node invalid: action {} with scope {} not allowed from {}",
@@ -83,8 +80,6 @@ fn visit(
     }
     for sub in subs {
         visit(
-            chain_id,
-            height,
             tx_type,
             sub,
             ExecFrom::Ast,
@@ -124,8 +119,6 @@ fn check_top_rule(act: &dyn Action, stats: &Stats) -> Rerr {
 }
 
 pub fn precheck_tx_actions(
-    chain_id: base::ChainId,
-    height: u64,
     tx_type: u8,
     actions: &[ActionRef],
     flags: u64,
@@ -137,8 +130,6 @@ pub fn precheck_tx_actions(
     let mut stats = Stats::default();
     for act in actions {
         visit(
-            chain_id,
-            height,
             tx_type,
             act.as_ref(),
             ExecFrom::Top,

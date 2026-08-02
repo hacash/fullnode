@@ -67,12 +67,6 @@ pub fn do_settlement(ctx: &mut dyn Context) -> Rerr {
         tex.diamonds = diamonds;
     }
     for (addr, dialist) in diamond_trs {
-        crate::upgrade::check_transfer_addr_online_open(
-            ctx.env().chain.id,
-            ctx.env().block.height,
-            &SETTLEMENT_ADDR,
-            &addr,
-        )?;
         let diamond_form_flag = crate::execution_params(ctx.services().as_ref())?.diamond_form_flag;
         let diamond_form = ctx.env().chain.consensus_flags & diamond_form_flag != 0;
         let mut state = CoreState::wrap(ctx.layer());
