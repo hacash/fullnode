@@ -297,9 +297,9 @@ impl P2PNode {
                             }
                             let this = self.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_conn_accept(this, stream, peer_addr).await {
-                                    eprintln!("[P2P] inbound {} error: {}", peer_addr, e);
-                                }
+                                // fullnodedev silently drops connections that fail before
+                                // becoming peers. Public ports routinely receive non-P2P probes.
+                                let _ = handle_conn_accept(this, stream, peer_addr).await;
                             });
                         }
                         Err(e) => eprintln!("[P2P] accept failed: {}", e),

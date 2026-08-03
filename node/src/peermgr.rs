@@ -8,7 +8,7 @@ use sys::Rerr;
 
 use crate::P2PNode;
 use crate::knowledge::KnowKey;
-use crate::p2p::msg::{MSG_REQ_STATUS, MSG_TX_SUBMIT, P2P_MSG_DATA_MAX_SIZE};
+use crate::p2p::msg::{MSG_REQ_STATUS, P2P_MSG_DATA_MAX_SIZE};
 use crate::p2p::peer::RemotePeer;
 
 impl P2PNode {
@@ -125,9 +125,9 @@ impl P2PNode {
         }
     }
 
-    /// Mark the source peer as knowing the hash and check global relay knowledge.
-    /// The caller records global knowledge only after admission accepts the
-    /// item; rejected and transient failures remain retryable.
+    /// Mark the source peer and this node as knowing the hash. This matches the
+    /// original node: knowledge is recorded before admission and is not rolled
+    /// back when validation fails.
     pub(crate) fn check_know(
         &self,
         hx: &field::Hash,
@@ -140,23 +140,8 @@ impl P2PNode {
         if self.knows.check(&key) {
             return (true, key);
         }
-        (false, key)
-    }
-
-    pub(crate) fn check_block_know(
-        &self,
-        hx: &field::Hash,
-        peer: Option<&RemotePeer>,
-    ) -> (bool, KnowKey) {
-        let key = hx.into_array();
-        if let Some(p) = peer {
-            p.knows.add(key);
-        }
-        (self.knows.check(&key), key)
-    }
-
-    pub(crate) fn remember_know(&self, key: KnowKey) {
         self.knows.add(key);
+        (false, key)
     }
 
     /// Broadcast only to peers that do not yet know `key`, matching dev.
@@ -181,34 +166,6 @@ impl P2PNode {
             peer.knows.add(key);
             if let Err(e) = peer.send_msg(ty, body.clone()) {
                 eprintln!("[P2P] send {} to {} failed: {}", ty, peer.id, e);
-            }
-        }
-        Ok(())
-    }
-
-    /// Keep the selective API contract used by the transaction policy, while
-    /// matching dev's actual network behavior: relay to every unaware peer.
-    pub(crate) fn broadcast_selective(
-        &self,
-        _channel_bit: u64,
-        key: KnowKey,
-        body: Vec<u8>,
-        except_peer: Option<&str>,
-    ) -> Rerr {
-        if body.len() > P2P_MSG_DATA_MAX_SIZE.saturating_sub(3) {
-            return sys::errf!("p2p selective tx too large: {}", body.len());
-        }
-        let peers = self.peertable.values_snapshot();
-        for peer in peers {
-            if except_peer.map_or(false, |ex| peer.id == ex) {
-                continue;
-            }
-            if peer.knows.check(&key) {
-                continue;
-            }
-            peer.knows.add(key);
-            if let Err(e) = peer.send_msg(MSG_TX_SUBMIT, body.clone()) {
-                eprintln!("[P2P] send selective tx to {} failed: {}", peer.id, e);
             }
         }
         Ok(())

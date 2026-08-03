@@ -155,3 +155,26 @@ pub async fn accept_read_magic(conn: &mut (impl AsyncRead + Unpin)) -> Ret<bool>
 pub async fn write_v2_magic(conn: &mut (impl AsyncWrite + Unpin)) -> Rerr {
     write_all(conn, &P2P_MAGIC_V2.to_be_bytes()).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::accept_read_magic;
+    use crate::p2p::msg::{P2P_MAGIC_V1, P2P_MAGIC_V2};
+
+    #[tokio::test]
+    async fn accept_magic_distinguishes_v1_and_v2() {
+        let v1_bytes = P2P_MAGIC_V1.to_be_bytes();
+        let v2_bytes = P2P_MAGIC_V2.to_be_bytes();
+        let mut v1 = v1_bytes.as_slice();
+        let mut v2 = v2_bytes.as_slice();
+
+        assert!(!accept_read_magic(&mut v1).await.unwrap());
+        assert!(accept_read_magic(&mut v2).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn accept_magic_rejects_non_p2p_prefixes() {
+        let mut http = b"GET ".as_slice();
+        assert!(accept_read_magic(&mut http).await.is_err());
+    }
+}

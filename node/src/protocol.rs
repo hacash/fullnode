@@ -130,7 +130,7 @@ impl P2PNode {
             return Ok(());
         }
         self.mark_doing_sync();
-        let num = self.engine.config().unstable_block.min(80) as u8;
+        let num = self.engine.config().unstable_block.min(255) as u8;
         let mut req = Vec::with_capacity(9);
         req.push(num);
         req.extend_from_slice(&local_height.to_be_bytes());
@@ -242,7 +242,7 @@ impl P2PNode {
         let max_send_size = 20 * 1024 * 1024usize;
         let max_send_num = 10_000usize;
         let (end_height, total_num, blocks) =
-            self.collect_blocks(start_height, max_send_num, max_send_size)?;
+            self.collect_blocks(start_height, max_send_num, max_send_size, true)?;
         if blocks.is_empty() {
             return Ok(());
         }
@@ -273,7 +273,7 @@ impl P2PNode {
         let max_bytes = (req.max_bytes as usize).clamp(64 * 1024, 32 * 1024 * 1024);
         let max_bytes = max_bytes.min(P2P_MSG_DATA_MAX_SIZE.saturating_sub(BLOCKS_HEADER_SIZE));
         let (end_height, total_num, blocks) =
-            self.collect_blocks(req.start_height, max_blocks, max_bytes)?;
+            self.collect_blocks(req.start_height, max_blocks, max_bytes, false)?;
         if blocks.is_empty() {
             return Ok(());
         }
@@ -299,6 +299,7 @@ impl P2PNode {
         start_height: u64,
         max_num: usize,
         max_bytes: usize,
+        legacy_v1_limits: bool,
     ) -> sys::Ret<(u64, usize, Vec<u8>)> {
         let latest_height = self.engine.latest_height();
         let mut total_size = 0usize;
@@ -308,13 +309,16 @@ impl P2PNode {
         let store = self.engine.store();
         for height in start_height..=latest_height {
             let Some((_, data)) = store.block_data_by_height(height) else {
+                if legacy_v1_limits {
+                    return Ok((0, 0, Vec::new()));
+                }
                 break;
             };
             let next_size = total_size.saturating_add(data.len());
-            if total_num > 0 && next_size > max_bytes {
+            if !legacy_v1_limits && total_num > 0 && next_size > max_bytes {
                 break;
             }
-            if total_num == 0 && data.len() > max_bytes {
+            if !legacy_v1_limits && total_num == 0 && data.len() > max_bytes {
                 return sys::errf!(
                     "block at height {} exceeds requested sync payload limit {}",
                     height,
@@ -325,7 +329,13 @@ impl P2PNode {
             total_num += 1;
             end_height = height;
             blocks.extend_from_slice(data.as_ref());
-            if total_num >= max_num || total_size == max_bytes {
+            if total_num >= max_num
+                || if legacy_v1_limits {
+                    total_size >= max_bytes
+                } else {
+                    total_size == max_bytes
+                }
+            {
                 break;
             }
         }

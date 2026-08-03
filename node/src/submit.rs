@@ -62,45 +62,16 @@ impl P2PNode {
         if already && (is_remote || exact_in_pool()) {
             return Ok(());
         }
-        let reject_tip = self.engine.latest_block().hash().into_array();
-        if is_remote && self.tx_rejects.contains(&knowkey, &reject_tip) {
-            return Ok(());
-        }
         let result = self.admit_transaction_inner(tx, only_pool)?;
-        if result.status == TxAdmissionStatus::Rejected && is_remote {
-            self.tx_rejects.add(knowkey, reject_tip);
-        }
-        if should_remember_transaction(result.status) {
-            self.remember_know(knowkey);
-        }
         match result.status {
             TxAdmissionStatus::AcceptedBroadcast => {
                 if result.should_relay() {
-                    // Look up whether this tx's pool group is a selective relay
-                    // channel declared by the consensus policy. The node does
-                    // not name the channel; it only carries the bit.
-                    let selective_bit = result.group.and_then(|g| {
-                        self.engine
-                            .tx_policy()
-                            .tx_pool_groups()
-                            .into_iter()
-                            .find(|spec| spec.id == g)
-                            .and_then(|spec| spec.relay_service_bit)
-                    });
-                    match selective_bit {
-                        Some(bit) => self.broadcast_selective(
-                            bit,
-                            knowkey,
-                            tx.data().as_ref().to_vec(),
-                            except_peer,
-                        )?,
-                        None => self.broadcast_unaware(
-                            knowkey,
-                            MSG_TX_SUBMIT,
-                            tx.data().as_ref().to_vec(),
-                            except_peer,
-                        )?,
-                    }
+                    self.broadcast_unaware(
+                        knowkey,
+                        MSG_TX_SUBMIT,
+                        tx.data().as_ref().to_vec(),
+                        except_peer,
+                    )?;
                 }
                 Ok(())
             }
@@ -115,7 +86,7 @@ impl P2PNode {
     pub(crate) fn submit_block_pkg(&self, blk: &BlkPkg, except_peer: Option<&str>) -> Rerr {
         let is_remote = except_peer.is_some();
         let peer = except_peer.and_then(|id| self.peertable.get_snapshot(id));
-        let (already, knowkey) = self.check_block_know(&blk.hash(), peer.as_deref());
+        let (already, knowkey) = self.check_know(&blk.hash(), peer.as_deref());
         // As with transactions, global knowledge must not prevent a local
         // block from being retried when an earlier attempt was rejected or
         // held before persistence.
@@ -129,21 +100,9 @@ impl P2PNode {
         {
             return Ok(());
         }
-        let reject_tip = self.engine.latest_block().hash().into_array();
-        if is_remote && self.block_rejects.contains(&knowkey, &reject_tip) {
-            return Ok(());
-        }
-
-        if let Err(e) = self
-            .engine
+        self.engine
             .consensus()
-            .check_block_data(blk.data().as_ref(), self.engine.as_ref())
-        {
-            if is_remote {
-                self.block_rejects.add(knowkey, reject_tip);
-            }
-            return Err(e);
-        }
+            .check_block_data(blk.data().as_ref(), self.engine.as_ref())?;
 
         let admission = match self
             .engine
@@ -151,19 +110,14 @@ impl P2PNode {
             .check_block_admission(blk, self.engine.as_ref())
         {
             Ok(admission) => admission,
-            Err(e) => {
-                if is_remote {
-                    self.block_rejects.add(knowkey, reject_tip);
-                }
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         };
         let deferred = matches!(admission, base::BlockAdmissionDecision::Defer(_));
         let local_height = self.engine.latest_height();
         let heispan = self.engine.config().unstable_block;
         if !deferred && blk.height() > local_height + 1 {
             if let Some(ref p) = peer {
-                let num = (heispan + 1).min(255) as u8;
+                let num = (heispan + 1) as u8;
                 let mut req = Vec::with_capacity(9);
                 req.push(num);
                 req.extend_from_slice(&local_height.to_be_bytes());
@@ -183,16 +137,9 @@ impl P2PNode {
             );
         }
 
-        if let Err(e) = self
-            .engine
+        self.engine
             .consensus()
-            .check_block_arrive_data(blk.data().as_ref(), self.engine.as_ref())
-        {
-            if is_remote {
-                self.block_rejects.add(knowkey, reject_tip);
-            }
-            return Err(e);
-        }
+            .check_block_arrive_data(blk.data().as_ref(), self.engine.as_ref())?;
 
         let _insert_guard = self.inserting.lock().unwrap();
         let block_hash = blk.hash();
@@ -225,9 +172,6 @@ impl P2PNode {
                 }
                 Err(e) => {
                     println!("Error: {}", e);
-                    if is_remote && e.code() != Some("deferred_sync") {
-                        self.block_rejects.add(knowkey, reject_tip);
-                    }
                     return Err(e);
                 }
             }
@@ -245,15 +189,6 @@ impl P2PNode {
                 }
             }
             return Ok(());
-        }
-
-        if matches!(
-            result.status,
-            BlockAcceptStatus::Accepted
-                | BlockAcceptStatus::Duplicate
-                | BlockAcceptStatus::Deferred
-        ) {
-            self.remember_know(knowkey);
         }
 
         // Accepted and deferred blocks may both be relayable by policy.
@@ -312,7 +247,6 @@ impl P2PNode {
     }
 
     pub(crate) fn handle_block_bytes(&self, body: Vec<u8>, peer: Option<String>) -> Rerr {
-        let is_remote = peer.is_some();
         let max = self.engine.consensus().mint_params().max_block_size;
         if max > 0 && body.len() > max.saturating_add(100) {
             return sys::errf!(
@@ -327,32 +261,10 @@ impl P2PNode {
             source = source.with_peer(peer);
         }
         let except_peer = source.peer.clone();
-        // This validation intentionally precedes full decoding. Use a separate
-        // wire-key cache because the canonical block hash is not available yet.
-        let wire_key = sys::calculate_hash(&body);
-        let reject_tip = self.engine.latest_block().hash().into_array();
-        if is_remote && self.block_wire_rejects.contains(&wire_key, &reject_tip) {
-            return Ok(());
-        }
-        if let Err(e) = self
-            .engine
+        self.engine
             .consensus()
-            .check_block_data(&body, self.engine.as_ref())
-        {
-            if is_remote {
-                self.block_wire_rejects.add(wire_key, reject_tip);
-            }
-            return Err(e);
-        }
-        let block = match BlkPkg::from_bytes(self.engine.services().as_ref(), body, source) {
-            Ok(block) => block,
-            Err(e) => {
-                if is_remote {
-                    self.block_wire_rejects.add(wire_key, reject_tip);
-                }
-                return Err(e);
-            }
-        };
+            .check_block_data(&body, self.engine.as_ref())?;
+        let block = BlkPkg::from_bytes(self.engine.services().as_ref(), body, source)?;
         self.submit_block_pkg(&block, except_peer.as_deref())
     }
 
@@ -413,8 +325,7 @@ impl P2PNode {
         // 5. insert into txpool
         let g = self.engine.tx_policy().tx_pool_group(tx);
         let outcome = self.txpool.insert(g, tx.clone())?;
-        // 6. Local retention is independent from relay eligibility. A bounded
-        // non-mining pool may decline storage without becoming a relay sink.
+        // 6. The original node relays only after a successful pool insertion.
         Ok(admission_after_pool_insert(
             tx.hash(),
             g,
@@ -503,13 +414,12 @@ fn admission_after_pool_insert(
     only_pool: bool,
     outcome: TxPoolInsertOutcome,
 ) -> TxSubmitResult {
-    match (only_pool, outcome) {
-        (false, _) => TxSubmitResult::accepted(hash, group, true),
-        (true, TxPoolInsertOutcome::Stored) => TxSubmitResult::accepted(hash, group, false),
-        (true, TxPoolInsertOutcome::NotStored(TxPoolInsertReject::Capacity)) => {
+    match outcome {
+        TxPoolInsertOutcome::Stored => TxSubmitResult::accepted(hash, group, !only_pool),
+        TxPoolInsertOutcome::NotStored(TxPoolInsertReject::Capacity) => {
             TxSubmitResult::rejected(hash, TxRejectReason::PoolFull)
         }
-        (true, TxPoolInsertOutcome::NotStored(TxPoolInsertReject::UnderpricedReplacement)) => {
+        TxPoolInsertOutcome::NotStored(TxPoolInsertReject::UnderpricedReplacement) => {
             TxSubmitResult::rejected(
                 hash,
                 TxRejectReason::Policy(
@@ -520,60 +430,40 @@ fn admission_after_pool_insert(
     }
 }
 
-fn should_remember_transaction(status: TxAdmissionStatus) -> bool {
-    status != TxAdmissionStatus::Rejected
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{admission_after_pool_insert, should_remember_transaction};
+    use super::admission_after_pool_insert;
     use base::{
         TxAdmissionStatus, TxGroupId, TxPoolInsertOutcome, TxPoolInsertReject, TxRejectReason,
     };
     use field::Hash;
 
     #[test]
-    fn pool_capacity_does_not_block_relay() {
-        let result = admission_after_pool_insert(
-            Hash::default(),
-            TxGroupId::DEFAULT,
-            false,
-            TxPoolInsertOutcome::NotStored(TxPoolInsertReject::Capacity),
-        );
-        assert_eq!(result.status, TxAdmissionStatus::AcceptedBroadcast);
-        assert_eq!(result.group, Some(TxGroupId::DEFAULT));
-        assert!(result.reason.is_none());
+    fn pool_capacity_rejects_in_all_submission_modes() {
+        for only_pool in [false, true] {
+            let result = admission_after_pool_insert(
+                Hash::default(),
+                TxGroupId::DEFAULT,
+                only_pool,
+                TxPoolInsertOutcome::NotStored(TxPoolInsertReject::Capacity),
+            );
+            assert_eq!(result.status, TxAdmissionStatus::Rejected);
+            assert_eq!(result.reason, Some(TxRejectReason::PoolFull));
+        }
     }
 
     #[test]
-    fn pool_replacement_policy_does_not_block_relay() {
-        let result = admission_after_pool_insert(
-            Hash::default(),
-            TxGroupId::DEFAULT,
-            false,
-            TxPoolInsertOutcome::NotStored(TxPoolInsertReject::UnderpricedReplacement),
-        );
-        assert_eq!(result.status, TxAdmissionStatus::AcceptedBroadcast);
-    }
-
-    #[test]
-    fn only_pool_keeps_strict_storage_semantics() {
-        let result = admission_after_pool_insert(
-            Hash::default(),
-            TxGroupId::DEFAULT,
-            true,
-            TxPoolInsertOutcome::NotStored(TxPoolInsertReject::Capacity),
-        );
-        assert_eq!(result.status, TxAdmissionStatus::Rejected);
-        assert_eq!(result.reason, Some(TxRejectReason::PoolFull));
-    }
-
-    #[test]
-    fn rejected_admission_stays_retryable() {
-        assert!(!should_remember_transaction(TxAdmissionStatus::Rejected));
-        assert!(should_remember_transaction(
-            TxAdmissionStatus::AcceptedBroadcast
-        ));
+    fn underpriced_replacement_rejects_in_all_submission_modes() {
+        for only_pool in [false, true] {
+            let result = admission_after_pool_insert(
+                Hash::default(),
+                TxGroupId::DEFAULT,
+                only_pool,
+                TxPoolInsertOutcome::NotStored(TxPoolInsertReject::UnderpricedReplacement),
+            );
+            assert_eq!(result.status, TxAdmissionStatus::Rejected);
+            assert!(matches!(result.reason, Some(TxRejectReason::Policy(_))));
+        }
     }
 }
 

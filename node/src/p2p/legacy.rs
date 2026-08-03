@@ -169,12 +169,26 @@ fn parse_key_name(idname: &[u8], listen_port: u16) -> sys::Ret<PeerIdentity> {
     let mut key = [0u8; 16];
     key.copy_from_slice(&idname[..PEER_KEY_SIZE]);
     let name_raw = &idname[PEER_KEY_SIZE..PEER_KEY_SIZE * 2];
-    let name = String::from_utf8_lossy(name_raw)
-        .trim_end_matches(' ')
-        .to_string();
+    let name = sys::bytes_to_readable_string(name_raw).replace(' ', "");
     Ok(PeerIdentity {
         key,
         name,
         listen_port,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_node_info, parse_report_peer};
+
+    #[test]
+    fn v1_identity_matches_fullnodedev_name_normalization() {
+        let mut info = build_node_info(&[7; 16], "node name", 3337);
+        info[20] = 0;
+
+        let identity = parse_report_peer(&info).unwrap();
+        assert_eq!(identity.key, [7; 16]);
+        assert_eq!(identity.listen_port, 3337);
+        assert_eq!(identity.name, "odename");
+    }
 }

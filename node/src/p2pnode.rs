@@ -8,7 +8,7 @@ use base::{BlkPkg, ChainListener, Engine, Node, P2PConfig, TxPkg, TxPool, TxSubm
 use field::Hash;
 use sys::{Rerr, Waiter};
 
-use crate::knowledge::{Knowledge, RejectCache};
+use crate::knowledge::Knowledge;
 use crate::msgqueue::{InboundHub, InboundMsg};
 use crate::peertable::PeerTable;
 use crate::sync_pipeline::SyncSlot;
@@ -33,9 +33,6 @@ pub struct P2PNode {
     pub(crate) listeners: Mutex<Vec<Arc<dyn ChainListener>>>,
     /// Global broadcast knowledge (capacity 2000).
     pub(crate) knows: Knowledge,
-    pub(crate) tx_rejects: RejectCache,
-    pub(crate) block_rejects: RejectCache,
-    pub(crate) block_wire_rejects: RejectCache,
     pub(crate) sync_tracker: Arc<SyncTracker>,
     pub(crate) doing_sync: Arc<AtomicU64>,
     pub(crate) inserting: Arc<Mutex<()>>,
@@ -63,9 +60,6 @@ impl P2PNode {
             peertable,
             listeners: Mutex::new(Vec::new()),
             knows: Knowledge::new(2000),
-            tx_rejects: RejectCache::new(2000, std::time::Duration::from_secs(30)),
-            block_rejects: RejectCache::new(2000, std::time::Duration::from_secs(30)),
-            block_wire_rejects: RejectCache::new(2000, std::time::Duration::from_secs(30)),
             sync_tracker: Arc::new(SyncTracker::new()),
             doing_sync: Arc::new(AtomicU64::new(0)),
             inserting: Arc::new(Mutex::new(())),
