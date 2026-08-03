@@ -2,13 +2,15 @@ use std::any::Any;
 use std::sync::Arc;
 
 use base::{Context, GasBuckets, IntentScope, TransferPayload, TransferRouting};
-use field::Address;
+use field::{Address, BytesW2};
 use sys::Ret;
 
+use crate::action::P2SHScriptProve;
+use crate::contract::ContractAddrListW1;
 use crate::rt::{AbstCall, CodeConf, CodeType, EntryKind, FnObj, FrameBindings, ItrErr, VmrtRes};
 use crate::value::{ContractAddress, Value};
 
-use super::StubVm;
+use super::{StubVm, peek_vm_runtime_limits};
 
 struct TransferCall {
     kind: AbstCall,
@@ -67,6 +69,11 @@ impl StubVm {
             params.push(Value::Nil);
         }
         let param = Value::pack_call_args(params).map_err(sys::Error::from)?;
+        // Mirror dev `run_p2sh_entry`: re-validate the stored unlock inputs at
+        // every p2sh VM entry before dispatch. The object was verified at
+        // P2SHScriptProve set time; re-checking keeps the entry boundary robust
+        // against any future p2sh_set source and guards caches against forged blobs.
+        verify_p2sh_entry_inputs(ctx, code_conf, &libs, &codes, &param)?;
         let label = format!("p2sh transfer authorize {}", owner.to_readable());
         let (cost, rv) = self.run_entry(ctx, EntryKind::P2sh, move |vm, ctx| {
             vm.p2sh_call_raw(
@@ -235,4 +242,122 @@ fn parse_p2sh_code_stuff(raw: &[u8]) -> Ret<(Address, Vec<Address>, Arc<[u8]>)> 
         libs.push(Address::from(lib));
     }
     Ok((context_addr, libs, Arc::from(&raw[codes_start..])))
+}
+
+/// Extract the P2SH witness bytes from the entry parameter (dev-compatible:
+/// bare `Bytes`, or a tuple whose first item is the witness).
+fn extract_p2sh_witness(param: &Value) -> Ret<Vec<u8>> {
+    match param {
+        Value::Bytes(witness) => Ok(witness.clone()),
+        Value::Tuple(items) => {
+            let Some(first) = items.as_slice().first() else {
+                return sys::errf!("p2sh param tuple is empty");
+            };
+            let Value::Bytes(witness) = first else {
+                return sys::errf!("p2sh witness must be the first tuple item as bytes");
+            };
+            Ok(witness.clone())
+        }
+        _ => sys::errf!("p2sh param must be bytes or a tuple starting with witness bytes"),
+    }
+}
+
+/// Dev `run_p2sh_entry` re-validation: parse the stored unlock inputs and run
+/// `P2SHScriptProve::verify_unlock_inputs` (libs allowlist, lockbox size,
+/// code convert+check, witness size) before any VM dispatch or cache warmup.
+fn verify_p2sh_entry_inputs(
+    ctx: &mut dyn Context,
+    code_conf: CodeConf,
+    libs: &[Address],
+    codes: &[u8],
+    param: &Value,
+) -> Ret<()> {
+    let hei = ctx.env().block.height;
+    let (gst, cap) = peek_vm_runtime_limits(ctx, hei);
+    let witness = BytesW2::from(extract_p2sh_witness(param)?).map_err(sys::Error::from)?;
+    let lib_list = ContractAddrListW1::from(
+        libs.iter()
+            .map(|addr| ContractAddress::from_addr(*addr))
+            .collect::<Ret<Vec<_>>>()?,
+    )
+    .map_err(sys::Error::from)?;
+    let lockbox = BytesW2::from(codes.to_vec()).map_err(sys::Error::from)?;
+    P2SHScriptProve::verify_unlock_inputs(
+        hei,
+        &gst,
+        &cap,
+        &lib_list,
+        code_conf,
+        &lockbox,
+        &witness,
+        ctx.services().as_ref(),
+    )
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::*;
+    use crate::machine::test_ctx::TestCtx;
+    use crate::rt::{Bytecode, SpaceCap};
+
+    /// Dev `run_p2sh_entry` re-validation: the entry boundary rejects a
+    /// witness larger than `SpaceCap::value_size` before any VM dispatch.
+    #[test]
+    fn verify_p2sh_entry_inputs_rejects_oversized_witness() {
+        let mut ctx = TestCtx::new();
+        let cap = SpaceCap::new(1);
+        let oversized = vec![0u8; cap.value_size + 1];
+        assert!(oversized.len() <= u16::MAX as usize, "witness must fit BytesW2");
+        let param = Value::pack_call_args(vec![Value::Bytes(oversized)]).unwrap();
+        let codes: Arc<[u8]> = Arc::from(vec![Bytecode::END as u8]);
+        let err = verify_p2sh_entry_inputs(
+            &mut ctx,
+            CodeConf::from_type(CodeType::Bytecode),
+            &[],
+            &codes,
+            &param,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("witness bytes too long"), "{err}");
+    }
+
+    /// Dev `run_p2sh_entry` re-validation: non-contract-version library
+    /// addresses are rejected before VM dispatch (mirrors `ContractAddressW1`
+    /// payload decode failing in fullnodedev).
+    #[test]
+    fn verify_p2sh_entry_inputs_rejects_non_contract_lib() {
+        let mut ctx = TestCtx::new();
+        let lib = Address::from([0u8; 21]); // version 0, not a contract
+        let param = Value::pack_call_args(vec![Value::Bytes(vec![1u8])]).unwrap();
+        let codes: Arc<[u8]> = Arc::from(vec![Bytecode::END as u8]);
+        let err = verify_p2sh_entry_inputs(
+            &mut ctx,
+            CodeConf::from_type(CodeType::Bytecode),
+            &[lib],
+            &codes,
+            &param,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("is not CONTRACT"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Valid inputs (empty libs, valid END bytecode, small witness) pass the
+    /// entry re-validation.
+    #[test]
+    fn verify_p2sh_entry_inputs_accepts_valid_inputs() {
+        let mut ctx = TestCtx::new();
+        let param = Value::pack_call_args(vec![Value::Bytes(vec![1u8])]).unwrap();
+        let codes: Arc<[u8]> = Arc::from(vec![Bytecode::END as u8]);
+        verify_p2sh_entry_inputs(
+            &mut ctx,
+            CodeConf::from_type(CodeType::Bytecode),
+            &[],
+            &codes,
+            &param,
+        )
+        .unwrap();
+    }
 }

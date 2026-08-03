@@ -23,6 +23,8 @@ mod loader;
 mod runtime;
 mod sandbox;
 mod service;
+#[cfg(test)]
+mod test_ctx;
 mod transfer;
 
 pub use deferred::DeferredRegistry;

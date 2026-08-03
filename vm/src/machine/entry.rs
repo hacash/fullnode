@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use base::{Context, GasBuckets, IntentScope};
+use base::{Context, ExecFrom, GasBuckets, IntentScope, with_exec_from};
 use sys::Ret;
 
 use crate::frame::CallFrame;
@@ -82,7 +82,11 @@ impl StubVm {
         run: impl FnOnce(&mut Self, &mut dyn Context) -> Result<Value, ItrErr>,
     ) -> Ret<(GasBuckets, Value)> {
         self.push_entry(kind)?;
-        let result = run(self, ctx).map_err(sys::Error::from);
+        // Match dev entry semantics: every VM entry executes under `ExecFrom::Call`
+        // (dev wraps `run_vm_entry_ret/xret` in `with_exec_from(ctx, ExecFrom::Call, ..)`).
+        // Keeps ctx.exec_from() observable by VM-hosted code identical to fullnodedev.
+        let result =
+            with_exec_from(ctx, ExecFrom::Call, |ctx| run(self, ctx)).map_err(sys::Error::from);
         let entry = self.pop_entry()?;
         let settle = self.settle_entry_return_cost(ctx, entry);
         match (result, settle) {
@@ -258,5 +262,68 @@ impl StubVm {
                 param,
             } => self.run_abst_entry(ctx, kind, contract_addr, intent_scope, param),
         }
+    }
+}
+
+#[cfg(test)]
+mod entry_semantics_tests {
+    use super::*;
+    use crate::machine::test_ctx::TestCtx;
+    use crate::rt::{ItrErr, ItrErrCode};
+    use base::ExecFrom;
+
+    /// Dev entry semantics: every VM entry executes under `ExecFrom::Call`
+    /// (dev wraps `run_vm_entry_ret/xret` in `with_exec_from(ctx, Call, ..)`),
+    /// and the caller's exec_from is restored afterwards.
+    #[test]
+    fn run_entry_executes_under_exec_from_call_and_restores() {
+        let mut vm = StubVm::new(1, 0);
+        let mut ctx = TestCtx::new();
+        assert_eq!(ctx.exec_from(), ExecFrom::Top);
+        let (_, rv) = vm
+            .run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
+                assert_eq!(ctx.exec_from(), ExecFrom::Call);
+                vm.runtime.settle_compute_gas(ctx, 5).unwrap();
+                Ok(Value::Nil)
+            })
+            .unwrap();
+        assert!(rv.is_nil());
+        assert_eq!(ctx.exec_from(), ExecFrom::Top);
+    }
+
+    #[test]
+    fn run_entry_restores_exec_from_on_error() {
+        let mut vm = StubVm::new(1, 0);
+        let mut ctx = TestCtx::new();
+        let err = vm
+            .run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
+                assert_eq!(ctx.exec_from(), ExecFrom::Call);
+                vm.runtime.settle_compute_gas(ctx, 5).unwrap();
+                Err(ItrErr::new(ItrErrCode::ThrowAbort, "boom"))
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("boom"), "{err}");
+        assert_eq!(ctx.exec_from(), ExecFrom::Top);
+    }
+
+    /// Nested entries (contract-to-contract / transfer recursion) keep
+    /// `ExecFrom::Call` at every level and unwind back to the caller's value.
+    #[test]
+    fn nested_entries_keep_exec_from_call_and_restore_outer() {
+        let mut vm = StubVm::new(1, 0);
+        let mut ctx = TestCtx::new();
+        vm.run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
+            assert_eq!(ctx.exec_from(), ExecFrom::Call);
+            let inner = vm.run_entry(ctx, EntryKind::Abst, |vm, ctx| {
+                assert_eq!(ctx.exec_from(), ExecFrom::Call);
+                vm.runtime.settle_compute_gas(ctx, 5).unwrap();
+                Ok(Value::Nil)
+            });
+            assert!(inner.is_ok());
+            vm.runtime.settle_compute_gas(ctx, 5).unwrap();
+            Ok(Value::Nil)
+        })
+        .unwrap();
+        assert_eq!(ctx.exec_from(), ExecFrom::Top);
     }
 }
