@@ -164,9 +164,7 @@ impl P2PNode {
                 continue;
             }
             peer.knows.add(key);
-            if let Err(e) = peer.send_msg(ty, body.clone()) {
-                eprintln!("[P2P] send {} to {} failed: {}", ty, peer.id, e);
-            }
+            let _ = peer.send_msg(ty, body.clone());
         }
         Ok(())
     }

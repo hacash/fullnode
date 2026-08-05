@@ -462,7 +462,13 @@ fn req_sign_for(main: Address, addrlist: &AddrOrList, actions: &[ActionRef]) -> 
     for act in actions {
         for ptr in act.req_sign() {
             let addr = ptr.real(&addrs)?;
-            if !required.contains(&addr) {
+            // Legacy signer semantics: non-PRIVAKEY req_sign targets are not
+            // required to sign. Mainnet history contains FromTo transfers
+            // whose `from` is a SCRIPTMH address; those addresses cannot
+            // produce a signature, so dev (transaction::macro req_sign) drops
+            // them from the required set. Keep the same rule here or the
+            // historical blocks fail signature verification on replay.
+            if addr.is_privkey() && !required.contains(&addr) {
                 required.push(addr);
             }
         }
@@ -1105,4 +1111,66 @@ pub fn create_transaction_type3(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base
 
 pub fn create_std_tx(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
     create_transaction_type2(reg, buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::action::HacFromToTrs;
+    use field::AddrOrPtr;
+
+    fn scriptmh_address() -> Address {
+        // VERSION_SCRIPTMH = 5; such addresses cannot produce signatures.
+        let mut raw = [0u8; 21];
+        raw[0] = 5;
+        raw[1..].copy_from_slice(&[7u8; 20]);
+        Address::from(raw)
+    }
+
+    fn fromto_tx(from: Address, to: Address, acc: &Account) -> TransactionType1 {
+        let main = Address::from(*acc.address());
+        let mut tx = TransactionType1::new(main, Amount::mei(1));
+        tx.push_action_in(Arc::new(HacFromToTrs {
+            kind: Uint2::from(HacFromToTrs::KIND),
+            from: AddrOrPtr::Addr(from),
+            to: AddrOrPtr::Addr(to),
+            hacash: Amount::mei(1),
+        }));
+        tx
+    }
+
+    /// Mainnet history contains FromTo txs whose action req_sign target is a
+    /// SCRIPTMH address (which cannot sign). The legacy required-signer set
+    /// must drop it, exactly like dev's `req_sign` — otherwise the historical
+    /// block fails `verify_signature` on replay.
+    #[test]
+    fn legacy_req_sign_drops_non_privkey_targets() {
+        let acc = Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let main = Address::from(*acc.address());
+        let mut tx = fromto_tx(scriptmh_address(), main, &acc);
+        tx.fill_sign_account(&acc).unwrap();
+
+        let required = tx.req_sign().unwrap();
+        assert_eq!(required, vec![main], "scriptmh signer must be dropped");
+        tx.verify_signature().unwrap();
+    }
+
+    /// A PRIVAKEY `from` stays required: missing its signature fails, and the
+    /// tx verifies once the second sign is attached.
+    #[test]
+    fn legacy_req_sign_keeps_privkey_targets() {
+        let acc_from = Account::create_by_secret_key_value([1u8; 32]).unwrap();
+        let acc_to = Account::create_by_secret_key_value([2u8; 32]).unwrap();
+        let main = Address::from(*acc_from.address());
+        let from = Address::from(*acc_to.address());
+
+        let mut tx = fromto_tx(from, main, &acc_from);
+        tx.fill_sign_account(&acc_from).unwrap();
+        assert_eq!(tx.req_sign().unwrap(), vec![main, from]);
+        assert!(tx.verify_signature().is_err(), "missing the `from` signature");
+
+        let sign = Sign::create_by(&acc_to, &tx.hash());
+        tx.push_sign(sign).unwrap();
+        tx.verify_signature().unwrap();
+    }
 }
