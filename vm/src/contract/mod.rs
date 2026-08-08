@@ -137,6 +137,52 @@ contract_codec_struct!(ContractSto {
     morextend: Uint8,
 });
 
+base::impl_fields_to_json!(ContractMeta {
+    vrsn,
+    revision,
+    mark,
+    mext
+});
+base::impl_fields_to_json!(ContractAbstCall {
+    sign,
+    mark,
+    fncnf,
+    code_stuff
+});
+base::impl_fields_to_json!(ContractUserFunc {
+    sign,
+    mark,
+    fncnf,
+    pmdf,
+    code_stuff
+});
+base::impl_fields_to_json!(ContractCalcFunc {
+    sign,
+    mark,
+    fncnf,
+    code_stuff
+});
+base::impl_fields_to_json!(ContractAddrReplaceAt { idx, addr });
+base::impl_fields_to_json!(ContractEdit {
+    new_revision,
+    inherit_add,
+    inherit_replace_at,
+    library_add,
+    library_replace_at,
+    abstcalls,
+    userfuncs,
+    calcfuncs
+});
+base::impl_fields_to_json!(ContractSto {
+    metas,
+    inherit,
+    library,
+    abstcalls,
+    userfuncs,
+    calcfuncs,
+    morextend
+});
+
 #[derive(Default)]
 pub struct ContractObj {
     pub sto: ContractSto,

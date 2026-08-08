@@ -107,6 +107,21 @@ impl Encode for ContractAddress {
     }
 }
 
+impl ToJSON for ContractAddress {
+    fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
+        self.addr.to_json_fmt(fmt)
+    }
+}
+
+impl FromJSON for ContractAddress {
+    fn from_json(&mut self, json: &str) -> sys::Ret<()> {
+        let mut addr = self.addr;
+        addr.from_json(json)?;
+        self.addr = addr;
+        self.check()
+    }
+}
+
 impl Decode for ContractAddress {
     fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
         let (addr, used) = field::Address::decode(buf)?;

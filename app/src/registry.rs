@@ -329,6 +329,62 @@ mod tests {
     }
 
     #[test]
+    fn standard_registry_decodes_regular_action_json() {
+        use field::{Encode, ToJSON};
+
+        let registry = standard_registry().expect("standard registry");
+        let source =
+            protocol::action_std::SatToTrs::new(field::Address::default(), field::Satoshi::from(7));
+        let decoded = registry
+            .decode_action_json(source.kind(), &source.to_json())
+            .expect("json codec")
+            .expect("registered action");
+        assert_eq!(decoded.encode(), source.encode());
+        assert!(
+            registry
+                .decode_action_json(
+                    source.kind(),
+                    "{\"kind\":10,\"to\":0,\"to\":0,\"satoshi\":7}"
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn registry_json_keeps_dynamic_actions_registry_owned() {
+        use field::ToJSON;
+        use std::sync::Arc;
+
+        let registry = standard_registry().expect("standard registry");
+        let child =
+            protocol::action_std::SatToTrs::new(field::Address::default(), field::Satoshi::from(1));
+        let ast =
+            protocol::action_std::AstSelect::create_by(0, 1, vec![Arc::new(child)]).expect("AST");
+        let decoded = registry
+            .decode_action_json(ast.kind(), &ast.to_json())
+            .expect("AST JSON codec")
+            .expect("registered AST action");
+        assert_eq!(decoded.to_json(), ast.to_json());
+
+        let signers = protocol::action_std::ReqSignList::create_by(vec![field::AddrOrPtr::Ptr(0)])
+            .expect("signer list");
+        let decoded = registry
+            .decode_action_json(signers.kind(), &signers.to_json())
+            .expect("ReqSignList JSON codec")
+            .expect("registered ReqSignList action");
+        assert_eq!(decoded.to_json(), signers.to_json());
+
+        assert!(
+            registry
+                .decode_action_json(
+                    protocol::action_std::DiaToTrs::KIND,
+                    "{\"kind\":7,\"to\":0,\"diamonds\":[]}"
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
     fn consensus_uses_registry_feature_flags() {
         let registry = standard_registry().expect("standard registry");
         let consensus = mint::HacashConsensus::with_config(

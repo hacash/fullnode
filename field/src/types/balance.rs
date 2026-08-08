@@ -121,7 +121,7 @@ impl Balance {
 codec_struct!(AddrHac {
     address: Address,
     amount: Amount,
-});
+} json);
 
 codec_struct!(HacSat {
     amount: Amount,

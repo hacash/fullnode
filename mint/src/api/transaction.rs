@@ -1,25 +1,16 @@
 //! Transaction build / check / sign APIs (ported from fullnodedev mint api).
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use base::{ActionRef, ApiExecCtx, ApiRequest, ApiResponse, Transaction, TransactionBuild, TxPkg};
 use field::{
-    Address, Amount, BytesW1, DiamondName, DiamondNameListMax200, DiamondNumber, Encode, Fixed8,
-    Hash, Satoshi, Sign, Uint1, Uint2, WireAmount, json_decode_array, json_decode_object,
+    Address, Amount, Encode, Hash, Sign, Uint1, json_decode_array, json_decode_object,
     json_expect_quoted_decoded, json_expect_unquoted,
-};
-use protocol::action_std::{
-    DiaFromToTrs, DiaFromTrs, DiaSingleTrs, DiaToTrs, HacFromToTrs, HacFromTrs, HacToTrs,
-    SatFromToTrs, SatFromTrs, SatToTrs,
 };
 use protocol::tx_std::{TransactionType2, TransactionType3};
 use sys::ToHex;
 
-use crate::action::diamond::DiamondMint;
-use crate::action::diamond_insc::{
-    DiaInscClean, DiaInscDrop, DiaInscEdit, DiaInscMove, DiaInscPush,
-};
+use crate::action::diamond_insc::DiaInscPush;
 use crate::api::util::*;
 
 fn create_transaction_error_response(
@@ -51,14 +42,6 @@ fn parse_amount_value(v: &str) -> sys::Ret<Amount> {
     Amount::from(&json_expect_quoted_decoded(v)?)
 }
 
-fn parse_diamond_list_value(v: &str) -> sys::Ret<DiamondNameListMax200> {
-    DiamondNameListMax200::from_readable(&json_expect_quoted_decoded(v)?)
-}
-
-fn parse_diamond_name_value(v: &str) -> sys::Ret<DiamondName> {
-    DiamondName::from_readable(json_expect_quoted_decoded(v)?.as_bytes())
-}
-
 fn parse_hex_bytes(v: &str) -> sys::Ret<Vec<u8>> {
     let raw = json_expect_quoted_decoded(v)?;
     let trimmed = raw.trim();
@@ -69,24 +52,9 @@ fn parse_hex_bytes(v: &str) -> sys::Ret<Vec<u8>> {
     hex::decode(hex).map_err(|e| sys::Error::fault(e.to_string()))
 }
 
-fn parse_fixed_n_value<const N: usize>(v: &str) -> sys::Ret<[u8; N]> {
-    let data = parse_hex_bytes(v)?;
-    if data.len() != N {
-        return sys::errf!("fixed size invalid: expected {} got {}", N, data.len());
-    }
-    let mut out = [0u8; N];
-    out.copy_from_slice(&data);
-    Ok(out)
-}
-
-fn require_field<'a>(obj: &'a HashMap<String, String>, key: &str) -> sys::Ret<&'a str> {
-    obj.get(key)
-        .map(|s| s.as_str())
-        .ok_or_else(|| sys::Error::fault(format!("missing required field(s): {}", key)))
-}
-
 fn action_from_json_obj(
-    reg: &dyn base::BinaryCodecs,
+    reg: &dyn base::ExecutionServices,
+    json: &str,
     obj: &HashMap<String, String>,
 ) -> sys::Ret<ActionRef> {
     if let Some(body) = obj.get("body") {
@@ -105,169 +73,19 @@ fn action_from_json_obj(
         }
         return Ok(action);
     }
-    let kind_s = require_field(obj, "kind")?;
+    let kind_s = obj
+        .get("kind")
+        .map(String::as_str)
+        .ok_or_else(|| sys::Error::fault("missing required field(s): kind"))?;
     let kind: u16 = json_expect_unquoted(kind_s)?
         .parse()
         .map_err(|_| sys::Error::fault("kind format invalid"))?;
-
-    match kind {
-        HacToTrs::KIND => {
-            let to = parse_addr_value(require_field(obj, "to")?)?;
-            let hacash = parse_amount_value(require_field(obj, "hacash")?)?;
-            Ok(Arc::new(HacToTrs::new(to, hacash)))
-        }
-        HacFromTrs::KIND => {
-            let from = parse_addr_value(require_field(obj, "from")?)?;
-            let hacash = parse_amount_value(require_field(obj, "hacash")?)?;
-            Ok(Arc::new(HacFromTrs::new(from, hacash)))
-        }
-        HacFromToTrs::KIND => {
-            let from = parse_addr_value(require_field(obj, "from")?)?;
-            let to = parse_addr_value(require_field(obj, "to")?)?;
-            let hacash = parse_amount_value(require_field(obj, "hacash")?)?;
-            Ok(Arc::new(HacFromToTrs::new(from, to, hacash)))
-        }
-        SatToTrs::KIND => {
-            let to = parse_addr_value(require_field(obj, "to")?)?;
-            let sat: u64 = json_expect_unquoted(require_field(obj, "satoshi")?)?
-                .parse()
-                .map_err(|_| sys::Error::fault("satoshi format invalid"))?;
-            Ok(Arc::new(SatToTrs::new(to, Satoshi::from(sat))))
-        }
-        SatFromTrs::KIND => {
-            let from = parse_addr_value(require_field(obj, "from")?)?;
-            let sat: u64 = json_expect_unquoted(require_field(obj, "satoshi")?)?
-                .parse()
-                .map_err(|_| sys::Error::fault("satoshi format invalid"))?;
-            Ok(Arc::new(SatFromTrs::new(from, Satoshi::from(sat))))
-        }
-        SatFromToTrs::KIND => {
-            let from = parse_addr_value(require_field(obj, "from")?)?;
-            let to = parse_addr_value(require_field(obj, "to")?)?;
-            let sat: u64 = json_expect_unquoted(require_field(obj, "satoshi")?)?
-                .parse()
-                .map_err(|_| sys::Error::fault("satoshi format invalid"))?;
-            Ok(Arc::new(SatFromToTrs::new(from, to, Satoshi::from(sat))))
-        }
-        DiaSingleTrs::KIND => {
-            let to = parse_addr_value(require_field(obj, "to")?)?;
-            let diamond = parse_diamond_name_value(require_field(obj, "diamond")?)?;
-            Ok(Arc::new(DiaSingleTrs::new(diamond, to)))
-        }
-        DiaFromToTrs::KIND => {
-            let from = parse_addr_value(require_field(obj, "from")?)?;
-            let to = parse_addr_value(require_field(obj, "to")?)?;
-            let diamonds = parse_diamond_list_value(require_field(obj, "diamonds")?)?;
-            Ok(Arc::new(DiaFromToTrs::new(from, to, diamonds)))
-        }
-        DiaToTrs::KIND => {
-            let to = parse_addr_value(require_field(obj, "to")?)?;
-            let diamonds = parse_diamond_list_value(require_field(obj, "diamonds")?)?;
-            Ok(Arc::new(DiaToTrs::new(to, diamonds)))
-        }
-        DiaFromTrs::KIND => {
-            let from = parse_addr_value(require_field(obj, "from")?)?;
-            let diamonds = parse_diamond_list_value(require_field(obj, "diamonds")?)?;
-            Ok(Arc::new(DiaFromTrs::new(from, diamonds)))
-        }
-        DiamondMint::KIND => {
-            let d_obj = if let Some(d) = obj.get("d") {
-                json_decode_object(d)?
-            } else {
-                obj.clone()
-            };
-            let diamond = parse_diamond_name_value(require_field(&d_obj, "diamond")?)?;
-            let number: u32 = json_expect_unquoted(require_field(&d_obj, "number")?)?
-                .parse()
-                .map_err(|_| sys::Error::fault("diamond number format invalid"))?;
-            let mut act = DiamondMint::with(diamond, DiamondNumber::from(number));
-            if let Some(v) = d_obj.get("prev_hash") {
-                act.d.prev_hash = Hash::from(parse_fixed_n_value::<32>(v)?);
-            }
-            if let Some(v) = d_obj.get("nonce") {
-                act.d.nonce = Fixed8::from(parse_fixed_n_value::<8>(v)?);
-            }
-            if let Some(v) = d_obj.get("address") {
-                act.d.address = parse_addr_value(v)?;
-            }
-            if let Some(v) = d_obj.get("custom_message") {
-                act.d.custom_message = Hash::from(parse_fixed_n_value::<32>(v)?);
-            }
-            Ok(Arc::new(act))
-        }
-        DiaInscPush::KIND => {
-            let diamonds = parse_diamond_list_value(require_field(obj, "diamonds")?)?;
-            let protocol_cost =
-                WireAmount::from_amount(parse_amount_value(require_field(obj, "protocol_cost")?)?);
-            let engraved_type: u8 = json_expect_unquoted(require_field(obj, "engraved_type")?)?
-                .parse()
-                .map_err(|_| sys::Error::fault("engraved_type format invalid"))?;
-            let content_raw = json_expect_quoted_decoded(require_field(obj, "engraved_content")?)?;
-            let engraved_content = BytesW1::from(content_raw.into_bytes())?;
-            Ok(Arc::new(DiaInscPush::new(
-                diamonds,
-                protocol_cost,
-                Uint1::from(engraved_type),
-                engraved_content,
-            )))
-        }
-        DiaInscClean::KIND => {
-            let diamonds = parse_diamond_list_value(require_field(obj, "diamonds")?)?;
-            let protocol_cost = parse_amount_value(require_field(obj, "protocol_cost")?)?;
-            Ok(Arc::new(DiaInscClean::new(diamonds, protocol_cost)))
-        }
-        DiaInscEdit::KIND => {
-            let diamond = parse_diamond_name_value(require_field(obj, "diamond")?)?;
-            let index: u8 = json_expect_unquoted(require_field(obj, "index")?)?
-                .parse()
-                .map_err(|_| sys::Error::fault("index format invalid"))?;
-            let protocol_cost = parse_amount_value(require_field(obj, "protocol_cost")?)?;
-            let engraved_type: u8 = json_expect_unquoted(require_field(obj, "engraved_type")?)?
-                .parse()
-                .map_err(|_| sys::Error::fault("engraved_type format invalid"))?;
-            let content_raw = json_expect_quoted_decoded(require_field(obj, "engraved_content")?)?;
-            Ok(Arc::new(DiaInscEdit {
-                kind: Uint2::from(DiaInscEdit::KIND),
-                diamond,
-                index: Uint1::from(index),
-                protocol_cost,
-                engraved_type: Uint1::from(engraved_type),
-                engraved_content: BytesW1::from(content_raw.into_bytes())?,
-            }))
-        }
-        DiaInscMove::KIND => {
-            let from_diamond = parse_diamond_name_value(require_field(obj, "from_diamond")?)?;
-            let to_diamond = parse_diamond_name_value(require_field(obj, "to_diamond")?)?;
-            let index: u8 = json_expect_unquoted(require_field(obj, "index")?)?
-                .parse()
-                .map_err(|_| sys::Error::fault("index format invalid"))?;
-            let protocol_cost = parse_amount_value(require_field(obj, "protocol_cost")?)?;
-            Ok(Arc::new(DiaInscMove {
-                kind: Uint2::from(DiaInscMove::KIND),
-                from_diamond,
-                to_diamond,
-                index: Uint1::from(index),
-                protocol_cost,
-            }))
-        }
-        DiaInscDrop::KIND => {
-            let diamond = parse_diamond_name_value(require_field(obj, "diamond")?)?;
-            let index: u8 = json_expect_unquoted(require_field(obj, "index")?)?
-                .parse()
-                .map_err(|_| sys::Error::fault("index format invalid"))?;
-            let protocol_cost = parse_amount_value(require_field(obj, "protocol_cost")?)?;
-            Ok(Arc::new(DiaInscDrop {
-                kind: Uint2::from(DiaInscDrop::KIND),
-                diamond,
-                index: Uint1::from(index),
-                protocol_cost,
-            }))
-        }
-        _ => sys::errf!(
+    reg.decode_action_json(kind, json)?.ok_or_else(|| {
+        sys::Error::fault(format!(
             "action kind {} not supported by create/transaction subset (Type3/VM/AST stubbed)",
             kind
-        ),
-    }
+        ))
+    })
 }
 
 pub(crate) fn reject_non_canonical_dia_insc_push(tx: &dyn Transaction) -> Option<ApiResponse> {
@@ -482,7 +300,7 @@ pub(crate) fn transaction_build_handler(ctx: &ApiExecCtx, req: ApiRequest) -> Ap
         let action_kind = act_obj
             .get("kind")
             .and_then(|v| json_expect_unquoted(v).ok()?.parse::<u64>().ok());
-        let a = match action_from_json_obj(ctx.engine.services().as_ref(), &act_obj) {
+        let a = match action_from_json_obj(ctx.engine.services().as_ref(), act_raw, &act_obj) {
             Ok(v) => v,
             Err(e) => {
                 let message = match action_kind {

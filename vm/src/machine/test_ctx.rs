@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use base::{
     ActOut, ActionRef, BinaryCodecs, BlockHasherFn, BlockRef, Context, Env, ExecFrom,
-    ExecutionServices, LogEntry, P2sh, StateChunkRef, StateLayer, StateRead, TexLedger,
+    ExecutionServices, JsonCodecs, LogEntry, P2sh, StateChunkRef, StateLayer, StateRead, TexLedger,
     Transaction, TxRef, Vm, VmExecutionParams, VmHostActionDef, VmHostCallKind,
 };
 use field::{Address, Amount, Encode, Hash};
@@ -67,6 +67,16 @@ impl BinaryCodecs for StubServices {
     }
     fn block_hasher_fn(&self) -> BlockHasherFn {
         stub_block_hasher
+    }
+}
+
+impl JsonCodecs for StubServices {
+    fn decode_tx_json(&self, _ty: u8, _json: &str) -> Ret<Option<TxRef>> {
+        errf!("stub services: decode_tx_json")
+    }
+
+    fn decode_action_json(&self, _kind: u16, _json: &str) -> Ret<Option<ActionRef>> {
+        errf!("stub services: decode_action_json")
     }
 }
 

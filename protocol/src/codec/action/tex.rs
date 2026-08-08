@@ -1,15 +1,15 @@
 //! TexCellAct (kind 22) and TEX cell codecs.
 
-use std::any::Any;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use base::{
-    ActOut, ActScope, Action, ActionRef, Context, CoreState, ExecFrom, asset_add, asset_sub,
-    diamond_owned_move, hac_add, hac_sub, hacd_move_one_diamond, hacd_transfer, sat_add, sat_sub,
+    ActScope, ActionRef, Context, CoreState, ExecFrom, asset_add, asset_sub, diamond_owned_move,
+    hac_add, hac_sub, hacd_move_one_diamond, hacd_transfer, sat_add, sat_sub,
 };
 use field::{
     Address, Amount, AssetAmt, BlockHeight, DiamondNameListMax200, DiamondNumber, Encode, Fold64,
-    Hash, Reader, Satoshi, Sign, Uint1, Uint2, Uint4,
+    Hash, Reader, Satoshi, Sign, Uint1, Uint2, Uint4, json_decode_value, json_split_object,
 };
 use sys::{Account, Rerr, Ret, errf};
 
@@ -507,6 +507,121 @@ pub struct TexCellAct {
     pub sign: Sign,
 }
 
+impl field::ToJSON for TexCell {
+    fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
+        macro_rules! cell {
+            ($id:expr, $name:literal, $value:expr) => {
+                format!(
+                    "{{\"cellid\":{},\"{}\":{}}}",
+                    $id,
+                    $name,
+                    field::ToJSON::to_json_fmt($value, fmt)
+                )
+            };
+        }
+
+        match self {
+            Self::ZhuPay { haczhu } => cell!(1, "haczhu", haczhu),
+            Self::ZhuGet { haczhu } => cell!(2, "haczhu", haczhu),
+            Self::SatPay { satnum } => cell!(3, "satnum", satnum),
+            Self::SatGet { satnum } => cell!(4, "satnum", satnum),
+            Self::DiaPay { diamonds } => cell!(5, "diamonds", diamonds),
+            Self::DiaGet { dianum } => cell!(6, "dianum", dianum),
+            Self::AssetPay { asset } => cell!(7, "asset", asset),
+            Self::AssetGet { asset } => cell!(8, "asset", asset),
+            Self::CondZhuAtMost { haczhu } => cell!(11, "haczhu", haczhu),
+            Self::CondZhuAtLeast { haczhu } => cell!(12, "haczhu", haczhu),
+            Self::CondZhuEq { haczhu } => cell!(13, "haczhu", haczhu),
+            Self::CondSatAtMost { satoshi } => cell!(14, "satoshi", satoshi),
+            Self::CondSatAtLeast { satoshi } => cell!(15, "satoshi", satoshi),
+            Self::CondSatEq { satoshi } => cell!(16, "satoshi", satoshi),
+            Self::CondDiaAtMost { diamond } => cell!(17, "diamond", diamond),
+            Self::CondDiaAtLeast { diamond } => cell!(18, "diamond", diamond),
+            Self::CondDiaEq { diamond } => cell!(19, "diamond", diamond),
+            Self::CondAssetAtMost { asset } => cell!(20, "asset", asset),
+            Self::CondAssetAtLeast { asset } => cell!(21, "asset", asset),
+            Self::CondAssetEq { asset } => cell!(22, "asset", asset),
+            Self::CondHeightAtMost { height } => cell!(23, "height", height),
+            Self::CondHeightAtLeast { height } => cell!(24, "height", height),
+            Self::CondChainIdEq { chainid } => cell!(25, "chainid", chainid),
+        }
+    }
+}
+
+fn decode_tex_cell_json(json: &str) -> Ret<TexCell> {
+    let mut fields = HashMap::new();
+    for (key, value) in json_split_object(json)? {
+        if fields.insert(key, value).is_some() {
+            return sys::decodef!("TEX cell JSON field {} is duplicated", key);
+        }
+    }
+    let cid: Uint1 = fields
+        .get("cellid")
+        .copied()
+        .ok_or_else(|| sys::Error::decode("TEX cell JSON missing cellid"))
+        .and_then(json_decode_value)?;
+    let cid = cid.uint();
+
+    macro_rules! decode_cell {
+        ($id:expr, $name:literal, $variant:ident, $field:ident) => {
+            if cid == $id {
+                let value = fields.get($name).copied().ok_or_else(|| {
+                    sys::Error::decode(format!("TEX cell {} JSON missing {}", $id, $name))
+                })?;
+                return Ok(TexCell::$variant {
+                    $field: json_decode_value(value)?,
+                });
+            }
+        };
+    }
+
+    decode_cell!(1, "haczhu", ZhuPay, haczhu);
+    decode_cell!(2, "haczhu", ZhuGet, haczhu);
+    decode_cell!(3, "satnum", SatPay, satnum);
+    decode_cell!(4, "satnum", SatGet, satnum);
+    decode_cell!(5, "diamonds", DiaPay, diamonds);
+    decode_cell!(6, "dianum", DiaGet, dianum);
+    decode_cell!(7, "asset", AssetPay, asset);
+    decode_cell!(8, "asset", AssetGet, asset);
+    decode_cell!(11, "haczhu", CondZhuAtMost, haczhu);
+    decode_cell!(12, "haczhu", CondZhuAtLeast, haczhu);
+    decode_cell!(13, "haczhu", CondZhuEq, haczhu);
+    decode_cell!(14, "satoshi", CondSatAtMost, satoshi);
+    decode_cell!(15, "satoshi", CondSatAtLeast, satoshi);
+    decode_cell!(16, "satoshi", CondSatEq, satoshi);
+    decode_cell!(17, "diamond", CondDiaAtMost, diamond);
+    decode_cell!(18, "diamond", CondDiaAtLeast, diamond);
+    decode_cell!(19, "diamond", CondDiaEq, diamond);
+    decode_cell!(20, "asset", CondAssetAtMost, asset);
+    decode_cell!(21, "asset", CondAssetAtLeast, asset);
+    decode_cell!(22, "asset", CondAssetEq, asset);
+    decode_cell!(23, "height", CondHeightAtMost, height);
+    decode_cell!(24, "height", CondHeightAtLeast, height);
+    decode_cell!(25, "chainid", CondChainIdEq, chainid);
+    Err(sys::Error::decode(format!(
+        "cannot find tex cell id '{}'",
+        cid
+    )))
+}
+
+impl field::ToJSON for TexCellAct {
+    fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
+        let cells = self
+            .cells
+            .iter()
+            .map(|cell| cell.to_json_fmt(fmt))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{{\"kind\":{},\"addr\":{},\"cells\":[{}],\"sign\":{}}}",
+            field::ToJSON::to_json_fmt(&self.kind, fmt),
+            field::ToJSON::to_json_fmt(&self.addr, fmt),
+            cells,
+            field::ToJSON::to_json_fmt(&self.sign, fmt)
+        )
+    }
+}
+
 impl TexCellAct {
     pub const KIND: u16 = 22;
 
@@ -545,21 +660,17 @@ impl Encode for TexCellAct {
     }
 }
 
-impl Action for TexCellAct {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::TOP
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn extra9(&self) -> bool {
-        self.has_asset_transfer_cell()
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    TexCellAct {
+        scope: ActScope::TOP,
+        min_tx_type: 3,
+        extra9: |this: &TexCellAct| this.has_asset_transfer_cell(),
+        req_sign: |_: &TexCellAct| vec![],
+        as_transfer_like: none,
+        description: |this: &TexCellAct| {
+            format!("Execute {} tex cells by {}", this.cells.len(), this.addr.to_readable())
+        },
+        execute: (self, ctx) {
         if ctx.exec_from() != ExecFrom::Top {
             return errf!(
                 "TexCellAct can only run in TOP context, got {}",
@@ -577,10 +688,8 @@ impl Action for TexCellAct {
         for cell in &self.cells {
             cell.execute(ctx, &self.addr)?;
         }
-        Ok((gas, vec![]))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
@@ -616,4 +725,58 @@ pub fn create_tex_cell_act(
         }),
         r.used(),
     ))
+}
+
+pub fn decode_tex_cell_act_json(
+    _reg: &dyn base::CodecRegistry,
+    kind: u16,
+    json: &str,
+) -> Ret<ActionRef> {
+    if kind != TexCellAct::KIND {
+        return sys::decodef!("TexCellAct JSON codec got kind {}", kind);
+    }
+    let mut fields = HashMap::new();
+    for (key, value) in json_split_object(json)? {
+        if fields.insert(key, value).is_some() {
+            return sys::decodef!("TexCellAct JSON field {} is duplicated", key);
+        }
+    }
+    let kind_field: Uint2 = fields
+        .get("kind")
+        .copied()
+        .map(json_decode_value)
+        .transpose()?
+        .unwrap_or_else(|| Uint2::from(TexCellAct::KIND));
+    if kind_field.uint() != TexCellAct::KIND {
+        return sys::decodef!(
+            "action kind mismatch: expected {} got {}",
+            TexCellAct::KIND,
+            kind_field.uint()
+        );
+    }
+    let addr: Address = fields
+        .get("addr")
+        .copied()
+        .ok_or_else(|| sys::Error::decode("TexCellAct JSON missing addr"))
+        .and_then(json_decode_value)?;
+    let cells_json = fields
+        .get("cells")
+        .copied()
+        .ok_or_else(|| sys::Error::decode("TexCellAct JSON missing cells"))?;
+    let cells = field::json_split_array(cells_json)?
+        .into_iter()
+        .map(decode_tex_cell_json)
+        .collect::<Ret<Vec<_>>>()?;
+    Uint1::from_usize(cells.len())?;
+    let sign: Sign = fields
+        .get("sign")
+        .copied()
+        .ok_or_else(|| sys::Error::decode("TexCellAct JSON missing sign"))
+        .and_then(json_decode_value)?;
+    Ok(Arc::new(TexCellAct {
+        kind: kind_field,
+        addr,
+        cells,
+        sign,
+    }))
 }

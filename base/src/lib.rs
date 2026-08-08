@@ -28,6 +28,7 @@ pub mod state;
 pub mod store;
 pub mod sync;
 
+pub use action_codec_derive::ActionCodec;
 pub use api::*;
 pub use chain::*;
 pub use iface::*;

@@ -1,13 +1,12 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use base::{
-    ActOut, ActScope, Action, ActionRef, AddrOrPtr, Context, CoreState, DIAMOND_STATUS_NORMAL,
+    ActScope, Action, ActionJsonCodec, ActionRef, Context, CoreState, DIAMOND_STATUS_NORMAL,
     check_diamond_status, hac_sub, total_add_amount_238, total_add_u8,
 };
 use field::{
-    Address, Amount, BlockHeight, BytesW1, DiamondInscript, DiamondName, DiamondNameListMax200,
-    DiamondSto, Encode, Inscripts, Reader, Uint1, Uint2, WireAmount,
+    Address, Amount, BlockHeight, BytesW1, Decode, DiamondInscript, DiamondName,
+    DiamondNameListMax200, DiamondSto, Encode, Inscripts, Uint1, Uint2, WireAmount,
 };
 use sys::{Rerr, Ret, errf};
 
@@ -21,7 +20,7 @@ const APPEND_FREE_MAX_INSCRIPTIONS: usize = 10;
 const APPEND_TIER1_MAX_INSCRIPTIONS: usize = 40;
 const APPEND_TIER2_MAX_INSCRIPTIONS: usize = 100;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct DiaInscPush {
     pub kind: Uint2,
     pub diamonds: DiamondNameListMax200,
@@ -30,14 +29,14 @@ pub struct DiaInscPush {
     pub engraved_content: BytesW1,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct DiaInscClean {
     pub kind: Uint2,
     pub diamonds: DiamondNameListMax200,
     pub protocol_cost: Amount,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct DiaInscEdit {
     pub kind: Uint2,
     pub diamond: DiamondName,
@@ -47,7 +46,7 @@ pub struct DiaInscEdit {
     pub engraved_content: BytesW1,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct DiaInscMove {
     pub kind: Uint2,
     pub from_diamond: DiamondName,
@@ -56,7 +55,7 @@ pub struct DiaInscMove {
     pub protocol_cost: Amount,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct DiaInscDrop {
     pub kind: Uint2,
     pub diamond: DiamondName,
@@ -107,232 +106,121 @@ impl DiaInscDrop {
     pub const KIND: u16 = 36;
 }
 
-impl Encode for DiaInscPush {
-    fn size(&self) -> usize {
-        self.kind.size()
-            + self.diamonds.size()
-            + self.protocol_cost.size()
-            + self.engraved_type.size()
-            + self.engraved_content.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.diamonds.encode_to(out);
-        self.protocol_cost.encode_to(out);
-        self.engraved_type.encode_to(out);
-        self.engraved_content.encode_to(out);
-    }
-}
-
-impl Action for DiaInscPush {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::TOP
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-
-    fn extra9(&self) -> bool {
-        true
-    }
-
-    fn req_sign(&self) -> Vec<AddrOrPtr> {
-        vec![AddrOrPtr::Ptr(0)]
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    DiaInscPush {
+        scope: ActScope::TOP,
+        min_tx_type: 2,
+        extra9: |_: &DiaInscPush| true,
+        req_sign: |_: &DiaInscPush| vec![],
+        as_transfer_like: none,
+        description: |this: &DiaInscPush| {
+            let mut desc = format!(
+                "Inscript {} HACD ({}) with \"{}\"",
+                this.diamonds.length(),
+                this.diamonds.splitstr(),
+                this.engraved_content.to_readable_or_hex()
+            );
+            if this.protocol_cost.is_positive() {
+                desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string()));
+            }
+            desc
+        },
+        execute: (self, ctx) {
         diamond_inscription_push(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
-impl Encode for DiaInscClean {
-    fn size(&self) -> usize {
-        self.kind.size() + self.diamonds.size() + self.protocol_cost.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.diamonds.encode_to(out);
-        self.protocol_cost.encode_to(out);
-    }
-}
-
-impl Encode for DiaInscEdit {
-    fn size(&self) -> usize {
-        self.kind.size()
-            + self.diamond.size()
-            + self.index.size()
-            + self.protocol_cost.size()
-            + self.engraved_type.size()
-            + self.engraved_content.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.diamond.encode_to(out);
-        self.index.encode_to(out);
-        self.protocol_cost.encode_to(out);
-        self.engraved_type.encode_to(out);
-        self.engraved_content.encode_to(out);
-    }
-}
-
-impl Encode for DiaInscMove {
-    fn size(&self) -> usize {
-        self.kind.size()
-            + self.from_diamond.size()
-            + self.to_diamond.size()
-            + self.index.size()
-            + self.protocol_cost.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.from_diamond.encode_to(out);
-        self.to_diamond.encode_to(out);
-        self.index.encode_to(out);
-        self.protocol_cost.encode_to(out);
-    }
-}
-
-impl Encode for DiaInscDrop {
-    fn size(&self) -> usize {
-        self.kind.size() + self.diamond.size() + self.index.size() + self.protocol_cost.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.diamond.encode_to(out);
-        self.index.encode_to(out);
-        self.protocol_cost.encode_to(out);
-    }
-}
-
-impl Action for DiaInscClean {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::TOP
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-
-    fn extra9(&self) -> bool {
-        true
-    }
-
-    fn req_sign(&self) -> Vec<AddrOrPtr> {
-        vec![AddrOrPtr::Ptr(0)]
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    DiaInscClean {
+        scope: ActScope::TOP,
+        min_tx_type: 2,
+        extra9: |_: &DiaInscClean| true,
+        req_sign: |_: &DiaInscClean| vec![],
+        as_transfer_like: none,
+        description: |this: &DiaInscClean| format!(
+            "Clean inscript {} HACD ({}) cost {} HAC fee",
+            this.diamonds.length(),
+            this.diamonds.splitstr(),
+            this.protocol_cost.to_fin_string()
+        ),
+        execute: (self, ctx) {
         diamond_inscription_clean(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
-impl Action for DiaInscEdit {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::CALL
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-
-    fn extra9(&self) -> bool {
-        true
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    DiaInscEdit {
+        scope: ActScope::CALL,
+        min_tx_type: 2,
+        extra9: |_: &DiaInscEdit| true,
+        req_sign: |_: &DiaInscEdit| vec![],
+        as_transfer_like: none,
+        description: |this: &DiaInscEdit| {
+            let mut desc = format!(
+                "Edit inscription #{} of HACD {} to \"{}\"",
+                this.index.uint(),
+                this.diamond.to_readable(),
+                this.engraved_content.to_readable_or_hex()
+            );
+            if this.protocol_cost.is_positive() {
+                desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string()));
+            }
+            desc
+        },
+        execute: (self, ctx) {
         diamond_inscription_edit(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
-impl Action for DiaInscMove {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::AST
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-
-    fn extra9(&self) -> bool {
-        true
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    DiaInscMove {
+        scope: ActScope::AST,
+        min_tx_type: 2,
+        extra9: |_: &DiaInscMove| true,
+        req_sign: |_: &DiaInscMove| vec![],
+        as_transfer_like: none,
+        description: |this: &DiaInscMove| {
+            let mut desc = format!(
+                "Move inscription #{} from HACD {} to HACD {}",
+                this.index.uint(),
+                this.from_diamond.to_readable(),
+                this.to_diamond.to_readable()
+            );
+            if this.protocol_cost.is_positive() {
+                desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string()));
+            }
+            desc
+        },
+        execute: (self, ctx) {
         diamond_inscription_move(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
-impl Action for DiaInscDrop {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::TOP
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-
-    fn extra9(&self) -> bool {
-        true
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    DiaInscDrop {
+        scope: ActScope::TOP,
+        min_tx_type: 2,
+        extra9: |_: &DiaInscDrop| true,
+        req_sign: |_: &DiaInscDrop| vec![],
+        as_transfer_like: none,
+        description: |this: &DiaInscDrop| format!(
+            "Drop inscription #{} from HACD {} cost {} HAC fee",
+            this.index.uint(),
+            this.diamond.to_readable(),
+            this.protocol_cost.to_fin_string()
+        ),
+        execute: (self, ctx) {
         diamond_inscription_drop(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
@@ -860,30 +748,27 @@ fn diamond_inscription_drop(this: &DiaInscDrop, ctx: &mut dyn Context) -> Rerr {
     Ok(())
 }
 
+pub fn create_dia_insc_action(
+    reg: &dyn base::BinaryCodecs,
+    kind: u16,
+    buf: &[u8],
+) -> Ret<(ActionRef, usize)> {
+    match kind {
+        DiaInscPush::KIND => create_dia_insc_push(reg, kind, buf),
+        DiaInscClean::KIND => create_dia_insc_clean(reg, kind, buf),
+        DiaInscEdit::KIND => create_dia_insc_edit(reg, kind, buf),
+        DiaInscMove::KIND => create_dia_insc_move(reg, kind, buf),
+        DiaInscDrop::KIND => create_dia_insc_drop(reg, kind, buf),
+        _ => sys::decodef!("inscription action kind {} not registered", kind),
+    }
+}
+
 pub fn create_dia_insc_push(
     _reg: &dyn base::BinaryCodecs,
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != DiaInscPush::KIND {
-        return sys::decodef!("DiaInscPush codec got kind {}", kind.uint());
-    }
-    let diamonds: DiamondNameListMax200 = r.read()?;
-    let protocol_cost: WireAmount = r.read()?;
-    let engraved_type: Uint1 = r.read()?;
-    let engraved_content: BytesW1 = r.read()?;
-    Ok((
-        Arc::new(DiaInscPush {
-            kind,
-            diamonds,
-            protocol_cost,
-            engraved_type,
-            engraved_content,
-        }),
-        r.used(),
-    ))
+    decode_inscription_action::<DiaInscPush>(buf)
 }
 
 pub fn create_dia_insc_clean(
@@ -891,21 +776,7 @@ pub fn create_dia_insc_clean(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != DiaInscClean::KIND {
-        return sys::decodef!("DiaInscClean codec got kind {}", kind.uint());
-    }
-    let diamonds: DiamondNameListMax200 = r.read()?;
-    let protocol_cost: Amount = r.read()?;
-    Ok((
-        Arc::new(DiaInscClean {
-            kind,
-            diamonds,
-            protocol_cost,
-        }),
-        r.used(),
-    ))
+    decode_inscription_action::<DiaInscClean>(buf)
 }
 
 pub fn create_dia_insc_edit(
@@ -913,27 +784,7 @@ pub fn create_dia_insc_edit(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != DiaInscEdit::KIND {
-        return sys::decodef!("DiaInscEdit codec got kind {}", kind.uint());
-    }
-    let diamond: DiamondName = r.read()?;
-    let index: Uint1 = r.read()?;
-    let protocol_cost: Amount = r.read()?;
-    let engraved_type: Uint1 = r.read()?;
-    let engraved_content: BytesW1 = r.read()?;
-    Ok((
-        Arc::new(DiaInscEdit {
-            kind,
-            diamond,
-            index,
-            protocol_cost,
-            engraved_type,
-            engraved_content,
-        }),
-        r.used(),
-    ))
+    decode_inscription_action::<DiaInscEdit>(buf)
 }
 
 pub fn create_dia_insc_move(
@@ -941,25 +792,7 @@ pub fn create_dia_insc_move(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != DiaInscMove::KIND {
-        return sys::decodef!("DiaInscMove codec got kind {}", kind.uint());
-    }
-    let from_diamond: DiamondName = r.read()?;
-    let to_diamond: DiamondName = r.read()?;
-    let index: Uint1 = r.read()?;
-    let protocol_cost: Amount = r.read()?;
-    Ok((
-        Arc::new(DiaInscMove {
-            kind,
-            from_diamond,
-            to_diamond,
-            index,
-            protocol_cost,
-        }),
-        r.used(),
-    ))
+    decode_inscription_action::<DiaInscMove>(buf)
 }
 
 pub fn create_dia_insc_drop(
@@ -967,21 +800,45 @@ pub fn create_dia_insc_drop(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != DiaInscDrop::KIND {
-        return sys::decodef!("DiaInscDrop codec got kind {}", kind.uint());
+    decode_inscription_action::<DiaInscDrop>(buf)
+}
+
+/// JSON decoder for inscription actions. Diamond lists need the same
+/// duplicate/quantity checks as the legacy transaction API before an action
+/// is accepted into a transaction build.
+pub fn decode_dia_insc_json(
+    _reg: &dyn base::CodecRegistry,
+    kind: u16,
+    json: &str,
+) -> Ret<ActionRef> {
+    macro_rules! decode_action {
+        ($ty:ty) => {{
+            let action = <$ty as ActionJsonCodec>::decode_json(json)?;
+            Ok(Arc::new(action) as ActionRef)
+        }};
     }
-    let diamond: DiamondName = r.read()?;
-    let index: Uint1 = r.read()?;
-    let protocol_cost: Amount = r.read()?;
-    Ok((
-        Arc::new(DiaInscDrop {
-            kind,
-            diamond,
-            index,
-            protocol_cost,
-        }),
-        r.used(),
-    ))
+    match kind {
+        DiaInscPush::KIND => {
+            let action = DiaInscPush::decode_json(json)?;
+            action.diamonds.check()?;
+            Ok(Arc::new(action))
+        }
+        DiaInscClean::KIND => {
+            let action = DiaInscClean::decode_json(json)?;
+            action.diamonds.check()?;
+            Ok(Arc::new(action))
+        }
+        DiaInscEdit::KIND => decode_action!(DiaInscEdit),
+        DiaInscMove::KIND => decode_action!(DiaInscMove),
+        DiaInscDrop::KIND => decode_action!(DiaInscDrop),
+        _ => sys::decodef!("inscription JSON action kind {} not registered", kind),
+    }
+}
+
+fn decode_inscription_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
+where
+    T: Action + Decode + 'static,
+{
+    let (action, used) = T::decode(buf)?;
+    Ok((Arc::new(action), used))
 }

@@ -14,10 +14,10 @@ use std::any::Any;
 use std::sync::Arc;
 
 use base::{
-    ActOut, ActScope, Action, ActionRef, Context, CoreState, VmEntry, hac_sub,
+    ActScope, ActionRef, Context, CoreState, VmEntry, hac_sub,
     total_add_amount_238, total_add_u8, total_add_u12, with_base_total,
 };
-use field::{Address, Amount, BytesW2, Encode, Fixed2, Fixed4, Reader, Uint2, Uint4};
+use field::{Address, Amount, BytesW2, Decode, Encode, Fixed2, Fixed4, Uint2, Uint4};
 use sys::{Rerr, Ret, errf};
 
 use crate::contract::{ContractEdit, ContractSto};
@@ -57,7 +57,7 @@ pub struct ContractUpdateAnalysis {
 
 // ================================ ContractDeploy ================================
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
 pub struct ContractDeploy {
     pub kind: Uint2,
     pub protocol_cost: Amount,
@@ -88,59 +88,20 @@ impl Default for ContractDeploy {
     }
 }
 
-impl Encode for ContractDeploy {
-    fn size(&self) -> usize {
-        self.kind.size()
-            + self.protocol_cost.size()
-            + self.nonce.size()
-            + self.construct_argv.size()
-            + self.marks.size()
-            + self.contract.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.protocol_cost.encode_to(out);
-        self.nonce.encode_to(out);
-        self.construct_argv.encode_to(out);
-        self.marks.encode_to(out);
-        self.contract.encode_to(out);
-    }
-}
-
-impl Action for ContractDeploy {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::TOP_ONLY_CAN_WITH_GUARD
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-
-    fn extra9(&self) -> bool {
-        false
-    }
-
-    fn req_sign(&self) -> Vec<base::AddrOrPtr> {
-        vec![]
-    }
-
-    fn description(&self) -> String {
-        format!("Deploy smart contract with nonce {}", self.nonce.uint())
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ContractDeploy {
+        scope: ActScope::TOP_ONLY_CAN_WITH_GUARD,
+        min_tx_type: 3,
+        extra9: |_: &ContractDeploy| false,
+        req_sign: |_: &ContractDeploy| vec![],
+        as_transfer_like: none,
+        description: |this: &ContractDeploy| {
+            format!("Deploy smart contract with nonce {}", this.nonce.uint())
+        },
+        execute: (self, ctx) {
         contract_deploy_execute(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
@@ -225,7 +186,7 @@ fn contract_deploy_execute(this: &ContractDeploy, ctx: &mut dyn Context) -> Rerr
 
 // ================================ ContractUpdate ================================
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
 pub struct ContractUpdate {
     pub kind: Uint2,
     pub protocol_cost: Amount,
@@ -254,57 +215,20 @@ impl Default for ContractUpdate {
     }
 }
 
-impl Encode for ContractUpdate {
-    fn size(&self) -> usize {
-        self.kind.size()
-            + self.protocol_cost.size()
-            + self.address.size()
-            + self.marks.size()
-            + self.edit.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.protocol_cost.encode_to(out);
-        self.address.encode_to(out);
-        self.marks.encode_to(out);
-        self.edit.encode_to(out);
-    }
-}
-
-impl Action for ContractUpdate {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::TOP_ONLY_CAN_WITH_GUARD
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-
-    fn extra9(&self) -> bool {
-        false
-    }
-
-    fn req_sign(&self) -> Vec<base::AddrOrPtr> {
-        vec![]
-    }
-
-    fn description(&self) -> String {
-        format!("Update smart contract {}", self.address.to_readable())
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ContractUpdate {
+        scope: ActScope::TOP_ONLY_CAN_WITH_GUARD,
+        min_tx_type: 3,
+        extra9: |_: &ContractUpdate| false,
+        req_sign: |_: &ContractUpdate| vec![],
+        as_transfer_like: none,
+        description: |this: &ContractUpdate| {
+            format!("Update smart contract {}", this.address.to_readable())
+        },
+        execute: (self, ctx) {
         contract_update_execute(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
@@ -893,27 +817,8 @@ pub fn create_contract_deploy(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != ContractDeploy::KIND {
-        return sys::decodef!("ContractDeploy codec got kind {}", kind.uint());
-    }
-    let protocol_cost: Amount = r.read()?;
-    let nonce: Uint4 = r.read()?;
-    let construct_argv: BytesW2 = r.read()?;
-    let marks: Fixed4 = r.read()?;
-    let contract: ContractSto = r.read()?;
-    Ok((
-        Arc::new(ContractDeploy {
-            kind,
-            protocol_cost,
-            nonce,
-            construct_argv,
-            marks,
-            contract,
-        }),
-        r.used(),
-    ))
+    let (action, used) = ContractDeploy::decode(buf)?;
+    Ok((Arc::new(action), used))
 }
 
 pub fn create_contract_update(
@@ -921,23 +826,6 @@ pub fn create_contract_update(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != ContractUpdate::KIND {
-        return sys::decodef!("ContractUpdate codec got kind {}", kind.uint());
-    }
-    let protocol_cost: Amount = r.read()?;
-    let address: Address = r.read()?;
-    let marks: Fixed2 = r.read()?;
-    let edit: ContractEdit = r.read()?;
-    Ok((
-        Arc::new(ContractUpdate {
-            kind,
-            protocol_cost,
-            address,
-            marks,
-            edit,
-        }),
-        r.used(),
-    ))
+    let (action, used) = ContractUpdate::decode(buf)?;
+    Ok((Arc::new(action), used))
 }

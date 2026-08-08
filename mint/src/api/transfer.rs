@@ -17,7 +17,7 @@ use protocol::action_std::{
 use protocol::tx_std::TransactionType2;
 use sys::ToHex;
 
-use super::util::{api_error, json_string, q_string};
+use super::util::{api_error, diamond_names_readable, json_string, q_string};
 
 // =============================================================
 // CoinKind
@@ -99,24 +99,6 @@ fn real_addr(ptr: &AddrOrPtr, addrs: &[Address]) -> sys::Ret<Address> {
     ptr.real(addrs)
 }
 
-/// Reconstruct the readable diamond-name string from the raw payload bytes.
-///
-/// For `DiaSingleTrs` the payload carries the single 6-byte name; for the
-/// list variants it carries the encoded `DiamondNameListMax200` minus its
-/// 1-byte length prefix -- i.e. the concatenation of the names. In both
-/// cases the bytes chunk cleanly into `DiamondName::SIZE`-sized names. The
-/// names are concatenated without separators, mirroring
-/// `DiamondNameListMax200::readable()` (the shape the previous
-/// `downcast_ref`-based code emitted).
-fn diamond_names_readable(names: &[u8]) -> String {
-    json_string(
-        &names
-            .chunks_exact(DiamondName::SIZE)
-            .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
-            .collect::<String>(),
-    )
-}
-
 // =============================================================
 // transfer_json -- dispatched via TransferLike, no downcast_ref
 // =============================================================
@@ -128,15 +110,8 @@ fn diamond_names_readable(names: &[u8]) -> String {
 /// derived from `TransferPayload` -- there is no `downcast_ref` onto the
 /// concrete `protocol::action_std` types. The `from` address is resolved
 /// from `transfer_from()` (falling back to the tx main address when the
-/// action has no explicit payer, e.g. `*ToTrs`); the `to` address comes
-/// from `transfer_to()`.
-///
-/// Note on `Ptr` destinations: `TransferLike::transfer_to()` returns the
-/// resolved `Address` for an `Addr` destination but yields the default
-/// address for a `Ptr` destination (the trait lacks access to `tx.addrs()`
-/// to resolve pointers). Standard transactions build these actions with a
-/// concrete `to` address, so this is a non-issue on the common path; a
-/// `Ptr` destination would show as the zero address.
+/// action has no explicit payer, e.g. `*ToTrs`). Both endpoints are resolved
+/// against `tx.addrs()`, so address pointers never leak into this API shape.
 fn transfer_json(
     tx: &dyn Transaction,
     act: &dyn Action,
@@ -172,7 +147,7 @@ fn transfer_json(
                 Err(_) => Amount::zero(),
             };
             fields.push(format!(
-                "\"amount\":{}",
+                "\"hacash\":{}",
                 json_string(&amt.to_unit_string(unit))
             ));
         }
@@ -188,14 +163,19 @@ fn transfer_json(
             }
             fields.push(format!("\"diamond\":{}", count));
             // Prefer the payload's raw name bytes for the readable list.
-            fields.push(format!("\"diamonds\":{}", diamond_names_readable(&names)));
+            fields.push(format!(
+                "\"diamonds\":{}",
+                json_string(&diamond_names_readable(&names))
+            ));
         }
         TransferPayload::Asset { serial, amount } => {
             if !(ck.assets_all || ck.assets.contains(&serial)) {
                 return None;
             }
-            fields.push(format!("\"asset\":{}", serial));
-            fields.push(format!("\"amount\":{}", amount));
+            fields.push(format!(
+                "\"asset\":{{\"serial\":{},\"amount\":{}}}",
+                serial, amount
+            ));
         }
     }
 
@@ -371,4 +351,45 @@ pub(crate) fn create_coin_transfer_handler(_ctx: &ApiExecCtx, req: ApiRequest) -
         tx.timestamp.value(),
         json_string(&tx.encode().to_hex()),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    #[test]
+    fn transfer_json_keeps_readable_endpoints_and_payload_shape() {
+        let from = Address::from([
+            0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
+        let to = Address::from([
+            0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
+        let mut tx = TransactionType2::new_by(from, Amount::zero(), 1);
+        tx.addrlist = field::AddrOrList::from_list(vec![from, to]).expect("address list");
+        let action: Arc<dyn Action> = Arc::new(SatFromToTrs {
+            kind: field::Uint2::from(SatFromToTrs::KIND),
+            from: AddrOrPtr::Ptr(0),
+            to: AddrOrPtr::Ptr(1),
+            satoshi: Satoshi::from(7),
+        });
+
+        let json = transfer_json(
+            &tx,
+            action.as_ref(),
+            "fin",
+            &CoinKind::parse("s").expect("coin kind"),
+            None,
+            None,
+        )
+        .expect("transfer JSON");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+
+        assert_eq!(value["kind"], SatFromToTrs::KIND);
+        assert_eq!(value["satoshi"], 7);
+        assert_eq!(value["from"], from.to_readable());
+        assert_eq!(value["to"], to.to_readable());
+    }
 }

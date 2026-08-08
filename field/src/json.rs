@@ -44,6 +44,129 @@ pub trait FromJSON {
     fn from_json(&mut self, json: &str) -> Ret<()>;
 }
 
+/// Construct a JSON value through the field's existing mutable decoder.
+///
+/// The helper keeps object decoders transactional: callers can parse every
+/// field into temporaries and assign the finished value only after all fields
+/// have succeeded.
+pub fn json_decode_value<T>(json: &str) -> Ret<T>
+where
+    T: Default + FromJSON,
+{
+    let mut value = T::default();
+    value.from_json(json)?;
+    Ok(value)
+}
+
+/// Generate the standard object JSON decoder for a field struct.
+#[macro_export]
+macro_rules! impl_struct_from_json {
+    ($class:ty { $($field:ident),* $(,)? } optional $optional:ident when $condition:ident) => {
+        impl $crate::FromJSON for $class {
+            fn from_json(&mut self, json: &str) -> sys::Ret<()> {
+                let mut next = self.clone();
+                let mut seen = std::collections::HashSet::new();
+                for (key, value) in $crate::json_split_object(json)? {
+                    if !seen.insert(key) {
+                        return sys::errf!("{} JSON field {} is duplicated", stringify!($class), key);
+                    }
+                    match key {
+                        $(stringify!($field) => next.$field.from_json(value)?,)*
+                        stringify!($optional) => next.$optional.from_json(value)?,
+                        _ => {}
+                    }
+                }
+                $(
+                    if !seen.contains(stringify!($field)) {
+                        return sys::errf!("{} JSON missing field {}", stringify!($class), stringify!($field));
+                    }
+                )*
+                *self = next;
+                Ok(())
+            }
+        }
+    };
+    ($class:ty { $($field:ident),* $(,)? }) => {
+        impl $crate::FromJSON for $class {
+            fn from_json(&mut self, json: &str) -> sys::Ret<()> {
+                let mut next = self.clone();
+                let mut seen = std::collections::HashSet::new();
+                for (key, value) in $crate::json_split_object(json)? {
+                    if !seen.insert(key) {
+                        return sys::errf!("{} JSON field {} is duplicated", stringify!($class), key);
+                    }
+                    match key {
+                        $(stringify!($field) => next.$field.from_json(value)?,)*
+                        _ => {}
+                    }
+                }
+                $(
+                    if !seen.contains(stringify!($field)) {
+                        return sys::errf!("{} JSON missing field {}", stringify!($class), stringify!($field));
+                    }
+                )*
+                *self = next;
+                Ok(())
+            }
+        }
+    };
+}
+
+/// Generate both directions of the standard object JSON representation.
+#[macro_export]
+macro_rules! impl_struct_json {
+    ($class:ty { $($field:ident),* $(,)? } optional $optional:ident when $condition:ident) => {
+        $crate::impl_struct_to_json!($class { $($field),* } optional $optional when $condition);
+        $crate::impl_struct_from_json!($class { $($field),* } optional $optional when $condition);
+    };
+    ($class:ty { $($field:ident),* $(,)? }) => {
+        $crate::impl_struct_to_json!($class { $($field),* });
+        $crate::impl_struct_from_json!($class { $($field),* });
+    };
+}
+
+/// Generate the standard object JSON representation for a field struct.
+#[macro_export]
+macro_rules! impl_struct_to_json {
+    ($class:ty { $($field:ident),* $(,)? } optional $optional:ident when $condition:ident) => {
+        impl $crate::ToJSON for $class {
+            fn to_json_fmt(&self, fmt: &$crate::JSONFormater) -> String {
+                let mut fields = Vec::new();
+                $(
+                    fields.push(format!(
+                        "\"{}\":{}",
+                        stringify!($field),
+                        $crate::ToJSON::to_json_fmt(&self.$field, fmt)
+                    ));
+                )*
+                if self.$condition() {
+                    fields.push(format!(
+                        "\"{}\":{}",
+                        stringify!($optional),
+                        $crate::ToJSON::to_json_fmt(&self.$optional, fmt)
+                    ));
+                }
+                format!("{{{}}}", fields.join(","))
+            }
+        }
+    };
+    ($class:ty { $($field:ident),* $(,)? }) => {
+        impl $crate::ToJSON for $class {
+            fn to_json_fmt(&self, fmt: &$crate::JSONFormater) -> String {
+                let mut fields = Vec::new();
+                $(
+                    fields.push(format!(
+                        "\"{}\":{}",
+                        stringify!($field),
+                        $crate::ToJSON::to_json_fmt(&self.$field, fmt)
+                    ));
+                )*
+                format!("{{{}}}", fields.join(","))
+            }
+        }
+    };
+}
+
 pub fn json_unquote(s: &str) -> &str {
     let s = s.trim();
     if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {

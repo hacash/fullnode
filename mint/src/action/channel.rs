@@ -1,19 +1,18 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use base::{
-    ActOut, ActScope, Action, ActionRef, AddrOrPtr, Context, hac_add, hac_sub, sat_add,
-    total_add_u8, total_add_u12, total_sub_u8, total_sub_u12,
+    ActionRef, AddrOrPtr, Context, hac_add, hac_sub, sat_add, total_add_u8, total_add_u12,
+    total_sub_u8, total_sub_u12,
 };
 use field::{
     AddrBalance, AddrHac, Balance, ChannelId, ChannelSto, ClosedDistributionData,
-    ClosedDistributionDataOptional, Encode, Reader, Uint2, Uint4,
+    ClosedDistributionDataOptional, Decode, Encode, Uint2, Uint4,
 };
 use sys::{Rerr, Ret, errf};
 
 use crate::state::{MintState, with_mint_total};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct ChannelOpen {
     pub kind: Uint2,
     pub channel_id: ChannelId,
@@ -21,7 +20,7 @@ pub struct ChannelOpen {
     pub right_bill: AddrHac,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct ChannelClose {
     pub kind: Uint2,
     pub channel_id: ChannelId,
@@ -51,82 +50,30 @@ impl ChannelClose {
     }
 }
 
-impl Encode for ChannelOpen {
-    fn size(&self) -> usize {
-        self.kind.size() + self.channel_id.size() + self.left_bill.size() + self.right_bill.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.channel_id.encode_to(out);
-        self.left_bill.encode_to(out);
-        self.right_bill.encode_to(out);
-    }
-}
-
-impl Encode for ChannelClose {
-    fn size(&self) -> usize {
-        self.kind.size() + self.channel_id.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.channel_id.encode_to(out);
-    }
-}
-
-impl Action for ChannelOpen {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::TOP
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-
-    fn req_sign(&self) -> Vec<AddrOrPtr> {
-        vec![
-            AddrOrPtr::Addr(self.left_bill.address),
-            AddrOrPtr::Addr(self.right_bill.address),
-        ]
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ChannelOpen {
+        scope: base::ActScope::TOP,
+        min_tx_type: 2,
+        extra9: |_: &ChannelOpen| false,
+        req_sign: |this: &ChannelOpen| vec![
+            AddrOrPtr::Addr(this.left_bill.address),
+            AddrOrPtr::Addr(this.right_bill.address),
+        ],
+        as_transfer_like: none,
+        description: |this: &ChannelOpen| format!("Open channel {} for {} and {}", this.channel_id, this.left_bill.address.to_readable(), this.right_bill.address.to_readable()),
+        execute: (self, ctx) {
         channel_open(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
-impl Action for ChannelClose {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::TOP
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
-        let ret = channel_close(self, ctx)?;
-        Ok((gas, ret))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+base::impl_action! {
+    ChannelClose {
+        scope: base::ActScope::TOP,
+        min_tx_type: 2,
+        description: |this: &ChannelClose| format!("Close channel {}", this.channel_id),
+        execute: (self, ctx) { channel_close(self, ctx) }
     }
 }
 
@@ -385,23 +332,8 @@ pub fn create_channel_open(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != ChannelOpen::KIND {
-        return sys::decodef!("ChannelOpen codec got kind {}", kind.uint());
-    }
-    let channel_id: ChannelId = r.read()?;
-    let left_bill: AddrHac = r.read()?;
-    let right_bill: AddrHac = r.read()?;
-    Ok((
-        Arc::new(ChannelOpen {
-            kind,
-            channel_id,
-            left_bill,
-            right_bill,
-        }),
-        r.used(),
-    ))
+    let (action, used) = ChannelOpen::decode(buf)?;
+    Ok((Arc::new(action), used))
 }
 
 pub fn create_channel_close(
@@ -409,13 +341,8 @@ pub fn create_channel_close(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != ChannelClose::KIND {
-        return sys::decodef!("ChannelClose codec got kind {}", kind.uint());
-    }
-    let channel_id: ChannelId = r.read()?;
-    Ok((Arc::new(ChannelClose { kind, channel_id }), r.used()))
+    let (action, used) = ChannelClose::decode(buf)?;
+    Ok((Arc::new(action), used))
 }
 
 #[cfg(test)]

@@ -8,6 +8,7 @@ use num_traits::{Num, ToPrimitive, Zero};
 use sys::{Rerr, Ret, decodef, errf};
 
 use crate::codec::{Decode, Encode, Reader};
+use crate::json::{FromJSON, JSONFormater, ToJSON, json_expect_quoted_decoded};
 
 pub const UNIT_MEI: u8 = 248;
 pub const UNIT_244: u8 = 244;
@@ -693,6 +694,20 @@ impl Decode for WireAmount {
         let (amount, used) = try_decode_non_canonical_semantic_zero(buf)?;
         let wire = buf[..used].to_vec();
         Ok((Self { amount, wire }, used))
+    }
+}
+
+impl ToJSON for WireAmount {
+    fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
+        self.amount.to_json_fmt(fmt)
+    }
+}
+
+impl FromJSON for WireAmount {
+    fn from_json(&mut self, json: &str) -> Ret<()> {
+        let amount = Amount::from(&json_expect_quoted_decoded(json)?)?;
+        *self = Self::from_amount(amount);
+        Ok(())
     }
 }
 

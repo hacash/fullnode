@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use field::{Address, Amount, Encode};
+use field::{Address, Amount, Encode, ToJSON};
 use sys::Ret;
 
 use crate::iface::context::Context;
@@ -90,9 +90,11 @@ pub fn resolve_transfer_routing_on<C: Context + ?Sized>(
 /// Cross-crate action contract owned by `base` and consumed by protocol,
 /// mint, VM, and dispatch code. Standard Hacash implementations live in
 /// `protocol/src/codec/action`, `mint/src/action`, and `vm/src/action`.
-/// Keep this trait chain-neutral: concrete consensus payloads stay with their
-/// owning implementation crate.
-pub trait Action: Encode + Send + Sync + std::fmt::Debug {
+/// `ToJSON` is the canonical API-facing representation; it does not
+/// participate in binary encoding, validation, or consensus execution.
+/// Regular payloads derive `base::ActionCodec`; irregular payloads keep an
+/// explicit codec in their owning crate. Neither path generates execution.
+pub trait Action: Encode + ToJSON + Send + Sync + std::fmt::Debug {
     fn kind(&self) -> u16;
     fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut>;
 
@@ -132,4 +134,211 @@ pub trait Action: Encode + Send + Sync + std::fmt::Debug {
     /// concepts. `downcast_ref` returning `None` for an unrecognised chain is
     /// the intended fallback, not a bug.
     fn as_any(&self) -> &dyn Any;
+}
+
+/// Owned JSON construction for actions whose JSON schema maps directly to
+/// their fields. This is deliberately separate from `Action`: internal or
+/// dynamic actions are not required to expose a generic JSON constructor.
+pub trait ActionJsonCodec: Action + Sized {
+    fn decode_json(json: &str) -> Ret<Self>;
+}
+
+/// Generate the mechanical part of a regular `Action` implementation.
+///
+/// The execution body remains ordinary Rust and is deliberately evaluated
+/// inside the existing `ActionDispatcher` lifecycle. This macro only removes
+/// repeated metadata, `as_any`, and size-based gas plumbing; it does not add a
+/// second precheck or hook path.
+#[macro_export]
+macro_rules! impl_action {
+    ($class:ty {
+        scope: $scope:expr,
+        min_tx_type: $min_tx_type:expr,
+        description: $description:expr,
+        execute: ($action_self:ident, $action_ctx:ident) $execute:block $(,)?
+    }) => {
+        $crate::impl_action! {
+            $class {
+                scope: $scope,
+                min_tx_type: $min_tx_type,
+                extra9: |_: &$class| false,
+                req_sign: |_: &$class| vec![],
+                as_transfer_like: none,
+                description: $description,
+                execute: ($action_self, $action_ctx) $execute
+            }
+        }
+    };
+
+    ($class:ty {
+        scope: $scope:expr,
+        min_tx_type: $min_tx_type:expr,
+        execute: ($action_self:ident, $action_ctx:ident) $execute:block $(,)?
+    }) => {
+        impl $crate::Action for $class {
+            fn kind(&self) -> u16 {
+                Self::KIND
+            }
+
+            fn scope(&self) -> $crate::ActScope {
+                $scope
+            }
+
+            fn min_tx_type(&self) -> u8 {
+                $min_tx_type
+            }
+
+            fn execute(&$action_self, $action_ctx: &mut dyn $crate::Context) -> sys::Ret<$crate::ActOut> {
+                let gas = $action_self.size() as u32;
+                let result: sys::Ret<Vec<u8>> = (|| $execute)();
+                Ok((gas, result?))
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+    };
+
+    ($class:ty {
+        scope: $scope:expr,
+        min_tx_type: $min_tx_type:expr,
+        extra9: $extra9:expr,
+        req_sign: $req_sign:expr,
+        as_transfer_like: $as_transfer_like:ident,
+        description: $description:expr,
+        execute: ($action_self:ident, $action_ctx:ident) $execute:block $(,)?
+    }) => {
+        impl $crate::Action for $class {
+            fn kind(&self) -> u16 {
+                Self::KIND
+            }
+
+            fn scope(&self) -> $crate::ActScope {
+                $scope
+            }
+
+            fn min_tx_type(&self) -> u8 {
+                $min_tx_type
+            }
+
+            fn extra9(&self) -> bool {
+                ($extra9)(self)
+            }
+
+            fn req_sign(&self) -> Vec<$crate::AddrOrPtr> {
+                ($req_sign)(self)
+            }
+
+            fn as_transfer_like(&self) -> Option<&dyn $crate::TransferLike> {
+                $crate::impl_action!(@as_transfer_like self, $as_transfer_like)
+            }
+
+            fn description(&self) -> String {
+                ($description)(self)
+            }
+
+            fn execute(&$action_self, $action_ctx: &mut dyn $crate::Context) -> sys::Ret<$crate::ActOut> {
+                let gas = $action_self.size() as u32;
+                let result: sys::Ret<Vec<u8>> = (|| $execute)();
+                Ok((gas, result?))
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+    };
+
+    (@as_transfer_like $action_self:ident, self) => {
+        Some($action_self)
+    };
+
+    (@as_transfer_like $action_self:ident, none) => {
+        None
+    };
+}
+
+/// Registry-compatible JSON creator for regular derived actions.
+pub fn decode_regular_action_json<T>(
+    _reg: &dyn crate::CodecRegistry,
+    kind: u16,
+    json: &str,
+) -> Ret<ActionRef>
+where
+    T: ActionJsonCodec + 'static,
+{
+    let action = T::decode_json(json)?;
+    if action.kind() != kind {
+        return sys::decodef!(
+            "action kind mismatch: expected {} got {}",
+            kind,
+            action.kind()
+        );
+    }
+    Ok(Arc::new(action))
+}
+
+/// Register binary and JSON codecs from one regular-action type list.
+#[macro_export]
+macro_rules! register_regular_actions {
+    ($registry:expr, $( $binary:path => [$( $action:ty ),+ $(,)?] ),+ $(,)?) => {{
+        $(
+            let kinds: &[u16] = &[$(<$action>::KIND),+];
+            $registry.register_action(kinds, $binary)?;
+            $(
+                $registry.register_action_json(
+                    &[<$action>::KIND],
+                    $crate::decode_regular_action_json::<$action>,
+                )?;
+            )+
+        )+
+        Ok::<(), sys::Error>(())
+    }};
+}
+
+/// Register a custom binary/JSON action family from one authoritative kind
+/// list. The registry interface stays unchanged while callers can no longer
+/// accidentally use different kind lists for the two codec directions.
+#[macro_export]
+macro_rules! register_custom_actions {
+    ($registry:expr, $binary:path, $json:path => [$( $action:ty ),+ $(,)?] $(,)?) => {{
+        let kinds: &[u16] = &[$(<$action>::KIND),+];
+        $registry.register_action(kinds, $binary)?;
+        $registry.register_action_json(kinds, $json)?;
+        Ok::<(), sys::Error>(())
+    }};
+}
+
+/// Keep the JSON-only form for irregular actions whose wire codec is custom.
+#[macro_export]
+macro_rules! impl_action_to_json {
+    ($class:ty { $($field:ident),* $(,)? }) => {
+        impl field::ToJSON for $class {
+            fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
+                let mut fields = vec![format!(
+                    "\"kind\":{}",
+                    field::ToJSON::to_json_fmt(&self.kind, fmt)
+                )];
+                $(
+                    fields.push(format!(
+                        "\"{}\":{}",
+                        stringify!($field),
+                        field::ToJSON::to_json_fmt(&self.$field, fmt)
+                    ));
+                )*
+                format!("{{{}}}", fields.join(","))
+            }
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! impl_fields_to_json {
+    ($class:ty { $($field:ident),* $(,)? } optional $optional:ident when $condition:ident) => {
+        field::impl_struct_json!($class { $($field),* } optional $optional when $condition);
+    };
+    ($class:ty { $($field:ident),* $(,)? }) => {
+        field::impl_struct_json!($class { $($field),* });
+    };
 }

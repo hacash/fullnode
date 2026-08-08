@@ -41,15 +41,11 @@ use p2sh::create_p2sh_script_prove;
 /// Register all four VM action codecs. Mirrors `mint::setup::register`'s
 /// `register_action` pattern. Idempotent per-kind (Registry rejects duplicate kinds).
 pub fn register_actions(reg: &mut dyn RegistryWriter) -> Ret<()> {
-    reg.register_action(
-        &[
-            ContractDeploy::KIND,
-            ContractUpdate::KIND,
-            ContractMainCall::KIND,
-        ],
-        create_contract_action,
+    base::register_regular_actions!(
+        reg,
+        create_contract_action => [ContractDeploy, ContractUpdate, ContractMainCall],
+        create_p2sh_script_prove => [P2SHScriptProve],
     )?;
-    reg.register_action(&[P2SHScriptProve::KIND], create_p2sh_script_prove)?;
     Ok(())
 }
 

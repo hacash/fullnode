@@ -1,11 +1,7 @@
-use std::any::Any;
 use std::sync::Arc;
 
-use base::{
-    ActOut, ActScope, Action, ActionRef, Context, CoreState, hac_sub, total_add_amount_238,
-    total_add_u8,
-};
-use field::{Amount, AssetAmt, AssetSmelt, Encode, Reader, Uint2};
+use base::{ActionRef, Context, CoreState, hac_sub, total_add_amount_238, total_add_u8};
+use field::{Amount, AssetAmt, AssetSmelt, Decode, Encode, Uint2};
 use sys::{Rerr, Ret, errf};
 
 use crate::{
@@ -15,7 +11,7 @@ use crate::{
 
 pub const ASSET_ALIVE_HEIGHT: u64 = 765_432;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct AssetCreate {
     pub kind: Uint2,
     pub metadata: AssetSmelt,
@@ -34,39 +30,15 @@ impl AssetCreate {
     }
 }
 
-impl Encode for AssetCreate {
-    fn size(&self) -> usize {
-        self.kind.size() + self.metadata.size() + self.protocol_cost.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.metadata.encode_to(out);
-        self.protocol_cost.encode_to(out);
-    }
-}
-
-impl Action for AssetCreate {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::TOP_ONLY
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    AssetCreate {
+        scope: base::ActScope::TOP_ONLY,
+        min_tx_type: 2,
+        description: |this: &AssetCreate| format!("Register asset <{}>", this.metadata.ticket.to_readable_or_hex()),
+        execute: (self, ctx) {
         execute_asset_create(ctx, &self.metadata, &self.protocol_cost)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
@@ -175,19 +147,6 @@ pub fn create_asset_create(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    let metadata: AssetSmelt = r.read()?;
-    let protocol_cost: Amount = r.read()?;
-    if kind.uint() != AssetCreate::KIND {
-        return sys::decodef!("AssetCreate codec got kind {}", kind.uint());
-    }
-    Ok((
-        Arc::new(AssetCreate {
-            kind,
-            metadata,
-            protocol_cost,
-        }),
-        r.used(),
-    ))
+    let (action, used) = AssetCreate::decode(buf)?;
+    Ok((Arc::new(action), used))
 }

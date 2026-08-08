@@ -1,17 +1,26 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use base::{
-    ActOut, ActScope, Action, ActionRef, BLACKHOLE_ADDR, Context, CoreState, DIAMOND_STATUS_NORMAL,
+    ActScope, ActionRef, BLACKHOLE_ADDR, Context, CoreState, DIAMOND_STATUS_NORMAL,
     diamond_owned_push_one, hacd_add, total_add_diamond_number, total_add_u12,
 };
 use field::{
     Address, Amount, BlockHeight, DiamondName, DiamondNumber, DiamondSmelt, DiamondSto,
-    DiamondVisualGene, Encode, Fixed8, Hash, Inscripts, Reader, Uint2,
+    DiamondVisualGene, Encode, Fixed8, FromJSON, Hash, Inscripts, Reader, Uint2, json_decode_value,
+    json_split_object,
 };
 use sys::{Rerr, Ret, errf};
 
 use crate::state::{MintState, with_mint_total};
+
+base::impl_fields_to_json!(DiamondMintData {
+    diamond,
+    number,
+    prev_hash,
+    nonce,
+    address
+} optional custom_message when has_custom_message);
+base::impl_action_to_json!(DiamondMint { d });
 
 pub const DIAMOND_ABOVE_NUMBER_OF_CREATE_BY_CUSTOM_MESSAGE: u32 = 20_000;
 pub const DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES: u32 = 30_000;
@@ -133,31 +142,20 @@ impl Encode for DiamondMint {
     }
 }
 
-impl Action for DiamondMint {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::TOP_ONLY
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-
-    fn extra9(&self) -> bool {
-        self.d.number.uint() > DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    DiamondMint {
+        scope: ActScope::TOP_ONLY,
+        min_tx_type: 2,
+        extra9: |this: &DiamondMint| {
+            this.d.number.uint() > DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES
+        },
+        req_sign: |_: &DiamondMint| vec![],
+        as_transfer_like: none,
+        description: |this: &DiamondMint| format!("Mint diamond <{}> number {}", this.d.diamond.to_readable(), this.d.number.uint()),
+        execute: (self, ctx) {
         diamond_mint(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
@@ -195,6 +193,92 @@ pub fn create_diamond_mint(
         }),
         r.used(),
     ))
+}
+
+fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
+    let mut seen = std::collections::HashSet::new();
+    let mut declared_kind = Uint2::from(DiamondMint::KIND);
+    let mut data_json = None;
+    let mut data = DiamondMintData::default();
+    let mut flat_fields = Vec::new();
+
+    for (key, value) in json_split_object(json)? {
+        if !seen.insert(key) {
+            return sys::decodef!("DiamondMint JSON field {} is duplicated", key);
+        }
+        match key {
+            "kind" => declared_kind = json_decode_value(value)?,
+            "d" => data_json = Some(value),
+            "diamond" | "number" | "prev_hash" | "nonce" | "address" | "custom_message" => {
+                flat_fields.push((key, value));
+            }
+            _ => {}
+        }
+    }
+    if declared_kind.uint() != DiamondMint::KIND {
+        return sys::decodef!(
+            "action kind mismatch: expected {} got {}",
+            DiamondMint::KIND,
+            declared_kind.uint()
+        );
+    }
+
+    let fields = match data_json {
+        Some(nested) => json_split_object(nested)?,
+        None => flat_fields,
+    };
+    let mut data_seen = std::collections::HashSet::new();
+    for (key, value) in fields {
+        if !data_seen.insert(key) {
+            return sys::decodef!("DiamondMint data field {} is duplicated", key);
+        }
+        match key {
+            "diamond" => data.diamond.from_json(value)?,
+            "number" => data.number.from_json(value)?,
+            "prev_hash" => data.prev_hash.from_json(value)?,
+            "nonce" => data.nonce.from_json(value)?,
+            "address" => data.address.from_json(value)?,
+            "custom_message" => data.custom_message.from_json(value)?,
+            _ => {}
+        }
+    }
+    if !data_seen.contains("diamond") || !data_seen.contains("number") {
+        return sys::errf!("DiamondMint JSON requires diamond and number");
+    }
+    Ok(DiamondMint {
+        kind: declared_kind,
+        d: data,
+    })
+}
+
+impl base::ActionJsonCodec for DiamondMint {
+    fn decode_json(json: &str) -> Ret<Self> {
+        parse_diamond_mint_json(json)
+    }
+}
+
+impl field::FromJSON for DiamondMint {
+    fn from_json(&mut self, json: &str) -> Ret<()> {
+        *self = parse_diamond_mint_json(json)?;
+        Ok(())
+    }
+}
+
+/// JSON creator for the consensus-specific diamond mint payload.
+///
+/// The public transaction API historically accepted both the canonical
+/// `{"kind":4,"d":{...}}` form and a flat object. Keep both forms here so
+/// registry dispatch does not change the API contract while ordinary actions
+/// use the generated decoder.
+pub fn decode_diamond_mint_json(
+    _reg: &dyn base::CodecRegistry,
+    kind: u16,
+    json: &str,
+) -> Ret<ActionRef> {
+    if kind != DiamondMint::KIND {
+        return sys::decodef!("DiamondMint JSON codec got kind {}", kind);
+    }
+    Ok(Arc::new(parse_diamond_mint_json(json)?))
 }
 
 fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Rerr {

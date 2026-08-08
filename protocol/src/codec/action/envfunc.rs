@@ -2,64 +2,65 @@
 //!
 //! Invoked via `Context::action_call` with kid = `[0x07|0x06, idx]` where idx = KIND % 256.
 
-use std::any::Any;
 use std::sync::Arc;
 
-use base::{ActOut, ActScope, Action, ActionRef, Context, CoreState};
+use base::{Action, ActionRef, CoreState};
 use field::{
-    Address, DiamondName, DiamondNameListMax200, DiamondNumber, Encode, Fold64, Reader, Uint1,
+    Address, Decode, DiamondName, DiamondNameListMax200, DiamondNumber, Encode, Fold64, Uint1,
     Uint2,
 };
 use sys::{Ret, errf};
 
-#[derive(Debug, Clone)]
+use super::common::check_action_kind;
+
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct EnvHeight {
     pub kind: Uint2,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct EnvMainAddr {
     pub kind: Uint2,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct EnvBlockAuthorAddr {
     pub kind: Uint2,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct ViewBalance {
     pub kind: Uint2,
     pub addr: Address,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct ViewAssetBalance {
     pub kind: Uint2,
     pub addr: Address,
     pub serial: Fold64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct ViewCheckSign {
     pub kind: Uint2,
     pub addr: Address,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct ViewDiaInscNum {
     pub kind: Uint2,
     pub diamond: DiamondName,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct ViewDiaInscGet {
     pub kind: Uint2,
     pub diamond: DiamondName,
     pub inscidx: Uint1,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct ViewDiaNameList {
     pub kind: Uint2,
     pub addr: Address,
@@ -67,7 +68,7 @@ pub struct ViewDiaNameList {
     pub limit: DiamondNumber,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct ViewDiaOwnerAddrs {
     pub kind: Uint2,
     pub diamonds: DiamondNameListMax200,
@@ -113,112 +114,39 @@ impl ViewDiaOwnerAddrs {
     pub const KIND: u16 = 0x0614;
 }
 
-impl Encode for EnvHeight {
-    fn size(&self) -> usize {
-        self.kind.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-    }
-}
-
-impl Action for EnvHeight {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::CALL_ONLY
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
-        Ok((gas, ctx.env().block.height.to_be_bytes().to_vec()))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+base::impl_action! {
+    EnvHeight {
+        scope: base::ActScope::CALL_ONLY,
+        min_tx_type: 3,
+        description: |_: &EnvHeight| "Syscall: Get block height".to_owned(),
+        execute: (self, ctx) { Ok(ctx.env().block.height.to_be_bytes().to_vec()) }
     }
 }
 
-impl Encode for EnvMainAddr {
-    fn size(&self) -> usize {
-        self.kind.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-    }
-}
-
-impl Action for EnvMainAddr {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::CALL_ONLY
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
-        Ok((gas, ctx.env().tx.main.as_ref().to_vec()))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+base::impl_action! {
+    EnvMainAddr {
+        scope: base::ActScope::CALL_ONLY,
+        min_tx_type: 3,
+        description: |_: &EnvMainAddr| "Syscall: Get main address".to_owned(),
+        execute: (self, ctx) { Ok(ctx.env().tx.main.as_ref().to_vec()) }
     }
 }
 
-impl Encode for EnvBlockAuthorAddr {
-    fn size(&self) -> usize {
-        self.kind.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-    }
-}
-
-impl Action for EnvBlockAuthorAddr {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::CALL_ONLY
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
-        Ok((gas, ctx.env().block.author.as_ref().to_vec()))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+base::impl_action! {
+    EnvBlockAuthorAddr {
+        scope: base::ActScope::CALL_ONLY,
+        min_tx_type: 3,
+        description: |_: &EnvBlockAuthorAddr| "Syscall: Get author address".to_owned(),
+        execute: (self, ctx) { Ok(ctx.env().block.author.as_ref().to_vec()) }
     }
 }
 
-impl Encode for ViewBalance {
-    fn size(&self) -> usize {
-        self.kind.size() + self.addr.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.addr.encode_to(out);
-    }
-}
-
-impl Action for ViewBalance {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::CALL_ONLY
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ViewBalance {
+        scope: base::ActScope::CALL_ONLY,
+        min_tx_type: 3,
+        description: |this: &ViewBalance| format!("Syscall: Get balance for {}", this.addr.to_readable()),
+        execute: (self, ctx) {
         let bls = CoreState::wrap(ctx.layer())
             .balance(&self.addr)
             .unwrap_or_default();
@@ -235,36 +163,17 @@ impl Action for ViewBalance {
         res.extend_from_slice(&(dia as u32).to_be_bytes());
         res.extend_from_slice(&bls.satoshi.uint().to_be_bytes());
         res.extend_from_slice(&hac);
-        Ok((gas, res))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(res)
+        }
     }
 }
 
-impl Encode for ViewAssetBalance {
-    fn size(&self) -> usize {
-        self.kind.size() + self.addr.size() + self.serial.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.addr.encode_to(out);
-        self.serial.encode_to(out);
-    }
-}
-
-impl Action for ViewAssetBalance {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::CALL_ONLY
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ViewAssetBalance {
+        scope: base::ActScope::CALL_ONLY,
+        min_tx_type: 3,
+        description: |this: &ViewAssetBalance| format!("Syscall: Get asset {} balance for {}", this.serial.uint(), this.addr.to_readable()),
+        execute: (self, ctx) {
         let serial = self.serial.uint();
         if serial == 0 {
             return errf!("asset serial cannot be zero");
@@ -279,68 +188,32 @@ impl Action for ViewAssetBalance {
             .find(|a| a.serial.uint() == serial)
             .map(|a| a.amount.uint())
             .unwrap_or(0);
-        Ok((gas, amt.to_be_bytes().to_vec()))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(amt.to_be_bytes().to_vec())
+        }
     }
 }
 
-impl Encode for ViewCheckSign {
-    fn size(&self) -> usize {
-        self.kind.size() + self.addr.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.addr.encode_to(out);
-    }
-}
-
-impl Action for ViewCheckSign {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::CALL_ONLY
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ViewCheckSign {
+        scope: base::ActScope::CALL_ONLY,
+        min_tx_type: 3,
+        description: |this: &ViewCheckSign| format!("Syscall: Check signature for {}", this.addr.to_readable()),
+        execute: (self, ctx) {
         let ok = match ctx.check_sign(&self.addr) {
             Ok(()) => 1u8,
             Err(_) => 0u8,
         };
-        Ok((gas, vec![ok]))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![ok])
+        }
     }
 }
 
-impl Encode for ViewDiaInscNum {
-    fn size(&self) -> usize {
-        self.kind.size() + self.diamond.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.diamond.encode_to(out);
-    }
-}
-
-impl Action for ViewDiaInscNum {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::CALL_ONLY
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ViewDiaInscNum {
+        scope: base::ActScope::CALL_ONLY,
+        min_tx_type: 3,
+        description: |this: &ViewDiaInscNum| format!("Syscall: Get diamond inscription number for <{}>", this.diamond.to_readable()),
+        execute: (self, ctx) {
         let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond) else {
             return errf!("diamond {} not found", self.diamond.to_readable());
         };
@@ -351,36 +224,17 @@ impl Action for ViewDiaInscNum {
                 self.diamond.to_readable()
             );
         }
-        Ok((gas, vec![num as u8]))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![num as u8])
+        }
     }
 }
 
-impl Encode for ViewDiaInscGet {
-    fn size(&self) -> usize {
-        self.kind.size() + self.diamond.size() + self.inscidx.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.diamond.encode_to(out);
-        self.inscidx.encode_to(out);
-    }
-}
-
-impl Action for ViewDiaInscGet {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::CALL_ONLY
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ViewDiaInscGet {
+        scope: base::ActScope::CALL_ONLY,
+        min_tx_type: 3,
+        description: |this: &ViewDiaInscGet| format!("Syscall: Get diamond inscription data for <{}>", this.diamond.to_readable()),
+        execute: (self, ctx) {
         let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond) else {
             return errf!("diamond {} not found", self.diamond.to_readable());
         };
@@ -392,37 +246,17 @@ impl Action for ViewDiaInscGet {
                 self.diamond.to_readable()
             );
         }
-        Ok((gas, diaobj.inscripts.as_list()[idx].content.to_vec()))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(diaobj.inscripts.as_list()[idx].content.to_vec())
+        }
     }
 }
 
-impl Encode for ViewDiaNameList {
-    fn size(&self) -> usize {
-        self.kind.size() + self.addr.size() + self.page.size() + self.limit.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.addr.encode_to(out);
-        self.page.encode_to(out);
-        self.limit.encode_to(out);
-    }
-}
-
-impl Action for ViewDiaNameList {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::CALL_ONLY
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ViewDiaNameList {
+        scope: base::ActScope::CALL_ONLY,
+        min_tx_type: 3,
+        description: |this: &ViewDiaNameList| format!("Syscall: Get HACD name list for {} page {} limit {}", this.addr.to_readable(), this.page.uint(), this.limit.uint()),
+        execute: (self, ctx) {
         const DNM_SZ: usize = DiamondName::SIZE;
         let owned = CoreState::wrap(ctx.layer())
             .diamond_owned(&self.addr)
@@ -440,44 +274,26 @@ impl Action for ViewDiaNameList {
             return errf!("limit {} cannot exceed 200", limit);
         }
         if limit == 0 {
-            return Ok((gas, vec![]));
+            return Ok(vec![]);
         }
         let page = self.page.uint() as usize;
         let unit = limit * DNM_SZ;
         let start = page.saturating_mul(unit);
         if start >= names.len() {
-            return Ok((gas, vec![]));
+            return Ok(vec![]);
         }
         let end = start.saturating_add(unit).min(names.len());
-        Ok((gas, names[start..end].to_vec()))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(names[start..end].to_vec())
+        }
     }
 }
 
-impl Encode for ViewDiaOwnerAddrs {
-    fn size(&self) -> usize {
-        self.kind.size() + self.diamonds.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.diamonds.encode_to(out);
-    }
-}
-
-impl Action for ViewDiaOwnerAddrs {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::CALL_ONLY
-    }
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ViewDiaOwnerAddrs {
+        scope: base::ActScope::CALL_ONLY,
+        min_tx_type: 3,
+        description: |this: &ViewDiaOwnerAddrs| format!("Syscall: Get HACD owner addresses for {}", this.diamonds.splitstr()),
+        execute: (self, ctx) {
         let num = self.diamonds.check()?;
         if num > 50 {
             return errf!("diamond list length {} cannot exceed 50", num);
@@ -490,10 +306,8 @@ impl Action for ViewDiaOwnerAddrs {
             };
             res.extend_from_slice(diaobj.address.as_ref());
         }
-        Ok((gas, res))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(res)
+        }
     }
 }
 
@@ -502,99 +316,26 @@ pub fn create_envfunc_action(
     kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind_field: Uint2 = r.read()?;
-    if kind_field.uint() != kind {
-        return sys::decodef!(
-            "action kind mismatch: expected {} got {}",
-            kind,
-            kind_field.uint()
-        );
-    }
+    check_action_kind(kind, buf)?;
     match kind {
-        EnvHeight::KIND => Ok((Arc::new(EnvHeight { kind: kind_field }), r.used())),
-        EnvMainAddr::KIND => Ok((Arc::new(EnvMainAddr { kind: kind_field }), r.used())),
-        EnvBlockAuthorAddr::KIND => {
-            Ok((Arc::new(EnvBlockAuthorAddr { kind: kind_field }), r.used()))
-        }
-        ViewBalance::KIND => {
-            let addr: Address = r.read()?;
-            Ok((
-                Arc::new(ViewBalance {
-                    kind: kind_field,
-                    addr,
-                }),
-                r.used(),
-            ))
-        }
-        ViewAssetBalance::KIND => {
-            let addr: Address = r.read()?;
-            let serial: Fold64 = r.read()?;
-            Ok((
-                Arc::new(ViewAssetBalance {
-                    kind: kind_field,
-                    addr,
-                    serial,
-                }),
-                r.used(),
-            ))
-        }
-        ViewCheckSign::KIND => {
-            let addr: Address = r.read()?;
-            Ok((
-                Arc::new(ViewCheckSign {
-                    kind: kind_field,
-                    addr,
-                }),
-                r.used(),
-            ))
-        }
-        ViewDiaInscNum::KIND => {
-            let diamond: DiamondName = r.read()?;
-            Ok((
-                Arc::new(ViewDiaInscNum {
-                    kind: kind_field,
-                    diamond,
-                }),
-                r.used(),
-            ))
-        }
-        ViewDiaInscGet::KIND => {
-            let diamond: DiamondName = r.read()?;
-            let inscidx: Uint1 = r.read()?;
-            Ok((
-                Arc::new(ViewDiaInscGet {
-                    kind: kind_field,
-                    diamond,
-                    inscidx,
-                }),
-                r.used(),
-            ))
-        }
-        ViewDiaNameList::KIND => {
-            let addr: Address = r.read()?;
-            let page: DiamondNumber = r.read()?;
-            let limit: DiamondNumber = r.read()?;
-            Ok((
-                Arc::new(ViewDiaNameList {
-                    kind: kind_field,
-                    addr,
-                    page,
-                    limit,
-                }),
-                r.used(),
-            ))
-        }
-        ViewDiaOwnerAddrs::KIND => {
-            let diamonds: DiamondNameListMax200 = r.read()?;
-            Ok((
-                Arc::new(ViewDiaOwnerAddrs {
-                    kind: kind_field,
-                    diamonds,
-                }),
-                r.used(),
-            ))
-        }
+        EnvHeight::KIND => decode_envfunc_action::<EnvHeight>(buf),
+        EnvMainAddr::KIND => decode_envfunc_action::<EnvMainAddr>(buf),
+        EnvBlockAuthorAddr::KIND => decode_envfunc_action::<EnvBlockAuthorAddr>(buf),
+        ViewBalance::KIND => decode_envfunc_action::<ViewBalance>(buf),
+        ViewAssetBalance::KIND => decode_envfunc_action::<ViewAssetBalance>(buf),
+        ViewCheckSign::KIND => decode_envfunc_action::<ViewCheckSign>(buf),
+        ViewDiaInscNum::KIND => decode_envfunc_action::<ViewDiaInscNum>(buf),
+        ViewDiaInscGet::KIND => decode_envfunc_action::<ViewDiaInscGet>(buf),
+        ViewDiaNameList::KIND => decode_envfunc_action::<ViewDiaNameList>(buf),
+        ViewDiaOwnerAddrs::KIND => decode_envfunc_action::<ViewDiaOwnerAddrs>(buf),
         _ => sys::decodef!("envfunc action kind {} not registered", kind),
     }
+}
+
+fn decode_envfunc_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
+where
+    T: Action + Decode + 'static,
+{
+    let (action, used) = T::decode(buf)?;
+    Ok((Arc::new(action), used))
 }

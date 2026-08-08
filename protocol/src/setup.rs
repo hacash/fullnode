@@ -13,7 +13,8 @@ use crate::codec::action::{
     ViewDiaInscGet, ViewDiaInscNum, ViewDiaNameList, ViewDiaOwnerAddrs, create_asset_transfer,
     create_ast_if, create_ast_select, create_blob_action, create_chain_guard_action,
     create_diamond_transfer, create_envfunc_action, create_hac_transfer, create_sat_transfer,
-    create_tex_cell_act,
+    create_tex_cell_act, decode_ast_if_json, decode_ast_select_json, decode_diamond_transfer_json,
+    decode_req_sign_list_json, decode_tex_cell_act_json,
 };
 use crate::codec::block::create_std_block;
 use crate::codec::tx::{
@@ -146,55 +147,47 @@ pub fn register_standard(
     reg.register_tx(TransactionType1::TYPE, create_transaction_type1)?;
     reg.register_tx(TransactionType2::TYPE, create_transaction_type2)?;
     reg.register_tx(TransactionType3::TYPE, create_transaction_type3)?;
-    reg.register_action(
-        &[HacToTrs::KIND, HacFromTrs::KIND, HacFromToTrs::KIND],
-        create_hac_transfer,
-    )?;
-    reg.register_action(
-        &[SatToTrs::KIND, SatFromTrs::KIND, SatFromToTrs::KIND],
-        create_sat_transfer,
-    )?;
-    reg.register_action(
-        &[AssetToTrs::KIND, AssetFromTrs::KIND, AssetFromToTrs::KIND],
-        create_asset_transfer,
-    )?;
-    reg.register_action(
-        &[
-            DiaSingleTrs::KIND,
-            DiaFromToTrs::KIND,
-            DiaToTrs::KIND,
-            DiaFromTrs::KIND,
+    base::register_regular_actions!(
+        reg,
+        create_hac_transfer => [HacToTrs, HacFromTrs, HacFromToTrs],
+        create_sat_transfer => [SatToTrs, SatFromTrs, SatFromToTrs],
+        create_asset_transfer => [AssetToTrs, AssetFromTrs, AssetFromToTrs],
+        create_blob_action => [TxMessage, TxBlob],
+        create_chain_guard_action => [ChainAllow, HeightScope, BalanceFloor],
+        create_envfunc_action => [
+            EnvHeight,
+            EnvMainAddr,
+            EnvBlockAuthorAddr,
+            ViewBalance,
+            ViewAssetBalance,
+            ViewCheckSign,
+            ViewDiaInscNum,
+            ViewDiaInscGet,
+            ViewDiaNameList,
+            ViewDiaOwnerAddrs,
         ],
+    )?;
+    base::register_custom_actions!(
+        reg,
         create_diamond_transfer,
+        decode_diamond_transfer_json => [DiaSingleTrs, DiaFromToTrs, DiaToTrs, DiaFromTrs],
     )?;
-    reg.register_action(&[TxMessage::KIND, TxBlob::KIND], create_blob_action)?;
-    reg.register_action(
-        &[
-            ChainAllow::KIND,
-            HeightScope::KIND,
-            BalanceFloor::KIND,
-            ReqSignList::KIND,
-        ],
+    base::register_custom_actions!(
+        reg,
         create_chain_guard_action,
+        decode_req_sign_list_json => [ReqSignList],
     )?;
-    reg.register_action(&[AstSelect::KIND], create_ast_select)?;
-    reg.register_action(&[AstIf::KIND], create_ast_if)?;
-    reg.register_action(
-        &[
-            EnvHeight::KIND,
-            EnvMainAddr::KIND,
-            EnvBlockAuthorAddr::KIND,
-            ViewBalance::KIND,
-            ViewAssetBalance::KIND,
-            ViewCheckSign::KIND,
-            ViewDiaInscNum::KIND,
-            ViewDiaInscGet::KIND,
-            ViewDiaNameList::KIND,
-            ViewDiaOwnerAddrs::KIND,
-        ],
-        create_envfunc_action,
+    base::register_custom_actions!(
+        reg,
+        create_ast_select,
+        decode_ast_select_json => [AstSelect],
     )?;
-    reg.register_action(&[TexCellAct::KIND], create_tex_cell_act)?;
+    base::register_custom_actions!(reg, create_ast_if, decode_ast_if_json => [AstIf])?;
+    base::register_custom_actions!(
+        reg,
+        create_tex_cell_act,
+        decode_tex_cell_act_json => [TexCellAct],
+    )?;
     reg.set_block_creator(create_std_block)?;
     reg.set_context_creator(create_context, base::DEFAULT_GAS_BUDGET)?;
     register_vm_host_defs(reg)?;

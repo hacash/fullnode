@@ -1,19 +1,20 @@
 //! TxMessage / TxBlob actions.
 
-use std::any::Any;
 use std::sync::Arc;
 
-use base::{ActOut, ActScope, Action, ActionRef, Context};
-use field::{BytesW1, BytesW2, Encode, Reader, Uint2};
+use base::{Action, ActionRef};
+use field::{BytesW1, BytesW2, Decode, Encode, Uint2};
 use sys::Ret;
 
-#[derive(Debug, Clone)]
+use super::common::check_action_kind;
+
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct TxMessage {
     pub kind: Uint2,
     pub data: BytesW1,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct TxBlob {
     pub kind: Uint2,
     pub data: BytesW2,
@@ -41,61 +42,21 @@ impl TxBlob {
     }
 }
 
-impl Encode for TxMessage {
-    fn size(&self) -> usize {
-        self.kind.size() + self.data.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.data.encode_to(out);
-    }
-}
-
-impl Encode for TxBlob {
-    fn size(&self) -> usize {
-        self.kind.size() + self.data.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.data.encode_to(out);
+base::impl_action! {
+    TxMessage {
+        scope: base::ActScope::GUARD,
+        min_tx_type: 2,
+        description: |_: &TxMessage| "Transaction message".to_owned(),
+        execute: (self, _ctx) { Ok(vec![]) }
     }
 }
 
-impl Action for TxMessage {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::GUARD
-    }
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-    fn execute(&self, _ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
-        Ok((gas, vec![]))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-impl Action for TxBlob {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::GUARD
-    }
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-    fn execute(&self, _ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
-        Ok((gas, vec![]))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+base::impl_action! {
+    TxBlob {
+        scope: base::ActScope::GUARD,
+        min_tx_type: 2,
+        description: |_: &TxBlob| "Transaction blob data".to_owned(),
+        execute: (self, _ctx) { Ok(vec![]) }
     }
 }
 
@@ -104,36 +65,18 @@ pub fn create_blob_action(
     kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind_field: Uint2 = r.read()?;
-    if kind_field.uint() != kind {
-        return sys::decodef!(
-            "action kind mismatch: expected {} got {}",
-            kind,
-            kind_field.uint()
-        );
-    }
+    check_action_kind(kind, buf)?;
     match kind {
-        TxMessage::KIND => {
-            let data: BytesW1 = r.read()?;
-            Ok((
-                Arc::new(TxMessage {
-                    kind: kind_field,
-                    data,
-                }),
-                r.used(),
-            ))
-        }
-        TxBlob::KIND => {
-            let data: BytesW2 = r.read()?;
-            Ok((
-                Arc::new(TxBlob {
-                    kind: kind_field,
-                    data,
-                }),
-                r.used(),
-            ))
-        }
+        TxMessage::KIND => decode_blob_action::<TxMessage>(buf),
+        TxBlob::KIND => decode_blob_action::<TxBlob>(buf),
         _ => sys::decodef!("blob action kind {} not registered", kind),
     }
+}
+
+fn decode_blob_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
+where
+    T: Action + Decode + 'static,
+{
+    let (action, used) = T::decode(buf)?;
+    Ok((Arc::new(action), used))
 }

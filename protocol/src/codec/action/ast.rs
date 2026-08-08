@@ -4,11 +4,38 @@ use std::any::Any;
 use std::sync::Arc;
 
 use base::{
-    ActOut, ActScope, Action, ActionDispatcher, ActionRef, AddrOrPtr, BinaryCodecs, Context,
-    TopRule,
+    ActOut, ActScope, Action, ActionDispatcher, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry,
+    Context, TopRule,
 };
-use field::{Decode, Encode, Reader, Uint1, Uint2};
+use field::{
+    Decode, Encode, Reader, Uint1, Uint2, json_decode_object, json_decode_value,
+    json_expect_unquoted, json_split_array, json_split_object,
+};
 use sys::{Rerr, Ret, errf};
+
+impl field::ToJSON for ActionListW1 {
+    fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
+        format!(
+            "[{}]",
+            self.actions
+                .iter()
+                .map(|action| action.to_json_fmt(fmt))
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    }
+}
+
+base::impl_action_to_json!(AstSelect {
+    exe_min,
+    exe_max,
+    actions
+});
+base::impl_action_to_json!(AstIf {
+    cond,
+    br_if,
+    br_else
+});
 
 #[derive(Debug, Clone)]
 pub struct ActionListW1 {
@@ -113,6 +140,117 @@ impl AstIf {
         out.extend(self.br_else.child_actions());
         out
     }
+}
+
+fn decode_ast_child(reg: &dyn CodecRegistry, json: &str) -> Ret<ActionRef> {
+    let obj = json_decode_object(json)?;
+    if let Some(body) = obj.get("body") {
+        return reg.decode_action_exact(&field::json_decode_binary(body)?);
+    }
+    let kind = obj
+        .get("kind")
+        .ok_or_else(|| sys::Error::fault("AST child action missing kind"))?;
+    let kind: u16 = json_expect_unquoted(kind)?
+        .parse()
+        .map_err(|_| sys::Error::decode("AST child action kind invalid"))?;
+    reg.decode_action_json(kind, json)?.ok_or_else(|| {
+        sys::Error::decode(format!("AST child action kind {} has no JSON codec", kind))
+    })
+}
+
+fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect> {
+    let mut kind = Uint2::from(AstSelect::KIND);
+    let mut exe_min = None;
+    let mut exe_max = None;
+    let mut actions = None;
+    let mut seen = std::collections::HashSet::new();
+    for (key, value) in json_split_object(json)? {
+        if !seen.insert(key) {
+            return sys::decodef!("AstSelect JSON field {} is duplicated", key);
+        }
+        match key {
+            "kind" => kind = json_decode_value(value)?,
+            "exe_min" => exe_min = Some(json_decode_value(value)?),
+            "exe_max" => exe_max = Some(json_decode_value(value)?),
+            "actions" => actions = Some(value),
+            _ => {}
+        }
+    }
+    if kind.uint() != AstSelect::KIND {
+        return sys::decodef!(
+            "action kind mismatch: expected {} got {}",
+            AstSelect::KIND,
+            kind.uint()
+        );
+    }
+    let exe_min: Uint1 =
+        exe_min.ok_or_else(|| sys::Error::decode("AstSelect JSON missing exe_min"))?;
+    let exe_max: Uint1 =
+        exe_max.ok_or_else(|| sys::Error::decode("AstSelect JSON missing exe_max"))?;
+    let actions_json =
+        actions.ok_or_else(|| sys::Error::decode("AstSelect JSON missing actions"))?;
+    let mut children = Vec::new();
+    for child in json_split_array(actions_json)? {
+        children.push(decode_ast_child(reg, child)?);
+    }
+    Ok(AstSelect {
+        kind,
+        exe_min,
+        exe_max,
+        actions: ActionListW1::from_vec(children)?,
+    })
+}
+
+pub fn decode_ast_select_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret<ActionRef> {
+    if kind != AstSelect::KIND {
+        return sys::decodef!("AstSelect JSON codec got kind {}", kind);
+    }
+    Ok(Arc::new(decode_ast_select_value(reg, json)?))
+}
+
+pub fn decode_ast_if_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret<ActionRef> {
+    if kind != AstIf::KIND {
+        return sys::decodef!("AstIf JSON codec got kind {}", kind);
+    }
+    let mut declared = Uint2::from(AstIf::KIND);
+    let mut cond = None;
+    let mut br_if = None;
+    let mut br_else = None;
+    let mut seen = std::collections::HashSet::new();
+    for (key, value) in json_split_object(json)? {
+        if !seen.insert(key) {
+            return sys::decodef!("AstIf JSON field {} is duplicated", key);
+        }
+        match key {
+            "kind" => declared = json_decode_value(value)?,
+            "cond" => cond = Some(value),
+            "br_if" => br_if = Some(value),
+            "br_else" => br_else = Some(value),
+            _ => {}
+        }
+    }
+    if declared.uint() != AstIf::KIND {
+        return sys::decodef!(
+            "action kind mismatch: expected {} got {}",
+            AstIf::KIND,
+            declared.uint()
+        );
+    }
+    Ok(Arc::new(AstIf {
+        kind: declared,
+        cond: decode_ast_select_value(
+            reg,
+            cond.ok_or_else(|| sys::Error::decode("AstIf JSON missing cond"))?,
+        )?,
+        br_if: decode_ast_select_value(
+            reg,
+            br_if.ok_or_else(|| sys::Error::decode("AstIf JSON missing br_if"))?,
+        )?,
+        br_else: decode_ast_select_value(
+            reg,
+            br_else.ok_or_else(|| sys::Error::decode("AstIf JSON missing br_else"))?,
+        )?,
+    }))
 }
 
 fn collect_ast_req_sign(req: &mut Vec<AddrOrPtr>, act: &dyn Action) {
@@ -249,6 +387,15 @@ impl Action for AstSelect {
         3
     }
 
+    fn description(&self) -> String {
+        format!(
+            "Execute select {} to {} in {} actions",
+            self.exe_min.uint(),
+            self.exe_max.uint(),
+            self.actions.length()
+        )
+    }
+
     fn req_sign(&self) -> Vec<AddrOrPtr> {
         self.collect_req_sign()
     }
@@ -306,6 +453,10 @@ impl Action for AstIf {
 
     fn min_tx_type(&self) -> u8 {
         3
+    }
+
+    fn description(&self) -> String {
+        "Asset if-else execute".to_owned()
     }
 
     fn req_sign(&self) -> Vec<AddrOrPtr> {

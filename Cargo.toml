@@ -4,6 +4,7 @@ members = [
     "sys",
     "field",
     "base",
+    "action-codec-derive",
     "protocol",
     "vm",
     "mint",
@@ -21,6 +22,7 @@ default-members = [
     "sys",
     "field",
     "base",
+    "action-codec-derive",
     "protocol",
     "vm",
     "mint",
@@ -42,6 +44,7 @@ edition = "2024"
 sys        = { path = "sys" }
 field      = { path = "field" }
 base       = { path = "base" }
+action-codec-derive = { path = "action-codec-derive" }
 protocol   = { path = "protocol" }
 vm         = { path = "vm" }
 mint       = { path = "mint" }

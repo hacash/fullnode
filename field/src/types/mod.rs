@@ -1,5 +1,19 @@
 macro_rules! codec_struct {
+    ($name:ident { $($field:ident : $ty:ty),+ $(,)? } json optional $optional:ident when $condition:ident $(,)?) => {
+        codec_struct!(@codec $name { $($field : $ty),+ });
+        $crate::impl_struct_json!($name { $($field),+ } optional $optional when $condition);
+    };
+
+    ($name:ident { $($field:ident : $ty:ty),+ $(,)? } json $(,)?) => {
+        codec_struct!(@codec $name { $($field : $ty),+ });
+        $crate::impl_struct_json!($name { $($field),+ });
+    };
+
     ($name:ident { $($field:ident : $ty:ty),+ $(,)? }) => {
+        codec_struct!(@codec $name { $($field : $ty),+ });
+    };
+
+    (@codec $name:ident { $($field:ident : $ty:ty),+ $(,)? }) => {
         #[derive(Debug, Clone, Default, PartialEq, Eq)]
         pub struct $name {
             $(pub $field: $ty),+
@@ -24,6 +38,8 @@ macro_rules! codec_struct {
         }
     };
 }
+
+
 #[allow(unused_imports)]
 pub(crate) use codec_struct;
 

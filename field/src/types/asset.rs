@@ -104,4 +104,4 @@ codec_struct!(AssetSmelt {
     issuer: Address,
     ticket: BytesW1,
     name: BytesW1,
-});
+} json);

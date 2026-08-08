@@ -20,7 +20,7 @@ pub type TxCreateFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<(TxRef, usize)>;
 pub type BlockCreateFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<(BlockRef, usize)>;
 /// ""—— header  pipeline feeder
 pub type BlockSizeFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<usize>;
-pub type ActionJsonDecodeFn = fn(&dyn BinaryCodecs, u16, &str) -> Ret<ActionRef>;
+pub type ActionJsonDecodeFn = fn(&dyn CodecRegistry, u16, &str) -> Ret<ActionRef>;
 pub type TxJsonDecodeFn = fn(&dyn BinaryCodecs, u8, &str) -> Ret<TxRef>;
 pub type ContextCreateFn =
     fn(Env, Arc<dyn ExecutionServices>, StateChunkRef, TxRef, i64) -> Ret<Box<dyn Context>>;
@@ -112,7 +112,13 @@ pub trait JsonCodecs: Send + Sync {
     fn decode_action_json(&self, kind: u16, json: &str) -> Ret<Option<ActionRef>>;
 }
 
-pub trait ExecutionServices: BinaryCodecs {
+/// View passed to JSON creators. Recursive/dynamic JSON actions need both
+/// binary decoding (for legacy `body` fields) and JSON registry dispatch.
+pub trait CodecRegistry: BinaryCodecs + JsonCodecs {}
+
+impl<T: BinaryCodecs + JsonCodecs + ?Sized> CodecRegistry for T {}
+
+pub trait ExecutionServices: BinaryCodecs + JsonCodecs {
     fn assign_vm(&self, height: u64) -> Option<Box<dyn Vm>>;
     fn vm_host_def(&self, kind: VmHostCallKind, id: u8) -> Option<&VmHostActionDef>;
     fn vm_host_defs(&self, kind: VmHostCallKind) -> Vec<&VmHostActionDef>;

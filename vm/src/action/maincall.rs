@@ -5,18 +5,17 @@
 //! runtime `SpaceCap`/`GasExtra` (height-derived) before being handed to the VM
 //! via `VmRequest::Main`.
 
-use std::any::Any;
 use std::sync::Arc;
 
-use base::{ActOut, ActScope, Action, ActionRef, Context, VmEntry};
-use field::{BytesW2, Encode, Fixed3, Reader, Uint1, Uint2};
+use base::{ActScope, ActionRef, Context, VmEntry};
+use field::{BytesW2, Decode, Encode, Fixed3, Uint1, Uint2};
 use sys::Ret;
 
 use crate::contract::convert_and_check;
 use crate::machine::{VmRequest, peek_vm_runtime_limits};
 use crate::rt::{CodeConf, CodeType};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
 pub struct ContractMainCall {
     pub kind: Uint2,
     pub marks: Fixed3,
@@ -50,52 +49,20 @@ impl Default for ContractMainCall {
     }
 }
 
-impl Encode for ContractMainCall {
-    fn size(&self) -> usize {
-        self.kind.size() + self.marks.size() + self.codeconf.size() + self.codes.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.marks.encode_to(out);
-        self.codeconf.encode_to(out);
-        self.codes.encode_to(out);
-    }
-}
-
-impl Action for ContractMainCall {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::AST
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-
-    fn extra9(&self) -> bool {
-        false
-    }
-
-    fn req_sign(&self) -> Vec<base::AddrOrPtr> {
-        vec![]
-    }
-
-    fn description(&self) -> String {
-        format!("Run main codes with conf {}", self.codeconf.uint())
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ContractMainCall {
+        scope: ActScope::AST,
+        min_tx_type: 3,
+        extra9: |_: &ContractMainCall| false,
+        req_sign: |_: &ContractMainCall| vec![],
+        as_transfer_like: none,
+        description: |this: &ContractMainCall| {
+            format!("Run main codes with conf {}", this.codeconf.uint())
+        },
+        execute: (self, ctx) {
         contract_main_call_execute(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
@@ -128,21 +95,6 @@ pub fn create_contract_main_call(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != ContractMainCall::KIND {
-        return sys::decodef!("ContractMainCall codec got kind {}", kind.uint());
-    }
-    let marks: Fixed3 = r.read()?;
-    let codeconf: Uint1 = r.read()?;
-    let codes: BytesW2 = r.read()?;
-    Ok((
-        Arc::new(ContractMainCall {
-            kind,
-            marks,
-            codeconf,
-            codes,
-        }),
-        r.used(),
-    ))
+    let (action, used) = ContractMainCall::decode(buf)?;
+    Ok((Arc::new(action), used))
 }

@@ -1,32 +1,50 @@
 //! ChainAllow / HeightScope / BalanceFloor / ReqSignList guard actions.
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use base::{ActOut, ActScope, Action, ActionRef, AddrOrPtr, Context, CoreState};
+use base::{ActScope, Action, ActionRef, AddrOrPtr, CoreState};
 use field::{
-    Amount, AssetAmt, AssetAmtW1, BlockHeight, ChainIDList, DiamondNumber, Encode, Reader, Satoshi,
-    ToJSON, Uint2,
+    Amount, AssetAmt, AssetAmtW1, BlockHeight, ChainIDList, Decode, DiamondNumber, Encode, Reader,
+    Satoshi, ToJSON, Uint2, json_decode_value, json_split_array, json_split_object,
 };
 use sys::{Rerr, Ret, errf};
 
-use super::common::{addr_or_ptr_size, decode_addr_or_ptr, encode_addr_or_ptr};
+use super::common::{
+    addr_or_ptr_readable, addr_or_ptr_size, check_action_kind, decode_addr_or_ptr,
+    encode_addr_or_ptr,
+};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct ChainAllow {
     pub kind: Uint2,
     pub chains: ChainIDList,
 }
 
-#[derive(Debug, Clone)]
+impl field::ToJSON for ReqSignList {
+    fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
+        let signers = self
+            .signers
+            .iter()
+            .map(|signer| field::ToJSON::to_json_fmt(signer, fmt))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{{\"kind\":{},\"signers\":[{}]}}",
+            field::ToJSON::to_json_fmt(&self.kind, fmt),
+            signers
+        )
+    }
+}
+
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct HeightScope {
     pub kind: Uint2,
     pub start: BlockHeight,
     pub end: BlockHeight,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
 pub struct BalanceFloor {
     pub kind: Uint2,
     pub addr: AddrOrPtr,
@@ -128,44 +146,58 @@ impl ReqSignList {
     }
 }
 
-impl Encode for ChainAllow {
-    fn size(&self) -> usize {
-        self.kind.size() + self.chains.size()
+fn parse_req_sign_list_json(json: &str) -> Ret<ReqSignList> {
+    let mut declared = Uint2::from(ReqSignList::KIND);
+    let mut signers_json = None;
+    let mut seen = HashSet::new();
+    for (key, value) in json_split_object(json)? {
+        if !seen.insert(key) {
+            return sys::decodef!("ReqSignList JSON field {} is duplicated", key);
+        }
+        match key {
+            "kind" => declared = json_decode_value(value)?,
+            "signers" => signers_json = Some(value),
+            _ => {}
+        }
     }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.chains.encode_to(out);
+    if declared.uint() != ReqSignList::KIND {
+        return sys::decodef!(
+            "action kind mismatch: expected {} got {}",
+            ReqSignList::KIND,
+            declared.uint()
+        );
+    }
+    let raw = signers_json.ok_or_else(|| sys::Error::decode("ReqSignList JSON missing signers"))?;
+    let mut signers = Vec::new();
+    for value in json_split_array(raw)? {
+        signers.push(json_decode_value(value)?);
+    }
+    Ok(ReqSignList::create_by(signers)?)
+}
+
+impl field::FromJSON for ReqSignList {
+    fn from_json(&mut self, json: &str) -> Ret<()> {
+        *self = parse_req_sign_list_json(json)?;
+        Ok(())
     }
 }
 
-impl Encode for HeightScope {
-    fn size(&self) -> usize {
-        self.kind.size() + self.start.size() + self.end.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.start.encode_to(out);
-        self.end.encode_to(out);
+impl base::ActionJsonCodec for ReqSignList {
+    fn decode_json(json: &str) -> Ret<Self> {
+        parse_req_sign_list_json(json)
     }
 }
 
-impl Encode for BalanceFloor {
-    fn size(&self) -> usize {
-        self.kind.size()
-            + addr_or_ptr_size(&self.addr)
-            + self.hacash.size()
-            + self.satoshi.size()
-            + self.diamond.size()
-            + self.assets.size()
+/// Registry JSON decoder for the dynamic signer-list action.
+pub fn decode_req_sign_list_json(
+    _reg: &dyn base::CodecRegistry,
+    kind: u16,
+    json: &str,
+) -> Ret<ActionRef> {
+    if kind != ReqSignList::KIND {
+        return sys::decodef!("ReqSignList JSON codec got kind {}", kind);
     }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        encode_addr_or_ptr(&self.addr, out);
-        self.hacash.encode_to(out);
-        self.satoshi.encode_to(out);
-        self.diamond.encode_to(out);
-        self.assets.encode_to(out);
-    }
+    Ok(Arc::new(parse_req_sign_list_json(json)?))
 }
 
 impl Encode for ReqSignList {
@@ -206,18 +238,12 @@ fn check_balance_floor_assets(assets: &AssetAmtW1) -> Rerr {
     Ok(())
 }
 
-impl Action for ChainAllow {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::GUARD
-    }
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ChainAllow {
+        scope: ActScope::GUARD,
+        min_tx_type: 2,
+        description: |this: &ChainAllow| format!("Valid chain ID list {}", this.chains.as_list().iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")),
+        execute: (self, ctx) {
         let cid = ctx.env().chain.id;
         if !self
             .chains
@@ -238,25 +264,17 @@ impl Action for ChainAllow {
                 cid
             );
         }
-        Ok((gas, vec![]))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
-impl Action for HeightScope {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::GUARD
-    }
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    HeightScope {
+        scope: ActScope::GUARD,
+        min_tx_type: 2,
+        description: |this: &HeightScope| format!("Limit height range ({}, {})", this.start.uint(), if this.end.uint() == 0 { "Unlimited".to_owned() } else { this.end.uint().to_string() }),
+        execute: (self, ctx) {
         let left = self.start.uint();
         let right = match self.end.uint() {
             0 => u64::MAX,
@@ -273,25 +291,17 @@ impl Action for HeightScope {
                 right
             );
         }
-        Ok((gas, vec![]))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
-impl Action for BalanceFloor {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::GUARD
-    }
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    BalanceFloor {
+        scope: ActScope::GUARD,
+        min_tx_type: 2,
+        description: |this: &BalanceFloor| format!("Balance floor for {} (hac={}, sat={}, dia={}, assets={})", addr_or_ptr_readable(&this.addr), this.hacash, this.satoshi.uint(), this.diamond.uint(), this.assets.length()),
+        execute: (self, ctx) {
         if self.hacash.is_negative() {
             return errf!("balance floor hacash {} cannot be negative", self.hacash);
         }
@@ -352,33 +362,23 @@ impl Action for BalanceFloor {
                 );
             }
         }
-        Ok((gas, vec![]))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
-impl Action for ReqSignList {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-    fn scope(&self) -> ActScope {
-        ActScope::TOP_GUARD_UNIQUE
-    }
-    fn min_tx_type(&self) -> u8 {
-        2
-    }
-    fn req_sign(&self) -> Vec<AddrOrPtr> {
-        self.signers.clone()
-    }
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    ReqSignList {
+        scope: ActScope::TOP_GUARD_UNIQUE,
+        min_tx_type: 2,
+        extra9: |_: &ReqSignList| false,
+        req_sign: |this: &ReqSignList| this.signers.clone(),
+        as_transfer_like: none,
+        description: |this: &ReqSignList| format!("Require extra signers ({})", this.signers.len()),
+        execute: (self, ctx) {
         self.validate_against(&ctx.env().tx.addrs)?;
-        Ok((gas, vec![]))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
@@ -387,6 +387,7 @@ pub fn create_chain_guard_action(
     kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
+    check_action_kind(kind, buf)?;
     let mut r = Reader::new(buf);
     let kind_field: Uint2 = r.read()?;
     if kind_field.uint() != kind {
@@ -397,47 +398,9 @@ pub fn create_chain_guard_action(
         );
     }
     match kind {
-        ChainAllow::KIND => {
-            let chains: ChainIDList = r.read()?;
-            Ok((
-                Arc::new(ChainAllow {
-                    kind: kind_field,
-                    chains,
-                }),
-                r.used(),
-            ))
-        }
-        HeightScope::KIND => {
-            let start: BlockHeight = r.read()?;
-            let end: BlockHeight = r.read()?;
-            Ok((
-                Arc::new(HeightScope {
-                    kind: kind_field,
-                    start,
-                    end,
-                }),
-                r.used(),
-            ))
-        }
-        BalanceFloor::KIND => {
-            let (addr, used) = decode_addr_or_ptr(&buf[r.used()..])?;
-            let _ = r.read_bytes(used)?;
-            let hacash: Amount = r.read()?;
-            let satoshi: Satoshi = r.read()?;
-            let diamond: DiamondNumber = r.read()?;
-            let assets: AssetAmtW1 = r.read()?;
-            Ok((
-                Arc::new(BalanceFloor {
-                    kind: kind_field,
-                    addr,
-                    hacash,
-                    satoshi,
-                    diamond,
-                    assets,
-                }),
-                r.used(),
-            ))
-        }
+        ChainAllow::KIND => decode_regular_guard_action::<ChainAllow>(buf),
+        HeightScope::KIND => decode_regular_guard_action::<HeightScope>(buf),
+        BalanceFloor::KIND => decode_regular_guard_action::<BalanceFloor>(buf),
         ReqSignList::KIND => {
             let count: Uint2 = r.read()?;
             let mut signers = Vec::with_capacity(count.uint() as usize);
@@ -456,4 +419,12 @@ pub fn create_chain_guard_action(
         }
         _ => sys::decodef!("chain guard action kind {} not registered", kind),
     }
+}
+
+fn decode_regular_guard_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
+where
+    T: Action + Decode + 'static,
+{
+    let (action, used) = T::decode(buf)?;
+    Ok((Arc::new(action), used))
 }

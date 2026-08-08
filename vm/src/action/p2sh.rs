@@ -10,10 +10,9 @@
 //! - `sha3`/`ripemd160` free fns (dev sys) -> local helpers over the `sha3`/`ripemd` crates.
 //! - `.serialize()` on `Hash`/`ContractAddressW1` -> `.encode()` / `.as_bytes()`.
 
-use std::any::Any;
 use std::sync::Arc;
 
-use base::{ActOut, ActScope, Action, ActionRef, Context, ExecFrom, P2sh};
+use base::{ActScope, ActionRef, Context, ExecFrom, P2sh};
 use field::{Address, BytesW2, Decode, Encode, Hash, Reader, Uint1, Uint2};
 use ripemd::{Digest, Ripemd160};
 use sha3::Sha3_256;
@@ -23,6 +22,7 @@ use crate::contract::ContractAddrListW1;
 use crate::machine::peek_vm_runtime_limits;
 use crate::rt::{CodeConf, GasExtra, SpaceCap};
 
+base::impl_fields_to_json!(PosiHash { posi, hash });
 // ================================ PosiHash / MerkelStuffs ================================
 
 /// One Merkle proof step: sibling hash + left/right position.
@@ -146,7 +146,7 @@ impl P2shEntryPayload {
 
 // ================================ P2SHScriptProve ================================
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
 pub struct P2SHScriptProve {
     pub kind: Uint2,
     // calc hash: script + calibs
@@ -182,61 +182,18 @@ impl Default for P2SHScriptProve {
     }
 }
 
-impl Encode for P2SHScriptProve {
-    fn size(&self) -> usize {
-        self.kind.size()
-            + self.argvkey.size()
-            + self.adrlibs.size()
-            + self.codeconf.size()
-            + self.lockbox.size()
-            + self.merkels.size()
-            + self.marks.size()
-    }
-
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        self.argvkey.encode_to(out);
-        self.adrlibs.encode_to(out);
-        self.codeconf.encode_to(out);
-        self.lockbox.encode_to(out);
-        self.merkels.encode_to(out);
-        self.marks.encode_to(out);
-    }
-}
-
-impl Action for P2SHScriptProve {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn scope(&self) -> ActScope {
-        ActScope::TOP
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-
-    fn extra9(&self) -> bool {
-        false
-    }
-
-    fn req_sign(&self) -> Vec<base::AddrOrPtr> {
-        vec![]
-    }
-
-    fn description(&self) -> String {
-        "Prove P2SH unlock script".to_owned()
-    }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = self.size() as u32;
+base::impl_action! {
+    P2SHScriptProve {
+        scope: ActScope::TOP,
+        min_tx_type: 3,
+        extra9: |_: &P2SHScriptProve| false,
+        req_sign: |_: &P2SHScriptProve| vec![],
+        as_transfer_like: none,
+        description: |_: &P2SHScriptProve| "Prove P2SH unlock script".to_owned(),
+        execute: (self, ctx) {
         p2sh_script_prove_execute(self, ctx)?;
-        Ok((gas, vec![]))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
+        Ok(vec![])
+        }
     }
 }
 
@@ -472,27 +429,6 @@ pub fn create_p2sh_script_prove(
     _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != P2SHScriptProve::KIND {
-        return sys::decodef!("P2SHScriptProve codec got kind {}", kind.uint());
-    }
-    let argvkey: BytesW2 = r.read()?;
-    let adrlibs: ContractAddrListW1 = r.read()?;
-    let codeconf: Uint1 = r.read()?;
-    let lockbox: BytesW2 = r.read()?;
-    let merkels: MerkelStuffs = r.read()?;
-    let marks: Fixed2 = r.read()?;
-    Ok((
-        Arc::new(P2SHScriptProve {
-            kind,
-            argvkey,
-            adrlibs,
-            codeconf,
-            lockbox,
-            merkels,
-            marks,
-        }),
-        r.used(),
-    ))
+    let (action, used) = P2SHScriptProve::decode(buf)?;
+    Ok((Arc::new(action), used))
 }

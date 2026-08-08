@@ -1,6 +1,7 @@
 use sys::{Ret, decodef, errf};
 
 use crate::codec::{Decode, Encode};
+use crate::json::{FromJSON, JSONFormater, ToJSON, json_expect_unquoted};
 use crate::types::address::Address;
 
 /// Wire discriminator for an inline address versus a compact address-list reference.
@@ -78,5 +79,34 @@ impl Decode for AddrOrPtr {
             return Ok((Self::Addr(addr), used));
         }
         Ok((Self::Ptr(first - ADDR_REF_MARKER_BASE), 1))
+    }
+}
+
+impl ToJSON for AddrOrPtr {
+    fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
+        match self {
+            Self::Addr(addr) => addr.to_json_fmt(fmt),
+            Self::Ptr(index) => index.to_string(),
+        }
+    }
+}
+
+impl FromJSON for AddrOrPtr {
+    fn from_json(&mut self, json: &str) -> Ret<()> {
+        let raw = json.trim();
+        if raw.starts_with('"') {
+            let mut addr = Address::default();
+            addr.from_json(raw)?;
+            *self = Self::Addr(addr);
+            return Ok(());
+        }
+        let index: u16 = json_expect_unquoted(raw)?
+            .parse()
+            .map_err(|_| sys::Error::decode("cannot parse AddrOrPtr"))?;
+        if index > Self::MAX_INDEX as u16 {
+            return errf!("AddrOrPtr index {} exceeds max {}", index, Self::MAX_INDEX);
+        }
+        *self = Self::Ptr(index as u8);
+        Ok(())
     }
 }
