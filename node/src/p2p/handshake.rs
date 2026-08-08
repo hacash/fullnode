@@ -1,7 +1,6 @@
-//! v2 identity handshake: VERSION / VERACK.
+//! Identity handshake: VERSION / VERACK.
 //!
-//! Replaces v1's REPORT_PEER/ANSWER_PEER identity exchange. The VERSION
-//! message carries node identity, services, and a real protocol-version field;
+//! The VERSION message carries node identity, services, and a real protocol-version field;
 //! the shared STATUS exchange still validates genesis and starts sync.
 //!
 //! Flow (both directions symmetric):
@@ -26,18 +25,17 @@
 //! [N B    custom_types]        (each in 101..=255, sorted, unique)
 //! ```
 //! Note: no timestamp field (earlier drafts had one; do not reintroduce without
-//! bumping `PROTOCOL_VERSION_V2`).
+//! bumping `PROTOCOL_VERSION`).
 
 use std::time::Duration;
 
 use sys::{Ret, errf};
 
 use super::codec::{read_transport_msg, write_transport_msg};
-use super::msg::v2::{MSG_VERACK, MSG_VERSION};
-use super::msg::{PEER_KEY_SIZE, PROTOCOL_VERSION_V2};
+use super::msg::{MSG_VERACK, MSG_VERSION, PEER_KEY_SIZE, PROTOCOL_VERSION};
 use field::Hash;
 
-/// Whole v2 handshake budget (VERSION+VERACK both ways).
+/// Whole handshake budget (VERSION+VERACK both ways).
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug)]
@@ -66,7 +64,7 @@ impl VersionMessage {
         custom_types: &[u8],
     ) -> Self {
         Self {
-            protocol_version: PROTOCOL_VERSION_V2,
+            protocol_version: PROTOCOL_VERSION,
             services: services_bits,
             node_key: *node_key,
             node_name: node_name.to_string(),
@@ -164,11 +162,11 @@ impl VersionMessage {
     }
 
     pub fn validate_as_peer(&self) -> Ret<()> {
-        if self.protocol_version != PROTOCOL_VERSION_V2 {
+        if self.protocol_version != PROTOCOL_VERSION {
             return errf!(
                 "unexpected protocol_version {} (want {})",
                 self.protocol_version,
-                PROTOCOL_VERSION_V2
+                PROTOCOL_VERSION
             );
         }
         Ok(())
@@ -198,20 +196,6 @@ impl PeerIdentity {
             services: v.services,
             relay: v.wants_relay(),
             custom_types: v.custom_types.clone(),
-        }
-    }
-
-    /// Construct from a v1 (legacy) peer identity. Services/relay are
-    /// unavailable in v1; defaults assume full-service (v1 peers relay
-    /// all tx types and have no service bits).
-    pub fn from_legacy(legacy: super::legacy::PeerIdentity, services: u64, relay: bool) -> Self {
-        Self {
-            key: legacy.key,
-            name: legacy.name,
-            listen_port: legacy.listen_port,
-            services,
-            relay,
-            custom_types: Vec::new(),
         }
     }
 }
@@ -269,5 +253,5 @@ pub async fn exchange_handshake(
         Ok(peer)
     })
     .await
-    .map_err(|_| sys::Error::fault("v2 handshake timeout".to_owned()))?
+    .map_err(|_| sys::Error::fault("handshake timeout".to_owned()))?
 }

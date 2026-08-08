@@ -222,17 +222,6 @@ impl PeerTable {
             .clone()
     }
 
-    /// Prefer the current public peer; otherwise choose the first public peer
-    /// in backbone/offshoot order, matching fullnodedev's switch_peer.
-    pub fn try_switch_peer(&self, prefer_id: &str) -> Option<Arc<RemotePeer>> {
-        let peers = self.values_snapshot();
-        let mut publics = peers.iter().filter(|peer| peer.is_public());
-        if let Some(p) = publics.clone().find(|p| p.id == prefer_id) {
-            return Some(p.clone());
-        }
-        publics.next().cloned()
-    }
-
     fn publish_snapshot(&self, tables: &Tables) {
         let peers = tables
             .backbones
@@ -250,7 +239,7 @@ impl PeerTable {
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64};
+    use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
@@ -258,7 +247,7 @@ mod tests {
 
     use super::PeerTable;
     use crate::knowledge::Knowledge;
-    use crate::p2p::peer::{PeerWriteCmd, ProtocolVersion, RemotePeer};
+    use crate::p2p::peer::{PeerWriteCmd, RemotePeer};
 
     fn remote_peer(id: &str, key: u8, is_public: bool, is_inbound: bool) -> Arc<RemotePeer> {
         let (writer_tx, _writer_rx) = mpsc::channel::<PeerWriteCmd>(1);
@@ -271,7 +260,6 @@ mod tests {
             is_public: AtomicBool::new(is_public),
             is_inbound: AtomicBool::new(is_inbound),
             last_active: Mutex::new(Instant::now()),
-            protocol_version: AtomicU8::new(ProtocolVersion::V2.as_u8()),
             service_mask: AtomicU64::new(u64::MAX),
             relay: AtomicBool::new(true),
             custom_types: Vec::new(),
@@ -375,21 +363,6 @@ mod tests {
             table
                 .get_by_key_snapshot(&[1; 16])
                 .is_some_and(|peer| Arc::ptr_eq(&peer, &replacement))
-        );
-    }
-
-    #[tokio::test]
-    async fn switch_peer_keeps_a_public_offshoot() {
-        let table = PeerTable::new([0; 16], 1, 2);
-        let backbone = remote_peer("backbone", 1, true, false);
-        let offshoot = remote_peer("offshoot", 20, true, true);
-        table.insert(backbone.clone()).await;
-        table.insert(offshoot.clone()).await;
-
-        assert!(
-            table
-                .try_switch_peer("offshoot")
-                .is_some_and(|peer| Arc::ptr_eq(&peer, &offshoot))
         );
     }
 }

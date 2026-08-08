@@ -1,7 +1,7 @@
-//! Remote peer: fullnodedev-compatible single writer queue with v1/v2 framing.
+//! Remote peer: single writer queue.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -10,11 +10,8 @@ use tokio::sync::{Notify, mpsc};
 
 use sys::Rerr;
 
-use super::codec::create_transport_frame as v2_create_frame;
-use super::legacy::{
-    create_transport_frame as v1_create_frame, encode_customer as v1_encode_customer,
-};
-use super::msg::{V1_MSG_CLOSE, v2 as v2msg};
+use super::codec::create_transport_frame;
+use super::msg::{MSG_CLOSE, MSG_RESERVED};
 use crate::knowledge::Knowledge;
 
 pub(crate) const PEER_WRITER_CAPACITY: usize = 128;
@@ -22,25 +19,6 @@ static PEER_AUTO_ID_INCREASE: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn next_peer_id() -> String {
     (PEER_AUTO_ID_INCREASE.fetch_add(1, Ordering::Relaxed) + 1).to_string()
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum ProtocolVersion {
-    V1 = 1,
-    V2 = 2,
-}
-
-impl ProtocolVersion {
-    pub fn from_u8(v: u8) -> Self {
-        match v {
-            2 => ProtocolVersion::V2,
-            _ => ProtocolVersion::V1,
-        }
-    }
-    pub fn as_u8(self) -> u8 {
-        self as u8
-    }
 }
 
 pub(crate) enum PeerWriteCmd {
@@ -60,9 +38,8 @@ pub(crate) struct RemotePeer {
     pub is_public: AtomicBool,
     pub is_inbound: AtomicBool,
     pub last_active: Mutex<Instant>,
-    pub protocol_version: AtomicU8,
     /// Business relay channels the peer opted into via its advertised services
-    /// mask (v2: captured from VERSION.services; v1: all channels assumed).
+    /// mask captured from VERSION.services.
     /// Channel bits are named by the consensus layer; the node only checks
     /// membership via `relays_channel(bit)`.
     pub service_mask: std::sync::atomic::AtomicU64,
@@ -82,28 +59,19 @@ impl base::Peer for RemotePeer {
         self.name.clone()
     }
     fn send_msg(&self, ty: u16, body: Vec<u8>) -> Rerr {
-        let frame = match self.protocol_version() {
-            ProtocolVersion::V2 => {
-                let ty = u8::try_from(ty).map_err(|_| {
-                    sys::Error::fault(format!("v2 message type out of range: {}", ty))
-                })?;
-                if ty == v2msg::MSG_RESERVED {
-                    return sys::errf!("v2 message type 100 is reserved");
-                }
-                if ty > v2msg::MSG_RESERVED && !self.supports_custom_type(ty) {
-                    return sys::errf!("peer {} did not negotiate custom message {}", self.id, ty);
-                }
-                v2_create_frame(ty, &body)?
-            }
-            ProtocolVersion::V1 => v1_encode_customer(ty, &body)?,
-        };
+        let ty = u8::try_from(ty)
+            .map_err(|_| sys::Error::fault(format!("message type out of range: {}", ty)))?;
+        if ty == MSG_RESERVED {
+            return sys::errf!("message type 100 is reserved");
+        }
+        if ty > MSG_RESERVED && !self.supports_custom_type(ty) {
+            return sys::errf!("peer {} did not negotiate custom message {}", self.id, ty);
+        }
+        let frame = create_transport_frame(ty, &body)?;
         self.send_frame(frame)
     }
     fn disconnect(&self) {
         RemotePeer::disconnect(self);
-    }
-    fn protocol_version(&self) -> u8 {
-        self.protocol_version.load(Ordering::Acquire)
     }
 }
 
@@ -121,11 +89,11 @@ impl RemotePeer {
         self.send_frame(frame)
     }
 
-    pub(crate) fn send_v2_transport(&self, ty: u8, body: &[u8]) -> Rerr {
-        if ty == v2msg::MSG_RESERVED {
-            return sys::errf!("v2 message type 100 is reserved");
+    pub(crate) fn send_message(&self, ty: u8, body: &[u8]) -> Rerr {
+        if ty == MSG_RESERVED {
+            return sys::errf!("message type 100 is reserved");
         }
-        let frame = v2_create_frame(ty, body)?;
+        let frame = create_transport_frame(ty, body)?;
         self.send_frame(frame)
     }
 
@@ -161,10 +129,6 @@ impl RemotePeer {
         self.is_inbound.load(Ordering::Acquire)
     }
 
-    pub(crate) fn protocol_version(&self) -> ProtocolVersion {
-        ProtocolVersion::from_u8(self.protocol_version.load(Ordering::Acquire))
-    }
-
     pub(crate) fn wants_relay(&self) -> bool {
         self.relay.load(Ordering::Acquire)
     }
@@ -181,10 +145,7 @@ impl RemotePeer {
     }
 
     pub(crate) fn disconnect(&self) {
-        let close_frame = match self.protocol_version() {
-            ProtocolVersion::V2 => v2_create_frame(v2msg::MSG_CLOSE, &[]),
-            ProtocolVersion::V1 => v1_create_frame(V1_MSG_CLOSE, &[]),
-        };
+        let close_frame = create_transport_frame(MSG_CLOSE, &[]);
         self.closed.store(true, Ordering::Release);
         if let Ok(frame) = close_frame {
             let _ = self.writer_tx.try_send(PeerWriteCmd::Close(frame));

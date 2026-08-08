@@ -1,9 +1,6 @@
 //! TCP listener, dialer, session loop, and P2P maintenance.
 //!
-//! Dual-protocol: accepts both v1 (legacy mainnet) and v2 (new) peers.
-//! Dialing tries v2 first, then reconnects with v1 only when magic identifies v1.
-//! Each session reads frames in the negotiated version and dispatches
-//! application messages to `handle_message` (shared, version-agnostic).
+//! TCP listener, dialer, session loop, and P2P maintenance.
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -16,29 +13,19 @@ use sys::{Rerr, ToHex, Waiter};
 
 use crate::P2PNode;
 use crate::msgqueue::InboundMsg;
-use crate::p2p::codec::{
-    accept_read_magic, dial_magic_exchange, read_transport_msg as v2_read_msg, write_v2_magic,
-};
+use crate::p2p::codec::{accept_read_magic, dial_magic_exchange, read_transport_msg, write_magic};
 use crate::p2p::handshake::{HANDSHAKE_TIMEOUT, PeerIdentity, VersionMessage, exchange_handshake};
-use crate::p2p::legacy::{
-    self, build_node_info, node_info_key_name, parse_answer_peer, parse_report_peer,
-};
 use crate::p2p::msg::{
-    MSG_BLOCK_DISCOVER, MSG_TX_SUBMIT, P2P_MAGIC_V1, V1_MSG_ANSWER_PEER, V1_MSG_CLOSE,
-    V1_MSG_CUSTOMER, V1_MSG_PING, V1_MSG_PONG, V1_MSG_REMIND_ME_IS_PUBLIC, V1_MSG_REPORT_PEER,
-    V1_MSG_REQUEST_NEAREST_PUBLIC_NODES, V1_MSG_REQUEST_NODE_KEY_FOR_PUBLIC_CHECK, services,
-    v2 as v2msg,
+    MSG_ADDR, MSG_BLOCK_DISCOVER, MSG_CHECK_PUBLIC, MSG_CLOSE, MSG_GETADDR, MSG_PING, MSG_PONG,
+    MSG_RESERVED, MSG_TX_SUBMIT, MSG_VERSION, services,
 };
 use crate::p2p::peer::{
-    PEER_WRITER_CAPACITY, PeerWriteCmd, ProtocolVersion, RemotePeer, next_peer_id, spawn_writer,
+    PEER_WRITER_CAPACITY, PeerWriteCmd, RemotePeer, next_peer_id, spawn_writer,
 };
-use crate::publiccheck::{
-    maybe_mark_public_from_report, maybe_mark_public_from_version, public_from_answer,
-    serve_check_public_v2,
-};
+use crate::publiccheck::{maybe_mark_public_from_version, serve_check_public};
 
 const P2P_STATUS_PRINT_INTERVAL_SECS: u64 = 60 * 97;
-const V1_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const MAGIC_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn format_p2p_status(
     public_count: usize,
@@ -104,32 +91,18 @@ impl P2PNode {
         self.run_p2p(waiter)
     }
 
-    /// Dial v2 first and reconnect with v1 only after an explicit v1 magic reply.
+    /// Dial a peer and run the handshake.
     pub async fn connect_addr(self: &Arc<Self>, addr: SocketAddr) -> Rerr {
         let stream =
             tokio::time::timeout(Duration::from_secs(6), tokio::net::TcpStream::connect(addr))
                 .await
-                .map_err(|_| sys::Error::fault(format!("v2 connect timeout {}", addr)))?
-                .map_err(|e| sys::Error::fault(format!("v2 connect {}: {}", addr, e)))?;
+                .map_err(|_| sys::Error::fault(format!("connect timeout {}", addr)))?
+                .map_err(|e| sys::Error::fault(format!("connect {}: {}", addr, e)))?;
         let mut stream = stream;
-        let is_v2 = tokio::time::timeout(HANDSHAKE_TIMEOUT, dial_magic_exchange(&mut stream))
+        tokio::time::timeout(HANDSHAKE_TIMEOUT, dial_magic_exchange(&mut stream))
             .await
-            .map_err(|_| sys::Error::fault("v2 magic handshake timeout".to_owned()))??;
-        if is_v2 {
-            return self.clone().run_v2_session(stream, addr, true).await;
-        }
-        drop(stream);
-        self.connect_addr_v1(addr).await
-    }
-
-    /// v1 dial: connect, exchange v1 magic, run v1 handshake + session.
-    async fn connect_addr_v1(self: &Arc<Self>, addr: SocketAddr) -> Rerr {
-        let stream =
-            tokio::time::timeout(Duration::from_secs(6), tokio::net::TcpStream::connect(addr))
-                .await
-                .map_err(|_| sys::Error::fault(format!("v1 connect timeout {}", addr)))?
-                .map_err(|e| sys::Error::fault(format!("v1 connect {}: {}", addr, e)))?;
-        handle_conn_v1(self.clone(), stream, addr, true).await
+            .map_err(|_| sys::Error::fault("magic handshake timeout".to_owned()))??;
+        self.clone().run_session(stream, addr, true).await
     }
 
     pub async fn run_p2p_async(self: Arc<Self>, waiter: Waiter) -> Rerr {
@@ -178,7 +151,7 @@ impl P2PNode {
     }
 
     fn report_p2p_listener(&self, addr: SocketAddr) {
-        println!("[P2P] listening on {} (v1+v2)", addr);
+        println!("[P2P] listening on {}", addr);
     }
 
     async fn run_p2p_with_listener(
@@ -387,140 +360,29 @@ fn parse_boot_addrs(boots: &[String]) -> Vec<SocketAddr> {
 }
 
 // ===================================================================
-// Inbound (accept): read-first magic detection, dispatch to v1/v2
+// Inbound (accept): magic and handshake
 // ===================================================================
 
-/// Accept-side connection handler. Reads the first 4 bytes (magic) to
-/// identify new vs old peer, then routes to the version-specific handshake.
+/// Accept-side connection handler.
 async fn handle_conn_accept(
     node: Arc<P2PNode>,
     mut stream: tokio::net::TcpStream,
     peer_addr: SocketAddr,
 ) -> Rerr {
-    let is_v2 = tokio::time::timeout(V1_HANDSHAKE_TIMEOUT, accept_read_magic(&mut stream))
+    tokio::time::timeout(MAGIC_HANDSHAKE_TIMEOUT, accept_read_magic(&mut stream))
         .await
         .map_err(|_| sys::Error::fault("p2p magic handshake timeout".to_owned()))??;
-    if is_v2 {
-        write_v2_magic(&mut stream).await?;
-        node.run_v2_session(stream, peer_addr, false).await
-    } else {
-        // v1 peer (magic already consumed by accept_read_magic).
-        // Reconstruct a 4-byte v1 magic prefix is impossible; instead we
-        // run the v1 handshake which expects to write-then-read magic. Since
-        // we already read the peer's magic, we only write ours back.
-        legacy::write_all(&mut stream, &P2P_MAGIC_V1.to_be_bytes()).await?;
-        handle_conn_v1_body(node, stream, peer_addr, false).await
-    }
+    write_magic(&mut stream).await?;
+    node.run_session(stream, peer_addr, false).await
 }
 
 // ===================================================================
-// v1 (legacy) session
-// ===================================================================
-
-/// v1 dial/accept entry that does the full magic handshake (write+read).
-/// Used by outbound v1 dial (and v1-only accept if magic not yet exchanged).
-async fn handle_conn_v1(
-    node: Arc<P2PNode>,
-    mut stream: tokio::net::TcpStream,
-    peer_addr: SocketAddr,
-    report_me: bool,
-) -> Rerr {
-    tokio::time::timeout(
-        V1_HANDSHAKE_TIMEOUT,
-        legacy::tcp_check_handshake(&mut stream),
-    )
-    .await
-    .map_err(|_| sys::Error::fault("v1 magic handshake timeout".to_owned()))??;
-    handle_conn_v1_body(node, stream, peer_addr, report_me).await
-}
-
-/// v1 connection body after magic exchange: REPORT/ANSWER identity, then session.
-async fn handle_conn_v1_body(
-    node: Arc<P2PNode>,
-    mut stream: tokio::net::TcpStream,
-    peer_addr: SocketAddr,
-    report_me: bool,
-) -> Rerr {
-    let my_info = build_node_info(
-        &node.config.node_key,
-        &node.config.node_name,
-        node.config.listen_port,
-    );
-    if report_me {
-        legacy::write_transport_msg(&mut stream, V1_MSG_REPORT_PEER, &my_info).await?;
-    }
-
-    let (ty, body) = tokio::time::timeout(
-        V1_HANDSHAKE_TIMEOUT,
-        legacy::read_transport_msg(&mut stream),
-    )
-    .await
-    .map_err(|_| sys::Error::fault("v1 identity handshake timeout".to_owned()))??;
-    // One-shot discovery/probe messages (no session).
-    if ty == V1_MSG_REMIND_ME_IS_PUBLIC {
-        return Ok(());
-    }
-    if ty == V1_MSG_REQUEST_NODE_KEY_FOR_PUBLIC_CHECK {
-        legacy::write_all(&mut stream, &node.config.node_key).await?;
-        return Ok(());
-    }
-    if ty == V1_MSG_REQUEST_NEAREST_PUBLIC_NODES {
-        return node.serve_nearest_public_nodes(&mut stream).await;
-    }
-
-    let (identity, is_inbound, is_public, mut session_addr) = if ty == V1_MSG_REPORT_PEER {
-        let id = parse_report_peer(&body)?;
-        if id.key == node.config.node_key {
-            return sys::errf!("cannot connect to self");
-        }
-        let answer = node_info_key_name(&my_info);
-        legacy::write_transport_msg(&mut stream, V1_MSG_ANSWER_PEER, &answer).await?;
-        let (pub_ok, addr) =
-            maybe_mark_public_from_report(peer_addr, id.listen_port, &id.key).await;
-        (id, true, pub_ok, addr)
-    } else if ty == V1_MSG_ANSWER_PEER {
-        let id = parse_answer_peer(&body)?;
-        if id.key == node.config.node_key {
-            return sys::errf!("cannot connect to self");
-        }
-        let pub_ok = public_from_answer(peer_addr);
-        (id, false, pub_ok, peer_addr)
-    } else {
-        return sys::errf!("unexpected v1 handshake msg type {}", ty);
-    };
-
-    // If REPORT declared a listen port and probe failed, keep TCP peer_addr.
-    if identity.listen_port > 0 && is_inbound && !is_public {
-        session_addr = peer_addr;
-    }
-
-    run_peer_session(
-        node,
-        stream,
-        session_addr,
-        // v1 has no service bits / relay flag: treat as full-service relay.
-        // v1 is a legacy wire protocol scheduled for removal once the network
-        // fully switches to v2; its `NODE_DIAMOND` reference below is kept
-        // verbatim and not generalized (the whole v1 path will be deleted).
-        PeerIdentity::from_legacy(
-            identity,
-            services::NODE_NETWORK | services::NODE_SYNC | services::NODE_DIAMOND,
-            true,
-        ),
-        is_inbound,
-        is_public,
-        ProtocolVersion::V1,
-    )
-    .await
-}
-
-// ===================================================================
-// v2 session
+// Session
 // ===================================================================
 
 impl P2PNode {
-    /// Run v2 handshake + session on a stream whose magic exchange is done.
-    async fn run_v2_session(
+    /// Run handshake + session on a stream whose magic exchange is done.
+    async fn run_session(
         self: Arc<Self>,
         mut stream: tokio::net::TcpStream,
         peer_addr: SocketAddr,
@@ -544,17 +406,18 @@ impl P2PNode {
             exchange_handshake(&mut stream, &my_version).await?
         } else {
             // Accept: first frame may be public probe or VERSION.
-            let (ty, body) = tokio::time::timeout(HANDSHAKE_TIMEOUT, v2_read_msg(&mut stream))
-                .await
-                .map_err(|_| sys::Error::fault("v2 accept first-frame timeout".to_owned()))??;
-            if ty == v2msg::MSG_CHECK_PUBLIC {
-                return serve_check_public_v2(&mut stream, &self.config.node_key).await;
+            let (ty, body) =
+                tokio::time::timeout(HANDSHAKE_TIMEOUT, read_transport_msg(&mut stream))
+                    .await
+                    .map_err(|_| sys::Error::fault("accept first-frame timeout".to_owned()))??;
+            if ty == MSG_CHECK_PUBLIC {
+                return serve_check_public(&mut stream, &self.config.node_key).await;
             }
-            if ty == v2msg::MSG_GETADDR {
-                return self.serve_getaddr_v2(&mut stream).await;
+            if ty == MSG_GETADDR {
+                return self.serve_getaddr(&mut stream).await;
             }
-            if ty != v2msg::MSG_VERSION {
-                return sys::errf!("unexpected v2 first msg type {}", ty);
+            if ty != MSG_VERSION {
+                return sys::errf!("unexpected first message type {}", ty);
             }
             let peer = VersionMessage::decode(&body)?;
             peer.validate_as_peer()?;
@@ -565,7 +428,7 @@ impl P2PNode {
                 Ok::<(), sys::Error>(())
             })
             .await
-            .map_err(|_| sys::Error::fault("v2 accept handshake timeout".to_owned()))??;
+            .map_err(|_| sys::Error::fault("accept handshake timeout".to_owned()))??;
             peer
         };
 
@@ -579,21 +442,13 @@ impl P2PNode {
             maybe_mark_public_from_version(peer_addr, identity.listen_port, &identity.key).await
         } else {
             // fullnodedev classifies a successfully dialed non-loopback peer
-            // as public; v2 capability bits do not change table placement.
+            // A successfully dialed non-loopback peer is public; capability
+            // bits do not change table placement.
             let pub_ok = !peer_addr.ip().is_loopback();
             (pub_ok, peer_addr)
         };
 
-        run_peer_session(
-            self,
-            stream,
-            session_addr,
-            identity,
-            is_inbound,
-            is_public,
-            ProtocolVersion::V2,
-        )
-        .await
+        run_peer_session(self, stream, session_addr, identity, is_inbound, is_public).await
     }
 
     /// Compute local services bits for VERSION advertisement.
@@ -617,7 +472,7 @@ impl P2PNode {
 }
 
 // ===================================================================
-// Shared peer session (version-aware read loop)
+// Shared peer session
 // ===================================================================
 
 /// Construct the `RemotePeer`, insert into peertable, then spawn the read loop.
@@ -631,7 +486,6 @@ async fn run_peer_session(
     identity: PeerIdentity,
     is_inbound: bool,
     is_public: bool,
-    protocol_version: ProtocolVersion,
 ) -> Rerr {
     let peer_id = next_peer_id();
     let (reader, writer) = stream.into_split();
@@ -647,18 +501,7 @@ async fn run_peer_session(
         is_public: std::sync::atomic::AtomicBool::new(is_public),
         is_inbound: std::sync::atomic::AtomicBool::new(is_inbound),
         last_active: std::sync::Mutex::new(Instant::now()),
-        protocol_version: std::sync::atomic::AtomicU8::new(protocol_version.as_u8()),
-        // v1 has no service bits: assume the peer relays every channel we
-        // know about (equivalent to an all-ones mask). v2 peers expose their
-        // advertised services verbatim; the node inspects individual channel
-        // bits via `relays_channel(bit)` without naming them.
-        service_mask: std::sync::atomic::AtomicU64::new(
-            if protocol_version == ProtocolVersion::V1 {
-                u64::MAX
-            } else {
-                identity.services
-            },
-        ),
+        service_mask: std::sync::atomic::AtomicU64::new(identity.services),
         relay: std::sync::atomic::AtomicBool::new(identity.relay),
         custom_types: identity.custom_types.clone(),
         writer_tx,
@@ -670,12 +513,11 @@ async fn run_peer_session(
     let _writer_task = spawn_writer(writer_rx, writer, close_notify.clone(), closed.clone());
     node.add_peer(peer.clone()).await;
     println!(
-        "[P2P] peer {} ({}) {} public={} v{} from {}",
+        "[P2P] peer {} ({}) {} public={} from {}",
         identity.name,
         peer_id,
         if is_inbound { "inbound" } else { "outbound" },
         is_public,
-        protocol_version.as_u8(),
         peer_addr
     );
 
@@ -684,14 +526,8 @@ async fn run_peer_session(
     let peer_id_bg = peer_id.clone();
     tokio::spawn(async move {
         let mut reader = reader;
-        let read_result = match protocol_version {
-            ProtocolVersion::V2 => {
-                run_v2_read_loop(node_bg.clone(), peer_bg.clone(), &mut reader, &peer_id_bg).await
-            }
-            ProtocolVersion::V1 => {
-                run_v1_read_loop(node_bg.clone(), peer_bg.clone(), &mut reader, &peer_id_bg).await
-            }
-        };
+        let read_result =
+            run_read_loop(node_bg.clone(), peer_bg.clone(), &mut reader, &peer_id_bg).await;
         peer_bg.disconnect();
         node_bg.remove_peer(&peer_bg).await;
         let disconnect_node = node_bg.clone();
@@ -716,7 +552,7 @@ fn pre_dispatch(peer: &RemotePeer) {
     peer.touch();
 }
 
-/// Dispatch an application message (u16 ty) shared by v1/v2 read loops.
+/// Dispatch an application message (u16 ty) from the read loop.
 /// TX/BLOCK go to the inbound queue with backpressure; everything else
 /// spawns a task to call `handle_message`.
 async fn dispatch_app_msg(
@@ -726,7 +562,7 @@ async fn dispatch_app_msg(
     ty: u16,
     body: Vec<u8>,
 ) {
-    if peer.protocol_version() == ProtocolVersion::V2 && ty > 100 {
+    if ty > 100 {
         if !peer.supports_custom_type(ty as u8) {
             eprintln!(
                 "[P2P] peer {} sent unnegotiated custom message {}",
@@ -787,8 +623,8 @@ async fn dispatch_app_msg(
     }
 }
 
-/// v2 read loop: decode v2 frames (u8 ty), dispatch.
-async fn run_v2_read_loop(
+/// Decode frames (u8 ty) and dispatch messages.
+async fn run_read_loop(
     node: Arc<P2PNode>,
     peer: Arc<RemotePeer>,
     reader: &mut (impl tokio::io::AsyncRead + Unpin),
@@ -801,71 +637,32 @@ async fn run_v2_read_loop(
         }
         let (ty, body) = tokio::select! {
             _ = close_wait => return Ok(()),
-            r = v2_read_msg(reader) => match r {
+            r = read_transport_msg(reader) => match r {
                 Ok(v) => v,
                 Err(_) => return Ok(()),
             },
         };
         pre_dispatch(&peer);
         match ty {
-            v2msg::MSG_PING => {
-                if let Ok(frame) = crate::p2p::codec::create_transport_frame(v2msg::MSG_PONG, &[]) {
+            MSG_PING => {
+                if let Ok(frame) = crate::p2p::codec::create_transport_frame(MSG_PONG, &[]) {
                     let _ = peer.send_transport(frame);
                 }
             }
-            v2msg::MSG_PONG => {}
-            v2msg::MSG_CLOSE => return Ok(()),
-            v2msg::MSG_GETADDR => {
+            MSG_PONG => {}
+            MSG_CLOSE => return Ok(()),
+            MSG_GETADDR => {
                 if let Err(e) = node.handle_getaddr(&peer) {
                     eprintln!("[P2P] GETADDR reply to {} failed: {}", peer_id, e);
                 }
             }
             // Discovery responses are accepted only on the one-shot query
             // connection created by find_nodes, as in dev.
-            v2msg::MSG_ADDR => {}
-            v2msg::MSG_RESERVED => {
-                eprintln!("[P2P] peer {} sent reserved v2 message type 100", peer_id);
+            MSG_ADDR => {}
+            MSG_RESERVED => {
+                eprintln!("[P2P] peer {} sent reserved message type 100", peer_id);
             }
             _ => dispatch_app_msg(&node, &peer, peer_id, ty as u16, body).await,
-        }
-    }
-}
-
-/// v1 read loop: decode v1 frames (u8 ty), unwrap CUSTOMER, dispatch.
-async fn run_v1_read_loop(
-    node: Arc<P2PNode>,
-    peer: Arc<RemotePeer>,
-    reader: &mut (impl tokio::io::AsyncRead + Unpin),
-    peer_id: &str,
-) -> Rerr {
-    loop {
-        let close_wait = peer.close_notify.notified();
-        if peer.closed.load(std::sync::atomic::Ordering::Acquire) {
-            return Ok(());
-        }
-        let (ty, body) = tokio::select! {
-            _ = close_wait => return Ok(()),
-            r = legacy::read_transport_msg(reader) => match r {
-                Ok(v) => v,
-                Err(_) => return Ok(()),
-            },
-        };
-        pre_dispatch(&peer);
-        match ty {
-            V1_MSG_CUSTOMER => {
-                let Ok((app_ty, app_body)) = legacy::decode_customer(&body) else {
-                    continue;
-                };
-                dispatch_app_msg(&node, &peer, peer_id, app_ty, app_body).await;
-            }
-            V1_MSG_PING => {
-                if let Ok(frame) = legacy::create_transport_frame(V1_MSG_PONG, &[]) {
-                    let _ = peer.send_transport(frame);
-                }
-            }
-            V1_MSG_PONG => {}
-            V1_MSG_CLOSE => return Ok(()),
-            _ => {}
         }
     }
 }

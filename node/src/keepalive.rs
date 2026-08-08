@@ -4,11 +4,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::P2PNode;
-use crate::p2p::codec::create_transport_frame as v2_create_frame;
-use crate::p2p::legacy::create_transport_frame as v1_create_frame;
-use crate::p2p::msg::V1_MSG_PING;
-use crate::p2p::msg::v2 as v2msg;
-use crate::p2p::peer::{ProtocolVersion, RemotePeer};
+use crate::p2p::codec::create_transport_frame;
+use crate::p2p::msg::MSG_PING;
+use crate::p2p::peer::RemotePeer;
 
 const PING_IDLE: Duration = Duration::from_secs(60 * 5);
 const EVICT_IDLE: Duration = Duration::from_secs(60 * 20);
@@ -22,11 +20,7 @@ pub async fn ping_backbones(node: &P2PNode) {
             .map(|g| now.saturating_duration_since(*g))
             .unwrap_or_default();
         if idle > PING_IDLE {
-            // Version-aware PING frame.
-            let frame = match peer.protocol_version() {
-                ProtocolVersion::V2 => v2_create_frame(v2msg::MSG_PING, &[]),
-                ProtocolVersion::V1 => v1_create_frame(V1_MSG_PING, &[]),
-            };
+            let frame = create_transport_frame(MSG_PING, &[]);
             if let Ok(frame) = frame {
                 let _ = peer.send_transport(frame);
             }

@@ -8,9 +8,8 @@ use field::Hash;
 use sys::Rerr;
 
 use crate::P2PNode;
-use crate::p2p::msg::v2::{MSG_BLOCKS, MSG_GET_BLOCKS};
 use crate::p2p::msg::{
-    MSG_BLOCK, MSG_BLOCK_DISCOVER, MSG_BLOCK_HASH, MSG_REQ_BLOCK, MSG_REQ_BLOCK_HASH,
+    MSG_BLOCK_DISCOVER, MSG_BLOCK_HASH, MSG_BLOCKS, MSG_GET_BLOCKS, MSG_REQ_BLOCK_HASH,
     MSG_REQ_STATUS, MSG_STATUS, MSG_TX_SUBMIT, P2P_MSG_DATA_MAX_SIZE,
 };
 use crate::p2p::source::OneShotBlocks;
@@ -75,7 +74,7 @@ impl P2PNode {
         start_height: u64,
         remote_height: u64,
     ) -> Rerr {
-        // Both v1 and v2 feed the same BlockStream apply thread.
+        // All peers feed the same BlockStream apply thread.
         self.start_sync_pipe(peer, start_height, remote_height)
     }
 
@@ -165,10 +164,9 @@ impl P2PNode {
         if num > 80 || end_height > latest_height {
             return Ok(());
         }
-        // Legacy fullnodedev treats the request count as the number of
-        // preceding links and includes the endpoint itself, so a request for
-        // `num` returns `num + 1` hashes whenever height zero is not reached.
-        // Keep that off-by-one wire behavior for v1 compatibility.
+        // The request count is the number of preceding links and includes the
+        // endpoint itself, so a request for `num` returns `num + 1` hashes
+        // whenever height zero is not reached.
         let start_height = if num >= end_height {
             1
         } else {
@@ -229,37 +227,7 @@ impl P2PNode {
         Ok(())
     }
 
-    /// v1 (and orphan) REQ_BLOCK: 8-byte start → MSG_BLOCK response.
-    fn handle_req_block_message(&self, peer: Arc<dyn base::Peer>, body: Vec<u8>) -> Rerr {
-        if body.len() != 8 {
-            return sys::errf!("p2p req block message length invalid: {}", body.len());
-        }
-        let start_height = u64::from_be_bytes(body[0..8].try_into().unwrap());
-        let latest_height = self.engine.latest_height();
-        if start_height == 0 || start_height > latest_height {
-            return Ok(());
-        }
-        let max_send_size = 20 * 1024 * 1024usize;
-        let max_send_num = 10_000usize;
-        let (end_height, total_num, blocks) =
-            self.collect_blocks(start_height, max_send_num, max_send_size, true)?;
-        if blocks.is_empty() {
-            return Ok(());
-        }
-        // v1: 24B header; transitional v2 peers still speaking MSG_BLOCK get 32B.
-        let header_size = if peer.protocol_version() >= 2 { 32 } else { 24 };
-        let mut res = Vec::with_capacity(header_size + blocks.len());
-        res.extend_from_slice(&latest_height.to_be_bytes());
-        res.extend_from_slice(&start_height.to_be_bytes());
-        res.extend_from_slice(&end_height.to_be_bytes());
-        if peer.protocol_version() >= 2 {
-            res.extend_from_slice(&(total_num as u64).to_be_bytes());
-        }
-        res.extend_from_slice(&blocks);
-        peer.send_msg(MSG_BLOCK, res)
-    }
-
-    /// v2 GET_BLOCKS → MSG_BLOCKS (pipelined).
+    /// GET_BLOCKS → MSG_BLOCKS (pipelined).
     fn handle_get_blocks_message(&self, peer: Arc<dyn base::Peer>, body: Vec<u8>) -> Rerr {
         let req = GetBlocks::decode(&body)?;
         if req.start_height == 0 {
@@ -273,7 +241,7 @@ impl P2PNode {
         let max_bytes = (req.max_bytes as usize).clamp(64 * 1024, 32 * 1024 * 1024);
         let max_bytes = max_bytes.min(P2P_MSG_DATA_MAX_SIZE.saturating_sub(BLOCKS_HEADER_SIZE));
         let (end_height, total_num, blocks) =
-            self.collect_blocks(req.start_height, max_blocks, max_bytes, false)?;
+            self.collect_blocks(req.start_height, max_blocks, max_bytes)?;
         if blocks.is_empty() {
             return Ok(());
         }
@@ -299,7 +267,6 @@ impl P2PNode {
         start_height: u64,
         max_num: usize,
         max_bytes: usize,
-        legacy_v1_limits: bool,
     ) -> sys::Ret<(u64, usize, Vec<u8>)> {
         let latest_height = self.engine.latest_height();
         let mut total_size = 0usize;
@@ -309,16 +276,13 @@ impl P2PNode {
         let store = self.engine.store();
         for height in start_height..=latest_height {
             let Some((_, data)) = store.block_data_by_height(height) else {
-                if legacy_v1_limits {
-                    return Ok((0, 0, Vec::new()));
-                }
                 break;
             };
             let next_size = total_size.saturating_add(data.len());
-            if !legacy_v1_limits && total_num > 0 && next_size > max_bytes {
+            if total_num > 0 && next_size > max_bytes {
                 break;
             }
-            if !legacy_v1_limits && total_num == 0 && data.len() > max_bytes {
+            if total_num == 0 && data.len() > max_bytes {
                 return sys::errf!(
                     "block at height {} exceeds requested sync payload limit {}",
                     height,
@@ -329,114 +293,11 @@ impl P2PNode {
             total_num += 1;
             end_height = height;
             blocks.extend_from_slice(data.as_ref());
-            if total_num >= max_num
-                || if legacy_v1_limits {
-                    total_size >= max_bytes
-                } else {
-                    total_size == max_bytes
-                }
-            {
+            if total_num >= max_num || total_size == max_bytes {
                 break;
             }
         }
         Ok((end_height, total_num, blocks))
-    }
-
-    /// v1 MSG_BLOCK: prefer unified sync ingress; oneshot fallback for orphan fetches.
-    async fn handle_blocks_message(
-        self: &Arc<Self>,
-        peer: Arc<dyn base::Peer>,
-        body: Vec<u8>,
-    ) -> Rerr {
-        // Transitional: some v2 peers may still speak MSG_BLOCK (32B header).
-        let is_v2_hdr = peer.protocol_version() >= 2;
-        let header_size = if is_v2_hdr { 32 } else { 24 };
-        if body.len() < header_size {
-            return sys::errf!("p2p blocks message length invalid: {}", body.len());
-        }
-        let remote_height = u64::from_be_bytes(body[0..8].try_into().unwrap());
-        let start_height = u64::from_be_bytes(body[8..16].try_into().unwrap());
-        let end_height = u64::from_be_bytes(body[16..24].try_into().unwrap());
-        if start_height == 0 || end_height < start_height {
-            return sys::errf!(
-                "p2p blocks invalid height span {}..{}",
-                start_height,
-                end_height
-            );
-        }
-        let expected_count = end_height - start_height + 1;
-        if is_v2_hdr {
-            let block_count = u64::from_be_bytes(body[24..32].try_into().unwrap());
-            if block_count == 0 || block_count > 10_000 {
-                return sys::errf!("p2p blocks count out of range: {}", block_count);
-            }
-            if block_count != expected_count {
-                return sys::errf!(
-                    "p2p blocks count mismatch: declared {} span {}",
-                    block_count,
-                    expected_count
-                );
-            }
-        }
-        let blocks = body[header_size..].to_vec();
-        if blocks.is_empty() {
-            return sys::errf!(
-                "p2p blocks response for {}..{} contains no block payload",
-                start_height,
-                end_height
-            );
-        }
-        // v1 has no explicit count field; derive it from the advertised
-        // height span and validate the concatenated frames before advancing
-        // the sync cursor. This keeps a malformed response from desynchronizing
-        // the session even though the legacy wire header is accepted.
-        let (offsets, decoded_blocks) = match crate::sync_pipeline::validate_blocks_payload(
-            self.engine.services().as_ref(),
-            &blocks,
-            expected_count,
-            start_height,
-        ) {
-            Ok(validated) => validated,
-            Err(e) => {
-                self.stop_sync_session(&peer.id(), &format!("invalid v1 block response: {}", e));
-                return Err(e);
-            }
-        };
-        let batch = BlockBatch {
-            bytes: Arc::new(blocks),
-            remote_height,
-            block_count: u32::try_from(expected_count)
-                .map_err(|_| sys::Error::fault("v1 block count exceeds u32".to_owned()))?,
-            block_offsets: Arc::new(offsets),
-            decoded_blocks: Arc::new(decoded_blocks),
-        };
-
-        if self
-            .try_ingest_v1_sync_batch(
-                peer.clone(),
-                start_height,
-                end_height,
-                remote_height,
-                batch.clone(),
-            )
-            .await?
-        {
-            return Ok(());
-        }
-
-        // During an active sync session, unmatched responses are stale or an
-        // orphan race. Drop them rather than replaying them after cancellation.
-        if self.sync_session.lock().unwrap().is_some() {
-            return Ok(());
-        }
-
-        // No sync session (e.g. orphan parent fetch) - oneshot apply.
-        let node = self.clone();
-        tokio::task::spawn_blocking(move || {
-            node.apply_oneshot_blocks(peer, start_height, end_height, remote_height, batch)
-        })
-        .await
-        .map_err(|e| sys::Error::fault(format!("p2p one-shot apply task failed: {}", e)))?
     }
 
     /// Ad-hoc apply when no SyncSession is active (orphan / one-off REQ_BLOCK).
@@ -538,18 +399,6 @@ impl P2PNode {
                 };
                 self.handle_block_hash_message(peer, body)
             }
-            MSG_REQ_BLOCK => {
-                let Some(peer) = peer else {
-                    return sys::errf!("block request missing peer");
-                };
-                self.handle_req_block_message(peer, body)
-            }
-            MSG_BLOCK => {
-                let Some(peer) = peer else {
-                    return sys::errf!("blocks message missing peer");
-                };
-                self.handle_blocks_message(peer, body).await
-            }
             ty if ty == MSG_GET_BLOCKS as u16 => {
                 let Some(peer) = peer else {
                     return sys::errf!("get_blocks missing peer");
@@ -558,9 +407,9 @@ impl P2PNode {
             }
             ty if ty == MSG_BLOCKS as u16 => {
                 let Some(peer) = peer else {
-                    return sys::errf!("blocks(v2) missing peer");
+                    return sys::errf!("blocks missing peer");
                 };
-                self.handle_v2_blocks_message(peer, body).await
+                self.handle_blocks_message(peer, body).await
             }
             _ => sys::errf!("p2p message type {} not implemented", ty),
         }

@@ -14,7 +14,7 @@ use crate::peertable::PeerTable;
 use crate::sync_pipeline::SyncSlot;
 use crate::sync_tracker::SyncTracker;
 
-/// Handler for a negotiated/custom v2 top-level message type (101..=255).
+/// Handler for a negotiated/custom message type (101..=255).
 pub trait CustomMessageHandler: Send + Sync {
     fn on_connect(&self, _peer: Arc<dyn base::Peer>) -> Rerr {
         Ok(())
@@ -36,7 +36,7 @@ pub struct P2PNode {
     pub(crate) sync_tracker: Arc<SyncTracker>,
     pub(crate) doing_sync: Arc<AtomicU64>,
     pub(crate) inserting: Arc<Mutex<()>>,
-    /// Unified sync: v1 serial / v2 window downloaders -> one BlockStream apply thread.
+    /// Unified window sync downloader -> one BlockStream apply thread.
     pub(crate) sync_session: Arc<SyncSlot>,
     pub(crate) sync_generation: AtomicU64,
     pub(crate) orphan_blocks: Mutex<HashMap<Hash, Vec<BlkPkg>>>,
@@ -92,7 +92,7 @@ impl P2PNode {
         }
     }
 
-    /// Register a v2 custom message handler. System types and the permanently
+    /// Register a custom message handler. System types and the permanently
     /// invalid type 100 are rejected at registration time.
     pub fn register_custom_message_handler(
         &self,
@@ -100,7 +100,7 @@ impl P2PNode {
         handler: Arc<dyn CustomMessageHandler>,
     ) -> Rerr {
         if ty <= 100 {
-            return sys::errf!("custom v2 message type must be in 101..=255, got {}", ty);
+            return sys::errf!("custom message type must be in 101..=255, got {}", ty);
         }
         self.custom_handlers.lock().unwrap().insert(ty, handler);
         Ok(())

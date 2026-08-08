@@ -8,7 +8,10 @@ use sys::Rerr;
 
 use crate::P2PNode;
 use crate::msgqueue::InboundMsg;
-use crate::p2p::msg::{MSG_BLOCK_DISCOVER, MSG_REQ_BLOCK, MSG_REQ_BLOCK_HASH, MSG_TX_SUBMIT};
+use crate::p2p::msg::{
+    MSG_BLOCK_DISCOVER, MSG_GET_BLOCKS, MSG_REQ_BLOCK_HASH, MSG_TX_SUBMIT, P2P_MSG_DATA_MAX_SIZE,
+};
+use crate::p2p::syncwire::{BLOCKS_HEADER_SIZE, GetBlocks};
 
 impl P2PNode {
     pub(crate) fn submit_transaction_pkg(
@@ -185,7 +188,13 @@ impl P2PNode {
             if let Some(ref p) = peer {
                 if blk.height() > 1 {
                     let parent_hei = blk.height() - 1;
-                    let _ = p.send_msg(MSG_REQ_BLOCK, parent_hei.to_be_bytes().to_vec());
+                    let mut request = GetBlocks::new(0, parent_hei);
+                    request.max_blocks = 1;
+                    // Raise to the frame ceiling: the responder's collect_blocks
+                    // rejects a first block larger than the requested max_bytes,
+                    // so an oversized parent would otherwise never be served.
+                    request.max_bytes = (P2P_MSG_DATA_MAX_SIZE - BLOCKS_HEADER_SIZE) as u32;
+                    let _ = p.send_msg(MSG_GET_BLOCKS as u16, request.encode());
                 }
             }
             return Ok(());

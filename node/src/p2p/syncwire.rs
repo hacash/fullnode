@@ -1,7 +1,4 @@
-//! v2 pipelined sync wire codecs (GET_BLOCKS / BLOCKS).
-//!
-//! v1 keeps `MSG_REQ_BLOCK` (8B start) + `MSG_BLOCK` (24B header). These
-//! messages are v2-only and must not be sent to v1 peers.
+//! Pipelined sync wire codecs (GET_BLOCKS / BLOCKS).
 
 use sys::{Ret, errf};
 

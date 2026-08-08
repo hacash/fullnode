@@ -17,7 +17,7 @@ pub struct SyncState {
     pub next_height: u64,
     pub remote_height: u64,
     pub updated_at: Instant,
-    /// True while a v1 serial BLOCK batch is being applied.
+    /// True while a block batch is being applied.
     pub applying: bool,
 }
 
@@ -72,7 +72,7 @@ impl SyncTracker {
         true
     }
 
-    /// Claim the next expected v1 batch so concurrent MSG_BLOCK tasks are rejected.
+    /// Claim the next expected batch so concurrent responses are rejected.
     pub fn claim_batch(&self, peer_id: &str, start_height: u64) -> bool {
         let mut sync = self.inner.lock().unwrap();
         let Some(st) = sync.as_mut() else {

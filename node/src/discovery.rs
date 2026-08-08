@@ -8,62 +8,12 @@ use std::time::Duration;
 use sys::Rerr;
 
 use crate::P2PNode;
-use crate::p2p::codec::{
-    dial_magic_exchange, read_transport_msg as read_v2_msg, write_transport_msg as write_v2_msg,
-};
-use crate::p2p::legacy::{tcp_check_handshake, write_all, write_transport_msg};
-use crate::p2p::msg::V1_MSG_REQUEST_NEAREST_PUBLIC_NODES;
-use crate::p2p::msg::v2::{MSG_ADDR, MSG_GETADDR};
-use crate::p2p::peer::{ProtocolVersion, RemotePeer};
+use crate::p2p::codec::{dial_magic_exchange, read_transport_msg, write_transport_msg};
+use crate::p2p::msg::{MSG_ADDR, MSG_GETADDR};
+use crate::p2p::peer::RemotePeer;
 use crate::topology::{PeerKey, insert_nearest_key};
 
-const V1_ENTRY_SIZE: usize = 4 + 2 + 16;
-
-// ---- v1 MSG 202 wire ----
-
-pub fn serialize_public_nodes(peers: &[Arc<RemotePeer>], _max: usize) -> Vec<u8> {
-    let mut body = Vec::new();
-    let mut count = 0u8;
-    for p in peers {
-        if count == 200 {
-            break;
-        }
-        if !p.is_public() || p.addr.ip().is_loopback() {
-            continue;
-        }
-        let IpAddr::V4(ip) = p.addr.ip() else {
-            continue;
-        };
-        body.extend_from_slice(&ip.octets());
-        body.extend_from_slice(&p.addr.port().to_be_bytes());
-        body.extend_from_slice(&p.node_key);
-        count += 1;
-    }
-    let mut out = Vec::with_capacity(1 + body.len());
-    out.push(count);
-    out.extend_from_slice(&body);
-    out
-}
-
-pub fn parse_public_nodes(bts: &[u8]) -> Vec<(PeerKey, SocketAddr)> {
-    let num = bts.len() / V1_ENTRY_SIZE;
-    let mut out = Vec::with_capacity(num);
-    for i in 0..num {
-        let one = &bts[i * V1_ENTRY_SIZE..(i + 1) * V1_ENTRY_SIZE];
-        let ip: [u8; 4] = one[0..4].try_into().unwrap();
-        let port = u16::from_be_bytes([one[4], one[5]]);
-        let mut key = [0u8; 16];
-        key.copy_from_slice(&one[6..22]);
-        let ipaddr = IpAddr::from(ip);
-        if ipaddr.is_loopback() {
-            continue;
-        }
-        out.push((key, SocketAddr::new(ipaddr, port)));
-    }
-    out
-}
-
-// ---- v2 GETADDR/ADDR wire (IPv4 + IPv6) ----
+// ---- GETADDR/ADDR wire (IPv4 + IPv6) ----
 // ADDR body:
 //   [u16BE count]
 //   repeated:
@@ -72,7 +22,7 @@ pub fn parse_public_nodes(bts: &[u8]) -> Vec<(PeerKey, SocketAddr)> {
 //     [u16BE port]
 //     [16B key]
 
-pub fn encode_addr_v2(peers: &[Arc<RemotePeer>], max: usize) -> Vec<u8> {
+pub fn encode_addr(peers: &[Arc<RemotePeer>], max: usize) -> Vec<u8> {
     let mut entries = Vec::new();
     let mut count = 0u16;
     for p in peers {
@@ -102,7 +52,7 @@ pub fn encode_addr_v2(peers: &[Arc<RemotePeer>], max: usize) -> Vec<u8> {
     out
 }
 
-pub fn decode_addr_v2(body: &[u8]) -> sys::Ret<Vec<(PeerKey, SocketAddr)>> {
+pub fn decode_addr(body: &[u8]) -> sys::Ret<Vec<(PeerKey, SocketAddr)>> {
     if body.len() < 2 {
         return sys::errf!("ADDR body too short");
     }
@@ -156,72 +106,29 @@ pub fn decode_addr_v2(body: &[u8]) -> sys::Ret<Vec<(PeerKey, SocketAddr)>> {
     Ok(out)
 }
 
-async fn request_public_nodes_v2(
-    addr: SocketAddr,
-    datas: &mut HashMap<PeerKey, SocketAddr>,
-) -> Rerr {
+async fn request_public_nodes(addr: SocketAddr, datas: &mut HashMap<PeerKey, SocketAddr>) -> Rerr {
     let mut stream =
         tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(addr))
             .await
             .map_err(|_| sys::Error::fault(format!("find_nodes connect timeout {}", addr)))?
             .map_err(|e| sys::Error::fault(format!("find_nodes connect {}: {}", addr, e)))?;
-    let is_v2 = tokio::time::timeout(Duration::from_secs(5), dial_magic_exchange(&mut stream))
+    tokio::time::timeout(Duration::from_secs(5), dial_magic_exchange(&mut stream))
         .await
-        .map_err(|_| sys::Error::fault("find_nodes v2 magic timeout".to_owned()))??;
-    if !is_v2 {
-        return sys::errf!("find_nodes peer {} no longer speaks v2", addr);
-    }
+        .map_err(|_| sys::Error::fault("find_nodes magic timeout".to_owned()))??;
     tokio::time::timeout(
         Duration::from_secs(5),
-        write_v2_msg(&mut stream, MSG_GETADDR, &[]),
+        write_transport_msg(&mut stream, MSG_GETADDR, &[]),
     )
     .await
     .map_err(|_| sys::Error::fault("find_nodes GETADDR write timeout".to_owned()))??;
-    let (ty, body) = tokio::time::timeout(Duration::from_secs(5), read_v2_msg(&mut stream))
+    let (ty, body) = tokio::time::timeout(Duration::from_secs(5), read_transport_msg(&mut stream))
         .await
         .map_err(|_| sys::Error::fault("find_nodes ADDR read timeout".to_owned()))??;
     if ty != MSG_ADDR {
         return sys::errf!("find_nodes expected ADDR, got {}", ty);
     }
-    for (key, found_addr) in decode_addr_v2(&body)? {
+    for (key, found_addr) in decode_addr(&body)? {
         datas.insert(key, found_addr);
-    }
-    Ok(())
-}
-
-async fn request_public_nodes_v1(
-    addr: SocketAddr,
-    datas: &mut HashMap<PeerKey, SocketAddr>,
-) -> Rerr {
-    let mut stream =
-        tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(addr))
-            .await
-            .map_err(|_| sys::Error::fault(format!("find_nodes connect timeout {}", addr)))?
-            .map_err(|e| sys::Error::fault(format!("find_nodes connect {}: {}", addr, e)))?;
-    tokio::time::timeout(Duration::from_secs(5), tcp_check_handshake(&mut stream))
-        .await
-        .map_err(|_| sys::Error::fault("find_nodes v1 magic timeout".to_owned()))??;
-    write_transport_msg(&mut stream, V1_MSG_REQUEST_NEAREST_PUBLIC_NODES, &[]).await?;
-    let mut buf = Vec::new();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        use tokio::io::AsyncReadExt;
-        stream.read_to_end(&mut buf).await
-    })
-    .await
-    .map_err(|_| sys::Error::fault("find_nodes read timeout".to_owned()))?
-    .map_err(|e| sys::Error::fault(format!("find_nodes read: {}", e)))?;
-    if buf.is_empty() {
-        return sys::errf!("find_nodes data empty");
-    }
-    let num = buf[0] as usize;
-    if num < 1 {
-        return Ok(());
-    }
-    if num * V1_ENTRY_SIZE != buf.len() - 1 {
-        return sys::errf!("find_nodes data size error");
-    }
-    for (k, a) in parse_public_nodes(&buf[1..]) {
-        datas.insert(k, a);
     }
     Ok(())
 }
@@ -242,17 +149,8 @@ impl P2PNode {
         let mut excluded = vec![self.config.node_key];
         for p in &backbones {
             excluded.push(p.node_key);
-            match p.protocol_version() {
-                ProtocolVersion::V2 => {
-                    if let Err(e) = request_public_nodes_v2(p.addr, &mut allfind).await {
-                        println!("request public nodes error: {}", e);
-                    }
-                }
-                ProtocolVersion::V1 => {
-                    if let Err(e) = request_public_nodes_v1(p.addr, &mut allfind).await {
-                        println!("request public nodes error: {}", e);
-                    }
-                }
+            if let Err(e) = request_public_nodes(p.addr, &mut allfind).await {
+                println!("request public nodes error: {}", e);
             }
         }
         for key in &excluded {
@@ -311,12 +209,6 @@ impl P2PNode {
         }
     }
 
-    pub async fn serve_nearest_public_nodes(&self, stream: &mut tokio::net::TcpStream) -> Rerr {
-        let publics = self.peertable.publics().await;
-        let body = serialize_public_nodes(&publics, 100);
-        write_all(stream, &body).await
-    }
-
     pub(crate) fn handle_getaddr(&self, peer: &Arc<RemotePeer>) -> Rerr {
         let publics = self
             .peertable
@@ -324,30 +216,30 @@ impl P2PNode {
             .into_iter()
             .filter(|candidate| candidate.is_public() && !candidate.addr.ip().is_loopback())
             .collect::<Vec<_>>();
-        let body = encode_addr_v2(&publics, 100);
-        peer.send_v2_transport(MSG_ADDR, &body)
+        let body = encode_addr(&publics, 100);
+        peer.send_message(MSG_ADDR, &body)
     }
 
-    pub(crate) async fn serve_getaddr_v2(&self, stream: &mut tokio::net::TcpStream) -> Rerr {
+    pub(crate) async fn serve_getaddr(&self, stream: &mut tokio::net::TcpStream) -> Rerr {
         let publics = self.peertable.publics().await;
-        let body = encode_addr_v2(&publics, 100);
-        write_v2_msg(stream, MSG_ADDR, &body).await
+        let body = encode_addr(&publics, 100);
+        write_transport_msg(stream, MSG_ADDR, &body).await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::decode_addr_v2;
+    use super::decode_addr;
 
     #[test]
     fn addr_rejects_more_than_two_hundred_entries() {
-        assert!(decode_addr_v2(&201u16.to_be_bytes()).is_err());
+        assert!(decode_addr(&201u16.to_be_bytes()).is_err());
     }
 
     #[test]
     fn addr_rejects_trailing_bytes() {
         let mut body = 0u16.to_be_bytes().to_vec();
         body.push(0);
-        assert!(decode_addr_v2(&body).is_err());
+        assert!(decode_addr(&body).is_err());
     }
 }

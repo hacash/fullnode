@@ -1,4 +1,4 @@
-//! Unified sync ingress: v1 serial / v2 window downloaders → one BlockStream → engine.
+//! Window downloader → one BlockStream → engine.
 //!
 //! Protocol differences stay in the downloader; engine only consumes `BlockSource`.
 
@@ -14,8 +14,7 @@ use base::{
 use sys::Rerr;
 
 use crate::P2PNode;
-use crate::p2p::msg::v2::MSG_GET_BLOCKS;
-use crate::p2p::msg::{MSG_REQ_BLOCK, MSG_REQ_STATUS};
+use crate::p2p::msg::{MSG_GET_BLOCKS, MSG_REQ_STATUS};
 use crate::p2p::syncwire::{DEFAULT_MAX_BLOCKS, GetBlocks, SYNC_WINDOW};
 
 const MAX_BLOCKING_ENQUEUE_TASKS: usize = 4;
@@ -27,15 +26,7 @@ fn blocking_enqueue_gate() -> &'static Arc<tokio::sync::Semaphore> {
     GATE.get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_BLOCKING_ENQUEUE_TASKS)))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SyncWire {
-    /// Serial REQ_BLOCK / MSG_BLOCK (window = 1).
-    V1,
-    /// Concurrent GET_BLOCKS / MSG_BLOCKS (window = SYNC_WINDOW).
-    V2,
-}
-
-struct LegacySyncBatchPrint {
+struct SyncBatchPrint {
     peer_name: String,
     start_height: u64,
     end_height: u64,
@@ -45,13 +36,13 @@ struct LegacySyncBatchPrint {
 
 struct SyncProgressPrinter {
     last_activity: Arc<Mutex<Instant>>,
-    pending_batches: Arc<Mutex<VecDeque<LegacySyncBatchPrint>>>,
+    pending_batches: Arc<Mutex<VecDeque<SyncBatchPrint>>>,
 }
 
 impl SyncProgressPrinter {
     fn new(
         last_activity: Arc<Mutex<Instant>>,
-        pending_batches: Arc<Mutex<VecDeque<LegacySyncBatchPrint>>>,
+        pending_batches: Arc<Mutex<VecDeque<SyncBatchPrint>>>,
     ) -> Self {
         Self {
             last_activity,
@@ -66,9 +57,7 @@ impl ProgressSink for SyncProgressPrinter {
             *last_activity = Instant::now();
         }
         if let Ok(mut batches) = self.pending_batches.lock() {
-            // The downloader may request the next legacy batch while this
-            // one is still being applied. Keep the historic output ordered
-            // by completed application batches without changing that flow.
+            // Keep output ordered by completed application batches.
             while let Some(batch) = batches.front_mut() {
                 if report.final_height < batch.start_height {
                     break;
@@ -96,15 +85,14 @@ impl ProgressSink for SyncProgressPrinter {
 pub(crate) struct SyncSession {
     pub generation: u64,
     pub peer_id: String,
-    pub wire: SyncWire,
     pub sender: BlockSender,
     pub cancel: Arc<AtomicBool>,
     pub next_req_id: u64,
     pub next_start: u64,
     pub remote_tip: u64,
-    /// request_id -> planned start (v2). v1 uses a single synthetic id 0.
+    /// request_id -> planned start.
     pub inflight: BTreeMap<u64, (u64, u32)>,
-    /// v2 responses can complete out of order because each response is
+    /// Responses can complete out of order because each response is
     /// dispatched independently. Keep decoded payloads here until the next
     /// contiguous height is available for the ordered chain pipeline.
     pub pending: BTreeMap<
@@ -120,10 +108,8 @@ pub(crate) struct SyncSession {
     /// Updated on either a network response or applying another 200 blocks.
     /// The watchdog must treat both as liveness during queue backpressure.
     pub last_activity: Arc<Mutex<Instant>>,
-    /// V1 legacy sync output is serialized after each batch is applied.
-    pending_print_batches: Arc<Mutex<VecDeque<LegacySyncBatchPrint>>>,
-    /// v1: true while waiting for the outstanding REQ_BLOCK response.
-    pub v1_waiting: bool,
+    /// Sync output is serialized after each batch is applied.
+    pending_print_batches: Arc<Mutex<VecDeque<SyncBatchPrint>>>,
 }
 
 impl SyncSession {
@@ -133,17 +119,11 @@ impl SyncSession {
     }
 
     fn window_limit(&self) -> usize {
-        match self.wire {
-            SyncWire::V1 => 1,
-            SyncWire::V2 => SYNC_WINDOW,
-        }
+        SYNC_WINDOW
     }
 
     fn can_fill_wire_window(&self) -> bool {
-        let in_flight = match self.wire {
-            SyncWire::V1 => usize::from(self.v1_waiting),
-            SyncWire::V2 => self.inflight.len(),
-        };
+        let in_flight = self.inflight.len();
         in_flight < self.window_limit() && self.next_start <= self.remote_tip
     }
 
@@ -157,9 +137,8 @@ impl SyncSession {
             return None;
         }
         Some(format!(
-            "no response or apply progress for {}s; wire={:?} next_request={} next_apply={} remote_tip={} in_flight={} pending={} apply_queue={}/{} v1_waiting={}",
+            "no response or apply progress for {}s; next_request={} next_apply={} remote_tip={} in_flight={} pending={} apply_queue={}/{}",
             elapsed.as_secs(),
-            self.wire,
             self.next_start,
             self.next_apply_start,
             self.remote_tip,
@@ -167,7 +146,6 @@ impl SyncSession {
             self.pending.len(),
             self.sender.len(),
             self.sender.capacity(),
-            self.v1_waiting,
         ))
     }
 }
@@ -220,7 +198,7 @@ impl P2PNode {
         }
     }
 
-    /// Start bulk sync: shared apply thread + version-specific downloader.
+    /// Start bulk sync: shared apply thread + window downloader.
     pub(crate) fn start_sync_pipe(
         self: &Arc<Self>,
         peer: Arc<dyn Peer>,
@@ -231,11 +209,6 @@ impl P2PNode {
             return Ok(());
         }
         let peer_id = peer.id();
-        let wire = if peer.protocol_version() >= 2 {
-            SyncWire::V2
-        } else {
-            SyncWire::V1
-        };
         let cap = self.config.block_queue_cap.clamp(2, SYNC_WINDOW);
         let (stream, sender) = BlockStream::with_capacity(cap);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -267,7 +240,6 @@ impl P2PNode {
             *slot = Some(SyncSession {
                 generation,
                 peer_id: peer_id.clone(),
-                wire,
                 sender: sender.clone(),
                 cancel: cancel.clone(),
                 next_req_id: 1,
@@ -278,7 +250,6 @@ impl P2PNode {
                 next_apply_start: start_height,
                 last_activity,
                 pending_print_batches,
-                v1_waiting: false,
             });
             generation
         };
@@ -464,46 +435,26 @@ impl P2PNode {
                 if !sess.can_fill_wire_window() {
                     return Ok(());
                 }
-                match sess.wire {
-                    SyncWire::V1 => {
-                        let start = sess.next_start;
-                        sess.v1_waiting = true;
-                        sess.inflight.insert(0, (start, 1));
-                        Some((SyncWire::V1, 0u64, start, start.to_be_bytes().to_vec()))
-                    }
-                    SyncWire::V2 => {
-                        let req_id = sess.next_req_id;
-                        sess.next_req_id = sess.next_req_id.saturating_add(1);
-                        let start = sess.next_start;
-                        sess.next_start = start.saturating_add(DEFAULT_MAX_BLOCKS as u64);
-                        if sess.next_start <= start {
-                            sess.next_start = start + 1;
-                        }
-                        sess.inflight.insert(req_id, (start, DEFAULT_MAX_BLOCKS));
-                        Some((
-                            SyncWire::V2,
-                            req_id,
-                            start,
-                            GetBlocks::new(req_id, start).encode(),
-                        ))
-                    }
+                let req_id = sess.next_req_id;
+                sess.next_req_id = sess.next_req_id.saturating_add(1);
+                let start = sess.next_start;
+                sess.next_start = start.saturating_add(DEFAULT_MAX_BLOCKS as u64);
+                if sess.next_start <= start {
+                    sess.next_start = start + 1;
                 }
+                sess.inflight.insert(req_id, (start, DEFAULT_MAX_BLOCKS));
+                Some((req_id, start, GetBlocks::new(req_id, start).encode()))
             };
-            let Some((wire, req_id, start, body)) = work else {
+            let Some((req_id, start, body)) = work else {
                 return Ok(());
             };
-            let ty = match wire {
-                SyncWire::V1 => MSG_REQ_BLOCK,
-                SyncWire::V2 => MSG_GET_BLOCKS as u16,
-            };
+            let ty = MSG_GET_BLOCKS as u16;
             if let Err(e) = peer.send_msg(ty, body) {
                 let cancelled = {
                     let mut g = self.sync_session.lock().unwrap();
                     if let Some(sess) = g.as_mut() {
                         sess.inflight.remove(&req_id);
-                        if wire == SyncWire::V1 {
-                            sess.v1_waiting = false;
-                        } else if sess.next_start > start {
+                        if sess.next_start > start {
                             sess.next_start = start;
                         }
                     }
@@ -521,112 +472,12 @@ impl P2PNode {
                 }
                 return Err(e);
             }
-            if wire == SyncWire::V1 {
-                // Serial: only one outstanding request. Its old-style log is
-                // emitted when the corresponding batch reaches the pipeline.
-                return Ok(());
-            }
         }
     }
 
-    /// Ingest a v1 MSG_BLOCK batch into the shared apply queue (active V1 session).
-    /// Returns `true` if handled as sync; `false` if no matching session (caller may oneshot).
-    pub(crate) async fn try_ingest_v1_sync_batch(
+    /// Handle MSG_BLOCKS: push into apply queue and refill window.
+    pub(crate) async fn handle_blocks_message(
         self: &Arc<Self>,
-        peer: Arc<dyn Peer>,
-        start_height: u64,
-        end_height: u64,
-        remote_tip: u64,
-        batch: BlockBatch,
-    ) -> sys::Ret<bool> {
-        let peer_id = peer.id();
-        let peer_name = peer.name();
-        let (sender, caught_up, pending_print_batches) = {
-            let mut g = self.sync_session.lock().unwrap();
-            let Some(sess) = g.as_mut() else {
-                return Ok(false);
-            };
-            if sess.wire != SyncWire::V1 || sess.peer_id != peer_id {
-                return Ok(false);
-            }
-            let Some((expected, _)) = sess.inflight.get(&0).copied() else {
-                return Ok(false);
-            };
-            if expected != start_height {
-                return Ok(false);
-            }
-            sess.inflight.remove(&0);
-            sess.v1_waiting = false;
-            sess.remote_tip = sess.remote_tip.max(remote_tip);
-            sess.next_start = end_height.saturating_add(1);
-            if let Ok(mut last_activity) = sess.last_activity.lock() {
-                *last_activity = Instant::now();
-            }
-
-            let caught_up = end_height >= sess.remote_tip;
-            let sender = sess.sender.clone();
-            (sender, caught_up, sess.pending_print_batches.clone())
-        };
-
-        if let Ok(mut batches) = pending_print_batches.lock() {
-            batches.push_back(LegacySyncBatchPrint {
-                peer_name,
-                start_height,
-                end_height,
-                remote_tip,
-                inserting_printed: false,
-            });
-        }
-
-        if caught_up {
-            if !batch.bytes.is_empty() {
-                if let Err(e) = push_block_batch(sender.clone(), batch, remote_tip).await {
-                    self.stop_sync_session(&peer_id, &format!("enqueue v1 blocks failed: {}", e));
-                    return Err(e);
-                }
-            }
-            sender.finish();
-            return Ok(true);
-        }
-
-        if !batch.bytes.is_empty() {
-            if let Err(e) = push_block_batch(sender.clone(), batch, remote_tip).await {
-                self.stop_sync_session(&peer_id, &format!("enqueue v1 blocks failed: {}", e));
-                return Err(e);
-            }
-        }
-        self.sync_tracker
-            .finish_if_done(&peer_id, end_height + 1, remote_tip);
-        self.mark_doing_sync();
-
-        // Prefer same peer; fall back to another backbone if needed.
-        let next_peer = self
-            .peertable
-            .try_switch_peer(&peer_id)
-            .map(|p| p as Arc<dyn Peer>)
-            .unwrap_or(peer);
-        if next_peer.id() != peer_id {
-            let tip = self
-                .sync_tracker
-                .active_remote_height()
-                .unwrap_or(remote_tip);
-            if let Ok(mut slot) = self.sync_session.lock() {
-                if let Some(session) = slot.take() {
-                    session.cancel();
-                }
-            }
-            self.sync_tracker.clear_peer(&peer_id);
-            self.doing_sync.store(0, Ordering::Release);
-            return self
-                .start_sync_pipe(next_peer, end_height + 1, tip)
-                .map(|_| true);
-        }
-        self.sync_fill_window(next_peer).map(|_| true)
-    }
-
-    /// Handle v2 MSG_BLOCKS: push into apply queue and refill window.
-    pub(crate) async fn handle_v2_blocks_message(
-        &self,
         peer: Arc<dyn Peer>,
         body: Vec<u8>,
     ) -> Rerr {
@@ -634,7 +485,7 @@ impl P2PNode {
         let (hdr, blocks) = match crate::p2p::syncwire::BlocksHeader::decode(&body) {
             Ok(decoded) => decoded,
             Err(e) => {
-                self.stop_sync_session(&peer_id, &format!("invalid v2 response header: {}", e));
+                self.stop_sync_session(&peer_id, &format!("invalid response header: {}", e));
                 return Err(e);
             }
         };
@@ -648,17 +499,45 @@ impl P2PNode {
         ) {
             Ok((offsets, decoded_blocks)) => (Arc::new(offsets), Arc::new(decoded_blocks)),
             Err(e) => {
-                self.stop_sync_session(&peer_id, &format!("invalid v2 block response: {}", e));
+                self.stop_sync_session(&peer_id, &format!("invalid block response: {}", e));
                 return Err(e);
             }
         };
+
+        // Orphan recovery issues a one-block GET_BLOCKS request with id 0.
+        // Session request ids start at 1, so id 0 can never collide with an
+        // in-flight download. Apply it even while a sync session is active:
+        // apply_oneshot_blocks claims the tracker and rejects any height that
+        // conflicts with the active download (or defers to the takeover rule
+        // for another peer), so the oneshot never disturbs the session.
+        if hdr.request_id == 0 && hdr.count == 1 {
+            let batch = base::BlockBatch {
+                bytes: Arc::new(blocks),
+                remote_height: hdr.remote_tip,
+                block_count: 1,
+                block_offsets: offsets,
+                decoded_blocks,
+            };
+            let node = self.clone();
+            return tokio::task::spawn_blocking(move || {
+                node.apply_oneshot_blocks(
+                    peer,
+                    hdr.start_height,
+                    hdr.end_height,
+                    hdr.remote_tip,
+                    batch,
+                )
+            })
+            .await
+            .map_err(|e| sys::Error::fault(format!("p2p one-shot apply task failed: {}", e)))?;
+        }
 
         let (sender, ready, caught_up, pending_print_batches) = {
             let mut g = self.sync_session.lock().unwrap();
             let Some(sess) = g.as_mut() else {
                 return Ok(());
             };
-            if sess.wire != SyncWire::V2 || sess.peer_id != peer_id {
+            if sess.peer_id != peer_id {
                 return Ok(());
             }
             let Some((planned_start, planned_max_blocks)) =
@@ -712,7 +591,7 @@ impl P2PNode {
                     item_hdr.count,
                     item_offsets,
                     item_decoded_blocks,
-                    LegacySyncBatchPrint {
+                    SyncBatchPrint {
                         peer_name: peer_name.clone(),
                         start_height: item_hdr.start_height,
                         end_height: item_hdr.end_height,
@@ -754,7 +633,7 @@ impl P2PNode {
                 )
                 .await
                 {
-                    self.stop_sync_session(&peer_id, &format!("enqueue v2 blocks failed: {}", e));
+                    self.stop_sync_session(&peer_id, &format!("enqueue blocks failed: {}", e));
                     return Err(e);
                 }
             }
@@ -765,18 +644,6 @@ impl P2PNode {
         }
         self.mark_doing_sync();
         self.sync_fill_window(peer)
-    }
-}
-
-async fn push_block_batch(sender: BlockSender, batch: BlockBatch, remote_tip: u64) -> Rerr {
-    match sender.try_push_block_batch(batch.clone())? {
-        true => Ok(()),
-        false => enqueue_block_batch(sender, batch).await.map_err(|e| {
-            sys::Error::fault(format!(
-                "p2p block enqueue at remote height {} failed: {}",
-                remote_tip, e
-            ))
-        }),
     }
 }
 
@@ -894,7 +761,6 @@ mod tests {
         let session = SyncSession {
             generation: 1,
             peer_id: "peer".into(),
-            wire: SyncWire::V2,
             sender,
             cancel: Arc::new(AtomicBool::new(false)),
             next_req_id: 3,
@@ -905,7 +771,6 @@ mod tests {
             next_apply_start: 1,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             pending_print_batches: Arc::new(Mutex::new(VecDeque::new())),
-            v1_waiting: false,
         };
 
         assert!(session.sender.is_full());
@@ -913,32 +778,28 @@ mod tests {
     }
 
     #[test]
-    fn stalled_session_reports_wire_and_queue_cursors() {
+    fn stalled_session_reports_queue_cursors() {
         let (_stream, sender) = BlockStream::with_capacity(2);
         let session = SyncSession {
             generation: 1,
             peer_id: "peer".into(),
-            wire: SyncWire::V1,
             sender,
             cancel: Arc::new(AtomicBool::new(false)),
             next_req_id: 1,
             next_start: 550_001,
             remote_tip: 769_089,
-            inflight: BTreeMap::from([(0, (550_001, 1))]),
+            inflight: BTreeMap::from([(1, (550_001, DEFAULT_MAX_BLOCKS))]),
             pending: BTreeMap::new(),
             next_apply_start: 550_001,
             last_activity: Arc::new(Mutex::new(
                 Instant::now() - SYNC_STALL_TIMEOUT - Duration::from_secs(1),
             )),
             pending_print_batches: Arc::new(Mutex::new(VecDeque::new())),
-            v1_waiting: true,
         };
 
         let reason = session.stall_reason(SYNC_STALL_TIMEOUT).unwrap();
-        assert!(reason.contains("wire=V1"));
         assert!(reason.contains("next_request=550001"));
         assert!(reason.contains("remote_tip=769089"));
-        assert!(reason.contains("v1_waiting=true"));
     }
 
     #[test]
@@ -947,7 +808,6 @@ mod tests {
         let session = SyncSession {
             generation: 1,
             peer_id: "peer".into(),
-            wire: SyncWire::V1,
             sender,
             cancel: Arc::new(AtomicBool::new(false)),
             next_req_id: 1,
@@ -958,7 +818,6 @@ mod tests {
             next_apply_start: 550_001,
             last_activity: Arc::new(Mutex::new(Instant::now())),
             pending_print_batches: Arc::new(Mutex::new(VecDeque::new())),
-            v1_waiting: false,
         };
 
         assert!(session.stall_reason(SYNC_STALL_TIMEOUT).is_none());
@@ -968,14 +827,14 @@ mod tests {
     #[test]
     fn progress_does_not_start_the_next_batch_early() {
         let batches = Arc::new(Mutex::new(VecDeque::from([
-            LegacySyncBatchPrint {
+            SyncBatchPrint {
                 peer_name: "peer".into(),
                 start_height: 100,
                 end_height: 199,
                 remote_tip: 299,
                 inserting_printed: false,
             },
-            LegacySyncBatchPrint {
+            SyncBatchPrint {
                 peer_name: "peer".into(),
                 start_height: 200,
                 end_height: 299,
