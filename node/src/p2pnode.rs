@@ -34,7 +34,6 @@ pub struct P2PNode {
     /// Global broadcast knowledge (capacity 2000).
     pub(crate) knows: Knowledge,
     pub(crate) sync_tracker: Arc<SyncTracker>,
-    pub(crate) doing_sync: Arc<AtomicU64>,
     pub(crate) inserting: Arc<Mutex<()>>,
     /// Unified window sync downloader -> one BlockStream apply thread.
     pub(crate) sync_session: Arc<SyncSlot>,
@@ -61,7 +60,6 @@ impl P2PNode {
             listeners: Mutex::new(Vec::new()),
             knows: Knowledge::new(2000),
             sync_tracker: Arc::new(SyncTracker::new()),
-            doing_sync: Arc::new(AtomicU64::new(0)),
             inserting: Arc::new(Mutex::new(())),
             sync_session: Arc::new(Mutex::new(None)),
             sync_generation: AtomicU64::new(0),
@@ -86,7 +84,6 @@ impl P2PNode {
         if let Some(session) = sync_session {
             session.cancel();
         }
-        self.doing_sync.store(0, Ordering::Release);
         for peer in self.peertable.values_snapshot() {
             peer.disconnect();
         }

@@ -170,7 +170,6 @@ impl P2PNode {
 
     pub(crate) fn mark_sync_failure(&self, peer_id: &str, reason: &str) {
         self.sync_tracker.clear_peer(peer_id);
-        self.doing_sync.store(0, Ordering::Release);
         if !self.stopping.load(Ordering::Acquire) {
             eprintln!("[P2P] sync with peer {} ended: {}", peer_id, reason);
         }
@@ -229,13 +228,10 @@ impl P2PNode {
             // Claim the downloader slot and tracker as one operation. STATUS or
             // fork-hash replies must never replace a healthy in-flight source.
             let mut slot = self.sync_session.lock().unwrap();
-            if self.stopping.load(Ordering::Acquire)
-                || slot.is_some()
-                || !self.try_begin_sync(&peer_id, start_height, remote_tip)
-            {
+            if self.stopping.load(Ordering::Acquire) || slot.is_some() {
                 return Ok(());
             }
-            self.mark_doing_sync();
+            self.try_begin_sync(&peer_id, remote_tip);
             let generation = self.sync_generation.fetch_add(1, Ordering::AcqRel) + 1;
             *slot = Some(SyncSession {
                 generation,
@@ -300,11 +296,7 @@ impl P2PNode {
                         }
                         node_for_apply.drain_all_orphans();
                         if report.held_blocks.is_empty() {
-                            sync_tracker.finish_if_done(
-                                &cleanup_peer_id,
-                                report.final_height.saturating_add(1),
-                                remote_tip,
-                            );
+                            sync_tracker.finish(&cleanup_peer_id, remote_tip);
                         } else {
                             sync_tracker.clear_peer(&cleanup_peer_id);
                         }
@@ -506,11 +498,14 @@ impl P2PNode {
 
         // Orphan recovery issues a one-block GET_BLOCKS request with id 0.
         // Session request ids start at 1, so id 0 can never collide with an
-        // in-flight download. Apply it even while a sync session is active:
-        // apply_oneshot_blocks claims the tracker and rejects any height that
-        // conflicts with the active download (or defers to the takeover rule
-        // for another peer), so the oneshot never disturbs the session.
+        // in-flight download. While a session is active the oneshot is
+        // skipped entirely: the orphan parent is already cached and
+        // drain_all_orphans replays it once the session ends, so running it
+        // here would only block the message handler on `inserting`.
         if hdr.request_id == 0 && hdr.count == 1 {
+            if self.sync_session.lock().ok().is_some_and(|g| g.is_some()) {
+                return Ok(());
+            }
             let batch = base::BlockBatch {
                 bytes: Arc::new(blocks),
                 remote_height: hdr.remote_tip,
@@ -520,13 +515,7 @@ impl P2PNode {
             };
             let node = self.clone();
             return tokio::task::spawn_blocking(move || {
-                node.apply_oneshot_blocks(
-                    peer,
-                    hdr.start_height,
-                    hdr.end_height,
-                    hdr.remote_tip,
-                    batch,
-                )
+                node.apply_oneshot_blocks(hdr.start_height, batch)
             })
             .await
             .map_err(|e| sys::Error::fault(format!("p2p one-shot apply task failed: {}", e)))?;
@@ -642,7 +631,6 @@ impl P2PNode {
             sender.finish();
             return Ok(());
         }
-        self.mark_doing_sync();
         self.sync_fill_window(peer)
     }
 }

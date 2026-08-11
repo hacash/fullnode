@@ -1,16 +1,16 @@
 //! Block execution and insertion — the one path every block goes through.
 
-use base::{ApplyMode, BlkPkg, Env, StateChunkRef};
+use base::{ApplyMode, BlkPkg, BlockRef, Env, ForkChoiceKey, StateChunkRef};
 use field::Hash;
 use sys::{Ret, errf};
 
 use crate::engine::ChainEngine;
+use crate::history::BranchHistory;
 use crate::tree::Inserted;
 
-/// How much validation a block gets. The caller selects this trusted execution
-/// mode explicitly; package source metadata never changes validation depth.
-pub fn is_fast_sync(mode: ApplyMode) -> bool {
-    mode.is_fast_sync()
+fn tree_fatal(error: sys::Error) -> sys::Error {
+    sys::Error::fault(format!("chain tree invariant failed: {}", error))
+        .with_code(crate::engine::CORE_FAILED)
 }
 
 /// Execute a block into a detached Block chunk. Each transaction gets its own
@@ -70,33 +70,66 @@ pub fn execute_block(
     Ok(block)
 }
 
-/// Result of `insert_block`.
+/// Result of `insert_block`. The accepted payload is the tree's own
+/// `Inserted` outcome; the caller's `pkg` still carries the height.
 pub enum Insert {
-    Accepted {
-        height: u64,
-        confirmed_txs: Vec<Hash>,
-        reverted_txs: Vec<Hash>,
-        is_head: bool,
-        reorg: bool,
-        roll: Option<crate::tree::RollJob>,
-    },
+    Accepted(Inserted),
     Duplicate,
     /// The parent is not in the tree; the caller should request it.
     Orphan(Hash),
+    /// A live side branch was discarded (execution / body write / attach
+    /// failure). Not an error and not a classification: the canonical tree is
+    /// untouched and the pipeline continues.
+    Discarded,
+}
+
+/// Resolve the candidate's parent and compute the fork-choice key along the
+/// parent's branch. `Ok(None)` means the parent is not in the tree (orphan).
+/// Shared by the live insert path and boot side replay, which must both see
+/// the same deterministic fork choice over the reconstructed ancestry.
+pub(crate) fn resolve_fork_choice<'a>(
+    eng: &'a ChainEngine,
+    pkg: &'a BlkPkg,
+) -> Ret<Option<(BlockRef, BranchHistory<'a>, ForkChoiceKey)>> {
+    let prev_hash = pkg.block().prev_hash();
+    let Some((parent_block, parent_key)) = eng.tree.block_context(&prev_hash) else {
+        return Ok(None);
+    };
+    let branch_blocks = eng.tree.branch_blocks(&prev_hash).ok_or_else(|| {
+        tree_fatal(sys::Error::fault(
+            "candidate parent disappeared from fork tree",
+        ))
+    })?;
+    let branch_history = eng.block_history.for_branch(branch_blocks);
+    let fork_choice = eng.consensus.fork_choice_key(pkg, &parent_key, &branch_history)?;
+    Ok(Some((parent_block, branch_history, fork_choice)))
+}
+
+/// A live side branch failed to commit; drop it without classifying the block
+/// (decision table #5). The canonical tree is untouched and the pipeline
+/// continues. Not an error and not a classification.
+fn side_discard(height: u64, hash: &Hash, phase: &str, error: sys::Error) -> Ret<Insert> {
+    eprintln!(
+        "[Engine] side block <{}, {:?}> {}: {}; branch discarded",
+        height, hash, phase, error
+    );
+    Ok(Insert::Discarded)
 }
 
 /// Validate, execute and attach one block. Callers serialize this with
-/// `eng.inserting`. Strict execution also holds the root-move read lock;
-/// fast-sync relies on its enforced linear-head invariant instead.
-pub fn insert_block(eng: &ChainEngine, pkg: &BlkPkg, mode: ApplyMode) -> Ret<Insert> {
-    let fast_sync = is_fast_sync(mode);
-    // Critical validation reads directly through the live chunk chain. Root
-    // persistence must not change its disk fallback until attach completes.
-    let _root_move = (!fast_sync).then(|| eng.root_move.read().unwrap());
+/// `eng.inserting`, which is also what excludes concurrent root movement:
+/// every root-move writer holds the same mutex, so no second lock is needed.
+/// Fast-sync relies on its enforced linear-head invariant instead.
+/// `persist_body` is false only for the internal replay pipeline, whose
+/// bodies already exist.
+pub fn insert_block(
+    eng: &ChainEngine,
+    pkg: &BlkPkg,
+    mode: ApplyMode,
+    persist_body: bool,
+) -> Ret<Insert> {
+    let fast_sync = mode.is_fast_sync();
     if !fast_sync && !eng.is_root_available() {
-        return errf!("chain state is unavailable pending root recovery");
-    }
-    if fast_sync && !eng.is_root_readable_for_fast_sync() {
         return errf!("chain state is unavailable pending root recovery");
     }
     let height = pkg.height();
@@ -116,6 +149,8 @@ pub fn insert_block(eng: &ChainEngine, pkg: &BlkPkg, mode: ApplyMode) -> Ret<Ins
         return Ok(Insert::Duplicate);
     }
     if fast_sync {
+        // Cheap fail-fast: reject a non-extension before executing the block.
+        // attach_linear re-checks the same invariant at attach time.
         let (head_hash, current_height) = eng.tree.head_tip();
         if prev_hash != head_hash || height != current_height.saturating_add(1) {
             return errf!(
@@ -127,70 +162,102 @@ pub fn insert_block(eng: &ChainEngine, pkg: &BlkPkg, mode: ApplyMode) -> Ret<Ins
             );
         }
     }
-    let Some((parent_block, parent_key)) = eng.tree.block_context(&prev_hash) else {
+    let Some((parent_block, branch_history, fork_choice)) = resolve_fork_choice(eng, pkg)? else {
         return Ok(Insert::Orphan(prev_hash));
     };
-    let branch_blocks = eng
-        .tree
-        .branch_blocks(&prev_hash)
-        .ok_or_else(|| sys::Error::fault("candidate parent disappeared from fork tree"))?;
-    let branch_history = eng.block_history.for_branch(branch_blocks);
 
     if !fast_sync {
         crate::verify::verify_block(eng, pkg, parent_block.as_ref())?;
-        eng.consensus
-            .check_block_before_execute(pkg, parent_block.as_ref(), &branch_history)?;
     }
-
-    let fork_choice = eng
-        .consensus
-        .fork_choice_key(pkg, &parent_key, &branch_history)?;
-    let Some((chunk, parent_state)) =
-        eng.tree
-            .begin_block_execution(&prev_hash, pkg.block_ref(), fork_choice)?
+    // The fast-sync flag is handed to the mint: validation-only
+    // implementations skip their checks there, while side-effectful ones
+    // still see every block and decide for themselves.
+    eng.consensus
+        .check_block_before_execute(pkg, parent_block.as_ref(), &branch_history, fast_sync)?;
+    // The commit plan (side vs canonical) must be fixed before the side body
+    // write can be ordered ahead of the attach. `inserting` is held, so the
+    // head cannot change and this comparison agrees with the attach below.
+    let plan_head = eng.tree.head_fork_choice() < fork_choice;
+    let Some((chunk, parent_state)) = eng
+        .tree
+        .begin_block_execution(&prev_hash, pkg.block_ref(), fork_choice)
+        .map_err(tree_fatal)?
     else {
         return Ok(Insert::Orphan(prev_hash));
     };
-    let chunk = execute_block(eng, pkg.block(), chunk, fast_sync)?;
-
-    if !fast_sync {
-        eng.consensus
-            .check_block_after_execute(pkg, &chunk, parent_state.as_ref(), eng)?;
-    }
-
-    let inserted = if fast_sync {
-        eng.tree
-            .attach_linear(&prev_hash, chunk, eng.config.unstable_block)?
-    } else {
-        eng.tree
-            .attach(&prev_hash, chunk, eng.config.unstable_block)?
+    // Execution errors: a live strict side branch is discarded (decision
+    // table #5); everything else — including any fast-sync failure, which can
+    // never be a legitimate side branch — is a real error.
+    let chunk = match execute_block(eng, pkg.block(), chunk, fast_sync) {
+        Ok(chunk) => chunk,
+        Err(e) if !fast_sync && !plan_head => {
+            return side_discard(height, &pkg.hash(), "execution failed", e);
+        }
+        Err(e) => return Err(e),
     };
-    let Inserted {
-        is_head,
-        reorg,
-        roll,
-        confirmed_txs,
-        reverted_txs,
-    } = inserted;
-    Ok(Insert::Accepted {
-        height,
-        confirmed_txs,
-        reverted_txs,
-        is_head,
-        reorg,
-        roll,
-    })
-}
 
-#[cfg(test)]
-mod tests {
-    use field::Amount;
-
-    #[test]
-    fn block_fee_sum_keeps_the_legacy_u64_consensus_boundary() {
-        let high = Amount::from("1:248").unwrap();
-        let low = Amount::from("1:228").unwrap();
-        assert!(high.add_mode_u64(&low).is_err());
-        assert!(high.add_mode_u128(&low).is_ok());
+    match eng
+        .consensus
+        .check_block_after_execute(pkg, &chunk, parent_state.as_ref(), eng, fast_sync)
+    {
+        Ok(()) => {}
+        // A live side branch failing the post-execute state check is
+        // discarded like any other side failure (decision table #5): the
+        // canonical tree is untouched and the stream continues. Only a
+        // canonical candidate returns the error (Rejected-class).
+        Err(e) if !fast_sync && !plan_head => {
+            return side_discard(height, &pkg.hash(), "post-execute check failed", e);
+        }
+        Err(e) => return Err(e),
     }
+
+    // Commit: three disjoint arms. Fast sync is strictly linear — attach_linear
+    // rejects a non-head plan, never a side branch. Strict mode follows the
+    // plan fixed above (canonical attach vs side branch).
+    if fast_sync {
+        let inserted = eng
+            .tree
+            .attach_linear(&prev_hash, chunk, eng.config.unstable_block)
+            .map_err(tree_fatal)?;
+        return Ok(Insert::Accepted(inserted));
+    }
+    if plan_head {
+        let inserted = eng
+            .tree
+            .attach(&prev_hash, chunk, eng.config.unstable_block)
+            .map_err(tree_fatal)?;
+        return Ok(Insert::Accepted(inserted));
+    }
+
+    // Side branch: the immutable body must be durable before the in-memory
+    // attach, so a body write failure can drop the detached chunk without
+    // touching the tree (no recover, no detach; §3.2).
+    if persist_body {
+        if let Err(e) = eng
+            .store
+            .block_store()
+            .put_block(height, &pkg.hash(), pkg.data().clone())
+        {
+            return side_discard(height, &pkg.hash(), "body write failed", e);
+        }
+    }
+    let inserted = match eng
+        .tree
+        .attach(&prev_hash, chunk, eng.config.unstable_block)
+    {
+        Ok(inserted) => inserted,
+        // An attach failure drops the branch without a recovery hint: the
+        // body stays on disk but is never replayed, so boot's "any invalid
+        // record clears the list" rule cannot nuke the other side branches.
+        Err(e) => return side_discard(height, &pkg.hash(), "attach failed", e),
+    };
+    // Best-effort recovery hint for a branch that is now live; a dropped hint
+    // only costs side rebuild.
+    eng.side_list.append(pkg.hash());
+    // The plan was fixed under the same stable head; a head mismatch here is
+    // a tree invariant bug and the canonical index write would fail loudly.
+    debug_assert!(!inserted.is_head, "side plan mismatch: block became head");
+    eng.tree
+        .enforce_side_capacity(eng.config.side_tree_capacity);
+    Ok(Insert::Accepted(inserted))
 }

@@ -70,7 +70,7 @@ impl StoreInst {
         let block = crate::mem::MemDiskDB::new() as Arc<dyn DiskDB>;
         let state = crate::mem::MemDiskDB::new() as Arc<dyn DiskDB>;
         let log = crate::mem::MemDiskDB::new() as Arc<dyn DiskDB>;
-        Self::from_disks(block, state, log)
+        Self::from_disks(block, state, log).expect("in-memory store")
     }
 
     /// Open the three directories selected by the application composition root.
@@ -82,21 +82,21 @@ impl StoreInst {
         let block = Arc::new(crate::DiskKV::open(block_dir)?) as Arc<dyn DiskDB>;
         let state = Arc::new(crate::DiskKV::open(state_dir)?) as Arc<dyn DiskDB>;
         let log = Arc::new(crate::DiskKV::open(log_dir)?) as Arc<dyn DiskDB>;
-        Ok(Self::from_disks(block, state, log))
+        Self::from_disks(block, state, log)
     }
 
     pub fn from_disks(
         block: Arc<dyn DiskDB>,
         state: Arc<dyn DiskDB>,
         log: Arc<dyn DiskDB>,
-    ) -> Self {
-        Self {
-            block_store: Arc::new(KvBlockStore::new(block.clone())),
+    ) -> sys::Ret<Self> {
+        Ok(Self {
+            block_store: Arc::new(KvBlockStore::new(block.clone())?),
             log_backend: Arc::new(KvLogBackend::new(log.clone())),
             block,
             state,
             log,
-        }
+        })
     }
 
     pub fn block_disk(&self) -> Arc<dyn DiskDB> {
@@ -109,16 +109,16 @@ impl StoreInst {
 }
 
 impl Store for StoreInst {
-    fn status(&self) -> ChainStatus {
-        match self.state_status() {
-            Ok(StateStatus::Ready(status)) => status,
-            Ok(StateStatus::Uninitialized) | Err(_) => ChainStatus::default(),
+    fn status(&self) -> Ret<ChainStatus> {
+        match self.state_status()? {
+            StateStatus::Ready(status) => Ok(status),
+            StateStatus::Uninitialized => Ok(ChainStatus::default()),
         }
     }
 
     fn state_status(&self) -> Ret<StateStatus> {
-        let hash = self.state.read(PERSIST_KEY_ROOT_HASH);
-        let height = self.state.read(PERSIST_KEY_ROOT_HEIGHT);
+        let hash = self.state.try_read(PERSIST_KEY_ROOT_HASH)?;
+        let height = self.state.try_read(PERSIST_KEY_ROOT_HEIGHT)?;
         match (hash, height) {
             (None, None) => {
                 let mut has_data = false;
@@ -146,7 +146,7 @@ impl Store for StoreInst {
     }
 
     fn state_get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.state.read(key)
+        base::read_or_panic(self.state.as_ref(), key)
     }
 
     fn stable_state(&self) -> Arc<dyn StateRead> {
@@ -175,7 +175,7 @@ struct DiskStateRead {
 
 impl StateRead for DiskStateRead {
     fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.disk.read(key)
+        base::read_or_panic(self.disk.as_ref(), key)
     }
 }
 

@@ -96,9 +96,9 @@ pub(crate) fn load_block_by_key(ctx: &ApiExecCtx, key: &str) -> sys::Ret<base::B
         }
         let mut raw = [0u8; field::Hash::SIZE];
         raw.copy_from_slice(&hx);
-        store.block_data(&field::Hash::from(raw))
+        store.block_data(&field::Hash::from(raw))?
     } else if let Ok(height) = key.parse::<u64>() {
-        store.block_data_by_height(height).map(|(_, data)| data)
+        store.block_data_by_height(height)?.map(|(_, data)| data)
     } else {
         None
     };

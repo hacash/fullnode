@@ -15,21 +15,17 @@ impl P2PNode {
     pub(crate) async fn add_peer(self: &Arc<Self>, peer: Arc<RemotePeer>) -> bool {
         let outcome = self.peertable.insert(peer.clone()).await;
         if let Some(old) = outcome.replaced {
-            let cancelled = {
+            {
                 let mut slot = self.sync_session.lock().unwrap();
                 if slot
                     .as_ref()
                     .is_some_and(|session| session.peer_id == old.id)
+                    && let Some(session) = slot.take()
                 {
-                    slot.take().map(|session| session.cancel()).is_some()
-                } else {
-                    false
+                    session.cancel();
                 }
-            };
-            self.sync_tracker.clear_peer(&old.id);
-            if cancelled {
-                self.doing_sync.store(0, Ordering::Release);
             }
+            self.sync_tracker.clear_peer(&old.id);
         }
         if outcome.backbone_changed {
             self.persist_stable_backbones().await;
@@ -66,16 +62,16 @@ impl P2PNode {
         let id = &peer.id;
         let cancelled = {
             let mut g = self.sync_session.lock().unwrap();
-            if g.as_ref().is_some_and(|session| session.peer_id == *id) {
-                g.take().map(|session| session.cancel()).is_some()
+            if g.as_ref().is_some_and(|session| session.peer_id == *id)
+                && let Some(session) = g.take()
+            {
+                session.cancel();
+                true
             } else {
                 false
             }
         };
         self.sync_tracker.clear_peer(id);
-        if cancelled {
-            self.doing_sync.store(0, Ordering::Release);
-        }
         if !self
             .peertable
             .get_snapshot(id)

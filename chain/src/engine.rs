@@ -2,14 +2,17 @@
 //! stream of them (sync). Everything else is a query.
 //!
 //! Concurrency, in full:
-//! - `inserting` serializes all block insertion (discover vs sync vs boot).
+//! - `inserting` serializes all block insertion (discover vs sync vs boot);
+//!   every root-move writer also holds it, so insertion excludes root movement.
 //! - the tree has its own short-lived lock for lookups and attaching.
-//! - critical state readers hold `root_move` shared; optimistic readers pin a
-//!   Tree root and validate after use.
+//! - state sessions pin the captured tree root (a `StateChunkRef`) instead of
+//!   holding any lock; the pin keeps their weak parent chains alive while a
+//!   root roll prunes the tree underneath them.
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 use base::{
     ApplyMode, BlkPkg, BlockAcceptResult, BlockRef, BlockSource, ChainListener, ConsensusRuntime,
@@ -20,28 +23,62 @@ use sys::{Rerr, Ret, errf};
 
 use crate::history::StoreHistory;
 use crate::insert::Insert;
-use crate::tree::Tree;
+use crate::side_list::{SideKeepCtx, SideListWriter};
+use crate::tree::{Inserted, Tree};
+
+/// Any persistence failure after a block was published to the tree. The disk
+/// or root transition is uncertain, so the engine must stop; see §2.3 of the
+/// engine error-handling contract.
+pub(crate) const PERSIST_FAILED: &str = "persist_failed";
+pub(crate) const CORE_FAILED: &str = "core_failed";
+pub(crate) const STORAGE_READ_FAILED: &str = "storage_read_failed";
+
+const LIFE_STARTING: u8 = 0;
+const LIFE_RUNNING: u8 = 1;
+const LIFE_FATAL: u8 = 2;
+const LIFE_STOPPING: u8 = 3;
+const LIFE_STOPPED: u8 = 4;
+
+fn persist_fatal(e: sys::Error) -> sys::Error {
+    sys::Error::fault(format!("canonical persistence failed: {}", e)).with_code(PERSIST_FAILED)
+}
+
+/// Convert only the storage panic used by the Option-based state API. Other
+/// panics remain programming/plugin failures and keep their normal unwind.
+pub(crate) fn catch_storage_panic<T>(run: impl FnOnce() -> Ret<T>) -> Ret<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        Ok(result) => result,
+        Err(payload) => match payload.downcast::<base::StorageReadPanic>() {
+            Ok(fault) => Err(sys::Error::fault(format!(
+                "core storage read failed: {}",
+                fault.error
+            ))
+            .with_code(STORAGE_READ_FAILED)),
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+    }
+}
 
 pub struct ChainEngine {
     pub(crate) registry: Arc<dyn ExecutionServices>,
     pub(crate) config: EngineConfig,
     pub(crate) consensus: Arc<dyn ConsensusRuntime>,
     pub(crate) store: Arc<dyn Store>,
-    pub(crate) tree: Tree,
+    pub(crate) tree: Arc<Tree>,
     pub(crate) block_history: Arc<StoreHistory>,
     pub(crate) genesis: BlockRef,
     pub(crate) waiter: sys::Waiter,
     pub(crate) listeners: Mutex<Vec<Arc<dyn ChainListener>>>,
     /// Held for the whole of any block insertion, single block or stream.
     pub(crate) inserting: Mutex<()>,
-    /// Critical state execution holds a read guard. Root persistence and tree
-    /// reset hold the write guard across both the disk and tree transitions.
-    pub(crate) root_move: RwLock<()>,
-    /// Even while stable, odd while a root writer is between disk and tree.
-    pub(crate) root_version: AtomicU64,
-    /// False while moving or recovering the root, and after any failed root
-    /// write until recovery explicitly publishes a valid state again.
+    /// False while a root writer is between disk and tree, and after any
+    /// failed root write (engine fatal). The only root state flag. Root
+    /// writers are already serialized by `inserting`, so no separate lock
+    /// guards the transition.
     pub(crate) root_available: AtomicBool,
+    /// Best-effort side recovery hints; `side_list_path` is the list file.
+    pub(crate) side_list: Arc<SideListWriter>,
+    pub(crate) side_list_path: Option<PathBuf>,
     /// Set while a sync stream owns `inserting`, so discover and miner packing
     /// can back off without blocking on the mutex.
     pub(crate) syncing: AtomicBool,
@@ -49,7 +86,9 @@ pub struct ChainEngine {
     recent: RwLock<VecDeque<RecentBlock>>,
     avgfees: Mutex<VecDeque<u64>>,
     background: Mutex<Vec<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>>,
+    side_background: Mutex<Option<(Arc<AtomicBool>, std::thread::JoinHandle<()>)>>,
     sync_cancels: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    lifecycle: AtomicU8,
     shutdown_lock: Mutex<()>,
     shutdown_complete: AtomicBool,
     next_sync_id: AtomicU64,
@@ -70,17 +109,18 @@ pub(crate) enum PreparedBlock {
     Accepted(PersistJob),
     Duplicate(Hash),
     Orphan(Hash),
+    /// A side branch was discarded (execution / body write / attach failure).
+    /// Not an error: the canonical tree is untouched and the stream continues.
+    Discarded,
 }
 
 pub(crate) struct PersistJob {
     pub pkg: BlkPkg,
-    pub height: u64,
-    pub confirmed_txs: Vec<Hash>,
-    pub reverted_txs: Vec<Hash>,
-    pub is_head: bool,
-    pub reorg: bool,
-    pub roll: Option<crate::tree::RollJob>,
+    pub inserted: Inserted,
     pub persist_body: bool,
+    /// Canonical head hash before the attach; after a reorg the replaced old
+    /// canonical tail is derived from it and appended to the side hash list.
+    pub prev_head: Hash,
 }
 
 pub(crate) struct PersistOutcome {
@@ -126,7 +166,9 @@ impl ChainEngine {
         waiter: sys::Waiter,
         mempool_min_fee_purity: u64,
     ) -> Ret<Arc<Self>> {
-        let state_status = store.state_status()?;
+        let state_status = store
+            .state_status()
+            .map_err(|e| crate::boot::probe_fault(format!("state status: {}", e)))?;
         let genesis = consensus.genesis_block();
         let block_history = Arc::new(crate::history::StoreHistory::new(
             store.clone(),
@@ -139,8 +181,17 @@ impl ChainEngine {
                 load_persisted_root_block(registry.as_ref(), store.as_ref(), &genesis, status)?
             }
         };
+        let tree = Arc::new(Tree::new(store.disk(), root_block));
+        // Side hash list writer. The keep predicate captures only standalone
+        // engine pieces (tree / store / registry), never the engine itself,
+        // so the writer thread needs no engine handle.
+        let side_cancel = Arc::new(AtomicBool::new(false));
+        let side_path = (!config.data_dir.is_empty())
+            .then(|| PathBuf::from(&config.data_dir).join("side_hash_list"));
+        let (side_list, side_rx) = SideListWriter::new();
+        let side_list_spawn = side_list.clone();
         let eng = Arc::new(Self {
-            tree: Tree::new(store.disk(), root_block),
+            tree,
             registry,
             config,
             consensus,
@@ -150,20 +201,33 @@ impl ChainEngine {
             waiter,
             listeners: Mutex::new(Vec::new()),
             inserting: Mutex::new(()),
-            root_move: RwLock::new(()),
-            root_version: AtomicU64::new(0),
             root_available: AtomicBool::new(true),
+            side_list,
+            side_list_path: side_path,
             syncing: AtomicBool::new(false),
             mempool_min_fee_purity,
             recent: RwLock::new(VecDeque::new()),
             avgfees: Mutex::new(VecDeque::new()),
             background: Mutex::new(Vec::new()),
+            side_background: Mutex::new(None),
             sync_cancels: Mutex::new(HashMap::new()),
+            lifecycle: AtomicU8::new(LIFE_STARTING),
             shutdown_lock: Mutex::new(()),
             shutdown_complete: AtomicBool::new(false),
             next_sync_id: AtomicU64::new(1),
         });
         crate::boot::open_state(&eng, state_status)?;
+        eng.lifecycle.store(LIFE_RUNNING, Ordering::Release);
+        // The writer only appends after boot; starting it here keeps the boot
+        // side replay's direct file read race-free and a boot failure cannot
+        // leak the writer thread.
+        let side_handle = side_list_spawn.spawn(
+            eng.side_list_path.clone(),
+            side_keep_ctx(eng.tree.clone(), eng.store.clone(), eng.registry.clone()),
+            side_cancel.clone(),
+            side_rx,
+        )?;
+        eng.track_side_writer(side_cancel, side_handle);
         Ok(eng)
     }
 
@@ -173,35 +237,15 @@ impl ChainEngine {
     }
 
     pub(crate) fn begin_root_move(&self) -> RootMoveGuard<'_> {
-        let lock = self.root_move.write().unwrap();
-        let previous = self.root_version.fetch_add(1, Ordering::AcqRel);
-        assert!(previous.is_multiple_of(2), "nested root movement");
         self.root_available.store(false, Ordering::Release);
         RootMoveGuard {
-            version: &self.root_version,
             available: &self.root_available,
             committed: false,
-            _lock: lock,
         }
-    }
-
-    /// Run a non-blocking optimistic validation against a stable root phase.
-    /// A root move before, during, or immediately after `check` makes the
-    /// result false; compatible completed moves may be accepted by `check`.
-    pub(crate) fn validate_stable_root(&self, check: impl FnOnce() -> bool) -> bool {
-        validate_root_state(&self.root_available, &self.root_version, check)
     }
 
     pub(crate) fn is_root_available(&self) -> bool {
         self.root_available.load(Ordering::Acquire)
-    }
-
-    /// Ordered fast-sync execution may overlap an active compatible root
-    /// writer. An even unavailable version means that writer failed and the
-    /// pipeline must stop for recovery.
-    pub(crate) fn is_root_readable_for_fast_sync(&self) -> bool {
-        let version = self.root_version.load(Ordering::Acquire);
-        !version.is_multiple_of(2) || self.root_available.load(Ordering::Acquire)
     }
 
     pub fn shutdown(&self) -> Rerr {
@@ -209,6 +253,7 @@ impl ChainEngine {
         if self.shutdown_complete.load(Ordering::Acquire) {
             return Ok(());
         }
+        self.lifecycle.store(LIFE_STOPPING, Ordering::Release);
         self.waiter.trigger();
         let cancels: Vec<_> = self
             .sync_cancels
@@ -227,7 +272,14 @@ impl ChainEngine {
             worker_panicked |= handle.join().is_err();
         }
         self.waiter.wait_complete();
+        if let Some((cancel, handle)) = self.side_background.lock().unwrap().take() {
+            // All inserts have completed before the side writer is cancelled;
+            // this is the normal-shutdown drain guarantee.
+            cancel.store(true, Ordering::Release);
+            worker_panicked |= handle.join().is_err();
+        }
         self.consensus.exit();
+        self.lifecycle.store(LIFE_STOPPED, Ordering::Release);
         self.shutdown_complete.store(true, Ordering::Release);
         println!("[Engine] exit.");
         if worker_panicked {
@@ -247,61 +299,105 @@ impl ChainEngine {
             );
         }
         crate::verify::check_intrinsic(self, &pkg)?;
-        self.consensus.check_block_arrive(&pkg, self)?;
+        // Parent verification comes before any admission/arrival side effect:
+        // an orphan must not touch the bidding map (§6 of the error contract).
+        let prev_hash = pkg.block().prev_hash();
+        if !self.tree.contains(&prev_hash) {
+            return Ok(BlockAcceptResult::orphan(prev_hash));
+        }
+        let arrive = catch_storage_panic(|| self.consensus.check_block_arrive(&pkg, self, false));
+        if let Err(e) = arrive {
+            if self.mark_core_error(&e) {
+                eprintln!(
+                    "[Engine Fatal] operation=discover_arrive phase=pre_attach height={} hash={:?} error={}",
+                    pkg.height(),
+                    pkg.hash(),
+                    e
+                );
+            }
+            return Err(e);
+        }
+
+        match catch_storage_panic(|| self.consensus.check_block_admission(&pkg, self, false)) {
+            Ok(base::BlockAdmissionDecision::Continue) => {}
+            Ok(base::BlockAdmissionDecision::Defer(_)) => {
+                return Ok(BlockAcceptResult::deferred());
+            }
+            Err(e) => return Err(e),
+        }
 
         let _guard = self.inserting.lock().unwrap();
         if self.waiter.is_shutdown() {
             return errf!("engine is stopping");
         }
-        match self.apply_one(&pkg, ApplyMode::Strict, true) {
-            Ok(result) => Ok(result),
+        // Preparation executes and attaches the candidate only after all
+        // fallible validation is complete. If it fails, the existing tree,
+        // including side branches, is untouched and must not be rebuilt.
+        let job = match self.prepare_one(&pkg, ApplyMode::Strict, true) {
+            Ok(PreparedBlock::Accepted(job)) => job,
+            Ok(PreparedBlock::Duplicate(hash)) => return Ok(BlockAcceptResult::duplicate(hash)),
+            Ok(PreparedBlock::Orphan(parent)) => return Ok(BlockAcceptResult::orphan(parent)),
+            Ok(PreparedBlock::Discarded) => return Ok(BlockAcceptResult::ignored()),
             Err(e) => {
-                if let Err(re) = crate::boot::recover(self) {
-                    return errf!("block insert failed: {}; recovery failed: {}", e, re);
+                if self.mark_core_error(&e) {
+                    eprintln!(
+                        "[Engine Fatal] operation=discover_prepare phase=pre_attach height={} hash={:?} error={}",
+                        pkg.height(),
+                        pkg.hash(),
+                        e
+                    );
                 }
+                return Err(e);
+            }
+        };
+        match self.persist_one(job, true) {
+            Ok(outcome) => Ok(outcome.result),
+            Err(e) => {
+                // After the attach, any canonical persistence failure is
+                // engine-fatal (§2.3): the memory tree and disk are in an
+                // uncertain transition. No recovery path exists; boot replay
+                // rebuilds from the real disk state on the next start.
+                eprintln!(
+                    "[Engine Fatal] operation=discover_persist phase=post_attach height={} hash={:?} error={}",
+                    pkg.height(),
+                    pkg.hash(),
+                    e
+                );
+                self.mark_fatal();
                 Err(e)
             }
         }
     }
 
-    /// The shared tail of discover and sync: insert, persist, report.
-    /// Caller holds `inserting`.
-    pub(crate) fn apply_one(
-        &self,
-        pkg: &BlkPkg,
-        mode: ApplyMode,
-        persist_body: bool,
-    ) -> Ret<BlockAcceptResult> {
-        match self.prepare_one(pkg, mode, persist_body)? {
-            PreparedBlock::Accepted(job) => Ok(self.persist_one(job, true)?.result),
-            PreparedBlock::Duplicate(hash) => Ok(BlockAcceptResult::duplicate(hash)),
-            PreparedBlock::Orphan(parent) => Ok(BlockAcceptResult::orphan(parent)),
-        }
-    }
-
-    /// Execute and attach a block without performing any I/O. Fast historical
-    /// sync sends the returned job to the ordered persistence stage.
+    /// Execute and attach a block without performing any I/O (except side
+    /// branch bodies, which must be durable before their in-memory attach).
+    /// Fast historical sync sends the returned job to the ordered persistence
+    /// stage.
     pub(crate) fn prepare_one(
         &self,
         pkg: &BlkPkg,
         mode: ApplyMode,
         persist_body: bool,
     ) -> Ret<PreparedBlock> {
-        let accepted = match crate::insert::insert_block(self, pkg, mode)? {
-            Insert::Accepted {
-                height,
-                confirmed_txs,
-                reverted_txs,
-                is_head,
-                reorg,
-                roll,
-            } => (height, confirmed_txs, reverted_txs, is_head, reorg, roll),
+        // The pre-attach canonical head; used only when the insert reorgs.
+        let prev_head = self.tree.head_tip().0;
+        // A failure here is either a plain consensus/validation error (returned
+        // to the caller, which decides peer penalty) or a core error carrying a
+        // fatal code — the caller decides the boundary and prints it (§2.3).
+        let accepted = match catch_storage_panic(|| {
+            crate::insert::insert_block(self, pkg, mode, persist_body)
+        }) {
+            Ok(value) => value,
+            Err(e) => return Err(e),
+        };
+        let inserted = match accepted {
+            Insert::Accepted(inserted) => inserted,
             Insert::Duplicate => return Ok(PreparedBlock::Duplicate(pkg.hash())),
             Insert::Orphan(parent) => return Ok(PreparedBlock::Orphan(parent)),
+            Insert::Discarded => return Ok(PreparedBlock::Discarded),
         };
-        let (height, confirmed_txs, reverted_txs, is_head, reorg, roll) = accepted;
-        if is_head {
-            if reorg {
+        if inserted.is_head {
+            if inserted.reorg {
                 // Pending entries describe the previous canonical branch. The
                 // strict path persists the replacement before another insert.
                 self.block_history.clear_pending();
@@ -310,18 +406,15 @@ impl ChainEngine {
         }
         Ok(PreparedBlock::Accepted(PersistJob {
             pkg: pkg.clone(),
-            height,
-            confirmed_txs,
-            reverted_txs,
-            is_head,
-            reorg,
-            roll,
+            inserted,
             persist_body,
+            prev_head,
         }))
     }
 
     /// Persist one already-executed block. Jobs must be supplied in insertion
-    /// order; root commits validate that ordering independently.
+    /// order; root commits validate that ordering independently. Any failure
+    /// after the block was attached to the tree is engine-fatal (§2.3).
     pub(crate) fn persist_one(
         &self,
         job: PersistJob,
@@ -329,16 +422,22 @@ impl ChainEngine {
     ) -> Ret<PersistOutcome> {
         let PersistJob {
             pkg,
-            height,
-            confirmed_txs,
-            reverted_txs,
+            inserted,
+            persist_body,
+            prev_head,
+        } = job;
+        let Inserted {
             is_head,
             reorg,
             roll,
-            persist_body,
-        } = job;
+            confirmed_txs,
+            reverted_txs,
+        } = inserted;
+        let height = pkg.height();
         // A false persistence flag is only supplied by the internal replay
-        // pipeline, whose block body and canonical index already exist.
+        // pipeline, whose block body and canonical index already exist. Side
+        // branch bodies are written inside insert_block before the attach, so
+        // a non-head job never reaches a body write here.
         let stored_replay = !persist_body;
         if persist_body {
             let store = self.store.block_store();
@@ -346,23 +445,56 @@ impl ChainEngine {
                 let depth = height.saturating_sub(self.tree.root_height());
                 let mut canonical = self.tree.back_hashes(depth);
                 canonical.reverse();
-                store.commit_reorg(height, &pkg.hash(), pkg.data().clone(), &canonical)?;
+                store
+                    .commit_reorg(height, &pkg.hash(), pkg.data().clone(), &canonical)
+                    .map_err(persist_fatal)?;
+                // The replaced old canonical tail becomes a side branch on the
+                // next boot; record it so the fork tree can be restored. The
+                // side tree just grew by the replaced tail, so re-apply the
+                // live capacity bound (side chunks never enter the canonical
+                // chain, only their side-subtree roots are evicted).
+                let root_height = self.tree.root_height();
+                let new_path: HashSet<Hash> = canonical.iter().map(|(_, hash)| *hash).collect();
+                let replaced: Vec<Hash> = self
+                    .tree
+                    .branch_blocks(&prev_head)
+                    .into_iter()
+                    .flatten()
+                    .filter(|blk| blk.height() > root_height && !new_path.contains(&blk.hash()))
+                    .map(|blk| blk.hash())
+                    .collect();
+                self.side_list.append_many(replaced);
+                self.tree
+                    .enforce_side_capacity(self.config.side_tree_capacity);
             } else if is_head {
-                store.put_block_available(height, &pkg.hash(), pkg.data().clone())?;
-            } else {
-                store.put_block(height, &pkg.hash(), pkg.data().clone())?;
+                store
+                    .put_block_available(height, &pkg.hash(), pkg.data().clone())
+                    .map_err(persist_fatal)?;
             }
         }
         let mut rolled = 0;
         if let Some(job) = roll {
-            rolled = crate::roll::roll_root(self, job, pkg.origin(), stored_replay)?.len() as u64;
+            rolled = crate::roll::roll_root(self, job, pkg.origin(), stored_replay)
+                .map_err(persist_fatal)?
+                .len() as u64;
+        }
+        // The block is durably accepted now; publish consensus-owned arrival
+        // metadata. Replay/rebuild must not republish it.
+        if !stored_replay {
+            isolate_callback("consensus.on_block_accepted", || {
+                self.consensus.on_block_accepted(&pkg, self);
+            });
         }
         if maintain_runtime_caches && is_head {
             self.record_recent(pkg.block());
             self.record_avgfee(pkg.block());
         }
-        for listener in self.listeners.lock().unwrap().iter() {
-            listener.on_block_accepted(height, pkg.origin());
+        if !stored_replay {
+            for listener in self.listeners.lock().unwrap().iter() {
+                isolate_callback("listener.on_block_accepted", || {
+                    listener.on_block_accepted(height, pkg.origin());
+                });
+            }
         }
         Ok(PersistOutcome {
             result: BlockAcceptResult::accepted(height, confirmed_txs, reverted_txs),
@@ -414,7 +546,10 @@ impl ChainEngine {
     /// Rebuild runtime-only historical caches after a sync run. Both new
     /// collections are complete before either live cache is replaced.
     pub(crate) fn rebuild_runtime_caches(&self) -> Rerr {
-        let tip = self.store.block_store().available_cursor().unwrap_or(0);
+        let tip = match self.store.block_store().available_cursor()? {
+            Some(tip) => tip,
+            None => 0,
+        };
         let root_height = self.tree.root_height();
         let recent_start = root_height
             .saturating_sub(self.config.unstable_block)
@@ -432,7 +567,7 @@ impl ChainEngine {
         let mut fees = VecDeque::new();
         if decode_start <= tip {
             for height in decode_start..=tip {
-                let Some((_hash, data)) = self.store.block_data_by_height(height) else {
+                let Some((_hash, data)) = self.store.block_data_by_height(height)? else {
                     return errf!("cannot rebuild runtime caches: block {} is missing", height);
                 };
                 let (block, _) = self
@@ -491,6 +626,59 @@ impl ChainEngine {
         SyncCancelRegistration { engine: self, id }
     }
 
+    /// Permanently stop accepting work after a canonical persistence failure
+    /// (or an internal inconsistency). The caller may still hold a waiter
+    /// handle, so this deliberately does not wait for outstanding work like
+    /// `shutdown` does.
+    pub(crate) fn mark_fatal(&self) {
+        let mut state = self.lifecycle.load(Ordering::Acquire);
+        loop {
+            match state {
+                LIFE_STOPPING | LIFE_STOPPED => return,
+                LIFE_FATAL => break,
+                _ => match self.lifecycle.compare_exchange(
+                    state,
+                    LIFE_FATAL,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => break,
+                    Err(next) => state = next,
+                },
+            }
+        }
+        self.waiter.trigger();
+        for cancel in self.sync_cancels.lock().unwrap().values() {
+            cancel.store(true, Ordering::Release);
+        }
+    }
+
+    /// Whether `error` is engine-fatal, marking the lifecycle when it is. The
+    /// caller prints the structured context; every fatal error is printed
+    /// exactly once at the boundary that decides it.
+    pub(crate) fn mark_core_error(&self, error: &sys::Error) -> bool {
+        let fatal = matches!(
+            error.code(),
+            Some(code)
+                if code == PERSIST_FAILED || code == CORE_FAILED || code == STORAGE_READ_FAILED
+        );
+        if fatal && self.lifecycle.load(Ordering::Acquire) == LIFE_RUNNING {
+            self.mark_fatal();
+        }
+        fatal
+    }
+
+    pub(crate) fn is_fatal(&self) -> bool {
+        self.lifecycle.load(Ordering::Acquire) == LIFE_FATAL
+    }
+
+    pub(crate) fn is_stopping(&self) -> bool {
+        matches!(
+            self.lifecycle.load(Ordering::Acquire),
+            LIFE_STOPPING | LIFE_STOPPED
+        )
+    }
+
     pub(crate) fn track_background(
         &self,
         cancel: Arc<AtomicBool>,
@@ -504,6 +692,19 @@ impl ChainEngine {
         } else {
             background.push((cancel, handle));
         }
+    }
+
+    pub(crate) fn track_side_writer(
+        &self,
+        cancel: Arc<AtomicBool>,
+        handle: std::thread::JoinHandle<()>,
+    ) {
+        if self.is_stopping() {
+            cancel.store(true, Ordering::Release);
+            let _ = handle.join();
+            return;
+        }
+        *self.side_background.lock().unwrap() = Some((cancel, handle));
     }
 
     pub(crate) fn recent_snapshot(&self) -> Vec<RecentBlock> {
@@ -597,63 +798,133 @@ impl ChainEngine {
     }
 }
 
+/// Run one external callback inside a panic boundary. A panicking listener
+/// must not take down the engine; the notification is skipped with a warning
+/// (§8 of the error contract).
+pub(crate) fn isolate_callback(name: &'static str, run: impl FnOnce()) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    if result.is_err() {
+        eprintln!("[Engine] {} panicked; notification skipped", name);
+    }
+}
+
+/// Build the side hash list keep predicate: per compaction it snapshots the
+/// canonical branch and the durable root height, then drops hashes that are
+/// canonical, below the root, or whose body is missing/undecodable.
+fn side_keep_ctx(
+    tree: Arc<Tree>,
+    store: Arc<dyn Store>,
+    registry: Arc<dyn ExecutionServices>,
+) -> SideKeepCtx {
+    Arc::new(move || {
+        let root_height = tree.root_height();
+        let head_hash = tree.head_tip().0;
+        let canonical: HashSet<Hash> = tree
+            .branch_blocks(&head_hash)
+            .into_iter()
+            .flatten()
+            .map(|blk| blk.hash())
+            .collect();
+        let store = store.clone();
+        let registry = registry.clone();
+        Box::new(move |hash: &Hash| {
+            if canonical.contains(hash) {
+                return false;
+            }
+            // A transient read failure keeps the recovery hint (conservative);
+            // a missing or undecodable body drops it, and boot decides the
+            // canonical answer anyway.
+            let Some(data) = store.block_data(hash).unwrap_or(None) else {
+                return false;
+            };
+            let Ok((blk, _)) = registry.decode_block(&data) else {
+                return false;
+            };
+            blk.height() > root_height
+        })
+    })
+}
+
 pub(crate) fn load_persisted_root_block(
     registry: &dyn ExecutionServices,
     store: &dyn Store,
     genesis: &BlockRef,
     status: &base::ChainStatus,
-) -> Ret<BlockRef> {
+) -> sys::Ret<BlockRef> {
+    use crate::boot::{boot_fault, validate_fault};
     if status.latest_height == 0 {
         if status.latest_hash != genesis.hash() {
-            return errf!(
+            return Err(validate_fault(format!(
                 "state root hash {:?} does not match genesis {:?}",
                 status.latest_hash,
                 genesis.hash()
-            );
+            )));
         }
         return Ok(genesis.clone());
     }
-    let data = store.block_data(&status.latest_hash).ok_or_else(|| {
-        format!(
-            "state root block <{}, {:?}> is missing from block db",
-            status.latest_height, status.latest_hash
+    // The height index must agree with the root marker: the state root block
+    // is identified by both, and a mismatch rejects startup (no cursor scan
+    // or repair is ever attempted). A read failure is a storage boot failure.
+    let index_hash = store.block_hash(status.latest_height).map_err(|e| {
+        validate_fault(format!(
+            "state root height index read failed at <{}, {:?}>: {}",
+            status.latest_height,
+            status.latest_hash,
+            e
+        ))
+    })?;
+    if index_hash != Some(status.latest_hash) {
+        return Err(validate_fault(format!(
+            "state root hash does not match the canonical height index at <{}, {:?}>",
+            status.latest_height,
+            status.latest_hash
+        )));
+    }
+    let data = match store.block_data(&status.latest_hash) {
+        Ok(Some(data)) => data,
+        Ok(None) => {
+            return Err(validate_fault(format!(
+                "state root block is missing from the block db at <{}, {:?}>",
+                status.latest_height,
+                status.latest_hash
+            )));
+        }
+        Err(e) => {
+            return Err(validate_fault(format!(
+                "state root block read failed at <{}, {:?}>: {}",
+                status.latest_height,
+                status.latest_hash,
+                e
+            )));
+        }
+    };
+    let block = registry.decode_block_exact(&data).map_err(|e| {
+        boot_fault(
+            "validate",
+            "compatibility",
+            format!(
+                "state root block cannot be decoded at <{}, {:?}>: {}",
+                status.latest_height,
+                status.latest_hash,
+                e
+            ),
         )
     })?;
-    let block = registry.decode_block_exact(&data)?;
     if block.height() != status.latest_height || block.hash() != status.latest_hash {
-        return errf!(
+        return Err(validate_fault(format!(
             "state root block identity mismatch: expected <{}, {:?}>, got <{}, {:?}>",
             status.latest_height,
             status.latest_hash,
             block.height(),
             block.hash()
-        );
+        )));
     }
     Ok(block)
 }
 
-fn validate_root_state(
-    available: &AtomicBool,
-    version: &AtomicU64,
-    check: impl FnOnce() -> bool,
-) -> bool {
-    if !available.load(Ordering::Acquire) {
-        return false;
-    }
-    let before = version.load(Ordering::Acquire);
-    if !before.is_multiple_of(2) {
-        return false;
-    }
-    let valid = check();
-    let after = version.load(Ordering::Acquire);
-    valid && before == after && available.load(Ordering::Acquire)
-}
-
 pub(crate) struct RootMoveGuard<'a> {
-    version: &'a AtomicU64,
     available: &'a AtomicBool,
     committed: bool,
-    _lock: RwLockWriteGuard<'a, ()>,
 }
 
 impl RootMoveGuard<'_> {
@@ -667,8 +938,6 @@ impl Drop for RootMoveGuard<'_> {
         if self.committed {
             self.available.store(true, Ordering::Release);
         }
-        let previous = self.version.fetch_add(1, Ordering::Release);
-        debug_assert!(!previous.is_multiple_of(2));
     }
 }
 
@@ -679,53 +948,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn failed_root_move_remains_unavailable_until_recovery() {
-        let lock = RwLock::new(());
-        let version = AtomicU64::new(1);
-        let available = AtomicBool::new(false);
-        {
-            let _guard = RootMoveGuard {
-                version: &version,
-                available: &available,
-                committed: false,
-                _lock: lock.write().unwrap(),
-            };
-        }
-        assert_eq!(version.load(Ordering::Acquire), 2);
-        assert!(!available.load(Ordering::Acquire));
-
-        version.store(3, Ordering::Release);
-        {
-            let mut recovery = RootMoveGuard {
-                version: &version,
-                available: &available,
-                committed: false,
-                _lock: lock.write().unwrap(),
-            };
-            recovery.commit();
-        }
-        assert_eq!(version.load(Ordering::Acquire), 4);
-        assert!(available.load(Ordering::Acquire));
+    fn storage_read_panic_becomes_a_core_storage_error() {
+        let result = catch_storage_panic(|| -> Ret<()> {
+            std::panic::panic_any(base::StorageReadPanic {
+                error: sys::Error::fault("injected read failure"),
+            })
+        });
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), Some(STORAGE_READ_FAILED));
     }
 
     #[test]
-    fn optimistic_validation_rejects_every_root_transition_window() {
+    #[should_panic(expected = "programming failure")]
+    fn non_storage_panic_keeps_unwinding() {
+        let _ = catch_storage_panic(|| -> Ret<()> { panic!("programming failure") });
+    }
+
+    #[test]
+    fn failed_root_move_stays_unavailable_until_commit() {
         let available = AtomicBool::new(true);
-        let version = AtomicU64::new(0);
-        assert!(validate_root_state(&available, &version, || true));
+        {
+            let mut guard = RootMoveGuard {
+                available: &available,
+                committed: false,
+            };
+            guard.commit();
+        }
+        assert!(
+            available.load(Ordering::Acquire),
+            "committed move is readable"
+        );
+    }
 
-        version.store(1, Ordering::Release);
-        assert!(!validate_root_state(&available, &version, || true));
-
-        version.store(2, Ordering::Release);
-        assert!(!validate_root_state(&available, &version, || {
-            version.store(4, Ordering::Release);
-            true
-        }));
-
-        assert!(!validate_root_state(&available, &version, || {
-            available.store(false, Ordering::Release);
-            true
-        }));
+    #[test]
+    fn abandoned_root_move_keeps_state_unavailable() {
+        // `begin_root_move` marks the state unavailable before the guard.
+        let available = AtomicBool::new(false);
+        {
+            let _guard = RootMoveGuard {
+                available: &available,
+                committed: false,
+            };
+        }
+        // A failed root persistence must leave the state unavailable so the
+        // engine rejects new work instead of continuing on an uncertain
+        // disk/tree transition.
+        assert!(!available.load(Ordering::Acquire));
     }
 }

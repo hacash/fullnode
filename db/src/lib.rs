@@ -104,11 +104,11 @@ impl DiskDB for DiskKV {
     fn remove(&self, key: &[u8]) {
         self.inner.remove(key);
     }
-    fn write(&self, memkv: &dyn MemDB) {
-        self.inner.write(memkv);
-    }
     fn try_write(&self, memkv: &dyn MemDB) -> Rerr {
         self.inner.try_write(memkv)
+    }
+    fn try_read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+        self.inner.try_read(key)
     }
     fn for_each(&self, f: &mut dyn FnMut(&[u8], &[u8])) -> Rerr {
         self.inner.for_each(f)

@@ -8,7 +8,7 @@ use base::{MemDB, PERSIST_KEY_ROOT_HASH, PERSIST_KEY_ROOT_HEIGHT, PkgOrigin};
 use field::Hash;
 use sys::Ret;
 
-use crate::engine::ChainEngine;
+use crate::engine::{ChainEngine, isolate_callback};
 use crate::tree::{RollJob, hash_of, height_of};
 
 /// Persist a root advance and then move the tree root. The root-move writer
@@ -56,23 +56,31 @@ fn notify_stable(
 ) {
     // Consensus tracks stable blocks to age out its bidding state. Replaying
     // stored blocks re-derives that from the state it already loaded, and the
-    // callback would cost a disk read plus a full decode per block.
-    let notify_consensus = !stored_replay;
+    // callback would cost a disk read plus a full decode per block. Replay
+    // also skips every external listener: restart must not re-publish
+    // non-durable events (§8 of the error contract). The pending-cache forget
+    // still runs so replayed blocks do not accumulate in memory.
     for (height, hash) in stable {
-        if notify_consensus {
+        if !stored_replay {
             let block = eng.block_history.cached(*height, hash).or_else(|| {
-                let data = eng.store.block_data(hash)?;
+                // Stable-block notification is peripheral (§8): a read error
+                // skips the decode attempt instead of failing the roll.
+                let data = eng.store.block_data(hash).ok().flatten()?;
                 eng.registry.decode_block(&data).ok().map(|(blk, _)| blk)
             });
             if let Some(block) = block {
                 // Listeners that query BlockHistory during this callback reuse
                 // the same decoded object.
                 eng.block_history.remember(block.clone());
-                eng.consensus.on_stable_block(block.as_ref(), eng);
+                isolate_callback("consensus.on_stable_block", || {
+                    eng.consensus.on_stable_block(block.as_ref(), eng);
+                });
             }
-        }
-        for listener in eng.listeners.lock().unwrap().iter() {
-            listener.on_stable_block(*height, *hash, origin);
+            for listener in eng.listeners.lock().unwrap().iter() {
+                isolate_callback("listener.on_stable_block", || {
+                    listener.on_stable_block(*height, *hash, origin);
+                });
+            }
         }
         eng.block_history.forget(*height, hash);
     }

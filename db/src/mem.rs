@@ -34,7 +34,7 @@ impl DiskDB for MemDiskDB {
         self.inner.write().unwrap().remove(key);
     }
 
-    fn write(&self, memkv: &dyn MemDB) {
+    fn try_write(&self, memkv: &dyn MemDB) -> Rerr {
         let mut inner = self.inner.write().unwrap();
         memkv.for_each(&mut |key, value| match value {
             Some(value) => {
@@ -44,6 +44,7 @@ impl DiskDB for MemDiskDB {
                 inner.remove(key);
             }
         });
+        Ok(())
     }
 
     fn for_each(&self, f: &mut dyn FnMut(&[u8], &[u8])) -> Rerr {

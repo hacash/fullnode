@@ -27,14 +27,6 @@ impl DiskDB for LeveldbSysDisk {
     fn remove(&self, key: &[u8]) {
         self.db.rm(key);
     }
-    fn write(&self, memkv: &dyn MemDB) {
-        let mut wb = Writebatch::new();
-        memkv.for_each(&mut |key, value| match value {
-            Some(value) => wb.put(key, value),
-            None => wb.delete(key),
-        });
-        self.db.write(&wb);
-    }
     fn try_write(&self, memkv: &dyn MemDB) -> Rerr {
         let mut wb = Writebatch::new();
         memkv.for_each(&mut |key, value| match value {

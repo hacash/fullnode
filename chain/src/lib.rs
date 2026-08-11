@@ -17,6 +17,7 @@ mod history;
 mod insert;
 mod ring;
 mod roll;
+mod side_list;
 mod source;
 mod sync;
 mod tree;

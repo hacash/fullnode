@@ -1,7 +1,6 @@
 //! P2P message dispatch and protocol handlers (status, block sync, tx/block submit).
 
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use base::{ApplyMode, BlockBatch, PipelineOptions};
 use field::Hash;
@@ -14,20 +13,6 @@ use crate::p2p::msg::{
 };
 use crate::p2p::source::OneShotBlocks;
 use crate::p2p::syncwire::{BLOCKS_HDR_VERSION, BLOCKS_HEADER_SIZE, BlocksHeader, GetBlocks};
-
-const SYNC_SESSION_TAKEOVER_IDLE: std::time::Duration = std::time::Duration::from_secs(10);
-
-fn may_replace_sync_session(
-    active_peer: &str,
-    last_activity: &std::sync::Mutex<std::time::Instant>,
-    candidate_peer: &str,
-) -> bool {
-    active_peer == candidate_peer
-        || last_activity
-            .lock()
-            .map(|last| last.elapsed() >= SYNC_SESSION_TAKEOVER_IDLE)
-            .unwrap_or(true)
-}
 
 impl P2PNode {
     fn status_message(&self) -> Vec<u8> {
@@ -50,22 +35,8 @@ impl P2PNode {
         body
     }
 
-    pub(crate) fn try_begin_sync(
-        &self,
-        peer_id: &str,
-        start_height: u64,
-        remote_height: u64,
-    ) -> bool {
-        let node_key = self
-            .peertable
-            .get_snapshot(peer_id)
-            .map(|peer| peer.node_key);
-        self.sync_tracker
-            .begin_or_refresh(peer_id, node_key, start_height, remote_height)
-    }
-
-    pub(crate) fn mark_doing_sync(&self) {
-        self.doing_sync.store(sys::curtimes(), Ordering::Relaxed);
+    pub(crate) fn try_begin_sync(&self, peer_id: &str, remote_height: u64) {
+        self.sync_tracker.begin(peer_id, remote_height);
     }
 
     fn request_blocks_after_fork(
@@ -79,6 +50,8 @@ impl P2PNode {
     }
 
     /// Start sync when a peer STATUS reports a height ahead of the local tip.
+    /// An active session is never displaced here: a stalled one is cancelled
+    /// by the watchdog, which then re-requests STATUS from all peers.
     fn maybe_sync_from_remote_height(
         self: &Arc<Self>,
         peer: Arc<dyn base::Peer>,
@@ -87,27 +60,8 @@ impl P2PNode {
         if remote_height <= self.engine.latest_height() {
             return Ok(());
         }
-        let peer_id = peer.id();
-        let replaced_peer = {
-            let mut slot = self.sync_session.lock().unwrap();
-            let Some(active) = slot.as_ref() else {
-                drop(slot);
-                return self.start_sync_from_status(peer, remote_height);
-            };
-            let may_replace =
-                may_replace_sync_session(&active.peer_id, &active.last_activity, &peer_id);
-            if !may_replace {
-                return Ok(());
-            }
-            slot.take().map(|session| {
-                let old_peer = session.peer_id.clone();
-                session.cancel();
-                old_peer
-            })
-        };
-        if let Some(old_peer) = replaced_peer {
-            self.sync_tracker.clear_peer(&old_peer);
-            self.doing_sync.store(0, Ordering::Release);
+        if self.sync_session.lock().ok().is_some_and(|s| s.is_some()) {
+            return Ok(());
         }
         self.start_sync_from_status(peer, remote_height)
     }
@@ -125,10 +79,7 @@ impl P2PNode {
             return self.request_blocks_after_fork(peer, 1, remote_height);
         }
         let peer_id = peer.id();
-        if !self.try_begin_sync(&peer_id, local_height + 1, remote_height) {
-            return Ok(());
-        }
-        self.mark_doing_sync();
+        self.try_begin_sync(&peer_id, remote_height);
         let num = self.engine.config().unstable_block.min(255) as u8;
         let mut req = Vec::with_capacity(9);
         req.push(num);
@@ -180,7 +131,7 @@ impl P2PNode {
         let mut res = Vec::with_capacity(8 + hash_count as usize * 32);
         res.extend_from_slice(&end_height.to_be_bytes());
         for height in (start_height..=end_height).rev() {
-            let Some(hash) = store.block_hash(height) else {
+            let Some(hash) = store.block_hash(height)? else {
                 return Ok(());
             };
             res.extend_from_slice(hash.as_ref());
@@ -205,11 +156,19 @@ impl P2PNode {
         if end_height == 0 || end_height > self.engine.latest_height() {
             return Ok(());
         }
+        // An active sync session is the only sanctioned downloader: ignore
+        // fork-hash replies while it runs (the sync itself covers forks; the
+        // watchdog re-requests STATUS on stall). This also avoids the
+        // per-height disk reads below being wasted on a session that would
+        // refuse the follow-up request anyway.
+        if self.sync_session.lock().ok().is_some_and(|s| s.is_some()) {
+            return Ok(());
+        }
         let max_num = (self.engine.config().unstable_block as u64 + 1).min(hash_num);
         let start_height = end_height.saturating_sub(max_num);
         let store = self.engine.store();
         for (idx, height) in ((start_height + 1)..=end_height).rev().enumerate() {
-            let Some(local_hash) = store.block_hash(height) else {
+            let Some(local_hash) = store.block_hash(height)? else {
                 return Ok(());
             };
             let off = idx * Hash::SIZE;
@@ -275,7 +234,7 @@ impl P2PNode {
         let mut blocks = Vec::new();
         let store = self.engine.store();
         for height in start_height..=latest_height {
-            let Some((_, data)) = store.block_data_by_height(height) else {
+            let Some((_, data)) = store.block_data_by_height(height)? else {
                 break;
             };
             let next_size = total_size.saturating_add(data.len());
@@ -301,23 +260,14 @@ impl P2PNode {
     }
 
     /// Ad-hoc apply when no SyncSession is active (orphan / one-off REQ_BLOCK).
+    /// `inserting` serializes this against the session pipeline, and the
+    /// caller has already gated it on the session slot being empty, so no
+    /// tracker state is involved.
     pub(crate) fn apply_oneshot_blocks(
         &self,
-        peer: Arc<dyn base::Peer>,
-        start_height: u64,
-        _end_height: u64,
-        remote_height: u64,
+        _start_height: u64,
         batch: BlockBatch,
     ) -> Rerr {
-        let peer_id = peer.id();
-        if !self.sync_tracker.claim_batch(&peer_id, start_height) {
-            // If tracker has no state, allow a soft begin for orphan.
-            if !self.try_begin_sync(&peer_id, start_height, remote_height)
-                || !self.sync_tracker.claim_batch(&peer_id, start_height)
-            {
-                return Ok(());
-            }
-        }
         let cfg = self.engine.config();
         let opts = PipelineOptions::default();
         let sync_mode = if cfg.fast_sync {
@@ -330,10 +280,8 @@ impl P2PNode {
             self.engine
                 .run_sync(Box::new(OneShotBlocks::from_batch(batch)), sync_mode, opts)
         };
-        let (held, final_height) = match sync_result.and_then(|h| h.wait()) {
+        match sync_result.and_then(|h| h.wait()) {
             Ok(report) => {
-                let held = !report.held_blocks.is_empty();
-                let final_height = report.final_height;
                 self.drain_all_orphans();
                 for (height, txs) in report.confirmed_txs {
                     self.txpool.drain(&txs);
@@ -344,24 +292,11 @@ impl P2PNode {
                         height,
                     );
                 }
-                if held {
+                if !report.held_blocks.is_empty() {
                     self.drain_deferred_blocks();
                 }
-                (held, final_height)
             }
-            Err(e) => {
-                self.sync_tracker.release_batch(&peer_id);
-                return Err(e);
-            }
-        };
-        if held {
-            self.sync_tracker.clear_peer(&peer_id);
-        } else {
-            self.sync_tracker.finish_if_done(
-                &peer_id,
-                final_height.saturating_add(1),
-                remote_height,
-            );
+            Err(e) => return Err(e),
         }
         Ok(())
     }
@@ -413,36 +348,5 @@ impl P2PNode {
             }
             _ => sys::errf!("p2p message type {} not implemented", ty),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Mutex;
-    use std::time::{Duration, Instant};
-
-    use super::may_replace_sync_session;
-
-    #[test]
-    fn same_connection_can_restart_its_sync_session() {
-        assert!(may_replace_sync_session(
-            "peer-a",
-            &Mutex::new(Instant::now()),
-            "peer-a"
-        ));
-    }
-
-    #[test]
-    fn another_connection_can_only_take_over_a_stale_session() {
-        assert!(!may_replace_sync_session(
-            "peer-a",
-            &Mutex::new(Instant::now()),
-            "peer-b"
-        ));
-        assert!(may_replace_sync_session(
-            "peer-a",
-            &Mutex::new(Instant::now() - Duration::from_secs(10)),
-            "peer-b"
-        ));
     }
 }

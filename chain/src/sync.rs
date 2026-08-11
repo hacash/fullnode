@@ -5,22 +5,30 @@
 //! the last durable one until the persistence stage commits it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::sync_channel;
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use base::{
-    ApplyMode, BlkPkg, BlockBatch, BlockSource, PipelineOptions, PipelineReport, PkgSource,
+    ApplyMode, BlkPkg, BlockBatch, BlockRef, BlockSource, PipelineOptions, PipelineReport,
+    PkgOrigin, PkgSource,
 };
 use sys::{Rerr, Ret};
 
-use crate::engine::{ChainEngine, PreparedBlock};
+use crate::engine::{ChainEngine, PersistJob, PreparedBlock};
 use crate::ring::Ring;
 
 const SYNC_CANCELLED: &str = "sync_cancelled";
+/// Admission deferred the block; the stream stopped intentionally and the
+/// held-block report is the result, never an error or a penalty.
+const SYNC_DEFERRED: &str = "sync_deferred";
 
 fn cancelled_error() -> sys::Error {
     sys::Error::fault("block sync cancelled").with_code(SYNC_CANCELLED)
+}
+
+fn deferred_error() -> sys::Error {
+    sys::Error::fault("block sync deferred by admission").with_code(SYNC_DEFERRED)
 }
 
 fn report_progress(opts: &PipelineOptions, report: &PipelineReport) {
@@ -83,6 +91,14 @@ enum PipelinePurpose {
 }
 
 impl PipelinePurpose {
+    fn is_network(self) -> bool {
+        matches!(self, Self::Network)
+    }
+
+    fn is_replay(self) -> bool {
+        matches!(self, Self::Replay { .. })
+    }
+
     fn persist_body(self) -> bool {
         matches!(self, Self::Network)
     }
@@ -151,12 +167,29 @@ pub fn run(
 
     match run_pipeline(eng, source, mode, opts, cancel, PipelinePurpose::Network) {
         Ok(report) => Ok(report),
+        // A persistence failure after blocks were published to the tree is
+        // engine-fatal: no recovery path exists, boot replay rebuilds from
+        // the real disk state on the next start (§2.3).
+        Err(e)
+            if matches!(
+                e.code(),
+                Some(code)
+                    if code == crate::engine::PERSIST_FAILED
+                        || code == crate::engine::CORE_FAILED
+                        || code == crate::engine::STORAGE_READ_FAILED
+            ) =>
+        {
+            eprintln!("[Block Sync Fatal] operation=sync error={}", e);
+            eng.mark_fatal();
+            Err(e)
+        }
         Err(e) if e.code() == Some(SYNC_CANCELLED) || eng.waiter.is_shutdown() => Err(e),
+        // Source gaps, invalid blocks and admission stops return to the
+        // caller. The failing block is never attached, and blocks accepted
+        // earlier in the run stay valid: the tree only ever holds blocks
+        // that were also persisted.
         Err(e) => {
             eprintln!("[Block Sync Warning] {}", e);
-            if let Err(re) = crate::boot::recover(eng) {
-                return sys::errf!("sync failed: {}; recovery failed: {}", e, re);
-            }
             Err(e)
         }
     }
@@ -182,9 +215,450 @@ pub(crate) fn run_replay_locked(
     )
 }
 
+/// One block frame handed from the feeder to a decoder.
+struct Job {
+    seq: u64,
+    blob: Arc<Vec<u8>>,
+    offset: usize,
+    len: usize,
+    decoded: Option<BlockRef>,
+}
+
+/// Replay reads from the local store: the height index hash must match the
+/// decoded body, or the node would replay a different branch than its own
+/// index records. A read failure is a replay corruption, not a missing block.
+fn check_replay_index(eng: &ChainEngine, pkg: &BlkPkg) -> Rerr {
+    let indexed = eng
+        .store
+        .block_store()
+        .hash_by_height(pkg.height())
+        .map_err(|e| e.with_code(crate::engine::STORAGE_READ_FAILED))?;
+    if indexed != Some(pkg.hash()) {
+        return sys::errf!(
+            "replay height index hash for {} does not match the decoded block",
+            pkg.height()
+        );
+    }
+    Ok(())
+}
+
+/// Strict network mode: a block may only be admitted after its parent is
+/// known to be in the tree, so an orphaned block never touches bidding/arrival
+/// state (§6). Fast sync is linear: the parent is always present.
+fn require_parent_in_tree(eng: &ChainEngine, pkg: &BlkPkg) -> Rerr {
+    let prev = pkg.block().prev_hash();
+    if !eng.tree.contains(&prev) {
+        return sys::errf!(
+            "network block {} is missing parent {:?}",
+            pkg.height(),
+            prev
+        );
+    }
+    Ok(())
+}
+
+/// Validate, execute and route one block: replay checks, wire checks,
+/// consensus checks, then prepare. Returns the persistence job, or None when
+/// the block is skipped (duplicate or discarded side branch in network mode).
+/// Failure metadata is recorded by the caller (`fail_with`).
+fn process_block(
+    ctx: &SyncCtx,
+    report: &mut PipelineReport,
+    pkg: &BlkPkg,
+    replay_next: &mut Option<u64>,
+) -> Ret<Option<PersistJob>> {
+    let height = pkg.height();
+
+    // Replay must decode exactly the expected next height.
+    check_replay_height(*replay_next, height)?;
+    if ctx.purpose.is_replay() {
+        check_replay_index(ctx.eng, pkg)?;
+    }
+
+    // Wire-level checks (fast-sync blocks come from a trusted source).
+    if !ctx.pipelined {
+        crate::verify::check_intrinsic(ctx.eng, pkg)?;
+    }
+
+    // Consensus admission checks for network blocks; replay skips them.
+    if ctx.purpose.is_network() {
+        if !ctx.pipelined {
+            require_parent_in_tree(ctx.eng, pkg)?;
+        }
+        // Same order as discover: arrive validation runs before admission, so
+        // a block failing the arrive check never touches bidding state (§6).
+        crate::engine::catch_storage_panic(|| {
+            ctx.eng
+                .consensus
+                .check_block_arrive(pkg, ctx.eng, ctx.pipelined)
+        })?;
+        match crate::engine::catch_storage_panic(|| {
+            ctx.eng
+                .consensus
+                .check_block_admission(pkg, ctx.eng, ctx.pipelined)
+        })? {
+            base::BlockAdmissionDecision::Continue => {}
+            base::BlockAdmissionDecision::Defer(_) => {
+                // Explicit deferred stop: the source pauses without judging
+                // the block invalid; the report carries the held blocks.
+                report.held_blocks.push((height, pkg.hash()));
+                report_progress(ctx.opts, report);
+                return Err(deferred_error());
+            }
+        }
+    }
+
+    // Execute and attach; the returned job is persisted in insertion order.
+    match ctx
+        .eng
+        .prepare_one(pkg, ctx.mode, ctx.purpose.persist_body())?
+    {
+        PreparedBlock::Accepted(job) => Ok(Some(job)),
+        // Network mode: a duplicate or discarded live side branch never stops
+        // the stream.
+        PreparedBlock::Duplicate(_) if ctx.purpose.is_network() => Ok(None),
+        PreparedBlock::Discarded if ctx.purpose.is_network() => Ok(None),
+        // Everything else is an error: replay is strictly linear and treats
+        // any deviation as corruption; a network orphan ends the stream.
+        PreparedBlock::Orphan(parent) if ctx.purpose.is_replay() => {
+            sys::errf!("replay block {} is missing parent {:?}", height, parent)
+        }
+        PreparedBlock::Orphan(parent) => {
+            sys::errf!("network block {} is missing parent {:?}", height, parent)
+        }
+        PreparedBlock::Duplicate(_) => sys::errf!(
+            "replay block <{}, {:?}> is already present",
+            height,
+            pkg.hash()
+        ),
+        PreparedBlock::Discarded => {
+            sys::errf!("replay block {} was discarded as a side branch", height)
+        }
+    }
+}
+
+/// Shared pipeline state: engine references, queues and the cancellation
+/// flag, used by every stage instead of threading parameters around.
+///
+/// The job receiver deliberately lives outside this struct: it must be owned
+/// only by the decoder workers, so that when they all exit on a hard pipeline
+/// stop the jobs channel disconnects and releases a feeder blocked in
+/// `send()` (see `run_pipeline`).
+struct SyncCtx<'a> {
+    eng: &'a ChainEngine,
+    opts: &'a PipelineOptions,
+    mode: ApplyMode,
+    purpose: PipelinePurpose,
+    cancel: Arc<AtomicBool>,
+    origin: PkgOrigin,
+    ring: Arc<Ring>,
+    pipelined: bool,
+}
+
+impl SyncCtx<'_> {
+    /// Failure broadcast: set the cancel flag and stop the ring so every
+    /// thread waiting on it wakes up. The two must always happen together.
+    fn abort(&self) {
+        self.cancel.store(true, Ordering::Release);
+        self.ring.stop();
+    }
+}
+
+/// Feeder stage: split source batches into per-block jobs.
+///
+/// `jobs_tx` is dropped when this returns, which releases any decoder blocked
+/// in `recv`. Every exit path must `close(seq)` first, or the apply stage
+/// would wait forever on the missing sequence.
+fn feed_batches(ctx: &SyncCtx, mut source: Box<dyn BlockSource>, jobs_tx: SyncSender<Job>) -> Rerr {
+    let mut seq = 0u64;
+    'outer: loop {
+        // Cancellation is graceful at the batch boundary. Once a batch has
+        // been taken from the source, publish all of its blocks so execute
+        // and persistence can finish it.
+        if ctx.cancel.load(Ordering::Acquire) {
+            break;
+        }
+        let batch = match source.next() {
+            Ok(Some(batch)) => batch,
+            Ok(None) => break,
+            Err(e) => {
+                ctx.ring.close(seq);
+                return Err(e);
+            }
+        };
+        let blob = batch.bytes.clone();
+        let frames = match validated_frames(&batch) {
+            Ok(Some(frames)) => frames,
+            Ok(None) => match peek_frames(ctx.eng.registry.as_ref(), &blob) {
+                Ok(frames) => frames,
+                Err(e) => {
+                    ctx.ring.close(seq);
+                    return Err(e);
+                }
+            },
+            Err(e) => {
+                ctx.ring.close(seq);
+                return Err(e);
+            }
+        };
+        for (index, (off, len)) in frames.into_iter().enumerate() {
+            let job = Job {
+                seq,
+                blob: blob.clone(),
+                offset: off,
+                len,
+                decoded: batch.decoded_blocks.get(index).cloned(),
+            };
+            if jobs_tx.send(job).is_err() {
+                break 'outer;
+            }
+            seq += 1;
+        }
+    }
+    ctx.ring.close(seq);
+    Ok(())
+}
+
+/// Split a blob into block frames when the producer did not pre-split it,
+/// using the registry's block sizer instead.
+fn peek_frames(registry: &dyn base::BinaryCodecs, blob: &[u8]) -> Ret<Vec<(usize, usize)>> {
+    let mut frames = Vec::new();
+    let mut off = 0usize;
+    while off < blob.len() {
+        let used = match registry.peek_block_size(&blob[off..]) {
+            Ok(used) => used,
+            Err(e) => return Err(e),
+        };
+        if used == 0 || off + used > blob.len() {
+            return sys::errf!("incomplete block frame at offset {}", off);
+        }
+        frames.push((off, used));
+        off += used;
+    }
+    Ok(frames)
+}
+
+/// Decoder stage: reserve a ring slot before taking a job. If sequence N is a
+/// slow decode, later workers can fill the ring but can never occupy the slot
+/// N still needs.
+fn decode_loop(ctx: &SyncCtx, jobs_rx: Arc<Mutex<Receiver<Job>>>) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        loop {
+            if !ctx.ring.reserve() {
+                break;
+            }
+            let job = jobs_rx.lock().unwrap().recv();
+            let Ok(job) = job else {
+                ctx.ring.release();
+                break;
+            };
+            let slot = match job.decoded {
+                Some(blk) => BlkPkg::from_shared_decoded(
+                    job.blob,
+                    job.offset,
+                    job.len,
+                    blk,
+                    PkgSource::new(ctx.origin),
+                ),
+                None => BlkPkg::from_shared(
+                    ctx.eng.registry.as_ref(),
+                    job.blob,
+                    job.offset,
+                    job.len,
+                    PkgSource::new(ctx.origin),
+                ),
+            };
+            if !ctx.ring.publish_reserved(job.seq, slot) {
+                break;
+            }
+        }
+    }));
+    if result.is_err() {
+        // The panicked thread's slot would never be published: wake every
+        // stage first, then re-raise so the join side reports the failure
+        // instead of the pipeline hanging on the missing sequence.
+        ctx.abort();
+        panic!("sync decoder panicked");
+    }
+}
+
+/// Persistence stage: write executed jobs to disk in insertion order. On
+/// failure the real disk/root error must reach the caller, so wake every
+/// stage instead of letting execute wait on more network input.
+fn persist_loop(ctx: &SyncCtx, persist_rx: Receiver<PersistJob>) -> Ret<(u64, u64)> {
+    let result = (|| {
+        let mut rolled = 0;
+        let mut events = 0;
+        while let Ok(job) = persist_rx.recv() {
+            let outcome = ctx.eng.persist_one(job, false)?;
+            rolled += outcome.rolled;
+            events += outcome.events;
+        }
+        Ok((rolled, events))
+    })();
+    if result.is_err() {
+        ctx.abort();
+    }
+    result
+}
+
+/// Record a failure and return the same error, for use in `?` chains. A
+/// deferred stop (SYNC_DEFERRED) is not a failure: it records nothing, so
+/// the report stays clean for the caller and any progress sink.
+fn fail_with(report: &mut PipelineReport, height: u64, e: sys::Error) -> sys::Error {
+    if e.code() != Some(SYNC_DEFERRED) {
+        report.failure_height = Some(height);
+        report.failure_message = Some(e.to_string());
+    }
+    e
+}
+
+/// Apply stage: consume decoded blocks in order. Fast-sync jobs are handed to
+/// the bounded persister; strict mode persists inline so a reorg can never be
+/// planned on top of outstanding root jobs.
+fn apply_loop(
+    ctx: &SyncCtx,
+    persist_tx: &SyncSender<PersistJob>,
+    report: &mut PipelineReport,
+    replay_next: &mut Option<u64>,
+) -> Rerr {
+    let mut seq = 0u64;
+    loop {
+        let Some(slot) = ctx.ring.take(seq) else {
+            break;
+        };
+        seq += 1;
+        let pkg = match slot {
+            Ok(pkg) => pkg,
+            // A decode failure has no block height, so only the message is
+            // recorded here; process failures use `fail_with` below.
+            Err(e) => {
+                report.failure_message = Some(e.to_string());
+                return Err(e);
+            }
+        };
+        let height = pkg.height();
+        let Some(job) = process_block(ctx, report, &pkg, replay_next)
+            .map_err(|e| fail_with(report, height, e))?
+        else {
+            continue; // duplicate or discarded side branch: keep streaming
+        };
+        debug_assert!(!ctx.pipelined || (job.inserted.is_head && !job.inserted.reorg));
+        let confirmed_txs = job.inserted.confirmed_txs.clone();
+        let reverted_txs = job.inserted.reverted_txs.clone();
+        if ctx.pipelined {
+            persist_tx.send(job).map_err(|_| {
+                fail_with(
+                    report,
+                    height,
+                    sys::Error::fault("ordered persistence stage stopped"),
+                )
+            })?;
+        } else {
+            let outcome = ctx
+                .eng
+                .persist_one(job, false)
+                .map_err(|e| fail_with(report, height, e))?;
+            report.rolled += outcome.rolled;
+            report.events += outcome.events;
+        }
+        // Counted once attached to the tree; persistence may lag behind by up
+        // to the persist queue depth, so `accepted` is not the durable height.
+        report.accepted += 1;
+        report.final_height = ctx.eng.tree.head_height();
+        if replay_next.is_some() {
+            *replay_next = height.checked_add(1);
+        }
+        if !confirmed_txs.is_empty() {
+            report.confirmed_txs.push((height, confirmed_txs));
+        }
+        if !reverted_txs.is_empty() {
+            report.reverted_txs.push((height, reverted_txs));
+        }
+        if ctx.purpose.is_replay() || report.accepted.is_multiple_of(200) {
+            report_progress(ctx.opts, report);
+        }
+    }
+    Ok(())
+}
+
+/// Finalize a pipeline run: cancellation detection, replay completeness,
+/// cache coordination after any durable commit, and the deferred/error split.
+///
+/// `persist_result` is the persister stage's own result: it drains the whole
+/// queue even when the apply stage stopped early, so its totals belong to the
+/// report in every non-fatal outcome. `pipeline_result` is the apply/feeder/
+/// decoder outcome.
+fn finalize_run(
+    eng: &ChainEngine,
+    opts: &PipelineOptions,
+    purpose: PipelinePurpose,
+    cancel: &AtomicBool,
+    mut report: PipelineReport,
+    persist_result: Ret<(u64, u64)>,
+    pipeline_result: Rerr,
+) -> Ret<PipelineReport> {
+    // A persistence failure is engine-fatal: the caller marks the engine dead
+    // and boot replay rebuilds caches from the real disk state (§2.3).
+    let (rolled, events) = match persist_result {
+        Ok(summary) => summary,
+        Err(e) => return Err(e),
+    };
+    report.rolled += rolled;
+    report.events += events;
+
+    // External cancellation: no deferred blocks were held, the run was cut
+    // short by the caller.
+    if pipeline_result.is_ok() && cancel.load(Ordering::Acquire) {
+        if !eng.waiter.is_shutdown() {
+            eng.rebuild_runtime_caches()?;
+        }
+        report_progress(opts, &report);
+        return Err(cancelled_error());
+    }
+
+    // A successful run must cover the full requested replay range.
+    if pipeline_result.is_ok()
+        && let PipelinePurpose::Replay { from, to } = purpose
+    {
+        check_replay_complete(from, to, &report)?;
+    }
+
+    // Every durable commit needs a final cache coordination no matter how the
+    // run stopped: recent-block and fee caches are only rebuilt here, so a
+    // partial run (defer, decode or validation failure, source gap) would
+    // otherwise leave them pointing at pre-sync state. A rebuild failure
+    // after real commits leaves them stale, so it becomes the run's error
+    // instead of being masked under the original one; only a zero-commit run
+    // keeps the original error (the rebuild then re-reads unchanged data).
+    if let Err(e) = eng.rebuild_runtime_caches() {
+        if pipeline_result.is_ok() || report.accepted > 0 {
+            return Err(e);
+        }
+        eprintln!("[Block Sync Warning] cache rebuild failed: {}", e);
+    }
+    report_progress(opts, &report);
+    match pipeline_result {
+        Ok(()) => Ok(report),
+        // An admission deferral is a successful stop: the source is paused
+        // and the held-block report tells the caller what to retry later.
+        Err(e) if e.code() == Some(SYNC_DEFERRED) => Ok(report),
+        Err(e) => {
+            if report.failure_message.is_none() {
+                report.failure_message = Some(e.to_string());
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Run one sync pipeline to completion: feed, parallel decode, ordered apply
+/// and ordered persistence. Errors from any stage are resolved with the
+/// persister's disk/root error taking priority; see `finalize_run` for the
+/// success/cancel/deferred outcome mapping.
 fn run_pipeline(
     eng: &ChainEngine,
-    mut source: Box<dyn BlockSource>,
+    source: Box<dyn BlockSource>,
     mode: ApplyMode,
     opts: PipelineOptions,
     cancel: Arc<AtomicBool>,
@@ -205,343 +679,84 @@ fn run_pipeline(
     report_progress(&opts, &report);
 
     let ring = Arc::new(Ring::new(queue));
-    // (seq, blob, offset, len, remote_height, pre-decoded block if any)
-    type Job = (u64, Arc<Vec<u8>>, usize, usize, u64, Option<base::BlockRef>);
     let (jobs_tx, jobs_rx) = sync_channel::<Job>(queue);
     let jobs_rx = Arc::new(Mutex::new(jobs_rx));
-    let origin = opts.origin;
-    let pipelined = mode.is_fast_sync();
+    let ctx = SyncCtx {
+        eng,
+        opts: &opts,
+        mode,
+        purpose,
+        cancel,
+        origin: opts.origin,
+        ring,
+        pipelined: mode.is_fast_sync(),
+    };
+    let ctx_ref = &ctx;
 
-    let result = thread::scope(|s| -> Ret<(u64, u64)> {
-        // Feeder: split incoming batches into per-block jobs.
-        let feed_ring = ring.clone();
-        let feed_registry = eng.registry.clone();
-        let feed_cancel = cancel.clone();
-        let feeder = s.spawn(move || -> Rerr {
-            let mut seq = 0u64;
-            'outer: loop {
-                // Cancellation is graceful at the batch boundary. Once a
-                // batch has been taken from the source, publish all of its
-                // blocks so execute and persistence can finish it.
-                if feed_cancel.load(Ordering::Acquire) {
-                    break;
-                }
-                let batch = match source.next() {
-                    Ok(Some(batch)) => batch,
-                    Ok(None) => break,
-                    Err(e) => {
-                        feed_ring.close(seq);
-                        drop(jobs_tx);
-                        return Err(e);
-                    }
-                };
-                let blob = batch.bytes.clone();
-                let frames = match validated_frames(&batch) {
-                    Ok(frames) => frames,
-                    Err(e) => {
-                        feed_ring.close(seq);
-                        return Err(e);
-                    }
-                };
-                if let Some(frames) = frames {
-                    for (index, (off, len)) in frames.into_iter().enumerate() {
-                        let decoded = batch.decoded_blocks.get(index).cloned();
-                        if jobs_tx
-                            .send((seq, blob.clone(), off, len, batch.remote_height, decoded))
-                            .is_err()
-                        {
-                            break 'outer;
-                        }
-                        seq += 1;
-                    }
-                    continue;
-                }
-                let mut off = 0usize;
-                let mut index = 0usize;
-                while off < blob.len() {
-                    let used = match feed_registry.peek_block_size(&blob[off..]) {
-                        Ok(used) => used,
-                        Err(e) => {
-                            feed_ring.close(seq);
-                            drop(jobs_tx);
-                            return Err(e);
-                        }
-                    };
-                    if used == 0 || off + used > blob.len() {
-                        feed_ring.close(seq);
-                        drop(jobs_tx);
-                        return sys::errf!("incomplete block frame at offset {}", off);
-                    }
-                    let decoded = batch.decoded_blocks.get(index).cloned();
-                    if jobs_tx
-                        .send((seq, blob.clone(), off, used, batch.remote_height, decoded))
-                        .is_err()
-                    {
-                        break 'outer;
-                    }
-                    off += used;
-                    index += 1;
-                    seq += 1;
-                }
-            }
-            feed_ring.close(seq);
-            drop(jobs_tx);
-            Ok(())
-        });
-
-        // Decoders.
-        for _ in 0..workers {
-            let rx = jobs_rx.clone();
-            let ring = ring.clone();
-            let registry = eng.registry.clone();
-            s.spawn(move || {
-                loop {
-                    // Reserve capacity before taking a job. If sequence N is a
-                    // slow decode, later workers can fill the ring but can
-                    // never occupy the slot N still needs.
-                    if !ring.reserve() {
-                        break;
-                    }
-                    let job = { rx.lock().unwrap().recv() };
-                    let Ok((seq, blob, off, len, _remote, decoded)) = job else {
-                        ring.release();
-                        break;
-                    };
-                    let slot = match decoded {
-                        Some(blk) => {
-                            BlkPkg::from_shared_decoded(blob, off, len, blk, PkgSource::new(origin))
-                        }
-                        None => BlkPkg::from_shared(
-                            registry.as_ref(),
-                            blob,
-                            off,
-                            len,
-                            PkgSource::new(origin),
-                        ),
-                    };
-                    if !ring.publish_reserved(seq, slot) {
-                        break;
-                    }
-                }
-            });
-        }
-        // Only decoder workers may keep the receive side alive. On a hard
-        // pipeline stop they all exit, disconnecting the channel and releasing
+    // Feed -> decode -> apply -> persist. Every stage blocks on the ring or a
+    // channel; any failure is broadcast through SyncCtx::abort. Returns the
+    // persister outcome separately from the run outcome: the persister drains
+    // the whole queue even when the apply stage stops early, so its totals
+    // reach the report in every non-fatal outcome.
+    let (persist_result, pipeline_result) = thread::scope(|s| -> (Ret<(u64, u64)>, Rerr) {
+        let (persist_tx, persist_rx) = sync_channel(persist_queue);
+        let feeder = s.spawn(move || feed_batches(ctx_ref, source, jobs_tx));
+        let decoders: Vec<_> = (0..workers)
+            .map(|_| {
+                let rx = jobs_rx.clone();
+                s.spawn(move || decode_loop(ctx_ref, rx))
+            })
+            .collect();
+        // Only decoder workers may keep the receive side alive: when they all
+        // exit on a hard pipeline stop, the channel disconnects and releases
         // a feeder blocked in send().
         drop(jobs_rx);
+        let persister = s.spawn(move || persist_loop(ctx_ref, persist_rx));
 
-        let (persist_tx, persist_rx) = sync_channel(persist_queue);
-        let persist_ring = ring.clone();
-        let persist_cancel = cancel.clone();
-        let persister = s.spawn(move || -> Ret<(u64, u64)> {
-            let result = (|| {
-                let mut rolled = 0;
-                let mut events = 0;
-                while let Ok(job) = persist_rx.recv() {
-                    let outcome = eng.persist_one(job, false)?;
-                    rolled += outcome.rolled;
-                    events += outcome.events;
-                }
-                Ok((rolled, events))
-            })();
-            if result.is_err() {
-                // Persistence can fail while execute is waiting for more
-                // network input. Wake every stage so the real disk/root error
-                // can be returned and recovery can reset pending tree state.
-                persist_cancel.store(true, Ordering::Release);
-                persist_ring.stop();
-            }
-            result
-        });
-
-        // Execute/tree: consume decoded blocks in order. Fast-sync jobs are
-        // handed to the bounded persister; strict mode persists inline so a
-        // reorg can never be planned on top of outstanding root jobs.
-        let apply_result = (|| -> Rerr {
-            let mut seq = 0u64;
-            loop {
-                let Some(slot) = ring.take(seq) else { break };
-                seq += 1;
-                let pkg = match slot {
-                    Ok(pkg) => pkg,
-                    Err(e) => {
-                        report.failure_message = Some(e.to_string());
-                        return Err(e);
-                    }
-                };
-                let height = pkg.height();
-                if let Err(e) = check_replay_height(replay_next, height) {
-                    report.failure_height = Some(height);
-                    report.failure_message = Some(e.to_string());
-                    return Err(e);
-                }
-                if !pipelined {
-                    crate::verify::check_intrinsic(eng, &pkg).inspect_err(|e| {
-                        report.failure_height = Some(height);
-                        report.failure_message = Some(e.to_string());
-                    })?;
-                }
-                if matches!(purpose, PipelinePurpose::Network) {
-                    let admission =
-                        eng.consensus
-                            .check_block_admission(&pkg, eng)
-                            .inspect_err(|e| {
-                                report.failure_height = Some(height);
-                                report.failure_message = Some(e.to_string());
-                            })?;
-                    if matches!(admission, base::BlockAdmissionDecision::Defer(_)) {
-                        report.held_blocks.push((height, pkg.hash()));
-                        report_progress(&opts, &report);
-                        // Wake a network source that may already be waiting for
-                        // the next batch. This is an intentional successful
-                        // stop, distinguished from external cancellation by
-                        // the non-empty held report below.
-                        cancel.store(true, Ordering::Release);
-                        ring.stop();
-                        break;
-                    }
-                    eng.consensus
-                        .check_block_arrive(&pkg, eng)
-                        .inspect_err(|e| {
-                            report.failure_height = Some(height);
-                            report.failure_message = Some(e.to_string());
-                        })?;
-                }
-                let prepared = eng
-                    .prepare_one(&pkg, mode, purpose.persist_body())
-                    .map_err(|e| {
-                        report.failure_height = Some(height);
-                        report.failure_message = Some(e.to_string());
-                        e
-                    })?;
-                let job = match prepared {
-                    PreparedBlock::Accepted(job) => job,
-                    PreparedBlock::Duplicate(hash) => match purpose {
-                        PipelinePurpose::Network => {
-                            report.final_height = eng.tree.head_height();
-                            continue;
-                        }
-                        PipelinePurpose::Replay { .. } => {
-                            let e = sys::Error::fault(format!(
-                                "replay block <{}, {:?}> is already present",
-                                height, hash
-                            ));
-                            report.failure_height = Some(height);
-                            report.failure_message = Some(e.to_string());
-                            return Err(e);
-                        }
-                    },
-                    PreparedBlock::Orphan(parent) => match purpose {
-                        PipelinePurpose::Network => {
-                            let e = sys::Error::fault(format!(
-                                "network block {} is missing parent {:?}",
-                                height, parent
-                            ));
-                            report.failure_height = Some(height);
-                            report.failure_message = Some(e.to_string());
-                            return Err(e);
-                        }
-                        PipelinePurpose::Replay { .. } => {
-                            let e = sys::Error::fault(format!(
-                                "replay block {} is missing parent {:?}",
-                                height, parent
-                            ));
-                            report.failure_height = Some(height);
-                            report.failure_message = Some(e.to_string());
-                            return Err(e);
-                        }
-                    },
-                };
-                debug_assert!(!pipelined || (job.is_head && !job.reorg));
-                let confirmed_txs = job.confirmed_txs.clone();
-                let reverted_txs = job.reverted_txs.clone();
-                if pipelined {
-                    persist_tx.send(job).map_err(|_| {
-                        let e = sys::Error::fault("ordered persistence stage stopped");
-                        report.failure_height = Some(height);
-                        report.failure_message = Some(e.to_string());
-                        e
-                    })?;
-                } else {
-                    let outcome = eng.persist_one(job, false).map_err(|e| {
-                        report.failure_height = Some(height);
-                        report.failure_message = Some(e.to_string());
-                        e
-                    })?;
-                    report.rolled += outcome.rolled;
-                    report.events += outcome.events;
-                }
-                report.accepted += 1;
-                report.final_height = eng.tree.head_height();
-                if replay_next.is_some() {
-                    replay_next = height.checked_add(1);
-                }
-                if !confirmed_txs.is_empty() {
-                    report.confirmed_txs.push((height, confirmed_txs));
-                }
-                if !reverted_txs.is_empty() {
-                    report.reverted_txs.push((height, reverted_txs));
-                }
-                if matches!(purpose, PipelinePurpose::Replay { .. })
-                    || report.accepted.is_multiple_of(200)
-                {
-                    report_progress(&opts, &report);
-                }
-            }
-            Ok(())
-        })();
-
-        if apply_result.is_err() {
-            cancel.store(true, Ordering::Release);
-            ring.stop();
+        let applied = apply_loop(ctx_ref, &persist_tx, &mut report, &mut replay_next);
+        if applied.is_err() {
+            ctx.abort();
         }
-
+        // Close the persistence channel; the persister drains and exits.
         drop(persist_tx);
-        let feeder_result = feeder
-            .join()
-            .map_err(|_| sys::Error::fault("sync feeder panicked"))?;
-        let persist_result = persister
-            .join()
-            .map_err(|_| sys::Error::fault("sync persister panicked"))?;
 
         // A closed persistence channel is only a symptom; preserve the actual
         // disk/root error returned by the persister when one exists.
-        let persisted = match persist_result {
-            Ok(summary) => summary,
-            Err(e) => return Err(e),
+        let persist_result = match persister.join() {
+            Ok(Ok(summary)) => Ok(summary),
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(sys::Error::fault("sync persister panicked")
+                .with_code(crate::engine::PERSIST_FAILED)),
         };
-        apply_result?;
-        feeder_result?;
-        Ok(persisted)
+        // The run outcome: the apply error, or the first error among the
+        // feeder and decoder joins. Every handle is joined explicitly so a
+        // panicking worker surfaces as an error here instead of panicking
+        // the scope and skipping finalize_run.
+        let feeder_result = match feeder.join() {
+            Ok(result) => result,
+            Err(_) => Err(sys::Error::fault("sync feeder panicked")),
+        };
+        let mut decoder_result: Rerr = Ok(());
+        for decoder in decoders {
+            if decoder.join().is_err() {
+                decoder_result = Err(sys::Error::fault("sync decoder panicked"));
+            }
+        }
+        (
+            persist_result,
+            applied.and(feeder_result).and(decoder_result),
+        )
     });
 
-    let result = match result {
-        Ok(_) if cancel.load(Ordering::Acquire) && report.held_blocks.is_empty() => {
-            if !eng.waiter.is_shutdown() {
-                eng.rebuild_runtime_caches()?;
-            }
-            Err(cancelled_error())
-        }
-        result => result,
-    };
-    let result = result.and_then(|(rolled, events)| {
-        report.rolled += rolled;
-        report.events += events;
-        if let PipelinePurpose::Replay { from, to } = purpose {
-            check_replay_complete(from, to, &report)?;
-        }
-        eng.rebuild_runtime_caches()
-    });
-    report_progress(&opts, &report);
-    match result {
-        Ok(()) => Ok(report),
-        Err(e) => {
-            if report.failure_message.is_none() {
-                report.failure_message = Some(e.to_string());
-            }
-            Err(e)
-        }
-    }
+    finalize_run(
+        eng,
+        &opts,
+        purpose,
+        &ctx.cancel,
+        report,
+        persist_result,
+        pipeline_result,
+    )
 }
 
 /// Clears the syncing flag however the run ends.

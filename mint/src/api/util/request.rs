@@ -1,8 +1,19 @@
-use base::{ApiRequest, ApiResponse};
+use base::{ApiExecCtx, ApiRequest, ApiResponse, OptimisticState};
 use std::fmt::Write;
 use sys::{ToBase64, ToHex};
 
 pub(crate) const UNIT_238: u128 = 100_0000_0000;
+
+/// Optimistic session acquisition with the unavailable case expressed
+/// distinctly: a fatal/stopping engine fails the request, a busy engine keeps
+/// the plain "state changed" response.
+pub(crate) fn optimistic_snapshot(ctx: &ApiExecCtx) -> Result<OptimisticState, ApiResponse> {
+    match ctx.engine.optimistic_canonical() {
+        Ok(Some(snapshot)) => Ok(snapshot),
+        Ok(None) => Err(api_error("state changed")),
+        Err(e) => Err(api_error(&format!("query unavailable: {}", e))),
+    }
+}
 
 pub(crate) fn hac238_to_unit(v: u128) -> f64 {
     v as f64 / UNIT_238 as f64
@@ -119,11 +130,7 @@ pub(crate) fn api_data_list_field(name: &str, latest: i64, list: Vec<String>) ->
 }
 
 pub(crate) fn encode_miner_bytes(v: &[u8], is_base64: bool) -> String {
-    if is_base64 {
-        v.to_base64()
-    } else {
-        v.to_hex()
-    }
+    if is_base64 { v.to_base64() } else { v.to_hex() }
 }
 
 pub(crate) fn get_id_range(max: i64, page: i64, limit: i64, instart: i64, desc: bool) -> Vec<i64> {

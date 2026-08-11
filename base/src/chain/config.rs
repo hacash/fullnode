@@ -50,6 +50,11 @@ pub struct EngineConfig {
     pub data_dir: String,
     pub fast_sync: bool,
     pub unstable_block: u64,
+    /// Maximum number of side branch blocks the live fork tree and boot side
+    /// replay may retain. Over-capacity side subtrees are dropped in
+    /// deterministic order; side state is volatile and rebuildable from the
+    /// side hash list.
+    pub side_tree_capacity: usize,
     pub recent_blocks: bool,
     pub average_fee_purity: bool,
     pub show_miner_name: bool,
@@ -66,6 +71,7 @@ impl Default for EngineConfig {
             data_dir: String::new(),
             fast_sync: false,
             unstable_block: 4,
+            side_tree_capacity: 256,
             recent_blocks: true,
             average_fee_purity: true,
             show_miner_name: false,

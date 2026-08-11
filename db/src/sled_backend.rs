@@ -45,17 +45,6 @@ impl DiskDB for SledDisk {
             self.db.flush().expect("sled flush");
         }
     }
-    fn write(&self, memkv: &dyn MemDB) {
-        let mut wb = sled::Batch::default();
-        memkv.for_each(&mut |key, value| match value {
-            Some(value) => wb.insert(key, value),
-            None => wb.remove(key),
-        });
-        self.db.apply_batch(wb).expect("sled write batch");
-        if db_sync_enabled() {
-            self.db.flush().expect("sled flush");
-        }
-    }
     fn try_write(&self, memkv: &dyn MemDB) -> Rerr {
         let mut wb = sled::Batch::default();
         memkv.for_each(&mut |key, value| match value {

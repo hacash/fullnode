@@ -16,7 +16,7 @@ pub(crate) fn block_intro_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespo
     }
     match load_block_by_key(ctx, &key) {
         Ok(pkg) => ApiResponse::json(block_intro_json(&pkg, &unit, tx_hash_list)),
-        Err(_) => api_error("cannot find block"),
+        Err(e) => ApiResponse::err(503, &format!("block query failed: {}", e)),
     }
 }
 
@@ -45,7 +45,13 @@ pub(crate) fn block_datas_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespo
         if height > last_height || count >= limit || alldatas.len() >= max_size {
             break;
         }
-        let Some((_, block_data)) = store.block_data_by_height(height) else {
+        let found = match store.block_data_by_height(height) {
+            Ok(found) => found,
+            Err(e) => {
+                return ApiResponse::err(503, &format!("block read failed: {}", e));
+            }
+        };
+        let Some((_, block_data)) = found else {
             break;
         };
         alldatas.extend_from_slice(block_data.as_ref());
@@ -81,8 +87,12 @@ pub(crate) fn block_views_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespo
         if id < 0 {
             continue;
         }
-        let Some(block) = ctx.engine.block_history().block_at_height(id as u64) else {
-            continue;
+        let block = match ctx.engine.block_history().block_at_height(id as u64) {
+            Ok(Some(block)) => block,
+            Ok(None) => continue,
+            Err(e) => {
+                return ApiResponse::err(503, &format!("block history read failed: {}", e));
+            }
         };
         list.push(block_summary_json(block.as_ref(), block.hash(), &unit));
     }
@@ -114,8 +124,12 @@ pub(crate) fn block_pool_stats_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> Ap
 
     // All periods end at the same height, so one longest-window scan populates every period.
     for height in first_height..=last_height {
-        let Some(block) = ctx.engine.block_history().block_at_height(height) else {
-            continue;
+        let block = match ctx.engine.block_history().block_at_height(height) {
+            Ok(Some(block)) => block,
+            Ok(None) => continue,
+            Err(e) => {
+                return ApiResponse::err(503, &format!("block history read failed: {}", e));
+            }
         };
         let prelude = block.prelude_transaction().ok();
         let miner = prelude

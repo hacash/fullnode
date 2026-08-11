@@ -62,7 +62,7 @@ impl ScanerView for EngineScanerView {
     ) -> Option<Vec<Option<Balance>>> {
         const MAX_SNAPSHOT_ATTEMPTS: usize = 3;
         for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
-            let Some(session) = self.engine.state_at_session(block_hash) else {
+            let Some(session) = self.engine.state_at_session(block_hash).ok().flatten() else {
                 std::thread::yield_now();
                 continue;
             };
@@ -91,7 +91,13 @@ impl ChainListener for ScanerListener {
         if matches!(origin, base::PkgOrigin::Rebuild | base::PkgOrigin::Replay) {
             return;
         }
-        let Some(block) = self.view.block_history().block_at_height(height) else {
+        let Some(block) = self
+            .view
+            .block_history()
+            .block_at_height(height)
+            .ok()
+            .flatten()
+        else {
             return;
         };
         self.scaner.on_block(block, self.view.clone());

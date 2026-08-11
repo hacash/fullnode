@@ -337,10 +337,6 @@ impl LevelDB {
         }
     }
 
-    pub fn write(&self, batch: &Writebatch) {
-        self.try_write(batch).expect("leveldb write batch");
-    }
-
     pub fn try_write(&self, batch: &Writebatch) -> Rerr {
         let mut error = ptr::null_mut();
         unsafe {

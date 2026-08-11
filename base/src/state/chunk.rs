@@ -414,6 +414,17 @@ impl StateChunkRef {
         Ok(())
     }
 
+    /// Detach a previously attached child (side-capacity eviction). Returns
+    /// whether the child was present. The detached subtree becomes
+    /// unreachable and is dropped with its state; the canonical chain never
+    /// goes through this path.
+    pub fn remove_block_child(&self, child: &Self) -> bool {
+        let mut children = self.0.children.write().unwrap();
+        let before = children.len();
+        children.retain(|c| !Arc::ptr_eq(c, &child.0));
+        before != children.len()
+    }
+
     pub fn block_logs(&self) -> Vec<LogEntry> {
         let body = self.0.body.read().unwrap();
         match &*body {
@@ -489,7 +500,7 @@ impl StateChunkRef {
         let parent = {
             let source = self.0.source.read().unwrap();
             match &*source {
-                Source::Disk(disk) => return disk.read(key),
+                Source::Disk(disk) => return crate::read_or_panic(disk.as_ref(), key),
                 Source::Parent(parent) => parent
                     .upgrade()
                     .expect("state chunk parent expired while its view was in use"),
@@ -549,6 +560,10 @@ mod tests {
         fn save(&self, _key: &[u8], _val: &[u8]) {}
 
         fn remove(&self, _key: &[u8]) {}
+
+        fn try_write(&self, _memkv: &dyn crate::MemDB) -> sys::Rerr {
+            Ok(())
+        }
     }
 
     #[derive(Debug)]
@@ -652,6 +667,9 @@ mod tests {
             }
             fn save(&self, _key: &[u8], _val: &[u8]) {}
             fn remove(&self, _key: &[u8]) {}
+            fn try_write(&self, _memkv: &dyn crate::MemDB) -> sys::Rerr {
+                Ok(())
+            }
         }
 
         let root = StateChunkRef::new_root(Arc::new(BaseDisk), block(0, Hash::default()));
@@ -741,6 +759,9 @@ mod tests {
             }
             fn save(&self, _key: &[u8], _val: &[u8]) {}
             fn remove(&self, _key: &[u8]) {}
+            fn try_write(&self, _memkv: &dyn crate::MemDB) -> sys::Rerr {
+                Ok(())
+            }
         }
 
         let disk = Arc::new(BaseDisk);

@@ -14,8 +14,9 @@ pub(crate) fn diamond_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse 
     let mut name = q_string(&req, "name", "");
     let number = req.query_u64("number").unwrap_or(0) as u32;
 
-    let Some(snapshot) = ctx.engine.optimistic_canonical() else {
-        return api_error("state changed");
+    let snapshot = match optimistic_snapshot(ctx) {
+        Ok(snapshot) => snapshot,
+        Err(resp) => return resp,
     };
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());
@@ -65,8 +66,9 @@ pub(crate) fn diamond_views_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRes
     let desc = q_bool(&req, "desc", false);
     let name = q_string(&req, "name", "");
 
-    let Some(snapshot) = ctx.engine.optimistic_canonical() else {
-        return api_error("state changed");
+    let snapshot = match optimistic_snapshot(ctx) {
+        Ok(snapshot) => snapshot,
+        Err(resp) => return resp,
     };
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());
@@ -121,8 +123,9 @@ pub(crate) fn diamond_inscription_protocol_cost_impl(
     let action_key = force_action
         .map(|v| v.to_owned())
         .unwrap_or_else(|| q_string(&req, "action", "append").to_lowercase());
-    let Some(snapshot) = ctx.engine.optimistic_canonical() else {
-        return api_error("state changed");
+    let snapshot = match optimistic_snapshot(ctx) {
+        Ok(snapshot) => snapshot,
+        Err(resp) => return resp,
     };
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());
@@ -248,8 +251,9 @@ pub(crate) fn diamond_bidding_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiR
     let number = req.query_u64("number").unwrap_or(0) as u32;
     let since = q_bool(&req, "since", false);
 
-    let Some(snapshot) = ctx.engine.optimistic_canonical() else {
-        return api_error("state changed");
+    let snapshot = match optimistic_snapshot(ctx) {
+        Ok(snapshot) => snapshot,
+        Err(resp) => return resp,
     };
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());

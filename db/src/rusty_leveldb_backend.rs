@@ -42,20 +42,6 @@ impl DiskDB for RustyLeveldbDisk {
         }
     }
 
-    fn write(&self, memkv: &dyn MemDB) {
-        let mut wb = rusty_leveldb::WriteBatch::default();
-        memkv.for_each(&mut |key, value| match value {
-            Some(value) => wb.put(key, value),
-            None => wb.delete(key),
-        });
-        let sync = db_sync_enabled();
-        let mut db = self.db.lock().unwrap();
-        db.write(wb, sync).expect("rusty-leveldb write batch");
-        if sync {
-            db.flush().expect("rusty-leveldb flush");
-        }
-    }
-
     fn try_write(&self, memkv: &dyn MemDB) -> Rerr {
         let mut wb = rusty_leveldb::WriteBatch::default();
         memkv.for_each(&mut |key, value| match value {

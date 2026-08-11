@@ -154,7 +154,10 @@ fn contract_sandbox_call(
     };
     let services = ctx.engine.services().clone();
     // §13.2 VM sandbox uses an optimistic snapshot, no StateGate held.
-    let Some(snapshot) = ctx.engine.optimistic_canonical() else {
+    let Some(snapshot) = (match ctx.engine.optimistic_canonical() {
+        Ok(snapshot) => snapshot,
+        Err(e) => return api_error(&format!("query unavailable: {}", e)),
+    }) else {
         return api_error("state changed during sandbox call");
     };
     let start_epoch = snapshot.epoch;
@@ -271,7 +274,10 @@ fn debug_contract_storage(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
         Err(reason) => return api_error(reason),
     };
     // §13.2 VM sandbox uses an optimistic snapshot, no StateGate held.
-    let Some(snapshot) = ctx.engine.optimistic_canonical() else {
+    let Some(snapshot) = (match ctx.engine.optimistic_canonical() {
+        Ok(snapshot) => snapshot,
+        Err(e) => return api_error(&format!("query unavailable: {}", e)),
+    }) else {
         return api_error("state changed during contract storage query");
     };
     let start_epoch = snapshot.epoch;

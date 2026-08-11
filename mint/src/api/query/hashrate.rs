@@ -6,11 +6,15 @@ use crate::difficulty::DifficultyConfig;
 
 pub(crate) fn hashrate_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse {
     let latest = ctx.engine.latest_block();
-    let prev100_timestamp = latest
-        .height()
-        .checked_sub(100)
-        .and_then(|h| ctx.engine.block_history().block_at_height(h))
-        .map(|b| b.timestamp());
+    let prev100_timestamp = match latest.height().checked_sub(100) {
+        Some(height) => match ctx.engine.block_history().block_at_height(height) {
+            Ok(block) => block.map(|block| block.timestamp()),
+            Err(e) => {
+                return ApiResponse::err(503, &format!("block history read failed: {}", e));
+            }
+        },
+        None => None,
+    };
     ApiResponse::json(hashrate_json(
         latest.height(),
         latest.timestamp(),
@@ -46,8 +50,18 @@ pub(crate) fn hashrate_logs_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRes
         let distance = (days - 1 - i).saturating_mul(blocks_per_adjust);
         let s1 = last_height.saturating_sub(distance);
         let s2 = secs + secs * i;
-        let rt1 = block_rate_at(ctx, s1);
-        let rt2 = block_rate_at(ctx, s2);
+        let rt1 = match block_rate_at(ctx, s1) {
+            Ok(rate) => rate,
+            Err(e) => {
+                return ApiResponse::err(503, &format!("block history read failed: {}", e));
+            }
+        };
+        let rt2 = match block_rate_at(ctx, s2) {
+            Ok(rate) => rate,
+            Err(e) => {
+                return ApiResponse::err(503, &format!("block history read failed: {}", e));
+            }
+        };
         day200_max = day200_max.max(rt1);
         dayall_max = dayall_max.max(rt2);
         day200.push(rt1);
@@ -59,11 +73,15 @@ pub(crate) fn hashrate_logs_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRes
 
     let mut fields = Vec::new();
     if target {
-        let prev100_timestamp = latest
-            .height()
-            .checked_sub(100)
-            .and_then(|h| ctx.engine.block_history().block_at_height(h))
-            .map(|b| b.timestamp());
+        let prev100_timestamp = match latest.height().checked_sub(100) {
+            Some(height) => match ctx.engine.block_history().block_at_height(height) {
+                Ok(block) => block.map(|block| block.timestamp()),
+                Err(e) => {
+                    return ApiResponse::err(503, &format!("block history read failed: {}", e));
+                }
+            },
+            None => None,
+        };
         fields.push(hashrate_fields_json(
             latest.height(),
             latest.timestamp(),

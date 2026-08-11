@@ -71,8 +71,9 @@ pub(crate) fn balance_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse 
     }
 
     // §13: multi-read API uses optimistic snapshot; validate at the end.
-    let Some(snapshot) = ctx.engine.optimistic_canonical() else {
-        return api_error("state changed");
+    let snapshot = match optimistic_snapshot(ctx) {
+        Ok(snapshot) => snapshot,
+        Err(resp) => return resp,
     };
     let start_epoch = snapshot.epoch;
     let core = CoreStateRead::wrap(snapshot.view());

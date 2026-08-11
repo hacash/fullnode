@@ -27,66 +27,41 @@ fn height_key(height: u64) -> Vec<u8> {
     v
 }
 
-fn read_hash(disk: &dyn DiskDB, key: &[u8]) -> Option<Hash> {
-    let bytes = disk.read(key)?;
-    if bytes.len() < 32 {
-        return None;
+/// Index hash lookup with the recoverable read boundary: `Ok(None)` is the
+/// only not-found answer and backend read failures are returned, not masked.
+fn read_hash_ret(disk: &dyn DiskDB, key: &[u8]) -> sys::Ret<Option<Hash>> {
+    let Some(bytes) = disk.try_read(key)? else {
+        return Ok(None);
+    };
+    if bytes.len() != 32 {
+        return sys::errf!(
+            "block height index is malformed: expected 32 bytes, got {}",
+            bytes.len()
+        );
     }
     let mut buf = [0u8; 32];
     buf.copy_from_slice(&bytes[..32]);
-    Some(Hash::from(buf))
+    Ok(Some(Hash::from(buf)))
 }
 
-/// Slow recovery path for a missing or corrupt cursor.
-fn scan_available_tip(block: &dyn DiskDB) -> u64 {
-    let mut max_index = 0u64;
-    let _ = block.for_each(&mut |k, _| {
-        if k.starts_with(KEY_PREFIX_BLOCK_INDEX) && k.len() == KEY_PREFIX_BLOCK_INDEX.len() + 8 {
-            let mut buf = [0u8; 8];
-            buf.copy_from_slice(&k[KEY_PREFIX_BLOCK_INDEX.len()..]);
-            max_index = max_index.max(u64::from_be_bytes(buf));
-        }
-    });
-
-    let mut tip = 0u64;
-    for height in 1..=max_index {
-        let Some(hash) = read_hash(block, &height_key(height)) else {
-            break;
-        };
-        if block.read(&block_key(&hash)).is_none() {
-            break;
-        }
-        tip = height;
-    }
-    tip
-}
-
-fn cursor_height(block: &dyn DiskDB) -> Option<u64> {
-    let raw = block.read(KEY_AVAILABLE_CURSOR)?;
+/// Raw cursor value without repair or validation: a missing cursor is `0` and
+/// is classified by boot (fresh store vs corrupted store); a malformed cursor
+/// is an explicit error — it must never silently become `0` and restart a
+/// non-empty store from genesis. Read errors are returned, never replaced by
+/// a default cursor.
+fn raw_cursor(block: &dyn DiskDB) -> sys::Ret<u64> {
+    let Some(raw) = block.try_read(KEY_AVAILABLE_CURSOR)? else {
+        return Ok(0);
+    };
     if raw.len() != 8 {
-        return None;
+        return sys::errf!(
+            "block available cursor is malformed: expected 8 bytes, got {}",
+            raw.len()
+        );
     }
     let mut bytes = [0u8; 8];
     bytes.copy_from_slice(&raw);
-    let height = u64::from_be_bytes(bytes);
-    if height == 0 {
-        return None;
-    }
-    let hash = read_hash(block, &height_key(height))?;
-    block.read(&block_key(&hash)).is_some().then_some(height)
-}
-
-fn restore_cursor(block: &dyn DiskDB) -> u64 {
-    if let Some(height) = cursor_height(block) {
-        return height;
-    }
-    let height = scan_available_tip(block);
-    if height > 0 {
-        let mut batch = MemKV::new();
-        batch.put(KEY_AVAILABLE_CURSOR.to_vec(), height.to_be_bytes().to_vec());
-        let _ = block.try_write(&batch);
-    }
-    height
+    Ok(u64::from_be_bytes(bytes))
 }
 
 pub(crate) struct KvBlockStore {
@@ -95,12 +70,14 @@ pub(crate) struct KvBlockStore {
 }
 
 impl KvBlockStore {
-    pub(crate) fn new(block: Arc<dyn DiskDB>) -> Self {
-        let tip = restore_cursor(block.as_ref());
-        Self {
+    /// Reads the persisted cursor as-is. The engine boot owns cursor
+    /// validation and must never be silently handed a repaired value.
+    pub(crate) fn new(block: Arc<dyn DiskDB>) -> sys::Ret<Self> {
+        let tip = raw_cursor(block.as_ref())?;
+        Ok(Self {
             block,
             tip: AtomicU64::new(tip),
-        }
+        })
     }
 }
 
@@ -170,7 +147,7 @@ impl BlockStoreTrait for KvBlockStore {
             if canonical_height == 0 {
                 return sys::errf!("genesis block must not be indexed in BlockStore");
             }
-            if canonical_hash != *hash && self.read_by_hash(&canonical_hash).is_none() {
+            if canonical_hash != *hash && self.read_by_hash(&canonical_hash)?.is_none() {
                 return sys::errf!(
                     "cannot index missing block {:?} at height {}",
                     canonical_hash,
@@ -196,19 +173,41 @@ impl BlockStoreTrait for KvBlockStore {
         Ok(())
     }
 
-    fn read_by_hash(&self, hash: &Hash) -> Option<Bytes> {
-        self.block.read(&block_key(hash)).map(Bytes::from_vec)
+    fn read_by_hash(&self, hash: &Hash) -> sys::Ret<Option<Bytes>> {
+        self.block
+            .try_read(&block_key(hash))
+            .map(|found| found.map(Bytes::from_vec))
     }
 
-    fn read_by_height(&self, height: u64) -> Option<(Hash, Bytes)> {
-        let hash = read_hash(self.block.as_ref(), &height_key(height))?;
-        let data = self.read_by_hash(&hash)?;
-        Some((hash, data))
+    fn read_by_height(&self, height: u64) -> sys::Ret<Option<(Hash, Bytes)>> {
+        let Some(hash) = read_hash_ret(self.block.as_ref(), &height_key(height))? else {
+            return Ok(None);
+        };
+        let Some(data) = self.read_by_hash(&hash)? else {
+            return sys::errf!(
+                "block height index references missing body at height {} hash {:?}",
+                height,
+                hash
+            );
+        };
+        Ok(Some((hash, data)))
     }
 
-    fn available_cursor(&self) -> Option<u64> {
+    fn hash_by_height(&self, height: u64) -> sys::Ret<Option<Hash>> {
+        read_hash_ret(self.block.as_ref(), &height_key(height))
+    }
+
+    fn available_cursor(&self) -> sys::Ret<Option<u64>> {
         let height = self.tip.load(Ordering::Acquire);
-        (height > 0).then_some(height)
+        Ok((height > 0).then_some(height))
+    }
+
+    fn has_records(&self) -> sys::Ret<bool> {
+        let mut found = false;
+        // A scan failure is treated as an error: boot must refuse to treat an
+        // unreadable store as a fresh one.
+        self.block.for_each(&mut |_, _| found = true)?;
+        Ok(found || self.available_cursor()?.is_some())
     }
 }
 
@@ -224,7 +223,7 @@ mod tests {
     #[test]
     fn reorg_body_indexes_tail_and_cursor_commit_together() {
         let disk = crate::mem::MemDiskDB::new() as Arc<dyn DiskDB>;
-        let store = KvBlockStore::new(disk);
+        let store = KvBlockStore::new(disk).unwrap();
         store
             .put_block_available(1, &hash(1), Bytes::from_vec(vec![1]))
             .unwrap();
@@ -243,17 +242,20 @@ mod tests {
                 &[(1, hash(11)), (2, hash(12))],
             )
             .unwrap();
-        assert_eq!(store.available_cursor(), Some(2));
-        assert_eq!(store.read_by_height(1).unwrap().0, hash(11));
-        assert_eq!(store.read_by_height(2).unwrap().0, hash(12));
+        assert_eq!(store.available_cursor().unwrap(), Some(2));
+        assert_eq!(store.read_by_height(1).unwrap().unwrap().0, hash(11));
+        assert_eq!(store.read_by_height(2).unwrap().unwrap().0, hash(12));
 
         store
             .commit_reorg(1, &hash(21), Bytes::from_vec(vec![21]), &[(1, hash(21))])
             .unwrap();
-        assert_eq!(store.available_cursor(), Some(1));
-        assert_eq!(store.read_by_height(1).unwrap().0, hash(21));
-        assert!(store.read_by_height(2).is_none());
-        assert_eq!(store.read_by_hash(&hash(2)).unwrap().as_ref(), &[2]);
+        assert_eq!(store.available_cursor().unwrap(), Some(1));
+        assert_eq!(store.read_by_height(1).unwrap().unwrap().0, hash(21));
+        assert!(store.read_by_height(2).unwrap().is_none());
+        assert_eq!(
+            store.read_by_hash(&hash(2)).unwrap().unwrap().as_ref(),
+            &[2]
+        );
     }
 
     struct RejectWrites;
@@ -274,12 +276,12 @@ mod tests {
 
     #[test]
     fn block_store_propagates_recoverable_batch_failures() {
-        let store = KvBlockStore::new(Arc::new(RejectWrites));
+        let store = KvBlockStore::new(Arc::new(RejectWrites)).unwrap();
         assert!(
             store
                 .put_block_available(1, &hash(1), Bytes::from_vec(vec![1]))
                 .is_err()
         );
-        assert_eq!(store.available_cursor(), None);
+        assert_eq!(store.available_cursor().unwrap(), None);
     }
 }

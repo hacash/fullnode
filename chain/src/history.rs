@@ -81,18 +81,41 @@ impl StoreHistory {
 
 impl BlockHistory for StoreHistory {
     fn stable_height(&self) -> u64 {
-        self.store.status().latest_height
+        match self.store.status() {
+            Ok(status) => status.latest_height,
+            Err(error) => std::panic::panic_any(base::StorageReadPanic { error }),
+        }
     }
 
-    fn block_at_height(&self, height: u64) -> Option<BlockRef> {
+    fn block_at_height(&self, height: u64) -> sys::Ret<Option<BlockRef>> {
         if height == 0 {
-            return Some(self.genesis.clone());
+            return Ok(Some(self.genesis.clone()));
         }
         if let Some((_, block)) = self.pending.lock().unwrap().get(&height) {
-            return Some(block.clone());
+            return Ok(Some(block.clone()));
         }
-        let (_, data) = self.store.block_data_by_height(height)?;
-        self.registry.decode_block(&data).ok().map(|(blk, _)| blk)
+        let Some((stored_hash, data)) = self
+            .store
+            .block_data_by_height(height)
+            .map_err(|error| error.with_code(crate::engine::STORAGE_READ_FAILED))?
+        else {
+            return Ok(None);
+        };
+        let block = self.registry.decode_block_exact(&data).map_err(|e| {
+            sys::Error::fault(format!("stored block {} cannot be decoded: {}", height, e))
+                .with_code(crate::engine::STORAGE_READ_FAILED)
+        })?;
+        if block.height() != height || block.hash() != stored_hash {
+            return Err(sys::Error::fault(format!(
+                "stored block identity mismatch at height {}: index {:?}, decoded <{}, {:?}>",
+                height,
+                stored_hash,
+                block.height(),
+                block.hash()
+            ))
+            .with_code(crate::engine::STORAGE_READ_FAILED));
+        }
+        Ok(Some(block))
     }
 }
 
@@ -101,10 +124,10 @@ impl BlockHistory for BranchHistory<'_> {
         self.canonical.stable_height()
     }
 
-    fn block_at_height(&self, height: u64) -> Option<BlockRef> {
-        self.branch
-            .get(&height)
-            .cloned()
-            .or_else(|| self.canonical.block_at_height(height))
+    fn block_at_height(&self, height: u64) -> sys::Ret<Option<BlockRef>> {
+        if let Some(block) = self.branch.get(&height) {
+            return Ok(Some(block.clone()));
+        }
+        self.canonical.block_at_height(height)
     }
 }

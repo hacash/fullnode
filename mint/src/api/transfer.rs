@@ -84,7 +84,7 @@ impl CoinKind {
 // =============================================================
 
 pub(crate) fn load_block_by_height(ctx: &ApiExecCtx, height: u64) -> sys::Ret<BlkPkg> {
-    let Some((_hash, data)) = ctx.engine.store().block_data_by_height(height) else {
+    let Some((_hash, data)) = ctx.engine.store().block_data_by_height(height)? else {
         return sys::errf!("block not found");
     };
     BlkPkg::from_bytes(

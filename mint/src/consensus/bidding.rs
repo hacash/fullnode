@@ -602,7 +602,6 @@ impl DiamondBidding {
                 return errf!("low-bid tip child PoW hash exceeds 4x root difficulty fence");
             }
             if let Some(id) = inner.cache_low_bid_child(pkg.clone()) {
-                inner.mark_block_arrival(pkg.height(), pkg.hash());
                 return Ok(BlockAdmissionDecision::Defer(id));
             }
             return errf!("low-bid tip child rejected (cache full or orphan)");

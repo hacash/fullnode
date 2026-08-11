@@ -1,7 +1,8 @@
 //! `ChainView` / `Engine` implementations: the query and admission surface.
 //!
-//! Every optimistic read pins the captured root so its parent chain stays
-//! alive. Validators decide whether work from that view remains publishable.
+//! Tree chunks are immutable and snapshots are self-consistent, so ordinary
+//! queries read them without locks and without post-hoc validation. Session
+//! acquisition expresses the unavailable case explicitly (§3.3).
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -9,11 +10,11 @@ use std::sync::atomic::Ordering;
 use base::{
     ApplyMode, BackgroundSyncHandle, BlkPkg, BlockAcceptResult, BlockHistory, BlockProducer,
     BlockRef, BlockSource, ChainListener, ChainView, Consensus, ConsensusNodeHooks, Engine,
-    EngineConfig, ExecutionServices, OptimisticState, PipelineOptions, RecentBlock,
-    StateReadSession, StateSnapSession, Store, SyncHandle, TxPolicy, TxRef,
+    EngineConfig, ExecutionServices, OptimisticState, PipelineOptions, QueryUnavailable,
+    RecentBlock, StateReadSession, StateSnapSession, Store, SyncHandle, TxPolicy, TxRef,
 };
 use field::{Address, Hash};
-use sys::{Rerr, Ret};
+use sys::{Rerr, Ret, errf};
 
 use crate::engine::ChainEngine;
 
@@ -46,68 +47,100 @@ impl ChainView for ChainEngine {
         self.tree.head_block()
     }
 
-    fn optimistic_canonical(&self) -> Option<OptimisticState> {
-        let hold = self.waiter.try_hold()?;
-        if self.waiter.is_shutdown() {
-            return None;
+    fn optimistic_canonical(&self) -> Result<Option<OptimisticState>, QueryUnavailable> {
+        if self.is_stopping() || self.is_fatal() {
+            return Err(QueryUnavailable::new(
+                "chain",
+                "optimistic_canonical",
+                "engine is stopping or fatal",
+            ));
         }
+        let hold = Some(self.waiter.try_hold().ok_or_else(|| {
+            QueryUnavailable::new("chain", "optimistic_canonical", "engine is stopping")
+        })?);
         let (head_hash, head_height, epoch, view, root_pin) = self.tree.head_snapshot();
-        Some(OptimisticState::new(
+        Ok(Some(OptimisticState::new(
             view,
             root_pin,
             head_hash,
             head_height,
             epoch,
             hold,
-        ))
+        )))
     }
 
+    /// Optimistic consumers (block templates, mining, indexers) still need a
+    /// consistent head: the snapshot is valid when the root is available and
+    /// the canonical epoch is unchanged. A fatal engine never validates.
     fn validate_optimistic(&self, start_epoch: u64) -> bool {
-        self.validate_stable_root(|| self.tree.epoch() == start_epoch)
+        self.is_root_available() && self.tree.epoch() == start_epoch
     }
 
     fn validate_state_view(&self, tip_hash: &Hash) -> bool {
-        self.validate_stable_root(|| self.tree.contains(tip_hash))
+        self.is_root_available() && self.tree.contains(tip_hash)
     }
 
-    fn state_canonical(&self) -> Option<StateReadSession<'_>> {
-        let hold = self.waiter.try_hold()?;
-        if self.waiter.is_shutdown() || self.syncing.load(Ordering::Acquire) {
-            return None;
+    fn state_canonical(&self) -> Result<Option<StateReadSession>, QueryUnavailable> {
+        if self.is_stopping() || self.is_fatal() {
+            return Err(QueryUnavailable::new(
+                "chain",
+                "state_canonical",
+                "engine is stopping or fatal",
+            ));
         }
-        let root_move = self.root_move.try_read().ok()?;
+        let hold = self.waiter.try_hold().ok_or_else(|| {
+            QueryUnavailable::new("chain", "state_canonical", "engine is stopping")
+        })?;
+        // Busy states are transient: the caller retries. Only fatal/stopping
+        // is unavailable.
+        if self.syncing.load(Ordering::Acquire) {
+            return Ok(None);
+        }
         if !self.is_root_available() {
-            return None;
+            return Ok(None);
         }
         // A strict insert publishes its tree node before persist_one writes the
         // block body. Packing must not capture that short intermediate state,
         // because difficulty lookup also needs the parent body. Do not wait:
         // the miner will retry on its next cycle.
-        let _inserting = self.inserting.try_lock().ok()?;
-        let (head_hash, head_height, epoch, view, _root_pin) = self.tree.head_snapshot();
-        Some(StateReadSession::new(
+        let Some(_inserting) = self.inserting.try_lock().ok() else {
+            return Ok(None);
+        };
+        let (head_hash, head_height, epoch, view, root_pin) = self.tree.head_snapshot();
+        Ok(Some(StateReadSession::new(
             view,
+            root_pin,
             head_hash,
             head_height,
             epoch,
             hold,
-            root_move,
-        ))
+        )))
     }
 
-    fn state_at_session(&self, branch_tip: &Hash) -> Option<StateSnapSession<'_>> {
-        let hold = self.waiter.try_hold()?;
-        if self.waiter.is_shutdown() {
-            return None;
+    fn state_at_session(
+        &self,
+        branch_tip: &Hash,
+    ) -> Result<Option<StateSnapSession<'_>>, QueryUnavailable> {
+        if self.is_stopping() || self.is_fatal() {
+            return Err(QueryUnavailable::new(
+                "chain",
+                "state_at_session",
+                "engine is stopping or fatal",
+            ));
         }
-        let (view, root_pin, tip_height) = self.tree.snapshot_at(branch_tip)?;
-        Some(StateSnapSession::new(
+        let hold = Some(self.waiter.try_hold().ok_or_else(|| {
+            QueryUnavailable::new("chain", "state_at_session", "engine is stopping")
+        })?);
+        let Some((view, root_pin, tip_height)) = self.tree.snapshot_at(branch_tip) else {
+            return Ok(None);
+        };
+        Ok(Some(StateSnapSession::new(
             view,
             root_pin,
             *branch_tip,
             tip_height,
             hold,
-        ))
+        )))
     }
 
     fn recent_blocks(&self) -> Vec<RecentBlock> {
@@ -133,12 +166,17 @@ impl Engine for ChainEngine {
     }
 
     fn is_packing_inhibited(&self) -> bool {
-        self.syncing.load(Ordering::Acquire) || self.waiter.is_shutdown()
+        self.syncing.load(Ordering::Acquire) || self.waiter.is_shutdown() || self.is_fatal()
     }
 
     fn try_execute_tx(&self, tx: TxRef) -> Rerr {
+        if self.is_fatal() {
+            return errf!("chain is fatal; transaction execution is unavailable");
+        }
         let snapshot = self
             .optimistic_canonical()
+            .ok()
+            .flatten()
             .ok_or_else(|| sys::Error::fault("chain state unavailable"))?;
         self.check_pending(tx.as_ref())?;
         let chunk = snapshot.begin_tx(tx.hash());
@@ -157,7 +195,10 @@ impl Engine for ChainEngine {
     }
 
     fn try_execute_batch(&self, txs: Vec<TxRef>, pending_height: u64) -> Vec<Hash> {
-        let Some(snapshot) = self.optimistic_canonical() else {
+        if self.is_fatal() {
+            return vec![];
+        }
+        let Some(snapshot) = self.optimistic_canonical().ok().flatten() else {
             return vec![];
         };
         let root = snapshot.begin_block_draft(pending_height);
@@ -180,7 +221,7 @@ impl Engine for ChainEngine {
 
     fn try_pick_pending_txs_on_session(
         &self,
-        session: &StateReadSession<'_>,
+        session: &StateReadSession,
         candidates: Vec<TxRef>,
         pending_height: u64,
         author: Address,

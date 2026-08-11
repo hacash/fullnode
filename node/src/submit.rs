@@ -98,7 +98,7 @@ impl P2PNode {
                 || self
                     .engine
                     .store()
-                    .block_hash(blk.height())
+                    .block_hash(blk.height())?
                     .is_some_and(|hash| hash == blk.hash()))
         {
             return Ok(());
@@ -107,18 +107,9 @@ impl P2PNode {
             .consensus()
             .check_block_data(blk.data().as_ref(), self.engine.as_ref())?;
 
-        let admission = match self
-            .engine
-            .consensus()
-            .check_block_admission(blk, self.engine.as_ref())
-        {
-            Ok(admission) => admission,
-            Err(e) => return Err(e),
-        };
-        let deferred = matches!(admission, base::BlockAdmissionDecision::Defer(_));
         let local_height = self.engine.latest_height();
         let heispan = self.engine.config().unstable_block;
-        if !deferred && blk.height() > local_height + 1 {
+        if blk.height() > local_height + 1 {
             if let Some(ref p) = peer {
                 let num = (heispan + 1) as u8;
                 let mut req = Vec::with_capacity(9);
@@ -140,10 +131,6 @@ impl P2PNode {
             );
         }
 
-        self.engine
-            .consensus()
-            .check_block_arrive_data(blk.data().as_ref(), self.engine.as_ref())?;
-
         let _insert_guard = self.inserting.lock().unwrap();
         let block_hash = blk.hash();
         let hx = block_hash.as_bytes();
@@ -164,19 +151,14 @@ impl P2PNode {
             &sys::ctshow()[11..],
             mshow
         );
-        let result = if deferred {
-            println!("deferred.");
-            base::BlockAcceptResult::deferred()
-        } else {
-            match self.engine.discover_block(blk.clone()) {
-                Ok(r) => {
-                    println!("ok.");
-                    r
-                }
-                Err(e) => {
-                    println!("Error: {}", e);
-                    return Err(e);
-                }
+        let result = match self.engine.discover_block(blk.clone()) {
+            Ok(r) => {
+                println!("ok.");
+                r
+            }
+            Err(e) => {
+                println!("Error: {}", e);
+                return Err(e);
             }
         };
         drop(_insert_guard);
@@ -256,6 +238,13 @@ impl P2PNode {
     }
 
     pub(crate) fn handle_block_bytes(&self, body: Vec<u8>, peer: Option<String>) -> Rerr {
+        // An active sync session is the only sanctioned downloader: drop
+        // broadcast blocks without decoding, locking or caching. The sync
+        // stream covers the vast majority of them; a tip block arriving at
+        // the tail is recovered by later broadcasts and orphan retries.
+        if peer.is_some() && self.sync_session.lock().ok().is_some_and(|g| g.is_some()) {
+            return Ok(());
+        }
         let max = self.engine.consensus().mint_params().max_block_size;
         if max > 0 && body.len() > max.saturating_add(100) {
             return sys::errf!(
@@ -345,6 +334,12 @@ impl P2PNode {
 
     /// Periodic / on-demand execution of consensus-owned deferred candidates.
     pub fn drain_deferred_blocks(&self) -> bool {
+        // Skip while a sync session runs: the periodic worker would only
+        // block on `inserting` until the pipeline ends, and the sync's own
+        // post-processing drains deferred blocks anyway.
+        if self.sync_session.lock().ok().is_some_and(|g| g.is_some()) {
+            return false;
+        }
         let _insert_guard = self.inserting.lock().unwrap();
         let mut progressed = false;
         let mut accepted_hashes = Vec::new();

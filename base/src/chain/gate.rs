@@ -1,54 +1,57 @@
 //! Read sessions for state queries.
 //!
 //! A session bundles a state tip with the ownership needed to keep its weak
-//! parent chain alive. Critical packing sessions additionally hold the root
-//! movement read lock for their full lifetime.
+//! parent chain alive: it pins the tree root captured with the tip, and the
+//! pin keeps the whole subtree alive while a root roll prunes the tree. No
+//! lock is held for the session lifetime — reads stay consistent because the
+//! state walk always stops at the current disk-backed root, whose `try_write`
+//! batch commits are atomic, and every roll's writes lie inside the session's
+//! own delta range (shadowed by the walk).
 
 use std::sync::Arc;
-use std::sync::RwLockReadGuard;
 
 use field::Hash;
 
 use crate::state::StateRead;
 use crate::{Env, ExecutionServices, StateChunkRef, TxRef};
 
-/// Root-stable session for miner packing. The root-move read lock is held for
-/// the session lifetime; callers still validate `epoch()` because ordinary
-/// head attachment remains concurrent.
+/// Root-pinned session for miner packing. The pinned root keeps the tip's weak
+/// parent chain alive across concurrent root rolls; callers still validate
+/// `epoch()` because ordinary head attachment remains concurrent.
 ///
-/// Fields are private so callers cannot detach the tip from the guard. Access
+/// Fields are private so callers cannot detach the tip from the pin. Access
 /// via `view()`, `head_hash()`, and `head_height()`.
-pub struct StateReadSession<'a> {
+pub struct StateReadSession {
     view: StateChunkRef,
+    _root_pin: StateChunkRef,
     head_hash: Hash,
     head_height: u64,
     epoch: u64,
     _hold: sys::HoldGuard,
-    _root_move: RwLockReadGuard<'a, ()>,
 }
 
-impl<'a> StateReadSession<'a> {
+impl StateReadSession {
     /// Engine-private constructor exposed for the engine crate only.
     /// External callers obtain a session via `ChainView::state_canonical`
     /// only - they cannot construct one directly and detach the state tip from
-    /// its guard. Kept `pub` because the engine lives in a
+    /// its pin. Kept `pub` because the engine lives in a
     /// sibling crate; the `state_canonical` indirection is what enforces the
     /// engine-private contract.
     pub fn new(
         view: StateChunkRef,
+        root_pin: StateChunkRef,
         head_hash: Hash,
         head_height: u64,
         epoch: u64,
         hold: sys::HoldGuard,
-        root_move: RwLockReadGuard<'a, ()>,
     ) -> Self {
         Self {
             view,
+            _root_pin: root_pin,
             head_hash,
             head_height,
             epoch,
             _hold: hold,
-            _root_move: root_move,
         }
     }
 
@@ -67,7 +70,7 @@ impl<'a> StateReadSession<'a> {
 
     /// Start cumulative transaction execution tied to this session.  The
     /// returned executor borrows `self` and never exposes the owned tip.
-    pub fn begin_execution<'s>(&'s self) -> StateExecSession<'s, 'a> {
+    pub fn begin_execution<'s>(&'s self) -> StateExecSession<'s> {
         StateExecSession {
             root: StateChunkRef::block_draft_on(&self.view, self.head_height.saturating_add(1)),
             _session: self,
@@ -75,7 +78,7 @@ impl<'a> StateReadSession<'a> {
     }
 }
 
-impl<'a> std::fmt::Debug for StateReadSession<'a> {
+impl std::fmt::Debug for StateReadSession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StateReadSession")
             .field("head_height", &self.head_height)
@@ -86,12 +89,12 @@ impl<'a> std::fmt::Debug for StateReadSession<'a> {
 /// Cumulative execution layer whose lifetime is bounded by a state session.
 /// Candidate transactions commit into `root` only after successful
 /// execution; failed candidates are discarded with their child context.
-pub struct StateExecSession<'s, 'g> {
+pub struct StateExecSession<'s> {
     root: StateChunkRef,
-    _session: &'s StateReadSession<'g>,
+    _session: &'s StateReadSession,
 }
 
-impl StateExecSession<'_, '_> {
+impl StateExecSession<'_> {
     pub fn execute_tx(
         &mut self,
         services: Arc<dyn ExecutionServices>,
@@ -118,7 +121,7 @@ pub struct StateSnapSession<'a> {
     _root_pin: StateChunkRef,
     tip_hash: Hash,
     tip_height: u64,
-    _hold: sys::HoldGuard,
+    _hold: Option<sys::HoldGuard>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -131,7 +134,7 @@ impl<'a> StateSnapSession<'a> {
         root_pin: StateChunkRef,
         tip_hash: Hash,
         tip_height: u64,
-        hold: sys::HoldGuard,
+        hold: Option<sys::HoldGuard>,
     ) -> Self {
         Self {
             view,
@@ -178,7 +181,7 @@ pub struct OptimisticState {
     pub head_height: u64,
     pub epoch: u64,
     _root_pin: StateChunkRef,
-    _hold: sys::HoldGuard,
+    _hold: Option<sys::HoldGuard>,
 }
 
 impl OptimisticState {
@@ -188,7 +191,7 @@ impl OptimisticState {
         head_hash: Hash,
         head_height: u64,
         epoch: u64,
-        hold: sys::HoldGuard,
+        hold: Option<sys::HoldGuard>,
     ) -> Self {
         Self {
             view,

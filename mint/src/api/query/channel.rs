@@ -20,8 +20,9 @@ pub(crate) fn channel_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse 
     id_raw.copy_from_slice(&raw);
     let chid = ChannelId::from(id_raw);
 
-    let Some(snapshot) = ctx.engine.optimistic_canonical() else {
-        return api_error("state changed");
+    let snapshot = match optimistic_snapshot(ctx) {
+        Ok(snapshot) => snapshot,
+        Err(resp) => return resp,
     };
     let start_epoch = snapshot.epoch;
     let state = MintStateRead::wrap(snapshot.view());

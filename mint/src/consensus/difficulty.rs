@@ -131,8 +131,14 @@ impl DifficultyGnr {
     }
 
     fn block_intro(&self, hei: u64, history: &dyn base::BlockHistory) -> (u64, u32) {
-        let Some(block) = history.block_at_height(hei) else {
-            panic!("difficulty block missing: block_height={}", hei);
+        let block = match history.block_at_height(hei) {
+            Ok(Some(block)) => block,
+            Ok(None) => panic!("difficulty block missing: block_height={}", hei),
+            // A storage read failure carries the dedicated panic payload so
+            // the block-processing boundary converts it to engine-fatal
+            // instead of unwinding the caller (§3.1 of the engine error
+            // contract).
+            Err(error) => std::panic::panic_any(base::StorageReadPanic { error }),
         };
         (block.timestamp(), block.pow_difficulty())
     }

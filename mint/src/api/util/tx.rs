@@ -186,6 +186,15 @@ mod tests {
         assert_eq!(action["from"], from.to_readable());
         assert_eq!(action["to"], to.to_readable());
         assert_eq!(action["satoshi"], 7);
-        assert_eq!(action["description"], "");
+        // The action-codec-derive contract generates a human-readable
+        // description for transfer actions.
+        assert_eq!(
+            action["description"],
+            format!(
+                "Transfer 7 SAT from {} to {}",
+                from.to_readable(),
+                to.to_readable()
+            )
+        );
     }
 }

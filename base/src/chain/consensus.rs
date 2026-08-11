@@ -23,7 +23,10 @@ pub struct MintParams {
 
 pub trait BlockHistory: Send + Sync {
     fn stable_height(&self) -> u64;
-    fn block_at_height(&self, height: u64) -> Option<BlockRef>;
+    /// `Ok(None)` is the only not-found answer. Read and decode failures are
+    /// returned as errors: a corrupt stored block must never masquerade as a
+    /// missing one on consensus paths.
+    fn block_at_height(&self, height: u64) -> Ret<Option<BlockRef>>;
 }
 
 /// Opaque, lexicographically ordered score used by the generic fork tree.
@@ -127,10 +130,16 @@ pub trait Consensus: Send + Sync {
         0
     }
 
+    /// Decide whether a block may proceed. `fast_sync` tells the
+    /// implementation the block arrived through the linear fast-sync stream:
+    /// validation-only implementations typically skip their checks there,
+    /// while implementations with side effects in this hook still see every
+    /// block and decide for themselves whether to run.
     fn check_block_admission(
         &self,
         _pkg: &BlkPkg,
         _view: &dyn ChainView,
+        _fast_sync: bool,
     ) -> Ret<BlockAdmissionDecision> {
         Ok(BlockAdmissionDecision::Continue)
     }
@@ -146,28 +155,43 @@ pub trait Consensus: Send + Sync {
         Ok(())
     }
 
-    fn check_block_arrive(&self, _pkg: &BlkPkg, _view: &dyn ChainView) -> Rerr {
+    /// Arrival gate over a full block package, before admission. `fast_sync`
+    /// marks the linear fast-sync stream; validation-only implementations
+    /// typically skip the check there, while side-effectful ones still run.
+    fn check_block_arrive(&self, _pkg: &BlkPkg, _view: &dyn ChainView, _fast_sync: bool) -> Rerr {
         Ok(())
     }
 
+    /// Run before executing a block against its parent. `fast_sync` carries
+    /// the same meaning as in `check_block_arrive`.
     fn check_block_before_execute(
         &self,
         _pkg: &BlkPkg,
         _parent: &dyn Block,
         _history: &dyn BlockHistory,
+        _fast_sync: bool,
     ) -> Rerr {
         Ok(())
     }
 
+    /// Run after executing a block, against its resulting state. `fast_sync`
+    /// carries the same meaning as in `check_block_arrive`.
     fn check_block_after_execute(
         &self,
         _pkg: &BlkPkg,
         _new_state: &StateChunkRef,
         _parent_state: &dyn StateRead,
         _view: &dyn ChainView,
+        _fast_sync: bool,
     ) -> Rerr {
         Ok(())
     }
+
+    /// A block was durably accepted (canonical or side branch). Used to
+    /// publish consensus-owned arrival metadata that must not be written
+    /// before parent verification or for orphaned blocks. Replay/rebuild do
+    /// not invoke it.
+    fn on_block_accepted(&self, _pkg: &BlkPkg, _view: &dyn ChainView) {}
 
     fn on_stable_block(&self, _block: &dyn Block, _view: &dyn ChainView) {}
 }

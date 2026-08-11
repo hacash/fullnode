@@ -5,8 +5,9 @@ use crate::state::MintStateRead;
 use crate::api::util::*;
 
 pub(crate) fn supply_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse {
-    let Some(snapshot) = ctx.engine.optimistic_canonical() else {
-        return api_error("state changed");
+    let snapshot = match optimistic_snapshot(ctx) {
+        Ok(snapshot) => snapshot,
+        Err(resp) => return resp,
     };
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());
@@ -33,8 +34,9 @@ pub(crate) fn latest_json(height: u64, diamond: u32) -> String {
 }
 
 pub(crate) fn latest_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse {
-    let Some(snapshot) = ctx.engine.optimistic_canonical() else {
-        return api_error("state changed");
+    let snapshot = match optimistic_snapshot(ctx) {
+        Ok(snapshot) => snapshot,
+        Err(resp) => return resp,
     };
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());

@@ -87,16 +87,14 @@ pub fn check_block_data(data: &[u8], view: &dyn ChainView) -> Rerr {
 pub fn check_block_arrive(
     difficulty: &DifficultyGnr,
     _mint_conf: &MintConf,
-    bidding: &DiamondBidding,
     pkg: &BlkPkg,
     view: &dyn ChainView,
 ) -> Rerr {
-    check_block_arrive_block(difficulty, bidding, pkg.block(), view)
+    check_block_arrive_block(difficulty, pkg.block(), view)
 }
 
 pub fn check_block_arrive_data(
     difficulty: &DifficultyGnr,
-    bidding: &DiamondBidding,
     data: &[u8],
     view: &dyn ChainView,
 ) -> Rerr {
@@ -108,12 +106,11 @@ pub fn check_block_arrive_data(
     else {
         return Ok(());
     };
-    check_block_arrive_block(difficulty, bidding, &intro, view)
+    check_block_arrive_block(difficulty, &intro, view)
 }
 
 fn check_block_arrive_block(
     difficulty: &DifficultyGnr,
-    bidding: &DiamondBidding,
     curblk: &dyn Block,
     view: &dyn ChainView,
 ) -> Rerr {
@@ -122,16 +119,18 @@ fn check_block_arrive_block(
     let cblkhx = curblk.hash().into_array();
     let history = view.block_history();
 
+    // Pure validation: arrival records are published only after the block is
+    // accepted (§6 of the engine error contract), so orphaned or unvalidated
+    // blocks never pollute the bidding map.
     if difficulty.is_pre_asert_mainnet(curhei) {
-        bidding.mark_block_arrival(curhei, curblk.hash());
         return Ok(());
     }
 
     if difficulty.is_asert_height(curhei) {
-        let canonical_prev = history.block_at_height(curhei - 1).map(|b| b.hash());
+        let canonical_prev = history.block_at_height(curhei - 1)?.map(|b| b.hash());
         if canonical_prev.as_ref() == Some(&curblk.prev_hash()) {
             let prev = history
-                .block_at_height(curhei - 1)
+                .block_at_height(curhei - 1)?
                 .ok_or_else(|| sys::Error::fault("prev block missing for asert arrive"))?;
             let target = difficulty.target_asert(
                 prev.pow_difficulty(),
@@ -153,10 +152,10 @@ fn check_block_arrive_block(
         }
     } else {
         // Non-mainnet pre-ASERT: soft check via retarget (bootstrap / weighted).
-        let canonical_prev = history.block_at_height(curhei - 1).map(|b| b.hash());
+        let canonical_prev = history.block_at_height(curhei - 1)?.map(|b| b.hash());
         if canonical_prev.as_ref() == Some(&curblk.prev_hash()) {
             let prev = history
-                .block_at_height(curhei - 1)
+                .block_at_height(curhei - 1)?
                 .ok_or_else(|| sys::Error::fault("prev block missing for difficulty arrive"))?;
             let target = difficulty.target(
                 prev.pow_difficulty(),
@@ -178,7 +177,6 @@ fn check_block_arrive_block(
             }
         }
     }
-    bidding.mark_block_arrival(curhei, curblk.hash());
     Ok(())
 }
 

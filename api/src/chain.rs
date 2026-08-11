@@ -10,13 +10,14 @@ fn block_by_height_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
         None => return ApiResponse::err(400, "missing query 'height'"),
     };
     match ctx.engine.store().block_data_by_height(h) {
-        Some((hash, data)) => ApiResponse::json(format!(
+        Ok(Some((hash, data))) => ApiResponse::json(format!(
             "{{\"height\":{},\"hash\":\"{}\",\"size\":{}}}",
             h,
             hex_short(hash.as_bytes()),
             data.len()
         )),
-        None => ApiResponse::err(404, "block not found"),
+        Ok(None) => ApiResponse::err(404, "block not found"),
+        Err(e) => ApiResponse::err(500, &format!("block read failed: {}", e)),
     }
 }
 

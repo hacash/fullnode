@@ -44,16 +44,6 @@ impl DiskDB for RocksdbDisk {
         self.db.delete_opt(key, &opts).expect("rocksdb delete");
     }
 
-    fn write(&self, memkv: &dyn MemDB) {
-        let mut wb = rocksdb::WriteBatch::default();
-        memkv.for_each(&mut |key, value| match value {
-            Some(value) => wb.put(key, value),
-            None => wb.delete(key),
-        });
-        let opts = Self::write_options();
-        self.db.write_opt(wb, &opts).expect("rocksdb write batch");
-    }
-
     fn try_write(&self, memkv: &dyn MemDB) -> Rerr {
         let mut wb = rocksdb::WriteBatch::default();
         memkv.for_each(&mut |key, value| match value {

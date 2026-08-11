@@ -183,6 +183,11 @@ impl Tree {
 
     /// Attach a fully executed block chunk. `unstable_window` is how many
     /// blocks may stay above the durable root before it advances.
+    ///
+    /// Strict mode: the root advances by exactly one block once the head
+    /// exceeds the window (`head − scheduled > unstable_window`), so the
+    /// durable root is always `head − unstable_block` and the fork survival
+    /// depth is constant.
     pub fn attach(
         &self,
         parent_hash: &Hash,
@@ -194,6 +199,11 @@ impl Tree {
 
     /// Attach one fast-sync block only if it is a direct canonical extension.
     /// All checks happen before the chunk is frozen or published.
+    ///
+    /// Fast sync / replay mode: the root advances in `unstable_window` steps
+    /// once the head reaches the scheduled root (`head − scheduled ≥
+    /// unstable_block`), so the state DB batch write frequency drops to
+    /// 1/unstable_block.
     pub fn attach_linear(
         &self,
         parent_hash: &Hash,
@@ -218,7 +228,7 @@ impl Tree {
         let parent = inner.find(parent_hash).ok_or_else(|| {
             format!(
                 "parent block <{}, {:?}> not in tree",
-                height - 1,
+                height.saturating_sub(1),
                 parent_hash
             )
         })?;
@@ -252,9 +262,18 @@ impl Tree {
         if linear && (!is_head || reorg) {
             return errf!("fast-sync block is not a linear head extension");
         }
+        // Roll policy: strict advances by one block past the window; fast
+        // sync and replay advance by a whole window when the head reaches
+        // the scheduled root.
         let scheduled_height = height_of(&inner.scheduled_root);
-        let roll = if is_head && height > scheduled_height.saturating_add(unstable_window) {
-            Some(inner.plan_roll_from(&chunk, scheduled_height + 1)?)
+        let over_window = if linear {
+            height >= scheduled_height.saturating_add(unstable_window)
+        } else {
+            height > scheduled_height.saturating_add(unstable_window)
+        };
+        let roll = if is_head && over_window {
+            let step = if linear { unstable_window } else { 1 };
+            Some(inner.plan_roll_from(&chunk, scheduled_height + step)?)
         } else {
             None
         };
@@ -281,6 +300,72 @@ impl Tree {
         })
     }
 
+    /// Attach a fully executed side branch block without touching the
+    /// canonical head, epoch or scheduled root. Used by boot side replay:
+    /// restored forks must not move the head; a live block extending them
+    /// later goes through the normal fork-choice path.
+    pub fn attach_side(&self, parent_hash: &Hash, chunk: StateChunkRef) -> Ret<()> {
+        let inner = self.lock();
+        let height = chunk.block_height()?;
+        let hash = hash_of(&chunk);
+        let parent = inner.find(parent_hash).ok_or_else(|| {
+            format!(
+                "side parent block <{}, {:?}> not in tree",
+                height.saturating_sub(1),
+                parent_hash
+            )
+        })?;
+        if height != height_of(&parent) + 1 {
+            return errf!(
+                "side block height {} does not follow parent height {}",
+                height,
+                height_of(&parent)
+            );
+        }
+        if inner.find(&hash).is_some() {
+            return errf!("side block <{}, {:?}> already in tree", height, hash);
+        }
+        let Some(chunk_parent) = chunk.parent() else {
+            return errf!(
+                "side block <{}, {:?}> has no execution parent",
+                height,
+                hash
+            );
+        };
+        if !chunk_parent.ptr_eq(&parent) {
+            return errf!(
+                "side block <{}, {:?}> execution parent does not match {:?}",
+                height,
+                hash,
+                parent_hash
+            );
+        }
+        parent.attach_block_child(&chunk)?;
+        Ok(())
+    }
+
+    /// The fork-choice key of the current canonical head. Under `inserting`
+    /// the head cannot change between this read and the matching attach, so
+    /// callers can fix the side/canonical commit plan before attaching.
+    pub fn head_fork_choice(&self) -> ForkChoiceKey {
+        let inner = self.lock();
+        inner
+            .head
+            .block_identity()
+            .expect("fork tree contains an unidentified block")
+            .fork_choice
+            .clone()
+    }
+
+    /// Drop side subtrees beyond `capacity` in deterministic order (ascending
+    /// fork-choice key, then hash). Only side branches are eligible; the
+    /// canonical chain is never touched. Live inserts and boot side replay
+    /// share this limit.
+    pub fn enforce_side_capacity(&self, capacity: usize) {
+        let mut inner = self.lock();
+        inner.enforce_side_capacity(capacity);
+    }
+
     /// Make `job.new_root` the root and drop everything outside its branch.
     /// Called after the job has been written to disk.
     pub fn validate_roll(&self, job: &RollJob) -> Ret<()> {
@@ -296,8 +381,13 @@ impl Tree {
             .ok_or_else(|| "durable root is not disk-backed".to_string())?;
         job.new_root.promote_to_root(disk)?;
         inner.root = job.new_root.clone();
+        // The head must descend from the new root (validate_roll checked it).
+        // If it ever does not, the roll pruned the canonical chain: fail
+        // loudly instead of silently re-rooting the head, which would let
+        // in-flight optimistic work pass epoch validation against a head that
+        // was never announced.
         if inner.find(&hash_of(&inner.head)).is_none() {
-            inner.head = inner.root.clone();
+            return errf!("root roll pruned the canonical head; engine state is inconsistent");
         }
         Ok(())
     }
@@ -433,23 +523,60 @@ impl Inner {
                 current_hash
             );
         }
-        let Some(first) = job.chain.first() else {
+        if job.chain.is_empty() {
             return errf!("root roll has an empty state chain");
-        };
-        let Some(parent) = first.parent() else {
-            return errf!("root roll first chunk has no durable parent");
-        };
-        if !parent.ptr_eq(&self.root) {
-            return errf!("root roll chain does not start above the durable root");
         }
-        if !job
-            .chain
-            .last()
-            .is_some_and(|last| last.ptr_eq(&job.new_root))
-        {
+        // The whole chain is streamed to disk as one root batch, so every link
+        // must be verified here: a broken link would persist a state that
+        // never existed and boot would trust the root marker it wrote.
+        if job.chain.len() as u64 != height_of(&job.new_root) - current_height {
+            return errf!(
+                "root roll chain length {} does not span heights <{}, {}>",
+                job.chain.len(),
+                current_height,
+                height_of(&job.new_root)
+            );
+        }
+        let mut prev = self.root.clone();
+        for chunk in &job.chain {
+            if height_of(chunk) != height_of(&prev) + 1 {
+                return errf!(
+                    "root roll chain height jumps from {} to {}",
+                    height_of(&prev),
+                    height_of(chunk)
+                );
+            }
+            let Some(parent) = chunk.parent() else {
+                return errf!("root roll chain chunk has no durable parent");
+            };
+            if !parent.ptr_eq(&prev) {
+                return errf!(
+                    "root roll chain breaks between heights {} and {}",
+                    height_of(&prev),
+                    height_of(chunk)
+                );
+            }
+            prev = chunk.clone();
+        }
+        if !prev.ptr_eq(&job.new_root) {
             return errf!("root roll chain does not end at the new root");
         }
-        Ok(())
+        // The new root must still lie on the current canonical head path.
+        // Planning guarantees it; a head that moved on in the persistence
+        // queue still descends from it, and anything else must not commit.
+        let mut cursor = self.head.clone();
+        loop {
+            if cursor.ptr_eq(&job.new_root) {
+                return Ok(());
+            }
+            if height_of(&cursor) <= height_of(&job.new_root) {
+                return errf!("root roll new root is not on the canonical head path");
+            }
+            let Some(parent) = cursor.parent() else {
+                return errf!("canonical head branch broken while validating root roll");
+            };
+            cursor = parent;
+        }
     }
 
     /// Depth-first from the root. The tree only ever holds the unstable window,
@@ -505,6 +632,69 @@ impl Inner {
             chain,
         })
     }
+
+    /// See `Tree::enforce_side_capacity`.
+    fn enforce_side_capacity(&mut self, capacity: usize) {
+        // Canonical chain, oldest first.
+        let mut chain = Vec::new();
+        let mut cursor = self.head.clone();
+        loop {
+            chain.push(cursor.clone());
+            match cursor.parent() {
+                Some(parent) => cursor = parent,
+                None => break,
+            }
+        }
+        chain.reverse();
+        let canonical: HashSet<Hash> = chain.iter().map(|c| hash_of(c)).collect();
+
+        // Side subtree roots: children of canonical-chain chunks that are not
+        // the next canonical block.
+        let mut side_roots = Vec::new();
+        for (index, chunk) in chain.iter().enumerate() {
+            let next = chain.get(index + 1).map(hash_of);
+            for child in chunk.children() {
+                if next.as_ref() != Some(&hash_of(&child)) {
+                    side_roots.push(child);
+                }
+            }
+        }
+        // Deterministic eviction order: weakest fork choice first, then hash.
+        side_roots.sort_by(|a, b| {
+            let key = |c: &StateChunkRef| {
+                let identity = c
+                    .block_identity()
+                    .expect("fork tree contains an unidentified block");
+                (identity.fork_choice.clone(), identity.hash)
+            };
+            key(a).cmp(&key(b))
+        });
+
+        let count_side = |root: &StateChunkRef, canonical: &HashSet<Hash>| -> usize {
+            let mut count = 0usize;
+            let mut stack = vec![root.clone()];
+            while let Some(node) = stack.pop() {
+                if !canonical.contains(&hash_of(&node)) {
+                    count += 1;
+                }
+                stack.extend(node.children());
+            }
+            count
+        };
+
+        while count_side(&self.root, &canonical) > capacity {
+            let Some(weakest) = side_roots.first().cloned() else {
+                break;
+            };
+            side_roots.remove(0);
+            let Some(parent) = weakest.parent() else {
+                break;
+            };
+            if !parent.remove_block_child(&weakest) {
+                break;
+            }
+        }
+    }
 }
 
 fn root_chunk(disk: Arc<dyn DiskDB>, block: BlockRef) -> StateChunkRef {
@@ -524,6 +714,9 @@ mod tests {
         }
         fn save(&self, _key: &[u8], _val: &[u8]) {}
         fn remove(&self, _key: &[u8]) {}
+        fn try_write(&self, _memkv: &dyn base::MemDB) -> sys::Rerr {
+            Ok(())
+        }
     }
 
     fn hash(b: u8) -> Hash {
@@ -673,6 +866,95 @@ mod tests {
         tree.attach(&parent_hash, chunk, 8).unwrap()
     }
 
+    fn attach_linear(
+        tree: &Tree,
+        parent_hash: Hash,
+        child_hash: Hash,
+        height: u64,
+        fork_choice: ForkChoiceKey,
+        window: u64,
+    ) -> Inserted {
+        let (chunk, _) = tree
+            .begin_block_execution(
+                &parent_hash,
+                block(height, child_hash, parent_hash),
+                fork_choice,
+            )
+            .unwrap()
+            .unwrap();
+        tree.attach_linear(&parent_hash, chunk, window).unwrap()
+    }
+
+    #[test]
+    fn linear_attach_rolls_in_window_steps() {
+        let t = tree();
+        // Strict (window 2) rolls one block at a time; see
+        // root_rolls_once_past_the_window. Fast sync / replay advance the
+        // root by a whole window when the head reaches the scheduled root
+        // (head − scheduled ≥ window).
+        let first = attach_linear(&t, hash(0), hash(1), 1, key(1), 2);
+        assert!(first.roll.is_none(), "must not roll inside the window");
+        let second = attach_linear(&t, hash(1), hash(2), 2, key(2), 2);
+        let job = second.roll.expect("linear roll at the window boundary");
+        assert_eq!(height_of(&job.new_root), 2, "new root = scheduled + window");
+        assert_eq!(job.chain.len(), 2, "the whole window is one state batch");
+        t.commit_roll(&job).unwrap();
+        assert_eq!(t.root_height(), 2);
+
+        // The next window rolls again when the head reaches height 4.
+        let third = attach_linear(&t, hash(2), hash(3), 3, key(3), 2);
+        assert!(third.roll.is_none());
+        let fourth = attach_linear(&t, hash(3), hash(4), 4, key(4), 2);
+        let job = fourth
+            .roll
+            .expect("linear roll on the next window boundary");
+        assert_eq!(height_of(&job.new_root), 4);
+        t.commit_roll(&job).unwrap();
+        assert_eq!(t.root_height(), 4);
+    }
+
+    #[test]
+    fn side_attach_never_moves_the_canonical_head() {
+        let t = tree();
+        attach(&t, hash(0), hash(1), 1, key(10), None, 4);
+        let epoch = t.epoch();
+        let (head_hash, head_height) = t.head_tip();
+
+        // A stronger fork-choice block attaches as a side branch: boot side
+        // replay must not move the head; the live path decides head changes.
+        let (chunk, _) = t
+            .begin_block_execution(&hash(0), block(1, hash(2), hash(0)), key(99))
+            .unwrap()
+            .unwrap();
+        t.attach_side(&hash(0), chunk).unwrap();
+        assert_eq!(t.head_tip(), (head_hash, head_height));
+        assert_eq!(t.epoch(), epoch);
+        assert!(t.contains(&hash(2)));
+
+        let (duplicate, _) = t
+            .begin_block_execution(&hash(0), block(1, hash(2), hash(0)), key(99))
+            .unwrap()
+            .unwrap();
+        assert!(t.attach_side(&hash(0), duplicate).is_err());
+    }
+
+    #[test]
+    fn side_capacity_evicts_weakest_branches_deterministically() {
+        let t = tree();
+        attach(&t, hash(0), hash(1), 1, key(10), None, 4); // canonical head
+        attach(&t, hash(0), hash(2), 1, key(5), None, 4); // weak side branch
+        attach(&t, hash(0), hash(3), 1, key(8), None, 4); // side branch
+        attach(&t, hash(2), hash(4), 2, key(6), None, 4); // subtree of hash(2)
+
+        // 3 side chunks (2, 3, 4) exceed capacity 2: the weakest side subtree
+        // (fork choice 5, root hash(2)) is dropped together with its child.
+        t.enforce_side_capacity(2);
+        assert!(!t.contains(&hash(2)));
+        assert!(!t.contains(&hash(4)));
+        assert!(t.contains(&hash(3)), "stronger side branch survives");
+        assert!(t.contains(&hash(1)), "canonical chain is never evicted");
+    }
+
     #[test]
     fn head_follows_fork_choice_not_height() {
         let t = tree();
@@ -815,6 +1097,67 @@ mod tests {
         let root = t.find(&hash(1)).unwrap();
         assert!(root.parent().is_none());
         assert!(root.disk().is_some());
+    }
+
+    #[test]
+    fn forged_roll_job_with_broken_chain_is_rejected() {
+        let t = tree();
+        // Fast-sync window 2: one roll carries the whole window as its chain.
+        attach_linear(&t, hash(0), hash(1), 1, key(1), 2);
+        let job = attach_linear(&t, hash(1), hash(2), 2, key(2), 2)
+            .roll
+            .expect("linear roll at the window boundary");
+        assert_eq!(job.chain.len(), 2);
+        let expect = || RollJob {
+            expected_root_hash: job.expected_root_hash,
+            expected_root_height: job.expected_root_height,
+            new_root: job.new_root.clone(),
+            chain: Vec::new(),
+        };
+
+        // A chain that skips the middle chunk would stream an impossible
+        // state into the root batch: it must never validate.
+        let gap = expect();
+        let gap = RollJob {
+            chain: vec![t.find(&hash(2)).unwrap()],
+            ..gap
+        };
+        assert!(t.validate_roll(&gap).is_err());
+        assert!(t.commit_roll(&gap).is_err());
+
+        // A duplicate link passes the length check but breaks the chain.
+        let dup = expect();
+        let dup = RollJob {
+            chain: vec![t.find(&hash(1)).unwrap(), t.find(&hash(1)).unwrap()],
+            ..dup
+        };
+        assert!(t.validate_roll(&dup).is_err());
+
+        t.commit_roll(&job).unwrap();
+        assert_eq!(t.root_height(), 2);
+    }
+
+    #[test]
+    fn forged_roll_job_off_the_head_path_is_rejected() {
+        let t = tree();
+        attach(&t, hash(0), hash(1), 1, key(10), None, 4);
+        // A weaker-fork side chunk shares the root but is not on the head
+        // path; committing it as the root would prune the canonical head.
+        let (side, _) = t
+            .begin_block_execution(&hash(0), block(1, hash(9), hash(0)), key(5))
+            .unwrap()
+            .unwrap();
+        t.attach_side(&hash(0), side.clone()).unwrap();
+        let job = RollJob {
+            expected_root_hash: hash(0),
+            expected_root_height: 0,
+            new_root: side.clone(),
+            chain: vec![side],
+        };
+        assert!(t.validate_roll(&job).is_err());
+        assert!(t.commit_roll(&job).is_err());
+        assert_eq!(t.root_height(), 0, "a rejected roll must not move the root");
+        assert_eq!(t.head_tip(), (hash(1), 1));
     }
 
     #[test]

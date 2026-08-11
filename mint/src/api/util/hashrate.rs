@@ -87,12 +87,12 @@ pub(crate) fn u128_array_json(values: &[u128]) -> String {
     )
 }
 
-pub(crate) fn block_rate_at(ctx: &ApiExecCtx, height: u64) -> u128 {
-    let Some(block) = ctx.engine.block_history().block_at_height(height) else {
-        return 0;
+pub(crate) fn block_rate_at(ctx: &ApiExecCtx, height: u64) -> sys::Ret<u128> {
+    let Some(block) = ctx.engine.block_history().block_at_height(height)? else {
+        return Ok(0);
     };
     let secs = DifficultyConfig::default().each_block_target_time as f64;
-    crate::difficulty::u32_to_rates(block.pow_difficulty(), secs) as u128
+    Ok(crate::difficulty::u32_to_rates(block.pow_difficulty(), secs) as u128)
 }
 
 pub(crate) fn scale_u128_series(values: &mut [u128], max: u128, scale: f64) {

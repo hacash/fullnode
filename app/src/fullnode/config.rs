@@ -112,6 +112,12 @@ pub(super) fn load(path: &std::path::Path) -> sys::Ret<RuntimeConfig> {
         ..Default::default()
     };
     cfg.engine.vm = vm;
+    if cfg.engine.fast_sync && cfg.engine.unstable_block == 0 {
+        return sys::errf!(
+            "config [engine].unstable_block must be at least 1 while fast_sync is enabled \
+             (linear sync advances the durable root in unstable_block steps)"
+        );
+    }
     if let Ok(dir) = std::env::var("HACASH_DATA_DIR") {
         cfg.engine.data_dir = dir;
     }

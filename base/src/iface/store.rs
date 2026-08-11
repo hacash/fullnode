@@ -11,6 +11,19 @@ use sys::Rerr;
 use crate::state::{LogBackend, StateRead};
 use crate::store::ChainStatus;
 
+/// A recoverable storage read failure crossing an `Option`-based state API.
+#[derive(Debug)]
+pub struct StorageReadPanic {
+    pub error: sys::Error,
+}
+
+pub fn read_or_panic(disk: &dyn DiskDB, key: &[u8]) -> Option<Vec<u8>> {
+    match disk.try_read(key) {
+        Ok(value) => value,
+        Err(error) => std::panic::panic_any(StorageReadPanic { error }),
+    }
+}
+
 // =============================================================
 // BlockStore
 // =============================================================
@@ -49,10 +62,27 @@ pub trait BlockStore: Send + Sync {
 
     /// canonical root roll finalize rebuild / open
     /// `height == 0` genesis
-    fn read_by_hash(&self, hash: &Hash) -> Option<sys::Bytes>;
-    fn read_by_height(&self, height: u64) -> Option<(Hash, sys::Bytes)>;
+    ///
+    /// `Ok(None)` is the only not-found answer. Read and decode failures are
+    /// returned as errors: a corrupt stored block must never masquerade as a
+    /// missing one on consensus or boot paths (§3.1 of the engine error
+    /// contract).
+    fn read_by_hash(&self, hash: &Hash) -> sys::Ret<Option<sys::Bytes>>;
+    fn read_by_height(&self, height: u64) -> sys::Ret<Option<(Hash, sys::Bytes)>>;
 
-    fn available_cursor(&self) -> Option<u64>;
+    /// The canonical height index hash without the body read. Replay uses it
+    /// to verify the decoded body identity without a second body fetch.
+    fn hash_by_height(&self, height: u64) -> sys::Ret<Option<Hash>> {
+        self.read_by_height(height)
+            .map(|found| found.map(|(hash, _)| hash))
+    }
+
+    fn available_cursor(&self) -> sys::Ret<Option<u64>>;
+
+    /// Whether the store holds any block records at all (bodies or height
+    /// index). Boot uses this to distinguish a fresh store from a corrupted
+    /// one whose available cursor is missing.
+    fn has_records(&self) -> sys::Ret<bool>;
 }
 
 // =============================================================
@@ -116,22 +146,15 @@ pub trait DiskDB: Send + Sync {
     fn read(&self, key: &[u8]) -> Option<Vec<u8>>;
     fn save(&self, key: &[u8], val: &[u8]);
     fn remove(&self, key: &[u8]);
-    fn write(&self, memkv: &dyn MemDB) {
-        memkv.for_each(&mut |key, value| match value {
-            Some(value) => self.save(key, value),
-            None => self.remove(key),
-        });
-    }
-    /// Recoverable boundary for consensus-critical persistence.
-    ///
-    /// Existing backends retain an infallible `write` API
-    /// and may report I/O failures by panicking. Callers that can recover use
-    /// this wrapper so a backend panic becomes an ordinary persistence error.
-    fn try_write(&self, memkv: &dyn MemDB) -> Rerr {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.write(memkv);
-        }))
-        .map_err(|_| sys::Error::fault("disk batch write panicked"))
+    /// Recoverable boundary for consensus-critical persistence. Every backend
+    /// must provide a native atomic batch implementation.
+    fn try_write(&self, memkv: &dyn MemDB) -> Rerr;
+    /// Recoverable read boundary, symmetric with `try_write`. Backends that
+    /// report I/O failures by panicking are caught here; `Ok(None)` remains
+    /// the only missing-key answer and must never be synthesized by callers.
+    fn try_read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.read(key)))
+            .map_err(|_| sys::Error::fault("disk read panicked"))
     }
     fn for_each(&self, _f: &mut dyn FnMut(&[u8], &[u8])) -> Rerr {
         Ok(())
@@ -174,7 +197,9 @@ pub enum StateStatus {
 // =============================================================
 
 pub trait Store: Send + Sync {
-    fn status(&self) -> ChainStatus;
+    /// The durable state root status. Read errors are returned, never
+    /// silently replaced by a default status.
+    fn status(&self) -> sys::Ret<ChainStatus>;
 
     /// Distinguish a fresh state store from a valid genesis state at height
     /// zero. Engine startup owns the resulting initialize/rebuild/replay
@@ -206,13 +231,16 @@ pub trait Store: Send + Sync {
         sys::errf!("store does not support clear_state_keep_blocks")
     }
 
-    fn block_data(&self, hash: &Hash) -> Option<sys::Bytes> {
+    /// Block body by hash; `Ok(None)` is the only not-found answer.
+    fn block_data(&self, hash: &Hash) -> sys::Ret<Option<sys::Bytes>> {
         self.block_store().read_by_hash(hash)
     }
-    fn block_hash(&self, height: u64) -> Option<Hash> {
-        self.block_store().read_by_height(height).map(|(h, _)| h)
+    fn block_hash(&self, height: u64) -> sys::Ret<Option<Hash>> {
+        self.block_store()
+            .read_by_height(height)
+            .map(|found| found.map(|(h, _)| h))
     }
-    fn block_data_by_height(&self, height: u64) -> Option<(Hash, sys::Bytes)> {
+    fn block_data_by_height(&self, height: u64) -> sys::Ret<Option<(Hash, sys::Bytes)>> {
         self.block_store().read_by_height(height)
     }
 }

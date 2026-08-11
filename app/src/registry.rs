@@ -306,6 +306,9 @@ mod tests {
         }
         fn save(&self, _key: &[u8], _val: &[u8]) {}
         fn remove(&self, _key: &[u8]) {}
+        fn try_write(&self, _mem: &dyn base::MemDB) -> sys::Rerr {
+            sys::errf!("empty test state is read-only")
+        }
     }
 
     fn custom_context_creator(

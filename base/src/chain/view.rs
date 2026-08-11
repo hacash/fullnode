@@ -7,7 +7,8 @@ use crate::chain::ApplyMode;
 use crate::chain::BlkPkg;
 use crate::chain::{
     BlockAcceptResult, BlockHistory, BlockProducer, ChainListener, Consensus, ConsensusNodeHooks,
-    EngineConfig, OptimisticState, RecentBlock, StateReadSession, StateSnapSession, TxPolicy,
+    EngineConfig, OptimisticState, QueryUnavailable, RecentBlock, StateReadSession,
+    StateSnapSession, TxPolicy,
 };
 use crate::registry::ExecutionServices;
 use crate::store::Store;
@@ -31,7 +32,11 @@ pub trait ChainView: Send + Sync {
     /// epoch together under the Tree lock. API queries and VM sandbox validate
     /// at the end; transaction relay may use execution only as a best-effort
     /// filter and skip validation.
-    fn optimistic_canonical(&self) -> Option<OptimisticState>;
+    ///
+    /// `Ok(None)` means the engine is busy (syncing / root moving) and the
+    /// caller should retry; `Err(QueryUnavailable)` means the engine is fatal
+    /// or stopping and no snapshot will ever be created again.
+    fn optimistic_canonical(&self) -> Result<Option<OptimisticState>, QueryUnavailable>;
 
     /// Exact canonical-head validation for work whose result is only useful on
     /// the same head, such as block-template construction.
@@ -42,13 +47,17 @@ pub trait ChainView: Send + Sync {
     /// requiring the canonical head to remain unchanged.
     fn validate_state_view(&self, tip_hash: &Hash) -> bool;
 
-    /// Root-stable read session for miner packing. Root movement is excluded,
-    /// while the epoch check still detects an ordinary head change.
-    fn state_canonical(&self) -> Option<StateReadSession<'_>>;
+    /// Root-pinned read session for miner packing. The session pins the tree
+    /// root captured with the head, so root rolls stay readable; the epoch
+    /// check still detects an ordinary head change.
+    fn state_canonical(&self) -> Result<Option<StateReadSession>, QueryUnavailable>;
 
     /// Optimistic branch snapshot for indexer reads. The complete read must be
     /// followed by `validate_state_view(&session.tip_hash())`.
-    fn state_at_session(&self, branch_tip: &Hash) -> Option<StateSnapSession<'_>>;
+    fn state_at_session(
+        &self,
+        branch_tip: &Hash,
+    ) -> Result<Option<StateSnapSession<'_>>, QueryUnavailable>;
 
     fn recent_blocks(&self) -> Vec<RecentBlock> {
         vec![]
@@ -102,7 +111,7 @@ pub trait Engine: ChainView {
     #[allow(clippy::too_many_arguments)]
     fn try_pick_pending_txs_on_session(
         &self,
-        session: &StateReadSession<'_>,
+        session: &StateReadSession,
         candidates: Vec<TxRef>,
         pending_height: u64,
         author: Address,

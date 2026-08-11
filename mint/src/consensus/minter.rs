@@ -489,7 +489,7 @@ impl HacashConsensus {
             return sys::errf!("diamond mint action type invalid");
         };
 
-        let snapshot = view.optimistic_canonical().ok_or_else(|| {
+        let snapshot = view.optimistic_canonical().ok().flatten().ok_or_else(|| {
             sys::Error::fault("state changed during diamond mint tx creation")
                 .with_code("state_changed")
         })?;
@@ -544,7 +544,7 @@ impl HacashConsensus {
     }
 
     fn clean_invalid_diamond_mint_txs(&self, view: &dyn ChainView, txpool: &dyn TxPool) {
-        let Some(snapshot) = view.optimistic_canonical() else {
+        let Some(snapshot) = view.optimistic_canonical().ok().flatten() else {
             return;
         };
         let start_epoch = snapshot.epoch;
@@ -566,7 +566,10 @@ impl HacashConsensus {
         next_height: u64,
         history: &dyn base::BlockHistory,
     ) -> Option<(u32, field::Hash)> {
-        let prev = history.block_at_height(next_height.checked_sub(1)?)?;
+        let prev = history
+            .block_at_height(next_height.checked_sub(1)?)
+            .ok()
+            .flatten()?;
         let blkt = sys::curtimes();
         let target = self.difficulty.target(
             prev.pow_difficulty(),
@@ -639,18 +642,35 @@ impl Consensus for HacashConsensus {
     }
 
     fn check_block_arrive_data(&self, data: &[u8], view: &dyn ChainView) -> Rerr {
-        block_check::check_block_arrive_data(&self.difficulty, &self.bidding, data, view)
+        block_check::check_block_arrive_data(&self.difficulty, data, view)
     }
 
-    fn check_block_arrive(&self, pkg: &BlkPkg, view: &dyn ChainView) -> Rerr {
-        block_check::check_block_arrive(&self.difficulty, &self.mint_conf, &self.bidding, pkg, view)
+    fn check_block_arrive(&self, pkg: &BlkPkg, view: &dyn ChainView, fast_sync: bool) -> Rerr {
+        // Fast sync skips consensus validation: the linear-head invariant
+        // and full state execution are its only guards. Custom mints that
+        // need side effects here may override this and ignore the flag.
+        if fast_sync {
+            return Ok(());
+        }
+        block_check::check_block_arrive(&self.difficulty, &self.mint_conf, pkg, view)
+    }
+
+    /// Publish the arrival record only after the block is durably accepted
+    /// (§6 of the engine error contract): orphans and unvalidated blocks
+    /// never pollute the bidding map.
+    fn on_block_accepted(&self, pkg: &BlkPkg, _view: &dyn ChainView) {
+        self.bidding.mark_block_arrival(pkg.height(), pkg.hash());
     }
 
     fn check_block_admission(
         &self,
         pkg: &base::BlkPkg,
         _view: &dyn ChainView,
+        fast_sync: bool,
     ) -> sys::Ret<BlockAdmissionDecision> {
+        if fast_sync {
+            return Ok(BlockAdmissionDecision::Continue);
+        }
         self.bidding.check_admission(pkg)
     }
 
@@ -659,7 +679,11 @@ impl Consensus for HacashConsensus {
         pkg: &base::BlkPkg,
         parent: &dyn Block,
         history: &dyn base::BlockHistory,
+        fast_sync: bool,
     ) -> Rerr {
+        if fast_sync {
+            return Ok(());
+        }
         block_check::check_block_before_execute(
             &self.mint_conf,
             &self.difficulty,
@@ -675,7 +699,11 @@ impl Consensus for HacashConsensus {
         _new_state: &StateChunkRef,
         parent_state: &dyn base::StateRead,
         _view: &dyn ChainView,
+        fast_sync: bool,
     ) -> Rerr {
+        if fast_sync {
+            return Ok(());
+        }
         block_check::check_highest_bid(&self.bidding, pkg, parent_state)
     }
 
@@ -828,7 +856,7 @@ impl BlockProducer for HacashConsensus {
         // §8.1 steps 3-6: strict read session.  `state_canonical()` captures
         // head hash + height + branch snapshot under one read guard so root
         // persist cannot commit between the height read and the snapshot.
-        let Some(session) = engine.state_canonical() else {
+        let Some(session) = engine.state_canonical().ok().flatten() else {
             return Ok(None);
         };
         let head_hash = session.head_hash();
