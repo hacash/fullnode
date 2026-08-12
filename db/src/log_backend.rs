@@ -80,7 +80,7 @@ impl LogBackend for KvLogBackend {
     }
 
     fn load_block_logs(&self, height: u64) -> Ret<Vec<LogEntry>> {
-        let Some(raw_len) = self.disk.read(&log_len_key(height)) else {
+        let Some(raw_len) = self.disk.read(&log_len_key(height))? else {
             return Ok(Vec::new());
         };
         let len = read_u64_be_prefix(&raw_len)
@@ -88,17 +88,19 @@ impl LogBackend for KvLogBackend {
         let mut logs = Vec::with_capacity(len as usize);
         for idx in 0..len {
             let key = log_item_key(height, idx);
-            let raw = self
-                .disk
-                .read(&key)
-                .ok_or_else(|| sys::Error::fault(format!("persisted log item {} missing", idx)))?;
+            let Some(raw) = self.disk.read(&key)? else {
+                return Err(sys::Error::fault(format!(
+                    "persisted log item {} missing",
+                    idx
+                )));
+            };
             logs.push(decode_log_entry(&raw)?);
         }
         Ok(logs)
     }
 
     fn remove_block_logs(&self, height: u64) -> Rerr {
-        let Some(raw_len) = self.disk.read(&log_len_key(height)) else {
+        let Some(raw_len) = self.disk.read(&log_len_key(height))? else {
             return Ok(());
         };
         let len = read_u64_be_prefix(&raw_len)

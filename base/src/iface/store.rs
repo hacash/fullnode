@@ -143,18 +143,19 @@ impl MemDB for MemKV {
 }
 
 pub trait DiskDB: Send + Sync {
-    fn read(&self, key: &[u8]) -> Option<Vec<u8>>;
+    /// Read one key. Backends report I/O or corruption failures as errors:
+    /// they must never be reported as a missing key, which would silently
+    /// diverge state. `Ok(None)` is the only missing-key answer.
+    fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>>;
     fn save(&self, key: &[u8], val: &[u8]);
     fn remove(&self, key: &[u8]);
     /// Recoverable boundary for consensus-critical persistence. Every backend
     /// must provide a native atomic batch implementation.
     fn try_write(&self, memkv: &dyn MemDB) -> Rerr;
-    /// Recoverable read boundary, symmetric with `try_write`. Backends that
-    /// report I/O failures by panicking are caught here; `Ok(None)` remains
-    /// the only missing-key answer and must never be synthesized by callers.
+    /// Read through the recoverable boundary. `Ok(None)` remains the only
+    /// missing-key answer and must never be synthesized by callers.
     fn try_read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.read(key)))
-            .map_err(|_| sys::Error::fault("disk read panicked"))
+        self.read(key)
     }
     fn for_each(&self, _f: &mut dyn FnMut(&[u8], &[u8])) -> Rerr {
         Ok(())

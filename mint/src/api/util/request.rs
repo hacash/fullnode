@@ -120,6 +120,10 @@ pub(crate) fn api_bytes(data: Vec<u8>, content_type: &str) -> ApiResponse {
     }
 }
 
+pub(crate) fn api_html(s: String) -> ApiResponse {
+    api_bytes(s.into_bytes(), "text/html; charset=utf-8")
+}
+
 pub(crate) fn api_data_list_field(name: &str, latest: i64, list: Vec<String>) -> ApiResponse {
     ApiResponse::json(format!(
         "{{\"ret\":0,\"{}\":{},\"list\":[{}]}}",

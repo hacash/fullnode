@@ -307,7 +307,10 @@ mod transfer_tests {
         let mut ctx = TestCtx::new();
         let cap = SpaceCap::new(1);
         let oversized = vec![0u8; cap.value_size + 1];
-        assert!(oversized.len() <= u16::MAX as usize, "witness must fit BytesW2");
+        assert!(
+            oversized.len() <= u16::MAX as usize,
+            "witness must fit BytesW2"
+        );
         let param = Value::pack_call_args(vec![Value::Bytes(oversized)]).unwrap();
         let codes: Arc<[u8]> = Arc::from(vec![Bytecode::END as u8]);
         let err = verify_p2sh_entry_inputs(

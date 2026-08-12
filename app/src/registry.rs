@@ -111,6 +111,7 @@ impl RegistryWriter for Registry {
     }
 
     fn register_vm_host_def(&mut self, def: VmHostActionDef) -> sys::Rerr {
+        def.validate_opcode_abi()?;
         let key = (def.kind, def.id);
         if self.vm_host_defs.contains_key(&key) {
             return sys::errf!("vm host {:?}/{} already registered", key.0, key.1);
@@ -300,9 +301,38 @@ mod tests {
 
     struct EmptyState;
 
+    fn host_def(kind: VmHostCallKind, ret: VmValueType, argc: usize) -> VmHostActionDef {
+        VmHostActionDef {
+            id: 1,
+            name: "test_host",
+            kind,
+            ret,
+            argc,
+            allowed_policy: VmHostAllowedPolicy::Any,
+        }
+    }
+
+    #[test]
+    fn registry_rejects_host_defs_that_conflict_with_opcode_abi() {
+        let mut registry = Registry::new(mint::block_hasher);
+        assert!(
+            registry
+                .register_vm_host_def(host_def(VmHostCallKind::Action, VmValueType::U64, 0))
+                .is_err()
+        );
+        assert!(
+            registry
+                .register_vm_host_def(host_def(VmHostCallKind::Env, VmValueType::U64, 1))
+                .is_err()
+        );
+        registry
+            .register_vm_host_def(host_def(VmHostCallKind::View, VmValueType::U64, 1))
+            .expect("valid view host definition");
+    }
+
     impl base::DiskDB for EmptyState {
-        fn read(&self, _key: &[u8]) -> Option<Vec<u8>> {
-            None
+        fn read(&self, _key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+            Ok(None)
         }
         fn save(&self, _key: &[u8], _val: &[u8]) {}
         fn remove(&self, _key: &[u8]) {}
@@ -328,6 +358,47 @@ mod tests {
         assert_eq!(
             protocol::execution_params(&registry).expect("protocol params"),
             &CHAIN_PROTOCOL_PARAMS
+        );
+    }
+
+    #[test]
+    fn standard_registry_host_defs_match_the_action_name_constants() {
+        let registry = standard_registry().expect("standard registry");
+        let name = |k: VmHostCallKind, id: u8| registry.vm_host_def(k, id).map(|d| d.name);
+        // protocol transfer EXTACTION hosts: id == kind, name == Type::NAME
+        assert_eq!(
+            name(VmHostCallKind::Action, 1),
+            Some(protocol::action_std::HacToTrs::NAME)
+        );
+        assert_eq!(
+            name(VmHostCallKind::Action, 10),
+            Some(protocol::action_std::SatToTrs::NAME)
+        );
+        assert_eq!(
+            name(VmHostCallKind::Action, 7),
+            Some(protocol::action_std::DiaToTrs::NAME)
+        );
+        // mint inscription host
+        assert_eq!(
+            name(VmHostCallKind::Action, 34),
+            Some(mint::action_diamond_insc::DiaInscEdit::NAME)
+        );
+        // ACTENV / ACTVIEW hosts: id == KIND low byte, name == Type::NAME
+        assert_eq!(
+            name(VmHostCallKind::Env, 1),
+            Some(protocol::action_std::EnvHeight::NAME)
+        );
+        assert_eq!(
+            name(VmHostCallKind::Env, 2),
+            Some(protocol::action_std::EnvMainAddr::NAME)
+        );
+        assert_eq!(
+            name(VmHostCallKind::View, 18),
+            Some(protocol::action_std::ViewDiaInscGet::NAME)
+        );
+        assert_eq!(
+            name(VmHostCallKind::View, 20),
+            Some(protocol::action_std::ViewDiaOwnerAddrs::NAME)
         );
     }
 

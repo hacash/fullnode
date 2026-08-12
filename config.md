@@ -101,6 +101,7 @@ Struct: `mint::MintConf`.
 | --- | --- | --- | --- |
 | `chain_id` | u32 | `0` (mainnet) | Network / chain identifier. This is the authoritative chain id and must fit in a u32. |
 | `diamond_form` | bool | `true` | "Diamond form" consensus variant (dev-compatible genesis configuration). **Persisted into the genesis state at first init and cannot be changed afterwards** — editing it on an existing chain state fails startup with a mismatch error. |
+| `height_max` | u64 | `0` (unlimited) | Sync block of max height (field `sync_maxh`, dev parity with OLD `[mint].height_max`). Blocks above this height are rejected at insert; `0` disables the limit. |
 
 Block, transaction, and difficulty limits are fixed `mint::MintParams` rules;
 they cannot be overridden by this file.

@@ -22,7 +22,7 @@ pub(crate) fn supply_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse 
     }
     match result {
         Ok(body) => ApiResponse::json(body),
-        Err(e) => ApiResponse::err(500, &e.to_string()),
+        Err(e) => api_error(&e.to_string()),
     }
 }
 

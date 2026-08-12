@@ -52,6 +52,7 @@ impl ChannelClose {
 
 base::impl_action! {
     ChannelOpen {
+        name: "channel_open",
         scope: base::ActScope::TOP,
         min_tx_type: 2,
         extra9: |_: &ChannelOpen| false,
@@ -70,6 +71,7 @@ base::impl_action! {
 
 base::impl_action! {
     ChannelClose {
+        name: "channel_close",
         scope: base::ActScope::TOP,
         min_tx_type: 2,
         description: |this: &ChannelClose| format!("Close channel {}", this.channel_id),

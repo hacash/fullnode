@@ -184,6 +184,7 @@ impl Default for P2SHScriptProve {
 
 base::impl_action! {
     P2SHScriptProve {
+        name: "p2sh_script_prove",
         scope: ActScope::TOP,
         min_tx_type: 3,
         extra9: |_: &P2SHScriptProve| false,

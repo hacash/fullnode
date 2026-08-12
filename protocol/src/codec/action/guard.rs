@@ -240,6 +240,7 @@ fn check_balance_floor_assets(assets: &AssetAmtW1) -> Rerr {
 
 base::impl_action! {
     ChainAllow {
+        name: "chain_allow",
         scope: ActScope::GUARD,
         min_tx_type: 2,
         description: |this: &ChainAllow| format!("Valid chain ID list {}", this.chains.as_list().iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")),
@@ -271,6 +272,7 @@ base::impl_action! {
 
 base::impl_action! {
     HeightScope {
+        name: "height_scope",
         scope: ActScope::GUARD,
         min_tx_type: 2,
         description: |this: &HeightScope| format!("Limit height range ({}, {})", this.start.uint(), if this.end.uint() == 0 { "Unlimited".to_owned() } else { this.end.uint().to_string() }),
@@ -298,6 +300,7 @@ base::impl_action! {
 
 base::impl_action! {
     BalanceFloor {
+        name: "balance_floor",
         scope: ActScope::GUARD,
         min_tx_type: 2,
         description: |this: &BalanceFloor| format!("Balance floor for {} (hac={}, sat={}, dia={}, assets={})", addr_or_ptr_readable(&this.addr), this.hacash, this.satoshi.uint(), this.diamond.uint(), this.assets.length()),
@@ -369,6 +372,7 @@ base::impl_action! {
 
 base::impl_action! {
     ReqSignList {
+        name: "req_sign_list",
         scope: ActScope::TOP_GUARD_UNIQUE,
         min_tx_type: 2,
         extra9: |_: &ReqSignList| false,

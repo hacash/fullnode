@@ -90,6 +90,7 @@ impl Default for ContractDeploy {
 
 base::impl_action! {
     ContractDeploy {
+        name: "contract_deploy",
         scope: ActScope::TOP_ONLY_CAN_WITH_GUARD,
         min_tx_type: 3,
         extra9: |_: &ContractDeploy| false,
@@ -217,6 +218,7 @@ impl Default for ContractUpdate {
 
 base::impl_action! {
     ContractUpdate {
+        name: "contract_update",
         scope: ActScope::TOP_ONLY_CAN_WITH_GUARD,
         min_tx_type: 3,
         extra9: |_: &ContractUpdate| false,

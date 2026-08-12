@@ -145,6 +145,11 @@ pub trait ActionJsonCodec: Action + Sized {
 
 /// Generate the mechanical part of a regular `Action` implementation.
 ///
+/// `name` supplies the static protocol/API identifier exposed as the
+/// inherent `NAME` constant (used e.g. by the setup host-definition
+/// registration in `protocol::setup`). It is a type-level constant and does
+/// not enter `dyn Action`, so object safety and `ActionRef` are unaffected.
+///
 /// The execution body remains ordinary Rust and is deliberately evaluated
 /// inside the existing `ActionDispatcher` lifecycle. This macro only removes
 /// repeated metadata, `as_any`, and size-based gas plumbing; it does not add a
@@ -152,6 +157,7 @@ pub trait ActionJsonCodec: Action + Sized {
 #[macro_export]
 macro_rules! impl_action {
     ($class:ty {
+        name: $name:literal,
         scope: $scope:expr,
         min_tx_type: $min_tx_type:expr,
         description: $description:expr,
@@ -159,6 +165,7 @@ macro_rules! impl_action {
     }) => {
         $crate::impl_action! {
             $class {
+                name: $name,
                 scope: $scope,
                 min_tx_type: $min_tx_type,
                 extra9: |_: &$class| false,
@@ -171,10 +178,15 @@ macro_rules! impl_action {
     };
 
     ($class:ty {
+        name: $name:literal,
         scope: $scope:expr,
         min_tx_type: $min_tx_type:expr,
         execute: ($action_self:ident, $action_ctx:ident) $execute:block $(,)?
     }) => {
+        impl $class {
+            pub const NAME: &'static str = $name;
+        }
+
         impl $crate::Action for $class {
             fn kind(&self) -> u16 {
                 Self::KIND
@@ -201,6 +213,7 @@ macro_rules! impl_action {
     };
 
     ($class:ty {
+        name: $name:literal,
         scope: $scope:expr,
         min_tx_type: $min_tx_type:expr,
         extra9: $extra9:expr,
@@ -209,6 +222,10 @@ macro_rules! impl_action {
         description: $description:expr,
         execute: ($action_self:ident, $action_ctx:ident) $execute:block $(,)?
     }) => {
+        impl $class {
+            pub const NAME: &'static str = $name;
+        }
+
         impl $crate::Action for $class {
             fn kind(&self) -> u16 {
                 Self::KIND

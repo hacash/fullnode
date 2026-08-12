@@ -87,6 +87,7 @@ impl ActionListW1 {
 
 impl AstSelect {
     pub const KIND: u16 = 25;
+    pub const NAME: &'static str = "ast_select";
 
     pub fn create_by(min: u8, max: u8, actions: Vec<ActionRef>) -> Ret<Self> {
         Ok(Self {
@@ -116,6 +117,7 @@ impl AstSelect {
 
 impl AstIf {
     pub const KIND: u16 = 26;
+    pub const NAME: &'static str = "ast_if";
 
     pub fn create_by(cond: AstSelect, br_if: AstSelect, br_else: AstSelect) -> Self {
         Self {

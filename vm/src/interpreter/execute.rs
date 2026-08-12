@@ -321,12 +321,11 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
             ($act_kind: expr) => {{
                 let act_kind = $act_kind;
                 let idx = pu8!();
-                let pass_body = act_pass_body(act_kind);
-                let have_retv = act_have_retv(act_kind);
+                let opcode_abi = host_opcode_abi(act_kind);
                 ensure_act_allowed(host, exec, act_kind, idx)?;
                 let kid = u16::from_be_bytes([instbyte, idx]);
                 let mut actbody = vec![];
-                if pass_body {
+                if opcode_abi.consumes_body {
                     let mut bdv = ops.peek()?.extract_call_data()?;
                     actbody.append(&mut bdv);
                     gas_resource!(act_bytes, actbody.len());
@@ -353,10 +352,11 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                     machine.drive_transfer(host.as_context_mut(), r, intent_scope)?;
                 }
                 gas_resource_raw!(bgasu);
-                if have_retv {
-                    let resv = Value::type_from(act_retv_type(host, act_kind, idx)?, cres)?.valid(cap)?;
+                if opcode_abi.produces_value {
+                    let resv =
+                        Value::type_from(act_retv_type(host, act_kind, idx)?, cres)?.valid(cap)?;
                     gas_resource!(act_bytes, resv.val_size());
-                    if pass_body {
+                    if opcode_abi.consumes_body {
                         *ops.peek()? = resv;
                     } else {
                         ops.push(resv)?;

@@ -261,8 +261,8 @@ mod tests {
     struct RejectWrites;
 
     impl DiskDB for RejectWrites {
-        fn read(&self, _key: &[u8]) -> Option<Vec<u8>> {
-            None
+        fn read(&self, _key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+            Ok(None)
         }
 
         fn save(&self, _key: &[u8], _val: &[u8]) {}

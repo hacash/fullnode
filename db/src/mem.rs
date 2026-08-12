@@ -19,8 +19,16 @@ impl MemDiskDB {
 }
 
 impl DiskDB for MemDiskDB {
-    fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.inner.read().unwrap().get(key).cloned()
+    fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+        // Reads are recoverable and poison-tolerant: a crashed writer must
+        // not wedge later reads. Writes below still panic on poison so a
+        // crashed writer cannot silently drop later writes.
+        Ok(self
+            .inner
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key)
+            .cloned())
     }
 
     fn save(&self, key: &[u8], val: &[u8]) {

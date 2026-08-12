@@ -11,21 +11,16 @@ use crate::value::Value;
 use super::{Runtime, StubVm, VmHost, VmRequest};
 
 impl StubVm {
-    pub fn new(height: u64, host_action_count: usize) -> Self {
+    pub fn new(height: u64) -> Self {
         Self {
             runtime: Runtime::create(height),
             entries: Vec::new(),
-            host_action_count,
             deadline: None,
         }
     }
 
     pub fn height(&self) -> u64 {
         self.runtime.cfg_height()
-    }
-
-    pub fn host_action_count(&self) -> usize {
-        self.host_action_count
     }
 
     fn push_entry(&mut self, kind: EntryKind) -> Ret<()> {
@@ -277,7 +272,7 @@ mod entry_semantics_tests {
     /// and the caller's exec_from is restored afterwards.
     #[test]
     fn run_entry_executes_under_exec_from_call_and_restores() {
-        let mut vm = StubVm::new(1, 0);
+        let mut vm = StubVm::new(1);
         let mut ctx = TestCtx::new();
         assert_eq!(ctx.exec_from(), ExecFrom::Top);
         let (_, rv) = vm
@@ -293,7 +288,7 @@ mod entry_semantics_tests {
 
     #[test]
     fn run_entry_restores_exec_from_on_error() {
-        let mut vm = StubVm::new(1, 0);
+        let mut vm = StubVm::new(1);
         let mut ctx = TestCtx::new();
         let err = vm
             .run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
@@ -310,7 +305,7 @@ mod entry_semantics_tests {
     /// `ExecFrom::Call` at every level and unwind back to the caller's value.
     #[test]
     fn nested_entries_keep_exec_from_call_and_restore_outer() {
-        let mut vm = StubVm::new(1, 0);
+        let mut vm = StubVm::new(1);
         let mut ctx = TestCtx::new();
         vm.run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
             assert_eq!(ctx.exec_from(), ExecFrom::Call);

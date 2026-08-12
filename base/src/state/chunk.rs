@@ -553,8 +553,8 @@ mod tests {
     struct NoDisk;
 
     impl DiskDB for NoDisk {
-        fn read(&self, _key: &[u8]) -> Option<Vec<u8>> {
-            None
+        fn read(&self, _key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+            Ok(None)
         }
 
         fn save(&self, _key: &[u8], _val: &[u8]) {}
@@ -662,8 +662,8 @@ mod tests {
     fn deletion_marker_shadows_parent_state() {
         struct BaseDisk;
         impl DiskDB for BaseDisk {
-            fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
-                (key == b"key").then(|| vec![1])
+            fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+                Ok((key == b"key").then(|| vec![1]))
             }
             fn save(&self, _key: &[u8], _val: &[u8]) {}
             fn remove(&self, _key: &[u8]) {}
@@ -754,8 +754,8 @@ mod tests {
     fn reads_survive_parent_to_disk_source_promotion() {
         struct BaseDisk;
         impl DiskDB for BaseDisk {
-            fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
-                (key == b"base").then(|| vec![1])
+            fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+                Ok((key == b"base").then(|| vec![1]))
             }
             fn save(&self, _key: &[u8], _val: &[u8]) {}
             fn remove(&self, _key: &[u8]) {}

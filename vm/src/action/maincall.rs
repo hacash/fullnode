@@ -51,6 +51,7 @@ impl Default for ContractMainCall {
 
 base::impl_action! {
     ContractMainCall {
+        name: "contract_main_call",
         scope: ActScope::AST,
         min_tx_type: 3,
         extra9: |_: &ContractMainCall| false,

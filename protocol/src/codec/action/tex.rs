@@ -662,6 +662,7 @@ impl Encode for TexCellAct {
 
 base::impl_action! {
     TexCellAct {
+        name: "tex_cell_act",
         scope: ActScope::TOP,
         min_tx_type: 3,
         extra9: |this: &TexCellAct| this.has_asset_transfer_cell(),

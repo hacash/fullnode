@@ -85,12 +85,33 @@ fn ensure_act_allowed<H: VmHost + ?Sized>(
     }
 }
 
-const fn act_pass_body(act_kind: Bytecode) -> bool {
-    matches!(act_kind, Bytecode::ACTION | Bytecode::ACTVIEW)
+#[derive(Clone, Copy)]
+struct HostOpcodeAbi {
+    consumes_body: bool,
+    produces_value: bool,
 }
 
-const fn act_have_retv(act_kind: Bytecode) -> bool {
-    !matches!(act_kind, Bytecode::ACTION)
+/// Stack and body behavior belongs to the opcode, not to a registered host.
+/// Host definitions select the capability, return value type and call policy.
+const fn host_opcode_abi(act_kind: Bytecode) -> HostOpcodeAbi {
+    match act_kind {
+        Bytecode::ACTION => HostOpcodeAbi {
+            consumes_body: true,
+            produces_value: false,
+        },
+        Bytecode::ACTVIEW => HostOpcodeAbi {
+            consumes_body: true,
+            produces_value: true,
+        },
+        Bytecode::ACTENV => HostOpcodeAbi {
+            consumes_body: false,
+            produces_value: true,
+        },
+        _ => HostOpcodeAbi {
+            consumes_body: false,
+            produces_value: false,
+        },
+    }
 }
 
 fn act_retv_type<H: VmHost + ?Sized>(host: &H, act_kind: Bytecode, idx: u8) -> VmrtRes<ValueTy> {

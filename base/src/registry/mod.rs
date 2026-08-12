@@ -63,10 +63,32 @@ pub struct VmHostActionDef {
     pub name: &'static str,
     pub kind: VmHostCallKind,
     pub ret: VmValueType,
+    /// Source-level function arity used by compilers and capability introspection.
+    /// Runtime body decoding remains authoritative for the wire ABI.
     pub argc: usize,
-    pub pass_body: bool,
-    pub have_retv: bool,
     pub allowed_policy: VmHostAllowedPolicy,
+}
+
+impl VmHostActionDef {
+    /// Validate fields constrained by the ACTION / ACTENV / ACTVIEW opcodes.
+    ///
+    /// Body consumption and stack output are opcode semantics and deliberately
+    /// are not configurable host-definition fields.
+    pub fn validate_opcode_abi(&self) -> Rerr {
+        match self.kind {
+            VmHostCallKind::Action if self.ret != VmValueType::Nil => sys::errf!(
+                "VM ACTION host {}/{} must have Nil return type",
+                self.name,
+                self.id
+            ),
+            VmHostCallKind::Env if self.argc != 0 => sys::errf!(
+                "VM ACTENV host {}/{} must have zero source arguments",
+                self.name,
+                self.id
+            ),
+            _ => Ok(()),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -108,6 +108,7 @@ impl DiaInscDrop {
 
 base::impl_action! {
     DiaInscPush {
+        name: "hacd_insc_push",
         scope: ActScope::TOP,
         min_tx_type: 2,
         extra9: |_: &DiaInscPush| true,
@@ -134,6 +135,7 @@ base::impl_action! {
 
 base::impl_action! {
     DiaInscClean {
+        name: "hacd_insc_clean",
         scope: ActScope::TOP,
         min_tx_type: 2,
         extra9: |_: &DiaInscClean| true,
@@ -154,6 +156,7 @@ base::impl_action! {
 
 base::impl_action! {
     DiaInscEdit {
+        name: "hacd_insc_edit",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &DiaInscEdit| true,
@@ -180,6 +183,7 @@ base::impl_action! {
 
 base::impl_action! {
     DiaInscMove {
+        name: "hacd_insc_move",
         scope: ActScope::AST,
         min_tx_type: 2,
         extra9: |_: &DiaInscMove| true,
@@ -206,6 +210,7 @@ base::impl_action! {
 
 base::impl_action! {
     DiaInscDrop {
+        name: "hacd_insc_drop",
         scope: ActScope::TOP,
         min_tx_type: 2,
         extra9: |_: &DiaInscDrop| true,

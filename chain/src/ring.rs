@@ -42,10 +42,22 @@ impl Ring {
         }
     }
 
+    /// Poison-tolerant lock. Every pipeline stage shares this mutex, so one
+    /// stage panicking must not wedge the others: the state each method
+    /// mutates is fully updated before its guard is released, so a poisoned
+    /// lock only ever reflects a completed transition, never a torn one. Any
+    /// panic behind a lock here is a programming error the sync join reports.
+    fn lock(&self) -> std::sync::MutexGuard<'_, RingState> {
+        self.slots.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub(crate) fn reserve(&self) -> bool {
-        let mut state = self.slots.lock().unwrap();
+        let mut state = self.lock();
         while !state.stopped && state.in_flight >= self.capacity {
-            state = self.not_full.wait(state).unwrap();
+            state = self
+                .not_full
+                .wait(state)
+                .unwrap_or_else(|e| e.into_inner());
         }
         if state.stopped {
             return false;
@@ -55,7 +67,7 @@ impl Ring {
     }
 
     pub(crate) fn release(&self) {
-        let mut state = self.slots.lock().unwrap();
+        let mut state = self.lock();
         debug_assert!(state.in_flight > 0);
         state.in_flight -= 1;
         self.not_full.notify_one();
@@ -63,7 +75,7 @@ impl Ring {
 
     pub(crate) fn publish_reserved(&self, seq: u64, slot: Slot) -> bool {
         let idx = (seq % self.capacity as u64) as usize;
-        let mut state = self.slots.lock().unwrap();
+        let mut state = self.lock();
         if state.stopped {
             debug_assert!(state.in_flight > 0);
             state.in_flight -= 1;
@@ -79,7 +91,7 @@ impl Ring {
 
     pub(crate) fn take(&self, seq: u64) -> Option<Slot> {
         let idx = (seq % self.capacity as u64) as usize;
-        let mut state = self.slots.lock().unwrap();
+        let mut state = self.lock();
         loop {
             if let Some(slot) = state.items[idx].take() {
                 state.next = seq + 1;
@@ -94,18 +106,21 @@ impl Ring {
             if state.end.is_some_and(|end| seq >= end) {
                 return None;
             }
-            state = self.not_empty.wait(state).unwrap();
+            state = self
+                .not_empty
+                .wait(state)
+                .unwrap_or_else(|e| e.into_inner());
         }
     }
 
     pub(crate) fn close(&self, total: u64) {
-        let mut state = self.slots.lock().unwrap();
+        let mut state = self.lock();
         state.end = Some(total);
         self.not_empty.notify_one();
     }
 
     pub(crate) fn stop(&self) {
-        let mut state = self.slots.lock().unwrap();
+        let mut state = self.lock();
         state.stopped = true;
         self.not_empty.notify_all();
         self.not_full.notify_all();

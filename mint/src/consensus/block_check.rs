@@ -181,7 +181,7 @@ fn check_block_arrive_block(
 }
 
 pub fn check_block_before_execute(
-    _mint_conf: &MintConf,
+    mint_conf: &MintConf,
     difficulty: &DifficultyGnr,
     pkg: &BlkPkg,
     parent: &dyn Block,
@@ -189,6 +189,11 @@ pub fn check_block_before_execute(
 ) -> Rerr {
     let curblk = pkg.block();
     let curhei = curblk.height();
+    // Config [mint].height_max limit (dev parity, OLD `impl_blk_verify`).
+    let smaxh = mint_conf.sync_maxh;
+    if smaxh > 0 && curhei > smaxh {
+        return errf!("config [mint].height_max limit: {}", smaxh);
+    }
     let ptx = curblk.prelude_transaction()?;
     if ptx.ty() != CoinbaseTx::TYPE {
         return errf!("mainnet prelude tx must be coinbase");

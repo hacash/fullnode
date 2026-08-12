@@ -1,7 +1,7 @@
 //! mint  Registry `mint::setup::register`
 
 use base::{RegistryWriter, VmHostActionDef, VmHostAllowedPolicy, VmHostCallKind, VmValueType};
-use sys::Rerr;
+use sys::{Rerr, errf};
 
 use crate::action::asset::{AssetCreate, create_asset_create};
 use crate::action::channel::{
@@ -13,6 +13,31 @@ use crate::action::diamond_insc::{
     decode_dia_insc_json,
 };
 use crate::tx_coinbase::{CoinbaseTx, create_coinbase};
+
+/// EXTACTION host defs: the wire id is the kind itself, so a kind larger than
+/// `0xff` is rejected instead of silently truncating into the u8 opcode id.
+fn register_action_def(
+    reg: &mut dyn RegistryWriter,
+    kind: u16,
+    name: &'static str,
+    argc: usize,
+) -> Rerr {
+    if kind > 0xff {
+        return errf!(
+            "VM ACTION host {} kind {:#06x} cannot fit the u8 opcode id",
+            name,
+            kind
+        );
+    }
+    reg.register_vm_host_def(VmHostActionDef {
+        id: kind as u8,
+        name,
+        kind: VmHostCallKind::Action,
+        ret: VmValueType::Nil,
+        argc,
+        allowed_policy: VmHostAllowedPolicy::TopOnly,
+    })
+}
 
 pub fn register(reg: &mut dyn RegistryWriter) -> Rerr {
     reg.register_tx(CoinbaseTx::TYPE, create_coinbase)?;
@@ -33,15 +58,6 @@ pub fn register(reg: &mut dyn RegistryWriter) -> Rerr {
         decode_diamond_mint_json => [DiamondMint],
     )?;
 
-    reg.register_vm_host_def(VmHostActionDef {
-        id: DiaInscEdit::KIND as u8,
-        name: "hacd_insc_edit",
-        kind: VmHostCallKind::Action,
-        ret: VmValueType::Nil,
-        argc: 5,
-        pass_body: true,
-        have_retv: false,
-        allowed_policy: VmHostAllowedPolicy::TopOnly,
-    })?;
+    register_action_def(reg, DiaInscEdit::KIND, DiaInscEdit::NAME, 5)?;
     Ok(())
 }

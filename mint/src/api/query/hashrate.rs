@@ -10,7 +10,7 @@ pub(crate) fn hashrate_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiRespons
         Some(height) => match ctx.engine.block_history().block_at_height(height) {
             Ok(block) => block.map(|block| block.timestamp()),
             Err(e) => {
-                return ApiResponse::err(503, &format!("block history read failed: {}", e));
+                return api_error(&format!("block history read failed: {}", e));
             }
         },
         None => None,
@@ -53,13 +53,13 @@ pub(crate) fn hashrate_logs_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRes
         let rt1 = match block_rate_at(ctx, s1) {
             Ok(rate) => rate,
             Err(e) => {
-                return ApiResponse::err(503, &format!("block history read failed: {}", e));
+                return api_error(&format!("block history read failed: {}", e));
             }
         };
         let rt2 = match block_rate_at(ctx, s2) {
             Ok(rate) => rate,
             Err(e) => {
-                return ApiResponse::err(503, &format!("block history read failed: {}", e));
+                return api_error(&format!("block history read failed: {}", e));
             }
         };
         day200_max = day200_max.max(rt1);
@@ -77,7 +77,7 @@ pub(crate) fn hashrate_logs_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRes
             Some(height) => match ctx.engine.block_history().block_at_height(height) {
                 Ok(block) => block.map(|block| block.timestamp()),
                 Err(e) => {
-                    return ApiResponse::err(503, &format!("block history read failed: {}", e));
+                    return api_error(&format!("block history read failed: {}", e));
                 }
             },
             None => None,

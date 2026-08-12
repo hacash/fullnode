@@ -709,8 +709,8 @@ mod tests {
 
     struct NoDisk;
     impl DiskDB for NoDisk {
-        fn read(&self, _key: &[u8]) -> Option<Vec<u8>> {
-            None
+        fn read(&self, _key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+            Ok(None)
         }
         fn save(&self, _key: &[u8], _val: &[u8]) {}
         fn remove(&self, _key: &[u8]) {}

@@ -144,6 +144,7 @@ impl Encode for DiamondMint {
 
 base::impl_action! {
     DiamondMint {
+        name: "diamond_mint",
         scope: ActScope::TOP_ONLY,
         min_tx_type: 2,
         extra9: |this: &DiamondMint| {

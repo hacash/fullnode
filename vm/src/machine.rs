@@ -67,6 +67,5 @@ struct EntryFrame {
 pub struct StubVm {
     runtime: Runtime,
     entries: Vec<EntryFrame>,
-    host_action_count: usize,
     deadline: Option<Instant>,
 }

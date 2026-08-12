@@ -78,6 +78,32 @@ pub enum TxRejectReason {
     Policy(String),
 }
 
+impl TxRejectReason {
+    /// Human-readable rejection message. Mirrors the wording the dev node
+    /// returned through the HTTP API so clients keep recognizing the errors.
+    pub fn as_message(&self) -> String {
+        match self {
+            TxRejectReason::Malformed(s) => s.clone(),
+            TxRejectReason::NonCanonical(s) => s.clone(),
+            TxRejectReason::TooLarge { size, max } => format!(
+                "tx size {} exceeds maximum {} bytes",
+                size, max
+            ),
+            TxRejectReason::FeeTooLow { got, min } => format!(
+                "The transaction fee purity {} is too low, the node minimum configuration is {}.",
+                got, min
+            ),
+            TxRejectReason::MempoolForbidden => {
+                "transaction type is forbidden in mempool".to_owned()
+            }
+            TxRejectReason::InvalidSignature(s) => s.clone(),
+            TxRejectReason::ExecutionFailed(s) => s.clone(),
+            TxRejectReason::PoolFull => "transaction pool is full".to_owned(),
+            TxRejectReason::Policy(s) => s.clone(),
+        }
+    }
+}
+
 /// A valid transaction may be unsuitable for this node's bounded local pool
 /// while still being eligible for network relay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

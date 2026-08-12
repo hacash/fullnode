@@ -22,8 +22,14 @@ impl RustyLeveldbDisk {
 }
 
 impl DiskDB for RustyLeveldbDisk {
-    fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.db.lock().unwrap().get(key)
+    fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+        // Poison-tolerant like the ring: a crashed writer must not wedge
+        // reads of the still-valid store behind a poisoned lock.
+        Ok(self
+            .db
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(key))
     }
 
     fn save(&self, key: &[u8], val: &[u8]) {

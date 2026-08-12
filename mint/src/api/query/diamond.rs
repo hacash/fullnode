@@ -365,6 +365,8 @@ pub(crate) fn diamond_engrave_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiR
                     tx_hash,
                     vec![
                         format!("\"action\":{}", json_string("clear")),
+                        // Documented clear marker (fullnode_api_doc_v2 §3.6).
+                        format!("\"clear\":true"),
                         format!("\"diamonds\":{}", json_string(&a.diamonds.readable())),
                         format!(
                             "\"protocol_cost\":{}",

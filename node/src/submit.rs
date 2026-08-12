@@ -82,7 +82,14 @@ impl P2PNode {
             | TxAdmissionStatus::Duplicate
             | TxAdmissionStatus::Replaced
             | TxAdmissionStatus::Ignored => Ok(()),
-            TxAdmissionStatus::Rejected => sys::errf!("tx rejected: {:?}", result.reason),
+            TxAdmissionStatus::Rejected => sys::errf!(
+                "{}",
+                result
+                    .reason
+                    .as_ref()
+                    .map(|r| r.as_message())
+                    .unwrap_or_else(|| "transaction rejected".to_owned())
+            ),
         }
     }
 

@@ -5,9 +5,9 @@ use sys::{Ret, errf};
 /// Default download window (in-flight GET_BLOCKS).
 pub const SYNC_WINDOW: usize = 3;
 /// Default max blocks per response.
-pub const DEFAULT_MAX_BLOCKS: u32 = 2_000;
-/// Default max payload bytes per response (~4 MiB).
-pub const DEFAULT_MAX_BYTES: u32 = 4 * 1024 * 1024;
+pub const DEFAULT_MAX_BLOCKS: u32 = 10_000;
+/// Default max payload bytes per response (~20 MiB).
+pub const DEFAULT_MAX_BYTES: u32 = 20 * 1024 * 1024;
 /// BLOCKS fixed header size.
 pub const BLOCKS_HEADER_SIZE: usize = 44;
 pub const BLOCKS_HDR_VERSION: u16 = 1;

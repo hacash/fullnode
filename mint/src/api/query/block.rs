@@ -16,7 +16,7 @@ pub(crate) fn block_intro_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespo
     }
     match load_block_by_key(ctx, &key) {
         Ok(pkg) => ApiResponse::json(block_intro_json(&pkg, &unit, tx_hash_list)),
-        Err(e) => ApiResponse::err(503, &format!("block query failed: {}", e)),
+        Err(e) => api_error(&format!("block query failed: {}", e)),
     }
 }
 
@@ -48,7 +48,7 @@ pub(crate) fn block_datas_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespo
         let found = match store.block_data_by_height(height) {
             Ok(found) => found,
             Err(e) => {
-                return ApiResponse::err(503, &format!("block read failed: {}", e));
+                return api_error(&format!("block read failed: {}", e));
             }
         };
         let Some((_, block_data)) = found else {
@@ -91,7 +91,7 @@ pub(crate) fn block_views_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespo
             Ok(Some(block)) => block,
             Ok(None) => continue,
             Err(e) => {
-                return ApiResponse::err(503, &format!("block history read failed: {}", e));
+                return api_error(&format!("block history read failed: {}", e));
             }
         };
         list.push(block_summary_json(block.as_ref(), block.hash(), &unit));
@@ -128,7 +128,7 @@ pub(crate) fn block_pool_stats_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> Ap
             Ok(Some(block)) => block,
             Ok(None) => continue,
             Err(e) => {
-                return ApiResponse::err(503, &format!("block history read failed: {}", e));
+                return api_error(&format!("block history read failed: {}", e));
             }
         };
         let prelude = block.prelude_transaction().ok();

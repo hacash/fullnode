@@ -3,7 +3,7 @@ use std::sync::{Arc, LazyLock};
 use std::any::Any;
 
 use base::{Block, BlockBuild, BlockRef, PowBlock, TxRef};
-use field::{Address, Amount, BlockHeight, Fixed16, Hash, Timestamp, Uint1, Uint4};
+use field::{Address, Amount, BlockHeight, Encode, Fixed16, Hash, Timestamp, Uint1, Uint4};
 use num_bigint::BigUint;
 use protocol::block_std::BlockV1;
 
@@ -17,6 +17,35 @@ pub static GENESIS_BLOCK_HASH: LazyLock<Hash> = LazyLock::new(|| {
             .unwrap(),
     )
 });
+
+/// Expected serialized mainnet genesis block bytes (from fullnodedev
+/// `mint/src/genesis/block.rs`). Byte-level self-check: any drift in the
+/// block/tx codecs or in the genesis construction itself panics at startup
+/// instead of silently booting a genesis whose hash no longer matches its
+/// bytes.
+const GENESIS_BLOCK_BODY_HEX: &str = "010000000000005c57b08c0000000000000000000000000000000000000000000000000000000000000000ad557702fc70afaf70a855e7b8a4400159643cb5a7fc8a89ba2bce6f818a9b0100000001098b344500000000000000000c1aaa4e6007cc58cfb932052ac0ec25ca356183f80101686172646572746f646f62657474657200";
+
+/// Validate the constructed genesis block against the locked mainnet bytes:
+/// both the computed block hash and the full serialized body must match.
+fn check_genesis_bytes(genesis: &BlockV1) {
+    let got_hash = genesis.hash();
+    let want_hash = *GENESIS_BLOCK_HASH;
+    if got_hash != want_hash {
+        panic!(
+            "Genesis Block Hash Error: expected {} but got {}",
+            want_hash, got_hash
+        );
+    }
+    let got_body = genesis.encode();
+    let want_body = hex::decode(GENESIS_BLOCK_BODY_HEX).expect("genesis body hex decode");
+    if got_body != want_body {
+        panic!(
+            "Genesis Block Body Error: expected {} but got {}",
+            hex::encode(&want_body),
+            hex::encode(got_body)
+        );
+    }
+}
 
 #[derive(Debug)]
 struct GenesisBlock {
@@ -111,6 +140,7 @@ pub fn create_genesis_block() -> BlockV1 {
         }))
         .unwrap();
     genesis.update_mrklroot();
+    check_genesis_bytes(&genesis);
     genesis
 }
 
@@ -184,4 +214,42 @@ pub fn calculate_interest_of_height(
         return Ok((amtl.clone(), amtr.clone()));
     }
     both_interest(distribute_type, amtl, amtr, calc_loop, wfzn)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Reaching this proves `create_genesis_block()` is byte-identical to the
+    /// locked mainnet genesis (it panics inside on any mismatch).
+    #[test]
+    fn genesis_construction_matches_mainnet_bytes() {
+        let genesis = create_genesis_block();
+        assert_eq!(genesis.hash(), *GENESIS_BLOCK_HASH);
+        assert_eq!(
+            genesis.encode(),
+            hex::decode(GENESIS_BLOCK_BODY_HEX).unwrap()
+        );
+    }
+
+    /// A genesis whose computed hash still matches (fake hasher) but whose
+    /// serialized body differs must panic with the body error.
+    #[test]
+    #[should_panic(expected = "Genesis Block Body Error")]
+    fn tampered_genesis_body_panics() {
+        let mut genesis = BlockV1::new(|_, _| GENESIS_BLOCK_HASH.0);
+        genesis.height = BlockHeight::from(0);
+        genesis.timestamp = Timestamp::from(1_549_250_700);
+        genesis
+            .push_transaction(Arc::new(CoinbaseTx {
+                ty: Uint1::from(CoinbaseTx::TYPE),
+                address: Address::from_readable("1271438866CSDpJUqrnchoJAiGGBFSQhjd").unwrap(),
+                reward: Amount::small(1, field::UNIT_MEI),
+                message: Fixed16::from(*b"hardertodobetter"),
+                extend: Default::default(),
+            }))
+            .unwrap();
+        genesis.update_mrklroot();
+        check_genesis_bytes(&genesis);
+    }
 }

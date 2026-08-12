@@ -95,7 +95,7 @@ impl DiskKV {
 }
 
 impl DiskDB for DiskKV {
-    fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
+    fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
         self.inner.read(key)
     }
     fn save(&self, key: &[u8], val: &[u8]) {

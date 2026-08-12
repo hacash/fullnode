@@ -32,6 +32,7 @@ impl AssetCreate {
 
 base::impl_action! {
     AssetCreate {
+        name: "asset_create",
         scope: base::ActScope::TOP_ONLY,
         min_tx_type: 2,
         description: |this: &AssetCreate| format!("Register asset <{}>", this.metadata.ticket.to_readable_or_hex()),

@@ -400,6 +400,7 @@ impl TransferLike for SatFromToTrs {
 
 base::impl_action! {
     HacToTrs {
+        name: "transfer_hac_to",
         scope: ActScope::CALL,
         min_tx_type: 1,
         extra9: |_: &HacToTrs| false,
@@ -417,6 +418,7 @@ base::impl_action! {
 
 base::impl_action! {
     HacFromTrs {
+        name: "transfer_hac_from",
         scope: ActScope::CALL,
         min_tx_type: 1,
         extra9: |_: &HacFromTrs| false,
@@ -434,6 +436,7 @@ base::impl_action! {
 
 base::impl_action! {
     HacFromToTrs {
+        name: "transfer_hac_from_to",
         scope: ActScope::CALL,
         min_tx_type: 1,
         extra9: |_: &HacFromToTrs| false,
@@ -451,6 +454,7 @@ base::impl_action! {
 
 base::impl_action! {
     SatToTrs {
+        name: "transfer_sat_to",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &SatToTrs| false,
@@ -468,6 +472,7 @@ base::impl_action! {
 
 base::impl_action! {
     SatFromTrs {
+        name: "transfer_sat_from",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &SatFromTrs| false,
@@ -485,6 +490,7 @@ base::impl_action! {
 
 base::impl_action! {
     SatFromToTrs {
+        name: "transfer_sat_from_to",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &SatFromToTrs| false,
@@ -568,6 +574,7 @@ impl TransferLike for AssetFromToTrs {
 
 base::impl_action! {
     AssetToTrs {
+        name: "transfer_asset_to",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &AssetToTrs| true,
@@ -585,6 +592,7 @@ base::impl_action! {
 
 base::impl_action! {
     AssetFromTrs {
+        name: "transfer_asset_from",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &AssetFromTrs| true,
@@ -602,6 +610,7 @@ base::impl_action! {
 
 base::impl_action! {
     AssetFromToTrs {
+        name: "transfer_asset_from_to",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &AssetFromToTrs| true,
@@ -740,6 +749,7 @@ impl TransferLike for DiaFromToTrs {
 
 base::impl_action! {
     DiaSingleTrs {
+        name: "transfer_hacd_single_to",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &DiaSingleTrs| false,
@@ -760,6 +770,7 @@ base::impl_action! {
 
 base::impl_action! {
     DiaFromToTrs {
+        name: "transfer_hacd_from_to",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &DiaFromToTrs| false,
@@ -779,6 +790,7 @@ base::impl_action! {
 
 base::impl_action! {
     DiaToTrs {
+        name: "transfer_hacd_to",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &DiaToTrs| false,
@@ -798,6 +810,7 @@ base::impl_action! {
 
 base::impl_action! {
     DiaFromTrs {
+        name: "transfer_hacd_from",
         scope: ActScope::CALL,
         min_tx_type: 2,
         extra9: |_: &DiaFromTrs| false,

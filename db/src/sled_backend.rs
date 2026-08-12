@@ -26,12 +26,12 @@ impl SledDisk {
 }
 
 impl DiskDB for SledDisk {
-    fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
+    fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
         // IO/corruption must NOT map to "missing" — that silently diverges state.
-        match self.db.get(key) {
-            Ok(v) => v.map(|v| v.to_vec()),
-            Err(e) => panic!("sled read failed for key len={}: {}", key.len(), e),
-        }
+        self.db
+            .get(key)
+            .map(|v| v.map(|v| v.to_vec()))
+            .map_err(|e| sys::Error::fault(format!("sled read failed for key len={}: {}", key.len(), e)))
     }
     fn save(&self, key: &[u8], val: &[u8]) {
         self.db.insert(key, val).expect("sled save");

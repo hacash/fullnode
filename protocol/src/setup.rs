@@ -1,26 +1,10 @@
-use base::{
-    Context, Env, ExecutionServices, RegistryWriter, StateChunkRef, TxRef, VmHostActionDef,
-    VmHostAllowedPolicy, VmHostCallKind, VmValueType,
-};
+use base::*;
 use std::sync::Arc;
-use sys::{Rerr, Ret};
+use sys::{Rerr, Ret, errf};
 
-use crate::codec::action::{
-    AssetFromToTrs, AssetFromTrs, AssetToTrs, AstIf, AstSelect, BalanceFloor, ChainAllow,
-    DiaFromToTrs, DiaFromTrs, DiaSingleTrs, DiaToTrs, EnvBlockAuthorAddr, EnvHeight, EnvMainAddr,
-    HacFromToTrs, HacFromTrs, HacToTrs, HeightScope, ReqSignList, SatFromToTrs, SatFromTrs,
-    SatToTrs, TexCellAct, TxBlob, TxMessage, ViewAssetBalance, ViewBalance, ViewCheckSign,
-    ViewDiaInscGet, ViewDiaInscNum, ViewDiaNameList, ViewDiaOwnerAddrs, create_asset_transfer,
-    create_ast_if, create_ast_select, create_blob_action, create_chain_guard_action,
-    create_diamond_transfer, create_envfunc_action, create_hac_transfer, create_sat_transfer,
-    create_tex_cell_act, decode_ast_if_json, decode_ast_select_json, decode_diamond_transfer_json,
-    decode_req_sign_list_json, decode_tex_cell_act_json,
-};
+use crate::codec::action::*;
 use crate::codec::block::create_std_block;
-use crate::codec::tx::{
-    TransactionType1, TransactionType2, TransactionType3, create_transaction_type1,
-    create_transaction_type2, create_transaction_type3,
-};
+use crate::codec::tx::*;
 
 fn create_context(
     env: Env,
@@ -38,69 +22,114 @@ fn register_host_def(reg: &mut dyn RegistryWriter, def: VmHostActionDef) -> Rerr
     reg.register_vm_host_def(def)
 }
 
+/// Transfer EXTACTION hosts: the wire id is the kind itself (`id = kind`), so a
+/// kind larger than `0xff` can never be silently truncated into the u8 opcode id.
 fn register_action_def(
     reg: &mut dyn RegistryWriter,
-    id: u8,
+    kind: u16,
     name: &'static str,
     argc: usize,
 ) -> Rerr {
+    if kind > 0xff {
+        return errf!(
+            "VM ACTION host {} kind {:#06x} cannot fit the u8 opcode id",
+            name,
+            kind
+        );
+    }
     // Transfer EXTACTION is Main+depth0 only (vm ensure_act_allowed); metadata matches.
     register_host_def(
         reg,
         VmHostActionDef {
-            id,
+            id: kind as u8,
             name,
             kind: VmHostCallKind::Action,
             ret: VmValueType::Nil,
             argc,
-            pass_body: true,
-            have_retv: false,
             allowed_policy: VmHostAllowedPolicy::TopOnly,
         },
     )
 }
 
+/// ACTENV hosts live in the 0x07xx opcode space; the opcode id is the low byte.
 fn register_env_def(
     reg: &mut dyn RegistryWriter,
-    id: u8,
+    kind: u16,
     name: &'static str,
     ret: VmValueType,
 ) -> Rerr {
+    if kind >> 8 != 0x07 {
+        return errf!(
+            "VM ACTENV host {} kind {:#06x} must be in the 0x07xx opcode space",
+            name,
+            kind
+        );
+    }
     register_host_def(
         reg,
         VmHostActionDef {
-            id,
+            id: kind as u8,
             name,
             kind: VmHostCallKind::Env,
             ret,
             argc: 0,
-            pass_body: false,
-            have_retv: true,
             allowed_policy: VmHostAllowedPolicy::Any,
         },
     )
 }
 
+/// ACTVIEW hosts live in the 0x06xx opcode space; the opcode id is the low byte.
 fn register_view_def(
     reg: &mut dyn RegistryWriter,
-    id: u8,
+    kind: u16,
     name: &'static str,
     ret: VmValueType,
     argc: usize,
 ) -> Rerr {
+    if kind >> 8 != 0x06 {
+        return errf!(
+            "VM ACTVIEW host {} kind {:#06x} must be in the 0x06xx opcode space",
+            name,
+            kind
+        );
+    }
     register_host_def(
         reg,
         VmHostActionDef {
-            id,
+            id: kind as u8,
             name,
             kind: VmHostCallKind::View,
             ret,
             argc,
-            pass_body: true,
-            have_retv: true,
             allowed_policy: VmHostAllowedPolicy::ViewOnly,
         },
     )
+}
+
+/// Host-definition registration sugar. The action type is the single
+/// declaration point of `KIND`/`NAME`, so each batch entry only repeats the ABI
+/// data that actually varies (source arity / return value type). The return
+/// variant is auto-qualified (`U64` expands to `VmValueType::U64`). Expands
+/// into the validating `register_*_def` helpers above.
+macro_rules! register_vm_hosts {
+    ($reg:expr, action; $( $ty:ty = $argc:expr ),+ $(,)?) => {{
+        $(
+            register_action_def($reg, <$ty>::KIND, <$ty>::NAME, $argc)?;
+        )+
+        Ok::<(), sys::Error>(())
+    }};
+    ($reg:expr, env; $( $ty:ty = $ret:ident ),+ $(,)?) => {{
+        $(
+            register_env_def($reg, <$ty>::KIND, <$ty>::NAME, VmValueType::$ret)?;
+        )+
+        Ok::<(), sys::Error>(())
+    }};
+    ($reg:expr, view; $( $ty:ty = ($ret:ident, $argc:expr) ),+ $(,)?) => {{
+        $(
+            register_view_def($reg, <$ty>::KIND, <$ty>::NAME, VmValueType::$ret, $argc)?;
+        )+
+        Ok::<(), sys::Error>(())
+    }};
 }
 
 /// VM host capability surface for the standard Hacash protocol.
@@ -108,32 +137,38 @@ fn register_view_def(
 /// - protocol owns transfer / env / view defs (this function)
 /// - mint owns its additional inscription host definitions
 fn register_vm_host_defs(reg: &mut dyn RegistryWriter) -> Rerr {
-    register_action_def(reg, HacToTrs::KIND as u8, "transfer_hac_to", 2)?;
-    register_action_def(reg, HacFromTrs::KIND as u8, "transfer_hac_from", 2)?;
-    register_action_def(reg, HacFromToTrs::KIND as u8, "transfer_hac_from_to", 3)?;
-    register_action_def(reg, SatToTrs::KIND as u8, "transfer_sat_to", 2)?;
-    register_action_def(reg, SatFromTrs::KIND as u8, "transfer_sat_from", 2)?;
-    register_action_def(reg, SatFromToTrs::KIND as u8, "transfer_sat_from_to", 3)?;
-    register_action_def(reg, DiaSingleTrs::KIND as u8, "transfer_hacd_single_to", 2)?;
-    register_action_def(reg, DiaToTrs::KIND as u8, "transfer_hacd_to", 2)?;
-    register_action_def(reg, DiaFromTrs::KIND as u8, "transfer_hacd_from", 2)?;
-    register_action_def(reg, DiaFromToTrs::KIND as u8, "transfer_hacd_from_to", 3)?;
-    register_action_def(reg, AssetToTrs::KIND as u8, "transfer_asset_to", 2)?;
-    register_action_def(reg, AssetFromTrs::KIND as u8, "transfer_asset_from", 2)?;
-    register_action_def(reg, AssetFromToTrs::KIND as u8, "transfer_asset_from_to", 3)?;
+    register_vm_hosts!(reg, action;
+        HacToTrs = 2,
+        HacFromTrs = 2,
+        HacFromToTrs = 3,
+        SatToTrs = 2,
+        SatFromTrs = 2,
+        SatFromToTrs = 3,
+        DiaSingleTrs = 2,
+        DiaToTrs = 2,
+        DiaFromTrs = 2,
+        DiaFromToTrs = 3,
+        AssetToTrs = 2,
+        AssetFromTrs = 2,
+        AssetFromToTrs = 3,
+    )?;
 
-    // Host ids = KIND % 256 (mainnet-compatible ACTENV / ACTVIEW idx).
-    register_env_def(reg, 1, "block_height", VmValueType::U64)?; // 0x0701
-    register_env_def(reg, 2, "tx_main_addr", VmValueType::Address)?; // 0x0702
-    register_env_def(reg, 3, "block_author_addr", VmValueType::Address)?; // 0x0703
+    // Host ids = KIND low byte (mainnet-compatible ACTENV / ACTVIEW idx).
+    register_vm_hosts!(reg, env;
+        EnvHeight = U64,
+        EnvMainAddr = Address,
+        EnvBlockAuthorAddr = Address,
+    )?;
 
-    register_view_def(reg, 1, "balance", VmValueType::Bytes, 1)?; // 0x0601
-    register_view_def(reg, 2, "asset_balance", VmValueType::U64, 2)?; // 0x0602
-    register_view_def(reg, 9, "check_signature", VmValueType::Bool, 1)?; // 0x0609
-    register_view_def(reg, 17, "hacd_insc_num", VmValueType::U8, 1)?; // 0x0611
-    register_view_def(reg, 18, "hacd_insc_get", VmValueType::Bytes, 2)?; // 0x0612
-    register_view_def(reg, 19, "hacd_name_list", VmValueType::Bytes, 3)?; // 0x0613
-    register_view_def(reg, 20, "hacd_owner_addrs", VmValueType::Bytes, 1)?; // 0x0614
+    register_vm_hosts!(reg, view;
+        ViewBalance = (Bytes, 1),
+        ViewAssetBalance = (U64, 2),
+        ViewCheckSign = (Bool, 1),
+        ViewDiaInscNum = (U8, 1),
+        ViewDiaInscGet = (Bytes, 2),
+        ViewDiaNameList = (Bytes, 3),
+        ViewDiaOwnerAddrs = (Bytes, 1),
+    )?;
     Ok(())
 }
 
@@ -192,4 +227,215 @@ pub fn register_standard(
     reg.set_context_creator(create_context, base::DEFAULT_GAS_BUDGET)?;
     register_vm_host_defs(reg)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// Minimal `RegistryWriter` capturing only VM host defs; the other
+    /// registration surfaces are unused by `register_vm_host_defs` and error
+    /// out if touched.
+    struct TestReg {
+        host_defs: HashMap<(VmHostCallKind, u8), VmHostActionDef>,
+    }
+
+    impl TestReg {
+        fn host(&self, kind: VmHostCallKind, id: u8) -> Option<&VmHostActionDef> {
+            self.host_defs.get(&(kind, id))
+        }
+    }
+
+    impl RegistryWriter for TestReg {
+        fn set_block_creator(&mut self, _f: base::BlockCreateFn) -> Rerr {
+            errf!("unexpected set_block_creator")
+        }
+        fn set_block_sizer(&mut self, _f: base::BlockSizeFn) -> Rerr {
+            errf!("unexpected set_block_sizer")
+        }
+        fn set_vm_assigner(&mut self, _f: base::VmAssignFn) -> Rerr {
+            errf!("unexpected set_vm_assigner")
+        }
+        fn register_tx(&mut self, _ty: u8, _f: base::TxCreateFn) -> Rerr {
+            errf!("unexpected register_tx")
+        }
+        fn register_tx_json(&mut self, _ty: u8, _f: base::TxJsonDecodeFn) -> Rerr {
+            errf!("unexpected register_tx_json")
+        }
+        fn register_action(&mut self, _kinds: &[u16], _f: base::ActionCreateFn) -> Rerr {
+            errf!("unexpected register_action")
+        }
+        fn register_action_json(
+            &mut self,
+            _kinds: &[u16],
+            _f: base::ActionJsonDecodeFn,
+        ) -> Rerr {
+            errf!("unexpected register_action_json")
+        }
+        fn register_vm_host_def(&mut self, def: VmHostActionDef) -> Rerr {
+            def.validate_opcode_abi()?;
+            let key = (def.kind, def.id);
+            if self.host_defs.insert(key, def).is_some() {
+                return errf!("vm host {:?}/{} already registered", key.0, key.1);
+            }
+            Ok(())
+        }
+        fn set_context_creator(&mut self, _f: base::ContextCreateFn, _gas_budget: i64) -> Rerr {
+            errf!("unexpected set_context_creator")
+        }
+        fn set_vm_params(&mut self, _params: base::VmExecutionParams) -> Rerr {
+            errf!("unexpected set_vm_params")
+        }
+        fn set_execution_profile(
+            &mut self,
+            _profile: &'static (dyn std::any::Any + Send + Sync),
+        ) -> Rerr {
+            errf!("unexpected set_execution_profile")
+        }
+    }
+
+    fn registered() -> TestReg {
+        let mut reg = TestReg {
+            host_defs: HashMap::new(),
+        };
+        register_vm_host_defs(&mut reg).expect("register vm host defs");
+        reg
+    }
+
+    /// Every registered host name equals the owning action type's `NAME`, and
+    /// the registered opcode id is the full KIND low byte.
+    #[test]
+    fn host_names_match_the_action_name_constants() {
+        let reg = registered();
+        for (kind, name, argc) in [
+            (HacToTrs::KIND, HacToTrs::NAME, 2),
+            (HacFromTrs::KIND, HacFromTrs::NAME, 2),
+            (HacFromToTrs::KIND, HacFromToTrs::NAME, 3),
+            (SatToTrs::KIND, SatToTrs::NAME, 2),
+            (SatFromTrs::KIND, SatFromTrs::NAME, 2),
+            (SatFromToTrs::KIND, SatFromToTrs::NAME, 3),
+            (DiaSingleTrs::KIND, DiaSingleTrs::NAME, 2),
+            (DiaToTrs::KIND, DiaToTrs::NAME, 2),
+            (DiaFromTrs::KIND, DiaFromTrs::NAME, 2),
+            (DiaFromToTrs::KIND, DiaFromToTrs::NAME, 3),
+            (AssetToTrs::KIND, AssetToTrs::NAME, 2),
+            (AssetFromTrs::KIND, AssetFromTrs::NAME, 2),
+            (AssetFromToTrs::KIND, AssetFromToTrs::NAME, 3),
+        ] {
+            let def = reg.host(VmHostCallKind::Action, kind as u8).unwrap();
+            assert_eq!(def.name, name);
+            assert_eq!(def.argc, argc);
+        }
+        for (kind, name, ret) in [
+            (EnvHeight::KIND, EnvHeight::NAME, VmValueType::U64),
+            (EnvMainAddr::KIND, EnvMainAddr::NAME, VmValueType::Address),
+            (
+                EnvBlockAuthorAddr::KIND,
+                EnvBlockAuthorAddr::NAME,
+                VmValueType::Address,
+            ),
+        ] {
+            let def = reg.host(VmHostCallKind::Env, kind as u8).unwrap();
+            assert_eq!(def.name, name);
+            assert_eq!(def.ret, ret);
+        }
+        for (kind, name, ret, argc) in [
+            (ViewBalance::KIND, ViewBalance::NAME, VmValueType::Bytes, 1),
+            (
+                ViewAssetBalance::KIND,
+                ViewAssetBalance::NAME,
+                VmValueType::U64,
+                2,
+            ),
+            (ViewCheckSign::KIND, ViewCheckSign::NAME, VmValueType::Bool, 1),
+            (ViewDiaInscNum::KIND, ViewDiaInscNum::NAME, VmValueType::U8, 1),
+            (
+                ViewDiaInscGet::KIND,
+                ViewDiaInscGet::NAME,
+                VmValueType::Bytes,
+                2,
+            ),
+            (
+                ViewDiaNameList::KIND,
+                ViewDiaNameList::NAME,
+                VmValueType::Bytes,
+                3,
+            ),
+            (
+                ViewDiaOwnerAddrs::KIND,
+                ViewDiaOwnerAddrs::NAME,
+                VmValueType::Bytes,
+                1,
+            ),
+        ] {
+            let def = reg.host(VmHostCallKind::View, kind as u8).unwrap();
+            assert_eq!(def.name, name);
+            assert_eq!(def.ret, ret);
+            assert_eq!(def.argc, argc);
+        }
+    }
+
+    /// ENV / VIEW full KIND high byte is the ACTENV / ACTVIEW opcode prefix.
+    #[test]
+    fn env_view_full_kind_matches_the_opcode_prefix() {
+        for kind in [EnvHeight::KIND, EnvMainAddr::KIND, EnvBlockAuthorAddr::KIND] {
+            assert_eq!(kind >> 8, 0x07);
+        }
+        for kind in [
+            ViewBalance::KIND,
+            ViewAssetBalance::KIND,
+            ViewCheckSign::KIND,
+            ViewDiaInscNum::KIND,
+            ViewDiaInscGet::KIND,
+            ViewDiaNameList::KIND,
+            ViewDiaOwnerAddrs::KIND,
+        ] {
+            assert_eq!(kind >> 8, 0x06);
+        }
+    }
+
+    /// An ACTION kind that does not fit the u8 opcode id is rejected instead of
+    /// silently truncating.
+    #[test]
+    fn action_kind_is_rejected_when_it_would_truncate() {
+        let mut reg = TestReg {
+            host_defs: HashMap::new(),
+        };
+        assert!(register_action_def(&mut reg, 0x0100, "overflow", 0).is_err());
+        // The 0xff boundary still fits an u8 id.
+        register_action_def(&mut reg, 0x00ff, "max_kind", 0).expect("0xff action kind fits");
+    }
+
+    /// ENV / VIEW kinds outside their opcode space are rejected.
+    #[test]
+    fn env_view_kinds_are_rejected_outside_their_opcode_space() {
+        let mut reg = TestReg {
+            host_defs: HashMap::new(),
+        };
+        assert!(
+            register_env_def(&mut reg, 0x0601, "view_kind_as_env", VmValueType::U64).is_err()
+        );
+        assert!(
+            register_view_def(&mut reg, 0x0701, "env_kind_as_view", VmValueType::U64, 0).is_err()
+        );
+    }
+
+    /// The mainnet-compatible ACTENV / ACTVIEW id -> name mapping is unchanged.
+    #[test]
+    fn legacy_capability_id_name_mapping_is_preserved() {
+        let reg = registered();
+        let name = |k: VmHostCallKind, id: u8| reg.host(k, id).map(|d| d.name);
+        assert_eq!(name(VmHostCallKind::Action, 1), Some(HacToTrs::NAME));
+        assert_eq!(name(VmHostCallKind::Env, 1), Some("block_height"));
+        assert_eq!(name(VmHostCallKind::Env, 2), Some("tx_main_addr"));
+        assert_eq!(name(VmHostCallKind::Env, 3), Some("block_author_addr"));
+        assert_eq!(name(VmHostCallKind::View, 1), Some("balance"));
+        assert_eq!(name(VmHostCallKind::View, 2), Some("asset_balance"));
+        assert_eq!(name(VmHostCallKind::View, 9), Some("check_signature"));
+        assert_eq!(name(VmHostCallKind::View, 17), Some("hacd_insc_num"));
+        assert_eq!(name(VmHostCallKind::View, 18), Some("hacd_insc_get"));
+        assert_eq!(name(VmHostCallKind::View, 19), Some("hacd_name_list"));
+        assert_eq!(name(VmHostCallKind::View, 20), Some("hacd_owner_addrs"));
+    }
 }

@@ -8,6 +8,7 @@ use base::{ApiResponse, ApiRoute, ApiService};
 
 use crate::HacashConsensus;
 
+mod console;
 mod miner;
 mod query;
 mod transaction;
@@ -18,6 +19,7 @@ use miner::{
     diamondminer_init_handler, diamondminer_success_handler, miner_notice_handler,
     miner_pending_handler, miner_success_handler,
 };
+use console::console_handler;
 use query::{
     balance_handler, block_datas_handler, block_intro_handler, block_pool_stats_handler,
     block_recents_handler, block_views_handler, channel_handler, diamond_bidding_handler,
@@ -49,7 +51,12 @@ impl ApiService for MintApi {
         let notice_cons = self.consensus.clone();
         let diamond_init_cons = self.consensus.clone();
         let diamond_success_cons = self.consensus.clone();
+        let console_cons = self.consensus.clone();
         vec![
+            // Documented console verification entry (fullnode_api_doc_v2).
+            ApiRoute::get("/", move |ctx, req| {
+                console_handler(console_cons.clone(), ctx, req)
+            }),
             ApiRoute::get("/miner/pending_replay", move |_ctx, _req| {
                 ApiResponse::json(format!(
                     "{{\"pending_replay\":{}}}",

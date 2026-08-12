@@ -18,8 +18,8 @@ impl LeveldbSysDisk {
 }
 
 impl DiskDB for LeveldbSysDisk {
-    fn read(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.db.get(key)
+    fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+        Ok(self.db.get(key))
     }
     fn save(&self, key: &[u8], val: &[u8]) {
         self.db.put(key, val);

@@ -44,6 +44,7 @@ impl TxBlob {
 
 base::impl_action! {
     TxMessage {
+        name: "tx_message",
         scope: base::ActScope::GUARD,
         min_tx_type: 2,
         description: |_: &TxMessage| "Transaction message".to_owned(),
@@ -53,6 +54,7 @@ base::impl_action! {
 
 base::impl_action! {
     TxBlob {
+        name: "tx_blob",
         scope: base::ActScope::GUARD,
         min_tx_type: 2,
         description: |_: &TxBlob| "Transaction blob data".to_owned(),

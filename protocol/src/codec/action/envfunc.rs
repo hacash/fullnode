@@ -116,6 +116,7 @@ impl ViewDiaOwnerAddrs {
 
 base::impl_action! {
     EnvHeight {
+        name: "block_height",
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |_: &EnvHeight| "Syscall: Get block height".to_owned(),
@@ -125,6 +126,7 @@ base::impl_action! {
 
 base::impl_action! {
     EnvMainAddr {
+        name: "tx_main_addr",
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |_: &EnvMainAddr| "Syscall: Get main address".to_owned(),
@@ -134,6 +136,7 @@ base::impl_action! {
 
 base::impl_action! {
     EnvBlockAuthorAddr {
+        name: "block_author_addr",
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |_: &EnvBlockAuthorAddr| "Syscall: Get author address".to_owned(),
@@ -143,6 +146,7 @@ base::impl_action! {
 
 base::impl_action! {
     ViewBalance {
+        name: "balance",
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |this: &ViewBalance| format!("Syscall: Get balance for {}", this.addr.to_readable()),
@@ -170,6 +174,7 @@ base::impl_action! {
 
 base::impl_action! {
     ViewAssetBalance {
+        name: "asset_balance",
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |this: &ViewAssetBalance| format!("Syscall: Get asset {} balance for {}", this.serial.uint(), this.addr.to_readable()),
@@ -195,6 +200,7 @@ base::impl_action! {
 
 base::impl_action! {
     ViewCheckSign {
+        name: "check_signature",
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |this: &ViewCheckSign| format!("Syscall: Check signature for {}", this.addr.to_readable()),
@@ -210,6 +216,7 @@ base::impl_action! {
 
 base::impl_action! {
     ViewDiaInscNum {
+        name: "hacd_insc_num",
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |this: &ViewDiaInscNum| format!("Syscall: Get diamond inscription number for <{}>", this.diamond.to_readable()),
@@ -231,6 +238,7 @@ base::impl_action! {
 
 base::impl_action! {
     ViewDiaInscGet {
+        name: "hacd_insc_get",
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |this: &ViewDiaInscGet| format!("Syscall: Get diamond inscription data for <{}>", this.diamond.to_readable()),
@@ -253,6 +261,7 @@ base::impl_action! {
 
 base::impl_action! {
     ViewDiaNameList {
+        name: "hacd_name_list",
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |this: &ViewDiaNameList| format!("Syscall: Get HACD name list for {} page {} limit {}", this.addr.to_readable(), this.page.uint(), this.limit.uint()),
@@ -290,6 +299,7 @@ base::impl_action! {
 
 base::impl_action! {
     ViewDiaOwnerAddrs {
+        name: "hacd_owner_addrs",
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |this: &ViewDiaOwnerAddrs| format!("Syscall: Get HACD owner addresses for {}", this.diamonds.splitstr()),

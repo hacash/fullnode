@@ -416,44 +416,44 @@ fn peek_frames(registry: &dyn base::BinaryCodecs, blob: &[u8]) -> Ret<Vec<(usize
 /// Decoder stage: reserve a ring slot before taking a job. If sequence N is a
 /// slow decode, later workers can fill the ring but can never occupy the slot
 /// N still needs.
+///
+/// The loop is infallible by construction: every step between `reserve` and
+/// `publish_reserved`/`release` either returns its failure inside the slot
+/// (`Slot = Ret<BlkPkg>`) or cannot panic (poison-tolerant locks), so a
+/// reserved sequence is always published or released and the apply stage can
+/// never wait on a slot nobody owns. No panic boundary is needed.
 fn decode_loop(ctx: &SyncCtx, jobs_rx: Arc<Mutex<Receiver<Job>>>) {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        loop {
-            if !ctx.ring.reserve() {
-                break;
-            }
-            let job = jobs_rx.lock().unwrap().recv();
-            let Ok(job) = job else {
-                ctx.ring.release();
-                break;
-            };
-            let slot = match job.decoded {
-                Some(blk) => BlkPkg::from_shared_decoded(
-                    job.blob,
-                    job.offset,
-                    job.len,
-                    blk,
-                    PkgSource::new(ctx.origin),
-                ),
-                None => BlkPkg::from_shared(
-                    ctx.eng.registry.as_ref(),
-                    job.blob,
-                    job.offset,
-                    job.len,
-                    PkgSource::new(ctx.origin),
-                ),
-            };
-            if !ctx.ring.publish_reserved(job.seq, slot) {
-                break;
-            }
+    loop {
+        if !ctx.ring.reserve() {
+            break;
         }
-    }));
-    if result.is_err() {
-        // The panicked thread's slot would never be published: wake every
-        // stage first, then re-raise so the join side reports the failure
-        // instead of the pipeline hanging on the missing sequence.
-        ctx.abort();
-        panic!("sync decoder panicked");
+        let job = jobs_rx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .recv();
+        let Ok(job) = job else {
+            ctx.ring.release();
+            break;
+        };
+        let slot = match job.decoded {
+            Some(blk) => BlkPkg::from_shared_decoded(
+                job.blob,
+                job.offset,
+                job.len,
+                blk,
+                PkgSource::new(ctx.origin),
+            ),
+            None => BlkPkg::from_shared(
+                ctx.eng.registry.as_ref(),
+                job.blob,
+                job.offset,
+                job.len,
+                PkgSource::new(ctx.origin),
+            ),
+        };
+        if !ctx.ring.publish_reserved(job.seq, slot) {
+            break;
+        }
     }
 }
 
