@@ -10,7 +10,7 @@ use crate::tree::Inserted;
 
 fn tree_fatal(error: sys::Error) -> sys::Error {
     sys::Error::fault(format!("chain tree invariant failed: {}", error))
-        .with_code(crate::engine::CORE_FAILED)
+        .with_code(crate::engine::CoreFault::CoreFailed.code())
 }
 
 /// Execute a block into a detached Block chunk. Each transaction gets its own

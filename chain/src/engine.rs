@@ -26,12 +26,41 @@ use crate::insert::Insert;
 use crate::side_list::{SideKeepCtx, SideListWriter};
 use crate::tree::{Inserted, Tree};
 
-/// Any persistence failure after a block was published to the tree. The disk
-/// or root transition is uncertain, so the engine must stop; see §2.3 of the
-/// engine error-handling contract.
-pub(crate) const PERSIST_FAILED: &str = "persist_failed";
-pub(crate) const CORE_FAILED: &str = "core_failed";
-pub(crate) const STORAGE_READ_FAILED: &str = "storage_read_failed";
+/// The engine-fatal fault classes. An error carrying one of these stops the
+/// engine; see §2.3 of the engine error-handling contract.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CoreFault {
+    /// Persistence failure after a block was published to the tree: the disk
+    /// or root transition is uncertain, so the engine must stop.
+    PersistFailed,
+    /// Internal inconsistency detected by the tree or consensus runtime.
+    CoreFailed,
+    /// A core storage read failed (the Option-based state API panics).
+    StorageReadFailed,
+}
+
+impl CoreFault {
+    /// The code attached to `sys::Error`; kept stable for the crate boundary.
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            CoreFault::PersistFailed => "persist_failed",
+            CoreFault::CoreFailed => "core_failed",
+            CoreFault::StorageReadFailed => "storage_read_failed",
+        }
+    }
+
+    /// Whether `error` carries this fault code.
+    pub(crate) fn is(self, error: &sys::Error) -> bool {
+        error.code() == Some(self.code())
+    }
+
+    /// Whether `error` is any engine-fatal core fault.
+    pub(crate) fn is_core_fault(error: &sys::Error) -> bool {
+        CoreFault::PersistFailed.is(error)
+            || CoreFault::CoreFailed.is(error)
+            || CoreFault::StorageReadFailed.is(error)
+    }
+}
 
 const LIFE_STARTING: u8 = 0;
 const LIFE_RUNNING: u8 = 1;
@@ -40,7 +69,8 @@ const LIFE_STOPPING: u8 = 3;
 const LIFE_STOPPED: u8 = 4;
 
 fn persist_fatal(e: sys::Error) -> sys::Error {
-    sys::Error::fault(format!("canonical persistence failed: {}", e)).with_code(PERSIST_FAILED)
+    sys::Error::fault(format!("canonical persistence failed: {}", e))
+        .with_code(CoreFault::PersistFailed.code())
 }
 
 /// Convert only the storage panic used by the Option-based state API. Other
@@ -53,7 +83,7 @@ pub(crate) fn catch_storage_panic<T>(run: impl FnOnce() -> Ret<T>) -> Ret<T> {
                 "core storage read failed: {}",
                 fault.error
             ))
-            .with_code(STORAGE_READ_FAILED)),
+            .with_code(CoreFault::StorageReadFailed.code())),
             Err(payload) => std::panic::resume_unwind(payload),
         },
     }
@@ -657,11 +687,7 @@ impl ChainEngine {
     /// caller prints the structured context; every fatal error is printed
     /// exactly once at the boundary that decides it.
     pub(crate) fn mark_core_error(&self, error: &sys::Error) -> bool {
-        let fatal = matches!(
-            error.code(),
-            Some(code)
-                if code == PERSIST_FAILED || code == CORE_FAILED || code == STORAGE_READ_FAILED
-        );
+        let fatal = CoreFault::is_core_fault(error);
         if fatal && self.lifecycle.load(Ordering::Acquire) == LIFE_RUNNING {
             self.mark_fatal();
         }
@@ -955,7 +981,7 @@ mod tests {
             })
         });
         let error = result.unwrap_err();
-        assert_eq!(error.code(), Some(STORAGE_READ_FAILED));
+        assert_eq!(error.code(), Some(CoreFault::StorageReadFailed.code()));
     }
 
     #[test]

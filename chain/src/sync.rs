@@ -15,7 +15,7 @@ use base::{
 };
 use sys::{Rerr, Ret};
 
-use crate::engine::{ChainEngine, PersistJob, PreparedBlock};
+use crate::engine::{ChainEngine, CoreFault, PersistJob, PreparedBlock};
 use crate::ring::Ring;
 
 const SYNC_CANCELLED: &str = "sync_cancelled";
@@ -170,15 +170,7 @@ pub fn run(
         // A persistence failure after blocks were published to the tree is
         // engine-fatal: no recovery path exists, boot replay rebuilds from
         // the real disk state on the next start (§2.3).
-        Err(e)
-            if matches!(
-                e.code(),
-                Some(code)
-                    if code == crate::engine::PERSIST_FAILED
-                        || code == crate::engine::CORE_FAILED
-                        || code == crate::engine::STORAGE_READ_FAILED
-            ) =>
-        {
+        Err(e) if CoreFault::is_core_fault(&e) => {
             eprintln!("[Block Sync Fatal] operation=sync error={}", e);
             eng.mark_fatal();
             Err(e)
@@ -232,7 +224,7 @@ fn check_replay_index(eng: &ChainEngine, pkg: &BlkPkg) -> Rerr {
         .store
         .block_store()
         .hash_by_height(pkg.height())
-        .map_err(|e| e.with_code(crate::engine::STORAGE_READ_FAILED))?;
+        .map_err(|e| e.with_code(crate::engine::CoreFault::StorageReadFailed.code()))?;
     if indexed != Some(pkg.hash()) {
         return sys::errf!(
             "replay height index hash for {} does not match the decoded block",
@@ -726,7 +718,7 @@ fn run_pipeline(
             Ok(Ok(summary)) => Ok(summary),
             Ok(Err(e)) => Err(e),
             Err(_) => Err(sys::Error::fault("sync persister panicked")
-                .with_code(crate::engine::PERSIST_FAILED)),
+                .with_code(crate::engine::CoreFault::PersistFailed.code())),
         };
         // The run outcome: the apply error, or the first error among the
         // feeder and decoder joins. Every handle is joined explicitly so a

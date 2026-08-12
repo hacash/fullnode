@@ -97,13 +97,15 @@ impl BlockHistory for StoreHistory {
         let Some((stored_hash, data)) = self
             .store
             .block_data_by_height(height)
-            .map_err(|error| error.with_code(crate::engine::STORAGE_READ_FAILED))?
+            .map_err(|error| {
+                error.with_code(crate::engine::CoreFault::StorageReadFailed.code())
+            })?
         else {
             return Ok(None);
         };
         let block = self.registry.decode_block_exact(&data).map_err(|e| {
             sys::Error::fault(format!("stored block {} cannot be decoded: {}", height, e))
-                .with_code(crate::engine::STORAGE_READ_FAILED)
+                .with_code(crate::engine::CoreFault::StorageReadFailed.code())
         })?;
         if block.height() != height || block.hash() != stored_hash {
             return Err(sys::Error::fault(format!(
@@ -113,7 +115,7 @@ impl BlockHistory for StoreHistory {
                 block.height(),
                 block.hash()
             ))
-            .with_code(crate::engine::STORAGE_READ_FAILED));
+            .with_code(crate::engine::CoreFault::StorageReadFailed.code()));
         }
         Ok(Some(block))
     }

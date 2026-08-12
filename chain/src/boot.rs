@@ -239,9 +239,9 @@ fn replay_side_branches(eng: &ChainEngine) -> sys::Rerr {
     // A failed replay is either a bad record (the whole list is cleared and
     // the side replay skipped) or a storage failure (boot aborts: the store
     // cannot be trusted). Only catch_storage_panic tags errors with
-    // STORAGE_READ_FAILED; everything else is a bad record.
+    // StorageReadFailed; everything else is a bad record.
     if let Err(e) = replay_side(eng, &hashes) {
-        if e.code() == Some(crate::engine::STORAGE_READ_FAILED) {
+        if crate::engine::CoreFault::StorageReadFailed.is(&e) {
             return Err(rebuild_fault(format!("side replay storage failure: {}", e)));
         }
         side_replay_fail(path, &e);
