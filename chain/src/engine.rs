@@ -497,7 +497,7 @@ impl ChainEngine {
         }
         let mut rolled = 0;
         if let Some(job) = roll {
-            rolled = crate::roll::roll_root(self, job, pkg.origin(), stored_replay)
+            rolled = crate::persist::roll_root(self, job, pkg.origin(), stored_replay)
                 .map_err(persist_fatal)?
                 .len() as u64;
         }

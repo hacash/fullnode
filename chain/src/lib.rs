@@ -16,7 +16,7 @@ mod engine;
 mod history;
 mod apply;
 mod ring;
-mod roll;
+mod persist;
 mod side_list;
 mod source;
 mod sync;
