@@ -84,26 +84,6 @@ fn validated_frames(batch: &BlockBatch) -> Ret<Option<Vec<(usize, usize)>>> {
     Ok(Some(frames))
 }
 
-#[derive(Clone, Copy)]
-enum PipelinePurpose {
-    Network,
-    Replay { from: u64, to: u64 },
-}
-
-impl PipelinePurpose {
-    fn is_network(self) -> bool {
-        matches!(self, Self::Network)
-    }
-
-    fn is_replay(self) -> bool {
-        matches!(self, Self::Replay { .. })
-    }
-
-    fn persist_body(self) -> bool {
-        matches!(self, Self::Network)
-    }
-}
-
 fn check_replay_height(expected: Option<u64>, height: u64) -> Rerr {
     if let Some(expected) = expected
         && height != expected
@@ -165,7 +145,7 @@ pub fn run(
     eng.syncing.store(true, Ordering::Release);
     let _reset = SyncFlag(eng);
 
-    match run_pipeline(eng, source, mode, opts, cancel, PipelinePurpose::Network) {
+    match run_pipeline(eng, source, mode, opts, cancel, None) {
         Ok(report) => Ok(report),
         // A persistence failure after blocks were published to the tree is
         // engine-fatal: no recovery path exists, boot replay rebuilds from
@@ -203,7 +183,7 @@ pub(crate) fn run_replay_locked(
         ApplyMode::FastSync,
         opts,
         cancel,
-        PipelinePurpose::Replay { from, to },
+        Some((from, to)),
     )
 }
 
@@ -263,7 +243,7 @@ fn process_block(
 
     // Replay must decode exactly the expected next height.
     check_replay_height(*replay_next, height)?;
-    if ctx.purpose.is_replay() {
+    if ctx.replay.is_some() {
         check_replay_index(ctx.eng, pkg)?;
     }
 
@@ -273,7 +253,7 @@ fn process_block(
     }
 
     // Consensus admission checks for network blocks; replay skips them.
-    if ctx.purpose.is_network() {
+    if ctx.replay.is_none() {
         if !ctx.pipelined {
             require_parent_in_tree(ctx.eng, pkg)?;
         }
@@ -303,16 +283,16 @@ fn process_block(
     // Execute and attach; the returned job is persisted in insertion order.
     match ctx
         .eng
-        .prepare_one(pkg, ctx.mode, ctx.purpose.persist_body())?
+        .prepare_one(pkg, ctx.mode, ctx.replay.is_none())?
     {
         ApplyResult::Accepted(job) => Ok(Some(job)),
         // Network mode: a duplicate or discarded live side branch never stops
         // the stream.
-        ApplyResult::Duplicate(_) if ctx.purpose.is_network() => Ok(None),
-        ApplyResult::Discarded if ctx.purpose.is_network() => Ok(None),
+        ApplyResult::Duplicate(_) if ctx.replay.is_none() => Ok(None),
+        ApplyResult::Discarded if ctx.replay.is_none() => Ok(None),
         // Everything else is an error: replay is strictly linear and treats
         // any deviation as corruption; a network orphan ends the stream.
-        ApplyResult::Orphan(parent) if ctx.purpose.is_replay() => {
+        ApplyResult::Orphan(parent) if ctx.replay.is_some() => {
             sys::errf!("replay block {} is missing parent {:?}", height, parent)
         }
         ApplyResult::Orphan(parent) => {
@@ -340,7 +320,10 @@ struct SyncCtx<'a> {
     eng: &'a ChainEngine,
     opts: &'a PipelineOptions,
     mode: ApplyMode,
-    purpose: PipelinePurpose,
+    /// The requested linear replay range `(from, to)`; `None` is a network
+    /// sync. Replay skips admission checks and body persistence, and every
+    /// deviation from the range is corruption.
+    replay: Option<(u64, u64)>,
     cancel: Arc<AtomicBool>,
     origin: PkgOrigin,
     ring: Arc<Ring>,
@@ -567,7 +550,7 @@ fn apply_loop(
         if !reverted_txs.is_empty() {
             report.reverted_txs.push((height, reverted_txs));
         }
-        if ctx.purpose.is_replay() || report.accepted.is_multiple_of(200) {
+        if ctx.replay.is_some() || report.accepted.is_multiple_of(200) {
             report_progress(ctx.opts, report);
         }
     }
@@ -584,7 +567,7 @@ fn apply_loop(
 fn finalize_run(
     eng: &ChainEngine,
     opts: &PipelineOptions,
-    purpose: PipelinePurpose,
+    replay: Option<(u64, u64)>,
     cancel: &AtomicBool,
     mut report: PipelineReport,
     persist_result: Ret<(u64, u64)>,
@@ -611,7 +594,7 @@ fn finalize_run(
 
     // A successful run must cover the full requested replay range.
     if pipeline_result.is_ok()
-        && let PipelinePurpose::Replay { from, to } = purpose
+        && let Some((from, to)) = replay
     {
         check_replay_complete(from, to, &report)?;
     }
@@ -654,7 +637,7 @@ fn run_pipeline(
     mode: ApplyMode,
     opts: PipelineOptions,
     cancel: Arc<AtomicBool>,
-    purpose: PipelinePurpose,
+    replay: Option<(u64, u64)>,
 ) -> Ret<PipelineReport> {
     let workers = opts.decode_workers.max(1);
     let queue = opts.decode_queue.max(workers + 1);
@@ -664,10 +647,7 @@ fn run_pipeline(
         final_height: eng.tree.head_height(),
         ..Default::default()
     };
-    let mut replay_next = match purpose {
-        PipelinePurpose::Network => None,
-        PipelinePurpose::Replay { from, .. } => Some(from),
-    };
+    let mut replay_next = replay.map(|(from, _)| from);
     report_progress(&opts, &report);
 
     let ring = Arc::new(Ring::new(queue));
@@ -677,7 +657,7 @@ fn run_pipeline(
         eng,
         opts: &opts,
         mode,
-        purpose,
+        replay,
         cancel,
         origin: opts.origin,
         ring,
@@ -743,7 +723,7 @@ fn run_pipeline(
     finalize_run(
         eng,
         &opts,
-        purpose,
+        replay,
         &ctx.cancel,
         report,
         persist_result,
