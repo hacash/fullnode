@@ -119,7 +119,6 @@ pub struct ChainEngine {
     sync_cancels: Mutex<HashMap<u64, Arc<AtomicBool>>>,
     lifecycle: AtomicU8,
     shutdown_lock: Mutex<()>,
-    shutdown_complete: AtomicBool,
     next_sync_id: AtomicU64,
 }
 
@@ -246,7 +245,6 @@ impl ChainEngine {
             sync_cancels: Mutex::new(HashMap::new()),
             lifecycle: AtomicU8::new(LIFE_STARTING),
             shutdown_lock: Mutex::new(()),
-            shutdown_complete: AtomicBool::new(false),
             next_sync_id: AtomicU64::new(1),
         });
         crate::boot::open_state(&eng, state_status)?;
@@ -283,7 +281,7 @@ impl ChainEngine {
 
     pub fn shutdown(&self) -> Rerr {
         let _shutdown = self.shutdown_lock.lock().unwrap();
-        if self.shutdown_complete.load(Ordering::Acquire) {
+        if self.lifecycle.load(Ordering::Acquire) == LIFE_STOPPED {
             return Ok(());
         }
         self.lifecycle.store(LIFE_STOPPING, Ordering::Release);
@@ -313,7 +311,6 @@ impl ChainEngine {
         }
         self.consensus.exit();
         self.lifecycle.store(LIFE_STOPPED, Ordering::Release);
-        self.shutdown_complete.store(true, Ordering::Release);
         println!("[Engine] exit.");
         if worker_panicked {
             return errf!("chain background sync worker panicked during shutdown");
