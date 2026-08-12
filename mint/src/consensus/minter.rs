@@ -831,9 +831,20 @@ impl BlockProducer for HacashConsensus {
         let mut scanned = 0usize;
         let max_candidate_bytes = (mint_params.max_block_size > 0)
             .then(|| mint_params.max_block_size.saturating_sub(base_tx_size));
+        // Hard bound: at most one diamond-mint tx per block (OLD
+        // check/block_build.rs "pick one diamond mint tx"). The diamond group
+        // is fee-descending, so the first pickable entry is the highest bid.
+        // Later entries could not pass the cumulative pick anyway (prev_hash /
+        // number checks), but excluding them here makes the bound explicit.
+        let mut diamond_kept = false;
         let mut collect_candidate = |txpkg: &base::TxPkg| {
             if candidates.len() >= max_candidates || scanned >= max_scanned {
                 return false;
+            }
+            let is_diamond =
+                crate::action::util::pickout_diamond_mint_action(txpkg.tx()).is_some();
+            if is_diamond && diamond_kept {
+                return true;
             }
             scanned = scanned.saturating_add(1);
             let next_bytes = candidate_bytes.saturating_add(txpkg.tx().size());
@@ -845,6 +856,7 @@ impl BlockProducer for HacashConsensus {
             }
             candidate_bytes = next_bytes;
             candidates.push(txpkg.tx_ref());
+            diamond_kept |= is_diamond;
             true
         };
         if pre_height > 0 && pre_height % 5 == 0 {
