@@ -22,7 +22,6 @@ use field::{Address, Hash};
 use sys::{Rerr, Ret, errf};
 
 use crate::history::StoreHistory;
-use crate::insert::Insert;
 use crate::side_list::{SideKeepCtx, SideListWriter};
 use crate::tree::{Inserted, Tree};
 
@@ -135,21 +134,25 @@ impl Drop for SyncCancelRegistration<'_> {
     }
 }
 
-pub(crate) enum PreparedBlock {
-    Accepted(PersistJob),
+pub(crate) enum ApplyResult {
+    Accepted(ApplyAccepted),
     Duplicate(Hash),
     Orphan(Hash),
-    /// A side branch was discarded (execution / body write / attach failure).
-    /// Not an error: the canonical tree is untouched and the stream continues.
+    /// A live side branch was discarded (execution / body write / attach
+    /// failure). Not an error: the canonical tree is untouched and the stream
+    /// continues.
     Discarded,
 }
 
-pub(crate) struct PersistJob {
+/// The accepted payload handed from the apply stage to the persist stage.
+/// `persist_body` is false only for the internal replay pipeline, whose block
+/// bodies and canonical index already exist. `prev_head` is the canonical head
+/// hash before the attach; after a reorg the replaced old canonical tail is
+/// derived from it and appended to the side hash list.
+pub(crate) struct ApplyAccepted {
     pub pkg: BlkPkg,
     pub inserted: Inserted,
     pub persist_body: bool,
-    /// Canonical head hash before the attach; after a reorg the replaced old
-    /// canonical tail is derived from it and appended to the side hash list.
     pub prev_head: Hash,
 }
 
@@ -364,10 +367,10 @@ impl ChainEngine {
         // fallible validation is complete. If it fails, the existing tree,
         // including side branches, is untouched and must not be rebuilt.
         let job = match self.prepare_one(&pkg, ApplyMode::Strict, true) {
-            Ok(PreparedBlock::Accepted(job)) => job,
-            Ok(PreparedBlock::Duplicate(hash)) => return Ok(BlockAcceptResult::duplicate(hash)),
-            Ok(PreparedBlock::Orphan(parent)) => return Ok(BlockAcceptResult::orphan(parent)),
-            Ok(PreparedBlock::Discarded) => return Ok(BlockAcceptResult::ignored()),
+            Ok(ApplyResult::Accepted(job)) => job,
+            Ok(ApplyResult::Duplicate(hash)) => return Ok(BlockAcceptResult::duplicate(hash)),
+            Ok(ApplyResult::Orphan(parent)) => return Ok(BlockAcceptResult::orphan(parent)),
+            Ok(ApplyResult::Discarded) => return Ok(BlockAcceptResult::ignored()),
             Err(e) => {
                 if self.mark_core_error(&e) {
                     eprintln!(
@@ -408,9 +411,7 @@ impl ChainEngine {
         pkg: &BlkPkg,
         mode: ApplyMode,
         persist_body: bool,
-    ) -> Ret<PreparedBlock> {
-        // The pre-attach canonical head; used only when the insert reorgs.
-        let prev_head = self.tree.head_tip().0;
+    ) -> Ret<ApplyResult> {
         // A failure here is either a plain consensus/validation error (returned
         // to the caller, which decides peer penalty) or a core error carrying a
         // fatal code — the caller decides the boundary and prints it (§2.3).
@@ -420,26 +421,18 @@ impl ChainEngine {
             Ok(value) => value,
             Err(e) => return Err(e),
         };
-        let inserted = match accepted {
-            Insert::Accepted(inserted) => inserted,
-            Insert::Duplicate => return Ok(PreparedBlock::Duplicate(pkg.hash())),
-            Insert::Orphan(parent) => return Ok(PreparedBlock::Orphan(parent)),
-            Insert::Discarded => return Ok(PreparedBlock::Discarded),
+        let ApplyResult::Accepted(job) = accepted else {
+            return Ok(accepted);
         };
-        if inserted.is_head {
-            if inserted.reorg {
+        if job.inserted.is_head {
+            if job.inserted.reorg {
                 // Pending entries describe the previous canonical branch. The
                 // strict path persists the replacement before another insert.
                 self.block_history.clear_pending();
             }
             self.block_history.remember(pkg.block_ref());
         }
-        Ok(PreparedBlock::Accepted(PersistJob {
-            pkg: pkg.clone(),
-            inserted,
-            persist_body,
-            prev_head,
-        }))
+        Ok(ApplyResult::Accepted(job))
     }
 
     /// Persist one already-executed block. Jobs must be supplied in insertion
@@ -447,10 +440,10 @@ impl ChainEngine {
     /// after the block was attached to the tree is engine-fatal (§2.3).
     pub(crate) fn persist_one(
         &self,
-        job: PersistJob,
+        job: ApplyAccepted,
         maintain_runtime_caches: bool,
     ) -> Ret<PersistOutcome> {
-        let PersistJob {
+        let ApplyAccepted {
             pkg,
             inserted,
             persist_body,

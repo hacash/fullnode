@@ -4,9 +4,8 @@ use base::{ApplyMode, BlkPkg, BlockRef, Env, ForkChoiceKey, StateChunkRef};
 use field::Hash;
 use sys::{Ret, errf};
 
-use crate::engine::ChainEngine;
+use crate::engine::{ApplyAccepted, ApplyResult, ChainEngine};
 use crate::history::BranchHistory;
-use crate::tree::Inserted;
 
 fn tree_fatal(error: sys::Error) -> sys::Error {
     sys::Error::fault(format!("chain tree invariant failed: {}", error))
@@ -70,19 +69,6 @@ pub fn execute_block(
     Ok(block)
 }
 
-/// Result of `insert_block`. The accepted payload is the tree's own
-/// `Inserted` outcome; the caller's `pkg` still carries the height.
-pub enum Insert {
-    Accepted(Inserted),
-    Duplicate,
-    /// The parent is not in the tree; the caller should request it.
-    Orphan(Hash),
-    /// A live side branch was discarded (execution / body write / attach
-    /// failure). Not an error and not a classification: the canonical tree is
-    /// untouched and the pipeline continues.
-    Discarded,
-}
-
 /// Resolve the candidate's parent and compute the fork-choice key along the
 /// parent's branch. `Ok(None)` means the parent is not in the tree (orphan).
 /// Shared by the live insert path and boot side replay, which must both see
@@ -108,12 +94,12 @@ pub(crate) fn resolve_fork_choice<'a>(
 /// A live side branch failed to commit; drop it without classifying the block
 /// (decision table #5). The canonical tree is untouched and the pipeline
 /// continues. Not an error and not a classification.
-fn side_discard(height: u64, hash: &Hash, phase: &str, error: sys::Error) -> Ret<Insert> {
+fn side_discard(height: u64, hash: &Hash, phase: &str, error: sys::Error) -> Ret<ApplyResult> {
     eprintln!(
         "[Engine] side block <{}, {:?}> {}: {}; branch discarded",
         height, hash, phase, error
     );
-    Ok(Insert::Discarded)
+    Ok(ApplyResult::Discarded)
 }
 
 /// Validate, execute and attach one block. Callers serialize this with
@@ -127,13 +113,15 @@ pub fn insert_block(
     pkg: &BlkPkg,
     mode: ApplyMode,
     persist_body: bool,
-) -> Ret<Insert> {
+) -> Ret<ApplyResult> {
     let fast_sync = mode.is_fast_sync();
     if !fast_sync && !eng.is_root_available() {
         return errf!("chain state is unavailable pending root recovery");
     }
     let height = pkg.height();
     let prev_hash = pkg.block().prev_hash();
+    // The pre-attach canonical head; used only when the insert reorgs.
+    let prev_head = eng.tree.head_tip().0;
 
     let root_height = eng.tree.root_height();
     let head_height = eng.tree.head_height();
@@ -146,7 +134,7 @@ pub fn insert_block(
         );
     }
     if eng.tree.contains(&pkg.hash()) {
-        return Ok(Insert::Duplicate);
+        return Ok(ApplyResult::Duplicate(pkg.hash()));
     }
     if fast_sync {
         // Cheap fail-fast: reject a non-extension before executing the block.
@@ -163,7 +151,7 @@ pub fn insert_block(
         }
     }
     let Some((parent_block, branch_history, fork_choice)) = resolve_fork_choice(eng, pkg)? else {
-        return Ok(Insert::Orphan(prev_hash));
+        return Ok(ApplyResult::Orphan(prev_hash));
     };
 
     if !fast_sync {
@@ -183,7 +171,7 @@ pub fn insert_block(
         .begin_block_execution(&prev_hash, pkg.block_ref(), fork_choice)
         .map_err(tree_fatal)?
     else {
-        return Ok(Insert::Orphan(prev_hash));
+        return Ok(ApplyResult::Orphan(prev_hash));
     };
     // Execution errors: a live strict side branch is discarded (decision
     // table #5); everything else — including any fast-sync failure, which can
@@ -219,14 +207,24 @@ pub fn insert_block(
             .tree
             .attach_linear(&prev_hash, chunk, eng.config.unstable_block)
             .map_err(tree_fatal)?;
-        return Ok(Insert::Accepted(inserted));
+        return Ok(ApplyResult::Accepted(ApplyAccepted {
+            pkg: pkg.clone(),
+            inserted,
+            persist_body,
+            prev_head,
+        }));
     }
     if plan_head {
         let inserted = eng
             .tree
             .attach(&prev_hash, chunk, eng.config.unstable_block)
             .map_err(tree_fatal)?;
-        return Ok(Insert::Accepted(inserted));
+        return Ok(ApplyResult::Accepted(ApplyAccepted {
+            pkg: pkg.clone(),
+            inserted,
+            persist_body,
+            prev_head,
+        }));
     }
 
     // Side branch: the immutable body must be durable before the in-memory
@@ -259,5 +257,10 @@ pub fn insert_block(
     debug_assert!(!inserted.is_head, "side plan mismatch: block became head");
     eng.tree
         .enforce_side_capacity(eng.config.side_tree_capacity);
-    Ok(Insert::Accepted(inserted))
+    Ok(ApplyResult::Accepted(ApplyAccepted {
+        pkg: pkg.clone(),
+        inserted,
+        persist_body,
+        prev_head,
+    }))
 }

@@ -15,7 +15,7 @@ use base::{
 };
 use sys::{Rerr, Ret};
 
-use crate::engine::{ChainEngine, CoreFault, PersistJob, PreparedBlock};
+use crate::engine::{ApplyAccepted, ApplyResult, ChainEngine, CoreFault};
 use crate::ring::Ring;
 
 const SYNC_CANCELLED: &str = "sync_cancelled";
@@ -258,7 +258,7 @@ fn process_block(
     report: &mut PipelineReport,
     pkg: &BlkPkg,
     replay_next: &mut Option<u64>,
-) -> Ret<Option<PersistJob>> {
+) -> Ret<Option<ApplyAccepted>> {
     let height = pkg.height();
 
     // Replay must decode exactly the expected next height.
@@ -305,25 +305,25 @@ fn process_block(
         .eng
         .prepare_one(pkg, ctx.mode, ctx.purpose.persist_body())?
     {
-        PreparedBlock::Accepted(job) => Ok(Some(job)),
+        ApplyResult::Accepted(job) => Ok(Some(job)),
         // Network mode: a duplicate or discarded live side branch never stops
         // the stream.
-        PreparedBlock::Duplicate(_) if ctx.purpose.is_network() => Ok(None),
-        PreparedBlock::Discarded if ctx.purpose.is_network() => Ok(None),
+        ApplyResult::Duplicate(_) if ctx.purpose.is_network() => Ok(None),
+        ApplyResult::Discarded if ctx.purpose.is_network() => Ok(None),
         // Everything else is an error: replay is strictly linear and treats
         // any deviation as corruption; a network orphan ends the stream.
-        PreparedBlock::Orphan(parent) if ctx.purpose.is_replay() => {
+        ApplyResult::Orphan(parent) if ctx.purpose.is_replay() => {
             sys::errf!("replay block {} is missing parent {:?}", height, parent)
         }
-        PreparedBlock::Orphan(parent) => {
+        ApplyResult::Orphan(parent) => {
             sys::errf!("network block {} is missing parent {:?}", height, parent)
         }
-        PreparedBlock::Duplicate(_) => sys::errf!(
+        ApplyResult::Duplicate(_) => sys::errf!(
             "replay block <{}, {:?}> is already present",
             height,
             pkg.hash()
         ),
-        PreparedBlock::Discarded => {
+        ApplyResult::Discarded => {
             sys::errf!("replay block {} was discarded as a side branch", height)
         }
     }
@@ -477,7 +477,7 @@ fn decode_loop(ctx: &SyncCtx, jobs_rx: Arc<Mutex<Receiver<Job>>>) {
 /// Persistence stage: write executed jobs to disk in insertion order. On
 /// failure the real disk/root error must reach the caller, so wake every
 /// stage instead of letting execute wait on more network input.
-fn persist_loop(ctx: &SyncCtx, persist_rx: Receiver<PersistJob>) -> Ret<(u64, u64)> {
+fn persist_loop(ctx: &SyncCtx, persist_rx: Receiver<ApplyAccepted>) -> Ret<(u64, u64)> {
     let result = (|| {
         let mut rolled = 0;
         let mut events = 0;
@@ -510,7 +510,7 @@ fn fail_with(report: &mut PipelineReport, height: u64, e: sys::Error) -> sys::Er
 /// planned on top of outstanding root jobs.
 fn apply_loop(
     ctx: &SyncCtx,
-    persist_tx: &SyncSender<PersistJob>,
+    persist_tx: &SyncSender<ApplyAccepted>,
     report: &mut PipelineReport,
     replay_next: &mut Option<u64>,
 ) -> Rerr {
