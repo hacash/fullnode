@@ -18,11 +18,10 @@ mod apply;
 mod ring;
 mod persist;
 mod side_list;
-mod source;
+mod pipeline;
 mod sync;
 mod tree;
 mod verify;
 mod view;
 
 pub use engine::ChainEngine;
-pub use source::{LocalReplay, OneShot};

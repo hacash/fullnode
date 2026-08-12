@@ -179,7 +179,7 @@ fn replay(eng: &ChainEngine, from: u64, to: u64, origin: PkgOrigin) -> sys::Rerr
         print!("[Engine] data: {}, replay ({})", eng.config.data_dir, from);
     }
 
-    let source = Box::new(crate::source::LocalReplay::new(
+    let source = Box::new(crate::pipeline::LocalReplay::new(
         eng.registry.clone(),
         eng.store.block_store(),
         from,

@@ -1,33 +1,14 @@
-//! Block sources for local replay and one-shot batches.
+//! Pipeline-local block source: local replay from the block store.
 
 use std::sync::Arc;
 
 use base::{BlockBatch, BlockSource, BlockStore, ExecutionServices};
 use sys::Ret;
 
-/// A single pre-assembled blob of concatenated blocks.
-pub struct OneShot {
-    blob: Option<Arc<Vec<u8>>>,
-}
-
-impl OneShot {
-    pub fn new(data: Vec<u8>) -> Self {
-        Self {
-            blob: Some(Arc::new(data)),
-        }
-    }
-}
-
-impl BlockSource for OneShot {
-    fn next(&mut self) -> Ret<Option<BlockBatch>> {
-        Ok(self.blob.take().map(|bytes| BlockBatch::raw(bytes, 0)))
-    }
-}
-
 /// Reads stored blocks back out of the block DB, for state rebuilds. Bodies
 /// are decoded once here, and the batch carries the decoded blocks, so the
 /// sync pipeline reuses them instead of decoding every frame a second time.
-pub struct LocalReplay {
+pub(crate) struct LocalReplay {
     registry: Arc<dyn ExecutionServices>,
     store: Arc<dyn BlockStore>,
     next: u64,
@@ -36,7 +17,7 @@ pub struct LocalReplay {
 }
 
 impl LocalReplay {
-    pub fn new(
+    pub(crate) fn new(
         registry: Arc<dyn ExecutionServices>,
         store: Arc<dyn BlockStore>,
         from: u64,
@@ -49,11 +30,6 @@ impl LocalReplay {
             end: to,
             batch: 64,
         }
-    }
-
-    pub fn with_batch(mut self, batch: usize) -> Self {
-        self.batch = batch.max(1);
-        self
     }
 }
 
