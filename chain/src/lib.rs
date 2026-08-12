@@ -14,7 +14,7 @@
 mod boot;
 mod engine;
 mod history;
-mod insert;
+mod apply;
 mod ring;
 mod roll;
 mod side_list;

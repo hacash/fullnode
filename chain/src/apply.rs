@@ -1,4 +1,5 @@
-//! Block execution and insertion — the one path every block goes through.
+//! The single-block apply path: verify, execute and attach one block, shared
+//! by discover, the sync pipeline and boot replay.
 
 use base::{ApplyMode, BlkPkg, BlockRef, Env, ForkChoiceKey, StateChunkRef};
 use field::Hash;

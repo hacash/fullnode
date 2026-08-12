@@ -299,7 +299,7 @@ fn replay_side(eng: &ChainEngine, hashes: &[Hash]) -> sys::Ret<()> {
         let prev_hash = blk.prev_hash();
         let pkg = BlkPkg::from_block(blk.clone(), PkgSource::new(PkgOrigin::Replay));
         let Some((_, _, fork_choice)) = crate::engine::catch_storage_panic(|| {
-            crate::insert::resolve_fork_choice(eng, &pkg)
+            crate::apply::resolve_fork_choice(eng, &pkg)
         })?
         else {
             return errf!("block {:?}: parent is not in the recovered tree", hash);
@@ -311,7 +311,7 @@ fn replay_side(eng: &ChainEngine, hashes: &[Hash]) -> sys::Ret<()> {
             return errf!("block {:?}: parent is not in the recovered tree", hash);
         };
         let chunk = crate::engine::catch_storage_panic(|| {
-            crate::insert::execute_block(eng, pkg.block(), chunk, false)
+            crate::apply::execute_block(eng, pkg.block(), chunk, false)
         })?;
         eng.tree.attach_side(&prev_hash, chunk)?;
     }

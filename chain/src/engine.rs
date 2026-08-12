@@ -416,7 +416,7 @@ impl ChainEngine {
         // to the caller, which decides peer penalty) or a core error carrying a
         // fatal code — the caller decides the boundary and prints it (§2.3).
         let accepted = match catch_storage_panic(|| {
-            crate::insert::insert_block(self, pkg, mode, persist_body)
+            crate::apply::insert_block(self, pkg, mode, persist_body)
         }) {
             Ok(value) => value,
             Err(e) => return Err(e),
