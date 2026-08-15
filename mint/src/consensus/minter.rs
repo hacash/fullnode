@@ -489,10 +489,17 @@ impl HacashConsensus {
             return sys::errf!("diamond mint action type invalid");
         };
 
-        let snapshot = view.optimistic_canonical().ok().flatten().ok_or_else(|| {
-            sys::Error::fault("state changed during diamond mint tx creation")
-                .with_code("state_changed")
-        })?;
+        // Busy (`Ok(None)`) skips this round with the non-fatal StateChanged
+        // signal; fatal/stopping (`Err`) propagates instead of being flattened
+        // away (§5 of the error-system design).
+        let snapshot = match view.optimistic_canonical() {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => {
+                return Err(sys::Error::fault("state changed during diamond mint tx creation")
+                    .with_code("state_changed"))
+            }
+            Err(e) => return Err(e),
+        };
         let start_epoch = snapshot.epoch;
         let state = CoreStateRead::wrap(snapshot.view());
         let act = &mint.d;
@@ -544,7 +551,12 @@ impl HacashConsensus {
     }
 
     fn clean_invalid_diamond_mint_txs(&self, view: &dyn ChainView, txpool: &dyn TxPool) -> Rerr {
-        let Some(snapshot) = view.optimistic_canonical().ok().flatten() else {
+        let Some(snapshot) = (match view.optimistic_canonical() {
+            Ok(snapshot) => snapshot,
+            // A fatal/stopping engine must propagate, never be flattened into
+            // a silent skip (§5 of the error-system design).
+            Err(e) => return Err(e),
+        }) else {
             return Ok(());
         };
         let start_epoch = snapshot.epoch;
@@ -895,7 +907,12 @@ impl BlockProducer for HacashConsensus {
         // §8.1 steps 3-6: strict read session.  `state_canonical()` captures
         // head hash + height + branch snapshot under one read guard so root
         // persist cannot commit between the height read and the snapshot.
-        let Some(session) = engine.state_canonical().ok().flatten() else {
+        let Some(session) = (match engine.state_canonical() {
+            Ok(session) => session,
+            // `Err(EngineUnavailable)` (fatal/stopping) propagates to the
+            // miner loop instead of being flattened into a busy skip (§5).
+            Err(e) => return Err(e),
+        }) else {
             return Ok(None);
         };
         let head_hash = session.head_hash();
@@ -938,7 +955,7 @@ impl BlockProducer for HacashConsensus {
             base_tx_size,
             mint_params.max_block_txs,
             mint_params.max_block_size,
-        );
+        )?;
         if !engine.validate_optimistic(session.epoch()) {
             return Ok(None);
         }
@@ -968,25 +985,23 @@ impl ConsensusNodeHooks for HacashConsensus {
         Ok(())
     }
 
-    fn poll_deferred_batches(&self, view: &dyn ChainView) -> Ret<Vec<base::DeferredBatch>> {
+    fn poll_one_deferred_batch(&self, view: &dyn ChainView) -> Ret<Option<base::DeferredBatch>> {
         let hist = view.block_history();
-        // Read the stable height before draining so a read failure cannot
+        // Read the stable height before extracting so a read failure cannot
         // follow a batch removal; the engine digests the error and stops the
-        // round without requeueing (§6.6).
+        // round without losing the batch (§4.2).
         let root_min = hist.stable_height()?.saturating_add(1);
         let head_max = view.latest_height().saturating_add(1);
         Ok(self
             .bidding
-            .drain_deferred_batches(root_min, head_max)
-            .into_iter()
+            .drain_one_deferred_batch(root_min, head_max)
             .map(|(id, branches)| base::DeferredBatch {
                 id,
                 candidates: branches
                     .into_iter()
                     .map(|blocks| base::DeferredCandidate { blocks })
                     .collect(),
-            })
-            .collect())
+            }))
     }
 
     fn on_deferred_batch_result(&self, id: base::DeferredId, _result: base::DeferredBatchResult) {

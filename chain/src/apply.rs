@@ -10,7 +10,7 @@ use crate::history::BranchHistory;
 
 fn tree_fatal(error: sys::Error) -> sys::Error {
     sys::Error::abort(format!("chain tree invariant failed: {}", error))
-        .with_code(crate::engine::CoreFault::CoreFailed.code())
+        .with_code("core_failed")
 }
 
 /// Execute a block into a detached Block chunk. Each transaction gets its own

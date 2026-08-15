@@ -225,6 +225,11 @@ struct DiamondBiddingInner {
     latest: u32,
     books: HashMap<u32, BiddingBook>,
     low_bid_groups: HashMap<u64, LowBidGroup>,
+    /// Batches extracted but not yet reported: they stay out of the ready
+    /// queue until `finish_deferred_batch` removes them (§4.2 — a batch must
+    /// not leave the queue before its result is reported; an `Abort` during
+    /// execution therefore requeues it implicitly).
+    in_flight: HashMap<DeferredId, LowBidGroup>,
     replay_allow: HashMap<DeferredId, HashSet<Hash>>,
     block_arrive_time: HashMap<Hash, u64>,
     block_arrive_order: VecDeque<Hash>,
@@ -245,6 +250,7 @@ impl DiamondBiddingInner {
             latest: 0,
             books: HashMap::new(),
             low_bid_groups: HashMap::new(),
+            in_flight: HashMap::new(),
             replay_allow: HashMap::new(),
             block_arrive_time: HashMap::new(),
             block_arrive_order: VecDeque::new(),
@@ -398,7 +404,12 @@ impl DiamondBiddingInner {
         None
     }
 
-    fn take_deferred_groups(&mut self, root_min: u64, head_max: u64) -> Vec<LowBidGroup> {
+    /// Take at most one ready deferred group, the oldest. Batches are
+    /// extracted one at a time; the extracted group moves to `in_flight`
+    /// (in `drain_one_deferred_batch`) so an aborted execution requeues it
+    /// and the remaining groups stay queued (§4.2 of the error-system
+    /// design).
+    fn take_next_deferred_group(&mut self, root_min: u64, head_max: u64) -> Option<LowBidGroup> {
         self.low_bid_groups.retain(|_, group| {
             let keep = group.height >= root_min && group.height <= head_max;
             if !keep {
@@ -420,13 +431,10 @@ impl DiamondBiddingInner {
             }
         }
         heights.sort_unstable();
-        let mut groups = Vec::with_capacity(heights.len());
-        for height in heights {
-            if let Some(group) = self.low_bid_groups.remove(&height) {
-                groups.push(group);
-            }
-        }
-        groups
+        let Some(height) = heights.into_iter().next() else {
+            return None;
+        };
+        self.low_bid_groups.remove(&height)
     }
 
     fn allow_replay_batch(&mut self, id: DeferredId, candidates: &[Vec<BlkPkg>]) {
@@ -474,6 +482,7 @@ impl DiamondBiddingInner {
     fn pending_count(&self) -> usize {
         self.low_bid_groups
             .values()
+            .chain(self.in_flight.values())
             .map(|g| g.branches.iter().map(|b| b.len()).sum::<usize>())
             .sum()
     }
@@ -549,51 +558,56 @@ impl DiamondBidding {
         self.inner.lock().unwrap().pending_count()
     }
 
-    /// Pull ready low-bid groups (after 40min), emit **all** sorted branches
-    /// (best first) so node can try the next branch if an earlier one fails —
-    /// matches fullnodedev `replay_low_bid_group` multi-branch fallback under
-    /// the pull-based deferred-batch model.
-    pub fn drain_deferred_batches(
+    /// Pull the next ready low-bid group (after 40min) and emit its sorted
+    /// branches (best first) so node can try the next branch if an earlier
+    /// one fails. Only one batch is extracted per call: an `Abort` during
+    /// execution leaves the batch in `in_flight` (no result is reported, so
+    /// it is not marked `Exhausted` and stays replay-allowed), the remaining
+    /// groups stay queued, and the rest of the round stops. The batch only
+    /// leaves the bidding state when `finish_deferred_batch` receives a
+    /// result (§4.2 of the error-system design).
+    pub fn drain_one_deferred_batch(
         &self,
         root_min: u64,
         head_max: u64,
-    ) -> Vec<(DeferredId, Vec<Vec<BlkPkg>>)> {
+    ) -> Option<(DeferredId, Vec<Vec<BlkPkg>>)> {
         let mut inner = self.inner.lock().unwrap();
-        let groups = inner.take_deferred_groups(root_min, head_max);
-        let mut out = Vec::new();
-        for group in groups {
-            let branches = group.replay_branches();
-            if branches.is_empty() {
-                continue;
-            }
+        let Some(group) = inner.take_next_deferred_group(root_min, head_max) else {
+            return None;
+        };
+        let id = DeferredId::new(group.height);
+        let branches = group.replay_branches();
+        // Even an empty batch is reported (the node answers `Exhausted`), so
+        // the group leaves the state through the result path and never
+        // silently disappears.
+        println!(
+            "[MintLowBid] drain begin height={} diamond={} branches={}",
+            group.height,
+            group.dianum,
+            branches.len(),
+        );
+        let mut group_out = Vec::new();
+        for (i, branch) in branches.into_iter().enumerate() {
             println!(
-                "[MintLowBid] drain begin height={} diamond={} branches={}",
+                "[MintLowBid] drain branch#{} height={} diamond={} selected_len={} root_hash={} root_fee={}",
+                i,
                 group.height,
                 group.dianum,
-                branches.len(),
+                branch.len(),
+                hash_half(&branch.root_hash()),
+                branch.root_fee,
             );
-            let mut group_out = Vec::new();
-            for (i, branch) in branches.into_iter().enumerate() {
-                println!(
-                    "[MintLowBid] drain branch#{} height={} diamond={} selected_len={} root_hash={} root_fee={}",
-                    i,
-                    group.height,
-                    group.dianum,
-                    branch.len(),
-                    hash_half(&branch.root_hash()),
-                    branch.root_fee,
-                );
-                group_out.push(branch.blocks);
-            }
-            let id = DeferredId::new(group.height);
-            inner.allow_replay_batch(id, &group_out);
-            out.push((id, group_out));
+            group_out.push(branch.blocks);
         }
-        out
+        inner.in_flight.insert(id, group);
+        inner.allow_replay_batch(id, &group_out);
+        Some((id, group_out))
     }
 
     pub fn finish_deferred_batch(&self, id: DeferredId) {
-        self.inner.lock().unwrap().clear_replay_batch(id);
+        let mut inner = self.inner.lock().unwrap();
+        inner.in_flight.remove(&id);
+        inner.clear_replay_batch(id);
     }
 
     pub fn check_admission(&self, pkg: &BlkPkg) -> Ret<BlockAdmissionDecision> {
@@ -771,12 +785,84 @@ mod tests {
             ),
         );
 
-        let batches = bidding.drain_deferred_batches(1, 10);
-        assert_eq!(batches.len(), 1);
-        let id = batches[0].0;
+        let batch = bidding.drain_one_deferred_batch(1, 10);
+        assert!(batch.is_some(), "one ready group must be extracted");
+        let (id, _) = batch.unwrap();
         assert!(bidding.inner.lock().unwrap().is_replay_allowed(&pkg.hash()));
 
         bidding.finish_deferred_batch(id);
         assert!(!bidding.inner.lock().unwrap().is_replay_allowed(&pkg.hash()));
+    }
+
+    /// Only one batch is extracted per call; the remaining ready groups stay
+    /// queued so an aborted execution can requeue without losing candidates
+    /// (§4.2 of the error-system design).
+    #[test]
+    fn deferred_batches_extract_one_at_a_time() {
+        let bidding = DiamondBidding::new(4);
+        for (height, byte) in [(5u64, 7u8), (6, 8)] {
+            let pkg = test_pkg(height, byte);
+            bidding.inner.lock().unwrap().low_bid_groups.insert(
+                height,
+                LowBidGroup::create(
+                    1,
+                    pkg,
+                    Amount::zero(),
+                    Instant::now() - Duration::from_secs(2_400),
+                ),
+            );
+        }
+        let first = bidding.drain_one_deferred_batch(1, 10).unwrap();
+        assert_eq!(first.0.get(), 5);
+        assert!(bidding
+            .inner
+            .lock()
+            .unwrap()
+            .low_bid_groups
+            .contains_key(&6), "the second ready group must stay queued");
+        let second = bidding.drain_one_deferred_batch(1, 10).unwrap();
+        assert_eq!(second.0.get(), 6);
+        assert!(bidding.drain_one_deferred_batch(1, 10).is_none());
+    }
+
+    /// An aborted batch stays in the bidding state until a result is
+    /// reported: the group leaves the ready queue but remains in `in_flight`
+    /// and replay-allowed, and no further drain re-extracts it (§4.2).
+    #[test]
+    fn aborted_batch_stays_in_flight_until_result() {
+        let bidding = DiamondBidding::new(4);
+        let pkg = test_pkg(5, 7);
+        bidding.inner.lock().unwrap().low_bid_groups.insert(
+            5,
+            LowBidGroup::create(
+                1,
+                pkg.clone(),
+                Amount::zero(),
+                Instant::now() - Duration::from_secs(2_400),
+            ),
+        );
+
+        let (id, candidates) = bidding.drain_one_deferred_batch(1, 10).unwrap();
+        assert!(!candidates.is_empty());
+        let inner = bidding.inner.lock().unwrap();
+        assert!(
+            !inner.low_bid_groups.contains_key(&5),
+            "the batch must leave the ready queue while executing"
+        );
+        assert!(
+            inner.in_flight.contains_key(&id),
+            "no result reported: the batch must stay in flight (requeue)"
+        );
+        assert!(inner.is_replay_allowed(&pkg.hash()));
+        drop(inner);
+
+        assert!(
+            bidding.drain_one_deferred_batch(1, 10).is_none(),
+            "an in-flight batch must not be re-extracted"
+        );
+        bidding.finish_deferred_batch(id);
+        let inner = bidding.inner.lock().unwrap();
+        assert!(!inner.in_flight.contains_key(&id));
+        assert!(!inner.is_replay_allowed(&pkg.hash()));
     }
 }

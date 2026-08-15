@@ -1,4 +1,4 @@
-use sys::{Ret, decodef};
+use sys::{Ret, normalf};
 
 pub trait Encode {
     fn size(&self) -> usize;
@@ -41,7 +41,7 @@ impl<'a> Reader<'a> {
 
     pub fn read_bytes(&mut self, n: usize) -> Ret<&'a [u8]> {
         if self.pos + n > self.buf.len() {
-            return decodef!(
+            return normalf!(
                 "buffer too short: need {} got {}",
                 n,
                 self.buf.len() - self.pos

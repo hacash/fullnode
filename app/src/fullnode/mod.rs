@@ -119,7 +119,7 @@ impl Fullnode {
             .is_some_and(|bider| bider.join().is_err());
         self.engine.shutdown()?;
         if bider_panicked {
-            return Err(sys::Error::fault("diamond auto-bid worker panicked"));
+            return sys::errf!("diamond auto-bid worker panicked");
         }
         Ok(())
     }

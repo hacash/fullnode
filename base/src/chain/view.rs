@@ -7,8 +7,7 @@ use crate::chain::ApplyMode;
 use crate::chain::BlkPkg;
 use crate::chain::{
     BlockAcceptResult, BlockHistory, BlockProducer, ChainListener, Consensus, ConsensusNodeHooks,
-    EngineConfig, OptimisticState, QueryUnavailable, RecentBlock, StateReadSession,
-    StateSnapSession, TxPolicy,
+    EngineConfig, OptimisticState, RecentBlock, StateReadSession, StateSnapSession, TxPolicy,
 };
 use crate::registry::ExecutionServices;
 use crate::store::Store;
@@ -34,9 +33,10 @@ pub trait ChainView: Send + Sync {
     /// filter and skip validation.
     ///
     /// `Ok(None)` means the engine is busy (syncing / root moving) and the
-    /// caller should retry; `Err(QueryUnavailable)` means the engine is fatal
-    /// or stopping and no snapshot will ever be created again.
-    fn optimistic_canonical(&self) -> Result<Option<OptimisticState>, QueryUnavailable>;
+    /// caller should retry; `Err(EngineUnavailable)` means the engine is fatal
+    /// or stopping and no snapshot will ever be created again (§5 of the
+    /// error-system normalization design).
+    fn optimistic_canonical(&self) -> Result<Option<OptimisticState>, sys::Error>;
 
     /// Exact canonical-head validation for work whose result is only useful on
     /// the same head, such as block-template construction.
@@ -50,14 +50,15 @@ pub trait ChainView: Send + Sync {
     /// Root-pinned read session for miner packing. The session pins the tree
     /// root captured with the head, so root rolls stay readable; the epoch
     /// check still detects an ordinary head change.
-    fn state_canonical(&self) -> Result<Option<StateReadSession>, QueryUnavailable>;
+    fn state_canonical(&self) -> Result<Option<StateReadSession>, sys::Error>;
 
     /// Optimistic branch snapshot for indexer reads. The complete read must be
-    /// followed by `validate_state_view(&session.tip_hash())`.
+    /// followed by `validate_state_view(&session.tip_hash())`. `Ok(None)` is
+    /// the branch tip not being present in the tree.
     fn state_at_session(
         &self,
         branch_tip: &Hash,
-    ) -> Result<Option<StateSnapSession<'_>>, QueryUnavailable>;
+    ) -> Result<Option<StateSnapSession<'_>>, sys::Error>;
 
     fn recent_blocks(&self) -> Vec<RecentBlock> {
         vec![]
@@ -112,6 +113,9 @@ pub trait Engine: ChainView {
         picked
     }
 
+    /// Best-effort packing filter on a root-pinned session. An `Abort` (core
+    /// state read failure) is returned as `Err` so the error reaches the
+    /// engine fatal boundary instead of judging transactions unsuitable (§5).
     #[allow(clippy::too_many_arguments)]
     fn try_pick_pending_txs_on_session(
         &self,
@@ -122,7 +126,16 @@ pub trait Engine: ChainView {
         base_tx_size: usize,
         max_txs: usize,
         max_block_size: usize,
-    ) -> Vec<TxRef>;
+    ) -> Ret<Vec<TxRef>>;
+
+    /// Route an error observed outside the engine (a canonical state read
+    /// failure during deferred polling) into the single engine boundary
+    /// (§4.1): `Abort` marks the engine fatal and is recorded once, then
+    /// returned unchanged for propagation; other errors only warn. The
+    /// default passes the error through without marking.
+    fn handle_engine_error(&self, _operation: &'static str, err: sys::Error) -> Rerr {
+        Err(err)
+    }
 
     /// try_execute_tx  sync/rebuild
     fn discover_block(&self, blk: BlkPkg) -> Ret<BlockAcceptResult>;
@@ -148,13 +161,6 @@ pub trait Engine: ChainView {
     fn add_chain_listener(&self, _listener: Arc<dyn ChainListener>) -> Rerr {
         sys::errf!("chain listener registration not supported")
     }
-
-    /// Report a core error (`ErrorKind::Abort`) observed outside the engine's
-    /// own consensus paths (listener boundaries, tx admission, deferred batch
-    /// polling). Implementations judge with `error.is_abort()` and enter their
-    /// fatal lifecycle. The default empty implementation would silently drop
-    /// the escalation and is not recommended for a real engine.
-    fn report_core_error(&self, _e: &sys::Error) {}
 
     fn exit(&self) {}
 }

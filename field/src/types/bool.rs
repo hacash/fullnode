@@ -1,4 +1,4 @@
-use sys::{Ret, decodef};
+use sys::{Ret, normalf};
 
 use crate::codec::{Decode, Encode};
 use crate::types::fixed::Fixed1;
@@ -29,7 +29,7 @@ impl Decode for Bool {
     fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
         let (v, n) = Fixed1::decode(buf)?;
         if v[0] > 1 {
-            return decodef!("Bool value {} invalid", v[0]);
+            return normalf!("Bool value {} invalid", v[0]);
         }
         Ok((Self(v), n))
     }

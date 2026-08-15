@@ -1,4 +1,4 @@
-use sys::{Ret, decodef};
+use sys::{Ret, normalf};
 
 use crate::codec::{Decode, Encode};
 use crate::types::fixed::Hash;
@@ -45,7 +45,7 @@ impl Encode for Sign {
 impl Decode for Sign {
     fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
         if buf.len() < Self::SIZE {
-            return decodef!("buffer too short for Sign");
+            return normalf!("buffer too short for Sign");
         }
         let mut publickey = [0u8; Self::PUBLICKEY_SIZE];
         let mut signature = [0u8; Self::SIGNATURE_SIZE];

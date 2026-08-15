@@ -1,4 +1,4 @@
-use sys::{Rerr, Ret, decodef, errf};
+use sys::{Rerr, Ret, normalf, errf};
 
 use crate::codec::{Decode, Encode};
 use crate::types::fixed::{Fixed6, Fixed10};
@@ -126,7 +126,7 @@ impl Decode for DiamondName {
         let (fixed, used) = Fixed6::decode(buf)?;
         let name = Self(fixed);
         if !Self::is_valid(name.as_ref()) {
-            return decodef!("diamond name {} is not valid", name.to_readable());
+            return normalf!("diamond name {} is not valid", name.to_readable());
         }
         Ok((name, used))
     }

@@ -1,5 +1,5 @@
 use base58check::{FromBase58Check, ToBase58Check};
-use sys::{Ret, decodef, errf};
+use sys::{Ret, normalf, errf};
 
 use crate::codec::{Decode, Encode};
 use crate::types::fixed::Fixed21;
@@ -148,12 +148,12 @@ impl Encode for Address {
 impl Decode for Address {
     fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
         if buf.len() < Self::SIZE {
-            return decodef!("buffer too short for Address");
+            return normalf!("buffer too short for Address");
         }
         let (fixed, used) = Fixed21::decode(buf)?;
         let address = Self(fixed);
         if !address.is_supported() {
-            return decodef!("address version {} invalid", address.version());
+            return normalf!("address version {} invalid", address.version());
         }
         Ok((address, used))
     }

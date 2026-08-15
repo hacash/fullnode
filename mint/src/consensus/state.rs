@@ -1,5 +1,5 @@
 use base::{
-    STATE_DECODE_FAILED_CODE, StateLayer, StateRead, numeric_state_key, numeric_state_prefix,
+    read_typed, StateLayer, StateRead, numeric_state_key, numeric_state_prefix,
 };
 use field::{ChannelId, ChannelSto, Decode, DiamondNumber, Encode, Reader, Uint8, Uint12};
 use sys::Ret;
@@ -118,26 +118,11 @@ impl<'a> MintStateRead<'a> {
     }
 
     pub fn channel(&self, id: &ChannelId) -> Ret<Option<ChannelSto>> {
-        let k = MintState::key_channel(id);
-        match self.0.get(&k)? {
-            Some(b) => match ChannelSto::decode(b.as_ref()) {
-                Ok((v, _)) => Ok(Some(v)),
-                Err(e) => Err(sys::Error::abort(format!("state decode failed: {}", e))
-                    .with_code(STATE_DECODE_FAILED_CODE)),
-            },
-            None => Ok(None),
-        }
+        read_typed(self.0, &MintState::key_channel(id))
     }
 
     pub fn mint_total(&self) -> Ret<Option<MintTotal>> {
-        match self.0.get(MintState::TOTAL_KEY)? {
-            Some(bytes) => match MintTotal::decode(bytes.as_ref()) {
-                Ok((v, _)) => Ok(Some(v)),
-                Err(e) => Err(sys::Error::abort(format!("state decode failed: {}", e))
-                    .with_code(STATE_DECODE_FAILED_CODE)),
-            },
-            None => Ok(None),
-        }
+        read_typed(self.0, MintState::TOTAL_KEY)
     }
 
     pub fn get_mint_total(&self) -> Ret<MintTotal> {
@@ -156,15 +141,7 @@ impl<'a> MintState<'a> {
     }
 
     pub fn channel(&self, id: &ChannelId) -> Ret<Option<ChannelSto>> {
-        let k = Self::key_channel(id);
-        match self.0.get(&k)? {
-            Some(b) => match ChannelSto::decode(b.as_ref()) {
-                Ok((v, _)) => Ok(Some(v)),
-                Err(e) => Err(sys::Error::abort(format!("state decode failed: {}", e))
-                    .with_code(STATE_DECODE_FAILED_CODE)),
-            },
-            None => Ok(None),
-        }
+        read_typed(&*self.0, &Self::key_channel(id))
     }
 
     pub fn channel_set(&mut self, id: &ChannelId, v: &ChannelSto) {
@@ -172,14 +149,7 @@ impl<'a> MintState<'a> {
     }
 
     pub fn mint_total(&self) -> Ret<Option<MintTotal>> {
-        match self.0.get(Self::TOTAL_KEY)? {
-            Some(bytes) => match MintTotal::decode(bytes.as_ref()) {
-                Ok((v, _)) => Ok(Some(v)),
-                Err(e) => Err(sys::Error::abort(format!("state decode failed: {}", e))
-                    .with_code(STATE_DECODE_FAILED_CODE)),
-            },
-            None => Ok(None),
-        }
+        read_typed(&*self.0, Self::TOTAL_KEY)
     }
 
     pub fn get_mint_total(&self) -> Ret<MintTotal> {

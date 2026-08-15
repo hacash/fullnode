@@ -7,7 +7,7 @@ use base::{
     TxRef, VmAssignFn, VmExecutionParams, VmHostActionDef,
 };
 use field::{Decode, Uint1, Uint2};
-use sys::{Ret, decodef, errf};
+use sys::{Ret, normalf, errf};
 
 /// Transaction/action codec composition used by the WASM signer.
 ///
@@ -112,14 +112,14 @@ impl BinaryCodecs for SdkCodecs {
         let kind = kind.uint();
         match self.actions.get(&kind) {
             Some(creator) => creator(self, kind, buf),
-            None => decodef!("action kind {} not registered in sdk", kind),
+            None => normalf!("action kind {} not registered in sdk", kind),
         }
     }
 
     fn decode_action_exact(&self, buf: &[u8]) -> Ret<ActionRef> {
         let (action, used) = self.decode_action(buf)?;
         if used != buf.len() {
-            return decodef!(
+            return normalf!(
                 "action parse length mismatch: consumed {} but payload length is {}",
                 used,
                 buf.len()
@@ -133,14 +133,14 @@ impl BinaryCodecs for SdkCodecs {
         let ty = ty.uint();
         match self.transactions.get(&ty) {
             Some(creator) => creator(self, buf),
-            None => decodef!("transaction type {} not registered in sdk", ty),
+            None => normalf!("transaction type {} not registered in sdk", ty),
         }
     }
 
     fn decode_transaction_exact(&self, buf: &[u8]) -> Ret<TxRef> {
         let (transaction, used) = self.decode_transaction(buf)?;
         if used != buf.len() {
-            return decodef!(
+            return normalf!(
                 "transaction parse length mismatch: consumed {} but payload length is {}",
                 used,
                 buf.len()
@@ -150,15 +150,15 @@ impl BinaryCodecs for SdkCodecs {
     }
 
     fn decode_block(&self, _buf: &[u8]) -> Ret<(BlockRef, usize)> {
-        decodef!("block decoding is not part of the wasm sdk")
+        normalf!("block decoding is not part of the wasm sdk")
     }
 
     fn decode_block_exact(&self, _buf: &[u8]) -> Ret<BlockRef> {
-        decodef!("block decoding is not part of the wasm sdk")
+        normalf!("block decoding is not part of the wasm sdk")
     }
 
     fn peek_block_size(&self, _buf: &[u8]) -> Ret<usize> {
-        decodef!("block decoding is not part of the wasm sdk")
+        normalf!("block decoding is not part of the wasm sdk")
     }
 
     fn block_hash(&self, height: u64, stuff: &[u8]) -> [u8; HASH_SIZE] {

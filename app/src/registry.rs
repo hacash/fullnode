@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use base::*;
 use field::{Decode, Uint1, Uint2};
-use sys::{Ret, decodef};
+use sys::{Ret, normalf};
 
 /// Protocol rules selected by this Hacash application.
 pub static CHAIN_PROTOCOL_PARAMS: protocol::ProtocolParams = protocol::PROTOCOL_PARAMS;
@@ -155,14 +155,14 @@ impl BinaryCodecs for Registry {
         let kind = kind.uint();
         match self.action_codecs.get(&kind) {
             Some(codec) => codec(self, kind, buf),
-            None => decodef!("action kind {} not registered", kind),
+            None => normalf!("action kind {} not registered", kind),
         }
     }
 
     fn decode_action_exact(&self, buf: &[u8]) -> Ret<ActionRef> {
         let (obj, used) = self.decode_action(buf)?;
         if used != buf.len() {
-            return decodef!(
+            return normalf!(
                 "action parse length mismatch: consumed {} but payload length is {}",
                 used,
                 buf.len()
@@ -175,14 +175,14 @@ impl BinaryCodecs for Registry {
         let ty = ty.uint();
         match self.tx_codecs.get(&ty) {
             Some(codec) => codec(self, buf),
-            None => decodef!("transaction type {} not registered", ty),
+            None => normalf!("transaction type {} not registered", ty),
         }
     }
 
     fn decode_transaction_exact(&self, buf: &[u8]) -> Ret<TxRef> {
         let (obj, used) = self.decode_transaction(buf)?;
         if used != buf.len() {
-            return decodef!(
+            return normalf!(
                 "transaction parse length mismatch: consumed {} but payload length is {}",
                 used,
                 buf.len()
@@ -200,14 +200,14 @@ impl BinaryCodecs for Registry {
     fn decode_block(&self, buf: &[u8]) -> Ret<(BlockRef, usize)> {
         match self.block_creator {
             Some(creator) => creator(self, buf),
-            None => decodef!("block creator not registered"),
+            None => normalf!("block creator not registered"),
         }
     }
 
     fn decode_block_exact(&self, buf: &[u8]) -> Ret<BlockRef> {
         let (obj, used) = self.decode_block(buf)?;
         if used != buf.len() {
-            return decodef!(
+            return normalf!(
                 "block parse length mismatch: consumed {} but payload length is {}",
                 used,
                 buf.len()

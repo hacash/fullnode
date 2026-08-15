@@ -69,7 +69,7 @@ impl ContractAddress {
     pub fn parse(bytes: &[u8]) -> Ret<Self> {
         let (addr, used) = field::Address::decode(bytes)?;
         if used != field::Address::SIZE {
-            return decodef!("contract address size invalid");
+            return normalf!("contract address size invalid");
         }
         Self::from_addr(addr)
     }

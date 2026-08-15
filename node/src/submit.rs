@@ -207,7 +207,7 @@ impl P2PNode {
                 blk.height(),
             );
         }
-        self.drain_deferred_blocks();
+        self.drain_deferred_blocks()?;
         self.drain_orphans_for(&blk.hash());
         Ok(())
     }
@@ -316,10 +316,10 @@ impl P2PNode {
         // 3. try execute
         if let Err(e) = self.engine.try_execute_tx(tx.tx_ref()) {
             // A core state read failure must not judge the transaction
-            // invalid: it reports node-unavailable and escalates to engine
-            // fatal (§6.7). Ordinary execution errors remain a rejection.
+            // invalid: the engine boundary has already set fatal, and the
+            // error propagates as node-unavailable (§5 of the error-system
+            // design). Ordinary execution errors remain a rejection.
             if e.is_abort() {
-                self.engine.report_core_error(&e);
                 return Err(e);
             }
             return Ok(TxSubmitResult::rejected(
@@ -347,36 +347,45 @@ impl P2PNode {
     }
 
     /// Periodic / on-demand execution of consensus-owned deferred candidates.
-    pub fn drain_deferred_blocks(&self) -> bool {
+    /// Batches are extracted one at a time: an `Abort` during execution keeps
+    /// the batch in the bidding state (no result is reported, so it is not
+    /// marked `Exhausted`), the remaining candidates are not destroyed, and
+    /// the rest of this round stops. A polling failure (canonical state read)
+    /// is routed into the single engine boundary, which marks the engine
+    /// fatal; the error propagates as `Err`. After a restart the batch
+    /// becomes visible again from the rebuilt bidding state (§4.2 of the
+    /// error-system design).
+    pub fn drain_deferred_blocks(&self) -> sys::Ret<bool> {
         // Skip while a sync session runs: the periodic worker would only
         // block on `inserting` until the pipeline ends, and the sync's own
         // post-processing drains deferred blocks anyway.
         if self.sync_session.lock().ok().is_some_and(|g| g.is_some()) {
-            return false;
+            return Ok(false);
         }
         let _insert_guard = self.inserting.lock().unwrap();
         let mut progressed = false;
         let mut accepted_hashes = Vec::new();
-        let batches = match self
-            .engine
-            .node_hooks()
-            .poll_deferred_batches(self.engine.as_ref())
-        {
-            Ok(batches) => batches,
-            Err(e) => {
-                // Digest the polling failure inside this round: record and
-                // stop; never judge candidates invalid. An `Abort` escalates
-                // to engine fatal through the public reporting interface
-                // (§6.6). Batch extraction happens after the mint's
-                // `stable_height` read, so a polling error needs no requeue.
-                eprintln!("[node] poll_deferred_batches failed: {}", e);
-                if e.is_abort() {
-                    self.engine.report_core_error(&e);
+        loop {
+            let batch = match self
+                .engine
+                .node_hooks()
+                .poll_one_deferred_batch(self.engine.as_ref())
+            {
+                Ok(Some(batch)) => batch,
+                Ok(None) => break,
+                Err(e) => {
+                    // A polling failure is a canonical state read failure
+                    // (`Abort + StorageRead` from the mint's `stable_height`
+                    // read): route it into the single engine boundary, which
+                    // marks fatal and records it once; the error propagates
+                    // and this round stops. Extraction happens after that
+                    // read, so no batch was removed (§4.1/§9).
+                    return self
+                        .engine
+                        .handle_engine_error("poll_one_deferred_batch", e)
+                        .map(|_| progressed);
                 }
-                return progressed;
-            }
-        };
-        for batch in batches {
+            };
             let mut batch_result = base::DeferredBatchResult::Exhausted;
             for (candidate_index, candidate) in batch.candidates.into_iter().enumerate() {
                 let mut candidate_ok = true;
@@ -411,6 +420,13 @@ impl P2PNode {
                             }
                         }
                         Err(e) => {
+                            // An `Abort` (engine fatal already set by the
+                            // discover boundary) requeues the batch: no result
+                            // is reported, remaining candidates stay intact
+                            // and the rest of this round stops (§4.2).
+                            if e.is_abort() {
+                                return Ok(progressed);
+                            }
                             eprintln!("[node] deferred block candidate failed: {}", e);
                             candidate_ok = false;
                             break;
@@ -437,7 +453,7 @@ impl P2PNode {
         for hash in accepted_hashes {
             self.drain_orphans_for(&hash);
         }
-        progressed
+        Ok(progressed)
     }
 }
 

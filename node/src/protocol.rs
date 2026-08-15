@@ -289,7 +289,7 @@ impl P2PNode {
                     );
                 }
                 if !report.held_blocks.is_empty() {
-                    self.drain_deferred_blocks();
+                    let _ = self.drain_deferred_blocks();
                 }
             }
             Err(e) => return Err(e),

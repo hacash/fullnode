@@ -2,13 +2,12 @@
 
 use sys::{Rerr, Ret};
 
-/// Stable error code for canonical state backend read failures. Attached at
-/// the first stable `StateRead`/DB boundary; consumed by engine/boot/HTTP
-/// edges for classification, never synthesized by guessing from messages.
-pub const STATE_READ_FAILED_CODE: &str = "storage_read_failed";
-/// Stable error code for trusted persisted state bytes that fail protocol
-/// decode. Never used for network/API/user-input decode (those stay `Decode`).
-pub const STATE_DECODE_FAILED_CODE: &str = "state_decode_failed";
+/// Stable error string for canonical state backend read failures. The string
+/// is owned by the state boundary; `sys` only stores and carries it.
+pub const STATE_READ_FAILED_CODE: &'static str = "storage_read_failed";
+/// Stable error string for trusted persisted state bytes that fail protocol
+/// decode. Never used for network/API/user-input decode (those stay `Normal`).
+pub const STATE_DECODE_FAILED_CODE: &'static str = "state_decode_failed";
 
 // =============================================================
 // StateRead / StateLayer  KV

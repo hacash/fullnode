@@ -10,13 +10,13 @@ use std::sync::atomic::Ordering;
 use base::{
     ApplyMode, BackgroundSyncHandle, BlkPkg, BlockAcceptResult, BlockHistory, BlockProducer,
     BlockRef, BlockSource, ChainListener, ChainView, Consensus, ConsensusNodeHooks, Engine,
-    EngineConfig, ExecutionServices, OptimisticState, PipelineOptions, QueryUnavailable,
-    RecentBlock, StateReadSession, StateSnapSession, Store, SyncHandle, TxPolicy, TxRef,
+    EngineConfig, ExecutionServices, OptimisticState, PipelineOptions, RecentBlock,
+    StateReadSession, StateSnapSession, Store, SyncHandle, TxPolicy, TxRef,
 };
 use field::{Address, Hash};
-use sys::{Rerr, Ret, errf};
+use sys::{Rerr, Ret};
 
-use crate::engine::ChainEngine;
+use crate::engine::{ChainEngine, Phase};
 
 impl ChainView for ChainEngine {
     fn services(&self) -> &Arc<dyn ExecutionServices> {
@@ -47,16 +47,12 @@ impl ChainView for ChainEngine {
         self.tree.head_block()
     }
 
-    fn optimistic_canonical(&self) -> Result<Option<OptimisticState>, QueryUnavailable> {
+    fn optimistic_canonical(&self) -> Result<Option<OptimisticState>, sys::Error> {
         if self.is_stopping() || self.is_fatal() {
-            return Err(QueryUnavailable::new(
-                "chain",
-                "optimistic_canonical",
-                "engine is stopping or fatal",
-            ));
+            return Err(unavailable("optimistic_canonical", "engine is stopping or fatal"));
         }
         let hold = Some(self.waiter.try_hold().ok_or_else(|| {
-            QueryUnavailable::new("chain", "optimistic_canonical", "engine is stopping")
+            unavailable("optimistic_canonical", "engine is stopping")
         })?);
         let (head_hash, head_height, epoch, view, root_pin) = self.tree.head_snapshot();
         Ok(Some(OptimisticState::new(
@@ -80,17 +76,14 @@ impl ChainView for ChainEngine {
         self.is_root_available() && self.tree.contains(tip_hash)
     }
 
-    fn state_canonical(&self) -> Result<Option<StateReadSession>, QueryUnavailable> {
+    fn state_canonical(&self) -> Result<Option<StateReadSession>, sys::Error> {
         if self.is_stopping() || self.is_fatal() {
-            return Err(QueryUnavailable::new(
-                "chain",
-                "state_canonical",
-                "engine is stopping or fatal",
-            ));
+            return Err(unavailable("state_canonical", "engine is stopping or fatal"));
         }
-        let hold = self.waiter.try_hold().ok_or_else(|| {
-            QueryUnavailable::new("chain", "state_canonical", "engine is stopping")
-        })?;
+        let hold = self
+            .waiter
+            .try_hold()
+            .ok_or_else(|| unavailable("state_canonical", "engine is stopping"))?;
         // Busy states are transient: the caller retries. Only fatal/stopping
         // is unavailable.
         if self.syncing.load(Ordering::Acquire) {
@@ -120,16 +113,12 @@ impl ChainView for ChainEngine {
     fn state_at_session(
         &self,
         branch_tip: &Hash,
-    ) -> Result<Option<StateSnapSession<'_>>, QueryUnavailable> {
+    ) -> Result<Option<StateSnapSession<'_>>, sys::Error> {
         if self.is_stopping() || self.is_fatal() {
-            return Err(QueryUnavailable::new(
-                "chain",
-                "state_at_session",
-                "engine is stopping or fatal",
-            ));
+            return Err(unavailable("state_at_session", "engine is stopping or fatal"));
         }
         let hold = Some(self.waiter.try_hold().ok_or_else(|| {
-            QueryUnavailable::new("chain", "state_at_session", "engine is stopping")
+            unavailable("state_at_session", "engine is stopping")
         })?);
         let Some((view, root_pin, tip_height)) = self.tree.snapshot_at(branch_tip) else {
             return Ok(None);
@@ -170,14 +159,14 @@ impl Engine for ChainEngine {
     }
 
     fn try_execute_tx(&self, tx: TxRef) -> Rerr {
-        if self.is_fatal() {
-            return errf!("chain is fatal; transaction execution is unavailable");
-        }
-        let snapshot = self
-            .optimistic_canonical()
-            .ok()
-            .flatten()
-            .ok_or_else(|| sys::Error::fault("chain state unavailable"))?;
+        // Busy (`Ok(None)`) skips this round; fatal/stopping (`Err`) must
+        // propagate and never be flattened into a busy skip (§5 of the
+        // error-system design).
+        let snapshot = match self.optimistic_canonical() {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => return Ok(()),
+            Err(e) => return Err(e),
+        };
         self.check_pending(tx.as_ref())?;
         let chunk = snapshot.begin_tx(tx.hash());
         let env = self.build_tx_env(
@@ -191,17 +180,24 @@ impl Engine for ChainEngine {
             .create_context(env, chunk, tx.clone())?;
         let result = tx.execute(ctx.as_mut());
         drop(ctx);
-        result
+        match result {
+            // A core state read failure surfaced during execution is
+            // engine-fatal: record it at the single engine boundary (§4.1).
+            Err(e) if e.is_abort() => self
+                .handle_error(Phase::PreAttach, "try_execute_tx", None, None, Err::<(), _>(e))
+                .map(|_| ()),
+            r => r,
+        }
     }
 
     fn try_execute_batch(&self, txs: Vec<TxRef>, pending_height: u64) -> Ret<Vec<Hash>> {
-        if self.is_fatal() {
-            return Ok(vec![]);
-        }
-        // `optimistic_canonical` is an engine-state signal (stopping/fatal/
-        // syncing), not a storage error: `QueryUnavailable`/`Ok(None)` keep
-        // the "skip this revalidation round" semantics (§6.7).
-        let Some(snapshot) = self.optimistic_canonical().ok().flatten() else {
+        // `Ok(None)` (busy) keeps the skip-this-round revalidation semantics;
+        // a fatal/stopping engine (`Err`) propagates and is never flattened
+        // (§5 of the error-system design).
+        let Some(snapshot) = (match self.optimistic_canonical() {
+            Ok(snapshot) => snapshot,
+            Err(e) => return Err(e),
+        }) else {
             return Ok(vec![]);
         };
         let root = snapshot.begin_block_draft(pending_height);
@@ -234,7 +230,7 @@ impl Engine for ChainEngine {
         base_tx_size: usize,
         max_txs: usize,
         max_block_size: usize,
-    ) -> Vec<TxRef> {
+    ) -> Ret<Vec<TxRef>> {
         let mut execution = session.begin_execution();
         let mut picked = Vec::new();
         let mut total = base_tx_size;
@@ -250,15 +246,32 @@ impl Engine for ChainEngine {
                 continue;
             }
             let env = self.build_tx_env(pending_height, author, tx.as_ref());
-            if execution
-                .execute_tx(self.registry.clone(), env, tx.clone())
-                .is_ok()
-            {
-                total += size;
-                picked.push(tx);
+            // A core state read failure must not judge the transaction
+            // unsuitable for packing: it is engine-fatal and propagates
+            // through the single boundary (§4.1). Ordinary execution errors
+            // keep the skip-this-transaction semantics.
+            match execution.execute_tx(self.registry.clone(), env, tx.clone()) {
+                Ok(()) => {
+                    total += size;
+                    picked.push(tx);
+                }
+                Err(e) if e.is_abort() => {
+                    return self.handle_error(
+                        Phase::PreAttach,
+                        "try_pick_pending_txs_on_session",
+                        None,
+                        None,
+                        Err::<Vec<TxRef>, _>(e),
+                    );
+                }
+                Err(_) => {}
             }
         }
-        picked
+        Ok(picked)
+    }
+
+    fn handle_engine_error(&self, operation: &'static str, err: sys::Error) -> Rerr {
+        self.handle_error(Phase::PreAttach, operation, None, None, Err::<(), _>(err))
     }
 
     fn discover_block(&self, blk: BlkPkg) -> Ret<BlockAcceptResult> {
@@ -287,13 +300,16 @@ impl Engine for ChainEngine {
         ChainEngine::add_chain_listener(self, listener)
     }
 
-    fn report_core_error(&self, e: &sys::Error) {
-        if self.mark_core_error(e) {
-            eprintln!("[Engine Fatal] operation=report_core_error error={}", e);
-        }
-    }
-
     fn exit(&self) {
         let _ = self.shutdown();
     }
+}
+
+/// The unavailable query error: `EngineUnavailable` with the operation as
+/// context (§5 of the error-system design; the old `QueryUnavailable` fields
+/// are carried by the message).
+fn unavailable(operation: &'static str, cause: &'static str) -> sys::Error {
+    sys::Error::abort(cause)
+        .with_code("engine_unavailable")
+        .context(operation)
 }

@@ -20,7 +20,7 @@ macro_rules! impl_uint_json {
                 fn from_json(&mut self, json: &str) -> Ret<()> {
                     let v = json_expect_unquoted(json)?
                         .parse()
-                        .map_err(|_| sys::Error::decode(format!("cannot parse {}", stringify!($name))))?;
+                        .map_err(|_| sys::Error::normal(format!("cannot parse {}", stringify!($name))))?;
                     *self = <$name>::from(v);
                     Ok(())
                 }
@@ -43,7 +43,7 @@ impl FromJSON for Timestamp {
     fn from_json(&mut self, json: &str) -> Ret<()> {
         let value = json_expect_unquoted(json)?
             .parse()
-            .map_err(|_| sys::Error::decode("cannot parse Timestamp"))?;
+            .map_err(|_| sys::Error::normal("cannot parse Timestamp"))?;
         *self = Timestamp::from_checked(value)?;
         Ok(())
     }
@@ -69,7 +69,7 @@ impl<const N: usize> FromJSON for Fixed<N> {
         if N == 1 && !json.trim().starts_with('"') {
             self.0[0] = json_expect_unquoted(json)?
                 .parse()
-                .map_err(|_| sys::Error::decode("cannot parse Fixed1"))?;
+                .map_err(|_| sys::Error::normal("cannot parse Fixed1"))?;
             return Ok(());
         }
         let data = json_decode_binary(json)?;
@@ -171,7 +171,7 @@ impl FromJSON for Fold64 {
         *self = Fold64::from(
             json_expect_unquoted(json)?
                 .parse()
-                .map_err(|_| sys::Error::decode("cannot parse Fold64"))?,
+                .map_err(|_| sys::Error::normal("cannot parse Fold64"))?,
         )?;
         Ok(())
     }

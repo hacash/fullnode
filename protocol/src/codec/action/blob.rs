@@ -71,7 +71,7 @@ pub fn create_blob_action(
     match kind {
         TxMessage::KIND => decode_blob_action::<TxMessage>(buf),
         TxBlob::KIND => decode_blob_action::<TxBlob>(buf),
-        _ => sys::decodef!("blob action kind {} not registered", kind),
+        _ => sys::normalf!("blob action kind {} not registered", kind),
     }
 }
 

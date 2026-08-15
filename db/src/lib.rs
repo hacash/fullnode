@@ -89,7 +89,7 @@ impl DiskKV {
         )))]
         {
             let _ = dir;
-            Err(sys::Error::fault("no db backend feature enabled"))
+            sys::errf!("no db backend feature enabled")
         }
     }
 }

@@ -16,7 +16,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use base::{
-    BlkPkg, PipelineOptions, PipelineReport, PkgOrigin, PkgSource, ProgressSink, StateStatus,
+    BlkPkg, PipelineOptions, PipelineReport, PkgOrigin, PkgSource, ProgressSink,
+    STATE_READ_FAILED_CODE, StateStatus,
 };
 use field::Hash;
 use sys::errf;
@@ -275,7 +276,7 @@ fn replay_side(eng: &ChainEngine, hashes: &[Hash]) -> sys::Ret<()> {
             // `replay_side_branches` refuses startup instead of clearing the
             // whole list (§7.2).
             sys::Error::abort(format!("block {:?}: side body read failed: {}", hash, e))
-                .with_code(base::STATE_READ_FAILED_CODE)
+                .with_code(STATE_READ_FAILED_CODE)
         })?;
         let Some(data) = data else {
             return errf!("block {:?}: side body is missing from the block db", hash);

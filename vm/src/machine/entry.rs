@@ -85,10 +85,12 @@ impl StubVm {
         let entry = self.pop_entry()?;
         let settle = self.settle_entry_return_cost(ctx, entry);
         match (result, settle) {
-            (Err(exec_err), Err(settle_err)) => Err(sys::Error::fault(format!(
-                "{} | secondary: {}",
-                exec_err, settle_err
-            ))),
+            // Both errors must be preserved without reclassifying the primary
+            // one: merge the secondary message into the primary error's
+            // context, keeping its kind/code (§3.2 of the error-system design).
+            (Err(exec_err), Err(settle_err)) => {
+                Err(exec_err.context(format!("secondary: {}", settle_err)))
+            }
             (Err(exec_err), _) => Err(exec_err),
             (Ok(_), Err(settle_err)) => Err(settle_err),
             (Ok(retv), Ok(cost)) => Ok((cost, retv)),
@@ -185,10 +187,7 @@ impl StubVm {
         };
         match failed {
             None => Ok(()),
-            Some(detail) => Err(sys::Error::revert(format!(
-                "{} return error {}",
-                err_msg, detail
-            ))),
+            Some(detail) => sys::revertf!("{} return error {}", err_msg, detail),
         }
     }
 

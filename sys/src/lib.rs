@@ -1,6 +1,7 @@
 //! `sys` -- foundational primitives shared by all crates.
 //!
-//! - `Error { Decode, Revert, Fault }` + `Ret<T>` / `Rerr`: unified error system
+//! - `Error { Normal, Revert, Fault, Abort }` + optional caller-owned string
+//!   code + `Ret<T>` / `Rerr`: unified error system
 //! - `Bytes`: refcounted byte buffer (`Arc<Vec<u8>>` + slice range)
 //! - `Waiter`: graceful-shutdown coordination token (sync + async + barrier)
 //! - `Account`: secp256k1 keypair + address generation

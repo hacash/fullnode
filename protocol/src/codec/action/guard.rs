@@ -152,7 +152,7 @@ fn parse_req_sign_list_json(json: &str) -> Ret<ReqSignList> {
     let mut seen = HashSet::new();
     for (key, value) in json_split_object(json)? {
         if !seen.insert(key) {
-            return sys::decodef!("ReqSignList JSON field {} is duplicated", key);
+            return sys::normalf!("ReqSignList JSON field {} is duplicated", key);
         }
         match key {
             "kind" => declared = json_decode_value(value)?,
@@ -161,13 +161,13 @@ fn parse_req_sign_list_json(json: &str) -> Ret<ReqSignList> {
         }
     }
     if declared.uint() != ReqSignList::KIND {
-        return sys::decodef!(
+        return sys::normalf!(
             "action kind mismatch: expected {} got {}",
             ReqSignList::KIND,
             declared.uint()
         );
     }
-    let raw = signers_json.ok_or_else(|| sys::Error::decode("ReqSignList JSON missing signers"))?;
+    let raw = signers_json.ok_or_else(|| sys::Error::normal("ReqSignList JSON missing signers"))?;
     let mut signers = Vec::new();
     for value in json_split_array(raw)? {
         signers.push(json_decode_value(value)?);
@@ -195,7 +195,7 @@ pub fn decode_req_sign_list_json(
     json: &str,
 ) -> Ret<ActionRef> {
     if kind != ReqSignList::KIND {
-        return sys::decodef!("ReqSignList JSON codec got kind {}", kind);
+        return sys::normalf!("ReqSignList JSON codec got kind {}", kind);
     }
     Ok(Arc::new(parse_req_sign_list_json(json)?))
 }
@@ -395,7 +395,7 @@ pub fn create_chain_guard_action(
     let mut r = Reader::new(buf);
     let kind_field: Uint2 = r.read()?;
     if kind_field.uint() != kind {
-        return sys::decodef!(
+        return sys::normalf!(
             "action kind mismatch: expected {} got {}",
             kind,
             kind_field.uint()
@@ -421,7 +421,7 @@ pub fn create_chain_guard_action(
                 r.used(),
             ))
         }
-        _ => sys::decodef!("chain guard action kind {} not registered", kind),
+        _ => sys::normalf!("chain guard action kind {} not registered", kind),
     }
 }
 

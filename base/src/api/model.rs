@@ -85,3 +85,34 @@ pub type ApiHandlerAsync = Arc<
         + Send
         + Sync,
 >;
+
+/// §8.2 of the error-system design: the single API mapping entry for state
+/// read errors. Canonical state failures (`Abort` — StorageRead, StateDecode,
+/// EngineUnavailable) map to HTTP 503; business errors keep the plain JSON
+/// error body.
+pub fn api_state_read_error(e: &sys::Error) -> ApiResponse {
+    if e.is_abort() {
+        ApiResponse::err(503, &format!("state read failed: {}", e))
+    } else {
+        let mut encoded = String::with_capacity(e.to_string().len() + 16);
+        encoded.push('"');
+        for ch in format!("state read failed: {}", e).chars() {
+            match ch {
+                '"' => encoded.push_str("\\\""),
+                '\\' => encoded.push_str("\\\\"),
+                '\u{08}' => encoded.push_str("\\b"),
+                '\u{0C}' => encoded.push_str("\\f"),
+                '\n' => encoded.push_str("\\n"),
+                '\r' => encoded.push_str("\\r"),
+                '\t' => encoded.push_str("\\t"),
+                c if c <= '\u{1F}' => {
+                    use std::fmt::Write;
+                    let _ = write!(&mut encoded, "\\u{:04x}", c as u32);
+                }
+                c => encoded.push(c),
+            }
+        }
+        encoded.push('"');
+        ApiResponse::json(format!("{{\"ret\":1,\"err\":{}}}", encoded))
+    }
+}

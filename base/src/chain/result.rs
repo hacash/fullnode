@@ -1,37 +1,5 @@
 use field::Hash;
 
-/// A query could not be served because the engine stopped accepting work
-/// (fatal or shutdown). It fails only the current request: the engine state
-/// is unchanged and no not-found value is fabricated.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct QueryUnavailable {
-    pub resource: &'static str,
-    pub operation: &'static str,
-    pub cause: String,
-}
-
-impl QueryUnavailable {
-    pub fn new(resource: &'static str, operation: &'static str, cause: impl Into<String>) -> Self {
-        Self {
-            resource,
-            operation,
-            cause: cause.into(),
-        }
-    }
-}
-
-impl std::fmt::Display for QueryUnavailable {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "query unavailable: {} / {}: {}",
-            self.resource, self.operation, self.cause
-        )
-    }
-}
-
-impl std::error::Error for QueryUnavailable {}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BlockAcceptStatus {
     Accepted,

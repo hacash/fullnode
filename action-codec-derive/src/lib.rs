@@ -90,7 +90,7 @@ fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStre
                 let mut reader = field::Reader::new(buf);
                 let kind: field::Uint2 = reader.read()?;
                 if kind.uint() != Self::KIND {
-                    return sys::decodef!(
+                    return sys::normalf!(
                         "action kind mismatch: expected {} got {}",
                         Self::KIND,
                         kind.uint()
@@ -128,7 +128,7 @@ fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStre
 
                 for (key, value) in field::json_split_object(json)? {
                     if !seen.insert(key) {
-                        return sys::decodef!(
+                        return sys::normalf!(
                             "action {} JSON field {} is duplicated",
                             Self::KIND,
                             key
@@ -142,7 +142,7 @@ fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStre
                 }
 
                 if kind.uint() != Self::KIND {
-                    return sys::decodef!(
+                    return sys::normalf!(
                         "action kind mismatch: expected {} got {}",
                         Self::KIND,
                         kind.uint()
@@ -150,7 +150,7 @@ fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStre
                 }
                 #(
                     let Some(#value_fields) = #value_fields else {
-                        return sys::decodef!(
+                        return sys::normalf!(
                             "action {} JSON missing required field {}",
                             Self::KIND,
                             #value_names

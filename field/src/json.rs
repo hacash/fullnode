@@ -193,7 +193,7 @@ pub fn json_expect_unquoted(s: &str) -> Ret<&str> {
 }
 
 pub fn json_expect_quoted_decoded(s: &str) -> Ret<String> {
-    serde_json::from_str(s.trim()).map_err(|e| sys::Error::decode(e.to_string()))
+    serde_json::from_str(s.trim()).map_err(|e| sys::Error::normal(e.to_string()))
 }
 
 pub fn json_split(s: &str, start_char: char, end_char: char) -> Ret<Vec<&str>> {
@@ -295,7 +295,7 @@ pub fn json_decode_binary(s: &str) -> Ret<Vec<u8>> {
         .strip_prefix("0x")
         .or_else(|| trimmed.strip_prefix("0X"))
     {
-        return hex::decode(hex).map_err(|e| sys::Error::decode(e.to_string()));
+        return hex::decode(hex).map_err(|e| sys::Error::normal(e.to_string()));
     }
     if let Some(b64) = trimmed
         .strip_prefix("b64:")
@@ -304,7 +304,7 @@ pub fn json_decode_binary(s: &str) -> Ret<Vec<u8>> {
         use base64::prelude::*;
         return BASE64_STANDARD
             .decode(b64)
-            .map_err(|e| sys::Error::decode(e.to_string()));
+            .map_err(|e| sys::Error::normal(e.to_string()));
     }
     Ok(raw.into_bytes())
 }

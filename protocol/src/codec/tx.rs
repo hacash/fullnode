@@ -141,7 +141,7 @@ pub fn create_default_prelude_tx(_reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(ba
     let mut r = Reader::new(buf);
     let ty: Uint1 = r.read()?;
     if ty.uint() != DefaultPreludeTx::TYPE {
-        return sys::decodef!("prelude tx type must be 0, got {}", ty.uint());
+        return sys::normalf!("prelude tx type must be 0, got {}", ty.uint());
     }
     let address: Address = r.read()?;
     let reward: Amount = r.read()?;
@@ -273,7 +273,7 @@ fn decode_action_list(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(Vec<ActionRef>
     let mut r = Reader::new(buf);
     let count: Uint2 = r.read()?;
     if count.uint() as usize > TX_ACTIONS_MAX {
-        return sys::decodef!("tx actions count {} exceeds limit", count.uint());
+        return sys::normalf!("tx actions count {} exceeds limit", count.uint());
     }
     let mut actions = Vec::with_capacity(count.uint() as usize);
     for _ in 0..count.uint() {
@@ -1050,7 +1050,7 @@ pub fn create_transaction_type1(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base
     let (ty, timestamp, addrlist, fee, actions, signs, gas_max, ano_mark, used) =
         decode_tx_fields(reg, buf)?;
     if ty.uint() != TransactionType1::TYPE {
-        return sys::decodef!("transaction type1 codec got type {}", ty.uint());
+        return sys::normalf!("transaction type1 codec got type {}", ty.uint());
     }
     Ok((
         Arc::new(TransactionType1 {
@@ -1071,7 +1071,7 @@ pub fn create_transaction_type2(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base
     let (ty, timestamp, addrlist, fee, actions, signs, gas_max, ano_mark, used) =
         decode_tx_fields(reg, buf)?;
     if ty.uint() != TransactionType2::TYPE {
-        return sys::decodef!("transaction type2 codec got type {}", ty.uint());
+        return sys::normalf!("transaction type2 codec got type {}", ty.uint());
     }
     Ok((
         Arc::new(TransactionType2 {
@@ -1092,7 +1092,7 @@ pub fn create_transaction_type3(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base
     let (ty, timestamp, addrlist, fee, actions, signs, gas_max, ano_mark, used) =
         decode_tx_fields(reg, buf)?;
     if ty.uint() != TransactionType3::TYPE {
-        return sys::decodef!("transaction type3 codec got type {}", ty.uint());
+        return sys::normalf!("transaction type3 codec got type {}", ty.uint());
     }
     Ok((
         Arc::new(TransactionType3 {

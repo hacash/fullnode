@@ -168,7 +168,7 @@ pub fn create_diamond_mint(
     let mut r = Reader::new(buf);
     let kind: Uint2 = r.read()?;
     if kind.uint() != DiamondMint::KIND {
-        return sys::decodef!("DiamondMint codec got kind {}", kind.uint());
+        return sys::normalf!("DiamondMint codec got kind {}", kind.uint());
     }
     let diamond: DiamondName = r.read()?;
     let number: DiamondNumber = r.read()?;
@@ -205,7 +205,7 @@ fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
 
     for (key, value) in json_split_object(json)? {
         if !seen.insert(key) {
-            return sys::decodef!("DiamondMint JSON field {} is duplicated", key);
+            return sys::normalf!("DiamondMint JSON field {} is duplicated", key);
         }
         match key {
             "kind" => declared_kind = json_decode_value(value)?,
@@ -217,7 +217,7 @@ fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
         }
     }
     if declared_kind.uint() != DiamondMint::KIND {
-        return sys::decodef!(
+        return sys::normalf!(
             "action kind mismatch: expected {} got {}",
             DiamondMint::KIND,
             declared_kind.uint()
@@ -231,7 +231,7 @@ fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
     let mut data_seen = std::collections::HashSet::new();
     for (key, value) in fields {
         if !data_seen.insert(key) {
-            return sys::decodef!("DiamondMint data field {} is duplicated", key);
+            return sys::normalf!("DiamondMint data field {} is duplicated", key);
         }
         match key {
             "diamond" => data.diamond.from_json(value)?,
@@ -277,7 +277,7 @@ pub fn decode_diamond_mint_json(
     json: &str,
 ) -> Ret<ActionRef> {
     if kind != DiamondMint::KIND {
-        return sys::decodef!("DiamondMint JSON codec got kind {}", kind);
+        return sys::normalf!("DiamondMint JSON codec got kind {}", kind);
     }
     Ok(Arc::new(parse_diamond_mint_json(json)?))
 }

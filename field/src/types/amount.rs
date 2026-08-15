@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use num_bigint::{BigInt, BigUint, Sign as BigSign};
 use num_traits::{Num, ToPrimitive, Zero};
-use sys::{Rerr, Ret, decodef, errf};
+use sys::{Rerr, Ret, normalf, errf};
 
 use crate::codec::{Decode, Encode, Reader};
 use crate::json::{FromJSON, JSONFormater, ToJSON, json_expect_quoted_decoded};
@@ -560,19 +560,19 @@ impl Decode for Amount {
         let unit = r.read_bytes(1)?[0];
         let dist_u = r.read_bytes(1)?[0];
         if dist_u == i8::MIN as u8 {
-            return decodef!("dist cannot be {}", i8::MIN);
+            return normalf!("dist cannot be {}", i8::MIN);
         }
         let dist = dist_u as i8;
         let len = dist.unsigned_abs() as usize;
         let byte = r.read_bytes(len)?.to_vec();
         if len > 1 && byte.iter().all(|b| *b == 0) {
-            return decodef!("multi-byte amount cannot be all zero");
+            return normalf!("multi-byte amount cannot be all zero");
         }
         if len > 1 && byte[0] == 0 {
-            return decodef!("amount leading zero byte is not canonical");
+            return normalf!("amount leading zero byte is not canonical");
         }
         if byte.iter().all(|b| *b == 0) && (unit != 0 || dist != 0 || !byte.is_empty()) {
-            return decodef!("amount semantic zero is not canonical");
+            return normalf!("amount semantic zero is not canonical");
         }
         Ok((Self { unit, dist, byte }, r.used()))
     }
@@ -647,30 +647,30 @@ impl From<Amount> for WireAmount {
 
 fn try_decode_non_canonical_semantic_zero(buf: &[u8]) -> Ret<(Amount, usize)> {
     if buf.len() < 2 {
-        return decodef!("buffer too short for WireAmount");
+        return normalf!("buffer too short for WireAmount");
     }
     let unit = buf[0];
     let dist_raw = buf[1];
     if dist_raw == i8::MIN as u8 {
-        return decodef!("dist cannot be {}", i8::MIN);
+        return normalf!("dist cannot be {}", i8::MIN);
     }
     let dist = dist_raw as i8;
     let len = dist.unsigned_abs() as usize;
     if buf.len() < 2 + len {
-        return decodef!("buffer too short for WireAmount");
+        return normalf!("buffer too short for WireAmount");
     }
     let byte = &buf[2..2 + len];
     if len > 1 && byte.iter().all(|b| *b == 0) {
-        return decodef!("multi-byte amount cannot be all zero");
+        return normalf!("multi-byte amount cannot be all zero");
     }
     if len > 1 && byte[0] == 0 {
-        return decodef!("amount leading zero byte is not canonical");
+        return normalf!("amount leading zero byte is not canonical");
     }
     if byte.iter().any(|b| *b != 0) {
-        return decodef!("wire amount fallback only accepts semantic zero");
+        return normalf!("wire amount fallback only accepts semantic zero");
     }
     if unit == 0 && dist == 0 && byte.is_empty() {
-        return decodef!("canonical zero must use Amount decode");
+        return normalf!("canonical zero must use Amount decode");
     }
     Ok((Amount::zero(), 2 + len))
 }

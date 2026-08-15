@@ -2,9 +2,6 @@ use field::*;
 use std::sync::Arc;
 use sys::{Error, Ret};
 
-pub type ExecError = Error;
-pub type TextError = String;
-
 macro_rules! enum_try_from_u8_by_variant {
     (
         $EnumName:ident,
@@ -38,7 +35,7 @@ macro_rules! bit4r {
 
 pub(crate) fn bufeat(buf: &[u8], n: usize) -> Ret<Vec<u8>> {
     if buf.len() < n {
-        return Err(Error::fault("buffer too short"));
+        return sys::errf!("buffer too short");
     }
     Ok(buf[..n].to_vec())
 }

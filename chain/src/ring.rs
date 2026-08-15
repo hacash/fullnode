@@ -137,7 +137,7 @@ mod tests {
     use super::*;
 
     fn slot(message: &'static str) -> Slot {
-        Err(sys::Error::fault(message))
+        sys::errf!("{}", message)
     }
 
     #[test]

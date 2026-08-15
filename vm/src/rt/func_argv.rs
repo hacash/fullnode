@@ -155,7 +155,7 @@ impl Decode for FuncArgvTypes {
         };
         let z = out.def_size();
         if buf.len() < used + z {
-            return Err(Error::decode("buffer too short for FuncArgvTypes"));
+            return sys::normalf!("buffer too short for FuncArgvTypes");
         }
         out.define.extend_from_slice(&buf[used..used + z]);
         Ok((out, used + z))

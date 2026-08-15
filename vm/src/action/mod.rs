@@ -61,6 +61,6 @@ fn create_contract_action(
         ContractDeploy::KIND => create_contract_deploy(_reg, kind, buf),
         ContractUpdate::KIND => create_contract_update(_reg, kind, buf),
         ContractMainCall::KIND => create_contract_main_call(_reg, kind, buf),
-        _ => sys::decodef!("create_contract_action: unknown kind {}", kind),
+        _ => sys::normalf!("create_contract_action: unknown kind {}", kind),
     }
 }

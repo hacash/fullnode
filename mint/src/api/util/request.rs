@@ -5,13 +5,14 @@ use sys::{ToBase64, ToHex};
 pub(crate) const UNIT_238: u128 = 100_0000_0000;
 
 /// Optimistic session acquisition with the unavailable case expressed
-/// distinctly: a fatal/stopping engine fails the request, a busy engine keeps
-/// the plain "state changed" response.
+/// distinctly: a fatal/stopping engine fails the request through the unified
+/// error mapping, a busy engine keeps the plain "state changed" response
+/// (§5/§8.2 of the error-system design).
 pub(crate) fn optimistic_snapshot(ctx: &ApiExecCtx) -> Result<OptimisticState, ApiResponse> {
     match ctx.engine.optimistic_canonical() {
         Ok(Some(snapshot)) => Ok(snapshot),
         Ok(None) => Err(api_error("state changed")),
-        Err(e) => Err(api_error(&format!("query unavailable: {}", e))),
+        Err(e) => Err(api_state_read_error(&e)),
     }
 }
 
@@ -103,16 +104,9 @@ pub(crate) fn api_error(errmsg: &str) -> ApiResponse {
     ApiResponse::json(format!("{{\"ret\":1,\"err\":{}}}", json_string(errmsg)))
 }
 
-/// Convert a state read error into an HTTP response. Canonical state backend
-/// failures (`Abort`) are 503 Service Unavailable; the plain JSON error body
-/// is kept for any other error.
-pub(crate) fn api_state_read_error(e: &sys::Error) -> ApiResponse {
-    if e.is_abort() {
-        ApiResponse::err(503, &format!("state read failed: {}", e))
-    } else {
-        api_error(&format!("state read failed: {}", e))
-    }
-}
+/// §8.2 of the error-system design: the single API mapping entry lives in
+/// `base` and is shared by every query handler and the VM sandbox API.
+pub(crate) use base::api_state_read_error;
 
 pub(crate) fn api_ok(fields: Vec<(&str, String)>) -> ApiResponse {
     let fields = fields
@@ -202,7 +196,7 @@ pub(crate) fn body_data_may_hex(req: &ApiRequest) -> sys::Ret<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_id_range, json_string};
+    use super::{api_state_read_error, get_id_range, json_string};
 
     #[test]
     fn json_string_escapes_control_characters() {
@@ -220,5 +214,28 @@ mod tests {
         assert!(get_id_range(10, 999_999_999, 3, i64::MAX, true).is_empty());
         assert!(get_id_range(10, 0, 3, i64::MAX, true).is_empty());
         assert!(get_id_range(10, 1, 0, i64::MAX, true).is_empty());
+    }
+
+    /// Test 11 of §10.2: canonical state read failures map to HTTP 503
+    /// through the single API mapping entry, while business decode/revert
+    /// errors stay ordinary business errors (§8.2).
+    #[test]
+    fn api_mapping_503_only_for_canonical_state_failures() {
+        let read =
+            sys::Error::abort("backend down").with_code(base::STATE_READ_FAILED_CODE);
+        assert_eq!(api_state_read_error(&read).status, 503);
+        let decode =
+            sys::Error::abort("bad bytes").with_code(base::STATE_DECODE_FAILED_CODE);
+        assert_eq!(api_state_read_error(&decode).status, 503);
+        let unavailable =
+            sys::Error::abort("engine stopping").with_code("engine_unavailable");
+        assert_eq!(api_state_read_error(&unavailable).status, 503);
+
+        let revert = sys::Error::revert("user revert");
+        assert_ne!(api_state_read_error(&revert).status, 503);
+        let fault = sys::Error::fault("business error");
+        assert_ne!(api_state_read_error(&fault).status, 503);
+        let decode_err = sys::Error::normal("bad input");
+        assert_ne!(api_state_read_error(&decode_err).status, 503);
     }
 }

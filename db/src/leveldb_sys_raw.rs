@@ -349,7 +349,7 @@ impl LevelDB {
         }
         if error != ptr::null_mut() {
             let err = new_string_from_char_ptr(error);
-            return Err(sys::Error::fault(err));
+            return sys::errf!("{}", err);
         }
         Ok(())
     }

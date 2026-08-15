@@ -2,7 +2,7 @@ use std::fmt;
 use std::ops::Deref;
 use std::sync::OnceLock;
 
-use sys::{Ret, decodef, errf};
+use sys::{Ret, normalf, errf};
 
 use crate::codec::{Decode, Encode};
 
@@ -89,13 +89,13 @@ macro_rules! fixed_uint {
         impl Decode for $name {
             fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
                 if buf.len() < $n {
-                    return decodef!("buffer too short for {}", stringify!($name));
+                    return normalf!("buffer too short for {}", stringify!($name));
                 }
                 let mut full = [0u8; core::mem::size_of::<$prim>()];
                 full[(core::mem::size_of::<$prim>() - $n)..].copy_from_slice(&buf[..$n]);
                 let value = <$prim>::from_be_bytes(full);
                 if value > Self::MAX {
-                    return decodef!(
+                    return normalf!(
                         "{} parse value {} exceeds max {}",
                         stringify!($name),
                         value,

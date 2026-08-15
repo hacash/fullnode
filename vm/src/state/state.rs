@@ -592,7 +592,7 @@ mod tests {
     struct FailingLayer;
     impl base::StateRead for FailingLayer {
         fn get(&self, _key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
-            Err(sys::Error::fault("injected backend read failure"))
+            sys::errf!("injected backend read failure")
         }
     }
     impl StateLayer for FailingLayer {

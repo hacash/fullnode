@@ -85,7 +85,8 @@ impl StoreHistory {
 
 impl BlockHistory for StoreHistory {
     /// The durable canonical root height. `Store::status` read failures are
-    /// canonical acquisitions (§6.8): classified as `Abort + storage_read_failed`
+    /// canonical acquisitions (§6.8): classified as
+    /// `Abort + STATE_READ_FAILED_CODE`
     /// so consensus callers treat them as fatal, never as a zero root.
     fn stable_height(&self) -> Ret<u64> {
         match self.store.status() {

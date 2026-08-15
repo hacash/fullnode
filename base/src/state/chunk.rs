@@ -807,7 +807,7 @@ mod tests {
         struct FailingDisk;
         impl DiskDB for FailingDisk {
             fn read(&self, _key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
-                Err(sys::Error::fault("injected disk read failure"))
+                errf!("injected disk read failure")
             }
             fn save(&self, _key: &[u8], _val: &[u8]) {}
             fn remove(&self, _key: &[u8]) {}

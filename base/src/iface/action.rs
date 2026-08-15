@@ -287,7 +287,7 @@ where
 {
     let action = T::decode_json(json)?;
     if action.kind() != kind {
-        return sys::decodef!(
+        return sys::normalf!(
             "action kind mismatch: expected {} got {}",
             kind,
             action.kind()

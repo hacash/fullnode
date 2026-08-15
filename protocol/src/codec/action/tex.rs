@@ -552,13 +552,13 @@ fn decode_tex_cell_json(json: &str) -> Ret<TexCell> {
     let mut fields = HashMap::new();
     for (key, value) in json_split_object(json)? {
         if fields.insert(key, value).is_some() {
-            return sys::decodef!("TEX cell JSON field {} is duplicated", key);
+            return sys::normalf!("TEX cell JSON field {} is duplicated", key);
         }
     }
     let cid: Uint1 = fields
         .get("cellid")
         .copied()
-        .ok_or_else(|| sys::Error::decode("TEX cell JSON missing cellid"))
+        .ok_or_else(|| sys::Error::normal("TEX cell JSON missing cellid"))
         .and_then(json_decode_value)?;
     let cid = cid.uint();
 
@@ -566,7 +566,7 @@ fn decode_tex_cell_json(json: &str) -> Ret<TexCell> {
         ($id:expr, $name:literal, $variant:ident, $field:ident) => {
             if cid == $id {
                 let value = fields.get($name).copied().ok_or_else(|| {
-                    sys::Error::decode(format!("TEX cell {} JSON missing {}", $id, $name))
+                    sys::Error::normal(format!("TEX cell {} JSON missing {}", $id, $name))
                 })?;
                 return Ok(TexCell::$variant {
                     $field: json_decode_value(value)?,
@@ -598,10 +598,7 @@ fn decode_tex_cell_json(json: &str) -> Ret<TexCell> {
     decode_cell!(23, "height", CondHeightAtMost, height);
     decode_cell!(24, "height", CondHeightAtLeast, height);
     decode_cell!(25, "chainid", CondChainIdEq, chainid);
-    Err(sys::Error::decode(format!(
-        "cannot find tex cell id '{}'",
-        cid
-    )))
+    sys::normalf!("cannot find tex cell id '{}'", cid)
 }
 
 impl field::ToJSON for TexCellAct {
@@ -702,7 +699,7 @@ pub fn create_tex_cell_act(
     let mut r = Reader::new(buf);
     let kind_field: Uint2 = r.read()?;
     if kind_field.uint() != kind {
-        return sys::decodef!(
+        return sys::normalf!(
             "action kind mismatch: expected {} got {}",
             kind,
             kind_field.uint()
@@ -734,12 +731,12 @@ pub fn decode_tex_cell_act_json(
     json: &str,
 ) -> Ret<ActionRef> {
     if kind != TexCellAct::KIND {
-        return sys::decodef!("TexCellAct JSON codec got kind {}", kind);
+        return sys::normalf!("TexCellAct JSON codec got kind {}", kind);
     }
     let mut fields = HashMap::new();
     for (key, value) in json_split_object(json)? {
         if fields.insert(key, value).is_some() {
-            return sys::decodef!("TexCellAct JSON field {} is duplicated", key);
+            return sys::normalf!("TexCellAct JSON field {} is duplicated", key);
         }
     }
     let kind_field: Uint2 = fields
@@ -749,7 +746,7 @@ pub fn decode_tex_cell_act_json(
         .transpose()?
         .unwrap_or_else(|| Uint2::from(TexCellAct::KIND));
     if kind_field.uint() != TexCellAct::KIND {
-        return sys::decodef!(
+        return sys::normalf!(
             "action kind mismatch: expected {} got {}",
             TexCellAct::KIND,
             kind_field.uint()
@@ -758,12 +755,12 @@ pub fn decode_tex_cell_act_json(
     let addr: Address = fields
         .get("addr")
         .copied()
-        .ok_or_else(|| sys::Error::decode("TexCellAct JSON missing addr"))
+        .ok_or_else(|| sys::Error::normal("TexCellAct JSON missing addr"))
         .and_then(json_decode_value)?;
     let cells_json = fields
         .get("cells")
         .copied()
-        .ok_or_else(|| sys::Error::decode("TexCellAct JSON missing cells"))?;
+        .ok_or_else(|| sys::Error::normal("TexCellAct JSON missing cells"))?;
     let cells = field::json_split_array(cells_json)?
         .into_iter()
         .map(decode_tex_cell_json)
@@ -772,7 +769,7 @@ pub fn decode_tex_cell_act_json(
     let sign: Sign = fields
         .get("sign")
         .copied()
-        .ok_or_else(|| sys::Error::decode("TexCellAct JSON missing sign"))
+        .ok_or_else(|| sys::Error::normal("TexCellAct JSON missing sign"))
         .and_then(json_decode_value)?;
     Ok(Arc::new(TexCellAct {
         kind: kind_field,

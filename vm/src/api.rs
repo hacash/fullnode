@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use base::{
-    ApiExecCtx, ApiRequest, ApiResponse, ApiRoute, ApiService, BlockInfo, Env, TransactionCreator,
-    TxCreateRequest, TxInfo,
+    api_state_read_error, ApiExecCtx, ApiRequest, ApiResponse, ApiRoute, ApiService, BlockInfo, Env,
+    TransactionCreator, TxCreateRequest, TxInfo,
 };
 use field::{AddrOrList, Address, Amount, Hash};
 use sys::Ret;
@@ -153,10 +153,14 @@ fn contract_sandbox_call(
         Err(reason) => return api_error(reason),
     };
     let services = ctx.engine.services().clone();
-    // §13.2 VM sandbox uses an optimistic snapshot, no StateGate held.
+    // §13.2 VM sandbox uses an optimistic snapshot, no StateGate held. Busy
+    // (`Ok(None)`) reports "state changed"; a fatal/stopping engine (`Err`)
+    // surfaces the unavailable error (§5 of the error-system design).
     let Some(snapshot) = (match ctx.engine.optimistic_canonical() {
         Ok(snapshot) => snapshot,
-        Err(e) => return api_error(&format!("query unavailable: {}", e)),
+        // EngineUnavailable (fatal/stopping) maps to HTTP 503 through the
+        // single API mapping entry (§8.2 of the error-system design).
+        Err(e) => return api_state_read_error(&e),
     }) else {
         return api_error("state changed during sandbox call");
     };
@@ -273,10 +277,14 @@ fn debug_contract_storage(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
         Ok(p) => p,
         Err(reason) => return api_error(reason),
     };
-    // §13.2 VM sandbox uses an optimistic snapshot, no StateGate held.
+    // §13.2 VM sandbox uses an optimistic snapshot, no StateGate held. Busy
+    // (`Ok(None)`) reports "state changed"; a fatal/stopping engine (`Err`)
+    // surfaces the unavailable error (§5 of the error-system design).
     let Some(snapshot) = (match ctx.engine.optimistic_canonical() {
         Ok(snapshot) => snapshot,
-        Err(e) => return api_error(&format!("query unavailable: {}", e)),
+        // EngineUnavailable (fatal/stopping) maps to HTTP 503 through the
+        // single API mapping entry (§8.2 of the error-system design).
+        Err(e) => return api_state_read_error(&e),
     }) else {
         return api_error("state changed during contract storage query");
     };

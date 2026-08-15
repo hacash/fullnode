@@ -81,7 +81,7 @@ impl BlockV1 {
         let mut r = Reader::new(buf);
         let version: Uint1 = r.read()?;
         if version.uint() != Self::VERSION {
-            return sys::decodef!("block version {} not supported", version.uint());
+            return sys::normalf!("block version {} not supported", version.uint());
         }
         let height: BlockHeight = r.read()?;
         let timestamp: Timestamp = r.read()?;
@@ -92,7 +92,7 @@ impl BlockV1 {
         let difficulty: Uint4 = r.read()?;
         let witness_stage: Fixed2 = r.read()?;
         if r.used() != buf.len() {
-            return sys::decodef!(
+            return sys::normalf!(
                 "block intro length mismatch: consumed {} but payload length is {}",
                 r.used(),
                 buf.len()
@@ -274,7 +274,7 @@ pub fn create_std_block(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::BlockR
     let mut r = Reader::new(buf);
     let version: Uint1 = r.read()?;
     if version.uint() != BlockV1::VERSION {
-        return sys::decodef!("block version {} not supported", version.uint());
+        return sys::normalf!("block version {} not supported", version.uint());
     }
     let height: BlockHeight = r.read()?;
     let timestamp: Timestamp = r.read()?;

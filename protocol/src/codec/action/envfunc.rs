@@ -338,7 +338,7 @@ pub fn create_envfunc_action(
         ViewDiaInscGet::KIND => decode_envfunc_action::<ViewDiaInscGet>(buf),
         ViewDiaNameList::KIND => decode_envfunc_action::<ViewDiaNameList>(buf),
         ViewDiaOwnerAddrs::KIND => decode_envfunc_action::<ViewDiaOwnerAddrs>(buf),
-        _ => sys::decodef!("envfunc action kind {} not registered", kind),
+        _ => sys::normalf!("envfunc action kind {} not registered", kind),
     }
 }
 

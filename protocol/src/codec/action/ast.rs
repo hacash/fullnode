@@ -154,9 +154,9 @@ fn decode_ast_child(reg: &dyn CodecRegistry, json: &str) -> Ret<ActionRef> {
         .ok_or_else(|| sys::Error::fault("AST child action missing kind"))?;
     let kind: u16 = json_expect_unquoted(kind)?
         .parse()
-        .map_err(|_| sys::Error::decode("AST child action kind invalid"))?;
+        .map_err(|_| sys::Error::normal("AST child action kind invalid"))?;
     reg.decode_action_json(kind, json)?.ok_or_else(|| {
-        sys::Error::decode(format!("AST child action kind {} has no JSON codec", kind))
+        sys::Error::normal(format!("AST child action kind {} has no JSON codec", kind))
     })
 }
 
@@ -168,7 +168,7 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
     let mut seen = std::collections::HashSet::new();
     for (key, value) in json_split_object(json)? {
         if !seen.insert(key) {
-            return sys::decodef!("AstSelect JSON field {} is duplicated", key);
+            return sys::normalf!("AstSelect JSON field {} is duplicated", key);
         }
         match key {
             "kind" => kind = json_decode_value(value)?,
@@ -179,18 +179,18 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
         }
     }
     if kind.uint() != AstSelect::KIND {
-        return sys::decodef!(
+        return sys::normalf!(
             "action kind mismatch: expected {} got {}",
             AstSelect::KIND,
             kind.uint()
         );
     }
     let exe_min: Uint1 =
-        exe_min.ok_or_else(|| sys::Error::decode("AstSelect JSON missing exe_min"))?;
+        exe_min.ok_or_else(|| sys::Error::normal("AstSelect JSON missing exe_min"))?;
     let exe_max: Uint1 =
-        exe_max.ok_or_else(|| sys::Error::decode("AstSelect JSON missing exe_max"))?;
+        exe_max.ok_or_else(|| sys::Error::normal("AstSelect JSON missing exe_max"))?;
     let actions_json =
-        actions.ok_or_else(|| sys::Error::decode("AstSelect JSON missing actions"))?;
+        actions.ok_or_else(|| sys::Error::normal("AstSelect JSON missing actions"))?;
     let mut children = Vec::new();
     for child in json_split_array(actions_json)? {
         children.push(decode_ast_child(reg, child)?);
@@ -205,14 +205,14 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
 
 pub fn decode_ast_select_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret<ActionRef> {
     if kind != AstSelect::KIND {
-        return sys::decodef!("AstSelect JSON codec got kind {}", kind);
+        return sys::normalf!("AstSelect JSON codec got kind {}", kind);
     }
     Ok(Arc::new(decode_ast_select_value(reg, json)?))
 }
 
 pub fn decode_ast_if_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret<ActionRef> {
     if kind != AstIf::KIND {
-        return sys::decodef!("AstIf JSON codec got kind {}", kind);
+        return sys::normalf!("AstIf JSON codec got kind {}", kind);
     }
     let mut declared = Uint2::from(AstIf::KIND);
     let mut cond = None;
@@ -221,7 +221,7 @@ pub fn decode_ast_if_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret
     let mut seen = std::collections::HashSet::new();
     for (key, value) in json_split_object(json)? {
         if !seen.insert(key) {
-            return sys::decodef!("AstIf JSON field {} is duplicated", key);
+            return sys::normalf!("AstIf JSON field {} is duplicated", key);
         }
         match key {
             "kind" => declared = json_decode_value(value)?,
@@ -232,7 +232,7 @@ pub fn decode_ast_if_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret
         }
     }
     if declared.uint() != AstIf::KIND {
-        return sys::decodef!(
+        return sys::normalf!(
             "action kind mismatch: expected {} got {}",
             AstIf::KIND,
             declared.uint()
@@ -242,15 +242,15 @@ pub fn decode_ast_if_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret
         kind: declared,
         cond: decode_ast_select_value(
             reg,
-            cond.ok_or_else(|| sys::Error::decode("AstIf JSON missing cond"))?,
+            cond.ok_or_else(|| sys::Error::normal("AstIf JSON missing cond"))?,
         )?,
         br_if: decode_ast_select_value(
             reg,
-            br_if.ok_or_else(|| sys::Error::decode("AstIf JSON missing br_if"))?,
+            br_if.ok_or_else(|| sys::Error::normal("AstIf JSON missing br_if"))?,
         )?,
         br_else: decode_ast_select_value(
             reg,
-            br_else.ok_or_else(|| sys::Error::decode("AstIf JSON missing br_else"))?,
+            br_else.ok_or_else(|| sys::Error::normal("AstIf JSON missing br_else"))?,
         )?,
     }))
 }
@@ -495,7 +495,7 @@ pub fn create_ast_select(
     let mut r = Reader::new(buf);
     let kind: Uint2 = r.read()?;
     if kind.uint() != AstSelect::KIND {
-        return sys::decodef!("AstSelect codec got kind {}", kind.uint());
+        return sys::normalf!("AstSelect codec got kind {}", kind.uint());
     }
     let exe_min: Uint1 = r.read()?;
     let exe_max: Uint1 = r.read()?;
@@ -515,7 +515,7 @@ pub fn create_ast_select(
 fn decode_ast_select_inline(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(AstSelect, usize)> {
     let (act, used) = create_ast_select(reg, AstSelect::KIND, buf)?;
     let Some(ast) = act.as_any().downcast_ref::<AstSelect>() else {
-        return sys::decodef!("AstSelect decode type mismatch");
+        return sys::normalf!("AstSelect decode type mismatch");
     };
     Ok((ast.clone(), used))
 }
@@ -524,7 +524,7 @@ pub fn create_ast_if(reg: &dyn BinaryCodecs, _kind: u16, buf: &[u8]) -> Ret<(Act
     let mut r = Reader::new(buf);
     let kind: Uint2 = r.read()?;
     if kind.uint() != AstIf::KIND {
-        return sys::decodef!("AstIf codec got kind {}", kind.uint());
+        return sys::normalf!("AstIf codec got kind {}", kind.uint());
     }
     let (cond, used) = decode_ast_select_inline(reg, &buf[r.used()..])?;
     r.read_bytes(used)?;

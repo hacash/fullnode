@@ -20,6 +20,8 @@ mod pipeline;
 mod ring;
 mod side_list;
 mod sync;
+#[cfg(test)]
+mod test_engine;
 mod tree;
 mod verify;
 mod view;

@@ -318,7 +318,7 @@ impl P2PNode {
                                 report.held_blocks.len()
                             );
                         }
-                        node_for_apply.drain_deferred_blocks();
+                        let _ = node_for_apply.drain_deferred_blocks();
                     }
                     Err(e) => {
                         let current = sync_session.lock().ok().is_some_and(|g| {

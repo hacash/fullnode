@@ -1,6 +1,6 @@
 use crate::{
-    STATE_DECODE_FAILED_CODE, StateLayer, StateRead, numeric_state_empty_key, numeric_state_key,
-    numeric_state_prefix,
+    StateLayer, StateRead, numeric_state_empty_key, numeric_state_key, numeric_state_prefix,
+    read_typed,
 };
 use field::{
     Address, AssetSmelt, Balance, BlockHeight, Decode, DiamondName, DiamondNumber,
@@ -20,18 +20,12 @@ const KEY_DIAMOND_SMELT: u8 = numeric_state_prefix(0x0f);
 const KEY_DIAMOND_OWNED: u8 = numeric_state_prefix(0x10);
 const KEY_ASSET: u8 = numeric_state_prefix(0x11);
 
-/// Decode a typed value out of a `StateRead` layer. Backend read failures are
-/// propagated; bytes that were successfully read but fail protocol decode are
-/// reported as `Abort + state_decode_failed`, never as a missing key.
+/// Decode a typed value out of a `StateRead` layer via the shared
+/// `read_typed` helper (§6.2 of the error-system normalization design):
+/// backend read failures propagate, undecodable bytes surface as
+/// `Abort + STATE_DECODE_FAILED_CODE`, a missing key stays `Ok(None)`.
 fn get_typed<T: Decode>(sta: &dyn StateRead, key: &[u8]) -> Ret<Option<T>> {
-    match sta.get(key)? {
-        Some(bytes) => match T::decode(bytes.as_ref()) {
-            Ok((value, _)) => Ok(Some(value)),
-            Err(e) => Err(sys::Error::abort(format!("state decode failed: {}", e))
-                .with_code(STATE_DECODE_FAILED_CODE)),
-        },
-        None => Ok(None),
-    }
+    read_typed(sta, key)
 }
 
 pub struct CoreState<'a>(pub &'a mut dyn StateLayer);
@@ -231,7 +225,7 @@ impl<'a> CoreState<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{STATE_DECODE_FAILED_CODE, StateChunkRef, StateLayer};
+    use crate::{StateChunkRef, StateLayer};
 
     struct NoDisk;
     impl crate::DiskDB for NoDisk {
@@ -305,7 +299,7 @@ mod tests {
         let read = CoreStateRead::wrap(&tx);
         let err = read.balance(&addr).unwrap_err();
         assert!(err.is_abort(), "state decode failure must be fatal");
-        assert_eq!(err.code(), Some(STATE_DECODE_FAILED_CODE));
+        assert_eq!(err.code(), Some(crate::STATE_DECODE_FAILED_CODE));
     }
 
     /// A missing key reads as `Ok(None)` and only that.

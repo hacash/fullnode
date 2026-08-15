@@ -7,3 +7,6 @@ edition.workspace = true
 sys = { workspace = true }
 field = { workspace = true }
 base = { workspace = true }
+
+[dev-dependencies]
+db = { workspace = true }

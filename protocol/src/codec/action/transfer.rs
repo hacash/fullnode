@@ -835,7 +835,7 @@ pub fn create_hac_transfer(
         HacToTrs::KIND => decode_regular_action::<HacToTrs>(buf),
         HacFromTrs::KIND => decode_regular_action::<HacFromTrs>(buf),
         HacFromToTrs::KIND => decode_regular_action::<HacFromToTrs>(buf),
-        _ => sys::decodef!("hac action kind {} not registered", kind),
+        _ => sys::normalf!("hac action kind {} not registered", kind),
     }
 }
 
@@ -849,7 +849,7 @@ pub fn create_sat_transfer(
         SatToTrs::KIND => decode_regular_action::<SatToTrs>(buf),
         SatFromTrs::KIND => decode_regular_action::<SatFromTrs>(buf),
         SatFromToTrs::KIND => decode_regular_action::<SatFromToTrs>(buf),
-        _ => sys::decodef!("sat action kind {} not registered", kind),
+        _ => sys::normalf!("sat action kind {} not registered", kind),
     }
 }
 
@@ -863,7 +863,7 @@ pub fn create_asset_transfer(
         AssetToTrs::KIND => decode_regular_action::<AssetToTrs>(buf),
         AssetFromTrs::KIND => decode_regular_action::<AssetFromTrs>(buf),
         AssetFromToTrs::KIND => decode_regular_action::<AssetFromToTrs>(buf),
-        _ => sys::decodef!("asset action kind {} not registered", kind),
+        _ => sys::normalf!("asset action kind {} not registered", kind),
     }
 }
 
@@ -894,7 +894,7 @@ pub fn create_diamond_transfer(
             action.diamonds.check()?;
             Ok((Arc::new(action), used))
         }
-        _ => sys::decodef!("diamond action kind {} not registered", kind),
+        _ => sys::normalf!("diamond action kind {} not registered", kind),
     }
 }
 
@@ -921,7 +921,7 @@ pub fn decode_diamond_transfer_json(
             DiamondName::check_bytes(action.diamond.as_ref())?;
             Ok(Arc::new(action))
         }
-        _ => sys::decodef!("diamond JSON action kind {} not registered", kind),
+        _ => sys::normalf!("diamond JSON action kind {} not registered", kind),
     }
 }
 

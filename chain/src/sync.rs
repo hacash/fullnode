@@ -15,13 +15,13 @@ use base::{
 };
 use sys::{Rerr, Ret};
 
-use crate::engine::{ApplyAccepted, ApplyResult, ChainEngine};
+use crate::engine::{ApplyAccepted, ApplyResult, ChainEngine, Phase, PostCommitPolicy};
 use crate::ring::Ring;
 
-const SYNC_CANCELLED: &str = "sync_cancelled";
+const SYNC_CANCELLED: &'static str = "sync_cancelled";
 /// Admission deferred the block; the stream stopped intentionally and the
 /// held-block report is the result, never an error or a penalty.
-const SYNC_DEFERRED: &str = "sync_deferred";
+const SYNC_DEFERRED: &'static str = "sync_deferred";
 
 fn cancelled_error() -> sys::Error {
     sys::Error::fault("block sync cancelled").with_code(SYNC_CANCELLED)
@@ -147,15 +147,24 @@ pub fn run(
 
     match run_pipeline(eng, source, mode, opts, cancel, None) {
         Ok(report) => Ok(report),
-        // A persistence failure after blocks were published to the tree is
-        // engine-fatal: no recovery path exists, boot replay rebuilds from
-        // the real disk state on the next start (§2.3).
+        // A failure after blocks were published to the tree, or a core state
+        // read failure during execution, is engine-fatal: no recovery path
+        // exists, boot replay rebuilds from the real disk state on the next
+        // start (§4.1). Persistence-stage errors were already recorded by the
+        // boundary inside `persist_one`/`notify_stable`; the engine being
+        // fatal tells this branch not to record them a second time.
         Err(e) if e.is_abort() => {
-            eprintln!("[Block Sync Fatal] operation=sync error={}", e);
-            eng.mark_fatal();
+            if eng.is_fatal() {
+                Err(e)
+            } else {
+                Err(eng
+                    .handle_error(Phase::PreAttach, "sync", None, None, Err::<(), _>(e))
+                    .unwrap_err())
+            }
+        }
+        Err(e) if e.code() == Some(SYNC_CANCELLED) || eng.waiter.is_shutdown() => {
             Err(e)
         }
-        Err(e) if e.code() == Some(SYNC_CANCELLED) || eng.waiter.is_shutdown() => Err(e),
         // Source gaps, invalid blocks and admission stops return to the
         // caller. The failing block is never attached, and blocks accepted
         // earlier in the run stay valid: the tree only ever holds blocks
@@ -463,7 +472,13 @@ fn persist_loop(ctx: &SyncCtx, persist_rx: Receiver<ApplyAccepted>) -> Ret<(u64,
         let mut rolled = 0;
         let mut events = 0;
         while let Ok(job) = persist_rx.recv() {
-            let outcome = ctx.eng.persist_one(job, false)?;
+            // The engine may have been set fatal by a post-commit callback
+            // (listener path); stop taking new jobs (§4.2/§1).
+            if ctx.eng.is_fatal() {
+                return Err(sys::Error::abort("block sync stopped after engine fatal")
+                    .with_code("engine_unavailable"));
+            }
+            let outcome = ctx.eng.persist_one(job, false, PostCommitPolicy::StopPipeline)?;
             rolled += outcome.rolled;
             events += outcome.events;
         }
@@ -497,6 +512,13 @@ fn apply_loop(
 ) -> Rerr {
     let mut seq = 0u64;
     loop {
+        // The engine may have been set fatal by a post-commit callback (the
+        // listener path) while a strict-mode persist ran inline; stop taking
+        // more work (§4.2/§1).
+        if ctx.eng.is_fatal() {
+            return Err(sys::Error::abort("block sync stopped after engine fatal")
+                .with_code("engine_unavailable"));
+        }
         let Some(slot) = ctx.ring.take(seq) else {
             break;
         };
@@ -530,7 +552,7 @@ fn apply_loop(
         } else {
             let outcome = ctx
                 .eng
-                .persist_one(job, false)
+                .persist_one(job, false, PostCommitPolicy::StopPipeline)
                 .map_err(|e| fail_with(report, height, e))?;
             report.rolled += outcome.rolled;
             report.events += outcome.events;
@@ -611,6 +633,16 @@ fn finalize_run(
         eprintln!("[Block Sync Warning] cache rebuild failed: {}", e);
     }
     report_progress(opts, &report);
+    // A post-commit listener `Abort` may have set the engine fatal after the
+    // last job, where the loop-top checks never fire again: surface the stop
+    // signal to the caller instead of reporting a healthy run (§4.2/§4.3).
+    // Boot replay never notifies listeners, and consensus callbacks already
+    // return `Err` for `StopPipeline`, so this only fires on the listener
+    // path of a live sync run.
+    if eng.is_fatal() {
+        return Err(sys::Error::abort("block sync ended with engine fatal")
+            .with_code("engine_unavailable"));
+    }
     match pipeline_result {
         Ok(()) => Ok(report),
         // An admission deferral is a successful stop: the source is paused
@@ -696,7 +728,7 @@ fn run_pipeline(
             Ok(Ok(summary)) => Ok(summary),
             Ok(Err(e)) => Err(e),
             Err(_) => Err(sys::Error::abort("sync persister panicked")
-                .with_code(crate::engine::CoreFault::PersistFailed.code())),
+                .with_code("persist_failed")),
         };
         // The run outcome: the apply error, or the first error among the
         // feeder and decoder joins. Every handle is joined explicitly so a
@@ -704,12 +736,12 @@ fn run_pipeline(
         // the scope and skipping finalize_run.
         let feeder_result = match feeder.join() {
             Ok(result) => result,
-            Err(_) => Err(sys::Error::fault("sync feeder panicked")),
+            Err(_) => sys::errf!("sync feeder panicked"),
         };
         let mut decoder_result: Rerr = Ok(());
         for decoder in decoders {
             if decoder.join().is_err() {
-                decoder_result = Err(sys::Error::fault("sync decoder panicked"));
+                decoder_result = sys::errf!("sync decoder panicked");
             }
         }
         (

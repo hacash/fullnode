@@ -61,9 +61,16 @@ impl ScanerView for EngineScanerView {
     ) -> Ret<Option<Vec<Option<Balance>>>> {
         const MAX_SNAPSHOT_ATTEMPTS: usize = 3;
         for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
-            let Some(session) = self.engine.state_at_session(block_hash).ok().flatten() else {
-                std::thread::yield_now();
-                continue;
+            // `Ok(None)` (branch tip not in the tree) retries; a query failure
+            // (`Err`) propagates instead of being flattened away (§5 of the
+            // error-system design).
+            let session = match self.engine.state_at_session(block_hash) {
+                Ok(Some(session)) => session,
+                Ok(None) => {
+                    std::thread::yield_now();
+                    continue;
+                }
+                Err(e) => return Err(e),
             };
             let state = CoreStateRead::wrap(session.view());
             let mut balances = Vec::with_capacity(addresses.len());

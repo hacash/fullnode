@@ -1,6 +1,6 @@
 use std::fmt;
 
-use sys::{Ret, decodef, errf};
+use sys::{Ret, normalf, errf};
 
 use crate::codec::{Decode, Encode};
 
@@ -58,12 +58,12 @@ impl Encode for Fold64 {
 impl Decode for Fold64 {
     fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
         if buf.is_empty() {
-            return decodef!("buffer too short for Fold64");
+            return normalf!("buffer too short for Fold64");
         }
         let bt = buf[0];
         let n = (bt >> 5) as usize;
         if buf.len() < 1 + n {
-            return decodef!("Fold64 parse length {} < {}", buf.len(), 1 + n);
+            return normalf!("Fold64 parse length {} < {}", buf.len(), 1 + n);
         }
         let mut value = (bt & 0b0001_1111) as u64;
         for i in 0..n {
@@ -71,7 +71,7 @@ impl Decode for Fold64 {
         }
         let fold = Self::from(value)?;
         if fold.size() != 1 + n {
-            return decodef!(
+            return normalf!(
                 "Fold64 non-canonical size {} expected {}",
                 1 + n,
                 fold.size()

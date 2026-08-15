@@ -1,4 +1,4 @@
-use crate::{Ret, decodef};
+use crate::{Ret, normalf};
 
 pub fn start_with_char(s: &str, c: char) -> bool {
     !s.is_empty() && s.as_bytes()[0] == c as u8
@@ -18,7 +18,7 @@ pub fn bytes_to_readable_string(bts: &[u8]) -> String {
 
 pub fn bytes_from_readable_string(stuff: &[u8], len: usize) -> Ret<Vec<u8>> {
     if stuff.len() != len {
-        return decodef!(
+        return normalf!(
             "readable string length mismatch: expected {} but got {}",
             len,
             stuff.len()

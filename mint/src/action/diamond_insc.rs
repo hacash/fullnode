@@ -764,7 +764,7 @@ pub fn create_dia_insc_action(
         DiaInscEdit::KIND => create_dia_insc_edit(reg, kind, buf),
         DiaInscMove::KIND => create_dia_insc_move(reg, kind, buf),
         DiaInscDrop::KIND => create_dia_insc_drop(reg, kind, buf),
-        _ => sys::decodef!("inscription action kind {} not registered", kind),
+        _ => sys::normalf!("inscription action kind {} not registered", kind),
     }
 }
 
@@ -836,7 +836,7 @@ pub fn decode_dia_insc_json(
         DiaInscEdit::KIND => decode_action!(DiaInscEdit),
         DiaInscMove::KIND => decode_action!(DiaInscMove),
         DiaInscDrop::KIND => decode_action!(DiaInscDrop),
-        _ => sys::decodef!("inscription JSON action kind {} not registered", kind),
+        _ => sys::normalf!("inscription JSON action kind {} not registered", kind),
     }
 }
 

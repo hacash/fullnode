@@ -6,7 +6,7 @@ use sys::Ret;
 pub(super) fn check_action_kind(kind: u16, buf: &[u8]) -> Ret<()> {
     let (wire_kind, _) = Uint2::decode(buf)?;
     if wire_kind.uint() != kind {
-        return sys::decodef!(
+        return sys::normalf!(
             "action kind mismatch: expected {} got {}",
             kind,
             wire_kind.uint()

@@ -263,8 +263,13 @@ pub trait ConsensusNodeHooks: Send + Sync {
         Ok(())
     }
 
-    fn poll_deferred_batches(&self, _view: &dyn ChainView) -> Ret<Vec<DeferredBatch>> {
-        Ok(vec![])
+    /// Extract one ready deferred batch. `Ok(None)` means no batch is ready.
+    /// Batches are extracted one at a time so an `Abort` during execution
+    /// keeps the batch in the queue (requeue): the caller simply does not
+    /// report a result, and the batch becomes visible again after the engine
+    /// restarts with rebuilt bidding state (§4.2).
+    fn poll_one_deferred_batch(&self, _view: &dyn ChainView) -> Ret<Option<DeferredBatch>> {
+        Ok(None)
     }
 
     fn on_deferred_batch_result(&self, _id: DeferredId, _result: DeferredBatchResult) {}

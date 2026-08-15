@@ -39,11 +39,11 @@ fn encode_log_entry(entry: &LogEntry) -> Ret<Vec<u8>> {
 
 fn decode_log_entry(raw: &[u8]) -> Ret<LogEntry> {
     if raw.len() < 2 {
-        return Err(sys::Error::fault("persisted log entry is truncated"));
+        return sys::errf!("persisted log entry is truncated");
     }
     let topic_len = u16::from_be_bytes([raw[0], raw[1]]) as usize;
     if raw.len() < 2 + topic_len {
-        return Err(sys::Error::fault("persisted log topic is truncated"));
+        return sys::errf!("persisted log topic is truncated");
     }
     let topic = std::str::from_utf8(&raw[2..2 + topic_len])
         .map_err(|_| sys::Error::fault("persisted log topic is not utf-8"))?
@@ -89,10 +89,7 @@ impl LogBackend for KvLogBackend {
         for idx in 0..len {
             let key = log_item_key(height, idx);
             let Some(raw) = self.disk.read(&key)? else {
-                return Err(sys::Error::fault(format!(
-                    "persisted log item {} missing",
-                    idx
-                )));
+                return sys::errf!("persisted log item {} missing", idx);
             };
             logs.push(decode_log_entry(&raw)?);
         }

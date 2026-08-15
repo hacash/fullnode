@@ -227,7 +227,7 @@ impl P2PNode {
                         tokio::task::spawn_blocking(move || {
                             let _hold = hold;
                             if !this.stopping.load(std::sync::atomic::Ordering::Acquire) {
-                                this.drain_deferred_blocks();
+                                let _ = this.drain_deferred_blocks();
                             }
                         });
                     }
@@ -252,7 +252,7 @@ impl P2PNode {
                         tokio::task::spawn_blocking(move || {
                             let _hold = hold;
                             if !this.stopping.load(std::sync::atomic::Ordering::Acquire) {
-                                this.drain_deferred_blocks();
+                                let _ = this.drain_deferred_blocks();
                             }
                         });
                     }

@@ -142,7 +142,7 @@ impl P2PNode {
                     let Some(_hold) = waiter.try_hold() else {
                         break;
                     };
-                    node.drain_deferred_blocks();
+                    let _ = node.drain_deferred_blocks();
                 }
             });
     }

@@ -1,4 +1,4 @@
-use sys::{Ret, decodef, errf};
+use sys::{Ret, normalf, errf};
 
 use crate::codec::{Decode, Encode, ParsePrefix};
 use crate::json::{FromJSON, JSONFormater, ToJSON, json_decode_array};
@@ -71,7 +71,7 @@ impl Encode for AddrOrList {
 impl Decode for AddrOrList {
     fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
         if buf.is_empty() {
-            return decodef!("buffer too short for AddrOrList");
+            return normalf!("buffer too short for AddrOrList");
         }
         if buf[0] < ADDR_REF_MARKER_BASE {
             let (v, used) = Address::decode(buf)?;
@@ -80,7 +80,7 @@ impl Decode for AddrOrList {
 
         let count = buf[0] - ADDR_REF_MARKER_BASE;
         if count == 0 {
-            return decodef!("AddrOrList list cannot be empty");
+            return normalf!("AddrOrList list cannot be empty");
         }
         let (list, used) = AddressW1::create_with_prefix(&[count], &buf[1..])?;
         Ok((Self::List(list), used))

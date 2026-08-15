@@ -1,4 +1,4 @@
-use sys::{Ret, decodef, errf};
+use sys::{Ret, normalf, errf};
 
 use crate::codec::{Decode, Encode};
 use crate::json::{FromJSON, JSONFormater, ToJSON, json_expect_unquoted};
@@ -72,7 +72,7 @@ impl Encode for AddrOrPtr {
 impl Decode for AddrOrPtr {
     fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
         let Some(&first) = buf.first() else {
-            return decodef!("buffer too short for AddrOrPtr");
+            return normalf!("buffer too short for AddrOrPtr");
         };
         if first < ADDR_REF_MARKER_BASE {
             let (addr, used) = Address::decode(buf)?;
@@ -102,7 +102,7 @@ impl FromJSON for AddrOrPtr {
         }
         let index: u16 = json_expect_unquoted(raw)?
             .parse()
-            .map_err(|_| sys::Error::decode("cannot parse AddrOrPtr"))?;
+            .map_err(|_| sys::Error::normal("cannot parse AddrOrPtr"))?;
         if index > Self::MAX_INDEX as u16 {
             return errf!("AddrOrPtr index {} exceeds max {}", index, Self::MAX_INDEX);
         }

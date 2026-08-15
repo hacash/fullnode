@@ -1,7 +1,7 @@
 use std::fmt;
 use std::ops::Deref;
 
-use sys::{Ret, decodef};
+use sys::{Ret, normalf};
 
 use crate::codec::{Decode, Encode};
 
@@ -83,7 +83,7 @@ impl<const N: usize> Encode for Fixed<N> {
 impl<const N: usize> Decode for Fixed<N> {
     fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
         if buf.len() < N {
-            return decodef!("buffer too short for Fixed<{}>", N);
+            return normalf!("buffer too short for Fixed<{}>", N);
         }
         let mut a = [0u8; N];
         a.copy_from_slice(&buf[..N]);

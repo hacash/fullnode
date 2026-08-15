@@ -1,14 +1,10 @@
-//! `TextError(String)` + `ExecError{Revert,Fault}`
+//! Generic error model: `sys::Error { kind, code, msg }`.
 //!
-//! recode.loc.md  #9
-//! - `sys::Error`  `String` `ExecError{Revert, Fault}`
-//! -  `"[REVERT] "`  hack
-//! -  `Ret/Rerr/XRet/XRerr/TextRet`  `IntoExecRet/IntoTextRet/...`  trait
-//!
-//! **** `Error`  `kind`
-//! - `Decode`  /
-//! - `Revert`  /AST
-//! - `Fault`
+//! - `ErrorKind` only describes generic handling (Normal/Revert/Fault/Abort)
+//! - `code` is an optional stable string owned by the layer that creates it;
+//!   `sys` deliberately knows nothing about application/storage domains.
+//! - `Ret/Rerr` propagate up the call stack; lifecycle changes only occur at
+//!   the engine boundary
 //!
 //! `Ret<T>`
 
@@ -16,12 +12,12 @@ use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
-    /// /
-    Decode,
+    /// Ordinary recoverable error, including invalid input and decode errors.
+    Normal,
     /// revertAST
     Revert,
     Fault,
-    /// 当前状态机不能安全继续
+    /// The state machine cannot safely continue.
     Abort,
 }
 
@@ -44,8 +40,8 @@ impl Error {
             code: None,
         }
     }
-    pub fn decode(msg: impl Into<String>) -> Self {
-        Self::new(ErrorKind::Decode, msg)
+    pub fn normal(msg: impl Into<String>) -> Self {
+        Self::new(ErrorKind::Normal, msg)
     }
     pub fn revert(msg: impl Into<String>) -> Self {
         Self::new(ErrorKind::Revert, msg)
@@ -57,8 +53,8 @@ impl Error {
         Self::new(ErrorKind::Abort, msg)
     }
 
-    pub fn is_decode(&self) -> bool {
-        self.kind == ErrorKind::Decode
+    pub fn is_normal(&self) -> bool {
+        self.kind == ErrorKind::Normal
     }
     pub fn is_revert(&self) -> bool {
         self.kind == ErrorKind::Revert
@@ -77,6 +73,8 @@ impl Error {
         self.msg.contains(pat)
     }
 
+    /// Attach a stable string owned by the caller's layer. `sys` does not
+    /// interpret or enumerate these values.
     pub fn with_code(mut self, code: &'static str) -> Self {
         self.code = Some(code);
         self
@@ -85,12 +83,26 @@ impl Error {
     pub fn code(&self) -> Option<&'static str> {
         self.code
     }
+
+    /// Attach operational context. The original `kind` and `code` are preserved;
+    /// only a message prefix is prepended. It must not change the error's
+    /// classification. When several errors must be kept together (e.g. a VM
+    /// execution error coexisting with a gas settle error), call `context()`
+    /// on the primary error to merge in the secondary error's message.
+    pub fn context(mut self, msg: impl Into<String>) -> Self {
+        let prefix = msg.into();
+        if prefix.is_empty() {
+            return self;
+        }
+        self.msg = format!("{}: {}", prefix, self.msg);
+        self
+    }
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.kind {
-            ErrorKind::Decode => write!(f, "[decode] {}", self.msg),
+            ErrorKind::Normal => write!(f, "[normal] {}", self.msg),
             ErrorKind::Revert => write!(f, "[revert] {}", self.msg),
             ErrorKind::Fault => write!(f, "{}", self.msg),
             ErrorKind::Abort => write!(f, "[abort] {}", self.msg),
@@ -111,7 +123,7 @@ impl From<String> for Error {
     }
 }
 
-/// `Fault`  `return Err(..)` `errf!`
+/// Fault: `return Err(..)` via `errf!`.
 #[macro_export]
 macro_rules! errf {
     ( $($v:expr),+ ) => { Err($crate::Error::fault(format!( $($v),+ ))) };
@@ -123,8 +135,27 @@ macro_rules! revertf {
     ( $($v:expr),+ ) => { Err($crate::Error::revert(format!( $($v),+ ))) };
 }
 
-/// `Decode` `return Err(..)`
+/// Codec helper returning an `ErrorKind::Normal` error.
 #[macro_export]
-macro_rules! decodef {
-    ( $($v:expr),+ ) => { Err($crate::Error::decode(format!( $($v),+ ))) };
+macro_rules! normalf {
+    ( $($v:expr),+ ) => { Err($crate::Error::normal(format!( $($v),+ ))) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_helper_is_the_normal_category() {
+        let error = Error::normal("bad input");
+        assert_eq!(error.kind, ErrorKind::Normal);
+        assert!(error.is_normal());
+    }
+
+    #[test]
+    fn caller_owned_static_code_is_preserved() {
+        const CODE: &'static str = "example_code";
+        let error = Error::normal("example").with_code(CODE);
+        assert_eq!(error.code(), Some(CODE));
+    }
 }

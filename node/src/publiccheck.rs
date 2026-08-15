@@ -29,10 +29,10 @@ pub async fn probe_public_id(addr: SocketAddr, expect_key: &[u8; 16]) -> Ret<boo
         .await
         .map_err(|_| sys::Error::fault("public-check read timeout".to_owned()))??;
     if ty != MSG_CHECK_PUBLIC || body.len() != PEER_KEY_SIZE {
-        return Err(sys::Error::fault("public-check bad response".to_owned()));
+        return sys::errf!("public-check bad response");
     }
     if body.as_slice() != expect_key.as_slice() {
-        return Err(sys::Error::fault("peer id not match".to_owned()));
+        return sys::errf!("peer id not match");
     }
     Ok(true)
 }
