@@ -46,7 +46,7 @@ pub fn with_base_total<R>(
     state: &mut CoreState,
     f: impl FnOnce(&mut BaseTotal) -> Ret<R>,
 ) -> Ret<R> {
-    let mut total = state.get_base_total();
+    let mut total = state.get_base_total()?;
     let res = f(&mut total)?;
     state.set_base_total(&total);
     Ok(res)
@@ -146,20 +146,20 @@ pub fn total_record_blackhole_hacd(state: &mut CoreState) -> Ret<()> {
     })
 }
 
-pub fn blackhole_engulf(state: &mut CoreState, addr: &Address) -> bool {
+pub fn blackhole_engulf(state: &mut CoreState, addr: &Address) -> Ret<bool> {
     if *addr != BLACKHOLE_ADDR {
-        return false;
+        return Ok(false);
     }
     state.balance_set(addr, &field::Balance::default());
-    if state.diamond_owned_exist(addr) {
+    if state.diamond_owned_exist(addr)? {
         state.diamond_owned_del(addr);
     }
-    true
+    Ok(true)
 }
 
 fn do_hac_add(state: &mut CoreState, addr: &Address, amt: &Amount) -> Ret<Amount> {
     check_supported_address(addr)?;
-    let mut balance = state.balance(addr).unwrap_or_default();
+    let mut balance = state.balance(addr)?.unwrap_or_default();
     let new_hac = balance.hacash.add_mode_u128(amt)?;
     new_hac.check_store_long()?;
     balance.hacash = new_hac.clone();
@@ -170,7 +170,7 @@ fn do_hac_add(state: &mut CoreState, addr: &Address, amt: &Amount) -> Ret<Amount
 fn do_hac_sub(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> Ret<Amount> {
     check_supported_address(addr)?;
     let mut state = CoreState::wrap(ctx.layer());
-    let mut balance = state.balance(addr).unwrap_or_default();
+    let mut balance = state.balance(addr)?.unwrap_or_default();
     if balance.hacash < *amt {
         return revertf!(
             "address {} balance {} is insufficient, at least {}",
@@ -190,7 +190,7 @@ pub fn hac_check(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> Ret<Amo
     check_amount_is_positive(amt)?;
     check_supported_address(addr)?;
     let state = CoreState::wrap(ctx.layer());
-    if let Some(balance) = state.balance(addr) {
+    if let Some(balance) = state.balance(addr)? {
         if balance.hacash >= *amt {
             return Ok(balance.hacash);
         }
@@ -219,7 +219,7 @@ pub fn hac_add_state(
     check_amount_is_positive(amt)?;
     let mut state = CoreState::wrap(layer);
     do_hac_add(&mut state, addr, amt)?;
-    if blackhole_engulf(&mut state, addr) {
+    if blackhole_engulf(&mut state, addr)? {
         total_record_blackhole_hac(&mut state, amt)?;
     }
     Ok(vec![])
@@ -266,7 +266,7 @@ pub fn sat_add(ctx: &mut dyn Context, addr: &Address, sat: &Satoshi) -> Ret<Sato
     check_satoshi_nonzero(sat, "add")?;
     check_supported_address(addr)?;
     let mut state = CoreState::wrap(ctx.layer());
-    let mut balance = state.balance(addr).unwrap_or_default();
+    let mut balance = state.balance(addr)?.unwrap_or_default();
     let old = balance.satoshi.to_satoshi();
     let sum = old
         .uint()
@@ -275,7 +275,7 @@ pub fn sat_add(ctx: &mut dyn Context, addr: &Address, sat: &Satoshi) -> Ret<Sato
     let next = Satoshi::from(sum);
     balance.satoshi = SatoshiAuto::from_satoshi(&next)?;
     state.balance_set(addr, &balance);
-    if blackhole_engulf(&mut state, addr) {
+    if blackhole_engulf(&mut state, addr)? {
         total_record_blackhole_sat(&mut state, sat)?;
     }
     Ok(next)
@@ -285,7 +285,7 @@ pub fn sat_sub(ctx: &mut dyn Context, addr: &Address, sat: &Satoshi) -> Ret<Sato
     check_satoshi_nonzero(sat, "sub")?;
     check_supported_address(addr)?;
     let mut state = CoreState::wrap(ctx.layer());
-    let mut balance = state.balance(addr).unwrap_or_default();
+    let mut balance = state.balance(addr)?.unwrap_or_default();
     let old = balance.satoshi.to_satoshi();
     if old < *sat {
         return revertf!(
@@ -305,7 +305,7 @@ pub fn sat_check(ctx: &mut dyn Context, addr: &Address, sat: &Satoshi) -> Ret<Sa
     check_satoshi_nonzero(sat, "check")?;
     check_supported_address(addr)?;
     let state = CoreState::wrap(ctx.layer());
-    if let Some(balance) = state.balance(addr) {
+    if let Some(balance) = state.balance(addr)? {
         let old = balance.satoshi.to_satoshi();
         if old >= *sat {
             return Ok(old);
@@ -339,12 +339,12 @@ fn check_asset_nonzero(asset: &AssetAmt, what: &str) -> Ret<()> {
 pub fn asset_add(state: &mut CoreState, addr: &Address, asset: &AssetAmt) -> Ret<AssetAmt> {
     check_asset_nonzero(asset, "add")?;
     check_supported_address(addr)?;
-    let mut balance = state.balance(addr).unwrap_or_default();
+    let mut balance = state.balance(addr)?.unwrap_or_default();
     let old = balance.asset_must(asset.serial)?;
     let next = old.checked_add(asset)?;
     balance.asset_set(next.clone())?;
     state.balance_set(addr, &balance);
-    if blackhole_engulf(state, addr) {
+    if blackhole_engulf(state, addr)? {
         total_record_blackhole_asset(state)?;
     }
     Ok(next)
@@ -353,7 +353,7 @@ pub fn asset_add(state: &mut CoreState, addr: &Address, asset: &AssetAmt) -> Ret
 pub fn asset_sub(state: &mut CoreState, addr: &Address, asset: &AssetAmt) -> Ret<AssetAmt> {
     check_asset_nonzero(asset, "sub")?;
     check_supported_address(addr)?;
-    let mut balance = state.balance(addr).unwrap_or_default();
+    let mut balance = state.balance(addr)?.unwrap_or_default();
     let old = balance.asset_must(asset.serial)?;
     if old < *asset {
         return revertf!(
@@ -372,7 +372,7 @@ pub fn asset_check(ctx: &mut dyn Context, addr: &Address, asset: &AssetAmt) -> R
     check_asset_nonzero(asset, "check")?;
     check_supported_address(addr)?;
     let state = CoreState::wrap(ctx.layer());
-    if let Some(balance) = state.balance(addr) {
+    if let Some(balance) = state.balance(addr)? {
         if let Some(old) = balance.asset(asset.serial) {
             if old >= *asset {
                 return Ok(old);
@@ -402,7 +402,7 @@ pub const DIAMOND_STATUS_NORMAL: Uint1 = Uint1::from(1);
 
 pub fn hacd_add(state: &mut CoreState, addr: &Address, hacd: &DiamondNumber) -> Ret<DiamondNumber> {
     check_supported_address(addr)?;
-    let mut balance = state.balance(addr).unwrap_or_default();
+    let mut balance = state.balance(addr)?.unwrap_or_default();
     let old = balance.diamond.to_diamond()?;
     let sum = old
         .uint()
@@ -411,7 +411,7 @@ pub fn hacd_add(state: &mut CoreState, addr: &Address, hacd: &DiamondNumber) -> 
     let next = DiamondNumber::from(sum);
     balance.diamond = DiamondNumberAuto::from_diamond(&next);
     state.balance_set(addr, &balance);
-    if blackhole_engulf(state, addr) {
+    if blackhole_engulf(state, addr)? {
         total_record_blackhole_hacd(state)?;
     }
     Ok(next)
@@ -419,7 +419,7 @@ pub fn hacd_add(state: &mut CoreState, addr: &Address, hacd: &DiamondNumber) -> 
 
 pub fn hacd_sub(state: &mut CoreState, addr: &Address, hacd: &DiamondNumber) -> Ret<DiamondNumber> {
     check_supported_address(addr)?;
-    let mut balance = state.balance(addr).unwrap_or_default();
+    let mut balance = state.balance(addr)?.unwrap_or_default();
     let old = balance.diamond.to_diamond()?;
     if old < *hacd {
         return revertf!(
@@ -456,7 +456,7 @@ pub fn check_diamond_status(
     hacd_name: &DiamondName,
 ) -> Ret<DiamondSto> {
     check_supported_address(addr_from)?;
-    let Some(diaitem) = state.diamond(hacd_name) else {
+    let Some(diaitem) = state.diamond(hacd_name)? else {
         return errf!(
             "diamond status {} not found",
             String::from_utf8_lossy(hacd_name.as_ref())
@@ -501,7 +501,7 @@ pub fn diamond_owned_push_one(
     name: &DiamondName,
 ) -> Ret<()> {
     check_supported_address(address)?;
-    let mut owned = state.diamond_owned(address).unwrap_or_default();
+    let mut owned = state.diamond_owned(address)?.unwrap_or_default();
     owned.push_one(name)?;
     state.diamond_owned_set(address, &owned);
     Ok(())
@@ -513,7 +513,7 @@ pub fn diamond_owned_append(
     list: DiamondNameListMax60000,
 ) -> Ret<()> {
     check_supported_address(address)?;
-    let mut owned = state.diamond_owned(address).unwrap_or_default();
+    let mut owned = state.diamond_owned(address)?.unwrap_or_default();
     for name in list.as_list() {
         owned.push_one(name)?;
     }
@@ -532,7 +532,7 @@ pub fn diamond_owned_move(
     if from == to {
         return errf!("cannot transfer to self");
     }
-    let Some(mut from_owned) = state.diamond_owned(from) else {
+    let Some(mut from_owned) = state.diamond_owned(from)? else {
         return errf!("diamond owner record not found");
     };
     from_owned.drop(list)?;
@@ -542,7 +542,7 @@ pub fn diamond_owned_move(
         state.diamond_owned_del(from);
     }
 
-    let mut to_owned = state.diamond_owned(to).unwrap_or_default();
+    let mut to_owned = state.diamond_owned(to)?.unwrap_or_default();
     to_owned.push(list)?;
     state.diamond_owned_set(to, &to_owned);
     Ok(())

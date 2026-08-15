@@ -4,11 +4,14 @@
 //! the whole advance or keeps all of it.
 //! That is what lets boot trust `root_height` and replay from it safely.
 
-use base::{MemDB, PERSIST_KEY_ROOT_HASH, PERSIST_KEY_ROOT_HEIGHT, PkgOrigin};
+use base::{
+    Engine, MemDB, PERSIST_KEY_ROOT_HASH, PERSIST_KEY_ROOT_HEIGHT, PkgOrigin,
+    STATE_DECODE_FAILED_CODE, STATE_READ_FAILED_CODE,
+};
 use field::Hash;
-use sys::Ret;
+use sys::{Rerr, Ret};
 
-use crate::engine::{ChainEngine, isolate_callback};
+use crate::engine::{ChainEngine, persist_fatal};
 use crate::tree::{RollJob, hash_of, height_of};
 
 /// Persist a root advance and then move the tree root. The root-move writer
@@ -23,10 +26,15 @@ pub fn roll_root(
     {
         let mut root_move = eng.begin_root_move();
         // Reject a broken ordering before it can publish an incomplete root
-        // batch. Commit validates again after the write.
-        eng.tree.validate_roll(&job)?;
-        eng.store.disk().try_write(&RootBatch { job: &job })?;
-        eng.tree.commit_roll(&job)?;
+        // batch. Commit validates again after the write. Only the disk/root
+        // writes are tagged `persist_failed`; callback errors keep their own
+        // classification (§8.3).
+        eng.tree.validate_roll(&job).map_err(persist_fatal)?;
+        eng.store
+            .disk()
+            .try_write(&RootBatch { job: &job })
+            .map_err(persist_fatal)?;
+        eng.tree.commit_roll(&job).map_err(persist_fatal)?;
         root_move.commit();
     }
 
@@ -44,7 +52,7 @@ pub fn roll_root(
         }
         stable.push((height, hash));
     }
-    notify_stable(eng, &stable, origin, stored_replay);
+    notify_stable(eng, &stable, origin, stored_replay)?;
     Ok(stable)
 }
 
@@ -53,7 +61,7 @@ fn notify_stable(
     stable: &[(u64, Hash)],
     origin: PkgOrigin,
     stored_replay: bool,
-) {
+) -> Rerr {
     // Consensus tracks stable blocks to age out its bidding state. Replaying
     // stored blocks re-derives that from the state it already loaded, and the
     // callback would cost a disk read plus a full decode per block. Replay
@@ -62,28 +70,76 @@ fn notify_stable(
     // still runs so replayed blocks do not accumulate in memory.
     for (height, hash) in stable {
         if !stored_replay {
-            let block = eng.block_history.cached(*height, hash).or_else(|| {
-                // Stable-block notification is peripheral (§8): a read error
-                // skips the decode attempt instead of failing the roll.
-                let data = eng.store.block_data(hash).ok().flatten()?;
-                eng.registry.decode_block(&data).ok().map(|(blk, _)| blk)
-            });
-            if let Some(block) = block {
-                // Listeners that query BlockHistory during this callback reuse
-                // the same decoded object.
-                eng.block_history.remember(block.clone());
-                isolate_callback("consensus.on_stable_block", || {
-                    eng.consensus.on_stable_block(block.as_ref(), eng);
-                });
+            // Stable-block notification is consensus-critical (§8.3): a body
+            // read failure is `Abort + storage_read_failed`, a decode failure
+            // `Abort + state_decode_failed`. A missing body is never skipped.
+            let block = match eng.block_history.cached(*height, hash) {
+                Some(block) => block,
+                None => {
+                    let data = eng
+                        .store
+                        .block_data(hash)
+                        .map_err(|e| {
+                            sys::Error::abort(format!(
+                                "stable block {} body read failed: {}",
+                                hash, e
+                            ))
+                            .with_code(STATE_READ_FAILED_CODE)
+                        })?
+                        .ok_or_else(|| {
+                            sys::Error::abort(format!(
+                                "stable block {} body is missing from the block db",
+                                hash
+                            ))
+                            .with_code(STATE_READ_FAILED_CODE)
+                        })?;
+                    eng.registry
+                        .decode_block(&data)
+                        .map_err(|e| {
+                            sys::Error::abort(format!(
+                                "stable block {} body cannot be decoded: {}",
+                                hash, e
+                            ))
+                            .with_code(STATE_DECODE_FAILED_CODE)
+                        })?
+                        .0
+                }
+            };
+            // Listeners that query BlockHistory during this callback reuse
+            // the same decoded object.
+            eng.block_history.remember(block.clone());
+            // A consensus callback error is engine-fatal: preserve an already
+            // `Abort` error as-is, otherwise escalate to `Abort + core_failed`
+            // (§8.3). The accepted root is never rolled back.
+            if let Err(e) = eng.consensus.on_stable_block(block.as_ref(), eng) {
+                if e.is_abort() {
+                    return Err(e);
+                }
+                return Err(
+                    sys::Error::abort(format!("consensus.on_stable_block failed: {}", e))
+                        .with_code("core_failed"),
+                );
             }
-            for listener in eng.listeners.lock().unwrap().iter() {
-                isolate_callback("listener.on_stable_block", || {
-                    listener.on_stable_block(*height, *hash, origin);
-                });
+            // Listener registry mutex is released before any external callback
+            // (§8.4): ordinary `Err` only warns; `Abort` escalates to engine
+            // fatal after every listener has been notified.
+            let listeners = eng.listeners.lock().unwrap().clone();
+            let mut abort = None;
+            for listener in listeners {
+                if let Err(error) = listener.on_stable_block(*height, *hash, origin) {
+                    eprintln!("[Engine] listener.on_stable_block failed: {}", error);
+                    if error.is_abort() {
+                        abort = Some(error);
+                    }
+                }
+            }
+            if let Some(error) = abort {
+                eng.report_core_error(&error);
             }
         }
         eng.block_history.forget(*height, hash);
     }
+    Ok(())
 }
 
 /// The batch for one root advance, streamed straight from the frozen layers so

@@ -104,6 +104,13 @@ pub enum ItrErrCode {
     IntentError = 153,
     ExecutionDeadline = 154,
 
+    // Canonical state backend read / persisted state decode failures. These
+    // must stay fatal across the `ItrErr -> ExecError` boundary (they map to
+    // `Error::abort` with `storage_read_failed` / `state_decode_failed` codes)
+    // and must never be downgraded to ordinary execution failures.
+    StateReadFailed = 161,
+    StateDecodeFailed = 162,
+
     #[default]
     NeverError = 255,
 }
@@ -129,8 +136,16 @@ impl From<ItrErr> for ExecError {
         use ItrErrCode::*;
         let ItrErr(code, msg) = e;
         let text = format!("{:?}({}): {}", code, code as u8, msg);
-        let is_revert = matches!(code, ActCallRevert);
-        maybe!(is_revert, Error::revert(text), Error::fault(text))
+        match code {
+            ActCallRevert => Error::revert(text),
+            StateReadFailed => {
+                Error::abort(text).with_code(base::STATE_READ_FAILED_CODE)
+            }
+            StateDecodeFailed => {
+                Error::abort(text).with_code(base::STATE_DECODE_FAILED_CODE)
+            }
+            _ => Error::fault(text),
+        }
     }
 }
 
@@ -140,6 +155,22 @@ impl ItrErr {
     }
     pub fn code(n: ItrErrCode) -> ItrErr {
         ItrErr(n, "".to_string())
+    }
+}
+
+/// Map a native protocol action error (`sys::Error`) to a VM error code at the
+/// `sys::Error -> ItrErr` conversion points. An `Abort` (canonical state read
+/// or persisted-state decode failure) must keep its fatal classification and
+/// its dedicated code instead of being downgraded to an ordinary action-call
+/// failure (§5 of the state-read error contract).
+pub fn map_native_action_code(e: &sys::Error) -> ItrErrCode {
+    if e.is_abort() {
+        match e.code() {
+            Some(base::STATE_DECODE_FAILED_CODE) => ItrErrCode::StateDecodeFailed,
+            _ => ItrErrCode::StateReadFailed,
+        }
+    } else {
+        ItrErrCode::ActCallError
     }
 }
 
@@ -195,5 +226,73 @@ macro_rules! itr_err_code {
 macro_rules! itr_err_fmt {
     ($code: expr, $( $v: expr),+ ) => {
         Err(ItrErr::new($code, &format!($( $v ),+)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `ItrErr -> ExecError` choke point must keep canonical state read and
+    /// persisted-state decode failures fatal (`Abort`) with their stable codes,
+    /// and must not attach a code to validation-class `StorageError` (§5).
+    #[test]
+    fn state_read_failed_stays_abort_at_exec_error_boundary() {
+        let err: ExecError = ItrErr::new(ItrErrCode::StateReadFailed, "backend down").into();
+        assert!(err.is_abort(), "state read failure must be fatal");
+        assert_eq!(err.code(), Some(base::STATE_READ_FAILED_CODE));
+        assert!(!err.is_revert());
+    }
+
+    #[test]
+    fn state_decode_failed_stays_abort_at_exec_error_boundary() {
+        let err: ExecError = ItrErr::new(ItrErrCode::StateDecodeFailed, "bad bytes").into();
+        assert!(err.is_abort(), "state decode failure must be fatal");
+        assert_eq!(err.code(), Some(base::STATE_DECODE_FAILED_CODE));
+    }
+
+    #[test]
+    fn validation_storage_error_keeps_fault_without_code() {
+        let err: ExecError = ItrErr::new(ItrErrCode::StorageError, "status key too long").into();
+        assert!(!err.is_abort(), "validation error must stay non-fatal");
+        assert!(err.is_fault());
+        assert_eq!(err.code(), None);
+    }
+
+    #[test]
+    fn action_call_revert_stays_revert() {
+        let err: ExecError = ItrErr::new(ItrErrCode::ActCallRevert, "user revert").into();
+        assert!(err.is_revert());
+        assert!(!err.is_abort());
+    }
+
+    /// The `sys::Error -> ItrErr` conversion used at native action dispatch
+    /// points must select the dedicated abort code from the error code, and
+    /// map ordinary faults to `ActCallError` (§5).
+    #[test]
+    fn native_action_code_preserves_abort_codes() {
+        let read = sys::Error::abort("read failed").with_code(base::STATE_READ_FAILED_CODE);
+        assert_eq!(
+            map_native_action_code(&read),
+            ItrErrCode::StateReadFailed
+        );
+        let decode = sys::Error::abort("decode failed").with_code(base::STATE_DECODE_FAILED_CODE);
+        assert_eq!(
+            map_native_action_code(&decode),
+            ItrErrCode::StateDecodeFailed
+        );
+        let fault = sys::Error::fault("ordinary execution failure");
+        assert_eq!(map_native_action_code(&fault), ItrErrCode::ActCallError);
+        let revert = sys::Error::revert("user revert");
+        assert_eq!(map_native_action_code(&revert), ItrErrCode::ActCallError);
+    }
+
+    /// `StateReadFailed`/`StateDecodeFailed` must round-trip through the VM
+    /// runtime error chain back to `Abort` errors.
+    #[test]
+    fn abort_round_trips_through_text_error_and_exec_error() {
+        let itr = ItrErr::new(ItrErrCode::StateReadFailed, "disk");
+        let text: TextError = itr.into();
+        assert!(text.contains("StateReadFailed"));
     }
 }

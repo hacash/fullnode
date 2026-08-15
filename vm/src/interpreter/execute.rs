@@ -336,14 +336,19 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 // Call (slot law); the VM itself immediately recurses while
                 // the current frame is suspended at this instruction.
                 let routing = if matches!(act_kind, Bytecode::ACTION) {
-                    host.action_transfer_routing(kid, &actbody)
-                        .map_err(|e| ItrErr::new(ItrErrCode::ActCallError, &e.to_string()))?
+                    host.action_transfer_routing(kid, &actbody).map_err(|e| {
+                        ItrErr::new(crate::rt::map_native_action_code(&e), &e.to_string())
+                    })?
                 } else {
                     None
                 };
                 let (bgasu, cres) = VmHost::action_call(host, kid, actbody).map_err(|e| {
                     ItrErr::new(
-                        maybe!(e.is_revert(), ActCallRevert, ActCallError),
+                        if e.is_revert() {
+                            ActCallRevert
+                        } else {
+                            crate::rt::map_native_action_code(&e)
+                        },
                         e.as_str(),
                     )
                 })?;

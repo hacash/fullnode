@@ -318,7 +318,7 @@ base::impl_action! {
         }
         let addr = ctx.addr(&self.addr)?;
         let balance = CoreState::wrap(ctx.layer())
-            .balance(&addr)
+            .balance(&addr)?
             .unwrap_or_default();
         if check_hac && balance.hacash < self.hacash {
             return sys::revertf!(

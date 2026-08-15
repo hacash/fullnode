@@ -4,8 +4,12 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use base::{BlockHistory, BlockRef, ExecutionServices, Store};
+use base::{
+    BlockHistory, BlockRef, ExecutionServices, STATE_DECODE_FAILED_CODE, STATE_READ_FAILED_CODE,
+    Store,
+};
 use field::Hash;
+use sys::Ret;
 
 pub struct StoreHistory {
     store: Arc<dyn Store>,
@@ -80,10 +84,17 @@ impl StoreHistory {
 }
 
 impl BlockHistory for StoreHistory {
-    fn stable_height(&self) -> u64 {
+    /// The durable canonical root height. `Store::status` read failures are
+    /// canonical acquisitions (§6.8): classified as `Abort + storage_read_failed`
+    /// so consensus callers treat them as fatal, never as a zero root.
+    fn stable_height(&self) -> Ret<u64> {
         match self.store.status() {
-            Ok(status) => status.latest_height,
-            Err(error) => std::panic::panic_any(base::StorageReadPanic { error }),
+            Ok(status) => Ok(status.latest_height),
+            Err(error) => Err(sys::Error::abort(format!(
+                "canonical root status read failed: {}",
+                error
+            ))
+            .with_code(STATE_READ_FAILED_CODE)),
         }
     }
 
@@ -94,35 +105,37 @@ impl BlockHistory for StoreHistory {
         if let Some((_, block)) = self.pending.lock().unwrap().get(&height) {
             return Ok(Some(block.clone()));
         }
-        let Some((stored_hash, data)) = self
-            .store
-            .block_data_by_height(height)
-            .map_err(|error| {
-                error.with_code(crate::engine::CoreFault::StorageReadFailed.code())
+        let Some((stored_hash, data)) =
+            self.store.block_data_by_height(height).map_err(|error| {
+                sys::Error::abort(format!("canonical block read failed: {}", error))
+                    .with_code(STATE_READ_FAILED_CODE)
             })?
         else {
             return Ok(None);
         };
         let block = self.registry.decode_block_exact(&data).map_err(|e| {
-            sys::Error::fault(format!("stored block {} cannot be decoded: {}", height, e))
-                .with_code(crate::engine::CoreFault::StorageReadFailed.code())
+            sys::Error::abort(format!(
+                "stored canonical block {} cannot be decoded: {}",
+                height, e
+            ))
+            .with_code(STATE_DECODE_FAILED_CODE)
         })?;
         if block.height() != height || block.hash() != stored_hash {
-            return Err(sys::Error::fault(format!(
+            return Err(sys::Error::abort(format!(
                 "stored block identity mismatch at height {}: index {:?}, decoded <{}, {:?}>",
                 height,
                 stored_hash,
                 block.height(),
                 block.hash()
             ))
-            .with_code(crate::engine::CoreFault::StorageReadFailed.code()));
+            .with_code(STATE_DECODE_FAILED_CODE));
         }
         Ok(Some(block))
     }
 }
 
 impl BlockHistory for BranchHistory<'_> {
-    fn stable_height(&self) -> u64 {
+    fn stable_height(&self) -> Ret<u64> {
         self.canonical.stable_height()
     }
 

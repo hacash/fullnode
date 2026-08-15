@@ -11,14 +11,14 @@
 //! receive a snapshot that owns the state layers it needs, so they can never
 //! observe a torn tree nor block a writer.
 
+mod apply;
 mod boot;
 mod engine;
 mod history;
-mod apply;
-mod ring;
 mod persist;
-mod side_list;
 mod pipeline;
+mod ring;
+mod side_list;
 mod sync;
 mod tree;
 mod verify;

@@ -25,11 +25,15 @@ pub(crate) fn diamond_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse 
             Ok(v) => v,
             Err(_) => return api_error("diamond number error"),
         };
-        let Some(dian) = state.diamond_name(&dian) else {
-            if !ctx.engine.validate_optimistic(start_epoch) {
-                return api_error("state changed");
+        let dian = match state.diamond_name(&dian) {
+            Ok(Some(v)) => v,
+            Ok(None) => {
+                if !ctx.engine.validate_optimistic(start_epoch) {
+                    return api_error("state changed");
+                }
+                return api_error("cannot find diamond");
             }
-            return api_error("cannot find diamond");
+            Err(e) => return api_state_read_error(&e),
         };
         name = dian.to_readable();
     } else if !DiamondName::is_valid(name.as_bytes()) {
@@ -40,17 +44,25 @@ pub(crate) fn diamond_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse 
         Ok(v) => v,
         Err(_) => return api_error("invalid diamond name"),
     };
-    let Some(diaobj) = state.diamond(&dian) else {
-        if !ctx.engine.validate_optimistic(start_epoch) {
-            return api_error("state changed");
+    let diaobj = match state.diamond(&dian) {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            if !ctx.engine.validate_optimistic(start_epoch) {
+                return api_error("state changed");
+            }
+            return api_error("cannot find diamond");
         }
-        return api_error("cannot find diamond");
+        Err(e) => return api_state_read_error(&e),
     };
-    let Some(diasmelt) = state.diamond_smelt(&dian) else {
-        if !ctx.engine.validate_optimistic(start_epoch) {
-            return api_error("state changed");
+    let diasmelt = match state.diamond_smelt(&dian) {
+        Ok(Some(v)) => v,
+        Ok(None) => {
+            if !ctx.engine.validate_optimistic(start_epoch) {
+                return api_error("state changed");
+            }
+            return api_error("cannot find diamond");
         }
-        return api_error("cannot find diamond");
+        Err(e) => return api_state_read_error(&e),
     };
     if !ctx.engine.validate_optimistic(start_epoch) {
         return api_error("state changed");
@@ -72,7 +84,10 @@ pub(crate) fn diamond_views_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRes
     };
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());
-    let lastdianum = state.latest_diamond().unwrap_or_default().number.uint() as i64;
+    let lastdianum = match state.latest_diamond() {
+        Ok(d) => d.unwrap_or_default().number.uint() as i64,
+        Err(e) => return api_state_read_error(&e),
+    };
     if limit > 200 {
         limit = 200;
     }
@@ -84,10 +99,17 @@ pub(crate) fn diamond_views_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRes
             Err(_) => return api_error("invalid diamond name"),
         };
         for dian in names.as_list() {
-            if state.diamond(dian).is_none() {
+            let exists = match state.diamond(dian) {
+                Ok(v) => v.is_some(),
+                Err(e) => return api_state_read_error(&e),
+            };
+            if !exists {
                 continue;
             }
-            if let Some(smelt) = state.diamond_smelt(dian) {
+            if let Some(smelt) = match state.diamond_smelt(dian) {
+                Ok(v) => v,
+                Err(e) => return api_state_read_error(&e),
+            } {
                 list.push(diamond_view_item_json(dian, &smelt, &unit));
             }
         }
@@ -97,13 +119,22 @@ pub(crate) fn diamond_views_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRes
                 Ok(v) => v,
                 Err(_) => return api_error("diamond number error"),
             };
-            let Some(dian) = state.diamond_name(&dianum) else {
-                continue;
+            let dian = match state.diamond_name(&dianum) {
+                Ok(Some(v)) => v,
+                Ok(None) => continue,
+                Err(e) => return api_state_read_error(&e),
             };
-            if state.diamond(&dian).is_none() {
+            let exists = match state.diamond(&dian) {
+                Ok(v) => v.is_some(),
+                Err(e) => return api_state_read_error(&e),
+            };
+            if !exists {
                 continue;
             }
-            if let Some(smelt) = state.diamond_smelt(&dian) {
+            if let Some(smelt) = match state.diamond_smelt(&dian) {
+                Ok(v) => v,
+                Err(e) => return api_state_read_error(&e),
+            } {
                 list.push(diamond_view_item_json(&dian, &smelt, &unit));
             }
         }
@@ -201,7 +232,7 @@ pub(crate) fn diamond_inscription_protocol_cost_impl(
         return api_error("state changed");
     }
     if let Err(e) = res {
-        return api_error(&e.to_string());
+        return api_state_read_error(&e);
     }
     ApiResponse::json(format!(
         "{{\"ret\":0,\"action\":{},\"cost\":{}}}",
@@ -257,7 +288,10 @@ pub(crate) fn diamond_bidding_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiR
     };
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());
-    let lastdia = state.latest_diamond().unwrap_or_default();
+    let lastdia = match state.latest_diamond() {
+        Ok(d) => d.unwrap_or_default(),
+        Err(e) => return api_state_read_error(&e),
+    };
     let txpool = ctx.node.txpool();
     let mut datalist = Vec::new();
 

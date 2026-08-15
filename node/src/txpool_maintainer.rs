@@ -36,11 +36,13 @@ impl TxPoolMaintainer {
 
         // Evaluate the pool in one cumulative child state. This preserves
         // valid dependent transactions and lets the engine stop at an
-        // uncertain Type3+ failure, matching dev's fork_sub_state loop.
+        // uncertain Type3+ failure, matching dev's fork_sub_state loop. An
+        // `Abort` from `try_execute_batch` propagates so no transaction is
+        // judged invalid (§6.7).
         let failed = self.engine.try_execute_batch(
             txs.iter().map(TxPkg::tx_ref).collect(),
             height.saturating_add(1),
-        );
+        )?;
         if !failed.is_empty() {
             self.txpool.remove(group, &failed)?;
         }
@@ -49,9 +51,9 @@ impl TxPoolMaintainer {
 }
 
 impl ChainListener for TxPoolMaintainer {
-    fn on_block_accepted(&self, height: u64, origin: base::PkgOrigin) {
+    fn on_block_accepted(&self, height: u64, origin: base::PkgOrigin) -> Rerr {
         if matches!(origin, base::PkgOrigin::Rebuild | base::PkgOrigin::Replay) {
-            return;
+            return Ok(());
         }
         if should_print_txpool_status(height, origin) {
             println!("{}.", self.txpool.print());
@@ -61,9 +63,19 @@ impl ChainListener for TxPoolMaintainer {
                 .revalidate_interval
                 .is_some_and(|interval| interval > 0 && height % interval == 0)
             {
-                let _ = self.clean_invalid_group(spec.id, height);
+                match self.clean_invalid_group(spec.id, height) {
+                    Ok(()) => {}
+                    // A core state read failure must stop the revalidation and
+                    // escalate through the listener boundary (§8.4/§8.5).
+                    Err(e) if e.is_abort() => return Err(e),
+                    // Ordinary failures are recorded; the pool stays untouched.
+                    Err(e) => {
+                        eprintln!("[TxPool] clean_invalid_group failed: {}", e);
+                    }
+                }
             }
         }
+        Ok(())
     }
 }
 

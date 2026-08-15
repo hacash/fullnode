@@ -194,29 +194,35 @@ impl Engine for ChainEngine {
         result
     }
 
-    fn try_execute_batch(&self, txs: Vec<TxRef>, pending_height: u64) -> Vec<Hash> {
+    fn try_execute_batch(&self, txs: Vec<TxRef>, pending_height: u64) -> Ret<Vec<Hash>> {
         if self.is_fatal() {
-            return vec![];
+            return Ok(vec![]);
         }
+        // `optimistic_canonical` is an engine-state signal (stopping/fatal/
+        // syncing), not a storage error: `QueryUnavailable`/`Ok(None)` keep
+        // the "skip this revalidation round" semantics (§6.7).
         let Some(snapshot) = self.optimistic_canonical().ok().flatten() else {
-            return vec![];
+            return Ok(vec![]);
         };
         let root = snapshot.begin_block_draft(pending_height);
         let author = self.block_producer().external_exec_author();
         let mut failed = Vec::new();
         for tx in &txs {
-            if self
-                .execute_candidate(&root, tx, pending_height, author)
-                .is_err()
-            {
-                if self.tx_policy().failed_revalidation_can_remove(tx.as_ref()) {
-                    failed.push(tx.hash());
-                } else {
-                    break;
+            match self.execute_candidate(&root, tx, pending_height, author) {
+                Ok(()) => {}
+                // A core state read failure must not judge any transaction
+                // invalid; it propagates to the engine fatal boundary.
+                Err(e) if e.is_abort() => return Err(e),
+                Err(_) => {
+                    if self.tx_policy().failed_revalidation_can_remove(tx.as_ref()) {
+                        failed.push(tx.hash());
+                    } else {
+                        break;
+                    }
                 }
             }
         }
-        failed
+        Ok(failed)
     }
 
     fn try_pick_pending_txs_on_session(
@@ -279,6 +285,12 @@ impl Engine for ChainEngine {
 
     fn add_chain_listener(&self, listener: Arc<dyn ChainListener>) -> Rerr {
         ChainEngine::add_chain_listener(self, listener)
+    }
+
+    fn report_core_error(&self, e: &sys::Error) {
+        if self.mark_core_error(e) {
+            eprintln!("[Engine Fatal] operation=report_core_error error={}", e);
+        }
     }
 
     fn exit(&self) {

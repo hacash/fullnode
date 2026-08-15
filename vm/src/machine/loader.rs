@@ -71,7 +71,7 @@ impl Runtime {
         host: &mut H,
         addr: &ContractAddress,
     ) -> VmrtRes<Arc<ContractObj>> {
-        let Some(state_ed) = host.contract_edition(addr) else {
+        let Some(state_ed) = host.contract_edition(addr)? else {
             return itr_err_fmt!(
                 NotFindContract,
                 "cannot find contract edition {}",
@@ -87,7 +87,7 @@ impl Runtime {
         if self.warm.contracts.len() >= self.warm.space_cap.loaded_contract {
             return itr_err_code!(OutOfLoadContract);
         }
-        let Some(csto) = host.contract(addr) else {
+        let Some(csto) = host.contract(addr)? else {
             return itr_err_fmt!(
                 NotFindContract,
                 "cannot find contract {}",

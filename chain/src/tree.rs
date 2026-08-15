@@ -1056,11 +1056,11 @@ mod tests {
         attach(&t, hash(2), hash(3), 3, key(3), Some((b"k", b"v3")), 4);
         // Newest write of `k` wins, and writes from lower blocks are visible.
         let snap = t.snapshot(&hash(3)).unwrap();
-        assert_eq!(snap.get(b"k"), Some(b"v3".to_vec()));
-        assert_eq!(snap.get(b"other"), Some(b"x".to_vec()));
+        assert_eq!(snap.get(b"k").unwrap(), Some(b"v3".to_vec()));
+        assert_eq!(snap.get(b"other").unwrap(), Some(b"x".to_vec()));
         // A snapshot of the middle block must not see the later write.
         let mid = t.snapshot(&hash(2)).unwrap();
-        assert_eq!(mid.get(b"k"), Some(b"v1".to_vec()));
+        assert_eq!(mid.get(b"k").unwrap(), Some(b"v1".to_vec()));
     }
 
     #[test]
@@ -1075,10 +1075,10 @@ mod tests {
 
         attach(&t, hash(0), hash(3), 1, key(20), Some((b"k", b"head-2")), 4);
         assert_ne!(t.epoch(), epoch, "a reorg must stale old head work");
-        assert_eq!(snap.get(b"k"), Some(b"head-1".to_vec()));
+        assert_eq!(snap.get(b"k").unwrap(), Some(b"head-1".to_vec()));
         let (new_hash, new_height, _, new_snap, _root_pin) = t.head_snapshot();
         assert_eq!((new_hash, new_height), (hash(3), 1));
-        assert_eq!(new_snap.get(b"k"), Some(b"head-2".to_vec()));
+        assert_eq!(new_snap.get(b"k").unwrap(), Some(b"head-2".to_vec()));
     }
 
     #[test]
@@ -1191,8 +1191,8 @@ mod tests {
         assert_eq!(second.expected_root_height, 1);
         assert_eq!(height_of(&second.new_root), 2);
         let snap = t.snapshot(&hash(4)).unwrap();
-        assert_eq!(snap.get(b"a"), Some(b"one".to_vec()));
-        assert_eq!(snap.get(b"b"), Some(b"two".to_vec()));
+        assert_eq!(snap.get(b"a").unwrap(), Some(b"one".to_vec()));
+        assert_eq!(snap.get(b"b").unwrap(), Some(b"two".to_vec()));
 
         assert!(t.validate_roll(&second).is_err());
         assert!(t.commit_roll(&second).is_err());
@@ -1213,7 +1213,7 @@ mod tests {
         t.commit_roll(&r.roll.expect("root should advance"))
             .unwrap();
         // Old chunks are pruned, but the captured view still answers.
-        assert_eq!(snap.get(b"k"), Some(b"v1".to_vec()));
+        assert_eq!(snap.get(b"k").unwrap(), Some(b"v1".to_vec()));
     }
 
     #[test]
@@ -1274,7 +1274,7 @@ mod tests {
 
         assert!(!t.contains(&hash(9)));
         assert!(tip.parent().is_some());
-        assert_eq!(tip.get(b"side"), Some(b"value".to_vec()));
+        assert_eq!(tip.get(b"side").unwrap(), Some(b"value".to_vec()));
         drop(root_pin);
         assert!(tip.parent().is_none());
     }

@@ -1,4 +1,6 @@
-use base::{StateLayer, StateRead, numeric_state_key, numeric_state_prefix};
+use base::{
+    STATE_DECODE_FAILED_CODE, StateLayer, StateRead, numeric_state_key, numeric_state_prefix,
+};
 use field::{ChannelId, ChannelSto, Decode, DiamondNumber, Encode, Reader, Uint8, Uint12};
 use sys::Ret;
 
@@ -115,20 +117,31 @@ impl<'a> MintStateRead<'a> {
         Self(read)
     }
 
-    pub fn channel(&self, id: &ChannelId) -> Option<ChannelSto> {
-        self.0
-            .get(&MintState::key_channel(id))
-            .and_then(|b| ChannelSto::decode(b.as_ref()).ok().map(|x| x.0))
+    pub fn channel(&self, id: &ChannelId) -> Ret<Option<ChannelSto>> {
+        let k = MintState::key_channel(id);
+        match self.0.get(&k)? {
+            Some(b) => match ChannelSto::decode(b.as_ref()) {
+                Ok((v, _)) => Ok(Some(v)),
+                Err(e) => Err(sys::Error::abort(format!("state decode failed: {}", e))
+                    .with_code(STATE_DECODE_FAILED_CODE)),
+            },
+            None => Ok(None),
+        }
     }
 
-    pub fn mint_total(&self) -> Option<MintTotal> {
-        self.0
-            .get(MintState::TOTAL_KEY)
-            .and_then(|bytes| MintTotal::decode(bytes.as_ref()).ok().map(|value| value.0))
+    pub fn mint_total(&self) -> Ret<Option<MintTotal>> {
+        match self.0.get(MintState::TOTAL_KEY)? {
+            Some(bytes) => match MintTotal::decode(bytes.as_ref()) {
+                Ok((v, _)) => Ok(Some(v)),
+                Err(e) => Err(sys::Error::abort(format!("state decode failed: {}", e))
+                    .with_code(STATE_DECODE_FAILED_CODE)),
+            },
+            None => Ok(None),
+        }
     }
 
-    pub fn get_mint_total(&self) -> MintTotal {
-        self.mint_total().unwrap_or_default()
+    pub fn get_mint_total(&self) -> Ret<MintTotal> {
+        Ok(self.mint_total()?.unwrap_or_default())
     }
 }
 
@@ -142,24 +155,35 @@ impl<'a> MintState<'a> {
         numeric_state_key(KEY_CHANNEL, id)
     }
 
-    pub fn channel(&self, id: &ChannelId) -> Option<ChannelSto> {
-        self.0
-            .get(&Self::key_channel(id))
-            .and_then(|b| ChannelSto::decode(b.as_ref()).ok().map(|x| x.0))
+    pub fn channel(&self, id: &ChannelId) -> Ret<Option<ChannelSto>> {
+        let k = Self::key_channel(id);
+        match self.0.get(&k)? {
+            Some(b) => match ChannelSto::decode(b.as_ref()) {
+                Ok((v, _)) => Ok(Some(v)),
+                Err(e) => Err(sys::Error::abort(format!("state decode failed: {}", e))
+                    .with_code(STATE_DECODE_FAILED_CODE)),
+            },
+            None => Ok(None),
+        }
     }
 
     pub fn channel_set(&mut self, id: &ChannelId, v: &ChannelSto) {
         self.0.set(&Self::key_channel(id), v.encode());
     }
 
-    pub fn mint_total(&self) -> Option<MintTotal> {
-        self.0
-            .get(Self::TOTAL_KEY)
-            .and_then(|bytes| MintTotal::decode(bytes.as_ref()).ok().map(|value| value.0))
+    pub fn mint_total(&self) -> Ret<Option<MintTotal>> {
+        match self.0.get(Self::TOTAL_KEY)? {
+            Some(bytes) => match MintTotal::decode(bytes.as_ref()) {
+                Ok((v, _)) => Ok(Some(v)),
+                Err(e) => Err(sys::Error::abort(format!("state decode failed: {}", e))
+                    .with_code(STATE_DECODE_FAILED_CODE)),
+            },
+            None => Ok(None),
+        }
     }
 
-    pub fn get_mint_total(&self) -> MintTotal {
-        self.mint_total().unwrap_or_default()
+    pub fn get_mint_total(&self) -> Ret<MintTotal> {
+        Ok(self.mint_total()?.unwrap_or_default())
     }
 
     pub fn set_mint_total(&mut self, total: &MintTotal) {
@@ -176,7 +200,7 @@ pub(crate) fn with_mint_total<R>(
     state: &mut MintState,
     apply: impl FnOnce(&mut MintTotal) -> Ret<R>,
 ) -> Ret<R> {
-    let mut total = state.get_mint_total();
+    let mut total = state.get_mint_total()?;
     let result = apply(&mut total)?;
     state.set_mint_total(&total);
     Ok(result)

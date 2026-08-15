@@ -15,7 +15,7 @@ use base::{
 };
 use sys::{Rerr, Ret};
 
-use crate::engine::{ApplyAccepted, ApplyResult, ChainEngine, CoreFault};
+use crate::engine::{ApplyAccepted, ApplyResult, ChainEngine};
 use crate::ring::Ring;
 
 const SYNC_CANCELLED: &str = "sync_cancelled";
@@ -150,7 +150,7 @@ pub fn run(
         // A persistence failure after blocks were published to the tree is
         // engine-fatal: no recovery path exists, boot replay rebuilds from
         // the real disk state on the next start (§2.3).
-        Err(e) if CoreFault::is_core_fault(&e) => {
+        Err(e) if e.is_abort() => {
             eprintln!("[Block Sync Fatal] operation=sync error={}", e);
             eng.mark_fatal();
             Err(e)
@@ -204,7 +204,13 @@ fn check_replay_index(eng: &ChainEngine, pkg: &BlkPkg) -> Rerr {
         .store
         .block_store()
         .hash_by_height(pkg.height())
-        .map_err(|e| e.with_code(crate::engine::CoreFault::StorageReadFailed.code()))?;
+        .map_err(|e| {
+            // Replay is canonical acquisition: the read failure is `Abort +
+            // storage_read_failed` (§7.3), so sync stops instead of judging
+            // the block a bad record.
+            sys::Error::abort(format!("replay height index read failed: {}", e))
+                .with_code(base::STATE_READ_FAILED_CODE)
+        })?;
     if indexed != Some(pkg.hash()) {
         return sys::errf!(
             "replay height index hash for {} does not match the decoded block",
@@ -259,16 +265,14 @@ fn process_block(
         }
         // Same order as discover: arrive validation runs before admission, so
         // a block failing the arrive check never touches bidding state (§6).
-        crate::engine::catch_storage_panic(|| {
-            ctx.eng
-                .consensus
-                .check_block_arrive(pkg, ctx.eng, ctx.pipelined)
-        })?;
-        match crate::engine::catch_storage_panic(|| {
-            ctx.eng
-                .consensus
-                .check_block_admission(pkg, ctx.eng, ctx.pipelined)
-        })? {
+        ctx.eng
+            .consensus
+            .check_block_arrive(pkg, ctx.eng, ctx.pipelined)?;
+        match ctx
+            .eng
+            .consensus
+            .check_block_admission(pkg, ctx.eng, ctx.pipelined)?
+        {
             base::BlockAdmissionDecision::Continue => {}
             base::BlockAdmissionDecision::Defer(_) => {
                 // Explicit deferred stop: the source pauses without judging
@@ -281,10 +285,7 @@ fn process_block(
     }
 
     // Execute and attach; the returned job is persisted in insertion order.
-    match ctx
-        .eng
-        .prepare_one(pkg, ctx.mode, ctx.replay.is_none())?
-    {
+    match ctx.eng.prepare_one(pkg, ctx.mode, ctx.replay.is_none())? {
         ApplyResult::Accepted(job) => Ok(Some(job)),
         // Network mode: a duplicate or discarded live side branch never stops
         // the stream.
@@ -427,10 +428,7 @@ fn decode_loop(ctx: &SyncCtx, jobs_rx: Arc<Mutex<Receiver<Job>>>) {
         if !ctx.ring.reserve() {
             break;
         }
-        let job = jobs_rx
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .recv();
+        let job = jobs_rx.lock().unwrap_or_else(|e| e.into_inner()).recv();
         let Ok(job) = job else {
             ctx.ring.release();
             break;
@@ -697,7 +695,7 @@ fn run_pipeline(
         let persist_result = match persister.join() {
             Ok(Ok(summary)) => Ok(summary),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(sys::Error::fault("sync persister panicked")
+            Err(_) => Err(sys::Error::abort("sync persister panicked")
                 .with_code(crate::engine::CoreFault::PersistFailed.code())),
         };
         // The run outcome: the apply error, or the first error among the

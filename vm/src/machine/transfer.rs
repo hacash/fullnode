@@ -131,7 +131,10 @@ impl StubVm {
                 if e.is_revert() {
                     crate::rt::ItrErrCode::ActCallRevert
                 } else {
-                    crate::rt::ItrErrCode::ActCallError
+                    // Preserve `Abort` classification at this `sys::Error ->
+                    // ItrErr` conversion point so a transfer-hook state read
+                    // failure stays fatal (§5).
+                    crate::rt::map_native_action_code(&e)
                 },
                 e.as_str(),
             )

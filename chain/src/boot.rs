@@ -15,7 +15,9 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use base::{BlkPkg, PipelineOptions, PipelineReport, PkgOrigin, PkgSource, ProgressSink, StateStatus};
+use base::{
+    BlkPkg, PipelineOptions, PipelineReport, PkgOrigin, PkgSource, ProgressSink, StateStatus,
+};
 use field::Hash;
 use sys::errf;
 
@@ -23,13 +25,20 @@ use crate::engine::ChainEngine;
 
 /// Build a boot failure. `kind` only distinguishes the ops action:
 /// "repair/rebuild the store" vs "switch binary / migrate offline". The outer
-/// layer prints the message and refuses to enter Running.
+/// layer prints the message and refuses to enter Running. Boot failures are
+/// startup-fatal: they keep the `Abort` severity so storage read failures are
+/// never downgraded to ordinary faults (§7.2).
 pub(crate) fn boot_fault(
     phase: &'static str,
     kind: &'static str,
     message: impl Into<String>,
 ) -> sys::Error {
-    sys::Error::fault(format!("boot {} failed [{}]: {}", phase, kind, message.into()))
+    sys::Error::abort(format!(
+        "boot {} failed [{}]: {}",
+        phase,
+        kind,
+        message.into()
+    ))
 }
 
 /// Probe-phase storage failure (the state status read).
@@ -53,22 +62,8 @@ pub(crate) fn rebuild_fault(message: impl Into<String>) -> sys::Error {
 }
 
 pub fn open_state(eng: &ChainEngine, status: StateStatus) -> sys::Rerr {
-    // Storage read failures surface as StorageReadPanic through the
-    // Option-based state API. Convert them to boot storage failures instead
-    // of letting the panic escape boot (§3.1/§2.4 of the engine error
-    // contract).
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        open_state_inner(eng, status)
-    })) {
-        Ok(result) => result,
-        Err(payload) => match payload.downcast::<base::StorageReadPanic>() {
-            Ok(fault) => Err(probe_fault(format!("storage read failed: {}", fault.error))),
-            Err(payload) => std::panic::resume_unwind(payload),
-        },
-    }
-}
-
-fn open_state_inner(eng: &ChainEngine, status: StateStatus) -> sys::Rerr {
+    // Storage read failures now travel as `Abort` errors along the normal
+    // `Ret` path; no panic bridge exists here anymore (§7.2).
     let _guard = eng.inserting.lock().unwrap();
     let state = eng.store.stable_state();
     let root_height = match &status {
@@ -87,7 +82,7 @@ fn open_state_inner(eng: &ChainEngine, status: StateStatus) -> sys::Rerr {
     let rebuild = matches!(status, StateStatus::Uninitialized)
         || eng
             .consensus
-            .genesis_state_needs_rebuild(state.as_ref(), root_height);
+            .genesis_state_needs_rebuild(state.as_ref(), root_height)?;
     let tip = resolve_available_cursor(eng)?;
     if let StateStatus::Ready(status) = &status {
         if status.latest_height > tip {
@@ -99,7 +94,10 @@ fn open_state_inner(eng: &ChainEngine, status: StateStatus) -> sys::Rerr {
     }
     if rebuild {
         init_genesis_state(eng).map_err(|e| {
-            rebuild_fault(format!("genesis initialization at height {}: {}", root_height, e))
+            rebuild_fault(format!(
+                "genesis initialization at height {}: {}",
+                root_height, e
+            ))
         })?;
         if tip > 0 {
             replay(eng, 1, tip, PkgOrigin::Rebuild)?;
@@ -188,9 +186,8 @@ fn replay(eng: &ChainEngine, from: u64, to: u64, origin: PkgOrigin) -> sys::Rerr
     let mut opts = PipelineOptions::default();
     opts.origin = origin;
     opts.progress_sink = Some(Arc::new(ReplayProgress::new(origin, from, to)));
-    crate::sync::run_replay_locked(eng, source, from, to, opts).map_err(|e| {
-        replay_fault(format!("canonical replay [{}..{}]: {}", from, to, e))
-    })?;
+    crate::sync::run_replay_locked(eng, source, from, to, opts)
+        .map_err(|e| replay_fault(format!("canonical replay [{}..{}]: {}", from, to, e)))?;
 
     if is_rebuild {
         println!("finish.");
@@ -238,10 +235,10 @@ fn replay_side_branches(eng: &ChainEngine) -> sys::Rerr {
 
     // A failed replay is either a bad record (the whole list is cleared and
     // the side replay skipped) or a storage failure (boot aborts: the store
-    // cannot be trusted). Only catch_storage_panic tags errors with
-    // StorageReadFailed; everything else is a bad record.
+    // cannot be trusted). Storage failures are `Abort`; everything else is a
+    // bad record (§7.2).
     if let Err(e) = replay_side(eng, &hashes) {
-        if crate::engine::CoreFault::StorageReadFailed.is(&e) {
+        if e.is_abort() {
             return Err(rebuild_fault(format!("side replay storage failure: {}", e)));
         }
         side_replay_fail(path, &e);
@@ -274,7 +271,11 @@ fn replay_side(eng: &ChainEngine, hashes: &[Hash]) -> sys::Ret<()> {
             continue;
         }
         let data = eng.store.block_data(hash).map_err(|e| {
-            sys::Error::fault(format!("block {:?}: side body read failed: {}", hash, e))
+            // Storage failures during side replay must stay `Abort` so
+            // `replay_side_branches` refuses startup instead of clearing the
+            // whole list (§7.2).
+            sys::Error::abort(format!("block {:?}: side body read failed: {}", hash, e))
+                .with_code(base::STATE_READ_FAILED_CODE)
         })?;
         let Some(data) = data else {
             return errf!("block {:?}: side body is missing from the block db", hash);
@@ -283,7 +284,10 @@ fn replay_side(eng: &ChainEngine, hashes: &[Hash]) -> sys::Ret<()> {
             return errf!("block {:?}: side body cannot be decoded", hash);
         };
         if blk.hash() != *hash {
-            return errf!("block {:?}: stored hash does not match the decoded block", hash);
+            return errf!(
+                "block {:?}: stored hash does not match the decoded block",
+                hash
+            );
         }
         if blk.height() <= root_height {
             continue; // below the durable root: pruned history, discard
@@ -298,21 +302,16 @@ fn replay_side(eng: &ChainEngine, hashes: &[Hash]) -> sys::Ret<()> {
     for (_height, hash, blk) in pending {
         let prev_hash = blk.prev_hash();
         let pkg = BlkPkg::from_block(blk.clone(), PkgSource::new(PkgOrigin::Replay));
-        let Some((_, _, fork_choice)) = crate::engine::catch_storage_panic(|| {
-            crate::apply::resolve_fork_choice(eng, &pkg)
-        })?
+        let Some((_, _, fork_choice)) = crate::apply::resolve_fork_choice(eng, &pkg)? else {
+            return errf!("block {:?}: parent is not in the recovered tree", hash);
+        };
+        let Some((chunk, _)) =
+            eng.tree
+                .begin_block_execution(&prev_hash, pkg.block_ref(), fork_choice)?
         else {
             return errf!("block {:?}: parent is not in the recovered tree", hash);
         };
-        let Some((chunk, _)) = eng
-            .tree
-            .begin_block_execution(&prev_hash, pkg.block_ref(), fork_choice)?
-        else {
-            return errf!("block {:?}: parent is not in the recovered tree", hash);
-        };
-        let chunk = crate::engine::catch_storage_panic(|| {
-            crate::apply::execute_block(eng, pkg.block(), chunk, false)
-        })?;
+        let chunk = crate::apply::execute_block(eng, pkg.block(), chunk, false)?;
         eng.tree.attach_side(&prev_hash, chunk)?;
     }
     eng.tree

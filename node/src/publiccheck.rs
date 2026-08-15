@@ -5,9 +5,7 @@ use std::time::Duration;
 
 use sys::Ret;
 
-use crate::p2p::codec::{
-    dial_magic_exchange, read_transport_msg, write_transport_msg,
-};
+use crate::p2p::codec::{dial_magic_exchange, read_transport_msg, write_transport_msg};
 use crate::p2p::msg::MSG_CHECK_PUBLIC;
 use crate::p2p::msg::PEER_KEY_SIZE;
 

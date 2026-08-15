@@ -46,11 +46,8 @@ impl SyncTracker {
     pub fn finish(&self, peer_id: &str, remote_height: u64) {
         let mut sync = self.inner.lock().unwrap();
         if sync.as_ref().and_then(|s| s.active_peer.as_deref()) == Some(peer_id) {
-            sync.as_mut().unwrap().remote_height = sync
-                .as_ref()
-                .unwrap()
-                .remote_height
-                .max(remote_height);
+            sync.as_mut().unwrap().remote_height =
+                sync.as_ref().unwrap().remote_height.max(remote_height);
         }
     }
 

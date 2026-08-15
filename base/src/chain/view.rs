@@ -86,8 +86,12 @@ pub trait Engine: ChainView {
         false
     }
 
-    fn try_execute_batch(&self, _txs: Vec<TxRef>, _pending_height: u64) -> Vec<Hash> {
-        vec![]
+    /// Execute a batch against pending state and return the hashes whose
+    /// execution failed (removable from the txpool). An `Abort` (core state
+    /// read failure) is returned as `Err` so no transaction is judged invalid
+    /// and the error can reach the engine fatal boundary (§6.7).
+    fn try_execute_batch(&self, _txs: Vec<TxRef>, _pending_height: u64) -> Ret<Vec<Hash>> {
+        Ok(vec![])
     }
 
     fn try_pick_pending_txs(
@@ -144,6 +148,13 @@ pub trait Engine: ChainView {
     fn add_chain_listener(&self, _listener: Arc<dyn ChainListener>) -> Rerr {
         sys::errf!("chain listener registration not supported")
     }
+
+    /// Report a core error (`ErrorKind::Abort`) observed outside the engine's
+    /// own consensus paths (listener boundaries, tx admission, deferred batch
+    /// polling). Implementations judge with `error.is_abort()` and enter their
+    /// fatal lifecycle. The default empty implementation would silently drop
+    /// the escalation and is not recommended for a real engine.
+    fn report_core_error(&self, _e: &sys::Error) {}
 
     fn exit(&self) {}
 }

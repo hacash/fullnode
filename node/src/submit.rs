@@ -315,6 +315,13 @@ impl P2PNode {
         }
         // 3. try execute
         if let Err(e) = self.engine.try_execute_tx(tx.tx_ref()) {
+            // A core state read failure must not judge the transaction
+            // invalid: it reports node-unavailable and escalates to engine
+            // fatal (§6.7). Ordinary execution errors remain a rejection.
+            if e.is_abort() {
+                self.engine.report_core_error(&e);
+                return Err(e);
+            }
             return Ok(TxSubmitResult::rejected(
                 tx.hash(),
                 TxRejectReason::ExecutionFailed(e.to_string()),
@@ -350,11 +357,26 @@ impl P2PNode {
         let _insert_guard = self.inserting.lock().unwrap();
         let mut progressed = false;
         let mut accepted_hashes = Vec::new();
-        for batch in self
+        let batches = match self
             .engine
             .node_hooks()
             .poll_deferred_batches(self.engine.as_ref())
         {
+            Ok(batches) => batches,
+            Err(e) => {
+                // Digest the polling failure inside this round: record and
+                // stop; never judge candidates invalid. An `Abort` escalates
+                // to engine fatal through the public reporting interface
+                // (§6.6). Batch extraction happens after the mint's
+                // `stable_height` read, so a polling error needs no requeue.
+                eprintln!("[node] poll_deferred_batches failed: {}", e);
+                if e.is_abort() {
+                    self.engine.report_core_error(&e);
+                }
+                return progressed;
+            }
+        };
+        for batch in batches {
             let mut batch_result = base::DeferredBatchResult::Exhausted;
             for (candidate_index, candidate) in batch.candidates.into_iter().enumerate() {
                 let mut candidate_ok = true;

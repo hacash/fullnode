@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use field::{Address, Balance, Hash};
-use sys::{Rerr, Waiter};
+use sys::{Rerr, Ret, Waiter};
 
 use crate::BlockRef;
 use crate::api::ApiService;
@@ -29,7 +29,7 @@ use crate::chain::BlockHistory;
 /// and generic state-KV access.
 pub trait ScanerView: Send + Sync {
     fn block_history(&self) -> Arc<dyn BlockHistory>;
-    fn balance_at(&self, block_hash: &Hash, address: &Address) -> Option<Balance>;
+    fn balance_at(&self, block_hash: &Hash, address: &Address) -> Ret<Option<Balance>>;
 
     /// Read several balances from one validated state snapshot.
     ///
@@ -41,8 +41,8 @@ pub trait ScanerView: Send + Sync {
         &self,
         _block_hash: &Hash,
         _addresses: &[Address],
-    ) -> Option<Vec<Option<Balance>>> {
-        None
+    ) -> Ret<Option<Vec<Option<Balance>>>> {
+        Ok(None)
     }
 }
 
@@ -61,8 +61,11 @@ pub trait Scaner: Send + Sync {
     /// A stable block is available for indexing.
     ///
     /// Implementations must return promptly and do their database work in
-    /// their own queue/worker. Indexer failures must not reject a block.
-    fn on_block(&self, _block: BlockRef, _view: Arc<dyn ScanerView>) {}
+    /// their own queue/worker. Indexer failures must not reject a block;
+    /// returning an error is recorded by the listener boundary.
+    fn on_block(&self, _block: BlockRef, _view: Arc<dyn ScanerView>) -> Rerr {
+        Ok(())
+    }
 
     /// Extra HTTP routes merged by `app` into the main `HttpServer` service list.
     fn api_services(&self) -> Vec<Arc<dyn ApiService>> {

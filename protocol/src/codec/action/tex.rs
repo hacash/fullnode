@@ -43,7 +43,7 @@ fn tex_check_asset_serial(ctx: &mut dyn Context, serial: Fold64) -> Rerr {
     }
     let exist = {
         let state = CoreState::wrap(ctx.layer());
-        state.asset(&serial).is_some()
+        state.asset(&serial)?.is_some()
     };
     if !exist {
         return errf!("tex asset <{}> does not exist", serial.uint());
@@ -326,7 +326,7 @@ impl TexCell {
             }
             Self::CondZhuAtMost { haczhu } => {
                 let bls = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default();
                 let zhu = Amount::zhu(haczhu.uint());
                 if zhu >= bls.hacash {
@@ -337,7 +337,7 @@ impl TexCell {
             }
             Self::CondZhuAtLeast { haczhu } => {
                 let bls = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default();
                 let zhu = Amount::zhu(haczhu.uint());
                 if zhu <= bls.hacash {
@@ -348,7 +348,7 @@ impl TexCell {
             }
             Self::CondZhuEq { haczhu } => {
                 let bls = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default();
                 let zhu = Amount::zhu(haczhu.uint());
                 if zhu == bls.hacash {
@@ -359,7 +359,7 @@ impl TexCell {
             }
             Self::CondSatAtMost { satoshi } => {
                 let sat = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default()
                     .satoshi
                     .uint();
@@ -371,7 +371,7 @@ impl TexCell {
             }
             Self::CondSatAtLeast { satoshi } => {
                 let sat = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default()
                     .satoshi
                     .uint();
@@ -383,7 +383,7 @@ impl TexCell {
             }
             Self::CondSatEq { satoshi } => {
                 let sat = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default()
                     .satoshi
                     .uint();
@@ -395,7 +395,7 @@ impl TexCell {
             }
             Self::CondDiaAtMost { diamond } => {
                 let dia = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default()
                     .diamond
                     .uint();
@@ -407,7 +407,7 @@ impl TexCell {
             }
             Self::CondDiaAtLeast { diamond } => {
                 let dia = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default()
                     .diamond
                     .uint();
@@ -419,7 +419,7 @@ impl TexCell {
             }
             Self::CondDiaEq { diamond } => {
                 let dia = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default()
                     .diamond
                     .uint();
@@ -432,7 +432,7 @@ impl TexCell {
             Self::CondAssetAtMost { asset } => {
                 tex_check_asset_serial(ctx, asset.serial)?;
                 let bls = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default();
                 let ast = bls.asset_must(asset.serial)?;
                 if asset.amount.uint() >= ast.amount.uint() {
@@ -447,7 +447,7 @@ impl TexCell {
             Self::CondAssetAtLeast { asset } => {
                 tex_check_asset_serial(ctx, asset.serial)?;
                 let bls = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default();
                 let ast = bls.asset_must(asset.serial)?;
                 if asset.amount.uint() <= ast.amount.uint() {
@@ -462,7 +462,7 @@ impl TexCell {
             Self::CondAssetEq { asset } => {
                 tex_check_asset_serial(ctx, asset.serial)?;
                 let bls = CoreState::wrap(ctx.layer())
-                    .balance(taradr)
+                    .balance(taradr)?
                     .unwrap_or_default();
                 let ast = bls.asset_must(asset.serial)?;
                 if asset.amount.uint() == ast.amount.uint() {

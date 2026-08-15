@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use base::{
     ApplyMode, BlkPkg, BlockAcceptResult, BlockRef, BlockSource, ChainListener, ConsensusRuntime,
-    EngineConfig, Env, ExecutionServices, PipelineOptions, RecentBlock, Store, TxRef,
+    Engine, EngineConfig, Env, ExecutionServices, PipelineOptions, RecentBlock, Store, TxRef,
 };
 use field::{Address, Hash};
 use sys::{Rerr, Ret, errf};
@@ -26,7 +26,9 @@ use crate::side_list::{SideKeepCtx, SideListWriter};
 use crate::tree::{Inserted, Tree};
 
 /// The engine-fatal fault classes. An error carrying one of these stops the
-/// engine; see §2.3 of the engine error-handling contract.
+/// engine; see §2.3 of the engine error-handling contract. Storage read
+/// failures use `base::STATE_READ_FAILED_CODE`/`STATE_DECODE_FAILED_CODE`
+/// instead of a `CoreFault` class (§3 of the state-read error contract).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CoreFault {
     /// Persistence failure after a block was published to the tree: the disk
@@ -34,8 +36,6 @@ pub(crate) enum CoreFault {
     PersistFailed,
     /// Internal inconsistency detected by the tree or consensus runtime.
     CoreFailed,
-    /// A core storage read failed (the Option-based state API panics).
-    StorageReadFailed,
 }
 
 impl CoreFault {
@@ -44,20 +44,7 @@ impl CoreFault {
         match self {
             CoreFault::PersistFailed => "persist_failed",
             CoreFault::CoreFailed => "core_failed",
-            CoreFault::StorageReadFailed => "storage_read_failed",
         }
-    }
-
-    /// Whether `error` carries this fault code.
-    pub(crate) fn is(self, error: &sys::Error) -> bool {
-        error.code() == Some(self.code())
-    }
-
-    /// Whether `error` is any engine-fatal core fault.
-    pub(crate) fn is_core_fault(error: &sys::Error) -> bool {
-        CoreFault::PersistFailed.is(error)
-            || CoreFault::CoreFailed.is(error)
-            || CoreFault::StorageReadFailed.is(error)
     }
 }
 
@@ -67,25 +54,9 @@ const LIFE_FATAL: u8 = 2;
 const LIFE_STOPPING: u8 = 3;
 const LIFE_STOPPED: u8 = 4;
 
-fn persist_fatal(e: sys::Error) -> sys::Error {
-    sys::Error::fault(format!("canonical persistence failed: {}", e))
+pub(crate) fn persist_fatal(e: sys::Error) -> sys::Error {
+    sys::Error::abort(format!("canonical persistence failed: {}", e))
         .with_code(CoreFault::PersistFailed.code())
-}
-
-/// Convert only the storage panic used by the Option-based state API. Other
-/// panics remain programming/plugin failures and keep their normal unwind.
-pub(crate) fn catch_storage_panic<T>(run: impl FnOnce() -> Ret<T>) -> Ret<T> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
-        Ok(result) => result,
-        Err(payload) => match payload.downcast::<base::StorageReadPanic>() {
-            Ok(fault) => Err(sys::Error::fault(format!(
-                "core storage read failed: {}",
-                fault.error
-            ))
-            .with_code(CoreFault::StorageReadFailed.code())),
-            Err(payload) => std::panic::resume_unwind(payload),
-        },
-    }
 }
 
 pub struct ChainEngine {
@@ -335,7 +306,7 @@ impl ChainEngine {
         if !self.tree.contains(&prev_hash) {
             return Ok(BlockAcceptResult::orphan(prev_hash));
         }
-        let arrive = catch_storage_panic(|| self.consensus.check_block_arrive(&pkg, self, false));
+        let arrive = self.consensus.check_block_arrive(&pkg, self, false);
         if let Err(e) = arrive {
             if self.mark_core_error(&e) {
                 eprintln!(
@@ -348,12 +319,24 @@ impl ChainEngine {
             return Err(e);
         }
 
-        match catch_storage_panic(|| self.consensus.check_block_admission(&pkg, self, false)) {
+        match self.consensus.check_block_admission(&pkg, self, false) {
             Ok(base::BlockAdmissionDecision::Continue) => {}
             Ok(base::BlockAdmissionDecision::Defer(_)) => {
                 return Ok(BlockAcceptResult::deferred());
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                // Admission is a pre-attach boundary: `Abort` must trigger
+                // engine fatal like the arrive arm (§7.1).
+                if self.mark_core_error(&e) {
+                    eprintln!(
+                        "[Engine Fatal] operation=discover_admission phase=pre_attach height={} hash={:?} error={}",
+                        pkg.height(),
+                        pkg.hash(),
+                        e
+                    );
+                }
+                return Err(e);
+            }
         }
 
         let _guard = self.inserting.lock().unwrap();
@@ -412,12 +395,7 @@ impl ChainEngine {
         // A failure here is either a plain consensus/validation error (returned
         // to the caller, which decides peer penalty) or a core error carrying a
         // fatal code — the caller decides the boundary and prints it (§2.3).
-        let accepted = match catch_storage_panic(|| {
-            crate::apply::insert_block(self, pkg, mode, persist_body)
-        }) {
-            Ok(value) => value,
-            Err(e) => return Err(e),
-        };
+        let accepted = crate::apply::insert_block(self, pkg, mode, persist_body)?;
         let ApplyResult::Accepted(job) = accepted else {
             return Ok(accepted);
         };
@@ -494,26 +472,62 @@ impl ChainEngine {
         }
         let mut rolled = 0;
         if let Some(job) = roll {
-            rolled = crate::persist::roll_root(self, job, pkg.origin(), stored_replay)
-                .map_err(persist_fatal)?
-                .len() as u64;
+            // `roll_root` classifies its own errors: disk/root writes are
+            // `persist_failed`, consensus-stable callbacks keep `core_failed`
+            // (§8.3). The caller must not rewrap the whole result.
+            rolled =
+                crate::persist::roll_root(self, job, pkg.origin(), stored_replay)?.len() as u64;
         }
         // The block is durably accepted now; publish consensus-owned arrival
-        // metadata. Replay/rebuild must not republish it.
+        // metadata. Replay/rebuild must not republish it. A consensus callback
+        // error is engine-fatal (§8.3): the consensus auxiliary state may be
+        // incomplete, and the accepted block is not rolled back.
         if !stored_replay {
-            isolate_callback("consensus.on_block_accepted", || {
-                self.consensus.on_block_accepted(&pkg, self);
-            });
+            // A consensus callback error is engine-fatal (§8.3): the consensus
+            // auxiliary state may be incomplete and the accepted block is not
+            // rolled back. Preserve an already `Abort` error as-is; escalate
+            // ordinary errors to `Abort + core_failed`. The error is returned
+            // so `discover`'s caller never reads it as a plain block rejection
+            // (`core_failed`), while the engine being fatal stops retries.
+            if let Err(e) = self.consensus.on_block_accepted(&pkg, self) {
+                let fatal = if e.is_abort() {
+                    e
+                } else {
+                    sys::Error::abort(format!("consensus.on_block_accepted failed: {}", e))
+                        .with_code("core_failed")
+                };
+                eprintln!(
+                    "[Engine Fatal] consensus.on_block_accepted failed height={} hash={:?} error={}",
+                    height,
+                    pkg.hash(),
+                    fatal
+                );
+                self.mark_fatal();
+                return Err(fatal);
+            }
         }
         if maintain_runtime_caches && is_head {
             self.record_recent(pkg.block());
             self.record_avgfee(pkg.block());
         }
         if !stored_replay {
-            for listener in self.listeners.lock().unwrap().iter() {
-                isolate_callback("listener.on_block_accepted", || {
-                    listener.on_block_accepted(height, pkg.origin());
-                });
+            // Listener registry mutex is released before any external callback
+            // (§8.4). A listener's ordinary `Err` only warns and does not mark
+            // fatal; an `Abort` is escalated to engine fatal only after every
+            // listener has been notified, and never returned as `persist_one`'s
+            // error (the accepted block is not retried by the peer).
+            let listeners = self.listeners.lock().unwrap().clone();
+            let mut abort = None;
+            for listener in listeners {
+                if let Err(error) = listener.on_block_accepted(height, pkg.origin()) {
+                    eprintln!("[Engine] listener.on_block_accepted failed: {}", error);
+                    if error.is_abort() {
+                        abort = Some(error);
+                    }
+                }
+            }
+            if let Some(error) = abort {
+                self.report_core_error(&error);
             }
         }
         Ok(PersistOutcome {
@@ -677,7 +691,7 @@ impl ChainEngine {
     /// caller prints the structured context; every fatal error is printed
     /// exactly once at the boundary that decides it.
     pub(crate) fn mark_core_error(&self, error: &sys::Error) -> bool {
-        let fatal = CoreFault::is_core_fault(error);
+        let fatal = error.is_abort();
         if fatal && self.lifecycle.load(Ordering::Acquire) == LIFE_RUNNING {
             self.mark_fatal();
         }
@@ -814,16 +828,6 @@ impl ChainEngine {
     }
 }
 
-/// Run one external callback inside a panic boundary. A panicking listener
-/// must not take down the engine; the notification is skipped with a warning
-/// (§8 of the error contract).
-pub(crate) fn isolate_callback(name: &'static str, run: impl FnOnce()) {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
-    if result.is_err() {
-        eprintln!("[Engine] {} panicked; notification skipped", name);
-    }
-}
-
 /// Build the side hash list keep predicate: per compaction it snapshots the
 /// canonical branch and the durable root height, then drops hashes that are
 /// canonical, below the root, or whose body is missing/undecodable.
@@ -848,9 +852,13 @@ fn side_keep_ctx(
                 return false;
             }
             // A transient read failure keeps the recovery hint (conservative);
-            // a missing or undecodable body drops it, and boot decides the
-            // canonical answer anyway.
-            let Some(data) = store.block_data(hash).unwrap_or(None) else {
+            // a confirmed-missing or undecodable body drops it, and boot
+            // decides the canonical answer anyway (§6.8/§10).
+            let data = match store.block_data(hash) {
+                Ok(data) => data,
+                Err(_) => return true,
+            };
+            let Some(data) = data else {
                 return false;
             };
             let Ok((blk, _)) = registry.decode_block(&data) else {
@@ -884,16 +892,13 @@ pub(crate) fn load_persisted_root_block(
     let index_hash = store.block_hash(status.latest_height).map_err(|e| {
         validate_fault(format!(
             "state root height index read failed at <{}, {:?}>: {}",
-            status.latest_height,
-            status.latest_hash,
-            e
+            status.latest_height, status.latest_hash, e
         ))
     })?;
     if index_hash != Some(status.latest_hash) {
         return Err(validate_fault(format!(
             "state root hash does not match the canonical height index at <{}, {:?}>",
-            status.latest_height,
-            status.latest_hash
+            status.latest_height, status.latest_hash
         )));
     }
     let data = match store.block_data(&status.latest_hash) {
@@ -901,16 +906,13 @@ pub(crate) fn load_persisted_root_block(
         Ok(None) => {
             return Err(validate_fault(format!(
                 "state root block is missing from the block db at <{}, {:?}>",
-                status.latest_height,
-                status.latest_hash
+                status.latest_height, status.latest_hash
             )));
         }
         Err(e) => {
             return Err(validate_fault(format!(
                 "state root block read failed at <{}, {:?}>: {}",
-                status.latest_height,
-                status.latest_hash,
-                e
+                status.latest_height, status.latest_hash, e
             )));
         }
     };
@@ -920,9 +922,7 @@ pub(crate) fn load_persisted_root_block(
             "compatibility",
             format!(
                 "state root block cannot be decoded at <{}, {:?}>: {}",
-                status.latest_height,
-                status.latest_hash,
-                e
+                status.latest_height, status.latest_hash, e
             ),
         )
     })?;
@@ -962,23 +962,6 @@ impl Drop for RootMoveGuard<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn storage_read_panic_becomes_a_core_storage_error() {
-        let result = catch_storage_panic(|| -> Ret<()> {
-            std::panic::panic_any(base::StorageReadPanic {
-                error: sys::Error::fault("injected read failure"),
-            })
-        });
-        let error = result.unwrap_err();
-        assert_eq!(error.code(), Some(CoreFault::StorageReadFailed.code()));
-    }
-
-    #[test]
-    #[should_panic(expected = "programming failure")]
-    fn non_storage_panic_keeps_unwinding() {
-        let _ = catch_storage_panic(|| -> Ret<()> { panic!("programming failure") });
-    }
 
     #[test]
     fn failed_root_move_stays_unavailable_until_commit() {

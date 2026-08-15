@@ -118,7 +118,7 @@ fn execute_asset_create(
     hac_sub(ctx, &main_addr, protocol_cost)?;
 
     let mut state = CoreState::wrap(ctx.layer());
-    if !fast_sync && state.asset(&amd.serial).is_some() {
+    if !fast_sync && state.asset(&amd.serial)?.is_some() {
         return errf!("Asset serial {} already exists", serial);
     }
     state.asset_set(&amd.serial, &amd);
@@ -137,7 +137,7 @@ fn execute_asset_create(
         amount: amd.supply,
     }
     .checked()?;
-    let mut bls = state.balance(&amd.issuer).unwrap_or_default();
+    let mut bls = state.balance(&amd.issuer)?.unwrap_or_default();
     bls.asset_set(asset_obj)?;
     state.balance_set(&amd.issuer, &bls);
     Ok(())

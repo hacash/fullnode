@@ -36,10 +36,9 @@ mod tests {
     /// `[mint].height_max` (OLD config key) must map onto `sync_maxh`.
     #[test]
     fn height_max_key_maps_to_sync_maxh() {
-        let conf: MintConf = serde_json::from_str(
-            r#"{"chain_id":0,"diamond_form":true,"height_max":12345}"#,
-        )
-        .expect("parse MintConf");
+        let conf: MintConf =
+            serde_json::from_str(r#"{"chain_id":0,"diamond_form":true,"height_max":12345}"#)
+                .expect("parse MintConf");
         assert_eq!(conf.sync_maxh, 12345);
     }
 

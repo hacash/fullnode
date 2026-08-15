@@ -22,7 +22,7 @@ pub struct MintParams {
 }
 
 pub trait BlockHistory: Send + Sync {
-    fn stable_height(&self) -> u64;
+    fn stable_height(&self) -> Ret<u64>;
     /// `Ok(None)` is the only not-found answer. Read and decode failures are
     /// returned as errors: a corrupt stored block must never masquerade as a
     /// missing one on consensus paths.
@@ -122,8 +122,8 @@ pub trait Consensus: Send + Sync {
 
     /// Whether a root-height-zero state needs genesis reconstruction so the
     /// consensus can materialize a newly introduced genesis marker.
-    fn genesis_state_needs_rebuild(&self, _state: &dyn StateRead, _root_height: u64) -> bool {
-        false
+    fn genesis_state_needs_rebuild(&self, _state: &dyn StateRead, _root_height: u64) -> Ret<bool> {
+        Ok(false)
     }
 
     fn chain_flags(&self, _height: u64) -> u64 {
@@ -190,10 +190,16 @@ pub trait Consensus: Send + Sync {
     /// A block was durably accepted (canonical or side branch). Used to
     /// publish consensus-owned arrival metadata that must not be written
     /// before parent verification or for orphaned blocks. Replay/rebuild do
-    /// not invoke it.
-    fn on_block_accepted(&self, _pkg: &BlkPkg, _view: &dyn ChainView) {}
+    /// not invoke it. A returned error is engine-fatal (§8.3): the consensus
+    /// auxiliary state may be incomplete and the accepted block is not rolled
+    /// back.
+    fn on_block_accepted(&self, _pkg: &BlkPkg, _view: &dyn ChainView) -> Rerr {
+        Ok(())
+    }
 
-    fn on_stable_block(&self, _block: &dyn Block, _view: &dyn ChainView) {}
+    fn on_stable_block(&self, _block: &dyn Block, _view: &dyn ChainView) -> Rerr {
+        Ok(())
+    }
 }
 
 /// Transaction-pool policy owned by the active consensus implementation.
@@ -257,8 +263,8 @@ pub trait ConsensusNodeHooks: Send + Sync {
         Ok(())
     }
 
-    fn poll_deferred_batches(&self, _view: &dyn ChainView) -> Vec<DeferredBatch> {
-        vec![]
+    fn poll_deferred_batches(&self, _view: &dyn ChainView) -> Ret<Vec<DeferredBatch>> {
+        Ok(vec![])
     }
 
     fn on_deferred_batch_result(&self, _id: DeferredId, _result: DeferredBatchResult) {}

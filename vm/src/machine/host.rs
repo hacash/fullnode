@@ -13,8 +13,8 @@ pub trait VmHost {
     fn gas_remaining(&self) -> i64;
     fn gas_charge(&mut self, gas: i64) -> VmrtErr;
     fn gas_rebate(&mut self, gas: i64) -> VmrtErr;
-    fn contract_edition(&mut self, addr: &ContractAddress) -> Option<ContractEdition>;
-    fn contract(&mut self, addr: &ContractAddress) -> Option<ContractSto>;
+    fn contract_edition(&mut self, addr: &ContractAddress) -> VmrtRes<Option<ContractEdition>>;
+    fn contract(&mut self, addr: &ContractAddress) -> VmrtRes<Option<ContractSto>>;
     /// Host capability metadata from Registry (action / env / view).
     fn vm_host_def(&self, kind: VmHostCallKind, id: u8) -> Option<VmHostActionDef>;
     fn action_call(&mut self, kind: u16, body: Vec<u8>) -> Ret<(u32, Vec<u8>)>;
@@ -145,11 +145,11 @@ impl<T: Context + ?Sized> VmHost for T {
             .map_err(|e| ItrErr::new(ItrErrCode::GasError, &e.to_string()))
     }
 
-    fn contract_edition(&mut self, addr: &ContractAddress) -> Option<ContractEdition> {
+    fn contract_edition(&mut self, addr: &ContractAddress) -> VmrtRes<Option<ContractEdition>> {
         VMState::wrap(self.layer()).contract_edition(addr)
     }
 
-    fn contract(&mut self, addr: &ContractAddress) -> Option<ContractSto> {
+    fn contract(&mut self, addr: &ContractAddress) -> VmrtRes<Option<ContractSto>> {
         VMState::wrap(self.layer()).contract(addr)
     }
 

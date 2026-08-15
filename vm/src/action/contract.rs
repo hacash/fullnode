@@ -14,8 +14,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use base::{
-    ActScope, ActionRef, Context, CoreState, VmEntry, hac_sub,
-    total_add_amount_238, total_add_u8, total_add_u12, with_base_total,
+    ActScope, ActionRef, Context, CoreState, VmEntry, hac_sub, total_add_amount_238, total_add_u8,
+    total_add_u12, with_base_total,
 };
 use field::{Address, Amount, BytesW2, Decode, Encode, Fixed2, Fixed4, Uint2, Uint4};
 use sys::{Rerr, Ret, errf};
@@ -117,7 +117,7 @@ fn contract_deploy_execute(this: &ContractDeploy, ctx: &mut dyn Context) -> Rerr
     let maddr = ctx.env().tx.main;
     // check contract
     let caddr = ContractAddress::calculate(&maddr, &this.nonce);
-    if !fast_sync && vmsto!(ctx).contract(&caddr).is_some() {
+    if !fast_sync && vmsto!(ctx).contract(&caddr)?.is_some() {
         return errf!("contract {} already exists", caddr.to_readable());
     }
     // check
@@ -244,7 +244,7 @@ fn contract_update_execute(this: &ContractUpdate, ctx: &mut dyn Context) -> Rerr
     let (gst, cap) = peek_vm_runtime_limits(ctx, hei);
     // load old
     let caddr = ContractAddress::from_addr(this.address)?;
-    let Some(contract) = vmsto!(ctx).contract(&caddr) else {
+    let Some(contract) = vmsto!(ctx).contract(&caddr)? else {
         return errf!("contract {} does not exist", caddr.to_readable());
     };
     // apply edit (in memory)
@@ -382,7 +382,7 @@ pub fn analyze_contract_update(
     use AbstCall::*;
     let hei = ctx.env().block.height;
     let (gst, cap) = peek_vm_runtime_limits(ctx, hei);
-    let Some(contract) = VMState::wrap(ctx.layer()).contract(address) else {
+    let Some(contract) = VMState::wrap(ctx.layer()).contract(address)? else {
         return errf!("contract {} does not exist", address.to_readable());
     };
     let mut new_contract = contract.clone();
@@ -427,7 +427,7 @@ fn load_contract_for_check(
     if addr == root_addr {
         return Ok(root_contract.clone());
     }
-    match vmsta.contract(addr) {
+    match vmsta.contract(addr)? {
         Some(c) => Ok(c),
         None => errf!("{} contract {} does not exist", role, addr.to_readable()),
     }

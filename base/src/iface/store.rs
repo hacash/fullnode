@@ -11,19 +11,6 @@ use sys::Rerr;
 use crate::state::{LogBackend, StateRead};
 use crate::store::ChainStatus;
 
-/// A recoverable storage read failure crossing an `Option`-based state API.
-#[derive(Debug)]
-pub struct StorageReadPanic {
-    pub error: sys::Error,
-}
-
-pub fn read_or_panic(disk: &dyn DiskDB, key: &[u8]) -> Option<Vec<u8>> {
-    match disk.try_read(key) {
-        Ok(value) => value,
-        Err(error) => std::panic::panic_any(StorageReadPanic { error }),
-    }
-}
-
 // =============================================================
 // BlockStore
 // =============================================================
@@ -207,7 +194,7 @@ pub trait Store: Send + Sync {
     /// decision.
     fn state_status(&self) -> sys::Ret<StateStatus>;
 
-    fn state_get(&self, key: &[u8]) -> Option<Vec<u8>>;
+    fn state_get(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>>;
     fn stable_state(&self) -> Arc<dyn StateRead>;
 
     /// **State** disk — `move_root` / tree root KV (not the block DB).

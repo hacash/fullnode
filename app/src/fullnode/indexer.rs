@@ -18,7 +18,7 @@ use std::sync::Arc;
 
 use base::{ApiService, BlockHistory, ChainListener, CoreStateRead, Engine, Scaner, ScanerView};
 use field::{Address, Balance, Hash};
-use sys::{Rerr, Waiter};
+use sys::{Rerr, Ret, Waiter};
 
 /// Result of attaching a scaner: keep the handle to `start`.
 pub(super) struct AttachedIndexer {
@@ -48,18 +48,17 @@ impl ScanerView for EngineScanerView {
         self.engine.block_history()
     }
 
-    fn balance_at(&self, block_hash: &Hash, address: &Address) -> Option<Balance> {
-        self.balances_at(block_hash, &[*address])?
-            .into_iter()
-            .next()
-            .flatten()
+    fn balance_at(&self, block_hash: &Hash, address: &Address) -> Ret<Option<Balance>> {
+        Ok(self
+            .balances_at(block_hash, &[*address])?
+            .and_then(|list| list.into_iter().next().flatten()))
     }
 
     fn balances_at(
         &self,
         block_hash: &Hash,
         addresses: &[Address],
-    ) -> Option<Vec<Option<Balance>>> {
+    ) -> Ret<Option<Vec<Option<Balance>>>> {
         const MAX_SNAPSHOT_ATTEMPTS: usize = 3;
         for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
             let Some(session) = self.engine.state_at_session(block_hash).ok().flatten() else {
@@ -67,16 +66,16 @@ impl ScanerView for EngineScanerView {
                 continue;
             };
             let state = CoreStateRead::wrap(session.view());
-            let balances = addresses
-                .iter()
-                .map(|address| state.balance(address))
-                .collect();
+            let mut balances = Vec::with_capacity(addresses.len());
+            for address in addresses {
+                balances.push(state.balance(address)?);
+            }
             if self.engine.validate_state_view(&session.tip_hash()) {
-                return Some(balances);
+                return Ok(Some(balances));
             }
             std::thread::yield_now();
         }
-        None
+        Ok(None)
     }
 }
 
@@ -87,20 +86,19 @@ struct ScanerListener {
 }
 
 impl ChainListener for ScanerListener {
-    fn on_stable_block(&self, height: u64, _hash: Hash, origin: base::PkgOrigin) {
+    fn on_stable_block(&self, height: u64, _hash: Hash, origin: base::PkgOrigin) -> Rerr {
         if matches!(origin, base::PkgOrigin::Rebuild | base::PkgOrigin::Replay) {
-            return;
+            return Ok(());
         }
-        let Some(block) = self
-            .view
-            .block_history()
-            .block_at_height(height)
-            .ok()
-            .flatten()
-        else {
-            return;
+        // A read failure at a stable height is returned so the listener
+        // boundary records it (and escalates an `Abort`); a confirmed-missing
+        // block simply skips this notification.
+        let block = match self.view.block_history().block_at_height(height) {
+            Ok(Some(block)) => block,
+            Ok(None) => return Ok(()),
+            Err(e) => return Err(e),
         };
-        self.scaner.on_block(block, self.view.clone());
+        self.scaner.on_block(block, self.view.clone())
     }
 }
 

@@ -497,7 +497,7 @@ impl HacashConsensus {
         let state = CoreStateRead::wrap(snapshot.view());
         let act = &mint.d;
         let mint_number = act.number.uint();
-        let lastdia = state.latest_diamond().unwrap_or_default();
+        let lastdia = state.latest_diamond()?.unwrap_or_default();
         if mint_number != lastdia.number.uint() + 1 {
             return sys::errf!("invalid diamond number");
         }
@@ -543,33 +543,50 @@ impl HacashConsensus {
         Self::TX_GROUP_DIAMOND_MINT
     }
 
-    fn clean_invalid_diamond_mint_txs(&self, view: &dyn ChainView, txpool: &dyn TxPool) {
+    fn clean_invalid_diamond_mint_txs(&self, view: &dyn ChainView, txpool: &dyn TxPool) -> Rerr {
         let Some(snapshot) = view.optimistic_canonical().ok().flatten() else {
-            return;
+            return Ok(());
         };
         let start_epoch = snapshot.epoch;
         let state = CoreStateRead::wrap(snapshot.view());
-        let curdn = state.latest_diamond().unwrap_or_default().number.uint();
+        let curdn = match state.latest_diamond() {
+            Ok(d) => d.unwrap_or_default().number.uint(),
+            // Best-effort pool cleanup: a state read failure stops this
+            // cleanup pass; it must not silently judge mint txs invalid.
+            Err(e) => {
+                eprintln!(
+                    "[minter] clean_invalid_diamond_mint_txs state read failed: {}",
+                    e
+                );
+                return Ok(());
+            }
+        };
         let nextdn = curdn + 1;
         if !view.validate_optimistic(start_epoch) {
             // txpool maintenance is best-effort (§15); a stale snapshot
             // leaves cleanup to the next packing pass.
-            return;
+            return Ok(());
         }
         let _ = txpool.retain(Self::TX_GROUP_DIAMOND_MINT, &mut |a: &TxPkg| {
             crate::action::util::get_diamond_mint_number(a.tx()) == nextdn
         });
+        Ok(())
     }
 
     fn preview_next_difficulty(
         &self,
         next_height: u64,
         history: &dyn base::BlockHistory,
-    ) -> Option<(u32, field::Hash)> {
-        let prev = history
-            .block_at_height(next_height.checked_sub(1)?)
-            .ok()
-            .flatten()?;
+    ) -> Ret<Option<(u32, field::Hash)>> {
+        let prev = match history.block_at_height(
+            next_height
+                .checked_sub(1)
+                .ok_or_else(|| sys::Error::fault("no parent height for next difficulty preview"))?,
+        ) {
+            Ok(Some(block)) => block,
+            Ok(None) => return Ok(None),
+            Err(e) => return Err(e),
+        };
         let blkt = sys::curtimes();
         let target = self.difficulty.target(
             prev.pow_difficulty(),
@@ -577,8 +594,8 @@ impl HacashConsensus {
             next_height,
             blkt,
             history,
-        );
-        Some((target.num, field::Hash::from(target.hash)))
+        )?;
+        Ok(Some((target.num, field::Hash::from(target.hash))))
     }
 }
 
@@ -605,7 +622,7 @@ impl Consensus for HacashConsensus {
 
     fn validate_genesis_state(&self, state: &dyn base::StateRead, root_height: u64) -> Rerr {
         let expected = self.mint_conf.diamond_form as u8;
-        match state.get(DIAMOND_FORM_STATE_KEY) {
+        match state.get(DIAMOND_FORM_STATE_KEY)? {
             Some(raw) if raw.len() == 1 && raw[0] <= 1 => {
                 if raw[0] != expected {
                     return sys::errf!(
@@ -625,8 +642,13 @@ impl Consensus for HacashConsensus {
         }
     }
 
-    fn genesis_state_needs_rebuild(&self, state: &dyn base::StateRead, root_height: u64) -> bool {
-        root_height == 0 && state.get(DIAMOND_FORM_STATE_KEY).is_none()
+    fn genesis_state_needs_rebuild(
+        &self,
+        state: &dyn base::StateRead,
+        root_height: u64,
+    ) -> Ret<bool> {
+        let marker = state.get(DIAMOND_FORM_STATE_KEY)?;
+        Ok(root_height == 0 && marker.is_none())
     }
 
     fn chain_flags(&self, _height: u64) -> u64 {
@@ -658,8 +680,9 @@ impl Consensus for HacashConsensus {
     /// Publish the arrival record only after the block is durably accepted
     /// (§6 of the engine error contract): orphans and unvalidated blocks
     /// never pollute the bidding map.
-    fn on_block_accepted(&self, pkg: &BlkPkg, _view: &dyn ChainView) {
+    fn on_block_accepted(&self, pkg: &BlkPkg, _view: &dyn ChainView) -> Rerr {
         self.bidding.mark_block_arrival(pkg.height(), pkg.hash());
+        Ok(())
     }
 
     fn check_block_admission(
@@ -707,8 +730,9 @@ impl Consensus for HacashConsensus {
         block_check::check_highest_bid(&self.bidding, pkg, parent_state)
     }
 
-    fn on_stable_block(&self, block: &dyn Block, _view: &dyn ChainView) {
+    fn on_stable_block(&self, block: &dyn Block, _view: &dyn ChainView) -> Rerr {
         self.bidding.on_stable_block(block);
+        Ok(())
     }
 }
 
@@ -756,7 +780,11 @@ impl TxPolicy for HacashConsensus {
         height: u64,
     ) {
         if height % 5 == 0 {
-            self.clean_invalid_diamond_mint_txs(view, txpool);
+            if let Err(e) = self.clean_invalid_diamond_mint_txs(view, txpool) {
+                // Best-effort pool maintenance (§10): record the failure and
+                // keep the pool untouched; never judge mint txs invalid here.
+                eprintln!("[minter] clean_invalid_diamond_mint_txs failed: {}", e);
+            }
         }
         if txs.len() > 1 {
             let _ = txpool.drain(&txs[1..]);
@@ -841,8 +869,7 @@ impl BlockProducer for HacashConsensus {
             if candidates.len() >= max_candidates || scanned >= max_scanned {
                 return false;
             }
-            let is_diamond =
-                crate::action::util::pickout_diamond_mint_action(txpkg.tx()).is_some();
+            let is_diamond = crate::action::util::pickout_diamond_mint_action(txpkg.tx()).is_some();
             if is_diamond && diamond_kept {
                 return true;
             }
@@ -893,7 +920,7 @@ impl BlockProducer for HacashConsensus {
         }
         if self.difficulty.is_asert_height(next_height) || !self.mint_conf.is_mainnet() {
             if let Some((diff, _)) =
-                self.preview_next_difficulty(next_height, engine.block_history().as_ref())
+                self.preview_next_difficulty(next_height, engine.block_history().as_ref())?
             {
                 newdifn = diff;
             }
@@ -941,11 +968,15 @@ impl ConsensusNodeHooks for HacashConsensus {
         Ok(())
     }
 
-    fn poll_deferred_batches(&self, view: &dyn ChainView) -> Vec<base::DeferredBatch> {
+    fn poll_deferred_batches(&self, view: &dyn ChainView) -> Ret<Vec<base::DeferredBatch>> {
         let hist = view.block_history();
-        let root_min = hist.stable_height().saturating_add(1);
+        // Read the stable height before draining so a read failure cannot
+        // follow a batch removal; the engine digests the error and stops the
+        // round without requeueing (§6.6).
+        let root_min = hist.stable_height()?.saturating_add(1);
         let head_max = view.latest_height().saturating_add(1);
-        self.bidding
+        Ok(self
+            .bidding
             .drain_deferred_batches(root_min, head_max)
             .into_iter()
             .map(|(id, branches)| base::DeferredBatch {
@@ -955,7 +986,7 @@ impl ConsensusNodeHooks for HacashConsensus {
                     .map(|blocks| base::DeferredCandidate { blocks })
                     .collect(),
             })
-            .collect()
+            .collect())
     }
 
     fn on_deferred_batch_result(&self, id: base::DeferredId, _result: base::DeferredBatchResult) {

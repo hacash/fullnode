@@ -54,10 +54,7 @@ impl Ring {
     pub(crate) fn reserve(&self) -> bool {
         let mut state = self.lock();
         while !state.stopped && state.in_flight >= self.capacity {
-            state = self
-                .not_full
-                .wait(state)
-                .unwrap_or_else(|e| e.into_inner());
+            state = self.not_full.wait(state).unwrap_or_else(|e| e.into_inner());
         }
         if state.stopped {
             return false;

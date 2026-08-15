@@ -85,10 +85,9 @@ impl TxRejectReason {
         match self {
             TxRejectReason::Malformed(s) => s.clone(),
             TxRejectReason::NonCanonical(s) => s.clone(),
-            TxRejectReason::TooLarge { size, max } => format!(
-                "tx size {} exceeds maximum {} bytes",
-                size, max
-            ),
+            TxRejectReason::TooLarge { size, max } => {
+                format!("tx size {} exceeds maximum {} bytes", size, max)
+            }
             TxRejectReason::FeeTooLow { got, min } => format!(
                 "The transaction fee purity {} is too low, the node minimum configuration is {}.",
                 got, min

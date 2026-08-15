@@ -1,10 +1,12 @@
 use crate::{
-    StateLayer, StateRead, numeric_state_empty_key, numeric_state_key, numeric_state_prefix,
+    STATE_DECODE_FAILED_CODE, StateLayer, StateRead, numeric_state_empty_key, numeric_state_key,
+    numeric_state_prefix,
 };
 use field::{
     Address, AssetSmelt, Balance, BlockHeight, Decode, DiamondName, DiamondNumber,
     DiamondOwnedForm, DiamondSmelt, DiamondSto, Encode, Fold64, Hash,
 };
+use sys::Ret;
 
 use super::total::BaseTotal;
 
@@ -18,6 +20,20 @@ const KEY_DIAMOND_SMELT: u8 = numeric_state_prefix(0x0f);
 const KEY_DIAMOND_OWNED: u8 = numeric_state_prefix(0x10);
 const KEY_ASSET: u8 = numeric_state_prefix(0x11);
 
+/// Decode a typed value out of a `StateRead` layer. Backend read failures are
+/// propagated; bytes that were successfully read but fail protocol decode are
+/// reported as `Abort + state_decode_failed`, never as a missing key.
+fn get_typed<T: Decode>(sta: &dyn StateRead, key: &[u8]) -> Ret<Option<T>> {
+    match sta.get(key)? {
+        Some(bytes) => match T::decode(bytes.as_ref()) {
+            Ok((value, _)) => Ok(Some(value)),
+            Err(e) => Err(sys::Error::abort(format!("state decode failed: {}", e))
+                .with_code(STATE_DECODE_FAILED_CODE)),
+        },
+        None => Ok(None),
+    }
+}
+
 pub struct CoreState<'a>(pub &'a mut dyn StateLayer);
 
 pub struct CoreStateRead<'a>(pub &'a dyn StateRead);
@@ -27,49 +43,47 @@ impl<'a> CoreStateRead<'a> {
         Self(read)
     }
 
-    fn get_value<T: Decode>(&self, key: &[u8]) -> Option<T> {
-        self.0
-            .get(key)
-            .and_then(|b| T::decode(b.as_ref()).ok().map(|x| x.0))
+    fn get_value<T: Decode>(&self, key: &[u8]) -> Ret<Option<T>> {
+        get_typed(self.0, key)
     }
 
-    pub fn base_total(&self) -> Option<BaseTotal> {
+    pub fn base_total(&self) -> Ret<Option<BaseTotal>> {
         self.get_value(&CoreState::key_empty(KEY_BASE_TOTAL))
     }
 
-    pub fn get_base_total(&self) -> BaseTotal {
-        self.base_total().unwrap_or_default()
+    pub fn get_base_total(&self) -> Ret<BaseTotal> {
+        Ok(self.base_total()?.unwrap_or_default())
     }
 
-    pub fn latest_diamond(&self) -> Option<DiamondSmelt> {
+    pub fn latest_diamond(&self) -> Ret<Option<DiamondSmelt>> {
         self.get_value(&CoreState::key_empty(KEY_LATEST_DIAMOND))
     }
 
-    pub fn tx_exist(&self, hash: &Hash) -> Option<BlockHeight> {
+    pub fn tx_exist(&self, hash: &Hash) -> Ret<Option<BlockHeight>> {
         self.get_value(&CoreState::key_with(KEY_TX_EXIST, hash))
     }
 
-    pub fn balance(&self, addr: &Address) -> Option<Balance> {
+    pub fn balance(&self, addr: &Address) -> Ret<Option<Balance>> {
         self.get_value(&CoreState::key_with(KEY_BALANCE, addr))
     }
 
-    pub fn diamond(&self, name: &DiamondName) -> Option<DiamondSto> {
+    pub fn diamond(&self, name: &DiamondName) -> Ret<Option<DiamondSto>> {
         self.get_value(&CoreState::key_with(KEY_DIAMOND, name))
     }
 
-    pub fn diamond_name(&self, number: &DiamondNumber) -> Option<DiamondName> {
+    pub fn diamond_name(&self, number: &DiamondNumber) -> Ret<Option<DiamondName>> {
         self.get_value(&CoreState::key_with(KEY_DIAMOND_NAME, number))
     }
 
-    pub fn diamond_smelt(&self, name: &DiamondName) -> Option<DiamondSmelt> {
+    pub fn diamond_smelt(&self, name: &DiamondName) -> Ret<Option<DiamondSmelt>> {
         self.get_value(&CoreState::key_with(KEY_DIAMOND_SMELT, name))
     }
 
-    pub fn diamond_owned(&self, addr: &Address) -> Option<DiamondOwnedForm> {
+    pub fn diamond_owned(&self, addr: &Address) -> Ret<Option<DiamondOwnedForm>> {
         self.get_value(&CoreState::key_with(KEY_DIAMOND_OWNED, addr))
     }
 
-    pub fn asset(&self, serial: &Fold64) -> Option<AssetSmelt> {
+    pub fn asset(&self, serial: &Fold64) -> Ret<Option<AssetSmelt>> {
         self.get_value(&CoreState::key_with(KEY_ASSET, serial))
     }
 }
@@ -87,22 +101,20 @@ impl<'a> CoreState<'a> {
         numeric_state_key(idx, key)
     }
 
-    fn get_value<T: Decode>(&self, key: &[u8]) -> Option<T> {
-        self.0
-            .get(key)
-            .and_then(|b| T::decode(b.as_ref()).ok().map(|x| x.0))
+    fn get_value<T: Decode>(&self, key: &[u8]) -> Ret<Option<T>> {
+        get_typed(&*self.0, key)
     }
 
     fn set_value<T: Encode>(&mut self, key: Vec<u8>, val: &T) {
         self.0.set(&key, val.encode());
     }
 
-    pub fn base_total(&self) -> Option<BaseTotal> {
+    pub fn base_total(&self) -> Ret<Option<BaseTotal>> {
         self.get_value(&Self::key_empty(KEY_BASE_TOTAL))
     }
 
-    pub fn get_base_total(&self) -> BaseTotal {
-        self.base_total().unwrap_or_default()
+    pub fn get_base_total(&self) -> Ret<BaseTotal> {
+        Ok(self.base_total()?.unwrap_or_default())
     }
 
     pub fn base_total_set(&mut self, v: &BaseTotal) {
@@ -117,7 +129,7 @@ impl<'a> CoreState<'a> {
         self.0.del(&Self::key_empty(KEY_BASE_TOTAL));
     }
 
-    pub fn latest_diamond(&self) -> Option<DiamondSmelt> {
+    pub fn latest_diamond(&self) -> Ret<Option<DiamondSmelt>> {
         self.get_value(&Self::key_empty(KEY_LATEST_DIAMOND))
     }
 
@@ -129,7 +141,7 @@ impl<'a> CoreState<'a> {
         self.0.del(&Self::key_empty(KEY_LATEST_DIAMOND));
     }
 
-    pub fn tx_exist(&self, hash: &Hash) -> Option<BlockHeight> {
+    pub fn tx_exist(&self, hash: &Hash) -> Ret<Option<BlockHeight>> {
         self.get_value(&Self::key_with(KEY_TX_EXIST, hash))
     }
 
@@ -141,7 +153,7 @@ impl<'a> CoreState<'a> {
         self.0.del(&Self::key_with(KEY_TX_EXIST, hash));
     }
 
-    pub fn balance(&self, addr: &Address) -> Option<Balance> {
+    pub fn balance(&self, addr: &Address) -> Ret<Option<Balance>> {
         self.get_value(&Self::key_with(KEY_BALANCE, addr))
     }
 
@@ -153,7 +165,7 @@ impl<'a> CoreState<'a> {
         self.0.del(&Self::key_with(KEY_BALANCE, addr));
     }
 
-    pub fn diamond(&self, name: &DiamondName) -> Option<DiamondSto> {
+    pub fn diamond(&self, name: &DiamondName) -> Ret<Option<DiamondSto>> {
         self.get_value(&Self::key_with(KEY_DIAMOND, name))
     }
 
@@ -165,7 +177,7 @@ impl<'a> CoreState<'a> {
         self.0.del(&Self::key_with(KEY_DIAMOND, name));
     }
 
-    pub fn diamond_name(&self, number: &DiamondNumber) -> Option<DiamondName> {
+    pub fn diamond_name(&self, number: &DiamondNumber) -> Ret<Option<DiamondName>> {
         self.get_value(&Self::key_with(KEY_DIAMOND_NAME, number))
     }
 
@@ -173,7 +185,7 @@ impl<'a> CoreState<'a> {
         self.set_value(Self::key_with(KEY_DIAMOND_NAME, number), v);
     }
 
-    pub fn diamond_smelt(&self, name: &DiamondName) -> Option<DiamondSmelt> {
+    pub fn diamond_smelt(&self, name: &DiamondName) -> Ret<Option<DiamondSmelt>> {
         self.get_value(&Self::key_with(KEY_DIAMOND_SMELT, name))
     }
 
@@ -181,14 +193,14 @@ impl<'a> CoreState<'a> {
         self.set_value(Self::key_with(KEY_DIAMOND_SMELT, name), v);
     }
 
-    pub fn diamond_owned(&self, addr: &Address) -> Option<DiamondOwnedForm> {
+    pub fn diamond_owned(&self, addr: &Address) -> Ret<Option<DiamondOwnedForm>> {
         self.get_value(&Self::key_with(KEY_DIAMOND_OWNED, addr))
     }
 
-    pub fn diamond_owned_exist(&self, addr: &Address) -> bool {
-        self.0
-            .get(&Self::key_with(KEY_DIAMOND_OWNED, addr))
-            .is_some()
+    pub fn diamond_owned_exist(&self, addr: &Address) -> Ret<bool> {
+        Ok(self
+            .get(&Self::key_with(KEY_DIAMOND_OWNED, addr))?
+            .is_some())
     }
 
     pub fn diamond_owned_set(&mut self, addr: &Address, v: &DiamondOwnedForm) {
@@ -199,7 +211,7 @@ impl<'a> CoreState<'a> {
         self.0.del(&Self::key_with(KEY_DIAMOND_OWNED, addr));
     }
 
-    pub fn asset(&self, serial: &Fold64) -> Option<AssetSmelt> {
+    pub fn asset(&self, serial: &Fold64) -> Ret<Option<AssetSmelt>> {
         self.get_value(&Self::key_with(KEY_ASSET, serial))
     }
 
@@ -209,5 +221,99 @@ impl<'a> CoreState<'a> {
 
     pub fn asset_del(&mut self, serial: &Fold64) {
         self.0.del(&Self::key_with(KEY_ASSET, serial));
+    }
+
+    fn get(&self, key: &[u8]) -> Ret<Option<Vec<u8>>> {
+        self.0.get(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{STATE_DECODE_FAILED_CODE, StateChunkRef, StateLayer};
+
+    struct NoDisk;
+    impl crate::DiskDB for NoDisk {
+        fn read(&self, _key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+            Ok(None)
+        }
+        fn save(&self, _key: &[u8], _val: &[u8]) {}
+        fn remove(&self, _key: &[u8]) {}
+        fn try_write(&self, _memkv: &dyn crate::MemDB) -> sys::Rerr {
+            Ok(())
+        }
+    }
+
+    fn test_block(height: u64) -> std::sync::Arc<dyn crate::Block> {
+        std::sync::Arc::new(TestBlock { height })
+    }
+
+    #[derive(Debug)]
+    struct TestBlock {
+        height: u64,
+    }
+
+    impl field::Encode for TestBlock {
+        fn size(&self) -> usize {
+            0
+        }
+        fn encode_to(&self, _out: &mut Vec<u8>) {}
+    }
+
+    impl crate::Block for TestBlock {
+        fn version(&self) -> u8 {
+            1
+        }
+        fn height(&self) -> u64 {
+            self.height
+        }
+        fn hash(&self) -> Hash {
+            Hash::default()
+        }
+        fn prev_hash(&self) -> Hash {
+            Hash::default()
+        }
+        fn mrklroot(&self) -> Hash {
+            Hash::default()
+        }
+        fn timestamp(&self) -> u64 {
+            self.height
+        }
+        fn transactions(&self) -> &[crate::TxRef] {
+            &[]
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    fn root() -> StateChunkRef {
+        StateChunkRef::new_root(std::sync::Arc::new(NoDisk), test_block(0))
+    }
+
+    /// Bytes that were successfully read from persisted state but fail typed
+    /// protocol decode must surface as `Abort + state_decode_failed`, never as
+    /// a missing key (§3/§12.1).
+    #[test]
+    fn corrupted_persisted_bytes_decode_as_abort() {
+        let root = root();
+        let mut tx = StateChunkRef::tx_on(&root, Hash::default());
+        let addr = Address::default();
+        let key = CoreState::key_with(KEY_BALANCE, &addr);
+        tx.set(&key, vec![0xff, 0x01, 0x02]);
+        let read = CoreStateRead::wrap(&tx);
+        let err = read.balance(&addr).unwrap_err();
+        assert!(err.is_abort(), "state decode failure must be fatal");
+        assert_eq!(err.code(), Some(STATE_DECODE_FAILED_CODE));
+    }
+
+    /// A missing key reads as `Ok(None)` and only that.
+    #[test]
+    fn missing_key_is_ok_none() {
+        let root = root();
+        let tx = StateChunkRef::tx_on(&root, Hash::default());
+        let read = CoreStateRead::wrap(&tx);
+        assert!(read.balance(&Address::default()).unwrap().is_none());
     }
 }

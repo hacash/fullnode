@@ -36,8 +36,8 @@
 use std::sync::Arc;
 
 use base::{
-    ChainStatus, DiskDB, LogBackend, PERSIST_KEY_ROOT_HASH, PERSIST_KEY_ROOT_HEIGHT, StateRead,
-    StateStatus, Store,
+    ChainStatus, DiskDB, LogBackend, PERSIST_KEY_ROOT_HASH, PERSIST_KEY_ROOT_HEIGHT,
+    STATE_READ_FAILED_CODE, StateRead, StateStatus, Store,
 };
 use field::Hash;
 use sys::Ret;
@@ -145,8 +145,11 @@ impl Store for StoreInst {
         }
     }
 
-    fn state_get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        base::read_or_panic(self.state.as_ref(), key)
+    fn state_get(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+        self.state.try_read(key).map_err(|error| {
+            sys::Error::abort(format!("state backend read failed: {}", error))
+                .with_code(STATE_READ_FAILED_CODE)
+        })
     }
 
     fn stable_state(&self) -> Arc<dyn StateRead> {
@@ -174,8 +177,11 @@ struct DiskStateRead {
 }
 
 impl StateRead for DiskStateRead {
-    fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        base::read_or_panic(self.disk.as_ref(), key)
+    fn get(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+        self.disk.try_read(key).map_err(|error| {
+            sys::Error::abort(format!("state backend read failed: {}", error))
+                .with_code(STATE_READ_FAILED_CODE)
+        })
     }
 }
 

@@ -289,25 +289,25 @@ impl DiamondBiddingInner {
         self.trim_books();
     }
 
-    fn highest(&self, curhei: u64, dianum: u32, sta: &dyn StateRead, fblkt: u64) -> Amount {
+    fn highest(&self, curhei: u64, dianum: u32, sta: &dyn StateRead, fblkt: u64) -> Ret<Amount> {
         if fblkt == 0 {
-            return Amount::zero();
+            return Ok(Amount::zero());
         }
         let Some(book) = self.books.get(&dianum) else {
-            return Amount::zero();
+            return Ok(Amount::zero());
         };
         let coresta = CoreStateRead::wrap(sta);
         let ttx = fblkt.saturating_sub(Self::DELAY_SECS as u64);
         for r in book.uniq_top.iter() {
             let isusa = curhei <= r.tarhei || r.usable;
             if r.time < ttx && isusa {
-                let hacbls = coresta.balance(&r.addr).unwrap_or_default();
+                let hacbls = coresta.balance(&r.addr)?.unwrap_or_default();
                 if hacbls.hacash >= r.fee {
-                    return r.fee.clone();
+                    return Ok(r.fee.clone());
                 }
             }
         }
-        Amount::zero()
+        Ok(Amount::zero())
     }
 
     fn mark_block_arrival(&mut self, hei: u64, hash: Hash) {
@@ -501,7 +501,13 @@ impl DiamondBidding {
         self.inner.lock().unwrap().record(curr_hei, tx, act);
     }
 
-    pub fn highest(&self, curhei: u64, dianum: u32, sta: &dyn StateRead, fblkt: u64) -> Amount {
+    pub fn highest(
+        &self,
+        curhei: u64,
+        dianum: u32,
+        sta: &dyn StateRead,
+        fblkt: u64,
+    ) -> Ret<Amount> {
         self.inner
             .lock()
             .unwrap()
@@ -640,7 +646,7 @@ impl DiamondBidding {
         }
         let mut bidrecord = self.inner.lock().unwrap();
         let t4blkt = bidrecord.prev_block_arrive_time(&block.prev_hash());
-        let rhbf = bidrecord.highest(curhei, dianum, prev_state, t4blkt);
+        let rhbf = bidrecord.highest(curhei, dianum, prev_state, t4blkt)?;
         if bidfee < rhbf {
             if dianum > CKN {
                 if bidrecord.is_replay_allowed(&pkg.hash()) {

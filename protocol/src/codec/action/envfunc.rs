@@ -152,7 +152,7 @@ base::impl_action! {
         description: |this: &ViewBalance| format!("Syscall: Get balance for {}", this.addr.to_readable()),
         execute: (self, ctx) {
         let bls = CoreState::wrap(ctx.layer())
-            .balance(&self.addr)
+            .balance(&self.addr)?
             .unwrap_or_default();
         let dia = bls.diamond.uint();
         if dia > u32::MAX as u64 {
@@ -184,7 +184,7 @@ base::impl_action! {
             return errf!("asset serial cannot be zero");
         }
         let bls = CoreState::wrap(ctx.layer())
-            .balance(&self.addr)
+            .balance(&self.addr)?
             .unwrap_or_default();
         let amt = bls
             .assets
@@ -221,7 +221,7 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewDiaInscNum| format!("Syscall: Get diamond inscription number for <{}>", this.diamond.to_readable()),
         execute: (self, ctx) {
-        let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond) else {
+        let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond)? else {
             return errf!("diamond {} not found", self.diamond.to_readable());
         };
         let num = diaobj.inscripts.length();
@@ -243,7 +243,7 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewDiaInscGet| format!("Syscall: Get diamond inscription data for <{}>", this.diamond.to_readable()),
         execute: (self, ctx) {
-        let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond) else {
+        let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond)? else {
             return errf!("diamond {} not found", self.diamond.to_readable());
         };
         let num = diaobj.inscripts.length();
@@ -268,7 +268,7 @@ base::impl_action! {
         execute: (self, ctx) {
         const DNM_SZ: usize = DiamondName::SIZE;
         let owned = CoreState::wrap(ctx.layer())
-            .diamond_owned(&self.addr)
+            .diamond_owned(&self.addr)?
             .unwrap_or_default();
         let names = owned.names.as_ref();
         if names.len() % DNM_SZ != 0 {
@@ -311,7 +311,7 @@ base::impl_action! {
         let state = CoreState::wrap(ctx.layer());
         let mut res = Vec::with_capacity(num * Address::SIZE);
         for dian in self.diamonds.as_list() {
-            let Some(diaobj) = state.diamond(dian) else {
+            let Some(diaobj) = state.diamond(dian)? else {
                 return errf!("diamond {} not found", dian.to_readable());
             };
             res.extend_from_slice(diaobj.address.as_ref());

@@ -21,5 +21,5 @@ pub(crate) fn db_sled_small_machine_enabled() -> bool {
 }
 
 /*
-HACASH_DB_SMALL_MACHINE=1 HACASH_DB_SYNC=1 
+HACASH_DB_SMALL_MACHINE=1 HACASH_DB_SYNC=1
 */

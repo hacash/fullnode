@@ -113,10 +113,9 @@ fn first6(hash: Hash) -> [u8; DiamondName::SIZE] {
 /// Clear leaked HAC/SAT/Asset on the TEX settlement address after the transaction
 /// has completed its normal settlement path. Diamond ownership is intentionally
 /// left to `do_settlement`, which moves concrete diamond names.
-#[allow(dead_code)]
-pub fn settlement_addr_postsettle_cleanup(ctx: &mut dyn Context) {
+pub fn settlement_addr_postsettle_cleanup(ctx: &mut dyn Context) -> Rerr {
     let mut state = CoreState::wrap(ctx.layer());
-    if let Some(mut bls) = state.balance(&SETTLEMENT_ADDR) {
+    if let Some(mut bls) = state.balance(&SETTLEMENT_ADDR)? {
         let mut dirty = false;
         if bls.hacash > Amount::zero() {
             bls.hacash = Amount::zero();
@@ -134,4 +133,5 @@ pub fn settlement_addr_postsettle_cleanup(ctx: &mut dyn Context) {
             state.balance_set(&SETTLEMENT_ADDR, &bls);
         }
     }
+    Ok(())
 }

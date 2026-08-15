@@ -229,6 +229,8 @@ pub fn register_standard(
     Ok(())
 }
 
+/////////////////////////////////
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,11 +268,7 @@ mod tests {
         fn register_action(&mut self, _kinds: &[u16], _f: base::ActionCreateFn) -> Rerr {
             errf!("unexpected register_action")
         }
-        fn register_action_json(
-            &mut self,
-            _kinds: &[u16],
-            _f: base::ActionJsonDecodeFn,
-        ) -> Rerr {
+        fn register_action_json(&mut self, _kinds: &[u16], _f: base::ActionJsonDecodeFn) -> Rerr {
             errf!("unexpected register_action_json")
         }
         fn register_vm_host_def(&mut self, def: VmHostActionDef) -> Rerr {
@@ -348,8 +346,18 @@ mod tests {
                 VmValueType::U64,
                 2,
             ),
-            (ViewCheckSign::KIND, ViewCheckSign::NAME, VmValueType::Bool, 1),
-            (ViewDiaInscNum::KIND, ViewDiaInscNum::NAME, VmValueType::U8, 1),
+            (
+                ViewCheckSign::KIND,
+                ViewCheckSign::NAME,
+                VmValueType::Bool,
+                1,
+            ),
+            (
+                ViewDiaInscNum::KIND,
+                ViewDiaInscNum::NAME,
+                VmValueType::U8,
+                1,
+            ),
             (
                 ViewDiaInscGet::KIND,
                 ViewDiaInscGet::NAME,
@@ -413,9 +421,7 @@ mod tests {
         let mut reg = TestReg {
             host_defs: HashMap::new(),
         };
-        assert!(
-            register_env_def(&mut reg, 0x0601, "view_kind_as_env", VmValueType::U64).is_err()
-        );
+        assert!(register_env_def(&mut reg, 0x0601, "view_kind_as_env", VmValueType::U64).is_err());
         assert!(
             register_view_def(&mut reg, 0x0701, "env_kind_as_view", VmValueType::U64, 0).is_err()
         );

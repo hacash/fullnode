@@ -39,7 +39,6 @@ macro_rules! codec_struct {
     };
 }
 
-
 #[allow(unused_imports)]
 pub(crate) use codec_struct;
 

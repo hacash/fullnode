@@ -18,8 +18,8 @@ use sys::{Rerr, Ret, errf};
 pub struct MemLayer(pub HashMap<Vec<u8>, Vec<u8>>);
 
 impl StateRead for MemLayer {
-    fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
-        self.0.get(key).cloned()
+    fn get(&self, key: &[u8]) -> Ret<Option<Vec<u8>>> {
+        Ok(self.0.get(key).cloned())
     }
 }
 

@@ -263,11 +263,7 @@ impl P2PNode {
     /// `inserting` serializes this against the session pipeline, and the
     /// caller has already gated it on the session slot being empty, so no
     /// tracker state is involved.
-    pub(crate) fn apply_oneshot_blocks(
-        &self,
-        _start_height: u64,
-        batch: BlockBatch,
-    ) -> Rerr {
+    pub(crate) fn apply_oneshot_blocks(&self, _start_height: u64, batch: BlockBatch) -> Rerr {
         let cfg = self.engine.config();
         let opts = PipelineOptions::default();
         let sync_mode = if cfg.fast_sync {

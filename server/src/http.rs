@@ -232,15 +232,9 @@ async fn route_entry_sync(
     body: axum::body::Bytes,
 ) -> Response {
     let req = build_api_request(method, query, headers, body, peer_addr);
-    let response = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        (state.handler)(&state.ctx, req)
-    })) {
-        Ok(response) => response,
-        Err(payload) => match payload.downcast::<base::StorageReadPanic>() {
-            Ok(fault) => ApiResponse::err(503, &format!("storage read failed: {}", fault.error)),
-            Err(payload) => std::panic::resume_unwind(payload),
-        },
-    };
+    // State-query handlers convert storage read failures into 503 themselves
+    // (§7.4); no panic boundary exists here anymore.
+    let response = (state.handler)(&state.ctx, req);
     api_response_to_axum(response)
 }
 
@@ -253,9 +247,8 @@ async fn route_entry_async(
     body: axum::body::Bytes,
 ) -> Response {
     let req = build_api_request(method, query, headers, body, peer_addr);
-    // Async handlers cannot be wrapped in a synchronous catch_unwind boundary,
-    // so storage panics propagate to the runtime like any other panic; the
-    // request fails and the connection is torn down (peripheral, §8).
+    // Sync and async handlers share the same state-read error semantics: read
+    // failures are converted to 503 inside the handler (§7.4).
     api_response_to_axum((state.handler)(state.ctx.clone(), req).await)
 }
 

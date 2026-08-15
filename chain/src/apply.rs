@@ -9,7 +9,7 @@ use crate::engine::{ApplyAccepted, ApplyResult, ChainEngine};
 use crate::history::BranchHistory;
 
 fn tree_fatal(error: sys::Error) -> sys::Error {
-    sys::Error::fault(format!("chain tree invariant failed: {}", error))
+    sys::Error::abort(format!("chain tree invariant failed: {}", error))
         .with_code(crate::engine::CoreFault::CoreFailed.code())
 }
 
@@ -88,7 +88,9 @@ pub(crate) fn resolve_fork_choice<'a>(
         ))
     })?;
     let branch_history = eng.block_history.for_branch(branch_blocks);
-    let fork_choice = eng.consensus.fork_choice_key(pkg, &parent_key, &branch_history)?;
+    let fork_choice = eng
+        .consensus
+        .fork_choice_key(pkg, &parent_key, &branch_history)?;
     Ok(Some((parent_block, branch_history, fork_choice)))
 }
 
@@ -161,8 +163,12 @@ pub fn insert_block(
     // The fast-sync flag is handed to the mint: validation-only
     // implementations skip their checks there, while side-effectful ones
     // still see every block and decide for themselves.
-    eng.consensus
-        .check_block_before_execute(pkg, parent_block.as_ref(), &branch_history, fast_sync)?;
+    eng.consensus.check_block_before_execute(
+        pkg,
+        parent_block.as_ref(),
+        &branch_history,
+        fast_sync,
+    )?;
     // The commit plan (side vs canonical) must be fixed before the side body
     // write can be ordered ahead of the attach. `inserting` is held, so the
     // head cannot change and this comparison agrees with the attach below.
@@ -176,25 +182,31 @@ pub fn insert_block(
     };
     // Execution errors: a live strict side branch is discarded (decision
     // table #5); everything else — including any fast-sync failure, which can
-    // never be a legitimate side branch — is a real error.
+    // never be a legitimate side branch — is a real error. An `Abort` (core
+    // state read failure) on a live side branch is fatal like the canonical
+    // path and must not be swallowed by the discard arm (§7.5).
     let chunk = match execute_block(eng, pkg.block(), chunk, fast_sync) {
         Ok(chunk) => chunk,
-        Err(e) if !fast_sync && !plan_head => {
+        Err(e) if !fast_sync && !plan_head && !e.is_abort() => {
             return side_discard(height, &pkg.hash(), "execution failed", e);
         }
         Err(e) => return Err(e),
     };
 
-    match eng
-        .consensus
-        .check_block_after_execute(pkg, &chunk, parent_state.as_ref(), eng, fast_sync)
-    {
+    match eng.consensus.check_block_after_execute(
+        pkg,
+        &chunk,
+        parent_state.as_ref(),
+        eng,
+        fast_sync,
+    ) {
         Ok(()) => {}
         // A live side branch failing the post-execute state check is
         // discarded like any other side failure (decision table #5): the
         // canonical tree is untouched and the stream continues. Only a
-        // canonical candidate returns the error (Rejected-class).
-        Err(e) if !fast_sync && !plan_head => {
+        // canonical candidate returns the error (Rejected-class). An `Abort`
+        // is never branch-level: it stays fatal (§7.5).
+        Err(e) if !fast_sync && !plan_head && !e.is_abort() => {
             return side_discard(height, &pkg.hash(), "post-execute check failed", e);
         }
         Err(e) => return Err(e),

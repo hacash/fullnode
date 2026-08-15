@@ -83,9 +83,15 @@ pub(crate) fn balance_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse 
             Ok(v) => v,
             Err(_) => return api_error(&format!("address {} format invalid", raw)),
         };
-        let balance = core.balance(&addr).unwrap_or_default();
+        let balance = match core.balance(&addr) {
+            Ok(balance) => balance.unwrap_or_default(),
+            Err(e) => return api_state_read_error(&e),
+        };
         let diamond_names = if include_diamond_names && show_diamond {
-            Some(core.diamond_owned(&addr).unwrap_or_default().readable())
+            match core.diamond_owned(&addr) {
+                Ok(owned) => Some(owned.unwrap_or_default().readable()),
+                Err(e) => return api_state_read_error(&e),
+            }
         } else {
             None
         };

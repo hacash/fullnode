@@ -137,7 +137,7 @@ fn check_block_arrive_block(
                 curhei,
                 curblk.timestamp(),
                 history.as_ref(),
-            );
+            )?;
             if target.num != curdifnum {
                 return errf!(
                     "block found height {} PoW difficulty check failed: expected {} but got {}",
@@ -163,7 +163,7 @@ fn check_block_arrive_block(
                 curhei,
                 curblk.timestamp(),
                 history.as_ref(),
-            );
+            )?;
             if target.num != curdifnum {
                 return errf!(
                     "block found height {} PoW difficulty check failed: expected {} but got {}",
@@ -214,7 +214,7 @@ pub fn check_block_before_execute(
         curhei,
         curblk.timestamp(),
         history,
-    );
+    )?;
     if target.num != curn {
         return errf!(
             "height {} PoW difficulty check failed: expected {} but got {}",

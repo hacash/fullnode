@@ -26,11 +26,15 @@ pub(crate) fn channel_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse 
     };
     let start_epoch = snapshot.epoch;
     let state = MintStateRead::wrap(snapshot.view());
-    let Some(channel) = state.channel(&chid) else {
-        if !ctx.engine.validate_optimistic(start_epoch) {
-            return api_error("state changed");
+    let channel = match state.channel(&chid) {
+        Ok(Some(channel)) => channel,
+        Ok(None) => {
+            if !ctx.engine.validate_optimistic(start_epoch) {
+                return api_error("state changed");
+            }
+            return api_error("channel not found");
         }
-        return api_error("channel not found");
+        Err(e) => return api_state_read_error(&e),
     };
     let result = channel_json(&chid, &channel, &unit);
     if !ctx.engine.validate_optimistic(start_epoch) {

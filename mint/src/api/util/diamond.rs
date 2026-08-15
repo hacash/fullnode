@@ -107,7 +107,7 @@ pub(crate) fn parse_one_diamond_param(req: &ApiRequest, key: &str) -> sys::Ret<D
 }
 
 pub(crate) fn append_cost_for_one(state: &CoreStateRead, dia: &DiamondName) -> sys::Ret<Amount> {
-    let Some(diaobj) = state.diamond(dia) else {
+    let Some(diaobj) = state.diamond(dia)? else {
         return sys::errf!("cannot find diamond {}", dia.to_readable());
     };
     if diaobj.inscripts.length() >= crate::action::diamond_insc::INSCRIPTION_MAX_PER_DIAMOND {
@@ -117,7 +117,7 @@ pub(crate) fn append_cost_for_one(state: &CoreStateRead, dia: &DiamondName) -> s
             crate::action::diamond_insc::INSCRIPTION_MAX_PER_DIAMOND
         );
     }
-    let Some(diasmelt) = state.diamond_smelt(dia) else {
+    let Some(diasmelt) = state.diamond_smelt(dia)? else {
         return sys::errf!("cannot find diamond {}", dia.to_readable());
     };
     Ok(
@@ -132,7 +132,7 @@ pub(crate) fn move_cost_for_target(
     state: &CoreStateRead,
     to_diamond: &DiamondName,
 ) -> sys::Ret<Amount> {
-    let Some(diaobj) = state.diamond(to_diamond) else {
+    let Some(diaobj) = state.diamond(to_diamond)? else {
         return sys::errf!("cannot find diamond {}", to_diamond.to_readable());
     };
     if diaobj.inscripts.length() >= crate::action::diamond_insc::INSCRIPTION_MAX_PER_DIAMOND {
@@ -142,7 +142,7 @@ pub(crate) fn move_cost_for_target(
             crate::action::diamond_insc::INSCRIPTION_MAX_PER_DIAMOND
         );
     }
-    let Some(diasmelt) = state.diamond_smelt(to_diamond) else {
+    let Some(diasmelt) = state.diamond_smelt(to_diamond)? else {
         return sys::errf!("cannot find diamond {}", to_diamond.to_readable());
     };
     Ok(
@@ -154,10 +154,10 @@ pub(crate) fn move_cost_for_target(
 }
 
 pub(crate) fn smelt_average_bid(state: &CoreStateRead, dia: &DiamondName) -> sys::Ret<u16> {
-    if state.diamond(dia).is_none() {
+    if state.diamond(dia)?.is_none() {
         return sys::errf!("cannot find diamond {}", dia.to_readable());
     }
-    let Some(diasmelt) = state.diamond_smelt(dia) else {
+    let Some(diasmelt) = state.diamond_smelt(dia)? else {
         return sys::errf!("cannot find diamond {}", dia.to_readable());
     };
     Ok(diasmelt.average_bid_burn.uint())

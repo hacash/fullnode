@@ -2,12 +2,20 @@
 
 use sys::{Rerr, Ret};
 
+/// Stable error code for canonical state backend read failures. Attached at
+/// the first stable `StateRead`/DB boundary; consumed by engine/boot/HTTP
+/// edges for classification, never synthesized by guessing from messages.
+pub const STATE_READ_FAILED_CODE: &str = "storage_read_failed";
+/// Stable error code for trusted persisted state bytes that fail protocol
+/// decode. Never used for network/API/user-input decode (those stay `Decode`).
+pub const STATE_DECODE_FAILED_CODE: &str = "state_decode_failed";
+
 // =============================================================
 // StateRead / StateLayer  KV
 // =============================================================
 
 pub trait StateRead: Send + Sync {
-    fn get(&self, key: &[u8]) -> Option<Vec<u8>>;
+    fn get(&self, key: &[u8]) -> Ret<Option<Vec<u8>>>;
 }
 
 pub trait StateLayer: StateRead {

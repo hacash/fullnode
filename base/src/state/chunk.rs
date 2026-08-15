@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock, Weak};
 use field::Hash;
 use sys::{Ret, errf};
 
-use crate::state::{LogEntry, StateLayer, StateRead};
+use crate::state::{LogEntry, STATE_READ_FAILED_CODE, StateLayer, StateRead};
 use crate::store::{DiskDB, MemKV};
 use crate::{BlockRef, ForkChoiceKey};
 
@@ -479,18 +479,18 @@ impl StateChunkRef {
         self.0.body.read().unwrap().writable().is_some()
     }
 
-    fn get_state(&self, key: &[u8]) -> Option<Vec<u8>> {
+    fn get_state(&self, key: &[u8]) -> Ret<Option<Vec<u8>>> {
         {
             let body = self.0.body.read().unwrap();
             match &*body {
                 ChunkBody::Writable(delta) => {
                     if let Some(value) = delta.state.get(key) {
-                        return value.clone();
+                        return Ok(value.clone());
                     }
                 }
                 ChunkBody::Frozen(frozen) => {
                     if let Some(value) = frozen.state.get(key) {
-                        return value.clone();
+                        return Ok(value.clone());
                     }
                 }
                 ChunkBody::Consumed => {}
@@ -500,7 +500,12 @@ impl StateChunkRef {
         let parent = {
             let source = self.0.source.read().unwrap();
             match &*source {
-                Source::Disk(disk) => return crate::read_or_panic(disk.as_ref(), key),
+                Source::Disk(disk) => {
+                    return disk.try_read(key).map_err(|error| {
+                        sys::Error::abort(format!("state backend read failed: {}", error))
+                            .with_code(STATE_READ_FAILED_CODE)
+                    });
+                }
                 Source::Parent(parent) => parent
                     .upgrade()
                     .expect("state chunk parent expired while its view was in use"),
@@ -511,7 +516,7 @@ impl StateChunkRef {
 }
 
 impl StateRead for StateChunkRef {
-    fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+    fn get(&self, key: &[u8]) -> Ret<Option<Vec<u8>>> {
         self.get_state(key)
     }
 }
@@ -546,7 +551,6 @@ impl StateLayer for StateChunkRef {
 mod tests {
     use super::*;
     use std::any::Any;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::{Arc, Barrier};
     use std::thread;
 
@@ -631,12 +635,12 @@ mod tests {
         let mut committed = tx.spawn_ast_child().unwrap();
         committed.set(b"ast", vec![2]);
         let tx = committed.commit_to_parent().unwrap();
-        assert_eq!(tx.get(b"ast"), Some(vec![2]));
+        assert_eq!(tx.get(b"ast").unwrap(), Some(vec![2]));
 
         let mut discarded = tx.spawn_ast_child().unwrap();
         discarded.set(b"ast", vec![3]);
         discarded.discard().unwrap();
-        assert_eq!(tx.get(b"ast"), Some(vec![2]));
+        assert_eq!(tx.get(b"ast").unwrap(), Some(vec![2]));
     }
 
     #[test]
@@ -674,9 +678,9 @@ mod tests {
 
         let root = StateChunkRef::new_root(Arc::new(BaseDisk), block(0, Hash::default()));
         let mut tx = StateChunkRef::tx_on(&root, Hash::default());
-        assert_eq!(tx.get(b"key"), Some(vec![1]));
+        assert_eq!(tx.get(b"key").unwrap(), Some(vec![1]));
         tx.del(b"key");
-        assert_eq!(tx.get(b"key"), None);
+        assert_eq!(tx.get(b"key").unwrap(), None);
     }
 
     #[test]
@@ -709,17 +713,18 @@ mod tests {
         tx.set(b"speculative", vec![1]);
         let observer = tx.clone();
         tx.discard().unwrap();
-        assert_eq!(observer.get(b"speculative"), None);
+        assert_eq!(observer.get(b"speculative").unwrap(), None);
     }
 
     #[test]
+    #[should_panic(expected = "state chunk parent expired")]
     fn expired_parent_is_not_reported_as_a_missing_state_key() {
         let tx = {
             let root = root();
             StateChunkRef::tx_on(&root, Hash::default())
         };
         assert!(tx.parent().is_none());
-        assert!(catch_unwind(AssertUnwindSafe(|| tx.get(b"key"))).is_err());
+        let _ = tx.get(b"key").unwrap();
     }
 
     #[test]
@@ -745,7 +750,7 @@ mod tests {
         let body = block.0.body.read().unwrap();
         assert!(matches!(&*body, ChunkBody::Frozen(_)));
         drop(body);
-        assert_eq!(block.get(b"key"), Some(vec![9]));
+        assert_eq!(block.get(b"key").unwrap(), Some(vec![9]));
         assert_eq!(block.block_logs().len(), 1);
         assert_eq!(block.block_tx_hashes(), vec![tx_hash]);
     }
@@ -787,7 +792,7 @@ mod tests {
         let reads = thread::spawn(move || {
             read_barrier.wait();
             for _ in 0..10_000 {
-                assert_eq!(reader.get(b"base"), Some(vec![1]));
+                assert_eq!(reader.get(b"base").unwrap(), Some(vec![1]));
             }
         });
         barrier.wait();
@@ -795,6 +800,27 @@ mod tests {
         drop(root);
         reads.join().unwrap();
         assert!(first.parent().is_none());
+    }
+
+    #[test]
+    fn disk_read_error_propagates_as_abort_through_layers() {
+        struct FailingDisk;
+        impl DiskDB for FailingDisk {
+            fn read(&self, _key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+                Err(sys::Error::fault("injected disk read failure"))
+            }
+            fn save(&self, _key: &[u8], _val: &[u8]) {}
+            fn remove(&self, _key: &[u8]) {}
+            fn try_write(&self, _memkv: &dyn crate::MemDB) -> sys::Rerr {
+                Ok(())
+            }
+        }
+
+        let root = StateChunkRef::new_root(Arc::new(FailingDisk), block(0, Hash::default()));
+        let tx = StateChunkRef::tx_on(&root, Hash::default());
+        let err = tx.get(b"key").unwrap_err();
+        assert!(err.is_abort(), "state read failure must be fatal");
+        assert_eq!(err.code(), Some(crate::STATE_READ_FAILED_CODE));
     }
 
     #[test]
@@ -810,7 +836,7 @@ mod tests {
         let writer_barrier = barrier.clone();
         let writer = thread::spawn(move || {
             writer_barrier.wait();
-            catch_unwind(AssertUnwindSafe(|| writer.set(b"race", vec![1]))).is_ok()
+            writer.set(b"race", vec![1]);
         });
         let commit_barrier = barrier.clone();
         let commit = thread::spawn(move || {
@@ -820,9 +846,9 @@ mod tests {
         barrier.wait();
         drop(body_guard);
 
-        let write_succeeded = writer.join().unwrap();
+        let write_succeeded = writer.join().is_ok();
         commit.join().unwrap().unwrap();
-        assert_eq!(block.get(b"race").is_some(), write_succeeded);
+        assert_eq!(block.get(b"race").unwrap().is_some(), write_succeeded);
     }
 
     #[test]
@@ -841,7 +867,7 @@ mod tests {
         let writer_barrier = barrier.clone();
         let writer = thread::spawn(move || {
             writer_barrier.wait();
-            catch_unwind(AssertUnwindSafe(|| writer.set(b"race", vec![1]))).is_ok()
+            writer.set(b"race", vec![1]);
         });
         let attach_child = child.clone();
         let attach_root = root.clone();
@@ -853,9 +879,9 @@ mod tests {
         barrier.wait();
         drop(body_guard);
 
-        let write_succeeded = writer.join().unwrap();
+        let write_succeeded = writer.join().is_ok();
         attach.join().unwrap().unwrap();
-        assert_eq!(child.get(b"race").is_some(), write_succeeded);
+        assert_eq!(child.get(b"race").unwrap().is_some(), write_succeeded);
         assert!(child.frozen_state().is_some());
     }
 }

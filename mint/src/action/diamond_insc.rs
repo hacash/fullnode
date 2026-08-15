@@ -290,7 +290,7 @@ fn check_diamond_status_for_inscription(
 }
 
 fn load_diamond_for_inscription(state: &mut CoreState, diamond: &DiamondName) -> Ret<DiamondSto> {
-    let Some(diasto) = state.diamond(diamond) else {
+    let Some(diasto) = state.diamond(diamond)? else {
         return errf!("diamond status {} not found", diamond_readable(diamond));
     };
     check_inscription_owner_privakey(&diasto.address, diamond)?;
@@ -320,7 +320,7 @@ fn check_inscription_cooldown(
 }
 
 fn load_diamond_average_bid_burn_mei(state: &mut CoreState, diamond: &DiamondName) -> Ret<u16> {
-    let Some(diaslt) = state.diamond_smelt(diamond) else {
+    let Some(diaslt) = state.diamond_smelt(diamond)? else {
         return errf!("diamond {} not found", diamond_readable(diamond));
     };
     Ok(diaslt.average_bid_burn.uint())
@@ -454,7 +454,7 @@ pub fn engraved_one_diamond(
             INSCRIPTION_MAX_PER_DIAMOND
         );
     }
-    let Some(diaslt) = state.diamond_smelt(diamond) else {
+    let Some(diaslt) = state.diamond_smelt(diamond)? else {
         return errf!("diamond {} not found", diamond_readable(diamond));
     };
     let cost = calc_append_inscription_protocol_cost(haveng, diaslt.average_bid_burn.uint());
@@ -472,7 +472,7 @@ pub fn engraved_clean_one_diamond(
     diamond: &DiamondName,
 ) -> Ret<Amount> {
     let mut diasto = check_diamond_status_for_inscription(state, addr, diamond)?;
-    let Some(diaslt) = state.diamond_smelt(diamond) else {
+    let Some(diaslt) = state.diamond_smelt(diamond)? else {
         return errf!("diamond {} not found", diamond_readable(diamond));
     };
     if diasto.inscripts.length() == 0 {

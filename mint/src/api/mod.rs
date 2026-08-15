@@ -15,11 +15,11 @@ mod transaction;
 mod transfer;
 mod util;
 
+use console::console_handler;
 use miner::{
     diamondminer_init_handler, diamondminer_success_handler, miner_notice_handler,
     miner_pending_handler, miner_success_handler,
 };
-use console::console_handler;
 use query::{
     balance_handler, block_datas_handler, block_intro_handler, block_pool_stats_handler,
     block_recents_handler, block_views_handler, channel_handler, diamond_bidding_handler,

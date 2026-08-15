@@ -21,6 +21,8 @@ pub enum ErrorKind {
     /// revertAST
     Revert,
     Fault,
+    /// 当前状态机不能安全继续
+    Abort,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +53,9 @@ impl Error {
     pub fn fault(msg: impl Into<String>) -> Self {
         Self::new(ErrorKind::Fault, msg)
     }
+    pub fn abort(msg: impl Into<String>) -> Self {
+        Self::new(ErrorKind::Abort, msg)
+    }
 
     pub fn is_decode(&self) -> bool {
         self.kind == ErrorKind::Decode
@@ -60,6 +65,9 @@ impl Error {
     }
     pub fn is_fault(&self) -> bool {
         self.kind == ErrorKind::Fault
+    }
+    pub fn is_abort(&self) -> bool {
+        self.kind == ErrorKind::Abort
     }
 
     pub fn as_str(&self) -> &str {
@@ -85,6 +93,7 @@ impl fmt::Display for Error {
             ErrorKind::Decode => write!(f, "[decode] {}", self.msg),
             ErrorKind::Revert => write!(f, "[revert] {}", self.msg),
             ErrorKind::Fault => write!(f, "{}", self.msg),
+            ErrorKind::Abort => write!(f, "[abort] {}", self.msg),
         }
     }
 }

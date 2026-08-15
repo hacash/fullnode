@@ -31,7 +31,9 @@ impl DiskDB for SledDisk {
         self.db
             .get(key)
             .map(|v| v.map(|v| v.to_vec()))
-            .map_err(|e| sys::Error::fault(format!("sled read failed for key len={}: {}", key.len(), e)))
+            .map_err(|e| {
+                sys::Error::fault(format!("sled read failed for key len={}: {}", key.len(), e))
+            })
     }
     fn save(&self, key: &[u8], val: &[u8]) {
         self.db.insert(key, val).expect("sled save");

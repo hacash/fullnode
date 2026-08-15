@@ -28,9 +28,13 @@ impl RocksdbDisk {
 impl DiskDB for RocksdbDisk {
     fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
         // IO/corruption must NOT map to "missing" — that silently diverges state.
-        self.db
-            .get(key)
-            .map_err(|e| sys::Error::fault(format!("rocksdb read failed for key len={}: {}", key.len(), e)))
+        self.db.get(key).map_err(|e| {
+            sys::Error::fault(format!(
+                "rocksdb read failed for key len={}: {}",
+                key.len(),
+                e
+            ))
+        })
     }
 
     fn save(&self, key: &[u8], val: &[u8]) {

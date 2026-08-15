@@ -328,7 +328,7 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Rerr {
         if pending_hash != Hash::default() && pending_height % 5 != 0 {
             return errf!("diamond must be in a block height that is divisible by 5");
         }
-        let latest = state.latest_diamond().unwrap_or_default();
+        let latest = state.latest_diamond()?.unwrap_or_default();
         let latestdianum = latest.number.uint() as u32;
         let neednextnumber = latestdianum + 1;
         if dianum != neednextnumber {
@@ -355,13 +355,13 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Rerr {
         if name != dianame {
             return errf!("diamond name expected {:?} but got {:?}", dianame, name);
         }
-        if state.diamond(&name).is_some() {
+        if state.diamond(&name)?.is_some() {
             return errf!("diamond already exists");
         }
     }
 
     let projected_burn = MintState::wrap(&mut *state.0)
-        .get_mint_total()
+        .get_mint_total()?
         .hacd_bid_burn_238
         .uint()
         + tx_bid_burn_238.unwrap_or(0);

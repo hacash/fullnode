@@ -380,7 +380,7 @@ fn prepare_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Ret<TxExec
             let state = CoreState::wrap(ctx.layer());
             state.tx_exist(&tx_hash)
         };
-        if let Some(existing) = existing {
+        if let Some(existing) = existing? {
             // Preserve the historical dev exception for the one known duplicate
             // transaction replayed at height 63,448.
             const HISTORICAL_DUPLICATE_TX: [u8; Hash::SIZE] = [
@@ -1009,7 +1009,7 @@ macro_rules! impl_tx_type {
                 if Self::TYPE != TransactionType3::TYPE {
                     record_legacy_extra9_burn(ctx, &prep.fee, &self.fee_got())?;
                 }
-                crate::exec::tex::settlement_addr_postsettle_cleanup(ctx);
+                crate::exec::tex::settlement_addr_postsettle_cleanup(ctx)?;
                 Ok(())
             }
 
@@ -1167,7 +1167,10 @@ mod tests {
         let mut tx = fromto_tx(from, main, &acc_from);
         tx.fill_sign_account(&acc_from).unwrap();
         assert_eq!(tx.req_sign().unwrap(), vec![main, from]);
-        assert!(tx.verify_signature().is_err(), "missing the `from` signature");
+        assert!(
+            tx.verify_signature().is_err(),
+            "missing the `from` signature"
+        );
 
         let sign = Sign::create_by(&acc_to, &tx.hash());
         tx.push_sign(sign).unwrap();

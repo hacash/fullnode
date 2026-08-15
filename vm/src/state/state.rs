@@ -39,19 +39,19 @@ impl<'a> VMStateRead<'a> {
         Self { sta }
     }
 
-    pub fn contract(&self, key: &ContractAddress) -> Option<ContractSto> {
+    pub fn contract(&self, key: &ContractAddress) -> VmrtRes<Option<ContractSto>> {
         state_read_get(self.sta, KEY_CONTRACT, key)
     }
 
-    pub fn contract_edition(&self, key: &ContractAddress) -> Option<ContractEdition> {
+    pub fn contract_edition(&self, key: &ContractAddress) -> VmrtRes<Option<ContractEdition>> {
         state_read_get(self.sta, KEY_CONTRACT_EDITION, key)
     }
 
-    pub fn ctrtkvdb(&self, key: &ValueKey) -> Option<ValueSto> {
+    pub fn ctrtkvdb(&self, key: &ValueKey) -> VmrtRes<Option<ValueSto>> {
         state_read_get(self.sta, KEY_CONTRACT_KV, key)
     }
 
-    pub fn ctrtstatus(&self, key: &ContractAddress) -> Option<StatusSto> {
+    pub fn ctrtstatus(&self, key: &ContractAddress) -> VmrtRes<Option<StatusSto>> {
         state_read_get(self.sta, KEY_CONTRACT_STATUS, key)
     }
 
@@ -64,7 +64,7 @@ impl<'a> VMStateRead<'a> {
         k: &Value,
     ) -> VmrtRes<Option<StorageDebug>> {
         let sk = VMState::skey(cadr, k, cap.kv_key_size)?;
-        let Some(mut v) = self.ctrtkvdb(&sk) else {
+        let Some(mut v) = self.ctrtkvdb(&sk)? else {
             return Ok(None);
         };
         v.settle(curhei, gst)?;
@@ -84,7 +84,7 @@ impl<'a> VMStateRead<'a> {
 
     pub fn debug_status_get(&self, cap: &SpaceCap, cadr: &Address, k: &Value) -> VmrtRes<Value> {
         let caddr = VMState::status_contract_addr(cadr)?;
-        let status = match self.ctrtstatus(&caddr) {
+        let status = match self.ctrtstatus(&caddr)? {
             Some(sto) => {
                 let status = sto.to_status_map()?;
                 status.validate_key_lengths(VMState::status_key_max(cap), StorageError)?;
@@ -102,7 +102,7 @@ impl<'a> VMState<'a> {
         Self { sta }
     }
 
-    pub fn contract(&self, key: &ContractAddress) -> Option<ContractSto> {
+    pub fn contract(&self, key: &ContractAddress) -> VmrtRes<Option<ContractSto>> {
         state_get(self.sta, KEY_CONTRACT, key)
     }
 
@@ -114,7 +114,7 @@ impl<'a> VMState<'a> {
         state_del(self.sta, KEY_CONTRACT, key);
     }
 
-    pub fn contract_edition(&self, key: &ContractAddress) -> Option<ContractEdition> {
+    pub fn contract_edition(&self, key: &ContractAddress) -> VmrtRes<Option<ContractEdition>> {
         state_get(self.sta, KEY_CONTRACT_EDITION, key)
     }
 
@@ -126,7 +126,7 @@ impl<'a> VMState<'a> {
         state_del(self.sta, KEY_CONTRACT_EDITION, key);
     }
 
-    pub fn ctrtkvdb(&self, key: &ValueKey) -> Option<ValueSto> {
+    pub fn ctrtkvdb(&self, key: &ValueKey) -> VmrtRes<Option<ValueSto>> {
         state_get(self.sta, KEY_CONTRACT_KV, key)
     }
 
@@ -138,7 +138,7 @@ impl<'a> VMState<'a> {
         state_del(self.sta, KEY_CONTRACT_KV, key);
     }
 
-    pub fn ctrtstatus(&self, key: &ContractAddress) -> Option<StatusSto> {
+    pub fn ctrtstatus(&self, key: &ContractAddress) -> VmrtRes<Option<StatusSto>> {
         state_get(self.sta, KEY_CONTRACT_STATUS, key)
     }
 
@@ -188,7 +188,7 @@ impl<'a> VMState<'a> {
         cap: &SpaceCap,
         caddr: &ContractAddress,
     ) -> VmrtRes<StatusMap> {
-        match self.ctrtstatus(caddr) {
+        match self.ctrtstatus(caddr)? {
             Some(sto) => {
                 let status = sto.to_status_map()?;
                 status.validate_key_lengths(Self::status_key_max(cap), StorageError)?;
@@ -301,7 +301,7 @@ impl<'a> VMState<'a> {
     }
 
     fn sfetch(&mut self, curhei: u64, gst: &GasExtra, sk: &ValueKey) -> VmrtRes<Option<ValueSto>> {
-        let Some(mut v) = self.ctrtkvdb(sk) else {
+        let Some(mut v) = self.ctrtkvdb(sk)? else {
             return Ok(None);
         };
         v.settle(curhei, gst)?;
@@ -516,7 +516,7 @@ impl<'a> VMState<'a> {
         k: Value,
     ) -> VmrtRes<i64> {
         let sk = Self::skey(cadr, &k, cap.kv_key_size)?;
-        let Some(mut v) = self.ctrtkvdb(&sk) else {
+        let Some(mut v) = self.ctrtkvdb(&sk)? else {
             return Ok(0);
         };
         v.settle(curhei, gst)?;
@@ -537,24 +537,40 @@ fn state_key<K: Encode>(idx: u8, key: &K) -> Vec<u8> {
     numeric_state_key(idx, key)
 }
 
-fn state_get<K: Encode, V: Decode + Default>(sta: &dyn StateLayer, idx: u8, key: &K) -> Option<V> {
+fn state_get<K: Encode, V: Decode + Default>(
+    sta: &dyn StateLayer,
+    idx: u8,
+    key: &K,
+) -> VmrtRes<Option<V>> {
     let k = state_key(idx, key);
-    sta.get(&k).and_then(|b| {
-        let (v, _) = V::decode(b.as_ref()).ok()?;
-        Some(v)
-    })
+    let bytes = sta
+        .get(&k)
+        .map_err(|e| ItrErr::new(StateReadFailed, &e.to_string()))?;
+    match bytes {
+        Some(b) => match V::decode(b.as_ref()) {
+            Ok((v, _)) => Ok(Some(v)),
+            Err(e) => Err(ItrErr::new(StateDecodeFailed, &e.to_string())),
+        },
+        None => Ok(None),
+    }
 }
 
 fn state_read_get<K: Encode, V: Decode + Default>(
     sta: &dyn StateRead,
     idx: u8,
     key: &K,
-) -> Option<V> {
+) -> VmrtRes<Option<V>> {
     let k = state_key(idx, key);
-    sta.get(&k).and_then(|b| {
-        let (v, _) = V::decode(b.as_ref()).ok()?;
-        Some(v)
-    })
+    let bytes = sta
+        .get(&k)
+        .map_err(|e| ItrErr::new(StateReadFailed, &e.to_string()))?;
+    match bytes {
+        Some(b) => match V::decode(b.as_ref()) {
+            Ok((v, _)) => Ok(Some(v)),
+            Err(e) => Err(ItrErr::new(StateDecodeFailed, &e.to_string())),
+        },
+        None => Ok(None),
+    }
 }
 
 fn state_set<K: Encode, V: Encode>(sta: &mut dyn StateLayer, idx: u8, key: &K, v: &V) {
@@ -565,4 +581,71 @@ fn state_set<K: Encode, V: Encode>(sta: &mut dyn StateLayer, idx: u8, key: &K, v
 fn state_del<K: Encode>(sta: &mut dyn StateLayer, idx: u8, key: &K) {
     let k = state_key(idx, key);
     sta.del(&k);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `StateLayer` whose reads fail, standing in for a canonical backend
+    /// read error at the VM state boundary.
+    struct FailingLayer;
+    impl base::StateRead for FailingLayer {
+        fn get(&self, _key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+            Err(sys::Error::fault("injected backend read failure"))
+        }
+    }
+    impl StateLayer for FailingLayer {
+        fn set(&mut self, _key: &[u8], _val: Vec<u8>) {}
+        fn del(&mut self, _key: &[u8]) {}
+    }
+
+    /// In-memory layer storing bytes under a key.
+    struct CorruptLayer(std::collections::HashMap<Vec<u8>, Vec<u8>>);
+    impl base::StateRead for CorruptLayer {
+        fn get(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+            Ok(self.0.get(key).cloned())
+        }
+    }
+    impl StateLayer for CorruptLayer {
+        fn set(&mut self, key: &[u8], val: Vec<u8>) {
+            self.0.insert(key.to_vec(), val);
+        }
+        fn del(&mut self, key: &[u8]) {
+            self.0.remove(key);
+        }
+    }
+
+    #[test]
+    fn backend_read_failure_is_state_read_failed() {
+        let sta = FailingLayer;
+        let err = state_get::<field::Address, field::Uint8>(
+            &sta,
+            KEY_CONTRACT,
+            &field::Address::default(),
+        )
+        .unwrap_err();
+        assert_eq!(err.0, crate::rt::ItrErrCode::StateReadFailed);
+    }
+
+    #[test]
+    fn corrupt_storage_bytes_is_state_decode_failed() {
+        let mut map = CorruptLayer(Default::default());
+        let k = ValueKey::from(vec![0x01, 0x02, 0x03]);
+        let sk = state_key(KEY_CONTRACT_KV, &k);
+        map.set(&sk, vec![0xde, 0xad, 0xbe, 0xef]);
+        let err = state_get::<_, ValueSto>(&map, KEY_CONTRACT_KV, &k).unwrap_err();
+        assert_eq!(err.0, crate::rt::ItrErrCode::StateDecodeFailed);
+    }
+
+    #[test]
+    fn missing_key_is_ok_none() {
+        let map = CorruptLayer(Default::default());
+        let k = ValueKey::from(vec![0x04, 0x05, 0x06]);
+        assert!(
+            state_get::<_, ValueSto>(&map, KEY_CONTRACT_KV, &k)
+                .unwrap()
+                .is_none()
+        );
+    }
 }

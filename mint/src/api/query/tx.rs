@@ -45,11 +45,15 @@ pub(crate) fn transaction_query_handler(ctx: &ApiExecCtx, req: ApiRequest) -> Ap
     let last_height = snapshot.head_height;
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());
-    let Some(height) = state.tx_exist(&tx_hash) else {
-        if !ctx.engine.validate_optimistic(start_epoch) {
-            return api_error("state changed");
+    let height = match state.tx_exist(&tx_hash) {
+        Ok(Some(height)) => height,
+        Ok(None) => {
+            if !ctx.engine.validate_optimistic(start_epoch) {
+                return api_error("state changed");
+            }
+            return api_error("transaction not found");
         }
-        return api_error("transaction not found");
+        Err(e) => return api_state_read_error(&e),
     };
     if !ctx.engine.validate_optimistic(start_epoch) {
         return api_error("state changed");

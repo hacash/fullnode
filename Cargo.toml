@@ -62,7 +62,10 @@ debug = false
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "unwind"
+# Zero panic recovery in the codebase: a panic must terminate the process
+# instead of continuing on unknown in-process state; the supervisor restarts
+# from durable state (§9 of the state-read error contract).
+panic = "abort"
 strip = true
 
 [profile.wasm-release]

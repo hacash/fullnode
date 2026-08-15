@@ -103,6 +103,17 @@ pub(crate) fn api_error(errmsg: &str) -> ApiResponse {
     ApiResponse::json(format!("{{\"ret\":1,\"err\":{}}}", json_string(errmsg)))
 }
 
+/// Convert a state read error into an HTTP response. Canonical state backend
+/// failures (`Abort`) are 503 Service Unavailable; the plain JSON error body
+/// is kept for any other error.
+pub(crate) fn api_state_read_error(e: &sys::Error) -> ApiResponse {
+    if e.is_abort() {
+        ApiResponse::err(503, &format!("state read failed: {}", e))
+    } else {
+        api_error(&format!("state read failed: {}", e))
+    }
+}
+
 pub(crate) fn api_ok(fields: Vec<(&str, String)>) -> ApiResponse {
     let fields = fields
         .into_iter()

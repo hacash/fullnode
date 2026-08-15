@@ -12,11 +12,15 @@ pub(crate) fn supply_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse 
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());
     let mint_state = MintStateRead::wrap(snapshot.view());
-    let result = supply_json(
-        snapshot.head_height,
-        &state.get_base_total(),
-        &mint_state.get_mint_total(),
-    );
+    let base_total = match state.get_base_total() {
+        Ok(v) => v,
+        Err(e) => return api_state_read_error(&e),
+    };
+    let mint_total = match mint_state.get_mint_total() {
+        Ok(v) => v,
+        Err(e) => return api_state_read_error(&e),
+    };
+    let result = supply_json(snapshot.head_height, &base_total, &mint_total);
     if !ctx.engine.validate_optimistic(start_epoch) {
         return api_error("state changed");
     }
@@ -40,7 +44,10 @@ pub(crate) fn latest_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse 
     };
     let start_epoch = snapshot.epoch;
     let state = CoreStateRead::wrap(snapshot.view());
-    let latest_diamond = state.latest_diamond().unwrap_or_default();
+    let latest_diamond = match state.latest_diamond() {
+        Ok(v) => v.unwrap_or_default(),
+        Err(e) => return api_state_read_error(&e),
+    };
     if !ctx.engine.validate_optimistic(start_epoch) {
         return api_error("state changed");
     }

@@ -115,7 +115,7 @@ fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> Rerr {
     let mut reuse_version = Uint4::from(1);
     {
         let state = MintState::wrap(ctx.layer());
-        if let Some(chan) = state.channel(&this.channel_id) {
+        if let Some(chan) = state.channel(&this.channel_id)? {
             let samebothaddr =
                 *left_addr == chan.left_bill.address && *right_addr == chan.right_bill.address;
             if !samebothaddr || chan.status != field::CHANNEL_STATUS_AGREEMENT_CLOSED {
@@ -163,7 +163,7 @@ fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> Rerr {
 fn channel_close(this: &ChannelClose, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     check_channel_id(&this.channel_id)?;
     let pending_height = ctx.env().block.height;
-    let Some(chan) = MintState::wrap(ctx.layer()).channel(&this.channel_id) else {
+    let Some(chan) = MintState::wrap(ctx.layer()).channel(&this.channel_id)? else {
         return errf!("channel not found");
     };
     if !chan.left_bill.address.is_privkey() || !chan.right_bill.address.is_privkey() {

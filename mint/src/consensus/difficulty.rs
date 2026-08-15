@@ -1,6 +1,7 @@
 use base::PowBlockExt;
 use num_bigint::BigUint;
 use num_traits::ToPrimitive;
+use sys::{Ret, errf};
 
 pub const LOWEST_DIFFICULTY: u32 = 0xffff_ffff;
 
@@ -80,15 +81,15 @@ impl DifficultyGnr {
         hei: u64,
         blkt: u64,
         history: &dyn base::BlockHistory,
-    ) -> DifficultyTarget {
+    ) -> Ret<DifficultyTarget> {
         if self.is_asert_height(hei) {
             return self.target_asert(prevdiff, hei, blkt, history);
         }
         if self.cnf.is_mainnet() {
-            return DifficultyTarget::from_num(prevdiff);
+            return Ok(DifficultyTarget::from_num(prevdiff));
         }
         if self.use_bootstrap_rule(hei) {
-            return self.target_bootstrap();
+            return Ok(self.target_bootstrap());
         }
         self.target_weighted_sliding(prevdiff, prevblkt, hei, history)
     }
@@ -130,17 +131,13 @@ impl DifficultyGnr {
         hei <= self.window_blocks() + 1
     }
 
-    fn block_intro(&self, hei: u64, history: &dyn base::BlockHistory) -> (u64, u32) {
+    fn block_intro(&self, hei: u64, history: &dyn base::BlockHistory) -> Ret<(u64, u32)> {
         let block = match history.block_at_height(hei) {
             Ok(Some(block)) => block,
-            Ok(None) => panic!("difficulty block missing: block_height={}", hei),
-            // A storage read failure carries the dedicated panic payload so
-            // the block-processing boundary converts it to engine-fatal
-            // instead of unwinding the caller (§3.1 of the engine error
-            // contract).
-            Err(error) => std::panic::panic_any(base::StorageReadPanic { error }),
+            Ok(None) => return errf!("difficulty block missing: block_height={}", hei),
+            Err(error) => return Err(error),
         };
-        (block.timestamp(), block.pow_difficulty())
+        Ok((block.timestamp(), block.pow_difficulty()))
     }
 
     fn target_bootstrap(&self) -> DifficultyTarget {
@@ -154,30 +151,30 @@ impl DifficultyGnr {
         prevblkt: u64,
         hei: u64,
         history: &dyn base::BlockHistory,
-    ) -> DifficultyTarget {
+    ) -> Ret<DifficultyTarget> {
         let prevbign = u32_to_biguint(prevdiff);
         let mut observed: u128 = 0;
         let mut expected: u128 = 0;
         let group_target = (self.cnf.each_block_target_time * self.group_blocks()) as u128;
         let mut bound = hei - self.window_blocks() - 1;
-        let mut prev_time = self.block_intro(bound, history).0;
+        let mut prev_time = self.block_intro(bound, history)?.0;
         let last_group = self.window_groups() - 1;
         for i in 0..self.window_groups() {
             let next_time = if i == last_group {
                 prevblkt
             } else {
                 bound += self.group_blocks();
-                self.block_intro(bound, history).0
+                self.block_intro(bound, history)?.0
             };
             let weight = (i + 1) as u128;
             observed += (next_time.saturating_sub(prev_time) as u128) * weight;
             expected += group_target * weight;
             prev_time = next_time;
         }
-        DifficultyTarget::from_big(clamp_target_half_double(
+        Ok(DifficultyTarget::from_big(clamp_target_half_double(
             &prevbign,
             scale_target_by_ratio(&prevbign, observed, expected),
-        ))
+        )))
     }
 
     pub(crate) fn target_asert(
@@ -186,12 +183,12 @@ impl DifficultyGnr {
         hei: u64,
         blkt: u64,
         history: &dyn base::BlockHistory,
-    ) -> DifficultyTarget {
+    ) -> Ret<DifficultyTarget> {
         let upgrade_hei = self.asert_upgrade_height();
         if hei == upgrade_hei {
-            return DifficultyTarget::from_num(ASERT_START_TARGET_NUM);
+            return Ok(DifficultyTarget::from_num(ASERT_START_TARGET_NUM));
         }
-        let anchor_time = self.block_intro(upgrade_hei, history).0;
+        let anchor_time = self.block_intro(upgrade_hei, history)?.0;
         let anchor_target = u32_to_biguint(ASERT_START_TARGET_NUM);
         let time_delta = blkt as i128 - anchor_time as i128;
         let height_delta = hei as i128 - upgrade_hei as i128;
@@ -219,15 +216,15 @@ impl DifficultyGnr {
         }
         next_target >>= ASERT_RADIX_BITS as usize;
         if next_target == BigUint::default() {
-            return DifficultyTarget::from_big(BigUint::from(1u8));
+            return Ok(DifficultyTarget::from_big(BigUint::from(1u8)));
         }
         if next_target > ease_target {
             next_target = ease_target;
         }
         if next_target > max_target {
-            return DifficultyTarget::from_num(LOWEST_DIFFICULTY);
+            return Ok(DifficultyTarget::from_num(LOWEST_DIFFICULTY));
         }
-        DifficultyTarget::from_big(next_target)
+        Ok(DifficultyTarget::from_big(next_target))
     }
 }
 
