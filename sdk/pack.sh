@@ -42,6 +42,4 @@ cp "$SCRIPT_DIR/tests/friendly_test.html" "$DIST_DIR/page/friendly_test.html"
 rm -f "$DIST_DIR"/*.js "$DIST_DIR"/*.wasm
 
 mkdir -p "$DIST_DIR/js"
-cp "$JS_DIR/hacashsdk.mjs" "$DIST_DIR/js/hacashsdk.mjs"
-cp "$JS_DIR/hacashsdk.cjs" "$DIST_DIR/js/hacashsdk.cjs"
-cp "$JS_DIR/hacashsdk.global.js" "$DIST_DIR/js/hacashsdk.global.js"
+cp "$JS_DIR/hacashsdk2.mjs" "$DIST_DIR/js/hacashsdk.mjs"

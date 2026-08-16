@@ -669,7 +669,9 @@ fn signature_present_for(addr: &Address, signs: &[Sign]) -> bool {
     signs.iter().any(|sig| sign_address(sig) == *addr)
 }
 
-fn sign_hash_for(tx: &dyn Transaction, adr: &Address) -> Hash {
+/// Canonical per-signer sign hash: the main signer of Type-2/3 signs
+/// `hash_with_fee`, everyone else (and all Type-1 signers) signs `hash`.
+pub fn sign_hash_for(tx: &dyn Transaction, adr: &Address) -> Hash {
     if *adr == tx.main() && tx.ty() != TransactionType1::TYPE {
         tx.hash_with_fee()
     } else {

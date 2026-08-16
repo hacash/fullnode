@@ -7,17 +7,19 @@ use base::{
     TxRef, VmAssignFn, VmExecutionParams, VmHostActionDef,
 };
 use field::{Decode, Uint1, Uint2};
-use sys::{Ret, normalf, errf};
+use sys::{Ret, errf, normalf};
 
-/// Transaction/action codec composition used by the WASM signer.
+/// Transaction/action codec composition used by the WASM SDK.
 ///
 /// The full-node registry lives in `app` and also pulls in consensus, storage,
-/// VM and x16rs dependencies. The browser SDK only needs the standard protocol
-/// codecs, so it records the registrations contributed by `protocol` and
-/// deliberately ignores execution-only hooks.
+/// VM and x16rs dependencies. The SDK only needs the standard protocol codecs
+/// plus the four VM action codecs (ContractDeploy 40, ContractUpdate 41,
+/// ContractMainCall 44, P2SHScriptProve 46), so it records those registrations
+/// and deliberately ignores execution-only hooks (plan 13 §2, S1).
 pub(crate) struct SdkCodecs {
     transactions: HashMap<u8, TxCreateFn>,
     actions: HashMap<u16, ActionCreateFn>,
+    action_json: HashMap<u16, ActionJsonDecodeFn>,
 }
 
 impl SdkCodecs {
@@ -25,13 +27,21 @@ impl SdkCodecs {
         Self {
             transactions: HashMap::new(),
             actions: HashMap::new(),
+            action_json: HashMap::new(),
         }
     }
 
     fn standard() -> Ret<Self> {
         let mut codecs = Self::new();
         protocol::register_standard(&mut codecs, &protocol::PROTOCOL_PARAMS)?;
+        vm::action::register_actions(&mut codecs)?;
         Ok(codecs)
+    }
+
+    pub fn registered_kinds(&self) -> Vec<u16> {
+        let mut kinds: Vec<u16> = self.actions.keys().copied().collect();
+        kinds.sort_unstable();
+        kinds
     }
 }
 
@@ -78,7 +88,10 @@ impl RegistryWriter for SdkCodecs {
         Ok(())
     }
 
-    fn register_action_json(&mut self, _kinds: &[u16], _decoder: ActionJsonDecodeFn) -> sys::Rerr {
+    fn register_action_json(&mut self, kinds: &[u16], decoder: ActionJsonDecodeFn) -> sys::Rerr {
+        for kind in kinds {
+            self.action_json.insert(*kind, decoder);
+        }
         Ok(())
     }
 
@@ -170,15 +183,34 @@ impl BinaryCodecs for SdkCodecs {
     }
 }
 
+impl base::JsonCodecs for SdkCodecs {
+    fn decode_tx_json(&self, _ty: u8, _json: &str) -> Ret<Option<TxRef>> {
+        Ok(None)
+    }
+
+    fn decode_action_json(&self, kind: u16, json: &str) -> Ret<Option<ActionRef>> {
+        match self.action_json.get(&kind) {
+            Some(decoder) => decoder(self, kind, json).map(Some),
+            None => Ok(None),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn standard_protocol_registers_all_user_transaction_types() {
+    fn standard_protocol_and_vm_actions_are_registered() {
         let codecs = standard_codecs().unwrap();
         assert!(codecs.transactions.contains_key(&1));
         assert!(codecs.transactions.contains_key(&2));
         assert!(codecs.transactions.contains_key(&3));
+        for kind in [40u16, 41, 44, 46] {
+            assert!(
+                codecs.actions.contains_key(&kind),
+                "vm action kind {kind} must be registered"
+            );
+        }
     }
 }

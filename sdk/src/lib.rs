@@ -1,13 +1,52 @@
+//! Unified SDK 2.0 (doc 14). The raw WASM transport is a single
+//! `sdk_invoke`/`sdk_transport_version` pair; all operations are JSON
+//! request/response through the dispatcher. Private keys never cross the
+//! boundary.
+
 #![cfg_attr(all(target_arch = "wasm32", not(test)), no_main)]
 
-mod account;
 mod codec;
-mod coin;
-mod error;
-mod sign;
-mod util;
+mod names;
 
-pub use account::{Account, VerifyAddressResult, create_account, verify_address};
-pub use coin::{CoinTransferParam, CoinTransferResult, create_coin_transfer};
-pub use sign::{SignTxParam, SignTxResult, sign_transaction};
-pub use util::{hac_to_mei, hac_to_unit};
+pub mod account;
+pub mod amount;
+pub mod attach;
+pub mod audit;
+pub mod build;
+pub mod error;
+pub mod inspect;
+pub mod message;
+pub mod policy;
+pub mod profile;
+pub mod schema;
+pub mod service;
+
+pub use account::{address_from_public_key, verify_address};
+pub use amount::{format_protocol, parse_protocol};
+pub use attach::{
+    attach_signature, prepare_signature, signature_report, verify_signatures, SignatureProof,
+    SigningRequest,
+};
+pub use audit::{ActionDesc, TransferDesc};
+pub use build::{build_transaction, ActionSpec, TransactionSpec};
+pub use error::{SdkError, SdkErrorCode};
+pub use inspect::{inspect, inspect_report, Review};
+pub use policy::{evaluate_policy, Policy, PolicyDecision};
+pub use profile::{capabilities, CodecProfile, SDK_VERSION};
+pub use schema::ResultEnvelope;
+
+/// Raw WASM transport: one JSON request in, one envelope JSON out.
+/// `{ operation, schema?, payload }` → `{ ok: true, value } | { ok: false, error }`.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn sdk_invoke(request_json: &str) -> String {
+    service::invoke(request_json)
+}
+
+/// Raw WASM transport version (doc 14 §9). Bumping this means the JSON
+/// transport semantics changed, not that operations were added.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn sdk_transport_version() -> u32 {
+    service::TRANSPORT_VERSION
+}

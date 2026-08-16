@@ -58,8 +58,18 @@ wasm-bindgen "$BINARY" \
 BG_WASM="$DIST_DIR/${SDK_NAME}_bg.wasm"
 if command -v wasm-opt >/dev/null 2>&1; then
     TMP_WASM="$(mktemp)"
-    wasm-opt -Oz --all-features --strip-debug --strip-dwarf -o "$TMP_WASM" "$BG_WASM"
-    mv "$TMP_WASM" "$BG_WASM"
+    # Explicit feature flags: recent rustc emits bulk-memory/sign-ext on
+    # wasm32-unknown-unknown, which `--all-features` on older wasm-opt
+    # versions miscompiles. Validate the output and fall back to the
+    # (already valid) wasm-bindgen file when in doubt.
+    if wasm-opt -Oz --enable-bulk-memory --enable-sign-ext --strip-debug --strip-dwarf \
+            -o "$TMP_WASM" "$BG_WASM" \
+        && (command -v wasm-validate >/dev/null 2>&1 && wasm-validate "$TMP_WASM" >/dev/null 2>&1); then
+        mv "$TMP_WASM" "$BG_WASM"
+    else
+        echo "[SDK wasm] wasm-opt output failed validation; keeping unoptimized wasm"
+        rm -f "$TMP_WASM"
+    fi
 fi
 
 RAW_SIZE="$(wc -c < "$BG_WASM" | tr -d ' ')"

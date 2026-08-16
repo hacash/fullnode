@@ -1,51 +1,67 @@
+//! Account services (Unified SDK 2.0, doc 14 §5). Private keys never enter
+//! the SDK: `address_from_public_key` derives an address from a public key
+//! only; password→key derivation lives in the wallet vault.
+
 use field::Address;
-use sys::Account as SysAccount;
-use wasm_bindgen::prelude::*;
+use serde::{Deserialize, Serialize};
 
-use crate::error::js_error;
+use crate::error::{SdkError, SdkErrorCode};
 
-#[wasm_bindgen(getter_with_clone, inspectable)]
-pub struct Account {
-    pub prikey: String,
-    pub pubkey: String,
-    pub address: String,
-    pub address_hex: String,
-}
-
-fn create_account_inner(pass: &str) -> sys::Ret<Account> {
-    SysAccount::create_by(pass).map(|account| Account {
-        prikey: hex::encode(account.secret_key().serialize()),
-        pubkey: hex::encode(account.public_key().serialize_compressed()),
-        address: account.readable().to_owned(),
-        address_hex: hex::encode(account.address()),
-    })
-}
-
-/// `pass` is either a 32-byte private key in hex or a password, matching the
-/// historical JS SDK behavior.
-#[wasm_bindgen]
-pub fn create_account(pass: &str) -> Result<Account, JsValue> {
-    create_account_inner(pass).map_err(js_error)
-}
-
-#[wasm_bindgen(getter_with_clone, inspectable)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifyAddressResult {
     pub ok: bool,
-    pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
 }
 
-#[wasm_bindgen]
-pub fn verify_address(address: &str) -> VerifyAddressResult {
-    match Address::from_readable(address) {
-        Ok(_) => VerifyAddressResult {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddressFromPublicKeyResult {
+    pub address: String,
+    pub version: u8,
+}
+
+/// `account.verify_address`: parse and canonicalize a readable address.
+pub fn verify_address(raw: &str) -> VerifyAddressResult {
+    match Address::from_readable(raw) {
+        Ok(address) => VerifyAddressResult {
             ok: true,
-            error: String::new(),
+            error: None,
+            address: Some(address.to_readable()),
         },
         Err(error) => VerifyAddressResult {
             ok: false,
-            error: error.to_string(),
+            error: Some(error.to_string()),
+            address: None,
         },
     }
+}
+
+/// `account.address_from_public_key`: derive the Hacash address from a
+/// 33-byte compressed public key (hex). No secret input. The point must be a
+/// valid secp256k1 curve point.
+pub fn address_from_public_key(public_key_hex: &str) -> Result<AddressFromPublicKeyResult, SdkError> {
+    let public_key: [u8; 33] = hex::decode(public_key_hex.trim_start_matches("0x").trim_start_matches("0X"))
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| {
+            SdkError::new(
+                SdkErrorCode::InvalidPublicKey,
+                "public key must be 33-byte compressed hex",
+            )
+        })?;
+    if libsecp256k1::PublicKey::parse_compressed(&public_key).is_err() {
+        return Err(SdkError::new(
+            SdkErrorCode::InvalidPublicKey,
+            "public key is not a valid secp256k1 compressed point",
+        ));
+    }
+    let address = Address::from(sys::Account::get_address_by_public_key(public_key));
+    Ok(AddressFromPublicKeyResult {
+        address: address.to_readable(),
+        version: address.version(),
+    })
 }
 
 #[cfg(test)]
@@ -53,20 +69,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn password_and_equivalent_private_key_create_same_account() {
-        let by_password = create_account_inner("123456").unwrap();
-        let by_key = create_account_inner(
-            "8d969eef6ecad3c29a3a629280e686cf0c3f5d5a86aff3ca12020c923adc6c92",
-        )
-        .unwrap();
-        assert_eq!(by_password.prikey, by_key.prikey);
-        assert_eq!(by_password.pubkey, by_key.pubkey);
-        assert_eq!(by_password.address, by_key.address);
+    fn derives_address_from_public_key() {
+        let account = sys::Account::create_by("123456").unwrap();
+        let pubkey = hex::encode(account.public_key().serialize_compressed());
+        let result = address_from_public_key(&pubkey).unwrap();
+        assert_eq!(result.address, account.readable());
+        assert_eq!(result.version, 0);
     }
 
     #[test]
-    fn address_validation_checks_checksum_and_supported_version() {
-        assert!(verify_address("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").ok);
-        assert!(!verify_address("2MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").ok);
+    fn rejects_bad_public_keys() {
+        assert_eq!(
+            address_from_public_key("aabb").unwrap_err().code,
+            "invalid_public_key"
+        );
+        assert_eq!(
+            address_from_public_key("00".repeat(33).as_str())
+                .unwrap_err()
+                .code,
+            "invalid_public_key"
+        );
     }
 }
