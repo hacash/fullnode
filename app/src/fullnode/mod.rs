@@ -9,6 +9,7 @@ mod assemble;
 mod bider;
 mod config;
 mod indexer;
+mod miner_notice;
 mod storage;
 
 use std::path::Path;

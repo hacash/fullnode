@@ -58,11 +58,13 @@ wasm-bindgen "$BINARY" \
 BG_WASM="$DIST_DIR/${SDK_NAME}_bg.wasm"
 if command -v wasm-opt >/dev/null 2>&1; then
     TMP_WASM="$(mktemp)"
-    # Explicit feature flags: recent rustc emits bulk-memory/sign-ext on
-    # wasm32-unknown-unknown, which `--all-features` on older wasm-opt
-    # versions miscompiles. Validate the output and fall back to the
+    # Explicit feature flags: recent rustc emits bulk-memory/sign-ext (and
+    # nontrapping-float-to-int for `f64 as u64`, e.g. `Date.now()` in the SDK
+    # clock shim) on wasm32-unknown-unknown, which `--all-features` on older
+    # wasm-opt versions miscompiles. Validate the output and fall back to the
     # (already valid) wasm-bindgen file when in doubt.
-    if wasm-opt -Oz --enable-bulk-memory --enable-sign-ext --strip-debug --strip-dwarf \
+    if wasm-opt -Oz --enable-bulk-memory --enable-sign-ext \
+            --enable-nontrapping-float-to-int --strip-debug --strip-dwarf \
             -o "$TMP_WASM" "$BG_WASM" \
         && (command -v wasm-validate >/dev/null 2>&1 && wasm-validate "$TMP_WASM" >/dev/null 2>&1); then
         mv "$TMP_WASM" "$BG_WASM"

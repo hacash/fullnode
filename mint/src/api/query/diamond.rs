@@ -1,6 +1,6 @@
 use base::{ApiExecCtx, ApiRequest, ApiResponse, CoreStateRead, Transaction};
 
-use crate::action::diamond_insc::{
+use mint_core::inscription::{
     DiaInscClean, DiaInscDrop, DiaInscEdit, DiaInscMove, DiaInscPush,
 };
 use crate::action::util::pickout_diamond_mint_action;
@@ -207,7 +207,7 @@ pub(crate) fn diamond_inscription_protocol_cost_impl(
             };
             match smelt_average_bid(&state, &dia) {
                 Ok(v) => {
-                    cost = crate::action::diamond_insc::calc_edit_inscription_protocol_cost(v);
+                    cost = mint_core::inscription::calc_edit_inscription_protocol_cost(v);
                     Ok(())
                 }
                 Err(e) => Err(e),
@@ -220,7 +220,7 @@ pub(crate) fn diamond_inscription_protocol_cost_impl(
             };
             match smelt_average_bid(&state, &dia) {
                 Ok(v) => {
-                    cost = crate::action::diamond_insc::calc_drop_inscription_protocol_cost(v);
+                    cost = mint_core::inscription::calc_drop_inscription_protocol_cost(v);
                     Ok(())
                 }
                 Err(e) => Err(e),

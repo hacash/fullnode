@@ -669,6 +669,14 @@ base::impl_action! {
             format!("Execute {} tex cells by {}", this.cells.len(), this.addr.to_readable())
         },
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         if ctx.exec_from() != ExecFrom::Top {
             return errf!(
                 "TexCellAct can only run in TOP context, got {}",
@@ -687,6 +695,8 @@ base::impl_action! {
             cell.execute(ctx, &self.addr)?;
         }
         Ok(vec![])
+        
+        }
         }
     }
 }

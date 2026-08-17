@@ -48,7 +48,17 @@ base::impl_action! {
         scope: base::ActScope::GUARD,
         min_tx_type: 2,
         description: |_: &TxMessage| "Transaction message".to_owned(),
-        execute: (self, _ctx) { Ok(vec![]) }
+        execute: (self, _ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, _ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+ Ok(vec![]) 
+        }
+        }
     }
 }
 
@@ -58,7 +68,17 @@ base::impl_action! {
         scope: base::ActScope::GUARD,
         min_tx_type: 2,
         description: |_: &TxBlob| "Transaction blob data".to_owned(),
-        execute: (self, _ctx) { Ok(vec![]) }
+        execute: (self, _ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, _ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+ Ok(vec![]) 
+        }
+        }
     }
 }
 

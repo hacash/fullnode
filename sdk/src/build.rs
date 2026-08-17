@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use base::TransactionBuild;
-use field::{Address, Amount, BytesW1, BytesW2, DiamondNameListMax200, Encode, Satoshi};
+use field::{Address, Amount, BytesW1, BytesW2, DiamondName, DiamondNameListMax200, Encode, Satoshi, Uint1, WireAmount};
 use protocol::action_std::{
     AssetFromToTrs, AssetToTrs, ChainAllow, DiaFromToTrs, DiaSingleTrs, DiaToTrs, HacFromToTrs,
     HacToTrs, HeightScope, ReqSignList, SatFromToTrs, SatToTrs, TxBlob, TxMessage,
@@ -14,6 +14,10 @@ use protocol::tx_std::{TransactionType2, TransactionType3};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{SdkError, SdkErrorCode};
+use mint_core::inscription::{
+    DiaInscClean, DiaInscDrop, DiaInscEdit, DiaInscMove, DiaInscPush, check_inscription_content,
+    check_inscription_index_max, check_protocol_cost,
+};
 use crate::inspect::decode_tx;
 use crate::profile::{MAX_TX_SIZE, TX_ACTIONS_MAX};
 use crate::schema::{SCHEMA_BUILT_TRANSACTION, SCHEMA_TRANSACTION_SPEC};
@@ -58,6 +62,41 @@ pub enum ActionSpec {
     ReqSignList { signers: Vec<String> },
     TxMessage { data: String },
     TxBlob { data: String },
+    InscPush {
+        diamonds: Vec<String>,
+        #[serde(default)]
+        protocol_cost: Option<String>,
+        #[serde(default)]
+        engraved_type: Option<u8>,
+        engraved_content: String,
+    },
+    InscClean {
+        diamonds: Vec<String>,
+        #[serde(default)]
+        protocol_cost: Option<String>,
+    },
+    InscEdit {
+        diamond: String,
+        index: u8,
+        #[serde(default)]
+        protocol_cost: Option<String>,
+        #[serde(default)]
+        engraved_type: Option<u8>,
+        engraved_content: String,
+    },
+    InscMove {
+        from_diamond: String,
+        to_diamond: String,
+        index: u8,
+        #[serde(default)]
+        protocol_cost: Option<String>,
+    },
+    InscDrop {
+        diamond: String,
+        index: u8,
+        #[serde(default)]
+        protocol_cost: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -120,7 +159,7 @@ pub fn build_transaction(spec: &TransactionSpec) -> Result<BuiltTransaction, Sdk
     let main = Address::from_readable(&spec.main).map_err(|error| SdkError::from(error))?;
     let fee = Amount::from(&spec.fee).map_err(|error| SdkError::from(error))?;
     let fee_fin = fee.to_fin_string();
-    let timestamp = spec.timestamp.unwrap_or_else(sys::curtimes);
+    let timestamp = spec.timestamp.unwrap_or_else(crate::now_secs);
 
     let mut actions = Vec::with_capacity(spec.actions.len());
     for action in &spec.actions {
@@ -258,8 +297,110 @@ fn build_action(spec: &ActionSpec, main: &Address) -> Result<base::ActionRef, Sd
             BytesW2::from(decode_hex_data(data, "tx_blob")?)
                 .map_err(|error| SdkError::from(error))?,
         )),
+        ActionSpec::InscPush {
+            diamonds,
+            protocol_cost,
+            engraved_type,
+            engraved_content,
+        } => {
+            let list = parse_diamond_list(diamonds)?;
+            let cost = parse_optional_amount(protocol_cost)?;
+            check_protocol_cost(&cost).map_err(SdkError::from)?;
+            let etype = engraved_type.unwrap_or(0);
+            let content = parse_inscription_content(engraved_content)?;
+            check_inscription_content(etype, &content).map_err(SdkError::from)?;
+            Arc::new(DiaInscPush::new(
+                list,
+                WireAmount::from(cost),
+                Uint1::from(etype),
+                content,
+            ))
+        }
+        ActionSpec::InscClean {
+            diamonds,
+            protocol_cost,
+        } => {
+            let list = parse_diamond_list(diamonds)?;
+            let cost = parse_optional_amount(protocol_cost)?;
+            check_protocol_cost(&cost).map_err(SdkError::from)?;
+            Arc::new(DiaInscClean::new(list, cost))
+        }
+        ActionSpec::InscEdit {
+            diamond,
+            index,
+            protocol_cost,
+            engraved_type,
+            engraved_content,
+        } => {
+            let diamond = parse_diamond_name(diamond)?;
+            check_inscription_index_max(*index).map_err(SdkError::from)?;
+            let cost = parse_optional_amount(protocol_cost)?;
+            check_protocol_cost(&cost).map_err(SdkError::from)?;
+            let etype = engraved_type.unwrap_or(0);
+            let content = parse_inscription_content(engraved_content)?;
+            check_inscription_content(etype, &content).map_err(SdkError::from)?;
+            Arc::new(DiaInscEdit::new(
+                diamond,
+                Uint1::from(*index),
+                cost,
+                Uint1::from(etype),
+                content,
+            ))
+        }
+        ActionSpec::InscMove {
+            from_diamond,
+            to_diamond,
+            index,
+            protocol_cost,
+        } => {
+            let from = parse_diamond_name(from_diamond)?;
+            let to = parse_diamond_name(to_diamond)?;
+            if from == to {
+                return Err(SdkError::new(
+                    SdkErrorCode::ParseFailed,
+                    "inscription move source and target HACD cannot be the same",
+                ));
+            }
+            check_inscription_index_max(*index).map_err(SdkError::from)?;
+            let cost = parse_optional_amount(protocol_cost)?;
+            check_protocol_cost(&cost).map_err(SdkError::from)?;
+            Arc::new(DiaInscMove::new(from, to, Uint1::from(*index), cost))
+        }
+        ActionSpec::InscDrop {
+            diamond,
+            index,
+            protocol_cost,
+        } => {
+            let diamond = parse_diamond_name(diamond)?;
+            check_inscription_index_max(*index).map_err(SdkError::from)?;
+            let cost = parse_optional_amount(protocol_cost)?;
+            check_protocol_cost(&cost).map_err(SdkError::from)?;
+            Arc::new(DiaInscDrop::new(diamond, Uint1::from(*index), cost))
+        }
     };
     Ok(action)
+}
+
+fn parse_diamond_list(names: &[String]) -> Result<DiamondNameListMax200, SdkError> {
+    DiamondNameListMax200::from_readable(&names.join(","))
+        .map_err(|error| SdkError::from(error))
+}
+
+fn parse_diamond_name(name: &str) -> Result<DiamondName, SdkError> {
+    DiamondName::from_readable(name).map_err(|error| SdkError::from(error))
+}
+
+fn parse_optional_amount(raw: &Option<String>) -> Result<Amount, SdkError> {
+    match raw {
+        Some(value) => Amount::from(value).map_err(|error| SdkError::from(error)),
+        None => Ok(Amount::zero()),
+    }
+}
+
+fn parse_inscription_content(raw: &str) -> Result<BytesW1, SdkError> {
+    let json = serde_json::to_string(raw).map_err(SdkError::from)?;
+    let bytes = field::json_decode_binary(&json).map_err(SdkError::from)?;
+    BytesW1::from(bytes).map_err(SdkError::from)
 }
 
 fn parse_address(raw: &str) -> Result<Address, SdkError> {
@@ -344,6 +485,23 @@ mod tests {
         spec.gas_max = Some(10);
         let error = build_transaction(&spec).unwrap_err();
         assert_eq!(error.code, "parse_failed");
+    }
+
+    #[test]
+    fn inscription_content_uses_shared_binary_decoder() {
+        assert_eq!(
+            parse_inscription_content("plain text").unwrap().as_ref(),
+            b"plain text"
+        );
+        assert_eq!(
+            parse_inscription_content("0x00ff80").unwrap().as_ref(),
+            &[0x00, 0xff, 0x80]
+        );
+        assert_eq!(
+            parse_inscription_content("b64:AP+A").unwrap().as_ref(),
+            &[0x00, 0xff, 0x80]
+        );
+        assert!(parse_inscription_content("0xnot-hex").is_err());
     }
 
     #[test]

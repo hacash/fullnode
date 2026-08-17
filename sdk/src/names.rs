@@ -7,6 +7,8 @@
 use protocol::action_std::*;
 use vm::action::*;
 
+use mint_core::inscription::{DiaInscClean, DiaInscDrop, DiaInscEdit, DiaInscMove, DiaInscPush};
+
 /// (kind, name) pairs sourced from the `name:` literals of each action's
 /// `impl_action!`/`ActionCodec` registration.
 const NAME_TABLE: &[(u16, &str)] = &[
@@ -42,6 +44,11 @@ const NAME_TABLE: &[(u16, &str)] = &[
     (ViewDiaInscGet::KIND, "hacd_insc_get"),
     (ViewDiaNameList::KIND, "hacd_name_list"),
     (ViewDiaOwnerAddrs::KIND, "hacd_owner_addrs"),
+    (DiaInscPush::KIND, "hacd_insc_push"),
+    (DiaInscClean::KIND, "hacd_insc_clean"),
+    (DiaInscEdit::KIND, "hacd_insc_edit"),
+    (DiaInscMove::KIND, "hacd_insc_move"),
+    (DiaInscDrop::KIND, "hacd_insc_drop"),
     (ContractDeploy::KIND, "contract_deploy"),
     (ContractUpdate::KIND, "contract_update"),
     (ContractMainCall::KIND, "contract_main_call"),

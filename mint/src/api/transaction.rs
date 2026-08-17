@@ -10,7 +10,7 @@ use field::{
 use protocol::tx_std::{TransactionType2, TransactionType3};
 use sys::ToHex;
 
-use crate::action::diamond_insc::DiaInscPush;
+use mint_core::inscription::DiaInscPush;
 use crate::api::util::*;
 
 fn create_transaction_error_response(

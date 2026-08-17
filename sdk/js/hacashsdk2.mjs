@@ -18,6 +18,17 @@ function createSdkError(raw) {
     return error;
 }
 
+// `tx.build` without an explicit `timestamp` gets the current host time here:
+// the wasm side cannot read the clock itself on wasm32-unknown-unknown. An
+// explicitly passed `timestamp` is never overwritten.
+function withInjectedTimestamp(spec) {
+    const copy = spec && typeof spec === "object" ? { ...spec } : {};
+    if (copy.timestamp === undefined || copy.timestamp === null) {
+        copy.timestamp = Math.floor(Date.now() / 1000);
+    }
+    return copy;
+}
+
 function createFriendlyApi(backend) {
     const invoke = (operation, payload) => {
         const request = { operation, payload };
@@ -35,7 +46,7 @@ function createFriendlyApi(backend) {
             codec_profile: () => invoke("system.codec_profile", {}),
         },
         tx: {
-            build: (spec) => invoke("tx.build", { spec }),
+            build: (spec) => invoke("tx.build", { spec: withInjectedTimestamp(spec) }),
             inspect_report: (body, signer_address) =>
                 invoke("tx.inspect_report", { body, signer_address: signer_address ?? null }),
             inspect: (body, signer_address, context) =>

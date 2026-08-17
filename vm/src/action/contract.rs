@@ -22,9 +22,9 @@ use sys::{Rerr, Ret, errf};
 
 use crate::contract::{ContractEdit, ContractSto};
 use crate::machine::{VmRequest, peek_vm_runtime_limits};
-use crate::rt::{
-    AbstCall, CallSpec, CodePkg, CodeType, GasExtra, decode_user_call_site, is_user_call_inst,
-};
+use crate::rt::{AbstCall, CallSpec, GasExtra, is_user_call_inst};
+#[cfg(feature = "full")]
+use crate::rt::{CodePkg, CodeType, decode_user_call_site};
 use crate::state::VMState;
 use crate::value::{ContractAddress, Value};
 
@@ -100,8 +100,16 @@ base::impl_action! {
             format!("Deploy smart contract with nonce {}", this.nonce.uint())
         },
         execute: (self, ctx) {
-        contract_deploy_execute(self, ctx)?;
-        Ok(vec![])
+        #[cfg(all(feature = "codec-only", not(feature = "full")))]
+        {
+            let _ = (self, ctx);
+            crate::action::execution_disabled()
+        }
+        #[cfg(not(all(feature = "codec-only", not(feature = "full"))))]
+        {
+            contract_deploy_execute(self, ctx)?;
+            Ok(vec![])
+        }
         }
     }
 }
@@ -228,8 +236,16 @@ base::impl_action! {
             format!("Update smart contract {}", this.address.to_readable())
         },
         execute: (self, ctx) {
-        contract_update_execute(self, ctx)?;
-        Ok(vec![])
+        #[cfg(all(feature = "codec-only", not(feature = "full")))]
+        {
+            let _ = (self, ctx);
+            crate::action::execution_disabled()
+        }
+        #[cfg(not(all(feature = "codec-only", not(feature = "full"))))]
+        {
+            contract_update_execute(self, ctx)?;
+            Ok(vec![])
+        }
         }
     }
 }
@@ -649,6 +665,7 @@ fn resolve_userfn_meta_by_lookup_for_check(
     Ok(None)
 }
 
+#[cfg(feature = "full")]
 fn check_static_call_targets(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -716,6 +733,16 @@ fn check_static_call_targets(
     }
 
     Ok(())
+}
+
+#[cfg(all(feature = "codec-only", not(feature = "full")))]
+fn check_static_call_targets(
+    _vmsta: &mut VMState,
+    _root_addr: &ContractAddress,
+    _root_contract: &ContractSto,
+    _gst: &GasExtra,
+) -> Rerr {
+    errf!("contract static-call analysis is not included in the sdk (codec-only) build")
 }
 
 fn check_sub_contract_protocol_cost(

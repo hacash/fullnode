@@ -39,14 +39,21 @@ macro_rules! debug_println {
     };
 }
 
+// codec-only 与 full 二选一（见 Cargo.toml features 注释）；两者都不启用说明
+// 依赖方配错了 feature，编译期报错而不是静默编译出半套 VM。
+#[cfg(all(not(feature = "full"), not(feature = "codec-only")))]
+compile_error!("vm requires either `full` or `codec-only` feature");
+
 pub mod action;
 pub mod api;
 #[macro_use]
 pub(crate) mod rt;
 pub(crate) mod contract;
+#[cfg(feature = "full")]
 pub mod fitshc;
 pub(crate) mod frame;
 pub(crate) mod interpreter;
+#[cfg(feature = "full")]
 pub(crate) mod ir;
 pub(crate) mod machine;
 pub(crate) mod native;

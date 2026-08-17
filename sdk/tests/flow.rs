@@ -664,3 +664,135 @@ fn multiple_chain_allow_reviews_intersect() {
     assert_eq!(review.chain_ids_allowed, Some(vec![]));
     assert!(!review.protocol_valid);
 }
+
+#[test]
+fn inscription_actions_registered_in_codec_profile() {
+    let profile = profile();
+    for kind in [32u16, 33, 34, 35, 36] {
+        assert!(
+            profile.registered_kinds.contains(&kind),
+            "inscription kind {kind} must be registered"
+        );
+    }
+}
+
+#[test]
+fn type2_inscription_push_signs_and_verifies() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let main = account.readable();
+    let to = "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr";
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: main.to_owned(),
+        fee: "0.0001".to_owned(),
+        timestamp: Some(1_700_000_000),
+        gas_max: Some(0),
+        actions: vec![
+            ActionSpec::InscPush {
+                diamonds: vec!["AAABBB".to_owned()],
+                protocol_cost: None,
+                engraved_type: Some(0),
+                engraved_content: "First HACD inscription!".to_owned(),
+            },
+            hac_transfer(to, "0.01"),
+        ],
+    })
+    .unwrap();
+
+    let review = inspect_report(&built.body, Some(&main), &profile()).unwrap();
+    assert_eq!(review.signability, "signable");
+    assert_eq!(review.auditability, "full");
+    assert_eq!(review.actions[0].kind, 32);
+    assert_eq!(review.actions[0].name.as_deref(), Some("hacd_insc_push"));
+    assert!(review.actions[0].transfer.is_none());
+
+    let request = prepare_signature(
+        &built.body,
+        &main,
+        Some(&review),
+        None,
+        None,
+        None,
+        &profile(),
+    )
+    .unwrap();
+    let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
+    let attached = attach_signature(&built.body, &proof, &review, &request, &profile()).unwrap();
+    assert!(attached.complete);
+    assert!(attached.missing_signers.is_empty());
+    let verified = verify_signatures(&attached.body).unwrap();
+    assert!(verified.ok, "inscription tx must verify: {:?}", verified.errors);
+
+    // decode round-trip preserves the inscription action and re-encodes
+    // identically under the same review binding.
+    let decoded = sdk::inspect::decode_transaction_json(&attached.body).unwrap();
+    assert_eq!(decoded.actions[0].kind, 32);
+    assert_eq!(decoded.actions[0].name.as_deref(), Some("hacd_insc_push"));
+    let encoded = sdk::inspect::encode_transaction_json(&decoded, Some(&review), &profile()).unwrap();
+    assert_eq!(encoded.body, attached.body);
+}
+
+#[test]
+fn inscription_push_rejects_duplicate_diamonds() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let main = account.readable();
+    let err = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: main.to_owned(),
+        fee: "0.0001".to_owned(),
+        timestamp: Some(1_700_000_000),
+        gas_max: Some(0),
+        actions: vec![ActionSpec::InscPush {
+            diamonds: vec!["AAABBB".to_owned(), "AAABBB".to_owned()],
+            protocol_cost: None,
+            engraved_type: Some(0),
+            engraved_content: "dup".to_owned(),
+        }],
+    })
+    .unwrap_err();
+    assert!(!err.to_string().is_empty());
+}
+
+#[test]
+fn inscription_edit_move_drop_build_and_decode() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let main = account.readable();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: main.to_owned(),
+        fee: "0.0001".to_owned(),
+        timestamp: Some(1_700_000_000),
+        gas_max: Some(0),
+        actions: vec![
+            ActionSpec::InscEdit {
+                diamond: "AAABBB".to_owned(),
+                index: 0,
+                protocol_cost: None,
+                engraved_type: Some(0),
+                engraved_content: "edited".to_owned(),
+            },
+            ActionSpec::InscMove {
+                from_diamond: "AAABBB".to_owned(),
+                to_diamond: "TTTUUU".to_owned(),
+                index: 0,
+                protocol_cost: None,
+            },
+            ActionSpec::InscDrop {
+                diamond: "AAABBB".to_owned(),
+                index: 0,
+                protocol_cost: None,
+            },
+        ],
+    })
+    .unwrap();
+    let decoded = sdk::inspect::decode_transaction_json(&built.body).unwrap();
+    let names: Vec<&str> = decoded
+        .actions
+        .iter()
+        .filter_map(|action| action.name.as_deref())
+        .collect();
+    assert_eq!(names, ["hacd_insc_edit", "hacd_insc_move", "hacd_insc_drop"]);
+}

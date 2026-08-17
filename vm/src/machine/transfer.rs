@@ -297,7 +297,9 @@ fn verify_p2sh_entry_inputs(
     )
 }
 
-#[cfg(test)]
+// codec-only 下 `convert_and_check` 是入口桩，这些 entry 校验测试只对完整
+// 执行实现有意义。
+#[cfg(all(test, feature = "full"))]
 mod transfer_tests {
     use super::*;
     use crate::machine::test_ctx::TestCtx;

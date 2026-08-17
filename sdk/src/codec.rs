@@ -35,6 +35,7 @@ impl SdkCodecs {
         let mut codecs = Self::new();
         protocol::register_standard(&mut codecs, &protocol::PROTOCOL_PARAMS)?;
         vm::action::register_actions(&mut codecs)?;
+        mint_core::setup::register(&mut codecs)?;
         Ok(codecs)
     }
 

@@ -39,6 +39,18 @@ pub fn block_hasher(height: u64, data: &[u8]) -> [u8; 32] {
     x16rs::block_hash(height, data)
 }
 
+/// RAII guard keeping the miner long-poll waiter count raised for the lifetime
+/// of one `/query/miner/notice` long-poll (sync or app-side async).
+pub struct MinerNoticeGuard {
+    count: Arc<AtomicU64>,
+}
+
+impl Drop for MinerNoticeGuard {
+    fn drop(&mut self) {
+        self.count.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 pub fn block_reward_number(block_height: u64) -> u8 {
     let curstp = block_height / BLOCK_REWARD_STEP_BLOCK;
     if curstp >= BLOCK_REWARD_DEF_LIST.len() as u64 {
@@ -202,25 +214,22 @@ impl HacashConsensus {
         self.miner_notice_count.load(Ordering::Relaxed)
     }
 
+    /// RAII guard that keeps the long-poll waiter count raised while a
+    /// `miner_notice_wait` (or the app-side async long-poll) is in progress.
+    pub fn begin_miner_notice(&self) -> MinerNoticeGuard {
+        self.miner_notice_count.fetch_add(1, Ordering::Relaxed);
+        MinerNoticeGuard {
+            count: self.miner_notice_count.clone(),
+        }
+    }
+
     pub fn miner_notice_wait(
         &self,
         view: &dyn ChainView,
         target_height: u64,
         wait_secs: u64,
     ) -> u64 {
-        struct NoticeGuard {
-            count: Arc<AtomicU64>,
-        }
-        impl Drop for NoticeGuard {
-            fn drop(&mut self) {
-                self.count.fetch_sub(1, Ordering::Relaxed);
-            }
-        }
-
-        self.miner_notice_count.fetch_add(1, Ordering::Relaxed);
-        let _guard = NoticeGuard {
-            count: self.miner_notice_count.clone(),
-        };
+        let _guard = self.begin_miner_notice();
         let wait_secs = wait_secs.clamp(1, 300);
         let start = Instant::now();
         let wait = Duration::from_secs(wait_secs);
@@ -234,43 +243,6 @@ impl HacashConsensus {
                 return current_height;
             }
             std::thread::sleep(poll.min(wait.saturating_sub(start.elapsed())));
-        }
-    }
-
-    /// Async long-poll for miner workers (does not block tokio worker threads).
-    pub async fn miner_notice_wait_async(
-        &self,
-        view: &dyn ChainView,
-        target_height: u64,
-        wait_secs: u64,
-    ) -> u64 {
-        struct NoticeGuard {
-            count: Arc<AtomicU64>,
-        }
-        impl Drop for NoticeGuard {
-            fn drop(&mut self) {
-                self.count.fetch_sub(1, Ordering::Relaxed);
-            }
-        }
-
-        self.miner_notice_count.fetch_add(1, Ordering::Relaxed);
-        let _guard = NoticeGuard {
-            count: self.miner_notice_count.clone(),
-        };
-        let wait_secs = wait_secs.clamp(1, 300);
-        let start = Instant::now();
-        let wait = Duration::from_secs(wait_secs);
-        let poll = Duration::from_millis(250);
-        loop {
-            let current_height = view.latest_height();
-            if target_height > 0 && current_height >= target_height {
-                return current_height;
-            }
-            if start.elapsed() >= wait {
-                return current_height;
-            }
-            let sleep_for = poll.min(wait.saturating_sub(start.elapsed()));
-            tokio::time::sleep(sleep_for).await;
         }
     }
 

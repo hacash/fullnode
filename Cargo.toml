@@ -8,6 +8,7 @@ members = [
     "protocol",
     "vm",
     "mint",
+    "mint-core",
     "chain",
     "node",
     "server",
@@ -26,6 +27,7 @@ default-members = [
     "protocol",
     "vm",
     "mint",
+    "mint-core",
     "chain",
     "node",
     "server",
@@ -48,6 +50,7 @@ action-codec-derive = { path = "action-codec-derive" }
 protocol   = { path = "protocol" }
 vm         = { path = "vm" }
 mint       = { path = "mint" }
+mint-core = { path = "mint-core", default-features = false }
 chain      = { path = "chain" }
 node       = { path = "node" }
 server     = { path = "server" }
@@ -73,3 +76,4 @@ strip = true
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"
+

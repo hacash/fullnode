@@ -120,7 +120,17 @@ base::impl_action! {
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |_: &EnvHeight| "Syscall: Get block height".to_owned(),
-        execute: (self, ctx) { Ok(ctx.env().block.height.to_be_bytes().to_vec()) }
+        execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+ Ok(ctx.env().block.height.to_be_bytes().to_vec()) 
+        }
+        }
     }
 }
 
@@ -130,7 +140,17 @@ base::impl_action! {
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |_: &EnvMainAddr| "Syscall: Get main address".to_owned(),
-        execute: (self, ctx) { Ok(ctx.env().tx.main.as_ref().to_vec()) }
+        execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+ Ok(ctx.env().tx.main.as_ref().to_vec()) 
+        }
+        }
     }
 }
 
@@ -140,7 +160,17 @@ base::impl_action! {
         scope: base::ActScope::CALL_ONLY,
         min_tx_type: 3,
         description: |_: &EnvBlockAuthorAddr| "Syscall: Get author address".to_owned(),
-        execute: (self, ctx) { Ok(ctx.env().block.author.as_ref().to_vec()) }
+        execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+ Ok(ctx.env().block.author.as_ref().to_vec()) 
+        }
+        }
     }
 }
 
@@ -151,6 +181,14 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewBalance| format!("Syscall: Get balance for {}", this.addr.to_readable()),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         let bls = CoreState::wrap(ctx.layer())
             .balance(&self.addr)?
             .unwrap_or_default();
@@ -168,6 +206,8 @@ base::impl_action! {
         res.extend_from_slice(&bls.satoshi.uint().to_be_bytes());
         res.extend_from_slice(&hac);
         Ok(res)
+        
+        }
         }
     }
 }
@@ -179,6 +219,14 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewAssetBalance| format!("Syscall: Get asset {} balance for {}", this.serial.uint(), this.addr.to_readable()),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         let serial = self.serial.uint();
         if serial == 0 {
             return errf!("asset serial cannot be zero");
@@ -194,6 +242,8 @@ base::impl_action! {
             .map(|a| a.amount.uint())
             .unwrap_or(0);
         Ok(amt.to_be_bytes().to_vec())
+        
+        }
         }
     }
 }
@@ -205,11 +255,21 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewCheckSign| format!("Syscall: Check signature for {}", this.addr.to_readable()),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         let ok = match ctx.check_sign(&self.addr) {
             Ok(()) => 1u8,
             Err(_) => 0u8,
         };
         Ok(vec![ok])
+        
+        }
         }
     }
 }
@@ -221,6 +281,14 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewDiaInscNum| format!("Syscall: Get diamond inscription number for <{}>", this.diamond.to_readable()),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond)? else {
             return errf!("diamond {} not found", self.diamond.to_readable());
         };
@@ -232,6 +300,8 @@ base::impl_action! {
             );
         }
         Ok(vec![num as u8])
+        
+        }
         }
     }
 }
@@ -243,6 +313,14 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewDiaInscGet| format!("Syscall: Get diamond inscription data for <{}>", this.diamond.to_readable()),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond)? else {
             return errf!("diamond {} not found", self.diamond.to_readable());
         };
@@ -255,6 +333,8 @@ base::impl_action! {
             );
         }
         Ok(diaobj.inscripts.as_list()[idx].content.to_vec())
+        
+        }
         }
     }
 }
@@ -266,6 +346,14 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewDiaNameList| format!("Syscall: Get HACD name list for {} page {} limit {}", this.addr.to_readable(), this.page.uint(), this.limit.uint()),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         const DNM_SZ: usize = DiamondName::SIZE;
         let owned = CoreState::wrap(ctx.layer())
             .diamond_owned(&self.addr)?
@@ -293,6 +381,8 @@ base::impl_action! {
         }
         let end = start.saturating_add(unit).min(names.len());
         Ok(names[start..end].to_vec())
+        
+        }
         }
     }
 }
@@ -304,6 +394,14 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewDiaOwnerAddrs| format!("Syscall: Get HACD owner addresses for {}", this.diamonds.splitstr()),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         let num = self.diamonds.check()?;
         if num > 50 {
             return errf!("diamond list length {} cannot exceed 50", num);
@@ -317,6 +415,8 @@ base::impl_action! {
             res.extend_from_slice(diaobj.address.as_ref());
         }
         Ok(res)
+        
+        }
         }
     }
 }

@@ -50,6 +50,7 @@ include!("code.rs");
 include!("code_stuff.rs");
 include!("fin.rs");
 mod lang_min;
+#[cfg(feature = "full")]
 pub use lang_min::OpTy;
 include!("cap.rs");
 include!("gas.rs");
@@ -66,10 +67,11 @@ pub use call_site::{
     encode_user_call_site, is_user_call_inst,
 };
 mod verify;
+#[cfg(feature = "full")]
 pub use verify::{
     ensure_terminal_instruction, verify_bytecodes, verify_bytecodes_for_cap,
-    verify_bytecodes_with_registry,
 };
+pub use verify::verify_bytecodes_with_registry;
 // Re-export entry-stack helpers for external callers / future fitshc.
 #[allow(unused_imports)]
 pub use verify::{

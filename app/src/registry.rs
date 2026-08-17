@@ -381,7 +381,7 @@ mod tests {
         // mint inscription host
         assert_eq!(
             name(VmHostCallKind::Action, 34),
-            Some(mint::action_diamond_insc::DiaInscEdit::NAME)
+            Some(mint_core::inscription::DiaInscEdit::NAME)
         );
         // ACTENV / ACTVIEW hosts: id == KIND low byte, name == Type::NAME
         assert_eq!(

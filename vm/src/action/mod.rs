@@ -38,6 +38,17 @@ use contract::{create_contract_deploy, create_contract_update};
 use maincall::create_contract_main_call;
 use p2sh::create_p2sh_script_prove;
 
+/// codec-only 下所有 VM action 的 `Action::execute` 入口桩：直接返回
+/// `CodecOnlyUnsupported`，不进入完整执行函数，保证执行实现不进入依赖闭包。
+#[cfg(all(feature = "codec-only", not(feature = "full")))]
+pub(crate) fn execution_disabled() -> Ret<Vec<u8>> {
+    Err(crate::rt::ItrErr(
+        crate::rt::ItrErrCode::CodecOnlyUnsupported,
+        "vm action execution is not included in the sdk (codec-only) build".to_owned(),
+    )
+    .into())
+}
+
 /// Register all four VM action codecs. Mirrors `mint::setup::register`'s
 /// `register_action` pattern. Idempotent per-kind (Registry rejects duplicate kinds).
 pub fn register_actions(reg: &mut dyn RegistryWriter) -> Ret<()> {

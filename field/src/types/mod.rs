@@ -46,6 +46,7 @@ mod addr_or_list;
 mod addr_or_ptr;
 mod address;
 mod amount;
+mod amount_base256;
 mod asset;
 mod balance;
 mod bool;

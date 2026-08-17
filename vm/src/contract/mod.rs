@@ -257,6 +257,7 @@ fn verify_code_stuff(
     Ok(())
 }
 
+#[cfg(feature = "full")]
 pub fn convert_and_check(
     cap: &SpaceCap,
     gas: &GasExtra,
@@ -273,6 +274,21 @@ pub fn convert_and_check(
         return itr_err_code!(CodeTooLong);
     }
     verify_bytecodes_for_cap(&bytecodes, cap.value_size, registry)
+}
+
+#[cfg(all(feature = "codec-only", not(feature = "full")))]
+pub fn convert_and_check(
+    _cap: &SpaceCap,
+    _gas: &GasExtra,
+    _ctype: CodeType,
+    _codes: &[u8],
+    _height: u64,
+    _registry: &dyn base::ExecutionServices,
+) -> VmrtRes<Vec<u8>> {
+    itr_err!(
+        CodecOnlyUnsupported,
+        "vm code conversion is not included in the sdk (codec-only) build"
+    )
 }
 
 fn list_replace<T>(list: &mut Vec<T>, idx: usize, value: T, err: ItrErrCode) -> VmrtErr {

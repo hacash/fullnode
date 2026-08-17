@@ -9,7 +9,7 @@ pub mod genesis;
 pub(crate) mod initialize;
 pub mod minter;
 pub(crate) mod params;
-pub(crate) mod state;
+
 
 pub use bidding::{DiamondBidding, LOW_BID_CACHE_FULL_ERR, LOW_BID_PENDING_ERR};
 pub use config::MintConf;

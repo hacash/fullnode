@@ -3,6 +3,13 @@ name = "field"
 version.workspace = true
 edition.workspace = true
 
+#
+[features]
+# SDK/wasm 专用：Amount 的大整数路径改用 base-256 字节数组实现（不依赖
+# num-bigint）。必须与 target_arch = "wasm32" 搭配使用（见源码 cfg）；native
+# 构建即使启用该 feature 也保持 num-bigint 完整实现。
+sdk-codec-only = []
+
 [dependencies]
 sys = { workspace = true }
 num-bigint = "0.4"

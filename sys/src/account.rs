@@ -1,13 +1,63 @@
 use base58check::ToBase58Check;
 use libsecp256k1::{Message, PublicKey, SecretKey, Signature, util};
+#[cfg(not(feature = "secp-static-context"))]
+use libsecp256k1::curve::{ECMultContext, ECMultGenContext};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
+#[cfg(not(feature = "secp-static-context"))]
+use std::sync::OnceLock;
 
 use crate::{Rerr, Ret, errf};
 
 const ADDRESS_SIZE: usize = 21;
 const PRIVATE_SIZE: usize = 32;
 const PUBLIC_SIZE: usize = 33;
+
+// Two secp256k1 context strategies (see the `secp-static-context` feature):
+// fullnode builds embed libsecp256k1's precomputed tables and use the free
+// `sign`/`verify` functions (zero first-use init); SDK/wasm builds compute the
+// ecmult tables (~1MB) once on first use so the tables never enter the wasm.
+#[cfg(feature = "secp-static-context")]
+fn pubkey_from_secret_key(seckey: &SecretKey) -> PublicKey {
+    PublicKey::from_secret_key(seckey)
+}
+
+#[cfg(not(feature = "secp-static-context"))]
+fn pubkey_from_secret_key(seckey: &SecretKey) -> PublicKey {
+    PublicKey::from_secret_key_with_context(seckey, ecmult_gen_ctx())
+}
+
+#[cfg(feature = "secp-static-context")]
+fn sign_impl(msg: &Message, seckey: &SecretKey) -> (Signature, libsecp256k1::RecoveryId) {
+    libsecp256k1::sign(msg, seckey)
+}
+
+#[cfg(not(feature = "secp-static-context"))]
+fn sign_impl(msg: &Message, seckey: &SecretKey) -> (Signature, libsecp256k1::RecoveryId) {
+    libsecp256k1::sign_with_context(msg, seckey, ecmult_gen_ctx())
+}
+
+#[cfg(feature = "secp-static-context")]
+fn verify_impl(msg: &Message, signature: &Signature, pubkey: &PublicKey) -> bool {
+    libsecp256k1::verify(msg, signature, pubkey)
+}
+
+#[cfg(not(feature = "secp-static-context"))]
+fn verify_impl(msg: &Message, signature: &Signature, pubkey: &PublicKey) -> bool {
+    libsecp256k1::verify_with_context(msg, signature, pubkey, ecmult_ctx())
+}
+
+#[cfg(not(feature = "secp-static-context"))]
+fn ecmult_ctx() -> &'static ECMultContext {
+    static CTX: OnceLock<Box<ECMultContext>> = OnceLock::new();
+    &**CTX.get_or_init(ECMultContext::new_boxed)
+}
+
+#[cfg(not(feature = "secp-static-context"))]
+fn ecmult_gen_ctx() -> &'static ECMultGenContext {
+    static CTX: OnceLock<Box<ECMultGenContext>> = OnceLock::new();
+    &**CTX.get_or_init(ECMultGenContext::new_boxed)
+}
 
 #[derive(Clone, PartialEq)]
 pub struct Account {
@@ -83,7 +133,7 @@ impl Account {
     }
 
     fn create_by_secret_key(seckey: &SecretKey) -> Account {
-        let pubkey = PublicKey::from_secret_key(seckey);
+        let pubkey = pubkey_from_secret_key(seckey);
         let address = Account::get_address_by_public_key(pubkey.serialize_compressed());
         let address_readable = Account::to_readable(&address);
         Account {
@@ -116,14 +166,14 @@ impl Account {
 
     pub fn do_sign(&self, msg: &[u8; 32]) -> [u8; 64] {
         let msg = Message::parse(msg);
-        let (s, _r) = libsecp256k1::sign(&msg, &self.secret_key);
+        let (s, _r) = sign_impl(&msg, &self.secret_key);
         s.serialize()
     }
 
     pub fn verify_signature(msg: &[u8; 32], publickey: &[u8; 33], signature: &[u8; 64]) -> bool {
         if let Ok(pubkey) = PublicKey::parse_compressed(publickey) {
             if let Ok(sigobj) = Signature::parse_standard(signature) {
-                return libsecp256k1::verify(&Message::parse(msg), &sigobj, &pubkey);
+                return verify_impl(&Message::parse(msg), &sigobj, &pubkey);
             }
         }
         false

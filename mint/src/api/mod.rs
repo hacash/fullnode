@@ -17,7 +17,7 @@ mod util;
 
 use console::console_handler;
 use miner::{
-    diamondminer_init_handler, diamondminer_success_handler, miner_notice_handler,
+    diamondminer_init_handler, diamondminer_success_handler,
     miner_pending_handler, miner_success_handler,
 };
 use query::{
@@ -48,7 +48,6 @@ impl ApiService for MintApi {
         let cons = self.consensus.clone();
         let pending_cons = self.consensus.clone();
         let success_cons = self.consensus.clone();
-        let notice_cons = self.consensus.clone();
         let diamond_init_cons = self.consensus.clone();
         let diamond_success_cons = self.consensus.clone();
         let console_cons = self.consensus.clone();
@@ -68,9 +67,6 @@ impl ApiService for MintApi {
             }),
             ApiRoute::get("/submit/miner/success", move |ctx, req| {
                 miner_success_handler(success_cons.clone(), ctx, req)
-            }),
-            ApiRoute::get_async("/query/miner/notice", move |ctx, req| {
-                miner_notice_handler(notice_cons.clone(), ctx, req)
             }),
             ApiRoute::get("/query/diamondminer/init", move |ctx, req| {
                 diamondminer_init_handler(diamond_init_cons.clone(), ctx, req)

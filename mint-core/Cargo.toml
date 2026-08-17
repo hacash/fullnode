@@ -1,0 +1,18 @@
+[package]
+name = "mint-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sys = { workspace = true }
+field = { workspace = true }
+base = { workspace = true }
+
+[features]
+default = ["execute"]
+# execute：完整共识执行体（fullnode/mint 启用）；SDK（wasm）关闭后
+# execute 体编译为空，其引用的状态机代码不再进入 wasm
+execute = []
+# codec-only：仅铭刻动作编解码（SDK/wasm 启用）。与 default-features=false 等价，
+# 供依赖方显式声明"只要 codec 不要执行体"的意图（与 vm::codec-only 对称）
+codec-only = []

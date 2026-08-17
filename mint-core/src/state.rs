@@ -166,7 +166,7 @@ impl<'a> MintState<'a> {
     }
 }
 
-pub(crate) fn with_mint_total<R>(
+pub fn with_mint_total<R>(
     state: &mut MintState,
     apply: impl FnOnce(&mut MintTotal) -> Ret<R>,
 ) -> Ret<R> {

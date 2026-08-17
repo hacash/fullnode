@@ -192,8 +192,16 @@ base::impl_action! {
         as_transfer_like: none,
         description: |_: &P2SHScriptProve| "Prove P2SH unlock script".to_owned(),
         execute: (self, ctx) {
-        p2sh_script_prove_execute(self, ctx)?;
-        Ok(vec![])
+        #[cfg(all(feature = "codec-only", not(feature = "full")))]
+        {
+            let _ = (self, ctx);
+            crate::action::execution_disabled()
+        }
+        #[cfg(not(all(feature = "codec-only", not(feature = "full"))))]
+        {
+            p2sh_script_prove_execute(self, ctx)?;
+            Ok(vec![])
+        }
         }
     }
 }

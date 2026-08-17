@@ -20,6 +20,11 @@ const APPEND_FREE_MAX_INSCRIPTIONS: usize = 10;
 const APPEND_TIER1_MAX_INSCRIPTIONS: usize = 40;
 const APPEND_TIER2_MAX_INSCRIPTIONS: usize = 100;
 
+#[cfg(not(feature = "execute"))]
+fn execution_disabled() -> Ret<Vec<u8>> {
+    errf!("mint-core execution is disabled; enable the `execute` feature")
+}
+
 #[derive(Debug, Clone, base::ActionCodec)]
 pub struct DiaInscPush {
     pub kind: Uint2,
@@ -96,14 +101,55 @@ impl DiaInscPush {
 
 impl DiaInscEdit {
     pub const KIND: u16 = 34;
+
+    pub fn new(
+        diamond: DiamondName,
+        index: Uint1,
+        protocol_cost: Amount,
+        engraved_type: Uint1,
+        engraved_content: BytesW1,
+    ) -> Self {
+        Self {
+            kind: Uint2::from(Self::KIND),
+            diamond,
+            index,
+            protocol_cost,
+            engraved_type,
+            engraved_content,
+        }
+    }
 }
 
 impl DiaInscMove {
     pub const KIND: u16 = 35;
+
+    pub fn new(
+        from_diamond: DiamondName,
+        to_diamond: DiamondName,
+        index: Uint1,
+        protocol_cost: Amount,
+    ) -> Self {
+        Self {
+            kind: Uint2::from(Self::KIND),
+            from_diamond,
+            to_diamond,
+            index,
+            protocol_cost,
+        }
+    }
 }
 
 impl DiaInscDrop {
     pub const KIND: u16 = 36;
+
+    pub fn new(diamond: DiamondName, index: Uint1, protocol_cost: Amount) -> Self {
+        Self {
+            kind: Uint2::from(Self::KIND),
+            diamond,
+            index,
+            protocol_cost,
+        }
+    }
 }
 
 base::impl_action! {
@@ -127,8 +173,16 @@ base::impl_action! {
             desc
         },
         execute: (self, ctx) {
-        diamond_inscription_push(self, ctx)?;
-        Ok(vec![])
+        #[cfg(feature = "execute")]
+        {
+            diamond_inscription_push(self, ctx)?;
+            Ok(vec![])
+        }
+        #[cfg(not(feature = "execute"))]
+        {
+            let _ = (self, ctx);
+            execution_disabled()
+        }
         }
     }
 }
@@ -148,8 +202,16 @@ base::impl_action! {
             this.protocol_cost.to_fin_string()
         ),
         execute: (self, ctx) {
-        diamond_inscription_clean(self, ctx)?;
-        Ok(vec![])
+        #[cfg(feature = "execute")]
+        {
+            diamond_inscription_clean(self, ctx)?;
+            Ok(vec![])
+        }
+        #[cfg(not(feature = "execute"))]
+        {
+            let _ = (self, ctx);
+            execution_disabled()
+        }
         }
     }
 }
@@ -175,8 +237,16 @@ base::impl_action! {
             desc
         },
         execute: (self, ctx) {
-        diamond_inscription_edit(self, ctx)?;
-        Ok(vec![])
+        #[cfg(feature = "execute")]
+        {
+            diamond_inscription_edit(self, ctx)?;
+            Ok(vec![])
+        }
+        #[cfg(not(feature = "execute"))]
+        {
+            let _ = (self, ctx);
+            execution_disabled()
+        }
         }
     }
 }
@@ -202,8 +272,16 @@ base::impl_action! {
             desc
         },
         execute: (self, ctx) {
-        diamond_inscription_move(self, ctx)?;
-        Ok(vec![])
+        #[cfg(feature = "execute")]
+        {
+            diamond_inscription_move(self, ctx)?;
+            Ok(vec![])
+        }
+        #[cfg(not(feature = "execute"))]
+        {
+            let _ = (self, ctx);
+            execution_disabled()
+        }
         }
     }
 }
@@ -223,13 +301,21 @@ base::impl_action! {
             this.protocol_cost.to_fin_string()
         ),
         execute: (self, ctx) {
-        diamond_inscription_drop(self, ctx)?;
-        Ok(vec![])
+        #[cfg(feature = "execute")]
+        {
+            diamond_inscription_drop(self, ctx)?;
+            Ok(vec![])
+        }
+        #[cfg(not(feature = "execute"))]
+        {
+            let _ = (self, ctx);
+            execution_disabled()
+        }
         }
     }
 }
 
-fn check_protocol_cost(pfee: &Amount) -> Rerr {
+pub fn check_protocol_cost(pfee: &Amount) -> Rerr {
     if pfee.is_negative() {
         return errf!("protocol cost cannot be negative");
     }
@@ -239,7 +325,7 @@ fn check_protocol_cost(pfee: &Amount) -> Rerr {
     Ok(())
 }
 
-fn check_inscription_content(engraved_type: u8, content: &BytesW1) -> Rerr {
+pub fn check_inscription_content(engraved_type: u8, content: &BytesW1) -> Rerr {
     let insc_len = content.length();
     if insc_len == 0 {
         return errf!("engraved content cannot be empty");
@@ -254,6 +340,19 @@ fn check_inscription_content(engraved_type: u8, content: &BytesW1) -> Rerr {
         && !sys::check_readable_string(content.as_ref())
     {
         return errf!("engraved content must be a readable string");
+    }
+    Ok(())
+}
+
+/// Build-time index range check for inscription edit/move/drop. The executor
+/// additionally validates the index against the diamond's live inscription
+/// list; build only enforces the protocol maximum.
+pub fn check_inscription_index_max(index: u8) -> Rerr {
+    if index as usize >= INSCRIPTION_MAX_PER_DIAMOND {
+        return errf!(
+            "inscription index out of range, max per diamond is {}",
+            INSCRIPTION_MAX_PER_DIAMOND
+        );
     }
     Ok(())
 }
@@ -846,4 +945,13 @@ where
 {
     let (action, used) = T::decode(buf)?;
     Ok((Arc::new(action), used))
+}
+
+#[cfg(all(test, not(feature = "execute")))]
+mod tests {
+    #[test]
+    fn codec_only_execution_is_rejected() {
+        let error = super::execution_disabled().unwrap_err();
+        assert!(error.to_string().contains("execution is disabled"));
+    }
 }

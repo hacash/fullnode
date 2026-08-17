@@ -110,18 +110,18 @@ pub(crate) fn append_cost_for_one(state: &CoreStateRead, dia: &DiamondName) -> s
     let Some(diaobj) = state.diamond(dia)? else {
         return sys::errf!("cannot find diamond {}", dia.to_readable());
     };
-    if diaobj.inscripts.length() >= crate::action::diamond_insc::INSCRIPTION_MAX_PER_DIAMOND {
+    if diaobj.inscripts.length() >= mint_core::inscription::INSCRIPTION_MAX_PER_DIAMOND {
         return sys::errf!(
             "diamond {} inscriptions full (max {})",
             dia.to_readable(),
-            crate::action::diamond_insc::INSCRIPTION_MAX_PER_DIAMOND
+            mint_core::inscription::INSCRIPTION_MAX_PER_DIAMOND
         );
     }
     let Some(diasmelt) = state.diamond_smelt(dia)? else {
         return sys::errf!("cannot find diamond {}", dia.to_readable());
     };
     Ok(
-        crate::action::diamond_insc::calc_append_inscription_protocol_cost(
+        mint_core::inscription::calc_append_inscription_protocol_cost(
             diaobj.inscripts.length(),
             diasmelt.average_bid_burn.uint(),
         ),
@@ -135,18 +135,18 @@ pub(crate) fn move_cost_for_target(
     let Some(diaobj) = state.diamond(to_diamond)? else {
         return sys::errf!("cannot find diamond {}", to_diamond.to_readable());
     };
-    if diaobj.inscripts.length() >= crate::action::diamond_insc::INSCRIPTION_MAX_PER_DIAMOND {
+    if diaobj.inscripts.length() >= mint_core::inscription::INSCRIPTION_MAX_PER_DIAMOND {
         return sys::errf!(
             "target diamond {} inscriptions full (max {})",
             to_diamond.to_readable(),
-            crate::action::diamond_insc::INSCRIPTION_MAX_PER_DIAMOND
+            mint_core::inscription::INSCRIPTION_MAX_PER_DIAMOND
         );
     }
     let Some(diasmelt) = state.diamond_smelt(to_diamond)? else {
         return sys::errf!("cannot find diamond {}", to_diamond.to_readable());
     };
     Ok(
-        crate::action::diamond_insc::calc_move_inscription_protocol_cost(
+        mint_core::inscription::calc_move_inscription_protocol_cost(
             diaobj.inscripts.length(),
             diasmelt.average_bid_burn.uint(),
         ),

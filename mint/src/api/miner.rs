@@ -88,19 +88,6 @@ pub(crate) fn miner_success_handler(
     ])
 }
 
-pub(crate) async fn miner_notice_handler(
-    cons: Arc<HacashConsensus>,
-    ctx: ApiExecCtx,
-    req: ApiRequest,
-) -> ApiResponse {
-    let target_height = req.query_u64("height").unwrap_or(0);
-    let wait = req.query_u64("wait").unwrap_or(45);
-    let height = cons
-        .miner_notice_wait_async(ctx.engine.as_ref(), target_height, wait)
-        .await;
-    api_ok(vec![("height", height.to_string())])
-}
-
 pub(crate) fn diamondminer_init_handler(
     cons: Arc<HacashConsensus>,
     _ctx: &ApiExecCtx,

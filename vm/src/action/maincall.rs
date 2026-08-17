@@ -61,8 +61,16 @@ base::impl_action! {
             format!("Run main codes with conf {}", this.codeconf.uint())
         },
         execute: (self, ctx) {
-        contract_main_call_execute(self, ctx)?;
-        Ok(vec![])
+        #[cfg(all(feature = "codec-only", not(feature = "full")))]
+        {
+            let _ = (self, ctx);
+            crate::action::execution_disabled()
+        }
+        #[cfg(not(all(feature = "codec-only", not(feature = "full"))))]
+        {
+            contract_main_call_execute(self, ctx)?;
+            Ok(vec![])
+        }
         }
     }
 }

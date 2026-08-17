@@ -3,12 +3,19 @@ use std::fmt;
 use std::ops::Deref;
 use std::sync::OnceLock;
 
+#[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
 use num_bigint::{BigInt, BigUint, Sign as BigSign};
+#[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
 use num_traits::{Num, ToPrimitive, Zero};
 use sys::{Rerr, Ret, normalf, errf};
 
 use crate::codec::{Decode, Encode, Reader};
 use crate::json::{FromJSON, JSONFormater, ToJSON, json_expect_quoted_decoded};
+
+/// SDK/wasm codec-only 构建：Amount 的大整数路径使用 `amount_base256` 的
+/// 字节数组实现，不链接 num-bigint。native（含 native 测试）始终用完整实现。
+#[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+use crate::types::amount_base256 as b256;
 
 pub const UNIT_MEI: u8 = 248;
 pub const UNIT_244: u8 = 244;
@@ -181,6 +188,7 @@ impl Amount {
         Self::from_decimal_digits(negative, &body, unit)
     }
 
+    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
     pub fn from_bigint(bignum: &BigInt) -> Ret<Self> {
         if bignum.is_zero() {
             return Ok(Self::zero());
@@ -212,11 +220,28 @@ impl Amount {
             }
             return Ok(Self { unit, dist, byte });
         }
-        let magnitude = BigUint::from_str_radix(digits, 10)
-            .map_err(|_| sys::Error::fault("amount value invalid"))?;
-        Self::from_sign_magnitude(negative, unit, magnitude)
+        // >u128（>39 位十进制）：native 走 BigUint；SDK/wasm 走 base-256 字节数组。
+        #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+        {
+            let magnitude = BigUint::from_str_radix(digits, 10)
+                .map_err(|_| sys::Error::fault("amount value invalid"))?;
+            Self::from_sign_magnitude(negative, unit, magnitude)
+        }
+        #[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+        {
+            let byte = b256::from_decimal_b256(digits)?;
+            if byte.len() > 127 {
+                return errf!("Amount is too wide.");
+            }
+            let mut dist = byte.len() as i8;
+            if negative {
+                dist *= -1;
+            }
+            Ok(Self { unit, dist, byte })
+        }
     }
 
+    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
     fn from_sign_magnitude(negative: bool, unit: u8, magnitude: BigUint) -> Ret<Self> {
         let byte = magnitude.to_bytes_be();
         if byte.len() > 127 {
@@ -244,6 +269,7 @@ impl Amount {
         })
     }
 
+    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
     pub fn to_bigint(&self) -> BigInt {
         if self.is_zero() {
             return BigInt::from(0u8);
@@ -257,6 +283,7 @@ impl Amount {
         bignum * BigInt::from(10u64).pow(self.unit as u32)
     }
 
+    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
     pub fn to_biguint(&self) -> BigUint {
         if self.is_negative() {
             return BigUint::ZERO;
@@ -274,6 +301,7 @@ impl Amount {
         format!("{}{}:{}", sign, digits, self.unit)
     }
 
+    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
     pub fn to_unit_float(&self, base_unit: u8) -> f64 {
         if self.is_zero() {
             return 0.0;
@@ -338,55 +366,83 @@ impl Amount {
     }
 
     pub fn to_mei_u64(&self) -> Ret<u64> {
-        self.to_unit_biguint(UNIT_MEI)
-            .and_then(|v| v.to_u64())
-            .ok_or_else(|| sys::Error::fault(format!("amount {} overflow mei u64", self)))
+        u64::try_from(self.to_unit_u128(UNIT_MEI)?)
+            .map_err(|_| sys::Error::fault(format!("amount {} overflow mei u64", self)))
     }
 
     pub fn to_mei_u128(&self) -> Ret<u128> {
-        self.to_unit_biguint(UNIT_MEI)
-            .and_then(|v| v.to_u128())
-            .ok_or_else(|| sys::Error::fault(format!("amount {} overflow mei u128", self)))
+        self.to_unit_u128(UNIT_MEI)
     }
 
     pub fn to_244_u64(&self) -> Ret<u64> {
-        self.to_244_u128().and_then(|v| {
-            u64::try_from(v)
-                .map_err(|_| sys::Error::fault(format!("amount {} overflow 244 u64", self)))
-        })
+        u64::try_from(self.to_unit_u128(UNIT_244)?)
+            .map_err(|_| sys::Error::fault(format!("amount {} overflow 244 u64", self)))
     }
 
     pub fn to_244_u128(&self) -> Ret<u128> {
-        self.to_unit_biguint(UNIT_244)
-            .and_then(|v| v.to_u128())
-            .ok_or_else(|| sys::Error::fault(format!("amount {} overflow 244 u128", self)))
+        self.to_unit_u128(UNIT_244)
     }
 
     pub fn to_zhu_u64(&self) -> Ret<u64> {
-        self.to_zhu_u128().and_then(|v| {
-            u64::try_from(v)
-                .map_err(|_| sys::Error::fault(format!("amount {} overflow zhu u64", self)))
-        })
+        u64::try_from(self.to_unit_u128(UNIT_ZHU)?)
+            .map_err(|_| sys::Error::fault(format!("amount {} overflow zhu u64", self)))
     }
 
     pub fn to_zhu_u128(&self) -> Ret<u128> {
-        self.to_unit_biguint(UNIT_ZHU)
-            .and_then(|v| v.to_u128())
-            .ok_or_else(|| sys::Error::fault(format!("amount {} overflow zhu u128", self)))
+        self.to_unit_u128(UNIT_ZHU)
     }
 
     pub fn to_238_u64(&self) -> Ret<u64> {
-        self.to_unit_biguint(UNIT_238)
-            .and_then(|v| v.to_u64())
-            .ok_or_else(|| sys::Error::fault(format!("amount {} overflow unit238 u64", self)))
+        u64::try_from(self.to_unit_u128(UNIT_238)?)
+            .map_err(|_| sys::Error::fault(format!("amount {} overflow unit238 u64", self)))
     }
 
     pub fn to_238_u128(&self) -> Ret<u128> {
-        self.to_unit_biguint(UNIT_238)
-            .and_then(|v| v.to_u128())
-            .ok_or_else(|| sys::Error::fault(format!("amount {} overflow unit238 u128", self)))
+        self.to_unit_u128(UNIT_238)
     }
 
+    /// 按 `base_unit` 缩放后的 u128 值，语义与
+    /// `to_unit_biguint(base_unit)?.to_u128()` 一致（负数、商超过 16 字节
+    /// mantissa、缩放溢出均报错）。无条件编译：native 测试用它对比 BigUint
+    /// 路径；SDK/wasm codec-only 用它替代 BigUint（不链接 num-bigint）。
+    fn to_unit_u128(&self, base_unit: u8) -> Ret<u128> {
+        if self.is_negative() {
+            return errf!("amount {} overflow unit u128", self);
+        }
+        if self.unit >= base_unit {
+            let magnitude = tail_to_u128(&self.byte, u128::MAX)?;
+            scale_u128(magnitude, self.unit - base_unit, u128::MAX)
+        } else if self.byte.len() <= size_of::<u128>() {
+            let magnitude = tail_to_u128(&self.byte, u128::MAX)?;
+            let k = (base_unit - self.unit) as u32;
+            if k > 38 {
+                // 10^k 超出 u128 上限，而 magnitude ≤ u128::MAX < 10^39 ≤ 10^k，
+                // 与 BigUint 路径一致：整除结果必为 0。
+                Ok(0)
+            } else {
+                Ok(magnitude / 10u128.pow(k))
+            }
+        } else {
+            // 任意精度除法（>16 字节 mantissa）：商可能仍在 u128 内
+            // （例如除以足够大的 10^k 后为 0）。
+            #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+            {
+                let magnitude = BigUint::from_bytes_be(&self.byte);
+                let quotient =
+                    magnitude / BigUint::from(10u8).pow((base_unit - self.unit) as u32);
+                quotient
+                    .to_u128()
+                    .ok_or_else(|| sys::Error::fault("amount computing size overflow"))
+            }
+            #[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+            {
+                let quotient = b256::div_pow10_b256(&self.byte, base_unit - self.unit);
+                tail_to_u128(&quotient, u128::MAX)
+            }
+        }
+    }
+
+    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
     pub fn to_unit_biguint(&self, base_unit: u8) -> Option<BigUint> {
         if self.is_negative() {
             return None;
@@ -754,6 +810,7 @@ fn normalize_grouping(value: &str) -> Ret<String> {
     Ok(value.replace(',', ""))
 }
 
+#[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
 fn pow10_big(exp: u8) -> BigUint {
     BigUint::from(10u8).pow(exp as u32)
 }
@@ -764,7 +821,14 @@ fn mantissa_string(bytes: &[u8]) -> String {
             .expect("16-byte amount fits u128")
             .to_string()
     } else {
-        BigUint::from_bytes_be(bytes).to_string()
+        #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+        {
+            BigUint::from_bytes_be(bytes).to_string()
+        }
+        #[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+        {
+            b256::to_decimal_b256(bytes)
+        }
     }
 }
 
@@ -816,12 +880,174 @@ fn magnitude_cmp(lhs: &Amount, rhs: &Amount) -> Ordering {
             return scaled_lhs.cmp(&scaled_rhs);
         }
     }
-    let mut lhs_value = BigUint::from_bytes_be(&lhs.byte);
-    let mut rhs_value = BigUint::from_bytes_be(&rhs.byte);
-    if lhs.unit > rhs.unit {
-        lhs_value *= pow10_big(lhs.unit - rhs.unit);
-    } else {
-        rhs_value *= pow10_big(rhs.unit - lhs.unit);
+    // 任意精度 fallback：native 用 BigUint；SDK/wasm 用 base-256 对齐比较。
+    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+    {
+        let mut lhs_value = BigUint::from_bytes_be(&lhs.byte);
+        let mut rhs_value = BigUint::from_bytes_be(&rhs.byte);
+        if lhs.unit > rhs.unit {
+            lhs_value *= pow10_big(lhs.unit - rhs.unit);
+        } else {
+            rhs_value *= pow10_big(rhs.unit - lhs.unit);
+        }
+        lhs_value.cmp(&rhs_value)
     }
-    lhs_value.cmp(&rhs_value)
+    #[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+    {
+        magnitude_cmp_wide(lhs, rhs)
+    }
+}
+
+/// SDK/wasm codec-only：任意精度比较走 base-256 对齐（native 的 BigUint
+/// fallback 路径，见 `magnitude_cmp`）。
+#[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+fn magnitude_cmp_wide(lhs: &Amount, rhs: &Amount) -> Ordering {
+    let base_unit = lhs.unit.min(rhs.unit);
+    let lhs_value = b256::mul_pow10_b256(&lhs.byte, lhs.unit - base_unit);
+    let rhs_value = b256::mul_pow10_b256(&rhs.byte, rhs.unit - base_unit);
+    b256::cmp_b256(&lhs_value, &rhs_value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use num_bigint::BigUint;
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+        fn byte(&mut self) -> u8 {
+            (self.next() & 0xff) as u8
+        }
+    }
+
+    fn random_amount(lcg: &mut Lcg) -> Amount {
+        let len = (lcg.next() % 20) as usize + 1;
+        let mut byte = Vec::with_capacity(len);
+        for _ in 0..len {
+            byte.push(lcg.byte());
+        }
+        // 规范形态：无前导零（允许全零 → 空）
+        while byte.len() > 1 && byte[0] == 0 {
+            byte.remove(0);
+        }
+        if byte.iter().all(|&b| b == 0) {
+            byte.clear();
+        }
+        let unit = (lcg.next() % 256) as u8;
+        let dist = if byte.is_empty() {
+            0
+        } else if lcg.next() % 2 == 0 {
+            byte.len() as i8
+        } else {
+            -(byte.len() as i8)
+        };
+        Amount { unit, dist, byte }
+    }
+
+    /// `to_unit_u128` 与 BigUint 路径（`to_unit_biguint(...).to_u128()`）
+    /// 在成功值、失败条件上完全一致。
+    #[test]
+    fn to_unit_u128_matches_biguint_path() {
+        let mut lcg = Lcg(0xa110);
+        for _ in 0..5000 {
+            let amount = random_amount(&mut lcg);
+            let base_unit = (lcg.next() % 256) as u8;
+            let got = amount.to_unit_u128(base_unit);
+            let expected: Option<u128> = amount
+                .to_unit_biguint(base_unit)
+                .and_then(|v| v.to_u128());
+            match (got, expected) {
+                (Ok(got), Some(expected)) => assert_eq!(got, expected),
+                (Err(_), None) => {}
+                (Ok(got), None) => {
+                    panic!("to_unit_u128 returned Ok({got}) but BigUint path overflowed: {amount:?} @{base_unit}")
+                }
+                (Err(e), Some(expected)) => {
+                    panic!("to_unit_u128 errored ({e}) but BigUint path returned {expected}: {amount:?} @{base_unit}")
+                }
+            }
+        }
+    }
+
+    /// 8 个公开 `to_*_u64/u128` 与 BigUint 路径一致（含溢出/负值失败）。
+    #[test]
+    fn to_unit_converters_match_biguint_path() {
+        let mut lcg = Lcg(0xfeed);
+        for _ in 0..3000 {
+            let amount = random_amount(&mut lcg);
+            // 每个转换器配对的期望：u64 转换器对比 BigUint 的 to_u64，u128 对比 to_u128
+            let converters: Vec<(Box<dyn Fn(&Amount) -> Ret<u128>>, Box<dyn Fn(&Amount) -> Option<u128>>)> =
+                vec![
+                    (
+                        Box::new(|a| a.to_mei_u64().map(u128::from)),
+                        Box::new(|a| a.to_unit_biguint(UNIT_MEI).and_then(|v| v.to_u64()).map(u128::from)),
+                    ),
+                    (
+                        Box::new(|a| a.to_mei_u128()),
+                        Box::new(|a| a.to_unit_biguint(UNIT_MEI).and_then(|v| v.to_u128())),
+                    ),
+                    (
+                        Box::new(|a| a.to_244_u64().map(u128::from)),
+                        Box::new(|a| a.to_unit_biguint(UNIT_244).and_then(|v| v.to_u64()).map(u128::from)),
+                    ),
+                    (
+                        Box::new(|a| a.to_244_u128()),
+                        Box::new(|a| a.to_unit_biguint(UNIT_244).and_then(|v| v.to_u128())),
+                    ),
+                    (
+                        Box::new(|a| a.to_zhu_u64().map(u128::from)),
+                        Box::new(|a| a.to_unit_biguint(UNIT_ZHU).and_then(|v| v.to_u64()).map(u128::from)),
+                    ),
+                    (
+                        Box::new(|a| a.to_zhu_u128()),
+                        Box::new(|a| a.to_unit_biguint(UNIT_ZHU).and_then(|v| v.to_u128())),
+                    ),
+                    (
+                        Box::new(|a| a.to_238_u64().map(u128::from)),
+                        Box::new(|a| a.to_unit_biguint(UNIT_238).and_then(|v| v.to_u64()).map(u128::from)),
+                    ),
+                    (
+                        Box::new(|a| a.to_238_u128()),
+                        Box::new(|a| a.to_unit_biguint(UNIT_238).and_then(|v| v.to_u128())),
+                    ),
+                ];
+            for (conv, expected) in converters {
+                let got = conv(&amount);
+                let expected = expected(&amount);
+                match (got, expected) {
+                    (Ok(_), Some(_)) => {}
+                    (Err(_), None) => {}
+                    (Ok(got), None) => panic!("converter Ok but BigUint overflow: {amount:?}"),
+                    (Err(e), Some(_)) => {
+                        panic!("converter errored ({e}) but BigUint path ok: {amount:?}")
+                    }
+                }
+            }
+        }
+    }
+
+    /// >16 字节 mantissa 的金额：`to_fin_string` 的 base-256 与 BigUint
+    /// 格式化输出逐字节一致（codec-only 与 native 的上层路由都指向这两个
+    /// 核心，此处直接对比核心本身）。
+    #[test]
+    fn fin_string_matches_bigint_for_wide_mantissa() {
+        let mut lcg = Lcg(0x77aa);
+        for _ in 0..200 {
+            let len = 17 + (lcg.next() % 110) as usize;
+            let mut byte = Vec::with_capacity(len);
+            for _ in 0..len {
+                byte.push(lcg.byte());
+            }
+            byte[0] |= 0x80; // 保证无前导零且超 16 字节
+            let expected = BigUint::from_bytes_be(&byte).to_string();
+            assert_eq!(mantissa_string(&byte), expected);
+        }
+    }
 }

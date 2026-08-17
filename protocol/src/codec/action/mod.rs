@@ -5,6 +5,13 @@
 //! all public items are re-exported here so `protocol::action_std::*` and
 //! `crate::codec::action::*` keep working.
 
+/// codec-only（SDK wasm）下所有标准 action 的 `Action::execute` 入口桩：直接
+/// 返回错误，不进入完整执行函数，保证执行实现不进入 wasm 依赖闭包。
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+pub(crate) fn execution_disabled() -> sys::Ret<Vec<u8>> {
+    sys::errf!("protocol action execution is not included in the sdk (codec-only) build")
+}
+
 mod ast;
 mod blob;
 mod common;

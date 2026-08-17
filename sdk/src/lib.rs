@@ -35,6 +35,29 @@ pub use policy::{evaluate_policy, Policy, PolicyDecision};
 pub use profile::{capabilities, CodecProfile, SDK_VERSION};
 pub use schema::ResultEnvelope;
 
+/// Current UNIX time in seconds. Native builds use `sys::curtimes`; on wasm32
+/// `SystemTime::now()` is not implemented, so the host clock is reached
+/// through JS (`Date.now`) instead. The JS facade also injects an explicit
+/// `timestamp` when `tx.build` is called without one, so this is only a
+/// fallback for raw `sdk_invoke` callers and the request-expiry checks.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(js_namespace = Date)]
+    fn now() -> f64;
+}
+
+pub(crate) fn now_secs() -> u64 {
+    #[cfg(target_arch = "wasm32")]
+    {
+        (now() / 1000.0) as u64
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        sys::curtimes()
+    }
+}
+
 /// Raw WASM transport: one JSON request in, one envelope JSON out.
 /// `{ operation, payload }` → `{ ok: true, value } | { ok: false, error }`.
 /// Every input object rejects unknown fields (`unknown_field`); the

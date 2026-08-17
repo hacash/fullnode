@@ -4,6 +4,18 @@ version.workspace = true
 edition.workspace = true
 
 #
+[features]
+# 默认（不指定 codec-only）即含完整 VM：执行、IR 编译器、FitSH 入口。
+# 语义约定：`full` 与 `codec-only` 同时启用时以 `full` 为准（真实代码，
+# 不产生静默分叉）；桩仅在 `codec-only && !full` 时编译。
+default = ["full"]
+# 完整 VM（执行、IR 编译器、FitSH 入口）：mint/app 全节点使用
+full = []
+# 仅动作编解码（SDK/wasm 使用）。必须与 default-features = false 搭配；
+# 若 full 同时启用则按 full 构建。codec-only 下执行与分析路径编译为
+# 返回 CodecOnlyUnsupported 错误的桩（只失败、绝不静默成功），codec 行为不变。
+codec-only = []
+
 [dependencies]
 sys = { workspace = true }
 field = { workspace = true }

@@ -5,13 +5,14 @@ edition.workspace = true
 default-run = "fullnode"
 
 [dependencies]
-sys = { workspace = true }
+sys = { workspace = true, features = ["secp-static-context"] }
 field = { workspace = true }
 base = { workspace = true }
 protocol = { workspace = true }
 db = { workspace = true, default-features = false }
 vm = { workspace = true }
 mint = { workspace = true }
+mint-core = { workspace = true }
 chain = { workspace = true }
 node = { workspace = true }
 server = { workspace = true }
@@ -23,7 +24,7 @@ serde = { version = "1", features = ["derive"] }
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "rustls-tls"] }
 getrandom = "0.3"
 hex = "0.4"
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "time"] }
 
 [features]
 default = ["db-sled"]

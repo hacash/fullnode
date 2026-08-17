@@ -245,6 +245,14 @@ base::impl_action! {
         min_tx_type: 2,
         description: |this: &ChainAllow| format!("Valid chain ID list {}", this.chains.as_list().iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         let cid = ctx.env().chain.id;
         if !self
             .chains
@@ -266,6 +274,8 @@ base::impl_action! {
             );
         }
         Ok(vec![])
+        
+        }
         }
     }
 }
@@ -277,6 +287,14 @@ base::impl_action! {
         min_tx_type: 2,
         description: |this: &HeightScope| format!("Limit height range ({}, {})", this.start.uint(), if this.end.uint() == 0 { "Unlimited".to_owned() } else { this.end.uint().to_string() }),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         let left = self.start.uint();
         let right = match self.end.uint() {
             0 => u64::MAX,
@@ -294,6 +312,8 @@ base::impl_action! {
             );
         }
         Ok(vec![])
+        
+        }
         }
     }
 }
@@ -305,6 +325,14 @@ base::impl_action! {
         min_tx_type: 2,
         description: |this: &BalanceFloor| format!("Balance floor for {} (hac={}, sat={}, dia={}, assets={})", addr_or_ptr_readable(&this.addr), this.hacash, this.satoshi.uint(), this.diamond.uint(), this.assets.length()),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         if self.hacash.is_negative() {
             return errf!("balance floor hacash {} cannot be negative", self.hacash);
         }
@@ -366,6 +394,8 @@ base::impl_action! {
             }
         }
         Ok(vec![])
+        
+        }
         }
     }
 }
@@ -380,8 +410,18 @@ base::impl_action! {
         as_transfer_like: none,
         description: |this: &ReqSignList| format!("Require extra signers ({})", this.signers.len()),
         execute: (self, ctx) {
+#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
+        {
+            let _ = (self, ctx);
+            crate::codec::action::execution_disabled()
+        }
+#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
+        {
+
         self.validate_against(&ctx.env().tx.addrs)?;
         Ok(vec![])
+        
+        }
         }
     }
 }

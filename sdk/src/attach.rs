@@ -250,7 +250,7 @@ pub fn validate_proof_format(proof: &SignatureProof) -> Result<(), SdkError> {
 /// enforced by both consumer paths (`tx.attach_signature`, `message.verify`).
 pub fn check_request_expiry(request: &SigningRequest) -> Result<(), SdkError> {
     if let Some(expires_at) = request.expires_at {
-        let now = sys::curtimes();
+        let now = crate::now_secs();
         if now > expires_at {
             return Err(SdkError::with_detail(
                 SdkErrorCode::RequestExpired,

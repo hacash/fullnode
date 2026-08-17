@@ -88,7 +88,8 @@ fn standard_api_services(
         Arc::new(api::PoolApi),
         Arc::new(api::AccountApi),
     ];
-    services.extend(mint::api::api_services(consensus));
+    services.extend(mint::api::api_services(consensus.clone()));
+    services.push(Arc::new(super::miner_notice::MinerNoticeApi { consensus }));
     let tx_creator: Arc<dyn base::TransactionCreator> =
         Arc::new(protocol::tx_std::create_standard_transaction);
     services.extend(vm::api::api_services(
