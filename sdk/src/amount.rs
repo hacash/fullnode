@@ -47,9 +47,12 @@ pub fn parse_protocol(value: &str) -> Result<ParsedAmount, SdkError> {
     })
 }
 
-/// `amount.format_protocol`: convert to a decimal float for display (same
-/// semantics as the historical `hac_to_unit`; JS-safe only for display).
-pub fn format_protocol(value: &str, unit: u8) -> Result<f64, SdkError> {
+/// `amount.format_protocol`: exact decimal string of the amount at the given
+/// unit. No float is ever involved, so the result is safe for comparison and
+/// arithmetic, not just display (the historical `hac_to_unit` returned a
+/// JS float; JS callers that need a number do `Number(value)`). Unit 0
+/// returns the canonical `digits:unit` form.
+pub fn format_protocol(value: &str, unit: u8) -> Result<String, SdkError> {
     if unit > field::UNIT_MEI {
         return Err(SdkError::with_detail(
             SdkErrorCode::ParseFailed,
@@ -58,7 +61,7 @@ pub fn format_protocol(value: &str, unit: u8) -> Result<f64, SdkError> {
         ));
     }
     let amount = Amount::from(value).map_err(|error| SdkError::from(error))?;
-    Ok(amount.to_unit_float(unit))
+    Ok(amount.to_unit_string(&unit.to_string()))
 }
 
 #[cfg(test)]
@@ -86,7 +89,10 @@ mod tests {
 
     #[test]
     fn formats_to_decimal() {
-        assert_eq!(format_protocol("12:244", field::UNIT_MEI).unwrap(), 0.0012);
+        assert_eq!(
+            format_protocol("12:244", field::UNIT_MEI).unwrap(),
+            "0.0012"
+        );
         assert!(format_protocol("12:244", field::UNIT_MEI + 1).is_err());
     }
 }

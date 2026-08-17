@@ -11,6 +11,7 @@ use crate::schema::{DOMAIN_POLICY_DECISION, SCHEMA_POLICY, SCHEMA_POLICY_DECISIO
 /// Caller-provided policy, frozen schema `hacash.sdk/policy@1` (doc 14 §4.8).
 /// Absent fields take protocol defaults; nothing here is a product constant.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Policy {
     #[serde(default)]
     pub schema: Option<String>,
@@ -117,12 +118,23 @@ pub fn evaluate_policy(review: &Review, policy: &Policy) -> Result<PolicyDecisio
         findings,
         policy_binding: String::new(),
     };
-    let json = serde_json::to_string(&decision_obj).unwrap_or_default();
+    decision_obj.policy_binding = policy_binding_of(&decision_obj);
+    Ok(decision_obj)
+}
+
+/// Canonical policy-decision binding (sha3-256 over the domain prefix and the
+/// decision JSON minus `policy_binding` itself). Shared by `evaluate_policy`
+/// and the verification side, so a decision whose fields (decision, findings,
+/// review binding, policy hash) were edited after evaluation never
+/// re-verifies.
+pub fn policy_binding_of(decision: &PolicyDecision) -> String {
+    let mut copy = decision.clone();
+    copy.policy_binding.clear();
+    let json = serde_json::to_string(&copy).unwrap_or_default();
     let mut data = Vec::with_capacity(DOMAIN_POLICY_DECISION.len() + json.len());
     data.extend_from_slice(DOMAIN_POLICY_DECISION);
     data.extend_from_slice(json.as_bytes());
-    decision_obj.policy_binding = hex::encode(sys::calculate_hash(data));
-    Ok(decision_obj)
+    hex::encode(sys::calculate_hash(data))
 }
 
 #[cfg(test)]

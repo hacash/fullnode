@@ -9,9 +9,10 @@ if (caps.abi.major !== 2) {
 if (sdk.transport_version !== 1) {
     throw new Error("unexpected transport version");
 }
-const formatted = sdk.amount.format_protocol("12:244", 8);
-if (typeof formatted !== "number") {
-    throw new Error("amount.format_protocol failed in esm");
+// format_protocol returns an exact decimal string, never a float.
+const formatted = sdk.amount.format_protocol("12:244", 248);
+if (formatted !== "0.0012" || typeof formatted !== "string") {
+    throw new Error(`unexpected format_protocol result ${formatted}`);
 }
 
 console.log("friendly_node_esm.mjs OK");

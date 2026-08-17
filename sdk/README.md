@@ -27,24 +27,35 @@ sdk.tx.build({ spec });                              // 未签名 Type-2/3 body
 sdk.tx.inspect_report(body, signerAddress?);         // 无链上下文审阅
 sdk.tx.inspect(body, signerAddress, context);        // 严格模式（高度/链 guard）
 sdk.tx.prepare_signature(body, signerAddress, opts); // SigningRequest
-sdk.tx.attach_signature(body, proof, review?, request?);
+sdk.tx.attach_signature(body, proof, review, request);
+sdk.tx.attach_signature_unbound(body, proof);        // 低级路径，无审批链
 sdk.tx.verify(body);
 sdk.tx.signature_report(body);
 sdk.tx.decode(body) / sdk.tx.encode(transactionJson, review?); // 低级结构化 codec
 
 sdk.account.verify_address(address);
 sdk.account.address_from_public_key(publicKey);      // 无私钥输入
-sdk.amount.parse_protocol(value) / format_protocol(value, unit);
+sdk.amount.parse_protocol(value) / format_protocol(value, unit); // 精确十进制字符串
 sdk.message.prepare_signature(params) / verify(request, proof); // 冻结 raw 约定
 sdk.policy.evaluate(review, policy);
 ```
 
-`tx.attach_signature` 的 `review`/`request` 是可选审批上下文：提供 `review`
-时其 binding 会在 body/signer/profile 下重新计算并校验（篡改过的审阅内容
-会被拒绝）；提供 `request` 时 proof 必须携带该请求的 id/binding 且请求未
-过期。`tx.encode` 强制重建 body 的 `unsigned_body_hash` 与声明值一致，
-篡改 action json 会以 `transaction_json_mismatch` 失败而不是静默产出另一
-条交易；提供 `review` 时同样校验其 binding。
+`tx.prepare_signature` 的 `opts.policy` 由 SDK 自行评估：`deny` 决策直接拒绝
+（`policy_denied`），`allow/confirm` 决策作为 `PolicyDecision` 绑定进
+`SigningRequest`，调用方无法伪造决策结果。`tx.attach_signature`（完整链）
+强制要求 `review` + `request`：request 的 id/binding 会被重算校验（篡改
+任何字段——含 `expires_at`——都会以 `invalid_signing_request` 失败），并
+校验 digest/body_hash/signer/purpose/algorithm、proof↔request 绑定、policy
+决策与 review binding；无审批链的冷签名路径使用 `attach_signature_unbound`
+（只校验 body/signer/signature）。`tx.encode` 强制重建 body 的
+`unsigned_body_hash` 与声明值一致，篡改 action json 会以
+`transaction_json_mismatch` 失败；提供 `review` 时同样校验其 binding。
+
+输入对象全部启用未知字段拒绝（拼错字段报 `unknown_field`/`unknown_action`
+而不是静默忽略）；`system.capabilities().features` 与 dispatcher 共享同一
+`OPERATIONS` 注册表（有测试保证两者不漂移）。审阅中的 `chain_ids_allowed`
+为多个 `ChainAllow` 的交集（协议逐条执行），`valid_height_range` 同理取
+交集。
 
 错误统一为 `{ code, message, detail? }`（`SdkError`），facade 抛出带
 `code`/`detail` 的异常，raw envelope 在 `e.sdkError` 中保留。
@@ -71,7 +82,7 @@ rlib 同样可用：`sdk::inspect::inspect_report`、`sdk::attach::*`、
 ## 测试
 
 ```sh
-cargo test -p sdk          # 34 个单元/流程测试（含黄金向量、签名流、guard 检查、篡改/过期拒绝）
+cargo test -p sdk          # 41 个单元/流程测试（含黄金向量、签名流、guard 检查、篡改/过期/deny 拒绝）
 node ./sdk/tests/...       # 打包后 JS 冒烟
 ```
 

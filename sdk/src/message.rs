@@ -12,6 +12,7 @@ use crate::error::{SdkError, SdkErrorCode};
 use crate::schema::SCHEMA_SIGNING_REQUEST;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MessagePrepareParams {
     pub digest: String,
     pub signer_address: String,
@@ -56,7 +57,7 @@ pub fn prepare_message_signature(
         digest: hex::encode(digest),
         body_hash: None,
         review_binding: None,
-        policy_binding: None,
+        policy_decision: None,
         origin: params.origin.clone(),
         expires_at: params.expires_at,
         request_binding: String::new(),
@@ -68,8 +69,9 @@ pub fn prepare_message_signature(
 }
 
 /// `message.verify`: verify a proof over the digest and return the signer
-/// address. The proof envelope (schema/algorithm), the proof's request
-/// id/binding and the request expiry are all checked against the request.
+/// address. The request must be self-consistent (id/binding recompute),
+/// unexpired, purpose "authentication"; the proof envelope, its request
+/// id/binding and the signature are all checked against the request.
 pub fn verify_message_signature(
     request: &SigningRequest,
     proof: &SignatureProof,
@@ -80,7 +82,7 @@ pub fn verify_message_signature(
             "message.verify requires an authentication request",
         ));
     }
-    crate::attach::check_request_expiry(request)?;
+    crate::attach::verify_request_integrity(request)?;
     crate::attach::validate_proof_format(proof)?;
     let expected_binding = crate::attach::request_binding_of(request);
     if proof.request_binding != expected_binding || proof.request_id != request.id {

@@ -36,7 +36,9 @@ pub use profile::{capabilities, CodecProfile, SDK_VERSION};
 pub use schema::ResultEnvelope;
 
 /// Raw WASM transport: one JSON request in, one envelope JSON out.
-/// `{ operation, schema?, payload }` → `{ ok: true, value } | { ok: false, error }`.
+/// `{ operation, payload }` → `{ ok: true, value } | { ok: false, error }`.
+/// Every input object rejects unknown fields (`unknown_field`); the
+/// `operation` names are the `OPERATIONS` registry (see `profile`).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn sdk_invoke(request_json: &str) -> String {

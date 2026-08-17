@@ -61,6 +61,7 @@ pub enum ActionSpec {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TransactionSpec {
     #[serde(default)]
     pub schema: Option<String>,

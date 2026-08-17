@@ -16,8 +16,10 @@ use crate::schema::{
 
 /// Structured signing request produced by `prepare_signature` (doc 14 §4.9).
 /// The vault signs `digest` and returns a `SignatureProof`; nothing in here
-/// is secret.
+/// is secret. `id` and `request_binding` are both the recomputed binding over
+/// the request content, so editing any field after `prepare` breaks them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SigningRequest {
     pub schema: String,
     pub id: String,
@@ -29,8 +31,11 @@ pub struct SigningRequest {
     pub body_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub review_binding: Option<String>,
+    /// The policy decision the SDK itself computed (when a policy was
+    /// supplied to `prepare_signature`). A `deny` decision never reaches a
+    /// request; the decision is bound into the request like every other field.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub policy_binding: Option<String>,
+    pub policy_decision: Option<crate::policy::PolicyDecision>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -40,6 +45,7 @@ pub struct SigningRequest {
 
 /// External signer output (doc 14 §4.9, frozen schema). No secret fields.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignatureProof {
     pub schema: String,
     pub request_id: String,
@@ -96,11 +102,16 @@ pub fn request_binding_of(request: &SigningRequest) -> String {
 /// the body, signer, profile and the review's own content, so a review whose
 /// displayed fields (fee, amounts, actions, context) were edited after
 /// `inspect` is rejected here instead of being carried into the request.
+///
+/// A provided `Policy` is evaluated by the SDK itself over the verified
+/// review: the caller cannot claim an outcome different from the one the
+/// policy produces, a `deny` decision never mints a request, and the
+/// decision is bound into the request.
 pub fn prepare_signature(
     body_hex: &str,
     signer_address: &str,
     review: Option<&crate::inspect::Review>,
-    policy_binding: Option<&str>,
+    policy: Option<&crate::policy::Policy>,
     origin: Option<&str>,
     expires_at: Option<u64>,
     profile: &CodecProfile,
@@ -118,12 +129,29 @@ pub fn prepare_signature(
     if let Some(review) = review {
         verify_review(review, &unsigned_body_hash, &signer, tx.as_ref(), profile)?;
     }
-    if policy_binding.is_some() && review.is_none() {
-        return Err(SdkError::new(
-            SdkErrorCode::PolicyBindingMismatch,
-            "policy_binding requires a review",
-        ));
-    }
+    let policy_decision = match policy {
+        Some(policy) => {
+            let review = review.ok_or_else(|| {
+                SdkError::new(
+                    SdkErrorCode::PolicyBindingMismatch,
+                    "policy requires a review",
+                )
+            })?;
+            let decision = crate::policy::evaluate_policy(review, policy)?;
+            if decision.decision == "deny" {
+                return Err(SdkError::with_detail(
+                    SdkErrorCode::PolicyDenied,
+                    "policy decision denies signing",
+                    serde_json::json!({
+                        "policy_id": decision.policy_id,
+                        "findings": decision.findings,
+                    }),
+                ));
+            }
+            Some(decision)
+        }
+        None => None,
+    };
     let digest = hex::encode(protocol::tx_std::sign_hash_for(tx.as_ref(), &signer).0);
     let mut request = SigningRequest {
         schema: SCHEMA_SIGNING_REQUEST.to_owned(),
@@ -134,7 +162,7 @@ pub fn prepare_signature(
         digest,
         body_hash: Some(unsigned_body_hash),
         review_binding: review.map(|review| review.review_binding.clone()),
-        policy_binding: policy_binding.map(str::to_owned),
+        policy_decision,
         origin: origin.map(str::to_owned),
         expires_at,
         request_binding: String::new(),
@@ -248,23 +276,176 @@ fn parse_proof(proof: &SignatureProof) -> Result<(Sign, Address), SdkError> {
     Ok((Sign { publickey, signature }, signer))
 }
 
-/// `tx.attach_signature`: atomic attach of one external signature. Clones,
-/// re-validates body/review/request/profile/signer/signature, then commits
-/// (doc 14 §4.5/§4.9). Same key + same signature is idempotent; same key with
-/// a different signature is `DuplicateSigner`.
-///
-/// `review` (when provided) is the approval context from `tx.inspect`: it
-/// must cover this body, this signer and this profile, and its binding must
-/// recompute from its own content. `request` (when provided) is the
-/// `SigningRequest` the vault signed: the proof must carry its id/binding and
-/// the request must not be expired. This closes the full approval chain
-/// review → request → proof → body; with both absent the attach degrades to
-/// body+signer+signature validation only.
+/// One-shot integrity check of a signing request: `id` and `request_binding`
+/// must both equal the binding recomputed over the request content, so any
+/// field edit after `prepare` (expires_at, digest, body_hash, signer,
+/// purpose, algorithm, bindings, origin) is detected. Also enforces the
+/// frozen algorithm envelope and the request expiry.
+pub fn verify_request_integrity(request: &SigningRequest) -> Result<(), SdkError> {
+    let binding = request_binding_of(request);
+    if request.id != binding || request.request_binding != binding {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::InvalidSigningRequest,
+            "signing request id/binding do not match its content",
+            serde_json::json!({
+                "expected_binding": binding,
+                "actual_id": request.id,
+                "actual_binding": request.request_binding,
+            }),
+        ));
+    }
+    if request.algorithm != "secp256k1-rfc6979-sha256" {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::UnsupportedFeature,
+            "unsupported signature algorithm",
+            serde_json::json!({ "actual": request.algorithm }),
+        ));
+    }
+    check_request_expiry(request)?;
+    Ok(())
+}
+
+/// Full approval-context verification for `tx.attach_signature`: the request
+/// must be self-consistent (see `verify_request_integrity`), bound to this
+/// transaction and signer (body_hash, digest, signer_address, purpose), bound
+/// to the provided proof (id/binding) and review; the policy decision carried
+/// by the request must be self-consistent, bound to the review and non-deny;
+/// and the review itself must re-verify.
+fn verify_attach_context(
+    tx: &dyn Transaction,
+    signer: &Address,
+    proof: &SignatureProof,
+    review: &crate::inspect::Review,
+    request: &SigningRequest,
+    unsigned_body_hash: &str,
+    profile: &CodecProfile,
+) -> Result<(), SdkError> {
+    verify_request_integrity(request)?;
+    if request.purpose != "transaction" {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::UnsupportedFeature,
+            "attach requires a transaction signing request",
+            serde_json::json!({ "actual": request.purpose }),
+        ));
+    }
+    if request.signer_address != signer.to_readable() {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::InvalidSigningRequest,
+            "request signer does not match the proof signer",
+            serde_json::json!({
+                "expected": request.signer_address,
+                "actual": signer.to_readable(),
+            }),
+        ));
+    }
+    if request.body_hash.as_deref() != Some(unsigned_body_hash) {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::InvalidSigningRequest,
+            "request body hash does not match this transaction",
+            serde_json::json!({
+                "expected": request.body_hash,
+                "actual": unsigned_body_hash,
+            }),
+        ));
+    }
+    let sign_hash = hex::encode(protocol::tx_std::sign_hash_for(tx, signer).0);
+    if request.digest != sign_hash {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::InvalidSigningRequest,
+            "request digest does not match this signer's sign hash",
+            serde_json::json!({ "expected": request.digest, "actual": sign_hash }),
+        ));
+    }
+    if proof.request_id != request.id || proof.request_binding != request.request_binding {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::ReviewBindingMismatch,
+            "proof does not match the signing request",
+            serde_json::json!({
+                "expected_id": request.id,
+                "actual_id": proof.request_id,
+                "expected_binding": request.request_binding,
+                "actual_binding": proof.request_binding,
+            }),
+        ));
+    }
+    if request.review_binding.as_deref() != Some(&review.review_binding) {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::ReviewBindingMismatch,
+            "request review binding does not match the provided review",
+            serde_json::json!({
+                "expected": request.review_binding,
+                "actual": review.review_binding,
+            }),
+        ));
+    }
+    if let Some(decision) = &request.policy_decision {
+        if decision.decision == "deny" {
+            return Err(SdkError::new(
+                SdkErrorCode::PolicyDenied,
+                "policy decision denies signing",
+            ));
+        }
+        if decision.review_binding != review.review_binding {
+            return Err(SdkError::with_detail(
+                SdkErrorCode::PolicyBindingMismatch,
+                "policy decision is not bound to this review",
+                serde_json::json!({
+                    "expected": decision.review_binding,
+                    "actual": review.review_binding,
+                }),
+            ));
+        }
+        let expected_binding = crate::policy::policy_binding_of(decision);
+        if expected_binding != decision.policy_binding {
+            return Err(SdkError::with_detail(
+                SdkErrorCode::PolicyBindingMismatch,
+                "policy decision binding does not verify",
+                serde_json::json!({
+                    "expected": expected_binding,
+                    "actual": decision.policy_binding,
+                }),
+            ));
+        }
+    }
+    verify_review(review, unsigned_body_hash, signer, tx, profile)?;
+    Ok(())
+}
+
+/// `tx.attach_signature`: full approval-chain attach. Both the `review`
+/// (approval context from `tx.inspect`) and the `request` (the signing
+/// request the vault signed) are required and fully verified: request
+/// integrity, body/digest/signer binding, proof↔request binding, policy
+/// decision and review binding. Clones first, validates everything, then
+/// commits (doc 14 §4.5/§4.9). Same key + same signature is idempotent; same
+/// key with a different signature is `DuplicateSigner`. For attaching
+/// pre-signed signatures without an approval chain, use
+/// `attach_signature_unbound`.
 pub fn attach_signature(
     body_hex: &str,
     proof: &SignatureProof,
-    review: Option<&crate::inspect::Review>,
-    request: Option<&SigningRequest>,
+    review: &crate::inspect::Review,
+    request: &SigningRequest,
+    profile: &CodecProfile,
+) -> Result<AttachResult, SdkError> {
+    attach_signature_inner(body_hex, proof, Some((review, request)), profile)
+}
+
+/// `tx.attach_signature_unbound`: low-level attach of one external signature
+/// with no approval context. Validates body, proof envelope, required signer,
+/// signature and limits only; no review/request binding is enforced. Use for
+/// cold-signer and offline flows that do not go through the review chain.
+pub fn attach_signature_unbound(
+    body_hex: &str,
+    proof: &SignatureProof,
+    profile: &CodecProfile,
+) -> Result<AttachResult, SdkError> {
+    attach_signature_inner(body_hex, proof, None, profile)
+}
+
+fn attach_signature_inner(
+    body_hex: &str,
+    proof: &SignatureProof,
+    context: Option<(&crate::inspect::Review, &SigningRequest)>,
     profile: &CodecProfile,
 ) -> Result<AttachResult, SdkError> {
     let body = decode_body_hex(body_hex)?;
@@ -277,23 +458,16 @@ pub fn attach_signature(
     }
     let (sign, signer) = parse_proof(proof)?;
     let unsigned_body_hash = crate::audit::unsigned_body_hash(body_hex)?;
-    if let Some(request) = request {
-        check_request_expiry(request)?;
-        if proof.request_id != request.id || proof.request_binding != request.request_binding {
-            return Err(SdkError::with_detail(
-                SdkErrorCode::ReviewBindingMismatch,
-                "proof does not match the signing request",
-                serde_json::json!({
-                    "expected_id": request.id,
-                    "actual_id": proof.request_id,
-                    "expected_binding": request.request_binding,
-                    "actual_binding": proof.request_binding,
-                }),
-            ));
-        }
-    }
-    if let Some(review) = review {
-        verify_review(review, &unsigned_body_hash, &signer, tx.as_ref(), profile)?;
+    if let Some((review, request)) = context {
+        verify_attach_context(
+            tx.as_ref(),
+            &signer,
+            proof,
+            review,
+            request,
+            &unsigned_body_hash,
+            profile,
+        )?;
     }
     let required = tx
         .req_sign()

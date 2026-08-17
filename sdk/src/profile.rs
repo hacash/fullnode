@@ -123,32 +123,45 @@ pub struct Capabilities {
     pub features: Vec<FeatureItem>,
 }
 
-/// Frozen feature baseline of Unified SDK 2.0. New optional capabilities add
-/// entries here; changing an existing input/output semantic requires a schema
-/// major instead of reusing a feature name (doc 14 §4.1).
+/// Every operation the dispatcher routes. Single registry: `capabilities()`
+/// derives the feature list from it, and a dispatcher test asserts every
+/// entry routes, so the capability surface and the routing surface cannot
+/// drift.
+pub const OPERATIONS: &[&str] = &[
+    "system.capabilities",
+    "system.sdk_version",
+    "system.codec_profile",
+    "tx.build",
+    "tx.inspect_report",
+    "tx.inspect",
+    "tx.prepare_signature",
+    "tx.attach_signature",
+    "tx.attach_signature_unbound",
+    "tx.verify",
+    "tx.signature_report",
+    "tx.decode",
+    "tx.encode",
+    "account.verify_address",
+    "account.address_from_public_key",
+    "amount.parse_protocol",
+    "amount.format_protocol",
+    "message.prepare_signature",
+    "message.verify",
+    "policy.evaluate",
+];
+
+/// Frozen feature baseline of Unified SDK 2.0 — exactly the routed operation
+/// set, each at version 1. New operations extend `OPERATIONS`; changing an
+/// existing input/output semantic requires a schema major instead of reusing
+/// a feature name (doc 14 §4.1).
 pub fn capabilities(profile: &CodecProfile) -> Capabilities {
-    let features = [
-        ("tx.build", 1),
-        ("tx.inspect", 1),
-        ("tx.prepare-signature", 1),
-        ("tx.attach-signature", 1),
-        ("tx.verify", 1),
-        ("tx.signature-report", 1),
-        ("tx.decode", 1),
-        ("tx.encode", 1),
-        ("account.verify-address", 1),
-        ("account.address-from-public-key", 1),
-        ("amount.parse-format", 1),
-        ("message.signature", 1),
-        ("policy.evaluate", 1),
-        ("audit.action-desc", 1),
-    ]
-    .into_iter()
-    .map(|(id, version)| FeatureItem {
-        id: id.to_owned(),
-        version,
-    })
-    .collect();
+    let features = OPERATIONS
+        .iter()
+        .map(|id| FeatureItem {
+            id: (*id).to_owned(),
+            version: 1,
+        })
+        .collect();
     Capabilities {
         schema: SCHEMA_CAPABILITIES.to_owned(),
         package_version: SDK_VERSION.to_owned(),

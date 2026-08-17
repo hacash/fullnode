@@ -45,7 +45,7 @@ function createFriendlyApi(backend) {
                     body,
                     signer_address,
                     review: options?.review ?? null,
-                    policy_binding: options?.policy_binding ?? null,
+                    policy: options?.policy ?? null,
                     origin: options?.origin ?? null,
                     expires_at: options?.expires_at ?? null,
                 }),
@@ -53,8 +53,13 @@ function createFriendlyApi(backend) {
                 invoke("tx.attach_signature", {
                     body,
                     proof,
-                    review: review ?? null,
-                    request: request ?? null,
+                    review,
+                    request,
+                }),
+            attach_signature_unbound: (body, proof) =>
+                invoke("tx.attach_signature_unbound", {
+                    body,
+                    proof,
                 }),
             verify: (body) => invoke("tx.verify", { body }),
             signature_report: (body) => invoke("tx.signature_report", { body }),

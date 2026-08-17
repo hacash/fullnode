@@ -29,7 +29,9 @@ pub enum SdkErrorCode {
     ReviewBindingMismatch,
     TransactionJsonMismatch,
     RequestExpired,
+    InvalidSigningRequest,
     PolicyBindingMismatch,
+    PolicyDenied,
     CodecProfileMismatch,
     IncompleteSignatures,
 }
@@ -57,7 +59,9 @@ impl SdkErrorCode {
             SdkErrorCode::ReviewBindingMismatch => "review_binding_mismatch",
             SdkErrorCode::TransactionJsonMismatch => "transaction_json_mismatch",
             SdkErrorCode::RequestExpired => "request_expired",
+            SdkErrorCode::InvalidSigningRequest => "invalid_signing_request",
             SdkErrorCode::PolicyBindingMismatch => "policy_binding_mismatch",
+            SdkErrorCode::PolicyDenied => "policy_denied",
             SdkErrorCode::CodecProfileMismatch => "codec_profile_mismatch",
             SdkErrorCode::IncompleteSignatures => "incomplete_signatures",
         }
@@ -120,6 +124,26 @@ impl From<sys::Error> for SdkError {
 
 impl From<serde_json::Error> for SdkError {
     fn from(error: serde_json::Error) -> Self {
+        // The registry mirror pins serde_json < 1.0.167, which predates
+        // `Category::UnknownField`, so unknown-field/variant reports are
+        // detected from serde's stable message shape. Should the shape ever
+        // change, this degrades to `parse_failed` (the SDK classifies by
+        // code, never by message text).
+        let message = error.to_string();
+        if message.contains("unknown field") {
+            return SdkError::with_detail(
+                SdkErrorCode::UnknownField,
+                "request contains an unknown field (typo or newer schema?)",
+                serde_json::json!({ "message": message }),
+            );
+        }
+        if message.contains("unknown variant") {
+            return SdkError::with_detail(
+                SdkErrorCode::UnknownAction,
+                "request contains an unknown action kind or variant",
+                serde_json::json!({ "message": message }),
+            );
+        }
         SdkError::new(SdkErrorCode::ParseFailed, format!("request json invalid: {error}"))
     }
 }

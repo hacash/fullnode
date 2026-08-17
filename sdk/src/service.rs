@@ -17,10 +17,9 @@ pub(crate) fn profile() -> &'static CodecProfile {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InvokeRequest {
     pub operation: String,
-    #[serde(default)]
-    pub schema: Option<String>,
     #[serde(default)]
     pub payload: serde_json::Value,
 }
@@ -66,6 +65,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         "system.codec_profile" => serde_json::to_value(profile).map_err(SdkError::from),
         "tx.build" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 spec: crate::build::TransactionSpec,
             }
@@ -75,6 +75,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "tx.inspect_report" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 body: String,
                 #[serde(default)]
@@ -90,6 +91,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "tx.inspect" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 body: String,
                 #[serde(default)]
@@ -114,13 +116,14 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "tx.prepare_signature" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 body: String,
                 signer_address: String,
                 #[serde(default)]
                 review: Option<crate::inspect::Review>,
                 #[serde(default)]
-                policy_binding: Option<String>,
+                policy: Option<crate::policy::Policy>,
                 #[serde(default)]
                 origin: Option<String>,
                 #[serde(default)]
@@ -131,7 +134,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
                 &params.body,
                 &params.signer_address,
                 params.review.as_ref(),
-                params.policy_binding.as_deref(),
+                params.policy.as_ref(),
                 params.origin.as_deref(),
                 params.expires_at,
                 profile,
@@ -140,26 +143,41 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "tx.attach_signature" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 body: String,
                 proof: crate::attach::SignatureProof,
-                #[serde(default)]
-                review: Option<crate::inspect::Review>,
-                #[serde(default)]
-                request: Option<crate::attach::SigningRequest>,
+                review: crate::inspect::Review,
+                request: crate::attach::SigningRequest,
             }
             let params: Params = parse_payload(payload)?;
             serde_json::to_value(crate::attach::attach_signature(
                 &params.body,
                 &params.proof,
-                params.review.as_ref(),
-                params.request.as_ref(),
+                &params.review,
+                &params.request,
+                profile,
+            )?)
+            .map_err(SdkError::from)
+        }
+        "tx.attach_signature_unbound" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct Params {
+                body: String,
+                proof: crate::attach::SignatureProof,
+            }
+            let params: Params = parse_payload(payload)?;
+            serde_json::to_value(crate::attach::attach_signature_unbound(
+                &params.body,
+                &params.proof,
                 profile,
             )?)
             .map_err(SdkError::from)
         }
         "tx.verify" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 body: String,
             }
@@ -169,6 +187,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "tx.signature_report" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 body: String,
             }
@@ -178,6 +197,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "tx.decode" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 body: String,
             }
@@ -187,6 +207,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "tx.encode" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 transaction: crate::inspect::TransactionJson,
                 #[serde(default)]
@@ -202,6 +223,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "account.verify_address" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 address: String,
             }
@@ -211,6 +233,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "account.address_from_public_key" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 public_key: String,
             }
@@ -220,6 +243,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "amount.parse_protocol" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 value: String,
             }
@@ -229,6 +253,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "amount.format_protocol" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 value: String,
                 unit: u8,
@@ -244,6 +269,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "message.verify" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 request: crate::attach::SigningRequest,
                 proof: crate::attach::SignatureProof,
@@ -257,6 +283,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
         }
         "policy.evaluate" => {
             #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
             struct Params {
                 review: crate::inspect::Review,
                 #[serde(default)]
@@ -323,5 +350,56 @@ mod tests {
         let value: serde_json::Value = serde_json::from_str(&response).unwrap();
         assert_eq!(value["ok"], false);
         assert_eq!(value["error"]["code"], "parse_failed");
+    }
+
+    #[test]
+    fn every_registered_operation_routes() {
+        // The capabilities/operation registry must never list an operation
+        // the dispatcher cannot route.
+        for operation in crate::profile::OPERATIONS {
+            let request =
+                serde_json::json!({ "operation": operation, "payload": {} }).to_string();
+            let response = invoke(&request);
+            let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+            if value["ok"] == false {
+                assert_ne!(
+                    value["error"]["code"],
+                    "unknown_operation",
+                    "operation {operation} is listed in capabilities but not routed"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn capabilities_match_the_operation_registry() {
+        let caps = capabilities(&CodecProfile::standard());
+        let ids: Vec<&str> = caps.features.iter().map(|feature| feature.id.as_str()).collect();
+        assert_eq!(ids, crate::profile::OPERATIONS);
+    }
+
+    #[test]
+    fn unknown_payload_fields_are_rejected() {
+        // deny_unknown_fields on every input: a typo fails with the dedicated
+        // unknown_field code instead of being silently ignored.
+        let response = invoke(
+            r#"{"operation":"account.verify_address","payload":{"address":"x","typo_field":1}}"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "unknown_field");
+    }
+
+    #[test]
+    fn attach_signature_requires_review_and_request() {
+        // tx.attach_signature (full chain) structurally requires both; a
+        // partial payload is a parse failure, never a silent downgrade to the
+        // unbound path.
+        let response = invoke(
+            r#"{"operation":"tx.attach_signature","payload":{"body":"","proof":{}}}"#,
+        );
+        let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(value["ok"], false);
+        assert_ne!(value["error"]["code"], "unknown_operation");
     }
 }

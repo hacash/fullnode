@@ -14,6 +14,7 @@ use crate::schema::{SCHEMA_REVIEW, SCHEMA_TRANSACTION_JSON};
 
 /// Chain context for strict inspection (doc 14 §5 `tx.inspect`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InspectContext {
     pub current_height: u64,
     pub expected_chain_id: u32,
@@ -28,6 +29,7 @@ pub struct HeightRangeDesc {
 /// The review object (doc 14 §6.1). Contains protocol facts and audit
 /// material only; no policy decision, no bridge fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Review {
     pub schema: String,
     pub codec_profile_hash: String,
@@ -143,11 +145,14 @@ pub fn encode_without_signs(tx: &dyn Transaction) -> Result<Vec<u8>, SdkError> {
     ))
 }
 
-/// Guard facts extracted from the action list: union of allowed chains,
-/// intersected height range, per-action notes and protocol violations
-/// (empty `ReqSignList`, malformed height range).
+/// Guard facts extracted from the action list: allowed chains and height
+/// range as the *effective* constraints, per-action notes and protocol
+/// violations. The protocol executes every guard action independently
+/// (see `protocol::codec::action::guard`), so the effective chain set is the
+/// intersection of all `ChainAllow` actions and the effective height range is
+/// the intersection of all `HeightScope` actions.
 struct GuardFacts {
-    chains: Vec<u32>,
+    chains: Option<Vec<u32>>,
     height_range: Option<HeightRangeDesc>,
     /// (action_index, note) pairs attached to the matching action descriptor.
     action_notes: Vec<(usize, String)>,
@@ -158,17 +163,34 @@ struct GuardFacts {
 fn collect_guard_facts(tx: &dyn Transaction) -> GuardFacts {
     use protocol::action_std::{ChainAllow, HeightScope, ReqSignList};
     let mut facts = GuardFacts {
-        chains: Vec::new(),
+        chains: None,
         height_range: None,
         action_notes: Vec::new(),
         protocol_violations: Vec::new(),
     };
     for (index, action) in tx.actions().iter().enumerate() {
         if let Some(chain_allow) = action.as_any().downcast_ref::<ChainAllow>() {
-            for id in chain_allow.chains.as_list() {
-                if !facts.chains.contains(&id.uint()) {
-                    facts.chains.push(id.uint());
-                }
+            let allowed: Vec<u32> = chain_allow
+                .chains
+                .as_list()
+                .iter()
+                .map(|id| id.uint())
+                .collect();
+            if allowed.is_empty() {
+                let note = "chain_allow with empty chain list is protocol-invalid".to_owned();
+                facts.protocol_violations.push(note.clone());
+                facts.action_notes.push((index, note));
+                continue;
+            }
+            facts.chains = Some(match facts.chains.take() {
+                None => allowed,
+                Some(prev) => prev.into_iter().filter(|id| allowed.contains(id)).collect(),
+            });
+            if facts.chains.as_ref().is_some_and(|set| set.is_empty()) {
+                let note = "chain_allow constraints conflict: no chain satisfies all of them"
+                    .to_owned();
+                facts.protocol_violations.push(note.clone());
+                facts.action_notes.push((index, note));
             }
         } else if let Some(scope) = action.as_any().downcast_ref::<HeightScope>() {
             let start = scope.start.uint();
@@ -193,6 +215,16 @@ fn collect_guard_facts(tx: &dyn Transaction) -> GuardFacts {
                     end: prev.end.min(range.end),
                 },
             });
+            if facts
+                .height_range
+                .as_ref()
+                .is_some_and(|range| range.start > range.end)
+            {
+                let note = "height_scope constraints conflict: no height satisfies all of them"
+                    .to_owned();
+                facts.protocol_violations.push(note.clone());
+                facts.action_notes.push((index, note));
+            }
         } else if let Some(req_sign) = action.as_any().downcast_ref::<ReqSignList>() {
             if req_sign.signers.is_empty() {
                 let note = "req_sign_list with empty signer list is protocol-invalid".to_owned();
@@ -289,11 +321,7 @@ fn build_review(
         required_signers: readable_signers(&report.required),
         present_signers: readable_signers(&report.present),
         missing_signers: readable_signers(&report.missing),
-        chain_ids_allowed: if guard_facts.chains.is_empty() {
-            None
-        } else {
-            Some(guard_facts.chains)
-        },
+        chain_ids_allowed: guard_facts.chains,
         valid_height_range: guard_facts.height_range.map(|range| HeightRangeDesc {
             start: range.start,
             end: if range.end == u64::MAX { 0 } else { range.end },
@@ -442,6 +470,7 @@ pub(crate) fn decode_body_hex(body_hex: &str) -> Result<Vec<u8>, SdkError> {
 /// Signature entries for `tx.decode` (doc 14 §6.4). The low-level encode path
 /// accepts appended entries and re-validates everything.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignatureEntry {
     pub public_key: String,
     pub signature: String,
@@ -449,6 +478,7 @@ pub struct SignatureEntry {
 
 /// `tx.decode`: strict structured codec output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TransactionJson {
     pub schema: String,
     pub tx_type: u8,
