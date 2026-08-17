@@ -58,7 +58,7 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
     match operation {
         "system.capabilities" => serde_json::to_value(capabilities(profile)).map_err(SdkError::from),
         "system.sdk_version" => serde_json::to_value(serde_json::json!({
-            "schema": "hacash.sdk/sdk-version@1",
+            "schema": crate::schema::SCHEMA_SDK_VERSION,
             "package_version": crate::profile::SDK_VERSION,
             "abi": { "major": crate::profile::ABI_MAJOR, "minor": crate::profile::ABI_MINOR },
         }))
@@ -144,13 +144,16 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
                 body: String,
                 proof: crate::attach::SignatureProof,
                 #[serde(default)]
-                expected_review_binding: Option<String>,
+                review: Option<crate::inspect::Review>,
+                #[serde(default)]
+                request: Option<crate::attach::SigningRequest>,
             }
             let params: Params = parse_payload(payload)?;
             serde_json::to_value(crate::attach::attach_signature(
                 &params.body,
                 &params.proof,
-                params.expected_review_binding.as_deref(),
+                params.review.as_ref(),
+                params.request.as_ref(),
                 profile,
             )?)
             .map_err(SdkError::from)
@@ -187,12 +190,12 @@ fn route(operation: &str, payload: serde_json::Value) -> Result<serde_json::Valu
             struct Params {
                 transaction: crate::inspect::TransactionJson,
                 #[serde(default)]
-                expected_review_binding: Option<String>,
+                review: Option<crate::inspect::Review>,
             }
             let params: Params = parse_payload(payload)?;
             serde_json::to_value(crate::inspect::encode_transaction_json(
                 &params.transaction,
-                params.expected_review_binding.as_deref(),
+                params.review.as_ref(),
                 profile,
             )?)
             .map_err(SdkError::from)

@@ -49,19 +49,20 @@ function createFriendlyApi(backend) {
                     origin: options?.origin ?? null,
                     expires_at: options?.expires_at ?? null,
                 }),
-            attach_signature: (body, proof, expected_review_binding) =>
+            attach_signature: (body, proof, review, request) =>
                 invoke("tx.attach_signature", {
                     body,
                     proof,
-                    expected_review_binding: expected_review_binding ?? null,
+                    review: review ?? null,
+                    request: request ?? null,
                 }),
             verify: (body) => invoke("tx.verify", { body }),
             signature_report: (body) => invoke("tx.signature_report", { body }),
             decode: (body) => invoke("tx.decode", { body }),
-            encode: (transaction, expected_review_binding) =>
+            encode: (transaction, review) =>
                 invoke("tx.encode", {
                     transaction,
-                    expected_review_binding: expected_review_binding ?? null,
+                    review: review ?? null,
                 }),
         },
         account: {

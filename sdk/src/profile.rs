@@ -10,7 +10,10 @@ use crate::schema::{DOMAIN_CODEC_PROFILE, SCHEMA_CAPABILITIES, SCHEMA_CODEC_PROF
 pub const SDK_VERSION: &str = "0.2.0";
 pub const ABI_MAJOR: u32 = 2;
 pub const ABI_MINOR: u32 = 0;
-/// Target commit pinned by the refactor plan (13 §1, 14 §4.7).
+/// Fullnode source commit this SDK's protocol/codec behavior corresponds to.
+/// It pins the *protocol* identity, not the SDK release (the release is pinned
+/// by `SDK_VERSION`, which also rotates `profile_hash`): bump it only when a
+/// protocol/registry-affecting change lands, then release the SDK.
 pub const FULLNODE_COMMIT: &str = "644a6b51d8a11fac804d13ae5423c7277a6ec5d2";
 
 /// Protocol-level hard limits (doc 14 §4.7, plan 13 §4.5).

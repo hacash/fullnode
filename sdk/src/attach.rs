@@ -91,6 +91,11 @@ pub fn request_binding_of(request: &SigningRequest) -> String {
 /// `tx.prepare_signature`: re-validates the body and (when provided) the
 /// review/policy bindings, computes the local sign hash for `signer_address`
 /// and returns a `SigningRequest`. The SDK never signs.
+///
+/// A provided `Review` must fully re-verify: its binding is recomputed from
+/// the body, signer, profile and the review's own content, so a review whose
+/// displayed fields (fee, amounts, actions, context) were edited after
+/// `inspect` is rejected here instead of being carried into the request.
 pub fn prepare_signature(
     body_hex: &str,
     signer_address: &str,
@@ -111,26 +116,7 @@ pub fn prepare_signature(
     let signer = Address::from_readable(signer_address).map_err(SdkError::from)?;
     let unsigned_body_hash = crate::audit::unsigned_body_hash(body_hex)?;
     if let Some(review) = review {
-        if review.unsigned_body_hash != unsigned_body_hash {
-            return Err(SdkError::with_detail(
-                SdkErrorCode::ReviewBindingMismatch,
-                "review does not match this transaction body",
-                serde_json::json!({
-                    "expected": review.unsigned_body_hash,
-                    "actual": unsigned_body_hash,
-                }),
-            ));
-        }
-        if review.codec_profile_hash != profile.profile_hash {
-            return Err(SdkError::with_detail(
-                SdkErrorCode::CodecProfileMismatch,
-                "review was created under a different codec profile",
-                serde_json::json!({
-                    "expected": profile.profile_hash,
-                    "actual": review.codec_profile_hash,
-                }),
-            ));
-        }
+        verify_review(review, &unsigned_body_hash, &signer, tx.as_ref(), profile)?;
     }
     if policy_binding.is_some() && review.is_none() {
         return Err(SdkError::new(
@@ -159,7 +145,63 @@ pub fn prepare_signature(
     Ok(request)
 }
 
-fn parse_proof(proof: &SignatureProof) -> Result<(Sign, Address), SdkError> {
+/// Shared approval-context verification: the review must cover this body,
+/// this signer, this profile, and its binding must recompute from its own
+/// content (see `crate::inspect::review_binding_of`). Used by
+/// `prepare_signature`, `attach_signature` and `encode_transaction_json`.
+pub fn verify_review(
+    review: &crate::inspect::Review,
+    unsigned_body_hash: &str,
+    signer: &Address,
+    tx: &dyn Transaction,
+    profile: &CodecProfile,
+) -> Result<(), SdkError> {
+    if review.unsigned_body_hash != unsigned_body_hash {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::ReviewBindingMismatch,
+            "review does not match this transaction body",
+            serde_json::json!({
+                "expected": review.unsigned_body_hash,
+                "actual": unsigned_body_hash,
+            }),
+        ));
+    }
+    if review.codec_profile_hash != profile.profile_hash {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::CodecProfileMismatch,
+            "review was created under a different codec profile",
+            serde_json::json!({
+                "expected": profile.profile_hash,
+                "actual": review.codec_profile_hash,
+            }),
+        ));
+    }
+    if let Some(bound_signer) = &review.signer_address {
+        if bound_signer != &signer.to_readable() {
+            return Err(SdkError::with_detail(
+                SdkErrorCode::ReviewBindingMismatch,
+                "review was bound to a different signer",
+                serde_json::json!({
+                    "expected": bound_signer,
+                    "actual": signer.to_readable(),
+                }),
+            ));
+        }
+    }
+    let binding = crate::inspect::review_binding_of(review, unsigned_body_hash, tx, profile);
+    if binding != review.review_binding {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::ReviewBindingMismatch,
+            "review binding does not verify",
+            serde_json::json!({ "expected": review.review_binding, "actual": binding }),
+        ));
+    }
+    Ok(())
+}
+
+/// Frozen proof envelope checks shared by the transaction attach path and the
+/// message verify path, so both reject a malformed proof identically.
+pub fn validate_proof_format(proof: &SignatureProof) -> Result<(), SdkError> {
     if proof.schema != SCHEMA_SIGNATURE_PROOF {
         return Err(SdkError::new(
             SdkErrorCode::UnsupportedSchema,
@@ -173,6 +215,27 @@ fn parse_proof(proof: &SignatureProof) -> Result<(Sign, Address), SdkError> {
             serde_json::json!({ "actual": proof.algorithm }),
         ));
     }
+    Ok(())
+}
+
+/// A signing request with `expires_at` set stops being valid at that instant;
+/// enforced by both consumer paths (`tx.attach_signature`, `message.verify`).
+pub fn check_request_expiry(request: &SigningRequest) -> Result<(), SdkError> {
+    if let Some(expires_at) = request.expires_at {
+        let now = sys::curtimes();
+        if now > expires_at {
+            return Err(SdkError::with_detail(
+                SdkErrorCode::RequestExpired,
+                format!("signing request expired at {expires_at}"),
+                serde_json::json!({ "expires_at": expires_at, "now": now }),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_proof(proof: &SignatureProof) -> Result<(Sign, Address), SdkError> {
+    validate_proof_format(proof)?;
     let publickey: [u8; 33] = hex::decode(&proof.public_key)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
@@ -186,19 +249,22 @@ fn parse_proof(proof: &SignatureProof) -> Result<(Sign, Address), SdkError> {
 }
 
 /// `tx.attach_signature`: atomic attach of one external signature. Clones,
-/// re-validates body/review/profile/signer/signature, then commits
+/// re-validates body/review/request/profile/signer/signature, then commits
 /// (doc 14 §4.5/§4.9). Same key + same signature is idempotent; same key with
 /// a different signature is `DuplicateSigner`.
 ///
-/// `expected_review_binding` is the body-level binding recomputed here over
-/// (unsigned_body_hash, proof signer, proof sign-hash, profile hash) with
-/// empty context/digest. Full-context review bindings are enforced by
-/// `prepare_signature` against the caller-provided `Review`; this check is
-/// defense-in-depth for direct-attach flows (fail-closed on mismatch).
+/// `review` (when provided) is the approval context from `tx.inspect`: it
+/// must cover this body, this signer and this profile, and its binding must
+/// recompute from its own content. `request` (when provided) is the
+/// `SigningRequest` the vault signed: the proof must carry its id/binding and
+/// the request must not be expired. This closes the full approval chain
+/// review → request → proof → body; with both absent the attach degrades to
+/// body+signer+signature validation only.
 pub fn attach_signature(
     body_hex: &str,
     proof: &SignatureProof,
-    expected_review_binding: Option<&str>,
+    review: Option<&crate::inspect::Review>,
+    request: Option<&SigningRequest>,
     profile: &CodecProfile,
 ) -> Result<AttachResult, SdkError> {
     let body = decode_body_hex(body_hex)?;
@@ -210,24 +276,24 @@ pub fn attach_signature(
         ));
     }
     let (sign, signer) = parse_proof(proof)?;
-    let sign_hash = protocol::tx_std::sign_hash_for(tx.as_ref(), &signer);
-    if let Some(expected) = expected_review_binding {
-        let actual = crate::audit::unsigned_body_hash(body_hex)?;
-        let binding = crate::audit::compute_review_binding(
-            &actual,
-            Some(&signer.to_readable()),
-            Some(&hex::encode(sign_hash.0)),
-            &profile.profile_hash,
-            "",
-            "",
-        );
-        if binding != expected {
+    let unsigned_body_hash = crate::audit::unsigned_body_hash(body_hex)?;
+    if let Some(request) = request {
+        check_request_expiry(request)?;
+        if proof.request_id != request.id || proof.request_binding != request.request_binding {
             return Err(SdkError::with_detail(
                 SdkErrorCode::ReviewBindingMismatch,
-                "expected review binding does not match this body/signer",
-                serde_json::json!({ "expected": expected, "actual": binding }),
+                "proof does not match the signing request",
+                serde_json::json!({
+                    "expected_id": request.id,
+                    "actual_id": proof.request_id,
+                    "expected_binding": request.request_binding,
+                    "actual_binding": proof.request_binding,
+                }),
             ));
         }
+    }
+    if let Some(review) = review {
+        verify_review(review, &unsigned_body_hash, &signer, tx.as_ref(), profile)?;
     }
     let required = tx
         .req_sign()
@@ -252,8 +318,8 @@ pub fn attach_signature(
             ));
         }
     }
-    let hash = protocol::tx_std::sign_hash_for(tx.as_ref(), &signer);
-    if !sys::Account::verify_signature(&hash.0, &sign.publickey, &sign.signature) {
+    let sign_hash = protocol::tx_std::sign_hash_for(tx.as_ref(), &signer);
+    if !sys::Account::verify_signature(&sign_hash.0, &sign.publickey, &sign.signature) {
         return Err(SdkError::with_detail(
             SdkErrorCode::BadSignature,
             format!("signature does not verify for signer {}", signer.to_readable()),
@@ -273,21 +339,30 @@ pub fn attach_signature(
         let mut out: Option<base::TxRef> = None;
         if let Some(t) = tx.as_any().downcast_ref::<TransactionType2>() {
             let mut copy = t.clone();
-            copy.signs.push(sign).map_err(SdkError::from)?;
+            copy.signs.push(sign.clone()).map_err(SdkError::from)?;
             out = Some(std::sync::Arc::new(copy));
         } else if let Some(t) = tx.as_any().downcast_ref::<TransactionType3>() {
             let mut copy = t.clone();
-            copy.signs.push(sign).map_err(SdkError::from)?;
+            copy.signs.push(sign.clone()).map_err(SdkError::from)?;
             out = Some(std::sync::Arc::new(copy));
         }
         out.ok_or_else(|| SdkError::new(SdkErrorCode::UnsupportedTxType, "unsupported tx type"))?
     };
-    // Post-commit re-validation: the signed body must verify fully.
-    if let Err(error) = signed.verify_signature() {
+    // Post-commit re-validation: the attached signature must verify against
+    // the committed body. The protocol's execute-time exact-match rules
+    // (Type-3 deterministic signer set, full required coverage) are
+    // deliberately not enforced here: multi-signer transactions attach
+    // incrementally, and completeness is reported via `complete` /
+    // `missing_signers` instead of being a per-attach gate.
+    let committed_hash = protocol::tx_std::sign_hash_for(signed.as_ref(), &signer);
+    if !sys::Account::verify_signature(&committed_hash.0, &sign.publickey, &sign.signature) {
         return Err(SdkError::with_detail(
             SdkErrorCode::BadSignature,
-            format!("signed body failed verification: {error}"),
-            serde_json::json!({}),
+            format!(
+                "signed body failed verification for signer {}",
+                signer.to_readable()
+            ),
+            serde_json::json!({ "actual": signer.to_readable() }),
         ));
     }
     Ok(attach_result(signed.as_ref()))

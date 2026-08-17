@@ -5,6 +5,7 @@
 
 /// Stable schema ids (frozen at ABI major 2).
 pub const SCHEMA_ERROR: &str = "hacash.sdk/error@1";
+pub const SCHEMA_SDK_VERSION: &str = "hacash.sdk/sdk-version@1";
 pub const SCHEMA_CAPABILITIES: &str = "hacash.sdk/capabilities@1";
 pub const SCHEMA_CODEC_PROFILE: &str = "hacash.sdk/codec-profile@1";
 pub const SCHEMA_REVIEW: &str = "hacash.sdk/review@1";

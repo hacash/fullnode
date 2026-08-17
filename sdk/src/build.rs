@@ -7,8 +7,8 @@ use std::sync::Arc;
 use base::TransactionBuild;
 use field::{Address, Amount, BytesW1, BytesW2, DiamondNameListMax200, Encode, Satoshi};
 use protocol::action_std::{
-    AssetToTrs, ChainAllow, DiaToTrs, HacToTrs, HeightScope, ReqSignList, SatToTrs, TxBlob,
-    TxMessage,
+    AssetFromToTrs, AssetToTrs, ChainAllow, DiaFromToTrs, DiaSingleTrs, DiaToTrs, HacFromToTrs,
+    HacToTrs, HeightScope, ReqSignList, SatFromToTrs, SatToTrs, TxBlob, TxMessage,
 };
 use protocol::tx_std::{TransactionType2, TransactionType3};
 use serde::{Deserialize, Serialize};
@@ -20,13 +20,39 @@ use crate::schema::{SCHEMA_BUILT_TRANSACTION, SCHEMA_TRANSACTION_SPEC};
 
 /// One action in a build spec. The `kind` tag is the stable data contract;
 /// unknown kinds fail with `UnsupportedSchema` instead of being ignored.
+///
+/// Transfer actions carry an optional `from` address: when absent the action
+/// transfers from the transaction main address (`*ToTrs`); when present and
+/// different from `main` the action is a `*FromToTrs` transfer out of that
+/// address, which then becomes a required signer.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ActionSpec {
-    HacTransfer { to: String, amount: String },
-    SatTransfer { to: String, satoshi: u64 },
-    HacdTransfer { to: String, names: Vec<String> },
-    AssetTransfer { to: String, serial: u64, amount: String },
+    HacTransfer {
+        #[serde(default)]
+        from: Option<String>,
+        to: String,
+        amount: String,
+    },
+    SatTransfer {
+        #[serde(default)]
+        from: Option<String>,
+        to: String,
+        satoshi: u64,
+    },
+    HacdTransfer {
+        #[serde(default)]
+        from: Option<String>,
+        to: String,
+        names: Vec<String>,
+    },
+    AssetTransfer {
+        #[serde(default)]
+        from: Option<String>,
+        to: String,
+        serial: u64,
+        amount: String,
+    },
     HeightScope { start: u64, end: u64 },
     ChainAllow { chains: Vec<u32> },
     ReqSignList { signers: Vec<String> },
@@ -97,7 +123,7 @@ pub fn build_transaction(spec: &TransactionSpec) -> Result<BuiltTransaction, Sdk
 
     let mut actions = Vec::with_capacity(spec.actions.len());
     for action in &spec.actions {
-        actions.push(build_action(action)?);
+        actions.push(build_action(action, &main)?);
     }
 
     let body = if spec.tx_type == 3 {
@@ -151,22 +177,40 @@ pub fn build_transaction(spec: &TransactionSpec) -> Result<BuiltTransaction, Sdk
     })
 }
 
-fn build_action(spec: &ActionSpec) -> Result<base::ActionRef, SdkError> {
+/// Build one action. `main` is the transaction main address: a `from` equal
+/// to it collapses to the `*ToTrs` form (same wire bytes as the historical
+/// single-signer SDK), a different `from` yields the `*FromToTrs` form.
+fn build_action(spec: &ActionSpec, main: &Address) -> Result<base::ActionRef, SdkError> {
     let action: base::ActionRef = match spec {
-        ActionSpec::HacTransfer { to, amount } => Arc::new(HacToTrs::new(
-            parse_address(to)?,
-            Amount::from(amount).map_err(|error| SdkError::from(error))?,
-        )),
-        ActionSpec::SatTransfer { to, satoshi } => Arc::new(SatToTrs::new(
-            parse_address(to)?,
-            Satoshi::from(*satoshi),
-        )),
-        ActionSpec::HacdTransfer { to, names } => {
+        ActionSpec::HacTransfer { from, to, amount } => {
+            let amount = Amount::from(amount).map_err(|error| SdkError::from(error))?;
+            let to_address = parse_address(to)?;
+            match parse_from(from, main)? {
+                Some(from_address) => Arc::new(HacFromToTrs::new(from_address, to_address, amount)),
+                None => Arc::new(HacToTrs::new(to_address, amount)),
+            }
+        }
+        ActionSpec::SatTransfer { from, to, satoshi } => {
+            let satoshi = Satoshi::from(*satoshi);
+            let to_address = parse_address(to)?;
+            match parse_from(from, main)? {
+                Some(from_address) => Arc::new(SatFromToTrs::new(from_address, to_address, satoshi)),
+                None => Arc::new(SatToTrs::new(to_address, satoshi)),
+            }
+        }
+        ActionSpec::HacdTransfer { from, to, names } => {
             let list = DiamondNameListMax200::from_readable(&names.join(","))
                 .map_err(|error| SdkError::from(error))?;
-            Arc::new(DiaToTrs::new(parse_address(to)?, list))
+            let to_address = parse_address(to)?;
+            match parse_from(from, main)? {
+                Some(from_address) => Arc::new(DiaFromToTrs::new(from_address, to_address, list)),
+                None if list.length() == 1 => {
+                    Arc::new(DiaSingleTrs::new(list.as_list()[0], to_address))
+                }
+                None => Arc::new(DiaToTrs::new(to_address, list)),
+            }
         }
-        ActionSpec::AssetTransfer { to, serial, amount } => {
+        ActionSpec::AssetTransfer { from, to, serial, amount } => {
             let asset = field::AssetAmt {
                 serial: field::Fold64::from(*serial).map_err(SdkError::from)?,
                 amount: field::Fold64::from(parse_asset_amount(amount)?)
@@ -174,7 +218,13 @@ fn build_action(spec: &ActionSpec) -> Result<base::ActionRef, SdkError> {
             }
             .checked()
             .map_err(SdkError::from)?;
-            Arc::new(AssetToTrs::new(parse_address(to)?, asset))
+            let to_address = parse_address(to)?;
+            match parse_from(from, main)? {
+                Some(from_address) => {
+                    Arc::new(AssetFromToTrs::new(from_address, to_address, asset))
+                }
+                None => Arc::new(AssetToTrs::new(to_address, asset)),
+            }
         }
         ActionSpec::HeightScope { start, end } => Arc::new(HeightScope::new(
             field::BlockHeight::from(*start),
@@ -215,6 +265,22 @@ fn parse_address(raw: &str) -> Result<Address, SdkError> {
     Address::from_readable(raw).map_err(|error| SdkError::from(error))
 }
 
+/// `from` collapses to `None` when absent or equal to the transaction main
+/// address (single-signer `*ToTrs` form); a different address stays `Some`.
+fn parse_from(from: &Option<String>, main: &Address) -> Result<Option<Address>, SdkError> {
+    match from {
+        None => Ok(None),
+        Some(raw) => {
+            let address = parse_address(raw)?;
+            if address == *main {
+                Ok(None)
+            } else {
+                Ok(Some(address))
+            }
+        }
+    }
+}
+
 fn parse_asset_amount(raw: &str) -> Result<u64, SdkError> {
     raw.parse::<u64>()
         .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, format!("asset amount {raw:?} invalid")))
@@ -241,6 +307,7 @@ mod tests {
             gas_max: None,
             actions: vec![
                 ActionSpec::HacTransfer {
+                    from: None,
                     to: MAIN.to_owned(),
                     amount: "12:244".to_owned(),
                 },
@@ -276,5 +343,27 @@ mod tests {
         spec.gas_max = Some(10);
         let error = build_transaction(&spec).unwrap_err();
         assert_eq!(error.code, "parse_failed");
+    }
+
+    #[test]
+    fn explicit_from_builds_from_to_transfer_and_becomes_signer() {
+        use base::Transaction;
+        let other = sys::Account::create_by("654321").unwrap();
+        let mut spec = sample_spec();
+        spec.actions[0] = ActionSpec::HacTransfer {
+            from: Some(other.readable().to_owned()),
+            to: MAIN.to_owned(),
+            amount: "12:244".to_owned(),
+        };
+        let built = build_transaction(&spec).unwrap();
+        let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
+        assert_eq!(
+            decoded.actions()[0].kind(),
+            protocol::action_std::HacFromToTrs::KIND
+        );
+        // The explicit from address becomes a required signer.
+        let required = decoded.req_sign().unwrap();
+        let other_address = field::Address::from_readable(other.readable()).unwrap();
+        assert!(required.contains(&other_address));
     }
 }

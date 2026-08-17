@@ -2,33 +2,44 @@
 <head>
     <meta charset="utf-8">
     <title>Hacash WASM SDK smoke test</title>
-    <script src="./hacashsdk_bg.js"></script>
-    <script src="../js/hacashsdk.global.js"></script>
 </head>
 <body>
     <h1>Hacash WASM SDK smoke test</h1>
     <pre id="output"></pre>
-    <script>
+    <script type="module">
+        import create_hacash_sdk from "../js/hacashsdk.mjs";
+
         const output = document.getElementById("output");
         const write = (value) => {
             output.textContent += `${String(value)}\n`;
         };
 
-        (async () => {
+        try {
+            // The web backend resolves ../web/hacashsdk.js from the facade
+            // module URL; serve the dist directory statically.
             const sdk = await create_hacash_sdk();
-            const account = sdk.create_account("123456");
-            write(`address=${account.address}`);
-            const transaction = sdk.create_coin_transfer({
-                main_prikey: "123456",
-                to_address: "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
+            const caps = sdk.system.capabilities();
+            write(`abi=${caps.abi.major}.${caps.abi.minor}`);
+            const check = sdk.account.verify_address("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9");
+            write(`verify_address=${check.ok}`);
+            const built = sdk.tx.build({
+                tx_type: 2,
+                main: "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
                 fee: "1:244",
-                hacash: "12.0",
-                satoshi: 12000000,
                 timestamp: 1755223764,
+                actions: [
+                    {
+                        kind: "hac_transfer",
+                        to: "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
+                        amount: "12:244",
+                    },
+                ],
             });
-            write(`hash=${transaction.hash}`);
+            write(`hash=${built.hash}`);
             write("OK");
-        })().catch((error) => write(error.message || error));
+        } catch (error) {
+            write(error.message || error);
+        }
     </script>
 </body>
 </html>

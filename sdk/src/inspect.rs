@@ -41,6 +41,15 @@ pub struct Review {
     pub hash_with_fee: String,
     pub unsigned_body_hash: String,
     pub review_binding: String,
+    /// The signer this review's binding was computed for, if any. Stored in
+    /// the review so `review_binding` is recomputable by anyone holding the
+    /// review (see `review_binding_of`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signer_address: Option<String>,
+    /// The strict-inspect context the binding was computed with; `None` for
+    /// report mode. Stored for the same recomputability reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inspect_context: Option<InspectContext>,
     pub protocol_valid: bool,
     pub signability: String,
     pub auditability: String,
@@ -212,7 +221,7 @@ fn readable_signers(addrs: &[Address]) -> Vec<String> {
 fn build_review(
     body: &[u8],
     signer_address: Option<&str>,
-    context_json: &str,
+    context: Option<&InspectContext>,
     profile: &CodecProfile,
 ) -> Result<Review, SdkError> {
     let tx = decode_tx(body)?;
@@ -226,10 +235,6 @@ fn build_review(
     let report = protocol::tx_std::signature_report(tx.as_ref())
         .map_err(|error| SdkError::from(error))?;
     let guard_facts = collect_guard_facts(tx.as_ref());
-
-    let sign_hash_for_signer = signer.map(|signer| {
-        hex::encode(protocol::tx_std::sign_hash_for(tx.as_ref(), &signer).0)
-    });
 
     let mut actions = Vec::with_capacity(tx.action_count());
     let mut asset_serials = Vec::new();
@@ -275,6 +280,8 @@ fn build_review(
         hash_with_fee: hex::encode(tx.hash_with_fee().0),
         unsigned_body_hash: unsigned_body_hash.clone(),
         review_binding: String::new(),
+        signer_address: signer.as_ref().map(|addr| addr.to_readable()),
+        inspect_context: context.cloned(),
         protocol_valid: guard_facts.protocol_violations.is_empty(),
         signability,
         auditability: auditability.as_str().to_owned(),
@@ -297,20 +304,44 @@ fn build_review(
         asset_serials,
     };
 
-    // Bind the review: canonical digest excludes review_binding itself.
-    let signer_readable = signer.as_ref().map(|addr| addr.to_readable());
-    let review_value = serde_json::to_value(&review).map_err(SdkError::from)?;
-    let review_digest = audit::canonical_review_digest(&review_value);
-    let binding = audit::compute_review_binding(
-        &unsigned_body_hash,
-        signer_readable.as_deref(),
-        sign_hash_for_signer.as_deref(),
-        &profile.profile_hash,
-        context_json,
-        &review_digest,
-    );
-    review.review_binding = binding;
+    // Bind the review with the shared single-source computation, so the same
+    // recomputation in prepare/attach/encode verifies it.
+    review.review_binding = review_binding_of(&review, &unsigned_body_hash, tx.as_ref(), profile);
     Ok(review)
+}
+
+/// Canonical review binding — the single computation shared by `build_review`,
+/// `prepare_signature`, `attach_signature` and `encode_transaction_json`:
+/// sha3-256 over domain + unsigned_body_hash + signer + sign_hash + codec
+/// profile hash + inspect context + canonical review digest (which excludes
+/// `review_binding` itself and non-deterministic display text). Anyone holding
+/// the review can recompute it, so a review whose displayed fields were
+/// edited after inspection never re-verifies.
+pub fn review_binding_of(
+    review: &Review,
+    unsigned_body_hash: &str,
+    tx: &dyn Transaction,
+    profile: &CodecProfile,
+) -> String {
+    let sign_hash = review
+        .signer_address
+        .as_deref()
+        .and_then(|raw| Address::from_readable(raw).ok())
+        .map(|signer| hex::encode(protocol::tx_std::sign_hash_for(tx, &signer).0));
+    let context_json = match &review.inspect_context {
+        Some(context) => serde_json::to_string(context).unwrap_or_default(),
+        None => String::new(),
+    };
+    let review_value = serde_json::to_value(review).unwrap_or_default();
+    let review_digest = audit::canonical_review_digest(&review_value);
+    audit::compute_review_binding(
+        unsigned_body_hash,
+        review.signer_address.as_deref(),
+        sign_hash.as_deref(),
+        &profile.profile_hash,
+        &context_json,
+        &review_digest,
+    )
 }
 
 fn classify(grade: &str) -> Auditability {
@@ -340,7 +371,7 @@ pub fn inspect_report(
     profile: &CodecProfile,
 ) -> Result<Review, SdkError> {
     let body = decode_body_hex(body_hex)?;
-    build_review(&body, signer_address, "", profile)
+    build_review(&body, signer_address, None, profile)
 }
 
 /// `tx.inspect`: strict mode. Requires chain context and validates the
@@ -353,8 +384,7 @@ pub fn inspect(
 ) -> Result<Review, SdkError> {
     let body = decode_body_hex(body_hex)?;
     let tx = decode_tx(&body)?;
-    let context_json = serde_json::to_string(context).map_err(SdkError::from)?;
-    let review = build_review(&body, signer_address, &context_json, profile)?;
+    let review = build_review(&body, signer_address, Some(context), profile)?;
     // Strict guard checks against the caller-provided context.
     for action in tx.actions() {
         if let Some(scope) = action.as_any().downcast_ref::<protocol::action_std::HeightScope>() {
@@ -471,12 +501,15 @@ pub fn decode_transaction_json(body_hex: &str) -> Result<TransactionJson, SdkErr
 /// `tx.encode`: rebuild a body from `tx.decode` output (low-level path, doc
 /// 14 §6.4). Callers may append external signatures to `signatures[]`; the
 /// SDK re-validates action json, signature format, required signers,
-/// duplicates and limits, then re-encodes. The round-trip invariant
-/// `encode(decode(body)) == body` holds for every registered action whose
-/// json codec round-trips; anything else fails with `UnsupportedSchema`.
+/// duplicates and limits, then re-encodes. The rebuilt body must reproduce
+/// the declared `unsigned_body_hash` — a mismatch fails with
+/// `transaction_json_mismatch` instead of silently emitting a different
+/// transaction (this also catches action jsons that do not round-trip).
+/// When a `review` is provided, its binding must cover the rebuilt body and
+/// the review's declared hash, closing the same chain as `attach_signature`.
 pub fn encode_transaction_json(
     transaction: &TransactionJson,
-    expected_review_binding: Option<&str>,
+    review: Option<&Review>,
     profile: &CodecProfile,
 ) -> Result<crate::build::BuiltTransaction, SdkError> {
     use base::TransactionBuild;
@@ -500,25 +533,6 @@ pub fn encode_transaction_json(
             "action count exceeds protocol maximum",
             serde_json::json!({ "expected": profile::TX_ACTIONS_MAX }),
         ));
-    }
-    if let Some(expected) = expected_review_binding {
-        // Body-level binding over the unsigned body; full-context bindings are
-        // enforced through prepare_signature (see attach_signature).
-        let body_binding = audit::compute_review_binding(
-            &transaction.unsigned_body_hash,
-            None,
-            None,
-            &profile.profile_hash,
-            "",
-            "",
-        );
-        if body_binding != expected {
-            return Err(SdkError::with_detail(
-                SdkErrorCode::ReviewBindingMismatch,
-                "expected review binding does not match this transaction json",
-                serde_json::json!({ "expected": expected, "actual": body_binding }),
-            ));
-        }
     }
 
     let main = Address::from_readable(&transaction.main).map_err(SdkError::from)?;
@@ -601,6 +615,51 @@ pub fn encode_transaction_json(
         ));
     }
     let unsigned_body_hash = crate::audit::unsigned_body_hash(&body_hex)?;
+    // Integrity gate: the rebuilt body must reproduce the declared hash.
+    // Without this, tampering with an action's json would silently emit a
+    // different transaction than the one the review binding was computed over.
+    if unsigned_body_hash != transaction.unsigned_body_hash {
+        return Err(SdkError::with_detail(
+            SdkErrorCode::TransactionJsonMismatch,
+            "rebuilt body does not match the declared unsigned_body_hash",
+            serde_json::json!({
+                "expected": transaction.unsigned_body_hash,
+                "actual": unsigned_body_hash,
+            }),
+        ));
+    }
+    // When an approval context is supplied, its binding must cover the body
+    // that was actually rebuilt (same chain as attach_signature).
+    if let Some(review) = review {
+        if review.unsigned_body_hash != unsigned_body_hash {
+            return Err(SdkError::with_detail(
+                SdkErrorCode::ReviewBindingMismatch,
+                "review does not match the rebuilt body",
+                serde_json::json!({
+                    "expected": review.unsigned_body_hash,
+                    "actual": unsigned_body_hash,
+                }),
+            ));
+        }
+        if review.codec_profile_hash != profile.profile_hash {
+            return Err(SdkError::with_detail(
+                SdkErrorCode::CodecProfileMismatch,
+                "review was created under a different codec profile",
+                serde_json::json!({
+                    "expected": profile.profile_hash,
+                    "actual": review.codec_profile_hash,
+                }),
+            ));
+        }
+        let binding = review_binding_of(review, &unsigned_body_hash, decoded.as_ref(), profile);
+        if binding != review.review_binding {
+            return Err(SdkError::with_detail(
+                SdkErrorCode::ReviewBindingMismatch,
+                "review binding does not verify for the rebuilt body",
+                serde_json::json!({ "expected": review.review_binding, "actual": binding }),
+            ));
+        }
+    }
     Ok(crate::build::BuiltTransaction {
         schema: crate::schema::SCHEMA_BUILT_TRANSACTION.to_owned(),
         tx_type: transaction.tx_type,

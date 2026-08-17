@@ -27,10 +27,10 @@ sdk.tx.build({ spec });                              // 未签名 Type-2/3 body
 sdk.tx.inspect_report(body, signerAddress?);         // 无链上下文审阅
 sdk.tx.inspect(body, signerAddress, context);        // 严格模式（高度/链 guard）
 sdk.tx.prepare_signature(body, signerAddress, opts); // SigningRequest
-sdk.tx.attach_signature(body, proof, expectedReviewBinding?);
+sdk.tx.attach_signature(body, proof, review?, request?);
 sdk.tx.verify(body);
 sdk.tx.signature_report(body);
-sdk.tx.decode(body) / sdk.tx.encode(transactionJson); // 低级结构化 codec
+sdk.tx.decode(body) / sdk.tx.encode(transactionJson, review?); // 低级结构化 codec
 
 sdk.account.verify_address(address);
 sdk.account.address_from_public_key(publicKey);      // 无私钥输入
@@ -38,6 +38,13 @@ sdk.amount.parse_protocol(value) / format_protocol(value, unit);
 sdk.message.prepare_signature(params) / verify(request, proof); // 冻结 raw 约定
 sdk.policy.evaluate(review, policy);
 ```
+
+`tx.attach_signature` 的 `review`/`request` 是可选审批上下文：提供 `review`
+时其 binding 会在 body/signer/profile 下重新计算并校验（篡改过的审阅内容
+会被拒绝）；提供 `request` 时 proof 必须携带该请求的 id/binding 且请求未
+过期。`tx.encode` 强制重建 body 的 `unsigned_body_hash` 与声明值一致，
+篡改 action json 会以 `transaction_json_mismatch` 失败而不是静默产出另一
+条交易；提供 `review` 时同样校验其 binding。
 
 错误统一为 `{ code, message, detail? }`（`SdkError`），facade 抛出带
 `code`/`detail` 的异常，raw envelope 在 `e.sdkError` 中保留。
@@ -64,7 +71,7 @@ rlib 同样可用：`sdk::inspect::inspect_report`、`sdk::attach::*`、
 ## 测试
 
 ```sh
-cargo test -p sdk          # 26 个单元/流程测试（含黄金向量、签名流、guard 检查）
+cargo test -p sdk          # 34 个单元/流程测试（含黄金向量、签名流、guard 检查、篡改/过期拒绝）
 node ./sdk/tests/...       # 打包后 JS 冒烟
 ```
 

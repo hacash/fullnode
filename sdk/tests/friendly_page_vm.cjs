@@ -22,16 +22,25 @@ vm.runInContext(
     fs.readFileSync(path.join(__dirname, "../dist/page/hacashsdk_bg.js"), "utf8"),
     context,
 );
-vm.runInContext(
-    fs.readFileSync(path.join(__dirname, "../dist/js/hacashsdk.global.js"), "utf8"),
-    context,
-);
 
 (async () => {
-    const sdk = await context.create_hacash_sdk();
-    const account = sdk.create_account("123456");
-    if (account.address !== "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9") {
-        throw new Error(`unexpected account ${account.address}`);
+    // The no-modules bundle exposes the raw transport: one JSON request in,
+    // one envelope JSON out. No global facade exists anymore (v2 surface).
+    const raw = await context.hacash_sdk();
+    if (typeof raw.sdk_invoke !== "function" || raw.sdk_transport_version() !== 1) {
+        throw new Error("raw transport exports missing");
+    }
+    const invoke = (operation, payload) =>
+        JSON.parse(raw.sdk_invoke(JSON.stringify({ operation, payload })));
+    const response = invoke("system.capabilities", {});
+    if (!response.ok || response.value.abi.major !== 2) {
+        throw new Error(`capabilities failed: ${JSON.stringify(response)}`);
+    }
+    const check = invoke("account.verify_address", {
+        address: "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
+    });
+    if (!check.ok || !check.value.ok) {
+        throw new Error("verify_address failed");
     }
     console.log("friendly_page_vm.cjs OK");
 })().catch((error) => {

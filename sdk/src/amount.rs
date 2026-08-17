@@ -23,6 +23,12 @@ pub fn parse_protocol(value: &str) -> Result<ParsedAmount, SdkError> {
         return Err(SdkError::new(SdkErrorCode::ParseFailed, "amount is empty"));
     }
     let body = trimmed.strip_prefix('-').unwrap_or(trimmed);
+    if body.contains(',') {
+        return Err(SdkError::new(
+            SdkErrorCode::ParseFailed,
+            "thousand separators are not accepted by the machine parser",
+        ));
+    }
     if !body
         .bytes()
         .all(|byte| byte.is_ascii_digit() || byte == b':' || byte == b'.')
@@ -31,12 +37,6 @@ pub fn parse_protocol(value: &str) -> Result<ParsedAmount, SdkError> {
             SdkErrorCode::ParseFailed,
             "amount contains unsupported characters; use canonical digits only",
             serde_json::json!({ "actual": value }),
-        ));
-    }
-    if body.contains(',') {
-        return Err(SdkError::new(
-            SdkErrorCode::ParseFailed,
-            "thousand separators are not accepted by the machine parser",
         ));
     }
     let amount = Amount::from(trimmed).map_err(|error| SdkError::from(error))?;

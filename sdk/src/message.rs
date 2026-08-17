@@ -68,7 +68,8 @@ pub fn prepare_message_signature(
 }
 
 /// `message.verify`: verify a proof over the digest and return the signer
-/// address. The proof's request id/binding are checked against the request.
+/// address. The proof envelope (schema/algorithm), the proof's request
+/// id/binding and the request expiry are all checked against the request.
 pub fn verify_message_signature(
     request: &SigningRequest,
     proof: &SignatureProof,
@@ -79,6 +80,8 @@ pub fn verify_message_signature(
             "message.verify requires an authentication request",
         ));
     }
+    crate::attach::check_request_expiry(request)?;
+    crate::attach::validate_proof_format(proof)?;
     let expected_binding = crate::attach::request_binding_of(request);
     if proof.request_binding != expected_binding || proof.request_id != request.id {
         return Err(SdkError::new(
@@ -164,5 +167,56 @@ mod tests {
         };
         let error = verify_message_signature(&request, &proof).unwrap_err();
         assert_eq!(error.code, "review_binding_mismatch");
+    }
+
+    #[test]
+    fn rejects_wrong_proof_schema_and_algorithm() {
+        let account = sys::Account::create_by("123456").unwrap();
+        let request = prepare_message_signature(&MessagePrepareParams {
+            digest: hex::encode(sys::calculate_hash(b"challenge")),
+            signer_address: account.readable().to_owned(),
+            origin: None,
+            expires_at: None,
+        })
+        .unwrap();
+        let signature: [u8; 64] = account.do_sign(&sys::calculate_hash(b"challenge"));
+        let proof = SignatureProof {
+            schema: "hacash.sdk/wrong@1".to_owned(),
+            request_id: request.id.clone(),
+            request_binding: request.request_binding.clone(),
+            public_key: hex::encode(account.public_key().serialize_compressed()),
+            signature: hex::encode(signature),
+            algorithm: "not-a-real-algorithm".to_owned(),
+        };
+        let error = verify_message_signature(&request, &proof).unwrap_err();
+        assert_eq!(error.code, "unsupported_schema");
+
+        let mut fixed = proof;
+        fixed.schema = crate::schema::SCHEMA_SIGNATURE_PROOF.to_owned();
+        let error = verify_message_signature(&request, &fixed).unwrap_err();
+        assert_eq!(error.code, "unsupported_feature");
+    }
+
+    #[test]
+    fn rejects_expired_request() {
+        let account = sys::Account::create_by("123456").unwrap();
+        let request = prepare_message_signature(&MessagePrepareParams {
+            digest: hex::encode(sys::calculate_hash(b"challenge")),
+            signer_address: account.readable().to_owned(),
+            origin: None,
+            expires_at: Some(1), // long past
+        })
+        .unwrap();
+        let signature: [u8; 64] = account.do_sign(&sys::calculate_hash(b"challenge"));
+        let proof = SignatureProof {
+            schema: crate::schema::SCHEMA_SIGNATURE_PROOF.to_owned(),
+            request_id: request.id.clone(),
+            request_binding: request.request_binding.clone(),
+            public_key: hex::encode(account.public_key().serialize_compressed()),
+            signature: hex::encode(signature),
+            algorithm: "secp256k1-rfc6979-sha256".to_owned(),
+        };
+        let error = verify_message_signature(&request, &proof).unwrap_err();
+        assert_eq!(error.code, "request_expired");
     }
 }

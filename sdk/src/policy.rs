@@ -143,6 +143,8 @@ mod tests {
             hash_with_fee: String::new(),
             unsigned_body_hash: String::new(),
             review_binding: "rb".to_owned(),
+            signer_address: None,
+            inspect_context: None,
             protocol_valid: true,
             signability: "signable".to_owned(),
             auditability: "opaque".to_owned(),

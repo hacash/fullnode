@@ -16,6 +16,14 @@ fn profile() -> CodecProfile {
 /// Golden signed Type-2 HAC+SAT transfer (legacy vector, prikey "123456").
 const LEGACY_BODY: &str = "0200689e96d400e63c33a796b3032ce6b856f68fccf06608d9ed18f401010002000100e63c33a796b3032ce6b856f68fccf06608d9ed18f8010c000a00e63c33a796b3032ce6b856f68fccf06608d9ed180000000000b71b0000010231745adae24044ff09c3541537160abb8d5d720275bbaeed0b3d035b1e8b263c9b607f2bd9e1031536c13741facb78585755c116aa7d10628ebc2adbb4be96493bc1bb8ac6c3e78dee6717b9c4a27280b698efc91097d5900418a59c9d8e7ac30000";
 
+fn hac_transfer(to: &str, amount: &str) -> ActionSpec {
+    ActionSpec::HacTransfer {
+        from: None,
+        to: to.to_owned(),
+        amount: amount.to_owned(),
+    }
+}
+
 fn vault_sign(account: &sys::Account, digest_hex: &str, request_id: &str, request_binding: &str) -> SignatureProof {
     let digest = hex::decode(digest_hex).unwrap();
     let signature: [u8; 64] = account.do_sign(&digest.try_into().unwrap());
@@ -70,10 +78,7 @@ fn full_offline_sign_flow_type2() {
         timestamp: Some(1_755_223_764),
         gas_max: None,
         actions: vec![
-            ActionSpec::HacTransfer {
-                to: account.readable().to_owned(),
-                amount: "12:244".to_owned(),
-            },
+            hac_transfer(account.readable(), "12:244"),
             ActionSpec::HeightScope {
                 start: 1_000_000,
                 end: 0,
@@ -97,7 +102,8 @@ fn full_offline_sign_flow_type2() {
     assert_eq!(review.valid_height_range.as_ref().unwrap().start, 1_000_000);
     assert_eq!(review.signability, "signable");
 
-    // prepare → vault sign → attach → verify (offline, no node).
+    // prepare → vault sign → attach → verify (offline, no node). The full
+    // approval chain review → request → proof is handed to attach.
     let request = prepare_signature(
         &built.body,
         account.readable(),
@@ -116,15 +122,30 @@ fn full_offline_sign_flow_type2() {
         &request.id,
         &request.request_binding,
     );
-    let attached = attach_signature(&built.body, &proof, None, &profile).unwrap();
+    let attached = attach_signature(
+        &built.body,
+        &proof,
+        Some(&review),
+        Some(&request),
+        &profile,
+    )
+    .unwrap();
     assert!(attached.complete);
     assert!(attached.missing_signers.is_empty());
 
     let verified = verify_signatures(&attached.body).unwrap();
     assert!(verified.ok, "attached body must verify: {:?}", verified.errors);
 
-    // Same key + same signature is idempotent.
-    let again = attach_signature(&attached.body, &proof, None, &profile).unwrap();
+    // Same key + same signature is idempotent; the approval chain still holds
+    // for the attached body (the unsigned body hash is unchanged).
+    let again = attach_signature(
+        &attached.body,
+        &proof,
+        Some(&review),
+        Some(&request),
+        &profile,
+    )
+    .unwrap();
     assert_eq!(again.body, attached.body);
 }
 
@@ -140,16 +161,13 @@ fn duplicate_signer_and_not_required_signer_are_rejected() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
-        actions: vec![ActionSpec::HacTransfer {
-            to: account.readable().to_owned(),
-            amount: "1:244".to_owned(),
-        }],
+        actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
 
     let request = prepare_signature(&built.body, account.readable(), None, None, None, None, &profile).unwrap();
     let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
-    let attached = attach_signature(&built.body, &proof, None, &profile).unwrap();
+    let attached = attach_signature(&built.body, &proof, None, None, &profile).unwrap();
 
     // Same key, different signature (sign the non-main hash) → DuplicateSigner.
     let wrong_hash = {
@@ -157,7 +175,7 @@ fn duplicate_signer_and_not_required_signer_are_rejected() {
         hex::encode(tx.hash().0) // non-main digest for the main signer
     };
     let bad_proof = vault_sign(&account, &wrong_hash, &request.id, &request.request_binding);
-    let error = attach_signature(&attached.body, &bad_proof, None, &profile).unwrap_err();
+    let error = attach_signature(&attached.body, &bad_proof, None, None, &profile).unwrap_err();
     assert_eq!(error.code, "duplicate_signer");
 
     // Signer outside the required set → NotRequiredSigner.
@@ -169,7 +187,7 @@ fn duplicate_signer_and_not_required_signer_are_rejected() {
         &other_request.id,
         &other_request.request_binding,
     );
-    let error = attach_signature(&built.body, &other_proof, None, &profile).unwrap_err();
+    let error = attach_signature(&built.body, &other_proof, None, None, &profile).unwrap_err();
     assert_eq!(error.code, "not_required_signer");
 }
 
@@ -270,10 +288,7 @@ fn policy_evaluate_over_review() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
-        actions: vec![ActionSpec::HacTransfer {
-            to: account.readable().to_owned(),
-            amount: "1:244".to_owned(),
-        }],
+        actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
     let review = inspect_report(&built.body, None, &profile).unwrap();
@@ -293,4 +308,213 @@ fn codec_profile_is_pinned() {
     for kind in [40u16, 41, 44, 46] {
         assert!(profile.registered_kinds.contains(&kind));
     }
+}
+
+#[test]
+fn type2_multi_signer_attaches_incrementally() {
+    let main = sys::Account::create_by("123456").unwrap();
+    let second = sys::Account::create_by("second-key-9").unwrap();
+    let profile = profile();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: main.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![
+            ActionSpec::ReqSignList {
+                signers: vec![second.readable().to_owned()],
+            },
+            hac_transfer(main.readable(), "1:244"),
+        ],
+    })
+    .unwrap();
+
+    // Attach the non-main required signer first: partial signature sets must
+    // be accepted and reported as incomplete.
+    let request =
+        prepare_signature(&built.body, second.readable(), None, None, None, None, &profile)
+            .unwrap();
+    let proof = vault_sign(&second, &request.digest, &request.id, &request.request_binding);
+    let first = attach_signature(&built.body, &proof, None, None, &profile).unwrap();
+    assert!(!first.complete);
+    assert!(first.missing_signers.iter().any(|addr| addr == main.readable()));
+
+    // Then the main signer: the set becomes complete and fully verifiable.
+    let request = prepare_signature(&first.body, main.readable(), None, None, None, None, &profile)
+        .unwrap();
+    let proof = vault_sign(&main, &request.digest, &request.id, &request.request_binding);
+    let attached = attach_signature(&first.body, &proof, None, None, &profile).unwrap();
+    assert!(attached.complete);
+    assert!(attached.missing_signers.is_empty());
+
+    let verified = verify_signatures(&attached.body).unwrap();
+    assert!(verified.ok, "{:?}", verified.errors);
+}
+
+#[test]
+fn type3_multi_signer_attaches_incrementally() {
+    let main = sys::Account::create_by("123456").unwrap();
+    let second = sys::Account::create_by("second-key-9").unwrap();
+    let profile = profile();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 3,
+        main: main.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: Some(10),
+        actions: vec![
+            ActionSpec::ReqSignList {
+                signers: vec![second.readable().to_owned()],
+            },
+            hac_transfer(main.readable(), "1:244"),
+        ],
+    })
+    .unwrap();
+
+    // Type-3 requires the exact deterministic signer set at execute time, but
+    // attach must still build the set up incrementally; completeness is
+    // reported, not enforced, per attach.
+    let request =
+        prepare_signature(&built.body, second.readable(), None, None, None, None, &profile)
+            .unwrap();
+    let proof = vault_sign(&second, &request.digest, &request.id, &request.request_binding);
+    let first = attach_signature(&built.body, &proof, None, None, &profile).unwrap();
+    assert!(!first.complete);
+
+    let request = prepare_signature(&first.body, main.readable(), None, None, None, None, &profile)
+        .unwrap();
+    let proof = vault_sign(&main, &request.digest, &request.id, &request.request_binding);
+    let attached = attach_signature(&first.body, &proof, None, None, &profile).unwrap();
+    assert!(attached.complete);
+
+    // The complete Type-3 set must still satisfy the exact-match rule.
+    let verified = verify_signatures(&attached.body).unwrap();
+    assert!(verified.ok, "{:?}", verified.errors);
+}
+
+#[test]
+fn tx_encode_round_trips_and_rejects_tampered_input() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let profile = profile();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: account.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![hac_transfer(account.readable(), "12:244")],
+    })
+    .unwrap();
+
+    // Untampered round trip reproduces the exact body and hash.
+    let decoded = sdk::inspect::decode_transaction_json(&built.body).unwrap();
+    let rebuilt = sdk::inspect::encode_transaction_json(&decoded, None, &profile).unwrap();
+    assert_eq!(rebuilt.body, built.body);
+    assert_eq!(rebuilt.unsigned_body_hash, built.unsigned_body_hash);
+
+    // Tampering with an action's json must fail instead of silently emitting
+    // a different transaction than the one the declared hash refers to.
+    let mut tampered = decoded.clone();
+    tampered.actions[0].json = tampered.actions[0].json.replace("12:244", "12:000");
+    let error = sdk::inspect::encode_transaction_json(&tampered, None, &profile).unwrap_err();
+    assert_eq!(error.code, "transaction_json_mismatch");
+
+    // Supplying the matching review passes and the review is bound to the
+    // rebuilt body; a tampered review fails the binding recomputation.
+    let review = inspect_report(&built.body, None, &profile).unwrap();
+    let rebuilt = sdk::inspect::encode_transaction_json(&decoded, Some(&review), &profile).unwrap();
+    assert_eq!(rebuilt.body, built.body);
+    let mut tampered_review = review.clone();
+    tampered_review.fee = "999:244".to_owned();
+    let error =
+        sdk::inspect::encode_transaction_json(&decoded, Some(&tampered_review), &profile).unwrap_err();
+    assert_eq!(error.code, "review_binding_mismatch");
+}
+
+#[test]
+fn prepare_and_attach_reject_tampered_review() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let profile = profile();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: account.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![hac_transfer(account.readable(), "1:244")],
+    })
+    .unwrap();
+    let review = inspect_report(&built.body, Some(account.readable()), &profile).unwrap();
+
+    // Editing a displayed field after inspect must break the binding chain at
+    // prepare (the request is never minted for a tampered approval).
+    let mut tampered = review.clone();
+    tampered.fee = "999:244".to_owned();
+    let error = prepare_signature(
+        &built.body,
+        account.readable(),
+        Some(&tampered),
+        None,
+        None,
+        None,
+        &profile,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "review_binding_mismatch");
+
+    // A proof prepared against the genuine review must not attach under a
+    // tampered review either.
+    let request = prepare_signature(
+        &built.body,
+        account.readable(),
+        Some(&review),
+        None,
+        None,
+        None,
+        &profile,
+    )
+    .unwrap();
+    let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
+    let error =
+        attach_signature(&built.body, &proof, Some(&tampered), None, &profile).unwrap_err();
+    assert_eq!(error.code, "review_binding_mismatch");
+}
+
+#[test]
+fn attach_enforces_request_binding_and_expiry() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let profile = profile();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: account.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![hac_transfer(account.readable(), "1:244")],
+    })
+    .unwrap();
+
+    // A proof for request A attached under request B (different origin →
+    // different binding/id) is rejected.
+    let request_a = prepare_signature(&built.body, account.readable(), None, None, None, None, &profile)
+        .unwrap();
+    let request_b = prepare_signature(&built.body, account.readable(), None, None, Some("other"), None, &profile)
+        .unwrap();
+    assert_ne!(request_a.id, request_b.id);
+    let proof = vault_sign(&account, &request_a.digest, &request_a.id, &request_a.request_binding);
+    let error = attach_signature(&built.body, &proof, None, Some(&request_b), &profile).unwrap_err();
+    assert_eq!(error.code, "review_binding_mismatch");
+
+    // An expired request is rejected before any signature work.
+    let expired = prepare_signature(&built.body, account.readable(), None, None, None, Some(1), &profile)
+        .unwrap();
+    let proof = vault_sign(&account, &expired.digest, &expired.id, &expired.request_binding);
+    let error = attach_signature(&built.body, &proof, None, Some(&expired), &profile).unwrap_err();
+    assert_eq!(error.code, "request_expired");
 }
