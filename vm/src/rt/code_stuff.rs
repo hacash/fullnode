@@ -8,6 +8,8 @@ pub struct CodeStuff {
     pub data: BytesW2,
 }
 
+field::wire_struct_schema!(CodeStuff { conf: Uint1, data: BytesW2 });
+
 impl CodeStuff {
     pub fn parse_conf(&self) -> VmrtRes<CodeConf> {
         CodeConf::parse(self.conf.uint())

@@ -201,9 +201,23 @@ macro_rules! impl_action {
             }
 
             fn execute(&$action_self, $action_ctx: &mut dyn $crate::Context) -> sys::Ret<$crate::ActOut> {
-                let gas = $action_self.size() as u32;
-                let result: sys::Ret<Vec<u8>> = (|| $execute)();
-                Ok((gas, result?))
+                // The `execute` feature is the shared "execution enabled" flag
+                // across all crates that expand this macro. When it is off
+                // (codec-only SDK/wasm builds) the real body and the execution
+                // code it references are compiled out entirely, so the stub
+                // entry keeps the wire codecs without the state-machine deps.
+                #[cfg(not(feature = "execute"))]
+                {
+                    let _ = ($action_self, $action_ctx);
+                    let result: sys::Ret<Vec<u8>> = $crate::execution_disabled();
+                    Ok(($action_self.size() as u32, result?))
+                }
+                #[cfg(feature = "execute")]
+                {
+                    let gas = $action_self.size() as u32;
+                    let result: sys::Ret<Vec<u8>> = (|| $execute)();
+                    Ok((gas, result?))
+                }
             }
 
             fn as_any(&self) -> &dyn std::any::Any {
@@ -256,9 +270,18 @@ macro_rules! impl_action {
             }
 
             fn execute(&$action_self, $action_ctx: &mut dyn $crate::Context) -> sys::Ret<$crate::ActOut> {
-                let gas = $action_self.size() as u32;
-                let result: sys::Ret<Vec<u8>> = (|| $execute)();
-                Ok((gas, result?))
+                #[cfg(not(feature = "execute"))]
+                {
+                    let _ = ($action_self, $action_ctx);
+                    let result: sys::Ret<Vec<u8>> = $crate::execution_disabled();
+                    Ok(($action_self.size() as u32, result?))
+                }
+                #[cfg(feature = "execute")]
+                {
+                    let gas = $action_self.size() as u32;
+                    let result: sys::Ret<Vec<u8>> = (|| $execute)();
+                    Ok((gas, result?))
+                }
             }
 
             fn as_any(&self) -> &dyn std::any::Any {
@@ -274,6 +297,14 @@ macro_rules! impl_action {
     (@as_transfer_like $action_self:ident, none) => {
         None
     };
+}
+
+/// Stub `Action::execute` entry used by `impl_action!` when the `execute`
+/// feature is off (codec-only SDK/wasm builds): always fails, so execution
+/// implementations stay out of the wasm dependency closure. Only referenced
+/// from the cfg'd-out stub branch, so full builds never reach it.
+pub fn execution_disabled() -> sys::Ret<Vec<u8>> {
+    sys::errf!("action execution is disabled in this (codec-only) build")
 }
 
 /// Registry-compatible JSON creator for regular derived actions.
@@ -308,6 +339,9 @@ macro_rules! register_regular_actions {
                     &[<$action>::KIND],
                     $crate::decode_regular_action_json::<$action>,
                 )?;
+                $registry.register_action_schema(
+                    <$action as $crate::ActionSchemaProvider>::ACTION_SCHEMA,
+                )?;
             )+
         )+
         Ok::<(), sys::Error>(())
@@ -323,6 +357,11 @@ macro_rules! register_custom_actions {
         let kinds: &[u16] = &[$(<$action>::KIND),+];
         $registry.register_action(kinds, $binary)?;
         $registry.register_action_json(kinds, $json)?;
+        $(
+            $registry.register_action_schema(
+                <$action as $crate::ActionSchemaProvider>::ACTION_SCHEMA,
+            )?;
+        )+
         Ok::<(), sys::Error>(())
     }};
 }

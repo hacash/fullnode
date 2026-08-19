@@ -255,7 +255,7 @@ fn strict_inspect_guard_checks() {
 }
 
 #[test]
-fn type1_is_reportable_but_not_signable() {
+fn type1_is_signable_through_the_full_approval_chain() {
     use base::TransactionBuild;
     use field::Encode;
     let account = sys::Account::create_by("123456").unwrap();
@@ -272,13 +272,44 @@ fn type1_is_reportable_but_not_signable() {
     .unwrap();
     let body = hex::encode(tx.encode());
 
+    // Type 1 is a registered user tx type, so the SDK exposes signing; the
+    // chain decides whether it accepts the signed body (flag-gated types).
     let review = inspect_report(&body, None, &profile).unwrap();
     assert_eq!(review.tx_type, 1);
-    assert_eq!(review.signability, "unsupported_tx_type");
+    assert_eq!(review.signability, "signable");
 
-    let error =
-        prepare_signature(&body, account.readable(), None, None, None, None, &profile).unwrap_err();
-    assert_eq!(error.code, "unsupported_tx_type");
+    let request =
+        prepare_signature(&body, account.readable(), Some(&review), None, None, None, &profile)
+            .unwrap();
+    let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
+    let attached = attach_signature(&body, &proof, &review, &request, &profile).unwrap();
+    assert!(attached.complete);
+    let verified = verify_signatures(&attached.body).unwrap();
+    assert!(verified.ok, "type-1 body must verify: {:?}", verified.errors);
+}
+
+#[test]
+fn type1_builds_and_decodes_round_trip() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let profile = profile();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 1,
+        main: account.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![hac_transfer(account.readable(), "1:244")],
+    })
+    .unwrap();
+    assert_eq!(built.tx_type, 1);
+    let review = inspect_report(&built.body, None, &profile).unwrap();
+    assert_eq!(review.tx_type, 1);
+    assert_eq!(review.signability, "signable");
+    // decode → encode reproduces the type-1 body exactly.
+    let decoded = sdk::inspect::decode_transaction_json(&built.body).unwrap();
+    let rebuilt = sdk::inspect::encode_transaction_json(&decoded, None, &profile).unwrap();
+    assert_eq!(rebuilt.body, built.body);
 }
 
 #[test]
@@ -734,10 +765,13 @@ fn type2_inscription_push_signs_and_verifies() {
 }
 
 #[test]
-fn inscription_push_rejects_duplicate_diamonds() {
+fn inscription_push_duplicates_build_and_are_chain_execute_rules() {
     let account = sys::Account::create_by("123456").unwrap();
     let main = account.readable();
-    let err = build_transaction(&TransactionSpec {
+    // Duplicate diamond names decode fine (the wire carries them); ownership
+    // and duplication are execute-time chain rules, so the SDK builds and
+    // reports the action instead of refusing to construct it.
+    let built = build_transaction(&TransactionSpec {
         schema: None,
         tx_type: 2,
         main: main.to_owned(),
@@ -751,8 +785,11 @@ fn inscription_push_rejects_duplicate_diamonds() {
             engraved_content: "dup".to_owned(),
         }],
     })
-    .unwrap_err();
-    assert!(!err.to_string().is_empty());
+    .expect("duplicate diamonds are wire-valid; rejection is a chain execute rule");
+    let review = inspect_report(&built.body, None, &profile()).unwrap();
+    assert_eq!(review.actions[0].kind, 32);
+    assert_eq!(review.actions[0].name.as_deref(), Some("hacd_insc_push"));
+    assert!(review.protocol_valid);
 }
 
 #[test]
@@ -795,4 +832,37 @@ fn inscription_edit_move_drop_build_and_decode() {
         .filter_map(|action| action.name.as_deref())
         .collect();
     assert_eq!(names, ["hacd_insc_edit", "hacd_insc_move", "hacd_insc_drop"]);
+}
+
+#[test]
+fn oversized_body_decodes_and_reports_limits_facts() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let profile = profile();
+    // A 20KB blob action makes the body exceed the consensus size cap. The
+    // SDK decodes it anyway and reports the limit as a review fact instead
+    // of refusing to inspect (the upper layer decides).
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: account.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![ActionSpec::TxBlob {
+            data: "ab".repeat(20 * 1024),
+        }],
+    })
+    .unwrap();
+    assert!(built.body.len() / 2 > base::MAX_TX_SIZE);
+
+    let review = inspect_report(&built.body, None, &profile).unwrap();
+    assert!(
+        review
+            .limits_violations
+            .iter()
+            .any(|note| note.contains("consensus maximum")),
+        "oversized body must be reported as a limits fact, got {:?}",
+        review.limits_violations
+    );
+    assert_eq!(review.actions.len(), 1);
 }

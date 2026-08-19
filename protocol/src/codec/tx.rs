@@ -203,59 +203,102 @@ pub struct TransactionType3 {
 
 pub type StdTransaction = TransactionType2;
 
+/// Concrete standard transaction construction (types 1/2/3) from a
+/// `TxCreateRequest`. Shared by `create_standard_transaction` and
+/// `encode_standard_tx`, so the concrete type list exists once.
+macro_rules! standard_tx_from_request {
+    ($request:expr, $ty:ident) => {
+        $ty {
+            ty: Uint1::from($request.ty),
+            timestamp: Timestamp::from($request.timestamp),
+            addrlist: $request.addrlist,
+            fee: $request.fee,
+            actions: Vec::new(),
+            signs: SignW2::default(),
+            gas_max: Uint1::from($request.gas_max),
+            ano_mark: Fixed1::default(),
+        }
+    };
+}
+
+/// Standard-protocol gas rule: only type 3 carries a gas budget.
+fn check_standard_gas(ty: u8, gas_max: u8) -> Rerr {
+    if ty != TransactionType3::TYPE && gas_max != 0 {
+        return errf!("transaction type {} does not support gas", ty);
+    }
+    Ok(())
+}
+
 /// Create an empty standard user transaction selected by its wire type.
 ///
 /// This is the standard-protocol implementation of
 /// [`base::TransactionCreator`]. It owns the concrete transaction types while
 /// consumers depend only on base's request and creator interface.
 pub fn create_standard_transaction(request: TxCreateRequest) -> Ret<base::TxRef> {
-    let TxCreateRequest {
-        ty,
-        timestamp,
-        addrlist,
-        fee,
-        gas_max,
-    } = request;
-    if ty != TransactionType3::TYPE && gas_max != 0 {
-        return errf!("transaction type {} does not support gas", ty);
+    let ty = request.ty;
+    check_standard_gas(ty, request.gas_max)?;
+    match ty {
+        TransactionType1::TYPE => Ok(Arc::new(standard_tx_from_request!(
+            request, TransactionType1
+        ))),
+        TransactionType2::TYPE => Ok(Arc::new(standard_tx_from_request!(
+            request, TransactionType2
+        ))),
+        TransactionType3::TYPE => Ok(Arc::new(standard_tx_from_request!(
+            request, TransactionType3
+        ))),
+        _ => errf!("unsupported standard user transaction type {}", ty),
     }
-    if ty == TransactionType1::TYPE {
-        return Ok(Arc::new(TransactionType1 {
-            ty: Uint1::from(ty),
-            timestamp: Timestamp::from(timestamp),
-            addrlist,
-            fee,
-            actions: Vec::new(),
-            signs: SignW2::default(),
-            gas_max: Uint1::from(gas_max),
-            ano_mark: Fixed1::default(),
-        }));
+}
+
+/// Push actions and signatures into a standard transaction (both go through
+/// the protocol's own `push_action`/`push_sign` validation).
+fn fill_standard_tx<T: TransactionBuild>(
+    tx: &mut T,
+    actions: &[ActionRef],
+    signs: &[Sign],
+) -> Rerr {
+    for action in actions {
+        tx.push_action(action.clone())?;
     }
-    if ty == TransactionType2::TYPE {
-        return Ok(Arc::new(TransactionType2 {
-            ty: Uint1::from(ty),
-            timestamp: Timestamp::from(timestamp),
-            addrlist,
-            fee,
-            actions: Vec::new(),
-            signs: SignW2::default(),
-            gas_max: Uint1::from(gas_max),
-            ano_mark: Fixed1::default(),
-        }));
+    for sign in signs {
+        tx.push_sign(sign.clone())?;
     }
-    if ty == TransactionType3::TYPE {
-        return Ok(Arc::new(TransactionType3 {
-            ty: Uint1::from(ty),
-            timestamp: Timestamp::from(timestamp),
-            addrlist,
-            fee,
-            actions: Vec::new(),
-            signs: SignW2::default(),
-            gas_max: Uint1::from(gas_max),
-            ano_mark: Fixed1::default(),
-        }));
-    }
-    errf!("unsupported standard user transaction type {}", ty)
+    Ok(())
+}
+
+/// Encode a standard transaction body (types 1/2/3) with the given actions
+/// and signatures. Owns the type list and the gas rule
+/// (`check_standard_gas`/`create_standard_transaction`): callers never
+/// enumerate transaction types or re-declare which type carries a gas
+/// budget. A type without a standard creator fails here with the protocol's
+/// error.
+pub fn encode_standard_tx(
+    request: TxCreateRequest,
+    actions: &[ActionRef],
+    signs: &[Sign],
+) -> Ret<Vec<u8>> {
+    let ty = request.ty;
+    check_standard_gas(ty, request.gas_max)?;
+    let body = match ty {
+        TransactionType1::TYPE => {
+            let mut tx = standard_tx_from_request!(request, TransactionType1);
+            fill_standard_tx(&mut tx, actions, signs)?;
+            tx.encode()
+        }
+        TransactionType2::TYPE => {
+            let mut tx = standard_tx_from_request!(request, TransactionType2);
+            fill_standard_tx(&mut tx, actions, signs)?;
+            tx.encode()
+        }
+        TransactionType3::TYPE => {
+            let mut tx = standard_tx_from_request!(request, TransactionType3);
+            fill_standard_tx(&mut tx, actions, signs)?;
+            tx.encode()
+        }
+        _ => return errf!("unsupported standard user transaction type {}", ty),
+    };
+    Ok(body)
 }
 
 fn action_list_size(actions: &[ActionRef]) -> usize {
@@ -751,8 +794,69 @@ pub fn signature_report(tx: &dyn Transaction) -> Ret<TxSignatureReport> {
     })
 }
 
-fn insert_sign(signs: &mut SignW2, signobj: Sign) -> Ret<Address> {
-    if signs.length() >= u16::MAX as usize - 1 {
+/// Re-encode the transaction with its signature set cleared. Type-2/3 wire
+/// order is preserved exactly; used for the stable `unsigned_body_hash`. The
+/// concrete type list lives here (the crate that owns the types), not in
+/// callers.
+pub fn encode_without_signs(tx: &dyn Transaction) -> Ret<Vec<u8>> {
+    if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
+        let mut copy = t.clone();
+        copy.signs = SignW2::default();
+        return Ok(copy.encode());
+    }
+    if let Some(t) = tx.as_any().downcast_ref::<TransactionType2>() {
+        let mut copy = t.clone();
+        copy.signs = SignW2::default();
+        return Ok(copy.encode());
+    }
+    if let Some(t) = tx.as_any().downcast_ref::<TransactionType3>() {
+        let mut copy = t.clone();
+        copy.signs = SignW2::default();
+        return Ok(copy.encode());
+    }
+    errf!("transaction type {} has no unsigned-body form", tx.ty())
+}
+
+/// Clone the transaction, attach one signature through the protocol's own
+/// `push_sign` (which verifies it) and return the signed transaction. The
+/// concrete type list lives here, not in callers.
+pub fn attach_sign(tx: &dyn Transaction, sign: Sign) -> Ret<base::TxRef> {
+    use base::TransactionBuild;
+    if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
+        let mut copy = t.clone();
+        copy.push_sign(sign)?;
+        return Ok(Arc::new(copy));
+    }
+    if let Some(t) = tx.as_any().downcast_ref::<TransactionType2>() {
+        let mut copy = t.clone();
+        copy.push_sign(sign)?;
+        return Ok(Arc::new(copy));
+    }
+    if let Some(t) = tx.as_any().downcast_ref::<TransactionType3>() {
+        let mut copy = t.clone();
+        copy.push_sign(sign)?;
+        return Ok(Arc::new(copy));
+    }
+    errf!("transaction type {} does not support attach_sign", tx.ty())
+}
+
+/// Protocol signer-cap rule: only type 3 caps its *required* signer set (D)
+/// at `max` (execute-time rule); other types have no protocol cap beyond the
+/// wire's u16 count. The cap is evaluated on the required signers, not the
+/// attached count, so a type-3 body with 2 of 5 required signers already
+/// violates it.
+pub fn check_signers_cap(tx: &dyn Transaction, max: usize) -> Rerr {
+    if tx.ty() == TransactionType3::TYPE {
+        let t3 = tx
+            .as_any()
+            .downcast_ref::<TransactionType3>()
+            .ok_or_else(|| sys::Error::fault("Type3 signer cap cast failed"))?;
+        t3.validate_signer_limit(max)?;
+    }
+    Ok(())
+}
+
+fn insert_sign(signs: &mut SignW2, signobj: Sign) -> Ret<Address> {    if signs.length() >= u16::MAX as usize - 1 {
         return errf!("too many sign objects");
     }
     let curaddr = sign_address(&signobj);

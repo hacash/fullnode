@@ -1,13 +1,21 @@
-//! `mint-core::setup::register` —— 铭刻动作（32-36）注册入口。
+//! `mint-core::setup::register` — registration entry for inscription (32-36), channel (2/3),
+//! asset (16) and diamond mint (4).
 //!
-//! 供全节点（app/mint）与 WASM SDK 共用：SDK 的 `RegistryWriter` 忽略
-//! VM host 定义（`register_vm_host_def` 为 no-op），因此同一入口两端可用。
+//! Shared by the full node (app/mint) and the WASM SDK: the SDK's `RegistryWriter` ignores
+//! VM host definitions (`register_vm_host_def` is a no-op), so one entry works for both sides.
+//! It matches the fullnode runtime (`app::standard_registry`) action set exactly, so
+//! `codec-schema-gen`'s registration capture is naturally in sync with the runtime.
 
 use base::{
     RegistryWriter, VmHostActionDef, VmHostAllowedPolicy, VmHostCallKind, VmValueType,
 };
 use sys::{Rerr, errf};
 
+use crate::action::asset::{AssetCreate, create_asset_create};
+use crate::action::channel::{ChannelClose, ChannelOpen, create_channel_close, create_channel_open};
+use crate::action::diamond::{
+    DiamondMint, create_diamond_mint, decode_diamond_mint_json,
+};
 use crate::inscription::{
     DiaInscClean, DiaInscDrop, DiaInscEdit, DiaInscMove, DiaInscPush, create_dia_insc_action,
     decode_dia_insc_json,
@@ -43,6 +51,17 @@ pub fn register(reg: &mut dyn RegistryWriter) -> Rerr {
         reg,
         create_dia_insc_action,
         decode_dia_insc_json => [DiaInscPush, DiaInscClean, DiaInscEdit, DiaInscMove, DiaInscDrop],
+    )?;
+    base::register_regular_actions!(
+        reg,
+        create_channel_open => [ChannelOpen],
+        create_channel_close => [ChannelClose],
+        create_asset_create => [AssetCreate],
+    )?;
+    base::register_custom_actions!(
+        reg,
+        create_diamond_mint,
+        decode_diamond_mint_json => [DiamondMint],
     )?;
     register_action_def(reg, DiaInscEdit::KIND, DiaInscEdit::NAME, 5)?;
     Ok(())

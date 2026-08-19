@@ -6,7 +6,18 @@
 #![cfg_attr(all(target_arch = "wasm32", not(test)), no_main)]
 
 mod codec;
+mod json;
 mod names;
+mod spec_codec;
+
+/// Declarative friendly↔wire action mapping (`ACTION_SPECS`): single source
+/// for the generated Rust decoder, the generated JS adapter (`sdk_codegen`)
+/// and the golden-vector/validation tests.
+pub mod actionspec;
+
+/// Generators for the JS artifacts (`sdk_codegen` bin): `actionspec.mjs/.d.ts`
+/// and `op_tables.mjs`, all derived from Rust single sources.
+pub mod codegen;
 
 pub mod account;
 pub mod amount;
@@ -34,6 +45,7 @@ pub use inspect::{inspect, inspect_report, Review};
 pub use policy::{evaluate_policy, Policy, PolicyDecision};
 pub use profile::{capabilities, CodecProfile, SDK_VERSION};
 pub use schema::ResultEnvelope;
+pub use spec_codec::decode_transaction_spec_binary;
 
 /// Current UNIX time in seconds. Native builds use `sys::curtimes`; on wasm32
 /// `SystemTime::now()` is not implemented, so the host clock is reached
@@ -58,18 +70,16 @@ pub(crate) fn now_secs() -> u64 {
     }
 }
 
-/// Raw WASM transport: one JSON request in, one envelope JSON out.
-/// `{ operation, payload }` → `{ ok: true, value } | { ok: false, error }`.
-/// Every input object rejects unknown fields (`unknown_field`); the
-/// `operation` names are the `OPERATIONS` registry (see `profile`).
+/// Binary WASM transport (§5): `sdk_invoke_binary(operation_id, payload)`
+/// → binary envelope (see `service`). `operation_id` is a `service::OP_*`
+/// constant; the payload/result layout is in each operation's `route` branch.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
-pub fn sdk_invoke(request_json: &str) -> String {
-    service::invoke(request_json)
+pub fn sdk_invoke_binary(operation_id: u16, payload: &[u8]) -> Vec<u8> {
+    service::invoke_binary(operation_id, payload)
 }
 
-/// Raw WASM transport version (doc 14 §9). Bumping this means the JSON
-/// transport semantics changed, not that operations were added.
+/// Binary transport version (§5): bumped when the envelope/payload semantics change.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn sdk_transport_version() -> u32 {

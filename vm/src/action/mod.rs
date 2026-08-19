@@ -23,10 +23,9 @@ pub(crate) mod maincall;
 pub(crate) mod p2sh;
 pub(crate) mod p2sh_tool;
 
-pub use contract::{
-    ContractDeploy, ContractStoreAnalysis, ContractUpdate, ContractUpdateAnalysis,
-    analyze_contract_store, analyze_contract_update, contract_protocol_cost_min,
-};
+pub use contract::{ContractDeploy, ContractStoreAnalysis, ContractUpdate, ContractUpdateAnalysis};
+#[cfg(feature = "full")]
+pub use contract::{analyze_contract_store, analyze_contract_update, contract_protocol_cost_min};
 pub use maincall::ContractMainCall;
 pub use p2sh::{P2SHScriptProve, P2shEntryPayload, ScriptmhCalc, UnlockScript};
 pub use p2sh_tool::{P2shLeaf, P2shLeafSpec, P2shMerkleTree, P2shTool, P2shTreeCalc};
@@ -37,17 +36,6 @@ use sys::Ret;
 use contract::{create_contract_deploy, create_contract_update};
 use maincall::create_contract_main_call;
 use p2sh::create_p2sh_script_prove;
-
-/// codec-only 下所有 VM action 的 `Action::execute` 入口桩：直接返回
-/// `CodecOnlyUnsupported`，不进入完整执行函数，保证执行实现不进入依赖闭包。
-#[cfg(all(feature = "codec-only", not(feature = "full")))]
-pub(crate) fn execution_disabled() -> Ret<Vec<u8>> {
-    Err(crate::rt::ItrErr(
-        crate::rt::ItrErrCode::CodecOnlyUnsupported,
-        "vm action execution is not included in the sdk (codec-only) build".to_owned(),
-    )
-    .into())
-}
 
 /// Register all four VM action codecs. Mirrors `mint::setup::register`'s
 /// `register_action` pattern. Idempotent per-kind (Registry rejects duplicate kinds).

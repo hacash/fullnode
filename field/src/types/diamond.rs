@@ -18,6 +18,11 @@ pub type DiamondLifeGene = Fixed10;
 pub type DiamondNameListMax200 = ListW1<DiamondName>;
 pub type DiamondNameListMax60000 = ListW2<DiamondName>;
 
+/// Semantic cap of `DiamondNameListMax200` (its wire form is a u8-counted
+/// list, so this cap is a semantic rule, not a wire one). Single source: the
+/// checks in this module and the SDK's codec profile both read it.
+pub const DIAMOND_LIST_MAX: usize = 200;
+
 impl DiamondNumberAuto {
     pub fn uint(&self) -> u64 {
         self.0.uint()
@@ -141,8 +146,11 @@ impl DiamondNameListMax200 {
         if self.0.is_empty() {
             return errf!("diamonds quantity cannot be zero");
         }
-        if self.0.len() > 200 {
-            return errf!("diamonds quantity cannot exceed 200");
+        if self.0.len() > DIAMOND_LIST_MAX {
+            return errf!(
+                "diamonds quantity cannot exceed {}",
+                DIAMOND_LIST_MAX
+            );
         }
         let mut seen = std::collections::HashSet::with_capacity(self.0.len());
         for name in &self.0 {
@@ -174,7 +182,7 @@ impl DiamondNameListMax200 {
     }
 
     pub fn from_readable(stuff: &str) -> Ret<Self> {
-        let list = Self::from(parse_diamond_name_list(stuff, 200)?)?;
+        let list = Self::from(parse_diamond_name_list(stuff, DIAMOND_LIST_MAX)?)?;
         list.check()?;
         Ok(list)
     }

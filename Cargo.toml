@@ -10,6 +10,8 @@ members = [
     "mint",
     "mint-core",
     "chain",
+    "codec-schema-gen",
+    "chain-codec",
     "node",
     "server",
     "api",
@@ -29,6 +31,8 @@ default-members = [
     "mint",
     "mint-core",
     "chain",
+    "codec-schema-gen",
+    "chain-codec",
     "node",
     "server",
     "api",
@@ -44,7 +48,7 @@ edition = "2024"
 
 [workspace.dependencies]
 sys        = { path = "sys" }
-field      = { path = "field" }
+field      = { path = "field", default-features = false }
 base       = { path = "base" }
 action-codec-derive = { path = "action-codec-derive" }
 protocol   = { path = "protocol" }
@@ -52,6 +56,7 @@ vm         = { path = "vm" }
 mint       = { path = "mint" }
 mint-core = { path = "mint-core", default-features = false }
 chain      = { path = "chain" }
+chain-codec = { path = "chain-codec" }
 node       = { path = "node" }
 server     = { path = "server" }
 api        = { path = "api" }

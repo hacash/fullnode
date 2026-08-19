@@ -3,20 +3,17 @@
 //! only; password→key derivation lives in the wallet vault.
 
 use field::Address;
-use serde::{Deserialize, Serialize};
 
 use crate::error::{SdkError, SdkErrorCode};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VerifyAddressResult {
     pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address: Option<String>,
+        pub error: Option<String>,
+        pub address: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AddressFromPublicKeyResult {
     pub address: String,
     pub version: u8,

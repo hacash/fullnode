@@ -1,17 +1,29 @@
+//! Diamond mint action (kind 4, moved from mint; execution body gated by the `execute` feature;
+//! the x16rs/protocol dependencies compile only when the execution body is enabled).
+
 use std::sync::Arc;
 
-use base::{
-    ActScope, ActionRef, BLACKHOLE_ADDR, Context, CoreState, DIAMOND_STATUS_NORMAL,
-    diamond_owned_push_one, hacd_add, total_add_diamond_number, total_add_u12,
-};
+use base::{ActScope, ActionRef};
 use field::{
-    Address, Amount, BlockHeight, DiamondName, DiamondNumber, DiamondSmelt, DiamondSto,
-    DiamondVisualGene, Encode, Fixed8, FromJSON, Hash, Inscripts, Reader, Uint2, json_decode_value,
-    json_split_object,
+    Address, DiamondName, DiamondNumber, Encode, Fixed8, FromJSON, Hash, Reader, Uint2,
+    json_decode_value, json_split_object,
 };
-use sys::{Rerr, Ret, errf};
+use sys::Ret;
 
+#[cfg(feature = "execute")]
+use base::{BLACKHOLE_ADDR, Context, CoreState, DIAMOND_STATUS_NORMAL, diamond_owned_push_one, hacd_add, total_add_diamond_number, total_add_u12};
+#[cfg(feature = "execute")]
+use field::{Amount, BlockHeight, DiamondSmelt, DiamondSto, DiamondVisualGene, Inscripts};
+#[cfg(feature = "execute")]
+use sys::{Rerr, errf};
+
+#[cfg(feature = "execute")]
 use crate::state::{MintState, with_mint_total};
+
+#[cfg(feature = "execute")]
+use protocol::{execution_params, tx_std::TransactionType2};
+#[cfg(feature = "execute")]
+use x16rs;
 
 base::impl_fields_to_json!(DiamondMintData {
     diamond,
@@ -29,8 +41,10 @@ pub const DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BLOCK_HASH: u32 = 40_000;
 pub const DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BIDDING_FEE: u32 = 41_000;
 pub const DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST: u32 = 107_000;
 
+#[cfg(feature = "execute")]
 const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
 
+#[cfg(feature = "execute")]
 pub fn calculate_diamond_visual_gene(name: &DiamondName, life_gene: &Hash) -> DiamondVisualGene {
     let mut genehexstr = [b'0'; 20];
     let searchgx = |x| {
@@ -63,6 +77,33 @@ pub struct DiamondMintData {
     pub nonce: Fixed8,
     pub address: Address,
     pub custom_message: Hash,
+}
+
+// `DiamondMintData.custom_message` exists on the wire only above the consensus
+// threshold (see `has_custom_message`/`Encode`); the schema declares it
+// optional so the transport and the friendly surface stay faithful to the
+// native conditionality (the `wire_struct_schema!` macro has no marker
+// syntax, so the provider is written out).
+impl field::StructSchemaProvider for DiamondMintData {
+    const STRUCT_SCHEMA: field::StructSchema = field::StructSchema {
+        name: "DiamondMintData",
+        fields: &[
+            field::FieldSchema::new("diamond", field::FieldWire::DiamondName),
+            field::FieldSchema::new("number", field::FieldWire::DiamondNumber),
+            field::FieldSchema::new("prev_hash", field::FieldWire::Fixed(32)),
+            field::FieldSchema::new("nonce", field::FieldWire::Fixed(8)),
+            field::FieldSchema::new("address", field::FieldWire::Address),
+            field::FieldSchema::optional("custom_message", field::FieldWire::Fixed(32)),
+        ],
+    };
+}
+
+impl field::FieldWireShape for DiamondMintData {
+    const WIRE: field::FieldWire = field::FieldWire::Struct("DiamondMintData");
+}
+
+impl field::WireElementName for DiamondMintData {
+    const NAME: &'static str = "DiamondMintData";
 }
 
 impl Default for DiamondMintData {
@@ -154,8 +195,8 @@ base::impl_action! {
         as_transfer_like: none,
         description: |this: &DiamondMint| format!("Mint diamond <{}> number {}", this.d.diamond.to_readable(), this.d.number.uint()),
         execute: (self, ctx) {
-        diamond_mint(self, ctx)?;
-        Ok(vec![])
+            diamond_mint(self, ctx)?;
+            Ok(vec![])
         }
     }
 }
@@ -282,10 +323,11 @@ pub fn decode_diamond_mint_json(
     Ok(Arc::new(parse_diamond_mint_json(json)?))
 }
 
+#[cfg(feature = "execute")]
 fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Rerr {
     let act = &this.d;
     let env = ctx.env().clone();
-    let diamond_form_flag = protocol::execution_params(ctx.services().as_ref())?.diamond_form_flag;
+    let diamond_form_flag = execution_params(ctx.services().as_ref())?.diamond_form_flag;
     if !env.chain.fast_sync {
         if !act.address.is_privkey() {
             return errf!("diamond mint address must be PRIVAKEY type");
@@ -409,13 +451,15 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Rerr {
     Ok(())
 }
 
+#[cfg(feature = "execute")]
 fn check_diamond_mint_tx_type(ctx: &dyn Context) -> Rerr {
-    if ctx.env().tx.ty != protocol::tx_std::TransactionType2::TYPE {
+    if ctx.env().tx.ty != TransactionType2::TYPE {
         return errf!("DiamondMint can only be executed in tx type 2");
     }
     Ok(())
 }
 
+#[cfg(feature = "execute")]
 fn diamond_mint_legacy_bid_burn(ctx: &dyn Context, tx_bid_fee: &Amount) -> Ret<Amount> {
     if !ctx.env().chain.fast_sync {
         check_diamond_mint_tx_type(ctx)?;
@@ -423,6 +467,7 @@ fn diamond_mint_legacy_bid_burn(ctx: &dyn Context, tx_bid_fee: &Amount) -> Ret<A
     tx_bid_fee.sub_mode_u128(&ctx.tx().fee_got())
 }
 
+#[cfg(feature = "execute")]
 fn check_transfer_recipient_allowed(to: &Address) -> Rerr {
     if is_privakey_unknown(to) && *to != BLACKHOLE_ADDR {
         return errf!(
@@ -433,10 +478,12 @@ fn check_transfer_recipient_allowed(to: &Address) -> Rerr {
     Ok(())
 }
 
+#[cfg(feature = "execute")]
 fn is_privakey_unknown(addr: &Address) -> bool {
     addr.version() == 0 && addr.as_ref()[..17].iter().all(|&x| x == 0)
 }
 
+#[cfg(feature = "execute")]
 fn calculate_diamond_life_gene(
     dianum: u32,
     diamhash: &[u8; 32],
@@ -455,6 +502,7 @@ fn calculate_diamond_life_gene(
     Hash::from(vgenehash)
 }
 
+#[cfg(feature = "execute")]
 fn calculate_diamond_average_bid_burn(diamond_number: u32, hacd_burn_238: u128) -> Ret<Uint2> {
     if diamond_number <= DIAMOND_ABOVE_NUMBER_OF_STATISTICS_AVERAGE_BIDDING_BURNING {
         return Ok(Uint2::from(10));

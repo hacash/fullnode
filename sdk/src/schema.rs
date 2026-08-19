@@ -33,8 +33,7 @@ pub const DOMAIN_POLICY_DECISION: &[u8] = b"hacash.sdk/policy-decision@1";
 /// Every dispatcher response is one of these two shapes; the generated JS
 /// facade may throw `SdkError` on the failure branch but never loses the raw
 /// envelope (doc 14 §4.4).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ResultEnvelope<T> {
     Success {
         ok: bool,

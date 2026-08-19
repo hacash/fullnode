@@ -28,12 +28,10 @@ use crate::tx_coinbase::{CoinbaseExtend, CoinbaseExtendDataV1, CoinbaseTx};
 /// The value is exactly one byte: `0` or `1`.
 pub const DIAMOND_FORM_STATE_KEY: &[u8] = b"_consensus.diamond_form";
 
-const BLOCK_REWARD_STEP_BLOCK: u64 = 100_000;
-const BLOCK_REWARD_DEF_LIST: [u8; 66] = [
-    1, 1, 2, 3, 5, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 3,
-    3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1,
-];
+// Block reward curve moved to mint-core (`mint_core::reward`); keeps the old path usable.
+pub use mint_core::reward::{
+    BLOCK_REWARD_DEF_LIST, BLOCK_REWARD_STEP_BLOCK, block_reward_number,
+};
 
 pub fn block_hasher(height: u64, data: &[u8]) -> [u8; 32] {
     x16rs::block_hash(height, data)
@@ -49,14 +47,6 @@ impl Drop for MinerNoticeGuard {
     fn drop(&mut self) {
         self.count.fetch_sub(1, Ordering::Relaxed);
     }
-}
-
-pub fn block_reward_number(block_height: u64) -> u8 {
-    let curstp = block_height / BLOCK_REWARD_STEP_BLOCK;
-    if curstp >= BLOCK_REWARD_DEF_LIST.len() as u64 {
-        return 1;
-    }
-    BLOCK_REWARD_DEF_LIST[curstp as usize]
 }
 
 pub fn cumulative_block_reward(block_height: u64) -> u64 {

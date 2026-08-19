@@ -1,17 +1,27 @@
+//! Asset creation action (kind 16, moved from mint; execution body gated by the `execute` feature).
+
 use std::sync::Arc;
 
-use base::{ActionRef, Context, CoreState, hac_sub, total_add_amount_238, total_add_u8};
-use field::{Amount, AssetAmt, AssetSmelt, Decode, Encode, Uint2};
-use sys::{Rerr, Ret, errf};
+use base::ActionRef;
+use field::{Amount, AssetSmelt, Decode, Encode, Uint2};
+use sys::Ret;
 
-use crate::{
-    minter::block_reward_number,
-    state::{MintState, with_mint_total},
-};
+#[cfg(feature = "execute")]
+use base::{Context, CoreState, hac_sub, total_add_amount_238, total_add_u8};
+#[cfg(feature = "execute")]
+use field::AssetAmt;
+#[cfg(feature = "execute")]
+use sys::{Rerr, errf};
+
+#[cfg(feature = "execute")]
+use crate::reward::block_reward_number;
+#[cfg(feature = "execute")]
+use crate::state::{MintState, with_mint_total};
 
 pub const ASSET_ALIVE_HEIGHT: u64 = 765_432;
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct AssetCreate {
     pub kind: Uint2,
     pub metadata: AssetSmelt,
@@ -37,12 +47,13 @@ base::impl_action! {
         min_tx_type: 2,
         description: |this: &AssetCreate| format!("Register asset <{}>", this.metadata.ticket.to_readable_or_hex()),
         execute: (self, ctx) {
-        execute_asset_create(ctx, &self.metadata, &self.protocol_cost)?;
-        Ok(vec![])
+            execute_asset_create(ctx, &self.metadata, &self.protocol_cost)?;
+            Ok(vec![])
         }
     }
 }
 
+#[cfg(feature = "execute")]
 fn check_alive_blk_hei(ctx: &mut dyn Context) -> (u64, u64) {
     let is_mainnet = ctx.env().chain.id.is_mainnet();
     if is_mainnet {
@@ -52,6 +63,7 @@ fn check_alive_blk_hei(ctx: &mut dyn Context) -> (u64, u64) {
     }
 }
 
+#[cfg(feature = "execute")]
 fn execute_asset_create(
     ctx: &mut dyn Context,
     metadata: &AssetSmelt,

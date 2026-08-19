@@ -62,16 +62,34 @@ sdk.policy.evaluate(review, policy);
 
 ## 构建
 
-前置：`wasm32-unknown-unknown` target、`wasm-bindgen-cli 0.2.100`、
-`wasm-opt`（可选）。`wasm-opt` 需显式 `--enable-bulk-memory
---enable-sign-ext`（新版 rustc 的 wasm 输出包含这些指令，旧版
-`--all-features` 会产出无效模块；build.sh 已处理并带校验回退）。
+前置（一次性）：`rustup target add wasm32-unknown-unknown`、
+`cargo install -f wasm-bindgen-cli --version 0.2.100`（版本已固定，
+build.sh 会校验并给出安装提示）；`wasm-opt` 与 JS 压缩器（esbuild /
+terser，或经 npx 按需下载的 esbuild）可选，缺失时自动降级。`wasm-opt`
+需显式 `--enable-bulk-memory --enable-sign-ext`（新版 rustc 的 wasm
+输出包含这些指令，旧版 `--all-features` 会产出无效模块；build.sh 已
+处理并带校验回退）。
 
 ```sh
-./sdk/pack.sh
+./sdk/pack.sh             # 常规构建（可读 JS）
+./sdk/pack.sh --release   # 压缩 JS（facade/codec/glue/page 全部 minify）
 ```
 
-产物在 `sdk/dist/`：`nodejs/`、`web/`、`page/`（base64 内联）、`js/`（facade）。
+一条命令完成全部：由 Rust schema 重新生成 TS/JS codec
+（`codec-schema-gen` → `js/generated/`，构建产物不提交）、构建
+nodejs/web/no-modules 三个 wasm 目标、装配 dist、可选压缩。产物全部在
+`sdk/dist/`：
+
+- `js/hacashsdk.mjs` — 友好 API 入口（node 自动加载 `../nodejs/`；
+  web 用 `create_hacash_sdk({ wasm })` 加载 `../web/`）；
+  `js/generated/` 为生成的 codec（`codec.mjs` + `codec.ts`）。
+- `nodejs/`、`web/` — 对应平台的 wasm-bindgen 低级胶水 + wasm。
+- `page/` — 浏览器 script 标签单文件：`hacashsdk_bg.js`（wasm base64
+  内联）+ 演示页 `friendly_test.html`。
+
+`dist/`、`js/generated/`、`*.bak` 等构建产物已被 git 忽略（见
+`sdk/.gitignore`）；`sdk/check-schema.sh` 可独立验证已生成的 codec 与
+Rust schema 一致。
 
 ## Rust 原生使用
 
@@ -82,7 +100,7 @@ rlib 同样可用：`sdk::inspect::inspect_report`、`sdk::attach::*`、
 ## 测试
 
 ```sh
-cargo test -p sdk          # 41 个单元/流程测试（含黄金向量、签名流、guard 检查、篡改/过期/deny 拒绝）
+cargo test -p sdk          # 44 个单元/流程测试（含黄金向量、签名流、guard 检查、篡改/过期/deny 拒绝）
 node ./sdk/tests/...       # 打包后 JS 冒烟
 ```
 

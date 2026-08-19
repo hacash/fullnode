@@ -1,4 +1,4 @@
-//! `Registry` ——
+//! `Registry`
 //!
 //! - binary/json codec
 //! - block hasher / vm assigner / action hooks
@@ -18,7 +18,7 @@ pub type VmAssignFn = fn(&dyn ExecutionServices, u64) -> Box<dyn Vm>;
 pub type ActionCreateFn = fn(&dyn BinaryCodecs, u16, &[u8]) -> Ret<(ActionRef, usize)>;
 pub type TxCreateFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<(TxRef, usize)>;
 pub type BlockCreateFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<(BlockRef, usize)>;
-/// ""—— header  pipeline feeder
+/// Header pipeline feeder
 pub type BlockSizeFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<usize>;
 pub type ActionJsonDecodeFn = fn(&dyn CodecRegistry, u16, &str) -> Ret<ActionRef>;
 pub type TxJsonDecodeFn = fn(&dyn BinaryCodecs, u8, &str) -> Ret<TxRef>;
@@ -170,6 +170,15 @@ pub trait RegistryWriter {
     fn set_context_creator(&mut self, f: ContextCreateFn, gas_budget: i64) -> Rerr;
     fn set_vm_params(&mut self, params: VmExecutionParams) -> Rerr;
     fn set_execution_profile(&mut self, profile: &'static (dyn Any + Send + Sync)) -> Rerr;
+    /// Schema capture hook: the registration macros forward each action's
+    /// `ACTION_SCHEMA` here on every `register_action` call. Ordinary
+    /// registries (such as `Registry`) ignore it; schema generators
+    /// (`codec-schema-gen`, SDK spec codec) collect it, keeping the generated
+    /// schemas naturally in sync with the runtime registry and eliminating
+    /// hand-maintained action lists.
+    fn register_action_schema(&mut self, _schema: crate::ActionSchema) -> Rerr {
+        Ok(())
+    }
 }
 
 #[cfg(test)]

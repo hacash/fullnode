@@ -1,18 +1,26 @@
+//! Channel open/close action (kind 2/3, moved from mint; execution body gated by the `execute` feature).
+
 use std::sync::Arc;
 
-use base::{
-    ActionRef, AddrOrPtr, Context, hac_add, hac_sub, sat_add, total_add_u8, total_add_u12,
-    total_sub_u8, total_sub_u12,
-};
-use field::{
-    AddrBalance, AddrHac, Balance, ChannelId, ChannelSto, ClosedDistributionData,
-    ClosedDistributionDataOptional, Decode, Encode, Uint2, Uint4,
-};
-use sys::{Rerr, Ret, errf};
+use base::{ActionRef, AddrOrPtr};
+use field::{AddrHac, ChannelId, Decode, Encode, Uint2};
+use sys::Ret;
 
+#[cfg(feature = "execute")]
+use base::{Context, hac_add, hac_sub, sat_add, total_add_u8, total_add_u12, total_sub_u8, total_sub_u12};
+#[cfg(feature = "execute")]
+use field::{
+    AddrBalance, Balance, ChannelSto, ClosedDistributionData, ClosedDistributionDataOptional,
+    Uint4,
+};
+#[cfg(feature = "execute")]
+use sys::{Rerr, errf};
+
+#[cfg(feature = "execute")]
 use crate::state::{MintState, with_mint_total};
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct ChannelOpen {
     pub kind: Uint2,
     pub channel_id: ChannelId,
@@ -21,6 +29,7 @@ pub struct ChannelOpen {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct ChannelClose {
     pub kind: Uint2,
     pub channel_id: ChannelId,
@@ -63,8 +72,8 @@ base::impl_action! {
         as_transfer_like: none,
         description: |this: &ChannelOpen| format!("Open channel {} for {} and {}", this.channel_id, this.left_bill.address.to_readable(), this.right_bill.address.to_readable()),
         execute: (self, ctx) {
-        channel_open(self, ctx)?;
-        Ok(vec![])
+            channel_open(self, ctx)?;
+            Ok(vec![])
         }
     }
 }
@@ -75,10 +84,13 @@ base::impl_action! {
         scope: base::ActScope::TOP,
         min_tx_type: 2,
         description: |this: &ChannelClose| format!("Close channel {}", this.channel_id),
-        execute: (self, ctx) { channel_close(self, ctx) }
+        execute: (self, ctx) {
+            channel_close(self, ctx)
+        }
     }
 }
 
+#[cfg(feature = "execute")]
 fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> Rerr {
     check_channel_id(&this.channel_id)?;
     let left_addr = &this.left_bill.address;
@@ -160,6 +172,7 @@ fn channel_open(this: &ChannelOpen, ctx: &mut dyn Context) -> Rerr {
     Ok(())
 }
 
+#[cfg(feature = "execute")]
 fn channel_close(this: &ChannelClose, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     check_channel_id(&this.channel_id)?;
     let pending_height = ctx.env().block.height;
@@ -174,6 +187,7 @@ fn channel_close(this: &ChannelClose, ctx: &mut dyn Context) -> Ret<Vec<u8>> {
     close_channel_default(pending_height, ctx, &this.channel_id, &chan)
 }
 
+#[cfg(feature = "execute")]
 fn check_channel_id(id: &ChannelId) -> Rerr {
     let key = id.as_ref();
     if key.len() != ChannelId::SIZE || key[0] == 0 || key[ChannelId::SIZE - 1] == 0 {
@@ -182,6 +196,7 @@ fn check_channel_id(id: &ChannelId) -> Rerr {
     Ok(())
 }
 
+#[cfg(feature = "execute")]
 fn close_channel_default(
     pending_height: u64,
     ctx: &mut dyn Context,
@@ -199,6 +214,7 @@ fn close_channel_default(
     )
 }
 
+#[cfg(feature = "execute")]
 fn close_channel_with_distribution(
     pending_height: u64,
     ctx: &mut dyn Context,
@@ -249,7 +265,7 @@ fn close_channel_with_distribution(
     let mut deposit_sat_sub = 0u64;
 
     if locked_hac.is_positive() {
-        let (new_left, new_right) = crate::genesis::calculate_interest_of_height(
+        let (new_left, new_right) = crate::interest::calculate_interest_of_height(
             pending_height,
             channel.open_height.uint(),
             channel.interest_attribution,

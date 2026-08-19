@@ -5,10 +5,15 @@ edition.workspace = true
 
 #
 [features]
-# 仅动作编解码（SDK/wasm 使用）：所有标准 action 的 execute 编译为返回
-# 错误的入口桩（只失败、绝不静默成功）。与 vm/mint-core 的 codec-only 对称；
-# 必须与 target_arch = "wasm32" 搭配使用（见源码 cfg），native 构建即使启用
-# 该 feature 也保持完整执行实现。
+# `execute` is the shared "execution enabled" flag consumed by
+# `base::impl_action!` (it expands to a stub whenever this feature is off).
+# Default on: only codec-only consumers (SDK/wasm, chain-codec) disable it.
+default = ["execute"]
+execute = []
+# Action codec only (used by SDK/wasm), a marker kept for manifest symmetry
+# with vm/mint-core: every standard action's execute compiles into an entry
+# stub that returns an error (only fails, never silently succeeds). What
+# actually switches the stubs on is `execute` being off.
 codec-only = []
 
 [dependencies]

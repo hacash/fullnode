@@ -1,5 +1,12 @@
-/// `TX_ACTIONS_MAX`
+/// `TX_ACTIONS_MAX` — per-transaction action count cap, enforced by the
+/// protocol codecs (`protocol/src/codec/tx.rs`). Single source: the SDK
+/// re-exports it instead of re-declaring the number.
 pub const TX_ACTIONS_MAX: usize = 200;
+
+/// `MAX_TX_SIZE` — consensus transaction size cap (bytes). Single source:
+/// `mint::MINT_PARAMS.max_tx_size` and the SDK both read this constant, so a
+/// limit change never drifts between the full node and the wallet surface.
+pub const MAX_TX_SIZE: usize = 16 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ExecFrom {

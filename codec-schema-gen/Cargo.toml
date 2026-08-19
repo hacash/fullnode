@@ -1,0 +1,17 @@
+[package]
+name = "codec-schema-gen"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "codec-schema-gen"
+path = "src/main.rs"
+
+[dependencies]
+sys = { workspace = true }
+field = { workspace = true }
+base = { workspace = true }
+protocol = { workspace = true }
+vm = { workspace = true }
+mint-core = { workspace = true }
+chain-codec = { workspace = true }

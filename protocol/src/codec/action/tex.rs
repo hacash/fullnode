@@ -669,13 +669,6 @@ base::impl_action! {
             format!("Execute {} tex cells by {}", this.cells.len(), this.addr.to_readable())
         },
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         if ctx.exec_from() != ExecFrom::Top {
             return errf!(
@@ -696,7 +689,6 @@ base::impl_action! {
         }
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -787,4 +779,36 @@ pub fn decode_tex_cell_act_json(
         cells,
         sign,
     }))
+}
+
+// ================================ wire schema ================================
+
+impl base::StructSchemaProvider for TexCell {
+    // TexCell is an enum (variant-level fields are in tex.rs's Encode/Decode); the
+    // schema records its existence here to close the reference, expanded here when
+    // TS generates the enum variants.
+    const STRUCT_SCHEMA: base::StructSchema = base::StructSchema {
+        name: "TexCell",
+        fields: &[],
+    };
+}
+
+/// Exports the wire schema of `TexCell` (a private enum) for `codec-schema-gen` collection.
+pub fn tex_cell_schema() -> base::StructSchema {
+    <TexCell as base::StructSchemaProvider>::STRUCT_SCHEMA
+}
+
+impl base::ActionSchemaProvider for TexCellAct {
+    const ACTION_SCHEMA: base::ActionSchema = base::ActionSchema {
+        kind: Self::KIND,
+        name: "tex_cell_act",
+        audit_class: "full",
+        blob: false,
+        fields: &[
+            base::FieldSchema::new("kind", base::FieldWire::U2),
+            base::FieldSchema::new("addr", base::FieldWire::Address),
+            base::FieldSchema::new("cells", base::FieldWire::ListW1("TexCell")),
+            base::FieldSchema::new("sign", base::FieldWire::Fixed(97)),
+        ],
+    };
 }

@@ -14,27 +14,32 @@ use sys::{Ret, errf};
 use super::common::check_action_kind;
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct EnvHeight {
     pub kind: Uint2,
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct EnvMainAddr {
     pub kind: Uint2,
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct EnvBlockAuthorAddr {
     pub kind: Uint2,
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct ViewBalance {
     pub kind: Uint2,
     pub addr: Address,
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct ViewAssetBalance {
     pub kind: Uint2,
     pub addr: Address,
@@ -42,18 +47,21 @@ pub struct ViewAssetBalance {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct ViewCheckSign {
     pub kind: Uint2,
     pub addr: Address,
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct ViewDiaInscNum {
     pub kind: Uint2,
     pub diamond: DiamondName,
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct ViewDiaInscGet {
     pub kind: Uint2,
     pub diamond: DiamondName,
@@ -61,6 +69,7 @@ pub struct ViewDiaInscGet {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct ViewDiaNameList {
     pub kind: Uint2,
     pub addr: Address,
@@ -69,6 +78,7 @@ pub struct ViewDiaNameList {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct ViewDiaOwnerAddrs {
     pub kind: Uint2,
     pub diamonds: DiamondNameListMax200,
@@ -121,15 +131,7 @@ base::impl_action! {
         min_tx_type: 3,
         description: |_: &EnvHeight| "Syscall: Get block height".to_owned(),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
  Ok(ctx.env().block.height.to_be_bytes().to_vec()) 
-        }
         }
     }
 }
@@ -141,15 +143,7 @@ base::impl_action! {
         min_tx_type: 3,
         description: |_: &EnvMainAddr| "Syscall: Get main address".to_owned(),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
  Ok(ctx.env().tx.main.as_ref().to_vec()) 
-        }
         }
     }
 }
@@ -161,15 +155,7 @@ base::impl_action! {
         min_tx_type: 3,
         description: |_: &EnvBlockAuthorAddr| "Syscall: Get author address".to_owned(),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
  Ok(ctx.env().block.author.as_ref().to_vec()) 
-        }
         }
     }
 }
@@ -181,13 +167,6 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewBalance| format!("Syscall: Get balance for {}", this.addr.to_readable()),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let bls = CoreState::wrap(ctx.layer())
             .balance(&self.addr)?
@@ -208,7 +187,6 @@ base::impl_action! {
         Ok(res)
         
         }
-        }
     }
 }
 
@@ -219,13 +197,6 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewAssetBalance| format!("Syscall: Get asset {} balance for {}", this.serial.uint(), this.addr.to_readable()),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let serial = self.serial.uint();
         if serial == 0 {
@@ -244,7 +215,6 @@ base::impl_action! {
         Ok(amt.to_be_bytes().to_vec())
         
         }
-        }
     }
 }
 
@@ -255,13 +225,6 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewCheckSign| format!("Syscall: Check signature for {}", this.addr.to_readable()),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let ok = match ctx.check_sign(&self.addr) {
             Ok(()) => 1u8,
@@ -269,7 +232,6 @@ base::impl_action! {
         };
         Ok(vec![ok])
         
-        }
         }
     }
 }
@@ -281,13 +243,6 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewDiaInscNum| format!("Syscall: Get diamond inscription number for <{}>", this.diamond.to_readable()),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond)? else {
             return errf!("diamond {} not found", self.diamond.to_readable());
@@ -302,7 +257,6 @@ base::impl_action! {
         Ok(vec![num as u8])
         
         }
-        }
     }
 }
 
@@ -313,13 +267,6 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewDiaInscGet| format!("Syscall: Get diamond inscription data for <{}>", this.diamond.to_readable()),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond)? else {
             return errf!("diamond {} not found", self.diamond.to_readable());
@@ -335,7 +282,6 @@ base::impl_action! {
         Ok(diaobj.inscripts.as_list()[idx].content.to_vec())
         
         }
-        }
     }
 }
 
@@ -346,13 +292,6 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewDiaNameList| format!("Syscall: Get HACD name list for {} page {} limit {}", this.addr.to_readable(), this.page.uint(), this.limit.uint()),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         const DNM_SZ: usize = DiamondName::SIZE;
         let owned = CoreState::wrap(ctx.layer())
@@ -383,7 +322,6 @@ base::impl_action! {
         Ok(names[start..end].to_vec())
         
         }
-        }
     }
 }
 
@@ -394,13 +332,6 @@ base::impl_action! {
         min_tx_type: 3,
         description: |this: &ViewDiaOwnerAddrs| format!("Syscall: Get HACD owner addresses for {}", this.diamonds.splitstr()),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let num = self.diamonds.check()?;
         if num > 50 {
@@ -416,7 +347,6 @@ base::impl_action! {
         }
         Ok(res)
         
-        }
         }
     }
 }

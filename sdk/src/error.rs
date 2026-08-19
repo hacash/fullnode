@@ -3,81 +3,71 @@
 //! Codes are stable strings and additive-only: business logic classifies by
 //! `code`, never by message text. `sys::Error` text is never parsed.
 
-use serde::{Deserialize, Serialize};
+/// Declares the error-code surface in one place: the `SdkErrorCode` enum, its
+/// snake_case `as_str()` mapping and the positional `ERROR_CODES` ABI table all
+/// come from this list, so adding a code can never desync the enum from the
+/// binary ids (the same pattern as `profile::define_operations!`).
+macro_rules! define_error_codes {
+    ($(($variant:ident, $name:literal)),+ $(,)?) => {
+        /// Stable error codes, frozen at ABI major 2 (doc 14 §7).
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum SdkErrorCode {
+            $($variant,)+
+        }
 
-/// Stable error codes, frozen at ABI major 2 (doc 14 §7).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SdkErrorCode {
-    UnknownOperation,
-    UnsupportedFeature,
-    UnsupportedSchema,
-    UnknownField,
-    UnknownAction,
-    TrailingBytes,
-    ParseFailed,
-    LimitExceeded,
-    WrongChainId,
-    ExpiredHeight,
-    MissingInspectContext,
-    UnsupportedTxType,
-    InvalidAddress,
-    InvalidPublicKey,
-    BadSignature,
-    NotRequiredSigner,
-    DuplicateSigner,
-    ReviewBindingMismatch,
-    TransactionJsonMismatch,
-    RequestExpired,
-    InvalidSigningRequest,
-    PolicyBindingMismatch,
-    PolicyDenied,
-    CodecProfileMismatch,
-    IncompleteSignatures,
+        impl SdkErrorCode {
+            pub fn as_str(&self) -> &'static str {
+                match self {
+                    $(SdkErrorCode::$variant => $name,)+
+                }
+            }
+        }
+
+        /// Stable error codes in ABI id order (index + 1 = binary id; entry 0
+        /// is reserved as "unknown", mirroring `ERROR_NAMES` on the JS side).
+        /// Single source for `error_code_id` and the generated `op_tables.mjs`.
+        pub const ERROR_CODES: &[&str] = &[$($name),+];
+    };
 }
 
-impl SdkErrorCode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            SdkErrorCode::UnknownOperation => "unknown_operation",
-            SdkErrorCode::UnsupportedFeature => "unsupported_feature",
-            SdkErrorCode::UnsupportedSchema => "unsupported_schema",
-            SdkErrorCode::UnknownField => "unknown_field",
-            SdkErrorCode::UnknownAction => "unknown_action",
-            SdkErrorCode::TrailingBytes => "trailing_bytes",
-            SdkErrorCode::ParseFailed => "parse_failed",
-            SdkErrorCode::LimitExceeded => "limit_exceeded",
-            SdkErrorCode::WrongChainId => "wrong_chain_id",
-            SdkErrorCode::ExpiredHeight => "expired_height",
-            SdkErrorCode::MissingInspectContext => "missing_inspect_context",
-            SdkErrorCode::UnsupportedTxType => "unsupported_tx_type",
-            SdkErrorCode::InvalidAddress => "invalid_address",
-            SdkErrorCode::InvalidPublicKey => "invalid_public_key",
-            SdkErrorCode::BadSignature => "bad_signature",
-            SdkErrorCode::NotRequiredSigner => "not_required_signer",
-            SdkErrorCode::DuplicateSigner => "duplicate_signer",
-            SdkErrorCode::ReviewBindingMismatch => "review_binding_mismatch",
-            SdkErrorCode::TransactionJsonMismatch => "transaction_json_mismatch",
-            SdkErrorCode::RequestExpired => "request_expired",
-            SdkErrorCode::InvalidSigningRequest => "invalid_signing_request",
-            SdkErrorCode::PolicyBindingMismatch => "policy_binding_mismatch",
-            SdkErrorCode::PolicyDenied => "policy_denied",
-            SdkErrorCode::CodecProfileMismatch => "codec_profile_mismatch",
-            SdkErrorCode::IncompleteSignatures => "incomplete_signatures",
-        }
-    }
+define_error_codes! {
+    (UnknownOperation, "unknown_operation"),
+    (UnsupportedFeature, "unsupported_feature"),
+    (UnsupportedSchema, "unsupported_schema"),
+    (UnknownField, "unknown_field"),
+    (UnknownAction, "unknown_action"),
+    (TrailingBytes, "trailing_bytes"),
+    (ParseFailed, "parse_failed"),
+    (LimitExceeded, "limit_exceeded"),
+    (WrongChainId, "wrong_chain_id"),
+    (ExpiredHeight, "expired_height"),
+    (MissingInspectContext, "missing_inspect_context"),
+    (UnsupportedTxType, "unsupported_tx_type"),
+    (InvalidAddress, "invalid_address"),
+    (InvalidPublicKey, "invalid_public_key"),
+    (BadSignature, "bad_signature"),
+    (NotRequiredSigner, "not_required_signer"),
+    (DuplicateSigner, "duplicate_signer"),
+    (ReviewBindingMismatch, "review_binding_mismatch"),
+    (TransactionJsonMismatch, "transaction_json_mismatch"),
+    (RequestExpired, "request_expired"),
+    (InvalidSigningRequest, "invalid_signing_request"),
+    (PolicyBindingMismatch, "policy_binding_mismatch"),
+    (PolicyDenied, "policy_denied"),
+    (CodecProfileMismatch, "codec_profile_mismatch"),
+    (IncompleteSignatures, "incomplete_signatures"),
 }
 
 /// `{ code, message, detail? }` — the single error shape across every
 /// operation. `detail` carries `action_index`, `byte_offset`, `expected`,
 /// `actual`, `path` etc. when available.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SdkError {
     pub schema: String,
     pub code: String,
     pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub detail: Option<serde_json::Value>,
+    /// Serialized JSON detail (a string under the binary ABI, no serde).
+    pub detail: Option<String>,
 }
 
 impl SdkError {
@@ -93,13 +83,13 @@ impl SdkError {
     pub fn with_detail(
         code: SdkErrorCode,
         message: impl Into<String>,
-        detail: serde_json::Value,
+        detail: impl Into<String>,
     ) -> Self {
         Self {
             schema: crate::schema::SCHEMA_ERROR.to_owned(),
             code: code.as_str().to_owned(),
             message: message.into(),
-            detail: Some(detail),
+            detail: Some(detail.into()),
         }
     }
 }
@@ -122,28 +112,4 @@ impl From<sys::Error> for SdkError {
     }
 }
 
-impl From<serde_json::Error> for SdkError {
-    fn from(error: serde_json::Error) -> Self {
-        // The registry mirror pins serde_json < 1.0.167, which predates
-        // `Category::UnknownField`, so unknown-field/variant reports are
-        // detected from serde's stable message shape. Should the shape ever
-        // change, this degrades to `parse_failed` (the SDK classifies by
-        // code, never by message text).
-        let message = error.to_string();
-        if message.contains("unknown field") {
-            return SdkError::with_detail(
-                SdkErrorCode::UnknownField,
-                "request contains an unknown field (typo or newer schema?)",
-                serde_json::json!({ "message": message }),
-            );
-        }
-        if message.contains("unknown variant") {
-            return SdkError::with_detail(
-                SdkErrorCode::UnknownAction,
-                "request contains an unknown action kind or variant",
-                serde_json::json!({ "message": message }),
-            );
-        }
-        SdkError::new(SdkErrorCode::ParseFailed, format!("request json invalid: {error}"))
-    }
-}
+// Binary ABI: no serde_json, so the `From<serde_json::Error>` impl was dropped.

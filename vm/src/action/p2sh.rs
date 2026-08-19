@@ -19,6 +19,7 @@ use sha3::Sha3_256;
 use sys::{Rerr, Ret, errf};
 
 use crate::contract::ContractAddrListW1;
+#[cfg(feature = "full")]
 use crate::machine::peek_vm_runtime_limits;
 use crate::rt::{CodeConf, GasExtra, SpaceCap};
 
@@ -54,6 +55,14 @@ impl Decode for PosiHash {
 
 /// Merkle proof path (list of `PosiHash` siblings).
 pub type MerkelStuffs = field::ListW1<PosiHash>;
+
+impl field::FieldWireShape for PosiHash {
+    // `posi: Uint1 (1B) + hash: Hash (32B)` = 33 bytes
+    const WIRE: field::FieldWire = field::FieldWire::Fixed(33);
+}
+impl field::WireElementName for PosiHash {
+    const NAME: &'static str = "PosiHash";
+}
 
 // ================================ UnlockScript / ScriptmhCalc ================================
 
@@ -147,6 +156,7 @@ impl P2shEntryPayload {
 // ================================ P2SHScriptProve ================================
 
 #[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
+#[action_codec(audit = "structured")]
 pub struct P2SHScriptProve {
     pub kind: Uint2,
     // calc hash: script + calibs
@@ -192,20 +202,13 @@ base::impl_action! {
         as_transfer_like: none,
         description: |_: &P2SHScriptProve| "Prove P2SH unlock script".to_owned(),
         execute: (self, ctx) {
-        #[cfg(all(feature = "codec-only", not(feature = "full")))]
-        {
-            let _ = (self, ctx);
-            crate::action::execution_disabled()
-        }
-        #[cfg(not(all(feature = "codec-only", not(feature = "full"))))]
-        {
             p2sh_script_prove_execute(self, ctx)?;
             Ok(vec![])
-        }
         }
     }
 }
 
+#[cfg(feature = "full")]
 fn p2sh_script_prove_execute(this: &P2SHScriptProve, ctx: &mut dyn Context) -> Rerr {
     if ctx.exec_from() != ExecFrom::Top {
         return errf!(
@@ -226,7 +229,6 @@ fn p2sh_script_prove_execute(this: &P2SHScriptProve, ctx: &mut dyn Context) -> R
     let adr = this.get_merkel()?;
     let stuff = this.get_stuff_with_merkel(ctx, &adr)?;
     ctx.p2sh_set(adr, Box::new(stuff))?;
-    // finish
     Ok(())
 }
 
@@ -354,6 +356,7 @@ impl P2SHScriptProve {
         Ok(())
     }
 
+    #[cfg(feature = "full")]
     fn get_stuff_with_merkel(
         &self,
         ctx: &mut dyn Context,
@@ -374,7 +377,6 @@ impl P2SHScriptProve {
         )?;
         let lockbox = self.lockbox.to_vec();
         let witness = self.argvkey.to_vec();
-        // ok
         let merkel = scriptmh.as_bytes().to_vec();
         let libs = self.adrlibs.encode();
         let mut stuff = Vec::with_capacity(merkel.len() + libs.len() + lockbox.len());

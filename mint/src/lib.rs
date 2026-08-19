@@ -2,7 +2,7 @@
 //!
 //! # Module map
 //!
-//! - `action/`     diamond / asset / channel / coinbase tx（铭刻动作已拆至 `mint-core`）
+//! - `action/`     diamond / asset / channel / coinbase tx (inscription actions split out to `mint-core`)
 //! - `consensus/`  HacashConsensus, difficulty, genesis, bidding
 //! - `api`         mint HTTP services
 //! - `setup`       Registry registration
@@ -40,6 +40,6 @@ pub(crate) use consensus::bidding;
 pub(crate) use consensus::block_check;
 pub(crate) use consensus::coinbase;
 pub(crate) use consensus::initialize;
-// 共识状态类型已移至 mint-core（纯搬迁，存储布局不变）
+// Consensus state types moved to mint-core (pure relocation; storage layout unchanged).
 pub(crate) use mint_core::state;
 

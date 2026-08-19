@@ -1,0 +1,17 @@
+[package]
+name = "chain-codec"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+sys = { workspace = true }
+field = { workspace = true }
+base = { workspace = true }
+protocol = { path = "../protocol", default-features = false, features = ["codec-only"] }
+# Direct path (like the SDK): the workspace `vm` entry keeps its default
+# `full` feature for app/codec-schema-gen. codec-only: the SDK/wasm build
+# needs only the action codecs; the full node enables vm `full` itself, and
+# feature unification makes `full` take precedence there (vm's documented
+# convention).
+vm = { path = "../vm", default-features = false, features = ["codec-only"] }
+mint-core = { workspace = true, default-features = false, features = ["codec-only"] }

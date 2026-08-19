@@ -11,6 +11,8 @@ use crate::rt::ItrErrCode::*;
 use crate::rt::*;
 use crate::value::ContractAddress;
 
+mod schema;
+
 pub type ContractAddrListW1 = ListW1<ContractAddress>;
 pub type ContractAbstCallList = ListW1<ContractAbstCall>;
 pub type ContractUserFuncList = ListW2<ContractUserFunc>;
@@ -41,42 +43,76 @@ macro_rules! contract_codec_struct {
                 Ok((Self { $($field),+ }, r.used()))
             }
         }
+
+        // Wire schema (struct + field shapes) comes from the shared macro; the
+        // field names on the wire match the struct fields 1:1.
+        field::wire_struct_schema!($name { $($field: $ty),+ });
     };
 }
 
-contract_codec_struct!(ContractMeta {
-    vrsn: Fixed1,
-    revision: Uint2,
-    mark: Fixed3,
-    mext: Fixed4,
-});
+/// Defines the contract wire structs in one place: struct + codec + JSON +
+/// schema registration (`struct_schemas()`), so adding a struct only touches
+/// the single invocation below.
+macro_rules! contract_structs {
+    ($( $name:ident { $($field:ident : $ty:ty),+ $(,)? } ),+ $(,)?) => {
+        $(contract_codec_struct!($name { $($field: $ty),+ });)+
+        $(base::impl_fields_to_json!($name { $($field),+ });)+
+        pub fn struct_schemas() -> Vec<base::StructSchema> {
+            vec![$(<$name as base::StructSchemaProvider>::STRUCT_SCHEMA),+]
+        }
+    };
+}
 
-contract_codec_struct!(ContractAbstCall {
-    sign: Fixed1,
-    mark: Fixed2,
-    fncnf: Fixed1,
-    code_stuff: CodeStuff,
-});
-
-contract_codec_struct!(ContractUserFunc {
-    sign: Fixed4,
-    mark: Fixed3,
-    fncnf: Fixed1,
-    pmdf: FuncArgvTypes,
-    code_stuff: CodeStuff,
-});
-
-contract_codec_struct!(ContractCalcFunc {
-    sign: Fixed4,
-    mark: Fixed1,
-    fncnf: Fixed1,
-    code_stuff: CodeStuff,
-});
-
-contract_codec_struct!(ContractAddrReplaceAt {
-    idx: Uint1,
-    addr: ContractAddress,
-});
+contract_structs! {
+    ContractMeta {
+        vrsn: Fixed1,
+        revision: Uint2,
+        mark: Fixed3,
+        mext: Fixed4,
+    },
+    ContractAbstCall {
+        sign: Fixed1,
+        mark: Fixed2,
+        fncnf: Fixed1,
+        code_stuff: CodeStuff,
+    },
+    ContractUserFunc {
+        sign: Fixed4,
+        mark: Fixed3,
+        fncnf: Fixed1,
+        pmdf: FuncArgvTypes,
+        code_stuff: CodeStuff,
+    },
+    ContractCalcFunc {
+        sign: Fixed4,
+        mark: Fixed1,
+        fncnf: Fixed1,
+        code_stuff: CodeStuff,
+    },
+    ContractAddrReplaceAt {
+        idx: Uint1,
+        addr: ContractAddress,
+    },
+    ContractEdit {
+        new_revision: Uint2,
+        inherit_add: ContractAddrListW1,
+        inherit_replace_at: ContractAddrReplaceAtList,
+        library_add: ContractAddrListW1,
+        library_replace_at: ContractAddrReplaceAtList,
+        abstcalls: ContractAbstCallList,
+        userfuncs: ContractUserFuncList,
+        calcfuncs: ContractCalcFuncList,
+    },
+    ContractSto {
+        metas: ContractMeta,
+        inherit: ContractAddrListW1,
+        library: ContractAddrListW1,
+        abstcalls: ContractAbstCallList,
+        userfuncs: ContractUserFuncList,
+        calcfuncs: ContractCalcFuncList,
+        morextend: Uint8,
+    },
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ContractEdition {
@@ -115,73 +151,6 @@ impl Decode for ContractEdition {
         ))
     }
 }
-
-contract_codec_struct!(ContractEdit {
-    new_revision: Uint2,
-    inherit_add: ContractAddrListW1,
-    inherit_replace_at: ContractAddrReplaceAtList,
-    library_add: ContractAddrListW1,
-    library_replace_at: ContractAddrReplaceAtList,
-    abstcalls: ContractAbstCallList,
-    userfuncs: ContractUserFuncList,
-    calcfuncs: ContractCalcFuncList,
-});
-
-contract_codec_struct!(ContractSto {
-    metas: ContractMeta,
-    inherit: ContractAddrListW1,
-    library: ContractAddrListW1,
-    abstcalls: ContractAbstCallList,
-    userfuncs: ContractUserFuncList,
-    calcfuncs: ContractCalcFuncList,
-    morextend: Uint8,
-});
-
-base::impl_fields_to_json!(ContractMeta {
-    vrsn,
-    revision,
-    mark,
-    mext
-});
-base::impl_fields_to_json!(ContractAbstCall {
-    sign,
-    mark,
-    fncnf,
-    code_stuff
-});
-base::impl_fields_to_json!(ContractUserFunc {
-    sign,
-    mark,
-    fncnf,
-    pmdf,
-    code_stuff
-});
-base::impl_fields_to_json!(ContractCalcFunc {
-    sign,
-    mark,
-    fncnf,
-    code_stuff
-});
-base::impl_fields_to_json!(ContractAddrReplaceAt { idx, addr });
-base::impl_fields_to_json!(ContractEdit {
-    new_revision,
-    inherit_add,
-    inherit_replace_at,
-    library_add,
-    library_replace_at,
-    abstcalls,
-    userfuncs,
-    calcfuncs
-});
-base::impl_fields_to_json!(ContractSto {
-    metas,
-    inherit,
-    library,
-    abstcalls,
-    userfuncs,
-    calcfuncs,
-    morextend
-});
 
 #[derive(Default)]
 pub struct ContractObj {
@@ -276,7 +245,7 @@ pub fn convert_and_check(
     verify_bytecodes_for_cap(&bytecodes, cap.value_size, registry)
 }
 
-#[cfg(all(feature = "codec-only", not(feature = "full")))]
+#[cfg(not(feature = "execute"))]
 pub fn convert_and_check(
     _cap: &SpaceCap,
     _gas: &GasExtra,

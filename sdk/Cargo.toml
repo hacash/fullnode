@@ -8,15 +8,14 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 sys = { workspace = true }
-field = { workspace = true, features = ["sdk-codec-only"] }
+field = { path = "../field", default-features = false }
 base = { workspace = true }
-protocol = { workspace = true, features = ["codec-only"] }
-# codec-only：wasm SDK 只需要动作编解码，剔除 VM 执行/IR 编译器（~28KB）
+protocol = { path = "../protocol", default-features = false, features = ["codec-only"] }
+# codec-only: the wasm SDK only needs action codecs, dropping the VM executor/IR compiler (~28KB)
 vm = { path = "../vm", default-features = false, features = ["codec-only"] }
-# codec-only：与 vm 对称，显式声明只取铭刻动作编解码（execute 已在 workspace 关默认）
+# codec-only: symmetric with vm; explicitly take only the inscription action codecs (execute is off by default in the workspace)
 mint-core = { workspace = true, features = ["codec-only"] }
+chain-codec = { workspace = true }
 hex = "0.4.3"
 libsecp256k1 = { version = "0.7.2", features = ["hmac"], default-features = false }
-serde = { workspace = true }
-serde_json = { workspace = true }
 wasm-bindgen = "=0.2.100"

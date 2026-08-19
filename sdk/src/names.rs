@@ -1,62 +1,30 @@
-//! Stable numeric-kind → display-name table for every registered action.
+//! Stable numeric-kind → display-name lookup for every registered action.
 //!
 //! The wire kind is the protocol fact; the name is a stable display identity
-//! and is never used as a wire identity (doc 14 §4.6). Kinds without a table
-//! entry still decode and inspect; only `name` is omitted.
+//! and is never used as a wire identity (doc 14 §4.6). Names come from the
+//! schema capture of `standard_codecs()` (same registration macro as
+//! `codec-schema-gen`, naturally the same source — new actions need no
+//! registration here).
 
-use protocol::action_std::*;
-use vm::action::*;
+use crate::codec::standard_codecs;
 
-use mint_core::inscription::{DiaInscClean, DiaInscDrop, DiaInscEdit, DiaInscMove, DiaInscPush};
-
-/// (kind, name) pairs sourced from the `name:` literals of each action's
-/// `impl_action!`/`ActionCodec` registration.
-const NAME_TABLE: &[(u16, &str)] = &[
-    (HacToTrs::KIND, "transfer_hac_to"),
-    (HacFromTrs::KIND, "transfer_hac_from"),
-    (HacFromToTrs::KIND, "transfer_hac_from_to"),
-    (SatToTrs::KIND, "transfer_sat_to"),
-    (SatFromTrs::KIND, "transfer_sat_from"),
-    (SatFromToTrs::KIND, "transfer_sat_from_to"),
-    (DiaSingleTrs::KIND, "transfer_hacd_single_to"),
-    (DiaToTrs::KIND, "transfer_hacd_to"),
-    (DiaFromTrs::KIND, "transfer_hacd_from"),
-    (DiaFromToTrs::KIND, "transfer_hacd_from_to"),
-    (AssetToTrs::KIND, "transfer_asset_to"),
-    (AssetFromTrs::KIND, "transfer_asset_from"),
-    (AssetFromToTrs::KIND, "transfer_asset_from_to"),
-    (HeightScope::KIND, "height_scope"),
-    (ChainAllow::KIND, "chain_allow"),
-    (BalanceFloor::KIND, "balance_floor"),
-    (ReqSignList::KIND, "req_sign_list"),
-    (TxMessage::KIND, "tx_message"),
-    (TxBlob::KIND, "tx_blob"),
-    (AstIf::KIND, "ast_if"),
-    (AstSelect::KIND, "ast_select"),
-    (TexCellAct::KIND, "tex_cell_act"),
-    (EnvHeight::KIND, "block_height"),
-    (EnvMainAddr::KIND, "tx_main_addr"),
-    (EnvBlockAuthorAddr::KIND, "block_author_addr"),
-    (ViewBalance::KIND, "balance"),
-    (ViewAssetBalance::KIND, "asset_balance"),
-    (ViewCheckSign::KIND, "check_signature"),
-    (ViewDiaInscNum::KIND, "hacd_insc_num"),
-    (ViewDiaInscGet::KIND, "hacd_insc_get"),
-    (ViewDiaNameList::KIND, "hacd_name_list"),
-    (ViewDiaOwnerAddrs::KIND, "hacd_owner_addrs"),
-    (DiaInscPush::KIND, "hacd_insc_push"),
-    (DiaInscClean::KIND, "hacd_insc_clean"),
-    (DiaInscEdit::KIND, "hacd_insc_edit"),
-    (DiaInscMove::KIND, "hacd_insc_move"),
-    (DiaInscDrop::KIND, "hacd_insc_drop"),
-    (ContractDeploy::KIND, "contract_deploy"),
-    (ContractUpdate::KIND, "contract_update"),
-    (ContractMainCall::KIND, "contract_main_call"),
-    (P2SHScriptProve::KIND, "p2sh_script_prove"),
-];
+/// (kind, name) lazy registry of the `ACTION_SCHEMA` captured during
+/// registration assembly.
+fn name_table() -> &'static [(u16, &'static str)] {
+    use std::sync::OnceLock;
+    static TABLE: OnceLock<Vec<(u16, &'static str)>> = OnceLock::new();
+    TABLE.get_or_init(|| {
+        let codecs = standard_codecs().expect("standard codecs assembly");
+        codecs
+            .action_schemas()
+            .iter()
+            .map(|s| (s.kind, s.name))
+            .collect()
+    })
+}
 
 pub fn action_name(kind: u16) -> Option<&'static str> {
-    NAME_TABLE
+    name_table()
         .iter()
         .find(|(registered, _)| *registered == kind)
         .map(|(_, name)| *name)
@@ -65,10 +33,17 @@ pub fn action_name(kind: u16) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mint_core::action::{
+        asset::AssetCreate,
+        channel::{ChannelClose, ChannelOpen},
+        diamond::DiamondMint,
+    };
+    use protocol::action_std::{HacToTrs, TexCellAct};
+    use vm::action::ContractDeploy;
 
     #[test]
     fn table_has_no_duplicate_kinds() {
-        let mut kinds: Vec<u16> = NAME_TABLE.iter().map(|(kind, _)| *kind).collect();
+        let mut kinds: Vec<u16> = name_table().iter().map(|(kind, _)| *kind).collect();
         kinds.sort_unstable();
         let deduped = {
             let mut out = kinds.clone();
@@ -81,7 +56,15 @@ mod tests {
     #[test]
     fn known_kinds_resolve_names() {
         assert_eq!(action_name(HacToTrs::KIND), Some("transfer_hac_to"));
-        assert_eq!(action_name(HeightScope::KIND), Some("height_scope"));
-        assert_eq!(action_name(ContractMainCall::KIND), Some("contract_main_call"));
+        assert_eq!(action_name(TexCellAct::KIND), Some("tex_cell_act"));
+        assert_eq!(action_name(ContractDeploy::KIND), Some("contract_deploy"));
+    }
+
+    #[test]
+    fn mint_actions_resolve_names() {
+        assert_eq!(action_name(ChannelOpen::KIND), Some("channel_open"));
+        assert_eq!(action_name(ChannelClose::KIND), Some("channel_close"));
+        assert_eq!(action_name(AssetCreate::KIND), Some("asset_create"));
+        assert_eq!(action_name(DiamondMint::KIND), Some("diamond_mint"));
     }
 }

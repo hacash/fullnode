@@ -5,30 +5,24 @@
 //! only prepares and verifies; signing happens in the wallet vault.
 
 use field::Address;
-use serde::{Deserialize, Serialize};
 
 use crate::attach::{SignatureProof, SigningRequest};
 use crate::error::{SdkError, SdkErrorCode};
 use crate::schema::SCHEMA_SIGNING_REQUEST;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessagePrepareParams {
     pub digest: String,
     pub signer_address: String,
-    #[serde(default)]
-    pub origin: Option<String>,
-    #[serde(default)]
-    pub expires_at: Option<u64>,
+        pub origin: Option<String>,
+        pub expires_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MessageVerifyResult {
     pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub address: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+        pub address: Option<String>,
+        pub error: Option<String>,
 }
 
 /// `message.prepare_signature`: build an authentication `SigningRequest` over
@@ -44,7 +38,7 @@ pub fn prepare_message_signature(
             SdkError::with_detail(
                 SdkErrorCode::ParseFailed,
                 "message digest must be 32-byte hex",
-                serde_json::json!({ "actual": params.digest }),
+                format!("{{\"actual\":{}}}", params.digest),
             )
         })?;
     let signer = Address::from_readable(&params.signer_address).map_err(SdkError::from)?;
@@ -108,7 +102,7 @@ pub fn verify_message_signature(
         return Err(SdkError::with_detail(
             SdkErrorCode::BadSignature,
             "public key does not match the request signer address",
-            serde_json::json!({ "actual": address.to_readable() }),
+            crate::json::obj(vec![crate::json::kv("actual", crate::json::q(&address.to_readable()))]),
         ));
     }
     let ok = sys::Account::verify_signature(&digest, &public_key, &signature);

@@ -66,16 +66,12 @@ pub use call_site::{
     CallSpec, CallTarget, decode_user_call_site, encode_call_body, encode_splice_body,
     encode_user_call_site, is_user_call_inst,
 };
+#[cfg(feature = "full")]
 mod verify;
 #[cfg(feature = "full")]
 pub use verify::{
     ensure_terminal_instruction, verify_bytecodes, verify_bytecodes_for_cap,
-};
-pub use verify::verify_bytecodes_with_registry;
-// Re-export entry-stack helpers for external callers / future fitshc.
-#[allow(unused_imports)]
-pub use verify::{
-    VerifyEntryStack, verify_bytecodes_with_entry_stack,
+    verify_bytecodes_with_registry, VerifyEntryStack, verify_bytecodes_with_entry_stack,
     verify_bytecodes_with_entry_stack_and_registry,
 };
 

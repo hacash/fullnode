@@ -2,11 +2,18 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Data, DeriveInput, Fields, parse_macro_input};
 
-/// Generate only the mechanical representation of a regular Action.
+/// Generates only the mechanical parts of an action: `Encode/Decode/ToJSON/FromJSON/ActionJsonCodec`
+/// plus the wire schema (`ACTION_SCHEMA`, see `base::ActionSchemaProvider`).
+/// Field wire shapes come from each field type's own `field::FieldWireShape` (co-located with the
+/// type definition); field types that do not implement the trait fail to compile (no schema means
+/// failure, no fallback allowed).
 ///
-/// The derive intentionally does not implement `base::Action`: execution,
-/// metadata, and domain capabilities remain visible in the owning crate.
-#[proc_macro_derive(ActionCodec)]
+/// Review facts are declared at the definition site via the helper attribute:
+/// `#[action_codec(audit = "full"|"structured"|"branching"|"opaque", blob)]`.
+/// `audit` is required (the SDK audit surface is the definition surface, with
+/// no separate grading table); `blob` is opt-in for opaque byte-carrier actions
+/// (`tx_message`/`tx_blob`).
+#[proc_macro_derive(ActionCodec, attributes(action_codec))]
 pub fn derive_action_codec(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     match expand_action_codec(input) {
@@ -15,7 +22,46 @@ pub fn derive_action_codec(input: TokenStream) -> TokenStream {
     }
 }
 
+/// Parse the `#[action_codec(...)]` helper attribute (audit class + blob flag).
+fn parse_action_codec_attr(input: &DeriveInput) -> syn::Result<(String, bool)> {
+    let mut audit_class: Option<String> = None;
+    let mut blob = false;
+    for attr in &input.attrs {
+        if !attr.path().is_ident("action_codec") {
+            continue;
+        }
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("audit") {
+                let value = meta.value()?;
+                let lit: syn::LitStr = value.parse()?;
+                let class = lit.value();
+                if !matches!(class.as_str(), "full" | "structured" | "branching" | "opaque") {
+                    return Err(meta.error(format!(
+                        "invalid audit class {class:?}; expected full|structured|branching|opaque"
+                    )));
+                }
+                audit_class = Some(class);
+                Ok(())
+            } else if meta.path.is_ident("blob") {
+                blob = true;
+                Ok(())
+            } else {
+                Err(meta.error("unsupported action_codec attribute; expected audit = \"...\" or blob"))
+            }
+        })?;
+    }
+    let audit_class = audit_class.ok_or_else(|| {
+        syn::Error::new_spanned(
+            &input.ident,
+            "ActionCodec requires #[action_codec(audit = \"full\"|\"structured\"|\"branching\"|\"opaque\")]",
+        )
+    })?;
+    Ok((audit_class, blob))
+}
+
 fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    // Review facts are parsed first (they only need `attrs` + the ident).
+    let (audit_class, blob) = parse_action_codec_attr(&input)?;
     let name = input.ident;
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -71,6 +117,33 @@ fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStre
         .iter()
         .map(|ident| syn::LitStr::new(&ident.to_string(), ident.span()))
         .collect();
+
+    // wire schema: kind field + FieldWireShape mapping of the remaining fields.
+    let mut schema_fields = vec![quote! {
+        ::field::FieldSchema::new("kind", ::field::FieldWire::U2)
+    }];
+    for field in fields.iter().skip(1) {
+        let field_name = field
+            .ident
+            .as_ref()
+            .expect("named fields checked above")
+            .to_string();
+        let name_lit = syn::LitStr::new(
+            &field_name,
+            field.ident.as_ref().expect("named").span(),
+        );
+        let ty = &field.ty;
+        schema_fields.push(quote! {
+            ::field::FieldSchema::new(
+                #name_lit,
+                <#ty as ::field::FieldWireShape>::WIRE,
+            )
+        });
+    }
+
+    let schema_fields = schema_fields.as_slice();
+
+    let audit_lit = syn::LitStr::new(&audit_class, name.span());
 
     Ok(quote! {
         impl field::Encode for #name {
@@ -166,6 +239,16 @@ fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStre
                 *self = <Self as base::ActionJsonCodec>::decode_json(json)?;
                 Ok(())
             }
+        }
+
+        impl field::ActionSchemaProvider for #name {
+            const ACTION_SCHEMA: field::ActionSchema = field::ActionSchema {
+                kind: Self::KIND,
+                name: Self::NAME,
+                audit_class: #audit_lit,
+                blob: #blob,
+                fields: &[ #(#schema_fields),* ],
+            };
         }
     })
 }

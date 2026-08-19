@@ -26,6 +26,10 @@ impl field::ToJSON for ActionListW1 {
     }
 }
 
+impl field::FieldWireShape for ActionListW1 {
+    const WIRE: field::FieldWire = field::FieldWire::ActionListW1;
+}
+
 base::impl_action_to_json!(AstSelect {
     exe_min,
     exe_max,
@@ -541,4 +545,38 @@ pub fn create_ast_if(reg: &dyn BinaryCodecs, _kind: u16, buf: &[u8]) -> Ret<(Act
         }),
         r.used(),
     ))
+}
+
+// ================================ wire schema ================================
+
+impl base::ActionSchemaProvider for AstSelect {
+    const ACTION_SCHEMA: base::ActionSchema = base::ActionSchema {
+        kind: Self::KIND,
+        name: Self::NAME,
+        audit_class: "branching",
+        blob: false,
+        fields: &[
+            base::FieldSchema::new("kind", base::FieldWire::U2),
+            base::FieldSchema::new("exe_min", base::FieldWire::U1),
+            base::FieldSchema::new("exe_max", base::FieldWire::U1),
+            // `ActionListW1`: the actual wire is a 1-byte count (Uint1), unlike
+            // `ActionListW2`'s 2-byte count.
+            base::FieldSchema::new("actions", base::FieldWire::ActionListW1),
+        ],
+    };
+}
+
+impl base::ActionSchemaProvider for AstIf {
+    const ACTION_SCHEMA: base::ActionSchema = base::ActionSchema {
+        kind: Self::KIND,
+        name: Self::NAME,
+        audit_class: "branching",
+        blob: false,
+        fields: &[
+            base::FieldSchema::new("kind", base::FieldWire::U2),
+            base::FieldSchema::new("cond", base::FieldWire::Struct("ast_select")),
+            base::FieldSchema::new("br_if", base::FieldWire::Struct("ast_select")),
+            base::FieldSchema::new("br_else", base::FieldWire::Struct("ast_select")),
+        ],
+    };
 }

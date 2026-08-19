@@ -88,6 +88,11 @@ impl RegistryWriter for Registry {
     }
 
     fn register_action(&mut self, kinds: &[u16], f: ActionCreateFn) -> sys::Rerr {
+        for (index, kind) in kinds.iter().enumerate() {
+            if kinds[..index].contains(kind) {
+                return sys::errf!("action kind {} listed more than once", kind);
+            }
+        }
         if let Some(kind) = kinds.iter().find(|k| self.action_codecs.contains_key(k)) {
             return sys::errf!("action kind {} already registered", kind);
         }
@@ -98,6 +103,14 @@ impl RegistryWriter for Registry {
     }
 
     fn register_action_json(&mut self, kinds: &[u16], f: ActionJsonDecodeFn) -> sys::Rerr {
+        for (index, kind) in kinds.iter().enumerate() {
+            if kinds[..index].contains(kind) {
+                return sys::errf!("action json kind {} listed more than once", kind);
+            }
+            if !self.action_codecs.contains_key(kind) {
+                return sys::errf!("action json kind {} has no binary action codec", kind);
+            }
+        }
         if let Some(kind) = kinds
             .iter()
             .find(|k| self.action_json_codecs.contains_key(k))
@@ -286,7 +299,12 @@ impl ExecutionServices for Registry {
 
 pub fn standard_registry() -> Ret<Registry> {
     let mut registry = Registry::new(mint::block_hasher);
-    protocol::register_standard(&mut registry, &CHAIN_PROTOCOL_PARAMS)?;
+    // The standard codec surface is assembled once by chain-codec (protocol +
+    // mint-core + vm actions); this application adds its own block-level
+    // CoinbaseTx codec and the VM assigner on top. The SDK and
+    // codec-schema-gen use the same chain-codec entry, so the action set can
+    // never drift between them.
+    chain_codec::register_standard(&mut registry)?;
     mint::register(&mut registry)?;
     vm::register(&mut registry)?;
     Ok(registry)
@@ -358,6 +376,26 @@ mod tests {
         assert_eq!(
             protocol::execution_params(&registry).expect("protocol params"),
             &CHAIN_PROTOCOL_PARAMS
+        );
+    }
+
+    /// The app's action codec surface must be exactly the chain-codec capture:
+    /// a new action crate wired into the full node without going through
+    /// `chain_codec::register_standard` fails here (the same guard the SDK and
+    /// codec-schema-gen rely on).
+    #[test]
+    fn standard_registry_action_surface_matches_chain_codec() {
+        let registry = standard_registry().expect("standard registry");
+        let mut registered: Vec<u16> = registry.action_codecs.keys().copied().collect();
+        registered.sort_unstable();
+        let mut expected: Vec<u16> = chain_codec::collect_action_schemas()
+            .iter()
+            .map(|schema| schema.kind)
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(
+            registered, expected,
+            "app action surface must equal the chain-codec capture"
         );
     }
 

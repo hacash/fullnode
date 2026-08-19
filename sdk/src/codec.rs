@@ -11,15 +11,21 @@ use sys::{Ret, errf, normalf};
 
 /// Transaction/action codec composition used by the WASM SDK.
 ///
-/// The full-node registry lives in `app` and also pulls in consensus, storage,
-/// VM and x16rs dependencies. The SDK only needs the standard protocol codecs
-/// plus the four VM action codecs (ContractDeploy 40, ContractUpdate 41,
-/// ContractMainCall 44, P2SHScriptProve 46), so it records those registrations
-/// and deliberately ignores execution-only hooks (plan 13 §2, S1).
+/// The action/tx codec set is assembled by `chain-codec::register_standard` —
+/// the same entry the full node (`app::standard_registry`) and
+/// `codec-schema-gen` use — so the SDK's codec surface is the chain's surface
+/// by construction, with no hand-written action list. Execution-only hooks
+/// (block creator/sizer, VM assigner, context, VM params) are deliberately
+/// ignored by this `RegistryWriter` (plan 13 §2, S1); the codecs themselves
+/// are the full standard set.
 pub(crate) struct SdkCodecs {
     transactions: HashMap<u8, TxCreateFn>,
     actions: HashMap<u16, ActionCreateFn>,
     action_json: HashMap<u16, ActionJsonDecodeFn>,
+    /// Action schemas captured by the registration macro (same source as
+    /// `codec-schema-gen`; used by `spec_codec`'s TransactionSpec decoder, no
+    /// hand-written action list).
+    action_schemas: Vec<base::ActionSchema>,
 }
 
 impl SdkCodecs {
@@ -28,14 +34,13 @@ impl SdkCodecs {
             transactions: HashMap::new(),
             actions: HashMap::new(),
             action_json: HashMap::new(),
+            action_schemas: Vec::new(),
         }
     }
 
     fn standard() -> Ret<Self> {
         let mut codecs = Self::new();
-        protocol::register_standard(&mut codecs, &protocol::PROTOCOL_PARAMS)?;
-        vm::action::register_actions(&mut codecs)?;
-        mint_core::setup::register(&mut codecs)?;
+        chain_codec::register_standard(&mut codecs)?;
         Ok(codecs)
     }
 
@@ -43,6 +48,18 @@ impl SdkCodecs {
         let mut kinds: Vec<u16> = self.actions.keys().copied().collect();
         kinds.sort_unstable();
         kinds
+    }
+
+    /// Registered transaction types (1/2/3 for the standard chain; the
+    /// block-level CoinbaseTx type 0 lives only in the full node).
+    pub fn registered_tx_types(&self) -> Vec<u8> {
+        let mut types: Vec<u8> = self.transactions.keys().copied().collect();
+        types.sort_unstable();
+        types
+    }
+
+    pub fn action_schemas(&self) -> &[base::ActionSchema] {
+        &self.action_schemas
     }
 }
 
@@ -80,6 +97,11 @@ impl RegistryWriter for SdkCodecs {
     }
 
     fn register_action(&mut self, kinds: &[u16], creator: ActionCreateFn) -> sys::Rerr {
+        for (index, kind) in kinds.iter().enumerate() {
+            if kinds[..index].contains(kind) {
+                return errf!("action kind {} listed more than once", kind);
+            }
+        }
         if let Some(kind) = kinds.iter().find(|kind| self.actions.contains_key(kind)) {
             return errf!("action kind {} already registered", kind);
         }
@@ -89,7 +111,41 @@ impl RegistryWriter for SdkCodecs {
         Ok(())
     }
 
+    fn register_action_schema(&mut self, schema: base::ActionSchema) -> sys::Rerr {
+        if !self.actions.contains_key(&schema.kind) {
+            return errf!(
+                "schema {} ({}) registered without a binary action codec",
+                schema.kind,
+                schema.name
+            );
+        }
+        if self
+            .action_schemas
+            .iter()
+            .any(|known| known.kind == schema.kind || known.name == schema.name)
+        {
+            return errf!(
+                "duplicate action schema {} ({})",
+                schema.kind,
+                schema.name
+            );
+        }
+        self.action_schemas.push(schema);
+        Ok(())
+    }
+
     fn register_action_json(&mut self, kinds: &[u16], decoder: ActionJsonDecodeFn) -> sys::Rerr {
+        for (index, kind) in kinds.iter().enumerate() {
+            if kinds[..index].contains(kind) {
+                return errf!("action json kind {} listed more than once", kind);
+            }
+            if self.action_json.contains_key(kind) {
+                return errf!("action json kind {} already registered", kind);
+            }
+            if !self.actions.contains_key(kind) {
+                return errf!("action json kind {} has no binary action codec", kind);
+            }
+        }
         for kind in kinds {
             self.action_json.insert(*kind, decoder);
         }
@@ -212,6 +268,25 @@ mod tests {
                 codecs.actions.contains_key(&kind),
                 "vm action kind {kind} must be registered"
             );
+        }
+    }
+
+    /// The SDK's codec surface must be exactly the chain-codec capture (the
+    /// shared registration entry used by the full node and codec-schema-gen).
+    /// If a new action crate is ever wired into the chain without going
+    /// through `chain-codec::register_standard`, this test fails.
+    #[test]
+    fn sdk_codec_surface_matches_chain_codec() {
+        let codecs = standard_codecs().unwrap();
+        let captured = chain_codec::collect_action_schemas();
+        assert_eq!(
+            codecs.action_schemas().len(),
+            captured.len(),
+            "sdk action schema set must equal the chain-codec capture"
+        );
+        for (a, b) in codecs.action_schemas().iter().zip(&captured) {
+            assert_eq!(a.kind, b.kind, "kind drift in chain codec surface");
+            assert_eq!(a.name, b.name, "name drift in chain codec surface");
         }
     }
 }

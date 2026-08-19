@@ -4,10 +4,10 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-# 内嵌 libsecp256k1 预计算表（~1MB 数据段）：全节点（mint/app 等）启用，
-# 首次签名/验签零初始化开销。SDK（wasm/codec-only 构建）不启用，表改为
-# 首次使用时运行时计算，避免 ~1MB 预计算表进入 wasm。
-# 注意：feature 合并在构建图内取并集，必须只在全节点专属 crate 启用。
+# Embed libsecp256k1 precomputed tables (~1MB data segment): enabled by full nodes (mint/app etc.),
+# so the first sign/verify has zero initialization cost. SDK (wasm/codec-only builds) does not enable
+# it; the tables are computed at runtime on first use to keep ~1MB of precomputed tables out of wasm.
+# Note: feature union within the build graph means this must only be enabled by full-node crates.
 secp-static-context = ["libsecp256k1/static-context"]
 
 [dependencies]

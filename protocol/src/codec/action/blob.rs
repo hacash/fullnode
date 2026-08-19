@@ -9,12 +9,14 @@ use sys::Ret;
 use super::common::check_action_kind;
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full", blob)]
 pub struct TxMessage {
     pub kind: Uint2,
     pub data: BytesW1,
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full", blob)]
 pub struct TxBlob {
     pub kind: Uint2,
     pub data: BytesW2,
@@ -49,15 +51,7 @@ base::impl_action! {
         min_tx_type: 2,
         description: |_: &TxMessage| "Transaction message".to_owned(),
         execute: (self, _ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, _ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
  Ok(vec![]) 
-        }
         }
     }
 }
@@ -69,15 +63,7 @@ base::impl_action! {
         min_tx_type: 2,
         description: |_: &TxBlob| "Transaction blob data".to_owned(),
         execute: (self, _ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, _ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
  Ok(vec![]) 
-        }
         }
     }
 }

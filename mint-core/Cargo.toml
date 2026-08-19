@@ -7,12 +7,18 @@ edition.workspace = true
 sys = { workspace = true }
 field = { workspace = true }
 base = { workspace = true }
+# Used only by the execute body (BigUint for channel interest, x16rs mining/hex for diamond mint,
+# protocol execution params/tx types); codec-only (SDK/wasm) builds never compile them
+hex = { version = "0.4", optional = true }
+num-bigint = { version = "0.4", optional = true }
+protocol = { workspace = true, optional = true }
+x16rs = { workspace = true, optional = true }
 
 [features]
 default = ["execute"]
-# execute：完整共识执行体（fullnode/mint 启用）；SDK（wasm）关闭后
-# execute 体编译为空，其引用的状态机代码不再进入 wasm
-execute = []
-# codec-only：仅铭刻动作编解码（SDK/wasm 启用）。与 default-features=false 等价，
-# 供依赖方显式声明"只要 codec 不要执行体"的意图（与 vm::codec-only 对称）
+# execute: full consensus execution body (enabled by fullnode/mint); when SDK (wasm) turns it off,
+# the execute body compiles to nothing and the state-machine code it references no longer enters wasm
+execute = ["dep:hex", "dep:num-bigint", "dep:protocol", "dep:x16rs"]
+# codec-only: action (de)coding only (enabled by SDK/wasm). Equivalent to default-features=false;
+# lets dependents explicitly declare "codec only, no execution body" (symmetric to vm::codec-only)
 codec-only = []

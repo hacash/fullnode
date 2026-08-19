@@ -297,8 +297,8 @@ fn verify_p2sh_entry_inputs(
     )
 }
 
-// codec-only 下 `convert_and_check` 是入口桩，这些 entry 校验测试只对完整
-// 执行实现有意义。
+// Under codec-only, `convert_and_check` is an entry stub, so these entry-validation
+// tests are only meaningful for the full execution implementation.
 #[cfg(all(test, feature = "full"))]
 mod transfer_tests {
     use super::*;

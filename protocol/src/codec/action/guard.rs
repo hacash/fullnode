@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use base::{ActScope, Action, ActionRef, AddrOrPtr, CoreState};
+use base::{ActScope, Action, ActionRef, AddrOrPtr, CoreState, Transaction};
 use field::{
     Amount, AssetAmt, AssetAmtW1, BlockHeight, ChainIDList, Decode, DiamondNumber, Encode, Reader,
     Satoshi, ToJSON, Uint2, json_decode_value, json_split_array, json_split_object,
@@ -16,6 +16,7 @@ use super::common::{
 };
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct ChainAllow {
     pub kind: Uint2,
     pub chains: ChainIDList,
@@ -38,6 +39,7 @@ impl field::ToJSON for ReqSignList {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct HeightScope {
     pub kind: Uint2,
     pub start: BlockHeight,
@@ -45,6 +47,7 @@ pub struct HeightScope {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct BalanceFloor {
     pub kind: Uint2,
     pub addr: AddrOrPtr,
@@ -238,6 +241,28 @@ fn check_balance_floor_assets(assets: &AssetAmtW1) -> Rerr {
     Ok(())
 }
 
+/// Structural validation of a `BalanceFloor` (no chain state): negative
+/// amount, malformed asset list, empty floor. Shared by `execute` (revert
+/// semantics) and `guard_facts` (review facts); returns the per-asset check
+/// flags the execute body needs.
+fn validate_balance_floor_struct(floor: &BalanceFloor) -> Ret<(bool, bool, bool, bool)> {
+    if floor.hacash.is_negative() {
+        return errf!(
+            "balance floor hacash {} cannot be negative",
+            floor.hacash
+        );
+    }
+    check_balance_floor_assets(&floor.assets)?;
+    let check_hac = !floor.hacash.is_zero();
+    let check_sat = floor.satoshi.uint() > 0;
+    let check_dia = floor.diamond.uint() > 0;
+    let check_assets = floor.assets.length() > 0;
+    if !(check_hac || check_sat || check_dia || check_assets) {
+        return errf!("balance floor is empty");
+    }
+    Ok((check_hac, check_sat, check_dia, check_assets))
+}
+
 base::impl_action! {
     ChainAllow {
         name: "chain_allow",
@@ -245,13 +270,6 @@ base::impl_action! {
         min_tx_type: 2,
         description: |this: &ChainAllow| format!("Valid chain ID list {}", this.chains.as_list().iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let cid = ctx.env().chain.id;
         if !self
@@ -276,7 +294,6 @@ base::impl_action! {
         Ok(vec![])
         
         }
-        }
     }
 }
 
@@ -287,13 +304,6 @@ base::impl_action! {
         min_tx_type: 2,
         description: |this: &HeightScope| format!("Limit height range ({}, {})", this.start.uint(), if this.end.uint() == 0 { "Unlimited".to_owned() } else { this.end.uint().to_string() }),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let left = self.start.uint();
         let right = match self.end.uint() {
@@ -314,7 +324,6 @@ base::impl_action! {
         Ok(vec![])
         
         }
-        }
     }
 }
 
@@ -325,25 +334,8 @@ base::impl_action! {
         min_tx_type: 2,
         description: |this: &BalanceFloor| format!("Balance floor for {} (hac={}, sat={}, dia={}, assets={})", addr_or_ptr_readable(&this.addr), this.hacash, this.satoshi.uint(), this.diamond.uint(), this.assets.length()),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
-        if self.hacash.is_negative() {
-            return errf!("balance floor hacash {} cannot be negative", self.hacash);
-        }
-        check_balance_floor_assets(&self.assets)?;
-        let check_hac = !self.hacash.is_zero();
-        let check_sat = self.satoshi.uint() > 0;
-        let check_dia = self.diamond.uint() > 0;
-        let check_assets = self.assets.length() > 0;
-        if !(check_hac || check_sat || check_dia || check_assets) {
-            return errf!("balance floor is empty");
-        }
+        let (check_hac, check_sat, check_dia, _check_assets) = validate_balance_floor_struct(self)?;
         let addr = ctx.addr(&self.addr)?;
         let balance = CoreState::wrap(ctx.layer())
             .balance(&addr)?
@@ -396,7 +388,6 @@ base::impl_action! {
         Ok(vec![])
         
         }
-        }
     }
 }
 
@@ -410,18 +401,10 @@ base::impl_action! {
         as_transfer_like: none,
         description: |this: &ReqSignList| format!("Require extra signers ({})", this.signers.len()),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         self.validate_against(&ctx.env().tx.addrs)?;
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -471,4 +454,270 @@ where
 {
     let (action, used) = T::decode(buf)?;
     Ok((Arc::new(action), used))
+}
+
+// ================================ wire schema ================================
+
+impl base::ActionSchemaProvider for ReqSignList {
+    const ACTION_SCHEMA: base::ActionSchema = base::ActionSchema {
+        kind: Self::KIND,
+        name: "req_sign_list",
+        audit_class: "full",
+        blob: false,
+        fields: &[
+            base::FieldSchema::new("kind", base::FieldWire::U2),
+            base::FieldSchema::new("signers", base::FieldWire::ListW2("AddrOrPtr")),
+        ],
+    };
+}
+
+// ================================ review facts ================================
+
+/// Facts of the guard actions in one transaction: the *effective* allowed
+/// chains and height range (the protocol executes every guard action
+/// independently, so the effective chain set is the intersection of all
+/// `ChainAllow` lists and the effective height range is the intersection of
+/// all `HeightScope` ranges), plus per-action notes and structural protocol
+/// violations. This is the single analysis shared by the full node and the
+/// SDK review; state-dependent rules stay in the `execute` bodies. A guard
+/// kind without a facts arm is reported as a note instead of being silently
+/// dropped, so a new guard action never disappears from the review.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GuardFacts {
+    /// Effective allowed chain set (intersection of all `ChainAllow`
+    /// actions); `None` when no `ChainAllow` action is present.
+    pub chains: Option<Vec<u32>>,
+    /// Effective height range `(start, end)` (intersection of all
+    /// `HeightScope` actions); `None` when no `HeightScope` action is
+    /// present. `end == 0` means unlimited.
+    pub height_range: Option<(u64, u64)>,
+    /// (action index, note) pairs attached to the matching action descriptor.
+    pub action_notes: Vec<(usize, String)>,
+    /// Protocol-level violations: signing must be rejected, decode stays ok.
+    pub protocol_violations: Vec<String>,
+}
+
+fn push_guard_note(facts: &mut GuardFacts, index: usize, text: String) {
+    facts.protocol_violations.push(text.clone());
+    facts.action_notes.push((index, text));
+}
+
+/// Single guard-facts analysis for a transaction (see `GuardFacts`).
+pub fn guard_facts(tx: &dyn Transaction) -> GuardFacts {
+    let mut facts = GuardFacts {
+        chains: None,
+        height_range: None,
+        action_notes: Vec::new(),
+        protocol_violations: Vec::new(),
+    };
+    for (index, action) in tx.actions().iter().enumerate() {
+        match action.kind() {
+            ChainAllow::KIND => {
+                let Some(chain_allow) = action.as_any().downcast_ref::<ChainAllow>() else {
+                    continue;
+                };
+                let allowed: Vec<u32> = chain_allow
+                    .chains
+                    .as_list()
+                    .iter()
+                    .map(|id| id.uint())
+                    .collect();
+                if allowed.is_empty() {
+                    push_guard_note(
+                        &mut facts,
+                        index,
+                        "chain_allow with empty chain list is protocol-invalid".to_owned(),
+                    );
+                    continue;
+                }
+                facts.chains = Some(match facts.chains.take() {
+                    None => allowed,
+                    Some(prev) => prev.into_iter().filter(|id| allowed.contains(id)).collect(),
+                });
+                if facts.chains.as_ref().is_some_and(|set| set.is_empty()) {
+                    push_guard_note(
+                        &mut facts,
+                        index,
+                        "chain_allow constraints conflict: no chain satisfies all of them"
+                            .to_owned(),
+                    );
+                }
+            }
+            HeightScope::KIND => {
+                let Some(scope) = action.as_any().downcast_ref::<HeightScope>() else {
+                    continue;
+                };
+                let start = scope.start.uint();
+                let end = scope.end.uint();
+                if start > end && end != 0 {
+                    push_guard_note(
+                        &mut facts,
+                        index,
+                        format!("height_scope left {start} exceeds right {end}"),
+                    );
+                    continue;
+                }
+                let end = if end == 0 { u64::MAX } else { end };
+                facts.height_range = Some(match facts.height_range {
+                    None => (start, end),
+                    Some(prev) => (prev.0.max(start), prev.1.min(end)),
+                });
+                if facts
+                    .height_range
+                    .as_ref()
+                    .is_some_and(|range| range.0 > range.1)
+                {
+                    push_guard_note(
+                        &mut facts,
+                        index,
+                        "height_scope constraints conflict: no height satisfies all of them"
+                            .to_owned(),
+                    );
+                }
+            }
+            ReqSignList::KIND => {
+                if let Some(list) = action.as_any().downcast_ref::<ReqSignList>() {
+                    if let Err(error) = list.validate_against(&tx.addrs()) {
+                        push_guard_note(&mut facts, index, error.to_string());
+                    }
+                }
+            }
+            BalanceFloor::KIND => {
+                if let Some(floor) = action.as_any().downcast_ref::<BalanceFloor>() {
+                    if let Err(error) = validate_balance_floor_struct(floor) {
+                        push_guard_note(&mut facts, index, error.to_string());
+                    }
+                }
+            }
+            kind
+                if action.scope() == ActScope::GUARD
+                    || action.scope() == ActScope::TOP_GUARD_UNIQUE =>
+            {
+                push_guard_note(
+                    &mut facts,
+                    index,
+                    format!("guard action kind {kind} has no review facts"),
+                );
+            }
+            _ => {}
+        }
+    }
+    // Convert the internal unlimited sentinel back to the wire's 0 form.
+    if let Some(range) = &mut facts.height_range {
+        if range.1 == u64::MAX {
+            range.1 = 0;
+        }
+    }
+    facts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::tx::TransactionType2;
+    use field::{Amount, BlockHeight, ChainIDList, DiamondNumber, Satoshi, Uint4};
+
+    fn main_address() -> field::Address {
+        let account = sys::Account::create_by("123456").unwrap();
+        field::Address::from(*account.address())
+    }
+
+    fn sample_tx() -> TransactionType2 {
+        let main = main_address();
+        TransactionType2::new_by(main, Amount::from("1:244").unwrap(), 0)
+    }
+
+    /// Every standard guard kind must produce a specific fact (no "no review
+    /// facts" note): chains intersection, height range, signer validation and
+    /// balance-floor structural validation.
+    #[test]
+    fn guard_facts_cover_every_standard_guard_kind() {
+        let main = main_address();
+        let mut tx = sample_tx();
+        tx.push_action_in(Arc::new(ChainAllow::new(
+            ChainIDList::from(vec![Uint4::from(1)]).unwrap(),
+        )));
+        tx.push_action_in(Arc::new(HeightScope::new(
+            BlockHeight::from(100),
+            BlockHeight::from(200),
+        )));
+        tx.push_action_in(Arc::new(ReqSignList::create_by_addrs(vec![main]).unwrap()));
+        tx.push_action_in(Arc::new(BalanceFloor::new(
+            AddrOrPtr::Addr(main),
+            Amount::from("1:244").unwrap(),
+            Satoshi::from(100),
+            DiamondNumber::from(1),
+        )));
+
+        let facts = guard_facts(&tx);
+        assert!(
+            facts.protocol_violations.is_empty(),
+            "{:?}",
+            facts.protocol_violations
+        );
+        assert_eq!(facts.chains, Some(vec![1]));
+        assert_eq!(facts.height_range, Some((100, 200)));
+        assert!(
+            facts.action_notes.is_empty(),
+            "{:?}",
+            facts.action_notes
+        );
+    }
+
+    /// ChainAllow intersection and conflicting pairs are the same analysis the
+    /// strict inspect consumes.
+    #[test]
+    fn guard_facts_intersect_chain_allow_and_height_scope() {
+        let mut tx = sample_tx();
+        tx.push_action_in(Arc::new(ChainAllow::new(
+            ChainIDList::from(vec![Uint4::from(0), Uint4::from(1)]).unwrap(),
+        )));
+        tx.push_action_in(Arc::new(ChainAllow::new(
+            ChainIDList::from(vec![Uint4::from(1), Uint4::from(2)]).unwrap(),
+        )));
+        tx.push_action_in(Arc::new(HeightScope::new(
+            BlockHeight::from(100),
+            BlockHeight::from(0), // unlimited
+        )));
+        tx.push_action_in(Arc::new(HeightScope::new(
+            BlockHeight::from(150),
+            BlockHeight::from(300),
+        )));
+
+        let facts = guard_facts(&tx);
+        assert!(facts.protocol_violations.is_empty(), "{:?}", facts.protocol_violations);
+        assert_eq!(facts.chains, Some(vec![1]));
+        assert_eq!(facts.height_range, Some((150, 300)));
+
+        // A conflicting chain pair is a protocol fact (empty effective set).
+        let mut tx = sample_tx();
+        tx.push_action_in(Arc::new(ChainAllow::new(
+            ChainIDList::from(vec![Uint4::from(0)]).unwrap(),
+        )));
+        tx.push_action_in(Arc::new(ChainAllow::new(
+            ChainIDList::from(vec![Uint4::from(1)]).unwrap(),
+        )));
+        let facts = guard_facts(&tx);
+        assert_eq!(facts.chains, Some(vec![]));
+        assert_eq!(facts.protocol_violations.len(), 1);
+    }
+
+    /// A structurally invalid BalanceFloor is a review violation, not a
+    /// decode failure (the execute body applies the same structural rules).
+    #[test]
+    fn guard_facts_report_invalid_balance_floor_struct() {
+        let main = main_address();
+        let mut tx = sample_tx();
+        tx.push_action_in(Arc::new(BalanceFloor::new(
+            AddrOrPtr::Addr(main),
+            Amount::from("-1:244").unwrap(),
+            Satoshi::from(100),
+            DiamondNumber::from(1),
+        )));
+        let facts = guard_facts(&tx);
+        assert_eq!(facts.protocol_violations.len(), 1);
+        assert!(facts.protocol_violations[0].contains("cannot be negative"));
+        assert_eq!(facts.action_notes.len(), 1);
+        assert_eq!(facts.action_notes[0].0, 0);
+    }
 }

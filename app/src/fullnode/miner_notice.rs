@@ -1,10 +1,10 @@
-//! `/query/miner/notice` 长轮询端点（async 版）。
+//! `/query/miner/notice` long-poll endpoint (async version).
 //!
-//! mint 已移除 tokio（`miner_notice_wait_async` 删除，仅保留同步
-//! `miner_notice_wait` 与公开的 `begin_miner_notice` guard）。该 async 轮询
-//! 随 tokio 运行环境迁入 app——HTTP 路由由 server crate 的 tokio 运行时驱动，
-//! 此处只提供处理 future。语义与旧 mint 实现一致：登记等待计数、
-//! 轮询高度直到目标或超时。
+//! mint has dropped tokio (`miner_notice_wait_async` removed; only the sync
+//! `miner_notice_wait` and the public `begin_miner_notice` guard remain). This async poll
+//! moved into app with the tokio runtime — HTTP routes are driven by the server crate's
+//! tokio runtime; here we only provide the handling future. Semantics match the old mint
+//! implementation: bump the waiting count, poll the height until target or timeout.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};

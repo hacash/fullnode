@@ -6,7 +6,7 @@ default-run = "fullnode"
 
 [dependencies]
 sys = { workspace = true, features = ["secp-static-context"] }
-field = { workspace = true }
+field = { workspace = true, features = ["json-serde", "num-bigint"] }
 base = { workspace = true }
 protocol = { workspace = true }
 db = { workspace = true, default-features = false }
@@ -14,6 +14,7 @@ vm = { workspace = true }
 mint = { workspace = true }
 mint-core = { workspace = true }
 chain = { workspace = true }
+chain-codec = { workspace = true }
 node = { workspace = true }
 server = { workspace = true }
 api = { workspace = true }

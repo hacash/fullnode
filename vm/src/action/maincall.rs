@@ -12,10 +12,12 @@ use field::{BytesW2, Decode, Encode, Fixed3, Uint1, Uint2};
 use sys::Ret;
 
 use crate::contract::convert_and_check;
+#[cfg(feature = "full")]
 use crate::machine::{VmRequest, peek_vm_runtime_limits};
 use crate::rt::{CodeConf, CodeType};
 
 #[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
+#[action_codec(audit = "opaque")]
 pub struct ContractMainCall {
     pub kind: Uint2,
     pub marks: Fixed3,
@@ -61,20 +63,13 @@ base::impl_action! {
             format!("Run main codes with conf {}", this.codeconf.uint())
         },
         execute: (self, ctx) {
-        #[cfg(all(feature = "codec-only", not(feature = "full")))]
-        {
-            let _ = (self, ctx);
-            crate::action::execution_disabled()
-        }
-        #[cfg(not(all(feature = "codec-only", not(feature = "full"))))]
-        {
             contract_main_call_execute(self, ctx)?;
             Ok(vec![])
-        }
         }
     }
 }
 
+#[cfg(feature = "full")]
 fn contract_main_call_execute(this: &ContractMainCall, ctx: &mut dyn Context) -> Ret<()> {
     if !this.marks.is_zero() {
         return sys::errf!("marks bytes format invalid");

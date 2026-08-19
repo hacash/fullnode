@@ -3,24 +3,22 @@
 //! node; the chain context is caller input.
 
 use base::{BinaryCodecs, JsonCodecs, Transaction};
-use field::{Address, Encode};
-use serde::{Deserialize, Serialize};
+use field::Address;
 
 use crate::audit::{self, Auditability};
 use crate::codec::standard_codecs;
 use crate::error::{SdkError, SdkErrorCode};
-use crate::profile::{self, CodecProfile};
+use crate::profile::CodecProfile;
 use crate::schema::{SCHEMA_REVIEW, SCHEMA_TRANSACTION_JSON};
 
 /// Chain context for strict inspection (doc 14 §5 `tx.inspect`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InspectContext {
     pub current_height: u64,
     pub expected_chain_id: u32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HeightRangeDesc {
     pub start: u64,
     pub end: u64,
@@ -28,8 +26,7 @@ pub struct HeightRangeDesc {
 
 /// The review object (doc 14 §6.1). Contains protocol facts and audit
 /// material only; no policy decision, no bridge fields.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Review {
     pub schema: String,
     pub codec_profile_hash: String,
@@ -37,8 +34,7 @@ pub struct Review {
     pub timestamp: u64,
     pub main: String,
     pub fee: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gas_max: Option<u8>,
+        pub gas_max: Option<u8>,
     pub tx_hash: String,
     pub hash_with_fee: String,
     pub unsigned_body_hash: String,
@@ -46,54 +42,38 @@ pub struct Review {
     /// The signer this review's binding was computed for, if any. Stored in
     /// the review so `review_binding` is recomputable by anyone holding the
     /// review (see `review_binding_of`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer_address: Option<String>,
     /// The strict-inspect context the binding was computed with; `None` for
     /// report mode. Stored for the same recomputability reason.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inspect_context: Option<InspectContext>,
     pub protocol_valid: bool,
     pub signability: String,
     pub auditability: String,
     pub requires_user_confirmation: bool,
+    /// Consensus-level limit violations of the *decoded* transaction (body
+    /// size, type-3 signer count). Facts, never decode denials: the SDK
+    /// reports what the wire carries and the upper layer decides.
+    pub limits_violations: Vec<String>,
     pub required_signers: Vec<String>,
     pub present_signers: Vec<String>,
     pub missing_signers: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chain_ids_allowed: Option<Vec<u32>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub valid_height_range: Option<HeightRangeDesc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fee_purity: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fee_purity_ok: Option<bool>,
+        pub chain_ids_allowed: Option<Vec<u32>>,
+        pub valid_height_range: Option<HeightRangeDesc>,
+        pub fee_purity: Option<u64>,
+        pub fee_purity_ok: Option<bool>,
     pub actions: Vec<crate::audit::ActionDesc>,
     pub asset_serials: Vec<u64>,
 }
 
 /// Decode a transaction body with the SDK codec registry and fail-closed
-/// rules: size limit, unknown tx type, malformed wire, trailing bytes.
+/// rules: unknown tx type, malformed wire, trailing bytes. The registry (the
+/// chain-codec surface) decides which tx types exist; consensus-level rules
+/// (size caps, signer counts) are reported as review facts, never as decode
+/// denials — the SDK exposes what the wire carries and lets the upper layer
+/// judge.
 pub fn decode_tx(body: &[u8]) -> Result<base::TxRef, SdkError> {
-    if body.len() > profile::MAX_TX_SIZE {
-        return Err(SdkError::with_detail(
-            SdkErrorCode::LimitExceeded,
-            format!(
-                "tx body {} bytes exceeds protocol maximum {}",
-                body.len(),
-                profile::MAX_TX_SIZE
-            ),
-            serde_json::json!({ "byte_offset": body.len(), "expected": profile::MAX_TX_SIZE }),
-        ));
-    }
-    let Some(&ty_byte) = body.first() else {
+    if body.is_empty() {
         return Err(SdkError::new(SdkErrorCode::ParseFailed, "tx body is empty"));
-    };
-    if !matches!(ty_byte, 1 | 2 | 3) {
-        return Err(SdkError::with_detail(
-            SdkErrorCode::ParseFailed,
-            format!("unknown transaction type {ty_byte}"),
-            serde_json::json!({ "byte_offset": 0 }),
-        ));
     }
     let codecs = standard_codecs().map_err(SdkError::from)?;
     let (tx, used) = codecs
@@ -103,18 +83,7 @@ pub fn decode_tx(body: &[u8]) -> Result<base::TxRef, SdkError> {
         return Err(SdkError::with_detail(
             SdkErrorCode::TrailingBytes,
             format!("tx parse consumed {used} of {} bytes", body.len()),
-            serde_json::json!({ "byte_offset": used, "actual": body.len() }),
-        ));
-    }
-    if tx.action_count() > profile::TX_ACTIONS_MAX {
-        return Err(SdkError::with_detail(
-            SdkErrorCode::LimitExceeded,
-            format!(
-                "tx action count {} exceeds protocol maximum {}",
-                tx.action_count(),
-                profile::TX_ACTIONS_MAX
-            ),
-            serde_json::json!({ "expected": profile::TX_ACTIONS_MAX }),
+            crate::json::obj(vec![crate::json::kv("byte_offset", used.to_string()), crate::json::kv("actual", body.len().to_string())]),
         ));
     }
     Ok(tx)
@@ -122,118 +91,20 @@ pub fn decode_tx(body: &[u8]) -> Result<base::TxRef, SdkError> {
 
 /// Re-encode the transaction with its signature set cleared. Used for the
 /// stable `unsigned_body_hash`; Type-2/3 wire order is preserved exactly.
+/// The concrete type list lives in `protocol::tx_std` (the crate that owns
+/// the types), so a new transaction type needs no change here.
 pub fn encode_without_signs(tx: &dyn Transaction) -> Result<Vec<u8>, SdkError> {
-    use protocol::tx_std::{TransactionType1, TransactionType2, TransactionType3};
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
-        let mut copy = t.clone();
-        copy.signs = field::ListW2::<field::Sign>::default();
-        return Ok(copy.encode());
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType2>() {
-        let mut copy = t.clone();
-        copy.signs = field::ListW2::<field::Sign>::default();
-        return Ok(copy.encode());
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType3>() {
-        let mut copy = t.clone();
-        copy.signs = field::ListW2::<field::Sign>::default();
-        return Ok(copy.encode());
-    }
-    Err(SdkError::new(
-        SdkErrorCode::UnsupportedTxType,
-        format!("transaction type {} has no unsigned-body form", tx.ty()),
-    ))
+    protocol::tx_std::encode_without_signs(tx).map_err(SdkError::from)
 }
 
-/// Guard facts extracted from the action list: allowed chains and height
-/// range as the *effective* constraints, per-action notes and protocol
-/// violations. The protocol executes every guard action independently
-/// (see `protocol::codec::action::guard`), so the effective chain set is the
-/// intersection of all `ChainAllow` actions and the effective height range is
-/// the intersection of all `HeightScope` actions.
-struct GuardFacts {
-    chains: Option<Vec<u32>>,
-    height_range: Option<HeightRangeDesc>,
-    /// (action_index, note) pairs attached to the matching action descriptor.
-    action_notes: Vec<(usize, String)>,
-    /// Protocol-level violations: signing must be rejected, decode stays ok.
-    protocol_violations: Vec<String>,
-}
+/// Guard facts come from the protocol's single `guard_facts` analysis
+/// (`protocol::action_std`, co-located with the guard action definitions and
+/// their execute bodies); the SDK never re-derives guard semantics. The
+/// effective chain set is the intersection of all `ChainAllow` actions and
+/// the effective height range the intersection of all `HeightScope` actions.
 
-fn collect_guard_facts(tx: &dyn Transaction) -> GuardFacts {
-    use protocol::action_std::{ChainAllow, HeightScope, ReqSignList};
-    let mut facts = GuardFacts {
-        chains: None,
-        height_range: None,
-        action_notes: Vec::new(),
-        protocol_violations: Vec::new(),
-    };
-    for (index, action) in tx.actions().iter().enumerate() {
-        if let Some(chain_allow) = action.as_any().downcast_ref::<ChainAllow>() {
-            let allowed: Vec<u32> = chain_allow
-                .chains
-                .as_list()
-                .iter()
-                .map(|id| id.uint())
-                .collect();
-            if allowed.is_empty() {
-                let note = "chain_allow with empty chain list is protocol-invalid".to_owned();
-                facts.protocol_violations.push(note.clone());
-                facts.action_notes.push((index, note));
-                continue;
-            }
-            facts.chains = Some(match facts.chains.take() {
-                None => allowed,
-                Some(prev) => prev.into_iter().filter(|id| allowed.contains(id)).collect(),
-            });
-            if facts.chains.as_ref().is_some_and(|set| set.is_empty()) {
-                let note = "chain_allow constraints conflict: no chain satisfies all of them"
-                    .to_owned();
-                facts.protocol_violations.push(note.clone());
-                facts.action_notes.push((index, note));
-            }
-        } else if let Some(scope) = action.as_any().downcast_ref::<HeightScope>() {
-            let start = scope.start.uint();
-            let end = scope.end.uint();
-            if start > end && end != 0 {
-                facts.protocol_violations.push(format!(
-                    "height_scope left {start} exceeds right {end}"
-                ));
-                facts
-                    .action_notes
-                    .push((index, format!("height_scope left {start} exceeds right {end}")));
-                continue;
-            }
-            let range = HeightRangeDesc {
-                start,
-                end: if end == 0 { u64::MAX } else { end },
-            };
-            facts.height_range = Some(match facts.height_range {
-                None => range,
-                Some(prev) => HeightRangeDesc {
-                    start: prev.start.max(range.start),
-                    end: prev.end.min(range.end),
-                },
-            });
-            if facts
-                .height_range
-                .as_ref()
-                .is_some_and(|range| range.start > range.end)
-            {
-                let note = "height_scope constraints conflict: no height satisfies all of them"
-                    .to_owned();
-                facts.protocol_violations.push(note.clone());
-                facts.action_notes.push((index, note));
-            }
-        } else if let Some(req_sign) = action.as_any().downcast_ref::<ReqSignList>() {
-            if req_sign.signers.is_empty() {
-                let note = "req_sign_list with empty signer list is protocol-invalid".to_owned();
-                facts.protocol_violations.push(note.clone());
-                facts.action_notes.push((index, note));
-            }
-        }
-    }
-    facts
+fn collect_guard_facts(tx: &dyn Transaction) -> protocol::action_std::GuardFacts {
+    protocol::action_std::guard_facts(tx)
 }
 
 fn parse_signer_address(signer_address: Option<&str>) -> Result<Option<Address>, SdkError> {
@@ -273,8 +144,12 @@ fn build_review(
     let mut auditability = Auditability::Full;
     for (index, action) in tx.actions().iter().enumerate() {
         let mut desc = audit::describe_action(action, index, &index.to_string(), 0);
+        // Guard notes are protocol violations (the single `guard_facts`
+        // analysis): the per-action `protocol_valid` fact reflects them, so
+        // the descriptor never claims validity the review denies.
         if let Some((_, note)) = guard_facts.action_notes.iter().find(|(idx, _)| *idx == index) {
             desc.audit_notes.push(note.clone());
+            desc.protocol_valid = false;
         }
         auditability = Auditability::worse(auditability, classify(&desc.auditability));
         collect_asset_serials(action, &mut asset_serials);
@@ -282,23 +157,39 @@ fn build_review(
     }
     let requires_user_confirmation = auditability != Auditability::Full;
 
-    let signability = if tx.ty() == 1 {
-        "unsupported_tx_type".to_owned()
-    } else {
+    // Consensus-level limit facts, reported (never gated) for the decoded tx.
+    let mut limits_violations = Vec::new();
+    if body.len() > base::MAX_TX_SIZE {
+        limits_violations.push(format!(
+            "tx body {} bytes exceeds consensus maximum {}",
+            body.len(),
+            base::MAX_TX_SIZE
+        ));
+    }
+    // The signer cap (type 3 only) is the protocol's rule, evaluated on the
+    // required signer set; the SDK reports it as a fact.
+    if let Err(error) =
+        protocol::tx_std::check_signers_cap(tx.as_ref(), profile.protocol_params.max_type3_signers)
+    {
+        limits_violations.push(error.to_string());
+    }
+
+    // Every tx type the codec registry can decode is signable; the chain
+    // decides whether it accepts the signed body (e.g. flag-gated types).
+    let signability = if standard_codecs()
+        .map(|codecs| codecs.registered_tx_types().contains(&tx.ty()))
+        .unwrap_or(false)
+    {
         "signable".to_owned()
+    } else {
+        "unsupported_tx_type".to_owned()
     };
 
-    // Fee purity is a local protocol fact for Type-2; Type-3 purity depends on
-    // runtime gas, reported as unknown rather than a fake fixed fact.
-    let (fee_purity, fee_purity_ok) = if tx.ty() == 2 {
-        let purity = tx.fee_purity();
-        (
-            Some(purity),
-            Some(purity >= profile.protocol_params.fee_purity_floor),
-        )
-    } else {
-        (None, None)
-    };
+    // Fee purity is a protocol trait fact (`Transaction::fee_purity`,
+    // type-specific computation owned by protocol); the floor comparison is
+    // reported as-is and the upper layer judges it.
+    let fee_purity = Some(tx.fee_purity());
+    let fee_purity_ok = Some(tx.fee_purity() >= profile.protocol_params.fee_purity_floor);
 
     let mut review = Review {
         schema: SCHEMA_REVIEW.to_owned(),
@@ -318,13 +209,14 @@ fn build_review(
         signability,
         auditability: auditability.as_str().to_owned(),
         requires_user_confirmation,
+        limits_violations,
         required_signers: readable_signers(&report.required),
         present_signers: readable_signers(&report.present),
         missing_signers: readable_signers(&report.missing),
         chain_ids_allowed: guard_facts.chains,
         valid_height_range: guard_facts.height_range.map(|range| HeightRangeDesc {
-            start: range.start,
-            end: if range.end == u64::MAX { 0 } else { range.end },
+            start: range.0,
+            end: range.1,
         }),
         fee_purity,
         fee_purity_ok,
@@ -357,11 +249,10 @@ pub fn review_binding_of(
         .and_then(|raw| Address::from_readable(raw).ok())
         .map(|signer| hex::encode(protocol::tx_std::sign_hash_for(tx, &signer).0));
     let context_json = match &review.inspect_context {
-        Some(context) => serde_json::to_string(context).unwrap_or_default(),
+        Some(context) => context.to_json_string(),
         None => String::new(),
     };
-    let review_value = serde_json::to_value(review).unwrap_or_default();
-    let review_digest = audit::canonical_review_digest(&review_value);
+    let review_digest = audit::canonical_review_digest(review);
     audit::compute_review_binding(
         unsigned_body_hash,
         review.signer_address.as_deref(),
@@ -403,7 +294,9 @@ pub fn inspect_report(
 }
 
 /// `tx.inspect`: strict mode. Requires chain context and validates the
-/// height/chain guards against it.
+/// height/chain guards against it. The guard facts come from the single
+/// `collect_guard_facts` implementation (the same one that feeds the review),
+/// so the per-action semantics can never drift between report and strict mode.
 pub fn inspect(
     body_hex: &str,
     signer_address: Option<&str>,
@@ -413,50 +306,43 @@ pub fn inspect(
     let body = decode_body_hex(body_hex)?;
     let tx = decode_tx(&body)?;
     let review = build_review(&body, signer_address, Some(context), profile)?;
-    // Strict guard checks against the caller-provided context.
-    for action in tx.actions() {
-        if let Some(scope) = action.as_any().downcast_ref::<protocol::action_std::HeightScope>() {
-            let left = scope.start.uint();
-            let right = match scope.end.uint() {
-                0 => u64::MAX,
-                h => h,
-            };
-            if left > right {
-                return Err(SdkError::new(
-                    SdkErrorCode::ParseFailed,
-                    format!("height_scope left {left} exceeds right {right}"),
-                ));
-            }
-            let height = context.current_height;
-            if height < left || height > right {
-                return Err(SdkError::with_detail(
-                    SdkErrorCode::ExpiredHeight,
-                    format!(
-                        "current height {height} outside allowed range ({left}, {right})"
-                    ),
-                    serde_json::json!({
-                        "expected": format!("{}..{}", left, right),
-                        "actual": height,
-                    }),
-                ));
-            }
-        } else if let Some(chain_allow) =
-            action.as_any().downcast_ref::<protocol::action_std::ChainAllow>()
-        {
-            let allowed: Vec<u32> = chain_allow.chains.as_list().iter().map(|id| id.uint()).collect();
-            if !allowed.contains(&context.expected_chain_id) {
-                return Err(SdkError::with_detail(
-                    SdkErrorCode::WrongChainId,
-                    format!(
-                        "expected chain {} not in allowed chains {:?}",
-                        context.expected_chain_id, allowed
-                    ),
-                    serde_json::json!({
-                        "expected": allowed,
-                        "actual": context.expected_chain_id,
-                    }),
-                ));
-            }
+    // Strict guard checks against the caller-provided context, from the shared
+    // guard facts (intersection of all ChainAllow/HeightScope actions).
+    let facts = collect_guard_facts(tx.as_ref());
+    if let Some((start, end)) = &facts.height_range {
+        if *start > *end && *end != 0 {
+            return Err(SdkError::new(
+                SdkErrorCode::ParseFailed,
+                format!("height_scope constraints unsatisfiable ({start}..{end})"),
+            ));
+        }
+        let height = context.current_height;
+        if height < *start || (*end != 0 && height > *end) {
+            return Err(SdkError::with_detail(
+                SdkErrorCode::ExpiredHeight,
+                format!(
+                    "current height {height} outside allowed range ({start}, {end})"
+                ),
+                crate::json::obj(vec![crate::json::kv(
+                    "expected",
+                    format!("{start}..{end}")
+                ), crate::json::kv("actual", height.to_string())]),
+            ));
+        }
+    }
+    if let Some(chains) = &facts.chains {
+        if !chains.contains(&context.expected_chain_id) {
+            return Err(SdkError::with_detail(
+                SdkErrorCode::WrongChainId,
+                format!(
+                    "expected chain {} not in allowed chains {:?}",
+                    context.expected_chain_id, chains
+                ),
+                crate::json::obj(vec![crate::json::kv(
+                    "expected",
+                    crate::json::arr(chains.iter().map(|c| c.to_string()).collect())
+                ), crate::json::kv("actual", context.expected_chain_id.to_string())]),
+            ));
         }
     }
     Ok(review)
@@ -469,24 +355,21 @@ pub(crate) fn decode_body_hex(body_hex: &str) -> Result<Vec<u8>, SdkError> {
 
 /// Signature entries for `tx.decode` (doc 14 §6.4). The low-level encode path
 /// accepts appended entries and re-validates everything.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SignatureEntry {
     pub public_key: String,
     pub signature: String,
 }
 
 /// `tx.decode`: strict structured codec output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TransactionJson {
     pub schema: String,
     pub tx_type: u8,
     pub timestamp: u64,
     pub main: String,
     pub fee: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gas_max: Option<u8>,
+        pub gas_max: Option<u8>,
     pub tx_hash: String,
     pub hash_with_fee: String,
     pub unsigned_body_hash: String,
@@ -542,7 +425,6 @@ pub fn encode_transaction_json(
     review: Option<&Review>,
     profile: &CodecProfile,
 ) -> Result<crate::build::BuiltTransaction, SdkError> {
-    use base::TransactionBuild;
     use field::Sign;
 
     if transaction.schema != SCHEMA_TRANSACTION_JSON {
@@ -551,24 +433,21 @@ pub fn encode_transaction_json(
             format!("unsupported transaction json schema {:?}", transaction.schema),
         ));
     }
-    if !matches!(transaction.tx_type, 2 | 3) {
-        return Err(SdkError::new(
-            SdkErrorCode::UnsupportedTxType,
-            format!("encode supports type 2/3 only, got {}", transaction.tx_type),
-        ));
-    }
-    if transaction.actions.len() > profile::TX_ACTIONS_MAX {
+    let codecs = standard_codecs().map_err(SdkError::from)?;
+    if !codecs.registered_tx_types().contains(&transaction.tx_type) {
         return Err(SdkError::with_detail(
-            SdkErrorCode::LimitExceeded,
-            "action count exceeds protocol maximum",
-            serde_json::json!({ "expected": profile::TX_ACTIONS_MAX }),
+            SdkErrorCode::UnsupportedTxType,
+            format!(
+                "encode supports the registered transaction types only, got {}",
+                transaction.tx_type
+            ),
+            format!("{{\"actual\":{}}}", transaction.tx_type),
         ));
     }
 
     let main = Address::from_readable(&transaction.main).map_err(SdkError::from)?;
     let fee = field::Amount::from(&transaction.fee).map_err(SdkError::from)?;
     let fee_fin = fee.to_fin_string();
-    let codecs = standard_codecs().map_err(SdkError::from)?;
     let mut actions = Vec::with_capacity(transaction.actions.len());
     for desc in &transaction.actions {
         let action = codecs
@@ -578,7 +457,7 @@ pub fn encode_transaction_json(
                 SdkError::with_detail(
                     SdkErrorCode::UnsupportedSchema,
                     format!("action kind {} has no json codec for re-encoding", desc.kind),
-                    serde_json::json!({ "action_index": desc.index, "action_kind": desc.kind }),
+                    crate::json::obj(vec![crate::json::kv("action_index", desc.index.to_string()), crate::json::kv("action_kind", desc.kind.to_string())]),
                 )
             })?;
         actions.push(action);
@@ -604,38 +483,17 @@ pub fn encode_transaction_json(
         signs.push(Sign { publickey, signature });
     }
 
-    let (encoded, decoded) = if transaction.tx_type == 3 {
-        let mut tx = protocol::tx_std::TransactionType3::new_by(main, fee, transaction.timestamp);
-        if let Some(gas) = transaction.gas_max {
-            tx.gas_max = field::Uint1::from(gas);
-        }
-        for action in actions {
-            tx.push_action(action).map_err(SdkError::from)?;
-        }
-        for sign in signs {
-            tx.push_sign(sign).map_err(SdkError::from)?;
-        }
-        let encoded = tx.encode();
-        let decoded = decode_tx(&encoded)?;
-        (encoded, decoded)
-    } else {
-        if transaction.gas_max.is_some_and(|gas| gas != 0) {
-            return Err(SdkError::new(
-                SdkErrorCode::ParseFailed,
-                "type 2 transactions require gas_max = 0",
-            ));
-        }
-        let mut tx = protocol::tx_std::TransactionType2::new_by(main, fee, transaction.timestamp);
-        for action in actions {
-            tx.push_action(action).map_err(SdkError::from)?;
-        }
-        for sign in signs {
-            tx.push_sign(sign).map_err(SdkError::from)?;
-        }
-        let encoded = tx.encode();
-        let decoded = decode_tx(&encoded)?;
-        (encoded, decoded)
-    };
+    // The body is built by the protocol's own standard-tx constructor (type
+    // list and gas rule owned by protocol), then re-decoded for the
+    // round-trip invariant.
+    let encoded = protocol::tx_std::encode_standard_tx(
+        base::TxCreateRequest::new(transaction.tx_type, main, fee, transaction.timestamp)
+            .with_gas_max(transaction.gas_max.unwrap_or(0)),
+        &actions,
+        &signs,
+    )
+    .map_err(SdkError::from)?;
+    let decoded = decode_tx(&encoded)?;
     let body_hex = hex::encode(&encoded);
     // Round-trip invariant: rebuilding a decode output must reproduce it.
     if decoded.encode() != encoded {
@@ -652,10 +510,7 @@ pub fn encode_transaction_json(
         return Err(SdkError::with_detail(
             SdkErrorCode::TransactionJsonMismatch,
             "rebuilt body does not match the declared unsigned_body_hash",
-            serde_json::json!({
-                "expected": transaction.unsigned_body_hash,
-                "actual": unsigned_body_hash,
-            }),
+            crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&transaction.unsigned_body_hash)), crate::json::kv("actual", crate::json::q(&unsigned_body_hash))]),
         ));
     }
     // When an approval context is supplied, its binding must cover the body
@@ -665,20 +520,14 @@ pub fn encode_transaction_json(
             return Err(SdkError::with_detail(
                 SdkErrorCode::ReviewBindingMismatch,
                 "review does not match the rebuilt body",
-                serde_json::json!({
-                    "expected": review.unsigned_body_hash,
-                    "actual": unsigned_body_hash,
-                }),
+                crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&review.unsigned_body_hash)), crate::json::kv("actual", crate::json::q(&unsigned_body_hash))]),
             ));
         }
         if review.codec_profile_hash != profile.profile_hash {
             return Err(SdkError::with_detail(
                 SdkErrorCode::CodecProfileMismatch,
                 "review was created under a different codec profile",
-                serde_json::json!({
-                    "expected": profile.profile_hash,
-                    "actual": review.codec_profile_hash,
-                }),
+                crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&profile.profile_hash)), crate::json::kv("actual", crate::json::q(&review.codec_profile_hash))]),
             ));
         }
         let binding = review_binding_of(review, &unsigned_body_hash, decoded.as_ref(), profile);
@@ -686,7 +535,7 @@ pub fn encode_transaction_json(
             return Err(SdkError::with_detail(
                 SdkErrorCode::ReviewBindingMismatch,
                 "review binding does not verify for the rebuilt body",
-                serde_json::json!({ "expected": review.review_binding, "actual": binding }),
+                crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&review.review_binding)), crate::json::kv("actual", crate::json::q(&binding))]),
             ));
         }
     }

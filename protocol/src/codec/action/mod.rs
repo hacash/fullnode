@@ -5,13 +5,6 @@
 //! all public items are re-exported here so `protocol::action_std::*` and
 //! `crate::codec::action::*` keep working.
 
-/// codec-only（SDK wasm）下所有标准 action 的 `Action::execute` 入口桩：直接
-/// 返回错误，不进入完整执行函数，保证执行实现不进入 wasm 依赖闭包。
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-pub(crate) fn execution_disabled() -> sys::Ret<Vec<u8>> {
-    sys::errf!("protocol action execution is not included in the sdk (codec-only) build")
-}
-
 mod ast;
 mod blob;
 mod common;
@@ -30,10 +23,10 @@ pub use envfunc::{
     ViewDiaInscGet, ViewDiaInscNum, ViewDiaNameList, ViewDiaOwnerAddrs, create_envfunc_action,
 };
 pub use guard::{
-    BalanceFloor, ChainAllow, HeightScope, ReqSignList, create_chain_guard_action,
-    decode_req_sign_list_json,
+    BalanceFloor, ChainAllow, GuardFacts, HeightScope, ReqSignList, create_chain_guard_action,
+    decode_req_sign_list_json, guard_facts,
 };
-pub use tex::{TexCellAct, create_tex_cell_act, decode_tex_cell_act_json};
+pub use tex::{TexCellAct, create_tex_cell_act, decode_tex_cell_act_json, tex_cell_schema};
 pub use transfer::{
     AssetFromToTrs, AssetFromTrs, AssetToTrs, DiaFromToTrs, DiaFromTrs, DiaSingleTrs, DiaToTrs,
     HacFromToTrs, HacFromTrs, HacToTrs, HacTransfer, SatFromToTrs, SatFromTrs, SatToTrs,

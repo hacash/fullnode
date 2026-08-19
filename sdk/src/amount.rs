@@ -5,11 +5,10 @@
 //! floats are UI-adapter concerns and never reach the canonical parser.
 
 use field::Amount;
-use serde::{Deserialize, Serialize};
 
 use crate::error::{SdkError, SdkErrorCode};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ParsedAmount {
     pub value: String,
     pub unit: u8,
@@ -36,7 +35,7 @@ pub fn parse_protocol(value: &str) -> Result<ParsedAmount, SdkError> {
         return Err(SdkError::with_detail(
             SdkErrorCode::ParseFailed,
             "amount contains unsupported characters; use canonical digits only",
-            serde_json::json!({ "actual": value }),
+            format!("{{\"actual\":{:?}}}", value),
         ));
     }
     let amount = Amount::from(trimmed).map_err(|error| SdkError::from(error))?;
@@ -57,7 +56,7 @@ pub fn format_protocol(value: &str, unit: u8) -> Result<String, SdkError> {
         return Err(SdkError::with_detail(
             SdkErrorCode::ParseFailed,
             format!("unit {unit} out of range, max {}", field::UNIT_MEI),
-            serde_json::json!({ "expected": field::UNIT_MEI }),
+            crate::json::obj(vec![crate::json::kv("expected", field::UNIT_MEI.to_string())]),
         ));
     }
     let amount = Amount::from(value).map_err(|error| SdkError::from(error))?;

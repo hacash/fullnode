@@ -39,32 +39,59 @@ macro_rules! debug_println {
     };
 }
 
-// codec-only 与 full 二选一（见 Cargo.toml features 注释）；两者都不启用说明
-// 依赖方配错了 feature，编译期报错而不是静默编译出半套 VM。
+// Exactly one of `codec-only` and `full` should be enabled (see the Cargo.toml
+// features comments); if neither is, the dependent crate misconfigured its feature,
+// so fail at compile time instead of silently compiling half a VM.
 #[cfg(all(not(feature = "full"), not(feature = "codec-only")))]
 compile_error!("vm requires either `full` or `codec-only` feature");
 
 pub mod action;
+#[cfg(feature = "full")]
 pub mod api;
 #[macro_use]
 pub(crate) mod rt;
 pub(crate) mod contract;
 #[cfg(feature = "full")]
 pub mod fitshc;
+// The execution engine (frame/interpreter/machine/native/state/setup/api) compiles
+// only under `full`: codec-only (SDK/wasm) pulls in no execution dependencies
+// (see the Cargo.toml features comments).
+#[cfg(feature = "full")]
 pub(crate) mod frame;
+#[cfg(feature = "full")]
 pub(crate) mod interpreter;
 #[cfg(feature = "full")]
 pub(crate) mod ir;
+#[cfg(feature = "full")]
 pub(crate) mod machine;
+#[cfg(feature = "full")]
 pub(crate) mod native;
+#[cfg(feature = "full")]
 pub mod setup;
 pub(crate) mod space;
+#[cfg(feature = "full")]
 pub(crate) mod state;
 pub(crate) mod value;
 
+#[cfg(feature = "full")]
 pub use machine::peek_vm_runtime_limits;
+#[cfg(feature = "full")]
 pub use setup::register;
+#[cfg(feature = "full")]
 pub use state::{StorageDebug, VMState, VMStateRead, VmLog};
 pub use value::ContractAddress;
 
 pub const MAX_FUNC_PARAM_LEN: usize = 15;
+
+/// Wire schema exports (collected by `codec-schema-gen`; purely static data, not
+/// involved in execution). The contract structs register themselves via
+/// `contract::struct_schemas()`; the two remaining entries are composite/leaf
+/// types that keep hand-written impls.
+pub mod codec_schema {
+    pub fn struct_schemas() -> Vec<base::StructSchema> {
+        let mut v = crate::contract::struct_schemas();
+        v.push(<crate::rt::CodeStuff as base::StructSchemaProvider>::STRUCT_SCHEMA);
+        v.push(<crate::rt::FuncArgvTypes as base::StructSchemaProvider>::STRUCT_SCHEMA);
+        v
+    }
+}

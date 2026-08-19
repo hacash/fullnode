@@ -3,18 +3,19 @@ use std::fmt;
 use std::ops::Deref;
 use std::sync::OnceLock;
 
-#[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+#[cfg(feature = "num-bigint")]
 use num_bigint::{BigInt, BigUint, Sign as BigSign};
-#[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+#[cfg(feature = "num-bigint")]
 use num_traits::{Num, ToPrimitive, Zero};
 use sys::{Rerr, Ret, normalf, errf};
 
 use crate::codec::{Decode, Encode, Reader};
 use crate::json::{FromJSON, JSONFormater, ToJSON, json_expect_quoted_decoded};
 
-/// SDK/wasm codec-only 构建：Amount 的大整数路径使用 `amount_base256` 的
-/// 字节数组实现，不链接 num-bigint。native（含 native 测试）始终用完整实现。
-#[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+/// With the `num-bigint` feature disabled (codec-only builds such as
+/// SDK/wasm): Amount's big-integer path uses the `amount_base256` byte-array
+/// implementation and does not link num-bigint.
+#[cfg(not(feature = "num-bigint"))]
 use crate::types::amount_base256 as b256;
 
 pub const UNIT_MEI: u8 = 248;
@@ -188,7 +189,7 @@ impl Amount {
         Self::from_decimal_digits(negative, &body, unit)
     }
 
-    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+    #[cfg(feature = "num-bigint")]
     pub fn from_bigint(bignum: &BigInt) -> Ret<Self> {
         if bignum.is_zero() {
             return Ok(Self::zero());
@@ -220,14 +221,15 @@ impl Amount {
             }
             return Ok(Self { unit, dist, byte });
         }
-        // >u128（>39 位十进制）：native 走 BigUint；SDK/wasm 走 base-256 字节数组。
-        #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+        // >u128 (>39 decimal digits): BigUint when num-bigint is enabled;
+        // base-256 byte arrays when disabled.
+        #[cfg(feature = "num-bigint")]
         {
             let magnitude = BigUint::from_str_radix(digits, 10)
                 .map_err(|_| sys::Error::fault("amount value invalid"))?;
             Self::from_sign_magnitude(negative, unit, magnitude)
         }
-        #[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+        #[cfg(not(feature = "num-bigint"))]
         {
             let byte = b256::from_decimal_b256(digits)?;
             if byte.len() > 127 {
@@ -241,7 +243,7 @@ impl Amount {
         }
     }
 
-    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+    #[cfg(feature = "num-bigint")]
     fn from_sign_magnitude(negative: bool, unit: u8, magnitude: BigUint) -> Ret<Self> {
         let byte = magnitude.to_bytes_be();
         if byte.len() > 127 {
@@ -269,7 +271,7 @@ impl Amount {
         })
     }
 
-    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+    #[cfg(feature = "num-bigint")]
     pub fn to_bigint(&self) -> BigInt {
         if self.is_zero() {
             return BigInt::from(0u8);
@@ -283,7 +285,7 @@ impl Amount {
         bignum * BigInt::from(10u64).pow(self.unit as u32)
     }
 
-    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+    #[cfg(feature = "num-bigint")]
     pub fn to_biguint(&self) -> BigUint {
         if self.is_negative() {
             return BigUint::ZERO;
@@ -301,7 +303,7 @@ impl Amount {
         format!("{}{}:{}", sign, digits, self.unit)
     }
 
-    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+    #[cfg(feature = "num-bigint")]
     pub fn to_unit_float(&self, base_unit: u8) -> f64 {
         if self.is_zero() {
             return 0.0;
@@ -401,10 +403,11 @@ impl Amount {
         self.to_unit_u128(UNIT_238)
     }
 
-    /// 按 `base_unit` 缩放后的 u128 值，语义与
-    /// `to_unit_biguint(base_unit)?.to_u128()` 一致（负数、商超过 16 字节
-    /// mantissa、缩放溢出均报错）。无条件编译：native 测试用它对比 BigUint
-    /// 路径；SDK/wasm codec-only 用它替代 BigUint（不链接 num-bigint）。
+    /// u128 value of the amount scaled to `base_unit`, semantically identical
+    /// to `to_unit_biguint(base_unit)?.to_u128()` (negative values, quotients
+    /// wider than a 16-byte mantissa, and scaling overflow all error). Compiled
+    /// unconditionally: tests on the num-bigint path compare against BigUint;
+    /// when num-bigint is disabled (SDK/wasm) it replaces BigUint.
     fn to_unit_u128(&self, base_unit: u8) -> Ret<u128> {
         if self.is_negative() {
             return errf!("amount {} overflow unit u128", self);
@@ -416,16 +419,18 @@ impl Amount {
             let magnitude = tail_to_u128(&self.byte, u128::MAX)?;
             let k = (base_unit - self.unit) as u32;
             if k > 38 {
-                // 10^k 超出 u128 上限，而 magnitude ≤ u128::MAX < 10^39 ≤ 10^k，
-                // 与 BigUint 路径一致：整除结果必为 0。
+                // 10^k exceeds the u128 range, and magnitude <= u128::MAX <
+                // 10^39 <= 10^k, so consistent with the BigUint path the exact
+                // quotient is always 0.
                 Ok(0)
             } else {
                 Ok(magnitude / 10u128.pow(k))
             }
         } else {
-            // 任意精度除法（>16 字节 mantissa）：商可能仍在 u128 内
-            // （例如除以足够大的 10^k 后为 0）。
-            #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+            // Arbitrary-precision division (>16-byte mantissa): the quotient
+            // may still fit in u128 (e.g. 0 after dividing by a large enough
+            // 10^k).
+            #[cfg(feature = "num-bigint")]
             {
                 let magnitude = BigUint::from_bytes_be(&self.byte);
                 let quotient =
@@ -434,7 +439,7 @@ impl Amount {
                     .to_u128()
                     .ok_or_else(|| sys::Error::fault("amount computing size overflow"))
             }
-            #[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+            #[cfg(not(feature = "num-bigint"))]
             {
                 let quotient = b256::div_pow10_b256(&self.byte, base_unit - self.unit);
                 tail_to_u128(&quotient, u128::MAX)
@@ -442,7 +447,7 @@ impl Amount {
         }
     }
 
-    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+    #[cfg(feature = "num-bigint")]
     pub fn to_unit_biguint(&self, base_unit: u8) -> Option<BigUint> {
         if self.is_negative() {
             return None;
@@ -810,7 +815,7 @@ fn normalize_grouping(value: &str) -> Ret<String> {
     Ok(value.replace(',', ""))
 }
 
-#[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+#[cfg(feature = "num-bigint")]
 fn pow10_big(exp: u8) -> BigUint {
     BigUint::from(10u8).pow(exp as u32)
 }
@@ -821,11 +826,11 @@ fn mantissa_string(bytes: &[u8]) -> String {
             .expect("16-byte amount fits u128")
             .to_string()
     } else {
-        #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+        #[cfg(feature = "num-bigint")]
         {
             BigUint::from_bytes_be(bytes).to_string()
         }
-        #[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+        #[cfg(not(feature = "num-bigint"))]
         {
             b256::to_decimal_b256(bytes)
         }
@@ -880,8 +885,9 @@ fn magnitude_cmp(lhs: &Amount, rhs: &Amount) -> Ordering {
             return scaled_lhs.cmp(&scaled_rhs);
         }
     }
-    // 任意精度 fallback：native 用 BigUint；SDK/wasm 用 base-256 对齐比较。
-    #[cfg(not(all(feature = "sdk-codec-only", target_arch = "wasm32")))]
+    // Arbitrary-precision fallback: BigUint when num-bigint is enabled;
+    // base-256 aligned comparison when disabled.
+    #[cfg(feature = "num-bigint")]
     {
         let mut lhs_value = BigUint::from_bytes_be(&lhs.byte);
         let mut rhs_value = BigUint::from_bytes_be(&rhs.byte);
@@ -892,15 +898,16 @@ fn magnitude_cmp(lhs: &Amount, rhs: &Amount) -> Ordering {
         }
         lhs_value.cmp(&rhs_value)
     }
-    #[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+    #[cfg(not(feature = "num-bigint"))]
     {
         magnitude_cmp_wide(lhs, rhs)
     }
 }
 
-/// SDK/wasm codec-only：任意精度比较走 base-256 对齐（native 的 BigUint
-/// fallback 路径，见 `magnitude_cmp`）。
-#[cfg(all(feature = "sdk-codec-only", target_arch = "wasm32"))]
+/// With num-bigint disabled (SDK/wasm codec-only): arbitrary-precision
+/// comparison goes through base-256 alignment (the BigUint fallback path when
+/// num-bigint is enabled, see `magnitude_cmp`).
+#[cfg(not(feature = "num-bigint"))]
 fn magnitude_cmp_wide(lhs: &Amount, rhs: &Amount) -> Ordering {
     let base_unit = lhs.unit.min(rhs.unit);
     let lhs_value = b256::mul_pow10_b256(&lhs.byte, lhs.unit - base_unit);
@@ -933,7 +940,7 @@ mod tests {
         for _ in 0..len {
             byte.push(lcg.byte());
         }
-        // 规范形态：无前导零（允许全零 → 空）
+        // Canonical form: no leading zeros (all zeros collapse to empty)
         while byte.len() > 1 && byte[0] == 0 {
             byte.remove(0);
         }
@@ -951,8 +958,10 @@ mod tests {
         Amount { unit, dist, byte }
     }
 
-    /// `to_unit_u128` 与 BigUint 路径（`to_unit_biguint(...).to_u128()`）
-    /// 在成功值、失败条件上完全一致。
+    /// `to_unit_u128` agrees fully with the BigUint path
+    /// (`to_unit_biguint(...).to_u128()`) on success values and failure
+    /// conditions. A counterpart exists only when num-bigint is enabled.
+    #[cfg(feature = "num-bigint")]
     #[test]
     fn to_unit_u128_matches_biguint_path() {
         let mut lcg = Lcg(0xa110);
@@ -976,13 +985,17 @@ mod tests {
         }
     }
 
-    /// 8 个公开 `to_*_u64/u128` 与 BigUint 路径一致（含溢出/负值失败）。
+    /// The 8 public `to_*_u64/u128` converters agree with the BigUint path
+    /// (including overflow/negative-value failures). A counterpart exists only
+    /// when num-bigint is enabled.
+    #[cfg(feature = "num-bigint")]
     #[test]
     fn to_unit_converters_match_biguint_path() {
         let mut lcg = Lcg(0xfeed);
         for _ in 0..3000 {
             let amount = random_amount(&mut lcg);
-            // 每个转换器配对的期望：u64 转换器对比 BigUint 的 to_u64，u128 对比 to_u128
+            // Expected result for each converter pair: u64 converters compare
+            // against BigUint's to_u64, u128 against to_u128
             let converters: Vec<(Box<dyn Fn(&Amount) -> Ret<u128>>, Box<dyn Fn(&Amount) -> Option<u128>>)> =
                 vec![
                     (
@@ -1033,9 +1046,10 @@ mod tests {
         }
     }
 
-    /// >16 字节 mantissa 的金额：`to_fin_string` 的 base-256 与 BigUint
-    /// 格式化输出逐字节一致（codec-only 与 native 的上层路由都指向这两个
-    /// 核心，此处直接对比核心本身）。
+    /// Amounts with a >16-byte mantissa: base-256 `to_fin_string` and the
+    /// BigUint formatter produce byte-identical output (both codec-only and
+    /// native upper layers route to these two cores, so we compare the cores
+    /// directly here).
     #[test]
     fn fin_string_matches_bigint_for_wide_mantissa() {
         let mut lcg = Lcg(0x77aa);
@@ -1045,7 +1059,7 @@ mod tests {
             for _ in 0..len {
                 byte.push(lcg.byte());
             }
-            byte[0] |= 0x80; // 保证无前导零且超 16 字节
+            byte[0] |= 0x80; // guarantees no leading zero and >16 bytes
             let expected = BigUint::from_bytes_be(&byte).to_string();
             assert_eq!(mantissa_string(&byte), expected);
         }

@@ -4,10 +4,14 @@
 //! auditability and notes. The review binding is a sha3-256 over explicit
 //! domain-prefixed fields; it never depends on localized text or the binding
 //! itself.
+//!
+//! Auditability classes are declared at each action's definition site (the
+//! `ActionSchemaProvider`/derive `audit_class` fact captured with the schema),
+//! so the SDK's grading surface is the chain's definition surface: there is no
+//! separate hand-written grading table here to drift from the action set.
 
 use base::{Action, ActionRef};
 use field::Decode;
-use serde::{Deserialize, Serialize};
 
 use crate::error::{SdkError, SdkErrorCode};
 use crate::names::action_name;
@@ -18,8 +22,7 @@ pub use crate::schema::{
 
 /// Tagged asset payload (doc 14 §4.7): HAC/SAT/HACD keep their distinct wire
 /// shapes; only protocol Asset collapses to serial + atoms.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PayloadDesc {
     Hac { amount: String },
     Satoshi { atoms: String },
@@ -27,11 +30,10 @@ pub enum PayloadDesc {
     Asset { serial: String, atoms: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct TransferDesc {
     pub schema: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub from: Option<String>,
+        pub from: Option<String>,
     pub to: String,
     pub payload: PayloadDesc,
 }
@@ -44,6 +46,43 @@ pub enum Auditability {
     Structured,
     Branching,
     Opaque,
+}
+
+/// Graded action facts (by schema — the stable wire identity). The classes and
+/// the blob flag are declared at the action definition sites and captured with
+/// the codec schemas (same registry as `names::action_name`), so a new action
+/// carries its grade by construction; `classify_auditability` still fails
+/// closed (opaque + note) for any name outside the registered set.
+fn schema_of(name: &str) -> Option<&'static base::ActionSchema> {
+    crate::codec::standard_codecs()
+        .ok()?
+        .action_schemas()
+        .iter()
+        .find(|schema| schema.name == name)
+}
+
+fn schema_of_kind(kind: u16) -> Option<&'static base::ActionSchema> {
+    crate::codec::standard_codecs()
+        .ok()?
+        .action_schemas()
+        .iter()
+        .find(|schema| schema.kind == kind)
+}
+
+/// Classify an action kind into an auditability grade by its schema-declared
+/// class. Defaults to opaque with an explanatory note (fail-closed): a kind
+/// that has not been registered must not be presented as fully auditable.
+pub fn classify_auditability(name: &str) -> (Auditability, Option<&'static str>) {
+    match schema_of(name).map(|schema| schema.audit_class) {
+        Some("full") => (Auditability::Full, None),
+        Some("structured") => (Auditability::Structured, None),
+        Some("branching") => (Auditability::Branching, None),
+        Some("opaque") => (Auditability::Opaque, None),
+        _ => (
+            Auditability::Opaque,
+            Some("action kind is not graded by the SDK audit table; treat as opaque"),
+        ),
+    }
 }
 
 impl Auditability {
@@ -65,22 +104,6 @@ impl Auditability {
             (Structured, _) | (_, Structured) => Structured,
             _ => Full,
         }
-    }
-}
-
-/// Classify an action kind into an auditability grade. Full by default;
-/// AST control flow is branching, VM maincall is opaque, the remaining VM
-/// actions are structured (codec/bytecode present, execution not run here).
-pub fn classify_auditability(kind: u16) -> Auditability {
-    use protocol::action_std::{AstIf, AstSelect};
-    use vm::action::{ContractDeploy, ContractMainCall, ContractUpdate, P2SHScriptProve};
-    match kind {
-        AstIf::KIND | AstSelect::KIND => Auditability::Branching,
-        ContractMainCall::KIND => Auditability::Opaque,
-        ContractDeploy::KIND | ContractUpdate::KIND | P2SHScriptProve::KIND => {
-            Auditability::Structured
-        }
-        _ => Auditability::Full,
     }
 }
 
@@ -131,31 +154,36 @@ fn readable_diamond_names(names: &[u8]) -> Vec<String> {
 
 /// One action in the review tree. `path` is the nested index path ("0", "1/2").
 /// AST control-flow children are collected into `children` when present.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ActionDesc {
     pub schema: String,
     pub index: usize,
     pub path: String,
     pub kind: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+        pub name: Option<String>,
     pub scope: String,
     pub json: String,
     pub raw: String,
     pub protocol_valid: bool,
     pub auditability: String,
     pub audit_notes: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub transfer: Option<TransferDesc>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub children: Option<Vec<ActionDesc>>,
+        pub transfer: Option<TransferDesc>,
+        pub children: Option<Vec<ActionDesc>>,
+    /// Schema-declared blob fact (opaque byte-carrier action such as
+    /// `tx_message`/`tx_blob`); `policy.deny_blob` reads this instead of a
+    /// hand-written kind list.
+    pub blob: bool,
 }
 
 pub fn describe_action(action: &ActionRef, index: usize, path: &str, depth: usize) -> ActionDesc {
     let kind = action.kind();
     let mut notes = Vec::new();
     let children = collect_children(action, depth, &mut notes);
-    let auditability = classify_auditability(kind);
+    let name = action_name(kind);
+    let (auditability, grade_note) = classify_auditability(name.unwrap_or(""));
+    if let Some(note) = grade_note {
+        notes.push(note.to_owned());
+    }
     let transfer = action.as_transfer_like().map(|transfer| TransferDesc {
         schema: SCHEMA_TRANSFER_DESC.to_owned(),
         from: transfer.transfer_from().and_then(|from| match from {
@@ -174,7 +202,7 @@ pub fn describe_action(action: &ActionRef, index: usize, path: &str, depth: usiz
         index,
         path: path.to_owned(),
         kind,
-        name: action_name(kind).map(str::to_owned),
+        name: name.map(str::to_owned),
         scope: scope_name(action.scope()).to_owned(),
         json: action.to_json(),
         raw: hex::encode(action.encode()),
@@ -183,12 +211,16 @@ pub fn describe_action(action: &ActionRef, index: usize, path: &str, depth: usiz
         audit_notes: notes,
         transfer,
         children,
+        blob: schema_of_kind(kind).map(|schema| schema.blob).unwrap_or(false),
     }
 }
 
 /// Collect nested control-flow children (AstIf → cond/if/else AstSelects,
 /// AstSelect → flat action list) with the protocol depth cap. Depth overflow
-/// is reported as an audit note, never as a decode failure.
+/// is reported as an audit note, never as a decode failure. A new AST-scope
+/// action without a children walker is reported as a note too (fail-closed),
+/// so a new control-flow kind never silently drops its children from the
+/// review.
 fn collect_children(
     action: &ActionRef,
     depth: usize,
@@ -220,6 +252,12 @@ fn collect_children(
             list.push(describe_action(nested, idx, &idx.to_string(), depth + 1));
         }
         return Some(list);
+    }
+    if action.scope() == base::ActScope::AST {
+        notes.push(format!(
+            "AST control-flow action kind {} has no review children collection",
+            action.kind()
+        ));
     }
     None
 }
@@ -266,11 +304,101 @@ pub fn compute_review_binding(
 
 /// Canonical digest of a review payload: the review JSON with
 /// `review_binding` removed (deterministic for identical review content).
-pub fn canonical_review_digest(review: &serde_json::Value) -> String {
+/// Hand-written serialization (field declaration order + skip None), no serde_json.
+pub fn canonical_review_digest(review: &crate::inspect::Review) -> String {
     let mut copy = review.clone();
-    if let Some(obj) = copy.as_object_mut() {
-        obj.remove("review_binding");
-    }
-    let canonical = serde_json::to_string(&copy).unwrap_or_default();
+    copy.review_binding.clear();
+    let canonical = copy.to_json_string();
     hex::encode(sys::calculate_hash(canonical))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every registered action kind must grade through the schema-declared
+    /// class: a new action carries its class at the definition site, so no
+    /// registered kind may fall back to the ungraded note.
+    #[test]
+    fn every_registered_kind_has_a_schema_declared_audit_class() {
+        let names: Vec<&str> = chain_codec::collect_action_schemas()
+            .iter()
+            .map(|s| s.name)
+            .collect();
+        assert!(names.len() >= 40, "expected the full standard action set");
+        for name in &names {
+            let (_, note) = classify_auditability(name);
+            assert!(
+                note.is_none(),
+                "action {name} has no schema-declared audit class"
+            );
+        }
+    }
+
+    /// The schema-declared blob flag must be exactly the two opaque
+    /// byte-carrier actions: a new blob action without the flag (or a non-blob
+    /// action with it) fails here.
+    #[test]
+    fn blob_class_is_exactly_tx_message_and_tx_blob() {
+        let schemas = chain_codec::collect_action_schemas();
+        let blobs: Vec<&str> = schemas
+            .iter()
+            .filter(|s| s.blob)
+            .map(|s| s.name)
+            .collect();
+        assert_eq!(blobs, vec!["tx_message", "tx_blob"]);
+    }
+
+    #[test]
+    fn known_grades_are_stable() {
+        assert_eq!(
+            classify_auditability("transfer_hac_to"),
+            (Auditability::Full, None)
+        );
+        assert_eq!(
+            classify_auditability("ast_select"),
+            (Auditability::Branching, None)
+        );
+        assert_eq!(
+            classify_auditability("contract_deploy"),
+            (Auditability::Structured, None)
+        );
+        assert_eq!(
+            classify_auditability("contract_main_call"),
+            (Auditability::Opaque, None)
+        );
+        assert!(classify_auditability("brand_new_kind").0 == Auditability::Opaque);
+    }
+
+    /// The AST control-flow walkers must stay complete over the registered
+    /// AST actions: `ast_select` and `ast_if` collect their nested children.
+    /// A new AST action without a walker is reported as a note (fail-closed)
+    /// instead of silently dropping its children from the review.
+    #[test]
+    fn ast_control_flow_kinds_collect_children() {
+        use protocol::action_std::{AstIf, AstSelect, HacToTrs};
+        let transfer = std::sync::Arc::new(HacToTrs::new(
+            field::Address::from(*sys::Account::create_by("123456").unwrap().address()),
+            field::Amount::from("1:244").unwrap(),
+        ));
+        let select = AstSelect::create_by(1, 1, vec![transfer.clone()]).unwrap();
+        let select: base::ActionRef = std::sync::Arc::new(select);
+        let desc = describe_action(&select, 0, "0", 0);
+        let children = desc.children.expect("ast_select collects children");
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].path, "0");
+        assert_eq!(children[0].name.as_deref(), Some("transfer_hac_to"));
+
+        let ast_if = AstIf::create_by(
+            AstSelect::create_by(1, 1, vec![transfer.clone()]).unwrap(),
+            AstSelect::create_by(1, 1, vec![transfer.clone()]).unwrap(),
+            AstSelect::create_by(1, 1, vec![transfer.clone()]).unwrap(),
+        );
+        let ast_if: base::ActionRef = std::sync::Arc::new(ast_if);
+        let desc = describe_action(&ast_if, 0, "0", 0);
+        let children = desc.children.expect("ast_if collects children");
+        assert_eq!(children.len(), 3);
+        assert_eq!(children[0].path, "0/0");
+        assert_eq!(children[2].path, "2/0");
+    }
 }

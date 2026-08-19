@@ -1,25 +1,30 @@
-//! base-256 字节数组大数核心（Amount 的 SDK/wasm codec-only 路径）。
+//! Base-256 byte-array big-number core (the Amount path when `num-bigint` is
+//! disabled, used by codec-only builds such as SDK/wasm).
 //!
-//! `Amount` 的 mantissa 是"无前导零、最多 127 字节"的大端字节数组，十进制
-//! 表示即 base-256 数值。本模块用字节数组实现十进制解析/格式化、`10^k`
-//! 缩放和比较，不依赖 `num-bigint`。
+//! `Amount`'s mantissa is a big-endian byte array with no leading zeros and at
+//! most 127 bytes; its decimal representation is the base-256 value. This
+//! module implements decimal parse/format, `10^k` scaling and comparison on
+//! byte arrays, without depending on `num-bigint`.
 //!
-//! 本模块**无条件编译**：native 构建下它不被引用（链接器丢弃），但 `#[cfg(test)]`
-//! 里与 `num-bigint` 实现做随机向量对比，保证两条路径逐字节一致。
-#![allow(dead_code)] // native 构建下仅测试引用；SDK/wasm codec-only 下被上层引用
+//! This module is **compiled unconditionally**: builds with `num-bigint`
+//! enabled do not reference it (the linker discards it), but under
+//! `#[cfg(test)]` it is cross-checked against the `num-bigint` implementation
+//! with random vectors to guarantee the two paths agree byte for byte.
+#![allow(dead_code)] // referenced only by tests when num-bigint is on; by callers when off
 
 use std::cmp::Ordering;
 
 use sys::{Ret, errf};
 
-/// 十进制字符串 → 规范 mantissa 字节（无前导零；全零 → 空字节）。
-/// 超过 127 字节（>306 位十进制）与 `Amount` wire 上限一致地报错。
+/// Decimal string -> canonical mantissa bytes (no leading zeros; all zeros ->
+/// empty). Values over 127 bytes (>306 decimal digits) error, matching the
+/// `Amount` wire limit.
 pub(crate) fn from_decimal_b256(digits: &str) -> Ret<Vec<u8>> {
-    let mut bytes: Vec<u8> = Vec::new(); // 大端，可能含前导零，末尾先除
+    let mut bytes: Vec<u8> = Vec::new(); // big-endian, may hold leading zeros, reversed at the end
     for ch in digits.bytes() {
         debug_assert!(ch.is_ascii_digit());
         let digit = ch - b'0';
-        // bytes = bytes * 10 + digit（从低位进位，最后反转）
+        // bytes = bytes * 10 + digit (carry from the low end, reversed at the end)
         let mut carry = digit as u16;
         for b in bytes.iter_mut() {
             let v = (*b as u16) * 10 + carry;
@@ -34,19 +39,19 @@ pub(crate) fn from_decimal_b256(digits: &str) -> Ret<Vec<u8>> {
             return errf!("Amount is too wide.");
         }
     }
-    bytes.reverse(); // 大端
+    bytes.reverse(); // big-endian
     Ok(drop_left_zero_b256(&bytes))
 }
 
-/// 规范 mantissa 字节 → 十进制字符串（空字节 → "0"）。
+/// Canonical mantissa bytes -> decimal string (empty bytes -> "0").
 pub(crate) fn to_decimal_b256(bytes: &[u8]) -> String {
     if bytes.is_empty() {
         return "0".to_owned();
     }
-    let mut buf = bytes.to_vec(); // 大端
+    let mut buf = bytes.to_vec(); // big-endian
     let mut digits = Vec::with_capacity(40);
     loop {
-        // 整体除以 10，余数即当前最低位
+        // Divide the whole number by 10; the remainder is the current lowest digit
         let mut rem = 0u16;
         for b in buf.iter_mut() {
             let v = (rem << 8) | (*b as u16);
@@ -54,7 +59,7 @@ pub(crate) fn to_decimal_b256(bytes: &[u8]) -> String {
             rem = v % 10;
         }
         digits.push(b'0' + rem as u8);
-        // 去掉前导零后检查是否结束
+        // Check whether done after stripping leading zeros
         let mut nonzero = false;
         for &b in &buf {
             if b != 0 {
@@ -70,7 +75,8 @@ pub(crate) fn to_decimal_b256(bytes: &[u8]) -> String {
     String::from_utf8(digits).expect("decimal digits are ascii")
 }
 
-/// 乘以 `10^exp`（不做上限检查；结果字节数 ≤ len + exp/2，计算量可控）。
+/// Multiply by `10^exp` (no upper-bound check; the result is at most
+/// len + exp/2 bytes, so the cost is bounded).
 pub(crate) fn mul_pow10_b256(bytes: &[u8], exp: u8) -> Vec<u8> {
     let mut out = bytes.to_vec();
     for _ in 0..exp {
@@ -79,7 +85,8 @@ pub(crate) fn mul_pow10_b256(bytes: &[u8], exp: u8) -> Vec<u8> {
     out
 }
 
-/// 除以 `10^exp`（截断除法，与 BigUint `/` 语义一致；结果保持规范形态）。
+/// Divide by `10^exp` (truncating division, same semantics as BigUint `/`;
+/// the result stays canonical).
 pub(crate) fn div_pow10_b256(bytes: &[u8], exp: u8) -> Vec<u8> {
     let mut out = bytes.to_vec();
     for _ in 0..exp {
@@ -88,7 +95,8 @@ pub(crate) fn div_pow10_b256(bytes: &[u8], exp: u8) -> Vec<u8> {
     drop_left_zero_b256(&out)
 }
 
-/// 大端字节数组比较（调用方需先对齐单位；空字节 = 0）。
+/// Compare big-endian byte arrays (callers must align units first; empty bytes
+/// = 0).
 pub(crate) fn cmp_b256(a: &[u8], b: &[u8]) -> Ordering {
     a.len()
         .cmp(&b.len())
@@ -96,7 +104,7 @@ pub(crate) fn cmp_b256(a: &[u8], b: &[u8]) -> Ordering {
 }
 
 fn mul10_in_place(bytes: &mut Vec<u8>) {
-    // 大端：从低位（末尾）向高位进位
+    // Big-endian: carry from the low byte (end) toward the high byte
     let mut carry = 0u16;
     for b in bytes.iter_mut().rev() {
         let v = (*b as u16) * 10 + carry;
@@ -110,7 +118,7 @@ fn mul10_in_place(bytes: &mut Vec<u8>) {
 }
 
 fn div10_in_place(bytes: &mut [u8]) {
-    // 大端：从高位向低位传播余数
+    // Big-endian: propagate the remainder from the high byte toward the low byte
     let mut rem = 0u16;
     for b in bytes.iter_mut() {
         let v = (rem << 8) | (*b as u16);
@@ -137,7 +145,7 @@ mod tests {
     use num_bigint::BigUint;
     use num_traits::Zero;
 
-    /// 简易 LCG，避免为测试引入 rand 依赖。
+    /// Simple LCG, avoiding a rand dependency for tests.
     struct Lcg(u64);
     impl Lcg {
         fn next(&mut self) -> u64 {
@@ -161,7 +169,7 @@ mod tests {
             for _ in 0..len {
                 digits.push((b'0' + lcg.digit()) as char);
             }
-            // 只对不超过 127 字节的值断言一致；更宽的应同样报错
+            // Only assert agreement for values within 127 bytes; wider ones should error identically
             let b256 = from_decimal_b256(&digits);
             let big = BigUint::parse_bytes(digits.as_bytes(), 10).unwrap();
             let big_bytes = big.to_bytes_be();
@@ -192,7 +200,7 @@ mod tests {
         assert_eq!(from_decimal_b256("1").unwrap(), vec![1]);
         assert_eq!(from_decimal_b256("255").unwrap(), vec![0xff]);
         assert_eq!(from_decimal_b256("256").unwrap(), vec![1, 0]);
-        // 127 字节 = 2^1016 ≈ 10^305.85：305 位十进制数可容纳，306 位超出
+        // 127 bytes = 2^1016 ≈ 10^305.85: a 305-digit decimal fits, 306 digits overflow
         let max127 = "9".repeat(305);
         assert!(from_decimal_b256(&max127).is_ok());
         assert!(from_decimal_b256(&format!("{max127}9")).is_err());
@@ -207,7 +215,7 @@ mod tests {
             for _ in 0..len {
                 bytes.push(lcg.byte());
             }
-            // 构造规范形态（去前导零）
+            // Build canonical form (strip leading zeros)
             let mut first = 0;
             while first < bytes.len() - 1 && bytes[first] == 0 {
                 first += 1;
@@ -253,7 +261,7 @@ mod tests {
             let got = div_pow10_b256(&bytes, exp);
             let quotient = BigUint::from_bytes_be(&bytes) / BigUint::from(10u8).pow(exp as u32);
             let expected = if quotient.is_zero() {
-                Vec::new() // 与 Amount 的零表示（空字节）一致
+                Vec::new() // matches Amount's zero representation (empty bytes)
             } else {
                 quotient.to_bytes_be()
             };

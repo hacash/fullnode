@@ -81,7 +81,7 @@ impl FnObj {
         })
     }
 
-    #[cfg(all(feature = "codec-only", not(feature = "full")))]
+    #[cfg(not(feature = "execute"))]
     pub fn exec_bytecodes(&self, _height: u64, _gas_extra: &GasExtra) -> VmrtRes<ByteView> {
         itr_err!(
             CodecOnlyUnsupported,

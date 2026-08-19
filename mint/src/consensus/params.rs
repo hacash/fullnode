@@ -5,7 +5,7 @@ use base::{ChainId, MintParams};
 pub const MINT_PARAMS: MintParams = MintParams {
     max_block_txs: 1000,
     max_block_size: 1024 * 1024,
-    max_tx_size: 16 * 1024,
+    max_tx_size: base::MAX_TX_SIZE,
     difficulty_adjust_blocks: 288,
     difficulty_group_blocks: 4,
     each_block_target_time: 300,

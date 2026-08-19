@@ -16,6 +16,7 @@ use sys::Ret;
 use super::common::{addr_or_ptr_readable, check_action_kind};
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct HacToTrs {
     pub kind: Uint2,
     pub to: AddrOrPtr,
@@ -25,6 +26,7 @@ pub struct HacToTrs {
 pub type HacTransfer = HacToTrs;
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct HacFromTrs {
     pub kind: Uint2,
     pub from: AddrOrPtr,
@@ -32,6 +34,7 @@ pub struct HacFromTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct HacFromToTrs {
     pub kind: Uint2,
     pub from: AddrOrPtr,
@@ -40,6 +43,7 @@ pub struct HacFromToTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct SatToTrs {
     pub kind: Uint2,
     pub to: AddrOrPtr,
@@ -47,6 +51,7 @@ pub struct SatToTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct SatFromTrs {
     pub kind: Uint2,
     pub from: AddrOrPtr,
@@ -54,6 +59,7 @@ pub struct SatFromTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct SatFromToTrs {
     pub kind: Uint2,
     pub from: AddrOrPtr,
@@ -62,6 +68,7 @@ pub struct SatFromToTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct AssetToTrs {
     pub kind: Uint2,
     pub to: AddrOrPtr,
@@ -69,6 +76,7 @@ pub struct AssetToTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct AssetFromTrs {
     pub kind: Uint2,
     pub from: AddrOrPtr,
@@ -76,6 +84,7 @@ pub struct AssetFromTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct AssetFromToTrs {
     pub kind: Uint2,
     pub from: AddrOrPtr,
@@ -84,6 +93,7 @@ pub struct AssetFromToTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct DiaSingleTrs {
     pub kind: Uint2,
     pub diamond: DiamondName,
@@ -91,6 +101,7 @@ pub struct DiaSingleTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct DiaFromToTrs {
     pub kind: Uint2,
     pub from: AddrOrPtr,
@@ -99,6 +110,7 @@ pub struct DiaFromToTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct DiaToTrs {
     pub kind: Uint2,
     pub to: AddrOrPtr,
@@ -106,6 +118,7 @@ pub struct DiaToTrs {
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
 pub struct DiaFromTrs {
     pub kind: Uint2,
     pub from: AddrOrPtr,
@@ -408,20 +421,12 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &HacToTrs| format!("Transfer {} HAC to {}", this.hacash.to_unit_string("HAC"), addr_or_ptr_readable(&this.to)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.env().tx.main;
         let to = ctx.addr(&self.to)?;
         hac_transfer(ctx, &from, &to, &self.hacash)?;
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -436,20 +441,12 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &HacFromTrs| format!("Transfer {} HAC from {}", this.hacash.to_unit_string("HAC"), addr_or_ptr_readable(&this.from)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.addr(&self.from)?;
         let to = ctx.env().tx.main;
         hac_transfer(ctx, &from, &to, &self.hacash)?;
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -464,20 +461,12 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &HacFromToTrs| format!("Transfer {} HAC from {} to {}", this.hacash.to_unit_string("HAC"), addr_or_ptr_readable(&this.from), addr_or_ptr_readable(&this.to)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.addr(&self.from)?;
         let to = ctx.addr(&self.to)?;
         hac_transfer(ctx, &from, &to, &self.hacash)?;
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -492,20 +481,12 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &SatToTrs| format!("Transfer {} SAT to {}", this.satoshi.uint(), addr_or_ptr_readable(&this.to)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.env().tx.main;
         let to = ctx.addr(&self.to)?;
         sat_transfer(ctx, &from, &to, &self.satoshi)?;
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -520,20 +501,12 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &SatFromTrs| format!("Transfer {} SAT from {}", this.satoshi.uint(), addr_or_ptr_readable(&this.from)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.addr(&self.from)?;
         let to = ctx.env().tx.main;
         sat_transfer(ctx, &from, &to, &self.satoshi)?;
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -548,20 +521,12 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &SatFromToTrs| format!("Transfer {} SAT from {} to {}", this.satoshi.uint(), addr_or_ptr_readable(&this.from), addr_or_ptr_readable(&this.to)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.addr(&self.from)?;
         let to = ctx.addr(&self.to)?;
         sat_transfer(ctx, &from, &to, &self.satoshi)?;
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -642,20 +607,12 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &AssetToTrs| format!("Transfer {{{}:{}}} to {}", this.asset.serial.uint(), this.asset.amount.uint(), addr_or_ptr_readable(&this.to)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.env().tx.main;
         let to = ctx.addr(&self.to)?;
         asset_transfer(ctx, &from, &to, &self.asset)?;
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -670,20 +627,12 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &AssetFromTrs| format!("Transfer {{{}:{}}} from {}", this.asset.serial.uint(), this.asset.amount.uint(), addr_or_ptr_readable(&this.from)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.addr(&self.from)?;
         let to = ctx.env().tx.main;
         asset_transfer(ctx, &from, &to, &self.asset)?;
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -698,20 +647,12 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &AssetFromToTrs| format!("Transfer {{{}:{}}} from {} to {}", this.asset.serial.uint(), this.asset.amount.uint(), addr_or_ptr_readable(&this.from), addr_or_ptr_readable(&this.to)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.addr(&self.from)?;
         let to = ctx.addr(&self.to)?;
         asset_transfer(ctx, &from, &to, &self.asset)?;
         Ok(vec![])
         
-        }
         }
     }
 }
@@ -847,13 +788,6 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &DiaSingleTrs| format!("Transfer 1 HACD ({}) to {}", this.diamond.to_readable(), addr_or_ptr_readable(&this.to)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.env().tx.main;
         let to = ctx.addr(&self.to)?;
@@ -863,7 +797,6 @@ base::impl_action! {
         let diamonds = DiamondNameListMax200::one(self.diamond);
         do_diamonds_transfer(ctx, &diamonds, &from, &to)
         
-        }
         }
     }
 }
@@ -878,13 +811,6 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &DiaFromToTrs| format!("Transfer {} HACD ({}) from {} to {}", this.diamonds.length(), this.diamonds.splitstr(), addr_or_ptr_readable(&this.from), addr_or_ptr_readable(&this.to)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.addr(&self.from)?;
         let to = ctx.addr(&self.to)?;
@@ -893,7 +819,6 @@ base::impl_action! {
         }
         do_diamonds_transfer(ctx, &self.diamonds, &from, &to)
         
-        }
         }
     }
 }
@@ -908,13 +833,6 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &DiaToTrs| format!("Transfer {} HACD ({}) to {}", this.diamonds.length(), this.diamonds.splitstr(), addr_or_ptr_readable(&this.to)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.env().tx.main;
         let to = ctx.addr(&self.to)?;
@@ -923,7 +841,6 @@ base::impl_action! {
         }
         do_diamonds_transfer(ctx, &self.diamonds, &from, &to)
         
-        }
         }
     }
 }
@@ -938,19 +855,11 @@ base::impl_action! {
         as_transfer_like: self,
         description: |this: &DiaFromTrs| format!("Transfer {} HACD ({}) from {}", this.diamonds.length(), this.diamonds.splitstr(), addr_or_ptr_readable(&this.from)),
         execute: (self, ctx) {
-#[cfg(all(feature = "codec-only", target_arch = "wasm32"))]
-        {
-            let _ = (self, ctx);
-            crate::codec::action::execution_disabled()
-        }
-#[cfg(not(all(feature = "codec-only", target_arch = "wasm32")))]
-        {
 
         let from = ctx.addr(&self.from)?;
         let to = ctx.env().tx.main;
         do_diamonds_transfer(ctx, &self.diamonds, &from, &to)
         
-        }
         }
     }
 }
