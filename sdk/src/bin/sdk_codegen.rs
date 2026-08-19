@@ -27,6 +27,7 @@ fn main() {
         ("operations.mjs", sdk::codegen::render_operations_mjs()),
         ("actionspec.mjs", sdk::codegen::render_actionspec_mjs()),
         ("actionspec.d.ts", sdk::codegen::render_actionspec_dts()),
+        ("bjson_codec.mjs", sdk::codegen::render_bjson_codec_mjs()),
     ];
     for (name, content) in artifacts {
         let path = format!("{gen_dir}/{name}");

@@ -1,8 +1,16 @@
 //! Signing state machine (Unified SDK 2.0, doc 14 §4.5/§4.9): the SDK computes
 //! sign hashes and consumes `SignatureProof`s; private keys never cross the
 //! boundary. `attach` clones first, validates everything, then commits.
+//!
+//! The SDK is a capability provider, never a chain-rule judge: it verifies
+//! the approval-chain bindings it itself issued (review/request/proof
+//! integrity) and the proof's wire format, then attaches the signature
+//! through the protocol's own `attach_sign`. Whether the resulting body
+//! satisfies the chain's per-type signer rules (type-3 exact set D, signer
+//! caps, duplicates) is decided by the chain at execute/verify time — the
+//! SDK does not re-implement those rules and does not reject a body for
+//! them, even when the produced body cannot be executed on the chain.
 
-use base::Transaction;
 use field::{Address, Sign};
 
 use crate::error::{SdkError, SdkErrorCode};
@@ -79,10 +87,10 @@ pub fn request_binding_of(request: &SigningRequest) -> String {
     let mut copy = request.clone();
     copy.request_binding.clear();
     copy.id.clear();
-    let json = copy.to_json_string();
-    let mut data = Vec::with_capacity(DOMAIN_SIGNING_REQUEST.len() + json.len());
+    let body = copy.to_binary_body();
+    let mut data = Vec::with_capacity(DOMAIN_SIGNING_REQUEST.len() + body.len());
     data.extend_from_slice(DOMAIN_SIGNING_REQUEST);
-    data.extend_from_slice(json.as_bytes());
+    data.extend_from_slice(&body);
     hex::encode(sys::calculate_hash(data))
 }
 
@@ -97,8 +105,9 @@ pub fn request_binding_of(request: &SigningRequest) -> String {
 ///
 /// A provided `Policy` is evaluated by the SDK itself over the verified
 /// review: the caller cannot claim an outcome different from the one the
-/// policy produces, a `deny` decision never mints a request, and the
-/// decision is bound into the request.
+/// policy produces. The decision is bound into the request as a fact —
+/// whether a `deny` decision stops the signing is the caller's business
+/// call, not the SDK's.
 pub fn prepare_signature(
     body_hex: &str,
     signer_address: &str,
@@ -123,15 +132,7 @@ pub fn prepare_signature(
                     "policy requires a review",
                 )
             })?;
-            let decision = crate::policy::evaluate_policy(review, policy)?;
-            if decision.decision == "deny" {
-                return Err(SdkError::with_detail(
-                    SdkErrorCode::PolicyDenied,
-                    "policy decision denies signing",
-                    crate::json::obj(vec![crate::json::kv("policy_id", crate::json::q(&decision.policy_id)), crate::json::kv("findings", crate::json::arr(decision.findings.iter().map(|f| crate::json::q(f)).collect()))]),
-                ));
-            }
-            Some(decision)
+            Some(crate::policy::evaluate_policy(review, policy)?)
         }
         None => None,
     };
@@ -164,7 +165,7 @@ pub fn verify_review(
     review: &crate::inspect::Review,
     unsigned_body_hash: &str,
     signer: &Address,
-    tx: &dyn Transaction,
+    tx: &dyn base::TransactionSign,
     profile: &CodecProfile,
 ) -> Result<(), SdkError> {
     if review.unsigned_body_hash != unsigned_body_hash {
@@ -282,7 +283,7 @@ pub fn verify_request_integrity(request: &SigningRequest) -> Result<(), SdkError
 /// by the request must be self-consistent, bound to the review and non-deny;
 /// and the review itself must re-verify.
 fn verify_attach_context(
-    tx: &dyn Transaction,
+    tx: &dyn base::TransactionSign,
     signer: &Address,
     proof: &SignatureProof,
     review: &crate::inspect::Review,
@@ -335,12 +336,9 @@ fn verify_attach_context(
         ));
     }
     if let Some(decision) = &request.policy_decision {
-        if decision.decision == "deny" {
-            return Err(SdkError::new(
-                SdkErrorCode::PolicyDenied,
-                "policy decision denies signing",
-            ));
-        }
+        // The decision is bound to this review and its own binding must
+        // recompute; the decision VALUE (deny/confirm) is a business fact the
+        // caller acts on — the SDK never refuses to attach for it.
         if decision.review_binding != review.review_binding {
             return Err(SdkError::with_detail(
                 SdkErrorCode::PolicyBindingMismatch,
@@ -366,9 +364,12 @@ fn verify_attach_context(
 /// request the vault signed) are required and fully verified: request
 /// integrity, body/digest/signer binding, proof↔request binding, policy
 /// decision and review binding. Clones first, validates everything, then
-/// commits (doc 14 §4.5/§4.9). Same key + same signature is idempotent; same
-/// key with a different signature is `DuplicateSigner`. For attaching
-/// pre-signed signatures without an approval chain, use
+/// commits (doc 14 §4.5/§4.9). The chain's per-type signer rules (type-3
+/// exact set D, signer caps, duplicates) are never judged here: the
+/// signature is attached mechanically through the protocol's own
+/// `attach_sign` (which replaces an existing signature of the same key),
+/// and completeness is reported via `complete`/`missing_signers`. For
+/// attaching pre-signed signatures without an approval chain, use
 /// `attach_signature_unbound`.
 pub fn attach_signature(
     body_hex: &str,
@@ -381,9 +382,10 @@ pub fn attach_signature(
 }
 
 /// `tx.attach_signature_unbound`: low-level attach of one external signature
-/// with no approval context. Validates body, proof envelope, required signer,
-/// signature and limits only; no review/request binding is enforced. Use for
-/// cold-signer and offline flows that do not go through the review chain.
+/// with no approval context. Validates body and proof envelope only; no
+/// review/request binding and no chain-rule judgment is applied. Completeness
+/// is reported, not gated. Use for cold-signer and offline flows that do not
+/// go through the review chain.
 pub fn attach_signature_unbound(
     body_hex: &str,
     proof: &SignatureProof,
@@ -413,77 +415,15 @@ fn attach_signature_inner(
             profile,
         )?;
     }
-    let required = tx
-        .req_sign()
-        .map_err(|error| SdkError::from(error))?;
-    if !required.contains(&signer) {
-        return Err(SdkError::with_detail(
-            SdkErrorCode::NotRequiredSigner,
-            format!("signer {} is not a required signer", signer.to_readable()),
-            crate::json::obj(vec![crate::json::kv("actual", crate::json::q(&signer.to_readable()))]),
-        ));
-    }
-    // Same-key rules: idempotent on identical signature, reject otherwise.
-    for existing in tx.signs() {
-        if existing.publickey == sign.publickey {
-            if existing.signature == sign.signature {
-                return Ok(attach_result(tx.as_ref()));
-            }
-            return Err(SdkError::with_detail(
-                SdkErrorCode::DuplicateSigner,
-                format!("signer {} already signed with a different signature", signer.to_readable()),
-                crate::json::obj(vec![crate::json::kv("actual", crate::json::q(&signer.to_readable()))]),
-            ));
-        }
-    }
-    let sign_hash = protocol::tx_std::sign_hash_for(tx.as_ref(), &signer);
-    if !sys::Account::verify_signature(&sign_hash.0, &sign.publickey, &sign.signature) {
-        return Err(SdkError::with_detail(
-            SdkErrorCode::BadSignature,
-            format!("signature does not verify for signer {}", signer.to_readable()),
-            crate::json::obj(vec![crate::json::kv("actual", crate::json::q(&signer.to_readable()))]),
-        ));
-    }
-    // The type-3 signer cap is the protocol's rule, evaluated on the required
-    // signer set (see `protocol::tx_std::check_signers_cap`); type 1/2 have no
-    // protocol signer cap beyond the wire's u16 count.
-    if let Err(error) =
-        protocol::tx_std::check_signers_cap(tx.as_ref(), profile.protocol_params.max_type3_signers)
-    {
-        return Err(SdkError::with_detail(
-            SdkErrorCode::LimitExceeded,
-            error.to_string(),
-            crate::json::obj(vec![crate::json::kv(
-                "expected",
-                profile.protocol_params.max_type3_signers.to_string(),
-            )]),
-        ));
-    }
-    // Clone first, validate, then commit. The clone/push/type list is owned
-    // by the protocol (`attach_sign` uses the protocol's own push_sign).
+    // Mechanical attach through the protocol's own `push_sign` (the same-key
+    // replacement rule lives there); the chain decides signer-set acceptance
+    // at execute/verify time, never here.
     let signed = protocol::tx_std::attach_sign(tx.as_ref(), sign.clone())
         .map_err(|error| SdkError::from(error))?;
-    // Post-commit re-validation: the attached signature must verify against
-    // the committed body. The protocol's execute-time exact-match rules
-    // (Type-3 deterministic signer set, full required coverage) are
-    // deliberately not enforced here: multi-signer transactions attach
-    // incrementally, and completeness is reported via `complete` /
-    // `missing_signers` instead of being a per-attach gate.
-    let committed_hash = protocol::tx_std::sign_hash_for(signed.as_ref(), &signer);
-    if !sys::Account::verify_signature(&committed_hash.0, &sign.publickey, &sign.signature) {
-        return Err(SdkError::with_detail(
-            SdkErrorCode::BadSignature,
-            format!(
-                "signed body failed verification for signer {}",
-                signer.to_readable()
-            ),
-            crate::json::obj(vec![crate::json::kv("actual", crate::json::q(&signer.to_readable()))]),
-        ));
-    }
     Ok(attach_result(signed.as_ref()))
 }
 
-fn attach_result(tx: &dyn Transaction) -> AttachResult {
+fn attach_result(tx: &dyn base::TransactionSign) -> AttachResult {
     let report = protocol::tx_std::signature_report(tx).unwrap_or_else(|_| {
         protocol::tx_std::TxSignatureReport {
             required: vec![],

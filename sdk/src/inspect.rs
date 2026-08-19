@@ -1,8 +1,10 @@
 //! Transaction inspection: decode → protocol facts → Review (Unified SDK 2.0,
 //! doc 14 §5/§6.1). The SDK never executes transactions and never consults a
-//! node; the chain context is caller input.
+//! node; the chain context is caller input. Guard evaluation (height/chain)
+//! is reported as facts (`expired_height`/`wrong_chain`), never as review
+//! denials: the upper layer decides whether to proceed.
 
-use base::{BinaryCodecs, JsonCodecs, Transaction};
+use base::{BinaryCodecs, JsonCodecs, Transaction, TransactionSign};
 use field::Address;
 
 use crate::audit::{self, Auditability};
@@ -46,6 +48,12 @@ pub struct Review {
     /// The strict-inspect context the binding was computed with; `None` for
     /// report mode. Stored for the same recomputability reason.
     pub inspect_context: Option<InspectContext>,
+    /// Strict-mode derived facts (context provided): whether the caller's
+    /// current height is outside the effective HeightScope range and whether
+    /// the caller's expected chain is outside the effective ChainAllow set.
+    /// Facts, never denials: the upper layer decides whether to proceed.
+    pub expired_height: Option<bool>,
+    pub wrong_chain: Option<bool>,
     pub protocol_valid: bool,
     pub signability: String,
     pub auditability: String,
@@ -139,6 +147,25 @@ fn build_review(
         .map_err(|error| SdkError::from(error))?;
     let guard_facts = collect_guard_facts(tx.as_ref());
 
+    // Strict-mode guard evaluation against the caller-provided context,
+    // surfaced as facts (never denials): the same predicates the chain's
+    // guard actions run at execute time, computed from the shared guard
+    // facts and the protocol's own `height_in_range`, so the two can never
+    // drift. `None` without a context.
+    let (expired_height, wrong_chain) = match context {
+        Some(ctx) => {
+            let expired = guard_facts.height_range.map_or(false, |(start, end)| {
+                !protocol::action_std::height_in_range(start, end, ctx.current_height)
+            });
+            let wrong = guard_facts
+                .chains
+                .as_ref()
+                .map_or(false, |chains| !chains.contains(&ctx.expected_chain_id));
+            (Some(expired), Some(wrong))
+        }
+        None => (None, None),
+    };
+
     let mut actions = Vec::with_capacity(tx.action_count());
     let mut asset_serials = Vec::new();
     let mut auditability = Auditability::Full;
@@ -186,10 +213,15 @@ fn build_review(
     };
 
     // Fee purity is a protocol trait fact (`Transaction::fee_purity`,
-    // type-specific computation owned by protocol); the floor comparison is
-    // reported as-is and the upper layer judges it.
+    // type-specific computation owned by protocol). The floor comparison is
+    // height-dependent (the chain bills gas against the scheduled floor at
+    // the block height), so the strict mode compares against the scheduled
+    // floor at the caller's claimed height; report mode has no height and
+    // reports no comparison (the raw purity fact stays).
     let fee_purity = Some(tx.fee_purity());
-    let fee_purity_ok = Some(tx.fee_purity() >= profile.protocol_params.fee_purity_floor);
+    let fee_purity_ok = context.map(|ctx| {
+        tx.fee_purity() >= profile.protocol_params.fee_purity_floor_at(ctx.current_height)
+    });
 
     let mut review = Review {
         schema: SCHEMA_REVIEW.to_owned(),
@@ -205,6 +237,8 @@ fn build_review(
         review_binding: String::new(),
         signer_address: signer.as_ref().map(|addr| addr.to_readable()),
         inspect_context: context.cloned(),
+        expired_height,
+        wrong_chain,
         protocol_valid: guard_facts.protocol_violations.is_empty(),
         signability,
         auditability: auditability.as_str().to_owned(),
@@ -240,7 +274,7 @@ fn build_review(
 pub fn review_binding_of(
     review: &Review,
     unsigned_body_hash: &str,
-    tx: &dyn Transaction,
+    tx: &dyn TransactionSign,
     profile: &CodecProfile,
 ) -> String {
     let sign_hash = review
@@ -248,9 +282,9 @@ pub fn review_binding_of(
         .as_deref()
         .and_then(|raw| Address::from_readable(raw).ok())
         .map(|signer| hex::encode(protocol::tx_std::sign_hash_for(tx, &signer).0));
-    let context_json = match &review.inspect_context {
-        Some(context) => context.to_json_string(),
-        None => String::new(),
+    let context = match &review.inspect_context {
+        Some(context) => context.to_binary_body(),
+        None => Vec::new(),
     };
     let review_digest = audit::canonical_review_digest(review);
     audit::compute_review_binding(
@@ -258,7 +292,7 @@ pub fn review_binding_of(
         review.signer_address.as_deref(),
         sign_hash.as_deref(),
         &profile.profile_hash,
-        &context_json,
+        &context,
         &review_digest,
     )
 }
@@ -293,10 +327,13 @@ pub fn inspect_report(
     build_review(&body, signer_address, None, profile)
 }
 
-/// `tx.inspect`: strict mode. Requires chain context and validates the
-/// height/chain guards against it. The guard facts come from the single
-/// `collect_guard_facts` implementation (the same one that feeds the review),
-/// so the per-action semantics can never drift between report and strict mode.
+/// `tx.inspect`: strict mode. The caller-provided chain context is bound
+/// into the review binding and evaluated into facts (`expired_height`,
+/// `wrong_chain`); the SDK never denies the review for them — the upper
+/// layer decides whether to proceed. The guard facts come from the single
+/// `collect_guard_facts` implementation (the same one that feeds the
+/// report mode), so the per-action semantics can never drift between the
+/// two modes.
 pub fn inspect(
     body_hex: &str,
     signer_address: Option<&str>,
@@ -304,48 +341,7 @@ pub fn inspect(
     profile: &CodecProfile,
 ) -> Result<Review, SdkError> {
     let body = decode_body_hex(body_hex)?;
-    let tx = decode_tx(&body)?;
-    let review = build_review(&body, signer_address, Some(context), profile)?;
-    // Strict guard checks against the caller-provided context, from the shared
-    // guard facts (intersection of all ChainAllow/HeightScope actions).
-    let facts = collect_guard_facts(tx.as_ref());
-    if let Some((start, end)) = &facts.height_range {
-        if *start > *end && *end != 0 {
-            return Err(SdkError::new(
-                SdkErrorCode::ParseFailed,
-                format!("height_scope constraints unsatisfiable ({start}..{end})"),
-            ));
-        }
-        let height = context.current_height;
-        if height < *start || (*end != 0 && height > *end) {
-            return Err(SdkError::with_detail(
-                SdkErrorCode::ExpiredHeight,
-                format!(
-                    "current height {height} outside allowed range ({start}, {end})"
-                ),
-                crate::json::obj(vec![crate::json::kv(
-                    "expected",
-                    format!("{start}..{end}")
-                ), crate::json::kv("actual", height.to_string())]),
-            ));
-        }
-    }
-    if let Some(chains) = &facts.chains {
-        if !chains.contains(&context.expected_chain_id) {
-            return Err(SdkError::with_detail(
-                SdkErrorCode::WrongChainId,
-                format!(
-                    "expected chain {} not in allowed chains {:?}",
-                    context.expected_chain_id, chains
-                ),
-                crate::json::obj(vec![crate::json::kv(
-                    "expected",
-                    crate::json::arr(chains.iter().map(|c| c.to_string()).collect())
-                ), crate::json::kv("actual", context.expected_chain_id.to_string())]),
-            ));
-        }
-    }
-    Ok(review)
+    build_review(&body, signer_address, Some(context), profile)
 }
 
 pub(crate) fn decode_body_hex(body_hex: &str) -> Result<Vec<u8>, SdkError> {
@@ -450,20 +446,25 @@ pub fn encode_transaction_json(
     let fee_fin = fee.to_fin_string();
     let mut actions = Vec::with_capacity(transaction.actions.len());
     for desc in &transaction.actions {
+        // Re-encode from the wire form (the wasm core is JSON-free; the action
+        // carrier in `TransactionJson` is `raw` = wire hex).
+        let wire = hex::decode(&desc.raw).map_err(|_| {
+            SdkError::new(SdkErrorCode::ParseFailed, "action raw must be wire hex")
+        })?;
         let action = codecs
-            .decode_action_json(desc.kind, &desc.json)
-            .map_err(SdkError::from)?
-            .ok_or_else(|| {
+            .decode_action(&wire)
+            .map(|(action, _)| action)
+            .map_err(SdkError::from)
+            .map_err(|e| {
                 SdkError::with_detail(
                     SdkErrorCode::UnsupportedSchema,
-                    format!("action kind {} has no json codec for re-encoding", desc.kind),
-                    crate::json::obj(vec![crate::json::kv("action_index", desc.index.to_string()), crate::json::kv("action_kind", desc.kind.to_string())]),
+                    format!("action kind {} failed to re-encode from wire", desc.kind),
+                    crate::json::obj(vec![crate::json::kv("action_index", desc.index.to_string()), crate::json::kv("action_kind", desc.kind.to_string()), crate::json::kv("error", crate::json::q(&e.message))]),
                 )
             })?;
         actions.push(action);
     }
     let mut signs = Vec::with_capacity(transaction.signatures.len());
-    let mut seen: Vec<[u8; 33]> = Vec::new();
     for entry in &transaction.signatures {
         let publickey: [u8; 33] = hex::decode(&entry.public_key)
             .ok()
@@ -473,13 +474,9 @@ pub fn encode_transaction_json(
             .ok()
             .and_then(|bytes| bytes.try_into().ok())
             .ok_or_else(|| SdkError::new(SdkErrorCode::BadSignature, "signature must be 64-byte hex"))?;
-        if seen.contains(&publickey) {
-            return Err(SdkError::new(
-                SdkErrorCode::DuplicateSigner,
-                "duplicate public key in signatures",
-            ));
-        }
-        seen.push(publickey);
+        // Duplicate keys are not judged here: the protocol's own sign
+        // insertion replaces an existing same-key entry, and the chain
+        // decides signer-set acceptance at execute/verify time.
         signs.push(Sign { publickey, signature });
     }
 

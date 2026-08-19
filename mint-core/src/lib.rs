@@ -12,6 +12,13 @@
 //! Storage-layout compatibility: `MintTotal` field order, `TOTAL_KEY = b"_mint.total"` and the
 //! channel storage keys all match the pre-split layout (pure relocation, no serialization change);
 //! mainnet state is unaffected.
+//!
+//! This crate compiles in both shapes (fullnode with `execute`, SDK/wasm without).
+//! The consensus execute helpers in `inscription` are always compiled and
+//! dead-code-eliminated from the wasm artifact, so they are legitimately dead
+//! code in execute-off builds (same convention as `vm`).
+
+#![allow(dead_code)]
 
 pub mod action;
 pub mod inscription;

@@ -17,7 +17,9 @@
 //!
 //! The table is a *friendly overlay*, never a filter: kinds not in it decode
 //! to `ActionSpec::RawAction` (wire-shaped fields) and build through the
-//! generic schema-driven path in `build.rs`. The SDK exposes every action kind
+//! generic schema-driven path in `build.rs`; the generated JS adapter passes
+//! untabled friendly kinds through unchanged (identity: friendly == wire
+//! kind, fields keep their wire names). The SDK exposes every action kind
 //! the codec schema registry knows; what the chain can decode is decided by
 //! the protocol registry, not here.
 
@@ -32,9 +34,6 @@ use crate::spec_codec::WireValue;
 pub struct ActionSpecDef {
     /// Wire action name (schema `name`, e.g. `transfer_hac_to`).
     pub kind: &'static str,
-    /// Friendly SDK kind the JS facade accepts (e.g. `hac_transfer`);
-    /// identical to `kind` when there is no separate friendly form.
-    pub friendly: &'static str,
     /// Friendly `ActionSpec` variant name (Rust enum / TS union tag).
     pub variant: &'static str,
     pub fields: &'static [FieldDef],
@@ -193,14 +192,13 @@ macro_rules! rust_expr {
 /// `sdk_codegen` to emit the JS adapter and by the golden-vector/validation
 /// tests.
 macro_rules! actionspec_table {
-    ($fields:ident, $(($kind:literal, $friendly:literal, $variant:ident {
+    ($fields:ident, $(($kind:literal, $variant:ident {
         $($field:ident : $rc:ident($($rargs:tt)*) | $jc:ident($($jargs:tt)*)),+ $(,)?
     })),+ $(,)?) => {
         /// Declarative friendly↔wire mapping (single source; see module docs).
         pub const ACTION_SPECS: &[ActionSpecDef] = &[
             $(ActionSpecDef {
                 kind: $kind,
-                friendly: $friendly,
                 variant: stringify!($variant),
                 fields: &[
                     $(FieldDef {
@@ -237,119 +235,119 @@ macro_rules! actionspec_table {
 
 actionspec_table! {
     fields,
-    ("transfer_hac_to", "hac_transfer", HacTransfer {
+    ("transfer_hac_to", HacTransfer {
         from: none() | noop(),
         to: str("to") | rename("to"),
         amount: str("hacash") | rename("hacash"),
     }),
-    ("transfer_hac_from", "hac_transfer", HacTransfer {
+    ("transfer_hac_from", HacTransfer {
         from: some_str("from") | noop(),
         to: empty() | noop(),
         amount: str("hacash") | rename("hacash"),
     }),
-    ("transfer_hac_from_to", "hac_transfer", HacTransfer {
+    ("transfer_hac_from_to", HacTransfer {
         from: some_str("from") | noop(),
         to: str("to") | rename("to"),
         amount: str("hacash") | rename("hacash"),
     }),
-    ("transfer_sat_to", "sat_transfer", SatTransfer {
+    ("transfer_sat_to", SatTransfer {
         from: none() | noop(),
         to: str("to") | rename("to"),
         satoshi: num("satoshi") | rename("satoshi"),
     }),
-    ("transfer_sat_from", "sat_transfer", SatTransfer {
+    ("transfer_sat_from", SatTransfer {
         from: some_str("from") | noop(),
         to: empty() | noop(),
         satoshi: num("satoshi") | rename("satoshi"),
     }),
-    ("transfer_sat_from_to", "sat_transfer", SatTransfer {
+    ("transfer_sat_from_to", SatTransfer {
         from: some_str("from") | noop(),
         to: str("to") | rename("to"),
         satoshi: num("satoshi") | rename("satoshi"),
     }),
-    ("transfer_hacd_single_to", "hacd_transfer", HacdTransfer {
+    ("transfer_hacd_single_to", HacdTransfer {
         from: none() | noop(),
         to: str("to") | rename("to"),
         names: dia_single() | hex_single("diamond"),
     }),
-    ("transfer_hacd_to", "hacd_transfer", HacdTransfer {
+    ("transfer_hacd_to", HacdTransfer {
         from: none() | noop(),
         to: str("to") | rename("to"),
         names: dia_list() | hex_list("diamonds"),
     }),
-    ("transfer_hacd_from_to", "hacd_transfer", HacdTransfer {
+    ("transfer_hacd_from_to", HacdTransfer {
         from: some_str("from") | noop(),
         to: str("to") | rename("to"),
         names: dia_list() | hex_list("diamonds"),
     }),
-    ("transfer_hacd_from", "hacd_transfer", HacdTransfer {
+    ("transfer_hacd_from", HacdTransfer {
         from: some_str("from") | noop(),
         to: empty() | noop(),
         names: dia_list() | hex_list("diamonds"),
     }),
-    ("transfer_asset_to", "asset_transfer", AssetTransfer {
+    ("transfer_asset_to", AssetTransfer {
         from: none() | noop(),
         to: str("to") | rename("to"),
         serial: asset_num("serial") | struct_field("asset", "serial", to_str("")),
         amount: asset_str("amount") | struct_field("asset", "amount", to_str("")),
     }),
-    ("transfer_asset_from", "asset_transfer", AssetTransfer {
+    ("transfer_asset_from", AssetTransfer {
         from: some_str("from") | noop(),
         to: empty() | noop(),
         serial: asset_num("serial") | struct_field("asset", "serial", to_str("")),
         amount: asset_str("amount") | struct_field("asset", "amount", to_str("")),
     }),
-    ("transfer_asset_from_to", "asset_transfer", AssetTransfer {
+    ("transfer_asset_from_to", AssetTransfer {
         from: some_str("from") | noop(),
         to: str("to") | rename("to"),
         serial: asset_num("serial") | struct_field("asset", "serial", to_str("")),
         amount: asset_str("amount") | struct_field("asset", "amount", to_str("")),
     }),
-    ("height_scope", "height_scope", HeightScope {
+    ("height_scope", HeightScope {
         start: num("start") | rename("start"),
         end: num("end") | rename("end"),
     }),
-    ("chain_allow", "chain_allow", ChainAllow {
+    ("chain_allow", ChainAllow {
         chains: num_list("chains") | num_list("chains"),
     }),
-    ("req_sign_list", "req_sign_list", ReqSignList {
+    ("req_sign_list", ReqSignList {
         signers: str_list("signers") | rename("signers"),
     }),
-    ("tx_message", "tx_message", TxMessage {
+    ("tx_message", TxMessage {
         data: str("data") | rename("data"),
     }),
-    ("tx_blob", "tx_blob", TxBlob {
+    ("tx_blob", TxBlob {
         data: str("data") | rename("data"),
     }),
-    ("hacd_insc_push", "insc_push", InscPush {
+    ("hacd_insc_push", InscPush {
         diamonds: dia_list() | hex_list("diamonds"),
         protocol_cost: opt("protocol_cost", "str") | rename_def("protocol_cost", "0"),
         engraved_type: opt("engraved_type", "num") | rename_def_num("engraved_type", "0"),
         engraved_content: str("engraved_content") | hex_or_keep("engraved_content", ""),
     }),
-    ("hacd_insc_clean", "insc_clean", InscClean {
+    ("hacd_insc_clean", InscClean {
         diamonds: dia_list() | hex_list("diamonds"),
         protocol_cost: opt("protocol_cost", "str") | rename_def("protocol_cost", "0"),
     }),
-    ("hacd_insc_edit", "insc_edit", InscEdit {
+    ("hacd_insc_edit", InscEdit {
         diamond: dia("diamond") | hex("diamond"),
         index: num("index") | rename("index"),
         protocol_cost: opt("protocol_cost", "str") | rename_def("protocol_cost", "0"),
         engraved_type: opt("engraved_type", "num") | rename_def_num("engraved_type", "0"),
         engraved_content: str("engraved_content") | hex_or_keep("engraved_content", ""),
     }),
-    ("hacd_insc_move", "insc_move", InscMove {
+    ("hacd_insc_move", InscMove {
         from_diamond: dia("from_diamond") | hex("from_diamond"),
         to_diamond: dia("to_diamond") | hex("to_diamond"),
         index: num("index") | rename("index"),
         protocol_cost: opt("protocol_cost", "str") | rename_def("protocol_cost", "0"),
     }),
-    ("hacd_insc_drop", "insc_drop", InscDrop {
+    ("hacd_insc_drop", InscDrop {
         diamond: dia("diamond") | hex("diamond"),
         index: num("index") | rename("index"),
         protocol_cost: opt("protocol_cost", "str") | rename_def("protocol_cost", "0"),
     }),
-    ("channel_open", "channel_open", ChannelOpen {
+    ("channel_open", ChannelOpen {
         channel_id: str("channel_id") | strip0x("channel_id", ""),
         left_address: struct_str("left_bill", "address") | struct_field("left_bill", "address", keep("")),
         // The native amount is always present on the wire; "0" is the valid
@@ -358,10 +356,10 @@ actionspec_table! {
         right_address: struct_str("right_bill", "address") | struct_field("right_bill", "address", keep("")),
         right_amount: struct_str("right_bill", "amount") | struct_field("right_bill", "amount", to_str("0")),
     }),
-    ("channel_close", "channel_close", ChannelClose {
+    ("channel_close", ChannelClose {
         channel_id: str("channel_id") | strip0x("channel_id", ""),
     }),
-    ("asset_create", "asset_create", AssetCreate {
+    ("asset_create", AssetCreate {
         serial: struct_str("metadata", "serial") | struct_field("metadata", "serial", to_str("")),
         supply: struct_str("metadata", "supply") | struct_field("metadata", "supply", to_str("")),
         decimal: struct_str("metadata", "decimal") | struct_field("metadata", "decimal", keep("0")),
@@ -370,7 +368,7 @@ actionspec_table! {
         name: struct_str("metadata", "name") | struct_field("metadata", "name", hex_or_keep("")),
         protocol_cost: str("protocol_cost") | rename_def("protocol_cost", "0"),
     }),
-    ("diamond_mint", "diamond_mint", DiamondMint {
+    ("diamond_mint", DiamondMint {
         diamond: struct_readable("d", "diamond") | struct_field("d", "diamond", hex()),
         number: struct_str("d", "number") | struct_field("d", "number", to_str("")),
         prev_hash: struct_str("d", "prev_hash") | struct_field("d", "prev_hash", hex_or_keep("")),
@@ -387,6 +385,39 @@ actionspec_table! {
 // Shared by the JS adapter generator (codegen.rs) and the Rust build direction
 // (build.rs): the wire-kind selection for one friendly kind is derived from
 // the same table data on both sides, so the choice can never drift.
+//
+// The friendly NAME is not table data: it is resolved from the single family
+// registration (`register_action_family`, emitted by the codec register
+// macros from the same kind lists as the schemas), so the friendly surface is
+// the chain's registration surface and a new friendly family needs no table
+// decision.
+
+/// Wire kind name → its registered friendly family name (`None` for kinds
+/// without a friendly form, e.g. balance_floor/VM host opcodes).
+pub fn friendly_of(kind: &str) -> Option<&'static str> {
+    let number = action_kind_of(kind)?;
+    family_registry()
+        .iter()
+        .find(|family| family.kinds.contains(&number))
+        .map(|family| family.friendly)
+}
+
+fn action_kind_of(name: &str) -> Option<u16> {
+    crate::codec::standard_codecs()
+        .ok()?
+        .action_schemas()
+        .iter()
+        .find(|schema| schema.name == name)
+        .map(|schema| schema.kind)
+}
+
+/// The registered friendly-family set, captured through the same
+/// `chain_codec::register_standard` entry as the runtime codec surface.
+fn family_registry() -> &'static [chain_codec::ActionFamily] {
+    use std::sync::OnceLock;
+    static REGISTRY: OnceLock<Vec<chain_codec::ActionFamily>> = OnceLock::new();
+    REGISTRY.get_or_init(chain_codec::collect_action_families)
+}
 
 /// One friendly kind: the wire kinds it can produce and the JS-relevant entry.
 pub struct FriendlyGroup<'a> {
@@ -405,10 +436,15 @@ pub struct FriendlyGroup<'a> {
 pub fn friendly_groups() -> Vec<FriendlyGroup<'static>> {
     let mut groups: Vec<(&'static str, Vec<&'static ActionSpecDef>)> = Vec::new();
     for def in ACTION_SPECS {
-        if let Some(g) = groups.iter_mut().find(|(friendly, _)| *friendly == def.friendly) {
+        let friendly = friendly_of(def.kind)
+            .expect("every ACTION_SPECS kind resolves a registered friendly family");
+        if let Some(g) = groups
+            .iter_mut()
+            .find(|(friendly_name, _)| *friendly_name == friendly)
+        {
             g.1.push(def);
         } else {
-            groups.push((def.friendly, vec![def]));
+            groups.push((friendly, vec![def]));
         }
     }
     groups
@@ -570,6 +606,135 @@ mod tests {
                 actions.iter().any(|s| s.name == def.kind),
                 "ACTION_SPECS kind {} not registered",
                 def.kind
+            );
+        }
+    }
+
+    /// The reverse of `table_kinds_are_a_subset_of_registered_actions`: every
+    /// registered friendly family must be reachable through the friendly
+    /// surface — either a table entry, or identity-mappable (its friendly
+    /// name is a registered wire kind name, so the JS adapter's identity
+    /// fallback and the Rust RawAction path both reach it). A new family
+    /// that is neither fails here, forcing an explicit table decision
+    /// instead of silently dropping the friendly name.
+    #[test]
+    fn every_friendly_family_is_tabled_or_identity_mappable() {
+        let families = chain_codec::collect_action_families();
+        let actions = action_schemas();
+        for family in families {
+            if family.friendly.is_empty() {
+                continue; // no friendly form (balance_floor, VM host opcodes)
+            }
+            let tabled = ACTION_SPECS
+                .iter()
+                .any(|def| friendly_of(def.kind) == Some(family.friendly));
+            let identity = actions.iter().any(|s| s.name == family.friendly);
+            assert!(
+                tabled || identity,
+                "friendly family {:?} is neither tabled nor identity-mappable (friendly != any wire kind name)",
+                family.friendly
+            );
+        }
+    }
+
+    /// The friendly-group role selection (`to_kind`/`from_to_kind`/
+    /// `from_only_kind`/`single_entry`/`list_entry`) is first-match over the
+    /// table entries. The semantic roles (`to_kind`/`from_to_kind`/
+    /// `from_only_kind`/`single_entry`) must have at most one candidate per
+    /// friendly group — a second candidate would silently win or lose the
+    /// JS/Rust wire-kind selection. `list_entry` is a shape helper (the
+    /// from_to form shares the HexList shape), so its first-match selection
+    /// is instead asserted to be the no-from list form.
+    #[test]
+    fn friendly_group_roles_are_unambiguous() {
+        use JsConv::{HexList, HexSingle};
+        let has_real_to = |d: &&'static ActionSpecDef| {
+            d.fields
+                .iter()
+                .any(|f| f.friendly == "to" && !matches!(f.rust, RustConv::ConstEmpty))
+        };
+        let has_real_from = |d: &&'static ActionSpecDef| {
+            d.fields
+                .iter()
+                .any(|f| f.friendly == "from" && !matches!(f.rust, RustConv::ConstNone))
+        };
+        let has_hex_single = |d: &&'static ActionSpecDef| {
+            d.fields.iter().any(|f| matches!(f.js, HexSingle(_)))
+        };
+        for group in friendly_groups() {
+            let entries: Vec<&'static ActionSpecDef> = ACTION_SPECS
+                .iter()
+                .filter(|def| friendly_of(def.kind) == Some(group.friendly))
+                .collect();
+            let usable: Vec<&'static ActionSpecDef> =
+                entries.iter().copied().filter(|d| has_real_to(d)).collect();
+            let to_candidates = usable
+                .iter()
+                .filter(|d| !has_real_from(d) && !has_hex_single(d))
+                .count();
+            let from_to_candidates = usable.iter().filter(|d| has_real_from(d)).count();
+            let from_only_candidates = entries
+                .iter()
+                .filter(|d| has_real_from(d) && !has_real_to(d))
+                .count();
+            let single_candidates = usable.iter().filter(|d| has_hex_single(d)).count();
+            assert!(
+                to_candidates <= 1,
+                "group {} has ambiguous to-kind candidates",
+                group.friendly
+            );
+            assert!(
+                from_to_candidates <= 1,
+                "group {} has ambiguous from-to candidates",
+                group.friendly
+            );
+            assert!(
+                from_only_candidates <= 1,
+                "group {} has ambiguous from-only candidates",
+                group.friendly
+            );
+            assert!(
+                single_candidates <= 1,
+                "group {} has ambiguous single-diamond candidates",
+                group.friendly
+            );
+            if let Some(list) = group.list_entry {
+                assert!(
+                    !has_real_from(&list),
+                    "group {}: selected list entry {} must be the no-from list form",
+                    group.friendly,
+                    list.kind
+                );
+            }
+        }
+    }
+
+    /// The friendly grouping is registered once (`register_action_family`,
+    /// emitted by the register macros from the same kind lists as the codecs)
+    /// and collected by `chain-codec::collect_action_families`. The table
+    /// resolves friendly names from that registration (`friendly_of`), so a
+    /// table entry can never drift from the registered surface; this pins
+    /// that every tabled kind resolves a family — a kind without one would
+    /// silently lose its friendly form.
+    #[test]
+    fn every_tabled_kind_resolves_a_friendly_family() {
+        for def in ACTION_SPECS {
+            let friendly = friendly_of(def.kind).unwrap_or_else(|| {
+                panic!("ACTION_SPECS kind {} has no registered friendly family", def.kind)
+            });
+            // The resolved name must be the family that owns the kind.
+            let number = action_kind_of(def.kind)
+                .unwrap_or_else(|| panic!("ACTION_SPECS kind {} has no schema", def.kind));
+            let family = family_registry()
+                .iter()
+                .find(|f| f.friendly == friendly)
+                .expect("resolved friendly belongs to a registered family");
+            assert!(
+                family.kinds.contains(&number),
+                "kind {} ({}) resolved to family {:?} which does not own it",
+                def.kind,
+                number,
+                friendly
             );
         }
     }

@@ -2,9 +2,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use base::{
-    ActionCreateFn, ActionJsonDecodeFn, ActionRef, BinaryCodecs, BlockCreateFn, BlockHasherFn,
-    BlockRef, BlockSizeFn, ContextCreateFn, HASH_SIZE, RegistryWriter, TxCreateFn, TxJsonDecodeFn,
-    TxRef, VmAssignFn, VmExecutionParams, VmHostActionDef,
+    ActionCreateFn, ActionJsonDecodeFn, ActionRef, BinaryCodecs, BlockHasherFn, BlockRef, HASH_SIZE,
+    TxCreateFn, TxJsonDecodeFn, TxRef, WireRegistry,
 };
 use field::{Decode, Uint1, Uint2};
 use sys::{Ret, errf, normalf};
@@ -14,10 +13,10 @@ use sys::{Ret, errf, normalf};
 /// The action/tx codec set is assembled by `chain-codec::register_standard` —
 /// the same entry the full node (`app::standard_registry`) and
 /// `codec-schema-gen` use — so the SDK's codec surface is the chain's surface
-/// by construction, with no hand-written action list. Execution-only hooks
-/// (block creator/sizer, VM assigner, context, VM params) are deliberately
-/// ignored by this `RegistryWriter` (plan 13 §2, S1); the codecs themselves
-/// are the full standard set.
+/// by construction, with no hand-written action list. Only the wire surface is
+/// implemented (`WireRegistry`): execution-only registrations (block
+/// creator/sizer, VM assigner, context, VM params) are not part of this trait
+/// and can never be pulled into the wasm dependency graph.
 pub(crate) struct SdkCodecs {
     transactions: HashMap<u8, TxCreateFn>,
     actions: HashMap<u16, ActionCreateFn>,
@@ -71,19 +70,7 @@ pub(crate) fn standard_codecs() -> Ret<&'static SdkCodecs> {
     }
 }
 
-impl RegistryWriter for SdkCodecs {
-    fn set_block_creator(&mut self, _creator: BlockCreateFn) -> sys::Rerr {
-        Ok(())
-    }
-
-    fn set_block_sizer(&mut self, _sizer: BlockSizeFn) -> sys::Rerr {
-        Ok(())
-    }
-
-    fn set_vm_assigner(&mut self, _assigner: VmAssignFn) -> sys::Rerr {
-        Ok(())
-    }
-
+impl WireRegistry for SdkCodecs {
     fn register_tx(&mut self, ty: u8, creator: TxCreateFn) -> sys::Rerr {
         if self.transactions.contains_key(&ty) {
             return errf!("transaction type {} already registered", ty);
@@ -152,25 +139,15 @@ impl RegistryWriter for SdkCodecs {
         Ok(())
     }
 
-    fn register_vm_host_def(&mut self, _definition: VmHostActionDef) -> sys::Rerr {
-        Ok(())
-    }
-
-    fn set_context_creator(&mut self, _creator: ContextCreateFn, _gas_budget: i64) -> sys::Rerr {
-        Ok(())
-    }
-
-    fn set_vm_params(&mut self, _params: VmExecutionParams) -> sys::Rerr {
-        Ok(())
-    }
-
-    fn set_execution_profile(
-        &mut self,
-        _profile: &'static (dyn std::any::Any + Send + Sync),
-    ) -> sys::Rerr {
+    fn register_action_family(&mut self, _friendly: &'static str, _kinds: &[u16]) -> sys::Rerr {
+        // The friendly family surface is consumed by the codegen/profile
+        // paths through `chain_codec::collect_action_families` (the same
+        // registration entry); the runtime codec container does not use it.
+        // Explicit accept, never a silent default.
         Ok(())
     }
 }
+
 
 fn sdk_block_hash(_height: u64, stuff: &[u8]) -> [u8; HASH_SIZE] {
     sys::calculate_hash(stuff)

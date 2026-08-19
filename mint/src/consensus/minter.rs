@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use base::{
     BlkPkg, Block, BlockAdmissionDecision, BlockBuild, BlockProducer, BlockRef, ChainView,
     Consensus, ConsensusNodeHooks, CoreStateRead, Engine, Node, Peer, PkgOrigin, PkgSource,
-    PowBlockBuild, PowBlockExt, StateChunkRef, StateLayer, Transaction, TransactionBuild,
+    PowBlockBuild, PowBlockExt, StateChunkRef, StateLayer, Transaction, TransactionSign, TransactionBuild,
     TxGroupId, TxOrdering, TxPkg, TxPolicy, TxPool, TxPoolGroupSpec, TxRef,
 };
 use field::{Address, Amount, Encode, Fixed16, Hash, Timestamp, Uint1, Uint4};

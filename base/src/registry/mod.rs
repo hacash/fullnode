@@ -99,16 +99,24 @@ pub struct VmExecutionParams {
     pub fee_purity_reductions: &'static [(u64, u64)],
 }
 
+/// Fee purity floor selected by the consensus schedule at `height`
+/// (single computation: `VmExecutionParams::fee_purity_floor_at` and the
+/// SDK's height-aware review fact both call this, so the schedule exists
+/// once).
+pub fn fee_purity_floor_at(initial: u64, reductions: &[(u64, u64)], height: u64) -> u64 {
+    let mut floor = initial;
+    for &(activation, next) in reductions {
+        if height >= activation && next < floor {
+            floor = next;
+        }
+    }
+    floor
+}
+
 impl VmExecutionParams {
     /// Fee purity floor selected by the consensus schedule at `height`.
     pub fn fee_purity_floor_at(&self, height: u64) -> u64 {
-        let mut floor = self.initial_fee_purity_floor;
-        for &(activation, next) in self.fee_purity_reductions {
-            if height >= activation && next < floor {
-                floor = next;
-            }
-        }
-        floor
+        fee_purity_floor_at(self.initial_fee_purity_floor, self.fee_purity_reductions, height)
     }
 
     /// Effective fee purity floor at `height`, then `raw.max(floor)`.
@@ -155,21 +163,19 @@ pub trait ExecutionServices: BinaryCodecs + JsonCodecs {
     ) -> Ret<Box<dyn Context>>;
 }
 
-/// Registration-time write surface implemented by the application composition
-/// root. Protocol, consensus and VM crates contribute components without
-/// depending on the concrete registry container.
-pub trait RegistryWriter {
-    fn set_block_creator(&mut self, f: BlockCreateFn) -> Rerr;
-    fn set_block_sizer(&mut self, f: BlockSizeFn) -> Rerr;
-    fn set_vm_assigner(&mut self, f: VmAssignFn) -> Rerr;
+/// Registration-time write surface for the wire codec set (binary + JSON
+/// action/tx codecs and their schemas). Implemented by the application
+/// composition root (`app::Registry`), the SDK codec container and the schema
+/// collectors (`chain-codec::SchemaCollector`); protocol, mint-core and VM
+/// crates contribute codecs without depending on the concrete container.
+/// Execution-only registrations live on the separate `ExecRegistry`, so
+/// codec-only (SDK/wasm) registries implement exactly the wire surface and
+/// execution can never be pulled into their dependency graph.
+pub trait WireRegistry {
     fn register_tx(&mut self, ty: u8, f: TxCreateFn) -> Rerr;
     fn register_tx_json(&mut self, ty: u8, f: TxJsonDecodeFn) -> Rerr;
     fn register_action(&mut self, kinds: &[u16], f: ActionCreateFn) -> Rerr;
     fn register_action_json(&mut self, kinds: &[u16], f: ActionJsonDecodeFn) -> Rerr;
-    fn register_vm_host_def(&mut self, def: VmHostActionDef) -> Rerr;
-    fn set_context_creator(&mut self, f: ContextCreateFn, gas_budget: i64) -> Rerr;
-    fn set_vm_params(&mut self, params: VmExecutionParams) -> Rerr;
-    fn set_execution_profile(&mut self, profile: &'static (dyn Any + Send + Sync)) -> Rerr;
     /// Schema capture hook: the registration macros forward each action's
     /// `ACTION_SCHEMA` here on every `register_action` call. Ordinary
     /// registries (such as `Registry`) ignore it; schema generators
@@ -179,7 +185,36 @@ pub trait RegistryWriter {
     fn register_action_schema(&mut self, _schema: crate::ActionSchema) -> Rerr {
         Ok(())
     }
+    /// Friendly-family capture hook: the registration macros forward the
+    /// SDK-facing friendly kind name together with the wire kinds of every
+    /// codec group. The default fails so a registry that does not capture
+    /// families must say so explicitly — a silent accept-and-drop would
+    /// hide the friendly surface from that registry forever.
+    fn register_action_family(&mut self, _friendly: &'static str, _kinds: &[u16]) -> Rerr {
+        sys::errf!("friendly families are not captured by this registry")
+    }
 }
+
+/// Registration-time write surface for the execution services: block
+/// creator/sizer, VM assigner and host metadata, context creator, VM params
+/// and the protocol execution profile. Implemented by the application
+/// composition root only; nothing in the SDK/wasm graph implements it.
+pub trait ExecRegistry {
+    fn set_block_creator(&mut self, f: BlockCreateFn) -> Rerr;
+    fn set_block_sizer(&mut self, f: BlockSizeFn) -> Rerr;
+    fn set_vm_assigner(&mut self, f: VmAssignFn) -> Rerr;
+    fn register_vm_host_def(&mut self, def: VmHostActionDef) -> Rerr;
+    fn set_context_creator(&mut self, f: ContextCreateFn, gas_budget: i64) -> Rerr;
+    fn set_vm_params(&mut self, params: VmExecutionParams) -> Rerr;
+    fn set_execution_profile(&mut self, profile: &'static (dyn Any + Send + Sync)) -> Rerr;
+}
+
+/// Combined registration surface of the full node composition root: wire
+/// codecs plus execution services. `app::Registry` implements both halves;
+/// SDK/wasm registries implement `WireRegistry` only.
+pub trait RegistryWriter: WireRegistry + ExecRegistry {}
+
+impl<T: WireRegistry + ExecRegistry + ?Sized> RegistryWriter for T {}
 
 #[cfg(test)]
 mod tests {

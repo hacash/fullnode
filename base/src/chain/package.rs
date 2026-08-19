@@ -84,7 +84,7 @@ impl TxPkg {
         }
     }
 
-    pub fn tx(&self) -> &dyn crate::Transaction {
+    pub fn tx(&self) -> &dyn crate::TransactionSign {
         self.obj.as_ref()
     }
 
@@ -272,10 +272,6 @@ mod tests {
             2
         }
 
-        fn hash(&self) -> Hash {
-            self.hash
-        }
-
         fn main(&self) -> Address {
             Address::default()
         }
@@ -288,16 +284,24 @@ mod tests {
             self.fee_purity
         }
 
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    impl crate::TransactionSign for TestTx {
+        fn hash(&self) -> Hash {
+            self.hash
+        }
+
         fn verify_signature(&self) -> sys::Rerr {
             Ok(())
         }
+    }
 
+    impl crate::TransactionExecute for TestTx {
         fn execute(&self, _ctx: &mut dyn Context) -> sys::Rerr {
             Ok(())
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
 

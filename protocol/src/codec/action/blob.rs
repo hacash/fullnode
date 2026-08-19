@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use base::{Action, ActionRef};
+use base::{Action, ActionExecute, ActionRef};
 use field::{BytesW1, BytesW2, Decode, Encode, Uint2};
 use sys::Ret;
 
@@ -81,6 +81,17 @@ pub fn create_blob_action(
     }
 }
 
+
+#[cfg(feature = "execute")]
+fn decode_blob_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
+where
+    T: Action + ActionExecute + Decode + 'static,
+{
+    let (action, used) = T::decode(buf)?;
+    Ok((Arc::new(action), used))
+}
+
+#[cfg(not(feature = "execute"))]
 fn decode_blob_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
 where
     T: Action + Decode + 'static,

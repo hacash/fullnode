@@ -138,8 +138,10 @@ macro_rules! friendly_spec {
         ///
         /// Transfer actions carry an optional `from` address: when absent the
         /// action transfers from the transaction main address (`*ToTrs`); when
-        /// present and different from `main` the action is a `*FromToTrs`
-        /// transfer out of that address, which then becomes a required signer.
+        /// present the action is a `*FromToTrs` transfer out of that address,
+        /// which then becomes a required signer. The SDK never rewrites an
+        /// explicit `from` (even one equal to `main`) — the wire form is the
+        /// caller's choice, the chain decides acceptance.
         #[derive(Debug, Clone)]
         pub enum ActionSpec {
             $($variant { $($field: friendly_field_ty!($kind)),+ }),+,
@@ -269,7 +271,7 @@ pub fn build_transaction(spec: &TransactionSpec) -> Result<BuiltTransaction, Sdk
 
     let mut actions = Vec::with_capacity(spec.actions.len());
     for action in &spec.actions {
-        actions.push(build_action(action, &main)?);
+        actions.push(build_action(action)?);
     }
 
     // The body is built by the protocol's own standard-tx constructor: the
@@ -307,16 +309,14 @@ pub fn build_transaction(spec: &TransactionSpec) -> Result<BuiltTransaction, Sdk
     })
 }
 
-/// Build one action. `main` is the transaction main address: a `from` equal
-/// to it collapses to the `*ToTrs` form (same wire bytes as the historical
-/// single-signer SDK). Typed variants go through the table-driven
+/// Build one action. Typed variants go through the table-driven
 /// `friendly_to_wire`; `RawAction` goes through the generic wire-shaped path;
 /// both end in the same schema-driven encode + protocol decode.
-fn build_action(spec: &ActionSpec, main: &Address) -> Result<base::ActionRef, SdkError> {
+fn build_action(spec: &ActionSpec) -> Result<base::ActionRef, SdkError> {
     match spec {
         ActionSpec::RawAction { kind, fields } => build_raw(kind, fields),
         typed => {
-            let (kind, fields) = friendly_to_wire(typed, main)?;
+            let (kind, fields) = friendly_to_wire(typed)?;
             build_raw(&kind, &fields)
         }
     }
@@ -368,12 +368,13 @@ fn find_value<'a>(values: &'a [(&'static str, FriendlyValue)], name: &str) -> Op
 }
 
 /// Select the wire kind for a friendly variant, mirroring the JS adapter's
-/// selection (shared `friendly_groups` analysis) plus the historical
-/// `from == main` collapse and the from-only rebuild path.
+/// selection (shared `friendly_groups` analysis) plus the from-only rebuild
+/// path. An explicit `from` always selects the `*FromToTrs` form — the SDK
+/// never rewrites it, even when it equals `main` (that choice is the
+/// caller's; both wire forms are chain-valid).
 fn select_wire_kind(
     group: &FriendlyGroup<'static>,
     values: &[(&'static str, FriendlyValue)],
-    main: &Address,
 ) -> Result<&'static str, SdkError> {
     let from = find_value(values, "from").and_then(FriendlyValue::as_str);
     let to = find_value(values, "to").and_then(FriendlyValue::as_str);
@@ -387,11 +388,6 @@ fn select_wire_kind(
         )
     };
     if let Some(from) = from {
-        if from == main.to_readable() {
-            // Historical byte-compat: `from == main` builds the single-signer
-            // form (the state effect is identical).
-            return group.to_kind.map(Ok).unwrap_or_else(|| Err(missing("to")));
-        }
         if to == Some("") {
             // A decoded from-only form (`transfer_hac_from`, `to` empty)
             // rebuilds as the same wire kind instead of an invalid from_to.
@@ -412,24 +408,22 @@ fn select_wire_kind(
     // Fixed groups without a `to` field (height_scope etc.): the single entry.
     ACTION_SPECS
         .iter()
-        .find(|def| def.friendly == group.friendly)
+        .find(|def| crate::actionspec::friendly_of(def.kind) == Some(group.friendly))
         .map(|def| def.kind)
         .ok_or_else(|| missing("wire"))
 }
 
 /// Friendly typed variant → (wire kind, design-A wire fields).
-fn friendly_to_wire(
-    spec: &ActionSpec,
-    main: &Address,
-) -> Result<(String, Vec<(String, WireValue)>), SdkError> {
+fn friendly_to_wire(spec: &ActionSpec) -> Result<(String, Vec<(String, WireValue)>), SdkError> {
     let variant = spec.variant_name();
     let values = spec.friendly_fields();
     let group = friendly_groups()
         .into_iter()
         .find(|group| {
-            ACTION_SPECS
-                .iter()
-                .any(|def| def.friendly == group.friendly && def.variant == variant)
+            ACTION_SPECS.iter().any(|def| {
+                crate::actionspec::friendly_of(def.kind) == Some(group.friendly)
+                    && def.variant == variant
+            })
         })
         .ok_or_else(|| {
             SdkError::new(
@@ -437,7 +431,7 @@ fn friendly_to_wire(
                 format!("no friendly group for variant {variant}"),
             )
         })?;
-    let kind = select_wire_kind(&group, &values, main)?;
+    let kind = select_wire_kind(&group, &values)?;
     let entry = ACTION_SPECS
         .iter()
         .find(|def| def.kind == kind)
@@ -801,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn from_equal_to_main_collapses_to_the_single_signer_form() {
+    fn explicit_from_equal_to_main_builds_the_from_to_form() {
 
         let mut spec = sample_spec();
         spec.actions[0] = ActionSpec::HacTransfer {
@@ -813,8 +807,8 @@ mod tests {
         let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
         assert_eq!(
             decoded.actions()[0].kind(),
-            protocol::action_std::HacToTrs::KIND,
-            "from == main must collapse to the single-signer wire form"
+            protocol::action_std::HacFromToTrs::KIND,
+            "an explicit from equal to main must keep the from_to wire form (the SDK never rewrites it)"
         );
     }
 

@@ -427,7 +427,6 @@ impl Value {
         }
     }
 
-    #[cfg(feature = "full")]
     pub fn to_json(&self) -> String {
         match self {
             Nil =>          s!("null"),
@@ -446,7 +445,6 @@ impl Value {
         }
     }
 
-    #[cfg(feature = "full")]
     pub fn to_debug_json(&self) -> String {
         match self {
             Nil => s!("null"),

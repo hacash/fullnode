@@ -1,4 +1,4 @@
-use base::{ApiExecCtx, ApiRequest, ApiResponse, CoreStateRead, Transaction};
+use base::{ApiExecCtx, ApiRequest, ApiResponse, CoreStateRead, TransactionSign};
 
 use mint_core::inscription::{
     DiaInscClean, DiaInscDrop, DiaInscEdit, DiaInscMove, DiaInscPush,
@@ -370,7 +370,7 @@ pub(crate) fn diamond_engrave_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiR
     }
 
     let mut datalist = Vec::new();
-    let mut pick_engrave = |tx: &dyn Transaction| {
+    let mut pick_engrave = |tx: &dyn TransactionSign| {
         let txhx = tx.hash();
         for act in tx.actions() {
             if let Some(a) = act.as_any().downcast_ref::<DiaInscPush>() {

@@ -6,12 +6,11 @@ edition.workspace = true
 [dependencies]
 sys = { workspace = true }
 field = { workspace = true }
-base = { workspace = true }
-protocol = { path = "../protocol", default-features = false, features = ["codec-only"] }
+base = { path = "../base", default-features = false }
+protocol = { path = "../protocol", default-features = false }
 # Direct path (like the SDK): the workspace `vm` entry keeps its default
-# `full` feature for app/codec-schema-gen. codec-only: the SDK/wasm build
-# needs only the action codecs; the full node enables vm `full` itself, and
-# feature unification makes `full` take precedence there (vm's documented
-# convention).
-vm = { path = "../vm", default-features = false, features = ["codec-only"] }
-mint-core = { workspace = true, default-features = false, features = ["codec-only"] }
+# `execute` feature for app/codec-schema-gen; the SDK/wasm build needs only the
+# action codecs and disables the default here. The full node enables vm
+# `execute` itself, and feature unification makes it take precedence.
+vm = { path = "../vm", default-features = false }
+mint-core = { workspace = true }

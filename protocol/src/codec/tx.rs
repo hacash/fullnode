@@ -5,9 +5,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use base::{
-    ActionDispatcher, ActionRef, BinaryCodecs, Context, CoreState, ExecFrom, TX_ACTIONS_MAX,
-    Transaction, TransactionBuild, TxCreateRequest, hac_add, hac_sub,
+    ActionRef, BinaryCodecs, Context, CoreState, ExecFrom, TX_ACTIONS_MAX, Transaction,
+    TransactionBuild, TransactionExecute, TransactionSign, TxCreateRequest,
 };
+// Execution-only helpers (used by the `execute` impls and `execute_actions`);
+// gated because they dispatch through the `ActionRef` execute view, which only
+// exists when the `execute` feature is on.
+#[cfg(feature = "execute")]
+use base::{ActionDispatcher, hac_add, hac_sub};
 use field::{
     AddrOrList, Address, Amount, Encode, Fixed1, Fixed16, Hash, Reader, Sign, SignW2, Timestamp,
     Uint1, Uint2,
@@ -73,10 +78,6 @@ impl Transaction for DefaultPreludeTx {
         Self::TYPE
     }
 
-    fn hash(&self) -> Hash {
-        Hash::from(sys::calculate_hash(self.encode()))
-    }
-
     fn main(&self) -> Address {
         self.address
     }
@@ -117,17 +118,26 @@ impl Transaction for DefaultPreludeTx {
         true
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl TransactionSign for DefaultPreludeTx {
+    fn hash(&self) -> Hash {
+        Hash::from(sys::calculate_hash(self.encode()))
+    }
+
     fn verify_signature(&self) -> Rerr {
         errf!("cannot verify signature on prelude tx")
     }
+}
 
+#[cfg(feature = "execute")]
+impl TransactionExecute for DefaultPreludeTx {
     fn execute(&self, ctx: &mut dyn Context) -> Rerr {
         hac_add(ctx, &self.address, &self.reward)?;
         Ok(())
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -388,7 +398,7 @@ struct TxExecutePrep {
     has_ast_control: bool,
 }
 
-fn prepare_tx_execute(tx: &dyn Transaction, ctx: &mut dyn Context) -> Ret<TxExecutePrep> {
+fn prepare_tx_execute(tx: &dyn TransactionSign, ctx: &mut dyn Context) -> Ret<TxExecutePrep> {
     let env = ctx.env();
     let block_height = env.block.height;
     let tx_hash = tx.hash();
@@ -487,6 +497,7 @@ fn record_legacy_extra9_burn(ctx: &mut dyn Context, fee: &Amount, fee_got: &Amou
     })
 }
 
+#[cfg(feature = "execute")]
 fn execute_actions(ctx: &mut dyn Context, actions: &[ActionRef], charge_extra9: bool) -> Rerr {
     for act in actions {
         ctx.exec_from_set(ExecFrom::Top);
@@ -714,7 +725,7 @@ fn signature_present_for(addr: &Address, signs: &[Sign]) -> bool {
 
 /// Canonical per-signer sign hash: the main signer of Type-2/3 signs
 /// `hash_with_fee`, everyone else (and all Type-1 signers) signs `hash`.
-pub fn sign_hash_for(tx: &dyn Transaction, adr: &Address) -> Hash {
+pub fn sign_hash_for(tx: &dyn TransactionSign, adr: &Address) -> Hash {
     if *adr == tx.main() && tx.ty() != TransactionType1::TYPE {
         tx.hash_with_fee()
     } else {
@@ -733,12 +744,12 @@ pub fn verify_one_sign(hash: &Hash, addr: &Address, signs: &[Sign]) -> Ret<bool>
     errf!("{:?} signature verification failed", addr)
 }
 
-pub fn verify_target_signature(adr: &Address, tx: &dyn Transaction) -> Ret<bool> {
+pub fn verify_target_signature(adr: &Address, tx: &dyn TransactionSign) -> Ret<bool> {
     let hx = sign_hash_for(tx, adr);
     verify_one_sign(&hx, adr, tx.signs())
 }
 
-pub fn verify_tx_signature(tx: &dyn Transaction) -> Rerr {
+pub fn verify_tx_signature(tx: &dyn TransactionSign) -> Rerr {
     if tx.ty() == TransactionType3::TYPE {
         if let Some(t3) = tx.as_any().downcast_ref::<TransactionType3>() {
             return verify_type3_signatures_exact(t3);
@@ -751,7 +762,7 @@ pub fn verify_tx_signature(tx: &dyn Transaction) -> Rerr {
     Ok(())
 }
 
-pub fn check_tx_signature(tx: &dyn Transaction) -> Ret<HashMap<Address, bool>> {
+pub fn check_tx_signature(tx: &dyn TransactionSign) -> Ret<HashMap<Address, bool>> {
     let mut ckres = HashMap::new();
     for sig in tx.signs() {
         ckres.insert(sign_address(sig), true);
@@ -764,7 +775,7 @@ pub fn check_tx_signature(tx: &dyn Transaction) -> Ret<HashMap<Address, bool>> {
     Ok(ckres)
 }
 
-pub fn signature_report(tx: &dyn Transaction) -> Ret<TxSignatureReport> {
+pub fn signature_report(tx: &dyn TransactionSign) -> Ret<TxSignatureReport> {
     let mut required = tx.req_sign()?;
     sort_addresses(&mut required);
     let mut present = tx.signs().iter().map(sign_address).collect::<Vec<_>>();
@@ -991,14 +1002,6 @@ macro_rules! impl_tx_type {
                 self.ty.uint()
             }
 
-            fn hash(&self) -> Hash {
-                self.hash_ex(Vec::new())
-            }
-
-            fn hash_with_fee(&self) -> Hash {
-                self.hash_ex(self.fee.encode())
-            }
-
             fn main(&self) -> Address {
                 self.addrlist.to_list()[0]
             }
@@ -1064,6 +1067,20 @@ macro_rules! impl_tx_type {
                 Ok(Encode::size(self))
             }
 
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
+
+        impl TransactionSign for $name {
+            fn hash(&self) -> Hash {
+                self.hash_ex(Vec::new())
+            }
+
+            fn hash_with_fee(&self) -> Hash {
+                self.hash_ex(self.fee.encode())
+            }
+
             fn req_sign(&self) -> Ret<Vec<Address>> {
                 if Self::TYPE == TransactionType3::TYPE {
                     return type3_req_sign(self as &dyn Any);
@@ -1074,7 +1091,10 @@ macro_rules! impl_tx_type {
             fn verify_signature(&self) -> Rerr {
                 verify_tx_signature(self)
             }
+        }
 
+        #[cfg(feature = "execute")]
+        impl TransactionExecute for $name {
             fn execute(&self, ctx: &mut dyn Context) -> Rerr {
                 precheck_tx(ctx, self, &self.actions)?;
                 let prep = prepare_tx_execute(self, ctx)?;
@@ -1117,10 +1137,6 @@ macro_rules! impl_tx_type {
                 }
                 crate::exec::tex::settlement_addr_postsettle_cleanup(ctx)?;
                 Ok(())
-            }
-
-            fn as_any(&self) -> &dyn Any {
-                self
             }
         }
 

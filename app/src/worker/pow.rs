@@ -3,7 +3,7 @@ use std::sync::{Arc, LazyLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use base::{BlockBuild, Transaction, TransactionBuild};
+use base::{BlockBuild, TransactionBuild, TransactionSign};
 use field::Hash;
 use mint::diamond_mining::HASH_WIDTH;
 use mint::difficulty::{hash_to_rates, rates_to_show};

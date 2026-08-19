@@ -13,7 +13,7 @@ use field::{
 };
 use sys::{Account, Rerr, Ret, errf};
 
-use crate::exec::tex::SETTLEMENT_ADDR;
+use crate::params::SETTLEMENT_ADDR;
 
 fn tex_check_settlement_addr_privakey() -> Rerr {
     if !SETTLEMENT_ADDR.is_privkey() {

@@ -107,9 +107,6 @@ impl Transaction for CoinbaseTx {
     fn ty(&self) -> u8 {
         Self::TYPE
     }
-    fn hash(&self) -> Hash {
-        Hash::from(sys::calculate_hash(self.encode()))
-    }
     fn main(&self) -> Address {
         self.address
     }
@@ -143,18 +140,27 @@ impl Transaction for CoinbaseTx {
     fn is_block_prelude(&self) -> bool {
         true
     }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl base::TransactionSign for CoinbaseTx {
+    fn hash(&self) -> Hash {
+        Hash::from(sys::calculate_hash(self.encode()))
+    }
     fn req_sign(&self) -> Ret<Vec<Address>> {
         Ok(vec![])
     }
     fn verify_signature(&self) -> Rerr {
         Ok(())
     }
+}
+
+impl base::TransactionExecute for CoinbaseTx {
     fn execute(&self, ctx: &mut dyn Context) -> Rerr {
         hac_add(ctx, &self.address, &self.reward)?;
         Ok(())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

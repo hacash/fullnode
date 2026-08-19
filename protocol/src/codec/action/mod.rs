@@ -24,7 +24,7 @@ pub use envfunc::{
 };
 pub use guard::{
     BalanceFloor, ChainAllow, GuardFacts, HeightScope, ReqSignList, create_chain_guard_action,
-    decode_req_sign_list_json, guard_facts,
+    decode_req_sign_list_json, guard_facts, height_in_range,
 };
 pub use tex::{TexCellAct, create_tex_cell_act, decode_tex_cell_act_json, tex_cell_schema};
 pub use transfer::{

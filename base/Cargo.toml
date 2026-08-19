@@ -4,6 +4,20 @@ version.workspace = true
 edition.workspace = true
 
 #
+[features]
+# `execute` is the shared type-level cut owned by base: the `ActionRef`/`TxRef`
+# aliases and the JSON/binary decode creators flip between the execute view
+# (`dyn ActionExecute`/`dyn TransactionExecute`) and the wire view (`dyn
+# Action`/`dyn TransactionSign`), and the `ActionDispatcher` module + chain
+# gate entry compile only under it. Off in SDK/wasm builds the wire traits
+# (`Action`, `Transaction`, `TransactionSign`) and the registry keep their
+# exact shapes, so execution code cannot reach the wasm graph (no stubs).
+# Default on: only SDK/wasm consumers (sdk, chain-codec, codec-schema-gen, and
+# protocol/vm/mint-core under their execute-off edges) disable it via
+# `default-features = false`.
+default = ["execute"]
+execute = []
+
 [dependencies]
 sys = { workspace = true }
 field = { workspace = true }

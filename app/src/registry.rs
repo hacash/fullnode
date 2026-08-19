@@ -46,31 +46,7 @@ impl Registry {
     }
 }
 
-impl RegistryWriter for Registry {
-    fn set_block_creator(&mut self, f: BlockCreateFn) -> sys::Rerr {
-        if self.block_creator.is_some() {
-            return sys::errf!("block creator already registered");
-        }
-        self.block_creator = Some(f);
-        Ok(())
-    }
-
-    fn set_block_sizer(&mut self, f: BlockSizeFn) -> sys::Rerr {
-        if self.block_sizer.is_some() {
-            return sys::errf!("block sizer already registered");
-        }
-        self.block_sizer = Some(f);
-        Ok(())
-    }
-
-    fn set_vm_assigner(&mut self, f: VmAssignFn) -> sys::Rerr {
-        if self.vm_assigner.is_some() {
-            return sys::errf!("vm assigner already registered");
-        }
-        self.vm_assigner = Some(f);
-        Ok(())
-    }
-
+impl base::WireRegistry for Registry {
     fn register_tx(&mut self, ty: u8, f: TxCreateFn) -> sys::Rerr {
         if self.tx_codecs.contains_key(&ty) {
             return sys::errf!("transaction type {} already registered", ty);
@@ -120,6 +96,39 @@ impl RegistryWriter for Registry {
         for kind in kinds {
             self.action_json_codecs.insert(*kind, f);
         }
+        Ok(())
+    }
+
+    fn register_action_family(&mut self, _friendly: &'static str, _kinds: &[u16]) -> sys::Rerr {
+        // The friendly family surface is consumed by the SDK/codegen paths
+        // (`chain_codec::collect_action_families`); the runtime node has no
+        // use for it. Explicit accept, never a silent default.
+        Ok(())
+    }
+}
+
+impl base::ExecRegistry for Registry {
+    fn set_block_creator(&mut self, f: BlockCreateFn) -> sys::Rerr {
+        if self.block_creator.is_some() {
+            return sys::errf!("block creator already registered");
+        }
+        self.block_creator = Some(f);
+        Ok(())
+    }
+
+    fn set_block_sizer(&mut self, f: BlockSizeFn) -> sys::Rerr {
+        if self.block_sizer.is_some() {
+            return sys::errf!("block sizer already registered");
+        }
+        self.block_sizer = Some(f);
+        Ok(())
+    }
+
+    fn set_vm_assigner(&mut self, f: VmAssignFn) -> sys::Rerr {
+        if self.vm_assigner.is_some() {
+            return sys::errf!("vm assigner already registered");
+        }
+        self.vm_assigner = Some(f);
         Ok(())
     }
 
@@ -305,6 +314,12 @@ pub fn standard_registry() -> Ret<Registry> {
     // codec-schema-gen use the same chain-codec entry, so the action set can
     // never drift between them.
     chain_codec::register_standard(&mut registry)?;
+    // Execution services are installed by the full node on top of the shared
+    // wire codec surface: protocol profile/VM params/context/host defs,
+    // mint-core's DiaInscEdit EXTACTION host, the mint coinbase and the VM
+    // assigner. The SDK/wasm path stops at `register_standard`.
+    protocol::register_exec(&mut registry, &protocol::PROTOCOL_PARAMS)?;
+    mint_core::setup::register_exec(&mut registry)?;
     mint::register(&mut registry)?;
     vm::register(&mut registry)?;
     Ok(registry)

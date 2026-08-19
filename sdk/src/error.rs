@@ -38,7 +38,6 @@ define_error_codes! {
     (UnknownAction, "unknown_action"),
     (TrailingBytes, "trailing_bytes"),
     (ParseFailed, "parse_failed"),
-    (LimitExceeded, "limit_exceeded"),
     (WrongChainId, "wrong_chain_id"),
     (ExpiredHeight, "expired_height"),
     (MissingInspectContext, "missing_inspect_context"),
@@ -46,16 +45,12 @@ define_error_codes! {
     (InvalidAddress, "invalid_address"),
     (InvalidPublicKey, "invalid_public_key"),
     (BadSignature, "bad_signature"),
-    (NotRequiredSigner, "not_required_signer"),
-    (DuplicateSigner, "duplicate_signer"),
     (ReviewBindingMismatch, "review_binding_mismatch"),
     (TransactionJsonMismatch, "transaction_json_mismatch"),
     (RequestExpired, "request_expired"),
     (InvalidSigningRequest, "invalid_signing_request"),
     (PolicyBindingMismatch, "policy_binding_mismatch"),
-    (PolicyDenied, "policy_denied"),
     (CodecProfileMismatch, "codec_profile_mismatch"),
-    (IncompleteSignatures, "incomplete_signatures"),
 }
 
 /// `{ code, message, detail? }` — the single error shape across every

@@ -9,12 +9,15 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 sys = { workspace = true }
 field = { path = "../field", default-features = false }
-base = { workspace = true }
-protocol = { path = "../protocol", default-features = false, features = ["codec-only"] }
-# codec-only: the wasm SDK only needs action codecs, dropping the VM executor/IR compiler (~28KB)
-vm = { path = "../vm", default-features = false, features = ["codec-only"] }
-# codec-only: symmetric with vm; explicitly take only the inscription action codecs (execute is off by default in the workspace)
-mint-core = { workspace = true, features = ["codec-only"] }
+base = { path = "../base", default-features = false }
+protocol = { path = "../protocol", default-features = false }
+# Execute off (default-features = false): the wasm SDK only needs the action
+# codecs; the VM execution engine is compiled but dead-code-eliminated from
+# the wasm artifact (no codec-only feature anymore).
+vm = { path = "../vm", default-features = false }
+# mint-core inherits default-features = false from the workspace entry, so the
+# consensus execute body (and its x16rs/num-bigint deps) stays out of wasm.
+mint-core = { workspace = true }
 chain-codec = { workspace = true }
 hex = "0.4.3"
 libsecp256k1 = { version = "0.7.2", features = ["hmac"], default-features = false }

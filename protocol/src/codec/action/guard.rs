@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use base::{ActScope, Action, ActionRef, AddrOrPtr, CoreState, Transaction};
+use base::{ActScope, Action, ActionExecute, ActionRef, AddrOrPtr, CoreState, Transaction};
 use field::{
     Amount, AssetAmt, AssetAmtW1, BlockHeight, ChainIDList, Decode, DiamondNumber, Encode, Reader,
     Satoshi, ToJSON, Uint2, json_decode_value, json_split_array, json_split_object,
@@ -448,6 +448,17 @@ pub fn create_chain_guard_action(
     }
 }
 
+
+#[cfg(feature = "execute")]
+fn decode_regular_guard_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
+where
+    T: Action + ActionExecute + Decode + 'static,
+{
+    let (action, used) = T::decode(buf)?;
+    Ok((Arc::new(action), used))
+}
+
+#[cfg(not(feature = "execute"))]
 fn decode_regular_guard_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
 where
     T: Action + Decode + 'static,
@@ -500,6 +511,18 @@ pub struct GuardFacts {
 fn push_guard_note(facts: &mut GuardFacts, index: usize, text: String) {
     facts.protocol_violations.push(text.clone());
     facts.action_notes.push((index, text));
+}
+
+/// Height-range membership predicate of the `HeightScope` guard action:
+/// `end == 0` means unlimited and `start > end` with a non-zero `end` is an
+/// unsatisfiable range (never in range). This is the single implementation —
+/// the SDK review facts and any chain-side guard check both call it, so the
+/// semantics can never be re-derived differently.
+pub fn height_in_range(start: u64, end: u64, height: u64) -> bool {
+    if start > end && end != 0 {
+        return false;
+    }
+    height >= start && (end == 0 || height <= end)
 }
 
 /// Single guard-facts analysis for a transaction (see `GuardFacts`).

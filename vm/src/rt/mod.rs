@@ -50,7 +50,6 @@ include!("code.rs");
 include!("code_stuff.rs");
 include!("fin.rs");
 mod lang_min;
-#[cfg(feature = "full")]
 pub use lang_min::OpTy;
 include!("cap.rs");
 include!("gas.rs");
@@ -66,9 +65,8 @@ pub use call_site::{
     CallSpec, CallTarget, decode_user_call_site, encode_call_body, encode_splice_body,
     encode_user_call_site, is_user_call_inst,
 };
-#[cfg(feature = "full")]
 mod verify;
-#[cfg(feature = "full")]
+#[allow(unused_imports)] // entry-stack verify entry points reserved for machine entry checks
 pub use verify::{
     ensure_terminal_instruction, verify_bytecodes, verify_bytecodes_for_cap,
     verify_bytecodes_with_registry, VerifyEntryStack, verify_bytecodes_with_entry_stack,

@@ -121,23 +121,30 @@ impl Transaction for DummyTx {
     fn ty(&self) -> u8 {
         3
     }
-    fn hash(&self) -> Hash {
-        Hash::default()
-    }
     fn main(&self) -> Address {
         self.0
     }
     fn fee(&self) -> &Amount {
         Amount::zero_ref()
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl base::TransactionSign for DummyTx {
+    fn hash(&self) -> Hash {
+        Hash::default()
+    }
     fn verify_signature(&self) -> Rerr {
         Ok(())
     }
+}
+
+#[cfg(feature = "execute")]
+impl base::TransactionExecute for DummyTx {
     fn execute(&self, _ctx: &mut dyn Context) -> Rerr {
         errf!("stub tx: execute")
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

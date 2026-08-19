@@ -6,12 +6,12 @@
 //! and `codec-schema-gen`). Here we only register this crate's own CoinbaseTx
 //! (tx type 0), which is a block-level transaction, not a wallet-signable one.
 
-use base::RegistryWriter;
+use base::WireRegistry;
 use sys::Rerr;
 
 use crate::tx_coinbase::{CoinbaseTx, create_coinbase};
 
-pub fn register(reg: &mut dyn RegistryWriter) -> Rerr {
+pub fn register(reg: &mut dyn WireRegistry) -> Rerr {
     reg.register_tx(CoinbaseTx::TYPE, create_coinbase)?;
     Ok(())
 }

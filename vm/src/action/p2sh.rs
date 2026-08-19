@@ -19,7 +19,6 @@ use sha3::Sha3_256;
 use sys::{Rerr, Ret, errf};
 
 use crate::contract::ContractAddrListW1;
-#[cfg(feature = "full")]
 use crate::machine::peek_vm_runtime_limits;
 use crate::rt::{CodeConf, GasExtra, SpaceCap};
 
@@ -208,7 +207,6 @@ base::impl_action! {
     }
 }
 
-#[cfg(feature = "full")]
 fn p2sh_script_prove_execute(this: &P2SHScriptProve, ctx: &mut dyn Context) -> Rerr {
     if ctx.exec_from() != ExecFrom::Top {
         return errf!(
@@ -356,7 +354,6 @@ impl P2SHScriptProve {
         Ok(())
     }
 
-    #[cfg(feature = "full")]
     fn get_stuff_with_merkel(
         &self,
         ctx: &mut dyn Context,

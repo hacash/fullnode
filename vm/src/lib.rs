@@ -39,45 +39,28 @@ macro_rules! debug_println {
     };
 }
 
-// Exactly one of `codec-only` and `full` should be enabled (see the Cargo.toml
-// features comments); if neither is, the dependent crate misconfigured its feature,
-// so fail at compile time instead of silently compiling half a VM.
-#[cfg(all(not(feature = "full"), not(feature = "codec-only")))]
-compile_error!("vm requires either `full` or `codec-only` feature");
-
 pub mod action;
-#[cfg(feature = "full")]
 pub mod api;
 #[macro_use]
 pub(crate) mod rt;
 pub(crate) mod contract;
-#[cfg(feature = "full")]
 pub mod fitshc;
-// The execution engine (frame/interpreter/machine/native/state/setup/api) compiles
-// only under `full`: codec-only (SDK/wasm) pulls in no execution dependencies
-// (see the Cargo.toml features comments).
-#[cfg(feature = "full")]
+// The execution engine (frame/interpreter/machine/native/state/setup/api) is
+// always compiled; SDK/wasm builds never construct the execute view, so this
+// code is dead-code-eliminated from the wasm artifact (see the Cargo.toml
+// features comments).
 pub(crate) mod frame;
-#[cfg(feature = "full")]
 pub(crate) mod interpreter;
-#[cfg(feature = "full")]
 pub(crate) mod ir;
-#[cfg(feature = "full")]
 pub(crate) mod machine;
-#[cfg(feature = "full")]
 pub(crate) mod native;
-#[cfg(feature = "full")]
 pub mod setup;
 pub(crate) mod space;
-#[cfg(feature = "full")]
 pub(crate) mod state;
 pub(crate) mod value;
 
-#[cfg(feature = "full")]
 pub use machine::peek_vm_runtime_limits;
-#[cfg(feature = "full")]
 pub use setup::register;
-#[cfg(feature = "full")]
 pub use state::{StorageDebug, VMState, VMStateRead, VmLog};
 pub use value::ContractAddress;
 

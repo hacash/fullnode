@@ -31,6 +31,10 @@ esac
 SCHEMA_HASH="$(sed -n 's/^export const SCHEMA_HASH = "\([0-9a-f]*\)";/\1/p' "$JS_DIR/generated/codec.ts")"
 echo "[pack] codec regenerated (schema hash $SCHEMA_HASH)"
 
+# 1b. Verify the wasm dependency graph stays codec-only (no execute feature,
+#     no execution crates) — the "no stubs" guarantee is structural.
+"$SCRIPT_DIR/check-wasm-graph.sh"
+
 # 2. wasm targets → dist/{nodejs,web,page}
 "$SCRIPT_DIR/build.sh" nodejs
 mkdir -p "$DIST_DIR/nodejs"

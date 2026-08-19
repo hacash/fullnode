@@ -95,6 +95,9 @@ pub struct StateExecSession<'s> {
 }
 
 impl StateExecSession<'_> {
+    /// Execution entry: only exists in full builds (codec-only builds have no
+    /// callable `TransactionExecute` surface).
+    #[cfg(feature = "execute")]
     pub fn execute_tx(
         &mut self,
         services: Arc<dyn ExecutionServices>,

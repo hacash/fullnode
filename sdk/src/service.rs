@@ -2,11 +2,13 @@
 //!
 //! Single entry `sdk_invoke_binary(operation_id, payload)`:
 //! - request: each operation has a fixed binary layout (simple params as W2
-//!   strings/fixed-length numbers, complex objects as W4 length + JSON string,
-//!   see each `route` branch);
+//!   strings/fixed-length numbers, complex objects as W4 length + `bjson`
+//!   field stream, see each `route` branch);
 //! - result: binary envelope `ok:u8 | W4 body_len + body` (body is the
-//!   per-operation hand-written JSON, read by the TS side with native
-//!   `JSON.parse`) or `ok:u8 | err_code:u16 + W2 err_msg`.
+//!   per-operation `bjson` field stream, decoded by the TS facade) or
+//!   `ok:u8 | err_code:u16 + W2 err_msg`.
+//!
+//! The wasm core is JSON-free: no JSON is parsed or produced here.
 //!
 //! Design A: amount/address/hex and other "semantic" fields are always
 //! strings; parsing stays in Rust.
@@ -35,7 +37,12 @@ pub(crate) fn profile() -> &'static CodecProfile {
 
 /// Transport version of the binary WASM surface (§5). Bumping this means the
 /// binary envelope/payload semantics changed.
-pub const TRANSPORT_VERSION: u32 = 3;
+pub const TRANSPORT_VERSION: u32 = 5;
+// v5: the wasm core is JSON-free — response bodies and complex request
+// objects switched from JSON strings to `bjson` field streams (binary
+// envelope unchanged; the JS facade owns all JSON).
+// v4: `tx.inspect` review bodies gained the strict-mode guard facts
+// (`expired_height`/`wrong_chain`); the envelope itself is unchanged.
 // v3: the error envelope adds a W2 detail (v2 had only code + message, which
 // dropped the public semantics of `SdkError.detail`)
 
@@ -101,11 +108,9 @@ impl<'a> ReqReader<'a> {
             .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "request string is not utf8"))
     }
 
-    fn w4_json(&mut self) -> Result<String, SdkError> {
+    fn w4_bin(&mut self) -> Result<Vec<u8>, SdkError> {
         let len = self.u32()? as usize;
-        let bytes = self.take(len)?;
-        String::from_utf8(bytes.to_vec())
-            .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "request json is not utf8"))
+        Ok(self.take(len)?.to_vec())
     }
 
     fn opt_w2_str(&mut self) -> Result<Option<String>, SdkError> {
@@ -116,10 +121,10 @@ impl<'a> ReqReader<'a> {
         }
     }
 
-    fn opt_w4_json(&mut self) -> Result<Option<String>, SdkError> {
+    fn opt_w4_bin(&mut self) -> Result<Option<Vec<u8>>, SdkError> {
         match self.u8()? {
             0 => Ok(None),
-            1 => Ok(Some(self.w4_json()?)),
+            1 => Ok(Some(self.w4_bin()?)),
             _ => Err(SdkError::new(SdkErrorCode::ParseFailed, "invalid option marker")),
         }
     }
@@ -138,11 +143,11 @@ impl<'a> ReqReader<'a> {
 
 // ================================ binary result envelope ================================
 
-fn encode_result_ok(body: &str) -> Vec<u8> {
+fn encode_result_ok(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(5 + body.len());
     out.push(1);
     out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    out.extend_from_slice(body.as_bytes());
+    out.extend_from_slice(body);
     out
 }
 
@@ -176,9 +181,9 @@ pub fn invoke_binary(operation_id: u16, payload: &[u8]) -> Vec<u8> {
 /// One parsed request value (shape per the `OpRequestField` that produced it).
 enum ReqValue {
     Str(String),
-    Json(String),
+    Bin(Vec<u8>),
     OptStr(Option<String>),
-    OptJson(Option<String>),
+    OptBin(Option<Vec<u8>>),
     OptU64(Option<u64>),
     U8(u8),
     OptInspectContext(Option<(u64, u32)>),
@@ -205,22 +210,22 @@ impl ReqValue {
         }
     }
 
-    fn json(&self) -> Result<&str, SdkError> {
+    fn bin(&self) -> Result<&[u8], SdkError> {
         match self {
-            ReqValue::Json(s) => Ok(s),
+            ReqValue::Bin(bytes) => Ok(bytes),
             _ => Err(SdkError::new(
                 SdkErrorCode::ParseFailed,
-                "request field is not a json string",
+                "request field is not a binary object",
             )),
         }
     }
 
-    fn opt_json(&self) -> Result<Option<&str>, SdkError> {
+    fn opt_bin(&self) -> Result<Option<&[u8]>, SdkError> {
         match self {
-            ReqValue::OptJson(value) => Ok(value.as_deref()),
+            ReqValue::OptBin(value) => Ok(value.as_deref()),
             _ => Err(SdkError::new(
                 SdkErrorCode::ParseFailed,
-                "request field is not an optional json string",
+                "request field is not an optional binary object",
             )),
         }
     }
@@ -279,8 +284,8 @@ fn parse_request(operation_id: u16, payload: &[u8]) -> Result<Vec<(&'static str,
         let value = match field {
             OpRequestField::W2Str(_) => ReqValue::Str(r.w2_str()?),
             OpRequestField::OptW2Str(_) => ReqValue::OptStr(r.opt_w2_str()?),
-            OpRequestField::W4Json(_) => ReqValue::Json(r.w4_json()?),
-            OpRequestField::OptW4Json(_) => ReqValue::OptJson(r.opt_w4_json()?),
+            OpRequestField::W4Bin(_) => ReqValue::Bin(r.w4_bin()?),
+            OpRequestField::OptW4Bin(_) => ReqValue::OptBin(r.opt_w4_bin()?),
             OpRequestField::OptU64(_) => {
                 let value = match r.u8()? {
                     0 => None,
@@ -331,34 +336,32 @@ fn req_field<'a>(
         })
 }
 
-fn route(operation_id: u16, payload: &[u8]) -> Result<String, SdkError> {
+fn route(operation_id: u16, payload: &[u8]) -> Result<Vec<u8>, SdkError> {
     let profile = profile();
     match operation_id {
         OP_SYSTEM_CAPABILITIES => {
             parse_request(operation_id, payload)?;
-            Ok(capabilities(profile).to_json_string())
+            Ok(capabilities(profile).to_binary_body())
         }
         OP_SYSTEM_SDK_VERSION => {
             parse_request(operation_id, payload)?;
-            Ok(crate::json::obj(vec![
-                crate::json::kv("schema", crate::json::q(crate::schema::SCHEMA_SDK_VERSION)),
-                crate::json::kv("package_version", crate::json::q(crate::profile::SDK_VERSION)),
-                crate::json::kv(
-                    "abi",
-                    crate::json::obj(vec![
-                        crate::json::kv("major", crate::profile::ABI_MAJOR.to_string()),
-                        crate::json::kv("minor", crate::profile::ABI_MINOR.to_string()),
-                    ]),
-                ),
-            ]))
+            Ok(crate::json::SdkVersion {
+                schema: crate::schema::SCHEMA_SDK_VERSION.to_owned(),
+                package_version: crate::profile::SDK_VERSION.to_owned(),
+                abi: crate::profile::AbiVersion {
+                    major: crate::profile::ABI_MAJOR,
+                    minor: crate::profile::ABI_MINOR,
+                },
+            }
+            .to_binary_body())
         }
         OP_SYSTEM_CODEC_PROFILE => {
             parse_request(operation_id, payload)?;
-            Ok(profile.to_json_string())
+            Ok(profile.to_binary_body())
         }
         OP_TX_BUILD => {
             let spec = crate::spec_codec::decode_transaction_spec_binary(payload)?;
-            Ok(crate::build::build_transaction(&spec)?.to_json_string())
+            Ok(crate::build::build_transaction(&spec)?.to_binary_body())
         }
         OP_TX_INSPECT_REPORT => {
             let v = parse_request(operation_id, payload)?;
@@ -367,7 +370,7 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<String, SdkError> {
                 req_field(&v, "signer_address")?.opt_str()?,
                 profile,
             )?
-            .to_json_string())
+            .to_binary_body())
         }
         OP_TX_INSPECT => {
             let v = parse_request(operation_id, payload)?;
@@ -389,16 +392,16 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<String, SdkError> {
                 &context,
                 profile,
             )?
-            .to_json_string())
+            .to_binary_body())
         }
         OP_TX_PREPARE_SIGNATURE => {
             let v = parse_request(operation_id, payload)?;
-            let review = match req_field(&v, "options.review")?.opt_json()? {
-                Some(json) => Some(crate::inspect::Review::from_json(json)?),
+            let review = match req_field(&v, "options.review")?.opt_bin()? {
+                Some(bytes) => Some(crate::inspect::Review::from_binary(bytes)?),
                 None => None,
             };
-            let policy = match req_field(&v, "options.policy")?.opt_json()? {
-                Some(json) => Some(crate::policy::Policy::from_json(json)?),
+            let policy = match req_field(&v, "options.policy")?.opt_bin()? {
+                Some(bytes) => Some(crate::policy::Policy::from_binary(bytes)?),
                 None => None,
             };
             Ok(crate::attach::prepare_signature(
@@ -410,14 +413,15 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<String, SdkError> {
                 req_field(&v, "options.expires_at")?.opt_u64()?,
                 profile,
             )?
-            .to_json_string())
+            .to_binary_body())
         }
         OP_TX_ATTACH_SIGNATURE => {
             let v = parse_request(operation_id, payload)?;
-            let proof = crate::attach::SignatureProof::from_json(req_field(&v, "proof")?.json()?)?;
-            let review = crate::inspect::Review::from_json(req_field(&v, "review")?.json()?)?;
+            let proof =
+                crate::attach::SignatureProof::from_binary(req_field(&v, "proof")?.bin()?)?;
+            let review = crate::inspect::Review::from_binary(req_field(&v, "review")?.bin()?)?;
             let request =
-                crate::attach::SigningRequest::from_json(req_field(&v, "request")?.json()?)?;
+                crate::attach::SigningRequest::from_binary(req_field(&v, "request")?.bin()?)?;
             Ok(crate::attach::attach_signature(
                 req_field(&v, "body")?.str()?,
                 &proof,
@@ -425,37 +429,39 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<String, SdkError> {
                 &request,
                 profile,
             )?
-            .to_json_string())
+            .to_binary_body())
         }
         OP_TX_ATTACH_SIGNATURE_UNBOUND => {
             let v = parse_request(operation_id, payload)?;
-            let proof = crate::attach::SignatureProof::from_json(req_field(&v, "proof")?.json()?)?;
+            let proof =
+                crate::attach::SignatureProof::from_binary(req_field(&v, "proof")?.bin()?)?;
             Ok(crate::attach::attach_signature_unbound(
                 req_field(&v, "body")?.str()?,
                 &proof,
                 profile,
             )?
-            .to_json_string())
+            .to_binary_body())
         }
         OP_TX_VERIFY => {
             let v = parse_request(operation_id, payload)?;
-            Ok(crate::attach::verify_signatures(req_field(&v, "body")?.str()?)?.to_json_string())
+            Ok(crate::attach::verify_signatures(req_field(&v, "body")?.str()?)?.to_binary_body())
         }
         OP_TX_SIGNATURE_REPORT => {
             let v = parse_request(operation_id, payload)?;
-            Ok(crate::attach::signature_report(req_field(&v, "body")?.str()?)?.to_json_string())
+            Ok(crate::attach::signature_report(req_field(&v, "body")?.str()?)?.to_binary_body())
         }
         OP_TX_DECODE => {
             let v = parse_request(operation_id, payload)?;
             Ok(crate::inspect::decode_transaction_json(req_field(&v, "body")?.str()?)?
-                .to_json_string())
+                .to_binary_body())
         }
         OP_TX_ENCODE => {
             let v = parse_request(operation_id, payload)?;
-            let transaction =
-                crate::inspect::TransactionJson::from_json(req_field(&v, "transaction")?.json()?)?;
-            let review = match req_field(&v, "review")?.opt_json()? {
-                Some(json) => Some(crate::inspect::Review::from_json(json)?),
+            let transaction = crate::inspect::TransactionJson::from_binary(
+                req_field(&v, "transaction")?.bin()?,
+            )?;
+            let review = match req_field(&v, "review")?.opt_bin()? {
+                Some(bytes) => Some(crate::inspect::Review::from_binary(bytes)?),
                 None => None,
             };
             Ok(crate::inspect::encode_transaction_json(
@@ -463,47 +469,54 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<String, SdkError> {
                 review.as_ref(),
                 profile,
             )?
-            .to_json_string())
+            .to_binary_body())
         }
         OP_ACCOUNT_VERIFY_ADDRESS => {
             let v = parse_request(operation_id, payload)?;
-            Ok(crate::account::verify_address(req_field(&v, "address")?.str()?).to_json_string())
+            Ok(crate::account::verify_address(req_field(&v, "address")?.str()?).to_binary_body())
         }
         OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY => {
             let v = parse_request(operation_id, payload)?;
             Ok(crate::account::address_from_public_key(req_field(&v, "public_key")?.str()?)?
-                .to_json_string())
+                .to_binary_body())
         }
         OP_AMOUNT_PARSE_PROTOCOL => {
             let v = parse_request(operation_id, payload)?;
-            Ok(crate::amount::parse_protocol(req_field(&v, "value")?.str()?)?.to_json_string())
+            Ok(crate::amount::parse_protocol(req_field(&v, "value")?.str()?)?.to_binary_body())
         }
         OP_AMOUNT_FORMAT_PROTOCOL => {
             let v = parse_request(operation_id, payload)?;
-            Ok(crate::json::q(&crate::amount::format_protocol(
-                req_field(&v, "value")?.str()?,
-                req_field(&v, "unit")?.u8()?,
-            )?))
+            Ok(crate::json::AmountFormatResult {
+                value: crate::amount::format_protocol(
+                    req_field(&v, "value")?.str()?,
+                    req_field(&v, "unit")?.u8()?,
+                )?,
+            }
+            .to_binary_body())
         }
         OP_MESSAGE_PREPARE_SIGNATURE => {
             let v = parse_request(operation_id, payload)?;
-            let params = crate::message::MessagePrepareParams::from_json(req_field(&v, "params")?.json()?)?;
-            Ok(crate::message::prepare_message_signature(&params)?.to_json_string())
+            let params = crate::message::MessagePrepareParams::from_binary(
+                req_field(&v, "params")?.bin()?,
+            )?;
+            Ok(crate::message::prepare_message_signature(&params)?.to_binary_body())
         }
         OP_MESSAGE_VERIFY => {
             let v = parse_request(operation_id, payload)?;
-            let request = crate::attach::SigningRequest::from_json(req_field(&v, "request")?.json()?)?;
-            let proof = crate::attach::SignatureProof::from_json(req_field(&v, "proof")?.json()?)?;
-            Ok(crate::message::verify_message_signature(&request, &proof)?.to_json_string())
+            let request =
+                crate::attach::SigningRequest::from_binary(req_field(&v, "request")?.bin()?)?;
+            let proof =
+                crate::attach::SignatureProof::from_binary(req_field(&v, "proof")?.bin()?)?;
+            Ok(crate::message::verify_message_signature(&request, &proof)?.to_binary_body())
         }
         OP_POLICY_EVALUATE => {
             let v = parse_request(operation_id, payload)?;
-            let review = crate::inspect::Review::from_json(req_field(&v, "review")?.json()?)?;
-            let policy = match req_field(&v, "policy")?.opt_json()? {
-                Some(json) => crate::policy::Policy::from_json(json)?,
+            let review = crate::inspect::Review::from_binary(req_field(&v, "review")?.bin()?)?;
+            let policy = match req_field(&v, "policy")?.opt_bin()? {
+                Some(bytes) => crate::policy::Policy::from_binary(bytes)?,
                 None => crate::policy::Policy::default(),
             };
-            Ok(crate::policy::evaluate_policy(&review, &policy)?.to_json_string())
+            Ok(crate::policy::evaluate_policy(&review, &policy)?.to_binary_body())
         }
         _ => Err(SdkError::new(
             SdkErrorCode::UnknownOperation,
@@ -511,12 +524,11 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<String, SdkError> {
         )),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn invoke_ok(op: u16, payload: &[u8]) -> String {
+    fn invoke_ok(op: u16, payload: &[u8]) -> Vec<u8> {
         let response = invoke_binary(op, payload);
         if response[0] != 1 {
             let code = u16::from_be_bytes([response[1], response[2]]);
@@ -530,18 +542,26 @@ mod tests {
             response[3],
             response[4],
         ]) as usize;
-        String::from_utf8(response[5..5 + len].to_vec()).unwrap()
+        response[5..5 + len].to_vec()
+    }
+
+    fn field_names(body: &[u8]) -> Vec<String> {
+        crate::bjson::parse(body)
+            .expect("binary body parses")
+            .into_iter()
+            .map(|(name, _)| name.to_owned())
+            .collect()
     }
 
     #[test]
     fn system_operations() {
-        let caps = invoke_ok(OP_SYSTEM_CAPABILITIES, &[]);
-        assert!(caps.contains("\"schema\""));
-        assert!(caps.contains("\"features\""));
-        let version = invoke_ok(OP_SYSTEM_SDK_VERSION, &[]);
-        assert!(version.contains("\"package_version\""));
-        let profile = invoke_ok(OP_SYSTEM_CODEC_PROFILE, &[]);
-        assert!(profile.contains("\"profile_hash\""));
+        let caps = field_names(&invoke_ok(OP_SYSTEM_CAPABILITIES, &[]));
+        assert!(caps.iter().any(|n| n == "schema"));
+        assert!(caps.iter().any(|n| n == "features"));
+        let version = field_names(&invoke_ok(OP_SYSTEM_SDK_VERSION, &[]));
+        assert!(version.iter().any(|n| n == "package_version"));
+        let profile = field_names(&invoke_ok(OP_SYSTEM_CODEC_PROFILE, &[]));
+        assert!(profile.iter().any(|n| n == "profile_hash"));
     }
 
     #[test]
@@ -577,8 +597,12 @@ mod tests {
         payload.extend_from_slice(amount.as_bytes());
 
         let body = invoke_ok(OP_TX_BUILD, &payload);
-        assert!(body.contains("\"body\""), "unexpected: {body}");
-        assert!(body.contains("\"tx_type\":2"), "unexpected: {body}");
+        let fields = crate::bjson::parse(&body).expect("binary body parses");
+        assert!(
+            fields.iter().any(|(n, _)| *n == "body"),
+            "body field missing from tx.build response"
+        );
+        assert_eq!(crate::bjson::req(&fields, "tx_type").unwrap().u8().unwrap(), 2);
     }
 
     #[test]

@@ -235,10 +235,6 @@ mod tests {
             2
         }
 
-        fn hash(&self) -> Hash {
-            self.0
-        }
-
         fn main(&self) -> Address {
             Address::default()
         }
@@ -251,16 +247,26 @@ mod tests {
             self.1
         }
 
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    impl base::TransactionSign for TestTx {
+        fn hash(&self) -> Hash {
+            self.0
+        }
+
         fn verify_signature(&self) -> sys::Rerr {
             Ok(())
         }
+    }
 
+    // `node` is a fullnode-only crate: its `base` edge always carries
+    // `execute`, so the execute impl is unconditional here.
+    impl base::TransactionExecute for TestTx {
         fn execute(&self, _ctx: &mut dyn Context) -> sys::Rerr {
             Ok(())
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
     }
 

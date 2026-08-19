@@ -54,13 +54,21 @@ impl<const N: usize> ToJSON for Fixed<N> {
         if N == 1 {
             return self.0[0].to_string();
         }
+        let mut s = String::with_capacity(2 + N * 2);
+        s.push('"');
         match fmt.binary {
-            JSONBinaryFormat::Hex => format!("\"0x{}\"", hex::encode(self.0)),
+            JSONBinaryFormat::Hex => {
+                s.push_str("0x");
+                s.push_str(&hex::encode(self.0));
+            }
             JSONBinaryFormat::Base64 => {
                 use base64::prelude::*;
-                format!("\"b64:{}\"", BASE64_STANDARD.encode(self.0))
+                s.push_str("b64:");
+                s.push_str(&BASE64_STANDARD.encode(self.0));
             }
         }
+        s.push('"');
+        s
     }
 }
 
@@ -88,7 +96,11 @@ impl<const N: usize> FromJSON for Fixed<N> {
 
 impl ToJSON for Address {
     fn to_json_fmt(&self, _fmt: &JSONFormater) -> String {
-        format!("\"{}\"", self.to_readable())
+        let mut s = String::with_capacity(40);
+        s.push('"');
+        s.push_str(&self.to_readable());
+        s.push('"');
+        s
     }
 }
 
@@ -138,13 +150,21 @@ macro_rules! impl_bytes_json {
         $(
             impl ToJSON for $name {
                 fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
+                    let mut s = String::with_capacity(2 + self.as_ref().len() * 2);
+                    s.push('"');
                     match fmt.binary {
-                        JSONBinaryFormat::Hex => format!("\"0x{}\"", hex::encode(self.as_ref())),
+                        JSONBinaryFormat::Hex => {
+                            s.push_str("0x");
+                            s.push_str(&hex::encode(self.as_ref()));
+                        }
                         JSONBinaryFormat::Base64 => {
                             use base64::prelude::*;
-                            format!("\"b64:{}\"", BASE64_STANDARD.encode(self.as_ref()))
+                            s.push_str("b64:");
+                            s.push_str(&BASE64_STANDARD.encode(self.as_ref()));
                         }
                     }
+                    s.push('"');
+                    s
                 }
             }
 
@@ -179,12 +199,15 @@ impl FromJSON for Fold64 {
 
 impl ToJSON for Amount {
     fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
-        let value = if fmt.unit.is_empty() {
-            self.to_fin_string()
+        let mut s = String::new();
+        s.push('"');
+        if fmt.unit.is_empty() {
+            s.push_str(&self.to_fin_string());
         } else {
-            self.to_unit_string(&fmt.unit)
-        };
-        format!("\"{}\"", value)
+            s.push_str(&self.to_unit_string(&fmt.unit));
+        }
+        s.push('"');
+        s
     }
 }
 
@@ -197,7 +220,12 @@ impl FromJSON for Amount {
 
 impl ToJSON for Sign {
     fn to_json_fmt(&self, _fmt: &JSONFormater) -> String {
-        format!("\"0x{}\"", hex::encode(self.encode()))
+        let mut s = String::with_capacity(2 + self.encode().len() * 2);
+        s.push('"');
+        s.push_str("0x");
+        s.push_str(&hex::encode(self.encode()));
+        s.push('"');
+        s
     }
 }
 
@@ -218,14 +246,16 @@ macro_rules! impl_list_json {
         $(
             impl<T: ToJSON> ToJSON for $name<T> {
                 fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
-                    format!(
-                        "[{}]",
-                        self.0
-                            .iter()
-                            .map(|v| v.to_json_fmt(fmt))
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    )
+                    let mut s = String::new();
+                    s.push('[');
+                    for (i, v) in self.0.iter().enumerate() {
+                        if i > 0 {
+                            s.push(',');
+                        }
+                        s.push_str(&v.to_json_fmt(fmt));
+                    }
+                    s.push(']');
+                    s
                 }
             }
         )+
@@ -258,7 +288,11 @@ impl_list_from_json!(ListW1, ListW2);
 
 impl ToJSON for DiamondName {
     fn to_json_fmt(&self, _fmt: &JSONFormater) -> String {
-        format!("\"{}\"", self.to_readable())
+        let mut s = String::with_capacity(self.as_ref().len() + 2);
+        s.push('"');
+        s.push_str(&self.to_readable());
+        s.push('"');
+        s
     }
 }
 
@@ -311,11 +345,13 @@ impl FromJSON for DiamondNumberAuto {
 
 impl ToJSON for AssetAmt {
     fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
-        format!(
-            "{{\"serial\":{},\"amount\":{}}}",
-            self.serial.to_json_fmt(fmt),
-            self.amount.to_json_fmt(fmt)
-        )
+        let mut s = String::new();
+        s.push_str("{\"serial\":");
+        s.push_str(&self.serial.to_json_fmt(fmt));
+        s.push_str(",\"amount\":");
+        s.push_str(&self.amount.to_json_fmt(fmt));
+        s.push('}');
+        s
     }
 }
 
@@ -341,13 +377,17 @@ impl FromJSON for AssetAmt {
 
 impl ToJSON for Balance {
     fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
-        format!(
-            "{{\"hacash\":{},\"satoshi\":{},\"diamond\":{},\"assets\":{}}}",
-            self.hacash.to_json_fmt(fmt),
-            self.satoshi.to_json_fmt(fmt),
-            self.diamond.to_json_fmt(fmt),
-            self.assets.to_json_fmt(fmt)
-        )
+        let mut s = String::new();
+        s.push_str("{\"hacash\":");
+        s.push_str(&self.hacash.to_json_fmt(fmt));
+        s.push_str(",\"satoshi\":");
+        s.push_str(&self.satoshi.to_json_fmt(fmt));
+        s.push_str(",\"diamond\":");
+        s.push_str(&self.diamond.to_json_fmt(fmt));
+        s.push_str(",\"assets\":");
+        s.push_str(&self.assets.to_json_fmt(fmt));
+        s.push('}');
+        s
     }
 }
 

@@ -12,12 +12,13 @@ use std::collections::HashMap;
 use base::{
     Context, CoreState, ExecFrom, diamond_owned_move, hacd_move_one_diamond, hacd_transfer,
 };
-use field::{Address, Amount, DiamondName, DiamondNameListMax200, Hash, SatoshiAuto};
+use field::{Amount, DiamondName, DiamondNameListMax200, Hash, SatoshiAuto};
 use sys::{Rerr, errf};
 
-pub const SETTLEMENT_ADDR: Address = Address::from([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-]);
+// Defined in `params` (non-exec module): the wire codec of `TexCellAct` reads
+// it too. `tex` itself compiles unconditionally (only `exec::context` is
+// execute-gated); in SDK/wasm builds it is dead-code-eliminated.
+pub use crate::params::SETTLEMENT_ADDR;
 
 /// tex
 ///

@@ -6,17 +6,14 @@ edition.workspace = true
 #
 [features]
 # `execute` is the shared "execution enabled" flag consumed by
-# `base::impl_action!` (it expands to a stub whenever this feature is off).
-# Default on: only codec-only consumers (SDK/wasm, chain-codec) disable it.
+# `base::impl_action!` and by the type-level ActionRef/TxRef cut (the execute
+# view compiles only when this feature is on). Default on: only SDK/wasm and
+# chain-codec consumers disable it via default-features = false.
 default = ["execute"]
-execute = []
-# Action codec only (used by SDK/wasm), a marker kept for manifest symmetry
-# with vm/mint-core: every standard action's execute compiles into an entry
-# stub that returns an error (only fails, never silently succeeds). What
-# actually switches the stubs on is `execute` being off.
-codec-only = []
+execute = ["base/execute"]
 
 [dependencies]
 sys = { workspace = true }
 field = { workspace = true }
-base = { workspace = true }
+base = { path = "../base", default-features = false }
+hex = "0.4"

@@ -5,31 +5,21 @@ edition.workspace = true
 
 #
 [features]
-# The default (when codec-only is not specified) is the full VM: execution, IR compiler, FitSH entry.
-# Semantic convention: when `full` and `codec-only` are both enabled, `full` takes precedence
-# (real code, no silent divergence); stubs compile only when `execute` is off.
-default = ["full"]
-# Full VM (execution, IR compiler, FitSH entry): used by the mint/app full nodes.
-# serde_json is only needed by `full` (JSON debug output of VM values + api service);
-# codec-only (SDK/wasm) does not compile it, so the dependency graph contains no serde_json at all.
-# `full` also implies `execute`, so every real build keeps the execution body.
-full = ["dep:serde_json", "execute"]
 # `execute` is the shared "execution enabled" flag consumed by `base::impl_action!`
-# (it expands to a stub whenever this feature is off). Off under codec-only
-# (SDK/wasm) builds, on whenever `full` is enabled.
-execute = []
-# Action codec only (used by SDK/wasm). Must be combined with default-features = false;
-# if `full` is also enabled the build follows `full`. Under codec-only the execution and
-# analysis paths compile into stubs returning CodecOnlyUnsupported errors (only fail,
-# never silently succeed); codec behavior is unchanged.
-codec-only = []
+# (the execute impl compiles only when this feature is on). Off under SDK/wasm
+# builds (default-features = false), on by default for full nodes.
+# The VM codec/wire surface is unconditional; the execution engine (IR compiler,
+# machine, state, api, FitSH entry) is always compiled and dead-code-eliminated
+# from the SDK/wasm artifact, so the `full`/`codec-only` split no longer exists.
+default = ["execute"]
+execute = ["base/execute"]
 
 [dependencies]
 sys = { workspace = true }
 field = { workspace = true }
-base = { workspace = true }
+base = { path = "../base", default-features = false }
 hex = "0.4"
-serde_json = { version = "1.0", optional = true }
+serde_json = "1.0"
 dyn-clone = "1.0"
 ripemd = "0.1"
 sha2 = "0.10"

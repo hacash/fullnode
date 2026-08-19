@@ -6,9 +6,11 @@ edition.workspace = true
 [dependencies]
 sys = { workspace = true }
 field = { workspace = true }
-base = { workspace = true }
+base = { path = "../base", default-features = false }
 # Used only by the execute body (BigUint for channel interest, x16rs mining/hex for diamond mint,
-# protocol execution params/tx types); codec-only (SDK/wasm) builds never compile them
+# protocol execution params/tx types); SDK (wasm) builds keep execute off and never compile them.
+# x16rs is a hard gate: its C code cannot build for wasm32-unknown-unknown (no libc headers),
+# so the diamond-mint execute body must stay out of the wasm graph.
 hex = { version = "0.4", optional = true }
 num-bigint = { version = "0.4", optional = true }
 protocol = { workspace = true, optional = true }
@@ -18,7 +20,4 @@ x16rs = { workspace = true, optional = true }
 default = ["execute"]
 # execute: full consensus execution body (enabled by fullnode/mint); when SDK (wasm) turns it off,
 # the execute body compiles to nothing and the state-machine code it references no longer enters wasm
-execute = ["dep:hex", "dep:num-bigint", "dep:protocol", "dep:x16rs"]
-# codec-only: action (de)coding only (enabled by SDK/wasm). Equivalent to default-features=false;
-# lets dependents explicitly declare "codec only, no execution body" (symmetric to vm::codec-only)
-codec-only = []
+execute = ["dep:hex", "dep:num-bigint", "dep:protocol", "dep:x16rs", "base/execute"]

@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use base::{Action, ActionRef, CoreState};
+use base::{Action, ActionExecute, ActionRef, CoreState};
 use field::{
     Address, Decode, DiamondName, DiamondNameListMax200, DiamondNumber, Encode, Fold64, Uint1,
     Uint2,
@@ -372,6 +372,17 @@ pub fn create_envfunc_action(
     }
 }
 
+
+#[cfg(feature = "execute")]
+fn decode_envfunc_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
+where
+    T: Action + ActionExecute + Decode + 'static,
+{
+    let (action, used) = T::decode(buf)?;
+    Ok((Arc::new(action), used))
+}
+
+#[cfg(not(feature = "execute"))]
 fn decode_envfunc_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
 where
     T: Action + Decode + 'static,

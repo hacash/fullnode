@@ -10,8 +10,12 @@ path = "src/main.rs"
 [dependencies]
 sys = { workspace = true }
 field = { workspace = true }
-base = { workspace = true }
-protocol = { workspace = true }
-vm = { workspace = true }
+# Schema collection is wire-only: every edge must build with base/execute off
+# so the whole graph compiles in the SDK shape (a mixed graph — base/execute on
+# with codec-only consumers — no longer compiles since execution impls are
+# absent in codec-only builds).
+base = { path = "../base", default-features = false }
+protocol = { path = "../protocol", default-features = false }
+vm = { path = "../vm", default-features = false }
 mint-core = { workspace = true }
 chain-codec = { workspace = true }

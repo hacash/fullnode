@@ -55,7 +55,6 @@ impl Compo {
         }
     }
 
-    #[cfg(feature = "full")]
     fn to_json(&self) -> String {
         match self {
             Self::List(a) => {
@@ -75,7 +74,6 @@ impl Compo {
         }
     }
 
-    #[cfg(feature = "full")]
     fn to_debug_json(&self) -> String {
         match self {
             Self::List(a) => {
@@ -107,7 +105,6 @@ impl Compo {
         }
     }
 
-    #[cfg(feature = "full")]
     fn map_debug_json(items: &BTreeMap<Vec<u8>, Value>) -> Option<String> {
         let mut mmm = Vec::with_capacity(items.len());
         for (k, v) in items {
@@ -258,7 +255,6 @@ pub struct CompoItem {
     compo: Rc<RefCell<Compo>>,
 }
 
-#[cfg(feature = "full")]
 impl Display for CompoItem {
     fn fmt(&self, f: &mut Formatter) -> Result {
         write!(f, "{}", self.to_json())
@@ -305,12 +301,10 @@ impl CompoItem {
         self.compo.borrow().to_string()
     }
 
-    #[cfg(feature = "full")]
     pub fn to_json(&self) -> String {
         self.compo.borrow().to_json()
     }
 
-    #[cfg(feature = "full")]
     pub fn to_debug_json(&self) -> String {
         self.compo.borrow().to_debug_json()
     }

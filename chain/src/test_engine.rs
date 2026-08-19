@@ -54,9 +54,6 @@ impl Transaction for TestTx {
     fn ty(&self) -> u8 {
         1
     }
-    fn hash(&self) -> Hash {
-        Hash::default()
-    }
     fn main(&self) -> Address {
         self.main
     }
@@ -66,14 +63,25 @@ impl Transaction for TestTx {
     fn is_block_prelude(&self) -> bool {
         true
     }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl base::TransactionSign for TestTx {
+    fn hash(&self) -> Hash {
+        Hash::default()
+    }
     fn verify_signature(&self) -> Rerr {
         Ok(())
     }
+}
+
+// `chain` is a fullnode-only crate: its `base` edge always carries `execute`,
+// so the execute impl is unconditional here.
+impl base::TransactionExecute for TestTx {
     fn execute(&self, _ctx: &mut dyn Context) -> Rerr {
         Ok(())
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 
@@ -92,9 +100,6 @@ impl Transaction for AbortTx {
     fn ty(&self) -> u8 {
         2
     }
-    fn hash(&self) -> Hash {
-        Hash::from([0xab; 32])
-    }
     fn main(&self) -> Address {
         Address::default()
     }
@@ -105,14 +110,23 @@ impl Transaction for AbortTx {
     fn is_block_prelude(&self) -> bool {
         false
     }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl base::TransactionSign for AbortTx {
+    fn hash(&self) -> Hash {
+        Hash::from([0xab; 32])
+    }
     fn verify_signature(&self) -> Rerr {
         Ok(())
     }
+}
+
+impl base::TransactionExecute for AbortTx {
     fn execute(&self, _ctx: &mut dyn Context) -> Rerr {
         Err(sys::Error::abort("state backend down").with_code(STATE_READ_FAILED_CODE))
-    }
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

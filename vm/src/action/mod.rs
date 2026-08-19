@@ -24,13 +24,12 @@ pub(crate) mod p2sh;
 pub(crate) mod p2sh_tool;
 
 pub use contract::{ContractDeploy, ContractStoreAnalysis, ContractUpdate, ContractUpdateAnalysis};
-#[cfg(feature = "full")]
 pub use contract::{analyze_contract_store, analyze_contract_update, contract_protocol_cost_min};
 pub use maincall::ContractMainCall;
 pub use p2sh::{P2SHScriptProve, P2shEntryPayload, ScriptmhCalc, UnlockScript};
 pub use p2sh_tool::{P2shLeaf, P2shLeafSpec, P2shMerkleTree, P2shTool, P2shTreeCalc};
 
-use base::{ActionRef, RegistryWriter};
+use base::{ActionRef, WireRegistry};
 use sys::Ret;
 
 use contract::{create_contract_deploy, create_contract_update};
@@ -39,11 +38,12 @@ use p2sh::create_p2sh_script_prove;
 
 /// Register all four VM action codecs. Mirrors `mint::setup::register`'s
 /// `register_action` pattern. Idempotent per-kind (Registry rejects duplicate kinds).
-pub fn register_actions(reg: &mut dyn RegistryWriter) -> Ret<()> {
+pub fn register_actions(reg: &mut dyn WireRegistry) -> Ret<()> {
     base::register_regular_actions!(
         reg,
-        create_contract_action => [ContractDeploy, ContractUpdate, ContractMainCall],
-        create_p2sh_script_prove => [P2SHScriptProve],
+        // VM actions have no friendly SDK forms ("" skips family registration).
+        "", create_contract_action => [ContractDeploy, ContractUpdate, ContractMainCall],
+        "", create_p2sh_script_prove => [P2SHScriptProve],
     )?;
     Ok(())
 }

@@ -1,13 +1,19 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use field::{Address, Amount, Encode, ToJSON};
+use field::{Address, Amount, Encode};
 use sys::Ret;
 
 use crate::iface::context::Context;
 use crate::runtime::{ActScope, AddrOrPtr};
 
 pub type ActOut = (u32, Vec<u8>);
+/// The wire/offline view of an action. In full builds the same object also
+/// implements `ActionExecute`, and `ActionRef` carries that view; codec-only
+/// (SDK/wasm) builds keep the wire view only — execution is not compiled in.
+#[cfg(feature = "execute")]
+pub type ActionRef = Arc<dyn ActionExecute>;
+#[cfg(not(feature = "execute"))]
 pub type ActionRef = Arc<dyn Action>;
 
 #[derive(Clone, Debug)]
@@ -94,9 +100,20 @@ pub fn resolve_transfer_routing_on<C: Context + ?Sized>(
 /// participate in binary encoding, validation, or consensus execution.
 /// Regular payloads derive `base::ActionCodec`; irregular payloads keep an
 /// explicit codec in their owning crate. Neither path generates execution.
-pub trait Action: Encode + ToJSON + Send + Sync + std::fmt::Debug {
+///
+/// This is the wire + offline-semantics view (kind, scope, signers, transfer
+/// routing, flags). Execution lives on the separate `ActionExecute` trait,
+/// implemented only in full builds; codec-only (SDK/wasm) builds compile
+/// without it, so no stub exists.
+///
+/// `ToJSON` is deliberately NOT a supertrait: the SDK's wasm core is JSON-free
+/// (the transport is binary; JSON is a JS-side concern), and a `ToJSON`
+/// supertrait would force every `dyn Action` vtable in the SDK to carry the
+/// JSON formatter machinery. Code that needs the JSON view (fullnode API,
+/// registry JSON decoders) bounds on `ActionJsonCodec` / `field::ToJSON`
+/// explicitly.
+pub trait Action: Encode + Send + Sync + std::fmt::Debug {
     fn kind(&self) -> u16;
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut>;
 
     fn as_transfer_like(&self) -> Option<&dyn TransferLike> {
         None
@@ -136,6 +153,27 @@ pub trait Action: Encode + ToJSON + Send + Sync + std::fmt::Debug {
     fn as_any(&self) -> &dyn Any;
 }
 
+/// Execution view of an action: `Action` plus the consensus `execute` body.
+/// Implemented (via `impl_action!`) only when the `execute` feature is on, so
+/// the SDK/wasm dependency graph has no callable execution surface at all —
+/// there is no stub to reach.
+///
+/// `ActionExecute` additionally carries the JSON view (`ActionJsonView`), so
+/// full builds that hold `dyn ActionExecute` (the execute `ActionRef`) can
+/// still render action JSON in API services — while the SDK's `dyn Action`
+/// vtables stay JSON-free.
+pub trait ActionExecute: Action + ActionJsonView {
+    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut>;
+}
+
+/// JSON rendering for actions, kept off the `Action` wire trait so SDK/wasm
+/// `dyn Action` vtables carry no JSON formatter machinery. Full-node code that
+/// renders action JSON (API services) holds the execute view or bounds on this
+/// trait explicitly.
+pub trait ActionJsonView: field::ToJSON {}
+
+impl<T: field::ToJSON> ActionJsonView for T {}
+
 /// Owned JSON construction for actions whose JSON schema maps directly to
 /// their fields. This is deliberately separate from `Action`: internal or
 /// dynamic actions are not required to expose a generic JSON constructor.
@@ -150,10 +188,13 @@ pub trait ActionJsonCodec: Action + Sized {
 /// registration in `protocol::setup`). It is a type-level constant and does
 /// not enter `dyn Action`, so object safety and `ActionRef` are unaffected.
 ///
-/// The execution body remains ordinary Rust and is deliberately evaluated
-/// inside the existing `ActionDispatcher` lifecycle. This macro only removes
-/// repeated metadata, `as_any`, and size-based gas plumbing; it does not add a
-/// second precheck or hook path.
+/// The macro emits two impls: the wire/offline `Action` surface, and the
+/// `ActionExecute` impl with the real execution body. The execute impl is
+/// gated as a whole block on the expanding crate's `execute` feature (which
+/// forwards to `base/execute`), so codec-only (SDK/wasm) builds compile no
+/// execution body and no stub at all. This macro only removes repeated
+/// metadata, `as_any`, and size-based gas plumbing; it does not add a second
+/// precheck or hook path.
 #[macro_export]
 macro_rules! impl_action {
     ($class:ty {
@@ -183,45 +224,16 @@ macro_rules! impl_action {
         min_tx_type: $min_tx_type:expr,
         execute: ($action_self:ident, $action_ctx:ident) $execute:block $(,)?
     }) => {
-        impl $class {
-            pub const NAME: &'static str = $name;
-        }
-
-        impl $crate::Action for $class {
-            fn kind(&self) -> u16 {
-                Self::KIND
-            }
-
-            fn scope(&self) -> $crate::ActScope {
-                $scope
-            }
-
-            fn min_tx_type(&self) -> u8 {
-                $min_tx_type
-            }
-
-            fn execute(&$action_self, $action_ctx: &mut dyn $crate::Context) -> sys::Ret<$crate::ActOut> {
-                // The `execute` feature is the shared "execution enabled" flag
-                // across all crates that expand this macro. When it is off
-                // (codec-only SDK/wasm builds) the real body and the execution
-                // code it references are compiled out entirely, so the stub
-                // entry keeps the wire codecs without the state-machine deps.
-                #[cfg(not(feature = "execute"))]
-                {
-                    let _ = ($action_self, $action_ctx);
-                    let result: sys::Ret<Vec<u8>> = $crate::execution_disabled();
-                    Ok(($action_self.size() as u32, result?))
-                }
-                #[cfg(feature = "execute")]
-                {
-                    let gas = $action_self.size() as u32;
-                    let result: sys::Ret<Vec<u8>> = (|| $execute)();
-                    Ok((gas, result?))
-                }
-            }
-
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
+        $crate::impl_action! {
+            $class {
+                name: $name,
+                scope: $scope,
+                min_tx_type: $min_tx_type,
+                extra9: |_: &$class| false,
+                req_sign: |_: &$class| vec![],
+                as_transfer_like: none,
+                description: |_: &$class| String::new(),
+                execute: ($action_self, $action_ctx) $execute
             }
         }
     };
@@ -269,23 +281,17 @@ macro_rules! impl_action {
                 ($description)(self)
             }
 
-            fn execute(&$action_self, $action_ctx: &mut dyn $crate::Context) -> sys::Ret<$crate::ActOut> {
-                #[cfg(not(feature = "execute"))]
-                {
-                    let _ = ($action_self, $action_ctx);
-                    let result: sys::Ret<Vec<u8>> = $crate::execution_disabled();
-                    Ok(($action_self.size() as u32, result?))
-                }
-                #[cfg(feature = "execute")]
-                {
-                    let gas = $action_self.size() as u32;
-                    let result: sys::Ret<Vec<u8>> = (|| $execute)();
-                    Ok((gas, result?))
-                }
-            }
-
             fn as_any(&self) -> &dyn std::any::Any {
                 self
+            }
+        }
+
+        #[cfg(feature = "execute")]
+        impl $crate::ActionExecute for $class {
+            fn execute(&$action_self, $action_ctx: &mut dyn $crate::Context) -> sys::Ret<$crate::ActOut> {
+                let gas = $action_self.size() as u32;
+                let result: sys::Ret<Vec<u8>> = (|| $execute)();
+                Ok((gas, result?))
             }
         }
     };
@@ -299,15 +305,35 @@ macro_rules! impl_action {
     };
 }
 
-/// Stub `Action::execute` entry used by `impl_action!` when the `execute`
-/// feature is off (codec-only SDK/wasm builds): always fails, so execution
-/// implementations stay out of the wasm dependency closure. Only referenced
-/// from the cfg'd-out stub branch, so full builds never reach it.
-pub fn execution_disabled() -> sys::Ret<Vec<u8>> {
-    sys::errf!("action execution is disabled in this (codec-only) build")
+/// Registry-compatible JSON creator for regular derived actions.
+///
+/// Full builds store the execute view (`ActionRef = Arc<dyn ActionExecute>`),
+/// so the creator needs the concrete type to carry the execution impl;
+/// codec-only builds store the wire view and only need `Action`. The two
+/// bodies are identical — only the bound differs.
+#[cfg(feature = "execute")]
+pub fn decode_regular_action_json<T>(
+    _reg: &dyn crate::CodecRegistry,
+    kind: u16,
+    json: &str,
+) -> Ret<ActionRef>
+where
+    T: ActionJsonCodec + ActionExecute + 'static,
+{
+    let action = T::decode_json(json)?;
+    if action.kind() != kind {
+        return sys::normalf!(
+            "action kind mismatch: expected {} got {}",
+            kind,
+            action.kind()
+        );
+    }
+    Ok(Arc::new(action))
 }
 
-/// Registry-compatible JSON creator for regular derived actions.
+/// Registry-compatible JSON creator for regular derived actions (codec-only
+/// builds; see the `execute` variant above).
+#[cfg(not(feature = "execute"))]
 pub fn decode_regular_action_json<T>(
     _reg: &dyn crate::CodecRegistry,
     kind: u16,
@@ -328,12 +354,20 @@ where
 }
 
 /// Register binary and JSON codecs from one regular-action type list.
+///
+/// Each group carries its SDK-facing friendly kind name (`""` when the group
+/// has no friendly form, e.g. VM host actions); it is forwarded to
+/// `register_action_family` from the same invocation as the kind list, so the
+/// friendly grouping can never drift from the registered kinds.
 #[macro_export]
 macro_rules! register_regular_actions {
-    ($registry:expr, $( $binary:path => [$( $action:ty ),+ $(,)?] ),+ $(,)?) => {{
+    ($registry:expr, $( $friendly:literal, $binary:path => [$( $action:ty ),+ $(,)?] ),+ $(,)?) => {{
         $(
             let kinds: &[u16] = &[$(<$action>::KIND),+];
             $registry.register_action(kinds, $binary)?;
+            if !$friendly.is_empty() {
+                $registry.register_action_family($friendly, kinds)?;
+            }
             $(
                 $registry.register_action_json(
                     &[<$action>::KIND],
@@ -351,12 +385,17 @@ macro_rules! register_regular_actions {
 /// Register a custom binary/JSON action family from one authoritative kind
 /// list. The registry interface stays unchanged while callers can no longer
 /// accidentally use different kind lists for the two codec directions.
+/// `$friendly` is the SDK-facing friendly kind name (`""` when the family has
+/// no friendly form).
 #[macro_export]
 macro_rules! register_custom_actions {
-    ($registry:expr, $binary:path, $json:path => [$( $action:ty ),+ $(,)?] $(,)?) => {{
+    ($registry:expr, $friendly:literal, $binary:path, $json:path => [$( $action:ty ),+ $(,)?] $(,)?) => {{
         let kinds: &[u16] = &[$(<$action>::KIND),+];
         $registry.register_action(kinds, $binary)?;
         $registry.register_action_json(kinds, $json)?;
+        if !$friendly.is_empty() {
+            $registry.register_action_family($friendly, kinds)?;
+        }
         $(
             $registry.register_action_schema(
                 <$action as $crate::ActionSchemaProvider>::ACTION_SCHEMA,
@@ -367,23 +406,26 @@ macro_rules! register_custom_actions {
 }
 
 /// Keep the JSON-only form for irregular actions whose wire codec is custom.
+///
+/// Builds the object with direct string pushes (no `format!`) so the generated
+/// `to_json_fmt` carries no fmt machinery (wasm size).
 #[macro_export]
 macro_rules! impl_action_to_json {
     ($class:ty { $($field:ident),* $(,)? }) => {
         impl field::ToJSON for $class {
             fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
-                let mut fields = vec![format!(
-                    "\"kind\":{}",
-                    field::ToJSON::to_json_fmt(&self.kind, fmt)
-                )];
+                let mut s = String::new();
+                s.push_str("{\"kind\":");
+                s.push_str(&field::ToJSON::to_json_fmt(&self.kind, fmt));
                 $(
-                    fields.push(format!(
-                        "\"{}\":{}",
-                        stringify!($field),
-                        field::ToJSON::to_json_fmt(&self.$field, fmt)
-                    ));
+                    s.push(',');
+                    s.push('"');
+                    s.push_str(stringify!($field));
+                    s.push_str("\":");
+                    s.push_str(&field::ToJSON::to_json_fmt(&self.$field, fmt));
                 )*
-                format!("{{{}}}", fields.join(","))
+                s.push('}');
+                s
             }
         }
     };

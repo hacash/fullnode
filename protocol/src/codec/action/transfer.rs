@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use base::{
-    ActScope, Action, ActionJsonCodec, ActionRef, AddrOrPtr, Context, CoreState, TransferLike,
+    ActScope, Action, ActionJsonCodec, ActionExecute, ActionRef, AddrOrPtr, Context, CoreState, TransferLike,
     TransferPayload, asset_transfer, diamond_owned_move, hac_transfer, hacd_move_one_diamond,
     hacd_transfer, sat_transfer,
 };
@@ -964,6 +964,17 @@ pub fn decode_diamond_transfer_json(
     }
 }
 
+
+#[cfg(feature = "execute")]
+fn decode_regular_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
+where
+    T: Action + ActionExecute + Decode + 'static,
+{
+    let (action, used) = T::decode(buf)?;
+    Ok((Arc::new(action), used))
+}
+
+#[cfg(not(feature = "execute"))]
 fn decode_regular_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
 where
     T: Action + Decode + 'static,

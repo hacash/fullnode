@@ -109,35 +109,3 @@ impl ActionDispatcher {
         }
     }
 }
-
-pub struct ExecFromGuard<'a> {
-    ctx: &'a mut dyn Context,
-    prev: ExecFrom,
-}
-
-impl<'a> ExecFromGuard<'a> {
-    pub fn enter(ctx: &'a mut dyn Context, from: ExecFrom) -> Self {
-        let prev = ctx.exec_from();
-        ctx.exec_from_set(from);
-        Self { ctx, prev }
-    }
-
-    pub fn ctx(&mut self) -> &mut dyn Context {
-        self.ctx
-    }
-}
-
-impl Drop for ExecFromGuard<'_> {
-    fn drop(&mut self) {
-        self.ctx.exec_from_set(self.prev);
-    }
-}
-
-pub fn with_exec_from<R>(
-    ctx: &mut dyn Context,
-    from: ExecFrom,
-    f: impl FnOnce(&mut dyn Context) -> R,
-) -> R {
-    let mut guard = ExecFromGuard::enter(ctx, from);
-    f(guard.ctx())
-}

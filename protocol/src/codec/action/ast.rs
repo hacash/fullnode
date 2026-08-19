@@ -4,9 +4,11 @@ use std::any::Any;
 use std::sync::Arc;
 
 use base::{
-    ActOut, ActScope, Action, ActionDispatcher, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry,
+    ActOut, ActScope, Action, ActionExecute, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry,
     Context, TopRule,
 };
+#[cfg(feature = "execute")]
+use base::ActionDispatcher;
 use field::{
     Decode, Encode, Reader, Uint1, Uint2, json_decode_object, json_decode_value,
     json_expect_unquoted, json_split_array, json_split_object,
@@ -14,12 +16,19 @@ use field::{
 use sys::{Rerr, Ret, errf};
 
 impl field::ToJSON for ActionListW1 {
-    fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
+    fn to_json_fmt(&self, _fmt: &field::JSONFormater) -> String {
+        // `Action` no longer requires `ToJSON` (the SDK wasm core is JSON-free),
+        // so `dyn Action` has no JSON view here; serialize each child from its
+        // wire form as `{"body":"<hex>"}`, which `decode_ast_child` decodes via
+        // `decode_action_exact` (lossless round trip).
         format!(
             "[{}]",
             self.actions
                 .iter()
-                .map(|action| action.to_json_fmt(fmt))
+                .map(|action| format!(
+                    "{{\"body\":\"0x{}\"}}",
+                    hex::encode(action.encode())
+                ))
                 .collect::<Vec<_>>()
                 .join(",")
         )
@@ -336,6 +345,7 @@ fn validate_ast_select(min: usize, max: usize, num: usize) -> Rerr {
     Ok(())
 }
 
+#[cfg(feature = "execute")]
 fn run_ast_child(ctx: &mut dyn Context, act: &ActionRef) -> Ret<ActOut> {
     let gas = crate::execution_params(ctx.services().as_ref())?.ast_snapshot_try_gas;
     ctx.gas_charge(gas)?;
@@ -406,6 +416,13 @@ impl Action for AstSelect {
         self.collect_req_sign()
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[cfg(feature = "execute")]
+impl ActionExecute for AstSelect {
     fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
         // AST control nodes are structural. Their children and snapshot
         // boundaries are metered; charging the serialized wrapper here would
@@ -438,10 +455,6 @@ impl Action for AstSelect {
         }
         Ok((gas, last))
     }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
 }
 
 impl Action for AstIf {
@@ -469,6 +482,13 @@ impl Action for AstIf {
         self.collect_req_sign()
     }
 
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[cfg(feature = "execute")]
+impl ActionExecute for AstIf {
     fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
         let gas = 0;
         let cond_ref: ActionRef = Arc::new(self.cond.clone());
@@ -484,10 +504,6 @@ impl Action for AstIf {
         };
         let (_, ret) = run_ast_child(ctx, &branch)?;
         Ok((gas, ret))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 }
 

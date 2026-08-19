@@ -137,13 +137,11 @@ impl TupleItem {
         format!("tuple({})[{}]", self.items.len(), items.join(","))
     }
 
-    #[cfg(feature = "full")]
     pub fn to_json(&self) -> String {
         let items: Vec<_> = self.items.iter().map(Value::to_json).collect();
         format!("{{\"$tuple\":[{}]}}", items.join(","))
     }
 
-    #[cfg(feature = "full")]
     pub fn to_debug_json(&self) -> String {
         let items: Vec<_> = self.items.iter().map(Value::to_debug_json).collect();
         format!("{{\"$tuple\":[{}]}}", items.join(","))

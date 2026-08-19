@@ -126,42 +126,56 @@ macro_rules! impl_struct_json {
 }
 
 /// Generate the standard object JSON representation for a field struct.
+///
+/// Builds the object with direct string pushes instead of `format!` so the
+/// generated `to_json_fmt` bodies carry no fmt machinery (wasm size; these
+/// impls are instantiated for every wire struct).
 #[macro_export]
 macro_rules! impl_struct_to_json {
     ($class:ty { $($field:ident),* $(,)? } optional $optional:ident when $condition:ident) => {
         impl $crate::ToJSON for $class {
             fn to_json_fmt(&self, fmt: &$crate::JSONFormater) -> String {
-                let mut fields = Vec::new();
+                let mut s = String::new();
+                s.push('{');
                 $(
-                    fields.push(format!(
-                        "\"{}\":{}",
-                        stringify!($field),
-                        $crate::ToJSON::to_json_fmt(&self.$field, fmt)
-                    ));
+                    s.push('"');
+                    s.push_str(stringify!($field));
+                    s.push_str("\":");
+                    s.push_str(&$crate::ToJSON::to_json_fmt(&self.$field, fmt));
+                    s.push(',');
                 )*
                 if self.$condition() {
-                    fields.push(format!(
-                        "\"{}\":{}",
-                        stringify!($optional),
-                        $crate::ToJSON::to_json_fmt(&self.$optional, fmt)
-                    ));
+                    s.push('"');
+                    s.push_str(stringify!($optional));
+                    s.push_str("\":");
+                    s.push_str(&$crate::ToJSON::to_json_fmt(&self.$optional, fmt));
+                    s.push(',');
                 }
-                format!("{{{}}}", fields.join(","))
+                if s.len() > 1 {
+                    s.pop();
+                }
+                s.push('}');
+                s
             }
         }
     };
     ($class:ty { $($field:ident),* $(,)? }) => {
         impl $crate::ToJSON for $class {
             fn to_json_fmt(&self, fmt: &$crate::JSONFormater) -> String {
-                let mut fields = Vec::new();
+                let mut s = String::new();
+                s.push('{');
                 $(
-                    fields.push(format!(
-                        "\"{}\":{}",
-                        stringify!($field),
-                        $crate::ToJSON::to_json_fmt(&self.$field, fmt)
-                    ));
+                    s.push('"');
+                    s.push_str(stringify!($field));
+                    s.push_str("\":");
+                    s.push_str(&$crate::ToJSON::to_json_fmt(&self.$field, fmt));
+                    s.push(',');
                 )*
-                format!("{{{}}}", fields.join(","))
+                if s.len() > 1 {
+                    s.pop();
+                }
+                s.push('}');
+                s
             }
         }
     };
@@ -681,6 +695,57 @@ mod engine_equivalence {
                 handwritten_engine::split_array(s),
                 serde_engine::split_array(s),
             );
+        }
+    }
+
+    /// Dynamic binary formats (`0x..`/`b64:..`), unit-qualified amounts and
+    /// mixed-case variants: both engines must decode the same quoted string,
+    /// and the format layer (`json_decode_binary`) must yield the same bytes
+    /// from either engine's output.
+    #[test]
+    fn dynamic_formats_agree() {
+        for s in [
+            // hex / base64 binary formats (lower/upper prefixes, mixed case)
+            "\"0x12\"",
+            "\"0X12\"",
+            "\"0xdeadBEEF00\"",
+            "\"0x\"",
+            "\"b64:AA==\"",
+            "\"B64:AA==\"",
+            "\"b64:SGVsbG8sIFdvcmxkIQ==\"",
+            "\"b64:\"",
+            // unit-qualified amount strings (format layer parses the unit part)
+            "\"1.5HAC\"",
+            "\"1000SAT\"",
+            "\"2.34\"",
+            // plain text (no recognized prefix stays raw bytes)
+            "\"plain text\"",
+            // nested dynamic formats survive structure scanning
+            "{\"a\":\"0x12\",\"b\":\"b64:AA==\",\"c\":\"1.5HAC\"}",
+            "[\"0xdeadBEEF00\",\"b64:SGVsbG8=\",\"0X00\"]",
+        ] {
+            compare(
+                "quoted_decoded (dynamic formats)",
+                s,
+                handwritten_engine::quoted_decoded(s),
+                serde_engine::quoted_decoded(s),
+            );
+        }
+        // The format layer is engine-agnostic, but pin the contract end to
+        // end: identical bytes from both engines' decoded strings.
+        for s in [
+            "\"0xdeadBEEF00\"",
+            "\"0X12\"",
+            "\"b64:SGVsbG8sIFdvcmxkIQ==\"",
+            "\"B64:AA==\"",
+            "\"plain text\"",
+            "\"1.5HAC\"",
+        ] {
+            let hand = handwritten_engine::quoted_decoded(s).unwrap();
+            let serde = serde_engine::quoted_decoded(s).unwrap();
+            let hand_bytes = super::json_decode_binary(&format!("\"{hand}\"")).unwrap();
+            let serde_bytes = super::json_decode_binary(&format!("\"{serde}\"")).unwrap();
+            assert_eq!(hand_bytes, serde_bytes, "format layer diverged on {s:?}");
         }
     }
 }

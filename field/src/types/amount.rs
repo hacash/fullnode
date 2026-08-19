@@ -298,9 +298,29 @@ impl Amount {
         if self.is_zero() {
             return "0:0".to_owned();
         }
-        let sign = if self.is_negative() { "-" } else { "" };
         let digits = mantissa_string(&self.byte);
-        format!("{}{}:{}", sign, digits, self.unit)
+        let mut s = String::with_capacity(digits.len() + 5);
+        if self.is_negative() {
+            s.push('-');
+        }
+        s.push_str(&digits);
+        s.push(':');
+        // unit is a 0..=255 decimal exponent; write it without the fmt machinery
+        let mut buf = [0u8; 3];
+        let mut n = 0;
+        let mut unit = self.unit;
+        loop {
+            buf[n] = b'0' + unit % 10;
+            n += 1;
+            unit /= 10;
+            if unit == 0 {
+                break;
+            }
+        }
+        for i in (0..n).rev() {
+            s.push(buf[i] as char);
+        }
+        s
     }
 
     #[cfg(feature = "num-bigint")]
@@ -822,9 +842,8 @@ fn pow10_big(exp: u8) -> BigUint {
 
 fn mantissa_string(bytes: &[u8]) -> String {
     if bytes.len() <= size_of::<u128>() {
-        tail_to_u128(bytes, u128::MAX)
-            .expect("16-byte amount fits u128")
-            .to_string()
+        let value = tail_to_u128(bytes, u128::MAX).expect("16-byte amount fits u128");
+        u128_to_decimal(value)
     } else {
         #[cfg(feature = "num-bigint")]
         {
@@ -835,6 +854,24 @@ fn mantissa_string(bytes: &[u8]) -> String {
             b256::to_decimal_b256(bytes)
         }
     }
+}
+
+/// u128 → decimal string without the `core::fmt::num` machinery (amount
+/// formatting is on the JSON hot path; avoids pulling u128 Display into wasm).
+fn u128_to_decimal(value: u128) -> String {
+    if value == 0 {
+        return "0".to_owned();
+    }
+    let mut buf = [0u8; 39]; // max 39 decimal digits for u128
+    let mut i = buf.len();
+    let mut v = value;
+    while v > 0 {
+        i -= 1;
+        buf[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+    }
+    // SAFETY: buf[i..] contains only ASCII digits
+    unsafe { String::from_utf8_unchecked(buf[i..].to_vec()) }
 }
 
 fn tail_to_u128(bytes: &[u8], limit: u128) -> Ret<u128> {

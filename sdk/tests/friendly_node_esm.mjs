@@ -6,7 +6,7 @@ const caps = sdk.system.capabilities();
 if (caps.abi.major !== 2) {
     throw new Error(`unexpected abi major ${caps.abi.major}`);
 }
-if (sdk.transport_version !== 3) {
+if (sdk.transport_version !== 5) {
     throw new Error(`unexpected transport version ${sdk.transport_version}`);
 }
 // format_protocol returns an exact decimal string, never a float.

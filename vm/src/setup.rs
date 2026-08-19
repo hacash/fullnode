@@ -9,12 +9,12 @@
 //! Host capability metadata (which EXTACTION/env/view ids exist) is registered
 //! by `protocol::register_standard`. This crate only installs `vm_assigner`.
 
-use base::RegistryWriter;
+use base::ExecRegistry;
 use sys::Rerr;
 
 use crate::machine::StubVm;
 
-pub fn register(reg: &mut dyn RegistryWriter) -> Rerr {
+pub fn register(reg: &mut dyn ExecRegistry) -> Rerr {
     reg.set_vm_assigner(|_reg, height| Box::new(StubVm::new(height)))?;
     Ok(())
 }

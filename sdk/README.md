@@ -7,8 +7,11 @@ fullnode WASM SDK。设计要点：
   `system.capabilities()` 的 feature/schema/profile 表达。
 - **私钥不穿越 SDK 边界**：SDK 只产生 `SigningRequest`（digest + bindings）
   并消费 `SignatureProof`；钱包 vault 负责签名。
-- **JSON transport 极小面**：raw WASM 只有 `sdk_invoke(request_json) ->
-  envelope_json` 与 `sdk_transport_version()`，操作增加不改变 WASM 表面。
+- **JSON-free WASM 核心 + 二进制极小面**：raw WASM 只有
+  `sdk_invoke_binary(operation_id, payload)` 与 `sdk_transport_version()`；
+  wasm 核心不解析/不产生任何 JSON（`bjson` 二进制字段流进、二进制 envelope
+  出），全部 JSON 语义归 JS facade（原生 `JSON.parse/stringify`）。操作增加
+  不改变 WASM 表面。
 - **交易状态机**：`tx.build → inspect → prepare_signature → (vault)
   attach_signature → verify`；审阅对象 `Review` 本地生成，绑定
   `review_binding`。
@@ -25,7 +28,7 @@ sdk.system.codec_profile();     // fullnode_commit / limits / registered_kinds
 
 sdk.tx.build({ spec });                              // 未签名 Type-2/3 body
 sdk.tx.inspect_report(body, signerAddress?);         // 无链上下文审阅
-sdk.tx.inspect(body, signerAddress, context);        // 严格模式（高度/链 guard）
+sdk.tx.inspect(body, signerAddress, context);        // 严格模式（guard 作为事实报告，不拒绝）
 sdk.tx.prepare_signature(body, signerAddress, opts); // SigningRequest
 sdk.tx.attach_signature(body, proof, review, request);
 sdk.tx.attach_signature_unbound(body, proof);        // 低级路径，无审批链
@@ -47,7 +50,9 @@ sdk.policy.evaluate(review, policy);
 任何字段——含 `expires_at`——都会以 `invalid_signing_request` 失败），并
 校验 digest/body_hash/signer/purpose/algorithm、proof↔request 绑定、policy
 决策与 review binding；无审批链的冷签名路径使用 `attach_signature_unbound`
-（只校验 body/signer/signature）。`tx.encode` 强制重建 body 的
+（只校验 body/signature/limits；非必需签名者仅在 type-3 被拒绝——链的
+精确 D 集规则，type-1/2 链容忍多余签名，SDK 同样放行并以
+`complete`/`missing_signers` 报告完整性）。`tx.encode` 强制重建 body 的
 `unsigned_body_hash` 与声明值一致，篡改 action json 会以
 `transaction_json_mismatch` 失败；提供 `review` 时同样校验其 binding。
 
@@ -55,7 +60,8 @@ sdk.policy.evaluate(review, policy);
 而不是静默忽略）；`system.capabilities().features` 与 dispatcher 共享同一
 `OPERATIONS` 注册表（有测试保证两者不漂移）。审阅中的 `chain_ids_allowed`
 为多个 `ChainAllow` 的交集（协议逐条执行），`valid_height_range` 同理取
-交集。
+交集；严格模式的 `expired_height`/`wrong_chain` 是调用者 context 下的派生
+事实，SDK 从不因它们拒绝返回 review——是否继续由上层判断。
 
 错误统一为 `{ code, message, detail? }`（`SdkError`），facade 抛出带
 `code`/`detail` 的异常，raw envelope 在 `e.sdkError` 中保留。
@@ -91,6 +97,20 @@ nodejs/web/no-modules 三个 wasm 目标、装配 dist、可选压缩。产物�
 `sdk/.gitignore`）；`sdk/check-schema.sh` 可独立验证已生成的 codec 与
 Rust schema 一致。
 
+### 关于 execute-off 构建的 unused import 警告
+
+SDK 以 `default-features = false` 编译 protocol/vm/mint-core（`execute`
+关闭），但它们与 fullnode 共享同一份源码。为保持 fullnode 侧代码整洁，
+execute 相关的实现不再逐行用 cfg 裁剪，而是**全量编译、由 wasm 链接器
+剥离死代码**；只有少数类型级切分（`ActionRef`/`TxRef` 等）和 mint-core
+的 x16rs 硬依赖（C 代码无法为 wasm32 编译）仍保留 cfg。
+
+因此 execute-off 构建会输出一批 `unused import` 警告——这些导入只被
+execute 体使用，在 SDK 构建下确实是死代码。这是换取 fullnode 代码整洁
+的刻意代价：**不要为了消除这些警告而恢复 per-import cfg**。它们不影响
+fullnode 编译，也不影响 wasm 构建物（死代码剥离后产物不含 execute 代码，
+`check-wasm-graph.sh` 负责守护这一点）。
+
 ## Rust 原生使用
 
 rlib 同样可用：`sdk::inspect::inspect_report`、`sdk::attach::*`、
@@ -100,7 +120,7 @@ rlib 同样可用：`sdk::inspect::inspect_report`、`sdk::attach::*`、
 ## 测试
 
 ```sh
-cargo test -p sdk          # 44 个单元/流程测试（含黄金向量、签名流、guard 检查、篡改/过期/deny 拒绝）
+cargo test -p sdk          # 73 个单元/流程测试（含黄金向量、签名流、guard 事实、篡改/过期/deny 拒绝）
 node ./sdk/tests/...       # 打包后 JS 冒烟
 ```
 

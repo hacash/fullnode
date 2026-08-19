@@ -297,9 +297,9 @@ fn verify_p2sh_entry_inputs(
     )
 }
 
-// Under codec-only, `convert_and_check` is an entry stub, so these entry-validation
-// tests are only meaningful for the full execution implementation.
-#[cfg(all(test, feature = "full"))]
+// `convert_and_check` runs the real IR compiler unconditionally now; these
+// entry-validation tests exercise the full execution implementation.
+#[cfg(test)]
 mod transfer_tests {
     use super::*;
     use crate::machine::test_ctx::TestCtx;

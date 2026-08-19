@@ -111,9 +111,9 @@ pub enum ItrErrCode {
     StateReadFailed = 161,
     StateDecodeFailed = 162,
 
-    // codec-only build: the execution/analysis code was compiled out (see the
-    // `codec-only` feature). Reaching it is a build-assembly error, never a
-    // silent no-op: callers must surface it, not swallow it.
+    // Reserved error code: returned by the codec-only entry stubs that were
+    // removed when the execution engine became always-compiled. Retained so
+    // the VM error-code space stays stable; no current path produces it.
     CodecOnlyUnsupported = 163,
 
     #[default]

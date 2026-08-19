@@ -6,7 +6,9 @@
 //! # Module map
 //!
 //! - `codec/`   action / tx / block standard codecs
-//! - `exec/`    ContextInst / tex (operate helpers live in `base`)
+//! - `exec/`    ContextInst / gas / tex (operate helpers live in `base`);
+//!              only `ContextInst` is execute-view-bound (`ActionDispatcher`),
+//!              gas/tex compile unconditionally
 //! - `params`   standard Hacash protocol rules
 //! - `setup`    register_standard (+ VM host capability metadata)
 //!
@@ -26,4 +28,6 @@ pub use codec::tx as tx_std;
 
 // ---- crate-root re-exports ----
 pub use params::{PROTOCOL_PARAMS, ProtocolParams, execution_params};
-pub use setup::register_standard;
+pub use setup::register_wire;
+#[cfg(feature = "execute")]
+pub use setup::{register_exec, register_standard};

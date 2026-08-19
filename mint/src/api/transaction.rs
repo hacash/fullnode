@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use base::{ActionRef, ApiExecCtx, ApiRequest, ApiResponse, Transaction, TransactionBuild, TxPkg};
+use base::{ActionRef, ApiExecCtx, ApiRequest, ApiResponse, Transaction, TransactionBuild, TransactionSign, TxPkg};
 use field::{
     Address, Amount, Encode, Hash, Sign, Uint1, json_decode_array, json_decode_object,
     json_expect_quoted_decoded, json_expect_unquoted,
@@ -115,7 +115,7 @@ impl OwnedTx {
         }
     }
 
-    fn as_tx(&self) -> &dyn Transaction {
+    fn as_tx(&self) -> &dyn TransactionSign {
         match self {
             Self::Type2(tx) => tx,
             Self::Type3(tx) => tx,

@@ -1,10 +1,11 @@
-//! Unified SDK 2.0 (doc 14). The raw WASM transport is a single
-//! `sdk_invoke`/`sdk_transport_version` pair; all operations are JSON
-//! request/response through the dispatcher. Private keys never cross the
-//! boundary.
+//! Unified SDK 2.0 (doc 14). The raw WASM transport is
+//! `sdk_invoke_binary`/`sdk_transport_version`; the wasm core is JSON-free
+//! (binary `bjson` field streams in, binary envelope out — all JSON lives in
+//! the JS facade). Private keys never cross the boundary.
 
 #![cfg_attr(all(target_arch = "wasm32", not(test)), no_main)]
 
+mod bjson;
 mod codec;
 mod json;
 mod names;

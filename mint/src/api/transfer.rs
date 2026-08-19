@@ -8,7 +8,7 @@
 //! so the JSON shape is derived solely from the `TransferPayload` variant.
 
 use base::{
-    Action, AddrOrPtr, ApiExecCtx, ApiRequest, ApiResponse, BlkPkg, Transaction, TransferPayload,
+    Action, AddrOrPtr, ApiExecCtx, ApiRequest, ApiResponse, BlkPkg, Transaction, TransactionSign, TransferPayload,
 };
 use field::{Address, Amount, Decode, DiamondName, DiamondNameListMax200, Encode, Satoshi};
 use protocol::action_std::{

@@ -11,7 +11,7 @@ pub(crate) fn diamond_names_readable(names: &[u8]) -> String {
 }
 
 pub(crate) fn action_desc_array_json(
-    tx: &dyn base::Transaction,
+    tx: &dyn base::TransactionSign,
     unit: &str,
     description: bool,
 ) -> String {
@@ -40,7 +40,7 @@ pub(crate) fn action_desc_array_json(
     format!("[{}]", items)
 }
 
-pub(crate) fn tx_signature_report_json(tx: &dyn base::Transaction) -> Option<String> {
+pub(crate) fn tx_signature_report_json(tx: &dyn base::TransactionSign) -> Option<String> {
     let report = protocol::tx_std::signature_report(tx).ok()?;
     let items = report
         .required
@@ -58,7 +58,7 @@ pub(crate) fn tx_signature_report_json(tx: &dyn base::Transaction) -> Option<Str
 }
 
 pub(crate) fn transaction_fields_json(
-    tx: &dyn base::Transaction,
+    tx: &dyn base::TransactionSign,
     block: Option<&dyn base::Block>,
     last_height: u64,
     unit: &str,
@@ -131,7 +131,7 @@ pub(crate) fn transaction_fields_json(
 }
 
 pub(crate) fn transaction_basic_json(
-    tx: &dyn base::Transaction,
+    tx: &dyn base::TransactionSign,
     block: Option<&dyn base::Block>,
     last_height: u64,
     unit: &str,

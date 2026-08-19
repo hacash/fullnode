@@ -21,16 +21,12 @@ use field::{Address, Amount, BytesW2, Decode, Encode, Fixed2, Fixed4, Uint2, Uin
 use sys::{Rerr, Ret, errf};
 
 use crate::contract::{ContractEdit, ContractSto};
-#[cfg(feature = "full")]
 use crate::machine::{VmRequest, peek_vm_runtime_limits};
 use crate::rt::{AbstCall, CallSpec, GasExtra, is_user_call_inst};
-#[cfg(feature = "full")]
 use crate::rt::{CodePkg, CodeType, decode_user_call_site};
-#[cfg(feature = "full")]
 use crate::state::VMState;
 use crate::value::{ContractAddress, Value};
 
-#[cfg(feature = "full")]
 macro_rules! vmsto {
     ($ctx: expr) => {
         VMState::wrap($ctx.layer())
@@ -110,7 +106,6 @@ base::impl_action! {
     }
 }
 
-#[cfg(feature = "full")]
 fn contract_deploy_execute(this: &ContractDeploy, ctx: &mut dyn Context) -> Rerr {
     let fast_sync = ctx.env().chain.fast_sync;
     if !fast_sync && !this.marks.is_zero() {
@@ -240,7 +235,6 @@ base::impl_action! {
     }
 }
 
-#[cfg(feature = "full")]
 fn contract_update_execute(this: &ContractUpdate, ctx: &mut dyn Context) -> Rerr {
     use AbstCall::*;
     let fast_sync = ctx.env().chain.fast_sync;
@@ -332,7 +326,6 @@ fn contract_update_execute(this: &ContractUpdate, ctx: &mut dyn Context) -> Rerr
 
 /**************************************/
 
-#[cfg(feature = "full")]
 fn check_contract_self_reference(root_addr: &ContractAddress, root_contract: &ContractSto) -> Rerr {
     macro_rules! any_same {
         ($key: ident) => {
@@ -351,7 +344,6 @@ fn check_contract_self_reference(root_addr: &ContractAddress, root_contract: &Co
     Ok(())
 }
 
-#[cfg(feature = "full")]
 fn precheck_contract_store(
     root_addr: &ContractAddress,
     root_contract: &ContractSto,
@@ -361,7 +353,6 @@ fn precheck_contract_store(
     Ok(analyze_contract_store(ctx, root_addr, root_contract, gst)?.has_construct)
 }
 
-#[cfg(feature = "full")]
 pub fn analyze_contract_store(
     ctx: &mut dyn Context,
     root_addr: &ContractAddress,
@@ -384,7 +375,6 @@ pub fn analyze_contract_store(
     })
 }
 
-#[cfg(feature = "full")]
 pub fn analyze_contract_update(
     ctx: &mut dyn Context,
     address: &ContractAddress,
@@ -428,7 +418,6 @@ pub fn analyze_contract_update(
     })
 }
 
-#[cfg(feature = "full")]
 fn load_contract_for_check(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -445,7 +434,6 @@ fn load_contract_for_check(
     }
 }
 
-#[cfg(feature = "full")]
 fn detect_effective_abst_presence(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -464,7 +452,6 @@ fn detect_effective_abst_presence(
     Ok(false)
 }
 
-#[cfg(feature = "full")]
 fn check_link_contracts_exist(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -479,7 +466,6 @@ fn check_link_contracts_exist(
     Ok(())
 }
 
-#[cfg(feature = "full")]
 fn check_inherits_direct_parents_flat(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -502,7 +488,6 @@ struct UserfnMeta {
     is_external: bool,
 }
 
-#[cfg(feature = "full")]
 fn contract_userfn_meta(contract: &ContractSto, sign: &crate::rt::FnSign) -> Option<UserfnMeta> {
     let f = contract
         .userfuncs
@@ -515,7 +500,6 @@ fn contract_userfn_meta(contract: &ContractSto, sign: &crate::rt::FnSign) -> Opt
     })
 }
 
-#[cfg(feature = "full")]
 fn collect_effective_userfn_owners(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -534,7 +518,6 @@ fn collect_effective_userfn_owners(
     Ok(owners)
 }
 
-#[cfg(feature = "full")]
 fn effective_userfn_lookup_changed(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -552,7 +535,6 @@ fn effective_userfn_lookup_changed(
     Ok(false)
 }
 
-#[cfg(feature = "full")]
 fn scan_call_sites(
     codes: &[u8],
     mut check: impl FnMut(crate::rt::Bytecode, &[u8]) -> Rerr,
@@ -595,7 +577,6 @@ fn scan_call_sites(
     Ok(())
 }
 
-#[cfg(feature = "full")]
 fn resolve_userfn_meta_on_owner(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -607,7 +588,6 @@ fn resolve_userfn_meta_on_owner(
     Ok(contract_userfn_meta(&sto, sign).map(|meta| (*owner, meta)))
 }
 
-#[cfg(feature = "full")]
 fn resolve_lookup_anchor_for_check(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -632,7 +612,6 @@ fn resolve_lookup_anchor_for_check(
     Ok(anchor)
 }
 
-#[cfg(feature = "full")]
 fn resolve_lookup_entries_for_check(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -651,7 +630,6 @@ fn resolve_lookup_entries_for_check(
     Ok(call.resolve_candidates(anchor, &parents))
 }
 
-#[cfg(feature = "full")]
 fn resolve_userfn_meta_by_lookup_for_check(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -672,7 +650,6 @@ fn resolve_userfn_meta_by_lookup_for_check(
     Ok(None)
 }
 
-#[cfg(feature = "full")]
 fn check_static_call_targets(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
@@ -742,7 +719,6 @@ fn check_static_call_targets(
     Ok(())
 }
 
-#[cfg(feature = "full")]
 fn check_sub_contract_protocol_cost(
     ctx: &mut dyn Context,
     pfee: &Amount,
@@ -770,7 +746,6 @@ fn check_sub_contract_protocol_cost(
     Ok(())
 }
 
-#[cfg(feature = "full")]
 fn calc_contract_protocol_cost_min_with_periods(
     ctx: &dyn Context,
     charge_bytes: usize,
@@ -811,7 +786,6 @@ fn calc_contract_protocol_cost_min_with_periods(
 }
 
 /// Minimum on-chain `protocol_cost` for `charge_bytes` stored `periods` times.
-#[cfg(feature = "full")]
 pub fn contract_protocol_cost_min(
     ctx: &dyn Context,
     charge_bytes: usize,
@@ -825,7 +799,6 @@ pub fn contract_protocol_cost_min(
 /// Bridge to `VmRequest::Abst` (abst-call VM call). `contract_addr` is the contract,
 /// `intent_scope` is `None` (top-level action entries carry no intent binding;
 /// intent scopes are an intra-VM construct).
-#[cfg(feature = "full")]
 pub(crate) fn run_abst_entry(
     ctx: &mut dyn Context,
     kind: AbstCall,

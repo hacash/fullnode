@@ -7,7 +7,15 @@ use sys::{Rerr, Ret};
 use crate::iface::action::ActionRef;
 use crate::iface::context::Context;
 
-pub type TxRef = Arc<dyn Transaction>;
+/// Wire/offline view of a transaction. In full builds the same object also
+/// implements `TransactionSign` and `TransactionExecute`, and `TxRef` carries
+/// the execute view; codec-only (SDK/wasm) builds keep the sign-capable view
+/// (hash / req_sign / verify_signature are offline semantics) without the
+/// execution surface — execution is not compiled in.
+#[cfg(feature = "execute")]
+pub type TxRef = Arc<dyn TransactionExecute>;
+#[cfg(not(feature = "execute"))]
+pub type TxRef = Arc<dyn TransactionSign>;
 
 /// Common input for creating an unsigned user transaction.
 ///
@@ -73,12 +81,13 @@ pub enum MempoolPolicy {
 /// Cross-crate transaction contract owned by `base` and consumed by protocol,
 /// chain, node, and registry code. Standard Type1/2/3 and prelude transactions
 /// live in `protocol/src/codec/tx.rs`; the mining coinbase is in `mint/src/action`.
+///
+/// This is the wire view (type, addresses, fee, actions, signatures,
+/// timestamp, ...). Hashing/signing semantics live on `TransactionSign` and
+/// consensus execution on `TransactionExecute` — the latter exists only in
+/// full builds, so codec-only (SDK/wasm) builds compile no execution surface.
 pub trait Transaction: Encode + Send + Sync + std::fmt::Debug {
     fn ty(&self) -> u8;
-    fn hash(&self) -> Hash;
-    fn hash_with_fee(&self) -> Hash {
-        self.hash()
-    }
 
     fn main(&self) -> Address;
     fn addrs(&self) -> Vec<Address> {
@@ -126,10 +135,6 @@ pub trait Transaction: Encode + Send + Sync + std::fmt::Debug {
     fn signs(&self) -> &[Sign] {
         &[]
     }
-    fn req_sign(&self) -> Ret<Vec<Address>> {
-        Ok(vec![self.main()])
-    }
-    fn verify_signature(&self) -> Rerr;
 
     fn author(&self) -> Option<Address> {
         None
@@ -143,8 +148,6 @@ pub trait Transaction: Encode + Send + Sync + std::fmt::Debug {
     fn fee_receiver(&self) -> Option<Address> {
         self.author()
     }
-
-    fn execute(&self, ctx: &mut dyn Context) -> Rerr;
 
     /// Escape hatch back to the concrete transaction type.
     ///
@@ -162,6 +165,28 @@ pub trait Transaction: Encode + Send + Sync + std::fmt::Debug {
     /// returning `None` on a chain that uses a different transaction type is
     /// the intended fallback, not a defect.
     fn as_any(&self) -> &dyn Any;
+}
+
+/// Offline hashing/signing semantics: the transaction hash, the required
+/// signer set and signature verification. No state is needed — the SDK's
+/// inspect/attach surface is built on this view.
+pub trait TransactionSign: Transaction {
+    fn hash(&self) -> Hash;
+    fn hash_with_fee(&self) -> Hash {
+        self.hash()
+    }
+
+    fn req_sign(&self) -> Ret<Vec<Address>> {
+        Ok(vec![self.main()])
+    }
+    fn verify_signature(&self) -> Rerr;
+}
+
+/// Consensus execution view: `TransactionSign` plus the state-changing
+/// `execute` body. Implemented only when the `execute` feature is on, so the
+/// SDK/wasm dependency graph has no callable execution surface at all.
+pub trait TransactionExecute: TransactionSign {
+    fn execute(&self, ctx: &mut dyn Context) -> Rerr;
 }
 
 /// / trait / trait

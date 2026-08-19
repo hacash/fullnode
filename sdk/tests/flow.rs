@@ -57,9 +57,10 @@ fn legacy_golden_vector_inspects_and_signature_report_matches() {
     assert_eq!(review.required_signers.len(), 1);
     assert_eq!(review.missing_signers.len(), 0);
     assert!(!review.review_binding.is_empty());
-    // The legacy vector's 1:244 fee sits below the current 50_000 purity
-    // floor: the SDK reports the honest protocol fact instead of a fake pass.
-    assert_eq!(review.fee_purity_ok, Some(false));
+    // Report mode has no block height, so the height-dependent purity-floor
+    // comparison is absent (the raw `fee_purity` fact stays).
+    assert_eq!(review.fee_purity_ok, None);
+    assert!(review.fee_purity.is_some());
 
     let report = sdk::attach::signature_report(LEGACY_BODY).unwrap();
     assert_eq!(report.valid.len(), 1);
@@ -101,6 +102,9 @@ fn full_offline_sign_flow_type2() {
     .unwrap();
     assert_eq!(review.valid_height_range.as_ref().unwrap().start, 1_000_000);
     assert_eq!(review.signability, "signable");
+    // Strict mode knows the claimed height, so the purity-floor comparison
+    // is present (the scheduled floor at 1_100_000 is the initial floor).
+    assert!(review.fee_purity_ok.is_some());
 
     // prepare → vault sign → attach → verify (offline, no node). The full
     // approval chain review → request → proof is handed to attach.
@@ -150,7 +154,7 @@ fn full_offline_sign_flow_type2() {
 }
 
 #[test]
-fn duplicate_signer_and_not_required_signer_are_rejected() {
+fn attach_is_mechanical_and_never_judges_chain_signer_rules() {
     let account = sys::Account::create_by("123456").unwrap();
     let other = sys::Account::create_by("654321").unwrap();
     let profile = profile();
@@ -167,11 +171,16 @@ fn duplicate_signer_and_not_required_signer_are_rejected() {
 
     let request = prepare_signature(&built.body, account.readable(), None, None, None, None, &profile).unwrap();
     let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
-    // The low-level unbound path validates body/signer/signature without an
-    // approval chain; the full path is exercised by the flow test above.
+    // The low-level unbound path attaches without an approval chain; the full
+    // path is exercised by the flow test above.
     let attached = sdk::attach::attach_signature_unbound(&built.body, &proof, &profile).unwrap();
+    assert!(attached.complete);
 
-    // Same key, different signature (sign the non-main hash) → DuplicateSigner.
+    // Same key, a signature that is not cryptographically valid for this
+    // signer/digest: the protocol's own push_sign (the chain's insertion
+    // path) verifies each attached signature and rejects it — the SDK
+    // surfaces the protocol boundary error and performs no per-type rule
+    // judgment of its own.
     let wrong_hash = {
         let tx = sdk::inspect::decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
         hex::encode(tx.hash().0) // non-main digest for the main signer
@@ -179,9 +188,14 @@ fn duplicate_signer_and_not_required_signer_are_rejected() {
     let bad_proof = vault_sign(&account, &wrong_hash, &request.id, &request.request_binding);
     let error =
         sdk::attach::attach_signature_unbound(&attached.body, &bad_proof, &profile).unwrap_err();
-    assert_eq!(error.code, "duplicate_signer");
+    assert_eq!(
+        error.code, "parse_failed",
+        "a signature failing the protocol's push_sign verification is rejected there"
+    );
 
-    // Signer outside the required set → NotRequiredSigner.
+    // Signer outside the required set: type 2 tolerates the extra signature
+    // (the chain checks only required signers), so the attach succeeds and
+    // completeness is reported instead of being gated.
     let other_request =
         prepare_signature(&built.body, other.readable(), None, None, None, None, &profile).unwrap();
     let other_proof = vault_sign(
@@ -190,13 +204,48 @@ fn duplicate_signer_and_not_required_signer_are_rejected() {
         &other_request.id,
         &other_request.request_binding,
     );
-    let error =
-        sdk::attach::attach_signature_unbound(&built.body, &other_proof, &profile).unwrap_err();
-    assert_eq!(error.code, "not_required_signer");
+    let attached_extra =
+        sdk::attach::attach_signature_unbound(&built.body, &other_proof, &profile).unwrap();
+    assert!(
+        attached_extra
+            .missing_signers
+            .iter()
+            .any(|addr| addr == account.readable()),
+        "type-2 attach of a non-required signer must succeed and report the missing main signer"
+    );
+
+    // Type 3 requires the exact deterministic signer set at execute time, but
+    // attach never judges it: a non-D signer attaches mechanically and the
+    // resulting body simply fails `tx.verify` (the chain's boundary).
+    let type3 = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 3,
+        main: account.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: Some(10),
+        actions: vec![hac_transfer(account.readable(), "1:244")],
+    })
+    .unwrap();
+    let other_request =
+        prepare_signature(&type3.body, other.readable(), None, None, None, None, &profile).unwrap();
+    let other_proof = vault_sign(
+        &other,
+        &other_request.digest,
+        &other_request.id,
+        &other_request.request_binding,
+    );
+    let attached_non_d =
+        sdk::attach::attach_signature_unbound(&type3.body, &other_proof, &profile).unwrap();
+    let verified = verify_signatures(&attached_non_d.body).unwrap();
+    assert!(
+        !verified.ok,
+        "a type-3 body with a non-D signer must not verify (chain rule, not an SDK refusal)"
+    );
 }
 
 #[test]
-fn strict_inspect_guard_checks() {
+fn strict_inspect_reports_guard_facts_instead_of_denying() {
     let account = sys::Account::create_by("123456").unwrap();
     let profile = profile();
     let built = build_transaction(&TransactionSpec {
@@ -218,7 +267,8 @@ fn strict_inspect_guard_checks() {
     })
     .unwrap();
 
-    inspect(
+    // Inside the guard range: the strict review reports the derived facts.
+    let review = inspect(
         &built.body,
         None,
         &InspectContext {
@@ -228,8 +278,13 @@ fn strict_inspect_guard_checks() {
         &profile,
     )
     .unwrap();
+    assert_eq!(review.valid_height_range.as_ref().unwrap().start, 1_000_000);
+    assert_eq!(review.expired_height, Some(false));
+    assert_eq!(review.wrong_chain, Some(false));
 
-    let error = inspect(
+    // Outside the height range: the review still returns, reporting the
+    // expired fact — the upper layer decides whether to proceed.
+    let review = inspect(
         &built.body,
         None,
         &InspectContext {
@@ -238,10 +293,12 @@ fn strict_inspect_guard_checks() {
         },
         &profile,
     )
-    .unwrap_err();
-    assert_eq!(error.code, "expired_height");
+    .unwrap();
+    assert_eq!(review.expired_height, Some(true));
+    assert_eq!(review.wrong_chain, Some(false));
 
-    let error = inspect(
+    // Wrong chain: reported as a fact, never a denial.
+    let review = inspect(
         &built.body,
         None,
         &InspectContext {
@@ -250,8 +307,14 @@ fn strict_inspect_guard_checks() {
         },
         &profile,
     )
-    .unwrap_err();
-    assert_eq!(error.code, "wrong_chain_id");
+    .unwrap();
+    assert_eq!(review.expired_height, Some(false));
+    assert_eq!(review.wrong_chain, Some(true));
+
+    // Report mode (no context) carries no derived facts.
+    let review = inspect_report(&built.body, None, &profile).unwrap();
+    assert_eq!(review.expired_height, None);
+    assert_eq!(review.wrong_chain, None);
 }
 
 #[test]
@@ -451,10 +514,23 @@ fn tx_encode_round_trips_and_rejects_tampered_input() {
     assert_eq!(rebuilt.body, built.body);
     assert_eq!(rebuilt.unsigned_body_hash, built.unsigned_body_hash);
 
-    // Tampering with an action's json must fail instead of silently emitting
-    // a different transaction than the one the declared hash refers to.
+    // Tampering with an action's wire (`raw`) must fail instead of silently
+    // emitting a different transaction than the one the declared hash refers
+    // to. Build a valid sibling transaction with a different amount and swap
+    // its action wire in (decodes fine, produces a different body).
+    let sibling = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: account.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![hac_transfer(account.readable(), "12:000")],
+    })
+    .unwrap();
+    let sibling_decoded = sdk::inspect::decode_transaction_json(&sibling.body).unwrap();
     let mut tampered = decoded.clone();
-    tampered.actions[0].json = tampered.actions[0].json.replace("12:244", "12:000");
+    tampered.actions[0].raw = sibling_decoded.actions[0].raw.clone();
     let error = sdk::inspect::encode_transaction_json(&tampered, None, &profile).unwrap_err();
     assert_eq!(error.code, "transaction_json_mismatch");
 
@@ -598,7 +674,7 @@ fn attach_enforces_request_binding_and_expiry() {
 }
 
 #[test]
-fn prepare_evaluates_policy_and_deny_never_mints() {
+fn prepare_binds_policy_decision_and_attach_never_refuses_for_deny() {
     let account = sys::Account::create_by("123456").unwrap();
     let profile = profile();
     let built = build_transaction(&TransactionSpec {
@@ -613,13 +689,14 @@ fn prepare_evaluates_policy_and_deny_never_mints() {
     .unwrap();
     let review = inspect_report(&built.body, Some(account.readable()), &profile).unwrap();
 
-    // A policy that denies the built action kind makes prepare fail instead
-    // of minting a request under an arbitrary binding.
+    // A policy that denies the built action kind still mints the request: the
+    // SDK evaluates the caller's policy and binds the decision as a fact; the
+    // caller decides whether a deny stops the flow.
     let denying = Policy {
         deny_kinds: Some(vec![protocol::action_std::HacToTrs::KIND]),
         ..Default::default()
     };
-    let error = prepare_signature(
+    let request = prepare_signature(
         &built.body,
         account.readable(),
         Some(&review),
@@ -628,8 +705,17 @@ fn prepare_evaluates_policy_and_deny_never_mints() {
         None,
         &profile,
     )
-    .unwrap_err();
-    assert_eq!(error.code, "policy_denied");
+    .unwrap();
+    let decision = request.policy_decision.as_ref().unwrap();
+    assert_eq!(decision.decision, "deny");
+    assert_eq!(decision.review_binding, review.review_binding);
+    assert_eq!(decision.policy_binding, sdk::policy::policy_binding_of(decision));
+
+    // Attach under the deny decision succeeds mechanically (no refusal): the
+    // resulting body is the caller's responsibility.
+    let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
+    let attached = attach_signature(&built.body, &proof, &review, &request, &profile).unwrap();
+    assert!(attached.complete);
 
     // An allowing policy is evaluated by the SDK and its decision is bound
     // into the request; a forged binding string can no longer ride along.

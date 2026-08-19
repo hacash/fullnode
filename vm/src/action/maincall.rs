@@ -12,7 +12,6 @@ use field::{BytesW2, Decode, Encode, Fixed3, Uint1, Uint2};
 use sys::Ret;
 
 use crate::contract::convert_and_check;
-#[cfg(feature = "full")]
 use crate::machine::{VmRequest, peek_vm_runtime_limits};
 use crate::rt::{CodeConf, CodeType};
 
@@ -69,7 +68,6 @@ base::impl_action! {
     }
 }
 
-#[cfg(feature = "full")]
 fn contract_main_call_execute(this: &ContractMainCall, ctx: &mut dyn Context) -> Ret<()> {
     if !this.marks.is_zero() {
         return sys::errf!("marks bytes format invalid");

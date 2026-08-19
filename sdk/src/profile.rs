@@ -6,9 +6,12 @@
 use crate::error::{SdkError, SdkErrorCode};
 use crate::schema::{DOMAIN_CODEC_PROFILE, SCHEMA_CAPABILITIES, SCHEMA_CODEC_PROFILE};
 
-pub const SDK_VERSION: &str = "0.2.0";
+pub const SDK_VERSION: &str = "0.2.1";
 pub const ABI_MAJOR: u32 = 2;
-pub const ABI_MINOR: u32 = 0;
+/// v2.1: `tx.inspect` no longer denies reviews for height/chain guards; the
+/// strict-mode context is evaluated into facts (`expired_height`/
+/// `wrong_chain`, review schema v2) and the upper layer decides.
+pub const ABI_MINOR: u32 = 1;
 /// Fullnode source commit this SDK's protocol/codec behavior corresponds to.
 /// Injected from git by `build.rs` (never hand-maintained), so the profile
 /// identity can never lag behind a protocol/registry-affecting change.
@@ -29,6 +32,18 @@ pub struct ProtocolParamsProfile {
     pub max_type3_signers: usize,
     pub fee_purity_floor: u64,
     pub diamond_form_flag: u64,
+    /// Height-gated floor reductions `(activation_height, next_floor)`;
+    /// together with `fee_purity_floor` they form the same schedule the
+    /// chain bills gas by (single `base` computation).
+    pub fee_purity_reductions: Vec<(u64, u64)>,
+}
+
+impl ProtocolParamsProfile {
+    /// Effective fee purity floor at `height` — delegated to the single
+    /// `base` schedule implementation, never re-derived here.
+    pub fn fee_purity_floor_at(&self, height: u64) -> u64 {
+        base::fee_purity_floor_at(self.fee_purity_floor, &self.fee_purity_reductions, height)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,6 +90,7 @@ impl CodecProfile {
                 max_type3_signers: params.max_type3_signers,
                 fee_purity_floor: params.vm.initial_fee_purity_floor,
                 diamond_form_flag: params.diamond_form_flag,
+                fee_purity_reductions: params.vm.fee_purity_reductions.to_vec(),
             },
             limits: LimitsProfile {
                 max_tx_size: MAX_TX_SIZE,
@@ -110,10 +126,10 @@ impl CodecProfile {
     fn compute_hash(&self) -> String {
         let mut copy = self.clone();
         copy.profile_hash.clear();
-        let json = copy.to_json_string();
-        let mut data = Vec::with_capacity(DOMAIN_CODEC_PROFILE.len() + json.len());
+        let body = copy.to_binary_body();
+        let mut data = Vec::with_capacity(DOMAIN_CODEC_PROFILE.len() + body.len());
         data.extend_from_slice(DOMAIN_CODEC_PROFILE);
-        data.extend_from_slice(json.as_bytes());
+        data.extend_from_slice(&body);
         hex::encode(sys::calculate_hash(data))
     }
 
@@ -152,8 +168,9 @@ pub struct Capabilities {
 pub enum OpRequestField {
     W2Str(&'static str),
     OptW2Str(&'static str),
-    W4Json(&'static str),
-    OptW4Json(&'static str),
+    /// Complex object as a `bjson` field stream (W4 len + body).
+    W4Bin(&'static str),
+    OptW4Bin(&'static str),
     OptU64(&'static str),
     U8(&'static str),
     /// Inspect context `{current_height, expected_chain_id}`: marker 0/1,
@@ -167,8 +184,8 @@ impl OpRequestField {
         match self {
             OpRequestField::W2Str(a)
             | OpRequestField::OptW2Str(a)
-            | OpRequestField::W4Json(a)
-            | OpRequestField::OptW4Json(a)
+            | OpRequestField::W4Bin(a)
+            | OpRequestField::OptW4Bin(a)
             | OpRequestField::OptU64(a)
             | OpRequestField::U8(a)
             | OpRequestField::OptInspectContext(a) => *a,
@@ -192,8 +209,8 @@ pub struct OpDef {
 macro_rules! op_req {
     (w2_str($a:literal)) => { OpRequestField::W2Str($a) };
     (opt_w2_str($a:literal)) => { OpRequestField::OptW2Str($a) };
-    (w4_json($a:literal)) => { OpRequestField::W4Json($a) };
-    (opt_w4_json($a:literal)) => { OpRequestField::OptW4Json($a) };
+    (w4_bin($a:literal)) => { OpRequestField::W4Bin($a) };
+    (opt_w4_bin($a:literal)) => { OpRequestField::OptW4Bin($a) };
     (opt_u64($a:literal)) => { OpRequestField::OptU64($a) };
     (u8($a:literal)) => { OpRequestField::U8($a) };
     (opt_ctx($a:literal)) => { OpRequestField::OptInspectContext($a) };
@@ -234,20 +251,20 @@ define_operations! {
     (OP_TX_BUILD, "tx.build", "tx", build, true, []),
     (OP_TX_INSPECT_REPORT, "tx.inspect_report", "tx", inspect_report, false, [w2_str("body"), opt_w2_str("signer_address")]),
     (OP_TX_INSPECT, "tx.inspect", "tx", inspect, false, [w2_str("body"), opt_w2_str("signer_address"), opt_ctx("context")]),
-    (OP_TX_PREPARE_SIGNATURE, "tx.prepare_signature", "tx", prepare_signature, false, [w2_str("body"), w2_str("signer_address"), opt_w4_json("options.review"), opt_w4_json("options.policy"), opt_w2_str("options.origin"), opt_u64("options.expires_at")]),
-    (OP_TX_ATTACH_SIGNATURE, "tx.attach_signature", "tx", attach_signature, false, [w2_str("body"), w4_json("proof"), w4_json("review"), w4_json("request")]),
-    (OP_TX_ATTACH_SIGNATURE_UNBOUND, "tx.attach_signature_unbound", "tx", attach_signature_unbound, false, [w2_str("body"), w4_json("proof")]),
+    (OP_TX_PREPARE_SIGNATURE, "tx.prepare_signature", "tx", prepare_signature, false, [w2_str("body"), w2_str("signer_address"), opt_w4_bin("options.review"), opt_w4_bin("options.policy"), opt_w2_str("options.origin"), opt_u64("options.expires_at")]),
+    (OP_TX_ATTACH_SIGNATURE, "tx.attach_signature", "tx", attach_signature, false, [w2_str("body"), w4_bin("proof"), w4_bin("review"), w4_bin("request")]),
+    (OP_TX_ATTACH_SIGNATURE_UNBOUND, "tx.attach_signature_unbound", "tx", attach_signature_unbound, false, [w2_str("body"), w4_bin("proof")]),
     (OP_TX_VERIFY, "tx.verify", "tx", verify, false, [w2_str("body")]),
     (OP_TX_SIGNATURE_REPORT, "tx.signature_report", "tx", signature_report, false, [w2_str("body")]),
     (OP_TX_DECODE, "tx.decode", "tx", decode, false, [w2_str("body")]),
-    (OP_TX_ENCODE, "tx.encode", "tx", encode, false, [w4_json("transaction"), opt_w4_json("review")]),
+    (OP_TX_ENCODE, "tx.encode", "tx", encode, false, [w4_bin("transaction"), opt_w4_bin("review")]),
     (OP_ACCOUNT_VERIFY_ADDRESS, "account.verify_address", "account", verify_address, false, [w2_str("address")]),
     (OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY, "account.address_from_public_key", "account", address_from_public_key, false, [w2_str("public_key")]),
     (OP_AMOUNT_PARSE_PROTOCOL, "amount.parse_protocol", "amount", parse_protocol, false, [w2_str("value")]),
     (OP_AMOUNT_FORMAT_PROTOCOL, "amount.format_protocol", "amount", format_protocol, false, [w2_str("value"), u8("unit")]),
-    (OP_MESSAGE_PREPARE_SIGNATURE, "message.prepare_signature", "message", prepare_signature, false, [w4_json("params")]),
-    (OP_MESSAGE_VERIFY, "message.verify", "message", verify, false, [w4_json("request"), w4_json("proof")]),
-    (OP_POLICY_EVALUATE, "policy.evaluate", "policy", evaluate, false, [w4_json("review"), opt_w4_json("policy")]),
+    (OP_MESSAGE_PREPARE_SIGNATURE, "message.prepare_signature", "message", prepare_signature, false, [w4_bin("params")]),
+    (OP_MESSAGE_VERIFY, "message.verify", "message", verify, false, [w4_bin("request"), w4_bin("proof")]),
+    (OP_POLICY_EVALUATE, "policy.evaluate", "policy", evaluate, false, [w4_bin("review"), opt_w4_bin("policy")]),
 }
 
 /// Frozen feature baseline of Unified SDK 2.0 — exactly the routed operation

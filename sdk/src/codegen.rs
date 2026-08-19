@@ -49,7 +49,7 @@ pub fn render_operations_mjs() -> String {
     out.push_str("// operations (tx.build) keep hand-written bodies in `hacashsdk.mjs`.\n\n");
     out.push_str("import { OP } from \"./op_tables.mjs\";\n\n");
     out.push_str("export function createOperationMethods(invoke, push) {\n");
-    out.push_str("  const { pushW2Str, pushOptW2Str, pushW4Json, pushOptW4Json, pushOptU64, pushOptInspectContext } = push;\n");
+    out.push_str("  const { pushW2Str, pushOptW2Str, pushProofBin, pushReviewBin, pushRequestBin, pushPolicyBin, pushTransactionBin, pushParamsBin, pushOptBin, pushOptU64, pushOptInspectContext } = push;\n");
     out.push_str("  return {\n");
 
     let mut groups: Vec<(&'static str, Vec<&'static OpDef>)> = Vec::new();
@@ -108,13 +108,34 @@ fn op_field_stmt(field: &OpRequestField) -> String {
     match field {
         OpRequestField::W2Str(a) => format!("pushW2Str(out, {a});"),
         OpRequestField::OptW2Str(a) => format!("pushOptW2Str(out, {});", opt_expr(a)),
-        OpRequestField::W4Json(a) => format!("pushW4Json(out, {a});"),
-        OpRequestField::OptW4Json(a) => format!("pushOptW4Json(out, {});", opt_expr(a)),
+        OpRequestField::W4Bin(a) => {
+            let encoder = bin_encoder_name(a);
+            format!("{encoder}(out, {a});")
+        }
+        OpRequestField::OptW4Bin(a) => {
+            let encoder = bin_encoder_name(a);
+            format!("pushOptBin(out, {encoder}, {});", opt_expr(a))
+        }
         OpRequestField::OptU64(a) => format!("pushOptU64(out, {});", opt_expr(a)),
         OpRequestField::U8(a) => format!("out.push(Number({a}) & 0xff);"),
         OpRequestField::OptInspectContext(a) => {
             format!("pushOptInspectContext(out, {a});")
         }
+    }
+}
+
+/// Complex-object field → the JS encoder that packs it as a `bjson` stream.
+/// The Rust reader for each object is the matching `X::from_binary`.
+fn bin_encoder_name(arg: &str) -> &'static str {
+    let base = arg.rsplit('.').next().unwrap_or(arg);
+    match base {
+        "proof" => "pushProofBin",
+        "review" => "pushReviewBin",
+        "request" => "pushRequestBin",
+        "policy" => "pushPolicyBin",
+        "transaction" => "pushTransactionBin",
+        "params" => "pushParamsBin",
+        other => panic!("no bjson encoder registered for request field {other}"),
     }
 }
 
@@ -150,6 +171,12 @@ pub fn render_actionspec_mjs() -> String {
     for group in friendly_groups() {
         render_js_case(&mut out, &group);
     }
+    out.push_str("        default:\n");
+    out.push_str("            // Friendly kinds without a table entry pass through unchanged\n");
+    out.push_str("            // (identity: the wire kind is the friendly kind, fields keep\n");
+    out.push_str("            // their wire names). Kinds the codec registry doesn't know fail\n");
+    out.push_str("            // at encode with a clear error; the friendly surface never filters.\n");
+    out.push_str("            break;\n");
     out.push_str("    }\n");
     out.push_str("    return a;\n");
     out.push_str("}\n");
@@ -230,7 +257,11 @@ fn render_js_case(out: &mut String, g: &FriendlyGroup) {
             .usable
             .first()
             .copied()
-            .or_else(|| ACTION_SPECS.iter().find(|d| d.friendly == g.friendly))
+            .or_else(|| {
+                ACTION_SPECS
+                    .iter()
+                    .find(|d| crate::actionspec::friendly_of(d.kind) == Some(g.friendly))
+            })
             .expect("entry for friendly kind");
         out.push_str(&format!("            a.kind = {};\n", js_quote(entry.kind)));
         render_js_fields(out, entry.fields);
@@ -441,7 +472,7 @@ pub fn render_actionspec_dts() -> String {
             let friendly = ACTION_SPECS
                 .iter()
                 .find(|d| d.variant == *variant)
-                .map(|d| d.friendly)
+                .and_then(|d| crate::actionspec::friendly_of(d.kind))
                 .unwrap_or(variant);
             js_quote(friendly)
         })
@@ -454,7 +485,7 @@ pub fn render_actionspec_dts() -> String {
         let friendly = ACTION_SPECS
             .iter()
             .find(|d| d.variant == *variant)
-            .map(|d| d.friendly)
+            .and_then(|d| crate::actionspec::friendly_of(d.kind))
             .unwrap_or(variant);
         out.push_str(&format!("export interface {variant}Spec {{\n"));
         out.push_str(&format!("    kind: {};\n", js_quote(friendly)));
@@ -522,6 +553,7 @@ mod tests {
             ("operations.mjs", render_operations_mjs()),
             ("actionspec.mjs", render_actionspec_mjs()),
             ("actionspec.d.ts", render_actionspec_dts()),
+            ("bjson_codec.mjs", render_bjson_codec_mjs()),
         ] {
             let path = format!("{manifest}/js/generated/{name}");
             let on_disk = std::fs::read_to_string(&path)
@@ -532,4 +564,296 @@ mod tests {
             );
         }
     }
+}
+
+// ================================ bjson facade codec ================================
+
+/// `bjson_codec.mjs`: the JS pack/unpack for every SDK object whose binary
+/// layout is declared by `json::BIN_TYPES` — the same single source as the
+/// Rust `to_binary_body`/`from_binary` implementations. Encoders render for
+/// `From`-capable layouts, decoders for `To`-capable layouts; nested objects
+/// are referenced by their `BIN_TYPES` js name, so the whole tree is resolved
+/// here and can never drift from the Rust writers.
+pub fn render_bjson_codec_mjs() -> String {
+    use crate::json::{BinDir, BIN_TYPES};
+    let mut out = String::new();
+    out.push_str("// GENERATED by `sdk_codegen` (cargo run -p sdk --bin sdk_codegen). DO NOT EDIT.\n");
+    out.push_str("// Single source: Rust `sdk::json::BIN_TYPES` — the same per-type field layouts\n");
+    out.push_str("// that drive the Rust binary writers/readers (`to_binary_body`/`from_binary`).\n\n");
+    out.push_str(
+        r#"const TE = new TextEncoder();
+
+function w2(name) {
+    const b = TE.encode(name);
+    return [b.length >> 8, b.length & 0xff, ...b];
+}
+function w4b(bytes) {
+    return [bytes.length >>> 24, (bytes.length >>> 16) & 0xff, (bytes.length >>> 8) & 0xff, bytes.length & 0xff, ...bytes];
+}
+function u64b(v) {
+    const n = Number(v);
+    return [(n / 0x100000000) >>> 0, n >>> 0].flatMap((x) => [(x >>> 24) & 0xff, (x >>> 16) & 0xff, (x >>> 8) & 0xff, x & 0xff]);
+}
+function u32b(v) {
+    const n = Number(v) >>> 0;
+    return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+}
+const fStr = (name, value) => [...w2(name), 0x73, ...w4b(TE.encode(value))];
+const fU64 = (name, value) => [...w2(name), 0x75, ...u64b(value)];
+const fU32 = (name, value) => [...w2(name), 0x69, ...u32b(value)];
+const fU8 = (name, value) => [...w2(name), 0x74, Number(value) & 0xff];
+const fBool = (name, value) => [...w2(name), 0x62, value ? 1 : 0];
+const fStrArr = (name, values) => {
+    let p = u32b(values.length);
+    for (const v of values) p.push(...w4b(TE.encode(v)));
+    return [...w2(name), 0x61, ...p];
+};
+const fU64Arr = (name, values) => {
+    let p = u32b(values.length);
+    for (const v of values) p.push(...u64b(v));
+    return [...w2(name), 0x41, ...p];
+};
+const fU32Arr = (name, values) => {
+    let p = u32b(values.length);
+    for (const v of values) p.push(...u32b(v));
+    return [...w2(name), 0x42, ...p];
+};
+const fObj = (name, body) => [...w2(name), 0x6f, ...w4b(body)];
+const fObjArr = (name, bodies) => {
+    let p = u32b(bodies.length);
+    for (const b of bodies) p.push(...w4b(b));
+    return [...w2(name), 0x4f, ...p];
+};
+
+function fget(fields, name) {
+    return fields.has(name) ? fields.get(name) : undefined;
+}
+"#,
+    );
+
+    out.push_str("\n// ---- encoders (request side: pack what the Rust readers parse) ----\n");
+    for ty in BIN_TYPES {
+        if matches!(ty.dir, BinDir::From | BinDir::Both) {
+            render_js_encoder(&mut out, ty);
+        }
+    }
+    out.push_str("// ---- decoders (response side: unpack what the Rust writers emit) ----\n");
+    for ty in BIN_TYPES {
+        if matches!(ty.dir, BinDir::To | BinDir::Both) {
+            render_js_decoder(&mut out, ty);
+        }
+    }
+    out
+}
+
+/// JS encoder function for one layout type (or the tagged-enum encoder when
+/// the layout is a single `Tagged` field).
+fn render_js_encoder(out: &mut String, ty: &crate::json::BinType) {
+    use crate::json::{BinField, BinKind};
+    if let [BinField { kind: BinKind::Tagged(variants), .. }] = ty.fields {
+        return render_js_tagged_encoder(out, ty.js, variants);
+    }
+    out.push_str(&format!("export function encode{}(obj) {{\n", ty.js));
+    out.push_str("    if (obj === undefined || obj === null) return null;\n");
+    out.push_str("    let body = [];\n");
+    for field in ty.fields {
+        render_js_encode_field(out, field, "obj");
+    }
+    out.push_str("    return body;\n");
+    out.push_str("}\n\n");
+}
+
+/// JS decoder function for one layout type (or the tagged-enum decoder).
+fn render_js_decoder(out: &mut String, ty: &crate::json::BinType) {
+    use crate::json::{BinField, BinKind};
+    if let [BinField { kind: BinKind::Tagged(variants), .. }] = ty.fields {
+        return render_js_tagged_decoder(out, ty.js, variants);
+    }
+    out.push_str(&format!("export function decode{}(f) {{\n", ty.js));
+    out.push_str("    return {\n");
+    for field in ty.fields {
+        out.push_str(&format!("        {},\n", render_js_decode_entry(field)));
+    }
+    out.push_str("    };\n");
+    out.push_str("}\n\n");
+}
+
+/// One encoder statement: required fields always write (with the declared JS
+/// default), optional/def fields write only when present.
+fn render_js_encode_field(out: &mut String, field: &crate::json::BinField, obj: &str) {
+    use crate::json::BinKind;
+    let n = field.name;
+    let if_present = |out: &mut String, stmt: String| {
+        out.push_str(&format!(
+            "    if ({obj}.{n} !== undefined && {obj}.{n} !== null) {stmt}\n"
+        ));
+    };
+    match field.kind {
+        BinKind::Str => out.push_str(&format!(
+            "    body.push(...fStr(\"{n}\", {obj}.{n} ?? {}));\n",
+            js_quote(field.js_default.unwrap_or(""))
+        )),
+        BinKind::OptStr | BinKind::StrDef => {
+            if_present(out, format!("body.push(...fStr(\"{n}\", {obj}.{n}));"));
+        }
+        BinKind::U64 | BinKind::Usize => out.push_str(&format!(
+            "    body.push(...fU64(\"{n}\", {obj}.{n} ?? 0));\n"
+        )),
+        BinKind::OptU64 | BinKind::U64Def | BinKind::UsizeDef => {
+            if_present(out, format!("body.push(...fU64(\"{n}\", {obj}.{n}));"));
+        }
+        BinKind::U32 | BinKind::U16 => out.push_str(&format!(
+            "    body.push(...fU32(\"{n}\", {obj}.{n} ?? 0));\n"
+        )),
+        BinKind::OptU32 | BinKind::U32Def => {
+            if_present(out, format!("body.push(...fU32(\"{n}\", {obj}.{n}));"));
+        }
+        BinKind::U8 => out.push_str(&format!(
+            "    body.push(...fU8(\"{n}\", {obj}.{n} ?? 0));\n"
+        )),
+        BinKind::OptU8 | BinKind::U8Def => {
+            if_present(out, format!("body.push(...fU8(\"{n}\", {obj}.{n}));"));
+        }
+        BinKind::Bool => out.push_str(&format!(
+            "    body.push(...fBool(\"{n}\", {obj}.{n} ?? false));\n"
+        )),
+        BinKind::OptBool | BinKind::BoolDef(_) => {
+            if_present(out, format!("body.push(...fBool(\"{n}\", {obj}.{n}));"));
+        }
+        BinKind::StrArr | BinKind::OptStrArr => {
+            if_present(out, format!("body.push(...fStrArr(\"{n}\", {obj}.{n} ?? []));"));
+        }
+        BinKind::U64Arr | BinKind::OptU64Arr => {
+            if_present(out, format!("body.push(...fU64Arr(\"{n}\", {obj}.{n} ?? []));"));
+        }
+        BinKind::U32Arr | BinKind::OptU32Arr => {
+            if_present(out, format!("body.push(...fU32Arr(\"{n}\", {obj}.{n} ?? []));"));
+        }
+        BinKind::U16Arr | BinKind::OptU16Arr => {
+            if_present(
+                out,
+                format!(
+                    "body.push(...fU32Arr(\"{n}\", ({obj}.{n} ?? []).map(Number)));"
+                ),
+            );
+        }
+        BinKind::Obj(ref_name) => out.push_str(&format!(
+            "    body.push(...fObj(\"{n}\", encode{ref_name}({obj}.{n} ?? {{}})));\n"
+        )),
+        BinKind::OptObj(ref_name) => {
+            if_present(out, format!("body.push(...fObj(\"{n}\", encode{ref_name}({obj}.{n})));"));
+        }
+        BinKind::ObjArr(ref_name) => {
+            if_present(
+                out,
+                format!(
+                    "body.push(...fObjArr(\"{n}\", ({obj}.{n} ?? []).map(encode{ref_name}).filter(Boolean)));"
+                ),
+            );
+        }
+        BinKind::OptObjArr(ref_name) => {
+            if_present(
+                out,
+                format!(
+                    "body.push(...fObjArr(\"{n}\", ({obj}.{n} ?? []).map(encode{ref_name}).filter(Boolean)));"
+                ),
+            );
+        }
+        BinKind::Tagged(_) => unreachable!("tagged layouts are rendered as their own functions"),
+    }
+}
+
+/// One decoder entry (`name: <expression>`).
+fn render_js_decode_entry(field: &crate::json::BinField) -> String {
+    use crate::json::BinKind;
+    let n = field.name;
+    let d = field.js_default;
+    match field.kind {
+        BinKind::Str => format!("{n}: fget(f, \"{n}\") ?? {}", js_quote(d.unwrap_or(""))),
+        BinKind::StrDef => format!("{n}: fget(f, \"{n}\") ?? \"\""),
+        BinKind::OptStr => format!("{n}: fget(f, \"{n}\")"),
+        BinKind::U64 | BinKind::Usize => {
+            format!("{n}: fget(f, \"{n}\") ?? 0")
+        }
+        BinKind::U64Def | BinKind::UsizeDef => format!("{n}: fget(f, \"{n}\") ?? 0"),
+        BinKind::OptU64 => format!("{n}: fget(f, \"{n}\")"),
+        BinKind::U32 | BinKind::U16 => format!("{n}: fget(f, \"{n}\") ?? 0"),
+        BinKind::U32Def => format!("{n}: fget(f, \"{n}\") ?? 0"),
+        BinKind::OptU32 => format!("{n}: fget(f, \"{n}\")"),
+        BinKind::U8 => format!("{n}: fget(f, \"{n}\") ?? 0"),
+        BinKind::U8Def => format!("{n}: fget(f, \"{n}\") ?? 0"),
+        BinKind::OptU8 => format!("{n}: fget(f, \"{n}\")"),
+        BinKind::Bool => format!("{n}: fget(f, \"{n}\") ?? false"),
+        BinKind::BoolDef(true) => format!("{n}: fget(f, \"{n}\") ?? true"),
+        BinKind::BoolDef(false) => format!("{n}: fget(f, \"{n}\") ?? false"),
+        BinKind::OptBool => format!("{n}: fget(f, \"{n}\")"),
+        BinKind::StrArr => format!("{n}: fget(f, \"{n}\") ?? []"),
+        BinKind::OptStrArr => format!("{n}: fget(f, \"{n}\")"),
+        BinKind::U64Arr => format!("{n}: fget(f, \"{n}\") ?? []"),
+        BinKind::OptU64Arr => format!("{n}: fget(f, \"{n}\")"),
+        BinKind::U32Arr | BinKind::U16Arr => format!("{n}: fget(f, \"{n}\") ?? []"),
+        BinKind::OptU32Arr | BinKind::OptU16Arr => format!("{n}: fget(f, \"{n}\")"),
+        BinKind::Obj(ref_name) | BinKind::OptObj(ref_name) => format!(
+            "{n}: fget(f, \"{n}\") === undefined ? undefined : decode{ref_name}(fget(f, \"{n}\"))"
+        ),
+        BinKind::ObjArr(ref_name) => {
+            format!("{n}: (fget(f, \"{n}\") ?? []).map(decode{ref_name})")
+        }
+        BinKind::OptObjArr(ref_name) => format!(
+            "{n}: fget(f, \"{n}\") === undefined ? undefined : fget(f, \"{n}\").map(decode{ref_name})"
+        ),
+        BinKind::Tagged(_) => unreachable!("tagged layouts are rendered as their own functions"),
+    }
+}
+
+/// Tagged-enum encoder (PayloadDesc): `switch` over the `type` tag, each
+/// variant writes its own fields.
+fn render_js_tagged_encoder(
+    out: &mut String,
+    js: &str,
+    variants: &[crate::json::TaggedVariant],
+) {
+    out.push_str(&format!("export function encode{js}(payload) {{\n"));
+    out.push_str("    if (payload === undefined || payload === null) return null;\n");
+    out.push_str("    let body = [];\n");
+    out.push_str("    switch (payload.type) {\n");
+    for variant in variants {
+        out.push_str(&format!("        case {}: {{\n", js_quote(variant.tag)));
+        out.push_str(&format!(
+            "            body.push(...fStr(\"type\", {}));\n",
+            js_quote(variant.tag)
+        ));
+        for field in variant.fields {
+            render_js_encode_field(out, field, "payload");
+        }
+        out.push_str("            break;\n        }\n");
+    }
+    out.push_str("        default:\n");
+    out.push_str("            body.push(...fStr(\"type\", payload.type ?? \"\"));\n");
+    out.push_str("            break;\n");
+    out.push_str("    }\n");
+    out.push_str("    return body;\n");
+    out.push_str("}\n\n");
+}
+
+/// Tagged-enum decoder: pick the variant by the `type` tag.
+fn render_js_tagged_decoder(
+    out: &mut String,
+    js: &str,
+    variants: &[crate::json::TaggedVariant],
+) {
+    out.push_str(&format!("export function decode{js}(f) {{\n"));
+    out.push_str("    const type = fget(f, \"type\");\n");
+    for variant in variants {
+        out.push_str(&format!("    if (type === {}) {{\n", js_quote(variant.tag)));
+        let entries: Vec<String> = variant
+            .fields
+            .iter()
+            .map(render_js_decode_entry)
+            .collect();
+        out.push_str(&format!("        return {{ type, {} }};\n", entries.join(", ")));
+        out.push_str("    }\n");
+    }
+    out.push_str("    return { type };\n");
+    out.push_str("}\n\n");
 }

@@ -30,8 +30,8 @@ pub struct PolicyDecision {
 }
 
 fn policy_hash(policy: &Policy) -> String {
-    let json = policy.to_json_string();
-    hex::encode(sys::calculate_hash(json))
+    let body = policy.to_binary_body();
+    hex::encode(sys::calculate_hash(body))
 }
 
 /// Depth-first walk of the action review tree (children of AST control-flow
@@ -142,10 +142,10 @@ pub fn evaluate_policy(review: &Review, policy: &Policy) -> Result<PolicyDecisio
 pub fn policy_binding_of(decision: &PolicyDecision) -> String {
     let mut copy = decision.clone();
     copy.policy_binding.clear();
-    let json = copy.to_json_string();
-    let mut data = Vec::with_capacity(DOMAIN_POLICY_DECISION.len() + json.len());
+    let body = copy.to_binary_body();
+    let mut data = Vec::with_capacity(DOMAIN_POLICY_DECISION.len() + body.len());
     data.extend_from_slice(DOMAIN_POLICY_DECISION);
-    data.extend_from_slice(json.as_bytes());
+    data.extend_from_slice(&body);
     hex::encode(sys::calculate_hash(data))
 }
 
@@ -169,6 +169,8 @@ mod tests {
             review_binding: "rb".to_owned(),
             signer_address: None,
             inspect_context: None,
+            expired_height: None,
+            wrong_chain: None,
             protocol_valid: true,
             signability: "signable".to_owned(),
             limits_violations: vec![],
@@ -217,7 +219,6 @@ mod tests {
             kind: 44,
             name: None,
             scope: "main".to_owned(),
-            json: String::new(),
             raw: String::new(),
             protocol_valid: true,
             auditability: "opaque".to_owned(),
@@ -238,7 +239,6 @@ mod tests {
             kind,
             name: None,
             scope: "main".to_owned(),
-            json: String::new(),
             raw: String::new(),
             protocol_valid: true,
             auditability: "opaque".to_owned(),

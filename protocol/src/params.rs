@@ -24,6 +24,13 @@ pub const PROTOCOL_PARAMS: ProtocolParams = ProtocolParams {
     tex_diamond_get_max_per_tx: 200,
 };
 
+/// TEX settlement address (system address, no known private key). Lives here
+/// (outside the `exec` module) because the `TexCellAct` wire codec reads it
+/// and `exec::tex` compiles unconditionally.
+pub const SETTLEMENT_ADDR: field::Address = field::Address::from([
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+]);
+
 pub fn execution_params(
     services: &dyn base::ExecutionServices,
 ) -> sys::Ret<&'static ProtocolParams> {

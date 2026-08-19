@@ -1,3 +1,5 @@
+use crate::iface::context::Context;
+
 /// `TX_ACTIONS_MAX` — per-transaction action count cap, enforced by the
 /// protocol codecs (`protocol/src/codec/tx.rs`). Single source: the SDK
 /// re-exports it instead of re-declaring the number.
@@ -121,3 +123,39 @@ pub use field::AddrOrPtr;
 
 /// VM intent `None`= VM`Some(None)`= VM  intent`Some(Some(id))`= intent
 pub type IntentScope = Option<Option<usize>>;
+
+/// RAII guard that sets `ExecFrom` on a context for the duration of a closure
+/// and restores the previous value on drop. Execution-dispatch-independent
+/// (used by the VM entry/sandbox), so it lives outside the execute-gated
+/// dispatcher module.
+pub struct ExecFromGuard<'a> {
+    ctx: &'a mut dyn Context,
+    prev: ExecFrom,
+}
+
+impl<'a> ExecFromGuard<'a> {
+    pub fn enter(ctx: &'a mut dyn Context, from: ExecFrom) -> Self {
+        let prev = ctx.exec_from();
+        ctx.exec_from_set(from);
+        Self { ctx, prev }
+    }
+
+    pub fn ctx(&mut self) -> &mut dyn Context {
+        self.ctx
+    }
+}
+
+impl Drop for ExecFromGuard<'_> {
+    fn drop(&mut self) {
+        self.ctx.exec_from_set(self.prev);
+    }
+}
+
+pub fn with_exec_from<R>(
+    ctx: &mut dyn Context,
+    from: ExecFrom,
+    f: impl FnOnce(&mut dyn Context) -> R,
+) -> R {
+    let mut guard = ExecFromGuard::enter(ctx, from);
+    f(guard.ctx())
+}

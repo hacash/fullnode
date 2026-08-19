@@ -162,7 +162,6 @@ pub struct ActionDesc {
     pub kind: u16,
         pub name: Option<String>,
     pub scope: String,
-    pub json: String,
     pub raw: String,
     pub protocol_valid: bool,
     pub auditability: String,
@@ -204,7 +203,6 @@ pub fn describe_action(action: &ActionRef, index: usize, path: &str, depth: usiz
         kind,
         name: name.map(str::to_owned),
         scope: scope_name(action.scope()).to_owned(),
-        json: action.to_json(),
         raw: hex::encode(action.encode()),
         protocol_valid: true,
         auditability: auditability.as_str().to_owned(),
@@ -283,7 +281,7 @@ pub fn compute_review_binding(
     signer: Option<&str>,
     sign_hash: Option<&str>,
     codec_profile_hash: &str,
-    context_json: &str,
+    context: &[u8],
     review_digest: &str,
 ) -> String {
     let mut data = Vec::new();
@@ -296,7 +294,7 @@ pub fn compute_review_binding(
     data.push(0);
     data.extend_from_slice(codec_profile_hash.as_bytes());
     data.push(0);
-    data.extend_from_slice(context_json.as_bytes());
+    data.extend_from_slice(context);
     data.push(0);
     data.extend_from_slice(review_digest.as_bytes());
     hex::encode(sys::calculate_hash(data))
@@ -308,7 +306,7 @@ pub fn compute_review_binding(
 pub fn canonical_review_digest(review: &crate::inspect::Review) -> String {
     let mut copy = review.clone();
     copy.review_binding.clear();
-    let canonical = copy.to_json_string();
+    let canonical = copy.to_binary_body();
     hex::encode(sys::calculate_hash(canonical))
 }
 

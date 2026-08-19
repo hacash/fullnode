@@ -6,6 +6,7 @@ use crate::codec::action::*;
 use crate::codec::block::create_std_block;
 use crate::codec::tx::*;
 
+#[cfg(feature = "execute")]
 fn create_context(
     env: Env,
     registry: Arc<dyn ExecutionServices>,
@@ -18,14 +19,14 @@ fn create_context(
     )?))
 }
 
-fn register_host_def(reg: &mut dyn RegistryWriter, def: VmHostActionDef) -> Rerr {
+fn register_host_def(reg: &mut dyn ExecRegistry, def: VmHostActionDef) -> Rerr {
     reg.register_vm_host_def(def)
 }
 
 /// Transfer EXTACTION hosts: the wire id is the kind itself (`id = kind`), so a
 /// kind larger than `0xff` can never be silently truncated into the u8 opcode id.
 fn register_action_def(
-    reg: &mut dyn RegistryWriter,
+    reg: &mut dyn ExecRegistry,
     kind: u16,
     name: &'static str,
     argc: usize,
@@ -53,7 +54,7 @@ fn register_action_def(
 
 /// ACTENV hosts live in the 0x07xx opcode space; the opcode id is the low byte.
 fn register_env_def(
-    reg: &mut dyn RegistryWriter,
+    reg: &mut dyn ExecRegistry,
     kind: u16,
     name: &'static str,
     ret: VmValueType,
@@ -80,7 +81,7 @@ fn register_env_def(
 
 /// ACTVIEW hosts live in the 0x06xx opcode space; the opcode id is the low byte.
 fn register_view_def(
-    reg: &mut dyn RegistryWriter,
+    reg: &mut dyn ExecRegistry,
     kind: u16,
     name: &'static str,
     ret: VmValueType,
@@ -136,7 +137,7 @@ macro_rules! register_vm_hosts {
 /// Host defs are split across crates into the same Registry:
 /// - protocol owns transfer / env / view defs (this function)
 /// - mint owns its additional inscription host definitions
-fn register_vm_host_defs(reg: &mut dyn RegistryWriter) -> Rerr {
+fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
     register_vm_hosts!(reg, action;
         HacToTrs = 2,
         HacFromTrs = 2,
@@ -172,24 +173,31 @@ fn register_vm_host_defs(reg: &mut dyn RegistryWriter) -> Rerr {
     Ok(())
 }
 
-pub fn register_standard(
-    reg: &mut dyn RegistryWriter,
-    params: &'static crate::ProtocolParams,
-) -> Rerr {
-    reg.set_execution_profile(params)?;
-    reg.set_vm_params(params.vm)?;
+/// Install the standard wire codec set: transaction codecs and every action
+/// codec (binary + JSON + schema + friendly family). Execution-only
+/// registrations (profile, VM params, block creator, context creator, VM host
+/// defs) live in `register_exec`; the SDK/wasm path calls only this function,
+/// so execution never enters its dependency graph.
+pub fn register_wire(reg: &mut dyn WireRegistry) -> Rerr {
     // Type 0 is CoinbaseTx (registered by mint); do not register DefaultPreludeTx.
     reg.register_tx(TransactionType1::TYPE, create_transaction_type1)?;
     reg.register_tx(TransactionType2::TYPE, create_transaction_type2)?;
     reg.register_tx(TransactionType3::TYPE, create_transaction_type3)?;
     base::register_regular_actions!(
         reg,
-        create_hac_transfer => [HacToTrs, HacFromTrs, HacFromToTrs],
-        create_sat_transfer => [SatToTrs, SatFromTrs, SatFromToTrs],
-        create_asset_transfer => [AssetToTrs, AssetFromTrs, AssetFromToTrs],
-        create_blob_action => [TxMessage, TxBlob],
-        create_chain_guard_action => [ChainAllow, HeightScope, BalanceFloor],
-        create_envfunc_action => [
+        "hac_transfer", create_hac_transfer => [HacToTrs, HacFromTrs, HacFromToTrs],
+        "sat_transfer", create_sat_transfer => [SatToTrs, SatFromTrs, SatFromToTrs],
+        "asset_transfer", create_asset_transfer => [AssetToTrs, AssetFromTrs, AssetFromToTrs],
+        // tx_message / tx_blob are separate friendly variants, so the shared
+        // blob decoder is registered as two single-kind groups.
+        "tx_message", create_blob_action => [TxMessage],
+        "tx_blob", create_blob_action => [TxBlob],
+        // chain_allow / height_scope have friendly forms; balance_floor does
+        // not ("" skips the family registration).
+        "chain_allow", create_chain_guard_action => [ChainAllow],
+        "height_scope", create_chain_guard_action => [HeightScope],
+        "", create_chain_guard_action => [BalanceFloor],
+        "", create_envfunc_action => [
             EnvHeight,
             EnvMainAddr,
             EnvBlockAuthorAddr,
@@ -204,28 +212,50 @@ pub fn register_standard(
     )?;
     base::register_custom_actions!(
         reg,
+        "hacd_transfer",
         create_diamond_transfer,
         decode_diamond_transfer_json => [DiaSingleTrs, DiaFromToTrs, DiaToTrs, DiaFromTrs],
     )?;
     base::register_custom_actions!(
         reg,
+        "req_sign_list",
         create_chain_guard_action,
         decode_req_sign_list_json => [ReqSignList],
     )?;
+    base::register_custom_actions!(reg, "", create_ast_select, decode_ast_select_json => [AstSelect])?;
+    base::register_custom_actions!(reg, "", create_ast_if, decode_ast_if_json => [AstIf])?;
     base::register_custom_actions!(
         reg,
-        create_ast_select,
-        decode_ast_select_json => [AstSelect],
-    )?;
-    base::register_custom_actions!(reg, create_ast_if, decode_ast_if_json => [AstIf])?;
-    base::register_custom_actions!(
-        reg,
+        "",
         create_tex_cell_act,
         decode_tex_cell_act_json => [TexCellAct],
     )?;
+    Ok(())
+}
+
+/// Install the standard execution services on top of `register_wire`'s codec
+/// set: protocol profile, VM params, block creator, context creator and VM
+/// host capability metadata. Called by the full node composition root only
+/// (its context creator lives in the gated `exec` module).
+#[cfg(feature = "execute")]
+pub fn register_exec(reg: &mut dyn ExecRegistry, params: &'static crate::ProtocolParams) -> Rerr {
+    reg.set_execution_profile(params)?;
+    reg.set_vm_params(params.vm)?;
     reg.set_block_creator(create_std_block)?;
     reg.set_context_creator(create_context, base::DEFAULT_GAS_BUDGET)?;
     register_vm_host_defs(reg)?;
+    Ok(())
+}
+
+/// Full standard registration (wire + exec) for composition roots that want
+/// the whole surface from one entry.
+#[cfg(feature = "execute")]
+pub fn register_standard(
+    reg: &mut dyn base::RegistryWriter,
+    params: &'static crate::ProtocolParams,
+) -> Rerr {
+    register_wire(reg)?;
+    register_exec(reg, params)?;
     Ok(())
 }
 
@@ -249,7 +279,7 @@ mod tests {
         }
     }
 
-    impl RegistryWriter for TestReg {
+    impl ExecRegistry for TestReg {
         fn set_block_creator(&mut self, _f: base::BlockCreateFn) -> Rerr {
             errf!("unexpected set_block_creator")
         }
@@ -258,18 +288,6 @@ mod tests {
         }
         fn set_vm_assigner(&mut self, _f: base::VmAssignFn) -> Rerr {
             errf!("unexpected set_vm_assigner")
-        }
-        fn register_tx(&mut self, _ty: u8, _f: base::TxCreateFn) -> Rerr {
-            errf!("unexpected register_tx")
-        }
-        fn register_tx_json(&mut self, _ty: u8, _f: base::TxJsonDecodeFn) -> Rerr {
-            errf!("unexpected register_tx_json")
-        }
-        fn register_action(&mut self, _kinds: &[u16], _f: base::ActionCreateFn) -> Rerr {
-            errf!("unexpected register_action")
-        }
-        fn register_action_json(&mut self, _kinds: &[u16], _f: base::ActionJsonDecodeFn) -> Rerr {
-            errf!("unexpected register_action_json")
         }
         fn register_vm_host_def(&mut self, def: VmHostActionDef) -> Rerr {
             def.validate_opcode_abi()?;

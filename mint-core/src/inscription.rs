@@ -1,38 +1,27 @@
 use std::sync::Arc;
 
 use base::{
-    ActScope, Action, ActionJsonCodec, ActionRef,
+    ActScope, Action, ActionExecute, ActionJsonCodec, ActionRef,
 };
 use field::{
     Amount, BytesW1, Decode, DiamondName, DiamondNameListMax200, Encode, Uint1, Uint2, WireAmount,
 };
 use sys::Ret;
 
-#[cfg(feature = "execute")]
 use base::{
     Context, CoreState, DIAMOND_STATUS_NORMAL, check_diamond_status, hac_sub,
     total_add_amount_238, total_add_u8,
 };
-#[cfg(feature = "execute")]
 use field::{Address, BlockHeight, DiamondInscript, DiamondSto, Inscripts};
-#[cfg(feature = "execute")]
 use sys::{errf, Rerr};
-#[cfg(feature = "execute")]
 use crate::state::{MintState, MintTotal, with_mint_total};
 
-#[cfg(feature = "execute")]
 pub const INSCRIPTION_COOLDOWN_BLOCKS: u64 = 200;
-#[cfg(feature = "execute")]
 pub const INSCRIPTION_CONTENT_MAX_BYTES: usize = 64;
-#[cfg(feature = "execute")]
 pub const INSCRIPTION_READABLE_TYPE_MAX: u8 = 100;
-#[cfg(feature = "execute")]
 pub const INSCRIPTION_MAX_PER_DIAMOND: usize = 200;
-#[cfg(feature = "execute")]
 const APPEND_FREE_MAX_INSCRIPTIONS: usize = 10;
-#[cfg(feature = "execute")]
 const APPEND_TIER1_MAX_INSCRIPTIONS: usize = 40;
-#[cfg(feature = "execute")]
 const APPEND_TIER2_MAX_INSCRIPTIONS: usize = 100;
 
 #[derive(Debug, Clone, base::ActionCodec)]
@@ -290,7 +279,6 @@ base::impl_action! {
     }
 }
 
-#[cfg(feature = "execute")]
 pub fn check_protocol_cost(pfee: &Amount) -> Rerr {
     if pfee.is_negative() {
         return errf!("protocol cost cannot be negative");
@@ -301,7 +289,6 @@ pub fn check_protocol_cost(pfee: &Amount) -> Rerr {
     Ok(())
 }
 
-#[cfg(feature = "execute")]
 pub fn check_inscription_content(engraved_type: u8, content: &BytesW1) -> Rerr {
     let insc_len = content.length();
     if insc_len == 0 {
@@ -324,7 +311,6 @@ pub fn check_inscription_content(engraved_type: u8, content: &BytesW1) -> Rerr {
 /// Build-time index range check for inscription edit/move/drop. The executor
 /// additionally validates the index against the diamond's live inscription
 /// list; build only enforces the protocol maximum.
-#[cfg(feature = "execute")]
 pub fn check_inscription_index_max(index: u8) -> Rerr {
     if index as usize >= INSCRIPTION_MAX_PER_DIAMOND {
         return errf!(
@@ -335,7 +321,6 @@ pub fn check_inscription_index_max(index: u8) -> Rerr {
     Ok(())
 }
 
-#[cfg(feature = "execute")]
 fn create_diamond_inscript(engraved_type: u8, content: &BytesW1) -> DiamondInscript {
     DiamondInscript {
         engraved_type: Uint1::from(engraved_type),
@@ -343,12 +328,10 @@ fn create_diamond_inscript(engraved_type: u8, content: &BytesW1) -> DiamondInscr
     }
 }
 
-#[cfg(feature = "execute")]
 fn diamond_readable(diamond: &DiamondName) -> String {
     String::from_utf8_lossy(diamond.as_ref()).to_string()
 }
 
-#[cfg(feature = "execute")]
 fn check_inscription_owner_privakey(owner: &Address, diamond: &DiamondName) -> Rerr {
     if !owner.is_privkey() {
         return errf!(
@@ -360,7 +343,6 @@ fn check_inscription_owner_privakey(owner: &Address, diamond: &DiamondName) -> R
     Ok(())
 }
 
-#[cfg(feature = "execute")]
 fn check_diamond_status_for_inscription(
     state: &mut CoreState,
     owner: &Address,
@@ -370,7 +352,6 @@ fn check_diamond_status_for_inscription(
     check_diamond_status(state, owner, diamond)
 }
 
-#[cfg(feature = "execute")]
 fn load_diamond_for_inscription(state: &mut CoreState, diamond: &DiamondName) -> Ret<DiamondSto> {
     let Some(diasto) = state.diamond(diamond)? else {
         return errf!("diamond status {} not found", diamond_readable(diamond));
@@ -385,7 +366,6 @@ fn load_diamond_for_inscription(state: &mut CoreState, diamond: &DiamondName) ->
     Ok(diasto)
 }
 
-#[cfg(feature = "execute")]
 fn check_inscription_cooldown(
     prev_engraved_height: u64,
     pending_height: u64,
@@ -402,7 +382,6 @@ fn check_inscription_cooldown(
     Ok(())
 }
 
-#[cfg(feature = "execute")]
 fn load_diamond_average_bid_burn_mei(state: &mut CoreState, diamond: &DiamondName) -> Ret<u16> {
     let Some(diaslt) = state.diamond_smelt(diamond)? else {
         return errf!("diamond {} not found", diamond_readable(diamond));
@@ -410,7 +389,6 @@ fn load_diamond_average_bid_burn_mei(state: &mut CoreState, diamond: &DiamondNam
     Ok(diaslt.average_bid_burn.uint())
 }
 
-#[cfg(feature = "execute")]
 fn check_inscription_index(
     diamond: &DiamondName,
     idx: usize,
@@ -438,7 +416,6 @@ fn check_inscription_index(
     Ok(())
 }
 
-#[cfg(feature = "execute")]
 fn load_diamond_owner_for_inscription_index(
     state: &mut CoreState,
     diamond: &DiamondName,
@@ -453,7 +430,6 @@ fn load_diamond_owner_for_inscription_index(
     Ok((diasto, owner))
 }
 
-#[cfg(feature = "execute")]
 fn add_dia_insc_u8(
     state: &mut CoreState,
     field: fn(&mut MintTotal) -> &mut field::Uint8,
@@ -468,7 +444,6 @@ fn add_dia_insc_u8(
     })
 }
 
-#[cfg(feature = "execute")]
 fn add_diamond_insc_burn_count(state: &mut CoreState, pfee: &Amount) -> Rerr {
     if !pfee.is_positive() {
         return Ok(());
@@ -482,7 +457,6 @@ fn add_diamond_insc_burn_count(state: &mut CoreState, pfee: &Amount) -> Rerr {
     })
 }
 
-#[cfg(feature = "execute")]
 fn saturating_sub_dia_insc_live_diamond(state: &mut CoreState, sub: u64) -> Rerr {
     if sub == 0 {
         return Ok(());
@@ -495,7 +469,6 @@ fn saturating_sub_dia_insc_live_diamond(state: &mut CoreState, sub: u64) -> Rerr
     })
 }
 
-#[cfg(feature = "execute")]
 pub fn calc_append_inscription_protocol_cost(
     cur_inscriptions: usize,
     average_bid_burn_mei: u16,
@@ -512,7 +485,6 @@ pub fn calc_append_inscription_protocol_cost(
     Amount::coin(average_bid_burn_mei as u64 * 10, 246)
 }
 
-#[cfg(feature = "execute")]
 pub fn calc_move_inscription_protocol_cost(
     target_cur_inscriptions: usize,
     average_bid_burn_mei: u16,
@@ -520,17 +492,14 @@ pub fn calc_move_inscription_protocol_cost(
     calc_append_inscription_protocol_cost(target_cur_inscriptions, average_bid_burn_mei)
 }
 
-#[cfg(feature = "execute")]
 pub fn calc_edit_inscription_protocol_cost(average_bid_burn_mei: u16) -> Amount {
     Amount::coin(average_bid_burn_mei as u64, 246)
 }
 
-#[cfg(feature = "execute")]
 pub fn calc_drop_inscription_protocol_cost(average_bid_burn_mei: u16) -> Amount {
     Amount::coin(average_bid_burn_mei as u64 * 2, 246)
 }
 
-#[cfg(feature = "execute")]
 pub fn engraved_one_diamond(
     pending_height: u64,
     state: &mut CoreState,
@@ -560,7 +529,6 @@ pub fn engraved_one_diamond(
     Ok(cost)
 }
 
-#[cfg(feature = "execute")]
 pub fn engraved_clean_one_diamond(
     state: &mut CoreState,
     addr: &Address,
@@ -583,7 +551,6 @@ pub fn engraved_clean_one_diamond(
     Ok(cost)
 }
 
-#[cfg(feature = "execute")]
 fn diamond_inscription_push(this: &DiaInscPush, ctx: &mut dyn Context) -> Rerr {
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
@@ -647,7 +614,6 @@ fn diamond_inscription_push(this: &DiaInscPush, ctx: &mut dyn Context) -> Rerr {
     Ok(())
 }
 
-#[cfg(feature = "execute")]
 fn diamond_inscription_clean(this: &DiaInscClean, ctx: &mut dyn Context) -> Rerr {
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
@@ -695,7 +661,6 @@ fn diamond_inscription_clean(this: &DiaInscClean, ctx: &mut dyn Context) -> Rerr
     Ok(())
 }
 
-#[cfg(feature = "execute")]
 fn diamond_inscription_edit(this: &DiaInscEdit, ctx: &mut dyn Context) -> Rerr {
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
@@ -733,7 +698,6 @@ fn diamond_inscription_edit(this: &DiaInscEdit, ctx: &mut dyn Context) -> Rerr {
     Ok(())
 }
 
-#[cfg(feature = "execute")]
 fn diamond_inscription_move(this: &DiaInscMove, ctx: &mut dyn Context) -> Rerr {
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
@@ -813,7 +777,6 @@ fn diamond_inscription_move(this: &DiaInscMove, ctx: &mut dyn Context) -> Rerr {
     Ok(())
 }
 
-#[cfg(feature = "execute")]
 fn diamond_inscription_drop(this: &DiaInscDrop, ctx: &mut dyn Context) -> Rerr {
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
@@ -940,6 +903,19 @@ pub fn decode_dia_insc_json(
     }
 }
 
+// The execute view (`ActionExecute` bound) compiles only under `execute`; the
+// execute-off branch builds the same body with the wire view only (type-level
+// ActionRef cut, see base::iface::action).
+#[cfg(feature = "execute")]
+fn decode_inscription_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
+where
+    T: Action + ActionExecute + Decode + 'static,
+{
+    let (action, used) = T::decode(buf)?;
+    Ok((Arc::new(action), used))
+}
+
+#[cfg(not(feature = "execute"))]
 fn decode_inscription_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
 where
     T: Action + Decode + 'static,
@@ -948,11 +924,3 @@ where
     Ok((Arc::new(action), used))
 }
 
-#[cfg(all(test, not(feature = "execute")))]
-mod tests {
-    #[test]
-    fn codec_only_execution_is_rejected() {
-        let error = base::execution_disabled().unwrap_err();
-        assert!(error.to_string().contains("execution is disabled"));
-    }
-}

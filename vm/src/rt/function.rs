@@ -62,7 +62,6 @@ impl FnObj {
         }
     }
 
-    #[cfg(feature = "full")]
     pub fn exec_bytecodes(&self, _height: u64, gas_extra: &GasExtra) -> VmrtRes<ByteView> {
         use CodeType::*;
         Ok(match self.ctype {
@@ -79,14 +78,6 @@ impl FnObj {
                 compiled
             }
         })
-    }
-
-    #[cfg(not(feature = "execute"))]
-    pub fn exec_bytecodes(&self, _height: u64, _gas_extra: &GasExtra) -> VmrtRes<ByteView> {
-        itr_err!(
-            CodecOnlyUnsupported,
-            "ir code compilation is not included in the sdk (codec-only) build"
-        )
     }
 
     pub fn into_array(self) -> Vec<u8> {
