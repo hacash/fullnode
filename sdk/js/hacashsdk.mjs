@@ -9,7 +9,7 @@
 // The complex-object pack/unpack functions are GENERATED (bjson_codec.mjs) from
 // the Rust `sdk::json::BIN_TYPES` layouts; this file only wires the envelope.
 
-import { encodeTransactionSpec, pushU16, pushU32, pushU64, pushStrW2 as pushW2Str } from "./generated/codec.mjs";
+import { encodeTransactionSpec, pushU8, pushU16, pushU32, pushU64, pushStrW2 as pushW2Str } from "./generated/codec.mjs";
 import { OP, ERROR_NAMES } from "./generated/op_tables.mjs";
 import { adaptActionSpec } from "./generated/actionspec.mjs";
 import { createOperationMethods } from "./generated/operations.mjs";
@@ -77,11 +77,8 @@ function pushOptInspectContext(out, context) {
         out.push(0);
     } else {
         out.push(1);
-        const hi = Math.floor(Number(context.current_height) / 0x100000000);
-        const lo = Number(context.current_height) >>> 0;
-        pushU32(out, hi);
-        pushU32(out, lo);
-        pushU32(out, Number(context.expected_chain_id) >>> 0);
+        pushU64(out, context.current_height);
+        pushU32(out, context.expected_chain_id);
     }
 }
 
@@ -90,74 +87,88 @@ function pushOptInspectContext(out, context) {
 function readFieldStream(bytes) {
     const fields = new Map();
     let pos = 0;
-    const u8 = () => bytes[pos++];
+    const take = (n) => {
+        if (!Number.isSafeInteger(n) || n < 0 || pos + n > bytes.length) {
+            throw new Error("malformed binary response: truncated field stream");
+        }
+        const value = bytes.subarray(pos, pos + n);
+        pos += n;
+        return value;
+    };
+    const u8 = () => take(1)[0];
     const u16 = () => {
-        const v = (bytes[pos] << 8) | bytes[pos + 1];
-        pos += 2;
+        const b = take(2);
+        const v = (b[0] << 8) | b[1];
         return v;
     };
     const u32 = () => {
-        const v = ((bytes[pos] << 24) | (bytes[pos + 1] << 16) | (bytes[pos + 2] << 8) | bytes[pos + 3]) >>> 0;
-        pos += 4;
+        const b = take(4);
+        const v = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
         return v;
     };
     const u64 = () => {
         const hi = u32();
         const lo = u32();
-        return hi * 0x100000000 + lo;
+        const value = (BigInt(hi) << 32n) | BigInt(lo);
+        return value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value;
     };
     const str = () => {
         const len = u32();
-        const s = TD.decode(bytes.subarray(pos, pos + len));
-        pos += len;
+        const s = TD.decode(take(len));
         return s;
     };
     const u64Arr = () => {
         const n = u32();
+        if (n > Math.floor((bytes.length - pos) / 8)) throw new Error("malformed binary response: array count exceeds payload");
         const a = [];
         for (let i = 0; i < n; i++) a.push(u64());
         return a;
     };
     const u32Arr = () => {
         const n = u32();
+        if (n > Math.floor((bytes.length - pos) / 4)) throw new Error("malformed binary response: array count exceeds payload");
         const a = [];
         for (let i = 0; i < n; i++) a.push(u32());
         return a;
     };
     const strArr = () => {
         const n = u32();
+        if (n > Math.floor((bytes.length - pos) / 4)) throw new Error("malformed binary response: array count exceeds payload");
         const a = [];
         for (let i = 0; i < n; i++) a.push(str());
         return a;
     };
     const obj = () => {
         const len = u32();
-        const inner = bytes.subarray(pos, pos + len);
-        pos += len;
+        const inner = take(len);
         return readFieldStream(inner);
     };
     const objArr = () => {
         const n = u32();
+        if (n > Math.floor((bytes.length - pos) / 4)) throw new Error("malformed binary response: array count exceeds payload");
         const a = [];
         for (let i = 0; i < n; i++) {
             const len = u32();
-            const inner = bytes.subarray(pos, pos + len);
-            pos += len;
+            const inner = take(len);
             a.push(readFieldStream(inner));
         }
         return a;
     };
     while (pos < bytes.length) {
         const nameLen = u16();
-        const name = TD.decode(bytes.subarray(pos, pos + nameLen));
-        pos += nameLen;
+        const name = TD.decode(take(nameLen));
         const tag = u8();
         switch (String.fromCharCode(tag)) {
             case "s": fields.set(name, str()); break;
             case "u": fields.set(name, u64()); break;
             case "i": fields.set(name, u32()); break;
             case "t": fields.set(name, u8()); break;
-            case "b": fields.set(name, u8() === 1); break;
+            case "b": {
+                const value = u8();
+                if (value !== 0 && value !== 1) throw new Error("malformed binary response: invalid bool");
+                fields.set(name, value === 1);
+                break;
+            }
             case "a": fields.set(name, strArr()); break;
             case "A": fields.set(name, u64Arr()); break;
             case "B": fields.set(name, u32Arr()); break;
@@ -202,23 +213,34 @@ const RESPONSE_DECODERS = {
 // Error envelope: ok:0 | code:u16 | W2 message | W2 detail (may be empty)
 
 function decodeEnvelope(bytes, operationId) {
+    if (!(bytes instanceof Uint8Array) || bytes.length < 1) {
+        throw new Error("malformed binary response: missing envelope");
+    }
     const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     if (bytes[0] === 0) {
+        if (bytes.length < 5) throw new Error("malformed binary response: truncated error envelope");
         const code = dv.getUint16(1);
         const msgLen = dv.getUint16(3);
-        const message = TD.decode(bytes.subarray(5, 5 + msgLen));
+        const msgEnd = 5 + msgLen;
+        if (msgEnd + 2 > bytes.length) throw new Error("malformed binary response: truncated error message");
+        const message = TD.decode(bytes.subarray(5, msgEnd));
         let detail = undefined;
-        const detailLenPos = 5 + msgLen;
-        if (bytes.length >= detailLenPos + 2) {
-            const detailLen = dv.getUint16(detailLenPos);
-            if (detailLen > 0) {
-                detail = TD.decode(bytes.subarray(detailLenPos + 2, detailLenPos + 2 + detailLen));
-            }
+        const detailLen = dv.getUint16(msgEnd);
+        const detailEnd = msgEnd + 2 + detailLen;
+        if (detailEnd !== bytes.length) {
+            throw new Error("malformed binary response: invalid error detail length");
         }
+        if (detailLen > 0) detail = TD.decode(bytes.subarray(msgEnd + 2, detailEnd));
         return { ok: false, code, message, detail };
     }
+    if (bytes[0] !== 1 || bytes.length < 5) {
+        throw new Error("malformed binary response: invalid success envelope");
+    }
     const len = dv.getUint32(1);
-    const body = bytes.subarray(5, 5 + len);
+    if (len !== bytes.length - 5) {
+        throw new Error("malformed binary response: invalid body length");
+    }
+    const body = bytes.subarray(5);
     const decoder = RESPONSE_DECODERS[operationId];
     if (decoder === undefined) {
         throw new Error(`no response decoder for operation ${operationId}`);
@@ -263,6 +285,7 @@ function createFriendlyApi(backend) {
         pushOptBin,
         pushOptU64,
         pushOptInspectContext,
+        pushU8,
     });
 
     // `tx.build`: the SDK-interface spec (kind = "hac_transfer" etc.) goes

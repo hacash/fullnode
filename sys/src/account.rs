@@ -1,7 +1,7 @@
 use base58check::ToBase58Check;
-use libsecp256k1::{Message, PublicKey, SecretKey, Signature, util};
 #[cfg(not(feature = "secp-static-context"))]
 use libsecp256k1::curve::{ECMultContext, ECMultGenContext};
+use libsecp256k1::{Message, PublicKey, SecretKey, Signature, util};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 #[cfg(not(feature = "secp-static-context"))]
@@ -151,6 +151,14 @@ impl Account {
         let mut addr = [version; ADDRESS_SIZE];
         addr[1..].copy_from_slice(&dt);
         addr
+    }
+
+    /// Whether `pubkey` is a valid secp256k1 compressed point. The same
+    /// `PublicKey::parse_compressed` check `verify_signature` runs before
+    /// hashing; address derivation itself (`get_address_by_public_key`) stays
+    /// hash-only so execute never changes.
+    pub fn compressed_public_key_valid(pubkey: &[u8; PUBLIC_SIZE]) -> bool {
+        PublicKey::parse_compressed(pubkey).is_ok()
     }
 
     pub fn to_readable(addr: &[u8; ADDRESS_SIZE]) -> String {

@@ -836,7 +836,7 @@ impl ChainEngine {
             return errf!("a prelude transaction cannot be executed as a user transaction");
         }
         let params = self.consensus.mint_params();
-        if params.max_tx_size > 0 && tx.size() > params.max_tx_size {
+        if base::tx_exceeds_max_size(tx.size(), params.max_tx_size) {
             return errf!("tx size {} exceeds max {}", tx.size(), params.max_tx_size);
         }
         if tx.action_count() != tx.actions().len() {

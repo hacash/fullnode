@@ -15,7 +15,7 @@ use base::{BinaryCodecs, TxCreateRequest};
 use field::{Address, Amount};
 
 use crate::actionspec::{
-    friendly_groups, ActionSpecDef, FieldDef, FriendlyGroup, JsConv, RustConv, ACTION_SPECS,
+    ACTION_SPECS, ActionSpecDef, FieldDef, FriendlyGroup, JsConv, RustConv, friendly_groups,
 };
 use crate::error::{SdkError, SdkErrorCode};
 use crate::inspect::decode_tx;
@@ -37,12 +37,21 @@ macro_rules! friendly_field_ty {
 /// by the golden vectors). The JSON field name is `stringify!($field)`, i.e.
 /// exactly the enum field name.
 macro_rules! friendly_spec_kv {
-    ($field:ident, str) => { crate::json::kv(stringify!($field), crate::json::q($field)) };
-    ($field:ident, opt_str) => {
-        crate::json::kv_opt(stringify!($field), $field.as_ref().map(|s| crate::json::q(s)))
+    ($field:ident, str) => {
+        crate::json::kv(stringify!($field), crate::json::q($field))
     };
-    ($field:ident, num64) => { crate::json::kv(stringify!($field), $field.to_string()) };
-    ($field:ident, num8) => { crate::json::kv(stringify!($field), $field.to_string()) };
+    ($field:ident, opt_str) => {
+        crate::json::kv_opt(
+            stringify!($field),
+            $field.as_ref().map(|s| crate::json::q(s)),
+        )
+    };
+    ($field:ident, num64) => {
+        crate::json::kv(stringify!($field), $field.to_string())
+    };
+    ($field:ident, num8) => {
+        crate::json::kv(stringify!($field), $field.to_string())
+    };
     ($field:ident, opt_num8) => {
         crate::json::kv_opt(stringify!($field), $field.map(|v| v.to_string()))
     };
@@ -117,13 +126,27 @@ impl FriendlyValue {
 }
 
 macro_rules! friendly_value {
-    ($f:ident, str) => { FriendlyValue::Str($f.clone()) };
-    ($f:ident, opt_str) => { FriendlyValue::OptStr($f.clone()) };
-    ($f:ident, num64) => { FriendlyValue::Num(*$f) };
-    ($f:ident, num8) => { FriendlyValue::Num8(*$f) };
-    ($f:ident, opt_num8) => { FriendlyValue::OptNum8(*$f) };
-    ($f:ident, str_list) => { FriendlyValue::StrList($f.clone()) };
-    ($f:ident, num_list) => { FriendlyValue::NumList($f.clone()) };
+    ($f:ident, str) => {
+        FriendlyValue::Str($f.clone())
+    };
+    ($f:ident, opt_str) => {
+        FriendlyValue::OptStr($f.clone())
+    };
+    ($f:ident, num64) => {
+        FriendlyValue::Num(*$f)
+    };
+    ($f:ident, num8) => {
+        FriendlyValue::Num8(*$f)
+    };
+    ($f:ident, opt_num8) => {
+        FriendlyValue::OptNum8(*$f)
+    };
+    ($f:ident, str_list) => {
+        FriendlyValue::StrList($f.clone())
+    };
+    ($f:ident, num_list) => {
+        FriendlyValue::NumList($f.clone())
+    };
 }
 
 /// Declares the typed `ActionSpec` surface once: the enum variant structure,
@@ -221,7 +244,7 @@ friendly_spec! {
     (DiamondMint { diamond: str, number: str, prev_hash: str, nonce: str, address: str, custom_message: opt_str }),
 }
 
-#[derive(Debug, Clone, )]
+#[derive(Debug, Clone)]
 pub struct TransactionSpec {
         pub schema: Option<String>,
     pub tx_type: u8,
@@ -253,16 +276,6 @@ pub fn build_transaction(spec: &TransactionSpec) -> Result<BuiltTransaction, Sdk
                 format!("unsupported spec schema {schema:?}"),
             ));
         }
-    }
-    let codecs = crate::codec::standard_codecs().map_err(SdkError::from)?;
-    // Capability declaration from the registry: only the registered user tx
-    // types can be built (the block-level CoinbaseTx is not one of them).
-    if !codecs.registered_tx_types().contains(&spec.tx_type) {
-        return Err(SdkError::with_detail(
-            SdkErrorCode::UnsupportedTxType,
-            format!("build supports the registered transaction types only, got {}", spec.tx_type),
-            format!("{{\"actual\":{}}}", spec.tx_type),
-        ));
     }
     let main = Address::from_readable(&spec.main).map_err(|error| SdkError::from(error))?;
     let fee = Amount::from(&spec.fee).map_err(|error| SdkError::from(error))?;
@@ -363,7 +376,10 @@ fn build_raw(kind: &str, fields: &[(String, WireValue)]) -> Result<base::ActionR
 // the shared group analysis, field names/defaults from the table entries,
 // value conversion per the wire shape. No per-variant constructor code.
 
-fn find_value<'a>(values: &'a [(&'static str, FriendlyValue)], name: &str) -> Option<&'a FriendlyValue> {
+fn find_value<'a>(
+    values: &'a [(&'static str, FriendlyValue)],
+    name: &str,
+) -> Option<&'a FriendlyValue> {
     values.iter().find(|(n, _)| *n == name).map(|(_, v)| v)
 }
 
@@ -384,7 +400,10 @@ fn select_wire_kind(
     let missing = |what: &str| {
         SdkError::new(
             SdkErrorCode::ParseFailed,
-            format!("friendly group {} has no {} wire form", group.friendly, what),
+            format!(
+                "friendly group {} has no {} wire form",
+                group.friendly, what
+            ),
         )
     };
     if let Some(from) = from {
@@ -395,7 +414,10 @@ fn select_wire_kind(
                 return Ok(kind);
             }
         }
-        return group.from_to_kind.map(Ok).unwrap_or_else(|| Err(missing("from_to")));
+        return group
+            .from_to_kind
+            .map(Ok)
+            .unwrap_or_else(|| Err(missing("from_to")));
     }
     if names_len == 1 {
         if let Some(single) = group.single_entry {
@@ -465,7 +487,7 @@ fn wire_fields(
                         return Err(SdkError::new(
                             SdkErrorCode::ParseFailed,
                             format!("friendly field {} missing", field.friendly),
-                        ))
+                        ));
                     }
                 };
                 let wire = crate::spec_codec::struct_member_wire(entry.kind, struct_name, sub)
@@ -526,8 +548,8 @@ fn wire_fields(
                         )
                     })?,
                 };
-                let wire = crate::spec_codec::schema_wire_of(entry.kind, wire_name)
-                    .ok_or_else(|| {
+                let wire =
+                    crate::spec_codec::schema_wire_of(entry.kind, wire_name).ok_or_else(|| {
                         SdkError::new(
                             SdkErrorCode::ParseFailed,
                             format!(
@@ -567,12 +589,17 @@ fn js_wire_name(field: &FieldDef) -> &'static str {
 /// JsConv defaults (the same defaults the JS adapter writes).
 fn default_value(js: JsConv) -> Option<FriendlyValue> {
     match js {
-        JsConv::RenameDef(_, d) | JsConv::ToString(_, d) | JsConv::HexOrKeep(_, d) | JsConv::Strip0x(_, d) => {
-            Some(FriendlyValue::Str(d.to_owned()))
-        }
+        JsConv::RenameDef(_, d)
+        | JsConv::ToString(_, d)
+        | JsConv::HexOrKeep(_, d)
+        | JsConv::Strip0x(_, d) => Some(FriendlyValue::Str(d.to_owned())),
         JsConv::RenameDefNum(_, d) => d.parse().ok().map(FriendlyValue::Num),
         JsConv::NumList(_) | JsConv::HexList(_) => Some(FriendlyValue::StrList(Vec::new())),
-        JsConv::Noop | JsConv::Rename(_) | JsConv::Hex(_) | JsConv::HexSingle(_) | JsConv::StructField(..) => None,
+        JsConv::Noop
+        | JsConv::Rename(_)
+        | JsConv::Hex(_)
+        | JsConv::HexSingle(_)
+        | JsConv::StructField(..) => None,
     }
 }
 
@@ -641,9 +668,9 @@ fn convert_scalar(wire: &base::FieldWire, value: &FriendlyValue) -> Result<WireV
 }
 
 fn friendly_str(value: &FriendlyValue) -> Result<&str, SdkError> {
-    value.as_str().ok_or_else(|| {
-        SdkError::new(SdkErrorCode::ParseFailed, "friendly field is not a string")
-    })
+    value
+        .as_str()
+        .ok_or_else(|| SdkError::new(SdkErrorCode::ParseFailed, "friendly field is not a string"))
 }
 
 /// String form of a friendly value: strings pass through, numeric values
@@ -660,13 +687,19 @@ fn friendly_to_string(value: &FriendlyValue) -> Option<String> {
 
 fn friendly_str_list(value: &FriendlyValue) -> Result<&[String], SdkError> {
     value.as_str_list().ok_or_else(|| {
-        SdkError::new(SdkErrorCode::ParseFailed, "friendly field is not a string list")
+        SdkError::new(
+            SdkErrorCode::ParseFailed,
+            "friendly field is not a string list",
+        )
     })
 }
 
 fn friendly_num_list(value: &FriendlyValue) -> Result<&[u32], SdkError> {
     value.as_num_list().ok_or_else(|| {
-        SdkError::new(SdkErrorCode::ParseFailed, "friendly field is not a numeric list")
+        SdkError::new(
+            SdkErrorCode::ParseFailed,
+            "friendly field is not a numeric list",
+        )
     })
 }
 
@@ -689,7 +722,10 @@ fn hex_or_utf8(raw: &str) -> Result<Vec<u8>, SdkError> {
     let clean = raw.trim_start_matches("0x").trim_start_matches("0X");
     if clean.len() % 2 == 0 && clean.bytes().all(|b| b.is_ascii_hexdigit()) {
         return hex::decode(clean).map_err(|_| {
-            SdkError::new(SdkErrorCode::ParseFailed, format!("field hex invalid: {raw:?}"))
+            SdkError::new(
+                SdkErrorCode::ParseFailed,
+                format!("field hex invalid: {raw:?}"),
+            )
         });
     }
     Ok(raw.as_bytes().to_vec())
@@ -746,11 +782,16 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_tx_type() {
+    fn delegates_unknown_tx_type_to_protocol_constructor() {
         let mut spec = sample_spec();
-        spec.tx_type = 0; // coinbase is not a registered user tx type
+        spec.tx_type = 0;
         let error = build_transaction(&spec).unwrap_err();
-        assert_eq!(error.code, "unsupported_tx_type");
+        assert_eq!(error.code, "parse_failed");
+        assert!(
+            error
+                .message
+                .contains("unsupported standard user transaction type 0")
+        );
     }
 
     #[test]
@@ -774,7 +815,6 @@ mod tests {
 
     #[test]
     fn explicit_from_builds_from_to_transfer_and_becomes_signer() {
-
         let other = sys::Account::create_by("654321").unwrap();
         let mut spec = sample_spec();
         spec.actions[0] = ActionSpec::HacTransfer {
@@ -796,7 +836,6 @@ mod tests {
 
     #[test]
     fn explicit_from_equal_to_main_builds_the_from_to_form() {
-
         let mut spec = sample_spec();
         spec.actions[0] = ActionSpec::HacTransfer {
             from: Some(MAIN.to_owned()),
@@ -820,7 +859,10 @@ mod tests {
             fee: "1:244".to_owned(),
             timestamp: Some(1_755_223_764),
             gas_max: None,
-            actions: vec![ActionSpec::RawAction { kind: kind.to_owned(), fields }],
+            actions: vec![ActionSpec::RawAction {
+                kind: kind.to_owned(),
+                fields,
+            }],
         }
     }
 
@@ -831,8 +873,6 @@ mod tests {
     /// fixed/bytes (contract_main_call) and nested action lists (ast_select).
     #[test]
     fn raw_actions_build_through_the_protocol_codec() {
-
-
         let cases: Vec<(&str, Vec<(String, WireValue)>)> = vec![
             (
                 "balance_floor",
@@ -866,7 +906,10 @@ mod tests {
                     (
                         "actions".to_owned(),
                         WireValue::List(vec![WireValue::Struct(vec![
-                            ("kind".to_owned(), WireValue::Str("transfer_hac_to".to_owned())),
+                            (
+                                "kind".to_owned(),
+                                WireValue::Str("transfer_hac_to".to_owned()),
+                            ),
                             ("to".to_owned(), WireValue::Str(MAIN.to_owned())),
                             ("hacash".to_owned(), WireValue::Str("12:244".to_owned())),
                         ])]),
@@ -902,7 +945,6 @@ mod tests {
     /// by the SDK.
     #[test]
     fn raw_host_opcode_kind_builds_and_round_trips() {
-
         let built = build_transaction(&raw_spec("block_height", vec![])).unwrap();
         let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
         assert_eq!(
@@ -910,7 +952,10 @@ mod tests {
             built.body,
             "host opcode body must round-trip (scope validation is the chain's, not the SDK's)"
         );
-        assert_eq!(decoded.actions()[0].kind(), protocol::action_std::EnvHeight::KIND);
+        assert_eq!(
+            decoded.actions()[0].kind(),
+            protocol::action_std::EnvHeight::KIND
+        );
     }
 
     /// Every golden payload (the same vectors that lock the decode direction)
@@ -920,7 +965,6 @@ mod tests {
     /// hand-generated payloads.
     #[test]
     fn golden_vectors_rebuild_through_the_typed_path() {
-
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden.json");
         let json = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
         let mut vectors = 0usize;
@@ -938,11 +982,10 @@ mod tests {
                     }
                 }
                 let bytes = hex::decode(&payload_hex).expect("payload hex");
-                let (kinds, spec) =
-                    crate::spec_codec::decode_transaction_spec_parts(&bytes).expect("payload decodes");
-                let built = build_transaction(&spec).unwrap_or_else(|e| {
-                    panic!("vector {vectors}: rebuild failed: {e}")
-                });
+                let (kinds, spec) = crate::spec_codec::decode_transaction_spec_parts(&bytes)
+                    .expect("payload decodes");
+                let built = build_transaction(&spec)
+                    .unwrap_or_else(|e| panic!("vector {vectors}: rebuild failed: {e}"));
                 let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
                 let native: Vec<u16> = decoded.actions().iter().map(|a| a.kind()).collect();
                 assert_eq!(
@@ -952,7 +995,10 @@ mod tests {
                 vectors += 1;
             }
         }
-        assert!(vectors >= 20, "expected a full golden vector set, got {vectors}");
+        assert!(
+            vectors >= 20,
+            "expected a full golden vector set, got {vectors}"
+        );
     }
 }
 

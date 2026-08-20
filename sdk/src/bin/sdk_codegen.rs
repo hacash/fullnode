@@ -48,14 +48,22 @@ fn render_golden_json(manifest: &str) {
     let mut vectors: Vec<(String, String, String, String)> = Vec::new();
     for (_, value) in field::json_split_object(&seed).expect("seed object") {
         if value.starts_with('[') {
-            for (i, vector) in field::json_split_array(value).expect("vectors").iter().enumerate() {
+            for (i, vector) in field::json_split_array(value)
+                .expect("vectors")
+                .iter()
+                .enumerate()
+            {
                 let mut name = String::new();
                 let mut friendly = String::new();
                 let mut wire = String::new();
                 let mut payload = String::new();
                 for (key, v) in field::json_split_object(vector).expect("vector object") {
                     match key {
-                        "name" => name = field::json_expect_quoted_decoded(v).expect("name").to_owned(),
+                        "name" => {
+                            name = field::json_expect_quoted_decoded(v)
+                                .expect("name")
+                                .to_owned()
+                        }
                         "friendly" => friendly = v.to_owned(),
                         "wire" => wire = v.to_owned(),
                         "payload" => {
@@ -76,11 +84,7 @@ fn render_golden_json(manifest: &str) {
         let bytes = hex::decode(payload).unwrap_or_else(|e| panic!("vector {i} payload hex: {e}"));
         let decoded = sdk::decode_transaction_spec_binary(&bytes)
             .unwrap_or_else(|e| panic!("vector {i} decode: {e}"));
-        let actions: Vec<String> = decoded
-            .actions
-            .iter()
-            .map(|a| a.to_json_string())
-            .collect();
+        let actions: Vec<String> = decoded.actions.iter().map(|a| a.to_json_string()).collect();
         let decoded_json = format!("{{\"actions\":[{}]}}", actions.join(","));
         out.push_str("    {\n");
         out.push_str(&format!("      \"name\": \"{name}\",\n"));

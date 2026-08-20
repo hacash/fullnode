@@ -22,12 +22,12 @@ use std::sync::OnceLock;
 
 use crate::error::{SdkError, SdkErrorCode};
 use crate::profile::{
-    capabilities, CodecProfile, OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY, OP_ACCOUNT_VERIFY_ADDRESS,
-    OP_AMOUNT_FORMAT_PROTOCOL, OP_AMOUNT_PARSE_PROTOCOL, OP_MESSAGE_PREPARE_SIGNATURE,
+    CodecProfile, OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY, OP_ACCOUNT_VERIFY_ADDRESS,
+    OP_AMOUNT_FORMAT_PROTOCOL, OP_AMOUNT_PARSE_PROTOCOL, OP_DEFS, OP_MESSAGE_PREPARE_SIGNATURE,
     OP_MESSAGE_VERIFY, OP_POLICY_EVALUATE, OP_SYSTEM_CAPABILITIES, OP_SYSTEM_CODEC_PROFILE,
     OP_SYSTEM_SDK_VERSION, OP_TX_ATTACH_SIGNATURE, OP_TX_ATTACH_SIGNATURE_UNBOUND, OP_TX_BUILD,
     OP_TX_DECODE, OP_TX_ENCODE, OP_TX_INSPECT, OP_TX_INSPECT_REPORT, OP_TX_PREPARE_SIGNATURE,
-    OP_TX_SIGNATURE_REPORT, OP_TX_VERIFY, OpRequestField, OP_DEFS,
+    OP_TX_SIGNATURE_REPORT, OP_TX_VERIFY, OpRequestField, capabilities,
 };
 
 pub(crate) fn profile() -> &'static CodecProfile {
@@ -69,14 +69,13 @@ impl<'a> ReqReader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], SdkError> {
-        if self.pos + n > self.buf.len() {
-            return Err(SdkError::new(
-                SdkErrorCode::ParseFailed,
-                "request payload truncated",
-            ));
-        }
-        let slice = &self.buf[self.pos..self.pos + n];
-        self.pos += n;
+        let end = self
+            .pos
+            .checked_add(n)
+            .filter(|end| *end <= self.buf.len())
+            .ok_or_else(|| SdkError::new(SdkErrorCode::ParseFailed, "request payload truncated"))?;
+        let slice = &self.buf[self.pos..end];
+        self.pos = end;
         Ok(slice)
     }
 
@@ -117,7 +116,10 @@ impl<'a> ReqReader<'a> {
         match self.u8()? {
             0 => Ok(None),
             1 => Ok(Some(self.w2_str()?)),
-            _ => Err(SdkError::new(SdkErrorCode::ParseFailed, "invalid option marker")),
+            _ => Err(SdkError::new(
+                SdkErrorCode::ParseFailed,
+                "invalid option marker",
+            )),
         }
     }
 
@@ -125,7 +127,10 @@ impl<'a> ReqReader<'a> {
         match self.u8()? {
             0 => Ok(None),
             1 => Ok(Some(self.w4_bin()?)),
-            _ => Err(SdkError::new(SdkErrorCode::ParseFailed, "invalid option marker")),
+            _ => Err(SdkError::new(
+                SdkErrorCode::ParseFailed,
+                "invalid option marker",
+            )),
         }
     }
 
@@ -143,26 +148,44 @@ impl<'a> ReqReader<'a> {
 
 // ================================ binary result envelope ================================
 
-fn encode_result_ok(body: &[u8]) -> Vec<u8> {
+fn encode_result_ok(body: &[u8]) -> Result<Vec<u8>, SdkError> {
+    if body.len() > u32::MAX as usize {
+        return Err(SdkError::new(
+            SdkErrorCode::ParseFailed,
+            "result body exceeds binary envelope limit",
+        ));
+    }
     let mut out = Vec::with_capacity(5 + body.len());
     out.push(1);
     out.extend_from_slice(&(body.len() as u32).to_be_bytes());
     out.extend_from_slice(body);
-    out
+    Ok(out)
 }
 
 fn encode_result_err(error: &SdkError) -> Vec<u8> {
     let code = error_code_id(&error.code);
-    let msg = error.message.as_bytes();
-    let detail = error.detail.as_deref().map(str::as_bytes);
-    let mut out = Vec::with_capacity(5 + msg.len() + detail.map_or(0, |d| d.len()));
+    let original_msg = error.message.as_bytes();
+    let original_detail = error.detail.as_deref().map(str::as_bytes);
+    // A malformed or caller-controlled value must never be silently cast to
+    // W2. If either part cannot fit, replace the whole textual payload with a
+    // short, valid envelope-level diagnostic and preserve the stable code.
+    let (msg, detail) = if original_msg.len() <= u16::MAX as usize
+        && original_detail.map_or(true, |d| d.len() <= u16::MAX as usize)
+    {
+        (original_msg, original_detail.unwrap_or(&[]))
+    } else {
+        (
+            &b"sdk error text exceeds binary envelope limit"[..],
+            &[][..],
+        )
+    };
+    let mut out = Vec::with_capacity(5 + msg.len() + detail.len());
     out.push(0);
     out.extend_from_slice(&code.to_be_bytes());
     out.extend_from_slice(&(msg.len() as u16).to_be_bytes());
     out.extend_from_slice(msg);
     // W2 detail: length 0 when there is no detail (keeps byte-compatible
     // reading with the v2 envelope)
-    let detail = detail.unwrap_or(&[]);
     out.extend_from_slice(&(detail.len() as u16).to_be_bytes());
     out.extend_from_slice(detail);
     out
@@ -171,7 +194,7 @@ fn encode_result_err(error: &SdkError) -> Vec<u8> {
 /// Binary envelope result (the ok branch's body is a hand-written JSON string).
 pub fn invoke_binary(operation_id: u16, payload: &[u8]) -> Vec<u8> {
     match route(operation_id, payload) {
-        Ok(body) => encode_result_ok(&body),
+        Ok(body) => encode_result_ok(&body).unwrap_or_else(|error| encode_result_err(&error)),
         Err(error) => encode_result_err(&error),
     }
 }
@@ -265,8 +288,17 @@ impl ReqValue {
 /// the same single source the JS facade is generated from — so the packer and
 /// the parser can never drift. Values are addressed by arg name, so a layout
 /// reorder does not silently rewire the route arms either.
-fn parse_request(operation_id: u16, payload: &[u8]) -> Result<Vec<(&'static str, ReqValue)>, SdkError> {
-    let def = OP_DEFS.get(operation_id as usize - 1).ok_or_else(|| {
+fn parse_request(
+    operation_id: u16,
+    payload: &[u8],
+) -> Result<Vec<(&'static str, ReqValue)>, SdkError> {
+    let index = operation_id.checked_sub(1).map(usize::from).ok_or_else(|| {
+        SdkError::new(
+            SdkErrorCode::UnknownOperation,
+            format!("unknown operation id {}", operation_id),
+        )
+    })?;
+    let def = OP_DEFS.get(index).ok_or_else(|| {
         SdkError::new(
             SdkErrorCode::UnknownOperation,
             format!("unknown operation id {}", operation_id),
@@ -294,7 +326,7 @@ fn parse_request(operation_id: u16, payload: &[u8]) -> Result<Vec<(&'static str,
                         return Err(SdkError::new(
                             SdkErrorCode::ParseFailed,
                             "invalid option marker",
-                        ))
+                        ));
                     }
                 };
                 ReqValue::OptU64(value)
@@ -308,7 +340,7 @@ fn parse_request(operation_id: u16, payload: &[u8]) -> Result<Vec<(&'static str,
                         return Err(SdkError::new(
                             SdkErrorCode::ParseFailed,
                             "invalid inspect context marker",
-                        ))
+                        ));
                     }
                 };
                 ReqValue::OptInspectContext(value)
@@ -417,8 +449,7 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<Vec<u8>, SdkError> {
         }
         OP_TX_ATTACH_SIGNATURE => {
             let v = parse_request(operation_id, payload)?;
-            let proof =
-                crate::attach::SignatureProof::from_binary(req_field(&v, "proof")?.bin()?)?;
+            let proof = crate::attach::SignatureProof::from_binary(req_field(&v, "proof")?.bin()?)?;
             let review = crate::inspect::Review::from_binary(req_field(&v, "review")?.bin()?)?;
             let request =
                 crate::attach::SigningRequest::from_binary(req_field(&v, "request")?.bin()?)?;
@@ -433,8 +464,7 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<Vec<u8>, SdkError> {
         }
         OP_TX_ATTACH_SIGNATURE_UNBOUND => {
             let v = parse_request(operation_id, payload)?;
-            let proof =
-                crate::attach::SignatureProof::from_binary(req_field(&v, "proof")?.bin()?)?;
+            let proof = crate::attach::SignatureProof::from_binary(req_field(&v, "proof")?.bin()?)?;
             Ok(crate::attach::attach_signature_unbound(
                 req_field(&v, "body")?.str()?,
                 &proof,
@@ -452,24 +482,23 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<Vec<u8>, SdkError> {
         }
         OP_TX_DECODE => {
             let v = parse_request(operation_id, payload)?;
-            Ok(crate::inspect::decode_transaction_json(req_field(&v, "body")?.str()?)?
-                .to_binary_body())
+            Ok(
+                crate::inspect::decode_transaction_json(req_field(&v, "body")?.str()?)?
+                    .to_binary_body(),
+            )
         }
         OP_TX_ENCODE => {
             let v = parse_request(operation_id, payload)?;
-            let transaction = crate::inspect::TransactionJson::from_binary(
-                req_field(&v, "transaction")?.bin()?,
-            )?;
+            let transaction =
+                crate::inspect::TransactionJson::from_binary(req_field(&v, "transaction")?.bin()?)?;
             let review = match req_field(&v, "review")?.opt_bin()? {
                 Some(bytes) => Some(crate::inspect::Review::from_binary(bytes)?),
                 None => None,
             };
-            Ok(crate::inspect::encode_transaction_json(
-                &transaction,
-                review.as_ref(),
-                profile,
-            )?
-            .to_binary_body())
+            Ok(
+                crate::inspect::encode_transaction_json(&transaction, review.as_ref(), profile)?
+                    .to_binary_body(),
+            )
         }
         OP_ACCOUNT_VERIFY_ADDRESS => {
             let v = parse_request(operation_id, payload)?;
@@ -477,8 +506,10 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<Vec<u8>, SdkError> {
         }
         OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY => {
             let v = parse_request(operation_id, payload)?;
-            Ok(crate::account::address_from_public_key(req_field(&v, "public_key")?.str()?)?
-                .to_binary_body())
+            Ok(
+                crate::account::address_from_public_key(req_field(&v, "public_key")?.str()?)?
+                    .to_binary_body(),
+            )
         }
         OP_AMOUNT_PARSE_PROTOCOL => {
             let v = parse_request(operation_id, payload)?;
@@ -496,17 +527,15 @@ fn route(operation_id: u16, payload: &[u8]) -> Result<Vec<u8>, SdkError> {
         }
         OP_MESSAGE_PREPARE_SIGNATURE => {
             let v = parse_request(operation_id, payload)?;
-            let params = crate::message::MessagePrepareParams::from_binary(
-                req_field(&v, "params")?.bin()?,
-            )?;
+            let params =
+                crate::message::MessagePrepareParams::from_binary(req_field(&v, "params")?.bin()?)?;
             Ok(crate::message::prepare_message_signature(&params)?.to_binary_body())
         }
         OP_MESSAGE_VERIFY => {
             let v = parse_request(operation_id, payload)?;
             let request =
                 crate::attach::SigningRequest::from_binary(req_field(&v, "request")?.bin()?)?;
-            let proof =
-                crate::attach::SignatureProof::from_binary(req_field(&v, "proof")?.bin()?)?;
+            let proof = crate::attach::SignatureProof::from_binary(req_field(&v, "proof")?.bin()?)?;
             Ok(crate::message::verify_message_signature(&request, &proof)?.to_binary_body())
         }
         OP_POLICY_EVALUATE => {
@@ -536,12 +565,7 @@ mod tests {
             let msg = String::from_utf8_lossy(&response[5..5 + mlen]).to_string();
             panic!("unexpected error envelope: code={code} msg={msg:?}");
         }
-        let len = u32::from_be_bytes([
-            response[1],
-            response[2],
-            response[3],
-            response[4],
-        ]) as usize;
+        let len = u32::from_be_bytes([response[1], response[2], response[3], response[4]]) as usize;
         response[5..5 + len].to_vec()
     }
 
@@ -570,6 +594,15 @@ mod tests {
         assert_eq!(response[0], 0);
         let code = u16::from_be_bytes([response[1], response[2]]);
         assert_eq!(code, 1); // UnknownOperation
+    }
+
+    #[test]
+    fn zero_operation_id_is_an_error_not_an_index_underflow() {
+        let error = match parse_request(0, &[]) {
+            Ok(_) => panic!("operation id zero must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, SdkErrorCode::UnknownOperation.as_str());
     }
 
     #[test]
@@ -602,7 +635,10 @@ mod tests {
             fields.iter().any(|(n, _)| *n == "body"),
             "body field missing from tx.build response"
         );
-        assert_eq!(crate::bjson::req(&fields, "tx_type").unwrap().u8().unwrap(), 2);
+        assert_eq!(
+            crate::bjson::req(&fields, "tx_type").unwrap().u8().unwrap(),
+            2
+        );
     }
 
     #[test]
@@ -660,7 +696,9 @@ fn generated_op_table_matches_rust() {
         if line.is_empty() || line == "{" || line == "}" {
             continue;
         }
-        let (key, value) = line.split_once(':').unwrap_or_else(|| panic!("bad OP entry {line:?}"));
+        let (key, value) = line
+            .split_once(':')
+            .unwrap_or_else(|| panic!("bad OP entry {line:?}"));
         let key = key.trim().to_owned();
         let value: u16 = value
             .trim()

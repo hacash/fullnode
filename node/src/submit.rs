@@ -294,7 +294,7 @@ impl P2PNode {
             ));
         }
         let params = self.engine.consensus().mint_params();
-        if tx.size() > params.max_tx_size && params.max_tx_size > 0 {
+        if base::tx_exceeds_max_size(tx.size(), params.max_tx_size) {
             return Ok(TxSubmitResult::rejected(
                 tx.hash(),
                 TxRejectReason::TooLarge {

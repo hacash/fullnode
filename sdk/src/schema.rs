@@ -8,8 +8,8 @@ pub const SCHEMA_ERROR: &str = "hacash.sdk/error@1";
 pub const SCHEMA_SDK_VERSION: &str = "hacash.sdk/sdk-version@1";
 pub const SCHEMA_CAPABILITIES: &str = "hacash.sdk/capabilities@1";
 pub const SCHEMA_CODEC_PROFILE: &str = "hacash.sdk/codec-profile@1";
-/// v2: adds the strict-mode guard facts (`expired_height`/`wrong_chain`).
-pub const SCHEMA_REVIEW: &str = "hacash.sdk/review@2";
+/// v3: adds `topology_violations` (protocol action-tree facts; never denials).
+pub const SCHEMA_REVIEW: &str = "hacash.sdk/review@3";
 pub const SCHEMA_ACTION_DESC: &str = "hacash.sdk/action-desc@1";
 pub const SCHEMA_TRANSFER_DESC: &str = "hacash.sdk/transfer-desc@1";
 pub const SCHEMA_TRANSACTION_SPEC: &str = "hacash.sdk/transaction-spec@1";

@@ -20,5 +20,4 @@ vm = { path = "../vm", default-features = false }
 mint-core = { workspace = true }
 chain-codec = { workspace = true }
 hex = "0.4.3"
-libsecp256k1 = { version = "0.7.2", features = ["hmac"], default-features = false }
 wasm-bindgen = "=0.2.100"

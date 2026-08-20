@@ -111,7 +111,7 @@ pub(crate) fn submit_transaction_handler(ctx: &ApiExecCtx, req: ApiRequest) -> A
         ));
     }
     let max_tx_size = ctx.engine.consensus().mint_params().max_tx_size;
-    if max_tx_size > 0 && pkg.size() > max_tx_size {
+    if base::tx_exceeds_max_size(pkg.size(), max_tx_size) {
         return api_error(&format!("tx size cannot exceed {} bytes", max_tx_size));
     }
     let only_pool = q_bool(&req, "only_insert_txpool", false);

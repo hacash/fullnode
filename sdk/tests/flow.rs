@@ -2,12 +2,12 @@
 //! prepare → vault sign → attach → verify, offline, with the golden Type-2
 //! legacy vector and the strict-context guard paths.
 
-use sdk::attach::{attach_signature, prepare_signature, verify_signatures, SignatureProof};
-use sdk::build::{build_transaction, ActionSpec, TransactionSpec};
-use sdk::inspect::{inspect, inspect_report, InspectContext};
+use sdk::attach::{SignatureProof, attach_signature, prepare_signature, verify_signatures};
+use sdk::build::{ActionSpec, TransactionSpec, build_transaction};
+use sdk::inspect::{InspectContext, inspect, inspect_report};
 use sdk::profile::{CodecProfile, FULLNODE_COMMIT};
 use sdk::schema::SCHEMA_SIGNATURE_PROOF;
-use sdk::{evaluate_policy, Policy};
+use sdk::{Policy, evaluate_policy};
 
 fn profile() -> CodecProfile {
     CodecProfile::standard()
@@ -24,7 +24,12 @@ fn hac_transfer(to: &str, amount: &str) -> ActionSpec {
     }
 }
 
-fn vault_sign(account: &sys::Account, digest_hex: &str, request_id: &str, request_binding: &str) -> SignatureProof {
+fn vault_sign(
+    account: &sys::Account,
+    digest_hex: &str,
+    request_id: &str,
+    request_binding: &str,
+) -> SignatureProof {
     let digest = hex::decode(digest_hex).unwrap();
     let signature: [u8; 64] = account.do_sign(&digest.try_into().unwrap());
     SignatureProof {
@@ -126,30 +131,20 @@ fn full_offline_sign_flow_type2() {
         &request.id,
         &request.request_binding,
     );
-    let attached = attach_signature(
-        &built.body,
-        &proof,
-        &review,
-        &request,
-        &profile,
-    )
-    .unwrap();
+    let attached = attach_signature(&built.body, &proof, &review, &request, &profile).unwrap();
     assert!(attached.complete);
     assert!(attached.missing_signers.is_empty());
 
     let verified = verify_signatures(&attached.body).unwrap();
-    assert!(verified.ok, "attached body must verify: {:?}", verified.errors);
+    assert!(
+        verified.ok,
+        "attached body must verify: {:?}",
+        verified.errors
+    );
 
     // Same key + same signature is idempotent; the approval chain still holds
     // for the attached body (the unsigned body hash is unchanged).
-    let again = attach_signature(
-        &attached.body,
-        &proof,
-        &review,
-        &request,
-        &profile,
-    )
-    .unwrap();
+    let again = attach_signature(&attached.body, &proof, &review, &request, &profile).unwrap();
     assert_eq!(again.body, attached.body);
 }
 
@@ -169,8 +164,22 @@ fn attach_is_mechanical_and_never_judges_chain_signer_rules() {
     })
     .unwrap();
 
-    let request = prepare_signature(&built.body, account.readable(), None, None, None, None, &profile).unwrap();
-    let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
+    let request = prepare_signature(
+        &built.body,
+        account.readable(),
+        None,
+        None,
+        None,
+        None,
+        &profile,
+    )
+    .unwrap();
+    let proof = vault_sign(
+        &account,
+        &request.digest,
+        &request.id,
+        &request.request_binding,
+    );
     // The low-level unbound path attaches without an approval chain; the full
     // path is exercised by the flow test above.
     let attached = sdk::attach::attach_signature_unbound(&built.body, &proof, &profile).unwrap();
@@ -196,8 +205,16 @@ fn attach_is_mechanical_and_never_judges_chain_signer_rules() {
     // Signer outside the required set: type 2 tolerates the extra signature
     // (the chain checks only required signers), so the attach succeeds and
     // completeness is reported instead of being gated.
-    let other_request =
-        prepare_signature(&built.body, other.readable(), None, None, None, None, &profile).unwrap();
+    let other_request = prepare_signature(
+        &built.body,
+        other.readable(),
+        None,
+        None,
+        None,
+        None,
+        &profile,
+    )
+    .unwrap();
     let other_proof = vault_sign(
         &other,
         &other_request.digest,
@@ -227,8 +244,16 @@ fn attach_is_mechanical_and_never_judges_chain_signer_rules() {
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let other_request =
-        prepare_signature(&type3.body, other.readable(), None, None, None, None, &profile).unwrap();
+    let other_request = prepare_signature(
+        &type3.body,
+        other.readable(),
+        None,
+        None,
+        None,
+        None,
+        &profile,
+    )
+    .unwrap();
     let other_proof = vault_sign(
         &other,
         &other_request.digest,
@@ -260,9 +285,7 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
                 start: 1_000_000,
                 end: 2_000_000,
             },
-            ActionSpec::ChainAllow {
-                chains: vec![0],
-            },
+            ActionSpec::ChainAllow { chains: vec![0] },
         ],
     })
     .unwrap();
@@ -541,8 +564,8 @@ fn tx_encode_round_trips_and_rejects_tampered_input() {
     assert_eq!(rebuilt.body, built.body);
     let mut tampered_review = review.clone();
     tampered_review.fee = "999:244".to_owned();
-    let error =
-        sdk::inspect::encode_transaction_json(&decoded, Some(&tampered_review), &profile).unwrap_err();
+    let error = sdk::inspect::encode_transaction_json(&decoded, Some(&tampered_review), &profile)
+        .unwrap_err();
     assert_eq!(error.code, "review_binding_mismatch");
 }
 
@@ -590,7 +613,12 @@ fn prepare_and_attach_reject_tampered_review() {
         &profile,
     )
     .unwrap();
-    let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
+    let proof = vault_sign(
+        &account,
+        &request.digest,
+        &request.id,
+        &request.request_binding,
+    );
     let error = attach_signature(&built.body, &proof, &tampered, &request, &profile).unwrap_err();
     assert_eq!(error.code, "review_binding_mismatch");
 }
@@ -626,7 +654,12 @@ fn attach_rejects_tampered_request_fields() {
     // edit even though the proof still carries the original id/binding.
     let mut tampered = request.clone();
     tampered.expires_at = Some(1_000_000_000_000); // far future, original binding kept
-    let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
+    let proof = vault_sign(
+        &account,
+        &request.digest,
+        &request.id,
+        &request.request_binding,
+    );
     let error = attach_signature(&built.body, &proof, &review, &tampered, &profile).unwrap_err();
     assert_eq!(error.code, "invalid_signing_request");
 
@@ -709,11 +742,19 @@ fn prepare_binds_policy_decision_and_attach_never_refuses_for_deny() {
     let decision = request.policy_decision.as_ref().unwrap();
     assert_eq!(decision.decision, "deny");
     assert_eq!(decision.review_binding, review.review_binding);
-    assert_eq!(decision.policy_binding, sdk::policy::policy_binding_of(decision));
+    assert_eq!(
+        decision.policy_binding,
+        sdk::policy::policy_binding_of(decision)
+    );
 
     // Attach under the deny decision succeeds mechanically (no refusal): the
     // resulting body is the caller's responsibility.
-    let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
+    let proof = vault_sign(
+        &account,
+        &request.digest,
+        &request.id,
+        &request.request_binding,
+    );
     let attached = attach_signature(&built.body, &proof, &review, &request, &profile).unwrap();
     assert!(attached.complete);
 
@@ -732,7 +773,10 @@ fn prepare_binds_policy_decision_and_attach_never_refuses_for_deny() {
     let decision = request.policy_decision.unwrap();
     assert_eq!(decision.decision, "allow");
     assert_eq!(decision.review_binding, review.review_binding);
-    assert_eq!(decision.policy_binding, sdk::policy::policy_binding_of(&decision));
+    assert_eq!(
+        decision.policy_binding,
+        sdk::policy::policy_binding_of(&decision)
+    );
 }
 
 #[test]
@@ -749,12 +793,8 @@ fn multiple_chain_allow_reviews_intersect() {
         timestamp: Some(1_755_223_764),
         gas_max: None,
         actions: vec![
-            ActionSpec::ChainAllow {
-                chains: vec![0, 1],
-            },
-            ActionSpec::ChainAllow {
-                chains: vec![1, 2],
-            },
+            ActionSpec::ChainAllow { chains: vec![0, 1] },
+            ActionSpec::ChainAllow { chains: vec![1, 2] },
         ],
     })
     .unwrap();
@@ -834,19 +874,29 @@ fn type2_inscription_push_signs_and_verifies() {
         &profile(),
     )
     .unwrap();
-    let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
+    let proof = vault_sign(
+        &account,
+        &request.digest,
+        &request.id,
+        &request.request_binding,
+    );
     let attached = attach_signature(&built.body, &proof, &review, &request, &profile()).unwrap();
     assert!(attached.complete);
     assert!(attached.missing_signers.is_empty());
     let verified = verify_signatures(&attached.body).unwrap();
-    assert!(verified.ok, "inscription tx must verify: {:?}", verified.errors);
+    assert!(
+        verified.ok,
+        "inscription tx must verify: {:?}",
+        verified.errors
+    );
 
     // decode round-trip preserves the inscription action and re-encodes
     // identically under the same review binding.
     let decoded = sdk::inspect::decode_transaction_json(&attached.body).unwrap();
     assert_eq!(decoded.actions[0].kind, 32);
     assert_eq!(decoded.actions[0].name.as_deref(), Some("hacd_insc_push"));
-    let encoded = sdk::inspect::encode_transaction_json(&decoded, Some(&review), &profile()).unwrap();
+    let encoded =
+        sdk::inspect::encode_transaction_json(&decoded, Some(&review), &profile()).unwrap();
     assert_eq!(encoded.body, attached.body);
 }
 
@@ -876,6 +926,19 @@ fn inscription_push_duplicates_build_and_are_chain_execute_rules() {
     assert_eq!(review.actions[0].kind, 32);
     assert_eq!(review.actions[0].name.as_deref(), Some("hacd_insc_push"));
     assert!(review.protocol_valid);
+    assert!(
+        review.topology_violations.is_empty(),
+        "inscription at top is protocol-valid topology, got {:?}",
+        review.topology_violations
+    );
+    assert!(
+        review.actions[0]
+            .audit_notes
+            .iter()
+            .all(|n| !n.contains("nested_actions") && !n.contains("children collection")),
+        "ActScope::AST must not be treated as missing control-flow, got {:?}",
+        review.actions[0].audit_notes
+    );
 }
 
 #[test]
@@ -917,7 +980,10 @@ fn inscription_edit_move_drop_build_and_decode() {
         .iter()
         .filter_map(|action| action.name.as_deref())
         .collect();
-    assert_eq!(names, ["hacd_insc_edit", "hacd_insc_move", "hacd_insc_drop"]);
+    assert_eq!(
+        names,
+        ["hacd_insc_edit", "hacd_insc_move", "hacd_insc_drop"]
+    );
 }
 
 #[test]
@@ -950,5 +1016,37 @@ fn oversized_body_decodes_and_reports_limits_facts() {
         "oversized body must be reported as a limits fact, got {:?}",
         review.limits_violations
     );
+    assert_eq!(review.actions.len(), 1);
+}
+
+#[test]
+fn host_opcode_builds_and_inspect_reports_topology_facts() {
+    let account = sys::Account::create_by("123456").unwrap();
+    // CALL_ONLY host opcodes are wire-valid; the SDK builds and inspects them.
+    // Scope rejection is a chain execute rule, reported here as a topology
+    // fact so the upper layer can decide.
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 3,
+        main: account.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![ActionSpec::RawAction {
+            kind: "block_height".to_owned(),
+            fields: vec![],
+        }],
+    })
+    .expect("host opcode is wire-valid; rejection is a chain execute rule");
+    let review = inspect_report(&built.body, None, &profile()).unwrap();
+    assert!(
+        review
+            .topology_violations
+            .iter()
+            .any(|note| note.contains("not allowed from")),
+        "CALL_ONLY at top must be reported as a topology fact, got {:?}",
+        review.topology_violations
+    );
+    assert_eq!(review.signability, "signable");
     assert_eq!(review.actions.len(), 1);
 }

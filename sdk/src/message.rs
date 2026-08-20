@@ -31,7 +31,12 @@ pub struct MessageVerifyResult {
 pub fn prepare_message_signature(
     params: &MessagePrepareParams,
 ) -> Result<SigningRequest, SdkError> {
-    let digest: [u8; 32] = hex::decode(params.digest.trim_start_matches("0x").trim_start_matches("0X"))
+    let digest: [u8; 32] = hex::decode(
+        params
+            .digest
+            .trim_start_matches("0x")
+            .trim_start_matches("0X"),
+    )
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| {
@@ -77,7 +82,7 @@ pub fn verify_message_signature(
         ));
     }
     crate::attach::verify_request_integrity(request)?;
-    crate::attach::validate_proof_format(proof)?;
+    let (sign, address) = crate::attach::parse_proof(proof)?;
     let expected_binding = crate::attach::request_binding_of(request);
     if proof.request_binding != expected_binding || proof.request_id != request.id {
         return Err(SdkError::new(
@@ -89,27 +94,29 @@ pub fn verify_message_signature(
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| SdkError::new(SdkErrorCode::ParseFailed, "request digest invalid"))?;
-    let public_key: [u8; 33] = hex::decode(&proof.public_key)
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| SdkError::new(SdkErrorCode::InvalidPublicKey, "public key must be 33-byte hex"))?;
-    let signature: [u8; 64] = hex::decode(&proof.signature)
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| SdkError::new(SdkErrorCode::BadSignature, "signature must be 64-byte hex"))?;
-    let address = Address::from(sys::Account::get_address_by_public_key(public_key));
     if address.to_readable() != request.signer_address {
         return Err(SdkError::with_detail(
             SdkErrorCode::BadSignature,
             "public key does not match the request signer address",
-            crate::json::obj(vec![crate::json::kv("actual", crate::json::q(&address.to_readable()))]),
+            crate::json::obj(vec![crate::json::kv(
+                "actual",
+                crate::json::q(&address.to_readable()),
+            )]),
         ));
     }
-    let ok = sys::Account::verify_signature(&digest, &public_key, &signature);
+    let ok = sys::Account::verify_signature(&digest, &sign.publickey, &sign.signature);
     Ok(MessageVerifyResult {
         ok,
-        address: if ok { Some(address.to_readable()) } else { None },
-        error: if ok { None } else { Some("signature verification failed".to_owned()) },
+        address: if ok {
+            Some(address.to_readable())
+        } else {
+            None
+        },
+        error: if ok {
+            None
+        } else {
+            Some("signature verification failed".to_owned())
+        },
     })
 }
 

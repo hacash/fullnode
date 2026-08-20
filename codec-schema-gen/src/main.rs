@@ -161,7 +161,13 @@ fn render_wire_handler_table() -> String {
     ];
     let entries: Vec<String> = variants
         .iter()
-        .map(|wire| format!("    {:?}: {:?},", wire_tag(wire), wire_handler(wire).expect("plain tag")))
+        .map(|wire| {
+            format!(
+                "    {:?}: {:?},",
+                wire_tag(wire),
+                wire_handler(wire).expect("plain tag")
+            )
+        })
         .collect();
     format!("{{\n{}\n  }}", entries.join("\n"))
 }
@@ -206,7 +212,11 @@ fn render_codec(
             action.kind, action.name
         ));
         for field in action.fields {
-            let optional = if field.optional { ", optional: true" } else { "" };
+            let optional = if field.optional {
+                ", optional: true"
+            } else {
+                ""
+            };
             meta.push_str(&format!(
                 "    {{ name: {:?}, wire: {:?}{} }},\n",
                 field.name,
@@ -222,7 +232,11 @@ fn render_codec(
     for s in structs {
         meta.push_str(&format!("  {:?}: [\n", s.name));
         for field in s.fields {
-            let optional = if field.optional { ", optional: true" } else { "" };
+            let optional = if field.optional {
+                ", optional: true"
+            } else {
+                ""
+            };
             meta.push_str(&format!(
                 "    {{ name: {:?}, wire: {:?}{} }},\n",
                 field.name,
@@ -272,25 +286,44 @@ export const ACTION_BY_NAME = new Map(
 // Numeric fields: u1/u2/u4/fixed as raw big-endian bytes; u5/u8/satoshi/timestamp as decimal strings.
 // All numeric/hex inputs are validated first; silent truncation or rewriting is rejected.
 
-export function checkUint(name, v, max) {
-  if (!Number.isInteger(v) || v < 0 || v > max) {
-    throw new Error(`${name} must be an integer in [0, ${max}], got ${v}`);
+const MAX_SAFE_BIGINT = BigInt(Number.MAX_SAFE_INTEGER);
+function uintValue(name, value, max) {
+  let n;
+  if (typeof value === "bigint") {
+    n = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) throw new Error(`${name} must be a safe integer, got ${value}`);
+    n = BigInt(value);
+  } else if (typeof value === "string" && /^[0-9]+$/.test(value)) {
+    n = BigInt(value);
+  } else {
+    throw new Error(`${name} must be an unsigned integer, got ${value}`);
   }
+  const upper = BigInt(max);
+  if (n < 0n || n > upper) {
+    throw new Error(`${name} must be in [0, ${max}], got ${value}`);
+  }
+  return n;
+}
+export function checkUint(name, v, max) {
+  uintValue(name, v, max);
+}
+export function pushU8(out, v) {
+  out.push(Number(uintValue("u8", v, 0xff)));
 }
 export function pushU16(out, v) {
-  checkUint("u16", v, 0xffff);
-  out.push((v >> 8) & 0xff, v & 0xff);
+  const n = uintValue("u16", v, 0xffff);
+  out.push(Number((n >> 8n) & 0xffn), Number(n & 0xffn));
 }
 export function pushU32(out, v) {
-  checkUint("u32", v, 0xffffffff);
-  out.push((v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff);
+  const n = uintValue("u32", v, 0xffffffff);
+  out.push(Number((n >> 24n) & 0xffn), Number((n >> 16n) & 0xffn), Number((n >> 8n) & 0xffn), Number(n & 0xffn));
 }
 export function pushU64(out, v) {
-  checkUint("u64", v, Number.MAX_SAFE_INTEGER);
-  const hi = Math.floor(v / 0x100000000);
-  const lo = v % 0x100000000;
-  out.push((hi >>> 24) & 0xff, (hi >>> 16) & 0xff, (hi >>> 8) & 0xff, hi & 0xff);
-  out.push((lo >>> 24) & 0xff, (lo >>> 16) & 0xff, (lo >>> 8) & 0xff, lo & 0xff);
+  const n = uintValue("u64", v, 0xffffffffffffffffn);
+  for (let shift = 56n; shift >= 0n; shift -= 8n) {
+    out.push(Number((n >> shift) & 0xffn));
+  }
 }
 export function pushStrW2(out, s) {
   const bytes = Array.from(new TextEncoder().encode(s));
@@ -308,36 +341,36 @@ export function pushHexW2(out, hex) {
     out.push(parseInt(clean.slice(i, i + 2), 16));
   }
 }
+function take(buf, pos, n) {
+  if (!Number.isSafeInteger(n) || n < 0 || pos.p + n > buf.length) throw new Error("truncated TransactionSpec payload");
+  const value = buf.subarray(pos.p, pos.p + n);
+  pos.p += n;
+  return value;
+}
 function readU16(buf, pos) {
-  const v = (buf[pos.p] << 8) | buf[pos.p + 1];
-  pos.p += 2;
-  return v;
+  const b = take(buf, pos, 2);
+  return (b[0] << 8) | b[1];
 }
 function readU32(buf, pos) {
-  const v =
-    ((buf[pos.p] << 24) | (buf[pos.p + 1] << 16) | (buf[pos.p + 2] << 8) | buf[pos.p + 3]) >>> 0;
-  pos.p += 4;
-  return v;
+  const b = take(buf, pos, 4);
+  return ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
 }
 function readU64(buf, pos) {
-  const hi =
-    ((buf[pos.p] << 24) | (buf[pos.p + 1] << 16) | (buf[pos.p + 2] << 8) | buf[pos.p + 3]) >>> 0;
-  const lo =
-    ((buf[pos.p + 4] << 24) | (buf[pos.p + 5] << 16) | (buf[pos.p + 6] << 8) | buf[pos.p + 7]) >>> 0;
-  pos.p += 8;
-  return hi * 0x100000000 + lo;
+  const hi = readU32(buf, pos);
+  const lo = readU32(buf, pos);
+  const value = (BigInt(hi) << 32n) | BigInt(lo);
+  return value <= MAX_SAFE_BIGINT ? Number(value) : value;
 }
 function readStrW2(buf, pos) {
   const len = readU16(buf, pos);
-  const s = new TextDecoder().decode(buf.subarray(pos.p, pos.p + len));
-  pos.p += len;
+  const s = new TextDecoder().decode(take(buf, pos, len));
   return s;
 }
 function readHexW2(buf, pos) {
   const len = readU16(buf, pos);
+  const bytes = take(buf, pos, len);
   let hex = "";
-  for (let i = 0; i < len; i++) hex += buf[pos.p + i].toString(16).padStart(2, "0");
-  pos.p += len;
+  for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
   return hex;
 }
 
@@ -349,8 +382,7 @@ const WIRE_HANDLER = __WIRE_HANDLER__;
 function encodeFieldValue(out, value, wire) {
   switch (WIRE_HANDLER[wire]) {
     case "raw_u8":
-      checkUint("u8", Number(value), 0xff);
-      out.push(Number(value));
+      out.push(Number(uintValue("u8", value, 0xff)));
       break;
     case "raw_u16":
       pushU16(out, Number(value));
@@ -473,14 +505,14 @@ function encodeAction(out, action) {
 }
 
 export function encodeTransactionSpec(spec) {
-  checkUint("tx_type", spec.tx_type, 0xff);
-  checkUint("gas_max", spec.gas_max ?? 0, 0xff);
+  const txType = uintValue("tx_type", spec.tx_type, 0xff);
+  const gasMax = uintValue("gas_max", spec.gas_max ?? 0, 0xff);
   const out = [];
-  out.push(spec.tx_type & 0xff);
+  out.push(Number(txType));
   pushStrW2(out, spec.main);
   pushStrW2(out, spec.fee);
   pushU64(out, spec.timestamp ?? 0);
-  out.push(spec.gas_max ?? 0);
+  out.push(Number(gasMax));
   pushU16(out, spec.actions.length);
   for (const action of spec.actions) encodeAction(out, action);
   return new Uint8Array(out);
@@ -522,9 +554,9 @@ function decodeFieldValue(buf, pos, wire) {
     case undefined:
       if (wire.startsWith("fixed:")) {
         const n = Number(wire.slice(6));
+        const bytes = take(buf, pos, n);
         let hex = "";
-        for (let i = 0; i < n; i++) hex += buf[pos.p + i].toString(16).padStart(2, "0");
-        pos.p += n;
+        for (const byte of bytes) hex += byte.toString(16).padStart(2, "0");
         return hex;
       }
       if (wire.startsWith("list_w1:") || wire.startsWith("list_w2:")) {
@@ -555,9 +587,10 @@ function decodeStruct(buf, pos, meta) {
       // W2 length prefix; length 0 = absent.
       const len = readU16(buf, pos);
       if (len === 0) continue;
-      const inner = buf.subarray(pos.p, pos.p + len);
-      pos.p += len;
-      obj[field.name] = decodeFieldValue(inner, { p: 0 }, field.wire);
+      const inner = take(buf, pos, len);
+      const innerPos = { p: 0 };
+      obj[field.name] = decodeFieldValue(inner, innerPos, field.wire);
+      if (innerPos.p !== inner.length) throw new Error(`optional field ${field.name} has trailing bytes`);
     } else {
       obj[field.name] = decodeFieldValue(buf, pos, field.wire);
     }
@@ -579,11 +612,11 @@ function decodeAction(buf, pos) {
 
 export function decodeTransactionSpec(buf) {
   const pos = { p: 0 };
-  const tx_type = buf[pos.p++];
+  const tx_type = take(buf, pos, 1)[0];
   const main = readStrW2(buf, pos);
   const fee = readStrW2(buf, pos);
   const timestamp = readU64(buf, pos);
-  const gas_max = buf[pos.p++];
+  const gas_max = take(buf, pos, 1)[0];
   const count = readU16(buf, pos);
   const actions = [];
   for (let i = 0; i < count; i++) actions.push(decodeAction(buf, pos));

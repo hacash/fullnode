@@ -2,7 +2,6 @@
 //! consumes a Review and a caller-provided Policy and produces a
 //! PolicyDecision; it never changes `protocol_valid`/`signability`.
 
-
 use crate::error::SdkError;
 use crate::inspect::Review;
 use crate::schema::{DOMAIN_POLICY_DECISION, SCHEMA_POLICY, SCHEMA_POLICY_DECISION};
@@ -37,7 +36,10 @@ fn policy_hash(policy: &Policy) -> String {
 /// Depth-first walk of the action review tree (children of AST control-flow
 /// actions included): a policy that only inspects the top level would let
 /// `ast_select`/`ast_if` wrap denied content around it.
-fn walk_actions<'a>(actions: &'a [crate::audit::ActionDesc], visit: &mut impl FnMut(&'a crate::audit::ActionDesc)) {
+fn walk_actions<'a>(
+    actions: &'a [crate::audit::ActionDesc],
+    visit: &mut impl FnMut(&'a crate::audit::ActionDesc),
+) {
     for action in actions {
         visit(action);
         if let Some(children) = &action.children {
@@ -174,6 +176,7 @@ mod tests {
             protocol_valid: true,
             signability: "signable".to_owned(),
             limits_violations: vec![],
+            topology_violations: vec![],
             auditability: "opaque".to_owned(),
             requires_user_confirmation: true,
             required_signers: vec![],
@@ -231,7 +234,11 @@ mod tests {
         assert_eq!(decision.decision, "deny");
     }
 
-    fn desc(kind: u16, path: &str, children: Option<Vec<crate::audit::ActionDesc>>) -> crate::audit::ActionDesc {
+    fn desc(
+        kind: u16,
+        path: &str,
+        children: Option<Vec<crate::audit::ActionDesc>>,
+    ) -> crate::audit::ActionDesc {
         crate::audit::ActionDesc {
             schema: crate::schema::SCHEMA_ACTION_DESC.to_owned(),
             index: 0,
@@ -308,11 +315,7 @@ mod tests {
             ..Default::default()
         };
         let mut review = sample_review();
-        review.actions = vec![desc(
-            25,
-            "0",
-            Some(vec![hacd_desc("0/0", 3)]),
-        )];
+        review.actions = vec![desc(25, "0", Some(vec![hacd_desc("0/0", 3)]))];
         let decision = evaluate_policy(&review, &policy).unwrap();
         assert_eq!(decision.decision, "deny");
     }

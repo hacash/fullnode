@@ -78,6 +78,7 @@ pub fn validate_schema_set(
     let mut kinds = HashSet::new();
     let mut names = HashSet::new();
     for schema in schemas {
+        validate_field_names(schema.name, schema.fields)?;
         if !kinds.insert(schema.kind) {
             return Err(format!(
                 "duplicate action kind {} ({} and another schema)",
@@ -101,6 +102,7 @@ pub fn validate_schema_set(
         }
     }
     for struct_schema in struct_schemas {
+        validate_field_names(struct_schema.name, struct_schema.fields)?;
         if !names.insert(struct_schema.name) {
             return Err(format!(
                 "duplicate nested struct name {}",
@@ -130,6 +132,24 @@ pub fn validate_schema_set(
                         schema.name, field.name, missing
                     )
                 })?;
+        }
+    }
+    Ok(())
+}
+
+/// Field names are part of the wire contract. A duplicate name would make
+/// generated object codecs ambiguous (the later value silently overwrites the
+/// earlier one in map-based decoders), so reject it at the shared schema
+/// boundary before any SDK or fullnode registry can consume it.
+fn validate_field_names(name: &str, fields: &[FieldSchema]) -> Result<(), String> {
+    use std::collections::HashSet;
+    let mut seen = HashSet::new();
+    for field in fields {
+        if !seen.insert(field.name) {
+            return Err(format!(
+                "schema {} has duplicate field {}",
+                name, field.name
+            ));
         }
     }
     Ok(())
@@ -296,5 +316,22 @@ mod tests {
             schema_set_hash(&actions_a, &structs_a),
             schema_set_hash(&actions_b, &structs_b)
         );
+    }
+
+    #[test]
+    fn schema_validation_rejects_duplicate_field_names() {
+        const DUP_FIELDS: &[FieldSchema] = &[
+            FieldSchema::new("value", FieldWire::U1),
+            FieldSchema::new("value", FieldWire::U2),
+        ];
+        let actions = [ActionSchema {
+            kind: 1,
+            name: "duplicate_fields",
+            audit_class: "full",
+            blob: false,
+            fields: DUP_FIELDS,
+        }];
+        let error = validate_schema_set(&actions, &[]).unwrap_err();
+        assert!(error.contains("duplicate field value"), "{error}");
     }
 }

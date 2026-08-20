@@ -27,6 +27,7 @@ pub use codec::block as block_std;
 pub use codec::tx as tx_std;
 
 // ---- crate-root re-exports ----
+pub use level::{TopologyFacts, topology_facts};
 pub use params::{PROTOCOL_PARAMS, ProtocolParams, execution_params};
 pub use setup::register_wire;
 #[cfg(feature = "execute")]

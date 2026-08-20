@@ -36,15 +36,15 @@ pub mod service;
 pub use account::{address_from_public_key, verify_address};
 pub use amount::{format_protocol, parse_protocol};
 pub use attach::{
-    attach_signature, prepare_signature, signature_report, verify_signatures, SignatureProof,
-    SigningRequest,
+    SignatureProof, SigningRequest, attach_signature, prepare_signature, signature_report,
+    verify_signatures,
 };
 pub use audit::{ActionDesc, TransferDesc};
-pub use build::{build_transaction, ActionSpec, TransactionSpec};
+pub use build::{ActionSpec, TransactionSpec, build_transaction};
 pub use error::{SdkError, SdkErrorCode};
-pub use inspect::{inspect, inspect_report, Review};
-pub use policy::{evaluate_policy, Policy, PolicyDecision};
-pub use profile::{capabilities, CodecProfile, SDK_VERSION};
+pub use inspect::{Review, inspect, inspect_report};
+pub use policy::{Policy, PolicyDecision, evaluate_policy};
+pub use profile::{CodecProfile, SDK_VERSION, capabilities};
 pub use schema::ResultEnvelope;
 pub use spec_codec::decode_transaction_spec_binary;
 

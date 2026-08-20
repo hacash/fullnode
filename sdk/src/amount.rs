@@ -1,12 +1,14 @@
-//! Strict protocol amount conversion (Unified SDK 2.0, doc 14 §4.7).
+//! Protocol amount conversion (Unified SDK 2.0, doc 14 §4.7).
 //!
-//! `parse_protocol` accepts only canonical machine forms (decimal or
-//! `digits:unit`); currency prefixes ("ㄜ", "HAC "), locale separators and
-//! floats are UI-adapter concerns and never reach the canonical parser.
+//! Parse and format are thin wrappers around `field::Amount` — the same
+//! functions the chain codecs use. The SDK does not re-implement charset,
+//! grouping, or unit-range rules; a form `Amount::from` accepts is accepted
+//! here, including comma grouping (`12,000:244`). Currency prefixes ("ㄜ",
+//! "HAC ") fail because `Amount::from` rejects them.
 
 use field::Amount;
 
-use crate::error::{SdkError, SdkErrorCode};
+use crate::error::SdkError;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedAmount {
@@ -15,30 +17,9 @@ pub struct ParsedAmount {
     pub is_negative: bool,
 }
 
-/// `amount.parse_protocol`: validate and canonicalize one amount string.
+/// `amount.parse_protocol`: canonicalize one amount string via `Amount::from`.
 pub fn parse_protocol(value: &str) -> Result<ParsedAmount, SdkError> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(SdkError::new(SdkErrorCode::ParseFailed, "amount is empty"));
-    }
-    let body = trimmed.strip_prefix('-').unwrap_or(trimmed);
-    if body.contains(',') {
-        return Err(SdkError::new(
-            SdkErrorCode::ParseFailed,
-            "thousand separators are not accepted by the machine parser",
-        ));
-    }
-    if !body
-        .bytes()
-        .all(|byte| byte.is_ascii_digit() || byte == b':' || byte == b'.')
-    {
-        return Err(SdkError::with_detail(
-            SdkErrorCode::ParseFailed,
-            "amount contains unsupported characters; use canonical digits only",
-            format!("{{\"actual\":{:?}}}", value),
-        ));
-    }
-    let amount = Amount::from(trimmed).map_err(|error| SdkError::from(error))?;
+    let amount = Amount::from(value).map_err(SdkError::from)?;
     Ok(ParsedAmount {
         value: amount.to_fin_string(),
         unit: amount.unit(),
@@ -47,25 +28,20 @@ pub fn parse_protocol(value: &str) -> Result<ParsedAmount, SdkError> {
 }
 
 /// `amount.format_protocol`: exact decimal string of the amount at the given
-/// unit. No float is ever involved, so the result is safe for comparison and
-/// arithmetic, not just display (the historical `hac_to_unit` returned a
-/// JS float; JS callers that need a number do `Number(value)`). Unit 0
-/// returns the canonical `digits:unit` form.
+/// unit, via `Amount::to_unit_string`. No float is ever involved, so the
+/// result is safe for comparison and arithmetic, not just display (the
+/// historical `hac_to_unit` returned a JS float; JS callers that need a
+/// number do `Number(value)`). Unit 0 returns the canonical `digits:unit`
+/// form — the same fallback `to_unit_string` uses for an unparseable unit.
 pub fn format_protocol(value: &str, unit: u8) -> Result<String, SdkError> {
-    if unit > field::UNIT_MEI {
-        return Err(SdkError::with_detail(
-            SdkErrorCode::ParseFailed,
-            format!("unit {unit} out of range, max {}", field::UNIT_MEI),
-            crate::json::obj(vec![crate::json::kv("expected", field::UNIT_MEI.to_string())]),
-        ));
-    }
-    let amount = Amount::from(value).map_err(|error| SdkError::from(error))?;
+    let amount = Amount::from(value).map_err(SdkError::from)?;
     Ok(amount.to_unit_string(&unit.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use field::Amount;
 
     #[test]
     fn canonical_forms_parse() {
@@ -77,12 +53,24 @@ mod tests {
     }
 
     #[test]
-    fn prefixed_and_locale_forms_are_rejected() {
-        for bad in ["ㄜ12:244", "HAC 12:244", "12,000", "12,000:244", "12.0.1"] {
+    fn prefixed_and_malformed_forms_are_rejected() {
+        for bad in ["ㄜ12:244", "HAC 12:244", "12.0.1", ""] {
+            assert!(parse_protocol(bad).is_err(), "must reject amount {bad:?}");
             assert!(
-                parse_protocol(bad).is_err(),
-                "must reject non-canonical amount {bad:?}"
+                Amount::from(bad).is_err(),
+                "Amount::from must also reject {bad:?}"
             );
+        }
+    }
+
+    #[test]
+    fn grouping_forms_follow_amount_from() {
+        for value in ["12,000", "12,000:244"] {
+            let parsed = parse_protocol(value).unwrap();
+            let amount = Amount::from(value).unwrap();
+            assert_eq!(parsed.value, amount.to_fin_string());
+            assert_eq!(parsed.unit, amount.unit());
+            assert_eq!(parsed.is_negative, amount.is_negative());
         }
     }
 
@@ -92,6 +80,11 @@ mod tests {
             format_protocol("12:244", field::UNIT_MEI).unwrap(),
             "0.0012"
         );
-        assert!(format_protocol("12:244", field::UNIT_MEI + 1).is_err());
+        let amount = Amount::from("12:244").unwrap();
+        let unit = field::UNIT_MEI + 1;
+        assert_eq!(
+            format_protocol("12:244", unit).unwrap(),
+            amount.to_unit_string(&unit.to_string())
+        );
     }
 }

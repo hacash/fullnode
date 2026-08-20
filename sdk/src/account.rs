@@ -38,8 +38,14 @@ pub fn verify_address(raw: &str) -> VerifyAddressResult {
 /// `account.address_from_public_key`: derive the Hacash address from a
 /// 33-byte compressed public key (hex). No secret input. The point must be a
 /// valid secp256k1 curve point.
-pub fn address_from_public_key(public_key_hex: &str) -> Result<AddressFromPublicKeyResult, SdkError> {
-    let public_key: [u8; 33] = hex::decode(public_key_hex.trim_start_matches("0x").trim_start_matches("0X"))
+pub fn address_from_public_key(
+    public_key_hex: &str,
+) -> Result<AddressFromPublicKeyResult, SdkError> {
+    let public_key: [u8; 33] = hex::decode(
+        public_key_hex
+            .trim_start_matches("0x")
+            .trim_start_matches("0X"),
+    )
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
         .ok_or_else(|| {
@@ -48,7 +54,7 @@ pub fn address_from_public_key(public_key_hex: &str) -> Result<AddressFromPublic
                 "public key must be 33-byte compressed hex",
             )
         })?;
-    if libsecp256k1::PublicKey::parse_compressed(&public_key).is_err() {
+    if !sys::Account::compressed_public_key_valid(&public_key) {
         return Err(SdkError::new(
             SdkErrorCode::InvalidPublicKey,
             "public key is not a valid secp256k1 compressed point",

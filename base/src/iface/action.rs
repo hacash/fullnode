@@ -93,6 +93,23 @@ pub fn resolve_transfer_routing_on<C: Context + ?Sized>(
 
 // ================================ Action ================================
 
+/// Nested control-flow children of an action (AST select/if, and any future
+/// branching kind). `depth_inc` is the protocol AST-depth cost of this node
+/// (`AstSelect` = 1, `AstIf` = 2); `branches` preserves the review-path
+/// grouping (one inner vec per branch). Leaf actions return `None` from
+/// `Action::nested_actions`.
+#[derive(Clone)]
+pub struct NestedActions<'a> {
+    pub depth_inc: usize,
+    pub branches: Vec<Vec<&'a dyn Action>>,
+}
+
+impl<'a> NestedActions<'a> {
+    pub fn flatten(&self) -> Vec<&'a dyn Action> {
+        self.branches.iter().flatten().copied().collect()
+    }
+}
+
 /// Cross-crate action contract owned by `base` and consumed by protocol,
 /// mint, VM, and dispatch code. Standard Hacash implementations live in
 /// `protocol/src/codec/action`, `mint/src/action`, and `vm/src/action`.
@@ -135,14 +152,22 @@ pub trait Action: Encode + Send + Sync + std::fmt::Debug {
         String::new()
     }
 
+    /// Nested control-flow children. Default `None` (leaf). Protocol topology
+    /// analysis, AST signer collection and the SDK review tree all walk this
+    /// instead of downcasting concrete AST types, so a new branching action
+    /// is complete once it implements this method.
+    fn nested_actions(&self) -> Option<NestedActions<'_>> {
+        None
+    }
+
     /// Escape hatch back to the concrete action type.
     ///
     /// **When to use the trait method instead**: capabilities shared by every
-    /// chain's actions (signing requirements, transfer routing, scope, flags)
-    /// MUST go through dedicated `Action` methods (`req_sign`, `scope`,
-    /// `required_flags`, `as_transfer_like`, ...). Adding a new such method is
-    /// the right fix when multiple callers `downcast_ref` to read the same
-    /// generic field.
+    /// chain's actions (signing requirements, transfer routing, scope, flags,
+    /// nested children) MUST go through dedicated `Action` methods (`req_sign`,
+    /// `scope`, `required_flags`, `as_transfer_like`, `nested_actions`, ...).
+    /// Adding a new such method is the right fix when multiple callers
+    /// `downcast_ref` to read the same generic field.
     ///
     /// **When downcast is correct**: chain-specific or consensus-mechanism
     /// business (e.g. Hacash diamond minting, inscription edits, PoW coinbase

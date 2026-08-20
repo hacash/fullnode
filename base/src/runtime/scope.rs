@@ -10,6 +10,14 @@ pub const TX_ACTIONS_MAX: usize = 200;
 /// limit change never drifts between the full node and the wallet surface.
 pub const MAX_TX_SIZE: usize = 16 * 1024;
 
+/// Whether `size` exceeds the consensus cap. `max == 0` means unlimited
+/// (the same rule `MintParams.max_tx_size` uses on pending / submit / verify
+/// / API admission). The SDK inspect path reports this as a review fact;
+/// the full node gates on it.
+pub fn tx_exceeds_max_size(size: usize, max: usize) -> bool {
+    max > 0 && size > max
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum ExecFrom {
     #[default]

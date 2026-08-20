@@ -47,3 +47,37 @@ for (const vector of golden.vectors) {
     checked += 1;
 }
 console.log(`golden_test.mjs OK (${checked} vectors, forward+reverse)`);
+
+// Numeric and framing boundaries are part of the generated transport contract:
+// u64 values above JS's safe-integer range must remain exact, unsafe Numbers
+// must be rejected, and truncated payloads must fail closed.
+const maxU64 = 18446744073709551615n;
+const boundarySpec = {
+    tx_type: 2,
+    main: "",
+    fee: "",
+    timestamp: maxU64,
+    gas_max: 0,
+    actions: [],
+};
+const boundaryPayload = encodeTransactionSpec(boundarySpec);
+const boundaryDecoded = decodeTransactionSpec(boundaryPayload);
+if (boundaryDecoded.timestamp !== maxU64) {
+    throw new Error("u64 max round-trip lost precision");
+}
+let unsafeRejected = false;
+try {
+    encodeTransactionSpec({ ...boundarySpec, timestamp: Number.MAX_SAFE_INTEGER + 1 });
+} catch (_) {
+    unsafeRejected = true;
+}
+if (!unsafeRejected) throw new Error("unsafe Number timestamp was silently accepted");
+
+let truncatedRejected = false;
+try {
+    decodeTransactionSpec(boundaryPayload.slice(0, -1));
+} catch (_) {
+    truncatedRejected = true;
+}
+if (!truncatedRejected) throw new Error("truncated TransactionSpec was silently accepted");
+console.log("generated codec boundary checks OK (u64 precision, unsafe number, truncation)");

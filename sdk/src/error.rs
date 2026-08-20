@@ -100,9 +100,9 @@ impl std::error::Error for SdkError {}
 impl From<sys::Error> for SdkError {
     fn from(error: sys::Error) -> Self {
         // The codec registry reports unknown kinds/length mismatches as plain
-        // sys::Error text; the SDK decode path detects those conditions itself
-        // (see inspect::decode_tx) and only falls back here for unexpected
-        // internal failures.
+        // sys::Error text; decode paths call `decode_transaction_exact` /
+        // `decode_action_exact` (the registry's own predicates) and map the
+        // result here. Error text is never parsed to pick an SdkErrorCode.
         SdkError::new(SdkErrorCode::ParseFailed, error.to_string())
     }
 }

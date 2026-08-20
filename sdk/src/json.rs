@@ -11,23 +11,18 @@
 
 use sys::{Ret, errf};
 
-use crate::audit::{ActionDesc, PayloadDesc, TransferDesc};
-use crate::build::BuiltTransaction;
-use crate::inspect::{
-    HeightRangeDesc, InspectContext, Review, SignatureEntry, TransactionJson,
-};
-use crate::policy::{Policy, PolicyDecision};
-use crate::profile::{
-    AbiVersion, Capabilities, CodecProfile, FeatureItem, LimitsProfile,
-    ProtocolParamsProfile,
-};
-use crate::attach::{
-    AttachResult, SignatureProof, SignatureReport, SigningRequest, VerifyResult,
-};
-use crate::bjson::{BVal, Bw, opt, parse, req};
-use crate::message::{MessagePrepareParams, MessageVerifyResult};
 use crate::account::{AddressFromPublicKeyResult, VerifyAddressResult};
 use crate::amount::ParsedAmount;
+use crate::attach::{AttachResult, SignatureProof, SignatureReport, SigningRequest, VerifyResult};
+use crate::audit::{ActionDesc, PayloadDesc, TransferDesc};
+use crate::bjson::{BVal, Bw, opt, parse, req};
+use crate::build::BuiltTransaction;
+use crate::inspect::{HeightRangeDesc, InspectContext, Review, SignatureEntry, TransactionJson};
+use crate::message::{MessagePrepareParams, MessageVerifyResult};
+use crate::policy::{Policy, PolicyDecision};
+use crate::profile::{
+    AbiVersion, Capabilities, CodecProfile, FeatureItem, LimitsProfile, ProtocolParamsProfile,
+};
 
 // ================================ error-detail JSON builders ================================
 // Retained only for `SdkError.detail` (a string in the binary envelope) and
@@ -114,18 +109,66 @@ pub(crate) enum BinDir {
 
 /// Every layout-driven object, single list for the JS code generator.
 pub(crate) const BIN_TYPES: &[BinType] = &[
-    BinType { js: "InspectContext", dir: BinDir::Both, fields: InspectContext::BIN_FIELDS },
-    BinType { js: "HeightRangeDesc", dir: BinDir::Both, fields: HeightRangeDesc::BIN_FIELDS },
-    BinType { js: "SignatureEntry", dir: BinDir::Both, fields: SignatureEntry::BIN_FIELDS },
-    BinType { js: "SignatureProof", dir: BinDir::Both, fields: SignatureProof::BIN_FIELDS },
-    BinType { js: "PolicyDecision", dir: BinDir::Both, fields: PolicyDecision::BIN_FIELDS },
-    BinType { js: "PayloadDesc", dir: BinDir::Both, fields: PayloadDesc::BIN_FIELDS },
-    BinType { js: "TransferDesc", dir: BinDir::Both, fields: TransferDesc::BIN_FIELDS },
-    BinType { js: "ActionDesc", dir: BinDir::Both, fields: ActionDesc::BIN_FIELDS },
-    BinType { js: "Review", dir: BinDir::Both, fields: Review::BIN_FIELDS },
-    BinType { js: "Policy", dir: BinDir::Both, fields: Policy::BIN_FIELDS },
-    BinType { js: "SigningRequest", dir: BinDir::Both, fields: SigningRequest::BIN_FIELDS },
-    BinType { js: "TransactionJson", dir: BinDir::Both, fields: TransactionJson::BIN_FIELDS },
+    BinType {
+        js: "InspectContext",
+        dir: BinDir::Both,
+        fields: InspectContext::BIN_FIELDS,
+    },
+    BinType {
+        js: "HeightRangeDesc",
+        dir: BinDir::Both,
+        fields: HeightRangeDesc::BIN_FIELDS,
+    },
+    BinType {
+        js: "SignatureEntry",
+        dir: BinDir::Both,
+        fields: SignatureEntry::BIN_FIELDS,
+    },
+    BinType {
+        js: "SignatureProof",
+        dir: BinDir::Both,
+        fields: SignatureProof::BIN_FIELDS,
+    },
+    BinType {
+        js: "PolicyDecision",
+        dir: BinDir::Both,
+        fields: PolicyDecision::BIN_FIELDS,
+    },
+    BinType {
+        js: "PayloadDesc",
+        dir: BinDir::Both,
+        fields: PayloadDesc::BIN_FIELDS,
+    },
+    BinType {
+        js: "TransferDesc",
+        dir: BinDir::Both,
+        fields: TransferDesc::BIN_FIELDS,
+    },
+    BinType {
+        js: "ActionDesc",
+        dir: BinDir::Both,
+        fields: ActionDesc::BIN_FIELDS,
+    },
+    BinType {
+        js: "Review",
+        dir: BinDir::Both,
+        fields: Review::BIN_FIELDS,
+    },
+    BinType {
+        js: "Policy",
+        dir: BinDir::Both,
+        fields: Policy::BIN_FIELDS,
+    },
+    BinType {
+        js: "SigningRequest",
+        dir: BinDir::Both,
+        fields: SigningRequest::BIN_FIELDS,
+    },
+    BinType {
+        js: "TransactionJson",
+        dir: BinDir::Both,
+        fields: TransactionJson::BIN_FIELDS,
+    },
     BinType {
         js: "VerifyAddressResult",
         dir: BinDir::To,
@@ -136,7 +179,11 @@ pub(crate) const BIN_TYPES: &[BinType] = &[
         dir: BinDir::To,
         fields: crate::account::AddressFromPublicKeyResult::BIN_FIELDS,
     },
-    BinType { js: "ParsedAmount", dir: BinDir::To, fields: crate::amount::ParsedAmount::BIN_FIELDS },
+    BinType {
+        js: "ParsedAmount",
+        dir: BinDir::To,
+        fields: crate::amount::ParsedAmount::BIN_FIELDS,
+    },
     BinType {
         js: "MessageVerifyResult",
         dir: BinDir::To,
@@ -147,16 +194,56 @@ pub(crate) const BIN_TYPES: &[BinType] = &[
         dir: BinDir::To,
         fields: ProtocolParamsProfile::BIN_FIELDS,
     },
-    BinType { js: "LimitsProfile", dir: BinDir::To, fields: LimitsProfile::BIN_FIELDS },
-    BinType { js: "CodecProfile", dir: BinDir::To, fields: CodecProfile::BIN_FIELDS },
-    BinType { js: "AbiVersion", dir: BinDir::To, fields: AbiVersion::BIN_FIELDS },
-    BinType { js: "FeatureItem", dir: BinDir::To, fields: FeatureItem::BIN_FIELDS },
-    BinType { js: "Capabilities", dir: BinDir::To, fields: Capabilities::BIN_FIELDS },
-    BinType { js: "SdkVersion", dir: BinDir::To, fields: SdkVersion::BIN_FIELDS },
-    BinType { js: "AttachResult", dir: BinDir::To, fields: AttachResult::BIN_FIELDS },
-    BinType { js: "VerifyResult", dir: BinDir::To, fields: VerifyResult::BIN_FIELDS },
-    BinType { js: "SignatureReport", dir: BinDir::To, fields: SignatureReport::BIN_FIELDS },
-    BinType { js: "BuiltTransaction", dir: BinDir::To, fields: BuiltTransaction::BIN_FIELDS },
+    BinType {
+        js: "LimitsProfile",
+        dir: BinDir::To,
+        fields: LimitsProfile::BIN_FIELDS,
+    },
+    BinType {
+        js: "CodecProfile",
+        dir: BinDir::To,
+        fields: CodecProfile::BIN_FIELDS,
+    },
+    BinType {
+        js: "AbiVersion",
+        dir: BinDir::To,
+        fields: AbiVersion::BIN_FIELDS,
+    },
+    BinType {
+        js: "FeatureItem",
+        dir: BinDir::To,
+        fields: FeatureItem::BIN_FIELDS,
+    },
+    BinType {
+        js: "Capabilities",
+        dir: BinDir::To,
+        fields: Capabilities::BIN_FIELDS,
+    },
+    BinType {
+        js: "SdkVersion",
+        dir: BinDir::To,
+        fields: SdkVersion::BIN_FIELDS,
+    },
+    BinType {
+        js: "AttachResult",
+        dir: BinDir::To,
+        fields: AttachResult::BIN_FIELDS,
+    },
+    BinType {
+        js: "VerifyResult",
+        dir: BinDir::To,
+        fields: VerifyResult::BIN_FIELDS,
+    },
+    BinType {
+        js: "SignatureReport",
+        dir: BinDir::To,
+        fields: SignatureReport::BIN_FIELDS,
+    },
+    BinType {
+        js: "BuiltTransaction",
+        dir: BinDir::To,
+        fields: BuiltTransaction::BIN_FIELDS,
+    },
     BinType {
         js: "AmountFormatResult",
         dir: BinDir::To,
@@ -195,7 +282,11 @@ pub(crate) fn q(s: &str) -> String {
 
 /// Object `{"k":v,...}` (empty-string entries are skipped, used for Option fields).
 pub(crate) fn obj(parts: Vec<String>) -> String {
-    let filtered: Vec<&str> = parts.iter().filter(|p| !p.is_empty()).map(|s| s.as_str()).collect();
+    let filtered: Vec<&str> = parts
+        .iter()
+        .filter(|p| !p.is_empty())
+        .map(|s| s.as_str())
+        .collect();
     format!("{{{}}}", filtered.join(","))
 }
 
@@ -212,6 +303,23 @@ pub(crate) fn kv(key: &str, value: String) -> String {
 /// Option field: None returns an empty string (filtered out by `obj`).
 pub(crate) fn kv_opt(key: &str, value: Option<String>) -> String {
     value.map(|v| kv(key, v)).unwrap_or_default()
+}
+
+fn checked_usize(value: u64, field: &str) -> Ret<usize> {
+    usize::try_from(value)
+        .map_err(|_| sys::Error::fault(format!("binary field {field} does not fit usize")))
+}
+
+fn checked_u16(value: u32, field: &str) -> Ret<u16> {
+    u16::try_from(value)
+        .map_err(|_| sys::Error::fault(format!("binary field {field} does not fit u16")))
+}
+
+fn checked_u16_vec(values: Vec<u32>, field: &str) -> Ret<Vec<u16>> {
+    values
+        .into_iter()
+        .map(|value| checked_u16(value, field))
+        .collect()
 }
 
 // ================================ simple-object binary derive ================================
@@ -287,7 +395,10 @@ macro_rules! sdk_bin_kv {
     };
     ($w:ident, $self:ident, $field:ident, opt_u16_arr) => {
         if let Some(v) = &$self.$field {
-            $w.u32_arr(stringify!($field), &v.iter().map(|x| *x as u32).collect::<Vec<_>>());
+            $w.u32_arr(
+                stringify!($field),
+                &v.iter().map(|x| *x as u32).collect::<Vec<_>>(),
+            );
         }
     };
     ($w:ident, $self:ident, $field:ident, str_def) => {
@@ -322,14 +433,20 @@ macro_rules! sdk_bin_kv {
     ($w:ident, $self:ident, $field:ident, obj_arr $t:ty) => {
         $w.obj_arr(
             stringify!($field),
-            &$self.$field.iter().map(|x| <$t>::to_binary_body(x)).collect::<Vec<_>>(),
+            &$self
+                .$field
+                .iter()
+                .map(|x| <$t>::to_binary_body(x))
+                .collect::<Vec<_>>(),
         );
     };
     ($w:ident, $self:ident, $field:ident, opt_obj_arr $t:ty) => {
         if let Some(v) = &$self.$field {
             $w.obj_arr(
                 stringify!($field),
-                &v.iter().map(|x| <$t>::to_binary_body(x)).collect::<Vec<_>>(),
+                &v.iter()
+                    .map(|x| <$t>::to_binary_body(x))
+                    .collect::<Vec<_>>(),
             );
         }
     };
@@ -348,35 +465,49 @@ macro_rules! sdk_bin_expr {
         req(&$fields, stringify!($field))?.u64()?
     };
     ($fields:ident, $field:ident, opt_u64) => {
-        opt(&$fields, stringify!($field)).map(|v| v.u64()).transpose()?
+        opt(&$fields, stringify!($field))
+            .map(|v| v.u64())
+            .transpose()?
     };
     ($fields:ident, $field:ident, u32) => {
         req(&$fields, stringify!($field))?.u32()?
     };
     ($fields:ident, $field:ident, opt_u32) => {
-        opt(&$fields, stringify!($field)).map(|v| v.u32()).transpose()?
+        opt(&$fields, stringify!($field))
+            .map(|v| v.u32())
+            .transpose()?
     };
     ($fields:ident, $field:ident, u8) => {
         req(&$fields, stringify!($field))?.u8()?
     };
     ($fields:ident, $field:ident, opt_u8) => {
-        opt(&$fields, stringify!($field)).map(|v| v.u8()).transpose()?
+        opt(&$fields, stringify!($field))
+            .map(|v| v.u8())
+            .transpose()?
     };
     ($fields:ident, $field:ident, bool) => {
         req(&$fields, stringify!($field))?.bool()?
     };
     ($fields:ident, $field:ident, opt_bool) => {
-        opt(&$fields, stringify!($field)).map(|v| v.bool()).transpose()?
+        opt(&$fields, stringify!($field))
+            .map(|v| v.bool())
+            .transpose()?
     };
     ($fields:ident, $field:ident, str_arr) => {
         opt(&$fields, stringify!($field))
-            .map(|v| v.str_arr().map(|a| a.into_iter().map(str::to_owned).collect()))
+            .map(|v| {
+                v.str_arr()
+                    .map(|a| a.into_iter().map(str::to_owned).collect())
+            })
             .transpose()?
             .unwrap_or_default()
     };
     ($fields:ident, $field:ident, opt_str_arr) => {
         opt(&$fields, stringify!($field))
-            .map(|v| v.str_arr().map(|a| a.into_iter().map(str::to_owned).collect()))
+            .map(|v| {
+                v.str_arr()
+                    .map(|a| a.into_iter().map(str::to_owned).collect())
+            })
             .transpose()?
     };
     ($fields:ident, $field:ident, u64_arr) => {
@@ -392,23 +523,25 @@ macro_rules! sdk_bin_expr {
             .unwrap_or_default()
     };
     ($fields:ident, $field:ident, opt_u32_arr) => {
-        opt(&$fields, stringify!($field)).map(|v| v.u32_arr()).transpose()?
+        opt(&$fields, stringify!($field))
+            .map(|v| v.u32_arr())
+            .transpose()?
     };
     ($fields:ident, $field:ident, usize) => {
-        req(&$fields, stringify!($field))?.u64().map(|v| v as usize)?
+        checked_usize(req(&$fields, stringify!($field))?.u64()?, stringify!($field))?
     };
     ($fields:ident, $field:ident, u16) => {
-        req(&$fields, stringify!($field))?.u32().map(|v| v as u16)?
+        checked_u16(req(&$fields, stringify!($field))?.u32()?, stringify!($field))?
     };
     ($fields:ident, $field:ident, u16_arr) => {
         opt(&$fields, stringify!($field))
-            .map(|v| v.u32_arr().map(|a| a.into_iter().map(|x| x as u16).collect()))
+            .map(|v| v.u32_arr().and_then(|a| checked_u16_vec(a, stringify!($field))))
             .transpose()?
             .unwrap_or_default()
     };
     ($fields:ident, $field:ident, opt_u16_arr) => {
         opt(&$fields, stringify!($field))
-            .map(|v| v.u32_arr().map(|a| a.into_iter().map(|x| x as u16).collect()))
+            .map(|v| v.u32_arr().and_then(|a| checked_u16_vec(a, stringify!($field))))
             .transpose()?
     };
     ($fields:ident, $field:ident, str_def) => {
@@ -449,7 +582,7 @@ macro_rules! sdk_bin_expr {
     };
     ($fields:ident, $field:ident, usize_def) => {
         opt(&$fields, stringify!($field))
-            .map(|v| v.u64().map(|x| x as usize))
+            .map(|v| v.u64().and_then(|x| checked_usize(x, stringify!($field))))
             .transpose()?
             .unwrap_or_default()
     };
@@ -488,37 +621,99 @@ macro_rules! sdk_bin_expr {
 /// Layout kind of one field (mirrors the `sdk_bin_kv!`/`sdk_bin_expr!` arms).
 /// The optional `$arg:ty` carries the nested view type (`obj X`, `obj_arr X`).
 macro_rules! bin_kind {
-    (str) => { BinKind::Str };
-    (opt_str) => { BinKind::OptStr };
-    (str_def) => { BinKind::StrDef };
-    (u64) => { BinKind::U64 };
-    (opt_u64) => { BinKind::OptU64 };
-    (u64_def) => { BinKind::U64Def };
-    (u32) => { BinKind::U32 };
-    (opt_u32) => { BinKind::OptU32 };
-    (u32_def) => { BinKind::U32Def };
-    (u8) => { BinKind::U8 };
-    (opt_u8) => { BinKind::OptU8 };
-    (u8_def) => { BinKind::U8Def };
-    (bool) => { BinKind::Bool };
-    (opt_bool) => { BinKind::OptBool };
-    (bool_def_true) => { BinKind::BoolDef(true) };
-    (bool_def_false) => { BinKind::BoolDef(false) };
-    (str_arr) => { BinKind::StrArr };
-    (opt_str_arr) => { BinKind::OptStrArr };
-    (u64_arr) => { BinKind::U64Arr };
-    (opt_u64_arr) => { BinKind::OptU64Arr };
-    (u32_arr) => { BinKind::U32Arr };
-    (opt_u32_arr) => { BinKind::OptU32Arr };
-    (u16_arr) => { BinKind::U16Arr };
-    (opt_u16_arr) => { BinKind::OptU16Arr };
-    (usize) => { BinKind::Usize };
-    (usize_def) => { BinKind::UsizeDef };
-    (u16) => { BinKind::U16 };
-    (obj $t:ty) => { BinKind::Obj(stringify!($t)) };
-    (opt_obj $t:ty) => { BinKind::OptObj(stringify!($t)) };
-    (obj_arr $t:ty) => { BinKind::ObjArr(stringify!($t)) };
-    (opt_obj_arr $t:ty) => { BinKind::OptObjArr(stringify!($t)) };
+    (str) => {
+        BinKind::Str
+    };
+    (opt_str) => {
+        BinKind::OptStr
+    };
+    (str_def) => {
+        BinKind::StrDef
+    };
+    (u64) => {
+        BinKind::U64
+    };
+    (opt_u64) => {
+        BinKind::OptU64
+    };
+    (u64_def) => {
+        BinKind::U64Def
+    };
+    (u32) => {
+        BinKind::U32
+    };
+    (opt_u32) => {
+        BinKind::OptU32
+    };
+    (u32_def) => {
+        BinKind::U32Def
+    };
+    (u8) => {
+        BinKind::U8
+    };
+    (opt_u8) => {
+        BinKind::OptU8
+    };
+    (u8_def) => {
+        BinKind::U8Def
+    };
+    (bool) => {
+        BinKind::Bool
+    };
+    (opt_bool) => {
+        BinKind::OptBool
+    };
+    (bool_def_true) => {
+        BinKind::BoolDef(true)
+    };
+    (bool_def_false) => {
+        BinKind::BoolDef(false)
+    };
+    (str_arr) => {
+        BinKind::StrArr
+    };
+    (opt_str_arr) => {
+        BinKind::OptStrArr
+    };
+    (u64_arr) => {
+        BinKind::U64Arr
+    };
+    (opt_u64_arr) => {
+        BinKind::OptU64Arr
+    };
+    (u32_arr) => {
+        BinKind::U32Arr
+    };
+    (opt_u32_arr) => {
+        BinKind::OptU32Arr
+    };
+    (u16_arr) => {
+        BinKind::U16Arr
+    };
+    (opt_u16_arr) => {
+        BinKind::OptU16Arr
+    };
+    (usize) => {
+        BinKind::Usize
+    };
+    (usize_def) => {
+        BinKind::UsizeDef
+    };
+    (u16) => {
+        BinKind::U16
+    };
+    (obj $t:ty) => {
+        BinKind::Obj(stringify!($t))
+    };
+    (opt_obj $t:ty) => {
+        BinKind::OptObj(stringify!($t))
+    };
+    (obj_arr $t:ty) => {
+        BinKind::ObjArr(stringify!($t))
+    };
+    (opt_obj_arr $t:ty) => {
+        BinKind::OptObjArr(stringify!($t))
+    };
 }
 
 /// Generate `to_binary_body`/`from_binary`/`BIN_FIELDS` for a binary view type
@@ -596,13 +791,33 @@ impl_sdk_bin! {
 
 impl ProtocolParamsProfile {
     pub(crate) const BIN_FIELDS: &'static [BinField] = &[
-        BinField { name: "ast_tree_depth_max", kind: BinKind::U64, js_default: None },
-        BinField { name: "max_type3_signers", kind: BinKind::U64, js_default: None },
-        BinField { name: "fee_purity_floor", kind: BinKind::U64, js_default: None },
-        BinField { name: "diamond_form_flag", kind: BinKind::U64, js_default: None },
+        BinField {
+            name: "ast_tree_depth_max",
+            kind: BinKind::U64,
+            js_default: None,
+        },
+        BinField {
+            name: "max_type3_signers",
+            kind: BinKind::U64,
+            js_default: None,
+        },
+        BinField {
+            name: "fee_purity_floor",
+            kind: BinKind::U64,
+            js_default: None,
+        },
+        BinField {
+            name: "diamond_form_flag",
+            kind: BinKind::U64,
+            js_default: None,
+        },
         // Flattened (activation, next) pairs; the JS facade reads the array
         // as-is (pairs are split by the upper layer when needed).
-        BinField { name: "fee_purity_reductions", kind: BinKind::U64Arr, js_default: None },
+        BinField {
+            name: "fee_purity_reductions",
+            kind: BinKind::U64Arr,
+            js_default: None,
+        },
     ];
 
     pub(crate) fn to_binary_body(&self) -> Vec<u8> {
@@ -709,14 +924,26 @@ impl PayloadDesc {
             TaggedVariant {
                 tag: "hacd",
                 fields: &[
-                    BinField { name: "count", kind: BinKind::U32, js_default: None },
-                    BinField { name: "names", kind: BinKind::StrArr, js_default: None },
+                    BinField {
+                        name: "count",
+                        kind: BinKind::U32,
+                        js_default: None,
+                    },
+                    BinField {
+                        name: "names",
+                        kind: BinKind::StrArr,
+                        js_default: None,
+                    },
                 ],
             },
             TaggedVariant {
                 tag: "asset",
                 fields: &[
-                    BinField { name: "serial", kind: BinKind::Str, js_default: None },
+                    BinField {
+                        name: "serial",
+                        kind: BinKind::Str,
+                        js_default: None,
+                    },
                     BinField {
                         name: "atoms",
                         kind: BinKind::Str,
@@ -768,7 +995,10 @@ impl PayloadDesc {
             "hacd" => Ok(PayloadDesc::Hacd {
                 count: req(fields, "count")?.u32()?,
                 names: opt(fields, "names")
-                    .map(|v| v.str_arr().map(|a| a.into_iter().map(str::to_owned).collect()))
+                    .map(|v| {
+                        v.str_arr()
+                            .map(|a| a.into_iter().map(str::to_owned).collect())
+                    })
                     .transpose()?
                     .unwrap_or_default(),
             }),
@@ -840,6 +1070,7 @@ impl_sdk_bin! {
         auditability: str,
         requires_user_confirmation: bool,
         limits_violations: str_arr,
+        topology_violations: str_arr,
         required_signers: str_arr,
         present_signers: str_arr,
         missing_signers: str_arr,
@@ -1022,11 +1253,15 @@ mod tests {
     fn payload_desc_layout_matches_writer() {
         let cases: Vec<(PayloadDesc, &[(&str, char)])> = vec![
             (
-                PayloadDesc::Hac { amount: "1".to_owned() },
+                PayloadDesc::Hac {
+                    amount: "1".to_owned(),
+                },
                 &[("type", 's'), ("amount", 's')],
             ),
             (
-                PayloadDesc::Satoshi { atoms: "2".to_owned() },
+                PayloadDesc::Satoshi {
+                    atoms: "2".to_owned(),
+                },
                 &[("type", 's'), ("atoms", 's')],
             ),
             (
@@ -1063,11 +1298,14 @@ mod tests {
             assert_eq!(fields.len(), expected.len(), "field count for {payload:?}");
             for ((name, value), (exp_name, exp_tag)) in fields.iter().zip(expected) {
                 assert_eq!(name, exp_name, "field name for {payload:?}");
-                assert_eq!(tag_of(value), *exp_tag, "field tag for {name} in {payload:?}");
+                assert_eq!(
+                    tag_of(value),
+                    *exp_tag,
+                    "field tag for {name} in {payload:?}"
+                );
             }
         }
     }
-
 
     /// Binary round-trip of the macro-generated simple types (locks the field
     /// set so a future refactor cannot silently drop or rename a field).
@@ -1081,7 +1319,13 @@ mod tests {
         let body = verify.to_binary_body();
         let fields = crate::bjson::parse(&body).unwrap();
         assert!(crate::bjson::req(&fields, "ok").unwrap().bool().unwrap());
-        assert_eq!(crate::bjson::req(&fields, "address").unwrap().str().unwrap(), "1abc");
+        assert_eq!(
+            crate::bjson::req(&fields, "address")
+                .unwrap()
+                .str()
+                .unwrap(),
+            "1abc"
+        );
 
         let ctx = InspectContext {
             current_height: 123_456,
@@ -1103,9 +1347,21 @@ mod tests {
         };
         let body = built.to_binary_body();
         let fields = crate::bjson::parse(&body).unwrap();
-        assert_eq!(crate::bjson::req(&fields, "tx_type").unwrap().u8().unwrap(), 2);
-        assert_eq!(crate::bjson::req(&fields, "timestamp").unwrap().u64().unwrap(), 3);
-        assert_eq!(crate::bjson::req(&fields, "main").unwrap().str().unwrap(), "m");
+        assert_eq!(
+            crate::bjson::req(&fields, "tx_type").unwrap().u8().unwrap(),
+            2
+        );
+        assert_eq!(
+            crate::bjson::req(&fields, "timestamp")
+                .unwrap()
+                .u64()
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            crate::bjson::req(&fields, "main").unwrap().str().unwrap(),
+            "m"
+        );
 
         let report = crate::attach::SignatureReport {
             schema: "s".to_owned(),
@@ -1118,11 +1374,17 @@ mod tests {
         let body = report.to_binary_body();
         let fields = crate::bjson::parse(&body).unwrap();
         assert_eq!(
-            crate::bjson::req(&fields, "required").unwrap().str_arr().unwrap(),
+            crate::bjson::req(&fields, "required")
+                .unwrap()
+                .str_arr()
+                .unwrap(),
             vec!["a"]
         );
         assert_eq!(
-            crate::bjson::req(&fields, "present").unwrap().str_arr().unwrap(),
+            crate::bjson::req(&fields, "present")
+                .unwrap()
+                .str_arr()
+                .unwrap(),
             Vec::<&str>::new()
         );
     }
@@ -1158,7 +1420,8 @@ mod tests {
             findings: vec!["f1".to_owned()],
             policy_binding: "pb".to_owned(),
         };
-        let decoded = crate::policy::PolicyDecision::from_binary(&decision.to_binary_body()).unwrap();
+        let decoded =
+            crate::policy::PolicyDecision::from_binary(&decision.to_binary_body()).unwrap();
         assert_eq!(decoded.findings, vec!["f1".to_owned()]);
 
         let params = crate::message::MessagePrepareParams {
@@ -1177,5 +1440,13 @@ mod tests {
 
         // Missing required field is rejected.
         assert!(InspectContext::from_binary(&[]).is_err());
+    }
+
+    #[test]
+    fn narrow_integer_fields_reject_truncating_values() {
+        let mut w = Bw::new();
+        w.u32_arr("deny_kinds", &[u16::MAX as u32 + 1]);
+        let error = Policy::from_binary(&w.into_inner()).unwrap_err();
+        assert!(error.to_string().contains("does not fit u16"), "{error}");
     }
 }

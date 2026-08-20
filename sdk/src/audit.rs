@@ -10,7 +10,7 @@
 //! so the SDK's grading surface is the chain's definition surface: there is no
 //! separate hand-written grading table here to drift from the action set.
 
-use base::{Action, ActionRef};
+use base::Action;
 use field::Decode;
 
 use crate::error::{SdkError, SdkErrorCode};
@@ -146,7 +146,11 @@ fn payload_desc(action: &dyn Action) -> Option<PayloadDesc> {
 fn readable_diamond_names(names: &[u8]) -> Vec<String> {
     if let Ok((list, used)) = <field::DiamondNameListMax200 as Decode>::decode(names) {
         if used == names.len() {
-            return list.as_list().iter().map(|name| name.to_readable()).collect();
+            return list
+                .as_list()
+                .iter()
+                .map(|name| name.to_readable())
+                .collect();
         }
     }
     Vec::new()
@@ -174,7 +178,7 @@ pub struct ActionDesc {
     pub blob: bool,
 }
 
-pub fn describe_action(action: &ActionRef, index: usize, path: &str, depth: usize) -> ActionDesc {
+pub fn describe_action(action: &dyn Action, index: usize, path: &str, depth: usize) -> ActionDesc {
     let kind = action.kind();
     let mut notes = Vec::new();
     let children = collect_children(action, depth, &mut notes);
@@ -192,7 +196,7 @@ pub fn describe_action(action: &ActionRef, index: usize, path: &str, depth: usiz
             base::AddrOrPtr::Ptr(_) => None,
         }),
         to: transfer.transfer_to().to_readable(),
-        payload: payload_desc(action.as_ref()).unwrap_or(PayloadDesc::Hac {
+        payload: payload_desc(action).unwrap_or(PayloadDesc::Hac {
             amount: transfer.transfer_amount().to_fin_string(),
         }),
     });
@@ -209,55 +213,64 @@ pub fn describe_action(action: &ActionRef, index: usize, path: &str, depth: usiz
         audit_notes: notes,
         transfer,
         children,
-        blob: schema_of_kind(kind).map(|schema| schema.blob).unwrap_or(false),
+        blob: schema_of_kind(kind)
+            .map(|schema| schema.blob)
+            .unwrap_or(false),
     }
 }
 
-/// Collect nested control-flow children (AstIf → cond/if/else AstSelects,
-/// AstSelect → flat action list) with the protocol depth cap. Depth overflow
-/// is reported as an audit note, never as a decode failure. A new AST-scope
-/// action without a children walker is reported as a note too (fail-closed),
-/// so a new control-flow kind never silently drops its children from the
-/// review.
+/// Collect nested control-flow children through `Action::nested_actions` (the
+/// same walker protocol topology analysis uses). Depth overflow is an audit
+/// note, never a decode failure. A schema-declared `branching` action without
+/// a walker is reported as a note too (fail-closed), so a new control-flow
+/// kind never silently drops its children from the review. `ActScope::AST` is
+/// not the signal: inscriptions and `contract_main_call` share that scope
+/// without being control-flow.
 fn collect_children(
-    action: &ActionRef,
+    action: &dyn Action,
     depth: usize,
     notes: &mut Vec<String>,
 ) -> Option<Vec<ActionDesc>> {
-    use protocol::action_std::{AstIf, AstSelect};
-    if depth >= AST_DEPTH_MAX {
-        notes.push(format!(
-            "nested AST depth exceeds protocol maximum {}",
-            AST_DEPTH_MAX
-        ));
-        return None;
-    }
-    let mut list = Vec::new();
-    if let Some(ast) = action.as_any().downcast_ref::<AstIf>() {
-        for (branch_idx, select) in [&ast.cond, &ast.br_if, &ast.br_else]
-            .into_iter()
-            .enumerate()
-        {
-            for (idx, nested) in select.actions.as_list().iter().enumerate() {
-                let path = format!("{}/{}", branch_idx, idx);
-                list.push(describe_action(nested, idx, &path, depth + 1));
+    match action.nested_actions() {
+        Some(nested) => {
+            let next_depth = match depth.checked_add(nested.depth_inc) {
+                Some(d) => d,
+                None => {
+                    notes.push("ast tree depth overflow".to_owned());
+                    return None;
+                }
+            };
+            if next_depth > AST_DEPTH_MAX {
+                notes.push(format!(
+                    "nested AST depth exceeds protocol maximum {}",
+                    AST_DEPTH_MAX
+                ));
+                return None;
             }
+            let multi = nested.branches.len() > 1;
+            let mut list = Vec::new();
+            for (branch_idx, branch) in nested.branches.iter().enumerate() {
+                for (idx, child) in branch.iter().enumerate() {
+                    let path = if multi {
+                        format!("{branch_idx}/{idx}")
+                    } else {
+                        idx.to_string()
+                    };
+                    list.push(describe_action(*child, idx, &path, next_depth));
+                }
+            }
+            Some(list)
         }
-        return Some(list);
-    }
-    if let Some(select) = action.as_any().downcast_ref::<AstSelect>() {
-        for (idx, nested) in select.actions.as_list().iter().enumerate() {
-            list.push(describe_action(nested, idx, &idx.to_string(), depth + 1));
+        None => {
+            if schema_of_kind(action.kind()).map(|s| s.audit_class) == Some("branching") {
+                notes.push(format!(
+                    "branching action kind {} has no nested_actions walker",
+                    action.kind()
+                ));
+            }
+            None
         }
-        return Some(list);
     }
-    if action.scope() == base::ActScope::AST {
-        notes.push(format!(
-            "AST control-flow action kind {} has no review children collection",
-            action.kind()
-        ));
-    }
-    None
 }
 
 /// sha3-256 digest of the canonical unsigned body (signature set removed).
@@ -339,11 +352,7 @@ mod tests {
     #[test]
     fn blob_class_is_exactly_tx_message_and_tx_blob() {
         let schemas = chain_codec::collect_action_schemas();
-        let blobs: Vec<&str> = schemas
-            .iter()
-            .filter(|s| s.blob)
-            .map(|s| s.name)
-            .collect();
+        let blobs: Vec<&str> = schemas.iter().filter(|s| s.blob).map(|s| s.name).collect();
         assert_eq!(blobs, vec!["tx_message", "tx_blob"]);
     }
 
@@ -369,9 +378,10 @@ mod tests {
     }
 
     /// The AST control-flow walkers must stay complete over the registered
-    /// AST actions: `ast_select` and `ast_if` collect their nested children.
-    /// A new AST action without a walker is reported as a note (fail-closed)
-    /// instead of silently dropping its children from the review.
+    /// branching actions: `ast_select` and `ast_if` collect their nested
+    /// children through `Action::nested_actions`. A new branching action
+    /// without a walker is reported as a note (fail-closed) instead of
+    /// silently dropping its children from the review.
     #[test]
     fn ast_control_flow_kinds_collect_children() {
         use protocol::action_std::{AstIf, AstSelect, HacToTrs};
@@ -381,7 +391,7 @@ mod tests {
         ));
         let select = AstSelect::create_by(1, 1, vec![transfer.clone()]).unwrap();
         let select: base::ActionRef = std::sync::Arc::new(select);
-        let desc = describe_action(&select, 0, "0", 0);
+        let desc = describe_action(select.as_ref(), 0, "0", 0);
         let children = desc.children.expect("ast_select collects children");
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].path, "0");
@@ -393,10 +403,28 @@ mod tests {
             AstSelect::create_by(1, 1, vec![transfer.clone()]).unwrap(),
         );
         let ast_if: base::ActionRef = std::sync::Arc::new(ast_if);
-        let desc = describe_action(&ast_if, 0, "0", 0);
+        let desc = describe_action(ast_if.as_ref(), 0, "0", 0);
         let children = desc.children.expect("ast_if collects children");
         assert_eq!(children.len(), 3);
         assert_eq!(children[0].path, "0/0");
         assert_eq!(children[2].path, "2/0");
+    }
+
+    /// `ActScope::AST` is shared by inscriptions and `contract_main_call`,
+    /// which are not control-flow. The fail-closed note must key off the
+    /// schema-declared `branching` class (and a missing walker), never the
+    /// scope constant.
+    #[test]
+    fn non_branching_ast_scope_actions_have_no_missing_walker_note() {
+        let maincall: base::ActionRef = std::sync::Arc::new(vm::action::ContractMainCall::new());
+        let desc = describe_action(maincall.as_ref(), 0, "0", 0);
+        assert!(desc.children.is_none());
+        assert!(
+            desc.audit_notes
+                .iter()
+                .all(|n| !n.contains("nested_actions") && !n.contains("children collection")),
+            "spurious walker note on a non-branching action: {:?}",
+            desc.audit_notes
+        );
     }
 }

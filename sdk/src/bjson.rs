@@ -40,7 +40,8 @@ impl Bw {
     }
 
     fn raw(&mut self, name: &str, tag: u8, payload: &[u8]) {
-        self.out.extend_from_slice(&(name.len() as u16).to_be_bytes());
+        self.out
+            .extend_from_slice(&(name.len() as u16).to_be_bytes());
         self.out.extend_from_slice(name.as_bytes());
         self.out.push(tag);
         self.out.extend_from_slice(payload);
@@ -299,6 +300,7 @@ pub(crate) fn parse<'a>(buf: &'a [u8]) -> Ret<Vec<(&'a str, BVal<'a>)>> {
             b'b' => BVal::Bool(r.bool()?),
             b'a' => {
                 let n = r.u32()? as usize;
+                r.reserve_items(n, 4)?;
                 let mut items = Vec::with_capacity(n);
                 for _ in 0..n {
                     items.push(r.w4_str()?);
@@ -307,6 +309,7 @@ pub(crate) fn parse<'a>(buf: &'a [u8]) -> Ret<Vec<(&'a str, BVal<'a>)>> {
             }
             b'A' => {
                 let n = r.u32()? as usize;
+                r.reserve_items(n, 8)?;
                 let mut items = Vec::with_capacity(n);
                 for _ in 0..n {
                     items.push(r.u64()?);
@@ -315,6 +318,7 @@ pub(crate) fn parse<'a>(buf: &'a [u8]) -> Ret<Vec<(&'a str, BVal<'a>)>> {
             }
             b'B' => {
                 let n = r.u32()? as usize;
+                r.reserve_items(n, 4)?;
                 let mut items = Vec::with_capacity(n);
                 for _ in 0..n {
                     items.push(r.u32()?);
@@ -328,6 +332,7 @@ pub(crate) fn parse<'a>(buf: &'a [u8]) -> Ret<Vec<(&'a str, BVal<'a>)>> {
             }
             b'O' => {
                 let n = r.u32()? as usize;
+                r.reserve_items(n, 4)?;
                 let mut items = Vec::with_capacity(n);
                 for _ in 0..n {
                     let len = r.u32()? as usize;
@@ -345,10 +350,7 @@ pub(crate) fn parse<'a>(buf: &'a [u8]) -> Ret<Vec<(&'a str, BVal<'a>)>> {
 }
 
 /// Required / optional typed field accessors over a parsed field list.
-pub(crate) fn req<'a>(
-    fields: &'a [(&'a str, BVal<'a>)],
-    name: &str,
-) -> Ret<&'a BVal<'a>> {
+pub(crate) fn req<'a>(fields: &'a [(&'a str, BVal<'a>)], name: &str) -> Ret<&'a BVal<'a>> {
     fields
         .iter()
         .find(|(n, _)| *n == name)
@@ -356,10 +358,7 @@ pub(crate) fn req<'a>(
         .ok_or_else(|| sys::Error::fault(format!("binary field {name} missing")))
 }
 
-pub(crate) fn opt<'a>(
-    fields: &'a [(&'a str, BVal<'a>)],
-    name: &str,
-) -> Option<&'a BVal<'a>> {
+pub(crate) fn opt<'a>(fields: &'a [(&'a str, BVal<'a>)], name: &str) -> Option<&'a BVal<'a>> {
     fields.iter().find(|(n, _)| *n == name).map(|(_, v)| v)
 }
 
@@ -370,12 +369,21 @@ struct Br<'a> {
 
 impl<'a> Br<'a> {
     fn take(&mut self, n: usize) -> Ret<&'a [u8]> {
-        if self.pos + n > self.buf.len() {
-            return errf!("binary body truncated");
-        }
-        let slice = &self.buf[self.pos..self.pos + n];
-        self.pos += n;
+        let end = self
+            .pos
+            .checked_add(n)
+            .filter(|end| *end <= self.buf.len())
+            .ok_or_else(|| sys::Error::fault("binary body truncated"))?;
+        let slice = &self.buf[self.pos..end];
+        self.pos = end;
         Ok(slice)
+    }
+
+    fn reserve_items(&self, count: usize, min_size: usize) -> Ret<()> {
+        if min_size != 0 && count > self.buf.len().saturating_sub(self.pos) / min_size {
+            return errf!("binary array count {} exceeds remaining bytes", count);
+        }
+        Ok(())
     }
 
     fn u8(&mut self) -> Ret<u8> {

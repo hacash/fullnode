@@ -3,12 +3,12 @@
 use std::any::Any;
 use std::sync::Arc;
 
+#[cfg(feature = "execute")]
+use base::ActionDispatcher;
 use base::{
     ActOut, ActScope, Action, ActionExecute, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry,
     Context, TopRule,
 };
-#[cfg(feature = "execute")]
-use base::ActionDispatcher;
 use field::{
     Decode, Encode, Reader, Uint1, Uint2, json_decode_object, json_decode_value,
     json_expect_unquoted, json_split_array, json_split_object,
@@ -25,10 +25,7 @@ impl field::ToJSON for ActionListW1 {
             "[{}]",
             self.actions
                 .iter()
-                .map(|action| format!(
-                    "{{\"body\":\"0x{}\"}}",
-                    hex::encode(action.encode())
-                ))
+                .map(|action| format!("{{\"body\":\"0x{}\"}}", hex::encode(action.encode())))
                 .collect::<Vec<_>>()
                 .join(",")
         )
@@ -147,14 +144,6 @@ impl AstIf {
         req.extend(self.br_else.collect_req_sign());
         req
     }
-
-    pub(crate) fn child_actions(&self) -> Vec<&dyn Action> {
-        let mut out = Vec::new();
-        out.extend(self.cond.child_actions());
-        out.extend(self.br_if.child_actions());
-        out.extend(self.br_else.child_actions());
-        out
-    }
 }
 
 fn decode_ast_child(reg: &dyn CodecRegistry, json: &str) -> Ret<ActionRef> {
@@ -269,21 +258,9 @@ pub fn decode_ast_if_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret
 }
 
 fn collect_ast_req_sign(req: &mut Vec<AddrOrPtr>, act: &dyn Action) {
-    if let Some(ast) = act.as_any().downcast_ref::<AstSelect>() {
-        for child in ast.actions.as_list() {
-            collect_ast_req_sign(req, child.as_ref());
-        }
-        return;
-    }
-    if let Some(ast) = act.as_any().downcast_ref::<AstIf>() {
-        for child in ast.cond.actions.as_list() {
-            collect_ast_req_sign(req, child.as_ref());
-        }
-        for child in ast.br_if.actions.as_list() {
-            collect_ast_req_sign(req, child.as_ref());
-        }
-        for child in ast.br_else.actions.as_list() {
-            collect_ast_req_sign(req, child.as_ref());
+    if let Some(nested) = act.nested_actions() {
+        for child in nested.flatten() {
+            collect_ast_req_sign(req, child);
         }
         return;
     }
@@ -416,6 +393,13 @@ impl Action for AstSelect {
         self.collect_req_sign()
     }
 
+    fn nested_actions(&self) -> Option<base::NestedActions<'_>> {
+        Some(base::NestedActions {
+            depth_inc: 1,
+            branches: vec![self.child_actions()],
+        })
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
@@ -480,6 +464,17 @@ impl Action for AstIf {
 
     fn req_sign(&self) -> Vec<AddrOrPtr> {
         self.collect_req_sign()
+    }
+
+    fn nested_actions(&self) -> Option<base::NestedActions<'_>> {
+        Some(base::NestedActions {
+            depth_inc: 2,
+            branches: vec![
+                self.cond.child_actions(),
+                self.br_if.child_actions(),
+                self.br_else.child_actions(),
+            ],
+        })
     }
 
     fn as_any(&self) -> &dyn Any {

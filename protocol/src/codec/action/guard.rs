@@ -110,6 +110,10 @@ impl ReqSignList {
         if signers.is_empty() {
             return errf!("ReqSignList cannot be empty");
         }
+        // The native wire count is Uint2; validate before storing the list so
+        // every constructor rejects values that would otherwise truncate in
+        // `Encode::encode_to`.
+        Uint2::from_usize(signers.len())?;
         Ok(Self {
             kind: Uint2::from(Self::KIND),
             signers,
@@ -209,7 +213,11 @@ impl Encode for ReqSignList {
     }
     fn encode_to(&self, out: &mut Vec<u8>) {
         self.kind.encode_to(out);
-        Uint2::from(self.signers.len() as u16).encode_to(out);
+        // `create_by` validates the Uint2 bound. Keep this path defensive for
+        // values assembled through struct literals in consensus code.
+        Uint2::from_usize(self.signers.len())
+            .expect("ReqSignList signer count exceeds Uint2")
+            .encode_to(out);
         for ptr in &self.signers {
             encode_addr_or_ptr(ptr, out);
         }
@@ -247,10 +255,7 @@ fn check_balance_floor_assets(assets: &AssetAmtW1) -> Rerr {
 /// flags the execute body needs.
 fn validate_balance_floor_struct(floor: &BalanceFloor) -> Ret<(bool, bool, bool, bool)> {
     if floor.hacash.is_negative() {
-        return errf!(
-            "balance floor hacash {} cannot be negative",
-            floor.hacash
-        );
+        return errf!("balance floor hacash {} cannot be negative", floor.hacash);
     }
     check_balance_floor_assets(&floor.assets)?;
     let check_hac = !floor.hacash.is_zero();
@@ -448,7 +453,6 @@ pub fn create_chain_guard_action(
     }
 }
 
-
 #[cfg(feature = "execute")]
 fn decode_regular_guard_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
 where
@@ -500,12 +504,31 @@ pub struct GuardFacts {
     pub chains: Option<Vec<u32>>,
     /// Effective height range `(start, end)` (intersection of all
     /// `HeightScope` actions); `None` when no `HeightScope` action is
-    /// present. `end == 0` means unlimited.
+    /// present. `end == 0` means unlimited (the collector's internal
+    /// `u64::MAX` sentinel is rewritten to `0` before facts are returned).
     pub height_range: Option<(u64, u64)>,
     /// (action index, note) pairs attached to the matching action descriptor.
     pub action_notes: Vec<(usize, String)>,
     /// Protocol-level violations: signing must be rejected, decode stays ok.
     pub protocol_violations: Vec<String>,
+}
+
+impl GuardFacts {
+    /// Evaluate collected facts against a caller-provided height and chain id.
+    /// Returns `(expired_height, wrong_chain)`. Uses the same predicates the
+    /// chain's HeightScope / ChainAllow execute bodies use (`height_in_range`
+    /// and set membership). A missing fact means that check is inactive
+    /// (not expired / not on the wrong chain).
+    pub fn against_context(&self, current_height: u64, expected_chain_id: u32) -> (bool, bool) {
+        let expired = self.height_range.map_or(false, |(start, end)| {
+            !height_in_range(start, end, current_height)
+        });
+        let wrong = self
+            .chains
+            .as_ref()
+            .map_or(false, |chains| !chains.contains(&expected_chain_id));
+        (expired, wrong)
+    }
 }
 
 fn push_guard_note(facts: &mut GuardFacts, index: usize, text: String) {
@@ -612,8 +635,7 @@ pub fn guard_facts(tx: &dyn Transaction) -> GuardFacts {
                     }
                 }
             }
-            kind
-                if action.scope() == ActScope::GUARD
+            kind if action.scope() == ActScope::GUARD
                     || action.scope() == ActScope::TOP_GUARD_UNIQUE =>
             {
                 push_guard_note(
@@ -680,11 +702,7 @@ mod tests {
         );
         assert_eq!(facts.chains, Some(vec![1]));
         assert_eq!(facts.height_range, Some((100, 200)));
-        assert!(
-            facts.action_notes.is_empty(),
-            "{:?}",
-            facts.action_notes
-        );
+        assert!(facts.action_notes.is_empty(), "{:?}", facts.action_notes);
     }
 
     /// ChainAllow intersection and conflicting pairs are the same analysis the
@@ -708,9 +726,17 @@ mod tests {
         )));
 
         let facts = guard_facts(&tx);
-        assert!(facts.protocol_violations.is_empty(), "{:?}", facts.protocol_violations);
+        assert!(
+            facts.protocol_violations.is_empty(),
+            "{:?}",
+            facts.protocol_violations
+        );
         assert_eq!(facts.chains, Some(vec![1]));
         assert_eq!(facts.height_range, Some((150, 300)));
+        assert_eq!(facts.against_context(150, 1), (false, false));
+        assert_eq!(facts.against_context(149, 1), (true, false));
+        assert_eq!(facts.against_context(301, 1), (true, false));
+        assert_eq!(facts.against_context(200, 2), (false, true));
 
         // A conflicting chain pair is a protocol fact (empty effective set).
         let mut tx = sample_tx();
@@ -742,5 +768,26 @@ mod tests {
         assert!(facts.protocol_violations[0].contains("cannot be negative"));
         assert_eq!(facts.action_notes.len(), 1);
         assert_eq!(facts.action_notes[0].0, 0);
+    }
+
+    #[test]
+    fn guard_facts_against_context_treats_unlimited_end_as_open() {
+        let mut tx = sample_tx();
+        tx.push_action_in(Arc::new(HeightScope::new(
+            BlockHeight::from(100),
+            BlockHeight::from(0),
+        )));
+        let facts = guard_facts(&tx);
+        assert_eq!(facts.height_range, Some((100, 0)));
+        assert_eq!(facts.against_context(100, 0), (false, false));
+        assert_eq!(facts.against_context(99, 0), (true, false));
+        assert_eq!(facts.against_context(u64::MAX, 0), (false, false));
+    }
+
+    #[test]
+    fn req_sign_list_rejects_count_that_would_truncate() {
+        let signer = AddrOrPtr::Addr(main_address());
+        let error = ReqSignList::create_by(vec![signer; u16::MAX as usize + 1]).unwrap_err();
+        assert!(error.to_string().contains("65535"), "{error}");
     }
 }

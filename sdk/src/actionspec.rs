@@ -128,63 +128,167 @@ pub enum JsSubConv {
 // ================================ table + generated decoder ================================
 
 macro_rules! rust_conv {
-    (none()) => { RustConv::ConstNone };
-    (empty()) => { RustConv::ConstEmpty };
-    (str($w:literal)) => { RustConv::Str($w) };
-    (some_str($w:literal)) => { RustConv::SomeStr($w) };
-    (num($w:literal)) => { RustConv::Num($w) };
-    (opt($w:literal, $ty:literal)) => { RustConv::Opt($w, $ty) };
-    (str_list($w:literal)) => { RustConv::StrList($w) };
-    (num_list($w:literal)) => { RustConv::NumList($w) };
-    (dia($w:literal)) => { RustConv::Dia($w) };
-    (dia_name()) => { RustConv::DiaName };
-    (dia_list()) => { RustConv::DiaList };
-    (dia_single()) => { RustConv::DiaSingle };
-    (asset_num($w:literal)) => { RustConv::AssetNum($w) };
-    (asset_str($w:literal)) => { RustConv::AssetStr($w) };
-    (struct_str($s:literal, $w:literal)) => { RustConv::StructStr($s, $w) };
-    (struct_opt_str($s:literal, $w:literal)) => { RustConv::StructOptStr($s, $w) };
-    (struct_readable($s:literal, $w:literal)) => { RustConv::StructReadable($s, $w) };
+    (none()) => {
+        RustConv::ConstNone
+    };
+    (empty()) => {
+        RustConv::ConstEmpty
+    };
+    (str($w:literal)) => {
+        RustConv::Str($w)
+    };
+    (some_str($w:literal)) => {
+        RustConv::SomeStr($w)
+    };
+    (num($w:literal)) => {
+        RustConv::Num($w)
+    };
+    (opt($w:literal, $ty:literal)) => {
+        RustConv::Opt($w, $ty)
+    };
+    (str_list($w:literal)) => {
+        RustConv::StrList($w)
+    };
+    (num_list($w:literal)) => {
+        RustConv::NumList($w)
+    };
+    (dia($w:literal)) => {
+        RustConv::Dia($w)
+    };
+    (dia_name()) => {
+        RustConv::DiaName
+    };
+    (dia_list()) => {
+        RustConv::DiaList
+    };
+    (dia_single()) => {
+        RustConv::DiaSingle
+    };
+    (asset_num($w:literal)) => {
+        RustConv::AssetNum($w)
+    };
+    (asset_str($w:literal)) => {
+        RustConv::AssetStr($w)
+    };
+    (struct_str($s:literal, $w:literal)) => {
+        RustConv::StructStr($s, $w)
+    };
+    (struct_opt_str($s:literal, $w:literal)) => {
+        RustConv::StructOptStr($s, $w)
+    };
+    (struct_readable($s:literal, $w:literal)) => {
+        RustConv::StructReadable($s, $w)
+    };
 }
 
 macro_rules! js_conv {
-    (noop()) => { JsConv::Noop };
-    (rename($w:literal)) => { JsConv::Rename($w) };
-    (rename_def($w:literal, $d:literal)) => { JsConv::RenameDef($w, $d) };
-    (rename_def_num($w:literal, $d:literal)) => { JsConv::RenameDefNum($w, $d) };
-    (to_str($w:literal, $d:literal)) => { JsConv::ToString($w, $d) };
-    (num_list($w:literal)) => { JsConv::NumList($w) };
-    (hex($w:literal)) => { JsConv::Hex($w) };
-    (hex_list($w:literal)) => { JsConv::HexList($w) };
-    (hex_single($w:literal)) => { JsConv::HexSingle($w) };
-    (hex_or_keep($w:literal, $d:literal)) => { JsConv::HexOrKeep($w, $d) };
-    (strip0x($w:literal, $d:literal)) => { JsConv::Strip0x($w, $d) };
-    (struct_field($s:literal, $sub:literal, keep($d:literal))) => { JsConv::StructField($s, $sub, JsSubConv::Keep($d)) };
-    (struct_field($s:literal, $sub:literal, to_str($d:literal))) => { JsConv::StructField($s, $sub, JsSubConv::ToString($d)) };
-    (struct_field($s:literal, $sub:literal, hex_or_keep($d:literal))) => { JsConv::StructField($s, $sub, JsSubConv::HexOrKeep($d)) };
-    (struct_field($s:literal, $sub:literal, hex())) => { JsConv::StructField($s, $sub, JsSubConv::Hex) };
+    (noop()) => {
+        JsConv::Noop
+    };
+    (rename($w:literal)) => {
+        JsConv::Rename($w)
+    };
+    (rename_def($w:literal, $d:literal)) => {
+        JsConv::RenameDef($w, $d)
+    };
+    (rename_def_num($w:literal, $d:literal)) => {
+        JsConv::RenameDefNum($w, $d)
+    };
+    (to_str($w:literal, $d:literal)) => {
+        JsConv::ToString($w, $d)
+    };
+    (num_list($w:literal)) => {
+        JsConv::NumList($w)
+    };
+    (hex($w:literal)) => {
+        JsConv::Hex($w)
+    };
+    (hex_list($w:literal)) => {
+        JsConv::HexList($w)
+    };
+    (hex_single($w:literal)) => {
+        JsConv::HexSingle($w)
+    };
+    (hex_or_keep($w:literal, $d:literal)) => {
+        JsConv::HexOrKeep($w, $d)
+    };
+    (strip0x($w:literal, $d:literal)) => {
+        JsConv::Strip0x($w, $d)
+    };
+    (struct_field($s:literal, $sub:literal, keep($d:literal))) => {
+        JsConv::StructField($s, $sub, JsSubConv::Keep($d))
+    };
+    (struct_field($s:literal, $sub:literal, to_str($d:literal))) => {
+        JsConv::StructField($s, $sub, JsSubConv::ToString($d))
+    };
+    (struct_field($s:literal, $sub:literal, hex_or_keep($d:literal))) => {
+        JsConv::StructField($s, $sub, JsSubConv::HexOrKeep($d))
+    };
+    (struct_field($s:literal, $sub:literal, hex())) => {
+        JsConv::StructField($s, $sub, JsSubConv::Hex)
+    };
 }
 
 /// Wire-value extraction expression (Rust decode direction). `fields` is the
 /// parameter of the generated `map_action_spec`.
 macro_rules! rust_expr {
-    ($fields:ident, none()) => { None };
-    ($fields:ident, empty()) => { String::new() };
-    ($fields:ident, str($w:literal)) => { crate::spec_codec::field_str(&$fields, $w)? };
-    ($fields:ident, some_str($w:literal)) => { Some(crate::spec_codec::field_str(&$fields, $w)?) };
-    ($fields:ident, num($w:literal)) => { crate::spec_codec::field_num(&$fields, $w)? };
-    ($fields:ident, opt($w:literal, $ty:literal)) => { crate::spec_codec::field_opt(&$fields, $w)? };
-    ($fields:ident, str_list($w:literal)) => { crate::spec_codec::field_str_list(&$fields, $w)? };
-    ($fields:ident, num_list($w:literal)) => { crate::spec_codec::field_num_list(&$fields, $w)? };
-    ($fields:ident, dia($w:literal)) => { crate::spec_codec::diamond_field_readable(&$fields, $w)? };
-    ($fields:ident, dia_name()) => { crate::spec_codec::diamond_name_readable(&$fields)? };
-    ($fields:ident, dia_list()) => { crate::spec_codec::diamond_names_readable(&$fields)? };
-    ($fields:ident, dia_single()) => { vec![crate::spec_codec::diamond_name_readable(&$fields)?] };
-    ($fields:ident, asset_num($w:literal)) => { crate::spec_codec::field_num(crate::spec_codec::asset_fields(&$fields)?, $w)? };
-    ($fields:ident, asset_str($w:literal)) => { crate::spec_codec::field_str(crate::spec_codec::asset_fields(&$fields)?, $w)? };
-    ($fields:ident, struct_str($s:literal, $w:literal)) => { crate::spec_codec::struct_field_str(crate::spec_codec::fields_struct(&$fields, $s)?, $w)? };
-    ($fields:ident, struct_opt_str($s:literal, $w:literal)) => { crate::spec_codec::struct_field_opt_str(crate::spec_codec::fields_struct(&$fields, $s)?, $w)? };
-    ($fields:ident, struct_readable($s:literal, $w:literal)) => { crate::spec_codec::struct_field_readable(crate::spec_codec::fields_struct(&$fields, $s)?, $w)? };
+    ($fields:ident, none()) => {
+        None
+    };
+    ($fields:ident, empty()) => {
+        String::new()
+    };
+    ($fields:ident, str($w:literal)) => {
+        crate::spec_codec::field_str(&$fields, $w)?
+    };
+    ($fields:ident, some_str($w:literal)) => {
+        Some(crate::spec_codec::field_str(&$fields, $w)?)
+    };
+    ($fields:ident, num($w:literal)) => {
+        crate::spec_codec::field_num(&$fields, $w)?
+    };
+    ($fields:ident, opt($w:literal, $ty:literal)) => {
+        crate::spec_codec::field_opt(&$fields, $w)?
+    };
+    ($fields:ident, str_list($w:literal)) => {
+        crate::spec_codec::field_str_list(&$fields, $w)?
+    };
+    ($fields:ident, num_list($w:literal)) => {
+        crate::spec_codec::field_num_list(&$fields, $w)?
+    };
+    ($fields:ident, dia($w:literal)) => {
+        crate::spec_codec::diamond_field_readable(&$fields, $w)?
+    };
+    ($fields:ident, dia_name()) => {
+        crate::spec_codec::diamond_name_readable(&$fields)?
+    };
+    ($fields:ident, dia_list()) => {
+        crate::spec_codec::diamond_names_readable(&$fields)?
+    };
+    ($fields:ident, dia_single()) => {
+        vec![crate::spec_codec::diamond_name_readable(&$fields)?]
+    };
+    ($fields:ident, asset_num($w:literal)) => {
+        crate::spec_codec::field_num(crate::spec_codec::asset_fields(&$fields)?, $w)?
+    };
+    ($fields:ident, asset_str($w:literal)) => {
+        crate::spec_codec::field_str(crate::spec_codec::asset_fields(&$fields)?, $w)?
+    };
+    ($fields:ident, struct_str($s:literal, $w:literal)) => {
+        crate::spec_codec::struct_field_str(crate::spec_codec::fields_struct(&$fields, $s)?, $w)?
+    };
+    ($fields:ident, struct_opt_str($s:literal, $w:literal)) => {
+        crate::spec_codec::struct_field_opt_str(
+            crate::spec_codec::fields_struct(&$fields, $s)?,
+            $w,
+        )?
+    };
+    ($fields:ident, struct_readable($s:literal, $w:literal)) => {
+        crate::spec_codec::struct_field_readable(
+            crate::spec_codec::fields_struct(&$fields, $s)?,
+            $w,
+        )?
+    };
 }
 
 /// Declares the friendly action spec table and generates the wire → friendly
@@ -457,11 +561,8 @@ pub fn friendly_groups() -> Vec<FriendlyGroup<'static>> {
                     .iter()
                     .any(|f| f.friendly == "to" && !matches!(f.rust, RustConv::ConstEmpty))
             };
-            let usable: Vec<&'static ActionSpecDef> = entries
-                .iter()
-                .copied()
-                .filter(|d| has_real_to(d))
-                .collect();
+            let usable: Vec<&'static ActionSpecDef> =
+                entries.iter().copied().filter(|d| has_real_to(d)).collect();
             // a real `from` field (some_str); the `none()` placeholder field
             // on the *_to kinds does not count
             let has_real_from = |d: &&'static ActionSpecDef| {
@@ -470,23 +571,26 @@ pub fn friendly_groups() -> Vec<FriendlyGroup<'static>> {
                     .any(|f| f.friendly == "from" && !matches!(f.rust, RustConv::ConstNone))
             };
             let has_hex_single = |d: &&'static ActionSpecDef| {
-                d.fields.iter().any(|f| matches!(f.js, JsConv::HexSingle(_)))
+                d.fields
+                    .iter()
+                    .any(|f| matches!(f.js, JsConv::HexSingle(_)))
             };
             let to_kind = usable
                 .iter()
                 .find(|d| !has_real_from(d) && !has_hex_single(d))
                 .map(|d| d.kind);
-            let from_to_kind = usable
-                .iter()
-                .find(|d| has_real_from(d))
-                .map(|d| d.kind);
+            let from_to_kind = usable.iter().find(|d| has_real_from(d)).map(|d| d.kind);
             let from_only_kind = entries
                 .iter()
                 .find(|d| has_real_from(d) && !has_real_to(d))
                 .map(|d| d.kind);
             let single_entry = usable
                 .iter()
-                .find(|d| d.fields.iter().any(|f| matches!(f.js, JsConv::HexSingle(_))))
+                .find(|d| {
+                    d.fields
+                        .iter()
+                        .any(|f| matches!(f.js, JsConv::HexSingle(_)))
+                })
                 .copied();
             let list_entry = usable
                 .iter()
@@ -508,7 +612,8 @@ pub fn friendly_groups() -> Vec<FriendlyGroup<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base::ActionSchema;    fn action_schemas() -> Vec<ActionSchema> {
+    use base::ActionSchema;
+    fn action_schemas() -> Vec<ActionSchema> {
         crate::codec::standard_codecs()
             .expect("standard codecs assembly")
             .action_schemas()
@@ -573,20 +678,22 @@ mod tests {
                         // serial/amount sub-fields are intrinsic (no struct schema)
                         assert!(
                             action.fields.iter().any(|sf| {
-                                sf.name == "asset"
-                                    && matches!(sf.wire, field::FieldWire::AssetAmt)
+                                sf.name == "asset" && matches!(sf.wire, field::FieldWire::AssetAmt)
                             }),
                             "{} has no asset_amt wire field",
                             def.kind
                         );
                         let _ = w;
                     }
-                    RustConv::StructStr(s, w) | RustConv::StructReadable(s, w) | RustConv::StructOptStr(s, w) => {
+                    RustConv::StructStr(s, w)
+                    | RustConv::StructReadable(s, w)
+                    | RustConv::StructOptStr(s, w) => {
                         let name = nested_struct_wire(action, s)
                             .unwrap_or_else(|| panic!("{} has no nested struct {s}", def.kind));
                         assert!(
-                            structs.iter().any(|st| st.name == name
-                                && st.fields.iter().any(|sf| sf.name == w)),
+                            structs.iter().any(
+                                |st| st.name == name && st.fields.iter().any(|sf| sf.name == w)
+                            ),
                             "{} {s}.{w} missing in nested struct {name}",
                             def.kind
                         );
@@ -658,9 +765,8 @@ mod tests {
                 .iter()
                 .any(|f| f.friendly == "from" && !matches!(f.rust, RustConv::ConstNone))
         };
-        let has_hex_single = |d: &&'static ActionSpecDef| {
-            d.fields.iter().any(|f| matches!(f.js, HexSingle(_)))
-        };
+        let has_hex_single =
+            |d: &&'static ActionSpecDef| d.fields.iter().any(|f| matches!(f.js, HexSingle(_)));
         for group in friendly_groups() {
             let entries: Vec<&'static ActionSpecDef> = ACTION_SPECS
                 .iter()
@@ -720,7 +826,10 @@ mod tests {
     fn every_tabled_kind_resolves_a_friendly_family() {
         for def in ACTION_SPECS {
             let friendly = friendly_of(def.kind).unwrap_or_else(|| {
-                panic!("ACTION_SPECS kind {} has no registered friendly family", def.kind)
+                panic!(
+                    "ACTION_SPECS kind {} has no registered friendly family",
+                    def.kind
+                )
             });
             // The resolved name must be the family that owns the kind.
             let number = action_kind_of(def.kind)
@@ -753,9 +862,9 @@ mod tests {
             RustConv::DiaName | RustConv::DiaSingle => Some("diamond"),
             RustConv::DiaList => Some("diamonds"),
             RustConv::AssetNum(_) | RustConv::AssetStr(_) => Some("asset"),
-            RustConv::StructStr(s, _) | RustConv::StructReadable(s, _) | RustConv::StructOptStr(s, _) => {
-                Some(s)
-            }
+            RustConv::StructStr(s, _)
+            | RustConv::StructReadable(s, _)
+            | RustConv::StructOptStr(s, _) => Some(s),
             RustConv::ConstNone | RustConv::ConstEmpty => None,
         }
     }
@@ -827,14 +936,14 @@ mod tests {
                         );
                     }
                     _ => {
-                        let covered = def.fields.iter().any(|f| {
-                            referenced_wire_field(f.rust) == Some(sf.name)
-                        });
+                        let covered = def
+                            .fields
+                            .iter()
+                            .any(|f| referenced_wire_field(f.rust) == Some(sf.name));
                         assert!(
                             covered,
                             "{} wire field {} not covered by the table",
-                            def.kind,
-                            sf.name
+                            def.kind, sf.name
                         );
                     }
                 }

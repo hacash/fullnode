@@ -79,12 +79,21 @@ impl<'a> Reader<'a> {
     }
 
     fn take(&mut self, n: usize) -> Ret<&'a [u8]> {
-        if self.pos + n > self.buf.len() {
-            return sys::errf!("payload truncated at {}", self.pos);
-        }
-        let slice = &self.buf[self.pos..self.pos + n];
-        self.pos += n;
+        let end = self
+            .pos
+            .checked_add(n)
+            .filter(|end| *end <= self.buf.len())
+            .ok_or_else(|| sys::Error::normal(format!("payload truncated at {}", self.pos)))?;
+        let slice = &self.buf[self.pos..end];
+        self.pos = end;
         Ok(slice)
+    }
+
+    fn reserve_items(&self, count: usize, min_size: usize) -> Ret<()> {
+        if min_size != 0 && count > self.buf.len().saturating_sub(self.pos) / min_size {
+            return errf!("payload list count {} exceeds remaining bytes", count);
+        }
+        Ok(())
     }
 
     fn u8(&mut self) -> Ret<u8> {
@@ -134,7 +143,11 @@ fn decode_wire(r: &mut Reader, wire: &FieldWire) -> Ret<WireValue> {
         FieldWire::U1 | FieldWire::U8 => Ok(WireValue::Num(r.u8()? as u64)),
         FieldWire::U2 => Ok(WireValue::Num(r.u16()? as u64)),
         FieldWire::U4 => Ok(WireValue::Num(r.u32()? as u64)),
-        FieldWire::U5 => Ok(WireValue::Num(r.w2_str()?.parse().map_err(|_| sys::Error::fault("bad u5"))?)),
+        FieldWire::U5 => Ok(WireValue::Num(
+            r.w2_str()?
+                .parse()
+                .map_err(|_| sys::Error::fault("bad u5"))?,
+        )),
         FieldWire::Fixed(n) => {
             let bytes = r.take(*n as usize)?;
             Ok(WireValue::Hex(bytes.to_vec()))
@@ -153,10 +166,11 @@ fn decode_wire(r: &mut Reader, wire: &FieldWire) -> Ret<WireValue> {
         | FieldWire::DiamondName
         | FieldWire::SignW2
         | FieldWire::AssetAmtW1 => Ok(WireValue::Hex(r.w2_bytes()?)),
-        FieldWire::DiamondNameList
-        | FieldWire::ChainIDList
-        | FieldWire::ContractAddrListW1 => {
+        FieldWire::DiamondNameList | FieldWire::ChainIDList | FieldWire::ContractAddrListW1 => {
+            // The design-A SDK transport uses a uniform u16 list count; the
+            // native field encoder below narrows W1 shapes with from_usize.
             let count = r.u16()? as usize;
+            r.reserve_items(count, 2)?;
             let mut items = Vec::with_capacity(count);
             for _ in 0..count {
                 items.push(WireValue::Hex(r.w2_bytes()?));
@@ -175,6 +189,7 @@ fn decode_wire(r: &mut Reader, wire: &FieldWire) -> Ret<WireValue> {
         }
         FieldWire::ListW1(_) | FieldWire::ListW2(_) => {
             let count = r.u16()? as usize;
+            r.reserve_items(count, 1)?;
             let elem_wire = element_wire(wire);
             let mut items = Vec::with_capacity(count);
             for _ in 0..count {
@@ -185,6 +200,7 @@ fn decode_wire(r: &mut Reader, wire: &FieldWire) -> Ret<WireValue> {
         FieldWire::Struct(name) => Ok(WireValue::Struct(decode_struct_fields(r, name)?)),
         FieldWire::ActionList => {
             let count = r.u16()? as usize;
+            r.reserve_items(count, 2)?;
             let mut items = Vec::with_capacity(count);
             for _ in 0..count {
                 items.push(decode_action_value(r)?);
@@ -194,6 +210,7 @@ fn decode_wire(r: &mut Reader, wire: &FieldWire) -> Ret<WireValue> {
         FieldWire::ActionListW1 => {
             // `AstSelect.actions` (ActionListW1) uses a 1-byte count
             let count = r.u8()? as usize;
+            r.reserve_items(count, 2)?;
             let mut items = Vec::with_capacity(count);
             for _ in 0..count {
                 items.push(decode_action_value(r)?);
@@ -225,7 +242,8 @@ pub(crate) fn element_wire(wire: &FieldWire) -> FieldWire {
 /// (length 0 = absent), so a missing optional field consumes two bytes and is
 /// never ambiguous with the following data.
 fn decode_struct_fields(r: &mut Reader, name: &str) -> Ret<Vec<(String, WireValue)>> {
-    let fields = struct_fields_of(name).ok_or_else(|| sys::Error::fault(format!("unknown struct schema {}", name)))?;
+    let fields = struct_fields_of(name)
+        .ok_or_else(|| sys::Error::fault(format!("unknown struct schema {}", name)))?;
     if fields.is_empty() {
         // Placeholder empty schemas (e.g. TexCell/FuncArgvTypes) cannot be
         // decoded: error out rather than silently consuming zero bytes
@@ -253,6 +271,9 @@ fn decode_schema_fields(
             let inner = r.take(len)?;
             let mut sub = Reader::new(inner);
             let value = decode_wire(&mut sub, &field.wire)?;
+            if !sub.done() {
+                return errf!("optional field {} has trailing bytes", field.name);
+            }
             out.push((field.name.to_owned(), value));
         } else {
             let value = decode_wire(r, &field.wire)?;
@@ -280,7 +301,11 @@ pub(crate) fn schema_wire_of(action_name: &str, field: &str) -> Option<FieldWire
 /// Wire shape of one member of a nested struct reference (used by the
 /// table-driven build direction). The `asset` field is the dedicated
 /// `AssetAmt` wire variant whose serial/amount members are intrinsic.
-pub(crate) fn struct_member_wire(action_name: &str, struct_field: &str, member: &str) -> Option<FieldWire> {
+pub(crate) fn struct_member_wire(
+    action_name: &str,
+    struct_field: &str,
+    member: &str,
+) -> Option<FieldWire> {
     let action = action_schema_registry()
         .iter()
         .find(|(n, _)| *n == action_name)
@@ -304,7 +329,8 @@ pub(crate) fn struct_member_wire(action_name: &str, struct_field: &str, member: 
 /// re-encoded by the generic constructor without losing the dispatch tag.
 fn decode_action_value(r: &mut Reader) -> Ret<WireValue> {
     let kind = r.u16()?;
-    let schema = action_schema_of(kind).ok_or_else(|| sys::Error::fault(format!("unknown action kind {}", kind)))?;
+    let schema = action_schema_of(kind)
+        .ok_or_else(|| sys::Error::fault(format!("unknown action kind {}", kind)))?;
     let mut fields = Vec::with_capacity(schema.fields.len());
     fields.push(("kind".to_owned(), WireValue::Str(schema.name.to_owned())));
     fields.extend(decode_schema_fields(r, schema.fields)?);
@@ -340,8 +366,7 @@ fn struct_fields_of(name: &str) -> Option<&'static [base::FieldSchema]> {
 /// actions need no registration here).
 fn action_schema_registry() -> &'static Vec<(&'static str, &'static base::ActionSchema)> {
     use std::sync::OnceLock;
-    static REGISTRY: OnceLock<Vec<(&'static str, &'static base::ActionSchema)>> =
-        OnceLock::new();
+    static REGISTRY: OnceLock<Vec<(&'static str, &'static base::ActionSchema)>> = OnceLock::new();
     REGISTRY.get_or_init(|| {
         let codecs = crate::codec::standard_codecs().expect("standard codecs assembly");
         codecs
@@ -360,8 +385,7 @@ fn collect_struct_schemas() -> Vec<(&'static str, &'static base::StructSchema)> 
 
 fn struct_schema_registry() -> &'static Vec<(&'static str, &'static base::StructSchema)> {
     use std::sync::OnceLock;
-    static REGISTRY: OnceLock<Vec<(&'static str, &'static base::StructSchema)>> =
-        OnceLock::new();
+    static REGISTRY: OnceLock<Vec<(&'static str, &'static base::StructSchema)>> = OnceLock::new();
     REGISTRY.get_or_init(collect_struct_schemas)
 }
 
@@ -386,6 +410,7 @@ pub(crate) fn decode_transaction_spec_parts(
     let timestamp = r.u64().map_err(spec_err)?;
     let gas_max = r.u8().map_err(spec_err)?;
     let count = r.u16().map_err(spec_err)? as usize;
+    r.reserve_items(count, 2).map_err(spec_err)?;
     let mut actions = Vec::with_capacity(count);
     let mut kinds = Vec::with_capacity(count);
     for _ in 0..count {
@@ -394,7 +419,9 @@ pub(crate) fn decode_transaction_spec_parts(
         actions.push(action);
     }
     if !r.done() {
-        return Err(spec_err(sys::Error::fault("trailing bytes in TransactionSpec payload")));
+        return Err(spec_err(sys::Error::fault(
+            "trailing bytes in TransactionSpec payload",
+        )));
     }
     Ok((
         kinds,
@@ -424,7 +451,10 @@ fn decode_action_spec(r: &mut Reader) -> Result<(u16, ActionSpec), SdkError> {
         )
     })?;
     let fields = decode_schema_fields(r, schema.fields).map_err(spec_err)?;
-    Ok((kind, crate::actionspec::map_action_spec(schema.name, fields)?))
+    Ok((
+        kind,
+        crate::actionspec::map_action_spec(schema.name, fields)?,
+    ))
 }
 
 pub(crate) fn field_str(fields: &[(String, WireValue)], name: &str) -> Result<String, SdkError> {
@@ -439,7 +469,10 @@ pub(crate) fn field_str(fields: &[(String, WireValue)], name: &str) -> Result<St
     }
 }
 
-pub(crate) fn field_num<T: std::str::FromStr>(fields: &[(String, WireValue)], name: &str) -> Result<T, SdkError> {
+pub(crate) fn field_num<T: std::str::FromStr>(
+    fields: &[(String, WireValue)],
+    name: &str,
+) -> Result<T, SdkError> {
     field_str(fields, name)?
         .parse()
         .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, format!("field {} invalid", name)))
@@ -462,9 +495,9 @@ pub(crate) fn field_opt<T: std::str::FromStr>(
                 WireValue::Hex(b) => hex::encode(b),
                 _ => return Err(SdkError::new(SdkErrorCode::ParseFailed, "bad field")),
             };
-            s.parse::<T>()
-                .map(Some)
-                .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, format!("field {} invalid", name)))
+            s.parse::<T>().map(Some).map_err(|_| {
+                SdkError::new(SdkErrorCode::ParseFailed, format!("field {} invalid", name))
+            })
         }
         None => Ok(None),
     }
@@ -486,7 +519,7 @@ pub(crate) fn field_num_list<T: std::str::FromStr>(
                         return Err(SdkError::new(
                             SdkErrorCode::ParseFailed,
                             format!("field {} items invalid", name),
-                        ))
+                        ));
                     }
                 };
                 out.push(s.parse().map_err(|_| {
@@ -502,7 +535,10 @@ pub(crate) fn field_num_list<T: std::str::FromStr>(
     }
 }
 
-pub(crate) fn field_str_list(fields: &[(String, WireValue)], name: &str) -> Result<Vec<String>, SdkError> {
+pub(crate) fn field_str_list(
+    fields: &[(String, WireValue)],
+    name: &str,
+) -> Result<Vec<String>, SdkError> {
     match fields.iter().find(|(n, _)| n == name) {
         Some((_, WireValue::List(items))) => {
             let mut out = Vec::with_capacity(items.len());
@@ -515,7 +551,7 @@ pub(crate) fn field_str_list(fields: &[(String, WireValue)], name: &str) -> Resu
                         return Err(SdkError::new(
                             SdkErrorCode::ParseFailed,
                             format!("field {} items invalid", name),
-                        ))
+                        ));
                     }
                 });
             }
@@ -535,9 +571,8 @@ pub(crate) fn diamond_field_readable(
     name: &str,
 ) -> Result<String, SdkError> {
     match fields.iter().find(|(n, _)| n == name) {
-        Some((_, WireValue::Hex(bytes))) => String::from_utf8(bytes.clone()).map_err(|_| {
-            SdkError::new(SdkErrorCode::ParseFailed, "diamond name is not ascii")
-        }),
+        Some((_, WireValue::Hex(bytes))) => String::from_utf8(bytes.clone())
+            .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "diamond name is not ascii")),
         Some((_, WireValue::Str(s))) => Ok(s.clone()),
         _ => Err(SdkError::new(
             SdkErrorCode::ParseFailed,
@@ -550,27 +585,34 @@ pub(crate) fn diamond_name_readable(fields: &[(String, WireValue)]) -> Result<St
     diamond_field_readable(fields, "diamond")
 }
 
-pub(crate) fn diamond_names_readable(fields: &[(String, WireValue)]) -> Result<Vec<String>, SdkError> {
+pub(crate) fn diamond_names_readable(
+    fields: &[(String, WireValue)],
+) -> Result<Vec<String>, SdkError> {
     match fields.iter().find(|(n, _)| n == "diamonds") {
         Some((_, WireValue::List(items))) => {
             let mut out = Vec::with_capacity(items.len());
             for item in items {
                 match item {
-                    WireValue::Hex(bytes) => out.push(String::from_utf8(bytes.clone()).map_err(
-                        |_| SdkError::new(SdkErrorCode::ParseFailed, "diamond name is not ascii"),
-                    )?),
+                    WireValue::Hex(bytes) => {
+                        out.push(String::from_utf8(bytes.clone()).map_err(|_| {
+                            SdkError::new(SdkErrorCode::ParseFailed, "diamond name is not ascii")
+                        })?)
+                    }
                     WireValue::Str(s) => out.push(s.clone()),
                     _ => {
                         return Err(SdkError::new(
                             SdkErrorCode::ParseFailed,
                             "diamonds items must be hex",
-                        ))
+                        ));
                     }
                 }
             }
             Ok(out)
         }
-        _ => Err(SdkError::new(SdkErrorCode::ParseFailed, "diamonds field missing")),
+        _ => Err(SdkError::new(
+            SdkErrorCode::ParseFailed,
+            "diamonds field missing",
+        )),
     }
 }
 
@@ -602,7 +644,10 @@ pub(crate) fn fields_struct<'a>(
     }
 }
 
-pub(crate) fn struct_field_str(items: &[(String, WireValue)], name: &str) -> Result<String, SdkError> {
+pub(crate) fn struct_field_str(
+    items: &[(String, WireValue)],
+    name: &str,
+) -> Result<String, SdkError> {
     match items.iter().find(|(n, _)| n == name) {
         Some((_, WireValue::Str(s))) => Ok(s.clone()),
         Some((_, WireValue::Hex(b))) => Ok(hex::encode(b)),
@@ -634,11 +679,13 @@ pub(crate) fn struct_field_opt_str(
 
 /// Convert a hex byte field inside a struct to a readable string
 /// (`DiamondMintData.diamond`).
-pub(crate) fn struct_field_readable(items: &[(String, WireValue)], name: &str) -> Result<String, SdkError> {
+pub(crate) fn struct_field_readable(
+    items: &[(String, WireValue)],
+    name: &str,
+) -> Result<String, SdkError> {
     match items.iter().find(|(n, _)| n == name) {
-        Some((_, WireValue::Hex(bytes))) => String::from_utf8(bytes.clone()).map_err(|_| {
-            SdkError::new(SdkErrorCode::ParseFailed, "diamond name is not ascii")
-        }),
+        Some((_, WireValue::Hex(bytes))) => String::from_utf8(bytes.clone())
+            .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "diamond name is not ascii")),
         Some((_, WireValue::Str(s))) => Ok(s.clone()),
         _ => Err(SdkError::new(
             SdkErrorCode::ParseFailed,
@@ -653,9 +700,11 @@ pub(crate) fn struct_field_readable(items: &[(String, WireValue)], name: &str) -
 // encoder produced) into *native* action payload bytes, then hands them to the
 // protocol's own action decoder. This is how any action kind the codec schema
 // registry knows can be built through the raw path — no per-action
-// constructor, no hand-written capability list. Kinds without a transaction
-// action codec (e.g. VM host opcodes) fail at `decode_action` with the
-// registry's error; that boundary is the chain's, not the SDK's.
+// constructor, no hand-written capability list. Kinds the protocol registry
+// cannot decode fail at `decode_action` with the registry's error; that
+// boundary is the chain's, not the SDK's. Whether the resulting body is
+// executable (scope, min tx type, flags) is reported by inspect as topology
+// facts and decided by the chain at execute time.
 
 fn push_u16(out: &mut Vec<u8>, v: u16) {
     out.extend_from_slice(&v.to_be_bytes());
@@ -719,25 +768,41 @@ pub(crate) fn encode_wire(out: &mut Vec<u8>, wire: &FieldWire, value: &WireValue
             AddrOrList::Single(address).encode_to(out);
         }
         FieldWire::Satoshi => {
-            let n: u64 = value.as_str()?.parse().map_err(|_| sys::Error::normal("satoshi not a decimal string"))?;
+            let n: u64 = value
+                .as_str()?
+                .parse()
+                .map_err(|_| sys::Error::normal("satoshi not a decimal string"))?;
             Satoshi::from(n).encode_to(out);
         }
         FieldWire::Fold64 => {
-            let n: u64 = value.as_str()?.parse().map_err(|_| sys::Error::normal("fold64 not a decimal string"))?;
+            let n: u64 = value
+                .as_str()?
+                .parse()
+                .map_err(|_| sys::Error::normal("fold64 not a decimal string"))?;
             Fold64::from(n)?.encode_to(out);
         }
         FieldWire::Timestamp => {
-            let n: u64 = value.as_str()?.parse().map_err(|_| sys::Error::normal("timestamp not a decimal string"))?;
+            let n: u64 = value
+                .as_str()?
+                .parse()
+                .map_err(|_| sys::Error::normal("timestamp not a decimal string"))?;
             Timestamp::from_checked(n)?.encode_to(out);
         }
         FieldWire::DiamondNumber => {
-            let n: u32 = value.as_str()?.parse().map_err(|_| sys::Error::normal("diamond number not a decimal string"))?;
+            let n: u32 = value
+                .as_str()?
+                .parse()
+                .map_err(|_| sys::Error::normal("diamond number not a decimal string"))?;
             DiamondNumber::from(n).encode_to(out);
         }
         FieldWire::DiamondName => {
             let bytes = value.as_hex()?;
             if bytes.len() != DiamondName::SIZE {
-                return errf!("diamond name must be {} bytes, got {}", DiamondName::SIZE, bytes.len());
+                return errf!(
+                    "diamond name must be {} bytes, got {}",
+                    DiamondName::SIZE,
+                    bytes.len()
+                );
             }
             DiamondName::from(bytes.try_into().expect("diamond name size checked")).encode_to(out);
         }
@@ -755,8 +820,12 @@ pub(crate) fn encode_wire(out: &mut Vec<u8>, wire: &FieldWire, value: &WireValue
                 return errf!("sign must be {} bytes, got {}", Sign::SIZE, bytes.len());
             }
             Sign {
-                publickey: bytes[..Sign::PUBLICKEY_SIZE].try_into().expect("sign split"),
-                signature: bytes[Sign::PUBLICKEY_SIZE..].try_into().expect("sign split"),
+                publickey: bytes[..Sign::PUBLICKEY_SIZE]
+                    .try_into()
+                    .expect("sign split"),
+                signature: bytes[Sign::PUBLICKEY_SIZE..]
+                    .try_into()
+                    .expect("sign split"),
             }
             .encode_to(out);
         }
@@ -767,11 +836,15 @@ pub(crate) fn encode_wire(out: &mut Vec<u8>, wire: &FieldWire, value: &WireValue
         }
         FieldWire::DiamondNameList => {
             let items = value.as_list()?;
-            Uint1::from(items.len() as u8).encode_to(out);
+            Uint1::from_usize(items.len())?.encode_to(out);
             for item in items {
                 let bytes = item.as_hex()?;
                 if bytes.len() != DiamondName::SIZE {
-                    return errf!("diamond name must be {} bytes, got {}", DiamondName::SIZE, bytes.len());
+                    return errf!(
+                        "diamond name must be {} bytes, got {}",
+                        DiamondName::SIZE,
+                        bytes.len()
+                    );
                 }
                 DiamondName::from(bytes.try_into().expect("diamond name size checked"))
                     .encode_to(out);
@@ -779,7 +852,7 @@ pub(crate) fn encode_wire(out: &mut Vec<u8>, wire: &FieldWire, value: &WireValue
         }
         FieldWire::ChainIDList => {
             let items = value.as_list()?;
-            Uint1::from(items.len() as u8).encode_to(out);
+            Uint1::from_usize(items.len())?.encode_to(out);
             for item in items {
                 let bytes = item.as_hex()?;
                 if bytes.len() != 4 {
@@ -791,7 +864,7 @@ pub(crate) fn encode_wire(out: &mut Vec<u8>, wire: &FieldWire, value: &WireValue
         }
         FieldWire::ContractAddrListW1 => {
             let items = value.as_list()?;
-            Uint1::from(items.len() as u8).encode_to(out);
+            Uint1::from_usize(items.len())?.encode_to(out);
             for item in items {
                 Address::from_readable(item.as_str()?)?.encode_to(out);
             }
@@ -810,8 +883,8 @@ pub(crate) fn encode_wire(out: &mut Vec<u8>, wire: &FieldWire, value: &WireValue
         FieldWire::ListW1(_) | FieldWire::ListW2(_) => {
             let items = value.as_list()?;
             match wire {
-                FieldWire::ListW1(_) => Uint1::from(items.len() as u8).encode_to(out),
-                FieldWire::ListW2(_) => Uint2::from(items.len() as u16).encode_to(out),
+                FieldWire::ListW1(_) => Uint1::from_usize(items.len())?.encode_to(out),
+                FieldWire::ListW2(_) => Uint2::from_usize(items.len())?.encode_to(out),
                 _ => unreachable!("list arms"),
             }
             let elem_wire = element_wire(wire);
@@ -824,17 +897,14 @@ pub(crate) fn encode_wire(out: &mut Vec<u8>, wire: &FieldWire, value: &WireValue
         }
         FieldWire::ActionList => {
             let items = value.as_list()?;
-            Uint2::from(items.len() as u16).encode_to(out);
+            Uint2::from_usize(items.len())?.encode_to(out);
             for item in items {
                 encode_nested_action(out, item)?;
             }
         }
         FieldWire::ActionListW1 => {
             let items = value.as_list()?;
-            if items.len() > 0xff {
-                return errf!("action list exceeds 255 items: {}", items.len());
-            }
-            Uint1::from(items.len() as u8).encode_to(out);
+            Uint1::from_usize(items.len())?.encode_to(out);
             for item in items {
                 encode_nested_action(out, item)?;
             }
@@ -891,6 +961,14 @@ fn encode_struct_fields(out: &mut Vec<u8>, name: &str, items: &[(String, WireVal
         return errf!("struct schema {name} has no fields (not yet supported)");
     }
     for (field_name, _) in items {
+        if items
+            .iter()
+            .filter(|(known, _)| known == field_name)
+            .count()
+            != 1
+        {
+            return errf!("struct {name} has duplicate field {field_name}");
+        }
         if field_name == "kind" {
             continue;
         }
@@ -919,6 +997,15 @@ fn encode_struct_fields(out: &mut Vec<u8>, name: &str, items: &[(String, WireVal
 #[cfg(test)]
 mod golden_tests {
     use super::*;
+
+    #[test]
+    fn design_a_list_count_is_u16_before_native_narrowing() {
+        let payload = [0u8, 1, 0, 6, b'A', b'B', b'C', b'D', b'E', b'F'];
+        let mut reader = Reader::new(&payload);
+        let value = decode_wire(&mut reader, &FieldWire::DiamondNameList).unwrap();
+        assert!(reader.done());
+        assert_eq!(value.as_list().unwrap().len(), 1);
+    }
 
     /// Parses a flat JSON object into sorted (key, value) pairs so key order
     /// never affects the comparison.
@@ -961,11 +1048,8 @@ mod golden_tests {
                 }
                 let bytes = hex::decode(&payload_hex).expect("payload hex");
                 let spec = decode_transaction_spec_binary(&bytes).expect("payload decodes");
-                let actions: Vec<String> = spec
-                    .actions
-                    .iter()
-                    .map(|a| a.to_json_string())
-                    .collect();
+                let actions: Vec<String> =
+                    spec.actions.iter().map(|a| a.to_json_string()).collect();
                 let actual = format!("{{\"actions\":[{}]}}", actions.join(","));
                 assert_eq!(
                     sorted_pairs(&actual),
@@ -975,6 +1059,9 @@ mod golden_tests {
                 vectors += 1;
             }
         }
-        assert!(vectors >= 20, "expected a full golden vector set, got {vectors}");
+        assert!(
+            vectors >= 20,
+            "expected a full golden vector set, got {vectors}"
+        );
     }
 }

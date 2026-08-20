@@ -2,16 +2,14 @@
 //! §4.1/§4.7/§6.2). `profile_hash` pins the codec identity: any protocol or
 //! registry change rotates it, invalidating outstanding review bindings.
 
-
 use crate::error::{SdkError, SdkErrorCode};
 use crate::schema::{DOMAIN_CODEC_PROFILE, SCHEMA_CAPABILITIES, SCHEMA_CODEC_PROFILE};
 
 pub const SDK_VERSION: &str = "0.2.1";
 pub const ABI_MAJOR: u32 = 2;
-/// v2.1: `tx.inspect` no longer denies reviews for height/chain guards; the
-/// strict-mode context is evaluated into facts (`expired_height`/
-/// `wrong_chain`, review schema v2) and the upper layer decides.
-pub const ABI_MINOR: u32 = 1;
+/// v2.2: review reports protocol topology findings as facts
+/// (`topology_violations`); the SDK never refuses inspect/build for them.
+pub const ABI_MINOR: u32 = 2;
 /// Fullnode source commit this SDK's protocol/codec behavior corresponds to.
 /// Injected from git by `build.rs` (never hand-maintained), so the profile
 /// identity can never lag behind a protocol/registry-affecting change.
@@ -207,13 +205,27 @@ pub struct OpDef {
 }
 
 macro_rules! op_req {
-    (w2_str($a:literal)) => { OpRequestField::W2Str($a) };
-    (opt_w2_str($a:literal)) => { OpRequestField::OptW2Str($a) };
-    (w4_bin($a:literal)) => { OpRequestField::W4Bin($a) };
-    (opt_w4_bin($a:literal)) => { OpRequestField::OptW4Bin($a) };
-    (opt_u64($a:literal)) => { OpRequestField::OptU64($a) };
-    (u8($a:literal)) => { OpRequestField::U8($a) };
-    (opt_ctx($a:literal)) => { OpRequestField::OptInspectContext($a) };
+    (w2_str($a:literal)) => {
+        OpRequestField::W2Str($a)
+    };
+    (opt_w2_str($a:literal)) => {
+        OpRequestField::OptW2Str($a)
+    };
+    (w4_bin($a:literal)) => {
+        OpRequestField::W4Bin($a)
+    };
+    (opt_w4_bin($a:literal)) => {
+        OpRequestField::OptW4Bin($a)
+    };
+    (opt_u64($a:literal)) => {
+        OpRequestField::OptU64($a)
+    };
+    (u8($a:literal)) => {
+        OpRequestField::U8($a)
+    };
+    (opt_ctx($a:literal)) => {
+        OpRequestField::OptInspectContext($a)
+    };
 }
 
 /// Every operation the dispatcher routes. Single registry: `capabilities()`
@@ -297,7 +309,10 @@ pub fn check_profile_hash(expected: &str, actual: &str) -> Result<(), SdkError> 
         return Err(SdkError::with_detail(
             SdkErrorCode::CodecProfileMismatch,
             "codec profile hash mismatch",
-            crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&expected)), crate::json::kv("actual", crate::json::q(&actual))]),
+            crate::json::obj(vec![
+                crate::json::kv("expected", crate::json::q(&expected)),
+                crate::json::kv("actual", crate::json::q(&actual)),
+            ]),
         ));
     }
     Ok(())
@@ -340,11 +355,7 @@ mod tests {
             "every operation needs an OP_* id"
         );
         for (i, id) in ids.iter().enumerate() {
-            assert_eq!(
-                *id,
-                i as u16 + 1,
-                "OP_* id must be the operation index + 1"
-            );
+            assert_eq!(*id, i as u16 + 1, "OP_* id must be the operation index + 1");
         }
     }
 

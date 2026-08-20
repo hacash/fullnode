@@ -249,13 +249,16 @@ pub fn create_standard_transaction(request: TxCreateRequest) -> Ret<base::TxRef>
     check_standard_gas(ty, request.gas_max)?;
     match ty {
         TransactionType1::TYPE => Ok(Arc::new(standard_tx_from_request!(
-            request, TransactionType1
+            request,
+            TransactionType1
         ))),
         TransactionType2::TYPE => Ok(Arc::new(standard_tx_from_request!(
-            request, TransactionType2
+            request,
+            TransactionType2
         ))),
         TransactionType3::TYPE => Ok(Arc::new(standard_tx_from_request!(
-            request, TransactionType3
+            request,
+            TransactionType3
         ))),
         _ => errf!("unsupported standard user transaction type {}", ty),
     }
@@ -404,7 +407,7 @@ fn prepare_tx_execute(tx: &dyn TransactionSign, ctx: &mut dyn Context) -> Ret<Tx
     let tx_hash = tx.hash();
     let main = tx.main();
     let fee = tx.fee().clone();
-    let has_ast_control = tx.actions().iter().any(|a| matches!(a.kind(), 25 | 26));
+    let has_ast_control = tx.actions().iter().any(|a| a.nested_actions().is_some());
     if !env.chain.fast_sync {
         if !main.is_privkey() {
             return errf!("tx fee address version must be PRIVAKEY type");
@@ -867,7 +870,8 @@ pub fn check_signers_cap(tx: &dyn Transaction, max: usize) -> Rerr {
     Ok(())
 }
 
-fn insert_sign(signs: &mut SignW2, signobj: Sign) -> Ret<Address> {    if signs.length() >= u16::MAX as usize - 1 {
+fn insert_sign(signs: &mut SignW2, signobj: Sign) -> Ret<Address> {
+    if signs.length() >= u16::MAX as usize - 1 {
         return errf!("too many sign objects");
     }
     let curaddr = sign_address(&signobj);

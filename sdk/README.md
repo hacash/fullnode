@@ -38,14 +38,14 @@ sdk.tx.decode(body) / sdk.tx.encode(transactionJson, review?); // 低级结构�
 
 sdk.account.verify_address(address);
 sdk.account.address_from_public_key(publicKey);      // 无私钥输入
-sdk.amount.parse_protocol(value) / format_protocol(value, unit); // 精确十进制字符串
+sdk.amount.parse_protocol(value) / format_protocol(value, unit); // 走 field::Amount，精确十进制
 sdk.message.prepare_signature(params) / verify(request, proof); // 冻结 raw 约定
 sdk.policy.evaluate(review, policy);
 ```
 
-`tx.prepare_signature` 的 `opts.policy` 由 SDK 自行评估：`deny` 决策直接拒绝
-（`policy_denied`），`allow/confirm` 决策作为 `PolicyDecision` 绑定进
-`SigningRequest`，调用方无法伪造决策结果。`tx.attach_signature`（完整链）
+`tx.prepare_signature` 的 `opts.policy` 由 SDK 自行评估：决策结果（含 `deny`）
+作为 `PolicyDecision` 绑定进 `SigningRequest`，调用方无法伪造决策结果；是否因
+`deny` 停止签名由上层判断，SDK 从不因此拒绝 prepare/attach。`tx.attach_signature`（完整链）
 强制要求 `review` + `request`：request 的 id/binding 会被重算校验（篡改
 任何字段——含 `expires_at`——都会以 `invalid_signing_request` 失败），并
 校验 digest/body_hash/signer/purpose/algorithm、proof↔request 绑定、policy
@@ -61,7 +61,9 @@ sdk.policy.evaluate(review, policy);
 `OPERATIONS` 注册表（有测试保证两者不漂移）。审阅中的 `chain_ids_allowed`
 为多个 `ChainAllow` 的交集（协议逐条执行），`valid_height_range` 同理取
 交集；严格模式的 `expired_height`/`wrong_chain` 是调用者 context 下的派生
-事实，SDK 从不因它们拒绝返回 review——是否继续由上层判断。
+事实，SDK 从不因它们拒绝返回 review——是否继续由上层判断。审阅中的
+`topology_violations` 同理：协议 action 树（scope / min tx type / AST 深度 /
+top-rule）的分析结果作为事实报告，SDK 不因它们拒绝 inspect 或 build。
 
 错误统一为 `{ code, message, detail? }`（`SdkError`），facade 抛出带
 `code`/`detail` 的异常，raw envelope 在 `e.sdkError` 中保留。
@@ -120,7 +122,7 @@ rlib 同样可用：`sdk::inspect::inspect_report`、`sdk::attach::*`、
 ## 测试
 
 ```sh
-cargo test -p sdk          # 73 个单元/流程测试（含黄金向量、签名流、guard 事实、篡改/过期/deny 拒绝）
+cargo test -p sdk          # 77 个单元/流程测试（含黄金向量、签名流、guard/topology 事实、篡改/过期/deny 拒绝）
 node ./sdk/tests/...       # 打包后 JS 冒烟
 ```
 

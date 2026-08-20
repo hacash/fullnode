@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use base::{
-    ActionCreateFn, ActionJsonDecodeFn, ActionRef, BinaryCodecs, BlockHasherFn, BlockRef, HASH_SIZE,
-    TxCreateFn, TxJsonDecodeFn, TxRef, WireRegistry,
+    ActionCreateFn, ActionJsonDecodeFn, ActionRef, BinaryCodecs, BlockHasherFn, BlockRef,
+    HASH_SIZE, TxCreateFn, TxJsonDecodeFn, TxRef, WireRegistry,
 };
 use field::{Decode, Uint1, Uint2};
 use sys::{Ret, errf, normalf};
@@ -111,11 +111,7 @@ impl WireRegistry for SdkCodecs {
             .iter()
             .any(|known| known.kind == schema.kind || known.name == schema.name)
         {
-            return errf!(
-                "duplicate action schema {} ({})",
-                schema.kind,
-                schema.name
-            );
+            return errf!("duplicate action schema {} ({})", schema.kind, schema.name);
         }
         self.action_schemas.push(schema);
         Ok(())
@@ -147,7 +143,6 @@ impl WireRegistry for SdkCodecs {
         Ok(())
     }
 }
-
 
 fn sdk_block_hash(_height: u64, stuff: &[u8]) -> [u8; HASH_SIZE] {
     sys::calculate_hash(stuff)
@@ -237,12 +232,18 @@ mod tests {
     #[test]
     fn standard_protocol_and_vm_actions_are_registered() {
         let codecs = standard_codecs().unwrap();
-        assert!(codecs.transactions.contains_key(&1));
-        assert!(codecs.transactions.contains_key(&2));
-        assert!(codecs.transactions.contains_key(&3));
-        for kind in [40u16, 41, 44, 46] {
+        let types = codecs.registered_tx_types();
+        assert!(types.contains(&protocol::tx_std::TransactionType1::TYPE));
+        assert!(types.contains(&protocol::tx_std::TransactionType2::TYPE));
+        assert!(types.contains(&protocol::tx_std::TransactionType3::TYPE));
+        for kind in [
+            vm::action::ContractDeploy::KIND,
+            vm::action::ContractUpdate::KIND,
+            vm::action::ContractMainCall::KIND,
+            vm::action::P2SHScriptProve::KIND,
+        ] {
             assert!(
-                codecs.actions.contains_key(&kind),
+                codecs.registered_kinds().contains(&kind),
                 "vm action kind {kind} must be registered"
             );
         }

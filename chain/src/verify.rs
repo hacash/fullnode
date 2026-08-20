@@ -103,7 +103,7 @@ pub fn verify_block(eng: &ChainEngine, pkg: &BlkPkg, prev: &dyn Block) -> Rerr {
         }
         let size = tx.size();
         total_size += size;
-        if params.max_tx_size > 0 && size > params.max_tx_size {
+        if base::tx_exceeds_max_size(size, params.max_tx_size) {
             return errf!(
                 "tx({}) size {} exceeds max {}",
                 idx,

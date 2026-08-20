@@ -17,8 +17,8 @@ use crate::error::{SdkError, SdkErrorCode};
 use crate::inspect::{decode_body_hex, decode_tx};
 use crate::profile::CodecProfile;
 use crate::schema::{
-    DOMAIN_SIGNING_REQUEST, SCHEMA_ATTACH_RESULT, SCHEMA_SIGNATURE_PROOF,
-    SCHEMA_SIGNATURE_REPORT, SCHEMA_SIGNING_REQUEST, SCHEMA_VERIFY_RESULT,
+    DOMAIN_SIGNING_REQUEST, SCHEMA_ATTACH_RESULT, SCHEMA_SIGNATURE_PROOF, SCHEMA_SIGNATURE_REPORT,
+    SCHEMA_SIGNING_REQUEST, SCHEMA_VERIFY_RESULT,
 };
 
 /// Structured signing request produced by `prepare_signature` (doc 14 §4.9).
@@ -36,8 +36,9 @@ pub struct SigningRequest {
         pub body_hash: Option<String>,
         pub review_binding: Option<String>,
     /// The policy decision the SDK itself computed (when a policy was
-    /// supplied to `prepare_signature`). A `deny` decision never reaches a
-    /// request; the decision is bound into the request like every other field.
+    /// supplied to `prepare_signature`). A `deny` decision is bound into
+    /// the request as a fact like every other field; the SDK never refuses
+    /// to prepare or attach because of it.
         pub policy_decision: Option<crate::policy::PolicyDecision>,
         pub origin: Option<String>,
         pub expires_at: Option<u64>,
@@ -172,14 +173,20 @@ pub fn verify_review(
         return Err(SdkError::with_detail(
             SdkErrorCode::ReviewBindingMismatch,
             "review does not match this transaction body",
-            crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&review.unsigned_body_hash)), crate::json::kv("actual", crate::json::q(&unsigned_body_hash))]),
+            crate::json::obj(vec![
+                crate::json::kv("expected", crate::json::q(&review.unsigned_body_hash)),
+                crate::json::kv("actual", crate::json::q(&unsigned_body_hash)),
+            ]),
         ));
     }
     if review.codec_profile_hash != profile.profile_hash {
         return Err(SdkError::with_detail(
             SdkErrorCode::CodecProfileMismatch,
             "review was created under a different codec profile",
-            crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&profile.profile_hash)), crate::json::kv("actual", crate::json::q(&review.codec_profile_hash))]),
+            crate::json::obj(vec![
+                crate::json::kv("expected", crate::json::q(&profile.profile_hash)),
+                crate::json::kv("actual", crate::json::q(&review.codec_profile_hash)),
+            ]),
         ));
     }
     if let Some(bound_signer) = &review.signer_address {
@@ -187,7 +194,10 @@ pub fn verify_review(
             return Err(SdkError::with_detail(
                 SdkErrorCode::ReviewBindingMismatch,
                 "review was bound to a different signer",
-                crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&bound_signer)), crate::json::kv("actual", crate::json::q(&signer.to_readable()))]),
+                crate::json::obj(vec![
+                    crate::json::kv("expected", crate::json::q(&bound_signer)),
+                    crate::json::kv("actual", crate::json::q(&signer.to_readable())),
+                ]),
             ));
         }
     }
@@ -196,7 +206,10 @@ pub fn verify_review(
         return Err(SdkError::with_detail(
             SdkErrorCode::ReviewBindingMismatch,
             "review binding does not verify",
-            crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&review.review_binding)), crate::json::kv("actual", crate::json::q(&binding))]),
+            crate::json::obj(vec![
+                crate::json::kv("expected", crate::json::q(&review.review_binding)),
+                crate::json::kv("actual", crate::json::q(&binding)),
+            ]),
         ));
     }
     Ok(())
@@ -230,25 +243,41 @@ pub fn check_request_expiry(request: &SigningRequest) -> Result<(), SdkError> {
             return Err(SdkError::with_detail(
                 SdkErrorCode::RequestExpired,
                 format!("signing request expired at {expires_at}"),
-                crate::json::obj(vec![crate::json::kv("expires_at", expires_at.to_string()), crate::json::kv("now", now.to_string())]),
+                crate::json::obj(vec![
+                    crate::json::kv("expires_at", expires_at.to_string()),
+                    crate::json::kv("now", now.to_string()),
+                ]),
             ));
         }
     }
     Ok(())
 }
 
-fn parse_proof(proof: &SignatureProof) -> Result<(Sign, Address), SdkError> {
+pub(crate) fn parse_proof(proof: &SignatureProof) -> Result<(Sign, Address), SdkError> {
     validate_proof_format(proof)?;
     let publickey: [u8; 33] = hex::decode(&proof.public_key)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| SdkError::new(SdkErrorCode::InvalidPublicKey, "public key must be 33-byte hex"))?;
+        .ok_or_else(|| {
+            SdkError::new(
+                SdkErrorCode::InvalidPublicKey,
+                "public key must be 33-byte hex",
+            )
+        })?;
     let signature: [u8; 64] = hex::decode(&proof.signature)
         .ok()
         .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| SdkError::new(SdkErrorCode::BadSignature, "signature must be 64-byte hex"))?;
+        .ok_or_else(|| {
+            SdkError::new(SdkErrorCode::BadSignature, "signature must be 64-byte hex")
+        })?;
     let signer = Address::from(sys::Account::get_address_by_public_key(publickey));
-    Ok((Sign { publickey, signature }, signer))
+    Ok((
+        Sign {
+            publickey,
+            signature,
+        },
+        signer,
+    ))
 }
 
 /// One-shot integrity check of a signing request: `id` and `request_binding`
@@ -262,7 +291,11 @@ pub fn verify_request_integrity(request: &SigningRequest) -> Result<(), SdkError
         return Err(SdkError::with_detail(
             SdkErrorCode::InvalidSigningRequest,
             "signing request id/binding do not match its content",
-            crate::json::obj(vec![crate::json::kv("expected_binding", crate::json::q(&binding)), crate::json::kv("actual_id", crate::json::q(&request.id)), crate::json::kv("actual_binding", crate::json::q(&request.request_binding))]),
+            crate::json::obj(vec![
+                crate::json::kv("expected_binding", crate::json::q(&binding)),
+                crate::json::kv("actual_id", crate::json::q(&request.id)),
+                crate::json::kv("actual_binding", crate::json::q(&request.request_binding)),
+            ]),
         ));
     }
     if request.algorithm != "secp256k1-rfc6979-sha256" {
@@ -280,8 +313,9 @@ pub fn verify_request_integrity(request: &SigningRequest) -> Result<(), SdkError
 /// must be self-consistent (see `verify_request_integrity`), bound to this
 /// transaction and signer (body_hash, digest, signer_address, purpose), bound
 /// to the provided proof (id/binding) and review; the policy decision carried
-/// by the request must be self-consistent, bound to the review and non-deny;
-/// and the review itself must re-verify.
+/// by the request must be self-consistent and bound to the review (the
+/// decision value is a business fact, never an attach refusal); and the
+/// review itself must re-verify.
 fn verify_attach_context(
     tx: &dyn base::TransactionSign,
     signer: &Address,
@@ -303,14 +337,23 @@ fn verify_attach_context(
         return Err(SdkError::with_detail(
             SdkErrorCode::InvalidSigningRequest,
             "request signer does not match the proof signer",
-            crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&request.signer_address)), crate::json::kv("actual", crate::json::q(&signer.to_readable()))]),
+            crate::json::obj(vec![
+                crate::json::kv("expected", crate::json::q(&request.signer_address)),
+                crate::json::kv("actual", crate::json::q(&signer.to_readable())),
+            ]),
         ));
     }
     if request.body_hash.as_deref() != Some(unsigned_body_hash) {
         return Err(SdkError::with_detail(
             SdkErrorCode::InvalidSigningRequest,
             "request body hash does not match this transaction",
-            crate::json::obj(vec![crate::json::kv("expected", crate::json::q(request.body_hash.as_deref().unwrap_or(""))), crate::json::kv("actual", crate::json::q(&unsigned_body_hash))]),
+            crate::json::obj(vec![
+                crate::json::kv(
+                    "expected",
+                    crate::json::q(request.body_hash.as_deref().unwrap_or("")),
+                ),
+                crate::json::kv("actual", crate::json::q(&unsigned_body_hash)),
+            ]),
         ));
     }
     let sign_hash = hex::encode(protocol::tx_std::sign_hash_for(tx, signer).0);
@@ -318,21 +361,35 @@ fn verify_attach_context(
         return Err(SdkError::with_detail(
             SdkErrorCode::InvalidSigningRequest,
             "request digest does not match this signer's sign hash",
-            crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&request.digest)), crate::json::kv("actual", crate::json::q(&sign_hash))]),
+            crate::json::obj(vec![
+                crate::json::kv("expected", crate::json::q(&request.digest)),
+                crate::json::kv("actual", crate::json::q(&sign_hash)),
+            ]),
         ));
     }
     if proof.request_id != request.id || proof.request_binding != request.request_binding {
         return Err(SdkError::with_detail(
             SdkErrorCode::ReviewBindingMismatch,
             "proof does not match the signing request",
-            crate::json::obj(vec![crate::json::kv("expected_id", crate::json::q(&request.id)), crate::json::kv("actual_id", crate::json::q(&proof.request_id)), crate::json::kv("expected_binding", crate::json::q(&request.request_binding)), crate::json::kv("actual_binding", crate::json::q(&proof.request_binding))]),
+            crate::json::obj(vec![
+                crate::json::kv("expected_id", crate::json::q(&request.id)),
+                crate::json::kv("actual_id", crate::json::q(&proof.request_id)),
+                crate::json::kv("expected_binding", crate::json::q(&request.request_binding)),
+                crate::json::kv("actual_binding", crate::json::q(&proof.request_binding)),
+            ]),
         ));
     }
     if request.review_binding.as_deref() != Some(&review.review_binding) {
         return Err(SdkError::with_detail(
             SdkErrorCode::ReviewBindingMismatch,
             "request review binding does not match the provided review",
-            crate::json::obj(vec![crate::json::kv("expected", crate::json::q(request.review_binding.as_deref().unwrap_or(""))), crate::json::kv("actual", crate::json::q(&review.review_binding))]),
+            crate::json::obj(vec![
+                crate::json::kv(
+                    "expected",
+                    crate::json::q(request.review_binding.as_deref().unwrap_or("")),
+                ),
+                crate::json::kv("actual", crate::json::q(&review.review_binding)),
+            ]),
         ));
     }
     if let Some(decision) = &request.policy_decision {
@@ -343,7 +400,10 @@ fn verify_attach_context(
             return Err(SdkError::with_detail(
                 SdkErrorCode::PolicyBindingMismatch,
                 "policy decision is not bound to this review",
-                crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&decision.review_binding)), crate::json::kv("actual", crate::json::q(&review.review_binding))]),
+                crate::json::obj(vec![
+                    crate::json::kv("expected", crate::json::q(&decision.review_binding)),
+                    crate::json::kv("actual", crate::json::q(&review.review_binding)),
+                ]),
             ));
         }
         let expected_binding = crate::policy::policy_binding_of(decision);
@@ -351,7 +411,10 @@ fn verify_attach_context(
             return Err(SdkError::with_detail(
                 SdkErrorCode::PolicyBindingMismatch,
                 "policy decision binding does not verify",
-                crate::json::obj(vec![crate::json::kv("expected", crate::json::q(&expected_binding)), crate::json::kv("actual", crate::json::q(&decision.policy_binding))]),
+                crate::json::obj(vec![
+                    crate::json::kv("expected", crate::json::q(&expected_binding)),
+                    crate::json::kv("actual", crate::json::q(&decision.policy_binding)),
+                ]),
             ));
         }
     }
@@ -436,7 +499,10 @@ fn attach_result(tx: &dyn base::TransactionSign) -> AttachResult {
     AttachResult {
         schema: SCHEMA_ATTACH_RESULT.to_owned(),
         body: hex::encode(tx.encode()),
-        complete: report.required.iter().all(|addr| report.valid.contains(addr)),
+        complete: report
+            .required
+            .iter()
+            .all(|addr| report.valid.contains(addr)),
         missing_signers: report
             .missing
             .iter()
@@ -468,14 +534,30 @@ pub fn verify_signatures(body_hex: &str) -> Result<VerifyResult, SdkError> {
 pub fn signature_report(body_hex: &str) -> Result<SignatureReport, SdkError> {
     let body = decode_body_hex(body_hex)?;
     let tx = decode_tx(&body)?;
-    let report = protocol::tx_std::signature_report(tx.as_ref())
-        .map_err(|error| SdkError::from(error))?;
+    let report =
+        protocol::tx_std::signature_report(tx.as_ref()).map_err(|error| SdkError::from(error))?;
     Ok(SignatureReport {
         schema: SCHEMA_SIGNATURE_REPORT.to_owned(),
-        required: report.required.iter().map(|addr| addr.to_readable()).collect(),
-        present: report.present.iter().map(|addr| addr.to_readable()).collect(),
+        required: report
+            .required
+            .iter()
+            .map(|addr| addr.to_readable())
+            .collect(),
+        present: report
+            .present
+            .iter()
+            .map(|addr| addr.to_readable())
+            .collect(),
         valid: report.valid.iter().map(|addr| addr.to_readable()).collect(),
-        missing: report.missing.iter().map(|addr| addr.to_readable()).collect(),
-        invalid: report.invalid.iter().map(|addr| addr.to_readable()).collect(),
+        missing: report
+            .missing
+            .iter()
+            .map(|addr| addr.to_readable())
+            .collect(),
+        invalid: report
+            .invalid
+            .iter()
+            .map(|addr| addr.to_readable())
+            .collect(),
     })
 }
