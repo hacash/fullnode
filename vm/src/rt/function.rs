@@ -62,6 +62,7 @@ impl FnObj {
         }
     }
 
+    #[cfg(feature = "execute")]
     pub fn exec_bytecodes(&self, _height: u64, gas_extra: &GasExtra) -> VmrtRes<ByteView> {
         use CodeType::*;
         Ok(match self.ctype {

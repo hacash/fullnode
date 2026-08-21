@@ -1,9 +1,7 @@
 use sys::Rerr;
 
-/// Wire type for new-transaction push (`peer.send_msg(MSG_TX_SUBMIT, body)`).
-///
-/// Shared by `node` (frame codec) and `mint` (consensus `on_p2p_connect`).
-/// Kept in `base` so neither crate depends on the other.
+/// Wire type for new-transaction push (`peer.send_msg(MSG_TX_SUBMIT, body)`), shared by
+/// `node` (frame codec) and `mint` (`on_p2p_connect`) — kept in `base` to avoid a dependency.
 pub const MSG_TX_SUBMIT: u16 = 7;
 
 pub trait Peer: Send + Sync {

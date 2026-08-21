@@ -70,11 +70,7 @@ pub struct ApiExecCtx {
     pub node: Arc<dyn Node>,
     pub launch_time: u64,
     /// §13.2 shared concurrency + wall-clock limiter for VM sandbox calls.
-    /// Routes that invoke `contract_sandbox_call` / `debug_contract_storage`
-    /// acquire a permit from this limiter before running the sandbox so that
-    /// untrusted contract bytecodes cannot starve root writers or exhaust the
-    /// HTTP worker pool.  Routes that do not touch the VM sandbox simply
-    /// ignore this field.
+    /// Sandbox routes acquire a permit before running; non-sandbox routes ignore it.
     pub sandbox_limiter: SandboxLimiter,
 }
 
@@ -86,10 +82,8 @@ pub type ApiHandlerAsync = Arc<
         + Sync,
 >;
 
-/// §8.2 of the error-system design: the single API mapping entry for state
-/// read errors. Canonical state failures (`Abort` — StorageRead, StateDecode,
-/// EngineUnavailable) map to HTTP 503; business errors keep the plain JSON
-/// error body.
+/// §8.2: canonical `Abort` state-read failures (StorageRead, StateDecode,
+/// EngineUnavailable) map to HTTP 503; business errors keep the plain JSON body.
 pub fn api_state_read_error(e: &sys::Error) -> ApiResponse {
     if e.is_abort() {
         ApiResponse::err(503, &format!("state read failed: {}", e))

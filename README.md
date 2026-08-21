@@ -183,7 +183,9 @@ The primary assembly entry points are:
 
 ### 1. Customize a protocol or sidechain with Registry
 
-`base::RegistryWriter` is the registration boundary for protocol components. It supports registering:
+`base::WireRegistry` and `base::ExecRegistry` are the two registration
+boundaries for protocol components. They deliberately separate codec-only
+profiles from fullnode execution services:
 
 - block hashing, block construction, and block-size probing
 - binary and JSON codecs for transactions and Actions
@@ -194,12 +196,18 @@ The standard assembly is:
 
 ```rust
 let mut registry = app::Registry::new(mint::block_hasher);
-protocol::register_standard(&mut registry, &protocol::PROTOCOL_PARAMS)?;
-mint::register(&mut registry)?;
-vm::register(&mut registry)?;
+protocol::register_wire(&mut registry)?;
+mint_core::register_wire(&mut registry)?;
+vm::register_wire(&mut registry)?;
+protocol::register_exec(&mut registry, &hacash_params::MAINNET_PARAMS)?;
+mint_core::register_exec(&mut registry)?;
+mint::register_wire(&mut registry)?;
+vm::register_exec(&mut registry)?;
 ```
 
 A custom chain should normally add a separate application crate as its composition root. Replace the hasher, codecs, Actions, VM parameters, and `ConsensusRuntime` as needed, then follow `app/src/fullnode/assemble.rs` to assemble `ChainEngine`, `P2PNode`, and HTTP services. Registry rejects duplicate transaction types, Action kinds, and VM host IDs, so extensions must allocate non-conflicting identifiers.
+
+The SDK does not use this dynamic registry. Each crate still owns one static catalog (`TX_CODECS` / `ACTION_CODECS`); the SDK selects wallet-reachable entries from those same tables (transaction types 2/3, no VM env/view opcodes). The two composition roots stay independent so both compile graphs stay clean.
 
 `mint.chain_id` enters the execution environment and affects some consensus branches, but **changing `chain_id` alone does not isolate a sidechain**. The current P2P magic is not derived from `chain_id`. An independent network must also review or customize genesis state, consensus parameters, block hashing and difficulty, protocol upgrade heights, P2P magic, boot nodes, data directories, and SDK/signature domains. Nodes with incompatible consensus or codecs must not connect to mainnet.
 

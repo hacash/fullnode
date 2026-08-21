@@ -1,11 +1,5 @@
-//! Protocol-side gas billing (`GasCounter`).
-//!
-//! Final HAC burn/refund is derived from `used_net()`, not from VM bucket reports.
-//! Returned-gas charging accounts only for the extra9 delta at composition sites.
-//!
-//! Modes:
-//! - **Soft**: construct-time budget for Type1/2 / sandbox pre-arm (no HAC escrow).
-//! - **Running**: Type3 `gas_initialize` escrow + settle via `gas_refund`.
+//! Protocol-side Hacash transaction billing (`TxGasMeter`): final burn/refund from
+//! `used_net()`; returned-gas charges only the extra9 delta. Modes: Soft (Type1/2 budget, no escrow), Running (Type3 escrow + `gas_refund` settle).
 
 use base::{Context, CoreState, hac_add, hac_sub, total_add_u12, with_base_total};
 use field::Amount;
@@ -57,7 +51,7 @@ impl GasPrice {
 
 /// Source of truth for protocol-side gas billing.
 #[derive(Clone)]
-pub(crate) struct GasCounter {
+pub(crate) struct TxGasMeter {
     running: bool,
     remaining: i64,
     used: i64,
@@ -75,13 +69,13 @@ pub struct GasDiag {
     pub max_charge: Amount,
 }
 
-impl Default for GasCounter {
+impl Default for TxGasMeter {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl GasCounter {
+impl TxGasMeter {
     pub fn new() -> Self {
         Self {
             running: false,
@@ -244,7 +238,8 @@ pub fn tx_gas_initialize(ctx: &mut dyn Context) -> Ret<bool> {
     let Some(gas_max_byte) = tx.gas_max_byte() else {
         return errf!("tx type {} gas_max must exist", txty);
     };
-    let budget = base::decode_gas_budget(gas_max_byte.min(base::TX_GAS_BUDGET_CAP_BYTE));
+    let params = crate::execution_params(ctx.services().as_ref())?;
+    let budget = params.decode_gas_budget(gas_max_byte.min(params.tx_gas_budget_cap_byte));
     if budget <= 0 {
         return Ok(false);
     }
@@ -252,7 +247,7 @@ pub fn tx_gas_initialize(ctx: &mut dyn Context) -> Ret<bool> {
     Ok(true)
 }
 
-pub(crate) fn gas_initialize_on(gas: &mut GasCounter, ctx: &mut dyn Context, budget: i64) -> Rerr {
+pub(crate) fn gas_initialize_on(gas: &mut TxGasMeter, ctx: &mut dyn Context, budget: i64) -> Rerr {
     if gas.running {
         return errf!("gas already initialized");
     }
@@ -263,15 +258,16 @@ pub(crate) fn gas_initialize_on(gas: &mut GasCounter, ctx: &mut dyn Context, bud
         return errf!("gas budget invalid");
     }
     let price = GasPrice::from_context(ctx)?;
-    let cap = base::decode_gas_budget(base::TX_GAS_BUDGET_CAP_BYTE);
+    let params = crate::execution_params(ctx.services().as_ref())?;
+    let cap = params.decode_gas_budget(params.tx_gas_budget_cap_byte);
     let budget = budget.min(cap);
-    let max_burn_amt = GasCounter::calc_burn_amount(budget, &price)?;
+    let max_burn_amt = TxGasMeter::calc_burn_amount(budget, &price)?;
     let main = ctx.env().tx.main;
     hac_sub(ctx, &main, &max_burn_amt)?;
     gas.begin(budget, max_burn_amt)
 }
 
-pub(crate) fn gas_refund_on(gas: &mut GasCounter, ctx: &mut dyn Context) -> Rerr {
+pub(crate) fn gas_refund_on(gas: &mut TxGasMeter, ctx: &mut dyn Context) -> Rerr {
     let price = GasPrice::from_context(ctx)?;
     let (refund, used_charge) = gas.finalize(&price)?;
     if refund.is_positive() {

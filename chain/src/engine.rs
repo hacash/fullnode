@@ -1,13 +1,5 @@
-//! The chain engine. Two real jobs: insert one block (discover) and insert a
-//! stream of them (sync). Everything else is a query.
-//!
-//! Concurrency, in full:
-//! - `inserting` serializes all block insertion (discover vs sync vs boot);
-//!   every root-move writer also holds it, so insertion excludes root movement.
-//! - the tree has its own short-lived lock for lookups and attaching.
-//! - state sessions pin the captured tree root (a `StateChunkRef`) instead of
-//!   holding any lock; the pin keeps their weak parent chains alive while a
-//!   root roll prunes the tree underneath them.
+//! The chain engine: insert one block (discover) or a stream (sync);
+//! everything else is a query. `inserting` serializes insertion and root movement.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -32,8 +24,7 @@ const LIFE_STOPPING: u8 = 3;
 const LIFE_STOPPED: u8 = 4;
 
 pub(crate) fn persist_fatal(e: sys::Error) -> sys::Error {
-    sys::Error::abort(format!("canonical persistence failed: {}", e))
-        .with_code("persist_failed")
+    sys::Error::abort(format!("canonical persistence failed: {}", e)).with_code("persist_failed")
 }
 
 /// The lifecycle stage at which an error reached the engine boundary (§4.1 of
@@ -70,10 +61,8 @@ pub struct ChainEngine {
     pub(crate) listeners: Mutex<Vec<Arc<dyn ChainListener>>>,
     /// Held for the whole of any block insertion, single block or stream.
     pub(crate) inserting: Mutex<()>,
-    /// False while a root writer is between disk and tree, and after any
-    /// failed root write (engine fatal). The only root state flag. Root
-    /// writers are already serialized by `inserting`, so no separate lock
-    /// guards the transition.
+    /// False while a root writer is between disk and tree, and after any failed
+    /// root write (engine fatal). Root writers are serialized by `inserting`.
     pub(crate) root_available: AtomicBool,
     /// Best-effort side recovery hints; `side_list_path` is the list file.
     pub(crate) side_list: Arc<SideListWriter>,
@@ -108,16 +97,12 @@ pub(crate) enum ApplyResult {
     Duplicate(Hash),
     Orphan(Hash),
     /// A live side branch was discarded (execution / body write / attach
-    /// failure). Not an error: the canonical tree is untouched and the stream
-    /// continues.
+    /// failure). Not an error: the canonical tree is untouched.
     Discarded,
 }
 
 /// The accepted payload handed from the apply stage to the persist stage.
-/// `persist_body` is false only for the internal replay pipeline, whose block
-/// bodies and canonical index already exist. `prev_head` is the canonical head
-/// hash before the attach; after a reorg the replaced old canonical tail is
-/// derived from it and appended to the side hash list.
+/// `persist_body` is false only for the replay pipeline; `prev_head` seeds reorg side-tails.
 pub(crate) struct ApplyAccepted {
     pub pkg: BlkPkg,
     pub inserted: Inserted,
@@ -185,8 +170,7 @@ impl ChainEngine {
         };
         let tree = Arc::new(Tree::new(store.disk(), root_block));
         // Side hash list writer. The keep predicate captures only standalone
-        // engine pieces (tree / store / registry), never the engine itself,
-        // so the writer thread needs no engine handle.
+        // engine pieces (tree / store / registry), never the engine itself.
         let side_cancel = Arc::new(AtomicBool::new(false));
         let side_path = (!config.data_dir.is_empty())
             .then(|| PathBuf::from(&config.data_dir).join("side_hash_list"));
@@ -219,9 +203,8 @@ impl ChainEngine {
         });
         crate::boot::open_state(&eng, state_status)?;
         eng.lifecycle.store(LIFE_RUNNING, Ordering::Release);
-        // The writer only appends after boot; starting it here keeps the boot
-        // side replay's direct file read race-free and a boot failure cannot
-        // leak the writer thread.
+        // The writer only appends after boot; starting it here keeps boot's
+        // direct file read race-free and a boot failure cannot leak the thread.
         let side_handle = side_list_spawn.spawn(
             eng.side_list_path.clone(),
             side_keep_ctx(eng.tree.clone(), eng.store.clone(), eng.registry.clone()),
@@ -294,8 +277,9 @@ impl ChainEngine {
             return errf!("engine is stopping");
         };
         if self.syncing.load(Ordering::Acquire) {
-            return Err(sys::Error::fault("chain is syncing; block deferred")
-                .with_code("sync_deferred"));
+            return Err(
+                sys::Error::fault("chain is syncing; block deferred").with_code("sync_deferred")
+            );
         }
         crate::verify::check_intrinsic(self, &pkg)?;
         // Parent verification comes before any admission/arrival side effect:
@@ -307,14 +291,15 @@ impl ChainEngine {
         let height = pkg.height();
         let hash = pkg.hash();
         if let Err(e) = self.consensus.check_block_arrive(&pkg, self, false) {
-            return self.handle_error(
-                Phase::PreAttach,
-                "discover_arrive",
-                Some(height),
-                Some(&hash),
-                Err::<(), _>(e),
-            )
-            .map(|_| unreachable!());
+            return self
+                .handle_error(
+                    Phase::PreAttach,
+                    "discover_arrive",
+                    Some(height),
+                    Some(&hash),
+                    Err::<(), _>(e),
+                )
+                .map(|_| unreachable!());
         }
 
         match self.consensus.check_block_admission(&pkg, self, false) {
@@ -325,14 +310,15 @@ impl ChainEngine {
             Err(e) => {
                 // Admission is a pre-attach boundary: `Abort` must trigger
                 // engine fatal like the arrive arm (§4.1).
-                return self.handle_error(
-                    Phase::PreAttach,
-                    "discover_admission",
-                    Some(height),
-                    Some(&hash),
-                    Err::<(), _>(e),
-                )
-                .map(|_| unreachable!());
+                return self
+                    .handle_error(
+                        Phase::PreAttach,
+                        "discover_admission",
+                        Some(height),
+                        Some(&hash),
+                        Err::<(), _>(e),
+                    )
+                    .map(|_| unreachable!());
             }
         }
 
@@ -340,46 +326,41 @@ impl ChainEngine {
         if self.waiter.is_shutdown() {
             return errf!("engine is stopping");
         }
-        // Preparation executes and attaches the candidate only after all
-        // fallible validation is complete. If it fails, the existing tree,
-        // including side branches, is untouched and must not be rebuilt.
+        // Preparation runs only after all fallible validation; on failure the
+        // existing tree, including side branches, is untouched and not rebuilt.
         let job = match self.prepare_one(&pkg, ApplyMode::Strict, true) {
             Ok(ApplyResult::Accepted(job)) => job,
             Ok(ApplyResult::Duplicate(hash)) => return Ok(BlockAcceptResult::duplicate(hash)),
             Ok(ApplyResult::Orphan(parent)) => return Ok(BlockAcceptResult::orphan(parent)),
             Ok(ApplyResult::Discarded) => return Ok(BlockAcceptResult::ignored()),
             Err(e) => {
-                return self.handle_error(
-                    Phase::PreAttach,
-                    "discover_prepare",
-                    Some(height),
-                    Some(&hash),
-                    Err::<(), _>(e),
-                )
-                .map(|_| unreachable!());
+                return self
+                    .handle_error(
+                        Phase::PreAttach,
+                        "discover_prepare",
+                        Some(height),
+                        Some(&hash),
+                        Err::<(), _>(e),
+                    )
+                    .map(|_| unreachable!());
             }
         };
-        // Any `Err` from persist_one is a PostAttach durable failure: the
-        // boundary inside persist_one already set fatal and recorded it. A
-        // post-commit callback failure keeps the committed fact and returns
-        // Accepted (§4.2).
+        // Any `Err` from persist_one is a PostAttach failure already recorded
+        // by the boundary; a post-commit callback failure keeps the fact (§4.2).
         self.persist_one(job, true, PostCommitPolicy::KeepAccepted)
             .map(|outcome| outcome.result)
     }
 
-    /// Execute and attach a block without performing any I/O (except side
-    /// branch bodies, which must be durable before their in-memory attach).
-    /// Fast historical sync sends the returned job to the ordered persistence
-    /// stage.
+    /// Execute and attach a block without I/O (except side bodies, durable
+    /// before attach); fast sync sends the returned job to ordered persistence.
     pub(crate) fn prepare_one(
         &self,
         pkg: &BlkPkg,
         mode: ApplyMode,
         persist_body: bool,
     ) -> Ret<ApplyResult> {
-        // A failure here is either a plain consensus/validation error (returned
-        // to the caller, which decides peer penalty) or a core error carrying a
-        // fatal code — the caller decides the boundary and prints it (§2.3).
+        // A failure here is a plain consensus/validation error (caller decides
+        // peer penalty) or a core error carrying a fatal code (§2.3).
         let accepted = crate::apply::insert_block(self, pkg, mode, persist_body)?;
         let ApplyResult::Accepted(job) = accepted else {
             return Ok(accepted);
@@ -395,12 +376,8 @@ impl ChainEngine {
         Ok(ApplyResult::Accepted(job))
     }
 
-    /// Persist one already-executed block. Jobs must be supplied in insertion
-    /// order; root commits validate that ordering independently. Any failure
-    /// after the block was attached to the tree is engine-fatal (§4.1).
-    /// `post_commit` decides how a durable-commit callback failure is
-    /// surfaced: `discover` keeps the committed fact, the sync pipeline stops
-    /// (§4.2).
+    /// Persist one already-executed block in insertion order; any failure
+    /// after the tree attach is engine-fatal (§4.1). `post_commit` picks the callback-failure outcome (§4.2).
     pub(crate) fn persist_one(
         &self,
         job: ApplyAccepted,
@@ -421,18 +398,11 @@ impl ChainEngine {
             reverted_txs,
         } = inserted;
         let height = pkg.height();
-        // A false persistence flag is only supplied by the internal replay
-        // pipeline, whose block body and canonical index already exist. Side
-        // branch bodies are written inside insert_block before the attach, so
-        // a non-head job never reaches a body write here.
+        // A false persistence flag is only supplied by the replay pipeline
+        // (bodies exist); side bodies are written before attach, never here.
         let stored_replay = !persist_body;
-        // Every failure between the tree attach and the durable commit is
-        // engine-fatal (PostAttach): the memory tree and disk are in an
-        // uncertain transition and boot replay rebuilds from the real disk
-        // state on the next start. `roll_root` classifies its own errors —
-        // disk/root writes stay PostAttach, consensus-stable callbacks are
-        // handled at PostCommit inside `notify_stable` — so every error
-        // reaching this boundary is recorded exactly once.
+        // Every failure between tree attach and durable commit is engine-fatal
+        // (PostAttach); `roll_root` classifies its own errors, so each is recorded once.
         let mut rolled = 0;
         if let Err(e) = (|| -> Ret<()> {
             if persist_body {
@@ -445,20 +415,15 @@ impl ChainEngine {
                         .commit_reorg(height, &pkg.hash(), pkg.data().clone(), &canonical)
                         .map_err(persist_fatal)?;
                     // The replaced old canonical tail becomes a side branch on
-                    // the next boot; record it so the fork tree can be
-                    // restored. The side tree just grew by the replaced tail,
-                    // so re-apply the live capacity bound.
+                    // next boot; record it and re-apply the live capacity bound.
                     let root_height = self.tree.root_height();
-                    let new_path: HashSet<Hash> =
-                        canonical.iter().map(|(_, hash)| *hash).collect();
+                    let new_path: HashSet<Hash> = canonical.iter().map(|(_, hash)| *hash).collect();
                     let replaced: Vec<Hash> = self
                         .tree
                         .branch_blocks(&prev_head)
                         .into_iter()
                         .flatten()
-                        .filter(|blk| {
-                            blk.height() > root_height && !new_path.contains(&blk.hash())
-                        })
+                        .filter(|blk| blk.height() > root_height && !new_path.contains(&blk.hash()))
                         .map(|blk| blk.hash())
                         .collect();
                     self.side_list.append_many(replaced);
@@ -471,32 +436,24 @@ impl ChainEngine {
                 }
             }
             if let Some(job) = roll {
-                rolled = crate::persist::roll_root(
-                    self,
-                    job,
-                    pkg.origin(),
-                    stored_replay,
-                    post_commit,
-                )?
-                .len() as u64;
+                rolled =
+                    crate::persist::roll_root(self, job, pkg.origin(), stored_replay, post_commit)?
+                        .len() as u64;
             }
             Ok(())
         })() {
-            return self.handle_error(
-                Phase::PostAttach,
-                "discover_persist",
-                Some(height),
-                Some(&pkg.hash()),
-                Err::<(), _>(e),
-            )
-            .map(|_| unreachable!());
+            return self
+                .handle_error(
+                    Phase::PostAttach,
+                    "discover_persist",
+                    Some(height),
+                    Some(&pkg.hash()),
+                    Err::<(), _>(e),
+                )
+                .map(|_| unreachable!());
         }
-        // The block is durably accepted now; publish consensus-owned arrival
-        // metadata. Replay/rebuild must not republish it. A consensus callback
-        // error is engine-fatal (§4.2): the consensus auxiliary state may be
-        // incomplete, and the accepted block is not rolled back. The
-        // `discover` path keeps the committed fact (Accepted); the sync
-        // pipeline stops with the error.
+        // The block is durably accepted; publish consensus-owned arrival
+        // metadata (never on replay/rebuild). A callback error is engine-fatal (§4.2).
         if !stored_replay {
             if let Err(e) = self.consensus.on_block_accepted(&pkg, self) {
                 let fatal = if e.is_abort() {
@@ -524,13 +481,9 @@ impl ChainEngine {
             self.record_avgfee(pkg.block());
         }
         if !stored_replay {
-            // Listener registry mutex is released before any external callback
-            // (§4.3). A listener's ordinary `Err` only warns and does not mark
-            // fatal; an `Abort` escalates to engine fatal only after every
-            // listener has been notified. The committed result is kept: the
-            // pipeline stops through the fatal state, not through this return.
-            if let Err(error) =
-                self.notify_listeners(|l| l.on_block_accepted(height, pkg.origin()))
+            // Listener registry mutex is released before callbacks (§4.3):
+            // ordinary `Err` only warns; `Abort` escalates after all notified.
+            if let Err(error) = self.notify_listeners(|l| l.on_block_accepted(height, pkg.origin()))
             {
                 let _ = self.handle_error(
                     Phase::PostCommit,
@@ -671,10 +624,8 @@ impl ChainEngine {
         SyncCancelRegistration { engine: self, id }
     }
 
-    /// Permanently stop accepting work after a canonical persistence failure
-    /// (or an internal inconsistency). The caller may still hold a waiter
-    /// handle, so this deliberately does not wait for outstanding work like
-    /// `shutdown` does.
+    /// Permanently stop accepting work after a canonical persistence failure.
+    /// Unlike `shutdown`, deliberately does not wait for outstanding work.
     pub(crate) fn mark_fatal(&self) {
         let mut state = self.lifecycle.load(Ordering::Acquire);
         loop {
@@ -699,10 +650,7 @@ impl ChainEngine {
     }
 
     /// The single engine error boundary (§4.1): classify by `Phase`, set the
-    /// fatal state when required, record the error exactly once with its
-    /// context, and return the original error unchanged. Business modules no
-    /// longer decide the lifecycle themselves; `mark_fatal` is only invoked
-    /// here.
+    /// fatal state when required, record once, return unchanged. `mark_fatal` lives here.
     pub(crate) fn handle_error<T>(
         &self,
         phase: Phase,
@@ -728,10 +676,8 @@ impl ChainEngine {
             (None, None) => "-".to_owned(),
         };
         if fatal {
-            // Record the fatal transition once: the same class of error
-            // reaching an already-fatal engine again (e.g. the deferred
-            // polling worker re-reading a broken backend) must not spam the
-            // boundary log; the error still propagates to the caller.
+            // Record the fatal transition once so a repeated error on an
+            // already-fatal engine does not spam the log; it still propagates.
             if !was_fatal {
                 eprintln!(
                     "[Engine Fatal] operation={} phase={:?} {} code={:?} error={}",
@@ -755,11 +701,8 @@ impl ChainEngine {
         Err(error)
     }
 
-    /// Notify the registered listeners with the engine's mutex released (§4.3).
-    /// An ordinary listener error only warns and the notification continues;
-    /// the first `Abort` is collected and returned after every listener has
-    /// been notified. The caller decides at its phase whether to keep the
-    /// committed result; the fatal state is set by the boundary, not here.
+    /// Notify listeners with the engine's mutex released (§4.3): ordinary
+    /// errors warn and continue; the first `Abort` is returned after all notified.
     pub(crate) fn notify_listeners(&self, notify: impl Fn(&dyn ChainListener) -> Rerr) -> Ret<()> {
         let listeners = self.listeners.lock().unwrap().clone();
         let mut abort = None;
@@ -907,9 +850,8 @@ impl ChainEngine {
     }
 }
 
-/// Build the side hash list keep predicate: per compaction it snapshots the
-/// canonical branch and the durable root height, then drops hashes that are
-/// canonical, below the root, or whose body is missing/undecodable.
+/// Build the side hash list keep predicate: per compaction, drop hashes that
+/// are canonical, below the durable root, or whose body is missing/undecodable.
 fn side_keep_ctx(
     tree: Arc<Tree>,
     store: Arc<dyn Store>,
@@ -931,8 +873,7 @@ fn side_keep_ctx(
                 return false;
             }
             // A transient read failure keeps the recovery hint (conservative);
-            // a confirmed-missing or undecodable body drops it, and boot
-            // decides the canonical answer anyway (§6.8/§10).
+            // a confirmed-missing or undecodable body drops it (§6.8/§10).
             let data = match store.block_data(hash) {
                 Ok(data) => data,
                 Err(_) => return true,
@@ -965,9 +906,8 @@ pub(crate) fn load_persisted_root_block(
         }
         return Ok(genesis.clone());
     }
-    // The height index must agree with the root marker: the state root block
-    // is identified by both, and a mismatch rejects startup (no cursor scan
-    // or repair is ever attempted). A read failure is a storage boot failure.
+    // The height index must agree with the root marker; a mismatch rejects
+    // startup, and a read failure is a storage boot failure.
     let index_hash = store.block_hash(status.latest_height).map_err(|e| {
         validate_fault(format!(
             "state root height index read failed at <{}, {:?}>: {}",
@@ -1069,8 +1009,7 @@ mod tests {
             };
         }
         // A failed root persistence must leave the state unavailable so the
-        // engine rejects new work instead of continuing on an uncertain
-        // disk/tree transition.
+        // engine rejects new work on an uncertain disk/tree transition.
         assert!(!available.load(Ordering::Acquire));
     }
 }

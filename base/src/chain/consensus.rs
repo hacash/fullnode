@@ -7,32 +7,17 @@ use crate::chain::{BlkPkg, TxPkg};
 use crate::chain::{ChainView, Engine};
 use crate::node::{Peer, TxGroupId, TxOrdering, TxPool, TxPoolGroupSpec};
 use crate::state::{StateChunkRef, StateLayer, StateRead};
-use crate::{Block, BlockRef, Transaction};
-
-/// Consensus-defined wire and transaction limits. The generic chain runtime
-/// carries this shape, while each consensus implementation owns its values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MintParams {
-    pub max_block_txs: usize,
-    pub max_block_size: usize,
-    pub max_tx_size: usize,
-    pub difficulty_adjust_blocks: u64,
-    pub difficulty_group_blocks: u64,
-    pub each_block_target_time: u64,
-}
+use crate::{Block, BlockRef, MintParams, Transaction};
 
 pub trait BlockHistory: Send + Sync {
     fn stable_height(&self) -> Ret<u64>;
-    /// `Ok(None)` is the only not-found answer. Read and decode failures are
-    /// returned as errors: a corrupt stored block must never masquerade as a
-    /// missing one on consensus paths.
+    /// `Ok(None)` is the only not-found answer; read/decode failures are errors —
+    /// a corrupt stored block must never masquerade as a missing one.
     fn block_at_height(&self, height: u64) -> Ret<Option<BlockRef>>;
 }
 
-/// Opaque, lexicographically ordered score used by the generic fork tree.
-/// Consensus implementations are responsible for encoding their complete
-/// branch priority into this key. Equal keys keep the current head, making
-/// tie handling deterministic and independent of arrival-order callbacks.
+/// Opaque, lexicographically ordered fork-choice score. Consensus encodes its full
+/// branch priority here; equal keys keep the current head (deterministic ties).
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ForkChoiceKey(Vec<u8>);
 
@@ -110,12 +95,8 @@ pub trait Consensus: Send + Sync {
         Ok(())
     }
 
-    /// Validate consensus configuration persisted in the canonical genesis
-    /// state before the engine repairs, rebuilds, or replays the chain.
-    ///
-    /// A missing value is left to the consensus implementation to classify:
-    /// an empty genesis state may be initialized, while an already advanced
-    /// chain can be rejected as unverifiable.
+    /// Validate consensus config persisted in canonical genesis state before the
+    /// engine repairs/rebuilds/replays; a missing value is the implementation's call.
     fn validate_genesis_state(&self, _state: &dyn StateRead, _root_height: u64) -> Rerr {
         Ok(())
     }
@@ -130,11 +111,8 @@ pub trait Consensus: Send + Sync {
         0
     }
 
-    /// Decide whether a block may proceed. `fast_sync` tells the
-    /// implementation the block arrived through the linear fast-sync stream:
-    /// validation-only implementations typically skip their checks there,
-    /// while implementations with side effects in this hook still see every
-    /// block and decide for themselves whether to run.
+    /// Decide whether a block may proceed. `fast_sync` marks the linear fast-sync
+    /// stream: validation-only impls typically skip checks; side-effectful ones see every block.
     fn check_block_admission(
         &self,
         _pkg: &BlkPkg,
@@ -148,16 +126,14 @@ pub trait Consensus: Send + Sync {
         Ok(())
     }
 
-    /// Cheap arrival gate over the fixed block intro, before full transaction
-    /// decoding. Implementations may leave this at the default and perform
-    /// the package-level check in `check_block_arrive` instead.
+    /// Cheap arrival gate over the fixed block intro, before full tx decoding.
+    /// May stay at the default and defer to `check_block_arrive`.
     fn check_block_arrive_data(&self, _data: &[u8], _view: &dyn ChainView) -> Rerr {
         Ok(())
     }
 
     /// Arrival gate over a full block package, before admission. `fast_sync`
-    /// marks the linear fast-sync stream; validation-only implementations
-    /// typically skip the check there, while side-effectful ones still run.
+    /// marks the linear fast-sync stream (validation-only impls typically skip it).
     fn check_block_arrive(&self, _pkg: &BlkPkg, _view: &dyn ChainView, _fast_sync: bool) -> Rerr {
         Ok(())
     }
@@ -187,12 +163,8 @@ pub trait Consensus: Send + Sync {
         Ok(())
     }
 
-    /// A block was durably accepted (canonical or side branch). Used to
-    /// publish consensus-owned arrival metadata that must not be written
-    /// before parent verification or for orphaned blocks. Replay/rebuild do
-    /// not invoke it. A returned error is engine-fatal (§8.3): the consensus
-    /// auxiliary state may be incomplete and the accepted block is not rolled
-    /// back.
+    /// Block durably accepted (canonical or side). Never invoked for orphaned blocks
+    /// or replay/rebuild. A returned error is engine-fatal (§8.3) and not rolled back.
     fn on_block_accepted(&self, _pkg: &BlkPkg, _view: &dyn ChainView) -> Rerr {
         Ok(())
     }
@@ -263,11 +235,8 @@ pub trait ConsensusNodeHooks: Send + Sync {
         Ok(())
     }
 
-    /// Extract one ready deferred batch. `Ok(None)` means no batch is ready.
-    /// Batches are extracted one at a time so an `Abort` during execution
-    /// keeps the batch in the queue (requeue): the caller simply does not
-    /// report a result, and the batch becomes visible again after the engine
-    /// restarts with rebuilt bidding state (§4.2).
+    /// Extract one ready deferred batch (`Ok(None)` = none). One at a time so an
+    /// `Abort` during execution requeues it for the next engine restart (§4.2).
     fn poll_one_deferred_batch(&self, _view: &dyn ChainView) -> Ret<Option<DeferredBatch>> {
         Ok(None)
     }

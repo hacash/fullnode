@@ -11,7 +11,7 @@ use base::{
 use field::Address;
 use sys::{Rerr, Ret, errf};
 
-use super::gas::{GasCounter, GasDiag, gas_initialize_on, gas_refund_on};
+use super::gas::{GasDiag, TxGasMeter, gas_initialize_on, gas_refund_on};
 
 /// Diagnostic snapshot of `ContextInst` (reserved for future debug tooling).
 #[allow(dead_code)]
@@ -28,7 +28,7 @@ pub struct ContextInst {
     services: Arc<dyn ExecutionServices>,
     chunk: StateChunkRef,
     tx: TxRef,
-    gas: GasCounter,
+    gas: TxGasMeter,
     exec_from: ExecFrom,
     psh: HashMap<Address, Box<dyn P2sh>>,
     check_sign_cache: HashMap<Address, Ret<()>>,
@@ -53,7 +53,7 @@ impl ContextInst {
             services,
             chunk,
             tx,
-            gas: GasCounter::new(),
+            gas: TxGasMeter::new(),
             exec_from: ExecFrom::Top,
             psh: HashMap::new(),
             check_sign_cache: HashMap::new(),

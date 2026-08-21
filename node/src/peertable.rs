@@ -84,11 +84,8 @@ impl PeerTable {
         true
     }
 
-    /// Insert using fullnodedev's rules:
-    /// - replace the same node key atomically and close the old connection;
-    /// - public peers enter backbone in DHT order;
-    /// - an inbound public evicted from backbone is retained in offshoot;
-    /// - outbound public and offshoot overflow peers are closed after 15s.
+    /// Insert using fullnodedev's rules: same node key replaces atomically; public
+    /// peers enter backbone in DHT order, evicted inbound publics stay in offshoot, overflow closes after 15s.
     pub async fn insert(&self, peer: Arc<RemotePeer>) -> InsertOutcome {
         let mut t = self.inner.write().await;
         let mut drop_later = Vec::new();

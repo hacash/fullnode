@@ -20,10 +20,8 @@ pub struct ChainInfo {
     /// id 0L2/ 0
     pub id: ChainId,
     pub fast_sync: bool,
-    /// consensus-defined flag bits. base/chain never interpret them, only
-    /// carry them down. applications select the bit assignments as part of the
-    /// execution profile and consensus/action implementations consume them.
-    /// business flags (diamond form etc.) thus never leak into the core.
+    /// consensus-defined flag bits. base/chain only carry them; applications pick the bit
+    /// assignments in the execution profile, so business flags never leak into the core.
     pub consensus_flags: u64,
 }
 

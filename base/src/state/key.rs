@@ -1,8 +1,5 @@
-//! Persistent state-key namespace helpers.
-//!
-//! Textual keys always begin with `_` (`0x5f`). Numeric state namespaces begin
-//! at `0x01`, use one non-zero byte, and must skip that value, so the first
-//! byte alone keeps the two key spaces disjoint.
+//! Persistent state-key namespace helpers. Textual keys begin with `_` (`0x5f`); numeric
+//! namespaces begin at `0x01` and skip that byte, so the first byte keeps the spaces disjoint.
 
 use field::Encode;
 

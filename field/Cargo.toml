@@ -5,39 +5,32 @@ edition.workspace = true
 
 #
 [features]
-default = ["num-bigint"]
-# num-bigint: enabled by default for fullnode; when the sdk disables it
-# (default-features=false) the big-integer library is not compiled into wasm.
-# When disabled, Amount's big-integer path uses the base-256 byte-array
-# implementation (amount_base256, with equivalence tests against the BigInt
-# path).
-num-bigint = ["dep:num-bigint", "dep:num-traits"]
-# fullnode only: the JSON parsing engine switches to serde_json (see the dual
-# engine design in src/json.rs), so the hand-written parser is not compiled
-# into the node. Enabled explicitly by node-side crates (app/mint); SDK/wasm
-# builds keep the handwritten engine and zero serde dependencies. Note that
-# `cargo build --workspace` unifies features, so wasm artifacts must be built
-# separately with `cargo build -p sdk --target <wasm>`, otherwise serde_json
-# gets unified into the SDK.
-json-serde = ["dep:serde", "dep:serde_json"]
+default = []
+# Amount's big-integer path is the single base-256 byte-array core
+# (types/amount_base256.rs). num-bigint is not a production dependency: it
+# stays as a dev-dependency test oracle that cross-checks the base-256 core
+# against the reference implementation (drift guard).
+# The JSON parsing engine is the single hand-written implementation
+# (src/json.rs) in every build — SDK/wasm and fullnode alike. serde_json
+# survives only as a dev-dependency test oracle: the engine_equivalence
+# tests and the differential fuzz prove the hand-written engine is strictly
+# equivalent to serde_json on the shared contract. No feature selection, so
+# there is no workspace feature-unification hazard for wasm artifacts.
 
 [dependencies]
 sys = { workspace = true }
-num-bigint = { version = "0.4", optional = true }
-num-traits = { version = "0.2", optional = true }
 base64 = "0.22"
 hex = "0.4"
 base58check = "0.1"
-serde = { workspace = true, optional = true }
-serde_json = { workspace = true, features = ["raw_value"], optional = true }
 
 [dev-dependencies]
-# Under cfg(test), json.rs compiles both engines for the engine_equivalence
-# comparison tests
+# Test oracle only: under cfg(test), json.rs compiles the serde_json engine
+# alongside the handwritten one for the engine_equivalence comparison tests
+# and the differential fuzz. Never enters a production or wasm compile graph.
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["raw_value"] }
-# Equivalence tests for the two amount implementations (cfg(test) in
-# amount.rs / amount_base256.rs): as dev-dependencies they do not enter the
-# sdk's wasm compile graph
+# BigUint/BigInt oracle for the amount equivalence tests (cfg(test) in
+# amount.rs / amount_base256.rs): as dev-dependencies they do not enter any
+# production or wasm compile graph
 num-bigint = "0.4"
 num-traits = "0.2"

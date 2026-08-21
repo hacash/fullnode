@@ -1,6 +1,4 @@
-//!
-//!
-//!
+//! Mint HTTP services: console, miner, query, transaction, transfer.
 
 use std::sync::Arc;
 
@@ -17,8 +15,8 @@ mod util;
 
 use console::console_handler;
 use miner::{
-    diamondminer_init_handler, diamondminer_success_handler,
-    miner_pending_handler, miner_success_handler,
+    diamondminer_init_handler, diamondminer_success_handler, miner_pending_handler,
+    miner_success_handler,
 };
 use query::{
     balance_handler, block_datas_handler, block_intro_handler, block_pool_stats_handler,

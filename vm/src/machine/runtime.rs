@@ -48,9 +48,8 @@ impl Default for VolatileState {
 pub struct Runtime {
     cfg_height: u64,
     next_upgrade: u64,
-    /// Number of active VM entry frames.  This is independent of gas and
-    /// protects synchronous contract-to-contract transfer callbacks from
-    /// exhausting the native call stack.
+    /// Number of active VM entry frames (gas-independent); guards synchronous
+    /// contract-to-contract transfer callbacks from exhausting the native call stack.
     reentry_depth: usize,
     pub warm: WarmState,
     pub volatile: VolatileState,

@@ -71,9 +71,8 @@ impl P2PNode {
         }
     }
 
-    /// Stop accepting network work and wake the active sync pipeline. Engine
-    /// shutdown remains responsible for draining in-flight work and stopping
-    /// consensus hooks afterwards.
+    /// Stop accepting network work and wake the active sync pipeline; engine
+    /// shutdown still drains in-flight work and stops consensus hooks afterwards.
     pub fn begin_shutdown(&self) {
         self.stopping.store(true, Ordering::Release);
         let sync_session = self

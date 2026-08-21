@@ -8,10 +8,8 @@ enum Compo {
 
 impl PartialEq for Compo {
     fn eq(&self, _: &Self) -> bool {
-        // Intentionally not VM semantic equality.
-        // `Compo` lives behind `CompoItem(Rc<RefCell<_>>)` and Rust `==` must not be treated
-        // as contract-visible value comparison. VM content equality is implemented separately via
-        // `value_content_eq` / `CompoItem::content_eq`.
+        // Intentionally NOT VM semantic equality: `Compo` sits behind `CompoItem(Rc<RefCell<_>>)`,
+        // and Rust `==` must not be treated as contract-visible comparison (use `value_content_eq`).
         false
     }
 }
@@ -66,11 +64,13 @@ impl Compo {
                 None => {
                     let mmm: Vec<_> = b
                         .iter()
-                        .map(|(k, v)| format!(r#"{{"key_hex":"{}","value":{}}}"#, k.to_hex(), v.to_json()))
+                        .map(|(k, v)| {
+                            format!(r#"{{"key_hex":"{}","value":{}}}"#, k.to_hex(), v.to_json())
+                        })
                         .collect();
                     format!(r#"{{"$map":[{}]}}"#, mmm.join(","))
                 }
-            }
+            },
         }
     }
 
@@ -88,7 +88,7 @@ impl Compo {
                         .map(|(k, v)| match bytes_try_to_readable_string(k) {
                             Some(s) => format!(
                                 r#"{{"key":{},"key_hex":"{}","value":{}}}"#,
-                                serde_json::to_string(&s).unwrap(),
+                                json_quote(&s),
                                 k.to_hex(),
                                 v.to_debug_json()
                             ),
@@ -109,11 +109,7 @@ impl Compo {
         let mut mmm = Vec::with_capacity(items.len());
         for (k, v) in items {
             let key = bytes_try_to_readable_string(k)?;
-            mmm.push(format!(
-                "{}:{}",
-                serde_json::to_string(&key).unwrap(),
-                v.to_debug_json()
-            ));
+            mmm.push(format!("{}:{}", json_quote(&key), v.to_debug_json()));
         }
         Some(format!("{{{}}}", mmm.join(",")))
     }
@@ -247,11 +243,8 @@ impl Compo {
 
 #[derive(Default, Clone)]
 pub struct CompoItem {
-    // VM DUP clones this Rc, so all aliases must observe later container writes.
-    // A RefCell borrow conflict cannot be produced by valid bytecode: every guard
-    // is local to one container operation and must not cross a reentrant VM call.
-    // Use direct borrow()/borrow_mut() deliberately; a conflict is an implementation
-    // invariant violation and must panic rather than produce a partial VM result.
+    // VM DUP clones this Rc, so all aliases must observe later container writes. Borrow conflicts can't
+    // arise from valid bytecode; a conflict is an invariant violation and must panic, not produce a partial result.
     compo: Rc<RefCell<Compo>>,
 }
 
@@ -269,15 +262,15 @@ impl Debug for CompoItem {
 
 impl PartialEq for CompoItem {
     fn eq(&self, other: &Self) -> bool {
-        // Intentionally pointer identity, not VM semantic equality.
-        // This supports runtime/ref semantics and cheap identity checks. Any contract-visible
-        // comparison must use `value_content_eq` / `CompoItem::content_eq` instead.
+        // Intentionally pointer identity, not VM semantic equality — supports runtime/ref
+        // semantics; contract-visible comparison must use `value_content_eq` / `CompoItem::content_eq`.
         self.ptr_eq(other)
     }
 }
 
 impl Eq for CompoItem {}
 
+#[cfg(feature = "execute")]
 macro_rules! take_items_from_ops {
     ($is_map: expr, $cap: expr, $ops: expr) => {{
         let n = $ops.pop()?.extract_u16()? as usize;
@@ -329,6 +322,7 @@ impl CompoItem {
         })
     }
 
+    #[cfg(feature = "execute")]
     pub fn pack_list(cap: &SpaceCap, ops: &mut Stack) -> VmrtRes<(Value, usize)> {
         let items = take_items_from_ops!(false, cap, ops);
         let len = items.len();
@@ -338,6 +332,7 @@ impl CompoItem {
         Ok((Value::Compo(Self::list(VecDeque::from(items))?), len))
     }
 
+    #[cfg(feature = "execute")]
     pub fn pack_map(cap: &SpaceCap, ops: &mut Stack) -> VmrtRes<(Value, usize)> {
         let mut items: Vec<_> = take_items_from_ops!(true, cap, ops)
             .into_iter()

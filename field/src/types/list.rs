@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use sys::{Ret, errf};
 
 use crate::codec::{Decode, Encode, ParsePrefix, Reader};
@@ -10,8 +11,33 @@ pub struct ListW1<T>(pub Vec<T>);
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ListW2<T>(pub Vec<T>);
 
+macro_rules! list_view {
+    ($($name:ident),+ $(,)?) => {
+        $(
+            impl<T> Deref for $name<T> {
+                type Target = [T];
+
+                fn deref(&self) -> &Self::Target {
+                    &self.0
+                }
+            }
+
+            impl<'a, T> IntoIterator for &'a $name<T> {
+                type Item = &'a T;
+                type IntoIter = std::slice::Iter<'a, T>;
+
+                fn into_iter(self) -> Self::IntoIter {
+                    self.0.iter()
+                }
+            }
+        )+
+    };
+}
+
+list_view!(ListW1, ListW2);
+
 macro_rules! list_w {
-    ($name:ident, $len_ty:ty, $int_ty:ty) => {
+    ($name:ident, $len_ty:ty) => {
         impl<T> $name<T> {
             pub fn from(v: Vec<T>) -> Ret<Self> {
                 <$len_ty>::from_usize(v.len())?;
@@ -50,7 +76,9 @@ macro_rules! list_w {
                 <$len_ty>::SIZE + self.0.iter().map(|v| v.size()).sum::<usize>()
             }
             fn encode_to(&self, out: &mut Vec<u8>) {
-                <$len_ty>::from(self.0.len() as $int_ty).encode_to(out);
+                <$len_ty>::from_usize(self.0.len())
+                    .expect(concat!(stringify!($name), " length overflow"))
+                    .encode_to(out);
                 for v in &self.0 {
                     v.encode_to(out);
                 }
@@ -71,8 +99,8 @@ macro_rules! list_w {
     };
 }
 
-list_w!(ListW1, Uint1, u8);
-list_w!(ListW2, Uint2, u16);
+list_w!(ListW1, Uint1);
+list_w!(ListW2, Uint2);
 
 impl<T: Decode> ParsePrefix for ListW1<T> {
     fn create_with_prefix(prefix: &[u8], rest: &[u8]) -> Ret<(Self, usize)> {

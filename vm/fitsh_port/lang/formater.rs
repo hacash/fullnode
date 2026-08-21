@@ -349,9 +349,8 @@ impl<'a> Formater<'a> {
     }
 
     fn format_call_args(&self, args: &[String]) -> String {
-        // Join on argument boundaries (not line boundaries).
-        // Some expressions (e.g. `{ ... }` blocks) legitimately contain newlines; splitting
-        // by lines would corrupt the argument list and break roundtrip semantics.
+        // Join on argument boundaries, not lines — block expressions legitimately contain
+        // newlines, and line-splitting would corrupt the argument list / roundtrip.
         args.iter()
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
@@ -417,10 +416,8 @@ impl<'a> Formater<'a> {
         let mut args = Vec::new();
         let mut current: &dyn IRNode = node;
         loop {
-            // `IRLIST` is used both for "packed argv lists" and for actual list/map literals.
-            // For system/native/ext calls we use concat-argv mode; the argument node can
-            // legitimately be a list literal, so flattening IRLIST here would corrupt
-            // argument boundaries and even change call arity.
+            // `IRLIST` covers both packed argv lists and real list/map literals; flattening it in
+            // concat-argv mode would break argument boundaries (the arg may be a list literal).
             if self.opt.flatten_call_list && !system_call {
                 if let Some(list) = current.as_any().downcast_ref::<IRNodeArray>() {
                     if let Some(elements) = self.extract_packed_call_elements(list.inst, &list.subs)
@@ -583,10 +580,8 @@ impl<'a> Formater<'a> {
                     buf.push_str(&line);
                     buf.push('\n');
                 } else {
-                    // If we are trimming the file-level root block but not trimming param-unpack,
-                    // the decompiled code may still use SourceMap parameter names (e.g. `amt`),
-                    // which would be unbound without a `param { ... }` statement.
-                    // Pre-mark param slots so later PUTs keep statement form stable.
+                    // Without `param { ... }` (root trimmed, param-unpack not), decompiled SourceMap
+                    // names would be unbound; pre-mark param slots so later PUTs keep statement form.
                     let is_file_level_irblock = self.opt.tab == 0 && arr.inst == IRBLOCK;
                     if is_file_level_irblock && self.opt.map.is_some() {
                         // alloc could be at index 0 or 1
@@ -616,11 +611,8 @@ impl<'a> Formater<'a> {
             }
         }
 
-        // Even when `trim_root_block` / `trim_param_unpack` are disabled, we still must keep
-        // decompile->recompile closed.
-        // IMPORTANT: when `trim_param_unpack == false`, we must NEVER emit `param { ... }`.
-        // Instead, we keep the raw `UNPACK(ROLL0,P0)` instruction in output and only pre-mark
-        // parameter slots so later PUTs do not synthesize fake declarations.
+        // When `trim_param_unpack == false` we must NEVER emit `param { ... }` (decompile->recompile
+        // must stay closed): keep the raw `UNPACK(ROLL0,P0)` in output and only pre-mark slots.
         let is_file_level_irblock = self.opt.tab == 0 && arr.inst == IRBLOCK;
         // If `trim_param_unpack=true`, we may rewrite the canonical UNPACK node into `param { ... }`.
         // If `trim_param_unpack=false`, we must never emit `param { ... }`.
@@ -862,9 +854,8 @@ impl<'a> Formater<'a> {
                         return Some(format!("{}{} is not {}", pre, target, ty));
                     }
 
-                    // `!` has the highest precedence in fitsh (see `OpTy::NOT`),
-                    // so when the operand is a lower-precedence expression we must
-                    // parenthesize it to preserve semantics.
+                    // `!` has the highest fitsh precedence (`OpTy::NOT`), so a lower-precedence
+                    // operand must be parenthesized to preserve semantics.
                     let need_wrap = {
                         let lv = s.subx.level();
                         lv > 0 && lv < OpTy::NOT.level()
@@ -887,9 +878,8 @@ impl<'a> Formater<'a> {
         }
         if let Some(d) = node.as_any().downcast_ref::<IRNodeDouble>() {
             if d.inst == ITEMGET {
-                // `ITEMGET` is an expression; receiver must be printed inline.
-                // Using `print_sub()` can inject newlines/indentation and break parsing.
-                // Also, receiver precedence must be preserved: `(a + b)[0]` is not `a + b[0]`.
+                // `ITEMGET` is an expression: print the receiver inline (`print_sub()` would inject
+                // newlines and break parsing), and keep receiver precedence (`(a + b)[0]` not `a + b[0]`).
                 let mut subxstr = self.print_inline(&*d.subx);
                 if self.needs_postfix_lhs_wrap(&*d.subx) {
                     let t = subxstr.trim();

@@ -6,9 +6,7 @@ use protocol::block_std::StdBlock;
 use sys::{Rerr, errf};
 
 use crate::MintConf;
-use crate::action::diamond::{
-    DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST, DiamondMint,
-};
+use crate::action::diamond::DiamondMint;
 use crate::action::util::pickout_diamond_mint_action;
 use crate::bidding::DiamondBidding;
 use crate::coinbase::{verify_coinbase, verify_coinbase_privakey};
@@ -39,16 +37,19 @@ pub fn check_diamond_mint_minimum_bidding_fee(
     tx: &dyn Transaction,
     dmact: &DiamondMint,
 ) -> Rerr {
-    const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
+    let ckn = hacash_params::MAINNET_PARAMS
+        .mint_rules
+        .diamond
+        .minimum_bid_after;
     let bidmin = Amount::mei(block_reward_number(next_hei) as u64);
     let bidfee = tx.fee().clone();
     let dianum = dmact.d.number.uint();
-    if bidfee < bidmin && dianum > CKN {
+    if bidfee < bidmin && dianum > ckn {
         return errf!(
             "diamond bidding fee {} cannot be less than {} after number {}",
             bidfee,
             bidmin,
-            CKN
+            ckn
         );
     }
     Ok(())
@@ -119,9 +120,8 @@ fn check_block_arrive_block(
     let cblkhx = curblk.hash().into_array();
     let history = view.block_history();
 
-    // Pure validation: arrival records are published only after the block is
-    // accepted (§6 of the engine error contract), so orphaned or unvalidated
-    // blocks never pollute the bidding map.
+    // Pure validation: arrival records are published only after the block is accepted
+    // (§6 of the engine error contract), so orphans never pollute the bidding map.
     if difficulty.is_pre_asert_mainnet(curhei) {
         return Ok(());
     }

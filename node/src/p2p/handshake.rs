@@ -1,15 +1,7 @@
-//! Identity handshake: VERSION / VERACK.
+//! VERSION/VERACK identity handshake after magic exchange; the shared STATUS
+//! exchange validates genesis and starts sync.
 //!
-//! The VERSION message carries node identity, services, and a real protocol-version field;
-//! the shared STATUS exchange still validates genesis and starts sync.
-//!
-//! Flow (both directions symmetric):
-//! 1. After magic exchange, each side sends VERSION.
-//! 2. Each side validates protocol framing/version and replies VERACK.
-//!    Genesis compatibility is checked by the shared STATUS handler, as in dev.
-//! 3. After both VERSION+VERACK exchanges, the session is live.
-//!
-//! VERSION wire layout (fixed prefix **86** bytes + user_agent):
+//! VERSION wire layout (fixed prefix **86** bytes + user_agent; no timestamp field):
 //! ```text
 //! [u16BE protocol_version]   = 2
 //! [u64BE services]
@@ -24,8 +16,6 @@
 //! [u8     custom_type_count]
 //! [N B    custom_types]        (each in 101..=255, sorted, unique)
 //! ```
-//! Note: no timestamp field (earlier drafts had one; do not reintroduce without
-//! bumping `PROTOCOL_VERSION`).
 
 use std::time::Duration;
 

@@ -260,6 +260,10 @@ mod tests {
         fn verify_signature(&self) -> sys::Rerr {
             Ok(())
         }
+
+        fn as_execute(&self) -> Option<&dyn base::TransactionExecute> {
+            Some(self)
+        }
     }
 
     // `node` is a fullnode-only crate: its `base` edge always carries

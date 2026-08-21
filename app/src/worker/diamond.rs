@@ -6,13 +6,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use field::{Address, DiamondName, DiamondNumber, Encode, Fixed8, Hash};
-use mint::action_diamond::{DIAMOND_ABOVE_NUMBER_OF_CREATE_BY_CUSTOM_MESSAGE, DiamondMint};
+use mint::action_diamond::DiamondMint;
 use mint::diamond_mining::{
     DiamondMiningResult, HASH_WIDTH, check_diamond_success, diamond_more_power,
 };
 use reqwest::blocking::Client as HttpClient;
-use serde_json::Value;
 use sys::Ret;
+
+use super::json::JsonObj;
 
 #[cfg(feature = "ocl")]
 use mint::opencl::common;
@@ -292,7 +293,12 @@ fn do_diamond_group_mining(
     nonce_space: u64,
 ) -> DiamondMiningResult {
     let empty = [0u8; 0];
-    let custom_nonce = if number > DIAMOND_ABOVE_NUMBER_OF_CREATE_BY_CUSTOM_MESSAGE {
+    let custom_nonce = if number
+        > hacash_params::MAINNET_PARAMS
+            .mint_rules
+            .diamond
+            .custom_message_after
+    {
         custom_message.as_ref()
     } else {
         &empty
@@ -357,16 +363,16 @@ fn load_init(conf: &mut DiaWorkConf) -> Ret<()> {
                 continue;
             }
         };
-        if json["ret"].as_i64() != Some(0) {
+        if json.get_i64("ret").unwrap_or(-1) != 0 {
             eprintln!(
                 "[diaworker] init error: {}",
-                json["err"].as_str().unwrap_or("unknown")
+                json.get_str("err").unwrap_or_else(|_| "unknown".to_owned())
             );
             thread::sleep(Duration::from_secs(30));
             continue;
         }
-        conf.bid_address = parse_address(json_str(&json, "bid_address")?)?;
-        conf.reward_address = parse_address(json_str(&json, "reward_address")?)?;
+        conf.bid_address = parse_address(&json.get_str("bid_address")?)?;
+        conf.reward_address = parse_address(&json.get_str("reward_address")?)?;
         println!(
             "[diaworker] bid={} reward={}",
             conf.bid_address.to_readable(),
@@ -385,7 +391,7 @@ fn pull_next_diamond(conf: &DiaWorkConf) {
             return;
         }
     };
-    let next_number = latest["diamond"].as_u64().unwrap_or(0) as u32 + 1;
+    let next_number = latest.get_u64("diamond").unwrap_or(0) as u32 + 1;
     if next_number == 1 {
         *MINING_PREV_HASH.write().unwrap() = mint::genesis::genesis_block_hash();
         MINING_DIAMOND_NUM.store(next_number, Ordering::Relaxed);
@@ -403,7 +409,12 @@ fn pull_next_diamond(conf: &DiaWorkConf) {
             return;
         }
     };
-    let Some(prev_hash) = diamond["born"]["hash"].as_str().and_then(parse_hash_hex) else {
+    let Some(prev_hash) = diamond
+        .obj("born")
+        .ok()
+        .and_then(|born| born.get_str("hash").ok())
+        .and_then(|h| parse_hash_hex(&h))
+    else {
         eprintln!(
             "[diaworker] diamond born hash missing for {}",
             next_number - 1
@@ -426,11 +437,17 @@ fn push_diamond_mining_success(conf: &DiaWorkConf, success: DiamondMint) {
         eprintln!("[diaworker] submit diamond failed");
         return;
     };
-    let json = serde_json::from_str::<Value>(&text).unwrap_or(Value::Null);
-    if json["ret"].as_i64() != Some(0) {
+    let json = match JsonObj::parse(&text) {
+        Ok(v) => v,
+        Err(_) => {
+            eprintln!("[diaworker] submit diamond failed");
+            return;
+        }
+    };
+    if json.get_i64("ret").unwrap_or(-1) != 0 {
         eprintln!(
             "[diaworker] submit diamond error: {}",
-            json["err"].as_str().unwrap_or("unknown")
+            json.get_str("err").unwrap_or_else(|_| "unknown".to_owned())
         );
         return;
     }
@@ -438,7 +455,7 @@ fn push_diamond_mining_success(conf: &DiaWorkConf, success: DiamondMint) {
         "[diaworker] submitted diamond {} ({}) tx={}",
         success.d.diamond.to_readable(),
         success.d.number.uint(),
-        json["tx_hash"].as_str().unwrap_or("")
+        json.get_str("tx_hash").unwrap_or_default()
     );
 }
 
@@ -446,21 +463,15 @@ fn api_url(conf: &DiaWorkConf, path: &str) -> String {
     format!("http://{}{}", conf.rpcaddr, path)
 }
 
-fn get_json(url: &str) -> Ret<Value> {
+fn get_json(url: &str) -> Ret<JsonObj> {
     let text = HTTP_CLIENT
         .get(url)
         .send()
         .map_err(|e| sys::Error::fault(format!("request {} failed: {}", url, e)))?
         .text()
         .map_err(|e| sys::Error::fault(format!("read {} failed: {}", url, e)))?;
-    serde_json::from_str::<Value>(&text)
+    JsonObj::parse(&text)
         .map_err(|e| sys::Error::fault(format!("invalid json from {}: {}; body={}", url, e, text)))
-}
-
-fn json_str<'a>(json: &'a Value, key: &str) -> Ret<&'a str> {
-    json[key]
-        .as_str()
-        .ok_or_else(|| sys::Error::fault(format!("missing json string field {}", key)))
 }
 
 fn parse_address(v: &str) -> Ret<Address> {

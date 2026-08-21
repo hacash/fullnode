@@ -1,6 +1,8 @@
 [package]
 name = "sdk"
-version = "0.2.0"
+# Mirrors `profile::SDK_VERSION` (the ABI-facing package version the
+# capabilities/sdk_version responses report); keep the two in lockstep.
+version = "0.2.1"
 edition.workspace = true
 
 [lib]
@@ -10,14 +12,9 @@ crate-type = ["cdylib", "rlib"]
 sys = { workspace = true }
 field = { path = "../field", default-features = false }
 base = { path = "../base", default-features = false }
+hacash-params = { workspace = true }
 protocol = { path = "../protocol", default-features = false }
-# Execute off (default-features = false): the wasm SDK only needs the action
-# codecs; the VM execution engine is compiled but dead-code-eliminated from
-# the wasm artifact (no codec-only feature anymore).
 vm = { path = "../vm", default-features = false }
-# mint-core inherits default-features = false from the workspace entry, so the
-# consensus execute body (and its x16rs/num-bigint deps) stays out of wasm.
-mint-core = { workspace = true }
-chain-codec = { workspace = true }
+mint-core = { workspace = true, default-features = false }
 hex = "0.4.3"
 wasm-bindgen = "=0.2.100"

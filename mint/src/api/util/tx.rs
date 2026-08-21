@@ -15,25 +15,27 @@ pub(crate) fn action_desc_array_json(
     unit: &str,
     description: bool,
 ) -> String {
+    // Hand-written (no serde): the action's own ToJSON output is strict JSON,
+    // so re-emit it as raw member slices with `kind`/`description` injected.
     let items = tx
         .actions()
         .iter()
         .map(|act| {
-            let mut obj = match serde_json::from_str::<serde_json::Value>(
-                &act.to_json_fmt(&JSONFormater::new_unit(unit)),
-            ) {
-                Ok(serde_json::Value::Object(map)) => map,
-                _ => serde_json::Map::new(),
-            };
-            obj.insert("kind".to_owned(), serde_json::json!(act.kind()));
+            let mut parts = vec![format!("\"kind\":{}", act.kind())];
             if description {
-                obj.insert(
-                    "description".to_owned(),
-                    serde_json::json!(act.description()),
-                );
+                parts.push(format!(
+                    "\"description\":{}",
+                    field::json_escape(&act.description())
+                ));
             }
-            serde_json::to_string(&serde_json::Value::Object(obj))
-                .unwrap_or_else(|_| "{}".to_owned())
+            if let Ok(pairs) =
+                field::json_split_object(&act.to_json_fmt(&JSONFormater::new_unit(unit)))
+            {
+                for (key, value) in pairs {
+                    parts.push(format!("{}:{}", field::json_escape(key), value));
+                }
+            }
+            format!("{{{}}}", parts.join(","))
         })
         .collect::<Vec<_>>()
         .join(",");
@@ -186,7 +188,7 @@ mod tests {
         assert_eq!(action["from"], from.to_readable());
         assert_eq!(action["to"], to.to_readable());
         assert_eq!(action["satoshi"], 7);
-        // The action-codec-derive contract generates a human-readable
+        // The action-derive contract generates a human-readable
         // description for transfer actions.
         assert_eq!(
             action["description"],

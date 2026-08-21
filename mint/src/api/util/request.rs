@@ -1,13 +1,10 @@
 use base::{ApiExecCtx, ApiRequest, ApiResponse, OptimisticState};
-use std::fmt::Write;
 use sys::{ToBase64, ToHex};
 
 pub(crate) const UNIT_238: u128 = 100_0000_0000;
 
-/// Optimistic session acquisition with the unavailable case expressed
-/// distinctly: a fatal/stopping engine fails the request through the unified
-/// error mapping, a busy engine keeps the plain "state changed" response
-/// (§5/§8.2 of the error-system design).
+/// Optimistic session acquisition: fatal/stopping engine fails via the unified error
+/// mapping, busy engine keeps the plain "state changed" response (§5/§8.2).
 pub(crate) fn optimistic_snapshot(ctx: &ApiExecCtx) -> Result<OptimisticState, ApiResponse> {
     match ctx.engine.optimistic_canonical() {
         Ok(Some(snapshot)) => Ok(snapshot),
@@ -21,23 +18,9 @@ pub(crate) fn hac238_to_unit(v: u128) -> f64 {
 }
 
 pub(crate) fn json_string(v: &str) -> String {
-    let mut encoded = String::with_capacity(v.len() + 2);
-    encoded.push('"');
-    for ch in v.chars() {
-        match ch {
-            '"' => encoded.push_str("\\\""),
-            '\\' => encoded.push_str("\\\\"),
-            '\u{08}' => encoded.push_str("\\b"),
-            '\u{0C}' => encoded.push_str("\\f"),
-            '\n' => encoded.push_str("\\n"),
-            '\r' => encoded.push_str("\\r"),
-            '\t' => encoded.push_str("\\t"),
-            c if c <= '\u{1F}' => write!(&mut encoded, "\\u{:04x}", c as u32).unwrap(),
-            c => encoded.push(c),
-        }
-    }
-    encoded.push('"');
-    encoded
+    // Single shared escaper (no serde): field::json_escape matches
+    // serde_json's default string output.
+    field::json_escape(v)
 }
 
 pub(crate) fn q_string(req: &ApiRequest, key: &str, default: &str) -> String {
@@ -216,19 +199,15 @@ mod tests {
         assert!(get_id_range(10, 1, 0, i64::MAX, true).is_empty());
     }
 
-    /// Test 11 of §10.2: canonical state read failures map to HTTP 503
-    /// through the single API mapping entry, while business decode/revert
-    /// errors stay ordinary business errors (§8.2).
+    /// Test 11 of §10.2: canonical state read failures map to HTTP 503 via the single
+    /// API mapping entry; business decode/revert errors stay ordinary business errors (§8.2).
     #[test]
     fn api_mapping_503_only_for_canonical_state_failures() {
-        let read =
-            sys::Error::abort("backend down").with_code(base::STATE_READ_FAILED_CODE);
+        let read = sys::Error::abort("backend down").with_code(base::STATE_READ_FAILED_CODE);
         assert_eq!(api_state_read_error(&read).status, 503);
-        let decode =
-            sys::Error::abort("bad bytes").with_code(base::STATE_DECODE_FAILED_CODE);
+        let decode = sys::Error::abort("bad bytes").with_code(base::STATE_DECODE_FAILED_CODE);
         assert_eq!(api_state_read_error(&decode).status, 503);
-        let unavailable =
-            sys::Error::abort("engine stopping").with_code("engine_unavailable");
+        let unavailable = sys::Error::abort("engine stopping").with_code("engine_unavailable");
         assert_eq!(api_state_read_error(&unavailable).status, 503);
 
         let revert = sys::Error::revert("user revert");

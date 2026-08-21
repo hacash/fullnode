@@ -1,6 +1,5 @@
-//! Account services (Unified SDK 2.0, doc 14 §5). Private keys never enter
-//! the SDK: `address_from_public_key` derives an address from a public key
-//! only; password→key derivation lives in the wallet vault.
+//! Account services (Unified SDK 2.0, doc 14 §5). Private keys never enter the
+//! SDK: addresses derive from public keys only; password→key derivation lives in the vault.
 
 use field::Address;
 
@@ -9,8 +8,8 @@ use crate::error::{SdkError, SdkErrorCode};
 #[derive(Debug, Clone, PartialEq)]
 pub struct VerifyAddressResult {
     pub ok: bool,
-        pub error: Option<String>,
-        pub address: Option<String>,
+    pub error: Option<String>,
+    pub address: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,25 +34,16 @@ pub fn verify_address(raw: &str) -> VerifyAddressResult {
     }
 }
 
-/// `account.address_from_public_key`: derive the Hacash address from a
-/// 33-byte compressed public key (hex). No secret input. The point must be a
-/// valid secp256k1 curve point.
+/// `account.address_from_public_key`: derive the Hacash address from a 33-byte
+/// compressed public key (hex); no secret input, the point must be valid secp256k1.
 pub fn address_from_public_key(
     public_key_hex: &str,
 ) -> Result<AddressFromPublicKeyResult, SdkError> {
-    let public_key: [u8; 33] = hex::decode(
-        public_key_hex
-            .trim_start_matches("0x")
-            .trim_start_matches("0X"),
-    )
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| {
-            SdkError::new(
-                SdkErrorCode::InvalidPublicKey,
-                "public key must be 33-byte compressed hex",
-            )
-        })?;
+    let public_key: [u8; 33] = crate::inspect::decode_hex_fixed(
+        public_key_hex,
+        SdkErrorCode::InvalidPublicKey,
+        "public key must be 33-byte compressed hex",
+    )?;
     if !sys::Account::compressed_public_key_valid(&public_key) {
         return Err(SdkError::new(
             SdkErrorCode::InvalidPublicKey,

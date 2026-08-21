@@ -1,12 +1,5 @@
-//! Generic error model: `sys::Error { kind, code, msg }`.
-//!
-//! - `ErrorKind` only describes generic handling (Normal/Revert/Fault/Abort)
-//! - `code` is an optional stable string owned by the layer that creates it;
-//!   `sys` deliberately knows nothing about application/storage domains.
-//! - `Ret/Rerr` propagate up the call stack; lifecycle changes only occur at
-//!   the engine boundary
-//!
-//! `Ret<T>`
+//! Generic error model: `Error { kind, code, msg }` — `kind` only describes
+//! generic handling, `code` is an optional stable string owned by the creating layer. Lifecycle changes occur only at the engine boundary.
 
 use std::fmt;
 
@@ -84,11 +77,8 @@ impl Error {
         self.code
     }
 
-    /// Attach operational context. The original `kind` and `code` are preserved;
-    /// only a message prefix is prepended. It must not change the error's
-    /// classification. When several errors must be kept together (e.g. a VM
-    /// execution error coexisting with a gas settle error), call `context()`
-    /// on the primary error to merge in the secondary error's message.
+    /// Attach operational context: prepend a message prefix, preserving `kind`/`code`
+    /// and classification. Use to merge a secondary error's message into the primary.
     pub fn context(mut self, msg: impl Into<String>) -> Self {
         let prefix = msg.into();
         if prefix.is_empty() {

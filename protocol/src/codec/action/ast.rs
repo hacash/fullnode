@@ -3,24 +3,21 @@
 use std::any::Any;
 use std::sync::Arc;
 
-#[cfg(feature = "execute")]
-use base::ActionDispatcher;
 use base::{
-    ActOut, ActScope, Action, ActionExecute, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry,
-    Context, TopRule,
+    ActScope, Action, ActionCodec, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry, TopRule,
 };
+#[cfg(feature = "execute")]
+use base::{ActionExecute, ActionJsonView};
 use field::{
-    Decode, Encode, Reader, Uint1, Uint2, json_decode_object, json_decode_value,
-    json_expect_unquoted, json_split_array, json_split_object,
+    Decode, Encode, Reader, Uint1, Uint2, json_decode_value, json_expect_unquoted,
+    json_object_entries, json_object_fields, json_split_array,
 };
-use sys::{Rerr, Ret, errf};
+use sys::Ret;
 
 impl field::ToJSON for ActionListW1 {
     fn to_json_fmt(&self, _fmt: &field::JSONFormater) -> String {
-        // `Action` no longer requires `ToJSON` (the SDK wasm core is JSON-free),
-        // so `dyn Action` has no JSON view here; serialize each child from its
-        // wire form as `{"body":"<hex>"}`, which `decode_ast_child` decodes via
-        // `decode_action_exact` (lossless round trip).
+        // `Action` has no JSON view (SDK wasm core is JSON-free): serialize each child
+        // from its wire form as `{"body":"<hex>"}`, decoded by `decode_ast_child` via `decode_action_exact`.
         format!(
             "[{}]",
             self.actions
@@ -36,12 +33,12 @@ impl field::FieldWireShape for ActionListW1 {
     const WIRE: field::FieldWire = field::FieldWire::ActionListW1;
 }
 
-base::impl_action_to_json!(AstSelect {
+field::impl_action_json!(AstSelect {
     exe_min,
     exe_max,
     actions
 });
-base::impl_action_to_json!(AstIf {
+field::impl_action_json!(AstIf {
     cond,
     br_if,
     br_else
@@ -147,12 +144,14 @@ impl AstIf {
 }
 
 fn decode_ast_child(reg: &dyn CodecRegistry, json: &str) -> Ret<ActionRef> {
-    let obj = json_decode_object(json)?;
-    if let Some(body) = obj.get("body") {
+    let entries = json_object_entries(json)?;
+    if let Some((_, body)) = entries.iter().find(|(key, _)| *key == "body") {
         return reg.decode_action_exact(&field::json_decode_binary(body)?);
     }
-    let kind = obj
-        .get("kind")
+    let kind = entries
+        .iter()
+        .find(|(key, _)| *key == "kind")
+        .map(|(_, value)| *value)
         .ok_or_else(|| sys::Error::fault("AST child action missing kind"))?;
     let kind: u16 = json_expect_unquoted(kind)?
         .parse()
@@ -167,19 +166,20 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
     let mut exe_min = None;
     let mut exe_max = None;
     let mut actions = None;
-    let mut seen = std::collections::HashSet::new();
-    for (key, value) in json_split_object(json)? {
-        if !seen.insert(key) {
-            return sys::normalf!("AstSelect JSON field {} is duplicated", key);
-        }
-        match key {
-            "kind" => kind = json_decode_value(value)?,
-            "exe_min" => exe_min = Some(json_decode_value(value)?),
-            "exe_max" => exe_max = Some(json_decode_value(value)?),
-            "actions" => actions = Some(value),
-            _ => {}
-        }
-    }
+    json_object_fields(
+        json,
+        &["kind", "exe_min", "exe_max", "actions"],
+        |key, value| {
+            match key {
+                "kind" => kind = json_decode_value(value)?,
+                "exe_min" => exe_min = Some(json_decode_value(value)?),
+                "exe_max" => exe_max = Some(json_decode_value(value)?),
+                "actions" => actions = Some(value),
+                _ => unreachable!("allowed field checked by json_object_fields"),
+            }
+            Ok(())
+        },
+    )?;
     if kind.uint() != AstSelect::KIND {
         return sys::normalf!(
             "action kind mismatch: expected {} got {}",
@@ -220,19 +220,16 @@ pub fn decode_ast_if_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret
     let mut cond = None;
     let mut br_if = None;
     let mut br_else = None;
-    let mut seen = std::collections::HashSet::new();
-    for (key, value) in json_split_object(json)? {
-        if !seen.insert(key) {
-            return sys::normalf!("AstIf JSON field {} is duplicated", key);
-        }
+    json_object_fields(json, &["kind", "cond", "br_if", "br_else"], |key, value| {
         match key {
             "kind" => declared = json_decode_value(value)?,
             "cond" => cond = Some(value),
             "br_if" => br_if = Some(value),
             "br_else" => br_else = Some(value),
-            _ => {}
+            _ => unreachable!("allowed field checked by json_object_fields"),
         }
-    }
+        Ok(())
+    })?;
     if declared.uint() != AstIf::KIND {
         return sys::normalf!(
             "action kind mismatch: expected {} got {}",
@@ -306,68 +303,25 @@ impl Encode for AstIf {
     }
 }
 
-fn validate_ast_select(min: usize, max: usize, num: usize) -> Rerr {
-    if min > max {
-        return sys::errf!("action ast select max cannot be less than min");
-    }
-    if max > num {
-        return sys::errf!("action ast select max cannot exceed list num");
-    }
-    if num > base::TX_ACTIONS_MAX {
-        return sys::errf!(
-            "action ast select num cannot exceed {}",
-            base::TX_ACTIONS_MAX
-        );
-    }
-    Ok(())
-}
-
-#[cfg(feature = "execute")]
-fn run_ast_child(ctx: &mut dyn Context, act: &ActionRef) -> Ret<ActOut> {
-    let gas = crate::execution_params(ctx.services().as_ref())?.ast_snapshot_try_gas;
-    ctx.gas_charge(gas)?;
-    let gas_snap = ctx.snapshot_volatile();
-    let vm_snap = ctx.vm_peek().map(|vm| vm.snapshot_volatile());
-    let had_vm = ctx.vm_peek().is_some();
-    let mut run = |child: &mut dyn Context| {
-        let out = ActionDispatcher::dispatch_ast(child, act)?;
-        if act.extra9() {
-            child.gas_charge(out.0.saturating_mul(9) as i64)?;
-        }
-        Ok(out)
-    };
-    match ctx.exec_ast_child(&mut run) {
-        Ok(out) => Ok(out),
-        Err(e) if e.is_revert() => {
-            match (vm_snap, ctx.vm_peek().is_some()) {
-                (None, false) => {}
-                (None, true) => {
-                    if let Some(vm) = ctx.vm_peek() {
-                        vm.rollback_volatile_preserve_warm_and_gas();
-                    }
-                }
-                (Some(snap), true) => {
-                    if let Some(vm) = ctx.vm_peek() {
-                        vm.restore_volatile(snap);
-                    }
-                }
-                (Some(_), false) if had_vm => {
-                    return errf!("vm disappeared during AST snapshot/recover");
-                }
-                (Some(_), false) => {}
-            }
-            ctx.restore_volatile(gas_snap);
-            Err(e)
-        }
-        Err(e) => Err(e),
-    }
-}
-
-impl Action for AstSelect {
+impl ActionCodec for AstSelect {
     fn kind(&self) -> u16 {
         Self::KIND
     }
 
+    fn schema(&self) -> Option<&'static base::ActionSchema> {
+        Some(&<Self as base::ActionSchemaProvider>::ACTION_SCHEMA)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl base::ActionScopeProvider for AstSelect {
+    const SCOPE: ActScope = ActScope::AST;
+}
+
+impl Action for AstSelect {
     fn scope(&self) -> ActScope {
         ActScope {
             top: Some(TopRule::None),
@@ -400,52 +354,36 @@ impl Action for AstSelect {
         })
     }
 
+    #[cfg(feature = "execute")]
+    fn as_execute(&self) -> Option<&dyn ActionExecute> {
+        Some(self)
+    }
+
+    #[cfg(feature = "execute")]
+    fn as_json_view(&self) -> Option<&dyn ActionJsonView> {
+        Some(self)
+    }
+}
+
+impl ActionCodec for AstIf {
+    fn kind(&self) -> u16 {
+        Self::KIND
+    }
+
+    fn schema(&self) -> Option<&'static base::ActionSchema> {
+        Some(&<Self as base::ActionSchemaProvider>::ACTION_SCHEMA)
+    }
+
     fn as_any(&self) -> &dyn Any {
         self
     }
 }
 
-#[cfg(feature = "execute")]
-impl ActionExecute for AstSelect {
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        // AST control nodes are structural. Their children and snapshot
-        // boundaries are metered; charging the serialized wrapper here would
-        // double-charge relative to dev.
-        let gas = 0;
-        let min = self.exe_min.uint() as usize;
-        let max = self.exe_max.uint() as usize;
-        validate_ast_select(min, max, self.actions.length())?;
-        let mut ok = 0usize;
-        let mut last = Vec::new();
-        for act in self.actions.as_list() {
-            if ok >= max {
-                break;
-            }
-            match run_ast_child(ctx, act) {
-                Ok((_, ret)) => {
-                    ok += 1;
-                    last = ret;
-                }
-                Err(e) if e.is_revert() => {}
-                Err(e) => return Err(e),
-            }
-        }
-        if ok < min {
-            return sys::revertf!(
-                "action ast select must succeed at least {} but only {}",
-                min,
-                ok
-            );
-        }
-        Ok((gas, last))
-    }
+impl base::ActionScopeProvider for AstIf {
+    const SCOPE: ActScope = ActScope::AST;
 }
 
 impl Action for AstIf {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
     fn scope(&self) -> ActScope {
         ActScope {
             top: Some(TopRule::None),
@@ -477,28 +415,14 @@ impl Action for AstIf {
         })
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
+    #[cfg(feature = "execute")]
+    fn as_execute(&self) -> Option<&dyn ActionExecute> {
+        Some(self)
     }
-}
 
-#[cfg(feature = "execute")]
-impl ActionExecute for AstIf {
-    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
-        let gas = 0;
-        let cond_ref: ActionRef = Arc::new(self.cond.clone());
-        let cond_ok = match run_ast_child(ctx, &cond_ref) {
-            Ok(_) => true,
-            Err(e) if e.is_revert() => false,
-            Err(e) => return Err(e),
-        };
-        let branch: ActionRef = if cond_ok {
-            Arc::new(self.br_if.clone())
-        } else {
-            Arc::new(self.br_else.clone())
-        };
-        let (_, ret) = run_ast_child(ctx, &branch)?;
-        Ok((gas, ret))
+    #[cfg(feature = "execute")]
+    fn as_json_view(&self) -> Option<&dyn ActionJsonView> {
+        Some(self)
     }
 }
 
@@ -564,7 +488,7 @@ impl base::ActionSchemaProvider for AstSelect {
     const ACTION_SCHEMA: base::ActionSchema = base::ActionSchema {
         kind: Self::KIND,
         name: Self::NAME,
-        audit_class: "branching",
+        audit_class: base::AuditClass::Branching,
         blob: false,
         fields: &[
             base::FieldSchema::new("kind", base::FieldWire::U2),
@@ -581,7 +505,7 @@ impl base::ActionSchemaProvider for AstIf {
     const ACTION_SCHEMA: base::ActionSchema = base::ActionSchema {
         kind: Self::KIND,
         name: Self::NAME,
-        audit_class: "branching",
+        audit_class: base::AuditClass::Branching,
         blob: false,
         fields: &[
             base::FieldSchema::new("kind", base::FieldWire::U2),

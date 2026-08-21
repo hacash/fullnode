@@ -5,10 +5,11 @@ edition.workspace = true
 
 #
 [features]
-# `execute` is the shared "execution enabled" flag consumed by
-# `base::impl_action!` and by the type-level ActionRef/TxRef cut (the execute
-# view compiles only when this feature is on). Default on: only SDK/wasm and
-# chain-codec consumers disable it via default-features = false.
+# `execute` compiles `protocol::exec` (action/tx execute bodies via
+# `impl_action_execute!` / `TransactionExecute`). Codec files only describe
+# wire. `ActionRef`/`TxRef` stay the wire view in every build.
+# Default on: only SDK/wasm consumers disable it via
+# default-features = false.
 default = ["execute"]
 execute = ["base/execute"]
 
@@ -16,4 +17,5 @@ execute = ["base/execute"]
 sys = { workspace = true }
 field = { workspace = true }
 base = { path = "../base", default-features = false }
+hacash-params = { workspace = true }
 hex = "0.4"

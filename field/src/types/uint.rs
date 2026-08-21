@@ -2,7 +2,7 @@ use std::fmt;
 use std::ops::Deref;
 use std::sync::OnceLock;
 
-use sys::{Ret, normalf, errf};
+use sys::{Ret, errf, normalf};
 
 use crate::codec::{Decode, Encode};
 

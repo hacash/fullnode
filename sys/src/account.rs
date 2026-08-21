@@ -13,10 +13,8 @@ const ADDRESS_SIZE: usize = 21;
 const PRIVATE_SIZE: usize = 32;
 const PUBLIC_SIZE: usize = 33;
 
-// Two secp256k1 context strategies (see the `secp-static-context` feature):
-// fullnode builds embed libsecp256k1's precomputed tables and use the free
-// `sign`/`verify` functions (zero first-use init); SDK/wasm builds compute the
-// ecmult tables (~1MB) once on first use so the tables never enter the wasm.
+// Two secp256k1 context strategies (see `secp-static-context`): fullnode embeds
+// precomputed tables (free sign/verify); SDK/wasm computes the ~1MB ecmult tables once on first use.
 #[cfg(feature = "secp-static-context")]
 fn pubkey_from_secret_key(seckey: &SecretKey) -> PublicKey {
     PublicKey::from_secret_key(seckey)
@@ -153,10 +151,8 @@ impl Account {
         addr
     }
 
-    /// Whether `pubkey` is a valid secp256k1 compressed point. The same
-    /// `PublicKey::parse_compressed` check `verify_signature` runs before
-    /// hashing; address derivation itself (`get_address_by_public_key`) stays
-    /// hash-only so execute never changes.
+    /// Whether `pubkey` is a valid secp256k1 compressed point (same check
+    /// `verify_signature` runs before hashing; address derivation stays hash-only).
     pub fn compressed_public_key_valid(pubkey: &[u8; PUBLIC_SIZE]) -> bool {
         PublicKey::parse_compressed(pubkey).is_ok()
     }

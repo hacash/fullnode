@@ -1,8 +1,5 @@
-/// Convert raw bytes to a uint `Value` of the **minimal** active width.
-/// Leading zeros are trimmed; the effective length determines the target variant.
-///
-/// Map keys normalize via `uint_key_bytes` on the numeric value, so `U8(1)` and `U64(1)`
-/// share one slot. See `vm/doc/value-cast.md` §9.1.
+/// Convert raw bytes to a uint `Value` of the **minimal** active width (leading zeros trimmed).
+/// Map keys normalize via `uint_key_bytes`, so `U8(1)`/`U64(1)` share one slot (§9.1).
 pub(crate) fn buf_to_uint(buf: &[u8]) -> VmrtRes<Value> {
     let raw = trim_leading_zero_bytes(buf);
     let sz = raw.len();
@@ -96,9 +93,8 @@ impl Value {
         self.extract_uint_cast("u128")
     }
 
-    /// Runtime truthiness used by control flow, logical ops, and explicit `as bool` casts.
-    /// This is intentionally broader than canonical bool byte decoding used by
-    /// `Value::type_from(ValueTy::Bool, ..)` and `Parse for Value`.
+    /// Runtime truthiness used by control flow, logical ops, and `as bool` casts; intentionally
+    /// broader than the canonical bool byte decoding of `Value::type_from(ValueTy::Bool, ..)`.
     pub fn extract_bool(&self) -> VmrtRes<bool> {
         if let Some(n) = self.uint_u128_opt() {
             return Ok(n != 0);

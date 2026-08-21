@@ -1,7 +1,5 @@
-//! P2P message type constants.
-//!
-//! Core application messages use the same u16 identifiers throughout node
-//! APIs and are encoded as top-level frame types on the wire.
+//! P2P message type constants: application messages share the same u16 ids
+//! throughout node APIs and are encoded as top-level frame types on the wire.
 
 // ===================================================================
 // Transport
@@ -20,17 +18,14 @@ pub const PEER_KEY_SIZE: usize = 16;
 // ===================================================================
 // Core application message types
 // ===================================================================
-//
-// Callers use these names with `peer.send_msg(ty, body)`; framing is
-// performed by the peer writer.
+// Sent with `peer.send_msg(ty, body)`; the peer writer performs framing.
 
 pub const MSG_REQ_STATUS: u16 = 1;
 pub const MSG_STATUS: u16 = 2;
 pub const MSG_REQ_BLOCK_HASH: u16 = 3;
 pub const MSG_BLOCK_HASH: u16 = 4;
-/// New transaction push.
-/// Canonical definition lives in `base::MSG_TX_SUBMIT`; re-exported here
-/// so node-internal `msg::MSG_TX_SUBMIT` callers are unaffected.
+/// New transaction push. Canonical definition in `base::MSG_TX_SUBMIT`;
+/// re-exported here so node-internal `msg::MSG_TX_SUBMIT` callers are unaffected.
 pub use base::MSG_TX_SUBMIT;
 /// New block push / announce.
 pub const MSG_BLOCK_DISCOVER: u16 = 8;
@@ -38,9 +33,7 @@ pub const MSG_BLOCK_DISCOVER: u16 = 8;
 // ===================================================================
 // System message types (u8)
 // ===================================================================
-//
-// Values below 100 are reserved for system messages. Values above it are
-// custom and must be negotiated during the VERSION handshake.
+// Values below 100 are system-reserved; above are custom and negotiated during VERSION.
 
 /// `100` is permanently invalid. Values below it are system-reserved;
 /// values above it are custom and require explicit session negotiation.
@@ -82,10 +75,8 @@ pub mod services {
     pub const NODE_PUBLIC: u64 = 1 << 1;
     /// Willing to serve historical sync (heavy; high-load nodes may clear).
     pub const NODE_SYNC: u64 = 1 << 2;
-    // Bits >= 1 << 3 are business-specific relay channels, declared by the
-    // consensus layer via `TxPolicy::tx_pool_groups` and aggregated
-    // into the advertised services mask by the node. The node itself does not
-    // name or interpret them on the transport path.
+    // Bits >= 1 << 3 are business-specific relay channels declared by the
+    // consensus layer via `TxPolicy::tx_pool_groups`; the node never names/interpret them.
 }
 
 /// Current protocol version advertised in VERSION message.

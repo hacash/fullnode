@@ -1,13 +1,6 @@
-use serde::{Deserialize, Serialize};
-
-/// Stable chain identifier shared by configuration, execution and consensus.
-///
-/// The transparent representation keeps existing numeric configuration files
-/// compatible while preventing accidental widening/narrowing between layers.
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize, Serialize,
-)]
-#[serde(transparent)]
+/// Stable chain identifier shared by config, execution and consensus; a transparent
+/// u32 keeps existing numeric config files compatible (INI decoding: hand-written, no serde).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChainId(u32);
 
 impl ChainId {
@@ -44,24 +37,21 @@ impl std::fmt::Display for ChainId {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+/// Chain engine configuration (`[engine]` section). Decoded hand-written in the
+/// app composition layer (no serde); `vm` is populated from `[vm]` at load time.
+#[derive(Clone, Debug)]
 pub struct EngineConfig {
     pub data_dir: String,
     pub fast_sync: bool,
     pub unstable_block: u64,
-    /// Maximum number of side branch blocks the live fork tree and boot side
-    /// replay may retain. Over-capacity side subtrees are dropped in
-    /// deterministic order; side state is volatile and rebuildable from the
-    /// side hash list.
+    /// Max side branches the live fork tree and boot replay may retain; over-capacity
+    /// subtrees are dropped in deterministic order (side state is rebuildable).
     pub side_tree_capacity: usize,
     pub recent_blocks: bool,
     pub average_fee_purity: bool,
     pub show_miner_name: bool,
-    /// VM logging configuration. Populated at load time from the `[vm]`
-    /// section; `#[serde(skip)]` keeps it out of the `[engine]` section so
-    /// the two sections remain independently configured.
-    #[serde(skip)]
+    /// VM logging config; populated from the `[vm]` section at load time so the
+    /// two sections stay independently configured.
     pub vm: VmConfig,
 }
 
@@ -87,8 +77,7 @@ impl EngineConfig {
 }
 
 /// VM logging and log-management configuration (`[vm]` section).
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Clone, Debug, Default)]
 pub struct VmConfig {
     pub log_enable: bool,
     pub log_open_height: u64,
@@ -109,10 +98,12 @@ mod tests {
     use super::ChainId;
 
     #[test]
-    fn chain_id_is_transparent_u32() {
-        let id: ChainId = serde_json::from_str("4294967295").unwrap();
+    fn chain_id_is_a_transparent_u32() {
+        let id = ChainId::new(u32::MAX);
         assert_eq!(id.get(), u32::MAX);
-        assert_eq!(serde_json::to_string(&id).unwrap(), "4294967295");
-        assert!(serde_json::from_str::<ChainId>("4294967296").is_err());
+        assert_eq!(ChainId::from(u32::MAX), id);
+        assert_eq!(u32::from(id), u32::MAX);
+        assert!(ChainId::MAINNET.is_mainnet());
+        assert!(!id.is_mainnet());
     }
 }

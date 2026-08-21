@@ -49,9 +49,8 @@ impl P2PNode {
         self.start_sync_pipe(peer, start_height, remote_height)
     }
 
-    /// Start sync when a peer STATUS reports a height ahead of the local tip.
-    /// An active session is never displaced here: a stalled one is cancelled
-    /// by the watchdog, which then re-requests STATUS from all peers.
+    /// Start sync when a peer STATUS reports a height ahead of the local tip; an
+    /// active session is never displaced here, the watchdog cancels stalled ones.
     fn maybe_sync_from_remote_height(
         self: &Arc<Self>,
         peer: Arc<dyn base::Peer>,
@@ -115,9 +114,8 @@ impl P2PNode {
         if num > 80 || end_height > latest_height {
             return Ok(());
         }
-        // The request count is the number of preceding links and includes the
-        // endpoint itself, so a request for `num` returns `num + 1` hashes
-        // whenever height zero is not reached.
+        // The request count includes the endpoint itself: a request for `num`
+        // returns `num + 1` hashes whenever height zero is not reached.
         let start_height = if num >= end_height {
             1
         } else {
@@ -157,10 +155,7 @@ impl P2PNode {
             return Ok(());
         }
         // An active sync session is the only sanctioned downloader: ignore
-        // fork-hash replies while it runs (the sync itself covers forks; the
-        // watchdog re-requests STATUS on stall). This also avoids the
-        // per-height disk reads below being wasted on a session that would
-        // refuse the follow-up request anyway.
+        // fork-hash replies while it runs (the watchdog re-requests STATUS on stall).
         if self.sync_session.lock().ok().is_some_and(|s| s.is_some()) {
             return Ok(());
         }
@@ -259,10 +254,8 @@ impl P2PNode {
         Ok((end_height, total_num, blocks))
     }
 
-    /// Ad-hoc apply when no SyncSession is active (orphan / one-off REQ_BLOCK).
-    /// `inserting` serializes this against the session pipeline, and the
-    /// caller has already gated it on the session slot being empty, so no
-    /// tracker state is involved.
+    /// Ad-hoc apply when no SyncSession is active (orphan / one-off REQ_BLOCK);
+    /// `inserting` serializes against the session pipeline, no tracker state involved.
     pub(crate) fn apply_oneshot_blocks(&self, _start_height: u64, batch: BlockBatch) -> Rerr {
         let cfg = self.engine.config();
         let opts = PipelineOptions::default();

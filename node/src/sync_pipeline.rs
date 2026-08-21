@@ -1,6 +1,5 @@
-//! Window downloader → one BlockStream → engine.
-//!
-//! Protocol differences stay in the downloader; engine only consumes `BlockSource`.
+//! Window downloader → one BlockStream → engine; protocol differences stay in
+//! the downloader, engine only consumes `BlockSource`.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -92,9 +91,8 @@ pub(crate) struct SyncSession {
     pub remote_tip: u64,
     /// request_id -> planned start.
     pub inflight: BTreeMap<u64, (u64, u32)>,
-    /// Responses can complete out of order because each response is
-    /// dispatched independently. Keep decoded payloads here until the next
-    /// contiguous height is available for the ordered chain pipeline.
+    /// Out-of-order responses (each is dispatched independently) buffered here
+    /// until the next contiguous height is ready for the ordered chain pipeline.
     pub pending: BTreeMap<
         u64,
         (
@@ -153,9 +151,8 @@ impl SyncSession {
 pub type SyncSlot = Mutex<Option<SyncSession>>;
 
 impl P2PNode {
-    /// Ask connected peers to advertise their current tips after a downloader
-    /// failure. Other peers are queried before the failed source, so the first
-    /// valid STATUS normally moves the retry to a different connection.
+    /// Ask peers to advertise their tips after a downloader failure; others are
+    /// queried before the failed source so the first valid STATUS moves the retry.
     pub(crate) fn request_sync_status_candidates(&self, retry_last: Option<&str>) -> usize {
         if self.stopping.load(Ordering::Acquire) {
             return 0;
@@ -259,9 +256,8 @@ impl P2PNode {
         let spawn_result = std::thread::Builder::new()
             .name("node-sync-apply".into())
             .spawn(move || {
-                // Serialize block application itself.  Release the guard
-                // before post-processing, because orphan retries and
-                // deferred one-shot batches acquire the same lock.
+                // Serialize block application; release the guard before post-processing
+                // since orphan retries and deferred one-shot batches acquire the same lock.
                 let result = {
                     let _insert_guard = inserting.lock().unwrap();
                     engine
@@ -281,10 +277,8 @@ impl P2PNode {
                         let remote_tip = sync_tracker
                             .active_remote_height()
                             .unwrap_or(report.final_height);
-                        // The apply pipeline may stop at a held external block
-                        // while downloader responses are still in flight. Stop
-                        // that session before replaying, otherwise stale
-                        // responses can fill a queue with no consumer.
+                        // The apply pipeline may stop at a held external block while
+                        // responses are in flight: stop that session before replaying.
                         if let Ok(mut g) = sync_session.lock() {
                             if g.as_ref().is_some_and(|s| {
                                 s.generation == generation && s.peer_id == cleanup_peer_id
@@ -421,9 +415,8 @@ impl P2PNode {
                 if sess.peer_id != peer_id {
                     return Ok(());
                 }
-                // Response enqueueing already applies backpressure. Stopping
-                // request refill merely because that queue is currently full
-                // can strand the downloader: dequeueing has no refill callback.
+                // Response enqueueing already backpressures: stopping refill on a
+                // full queue can strand the downloader, since dequeueing has no refill callback.
                 if !sess.can_fill_wire_window() {
                     return Ok(());
                 }
@@ -496,12 +489,8 @@ impl P2PNode {
             }
         };
 
-        // Orphan recovery issues a one-block GET_BLOCKS request with id 0.
-        // Session request ids start at 1, so id 0 can never collide with an
-        // in-flight download. While a session is active the oneshot is
-        // skipped entirely: the orphan parent is already cached and
-        // drain_all_orphans replays it once the session ends, so running it
-        // here would only block the message handler on `inserting`.
+        // Orphan recovery uses one-block GET_BLOCKS id 0 (session ids start at 1, so no
+        // collision); skipped while a session runs — the cached parent is replayed after.
         if hdr.request_id == 0 && hdr.count == 1 {
             if self.sync_session.lock().ok().is_some_and(|g| g.is_some()) {
                 return Ok(());
@@ -589,9 +578,8 @@ impl P2PNode {
                     },
                 ));
                 if short {
-                    // Requests beyond a short response would leave a gap.
-                    // Discard those responses/requests and resume at the
-                    // first height not included by the short response.
+                    // Requests beyond a short response leave a gap: discard them and
+                    // resume at the first height not included by the short response.
                     sess.inflight.retain(|_, (start, _)| *start < next);
                     sess.pending.retain(|start, _| *start < next);
                     sess.next_start = next;

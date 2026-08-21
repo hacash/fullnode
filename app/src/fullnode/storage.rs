@@ -1,7 +1,5 @@
-//! Application-owned persistent storage layout.
-//!
-//! `db` opens supplied directories only. This module owns versioned chain-state
-//! paths; changes to other persistent layouts are handled by operations.
+//! Application-owned persistent storage layout: `db` opens supplied directories
+//! only; this module owns the versioned chain-state paths.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,10 +26,8 @@ fn prepare(data_dir: &Path) -> sys::Ret<StorageDirs> {
     std::fs::create_dir_all(data_dir)
         .map_err(|e| sys::Error::fault(format!("create data dir {}: {e}", data_dir.display())))?;
 
-    // Detect a prior `state_v{M}` directory. When the compiled `DB_VERSION`
-    // differs from the on-disk one we rename the old dirs aside (kept for ops
-    // to manually delete) instead of deleting them, so a rebuild can replay
-    // history without losing the old data on a coding mistake.
+    // Detect a prior `state_v{M}` directory. When the compiled `DB_VERSION` differs from
+    // the on-disk one, rename the old dirs aside (for ops to delete) instead of deleting them.
     let found_version = scan_state_version(data_dir)?;
     let needs_state_migration = match found_version {
         None => false, // first run: no prior state to migrate
@@ -115,11 +111,8 @@ fn scan_state_version(data_dir: &Path) -> sys::Ret<Option<u32>> {
     Ok(None)
 }
 
-/// Format the current wall clock as a UTC `YYYYMMDDHHMMSS` timestamp suffix.
-///
-/// Uses Howard Hinnant's `civil_from_days` algorithm to convert days-since-epoch
-/// (1970-01-01) into a proleptic Gregorian year/month/day. See
-/// <https://howardhinnant.github.io/date_algorithms.html>.
+/// Format the current wall clock as a UTC `YYYYMMDDHHMMSS` timestamp suffix
+/// (Howard Hinnant's `civil_from_days` proleptic Gregorian conversion, <https://howardhinnant.github.io/date_algorithms.html>).
 fn timestamp_suffix() -> sys::Ret<String> {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)

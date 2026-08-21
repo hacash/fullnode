@@ -71,10 +71,8 @@ impl Waiter {
         }
     }
 
-    /// Register work only while shutdown has not started.  The shutdown flag
-    /// is checked while holding the same mutex used by `wait_complete`, so a
-    /// successful registration is guaranteed to be observed by shutdown and
-    /// a completed shutdown cannot be followed by a new hold.
+    /// Register work only while shutdown has not started. The flag is checked under
+    /// the same mutex `wait_complete` uses, so a registered hold is always observed.
     pub fn try_hold(&self) -> Option<HoldGuard> {
         let mut state = self.inner.state.lock().unwrap();
         if self.is_shutdown() {

@@ -1,18 +1,5 @@
-//! Optional block-index / scaner extension.
-//!
-//! # Design (vs fullnodedev)
-//!
-//! | fullnodedev | fullnodenext |
-//! |-------------|--------------|
-//! | `ChainEngine` holds `Arc<dyn Scaner>` | Engine never holds a scaner |
-//! | `scaner.roll(block, state, disk)` from insert path | `ChainListener` + `on_stable_block` |
-//! | `start` / `serve` each own an OS thread | `start(Waiter)` on shared shutdown; HTTP via `api_services` |
-//! | `GLOBAL_API_SERVICES` OnceLock | App merges `api_services()` into `HttpServer::open` |
-//!
-//! Assembly lives only in `app` (or an external indexer crate that `app` wires).
-//! Concrete indexers (hascan, …) implement [`Scaner`] and optionally [`ApiService`].
-//!
-//! Configuration and concrete assembly belong to the application crate.
+//! Optional block-index / scaner extension. The engine never holds a scaner — indexing
+//! hooks into `ChainListener` + `on_stable_block`; assembly lives only in `app`.
 
 use std::sync::Arc;
 
@@ -23,20 +10,14 @@ use crate::BlockRef;
 use crate::api::ApiService;
 use crate::chain::BlockHistory;
 
-/// Read-only chain data exposed to a block explorer.
-///
-/// This deliberately excludes transaction execution, peers, storage handles,
-/// and generic state-KV access.
+/// Read-only chain data exposed to a block explorer. Deliberately excludes transaction
+/// execution, peers, storage handles, and generic state-KV access.
 pub trait ScanerView: Send + Sync {
     fn block_history(&self) -> Arc<dyn BlockHistory>;
     fn balance_at(&self, block_hash: &Hash, address: &Address) -> Ret<Option<Balance>>;
 
-    /// Read several balances from one validated state snapshot.
-    ///
-    /// The outer `Option` reports whether the requested snapshot is available;
-    /// each inner `Option` reports whether the corresponding address has a
-    /// balance entry. Indexers should prefer this over repeated `balance_at`
-    /// calls so a root move cannot mix results from different snapshots.
+    /// Read several balances from one validated state snapshot. Outer `Option` = snapshot
+    /// availability, inner `Option` = per-address balance entry. Prefer over repeated `balance_at` calls.
     fn balances_at(
         &self,
         _block_hash: &Hash,
@@ -46,9 +27,7 @@ pub trait ScanerView: Send + Sync {
     }
 }
 
-/// Block-index / scan extension point.
-///
-/// Prefer loading state via [`ChainView`] / store rather than receiving raw
+/// Block-index / scan extension point. Prefer state via [`ChainView`] / store over raw
 /// `DiskDB` handles (keeps `chain` free of indexer types).
 pub trait Scaner: Send + Sync {
     fn name(&self) -> &str;
@@ -58,11 +37,8 @@ pub trait Scaner: Send + Sync {
         Ok(())
     }
 
-    /// A stable block is available for indexing.
-    ///
-    /// Implementations must return promptly and do their database work in
-    /// their own queue/worker. Indexer failures must not reject a block;
-    /// returning an error is recorded by the listener boundary.
+    /// A stable block is available for indexing. Implementations must return promptly and do
+    /// DB work in their own queue; failures must not reject the block (errors are recorded).
     fn on_block(&self, _block: BlockRef, _view: Arc<dyn ScanerView>) -> Rerr {
         Ok(())
     }
@@ -72,10 +48,8 @@ pub trait Scaner: Send + Sync {
         vec![]
     }
 
-    /// Background work. Default no-op.
-    ///
-    /// Implementations may spawn threads or schedule on a shared tokio runtime;
-    /// they must honour `waiter` for shutdown (no separate `serve` OS thread).
+    /// Background work. Default no-op. May spawn threads or schedule on a shared tokio runtime;
+    /// must honour `waiter` for shutdown (no separate `serve` OS thread).
     fn start(&self, _waiter: Waiter) -> Rerr {
         Ok(())
     }

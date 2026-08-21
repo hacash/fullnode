@@ -121,9 +121,8 @@ impl Value {
         }
     }
 
-    /// Runtime byte normalization (`extract_bytes_ec` in `vm/doc/value-cast.md`).
-    /// `Nil` is rejected here; field serialization uses [`Value::scalar_bytes`] instead.
-    /// Native call packing uses [`Self::extract_call_data`], which alone maps `Nil` to `[]`.
+    /// Runtime byte normalization (`extract_bytes_ec` in `vm/doc/value-cast.md`). `Nil` rejected here;
+    /// field serialization uses [`Value::scalar_bytes`]; only [`Self::extract_call_data`] maps `Nil` to `[]`.
     fn extract_bytes_with_error_code(&self, ec: ItrErrCode) -> VmrtRes<Vec<u8>> {
         if matches!(self, Nil) {
             return itr_err_code!(ec);
@@ -138,13 +137,8 @@ impl Value {
         self.extract_bytes_with_error_code(CastBeBytesFail)
     }
 
-    /// Derive map key bytes from a value.
-    ///
-    /// Uint keys use value-defined minimal big-endian (`uint_key_bytes`), so equal uints
-    /// share one slot regardless of variant width. `Bytes` and `Address` use raw payload
-    /// bytes (`extract_bytes` / `scalar_bytes`). See `vm/doc/value-cast.md` §9.
-    ///
-    /// Bool, Nil, and empty `Bytes` are rejected as keys.
+    /// Derive map key bytes from a value. Uint keys use minimal big-endian `uint_key_bytes` (equal uints
+    /// share a slot); `Bytes`/`Address` use raw bytes. Bool, Nil, empty `Bytes` rejected. See `vm/doc/value-cast.md` §9.
     pub(crate) fn extract_key_bytes_with_error_code(&self, ec: ItrErrCode) -> VmrtRes<Vec<u8>> {
         match self {
             Bool(..) => itr_err_code!(ec),

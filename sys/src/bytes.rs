@@ -1,8 +1,5 @@
-//! `Bytes` — `Arc<Vec<u8>>` + `[start..end)` range, cheap clone / slice.
-//!
-//! The fundamental byte buffer type used across all crates for state values,
-//! block data, and KV storage.  Lives in `sys` because it is as foundational
-//! as `Hash` — zero domain semantics, used by every layer above.
+//! `Bytes` — `Arc<Vec<u8>>` + `[start..end)` range, cheap clone / slice. The
+//! fundamental buffer type across all crates for state values, block data, KV storage.
 
 use std::sync::Arc;
 

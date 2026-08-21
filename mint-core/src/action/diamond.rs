@@ -11,62 +11,19 @@ use field::{
 use sys::Ret;
 
 #[cfg(feature = "execute")]
-use base::{BLACKHOLE_ADDR, Context, CoreState, DIAMOND_STATUS_NORMAL, diamond_owned_push_one, hacd_add, total_add_diamond_number, total_add_u12};
-#[cfg(feature = "execute")]
-use field::{Amount, BlockHeight, DiamondSmelt, DiamondSto, DiamondVisualGene, Inscripts};
-#[cfg(feature = "execute")]
-use sys::{Rerr, errf};
+pub use crate::exec::diamond::calculate_diamond_visual_gene;
 
-#[cfg(feature = "execute")]
-use crate::state::{MintState, with_mint_total};
-
-#[cfg(feature = "execute")]
-use protocol::{execution_params, tx_std::TransactionType2};
-#[cfg(feature = "execute")]
-use x16rs;
-
-base::impl_fields_to_json!(DiamondMintData {
+field::impl_struct_json!(DiamondMintData {
     diamond,
     number,
     prev_hash,
     nonce,
     address
 } optional custom_message when has_custom_message);
-base::impl_action_to_json!(DiamondMint { d });
+field::impl_action_json!(DiamondMint { d });
 
-pub const DIAMOND_ABOVE_NUMBER_OF_CREATE_BY_CUSTOM_MESSAGE: u32 = 20_000;
-pub const DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES: u32 = 30_000;
-pub const DIAMOND_ABOVE_NUMBER_OF_STATISTICS_AVERAGE_BIDDING_BURNING: u32 = 40_000;
-pub const DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BLOCK_HASH: u32 = 40_000;
-pub const DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BIDDING_FEE: u32 = 41_000;
-pub const DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST: u32 = 107_000;
-
-#[cfg(feature = "execute")]
-const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
-
-#[cfg(feature = "execute")]
-pub fn calculate_diamond_visual_gene(name: &DiamondName, life_gene: &Hash) -> DiamondVisualGene {
-    let mut genehexstr = [b'0'; 20];
-    let searchgx = |x| {
-        for (i, a) in x16rs::DIAMOND_NAME_VALID_CHARS.iter().enumerate() {
-            if *a == x {
-                return HEX_CHARS[i];
-            }
-        }
-        panic!("not supply diamond char");
-    };
-    for i in 0..DiamondName::SIZE {
-        genehexstr[i + 2] = searchgx(name.as_ref()[i]);
-    }
-    let mut idx = 8;
-    for i in 20..31 {
-        let k = (life_gene.as_ref()[i] as usize) % 16;
-        genehexstr[idx] = HEX_CHARS[k];
-        idx += 1;
-    }
-    let mut genehex = hex::decode(genehexstr).unwrap();
-    genehex[0] = life_gene.as_ref()[31];
-    DiamondVisualGene::from(genehex.try_into().unwrap())
+fn wire_rules() -> &'static hacash_params::DiamondRules {
+    &hacash_params::MAINNET_PARAMS.mint_rules.diamond
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,11 +36,8 @@ pub struct DiamondMintData {
     pub custom_message: Hash,
 }
 
-// `DiamondMintData.custom_message` exists on the wire only above the consensus
-// threshold (see `has_custom_message`/`Encode`); the schema declares it
-// optional so the transport and the friendly surface stay faithful to the
-// native conditionality (the `wire_struct_schema!` macro has no marker
-// syntax, so the provider is written out).
+// `custom_message` exists on the wire only above the consensus threshold (see
+// `has_custom_message`/`Encode`); declared optional, so the provider is written out (no marker syntax).
 impl field::StructSchemaProvider for DiamondMintData {
     const STRUCT_SCHEMA: field::StructSchema = field::StructSchema {
         name: "DiamondMintData",
@@ -121,7 +75,7 @@ impl Default for DiamondMintData {
 
 impl DiamondMintData {
     fn has_custom_message(&self) -> bool {
-        self.number.uint() > DIAMOND_ABOVE_NUMBER_OF_CREATE_BY_CUSTOM_MESSAGE
+        self.number.uint() > wire_rules().custom_message_after
     }
 }
 
@@ -172,6 +126,19 @@ impl DiamondMint {
     }
 }
 
+impl base::ActionSchemaProvider for DiamondMint {
+    const ACTION_SCHEMA: base::ActionSchema = base::ActionSchema {
+        kind: Self::KIND,
+        name: "diamond_mint",
+        audit_class: base::AuditClass::Full,
+        blob: false,
+        fields: &[
+            base::FieldSchema::new("kind", base::FieldWire::U2),
+            base::FieldSchema::new("d", base::FieldWire::Struct("DiamondMintData")),
+        ],
+    };
+}
+
 impl Encode for DiamondMint {
     fn size(&self) -> usize {
         self.kind.size() + self.d.size()
@@ -183,21 +150,17 @@ impl Encode for DiamondMint {
     }
 }
 
-base::impl_action! {
+base::impl_action_facts! {
     DiamondMint {
         name: "diamond_mint",
         scope: ActScope::TOP_ONLY,
         min_tx_type: 2,
         extra9: |this: &DiamondMint| {
-            this.d.number.uint() > DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES
+            this.d.number.uint() > wire_rules().burn_90_percent_after
         },
         req_sign: |_: &DiamondMint| vec![],
         as_transfer_like: none,
         description: |this: &DiamondMint| format!("Mint diamond <{}> number {}", this.d.diamond.to_readable(), this.d.number.uint()),
-        execute: (self, ctx) {
-            diamond_mint(self, ctx)?;
-            Ok(vec![])
-        }
     }
 }
 
@@ -216,7 +179,7 @@ pub fn create_diamond_mint(
     let prev_hash: Hash = r.read()?;
     let nonce: Fixed8 = r.read()?;
     let address: Address = r.read()?;
-    let custom_message = if number.uint() > DIAMOND_ABOVE_NUMBER_OF_CREATE_BY_CUSTOM_MESSAGE {
+    let custom_message = if number.uint() > wire_rules().custom_message_after {
         r.read()?
     } else {
         Hash::default()
@@ -307,11 +270,7 @@ impl field::FromJSON for DiamondMint {
 }
 
 /// JSON creator for the consensus-specific diamond mint payload.
-///
-/// The public transaction API historically accepted both the canonical
-/// `{"kind":4,"d":{...}}` form and a flat object. Keep both forms here so
-/// registry dispatch does not change the API contract while ordinary actions
-/// use the generated decoder.
+/// Accepts both `{"kind":4,"d":{...}}` and the historical flat form, keeping the API contract stable.
 pub fn decode_diamond_mint_json(
     _reg: &dyn base::CodecRegistry,
     kind: u16,
@@ -321,196 +280,4 @@ pub fn decode_diamond_mint_json(
         return sys::normalf!("DiamondMint JSON codec got kind {}", kind);
     }
     Ok(Arc::new(parse_diamond_mint_json(json)?))
-}
-
-#[cfg(feature = "execute")]
-fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Rerr {
-    let act = &this.d;
-    let env = ctx.env().clone();
-    let diamond_form_flag = execution_params(ctx.services().as_ref())?.diamond_form_flag;
-    if !env.chain.fast_sync {
-        if !act.address.is_privkey() {
-            return errf!("diamond mint address must be PRIVAKEY type");
-        }
-        check_transfer_recipient_allowed(&act.address)?;
-        check_diamond_mint_tx_type(ctx)?;
-    }
-    let pending_height = env.block.height;
-    let pending_hash = env.block.hash;
-    let tx_bid_fee = env.tx.fee.clone();
-    let dianum = act.number.uint() as u32;
-    let name = act.diamond;
-    let prev_hash = act.prev_hash;
-    let nonce = act.nonce;
-    let address = act.address;
-    let custom_message = if dianum > DIAMOND_ABOVE_NUMBER_OF_CREATE_BY_CUSTOM_MESSAGE {
-        act.custom_message.encode()
-    } else {
-        Vec::new()
-    };
-    let tx_bid_burn_238 = if dianum > DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES {
-        Some(diamond_mint_legacy_bid_burn(ctx, &tx_bid_fee)?.to_238_u64()? as u128)
-    } else {
-        None
-    };
-
-    let prev_hash_arr: &[u8; 32] = prev_hash.as_ref().try_into().unwrap();
-    let nonce_arr: &[u8; 8] = nonce.as_ref().try_into().unwrap();
-    let address_arr: &[u8; 21] = address.as_ref().try_into().unwrap();
-    let (sha3hx, mediumhx, diahx) = x16rs::mine_diamond(
-        dianum,
-        prev_hash_arr,
-        nonce_arr,
-        address_arr,
-        &custom_message,
-    );
-
-    let mut state = CoreState::wrap(ctx.layer());
-    if !env.chain.fast_sync {
-        if pending_hash != Hash::default() && pending_height % 5 != 0 {
-            return errf!("diamond must be in a block height that is divisible by 5");
-        }
-        let latest = state.latest_diamond()?.unwrap_or_default();
-        let latestdianum = latest.number.uint() as u32;
-        let neednextnumber = latestdianum + 1;
-        if dianum != neednextnumber {
-            return errf!(
-                "diamond number expected {} but got {}",
-                neednextnumber,
-                dianum
-            );
-        }
-        if dianum > 1 && latest.born_hash != prev_hash {
-            return errf!(
-                "diamond prev hash expected {:?} but got {:?}",
-                latest.born_hash,
-                prev_hash
-            );
-        }
-        if !x16rs::check_diamond_difficulty(dianum, &sha3hx, &mediumhx) {
-            return errf!("diamond difficulty does not match");
-        }
-        let Some(dianame) = x16rs::check_diamond_hash_result(diahx) else {
-            return errf!("diamond hash result is not a valid diamond name");
-        };
-        let dianame = DiamondName::from(dianame);
-        if name != dianame {
-            return errf!("diamond name expected {:?} but got {:?}", dianame, name);
-        }
-        if state.diamond(&name)?.is_some() {
-            return errf!("diamond already exists");
-        }
-    }
-
-    let projected_burn = MintState::wrap(&mut *state.0)
-        .get_mint_total()?
-        .hacd_bid_burn_238
-        .uint()
-        + tx_bid_burn_238.unwrap_or(0);
-    let average_bid_burn = calculate_diamond_average_bid_burn(dianum, projected_burn)?;
-    let life_gene = calculate_diamond_life_gene(dianum, &mediumhx, &pending_hash, &tx_bid_fee);
-    let diasmelt = DiamondSmelt {
-        diamond: name,
-        number: act.number,
-        born_height: BlockHeight::from(pending_height),
-        born_hash: pending_hash,
-        prev_hash,
-        miner_address: address,
-        bid_fee: tx_bid_fee,
-        nonce,
-        average_bid_burn,
-        life_gene,
-    };
-    state.latest_diamond_set(&diasmelt);
-    state.diamond_smelt_set(&name, &diasmelt);
-    state.diamond_set(
-        &name,
-        &DiamondSto {
-            status: DIAMOND_STATUS_NORMAL,
-            address,
-            prev_engraved_height: BlockHeight::default(),
-            inscripts: Inscripts::default(),
-        },
-    );
-    state.diamond_name_set(&act.number, &name);
-    if env.chain.consensus_flags & diamond_form_flag != 0 {
-        diamond_owned_push_one(&mut state, &address, &name)?;
-    }
-    hacd_add(&mut state, &address, &DiamondNumber::from(1))?;
-    with_mint_total(&mut MintState::wrap(&mut *state.0), |ttcount| {
-        total_add_diamond_number(&mut ttcount.minted_diamond, 1, "minted_diamond")?;
-        if let Some(burn_238) = tx_bid_burn_238 {
-            total_add_u12(
-                &mut ttcount.hacd_bid_burn_238,
-                burn_238,
-                "hacd_bid_burn_238",
-            )?;
-        }
-        Ok(())
-    })?;
-    Ok(())
-}
-
-#[cfg(feature = "execute")]
-fn check_diamond_mint_tx_type(ctx: &dyn Context) -> Rerr {
-    if ctx.env().tx.ty != TransactionType2::TYPE {
-        return errf!("DiamondMint can only be executed in tx type 2");
-    }
-    Ok(())
-}
-
-#[cfg(feature = "execute")]
-fn diamond_mint_legacy_bid_burn(ctx: &dyn Context, tx_bid_fee: &Amount) -> Ret<Amount> {
-    if !ctx.env().chain.fast_sync {
-        check_diamond_mint_tx_type(ctx)?;
-    }
-    tx_bid_fee.sub_mode_u128(&ctx.tx().fee_got())
-}
-
-#[cfg(feature = "execute")]
-fn check_transfer_recipient_allowed(to: &Address) -> Rerr {
-    if is_privakey_unknown(to) && *to != BLACKHOLE_ADDR {
-        return errf!(
-            "cannot transfer to system address {:?} (privakey unknown)",
-            to
-        );
-    }
-    Ok(())
-}
-
-#[cfg(feature = "execute")]
-fn is_privakey_unknown(addr: &Address) -> bool {
-    addr.version() == 0 && addr.as_ref()[..17].iter().all(|&x| x == 0)
-}
-
-#[cfg(feature = "execute")]
-fn calculate_diamond_life_gene(
-    dianum: u32,
-    diamhash: &[u8; 32],
-    pending_block_hash: &Hash,
-    diabidfee: &Amount,
-) -> Hash {
-    let mut vgenehash = *diamhash;
-    if dianum > DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BLOCK_HASH {
-        let mut vgenestuff = diamhash.to_vec();
-        vgenestuff.extend_from_slice(pending_block_hash.as_ref());
-        if dianum > DIAMOND_ABOVE_NUMBER_OF_VISUAL_GENE_APPEND_BIDDING_FEE {
-            diabidfee.encode_to(&mut vgenestuff);
-        }
-        vgenehash = x16rs::calculate_hash(vgenestuff);
-    }
-    Hash::from(vgenehash)
-}
-
-#[cfg(feature = "execute")]
-fn calculate_diamond_average_bid_burn(diamond_number: u32, hacd_burn_238: u128) -> Ret<Uint2> {
-    if diamond_number <= DIAMOND_ABOVE_NUMBER_OF_STATISTICS_AVERAGE_BIDDING_BURNING {
-        return Ok(Uint2::from(10));
-    }
-    let bsnum = diamond_number - DIAMOND_ABOVE_NUMBER_OF_BURNING90_PERCENT_TX_FEES;
-    let avgbid = hacd_burn_238 / 1_000_000_0000 / bsnum as u128 + 1;
-    if avgbid > u16::MAX as u128 {
-        return errf!("average bid burn overflow u16");
-    }
-    Ok(Uint2::from(avgbid as u16))
 }

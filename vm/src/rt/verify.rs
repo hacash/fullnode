@@ -48,12 +48,8 @@ pub fn verify_bytecodes_for_cap(
     )
 }
 
-/// Initial operand-stack shape assumed by bytecode stack verification.
-///
-/// Existing runtime entries may execute with no argv value, or with one argv
-/// value already pushed onto the operand stack. Keep the default verifier
-/// compatible with both, and let stricter callers opt into the exact shape they
-/// know they will use.
+/// Initial operand-stack shape assumed by bytecode stack verification. Default `OptionalArgv` accepts
+/// both no-argv and one-argv entries; stricter callers opt into the exact shape they will use.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum VerifyEntryStack {
     Empty,
@@ -94,19 +90,16 @@ fn verify_bytecodes_with_limits(
     let (instable, jumpdests) = verify_valid_instruction(codes, max_push_buf_len, registry)?;
     // check jump dests
     verify_jump_dests(&instable, &jumpdests)?;
-    // Stack verification is intentionally layered. The linear verifier catches
-    // definite underflow in straight-line bytecode, then stops at control-flow,
-    // calls, and stack effects whose arity cannot be known without value
-    // interpretation. Runtime Stack::pop remains the final guard.
+    // Layered stack verification: the linear verifier catches definite underflow, then stops at
+    // control-flow/calls/dynamic arity; runtime Stack::pop remains the final guard.
     verify_linear_stack_effects(codes, entry_stack)?;
     verify_literal_fin_stack_prefix(codes)?;
     // ok finish
     Ok(instable)
 }
 
-/// Ensure the last instruction is a terminal one (RET/END/ERR/ABT or exposed call opcode).
-/// Failure (CodeNotWithEnd) is a fitsh code compile error and propagates to the compiler
-/// via compile_body -> parse_function -> parse_top_level -> fitshc::compile.
+/// Ensure the last instruction is terminal (RET/END/ERR/ABT or exposed call opcode). Failure
+/// (CodeNotWithEnd) propagates to the compiler via compile_body -> parse_function -> fitshc::compile.
 pub fn ensure_terminal_instruction(inst: Bytecode) -> VmrtErr {
     if matches!(inst, RET | END | ERR | ABT) || is_user_call_inst(inst) {
         return Ok(());
@@ -139,9 +132,6 @@ fn ensure_act_id(registry: Option<&dyn ExecutionServices>, act_kind: Bytecode, i
     Ok(())
 }
 
-/*
-
-*/
 fn verify_valid_instruction(
     codes: &[u8],
     max_push_buf_len: usize,
@@ -266,11 +256,9 @@ fn verify_valid_instruction(
         // next
     }
     ensure_terminal_instruction(cur)?; // check end
-    // finish orr
     Ok((instable, jumpdest))
 }
 
-//
 fn verify_jump_dests(instable: &[u8], jumpdests: &[isize]) -> VmrtErr {
     let itlen = instable.len();
     let right = itlen as isize - 1;
@@ -400,12 +388,8 @@ fn is_external_stack_boundary(inst: Bytecode) -> bool {
     )
 }
 
-/// Conservative straight-line stack-depth verifier.
-///
-/// This catches definite underflow before the first control-flow/call boundary.
-/// For dynamic arity that comes from the stack, it only simulates precisely when
-/// the arity is a small literal already visible on the stack. Otherwise it stops
-/// rather than guessing and risking false positives.
+/// Conservative straight-line stack-depth verifier. Catches definite underflow before the first
+/// control-flow/call boundary; simulates dynamic arity only when a small literal is on the stack.
 fn verify_linear_stack_effects(codes: &[u8], entry_stack: VerifyEntryStack) -> VmrtErr {
     let mut state = LinearStackState::new(entry_stack);
     let mut pc = 0usize;
@@ -500,13 +484,8 @@ fn verify_linear_stack_effects(codes: &[u8], entry_stack: VerifyEntryStack) -> V
     Ok(())
 }
 
-/// Lightweight literal FIN stack sanity check.
-///
-/// Runtime frames may legitimately start with an argv value on the operand
-/// stack, and bytecode can use branches, packed containers, calls, locals, and
-/// other dynamic-stack operations. A general verifier here would either become
-/// a real abstract interpreter or reject valid contracts. Keep this deliberately
-/// narrow: only catch the most obvious FIN underflow in a literal-only prefix.
+/// Lightweight literal FIN stack sanity check — deliberately narrow (a general verifier would reject
+/// valid contracts); catches only obvious FIN underflow in a literal-only prefix.
 fn verify_literal_fin_stack_prefix(codes: &[u8]) -> VmrtErr {
     const ENTRY_STACK_ALLOWANCE: i32 = 1;
     let mut depth: i32 = ENTRY_STACK_ALLOWANCE;

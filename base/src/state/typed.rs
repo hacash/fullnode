@@ -5,11 +5,8 @@ use sys::Ret;
 
 use crate::{STATE_DECODE_FAILED_CODE, StateRead};
 
-/// Decode a typed value out of a `StateRead` layer. Backend read failures are
-/// propagated unchanged (`Abort + STATE_READ_FAILED_CODE`); bytes that were
-/// successfully read but fail protocol decode are reported as
-/// `Abort + STATE_DECODE_FAILED_CODE`, never
-/// as a missing key. A missing key stays `Ok(None)`.
+/// Decode a typed value out of a `StateRead` layer. Backend failures propagate unchanged;
+/// undecodable bytes are `Abort + STATE_DECODE_FAILED_CODE`, never a missing key — `Ok(None)` is the only not-found answer.
 pub fn read_typed<T: Decode>(state: &dyn StateRead, key: &[u8]) -> Ret<Option<T>> {
     match state.get(key)? {
         Some(bytes) => match T::decode(bytes.as_ref()) {

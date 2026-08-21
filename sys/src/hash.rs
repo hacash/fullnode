@@ -1,7 +1,5 @@
-//!
-//! ""sha3-256
-//! PoW  x16rs Registry  `block_hasher`
-//! crate  C  ——  recode.loc.md goal #2
+//! Hash helpers: sha3-256 for consensus hashes and PoW, sha2-256 for
+//! node ids / account secrets. No C dependency (recode.loc.md goal #2).
 
 use sha2::Sha256;
 use sha3::{Digest, Sha3_256};

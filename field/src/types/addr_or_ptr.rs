@@ -1,4 +1,4 @@
-use sys::{Ret, normalf, errf};
+use sys::{Ret, errf, normalf};
 
 use crate::codec::{Decode, Encode};
 use crate::json::{FromJSON, JSONFormater, ToJSON, json_expect_unquoted};

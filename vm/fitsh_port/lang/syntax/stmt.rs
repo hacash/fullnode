@@ -266,10 +266,8 @@ impl Syntax {
                 _ => return errf!("bytecode format invalid"),
             }
         }
-        // Surface-level `bytecode { ... }` must produce a runtime-safe
-        // fragment: no IR-only opcodes, no absolute jumps, no misaligned
-        // params. Routing through `IRNodeBytecodes::new` is the single
-        // construction-time gate, matching the serialized-IR parser entry.
+        // Surface `bytecode { ... }` must produce a runtime-safe fragment (no IR-only opcodes,
+        // absolute jumps, or misaligned params); `IRNodeBytecodes::new` is the construction gate.
         let node = IRNodeBytecodes::new(codes).map_err(|e| e.to_string())?;
         Ok(Box::new(node))
     }

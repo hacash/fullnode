@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 use base::{
     BlkPkg, Block, BlockAdmissionDecision, BlockBuild, BlockProducer, BlockRef, ChainView,
     Consensus, ConsensusNodeHooks, CoreStateRead, Engine, Node, Peer, PkgOrigin, PkgSource,
-    PowBlockBuild, PowBlockExt, StateChunkRef, StateLayer, Transaction, TransactionSign, TransactionBuild,
-    TxGroupId, TxOrdering, TxPkg, TxPolicy, TxPool, TxPoolGroupSpec, TxRef,
+    PowBlockBuild, PowBlockExt, StateChunkRef, StateLayer, Transaction, TransactionBuild,
+    TransactionSign, TxGroupId, TxOrdering, TxPkg, TxPolicy, TxPool, TxPoolGroupSpec, TxRef,
 };
 use field::{Address, Amount, Encode, Fixed16, Hash, Timestamp, Uint1, Uint4};
 use protocol::block_std::{StdBlock, calculate_mrkl_prelude_modify, calculate_mrkl_prelude_update};
@@ -20,7 +20,6 @@ use crate::MintConf;
 use crate::action::diamond::DiamondMint;
 use crate::bidding::DiamondBidding;
 use crate::block_check;
-use crate::consensus::params::mint_params_for;
 use crate::difficulty::{DifficultyConfig, DifficultyGnr, LOWEST_DIFFICULTY, u32_to_hash};
 use crate::tx_coinbase::{CoinbaseExtend, CoinbaseExtendDataV1, CoinbaseTx};
 
@@ -28,10 +27,8 @@ use crate::tx_coinbase::{CoinbaseExtend, CoinbaseExtendDataV1, CoinbaseTx};
 /// The value is exactly one byte: `0` or `1`.
 pub const DIAMOND_FORM_STATE_KEY: &[u8] = b"_consensus.diamond_form";
 
-// Block reward curve moved to mint-core (`mint_core::reward`); keeps the old path usable.
-pub use mint_core::reward::{
-    BLOCK_REWARD_DEF_LIST, BLOCK_REWARD_STEP_BLOCK, block_reward_number,
-};
+// Re-export the standard profile's reward curve for the historical mint API.
+pub use hacash_params::{BLOCK_REWARD_DEF_LIST, BLOCK_REWARD_STEP_BLOCK, block_reward_number};
 
 pub fn block_hasher(height: u64, data: &[u8]) -> [u8; 32] {
     x16rs::block_hash(height, data)
@@ -135,14 +132,8 @@ impl HacashConsensus {
     pub const TX_GROUP_NORMAL: TxGroupId = TxGroupId::DEFAULT;
     pub const TX_GROUP_DIAMOND_MINT: TxGroupId = TxGroupId::new(1);
 
-    /// Business relay channel bit advertised in the P2P services mask for
-    /// diamond-mint tx relay. The node layer never names this bit; it is
-    /// declared here via `TxPolicy::tx_pool_groups` and aggregated
-    /// into the local peer's advertised services, and matched against peer
-    /// service masks when deciding whether to relay diamond-mint txs.
-    ///
-    /// Bit 3 matches the historical `NODE_DIAMOND = 1 << 3` so existing
-    /// mainnet peers remain wire-compatible.
+    /// Business relay bit in the P2P services mask for diamond-mint tx relay
+    /// (declared here, aggregated into advertised services). Bit 3 = historical `NODE_DIAMOND` for mainnet wire compatibility.
     pub const SERVICE_BIT_DIAMOND_RELAY: u64 = 1 << 3;
 
     pub fn new(services: &dyn base::ExecutionServices) -> Ret<Self> {
@@ -159,7 +150,7 @@ impl HacashConsensus {
         miner: MinerConf,
     ) -> Ret<Self> {
         let diamond_form_flag = protocol::execution_params(services)?.diamond_form_flag;
-        let mint_params = mint_params_for(mint.chain_id);
+        let mint_params = hacash_params::MAINNET_PARAMS.mint;
         let diff_cfg = DifficultyConfig::from_mint_params(mint.chain_id, mint_params);
         let max_shadow = diff_cfg.difficulty_group_blocks.saturating_mul(10).max(1) as usize;
         Ok(Self {
@@ -451,14 +442,15 @@ impl HacashConsensus {
             return sys::errf!("diamond mint action type invalid");
         };
 
-        // Busy (`Ok(None)`) skips this round with the non-fatal StateChanged
-        // signal; fatal/stopping (`Err`) propagates instead of being flattened
-        // away (§5 of the error-system design).
+        // Busy (`Ok(None)`) skips this round with the non-fatal StateChanged signal;
+        // fatal/stopping (`Err`) propagates (§5 of the error-system design).
         let snapshot = match view.optimistic_canonical() {
             Ok(Some(snapshot)) => snapshot,
             Ok(None) => {
-                return Err(sys::Error::fault("state changed during diamond mint tx creation")
-                    .with_code("state_changed"))
+                return Err(
+                    sys::Error::fault("state changed during diamond mint tx creation")
+                        .with_code("state_changed"),
+                );
             }
             Err(e) => return Err(e),
         };
@@ -583,7 +575,7 @@ impl Consensus for HacashConsensus {
     }
 
     fn mint_params(&self) -> base::MintParams {
-        mint_params_for(self.mint_conf.chain_id)
+        hacash_params::MAINNET_PARAMS.mint
     }
 
     fn genesis_block(&self) -> BlockRef {
@@ -642,9 +634,8 @@ impl Consensus for HacashConsensus {
     }
 
     fn check_block_arrive(&self, pkg: &BlkPkg, view: &dyn ChainView, fast_sync: bool) -> Rerr {
-        // Fast sync skips consensus validation: the linear-head invariant
-        // and full state execution are its only guards. Custom mints that
-        // need side effects here may override this and ignore the flag.
+        // Fast sync skips consensus validation — the linear-head invariant and
+        // full state execution are its only guards; custom mints may override this.
         if fast_sync {
             return Ok(());
         }
@@ -652,8 +643,7 @@ impl Consensus for HacashConsensus {
     }
 
     /// Publish the arrival record only after the block is durably accepted
-    /// (§6 of the engine error contract): orphans and unvalidated blocks
-    /// never pollute the bidding map.
+    /// (§6 of the engine error contract): orphans never pollute the bidding map.
     fn on_block_accepted(&self, pkg: &BlkPkg, _view: &dyn ChainView) -> Rerr {
         self.bidding.mark_block_arrival(pkg.height(), pkg.hash());
         Ok(())
@@ -790,21 +780,14 @@ impl BlockProducer for HacashConsensus {
                 self.miner.reward.version()
             );
         }
-        // §8.1 step 1 / §10: if the activity channel is owned by Sync,
-        // Recovery, Stopping, or sync has been requested (sync_waiting),
-        // return None (Busy) immediately.  Packing during sync only produces
-        // stale work that the next sync batch will invalidate; packing during
-        // Recovery would contend with the recovery writer.  This consults the
-        // ActivityGate BEFORE taking the strict `state_canonical` session so
-        // the miner never blocks a writer simply by attempting to pack.
+        // §8.1 step 1 / §10: if the activity channel is Sync/Recovery/Stopping or sync
+        // is requested, return None (Busy) — checked BEFORE the strict session so packing never blocks a writer.
         if engine.is_packing_inhibited() {
             return Ok(None);
         }
 
-        // §8.1 step 2: copy txpool candidates WITHOUT holding StateGate so
-        // admission cannot block the miner and the miner cannot block writers.
-        // Snapshot the next height first so the diamond-mint sampling window
-        // matches the strict session that follows.
+        // §8.1 step 2: copy txpool candidates without holding StateGate (no cross-blocking);
+        // snapshot next height first so the diamond-mint sampling window matches the strict session.
         let pre_height = engine.latest_height().saturating_add(1);
         let coinbase_tx = Arc::new(CoinbaseTx {
             ty: Uint1::from(CoinbaseTx::TYPE),
@@ -833,11 +816,8 @@ impl BlockProducer for HacashConsensus {
         let mut scanned = 0usize;
         let max_candidate_bytes = (mint_params.max_block_size > 0)
             .then(|| mint_params.max_block_size.saturating_sub(base_tx_size));
-        // Hard bound: at most one diamond-mint tx per block (OLD
-        // check/block_build.rs "pick one diamond mint tx"). The diamond group
-        // is fee-descending, so the first pickable entry is the highest bid.
-        // Later entries could not pass the cumulative pick anyway (prev_hash /
-        // number checks), but excluding them here makes the bound explicit.
+        // Hard bound: at most one diamond-mint tx per block (old check/block_build.rs rule);
+        // the diamond group is fee-descending, so the first pickable entry is the highest bid.
         let mut diamond_kept = false;
         let mut collect_candidate = |txpkg: &base::TxPkg| {
             if candidates.len() >= max_candidates || scanned >= max_scanned {
@@ -850,9 +830,8 @@ impl BlockProducer for HacashConsensus {
             scanned = scanned.saturating_add(1);
             let next_bytes = candidate_bytes.saturating_add(txpkg.tx().size());
             if max_candidate_bytes.is_some_and(|max| next_bytes > max) {
-                // One oversized/stale high-fee entry must not hide every
-                // smaller candidate behind it.  Continue only within the
-                // separate scan bound above.
+                // One oversized/stale high-fee entry must not hide smaller
+                // candidates; continue only within the separate scan bound above.
                 return true;
             }
             candidate_bytes = next_bytes;
@@ -866,9 +845,8 @@ impl BlockProducer for HacashConsensus {
         txpool.iter(Self::TX_GROUP_NORMAL, &mut collect_candidate)?;
         drop(collect_candidate);
 
-        // §8.1 steps 3-6: strict read session.  `state_canonical()` captures
-        // head hash + height + branch snapshot under one read guard so root
-        // persist cannot commit between the height read and the snapshot.
+        // §8.1 steps 3-6: strict read session. `state_canonical()` captures head hash,
+        // height and branch snapshot under one read guard (no interleaved root persist).
         let Some(session) = (match engine.state_canonical() {
             Ok(session) => session,
             // `Err(EngineUnavailable)` (fatal/stopping) propagates to the
@@ -880,11 +858,8 @@ impl BlockProducer for HacashConsensus {
         let head_hash = session.head_hash();
         let next_height = session.head_height().saturating_add(1);
         if pre_height != next_height {
-            // The head changed while candidates were copied outside the
-            // strict lock.  In particular, the diamond-mint group is sampled
-            // only at every fifth height, so reusing the old group selection
-            // could build from the wrong candidate class.  Abort this cycle;
-            // the miner loop will take a fresh bounded snapshot next time.
+            // Head changed while candidates were copied outside the strict lock
+            // (diamond-mint group samples every fifth height): abort; the miner loop retakes a fresh snapshot.
             return Ok(None);
         }
         let latest = engine.latest_block();
@@ -949,9 +924,8 @@ impl ConsensusNodeHooks for HacashConsensus {
 
     fn poll_one_deferred_batch(&self, view: &dyn ChainView) -> Ret<Option<base::DeferredBatch>> {
         let hist = view.block_history();
-        // Read the stable height before extracting so a read failure cannot
-        // follow a batch removal; the engine digests the error and stops the
-        // round without losing the batch (§4.2).
+        // Read the stable height before extracting so a read failure cannot follow
+        // a batch removal; the engine stops the round without losing the batch (§4.2).
         let root_min = hist.stable_height()?.saturating_add(1);
         let head_max = view.latest_height().saturating_add(1);
         Ok(self

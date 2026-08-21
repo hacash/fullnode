@@ -72,38 +72,20 @@ fn is_stack_list_tail_opcode(inst: Bytecode) -> bool {
     matches!(inst, PACKLIST | PACKMAP | PACKTUPLE)
 }
 
-// I-2: opcodes that implicitly read the existing top of stack (without
-// declaring it via metadata `input`). `DUP` and `ROLL0` have no params and
-// cannot be represented as a standalone IRNode in tree context — only
-// `ROLL0` is permitted, and only inside an `IrParseContext::StackValue`
-// slot (i.e. as the dedicated stack fixup placed in front of
-// `PUT(slot, ...)` or `UNPACK(idx, ...)`).
-//
-// `ROLL` is intentionally excluded from this list: it carries a `u8` param
-// (`meta.param=1`) and is parsed as `IRNodeParam1`, making it a valid
-// standalone IRNode that encodes its own stack offset.
+// I-2: opcodes implicitly reading the existing top of stack (undeclared in metadata): only `ROLL0`,
+// and only in an `IrParseContext::StackValue` slot (fixup before `PUT`/`UNPACK`). `ROLL` excluded (u8 param).
 fn is_hidden_stack_input_opcode(inst: Bytecode) -> bool {
     matches!(inst, DUP | ROLL0)
 }
 
-// I-3: only `ROLL0` is allowed inside a `StackValue` slot. This is an
-// intentional shape restriction so that IR round-trips deterministically;
-// `DUP`/`ROLL n` would create ambiguities about which existing stack value
-// the surrounding op is reading.
+// I-3: only `ROLL0` is allowed in a `StackValue` slot, keeping IR round-trips deterministic
+// (`DUP`/`ROLL n` would be ambiguous about which stack value the surrounding op reads).
 fn is_stack_value_opcode_allowed(inst: Bytecode, context: IrParseContext) -> bool {
     context == IrParseContext::StackValue && inst == ROLL0
 }
 
-// I-1: opcodes with `meta.input == 255` (dynamic stack input) cannot stand
-// alone as IRNodes. They are only legal as:
-//   * `POP` — explicit one-value pop in any tree context;
-//   * IR container opcodes (`IRBYTECODE/IRLIST/IRBLOCK/IRBLOCKR`) — they have
-//     their own structural arity;
-//   * `PACKLIST/PACKMAP/PACKTUPLE` — only at the tail of an `IRLIST`
-//     (`IrParseContext::StackList`), guarded by `validate_irlist_stack_tail`.
-// Anything else (e.g. `DUPN/POPN/JOIN/REV`) must be expressed via a raw
-// `IRBYTECODE` fragment; this keeps the standalone IRNode grammar
-// unambiguous.
+// I-1: opcodes with `meta.input == 255` (dynamic stack input) can't stand alone as IRNodes — only as
+// `POP`, IR containers, or `PACKLIST/PACKMAP/PACKTUPLE` at an IRLIST tail; otherwise raw `IRBYTECODE`.
 fn is_dynamic_stack_opcode_allowed(inst: Bytecode, context: IrParseContext) -> bool {
     inst == POP
         || is_ir_container_opcode(inst)
@@ -279,10 +261,8 @@ fn parse_ir_node_must(
     // parse
     let meta = inst.metadata();
     if meta.output > 1 {
-        // I-11: any opcode whose runtime output > 1 (including the `255`
-        // dynamic-output marker used by `DUPN`/`REV`) cannot be expressed as
-        // a single IRNode in the tree — a tree node has at most one stack
-        // result. Such ops must be wrapped in a raw `IRBYTECODE` fragment.
+        // I-11: opcodes whose runtime output > 1 (incl. the `255` DUPN/REV marker) cannot be a
+        // single IRNode (a tree node has at most one stack result); wrap them in a raw `IRBYTECODE`.
         return itr_err_fmt!(
             InstInvalid,
             "{:?} has multi-output and is not representable in IRNode",
@@ -311,12 +291,8 @@ fn parse_ir_node_must(
             let p = itrp2!();
             let n = u16::from_be_bytes(p);
             let bytes = itrbuf!(n as usize);
-            // Reject IR-only opcodes, absolute jumps, and misaligned
-            // params before they reach codegen. `IRNodeBytecodes::new` is
-            // the single point of truth for what a raw IR fragment is
-            // allowed to contain; routing the parser through it keeps
-            // serialized-IR ingestion on the same gate as in-process
-            // builders.
+            // Reject IR-only opcodes, absolute jumps, and misaligned params via the same
+            // `IRNodeBytecodes::new` gate used by in-process builders.
             Box::new(IRNodeBytecodes::new(bytes)?)
         }
         IRLIST => {

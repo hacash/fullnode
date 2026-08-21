@@ -1,18 +1,12 @@
-//! `ContractMainCall` (kind 44) top-level action.
-//!
-//! Ported from fullnodedev `vm/src/action/maincall.rs`. The main entry runs
-//! arbitrary VM bytecode at tx scope; the codes are verified against the
-//! runtime `SpaceCap`/`GasExtra` (height-derived) before being handed to the VM
-//! via `VmRequest::Main`.
+//! `ContractMainCall` (kind 44) top-level action. Runs arbitrary VM bytecode at tx
+//! scope; codes are verified against the runtime `SpaceCap`/`GasExtra` before `VmRequest::Main`.
 
 use std::sync::Arc;
 
-use base::{ActScope, ActionRef, Context, VmEntry};
-use field::{BytesW2, Decode, Encode, Fixed3, Uint1, Uint2};
+use base::{ActScope, ActionRef};
+use field::{BytesW2, Decode, Fixed3, Uint1, Uint2};
 use sys::Ret;
 
-use crate::contract::convert_and_check;
-use crate::machine::{VmRequest, peek_vm_runtime_limits};
 use crate::rt::{CodeConf, CodeType};
 
 #[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
@@ -50,7 +44,7 @@ impl Default for ContractMainCall {
     }
 }
 
-base::impl_action! {
+base::impl_action_facts! {
     ContractMainCall {
         name: "contract_main_call",
         scope: ActScope::AST,
@@ -61,35 +55,8 @@ base::impl_action! {
         description: |this: &ContractMainCall| {
             format!("Run main codes with conf {}", this.codeconf.uint())
         },
-        execute: (self, ctx) {
-            contract_main_call_execute(self, ctx)?;
-            Ok(vec![])
-        }
-    }
-}
 
-fn contract_main_call_execute(this: &ContractMainCall, ctx: &mut dyn Context) -> Ret<()> {
-    if !this.marks.is_zero() {
-        return sys::errf!("marks bytes format invalid");
     }
-    // check codes
-    let hei = ctx.env().block.height;
-    let (gst, cap) = peek_vm_runtime_limits(ctx, hei);
-    let codeconf = CodeConf::parse(this.codeconf.uint()).map_err(sys::Error::from)?;
-    convert_and_check(
-        &cap,
-        &gst,
-        codeconf.code_type(),
-        this.codes.as_vec(),
-        hei,
-        ctx.services().as_ref(),
-    )
-    .map_err(sys::Error::from)?;
-    let _ = ctx.vm_call(VmEntry::Raw(Box::new(VmRequest::Main {
-        code_type: codeconf.code_type(),
-        codes: Arc::from(this.codes.to_vec()),
-    })))?;
-    Ok(())
 }
 
 pub fn create_contract_main_call(

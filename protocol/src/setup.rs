@@ -1,12 +1,13 @@
-use base::*;
-use std::sync::Arc;
-use sys::{Rerr, Ret, errf};
-
 use crate::codec::action::*;
 use crate::codec::block::create_std_block;
-use crate::codec::tx::*;
-
-#[cfg(feature = "execute")]
+use base::{
+    Context, Env, ExecRegistry, ExecutionServices, StateChunkRef, TxRef, VmHostActionDef,
+    VmHostAllowedPolicy, VmHostCallKind, VmValueType,
+};
+use std::sync::Arc;
+use sys::Rerr;
+use sys::Ret;
+use sys::errf;
 fn create_context(
     env: Env,
     registry: Arc<dyn ExecutionServices>,
@@ -17,10 +18,6 @@ fn create_context(
     Ok(Box::new(crate::exec::context::ContextInst::new(
         env, registry, chunk, tx,
     )?))
-}
-
-fn register_host_def(reg: &mut dyn ExecRegistry, def: VmHostActionDef) -> Rerr {
-    reg.register_vm_host_def(def)
 }
 
 /// Transfer EXTACTION hosts: the wire id is the kind itself (`id = kind`), so a
@@ -39,17 +36,14 @@ fn register_action_def(
         );
     }
     // Transfer EXTACTION is Main+depth0 only (vm ensure_act_allowed); metadata matches.
-    register_host_def(
-        reg,
-        VmHostActionDef {
-            id: kind as u8,
-            name,
-            kind: VmHostCallKind::Action,
-            ret: VmValueType::Nil,
-            argc,
-            allowed_policy: VmHostAllowedPolicy::TopOnly,
-        },
-    )
+    reg.register_vm_host_def(VmHostActionDef {
+        id: kind as u8,
+        name,
+        kind: VmHostCallKind::Action,
+        ret: VmValueType::Nil,
+        argc,
+        allowed_policy: VmHostAllowedPolicy::TopOnly,
+    })
 }
 
 /// ACTENV hosts live in the 0x07xx opcode space; the opcode id is the low byte.
@@ -66,17 +60,14 @@ fn register_env_def(
             kind
         );
     }
-    register_host_def(
-        reg,
-        VmHostActionDef {
-            id: kind as u8,
-            name,
-            kind: VmHostCallKind::Env,
-            ret,
-            argc: 0,
-            allowed_policy: VmHostAllowedPolicy::Any,
-        },
-    )
+    reg.register_vm_host_def(VmHostActionDef {
+        id: kind as u8,
+        name,
+        kind: VmHostCallKind::Env,
+        ret,
+        argc: 0,
+        allowed_policy: VmHostAllowedPolicy::Any,
+    })
 }
 
 /// ACTVIEW hosts live in the 0x06xx opcode space; the opcode id is the low byte.
@@ -94,24 +85,18 @@ fn register_view_def(
             kind
         );
     }
-    register_host_def(
-        reg,
-        VmHostActionDef {
-            id: kind as u8,
-            name,
-            kind: VmHostCallKind::View,
-            ret,
-            argc,
-            allowed_policy: VmHostAllowedPolicy::ViewOnly,
-        },
-    )
+    reg.register_vm_host_def(VmHostActionDef {
+        id: kind as u8,
+        name,
+        kind: VmHostCallKind::View,
+        ret,
+        argc,
+        allowed_policy: VmHostAllowedPolicy::ViewOnly,
+    })
 }
 
-/// Host-definition registration sugar. The action type is the single
-/// declaration point of `KIND`/`NAME`, so each batch entry only repeats the ABI
-/// data that actually varies (source arity / return value type). The return
-/// variant is auto-qualified (`U64` expands to `VmValueType::U64`). Expands
-/// into the validating `register_*_def` helpers above.
+/// Registration sugar: the action type declares `KIND`/`NAME` once, entries only
+/// repeat the varying ABI (arity / return type, auto-qualified) and expand into the validating `register_*_def` helpers.
 macro_rules! register_vm_hosts {
     ($reg:expr, action; $( $ty:ty = $argc:expr ),+ $(,)?) => {{
         $(
@@ -133,10 +118,8 @@ macro_rules! register_vm_hosts {
     }};
 }
 
-/// VM host capability surface for the standard Hacash protocol.
-/// Host defs are split across crates into the same Registry:
-/// - protocol owns transfer / env / view defs (this function)
-/// - mint owns its additional inscription host definitions
+/// VM host capability surface for the standard protocol, split across crates
+/// into one Registry: protocol owns transfer/env/view defs, mint owns its own.
 fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
     register_vm_hosts!(reg, action;
         HacToTrs = 2,
@@ -173,89 +156,16 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
     Ok(())
 }
 
-/// Install the standard wire codec set: transaction codecs and every action
-/// codec (binary + JSON + schema + friendly family). Execution-only
-/// registrations (profile, VM params, block creator, context creator, VM host
-/// defs) live in `register_exec`; the SDK/wasm path calls only this function,
-/// so execution never enters its dependency graph.
-pub fn register_wire(reg: &mut dyn WireRegistry) -> Rerr {
-    // Type 0 is CoinbaseTx (registered by mint); do not register DefaultPreludeTx.
-    reg.register_tx(TransactionType1::TYPE, create_transaction_type1)?;
-    reg.register_tx(TransactionType2::TYPE, create_transaction_type2)?;
-    reg.register_tx(TransactionType3::TYPE, create_transaction_type3)?;
-    base::register_regular_actions!(
-        reg,
-        "hac_transfer", create_hac_transfer => [HacToTrs, HacFromTrs, HacFromToTrs],
-        "sat_transfer", create_sat_transfer => [SatToTrs, SatFromTrs, SatFromToTrs],
-        "asset_transfer", create_asset_transfer => [AssetToTrs, AssetFromTrs, AssetFromToTrs],
-        // tx_message / tx_blob are separate friendly variants, so the shared
-        // blob decoder is registered as two single-kind groups.
-        "tx_message", create_blob_action => [TxMessage],
-        "tx_blob", create_blob_action => [TxBlob],
-        // chain_allow / height_scope have friendly forms; balance_floor does
-        // not ("" skips the family registration).
-        "chain_allow", create_chain_guard_action => [ChainAllow],
-        "height_scope", create_chain_guard_action => [HeightScope],
-        "", create_chain_guard_action => [BalanceFloor],
-        "", create_envfunc_action => [
-            EnvHeight,
-            EnvMainAddr,
-            EnvBlockAuthorAddr,
-            ViewBalance,
-            ViewAssetBalance,
-            ViewCheckSign,
-            ViewDiaInscNum,
-            ViewDiaInscGet,
-            ViewDiaNameList,
-            ViewDiaOwnerAddrs,
-        ],
-    )?;
-    base::register_custom_actions!(
-        reg,
-        "hacd_transfer",
-        create_diamond_transfer,
-        decode_diamond_transfer_json => [DiaSingleTrs, DiaFromToTrs, DiaToTrs, DiaFromTrs],
-    )?;
-    base::register_custom_actions!(
-        reg,
-        "req_sign_list",
-        create_chain_guard_action,
-        decode_req_sign_list_json => [ReqSignList],
-    )?;
-    base::register_custom_actions!(reg, "", create_ast_select, decode_ast_select_json => [AstSelect])?;
-    base::register_custom_actions!(reg, "", create_ast_if, decode_ast_if_json => [AstIf])?;
-    base::register_custom_actions!(
-        reg,
-        "",
-        create_tex_cell_act,
-        decode_tex_cell_act_json => [TexCellAct],
-    )?;
-    Ok(())
-}
-
-/// Install the standard execution services on top of `register_wire`'s codec
-/// set: protocol profile, VM params, block creator, context creator and VM
-/// host capability metadata. Called by the full node composition root only
-/// (its context creator lives in the gated `exec` module).
-#[cfg(feature = "execute")]
-pub fn register_exec(reg: &mut dyn ExecRegistry, params: &'static crate::ProtocolParams) -> Rerr {
-    reg.set_execution_profile(params)?;
-    reg.set_vm_params(params.vm)?;
-    reg.set_block_creator(create_std_block)?;
-    reg.set_context_creator(create_context, base::DEFAULT_GAS_BUDGET)?;
-    register_vm_host_defs(reg)?;
-    Ok(())
-}
-
-/// Full standard registration (wire + exec) for composition roots that want
-/// the whole surface from one entry.
-#[cfg(feature = "execute")]
-pub fn register_standard(
-    reg: &mut dyn base::RegistryWriter,
-    params: &'static crate::ProtocolParams,
+/// Installs protocol-owned execution services into the fullnode profile.
+pub fn register_exec(
+    reg: &mut dyn ExecRegistry,
+    params: &'static hacash_params::HacashParams,
 ) -> Rerr {
-    register_wire(reg)?;
-    register_exec(reg, params)?;
+    reg.set_execution_profile(params)?;
+    reg.set_vm_params(params.protocol.vm)?;
+    reg.set_block_creator(create_std_block)?;
+    reg.set_context_creator(create_context, params.protocol.default_gas_budget)?;
+    register_vm_host_defs(reg)?;
     Ok(())
 }
 
@@ -266,9 +176,8 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    /// Minimal `RegistryWriter` capturing only VM host defs; the other
-    /// registration surfaces are unused by `register_vm_host_defs` and error
-    /// out if touched.
+    /// Minimal execution registry capturing only VM host defs; other registration
+    /// surfaces are unused by `register_vm_host_defs` and error out if touched.
     struct TestReg {
         host_defs: HashMap<(VmHostCallKind, u8), VmHostActionDef>,
     }
@@ -303,10 +212,7 @@ mod tests {
         fn set_vm_params(&mut self, _params: base::VmExecutionParams) -> Rerr {
             errf!("unexpected set_vm_params")
         }
-        fn set_execution_profile(
-            &mut self,
-            _profile: &'static (dyn std::any::Any + Send + Sync),
-        ) -> Rerr {
+        fn set_execution_profile(&mut self, _profile: &'static dyn base::ExecutionProfile) -> Rerr {
             errf!("unexpected set_execution_profile")
         }
     }

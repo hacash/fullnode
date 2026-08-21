@@ -44,11 +44,8 @@ fn read_hash_ret(disk: &dyn DiskDB, key: &[u8]) -> sys::Ret<Option<Hash>> {
     Ok(Some(Hash::from(buf)))
 }
 
-/// Raw cursor value without repair or validation: a missing cursor is `0` and
-/// is classified by boot (fresh store vs corrupted store); a malformed cursor
-/// is an explicit error — it must never silently become `0` and restart a
-/// non-empty store from genesis. Read errors are returned, never replaced by
-/// a default cursor.
+/// Raw cursor value without repair: missing cursor is `0` (classified at boot);
+/// a malformed cursor must never silently become `0` and restart a non-empty store from genesis.
 fn raw_cursor(block: &dyn DiskDB) -> sys::Ret<u64> {
     let Some(raw) = block.try_read(KEY_AVAILABLE_CURSOR)? else {
         return Ok(0);

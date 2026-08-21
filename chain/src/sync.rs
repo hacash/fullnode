@@ -1,8 +1,5 @@
 //! Bulk sync: parallel decode, ordered execute/tree, ordered persistence.
-//!
-//! The execute stage may lead persistence by a bounded number of blocks. Tree
-//! root planning therefore uses a scheduled cursor while the real root remains
-//! the last durable one until the persistence stage commits it.
+//! Execute may lead persistence; root planning uses a scheduled cursor.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -40,9 +37,8 @@ fn report_progress(opts: &PipelineOptions, report: &PipelineReport) {
     }
 }
 
-/// Reuse boundaries supplied by a producer that already decoded and validated
-/// the whole batch. Calling `peek_block_size` here would decode every block a
-/// second time when the registry has no dedicated block sizer.
+/// Reuse boundaries from a producer that already decoded and validated the
+/// batch; `peek_block_size` would decode every block a second time.
 fn validated_frames(batch: &BlockBatch) -> Ret<Option<Vec<(usize, usize)>>> {
     if batch.block_count == 0 || batch.block_offsets.is_empty() {
         return Ok(None);
@@ -121,9 +117,8 @@ fn prepare_cancel(source: &mut dyn BlockSource, opts: &mut PipelineOptions) -> A
     cancel
 }
 
-/// Apply a stream of blocks. Holds `inserting` for the whole run so discover
-/// and other syncs stay out. Fast-sync root persistence may overlap its next
-/// linear execution; strict execution and root movement remain exclusive.
+/// Apply a stream of blocks, holding `inserting` for the whole run. Fast-sync
+/// root persistence may overlap linear execution; strict execution never does.
 pub fn run(
     eng: &ChainEngine,
     mut source: Box<dyn BlockSource>,
@@ -147,12 +142,8 @@ pub fn run(
 
     match run_pipeline(eng, source, mode, opts, cancel, None) {
         Ok(report) => Ok(report),
-        // A failure after blocks were published to the tree, or a core state
-        // read failure during execution, is engine-fatal: no recovery path
-        // exists, boot replay rebuilds from the real disk state on the next
-        // start (§4.1). Persistence-stage errors were already recorded by the
-        // boundary inside `persist_one`/`notify_stable`; the engine being
-        // fatal tells this branch not to record them a second time.
+        // A failure after blocks were published, or a core state read failure
+        // during execution, is engine-fatal; boot replay rebuilds from disk (§4.1).
         Err(e) if e.is_abort() => {
             if eng.is_fatal() {
                 Err(e)
@@ -162,13 +153,9 @@ pub fn run(
                     .unwrap_err())
             }
         }
-        Err(e) if e.code() == Some(SYNC_CANCELLED) || eng.waiter.is_shutdown() => {
-            Err(e)
-        }
+        Err(e) if e.code() == Some(SYNC_CANCELLED) || eng.waiter.is_shutdown() => Err(e),
         // Source gaps, invalid blocks and admission stops return to the
-        // caller. The failing block is never attached, and blocks accepted
-        // earlier in the run stay valid: the tree only ever holds blocks
-        // that were also persisted.
+        // caller; the failing block is never attached, earlier blocks stay valid.
         Err(e) => {
             eprintln!("[Block Sync Warning] {}", e);
             Err(e)
@@ -206,8 +193,7 @@ struct Job {
 }
 
 /// Replay reads from the local store: the height index hash must match the
-/// decoded body, or the node would replay a different branch than its own
-/// index records. A read failure is a replay corruption, not a missing block.
+/// decoded body; a read failure is corruption, not a missing block.
 fn check_replay_index(eng: &ChainEngine, pkg: &BlkPkg) -> Rerr {
     let indexed = eng
         .store
@@ -215,8 +201,7 @@ fn check_replay_index(eng: &ChainEngine, pkg: &BlkPkg) -> Rerr {
         .hash_by_height(pkg.height())
         .map_err(|e| {
             // Replay is canonical acquisition: the read failure is `Abort +
-            // storage_read_failed` (§7.3), so sync stops instead of judging
-            // the block a bad record.
+            // storage_read_failed` (§7.3), so sync stops, never a bad record.
             sys::Error::abort(format!("replay height index read failed: {}", e))
                 .with_code(base::STATE_READ_FAILED_CODE)
         })?;
@@ -229,9 +214,8 @@ fn check_replay_index(eng: &ChainEngine, pkg: &BlkPkg) -> Rerr {
     Ok(())
 }
 
-/// Strict network mode: a block may only be admitted after its parent is
-/// known to be in the tree, so an orphaned block never touches bidding/arrival
-/// state (§6). Fast sync is linear: the parent is always present.
+/// Strict network mode: admit a block only after its parent is in the tree,
+/// so an orphan never touches bidding/arrival state (§6). Fast sync is linear.
 fn require_parent_in_tree(eng: &ChainEngine, pkg: &BlkPkg) -> Rerr {
     let prev = pkg.block().prev_hash();
     if !eng.tree.contains(&prev) {
@@ -244,10 +228,8 @@ fn require_parent_in_tree(eng: &ChainEngine, pkg: &BlkPkg) -> Rerr {
     Ok(())
 }
 
-/// Validate, execute and route one block: replay checks, wire checks,
-/// consensus checks, then prepare. Returns the persistence job, or None when
-/// the block is skipped (duplicate or discarded side branch in network mode).
-/// Failure metadata is recorded by the caller (`fail_with`).
+/// Validate, execute and route one block; returns the persistence job or None
+/// when skipped. Failure metadata is recorded by the caller (`fail_with`).
 fn process_block(
     ctx: &SyncCtx,
     report: &mut PipelineReport,
@@ -320,19 +302,13 @@ fn process_block(
 }
 
 /// Shared pipeline state: engine references, queues and the cancellation
-/// flag, used by every stage instead of threading parameters around.
-///
-/// The job receiver deliberately lives outside this struct: it must be owned
-/// only by the decoder workers, so that when they all exit on a hard pipeline
-/// stop the jobs channel disconnects and releases a feeder blocked in
-/// `send()` (see `run_pipeline`).
+/// flag. The job receiver lives outside so a hard stop disconnects the channel.
 struct SyncCtx<'a> {
     eng: &'a ChainEngine,
     opts: &'a PipelineOptions,
     mode: ApplyMode,
-    /// The requested linear replay range `(from, to)`; `None` is a network
-    /// sync. Replay skips admission checks and body persistence, and every
-    /// deviation from the range is corruption.
+    /// The linear replay range `(from, to)`; `None` is a network sync. Replay
+    /// skips admission checks and body persistence; deviation is corruption.
     replay: Option<(u64, u64)>,
     cancel: Arc<AtomicBool>,
     origin: PkgOrigin,
@@ -349,17 +325,13 @@ impl SyncCtx<'_> {
     }
 }
 
-/// Feeder stage: split source batches into per-block jobs.
-///
-/// `jobs_tx` is dropped when this returns, which releases any decoder blocked
-/// in `recv`. Every exit path must `close(seq)` first, or the apply stage
-/// would wait forever on the missing sequence.
+/// Feeder stage: split source batches into per-block jobs. Every exit path
+/// must `close(seq)` first, or the apply stage waits forever on the sequence.
 fn feed_batches(ctx: &SyncCtx, mut source: Box<dyn BlockSource>, jobs_tx: SyncSender<Job>) -> Rerr {
     let mut seq = 0u64;
     'outer: loop {
-        // Cancellation is graceful at the batch boundary. Once a batch has
-        // been taken from the source, publish all of its blocks so execute
-        // and persistence can finish it.
+        // Cancellation is graceful at the batch boundary: once a batch is
+        // taken, publish all of its blocks so execute and persistence can finish it.
         if ctx.cancel.load(Ordering::Acquire) {
             break;
         }
@@ -423,15 +395,8 @@ fn peek_frames(registry: &dyn base::BinaryCodecs, blob: &[u8]) -> Ret<Vec<(usize
     Ok(frames)
 }
 
-/// Decoder stage: reserve a ring slot before taking a job. If sequence N is a
-/// slow decode, later workers can fill the ring but can never occupy the slot
-/// N still needs.
-///
-/// The loop is infallible by construction: every step between `reserve` and
-/// `publish_reserved`/`release` either returns its failure inside the slot
-/// (`Slot = Ret<BlkPkg>`) or cannot panic (poison-tolerant locks), so a
-/// reserved sequence is always published or released and the apply stage can
-/// never wait on a slot nobody owns. No panic boundary is needed.
+/// Decoder stage: reserve a ring slot before taking a job, so a slow decode
+/// never blocks the slot N still needs. The loop cannot leak a reservation.
 fn decode_loop(ctx: &SyncCtx, jobs_rx: Arc<Mutex<Receiver<Job>>>) {
     loop {
         if !ctx.ring.reserve() {
@@ -465,8 +430,7 @@ fn decode_loop(ctx: &SyncCtx, jobs_rx: Arc<Mutex<Receiver<Job>>>) {
 }
 
 /// Persistence stage: write executed jobs to disk in insertion order. On
-/// failure the real disk/root error must reach the caller, so wake every
-/// stage instead of letting execute wait on more network input.
+/// failure, wake every stage so the disk/root error reaches the caller.
 fn persist_loop(ctx: &SyncCtx, persist_rx: Receiver<ApplyAccepted>) -> Ret<(u64, u64)> {
     let result = (|| {
         let mut rolled = 0;
@@ -478,7 +442,9 @@ fn persist_loop(ctx: &SyncCtx, persist_rx: Receiver<ApplyAccepted>) -> Ret<(u64,
                 return Err(sys::Error::abort("block sync stopped after engine fatal")
                     .with_code("engine_unavailable"));
             }
-            let outcome = ctx.eng.persist_one(job, false, PostCommitPolicy::StopPipeline)?;
+            let outcome = ctx
+                .eng
+                .persist_one(job, false, PostCommitPolicy::StopPipeline)?;
             rolled += outcome.rolled;
             events += outcome.events;
         }
@@ -490,9 +456,8 @@ fn persist_loop(ctx: &SyncCtx, persist_rx: Receiver<ApplyAccepted>) -> Ret<(u64,
     result
 }
 
-/// Record a failure and return the same error, for use in `?` chains. A
-/// deferred stop (SYNC_DEFERRED) is not a failure: it records nothing, so
-/// the report stays clean for the caller and any progress sink.
+/// Record a failure and return the same error for `?` chains. A deferred stop
+/// (SYNC_DEFERRED) records nothing, keeping the report clean.
 fn fail_with(report: &mut PipelineReport, height: u64, e: sys::Error) -> sys::Error {
     if e.code() != Some(SYNC_DEFERRED) {
         report.failure_height = Some(height);
@@ -501,9 +466,8 @@ fn fail_with(report: &mut PipelineReport, height: u64, e: sys::Error) -> sys::Er
     e
 }
 
-/// Apply stage: consume decoded blocks in order. Fast-sync jobs are handed to
-/// the bounded persister; strict mode persists inline so a reorg can never be
-/// planned on top of outstanding root jobs.
+/// Apply stage: consume decoded blocks in order. Fast-sync jobs go to the
+/// bounded persister; strict mode persists inline so reorgs are never planned.
 fn apply_loop(
     ctx: &SyncCtx,
     persist_tx: &SyncSender<ApplyAccepted>,
@@ -512,9 +476,8 @@ fn apply_loop(
 ) -> Rerr {
     let mut seq = 0u64;
     loop {
-        // The engine may have been set fatal by a post-commit callback (the
-        // listener path) while a strict-mode persist ran inline; stop taking
-        // more work (§4.2/§1).
+        // The engine may have been set fatal by a post-commit callback while
+        // a strict-mode persist ran inline; stop taking more work (§4.2/§1).
         if ctx.eng.is_fatal() {
             return Err(sys::Error::abort("block sync stopped after engine fatal")
                 .with_code("engine_unavailable"));
@@ -577,13 +540,8 @@ fn apply_loop(
     Ok(())
 }
 
-/// Finalize a pipeline run: cancellation detection, replay completeness,
-/// cache coordination after any durable commit, and the deferred/error split.
-///
-/// `persist_result` is the persister stage's own result: it drains the whole
-/// queue even when the apply stage stopped early, so its totals belong to the
-/// report in every non-fatal outcome. `pipeline_result` is the apply/feeder/
-/// decoder outcome.
+/// Finalize a pipeline run: cancellation, replay completeness, cache
+/// coordination, and the deferred/error split; `persist_result` drains the queue.
 fn finalize_run(
     eng: &ChainEngine,
     opts: &PipelineOptions,
@@ -619,13 +577,8 @@ fn finalize_run(
         check_replay_complete(from, to, &report)?;
     }
 
-    // Every durable commit needs a final cache coordination no matter how the
-    // run stopped: recent-block and fee caches are only rebuilt here, so a
-    // partial run (defer, decode or validation failure, source gap) would
-    // otherwise leave them pointing at pre-sync state. A rebuild failure
-    // after real commits leaves them stale, so it becomes the run's error
-    // instead of being masked under the original one; only a zero-commit run
-    // keeps the original error (the rebuild then re-reads unchanged data).
+    // Every durable commit needs a final cache coordination regardless of how
+    // the run stopped; a rebuild failure after real commits becomes the error.
     if let Err(e) = eng.rebuild_runtime_caches() {
         if pipeline_result.is_ok() || report.accepted > 0 {
             return Err(e);
@@ -633,15 +586,12 @@ fn finalize_run(
         eprintln!("[Block Sync Warning] cache rebuild failed: {}", e);
     }
     report_progress(opts, &report);
-    // A post-commit listener `Abort` may have set the engine fatal after the
-    // last job, where the loop-top checks never fire again: surface the stop
-    // signal to the caller instead of reporting a healthy run (§4.2/§4.3).
-    // Boot replay never notifies listeners, and consensus callbacks already
-    // return `Err` for `StopPipeline`, so this only fires on the listener
-    // path of a live sync run.
+    // A post-commit listener `Abort` may set the engine fatal after the last
+    // job, where loop-top checks never fire again; surface it instead of a healthy run.
     if eng.is_fatal() {
-        return Err(sys::Error::abort("block sync ended with engine fatal")
-            .with_code("engine_unavailable"));
+        return Err(
+            sys::Error::abort("block sync ended with engine fatal").with_code("engine_unavailable")
+        );
     }
     match pipeline_result {
         Ok(()) => Ok(report),
@@ -658,9 +608,7 @@ fn finalize_run(
 }
 
 /// Run one sync pipeline to completion: feed, parallel decode, ordered apply
-/// and ordered persistence. Errors from any stage are resolved with the
-/// persister's disk/root error taking priority; see `finalize_run` for the
-/// success/cancel/deferred outcome mapping.
+/// and persistence; the persister's disk/root error takes priority.
 fn run_pipeline(
     eng: &ChainEngine,
     source: Box<dyn BlockSource>,
@@ -695,11 +643,8 @@ fn run_pipeline(
     };
     let ctx_ref = &ctx;
 
-    // Feed -> decode -> apply -> persist. Every stage blocks on the ring or a
-    // channel; any failure is broadcast through SyncCtx::abort. Returns the
-    // persister outcome separately from the run outcome: the persister drains
-    // the whole queue even when the apply stage stops early, so its totals
-    // reach the report in every non-fatal outcome.
+    // Feed -> decode -> apply -> persist; failures broadcast through SyncCtx::abort.
+    // The persister drains the whole queue, so its totals reach every non-fatal report.
     let (persist_result, pipeline_result) = thread::scope(|s| -> (Ret<(u64, u64)>, Rerr) {
         let (persist_tx, persist_rx) = sync_channel(persist_queue);
         let feeder = s.spawn(move || feed_batches(ctx_ref, source, jobs_tx));
@@ -709,9 +654,8 @@ fn run_pipeline(
                 s.spawn(move || decode_loop(ctx_ref, rx))
             })
             .collect();
-        // Only decoder workers may keep the receive side alive: when they all
-        // exit on a hard pipeline stop, the channel disconnects and releases
-        // a feeder blocked in send().
+        // Only decoder workers keep the receive side alive; when they exit on
+        // a hard stop, the channel disconnects and releases a feeder in send().
         drop(jobs_rx);
         let persister = s.spawn(move || persist_loop(ctx_ref, persist_rx));
 
@@ -727,13 +671,10 @@ fn run_pipeline(
         let persist_result = match persister.join() {
             Ok(Ok(summary)) => Ok(summary),
             Ok(Err(e)) => Err(e),
-            Err(_) => Err(sys::Error::abort("sync persister panicked")
-                .with_code("persist_failed")),
+            Err(_) => Err(sys::Error::abort("sync persister panicked").with_code("persist_failed")),
         };
         // The run outcome: the apply error, or the first error among the
-        // feeder and decoder joins. Every handle is joined explicitly so a
-        // panicking worker surfaces as an error here instead of panicking
-        // the scope and skipping finalize_run.
+        // feeder and decoder joins. Explicit joins surface worker panics.
         let feeder_result = match feeder.join() {
             Ok(result) => result,
             Err(_) => sys::errf!("sync feeder panicked"),

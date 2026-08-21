@@ -1,8 +1,5 @@
 //! `ChainView` / `Engine` implementations: the query and admission surface.
-//!
-//! Tree chunks are immutable and snapshots are self-consistent, so ordinary
-//! queries read them without locks and without post-hoc validation. Session
-//! acquisition expresses the unavailable case explicitly (§3.3).
+//! Immutable, self-consistent snapshots let ordinary queries read without locks (§3.3).
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -49,11 +46,16 @@ impl ChainView for ChainEngine {
 
     fn optimistic_canonical(&self) -> Result<Option<OptimisticState>, sys::Error> {
         if self.is_stopping() || self.is_fatal() {
-            return Err(unavailable("optimistic_canonical", "engine is stopping or fatal"));
+            return Err(unavailable(
+                "optimistic_canonical",
+                "engine is stopping or fatal",
+            ));
         }
-        let hold = Some(self.waiter.try_hold().ok_or_else(|| {
-            unavailable("optimistic_canonical", "engine is stopping")
-        })?);
+        let hold = Some(
+            self.waiter
+                .try_hold()
+                .ok_or_else(|| unavailable("optimistic_canonical", "engine is stopping"))?,
+        );
         let (head_hash, head_height, epoch, view, root_pin) = self.tree.head_snapshot();
         Ok(Some(OptimisticState::new(
             view,
@@ -65,9 +67,8 @@ impl ChainView for ChainEngine {
         )))
     }
 
-    /// Optimistic consumers (block templates, mining, indexers) still need a
-    /// consistent head: the snapshot is valid when the root is available and
-    /// the canonical epoch is unchanged. A fatal engine never validates.
+    /// Optimistic consumers need a consistent head: valid when the root is
+    /// available and the canonical epoch is unchanged.
     fn validate_optimistic(&self, start_epoch: u64) -> bool {
         self.is_root_available() && self.tree.epoch() == start_epoch
     }
@@ -78,7 +79,10 @@ impl ChainView for ChainEngine {
 
     fn state_canonical(&self) -> Result<Option<StateReadSession>, sys::Error> {
         if self.is_stopping() || self.is_fatal() {
-            return Err(unavailable("state_canonical", "engine is stopping or fatal"));
+            return Err(unavailable(
+                "state_canonical",
+                "engine is stopping or fatal",
+            ));
         }
         let hold = self
             .waiter
@@ -92,10 +96,8 @@ impl ChainView for ChainEngine {
         if !self.is_root_available() {
             return Ok(None);
         }
-        // A strict insert publishes its tree node before persist_one writes the
-        // block body. Packing must not capture that short intermediate state,
-        // because difficulty lookup also needs the parent body. Do not wait:
-        // the miner will retry on its next cycle.
+        // A strict insert publishes its tree node before persist_one writes
+        // the body; packing must not capture that intermediate state (the miner retries).
         let Some(_inserting) = self.inserting.try_lock().ok() else {
             return Ok(None);
         };
@@ -115,11 +117,16 @@ impl ChainView for ChainEngine {
         branch_tip: &Hash,
     ) -> Result<Option<StateSnapSession<'_>>, sys::Error> {
         if self.is_stopping() || self.is_fatal() {
-            return Err(unavailable("state_at_session", "engine is stopping or fatal"));
+            return Err(unavailable(
+                "state_at_session",
+                "engine is stopping or fatal",
+            ));
         }
-        let hold = Some(self.waiter.try_hold().ok_or_else(|| {
-            unavailable("state_at_session", "engine is stopping")
-        })?);
+        let hold = Some(
+            self.waiter
+                .try_hold()
+                .ok_or_else(|| unavailable("state_at_session", "engine is stopping"))?,
+        );
         let Some((view, root_pin, tip_height)) = self.tree.snapshot_at(branch_tip) else {
             return Ok(None);
         };
@@ -159,9 +166,8 @@ impl Engine for ChainEngine {
     }
 
     fn try_execute_tx(&self, tx: TxRef) -> Rerr {
-        // Busy (`Ok(None)`) skips this round; fatal/stopping (`Err`) must
-        // propagate and never be flattened into a busy skip (§5 of the
-        // error-system design).
+        // Busy (`Ok(None)`) skips this round; fatal/stopping (`Err`) propagates
+        // and is never flattened into a busy skip (§5).
         let snapshot = match self.optimistic_canonical() {
             Ok(Some(snapshot)) => snapshot,
             Ok(None) => return Ok(()),
@@ -184,16 +190,21 @@ impl Engine for ChainEngine {
             // A core state read failure surfaced during execution is
             // engine-fatal: record it at the single engine boundary (§4.1).
             Err(e) if e.is_abort() => self
-                .handle_error(Phase::PreAttach, "try_execute_tx", None, None, Err::<(), _>(e))
+                .handle_error(
+                    Phase::PreAttach,
+                    "try_execute_tx",
+                    None,
+                    None,
+                    Err::<(), _>(e),
+                )
                 .map(|_| ()),
             r => r,
         }
     }
 
     fn try_execute_batch(&self, txs: Vec<TxRef>, pending_height: u64) -> Ret<Vec<Hash>> {
-        // `Ok(None)` (busy) keeps the skip-this-round revalidation semantics;
-        // a fatal/stopping engine (`Err`) propagates and is never flattened
-        // (§5 of the error-system design).
+        // `Ok(None)` (busy) keeps skip-this-round semantics; a fatal/stopping
+        // engine (`Err`) propagates and is never flattened (§5).
         let Some(snapshot) = (match self.optimistic_canonical() {
             Ok(snapshot) => snapshot,
             Err(e) => return Err(e),
@@ -246,10 +257,8 @@ impl Engine for ChainEngine {
                 continue;
             }
             let env = self.build_tx_env(pending_height, author, tx.as_ref());
-            // A core state read failure must not judge the transaction
-            // unsuitable for packing: it is engine-fatal and propagates
-            // through the single boundary (§4.1). Ordinary execution errors
-            // keep the skip-this-transaction semantics.
+            // A core state read failure is engine-fatal and propagates through
+            // the single boundary (§4.1), not a packing-judged transaction; ordinary errors skip the tx.
             match execution.execute_tx(self.registry.clone(), env, tx.clone()) {
                 Ok(()) => {
                     total += size;
@@ -306,8 +315,7 @@ impl Engine for ChainEngine {
 }
 
 /// The unavailable query error: `EngineUnavailable` with the operation as
-/// context (§5 of the error-system design; the old `QueryUnavailable` fields
-/// are carried by the message).
+/// context (§5; the old `QueryUnavailable` fields ride in the message).
 fn unavailable(operation: &'static str, cause: &'static str) -> sys::Error {
     sys::Error::abort(cause)
         .with_code("engine_unavailable")

@@ -1,17 +1,8 @@
-//! Field wire shape — binary layout description of action/struct fields.
-//!
-//! `FieldWire` is the authoritative "field type -> wire shape" enum; every field
-//! type participating in a schema implements `FieldWireShape` to provide its own
-//! shape (co-located with the type definition). The `ActionCodec` derive
-//! generates `ACTION_SCHEMA` via `<FieldType as FieldWireShape>::WIRE`;
-//! `codec-schema-gen` collects and validates these, then generates the
-//! TypeScript codec.
-//!
-//! This module is pure static data and never executes; native/fullnode and the
-//! SDK share the same definitions.
+//! Field wire shape — authoritative `FieldWire` enum mapping each field type to its
+//! binary layout, consumed by the SDK codegen. Pure static data, never executes.
 
 /// Wire shape of a field (authoritative description of its binary layout).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldWire {
     /// Fixed-size big-endian unsigned integer: 1/2/4/5 bytes.
     U1,
@@ -72,16 +63,73 @@ pub enum FieldWire {
     U8,
 }
 
-/// Schema description of a single action/struct field.
-///
-/// `optional` marks a field whose presence on the design-A transport is
-/// explicit (W2 length prefix; length 0 = absent) and whose native encoding is
-/// omitted when absent. The native wire shape itself never carries a presence
-/// marker: the owning codec decides presence (e.g. `DiamondMintData`
-/// `custom_message` exists only above a consensus threshold), so the schema
-/// flag exists to keep the transport and the friendly surface faithful to that
-/// conditionality. It is a wire-fidelity fact, never a business rule.
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl FieldWire {
+    /// Canonical tag used by generated JavaScript metadata.
+    pub fn js_wire_tag(self) -> String {
+        match self {
+            Self::U1 => "u1".to_owned(),
+            Self::U2 => "u2".to_owned(),
+            Self::U4 => "u4".to_owned(),
+            Self::U5 => "u5".to_owned(),
+            Self::U8 => "u8".to_owned(),
+            Self::Fixed(n) => format!("fixed:{n}"),
+            Self::Amount => "amount".to_owned(),
+            Self::WireAmount => "wire_amount".to_owned(),
+            Self::Address => "address".to_owned(),
+            Self::AddrOrPtr => "addr_or_ptr".to_owned(),
+            Self::AddrOrList => "addr_or_list".to_owned(),
+            Self::BytesW1 => "bytes_w1".to_owned(),
+            Self::BytesW2 => "bytes_w2".to_owned(),
+            Self::Satoshi => "satoshi".to_owned(),
+            Self::Fold64 => "fold64".to_owned(),
+            Self::Timestamp => "timestamp".to_owned(),
+            Self::DiamondName => "diamond_name".to_owned(),
+            Self::DiamondNumber => "diamond_number".to_owned(),
+            Self::DiamondNameList => "diamond_name_list".to_owned(),
+            Self::AssetAmt => "asset_amt".to_owned(),
+            Self::AssetAmtW1 => "asset_amt_w1".to_owned(),
+            Self::ChainIDList => "chain_id_list".to_owned(),
+            Self::ContractAddrListW1 => "contract_addr_list_w1".to_owned(),
+            Self::SignW2 => "sign_w2".to_owned(),
+            Self::ListW1(name) => format!("list_w1:{name}"),
+            Self::ListW2(name) => format!("list_w2:{name}"),
+            Self::Struct(name) => format!("struct:{name}"),
+            Self::ActionList => "action_list".to_owned(),
+            Self::ActionListW1 => "action_list_w1".to_owned(),
+        }
+    }
+
+    /// Generated JavaScript handler for non-parameterized wire tags.
+    pub const fn js_handler(self) -> Option<&'static str> {
+        Some(match self {
+            Self::U1 | Self::U8 => "raw_u8",
+            Self::U2 => "raw_u16",
+            Self::U4 => "raw_u32",
+            Self::U5
+            | Self::Amount
+            | Self::WireAmount
+            | Self::Address
+            | Self::AddrOrPtr
+            | Self::AddrOrList
+            | Self::Satoshi
+            | Self::Fold64
+            | Self::Timestamp
+            | Self::DiamondNumber => "decimal_str",
+            Self::BytesW1 | Self::BytesW2 | Self::DiamondName | Self::SignW2 | Self::AssetAmtW1 => {
+                "hex_w2"
+            }
+            Self::AssetAmt => "asset_amt",
+            Self::DiamondNameList | Self::ChainIDList | Self::ContractAddrListW1 => "hex_list",
+            Self::ActionList => "action_list",
+            Self::ActionListW1 => "action_list_w1",
+            Self::Fixed(_) | Self::ListW1(_) | Self::ListW2(_) | Self::Struct(_) => return None,
+        })
+    }
+}
+
+/// Schema description of a single action/struct field. `optional` marks explicit
+/// transport presence (W2 prefix, 0 = absent); native wire shape carries no presence marker — the owning codec decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FieldSchema {
     pub name: &'static str,
     pub wire: FieldWire,
@@ -116,16 +164,13 @@ impl FieldSchema {
 }
 
 /// Field type -> wire shape. The `ActionCodec` derive builds schemas from
-/// `#ty::WIRE`; field types that do not implement this trait fail to compile
-/// (no silent fallback allowed).
+/// `#ty::WIRE`; types without an impl fail to compile (no silent fallback).
 pub trait FieldWireShape {
     const WIRE: FieldWire;
 }
 
-/// List element name: generic wire shape for `ListW1<T>`/`ListW2<T>`
-/// (`ListW1(T::NAME)`). Lists with dedicated shapes (`DiamondNameList`/
-/// `AssetAmtW1`, etc.) get concrete `FieldWireShape` impls; only element types
-/// needing the `ListW1/ListW2(name)` shape implement this trait.
+/// List element name: generic wire shape for `ListW1<T>`/`ListW2<T>` (`ListW1(T::NAME)`).
+/// Only element types needing the generic `ListW1/ListW2(name)` shape implement this trait.
 pub trait WireElementName {
     const NAME: &'static str;
 }
@@ -137,26 +182,38 @@ impl<T: WireElementName> FieldWireShape for ListW2<T> {
     const WIRE: FieldWire = FieldWire::ListW2(T::NAME);
 }
 
-/// Complete wire schema of an action (or a nested struct).
-///
-/// `audit_class` (one of `full`/`structured`/`branching`/`opaque`) and `blob`
-/// are static review facts declared at the action definition site (the derive
-/// requires the class; `blob` is opt-in). They ride the schema capture so the
-/// SDK's audit surface is the definition surface, with no separate hand-written
-/// grading table; they are not wire shapes, but they are part of the codec
-/// identity (hashed into `schema_set_hash`), so a grading change rotates the
-/// SDK profile like any other codec change.
-#[derive(Debug, Clone)]
+/// Complete wire schema of an action (or nested struct). `audit_class` and `blob`
+/// are static review facts from the definition site, hashed into `schema_set_hash`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuditClass {
+    Full,
+    Structured,
+    Branching,
+    Opaque,
+}
+
+impl AuditClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Structured => "structured",
+            Self::Branching => "branching",
+            Self::Opaque => "opaque",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct ActionSchema {
     pub kind: u16,
     pub name: &'static str,
     pub fields: &'static [FieldSchema],
-    pub audit_class: &'static str,
+    pub audit_class: AuditClass,
     pub blob: bool,
 }
 
 /// Wire schema of a nested struct (not an action, no kind).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct StructSchema {
     pub name: &'static str,
     pub fields: &'static [FieldSchema],
@@ -174,22 +231,8 @@ pub trait StructSchemaProvider {
     const STRUCT_SCHEMA: StructSchema;
 }
 
-/// Build a nested-struct schema list from the provider types (single
-/// registration point for `codec-schema-gen`; new structs are appended here
-/// instead of writing the `<T as StructSchemaProvider>::STRUCT_SCHEMA` noise).
-#[macro_export]
-macro_rules! collect_struct_schemas {
-    ($($ty:ty),+ $(,)?) => {
-        vec![ $(<$ty as $crate::StructSchemaProvider>::STRUCT_SCHEMA),+ ]
-    };
-}
-
 // ================================ Built-in type impls ================================
-// Each field type's wire shape lives in the same crate as its definition; lists
-// uniformly use the generic `ListW1/ListW2<T: WireElementName>` shape
-// (`ListW1("DiamondName")` etc., wire-equivalent to the dedicated variants such
-// as `DiamondNameList`), and `Fixed<N>` is covered by const generics (`Hash =
-// Fixed<32>`, `ChannelId = Fixed16` and other aliases get a shape automatically).
+// Each field type's wire shape lives with its definition; lists use the generic `ListW1/ListW2<T: WireElementName>` shape, `Fixed<N>` via const generics.
 
 use crate::types::*;
 
@@ -206,10 +249,8 @@ impl FieldWireShape for Uint5 {
     const WIRE: FieldWire = FieldWire::U5;
 }
 impl FieldWireShape for Uint8 {
-    // `Uint8` is an 8-byte big-endian integer (`fixed_uint!(Uint8, u64, 8)`,
-    // aliased as `Satoshi`), not 1 byte; `FieldWire::U8` (1 byte) corresponds
-    // only to `Uint1`. The legacy wire_expr wrongly mapped `Uint8` to the
-    // 1-byte `U8`; fixed here.
+    // `Uint8` is an 8-byte big-endian integer (`fixed_uint!(Uint8, u64, 8)`, aliased `Satoshi`),
+    // not 1 byte; `FieldWire::U8` (1 byte) corresponds only to `Uint1` (legacy wire_expr had it wrong).
     const WIRE: FieldWire = FieldWire::Satoshi;
 }
 
@@ -298,23 +339,12 @@ impl WireElementName for Uint4 {
 impl WireElementName for Sign {
     const NAME: &'static str = "Sign";
 }
+impl WireElementName for AddrOrPtr {
+    const NAME: &'static str = "AddrOrPtr";
+}
 
 // ================================ Derivation macro ================================
-// `wire_struct_schema!` generates the full wire-schema impl set for a plain
-// named-field struct whose binary layout is exactly its fields in declaration
-// order: `StructSchemaProvider` (built from each field type's `FieldWireShape`,
-// same mechanism as the `ActionCodec` derive), `FieldWireShape` (own `Struct`
-// name) and `WireElementName`. Used by `vm::contract_codec_struct!` and for
-// standalone structs with hand-written codecs (`CodeStuff`). Composite types
-// whose wire shape is not a plain field sequence (`FuncArgvTypes`) keep
-// hand-written impls.
-//
-// A field may be followed by the `optional` marker (e.g.
-// `custom_message: Hash optional`): the `StructSchemaProvider` then carries
-// `FieldSchema::optional = true` (see `FieldSchema` for the transport
-// semantics). The marker is validated by `wire_struct_field_schema!` — only
-// the literal `optional` is accepted, so a typo fails to compile instead of
-// silently changing the wire contract.
+// `wire_struct_schema!` generates the full schema-impl set for a named-field struct (fields in declaration order; the literal `optional` marker is validated at compile time).
 
 #[macro_export]
 macro_rules! wire_struct_schema {

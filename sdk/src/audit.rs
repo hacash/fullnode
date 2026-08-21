@@ -1,20 +1,11 @@
 //! Action descriptors and review bindings (Unified SDK 2.0, doc 14 §5/§6).
-//!
-//! `ActionDesc` is the UI contract for one action: canonical json, raw bytes,
-//! auditability and notes. The review binding is a sha3-256 over explicit
-//! domain-prefixed fields; it never depends on localized text or the binding
-//! itself.
-//!
-//! Auditability classes are declared at each action's definition site (the
-//! `ActionSchemaProvider`/derive `audit_class` fact captured with the schema),
-//! so the SDK's grading surface is the chain's definition surface: there is no
-//! separate hand-written grading table here to drift from the action set.
+//! Auditability classes are schema-declared at each action's definition site, so the SDK never keeps a separate grading table.
 
 use base::Action;
 use field::Decode;
 
 use crate::error::{SdkError, SdkErrorCode};
-use crate::names::action_name;
+use crate::json::SdkJsonTo;
 use crate::profile::AST_DEPTH_MAX;
 pub use crate::schema::{
     DOMAIN_REVIEW_BINDING, DOMAIN_UNSIGNED_BODY, SCHEMA_ACTION_DESC, SCHEMA_TRANSFER_DESC,
@@ -33,7 +24,7 @@ pub enum PayloadDesc {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransferDesc {
     pub schema: String,
-        pub from: Option<String>,
+    pub from: Option<String>,
     pub to: String,
     pub payload: PayloadDesc,
 }
@@ -48,36 +39,20 @@ pub enum Auditability {
     Opaque,
 }
 
-/// Graded action facts (by schema — the stable wire identity). The classes and
-/// the blob flag are declared at the action definition sites and captured with
-/// the codec schemas (same registry as `names::action_name`), so a new action
-/// carries its grade by construction; `classify_auditability` still fails
-/// closed (opaque + note) for any name outside the registered set.
+/// Graded action facts (by schema — the stable wire identity); classes and the blob flag are
+/// schema-declared, and `classify_auditability` fails closed for any unregistered name.
 fn schema_of(name: &str) -> Option<&'static base::ActionSchema> {
-    crate::codec::standard_codecs()
-        .ok()?
-        .action_schemas()
-        .iter()
-        .find(|schema| schema.name == name)
+    crate::selection::action_schema_named(name)
 }
 
-fn schema_of_kind(kind: u16) -> Option<&'static base::ActionSchema> {
-    crate::codec::standard_codecs()
-        .ok()?
-        .action_schemas()
-        .iter()
-        .find(|schema| schema.kind == kind)
-}
-
-/// Classify an action kind into an auditability grade by its schema-declared
-/// class. Defaults to opaque with an explanatory note (fail-closed): a kind
-/// that has not been registered must not be presented as fully auditable.
+/// Classify an action kind by its schema-declared class; unregistered kinds
+/// default to opaque with a note (fail-closed).
 pub fn classify_auditability(name: &str) -> (Auditability, Option<&'static str>) {
     match schema_of(name).map(|schema| schema.audit_class) {
-        Some("full") => (Auditability::Full, None),
-        Some("structured") => (Auditability::Structured, None),
-        Some("branching") => (Auditability::Branching, None),
-        Some("opaque") => (Auditability::Opaque, None),
+        Some(base::AuditClass::Full) => (Auditability::Full, None),
+        Some(base::AuditClass::Structured) => (Auditability::Structured, None),
+        Some(base::AuditClass::Branching) => (Auditability::Branching, None),
+        Some(base::AuditClass::Opaque) => (Auditability::Opaque, None),
         _ => (
             Auditability::Opaque,
             Some("action kind is not graded by the SDK audit table; treat as opaque"),
@@ -140,9 +115,8 @@ fn payload_desc(action: &dyn Action) -> Option<PayloadDesc> {
     }
 }
 
-/// Diamond names ride the wire in their packed form; decode them for display.
-/// Unreadable payloads degrade to an empty list rather than failing the whole
-/// descriptor (the raw bytes stay available in `ActionDesc.raw`).
+/// Diamond names ride the wire packed; decode for display. Unreadable payloads
+/// degrade to an empty list rather than failing the descriptor.
 fn readable_diamond_names(names: &[u8]) -> Vec<String> {
     if let Ok((list, used)) = <field::DiamondNameListMax200 as Decode>::decode(names) {
         if used == names.len() {
@@ -164,17 +138,16 @@ pub struct ActionDesc {
     pub index: usize,
     pub path: String,
     pub kind: u16,
-        pub name: Option<String>,
+    pub name: Option<String>,
     pub scope: String,
     pub raw: String,
     pub protocol_valid: bool,
     pub auditability: String,
     pub audit_notes: Vec<String>,
-        pub transfer: Option<TransferDesc>,
-        pub children: Option<Vec<ActionDesc>>,
+    pub transfer: Option<TransferDesc>,
+    pub children: Option<Vec<ActionDesc>>,
     /// Schema-declared blob fact (opaque byte-carrier action such as
-    /// `tx_message`/`tx_blob`); `policy.deny_blob` reads this instead of a
-    /// hand-written kind list.
+    /// `tx_message`/`tx_blob`); `policy.deny_blob` reads it directly.
     pub blob: bool,
 }
 
@@ -182,7 +155,7 @@ pub fn describe_action(action: &dyn Action, index: usize, path: &str, depth: usi
     let kind = action.kind();
     let mut notes = Vec::new();
     let children = collect_children(action, depth, &mut notes);
-    let name = action_name(kind);
+    let name = crate::selection::action_schema(kind).map(|schema| schema.name);
     let (auditability, grade_note) = classify_auditability(name.unwrap_or(""));
     if let Some(note) = grade_note {
         notes.push(note.to_owned());
@@ -213,19 +186,14 @@ pub fn describe_action(action: &dyn Action, index: usize, path: &str, depth: usi
         audit_notes: notes,
         transfer,
         children,
-        blob: schema_of_kind(kind)
+        blob: crate::selection::action_schema(kind)
             .map(|schema| schema.blob)
             .unwrap_or(false),
     }
 }
 
-/// Collect nested control-flow children through `Action::nested_actions` (the
-/// same walker protocol topology analysis uses). Depth overflow is an audit
-/// note, never a decode failure. A schema-declared `branching` action without
-/// a walker is reported as a note too (fail-closed), so a new control-flow
-/// kind never silently drops its children from the review. `ActScope::AST` is
-/// not the signal: inscriptions and `contract_main_call` share that scope
-/// without being control-flow.
+/// Collect nested control-flow children via `Action::nested_actions`; depth overflow or a
+/// schema-declared `branching` action without a walker is an audit note (fail-closed), never a decode failure.
 fn collect_children(
     action: &dyn Action,
     depth: usize,
@@ -262,7 +230,9 @@ fn collect_children(
             Some(list)
         }
         None => {
-            if schema_of_kind(action.kind()).map(|s| s.audit_class) == Some("branching") {
+            if crate::selection::action_schema(action.kind()).map(|s| s.audit_class)
+                == Some(base::AuditClass::Branching)
+            {
                 notes.push(format!(
                     "branching action kind {} has no nested_actions walker",
                     action.kind()
@@ -274,11 +244,9 @@ fn collect_children(
 }
 
 /// sha3-256 digest of the canonical unsigned body (signature set removed).
-/// Domain-frozen at ABI major 2; stable across SDK releases (doc 14 §6.2).
-pub fn unsigned_body_hash(body_hex: &str) -> Result<String, SdkError> {
-    let body = hex::decode(body_hex)
-        .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "body hex invalid"))?;
-    let tx = crate::inspect::decode_tx(&body)?;
+/// Domain-frozen at ABI major 2 (doc 14 §6.2); the single computation every path funnels through.
+pub fn unsigned_body_hash_bytes(body: &[u8]) -> Result<String, SdkError> {
+    let tx = crate::inspect::decode_tx(body)?;
     let unsigned = crate::inspect::encode_without_signs(tx.as_ref())?;
     let mut data = Vec::with_capacity(DOMAIN_UNSIGNED_BODY.len() + unsigned.len());
     data.extend_from_slice(DOMAIN_UNSIGNED_BODY);
@@ -286,9 +254,16 @@ pub fn unsigned_body_hash(body_hex: &str) -> Result<String, SdkError> {
     Ok(hex::encode(sys::calculate_hash(data)))
 }
 
-/// sha3-256 over domain + unsigned_body_hash + signer + sign_hash +
-/// codec_profile_hash + inspect context + canonical review digest. The review
-/// digest excludes `review_binding` itself and non-deterministic display text.
+/// sha3-256 digest of the canonical unsigned body (hex body input; the `0x`
+/// prefix is tolerated like `decode_body_hex`).
+pub fn unsigned_body_hash(body_hex: &str) -> Result<String, SdkError> {
+    let body = hex::decode(body_hex.trim_start_matches("0x").trim_start_matches("0X"))
+        .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "body hex invalid"))?;
+    unsigned_body_hash_bytes(&body)
+}
+
+/// sha3-256 over domain + unsigned_body_hash + signer + sign_hash + codec_profile_hash +
+/// inspect context + canonical review digest (excludes `review_binding` and non-deterministic display text).
 pub fn compute_review_binding(
     unsigned_body_hash: &str,
     signer: Option<&str>,
@@ -313,30 +288,28 @@ pub fn compute_review_binding(
     hex::encode(sys::calculate_hash(data))
 }
 
-/// Canonical digest of a review payload: the review JSON with
-/// `review_binding` removed (deterministic for identical review content).
-/// Hand-written serialization (field declaration order + skip None), no serde_json.
+/// Canonical digest of a review payload: the review JSON with `review_binding`
+/// removed; hand-written serialization (field order + skip None), no serde_json.
 pub fn canonical_review_digest(review: &crate::inspect::Review) -> String {
     let mut copy = review.clone();
     copy.review_binding.clear();
-    let canonical = copy.to_binary_body();
-    hex::encode(sys::calculate_hash(canonical))
+    let canonical = copy.to_json_string();
+    hex::encode(sys::calculate_hash(canonical.as_bytes()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Every registered action kind must grade through the schema-declared
-    /// class: a new action carries its class at the definition site, so no
-    /// registered kind may fall back to the ungraded note.
+    /// Every registered action kind must grade through its schema-declared
+    /// class, so none falls back to the ungraded note.
     #[test]
     fn every_registered_kind_has_a_schema_declared_audit_class() {
-        let names: Vec<&str> = chain_codec::collect_action_schemas()
+        let names: Vec<&str> = crate::selection::action_schemas()
             .iter()
             .map(|s| s.name)
             .collect();
-        assert!(names.len() >= 40, "expected the full standard action set");
+        assert_eq!(names.len(), 35, "SDK capability profile changed");
         for name in &names {
             let (_, note) = classify_auditability(name);
             assert!(
@@ -347,11 +320,10 @@ mod tests {
     }
 
     /// The schema-declared blob flag must be exactly the two opaque
-    /// byte-carrier actions: a new blob action without the flag (or a non-blob
-    /// action with it) fails here.
+    /// byte-carrier actions; anything else fails here.
     #[test]
     fn blob_class_is_exactly_tx_message_and_tx_blob() {
-        let schemas = chain_codec::collect_action_schemas();
+        let schemas = crate::selection::action_schemas();
         let blobs: Vec<&str> = schemas.iter().filter(|s| s.blob).map(|s| s.name).collect();
         assert_eq!(blobs, vec!["tx_message", "tx_blob"]);
     }
@@ -377,11 +349,8 @@ mod tests {
         assert!(classify_auditability("brand_new_kind").0 == Auditability::Opaque);
     }
 
-    /// The AST control-flow walkers must stay complete over the registered
-    /// branching actions: `ast_select` and `ast_if` collect their nested
-    /// children through `Action::nested_actions`. A new branching action
-    /// without a walker is reported as a note (fail-closed) instead of
-    /// silently dropping its children from the review.
+    /// The AST control-flow walkers must stay complete over the registered branching actions
+    /// (`ast_select`/`ast_if`); a missing walker is a fail-closed note, not a silent child drop.
     #[test]
     fn ast_control_flow_kinds_collect_children() {
         use protocol::action_std::{AstIf, AstSelect, HacToTrs};
@@ -410,10 +379,8 @@ mod tests {
         assert_eq!(children[2].path, "2/0");
     }
 
-    /// `ActScope::AST` is shared by inscriptions and `contract_main_call`,
-    /// which are not control-flow. The fail-closed note must key off the
-    /// schema-declared `branching` class (and a missing walker), never the
-    /// scope constant.
+    /// `ActScope::AST` is shared by non-control-flow actions; the fail-closed
+    /// note must key off the `branching` class, never the scope constant.
     #[test]
     fn non_branching_ast_scope_actions_have_no_missing_walker_note() {
         let maincall: base::ActionRef = std::sync::Arc::new(vm::action::ContractMainCall::new());

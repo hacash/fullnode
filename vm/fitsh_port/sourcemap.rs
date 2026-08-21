@@ -96,9 +96,8 @@ impl SourceMap {
         Ok(())
     }
 
-    /// Register a local slot name for decompilation.
-    /// Slots are pessimistically marked as `let` and promoted to `var`
-    /// only when `mark_slot_mutated` is observed during parsing.
+    /// Register a local slot name for decompilation. Slots start pessimistically as `let` and
+    /// are promoted to `var` only when `mark_slot_mutated` is observed during parsing.
     pub fn register_slot(&mut self, slot: u8, name: String) -> Rerr {
         self.slots.insert(slot, name);
         self.vars.remove(&slot);

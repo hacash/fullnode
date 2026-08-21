@@ -2,7 +2,7 @@ use ocl::{Buffer, EventList, Kernel};
 
 use field::{Address, DiamondName, DiamondNumber, Fixed8, Hash};
 
-use crate::action::diamond::{DIAMOND_ABOVE_NUMBER_OF_CREATE_BY_CUSTOM_MESSAGE, DiamondMint};
+use crate::action::diamond::DiamondMint;
 use crate::diamond_mining::{
     DiamondMiningResult, HASH_WIDTH, check_diamond_success, diamond_more_power,
 };
@@ -22,7 +22,12 @@ pub fn do_diamond_group_mining_opencl(
     unit_size: u32,
 ) -> DiamondMiningResult {
     let empty = [0u8; 0];
-    let custom_nonce = if number > DIAMOND_ABOVE_NUMBER_OF_CREATE_BY_CUSTOM_MESSAGE {
+    let custom_nonce = if number
+        > hacash_params::MAINNET_PARAMS
+            .mint_rules
+            .diamond
+            .custom_message_after
+    {
         custom_message.as_ref()
     } else {
         &empty

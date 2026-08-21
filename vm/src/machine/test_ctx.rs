@@ -44,20 +44,11 @@ impl BinaryCodecs for StubServices {
     fn decode_action(&self, _buf: &[u8]) -> Ret<(ActionRef, usize)> {
         errf!("stub services: decode_action")
     }
-    fn decode_action_exact(&self, _buf: &[u8]) -> Ret<ActionRef> {
-        errf!("stub services: decode_action_exact")
-    }
     fn decode_transaction(&self, _buf: &[u8]) -> Ret<(TxRef, usize)> {
         errf!("stub services: decode_transaction")
     }
-    fn decode_transaction_exact(&self, _buf: &[u8]) -> Ret<TxRef> {
-        errf!("stub services: decode_transaction_exact")
-    }
     fn decode_block(&self, _buf: &[u8]) -> Ret<(BlockRef, usize)> {
         errf!("stub services: decode_block")
-    }
-    fn decode_block_exact(&self, _buf: &[u8]) -> Ret<BlockRef> {
-        errf!("stub services: decode_block_exact")
     }
     fn peek_block_size(&self, _buf: &[u8]) -> Ret<usize> {
         errf!("stub services: peek_block_size")
@@ -71,10 +62,6 @@ impl BinaryCodecs for StubServices {
 }
 
 impl JsonCodecs for StubServices {
-    fn decode_tx_json(&self, _ty: u8, _json: &str) -> Ret<Option<TxRef>> {
-        errf!("stub services: decode_tx_json")
-    }
-
     fn decode_action_json(&self, _kind: u16, _json: &str) -> Ret<Option<ActionRef>> {
         errf!("stub services: decode_action_json")
     }
@@ -93,7 +80,7 @@ impl ExecutionServices for StubServices {
     fn vm_params(&self) -> Ret<&VmExecutionParams> {
         errf!("stub services: vm_params")
     }
-    fn execution_profile(&self) -> Ret<&'static (dyn std::any::Any + Send + Sync)> {
+    fn execution_profile(&self) -> Ret<&'static dyn base::ExecutionProfile> {
         errf!("stub services: execution_profile")
     }
     fn create_context(
@@ -138,6 +125,11 @@ impl base::TransactionSign for DummyTx {
     }
     fn verify_signature(&self) -> Rerr {
         Ok(())
+    }
+
+    #[cfg(feature = "execute")]
+    fn as_execute(&self) -> Option<&dyn base::TransactionExecute> {
+        Some(self)
     }
 }
 

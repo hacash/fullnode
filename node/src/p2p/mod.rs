@@ -1,10 +1,5 @@
-//! P2P primitives for the node protocol.
-//!
-//! - [`msg`]: message constants, services bits, and magic number.
-//! - [`codec`]: frame codec (length + u8 ty + crc32c checksum).
-//! - [`handshake`]: VERSION/VERACK handshake.
-//! - [`peer`]: `RemotePeer` and its single writer queue.
-//! - [`source`]: sync block batch source.
+//! P2P primitives for the node protocol: [`msg`] constants/services/magic,
+//! [`codec`] framing, [`handshake`] VERSION/VERACK, [`peer`] `RemotePeer`, [`source`] sync batches.
 
 pub(crate) mod codec;
 pub(crate) mod handshake;

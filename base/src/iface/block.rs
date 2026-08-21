@@ -15,9 +15,8 @@ pub trait PowBlock: Send + Sync {
     fn difficulty(&self) -> u32;
 }
 
-/// Cross-crate block contract owned by `base` and consumed by chain, node, and
-/// registry code. Standard blocks are implemented in `protocol/src/codec/block.rs`;
-/// the genesis wrapper is in `mint/src/consensus/genesis.rs`.
+/// Cross-crate block contract owned by `base`, consumed by chain/node/registry.
+/// Standard blocks live in `protocol/src/codec/block.rs`; genesis in `mint/src/consensus/genesis.rs`.
 pub trait Block: Encode + Send + Sync + std::fmt::Debug {
     fn version(&self) -> u8;
     fn height(&self) -> u64;
@@ -54,18 +53,8 @@ pub trait Block: Encode + Send + Sync + std::fmt::Debug {
             .collect()
     }
 
-    /// Escape hatch back to the concrete block type.
-    ///
-    /// **Prefer a trait method** when the capability is part of the block
-    /// protocol (height, hash, prev_hash, mrklroot, transactions, ...): add a
-    /// method to `Block` and have every implementation expose it.
-    ///
-    /// **Downcast is the right choice** for consensus-mechanism products
-    /// (Hacash PoW difficulty/nonce fields, x16rs block intro layout) or
-    /// chain-specific block payloads. The owning crate (mint, protocol) knows
-    /// its own concrete block type; base must not encode those concepts.
-    /// `downcast_ref` returning `None` on a chain that uses a different block
-    /// type is the intended fallback.
+    /// Escape hatch to the concrete block type; downcast is for consensus-mechanism products
+    /// (PoW nonce/difficulty, chain payloads). `None` is the intended fallback on another chain.
     fn as_any(&self) -> &dyn Any;
 }
 

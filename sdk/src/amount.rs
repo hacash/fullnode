@@ -1,10 +1,5 @@
-//! Protocol amount conversion (Unified SDK 2.0, doc 14 §4.7).
-//!
-//! Parse and format are thin wrappers around `field::Amount` — the same
-//! functions the chain codecs use. The SDK does not re-implement charset,
-//! grouping, or unit-range rules; a form `Amount::from` accepts is accepted
-//! here, including comma grouping (`12,000:244`). Currency prefixes ("ㄜ",
-//! "HAC ") fail because `Amount::from` rejects them.
+//! Protocol amount conversion (Unified SDK 2.0, doc 14 §4.7). Parse/format are
+//! thin wrappers over `field::Amount`, so any form it accepts (incl. comma grouping) is accepted here.
 
 use field::Amount;
 
@@ -27,12 +22,8 @@ pub fn parse_protocol(value: &str) -> Result<ParsedAmount, SdkError> {
     })
 }
 
-/// `amount.format_protocol`: exact decimal string of the amount at the given
-/// unit, via `Amount::to_unit_string`. No float is ever involved, so the
-/// result is safe for comparison and arithmetic, not just display (the
-/// historical `hac_to_unit` returned a JS float; JS callers that need a
-/// number do `Number(value)`). Unit 0 returns the canonical `digits:unit`
-/// form — the same fallback `to_unit_string` uses for an unparseable unit.
+/// `amount.format_protocol`: exact decimal string at the given unit via
+/// `Amount::to_unit_string` — no float, so it is safe for comparison/arithmetic.
 pub fn format_protocol(value: &str, unit: u8) -> Result<String, SdkError> {
     let amount = Amount::from(value).map_err(SdkError::from)?;
     Ok(amount.to_unit_string(&unit.to_string()))

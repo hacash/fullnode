@@ -285,9 +285,8 @@ pub fn create_std_block(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::BlockR
     let difficulty: Uint4 = r.read()?;
     let witness_stage: Fixed2 = r.read()?;
 
-    // Do not preallocate from the untrusted wire count. A malformed
-    // `u32::MAX` count must fail during bounded decoding, not turn into an
-    // allocation denial of service before the body/count consistency check.
+    // Do not preallocate from the untrusted wire count: a malformed `u32::MAX` count
+    // must fail during bounded decoding, not allocate before the consistency check.
     let mut transactions = Vec::new();
     for _ in 0..transaction_count.uint() {
         let (tx, used) = reg.decode_transaction(&buf[r.used()..])?;

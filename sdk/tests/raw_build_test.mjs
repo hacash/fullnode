@@ -1,7 +1,6 @@
-// Raw wire-shaped actions end-to-end: the wasm `tx.build` must accept any
-// action kind the codec schema registry knows (no SDK-side filter), building
-// it through the protocol's own action decoder. The chain's scope validation
-// is the only judge of whether such an action belongs in a body — not the SDK.
+// Wire-shaped actions end-to-end: the wasm `tx.build` accepts any action
+// kind the SDK codec catalog knows. The chain's scope validation is the only
+// judge of whether such an action belongs in a body — not the SDK.
 //
 //   node sdk/tests/raw_build_test.mjs   (after ./sdk/pack.sh)
 
@@ -14,6 +13,13 @@ const { default: create_hacash_sdk } = await import(
     pathToFileURL(path.join(import.meta.dirname, "../dist/js/hacashsdk.mjs")).href
 );
 const sdk = await create_hacash_sdk();
+const invoke = (operationId, payload) => {
+    const envelope = sdk.sdk_invoke_json(operationId, payload);
+    if (envelope.ok !== 1) {
+        throw new Error(`SDK ${operationId} failed: ${envelope.msg}`);
+    }
+    return envelope.body;
+};
 
 const base = {
     tx_type: 3,
@@ -22,8 +28,7 @@ const base = {
     timestamp: 1755223764,
 };
 
-// A guard action the friendly adapter has no entry for: raw wire shape.
-const balanceFloor = sdk.tx.build({
+const balanceFloor = invoke(4, { spec: {
     ...base,
     actions: [
         {
@@ -35,14 +40,13 @@ const balanceFloor = sdk.tx.build({
             assets: [{ serial: "7", amount: "100" }],
         },
     ],
-});
-const decodedFloor = sdk.tx.decode(balanceFloor.body);
-if (decodedFloor.actions[0].kind !== 1043) {
-    throw new Error(`balance_floor built with wrong kind ${decodedFloor.actions[0].kind}`);
+} });
+const decodedFloor = invoke(12, { body: balanceFloor.body });
+if (decodedFloor.actions[0].name !== "balance_floor") {
+    throw new Error(`balance_floor built with wrong name ${decodedFloor.actions[0].name}`);
 }
 
-// Nested action lists (AST wrapper) go through the raw path recursively.
-const astSelect = sdk.tx.build({
+const astSelect = invoke(4, { spec: {
     ...base,
     actions: [
         {
@@ -52,21 +56,22 @@ const astSelect = sdk.tx.build({
             actions: [{ kind: "transfer_hac_to", to: MAIN, hacash: "12:244" }],
         },
     ],
-});
-const decodedAst = sdk.tx.decode(astSelect.body);
-if (decodedAst.actions[0].kind !== 25) {
-    throw new Error(`ast_select built with wrong kind ${decodedAst.actions[0].kind}`);
+} });
+const decodedAst = invoke(12, { body: astSelect.body });
+if (decodedAst.actions[0].name !== "ast_select") {
+    throw new Error(`ast_select built with wrong name ${decodedAst.actions[0].name}`);
 }
 
-// Host opcodes are exposed too; whether the chain accepts them is the chain's
-// scope validation (CALL_ONLY), not the SDK's business.
-const host = sdk.tx.build({
-    ...base,
-    actions: [{ kind: "block_height" }],
-});
-const decodedHost = sdk.tx.decode(host.body);
-if (decodedHost.actions[0].kind !== 0x0701) {
-    throw new Error(`block_height built with wrong kind ${decodedHost.actions[0].kind}`);
+try {
+    const envelope = sdk.sdk_invoke_json(4, { spec: {
+        ...base,
+        actions: [{ kind: "block_height" }],
+    } });
+    if (envelope.ok !== 0 || envelope.code !== 5) {
+        throw new Error(`unexpected invalid-action result ${JSON.stringify(envelope)}`);
+    }
+} catch (error) {
+    throw error;
 }
 
-console.log("raw_build_test.mjs OK (balance_floor / ast_select / block_height via wasm)");
+console.log("raw_build_test.mjs OK (SDK action subset enforced via wasm)");

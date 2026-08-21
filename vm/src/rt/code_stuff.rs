@@ -1,6 +1,6 @@
 use field::{BytesW2, Decode, Encode, Reader, Uint1};
 
-base::impl_fields_to_json!(CodeStuff { conf, data });
+field::impl_struct_json!(CodeStuff { conf, data });
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct CodeStuff {

@@ -5,11 +5,8 @@ const JMP_INST_LEN: usize = 3; //u8 + u16
 const BLOCK_CODES_MAX_LEN: usize = i16::MAX as usize - JMP_INST_LEN - 64;
 
 fn is_stmt_block(n: IRNRef) -> bool {
-    // Statement blocks (IRBLOCK) discard their own children's return values.
-    // We must look through any IRNodeWrapOne layer so that wrapped blocks are
-    // recognized; otherwise compile_while/compile_if would re-append a POP on
-    // top of the POPs already emitted by compile_block_into, corrupting the
-    // operand stack. See BUG-4 in the IR codegen audit.
+    // Statement blocks (IRBLOCK) discard their own children's return values; look through
+    // IRNodeWrapOne so wrapped blocks are recognized, else compile_while/if would double-POP.
     if let Some(wrap) = n.as_any().downcast_ref::<IRNodeWrapOne>() {
         return is_stmt_block(&wrap.node);
     }
@@ -48,11 +45,8 @@ fn compile_block(inst: Bytecode, list: &[Box<dyn IRNode>]) -> VmrtRes<Vec<u8>> {
 }
 
 fn compile_list_into(list: &[Box<dyn IRNode>], codes: &mut Vec<u8>) -> VmrtErr {
-    // Defense in depth: even when an IRLIST reaches codegen without going
-    // through `parse_ir_node_must`, the tail PACK invariants (literal item
-    // count, no zero count, PACKMAP parity) must still hold. The parse-side
-    // check stays for early rejection on deserialized streams; this is the
-    // mirror for in-process IR construction paths.
+    // Defense in depth: re-check tail PACK invariants (item count, no zero, PACKMAP parity)
+    // for in-process IR construction paths that bypass `parse_ir_node_must`.
     validate_irlist_stack_tail(list)?;
     for one in list {
         one.codegen_into(codes)?;
@@ -68,9 +62,7 @@ fn compile_list(list: &[Box<dyn IRNode>]) -> VmrtRes<Vec<u8>> {
 
 
 fn compile_double(btcd: Bytecode, x: IRNRef, y: IRNRef) -> VmrtRes<Option<Vec<u8>>> {
-    // I-12: IRWHILE must be lowered through IRNodeDouble. If it ever leaks
-    // into another node shape, the structural assumption that subx=cond and
-    // suby=body is broken, so fail loud instead of silently miscompiling.
+    // I-12: IRWHILE must stay in IRNodeDouble shape (subx=cond, suby=body); fail loud otherwise.
     Ok(match btcd {
         IRWHILE => Some(compile_while(x, y)?),
         _ => None
@@ -79,11 +71,8 @@ fn compile_double(btcd: Bytecode, x: IRNRef, y: IRNRef) -> VmrtRes<Option<Vec<u8
 
 /********** Patch-list loop lowering **********/
 
-/// A list of unresolved jump-slot positions that belong to a single
-/// while-loop scope. `LoopPatch::resolve` writes the final i16
-/// displacements once the loop layout is known.
-///
-/// See `compile_while` for the layout diagram.
+/// Unresolved jump-slot positions for one while-loop scope; `LoopPatch::resolve` writes the
+/// final i16 displacements once layout is known. See `compile_while` for the layout diagram.
 #[derive(Default)]
 struct LoopPatch {
     breaks: Vec<usize>,    // body-offsets of the i16 displacement byte
@@ -104,9 +93,7 @@ impl LoopPatch {
         }
     }
 
-    /// Shift all patch-slot values by `delta` — used when a sub-buffer
-    /// that was lowered independently gets appended to the main body at
-    /// a non-zero base.
+    /// Shift all patch-slot values by `delta` (used when a sub-buffer is appended at a non-zero base).
     fn shift(&mut self, delta: usize) {
         for slot in self.breaks.iter_mut() {
             *slot += delta;
@@ -116,20 +103,8 @@ impl LoopPatch {
         }
     }
 
-    /// Write the final i16 displacement into every recorded slot.
-    ///
-    /// Layout produced by `compile_while`:
-    ///
-    /// ```text
-    /// [cond:cond_len][BRSLN +body_l][body:body.len()][JMPSL -alls_l]
-    ///                                ^ body_start = cond_len + JIL
-    /// ```
-    ///
-    /// Inside `body`, a patch slot at offset `slot` has just consumed the
-    /// `JMPSL` opcode at `slot - 1`. The runtime `ostjump!` macro reads
-    /// the i16 starting at `slot`, then `pc` advances to `slot + 2`.
-    /// When computing a relative offset, the `pc` that the i16 will be
-    /// added to is `slot + 2` (body-relative).
+    /// Write the final i16 displacement into every recorded slot. Layout: `[cond][BRSLN +body_l][body][JMPSL -alls_l]`
+    /// with `body_start = cond_len + JIL`; offsets are relative to `slot+2` (the `pc` after reading the i16).
     fn resolve(&self, body: &mut [u8], cond_len: usize) -> VmrtErr {
         const JIL: usize = JMP_INST_LEN;
         let body_len = body.len();
@@ -165,10 +140,8 @@ fn write_i16_offset(buf: &mut [u8], slot: usize, offset: i32, label: &str) -> Vm
     Ok(())
 }
 
-/// Recursively lower `node`, intercepting IRBREAK/IRCONTINUE leaf nodes
-/// as JMPSL placeholders tracked by `patch`. Any nested IRWHILE opens its
-/// own patch scope (handled by `compile_while`), so inner breaks/continues
-/// target the inner loop and won't pollute the outer `patch`.
+/// Recursively lower `node`, intercepting IRBREAK/IRCONTINUE leaves as JMPSL placeholders
+/// tracked by `patch`. Nested IRWHILE opens its own patch scope, so inner breaks target it.
 fn lower_in_loop(node: &dyn IRNode, body: &mut Vec<u8>, patch: &mut LoopPatch) -> VmrtErr {
     // Look through wrap: the wrap is a print-time aid.
     if let Some(wrap) = node.as_any().downcast_ref::<IRNodeWrapOne>() {
@@ -186,10 +159,8 @@ fn lower_in_loop(node: &dyn IRNode, body: &mut Vec<u8>, patch: &mut LoopPatch) -
     if let Some(arr) = node.as_any().downcast_ref::<IRNodeArray>() {
         return lower_array_in_loop(arr, body, patch);
     }
-    // IRIF (statement if): lower each branch with the same patch list.
-    // IRIFR (expression if): falls through to default codegen because
-    //   break/continue are never syntactically valid inside an expression
-    //   context; `parse_item` in stmt.rs rejects them when `expect_retval`.
+    // IRIF (statement if): lower each branch with the same patch list. IRIFR (expression if)
+    // falls through to default codegen — break/continue are invalid in expression contexts.
     if let Some(tri) = node.as_any().downcast_ref::<IRNodeTriple>() {
         if tri.inst == IRIF {
             return lower_stmt_if_in_loop(tri, body, patch);
@@ -241,12 +212,8 @@ fn lower_array_in_loop(arr: &IRNodeArray, body: &mut Vec<u8>, patch: &mut LoopPa
     }
 }
 
-/// Lower an IRIF (not IRIFR) inside a loop body.
-///
-/// We lower each branch into a **temporary** buffer with its own patch
-/// scope, then splice everything into the main `body`, and move the
-/// sub-patches into the outer `patch` after shifting by the base offset
-/// where each branch was inserted.
+/// Lower an IRIF (not IRIFR) inside a loop body: lower each branch into a temporary buffer
+/// with its own patch scope, splice into the main `body`, then shift sub-patches into the outer patch.
 fn lower_stmt_if_in_loop(
     tri: &IRNodeTriple,
     body: &mut Vec<u8>,
@@ -328,9 +295,7 @@ fn compile_while(x: IRNRef, y: IRNRef) -> VmrtRes<Vec<u8>> {
     // Resolve patches now that the final body length is known.
     patch.resolve(&mut body, cond.len())?;
 
-    // body_l = body (containing the trailing break-jumping JMPSL
-    // instructions) + JIL for the trailing JMPSL.
-    // alls_l = body_l + cond + JIL for BRSLN.
+    // body_l = body (with trailing break-jumping JMPSLs) + JIL; alls_l = body_l + cond + JIL (BRSLN).
     let body_l = body.len() + JIL;
     let alls_l = body_l + cond.len() + JIL;
 
@@ -393,10 +358,8 @@ fn compile_if(btcd: Bytecode, x: IRNRef, y: IRNRef, z: IRNRef) -> VmrtRes<Vec<u8
     if if_l > MAXL || el_l > MAXL {
         return itr_err_fmt!(CompileError, "compiled IR code is too long")
     }
-    // Total emitted IR must also fit within the per-function code window so
-    // that downstream u16/i16 indexing stays safe. Surface the same
-    // CompileError class instead of letting the runtime verifier convert
-    // this into a generic CodeTooLong later.
+    // Total emitted IR must fit the per-function code window for safe u16/i16 indexing;
+    // surface CompileError here rather than a generic CodeTooLong from the runtime verifier.
     let total_len = cond
         .len()
         .checked_add(JIL) // BRSL
@@ -407,9 +370,7 @@ fn compile_if(btcd: Bytecode, x: IRNRef, y: IRNRef, z: IRNRef) -> VmrtRes<Vec<u8
         Some(n) if n <= u16::MAX as usize => {}
         _ => return itr_err_fmt!(CompileError, "compiled IR code is too long"),
     }
-    // Both forward jumps fit a signed-16 immediate; the MAXL bound above
-    // guarantees this, so a debug assert keeps the invariant visible if
-    // anyone widens MAXL or removes the branch checks.
+    // Both forward jumps fit a signed-16 immediate (guaranteed by MAXL); keep a debug assert visible.
     debug_assert!(if_l as i32 <= i16::MAX as i32);
     debug_assert!(el_l as i32 <= i16::MAX as i32);
     let mut codes = Vec::with_capacity(

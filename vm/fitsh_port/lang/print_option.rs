@@ -9,17 +9,14 @@ pub struct PrintOption<'a> {
     pub indent: &'a str,
     pub tab: usize,
     pub map: Option<&'a SourceMap>,
-    /// When enabled, emits source-map-derived `lib ...` declarations as a prelude.
-    /// This should only be enabled for top-level printing. Inline printing must disable
-    /// it to avoid injecting file-level declarations into expressions.
+    /// When enabled, emits source-map-derived `lib ...` declarations as a prelude. Top-level
+    /// printing only — inline printing must disable it to avoid injecting file-level declarations.
     pub emit_lib_prelude: bool,
     pub trim_root_block: bool,
     pub trim_head_alloc: bool,
     pub trim_param_unpack: bool,
-    /// When enabled, hides the compiler-injected `nil` placeholder used by packed call argv.
-    ///
-    /// This is intentionally opt-in because `foo()` and `foo(nil)` are not equivalent in packed-call
-    /// syntax once decompiled back to source.
+    /// When enabled, hides the compiler-injected `nil` placeholder for packed call argv. Opt-in
+    /// because `foo()` and `foo(nil)` are not equivalent in packed-call syntax after decompiling.
     pub hide_default_call_argv: bool,
     pub call_short_syntax: bool,
     pub flatten_call_list: bool,

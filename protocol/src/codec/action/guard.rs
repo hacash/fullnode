@@ -1,41 +1,20 @@
 //! ChainAllow / HeightScope / BalanceFloor / ReqSignList guard actions.
 
 use std::collections::HashSet;
+#[cfg(test)]
 use std::sync::Arc;
 
-use base::{ActScope, Action, ActionExecute, ActionRef, AddrOrPtr, CoreState, Transaction};
-use field::{
-    Amount, AssetAmt, AssetAmtW1, BlockHeight, ChainIDList, Decode, DiamondNumber, Encode, Reader,
-    Satoshi, ToJSON, Uint2, json_decode_value, json_split_array, json_split_object,
-};
+use base::{ActScope, ActionRef, AddrOrPtr, Transaction, decode_regular_action};
+use field::{Amount, AssetAmtW1, BlockHeight, ChainIDList, DiamondNumber, ListW2, Satoshi, Uint2};
 use sys::{Rerr, Ret, errf};
 
-use super::common::{
-    addr_or_ptr_readable, addr_or_ptr_size, check_action_kind, decode_addr_or_ptr,
-    encode_addr_or_ptr,
-};
+use super::common::addr_or_ptr_readable;
 
 #[derive(Debug, Clone, base::ActionCodec)]
 #[action_codec(audit = "full")]
 pub struct ChainAllow {
     pub kind: Uint2,
     pub chains: ChainIDList,
-}
-
-impl field::ToJSON for ReqSignList {
-    fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
-        let signers = self
-            .signers
-            .iter()
-            .map(|signer| field::ToJSON::to_json_fmt(signer, fmt))
-            .collect::<Vec<_>>()
-            .join(",");
-        format!(
-            "{{\"kind\":{},\"signers\":[{}]}}",
-            field::ToJSON::to_json_fmt(&self.kind, fmt),
-            signers
-        )
-    }
 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
@@ -97,27 +76,23 @@ impl BalanceFloor {
 
 /// Explicit extra required signers beyond intrinsic action req_sign.
 /// Type3 uses this as E in D = R0 ∪ E (exact SignW2 match).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full", validate = "Self::validate_codec")]
 pub struct ReqSignList {
     pub kind: Uint2,
-    pub signers: Vec<AddrOrPtr>,
+    pub signers: ListW2<AddrOrPtr>,
 }
 
 impl ReqSignList {
     pub const KIND: u16 = 0x0414;
 
     pub fn create_by(signers: Vec<AddrOrPtr>) -> Ret<Self> {
-        if signers.is_empty() {
-            return errf!("ReqSignList cannot be empty");
-        }
-        // The native wire count is Uint2; validate before storing the list so
-        // every constructor rejects values that would otherwise truncate in
-        // `Encode::encode_to`.
-        Uint2::from_usize(signers.len())?;
-        Ok(Self {
+        let value = Self {
             kind: Uint2::from(Self::KIND),
-            signers,
-        })
+            signers: ListW2::from(signers)?,
+        };
+        value.validate_codec()?;
+        Ok(value)
     }
 
     pub fn create_by_addrs(addrs: Vec<field::Address>) -> Ret<Self> {
@@ -127,11 +102,11 @@ impl ReqSignList {
 
     /// Resolve and validate E: non-empty, unique, PRIVAKEY, not unknown system.
     pub fn validate_against(&self, addrs: &[field::Address]) -> Ret<HashSet<field::Address>> {
-        if self.signers.is_empty() {
+        if self.signers.0.is_empty() {
             return errf!("ReqSignList cannot be empty");
         }
         let mut e = HashSet::new();
-        for ptr in &self.signers {
+        for ptr in self.signers.as_list() {
             let adr = ptr.real(addrs)?;
             if !adr.is_privkey() {
                 return errf!(
@@ -151,76 +126,12 @@ impl ReqSignList {
         }
         Ok(e)
     }
-}
 
-fn parse_req_sign_list_json(json: &str) -> Ret<ReqSignList> {
-    let mut declared = Uint2::from(ReqSignList::KIND);
-    let mut signers_json = None;
-    let mut seen = HashSet::new();
-    for (key, value) in json_split_object(json)? {
-        if !seen.insert(key) {
-            return sys::normalf!("ReqSignList JSON field {} is duplicated", key);
+    fn validate_codec(&self) -> Ret<()> {
+        if self.signers.0.is_empty() {
+            return errf!("ReqSignList cannot be empty");
         }
-        match key {
-            "kind" => declared = json_decode_value(value)?,
-            "signers" => signers_json = Some(value),
-            _ => {}
-        }
-    }
-    if declared.uint() != ReqSignList::KIND {
-        return sys::normalf!(
-            "action kind mismatch: expected {} got {}",
-            ReqSignList::KIND,
-            declared.uint()
-        );
-    }
-    let raw = signers_json.ok_or_else(|| sys::Error::normal("ReqSignList JSON missing signers"))?;
-    let mut signers = Vec::new();
-    for value in json_split_array(raw)? {
-        signers.push(json_decode_value(value)?);
-    }
-    Ok(ReqSignList::create_by(signers)?)
-}
-
-impl field::FromJSON for ReqSignList {
-    fn from_json(&mut self, json: &str) -> Ret<()> {
-        *self = parse_req_sign_list_json(json)?;
         Ok(())
-    }
-}
-
-impl base::ActionJsonCodec for ReqSignList {
-    fn decode_json(json: &str) -> Ret<Self> {
-        parse_req_sign_list_json(json)
-    }
-}
-
-/// Registry JSON decoder for the dynamic signer-list action.
-pub fn decode_req_sign_list_json(
-    _reg: &dyn base::CodecRegistry,
-    kind: u16,
-    json: &str,
-) -> Ret<ActionRef> {
-    if kind != ReqSignList::KIND {
-        return sys::normalf!("ReqSignList JSON codec got kind {}", kind);
-    }
-    Ok(Arc::new(parse_req_sign_list_json(json)?))
-}
-
-impl Encode for ReqSignList {
-    fn size(&self) -> usize {
-        self.kind.size() + Uint2::SIZE + self.signers.iter().map(addr_or_ptr_size).sum::<usize>()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.kind.encode_to(out);
-        // `create_by` validates the Uint2 bound. Keep this path defensive for
-        // values assembled through struct literals in consensus code.
-        Uint2::from_usize(self.signers.len())
-            .expect("ReqSignList signer count exceeds Uint2")
-            .encode_to(out);
-        for ptr in &self.signers {
-            encode_addr_or_ptr(ptr, out);
-        }
     }
 }
 
@@ -249,11 +160,9 @@ fn check_balance_floor_assets(assets: &AssetAmtW1) -> Rerr {
     Ok(())
 }
 
-/// Structural validation of a `BalanceFloor` (no chain state): negative
-/// amount, malformed asset list, empty floor. Shared by `execute` (revert
-/// semantics) and `guard_facts` (review facts); returns the per-asset check
-/// flags the execute body needs.
-fn validate_balance_floor_struct(floor: &BalanceFloor) -> Ret<(bool, bool, bool, bool)> {
+/// Structural (chain-state-free) validation of a `BalanceFloor` (negative amount,
+/// malformed asset list, empty floor); shared by `execute`/`guard_facts`, returns the per-asset check flags.
+pub(crate) fn validate_balance_floor_struct(floor: &BalanceFloor) -> Ret<(bool, bool, bool, bool)> {
     if floor.hacash.is_negative() {
         return errf!("balance floor hacash {} cannot be negative", floor.hacash);
     }
@@ -268,149 +177,46 @@ fn validate_balance_floor_struct(floor: &BalanceFloor) -> Ret<(bool, bool, bool,
     Ok((check_hac, check_sat, check_dia, check_assets))
 }
 
-base::impl_action! {
+base::impl_action_facts! {
     ChainAllow {
         name: "chain_allow",
         scope: ActScope::GUARD,
         min_tx_type: 2,
         description: |this: &ChainAllow| format!("Valid chain ID list {}", this.chains.as_list().iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")),
-        execute: (self, ctx) {
 
-        let cid = ctx.env().chain.id;
-        if !self
-            .chains
-            .as_list()
-            .iter()
-            .any(|id| id.uint() == cid.get())
-        {
-            let cids = self
-                .chains
-                .as_list()
-                .iter()
-                .map(|id| id.to_string())
-                .collect::<Vec<_>>()
-                .join(",");
-            return sys::revertf!(
-                "transaction must belong to chains {} but on chain {}",
-                cids,
-                cid
-            );
-        }
-        Ok(vec![])
-        
-        }
     }
 }
 
-base::impl_action! {
+base::impl_action_facts! {
     HeightScope {
         name: "height_scope",
         scope: ActScope::GUARD,
         min_tx_type: 2,
         description: |this: &HeightScope| format!("Limit height range ({}, {})", this.start.uint(), if this.end.uint() == 0 { "Unlimited".to_owned() } else { this.end.uint().to_string() }),
-        execute: (self, ctx) {
 
-        let left = self.start.uint();
-        let right = match self.end.uint() {
-            0 => u64::MAX,
-            h => h,
-        };
-        if left > right {
-            return errf!("left height {} cannot exceed right height {}", left, right);
-        }
-        let height = ctx.env().block.height;
-        if height < left || height > right {
-            return sys::revertf!(
-                "transaction must be submitted in height between {} and {}",
-                left,
-                right
-            );
-        }
-        Ok(vec![])
-        
-        }
     }
 }
 
-base::impl_action! {
+base::impl_action_facts! {
     BalanceFloor {
         name: "balance_floor",
         scope: ActScope::GUARD,
         min_tx_type: 2,
         description: |this: &BalanceFloor| format!("Balance floor for {} (hac={}, sat={}, dia={}, assets={})", addr_or_ptr_readable(&this.addr), this.hacash, this.satoshi.uint(), this.diamond.uint(), this.assets.length()),
-        execute: (self, ctx) {
 
-        let (check_hac, check_sat, check_dia, _check_assets) = validate_balance_floor_struct(self)?;
-        let addr = ctx.addr(&self.addr)?;
-        let balance = CoreState::wrap(ctx.layer())
-            .balance(&addr)?
-            .unwrap_or_default();
-        if check_hac && balance.hacash < self.hacash {
-            return sys::revertf!(
-                "address {} hacash {} is lower than floor {}",
-                addr.to_json(),
-                balance.hacash,
-                self.hacash
-            );
-        }
-        if check_sat {
-            let sat = balance.satoshi.to_satoshi();
-            if sat < self.satoshi {
-                return sys::revertf!(
-                    "address {} satoshi {} is lower than floor {}",
-                    addr.to_json(),
-                    sat,
-                    self.satoshi
-                );
-            }
-        }
-        if check_dia {
-            let dia = balance.diamond.to_diamond()?;
-            if dia < self.diamond {
-                return sys::revertf!(
-                    "address {} diamond {} is lower than floor {}",
-                    addr.to_json(),
-                    dia,
-                    self.diamond
-                );
-            }
-        }
-        for floor in self.assets.as_list() {
-            let cur = balance
-                .asset(floor.serial)
-                .unwrap_or(AssetAmt::from_serial(floor.serial)?);
-            if cur.amount < floor.amount {
-                return sys::revertf!(
-                    "address {} asset {}:{} is lower than floor {}:{}",
-                    addr.to_json(),
-                    cur.serial,
-                    cur.amount,
-                    floor.serial,
-                    floor.amount
-                );
-            }
-        }
-        Ok(vec![])
-        
-        }
     }
 }
 
-base::impl_action! {
+base::impl_action_facts! {
     ReqSignList {
         name: "req_sign_list",
         scope: ActScope::TOP_GUARD_UNIQUE,
         min_tx_type: 2,
         extra9: |_: &ReqSignList| false,
-        req_sign: |this: &ReqSignList| this.signers.clone(),
+        req_sign: |this: &ReqSignList| this.signers.0.clone(),
         as_transfer_like: none,
-        description: |this: &ReqSignList| format!("Require extra signers ({})", this.signers.len()),
-        execute: (self, ctx) {
+        description: |this: &ReqSignList| format!("Require extra signers ({})", this.signers.length()),
 
-        self.validate_against(&ctx.env().tx.addrs)?;
-        Ok(vec![])
-        
-        }
     }
 }
 
@@ -419,93 +225,26 @@ pub fn create_chain_guard_action(
     kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)> {
-    check_action_kind(kind, buf)?;
-    let mut r = Reader::new(buf);
-    let kind_field: Uint2 = r.read()?;
-    if kind_field.uint() != kind {
-        return sys::normalf!(
-            "action kind mismatch: expected {} got {}",
-            kind,
-            kind_field.uint()
-        );
-    }
     match kind {
-        ChainAllow::KIND => decode_regular_guard_action::<ChainAllow>(buf),
-        HeightScope::KIND => decode_regular_guard_action::<HeightScope>(buf),
-        BalanceFloor::KIND => decode_regular_guard_action::<BalanceFloor>(buf),
-        ReqSignList::KIND => {
-            let count: Uint2 = r.read()?;
-            let mut signers = Vec::with_capacity(count.uint() as usize);
-            for _ in 0..count.uint() {
-                let (ptr, used) = decode_addr_or_ptr(&buf[r.used()..])?;
-                let _ = r.read_bytes(used)?;
-                signers.push(ptr);
-            }
-            Ok((
-                Arc::new(ReqSignList {
-                    kind: kind_field,
-                    signers,
-                }),
-                r.used(),
-            ))
-        }
+        ChainAllow::KIND => decode_regular_action::<ChainAllow>(buf),
+        HeightScope::KIND => decode_regular_action::<HeightScope>(buf),
+        BalanceFloor::KIND => decode_regular_action::<BalanceFloor>(buf),
+        ReqSignList::KIND => decode_regular_action::<ReqSignList>(buf),
         _ => sys::normalf!("chain guard action kind {} not registered", kind),
     }
 }
 
-#[cfg(feature = "execute")]
-fn decode_regular_guard_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
-where
-    T: Action + ActionExecute + Decode + 'static,
-{
-    let (action, used) = T::decode(buf)?;
-    Ok((Arc::new(action), used))
-}
-
-#[cfg(not(feature = "execute"))]
-fn decode_regular_guard_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
-where
-    T: Action + Decode + 'static,
-{
-    let (action, used) = T::decode(buf)?;
-    Ok((Arc::new(action), used))
-}
-
-// ================================ wire schema ================================
-
-impl base::ActionSchemaProvider for ReqSignList {
-    const ACTION_SCHEMA: base::ActionSchema = base::ActionSchema {
-        kind: Self::KIND,
-        name: "req_sign_list",
-        audit_class: "full",
-        blob: false,
-        fields: &[
-            base::FieldSchema::new("kind", base::FieldWire::U2),
-            base::FieldSchema::new("signers", base::FieldWire::ListW2("AddrOrPtr")),
-        ],
-    };
-}
-
 // ================================ review facts ================================
 
-/// Facts of the guard actions in one transaction: the *effective* allowed
-/// chains and height range (the protocol executes every guard action
-/// independently, so the effective chain set is the intersection of all
-/// `ChainAllow` lists and the effective height range is the intersection of
-/// all `HeightScope` ranges), plus per-action notes and structural protocol
-/// violations. This is the single analysis shared by the full node and the
-/// SDK review; state-dependent rules stay in the `execute` bodies. A guard
-/// kind without a facts arm is reported as a note instead of being silently
-/// dropped, so a new guard action never disappears from the review.
+/// Effective guard-action facts for one transaction: chains/height-range are the
+/// intersection of all `ChainAllow`/`HeightScope` actions. Single analysis shared by node and SDK review; unknown guard kinds surface as notes, never silently dropped.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GuardFacts {
     /// Effective allowed chain set (intersection of all `ChainAllow`
     /// actions); `None` when no `ChainAllow` action is present.
     pub chains: Option<Vec<u32>>,
-    /// Effective height range `(start, end)` (intersection of all
-    /// `HeightScope` actions); `None` when no `HeightScope` action is
-    /// present. `end == 0` means unlimited (the collector's internal
-    /// `u64::MAX` sentinel is rewritten to `0` before facts are returned).
+    /// Effective height range `(start, end)` — intersection of all `HeightScope`
+    /// actions; `None` when none present, `end == 0` means unlimited.
     pub height_range: Option<(u64, u64)>,
     /// (action index, note) pairs attached to the matching action descriptor.
     pub action_notes: Vec<(usize, String)>,
@@ -514,11 +253,8 @@ pub struct GuardFacts {
 }
 
 impl GuardFacts {
-    /// Evaluate collected facts against a caller-provided height and chain id.
-    /// Returns `(expired_height, wrong_chain)`. Uses the same predicates the
-    /// chain's HeightScope / ChainAllow execute bodies use (`height_in_range`
-    /// and set membership). A missing fact means that check is inactive
-    /// (not expired / not on the wrong chain).
+    /// Evaluate facts against a height and chain id → `(expired_height, wrong_chain)`,
+    /// using the same predicates as the execute bodies; a missing fact = check inactive.
     pub fn against_context(&self, current_height: u64, expected_chain_id: u32) -> (bool, bool) {
         let expired = self.height_range.map_or(false, |(start, end)| {
             !height_in_range(start, end, current_height)
@@ -536,11 +272,8 @@ fn push_guard_note(facts: &mut GuardFacts, index: usize, text: String) {
     facts.action_notes.push((index, text));
 }
 
-/// Height-range membership predicate of the `HeightScope` guard action:
-/// `end == 0` means unlimited and `start > end` with a non-zero `end` is an
-/// unsatisfiable range (never in range). This is the single implementation —
-/// the SDK review facts and any chain-side guard check both call it, so the
-/// semantics can never be re-derived differently.
+/// Height-range predicate of `HeightScope`: `end == 0` means unlimited, `start > end`
+/// (non-zero `end`) is never in range. Single implementation shared by SDK review and chain checks.
 pub fn height_in_range(start: u64, end: u64, height: u64) -> bool {
     if start > end && end != 0 {
         return false;
@@ -636,7 +369,7 @@ pub fn guard_facts(tx: &dyn Transaction) -> GuardFacts {
                 }
             }
             kind if action.scope() == ActScope::GUARD
-                    || action.scope() == ActScope::TOP_GUARD_UNIQUE =>
+                || action.scope() == ActScope::TOP_GUARD_UNIQUE =>
             {
                 push_guard_note(
                     &mut facts,
@@ -672,9 +405,8 @@ mod tests {
         TransactionType2::new_by(main, Amount::from("1:244").unwrap(), 0)
     }
 
-    /// Every standard guard kind must produce a specific fact (no "no review
-    /// facts" note): chains intersection, height range, signer validation and
-    /// balance-floor structural validation.
+    /// Every standard guard kind must produce a specific fact (chains, height range,
+    /// signer validation, balance-floor) — never a "no review facts" note.
     #[test]
     fn guard_facts_cover_every_standard_guard_kind() {
         let main = main_address();

@@ -1,32 +1,13 @@
-//! Action wire schema — Rust is the single source of truth for action field
-//! wire shapes.
-//!
-//! `FieldWire`/`FieldSchema`/`FieldWireShape` are defined in `field::schema`
-//! (field types and their wire shapes are co-located); this module holds the
-//! action/struct-level schema types, provider traits, closure/uniqueness
-//! validation and deterministic hashing. The `ActionCodec` derive generates
-//! `ACTION_SCHEMA` (field names + wire shape markers of their field types) for
-//! every derived action; hand-written codec actions (AST/Tex/ReqSignList,
-//! DiamondMint) explicitly provide the same kind of constant in their crates.
-//! After `codec-schema-gen` captures all schemas through the registration
-//! macros it: validates kind/name uniqueness, complete field-type closure, and
-//! consistency with the runtime registry, then generates the TypeScript codec
-//! (algorithm-bearing fields such as amount/address are transmitted as strings
-//! at the payload layer per design A, with parsing staying in Rust and zero
-//! algorithm on the TS side).
-//!
-//! This module is pure static data and never executes; native/fullnode and the
-//! SDK share the same definitions.
+//! Action wire schema — Rust is the single source of truth for action field wire shapes.
+//! Holds action/struct-level schema types, provider traits, validation, and deterministic hashing; pure static data shared by fullnode and SDK.
 
 pub use field::schema::{
-    ActionSchema, ActionSchemaProvider, FieldSchema, FieldWire, FieldWireShape, StructSchema,
-    StructSchemaProvider,
+    ActionSchema, ActionSchemaProvider, AuditClass, FieldSchema, FieldWire, FieldWireShape,
+    StructSchema, StructSchemaProvider,
 };
 
 /// (name, wire) pairs for every built-in leaf; the single table behind
-/// `builtin_leaf_wire`, also rendered into the generated TS codec by
-/// `codec-schema-gen` so the `ListW1/ListW2` element resolution map exists in
-/// exactly one place (Rust).
+/// `builtin_leaf_wire`, also rendered into the generated TS codec by SDK codegen.
 pub const BUILTIN_LEAVES: &[(&str, FieldWire)] = &[
     ("U1", FieldWire::U8),
     ("Uint1", FieldWire::U8),
@@ -57,9 +38,8 @@ pub const BUILTIN_LEAVES: &[(&str, FieldWire)] = &[
     ("PosiHash", FieldWire::Fixed(33)),
 ];
 
-/// Built-in leaf element name -> wire shape (`ListW1/ListW2` element
-/// references). List elements may only reference a registered struct or the
-/// built-in leaves below.
+/// Built-in leaf element name → wire shape (`ListW1/ListW2` element references).
+/// List elements may only reference a registered struct or the built-in leaves.
 pub fn builtin_leaf_wire(name: &str) -> Option<FieldWire> {
     BUILTIN_LEAVES
         .iter()
@@ -67,9 +47,8 @@ pub fn builtin_leaf_wire(name: &str) -> Option<FieldWire> {
         .map(|(_, wire)| wire.clone())
 }
 
-/// Validate a schema set: unique kinds, unique names, a complete closure
-/// over nested references, and valid audit classes. On `Err`, describes the
-/// first violation.
+/// Validate a schema set: unique kinds, unique names, complete closure over
+/// nested references, and valid audit classes. `Err` describes the first violation.
 pub fn validate_schema_set(
     schemas: &[ActionSchema],
     struct_schemas: &[StructSchema],
@@ -91,15 +70,6 @@ pub fn validate_schema_set(
                 schema.name, schema.kind
             ));
         }
-        match schema.audit_class {
-            "full" | "structured" | "branching" | "opaque" => {}
-            other => {
-                return Err(format!(
-                    "action {} has unknown audit class {other:?}",
-                    schema.name
-                ))
-            }
-        }
     }
     for struct_schema in struct_schemas {
         validate_field_names(struct_schema.name, struct_schema.fields)?;
@@ -118,29 +88,26 @@ pub fn validate_schema_set(
         .chain(struct_schemas.iter().map(|s| ActionSchema {
             kind: 0,
             name: s.name,
-            audit_class: "full",
+            audit_class: AuditClass::Full,
             blob: false,
             fields: s.fields,
         }))
         .collect();
     for schema in &all_schemas {
         for field in schema.fields {
-            collect_struct_refs(&field.wire, &known)
-                .map_err(|missing| {
-                    format!(
-                        "schema {} field {} references unknown nested struct {}",
-                        schema.name, field.name, missing
-                    )
-                })?;
+            collect_struct_refs(&field.wire, &known).map_err(|missing| {
+                format!(
+                    "schema {} field {} references unknown nested struct {}",
+                    schema.name, field.name, missing
+                )
+            })?;
         }
     }
     Ok(())
 }
 
-/// Field names are part of the wire contract. A duplicate name would make
-/// generated object codecs ambiguous (the later value silently overwrites the
-/// earlier one in map-based decoders), so reject it at the shared schema
-/// boundary before any SDK or fullnode registry can consume it.
+/// Field names are part of the wire contract: duplicates make generated object codecs
+/// ambiguous (later value silently wins), so reject before any registry consumes the schema.
 fn validate_field_names(name: &str, fields: &[FieldSchema]) -> Result<(), String> {
     use std::collections::HashSet;
     let mut seen = HashSet::new();
@@ -174,20 +141,12 @@ fn collect_struct_refs(
     }
 }
 
-/// Deterministic hash (sha3-256) of a schema set, used as a codec version
-/// fingerprint. Any change to field/enum order changes the result;
-/// `codec-schema-gen` and the TS side use it to verify the generated artifacts
-/// have not drifted.
-pub fn schema_set_hash(
-    schemas: &[ActionSchema],
-    struct_schemas: &[StructSchema],
-) -> [u8; 32] {
+/// Deterministic sha3-256 hash of a schema set — a codec version fingerprint: any
+/// field/enum order change alters it, so SDK codegen / TS detect drifted artifacts.
+pub fn schema_set_hash(schemas: &[ActionSchema], struct_schemas: &[StructSchema]) -> [u8; 32] {
     use sha3::{Digest, Sha3_256};
-    // Registration order is a composition detail, not part of the wire
-    // contract. Keep field order inside each schema (it is wire-significant),
-    // but canonicalize the schema set before hashing so equivalent registries
-    // cannot rotate the SDK profile merely by assembling crates in a different
-    // order.
+    // Registration order is a composition detail, not wire contract: field order per schema
+    // is wire-significant, so canonicalize the set before hashing (stable SDK profile).
     let mut schemas: Vec<&ActionSchema> = schemas.iter().collect();
     schemas.sort_by_key(|schema| (schema.kind, schema.name));
     let mut struct_schemas: Vec<&StructSchema> = struct_schemas.iter().collect();
@@ -205,7 +164,7 @@ pub fn schema_set_hash(
         }
         // Review facts are part of the codec identity: a grading or blob-class
         // change rotates the SDK profile like any other codec change.
-        hasher.update(schema.audit_class.as_bytes());
+        hasher.update(schema.audit_class.as_str().as_bytes());
         hasher.update(&[0]);
         hasher.update(&[schema.blob as u8]);
         hasher.update([0xff]);
@@ -291,26 +250,29 @@ mod tests {
             ActionSchema {
                 kind: 20,
                 name: "b",
-                audit_class: "full",
+                audit_class: AuditClass::Full,
                 blob: false,
                 fields: B_FIELDS,
             },
             ActionSchema {
                 kind: 10,
                 name: "a",
-                audit_class: "opaque",
+                audit_class: AuditClass::Opaque,
                 blob: true,
                 fields: A_FIELDS,
             },
         ];
         let actions_b = [actions_a[1].clone(), actions_a[0].clone()];
-        let structs_a = [StructSchema {
-            name: "z",
-            fields: B_FIELDS,
-        }, StructSchema {
-            name: "a",
-            fields: A_FIELDS,
-        }];
+        let structs_a = [
+            StructSchema {
+                name: "z",
+                fields: B_FIELDS,
+            },
+            StructSchema {
+                name: "a",
+                fields: A_FIELDS,
+            },
+        ];
         let structs_b = [structs_a[1].clone(), structs_a[0].clone()];
         assert_eq!(
             schema_set_hash(&actions_a, &structs_a),
@@ -327,7 +289,7 @@ mod tests {
         let actions = [ActionSchema {
             kind: 1,
             name: "duplicate_fields",
-            audit_class: "full",
+            audit_class: AuditClass::Full,
             blob: false,
             fields: DUP_FIELDS,
         }];

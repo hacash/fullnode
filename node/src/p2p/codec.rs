@@ -1,12 +1,8 @@
-//! P2P transport frame codec.
-//!
-//! Wire format (big-endian throughout):
+//! P2P transport frame codec (big-endian wire format):
 //! ```text
 //! [u32BE length = body.len()][u8 ty][u32BE crc32c(ty+body)][body]
 //! ```
-//! - 9-byte header.
-//! - `crc32c` covers `[ty][body]` (not length, not itself).
-//! - `length` counts only `body`.
+//! 9-byte header; `crc32c` covers `[ty][body]` (not length), `length` counts only `body`.
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 

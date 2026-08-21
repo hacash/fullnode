@@ -1,28 +1,21 @@
-//! `P2SHScriptProve` (kind 46) top-level action + P2SH lock-script hashing helpers.
-//!
-//! Ported from fullnodedev `vm/src/action/p2sh.rs`. Adaptations:
-//! - `combi_struct!`/`combi_list!` macros (dev field crate) -> plain structs with manual
-//!   `Encode`/`Decode` + `ListW1<PosiHash>` alias.
-//! - `ContractAddressW1` -> `ContractAddrListW1` (= `ListW1<ContractAddress>`, defined in
-//!   `vm/src/contract/mod.rs`).
-//! - `Address::create_scriptmh(payload20)` is constructed inline with dev's
-//!   scriptmh version byte `5`.
-//! - `sha3`/`ripemd160` free fns (dev sys) -> local helpers over the `sha3`/`ripemd` crates.
-//! - `.serialize()` on `Hash`/`ContractAddressW1` -> `.encode()` / `.as_bytes()`.
+//! `P2SHScriptProve` (kind 46) top-level action + P2SH lock-script hashing helpers, ported
+//! from dev: field-crate macros replaced with manual `Encode`/`Decode` structs and local hashing helpers.
+
 
 use std::sync::Arc;
 
-use base::{ActScope, ActionRef, Context, ExecFrom, P2sh};
+use base::{ActScope, ActionRef, P2sh};
 use field::{Address, BytesW2, Decode, Encode, Hash, Reader, Uint1, Uint2};
 use ripemd::{Digest, Ripemd160};
 use sha3::Sha3_256;
-use sys::{Rerr, Ret, errf};
+use sys::{Ret, errf};
 
 use crate::contract::ContractAddrListW1;
-use crate::machine::peek_vm_runtime_limits;
-use crate::rt::{CodeConf, GasExtra, SpaceCap};
+use crate::rt::CodeConf;
+#[cfg(feature = "execute")]
+use crate::rt::{GasExtra, SpaceCap};
 
-base::impl_fields_to_json!(PosiHash { posi, hash });
+field::impl_struct_json!(PosiHash { posi, hash });
 // ================================ PosiHash / MerkelStuffs ================================
 
 /// One Merkle proof step: sibling hash + left/right position.
@@ -66,17 +59,13 @@ impl field::WireElementName for PosiHash {
 // ================================ UnlockScript / ScriptmhCalc ================================
 
 pub struct UnlockScript {
-    codeconf: u8,
-    stuff: Vec<u8>,
-    witness: Vec<u8>,
+    pub(crate) codeconf: u8,
+    pub(crate) stuff: Vec<u8>,
+    pub(crate) witness: Vec<u8>,
 }
 
-/// Result of `scriptmh` address derivation for a P2SH lock script.
-///
-/// Hashing rules (same as `P2SHScriptProve::get_merkel()`):
-/// - Leaf: `sha3("p2sh_leaf_" || libs || codeconf || lockbox)`
-/// - Branch i: `sha3("p2sh_branch_" || left || right)` where `(left,right)` is decided by `posi`.
-/// - Address: `Address` with scriptmh version byte `5` carrying `ripemd160(root_sha3)`.
+/// Result of `scriptmh` derivation for a P2SH lock script. Leaf: `sha3("p2sh_leaf_"||libs||codeconf||lockbox)`;
+/// branch i: `sha3("p2sh_branch_"||left||right)` (order from `posi`); address = version-byte-`5` `scriptmh` of `ripemd160(root_sha3)`.
 #[derive(Debug, Clone)]
 pub struct ScriptmhCalc {
     /// Final `SCRIPTMH` address (dev-compatible version byte `5`).
@@ -130,6 +119,7 @@ impl P2shEntryPayload {
         Ok(out)
     }
 
+    #[cfg(feature = "execute")]
     pub fn verify_unlock_inputs(
         &self,
         block_height: u64,
@@ -191,7 +181,7 @@ impl Default for P2SHScriptProve {
     }
 }
 
-base::impl_action! {
+base::impl_action_facts! {
     P2SHScriptProve {
         name: "p2sh_script_prove",
         scope: ActScope::TOP,
@@ -200,49 +190,13 @@ base::impl_action! {
         req_sign: |_: &P2SHScriptProve| vec![],
         as_transfer_like: none,
         description: |_: &P2SHScriptProve| "Prove P2SH unlock script".to_owned(),
-        execute: (self, ctx) {
-            p2sh_script_prove_execute(self, ctx)?;
-            Ok(vec![])
-        }
-    }
-}
 
-fn p2sh_script_prove_execute(this: &P2SHScriptProve, ctx: &mut dyn Context) -> Rerr {
-    if ctx.exec_from() != ExecFrom::Top {
-        return errf!(
-            "P2SHScriptProve can only run in TOP context, got {}",
-            ctx.exec_from()
-        );
     }
-    if !this.marks.is_zero() {
-        return errf!("marks bytes format invalid");
-    }
-    let hei = ctx.env().block.height;
-    let (_, cap) = peek_vm_runtime_limits(ctx, hei);
-    let p2sh_count = ctx.p2sh_count();
-    if p2sh_count >= cap.p2sh_set {
-        return errf!("p2sh_set overflow (>={})", cap.p2sh_set);
-    }
-    P2SHScriptProve::verify_merkle_depth(&cap, this.merkels.as_list().len())?;
-    let adr = this.get_merkel()?;
-    let stuff = this.get_stuff_with_merkel(ctx, &adr)?;
-    ctx.p2sh_set(adr, Box::new(stuff))?;
-    Ok(())
 }
 
 impl P2SHScriptProve {
-    /// Compute the `SCRIPTMH` address from:
-    /// - `adrlibs`: the contract libraries allowlist used by the P2SH lock script
-    /// - `codeconf`: script code config byte
-    /// - `lockbox`: the P2SH lock script bytecode (as it appears in this action field)
-    /// - `merkels`: the Merkle proof path (siblings + left/right positions) used to commit
-    ///   the lock script into a Merkle root.
-    ///
-    /// Notes for tooling authors:
-    /// - `codeconf` is hashed as one raw byte.
-    /// - lockbox is hashed as raw data bytes (`BytesW2::to_vec()`, without length prefix)
-    ///   not as a custom encoding.
-    /// - Each sibling `hash` is hashed as its raw 32 bytes.
+    /// Compute the `SCRIPTMH` address from `adrlibs`, `codeconf`, `lockbox`, and the Merkle proof
+    /// path `merkels`; all hashed raw (`codeconf` one byte, lockbox/siblings without length prefixes).
     pub fn calc_scriptmh_from_lockbox(
         adrlibs: &ContractAddrListW1,
         codeconf: CodeConf,
@@ -285,6 +239,7 @@ impl P2SHScriptProve {
         })
     }
 
+    #[cfg(feature = "execute")]
     fn verify_adrlibs(cap: &SpaceCap, adrlibs: &ContractAddrListW1) -> Ret<()> {
         let libs = adrlibs.as_list();
         if libs.len() > cap.library {
@@ -302,6 +257,7 @@ impl P2SHScriptProve {
         Ok(())
     }
 
+    #[cfg(feature = "execute")]
     pub fn verify_unlock_inputs(
         block_height: u64,
         gst: &GasExtra,
@@ -327,6 +283,7 @@ impl P2SHScriptProve {
         Ok(())
     }
 
+    #[cfg(feature = "execute")]
     fn verify_lockbox_bytes(cap: &SpaceCap, lockbox: &[u8]) -> Ret<()> {
         if lockbox.len() > cap.p2sh_lockbox_size_max {
             return errf!(
@@ -337,6 +294,7 @@ impl P2SHScriptProve {
         Ok(())
     }
 
+    #[cfg(feature = "execute")]
     pub fn verify_merkle_depth(cap: &SpaceCap, merkle_depth: usize) -> Ret<()> {
         if merkle_depth > cap.p2sh_merkle_depth_max {
             return errf!(
@@ -347,6 +305,7 @@ impl P2SHScriptProve {
         Ok(())
     }
 
+    #[cfg(feature = "execute")]
     fn verify_witness_bytes(cap: &SpaceCap, witness: &[u8]) -> Ret<()> {
         if witness.len() > cap.value_size {
             return errf!("p2sh witness bytes too long");
@@ -354,40 +313,8 @@ impl P2SHScriptProve {
         Ok(())
     }
 
-    fn get_stuff_with_merkel(
-        &self,
-        ctx: &mut dyn Context,
-        scriptmh: &Address,
-    ) -> Ret<UnlockScript> {
-        let hei = ctx.env().block.height;
-        let (gst, cap) = peek_vm_runtime_limits(ctx, hei);
-        let codeconf = CodeConf::parse(self.codeconf.uint()).map_err(sys::Error::from)?;
-        Self::verify_unlock_inputs(
-            hei,
-            &gst,
-            &cap,
-            &self.adrlibs,
-            codeconf,
-            &self.lockbox,
-            &self.argvkey,
-            ctx.services().as_ref(),
-        )?;
-        let lockbox = self.lockbox.to_vec();
-        let witness = self.argvkey.to_vec();
-        let merkel = scriptmh.as_bytes().to_vec();
-        let libs = self.adrlibs.encode();
-        let mut stuff = Vec::with_capacity(merkel.len() + libs.len() + lockbox.len());
-        stuff.extend_from_slice(&merkel);
-        stuff.extend_from_slice(&libs);
-        stuff.extend_from_slice(&lockbox);
-        Ok(UnlockScript {
-            codeconf: codeconf.raw(),
-            stuff,
-            witness,
-        })
-    }
-
-    fn get_merkel(&self) -> Ret<Address> {
+    #[cfg(feature = "execute")]
+    pub(crate) fn get_merkel(&self) -> Ret<Address> {
         let codeconf = CodeConf::parse(self.codeconf.uint()).map_err(sys::Error::from)?;
         Ok(
             Self::calc_scriptmh_from_lockbox(

@@ -1,9 +1,5 @@
-//! Standard full-node process assembly and lifecycle.
-//!
-//! This module deliberately uses direct concrete assembly instead of a generic
-//! builder: `app` is the one composition root that knows the standard Hacash
-//! stack.  The split is only between construction (`Fullnode::open`) and
-//! process ownership (`Fullnode::run`).
+//! Standard full-node process assembly and lifecycle. Direct concrete assembly (no
+//! builder): construction (`Fullnode::open`) vs process ownership (`Fullnode::run`).
 
 mod assemble;
 mod bider;

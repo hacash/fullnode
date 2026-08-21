@@ -110,13 +110,8 @@ impl IRNode for IRNodeLeaf {
         self.inst as u8
     }
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
-        // IRBREAK / IRCONTINUE are NEVER emitted directly. The surrounding
-        // IRWHILE installs a `LoopPatch` sink (see compile.rs) that
-        // intercepts these two opcodes through `codegen_into_with_patch` and
-        // turns them into real JMPSL instructions at loop close. If we get
-        // here for IRBREAK/IRCONTINUE it means the parser/builder allowed
-        // them outside a while body; fail loudly instead of poisoning the
-        // bytecode stream with an unmapped IR opcode.
+        // IRBREAK / IRCONTINUE must be lowered to JMPSL by the while-loop `LoopPatch`
+        // sink (compile.rs); reaching here means they leaked outside a while body — fail loudly.
         if matches!(self.inst, Bytecode::IRBREAK | Bytecode::IRCONTINUE) {
             return itr_err_fmt!(
                 CompileError,
@@ -128,10 +123,8 @@ impl IRNode for IRNodeLeaf {
         Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
-        // Serialized IR keeps IRBREAK/IRCONTINUE as 1-byte leaf nodes. They
-        // are lowered to JMPSL during while-loop codegen, never appear in
-        // the runtime bytecode stream, and round-trip cleanly through
-        // serialize → parse → serialize.
+        // Serialized IR keeps IRBREAK/IRCONTINUE as 1-byte leaves; they are lowered to JMPSL
+        // in while-loop codegen and never appear in runtime bytecode.
         vec![self.inst as u8]
     }
     fn print(&self) -> String {
@@ -1037,12 +1030,8 @@ impl IRNode for IRNodeBytecodes {
         IRBYTECODE as u8
     }
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
-        // Codegen stays a pure splice — the runtime-safe verifier
-        // (`verify_ir_runtime_safe_bytecodes`) is the gate for the final
-        // composed stream. Constructing an `IRNodeBytecodes` through the
-        // checked `IRNodeBytecodes::new` already runs the fragment check;
-        // leaving codegen unchecked preserves test surfaces that expect
-        // "plain IR conversion still works, runtime conversion rejects".
+        // Codegen is a pure splice; `verify_ir_runtime_safe_bytecodes` / `IRNodeBytecodes::new`
+        // gate the final composed stream, keeping unchecked conversion distinct from runtime rejection.
         Ok(self.codes.clone())
     }
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
@@ -1050,12 +1039,8 @@ impl IRNode for IRNodeBytecodes {
         Ok(())
     }
     fn serialize(&self) -> Vec<u8> {
-        // Length must be enforced at every construction path (parse-side,
-        // `IRNodeBytecodes::new`, syntax-level `bytecode { }`). Panicking
-        // here is deliberate: a truncated serialize would silently drop
-        // trailing instructions and change program semantics, which is
-        // unacceptable in a blockchain context. Every caller should have
-        // caught the overflow before calling serialize.
+        // Deliberate panic: a truncated serialize would silently drop trailing instructions and
+        // change program semantics. All construction paths enforce the length before this point.
         if self.codes.len() > u16::MAX as usize {
             panic!("IRNodeBytecodes payload too long ({} bytes)", self.codes.len());
         }
@@ -1071,12 +1056,8 @@ impl IRNode for IRNodeBytecodes {
 }
 
 impl IRNodeBytecodes {
-    /// Build a new `IRNodeBytecodes` from a verified runtime-shaped payload.
-    /// Rejects payloads that exceed the IR length window or contain IR-only
-    /// opcodes / absolute jumps / misaligned params at construction time. This
-    /// is the recommended constructor for any in-process IR builder; the
-    /// `Default` + direct field write path stays for parser/decoder use, where
-    /// the surrounding parse pipeline already enforces the same invariants.
+    /// Build a new `IRNodeBytecodes` from a verified runtime-shaped payload; rejects oversized or
+    /// IR-only / absolute-jump / misaligned payloads. Recommended for in-process builders (parser uses `Default`).
     pub fn new(codes: Vec<u8>) -> VmrtRes<Self> {
         if codes.len() > u16::MAX as usize {
             return itr_err_fmt!(CompileError, "IRNodeBytecodes payload too long");
@@ -1121,16 +1102,8 @@ impl IRNode for IRNodeArray {
         self.subs.len()
     }
     fn hasretval(&self) -> bool {
-        // I-4: IRBLOCK, IRBLOCKR, and IRLIST differ in their return-value
-        // contract:
-        //   * IRBLOCK  — statement container; internally pops every child's
-        //     value and itself never yields a value.
-        //   * IRBLOCKR — block expression; the last child provides the
-        //     overall value.
-        //   * IRLIST   — sequence of standalone sub-expressions; whether it
-        //     yields a value depends solely on the last child's retval.
-        // The asymmetry is by design so that `compile_block_into` can append
-        // POPs uniformly without consulting the container type.
+        // I-4 return-value contract: IRBLOCK never yields a value (pops children), IRBLOCKR
+        // yields the last child's value, IRLIST yields its last child's value if it has one.
         match self.inst {
             Bytecode::IRBLOCK => false,
             _ => match self.subs.last() {
@@ -1159,17 +1132,8 @@ impl IRNode for IRNodeArray {
         }
     }
     fn serialize(&self) -> Vec<u8> {
-        // I-5: serialization is NOT a 1:1 mirror of construction. Children
-        // that opt into `is_serialization_elided()` (currently
-        // `IRNodeEmpty`) disappear from the emitted stream entirely, and the
-        // header `count` is recomputed from the surviving children.
-        //
-        // The visible child count must fit u16 — every construction entry
-        // point enforces this (`with_capacity`, `from_vec`), and the
-        // DedefMut push path is bounded by the vendored parse-time length
-        // header. Exceeding u16::MAX here would produce an unreadable or
-        // semantically-truncated prefix; panic loudly because silent
-        // truncation is worse.
+        // I-5: serialization is not a 1:1 mirror of construction — elided children (IRNodeEmpty) vanish and
+        // `count` is recomputed. Visible count must fit u16; panic rather than emit a truncated prefix.
         let count = self
             .subs
             .iter()

@@ -3,19 +3,13 @@ use std::fmt;
 use std::ops::Deref;
 use std::sync::OnceLock;
 
-#[cfg(feature = "num-bigint")]
-use num_bigint::{BigInt, BigUint, Sign as BigSign};
-#[cfg(feature = "num-bigint")]
-use num_traits::{Num, ToPrimitive, Zero};
-use sys::{Rerr, Ret, normalf, errf};
+use sys::{Rerr, Ret, errf, normalf};
 
 use crate::codec::{Decode, Encode, Reader};
 use crate::json::{FromJSON, JSONFormater, ToJSON, json_expect_quoted_decoded};
 
-/// With the `num-bigint` feature disabled (codec-only builds such as
-/// SDK/wasm): Amount's big-integer path uses the `amount_base256` byte-array
-/// implementation and does not link num-bigint.
-#[cfg(not(feature = "num-bigint"))]
+/// Amount's big-integer path is the `amount_base256` byte-array core;
+/// `num-bigint` remains only as a dev-dependency test oracle.
 use crate::types::amount_base256 as b256;
 
 pub const UNIT_MEI: u8 = 248;
@@ -68,7 +62,9 @@ impl Amount {
     }
 
     pub fn is_zero(&self) -> bool {
-        self.byte.is_empty()
+        // Match BigUint: leading zeros are insignificant, all-zero bytes are 0.
+        // Production constructors/decode already collapse this to empty bytes.
+        self.byte.iter().all(|&b| b == 0)
     }
 
     pub fn not_zero(&self) -> bool {
@@ -189,21 +185,6 @@ impl Amount {
         Self::from_decimal_digits(negative, &body, unit)
     }
 
-    #[cfg(feature = "num-bigint")]
-    pub fn from_bigint(bignum: &BigInt) -> Ret<Self> {
-        if bignum.is_zero() {
-            return Ok(Self::zero());
-        }
-        let negative = bignum.sign() == BigSign::Minus;
-        let mut magnitude = bignum.magnitude().clone();
-        let mut unit = 0u8;
-        while unit < u8::MAX && (&magnitude % 10u8).is_zero() {
-            magnitude /= 10u8;
-            unit += 1;
-        }
-        Self::from_sign_magnitude(negative, unit, magnitude)
-    }
-
     fn from_decimal_digits(negative: bool, digits: &str, mut unit: u8) -> Ret<Self> {
         let mut digits = digits.trim_start_matches('0');
         if digits.is_empty() {
@@ -221,31 +202,9 @@ impl Amount {
             }
             return Ok(Self { unit, dist, byte });
         }
-        // >u128 (>39 decimal digits): BigUint when num-bigint is enabled;
-        // base-256 byte arrays when disabled.
-        #[cfg(feature = "num-bigint")]
-        {
-            let magnitude = BigUint::from_str_radix(digits, 10)
-                .map_err(|_| sys::Error::fault("amount value invalid"))?;
-            Self::from_sign_magnitude(negative, unit, magnitude)
-        }
-        #[cfg(not(feature = "num-bigint"))]
-        {
-            let byte = b256::from_decimal_b256(digits)?;
-            if byte.len() > 127 {
-                return errf!("Amount is too wide.");
-            }
-            let mut dist = byte.len() as i8;
-            if negative {
-                dist *= -1;
-            }
-            Ok(Self { unit, dist, byte })
-        }
-    }
-
-    #[cfg(feature = "num-bigint")]
-    fn from_sign_magnitude(negative: bool, unit: u8, magnitude: BigUint) -> Ret<Self> {
-        let byte = magnitude.to_bytes_be();
+        // >u128 (>39 decimal digits): base-256 byte-array core (the BigUint
+        // reference path is exercised by the test oracle).
+        let byte = b256::from_decimal_b256(digits)?;
         if byte.len() > 127 {
             return errf!("Amount is too wide.");
         }
@@ -269,29 +228,6 @@ impl Amount {
             dist: byte.len() as i8,
             byte,
         })
-    }
-
-    #[cfg(feature = "num-bigint")]
-    pub fn to_bigint(&self) -> BigInt {
-        if self.is_zero() {
-            return BigInt::from(0u8);
-        }
-        let sign = if self.dist > 0 {
-            BigSign::Plus
-        } else {
-            BigSign::Minus
-        };
-        let bignum = BigInt::from_bytes_be(sign, &self.byte);
-        bignum * BigInt::from(10u64).pow(self.unit as u32)
-    }
-
-    #[cfg(feature = "num-bigint")]
-    pub fn to_biguint(&self) -> BigUint {
-        if self.is_negative() {
-            return BigUint::ZERO;
-        }
-        let magnitude = BigUint::from_bytes_be(&self.byte);
-        magnitude * pow10_big(self.unit)
     }
 
     pub fn to_fin_string(&self) -> String {
@@ -321,24 +257,6 @@ impl Amount {
             s.push(buf[i] as char);
         }
         s
-    }
-
-    #[cfg(feature = "num-bigint")]
-    pub fn to_unit_float(&self, base_unit: u8) -> f64 {
-        if self.is_zero() {
-            return 0.0;
-        }
-        let mantissa = BigUint::from_bytes_be(&self.byte)
-            .to_f64()
-            .unwrap_or(f64::NAN);
-        let delta = (base_unit as i64 - self.unit as i64).unsigned_abs() as f64;
-        let scale = 10f64.powf(delta);
-        let value = if self.unit > base_unit {
-            mantissa * scale
-        } else {
-            mantissa / scale
-        };
-        if self.is_negative() { -value } else { value }
     }
 
     pub fn to_unit_string(&self, unit_str: &str) -> String {
@@ -423,11 +341,8 @@ impl Amount {
         self.to_unit_u128(UNIT_238)
     }
 
-    /// u128 value of the amount scaled to `base_unit`, semantically identical
-    /// to `to_unit_biguint(base_unit)?.to_u128()` (negative values, quotients
-    /// wider than a 16-byte mantissa, and scaling overflow all error). Compiled
-    /// unconditionally: tests on the num-bigint path compare against BigUint;
-    /// when num-bigint is disabled (SDK/wasm) it replaces BigUint.
+    /// u128 value of the amount scaled to `base_unit`, identical to the BigUint
+    /// path (negative values, wide quotients and scaling overflow all error).
     fn to_unit_u128(&self, base_unit: u8) -> Ret<u128> {
         if self.is_negative() {
             return errf!("amount {} overflow unit u128", self);
@@ -439,45 +354,18 @@ impl Amount {
             let magnitude = tail_to_u128(&self.byte, u128::MAX)?;
             let k = (base_unit - self.unit) as u32;
             if k > 38 {
-                // 10^k exceeds the u128 range, and magnitude <= u128::MAX <
-                // 10^39 <= 10^k, so consistent with the BigUint path the exact
-                // quotient is always 0.
+                // 10^k exceeds u128 range (magnitude <= u128::MAX < 10^39 <= 10^k),
+                // so the exact quotient is always 0, matching the BigUint path.
                 Ok(0)
             } else {
                 Ok(magnitude / 10u128.pow(k))
             }
         } else {
-            // Arbitrary-precision division (>16-byte mantissa): the quotient
-            // may still fit in u128 (e.g. 0 after dividing by a large enough
-            // 10^k).
-            #[cfg(feature = "num-bigint")]
-            {
-                let magnitude = BigUint::from_bytes_be(&self.byte);
-                let quotient =
-                    magnitude / BigUint::from(10u8).pow((base_unit - self.unit) as u32);
-                quotient
-                    .to_u128()
-                    .ok_or_else(|| sys::Error::fault("amount computing size overflow"))
-            }
-            #[cfg(not(feature = "num-bigint"))]
-            {
-                let quotient = b256::div_pow10_b256(&self.byte, base_unit - self.unit);
-                tail_to_u128(&quotient, u128::MAX)
-            }
+            // Arbitrary-precision division (>16-byte mantissa): the quotient may
+            // still fit in u128 (e.g. 0 after a large enough 10^k).
+            let quotient = b256::div_pow10_b256(&self.byte, base_unit - self.unit);
+            tail_to_u128(&quotient, u128::MAX)
         }
-    }
-
-    #[cfg(feature = "num-bigint")]
-    pub fn to_unit_biguint(&self, base_unit: u8) -> Option<BigUint> {
-        if self.is_negative() {
-            return None;
-        }
-        let magnitude = BigUint::from_bytes_be(&self.byte);
-        Some(if self.unit >= base_unit {
-            magnitude * pow10_big(self.unit - base_unit)
-        } else {
-            magnitude / pow10_big(base_unit - self.unit)
-        })
     }
 
     pub fn check_store_long(&self) -> Ret<()> {
@@ -539,9 +427,7 @@ impl Amount {
     }
 
     /// Lower the amount's unit exponent without changing its mantissa.
-    ///
-    /// Legacy Type1/Type2 extra9 fee accounting uses this operation to expose
-    /// the miner-side fee at one unit below the transaction's paid fee.
+    /// Legacy Type1/Type2 extra9 fee accounting uses this to expose the miner-side fee one unit below the paid fee.
     pub fn unit_sub(&self, sub: u8) -> Ret<Self> {
         if sub == 0 {
             return Ok(self.clone());
@@ -793,14 +679,9 @@ impl FromJSON for WireAmount {
 }
 
 fn drop_left_zero(v: &[u8]) -> Vec<u8> {
-    let mut res = v;
-    while res.len() > 1 && res[0] == 0 {
-        res = &res[1..];
-    }
-    if res.len() == 1 && res[0] == 0 {
-        Vec::new()
-    } else {
-        res.to_vec()
+    match v.iter().position(|&b| b != 0) {
+        Some(i) => v[i..].to_vec(),
+        None => Vec::new(),
     }
 }
 
@@ -835,24 +716,12 @@ fn normalize_grouping(value: &str) -> Ret<String> {
     Ok(value.replace(',', ""))
 }
 
-#[cfg(feature = "num-bigint")]
-fn pow10_big(exp: u8) -> BigUint {
-    BigUint::from(10u8).pow(exp as u32)
-}
-
 fn mantissa_string(bytes: &[u8]) -> String {
     if bytes.len() <= size_of::<u128>() {
         let value = tail_to_u128(bytes, u128::MAX).expect("16-byte amount fits u128");
         u128_to_decimal(value)
     } else {
-        #[cfg(feature = "num-bigint")]
-        {
-            BigUint::from_bytes_be(bytes).to_string()
-        }
-        #[cfg(not(feature = "num-bigint"))]
-        {
-            b256::to_decimal_b256(bytes)
-        }
+        b256::to_decimal_b256(bytes)
     }
 }
 
@@ -906,11 +775,7 @@ fn magnitude_cmp(lhs: &Amount, rhs: &Amount) -> Ordering {
         return lhs.not_zero().cmp(&rhs.not_zero());
     }
     if lhs.unit == rhs.unit {
-        return lhs
-            .byte
-            .len()
-            .cmp(&rhs.byte.len())
-            .then_with(|| lhs.byte.cmp(&rhs.byte));
+        return b256::cmp_b256(&lhs.byte, &rhs.byte);
     }
     if lhs.byte.len() <= size_of::<u128>() && rhs.byte.len() <= size_of::<u128>() {
         let lhs_value = tail_to_u128(&lhs.byte, u128::MAX).expect("16-byte amount fits u128");
@@ -922,29 +787,13 @@ fn magnitude_cmp(lhs: &Amount, rhs: &Amount) -> Ordering {
             return scaled_lhs.cmp(&scaled_rhs);
         }
     }
-    // Arbitrary-precision fallback: BigUint when num-bigint is enabled;
-    // base-256 aligned comparison when disabled.
-    #[cfg(feature = "num-bigint")]
-    {
-        let mut lhs_value = BigUint::from_bytes_be(&lhs.byte);
-        let mut rhs_value = BigUint::from_bytes_be(&rhs.byte);
-        if lhs.unit > rhs.unit {
-            lhs_value *= pow10_big(lhs.unit - rhs.unit);
-        } else {
-            rhs_value *= pow10_big(rhs.unit - lhs.unit);
-        }
-        lhs_value.cmp(&rhs_value)
-    }
-    #[cfg(not(feature = "num-bigint"))]
-    {
-        magnitude_cmp_wide(lhs, rhs)
-    }
+    // Arbitrary-precision fallback: base-256 aligned comparison (the BigUint
+    // reference is exercised by the test oracle).
+    magnitude_cmp_wide(lhs, rhs)
 }
 
-/// With num-bigint disabled (SDK/wasm codec-only): arbitrary-precision
-/// comparison goes through base-256 alignment (the BigUint fallback path when
-/// num-bigint is enabled, see `magnitude_cmp`).
-#[cfg(not(feature = "num-bigint"))]
+/// Arbitrary-precision comparison goes through base-256 alignment (the BigUint
+/// reference is exercised by the test oracle).
 fn magnitude_cmp_wide(lhs: &Amount, rhs: &Amount) -> Ordering {
     let base_unit = lhs.unit.min(rhs.unit);
     let lhs_value = b256::mul_pow10_b256(&lhs.byte, lhs.unit - base_unit);
@@ -955,7 +804,8 @@ fn magnitude_cmp_wide(lhs: &Amount, rhs: &Amount) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use num_bigint::BigUint;
+    use num_bigint::{BigInt, BigUint};
+    use num_traits::{ToPrimitive, Zero};
 
     struct Lcg(u64);
     impl Lcg {
@@ -968,6 +818,9 @@ mod tests {
         }
         fn byte(&mut self) -> u8 {
             (self.next() & 0xff) as u8
+        }
+        fn pick(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
         }
     }
 
@@ -995,98 +848,8 @@ mod tests {
         Amount { unit, dist, byte }
     }
 
-    /// `to_unit_u128` agrees fully with the BigUint path
-    /// (`to_unit_biguint(...).to_u128()`) on success values and failure
-    /// conditions. A counterpart exists only when num-bigint is enabled.
-    #[cfg(feature = "num-bigint")]
-    #[test]
-    fn to_unit_u128_matches_biguint_path() {
-        let mut lcg = Lcg(0xa110);
-        for _ in 0..5000 {
-            let amount = random_amount(&mut lcg);
-            let base_unit = (lcg.next() % 256) as u8;
-            let got = amount.to_unit_u128(base_unit);
-            let expected: Option<u128> = amount
-                .to_unit_biguint(base_unit)
-                .and_then(|v| v.to_u128());
-            match (got, expected) {
-                (Ok(got), Some(expected)) => assert_eq!(got, expected),
-                (Err(_), None) => {}
-                (Ok(got), None) => {
-                    panic!("to_unit_u128 returned Ok({got}) but BigUint path overflowed: {amount:?} @{base_unit}")
-                }
-                (Err(e), Some(expected)) => {
-                    panic!("to_unit_u128 errored ({e}) but BigUint path returned {expected}: {amount:?} @{base_unit}")
-                }
-            }
-        }
-    }
-
-    /// The 8 public `to_*_u64/u128` converters agree with the BigUint path
-    /// (including overflow/negative-value failures). A counterpart exists only
-    /// when num-bigint is enabled.
-    #[cfg(feature = "num-bigint")]
-    #[test]
-    fn to_unit_converters_match_biguint_path() {
-        let mut lcg = Lcg(0xfeed);
-        for _ in 0..3000 {
-            let amount = random_amount(&mut lcg);
-            // Expected result for each converter pair: u64 converters compare
-            // against BigUint's to_u64, u128 against to_u128
-            let converters: Vec<(Box<dyn Fn(&Amount) -> Ret<u128>>, Box<dyn Fn(&Amount) -> Option<u128>>)> =
-                vec![
-                    (
-                        Box::new(|a| a.to_mei_u64().map(u128::from)),
-                        Box::new(|a| a.to_unit_biguint(UNIT_MEI).and_then(|v| v.to_u64()).map(u128::from)),
-                    ),
-                    (
-                        Box::new(|a| a.to_mei_u128()),
-                        Box::new(|a| a.to_unit_biguint(UNIT_MEI).and_then(|v| v.to_u128())),
-                    ),
-                    (
-                        Box::new(|a| a.to_244_u64().map(u128::from)),
-                        Box::new(|a| a.to_unit_biguint(UNIT_244).and_then(|v| v.to_u64()).map(u128::from)),
-                    ),
-                    (
-                        Box::new(|a| a.to_244_u128()),
-                        Box::new(|a| a.to_unit_biguint(UNIT_244).and_then(|v| v.to_u128())),
-                    ),
-                    (
-                        Box::new(|a| a.to_zhu_u64().map(u128::from)),
-                        Box::new(|a| a.to_unit_biguint(UNIT_ZHU).and_then(|v| v.to_u64()).map(u128::from)),
-                    ),
-                    (
-                        Box::new(|a| a.to_zhu_u128()),
-                        Box::new(|a| a.to_unit_biguint(UNIT_ZHU).and_then(|v| v.to_u128())),
-                    ),
-                    (
-                        Box::new(|a| a.to_238_u64().map(u128::from)),
-                        Box::new(|a| a.to_unit_biguint(UNIT_238).and_then(|v| v.to_u64()).map(u128::from)),
-                    ),
-                    (
-                        Box::new(|a| a.to_238_u128()),
-                        Box::new(|a| a.to_unit_biguint(UNIT_238).and_then(|v| v.to_u128())),
-                    ),
-                ];
-            for (conv, expected) in converters {
-                let got = conv(&amount);
-                let expected = expected(&amount);
-                match (got, expected) {
-                    (Ok(_), Some(_)) => {}
-                    (Err(_), None) => {}
-                    (Ok(got), None) => panic!("converter Ok but BigUint overflow: {amount:?}"),
-                    (Err(e), Some(_)) => {
-                        panic!("converter errored ({e}) but BigUint path ok: {amount:?}")
-                    }
-                }
-            }
-        }
-    }
-
-    /// Amounts with a >16-byte mantissa: base-256 `to_fin_string` and the
-    /// BigUint formatter produce byte-identical output (both codec-only and
-    /// native upper layers route to these two cores, so we compare the cores
-    /// directly here).
+    /// Amounts with a >16-byte mantissa: base-256 `to_fin_string` and the BigUint
+    /// formatter must produce byte-identical output (the two cores compared directly).
     #[test]
     fn fin_string_matches_bigint_for_wide_mantissa() {
         let mut lcg = Lcg(0x77aa);
@@ -1100,5 +863,509 @@ mod tests {
             let expected = BigUint::from_bytes_be(&byte).to_string();
             assert_eq!(mantissa_string(&byte), expected);
         }
+    }
+
+    // --- Wide-mantissa oracle tests (num-bigint as test oracle) ---
+    // Random amounts up to the 127-byte cap checked against an independent num-bigint oracle.
+
+    /// Magnitude oracle: mantissa as BigUint, scaled by 10^unit (exact).
+    fn oracle_magnitude(a: &Amount) -> BigUint {
+        if a.is_zero() {
+            return BigUint::zero();
+        }
+        BigUint::from_bytes_be(a.byte()) * BigUint::from(10u8).pow(a.unit() as u32)
+    }
+
+    /// Signed oracle.
+    fn oracle_signed(a: &Amount) -> BigInt {
+        let m = oracle_magnitude(a);
+        if a.is_negative() {
+            -BigInt::from(m)
+        } else {
+            BigInt::from(m)
+        }
+    }
+
+    /// Oracle for to_fin_string: the fin form is the mantissa decimal with the
+    /// unit as a suffix, not the scaled value.
+    fn oracle_fin_string(a: &Amount) -> String {
+        if a.is_zero() {
+            return "0:0".to_owned();
+        }
+        let m = BigUint::from_bytes_be(a.byte()).to_string();
+        format!(
+            "{}{}:{}",
+            if a.is_negative() { "-" } else { "" },
+            m,
+            a.unit()
+        )
+    }
+
+    /// Wide random amount: mantissa 1..=127 bytes (weighted toward the u128
+    /// boundary and the 127-byte cap), random unit and sign.
+    fn random_wide_amount(lcg: &mut Lcg) -> Amount {
+        let len = match lcg.pick(10) {
+            0 => 15,
+            1 => 16,
+            2 => 17,
+            3 => 18,
+            4 => 31,
+            5 => 63,
+            6 => 127,
+            _ => 1 + lcg.pick(127),
+        };
+        let mut v = vec![0u8; len];
+        for b in v.iter_mut() {
+            *b = lcg.byte();
+        }
+        v[0] |= 0x80; // canonical: msb nonzero
+        let unit = lcg.pick(256) as u8;
+        let neg = lcg.pick(2) == 0;
+        let dist = if neg { -(v.len() as i8) } else { v.len() as i8 };
+        Amount {
+            unit,
+            dist,
+            byte: v,
+        }
+    }
+
+    /// Independent oracle for to_unit_string (bases 1..=255): exact terminating
+    /// decimal of value/10^base from the BigUint magnitude (base 0 never reaches this path).
+    fn oracle_unit_string(a: &Amount, base: u8) -> String {
+        debug_assert!(base > 0);
+        if a.is_zero() {
+            return "0".to_owned();
+        }
+        let m = oracle_magnitude(a); // M × 10^unit
+        let mut s = if a.unit() >= base {
+            (m / BigUint::from(10u8).pow(base as u32)).to_string()
+        } else {
+            let k = base as usize;
+            let ms = m.to_string();
+            let mut out = String::new();
+            if ms.len() <= k {
+                out.push_str("0.");
+                out.push_str(&"0".repeat(k - ms.len()));
+                out.push_str(&ms);
+            } else {
+                out.push_str(&ms[..ms.len() - k]);
+                out.push('.');
+                out.push_str(&ms[ms.len() - k..]);
+            }
+            while out.ends_with('0') {
+                out.pop();
+            }
+            if out.ends_with('.') {
+                out.pop();
+            }
+            out
+        };
+        if a.is_negative() {
+            s.insert(0, '-');
+        }
+        s
+    }
+
+    fn oracle_cmp(a: &Amount, b: &Amount) -> Ordering {
+        match (a.is_negative(), b.is_negative()) {
+            (true, false) => Ordering::Less,
+            (false, true) => Ordering::Greater,
+            (true, true) => oracle_mag_cmp(a, b).reverse(),
+            (false, false) => oracle_mag_cmp(a, b),
+        }
+    }
+
+    fn oracle_mag_cmp(a: &Amount, b: &Amount) -> Ordering {
+        if a.is_zero() || b.is_zero() {
+            return a.not_zero().cmp(&b.not_zero());
+        }
+        oracle_magnitude(a).cmp(&oracle_magnitude(b))
+    }
+
+    #[test]
+    fn fin_string_matches_oracle_for_wide() {
+        let mut lcg = Lcg(0x1234);
+        for _ in 0..3000 {
+            let a = random_wide_amount(&mut lcg);
+            assert_eq!(a.to_fin_string(), oracle_fin_string(&a), "amount={a:?}");
+        }
+    }
+
+    #[test]
+    fn parse_roundtrip_preserves_value_for_wide() {
+        let mut lcg = Lcg(0x5678);
+        for _ in 0..2000 {
+            let a = random_wide_amount(&mut lcg);
+            let s = a.to_fin_string();
+            let b = Amount::from(&s).unwrap();
+            assert_eq!(oracle_signed(&b), oracle_signed(&a), "roundtrip {s}");
+        }
+        for s in ["0", "0:0", "-0", "0:244"] {
+            let a = Amount::from(s).unwrap();
+            assert_eq!(oracle_signed(&a), BigInt::from(0), "zero form {s}");
+        }
+        // Cap boundary through the full parser: 127-byte mantissa cap — all-nines
+        // 305 fit / 306 do not; powers of ten raise the unit instead of erroring.
+        assert!(Amount::from(&"9".repeat(305)).is_ok());
+        assert!(Amount::from(&"9".repeat(306)).is_err());
+        let a = Amount::from(&format!("1{}", "0".repeat(305))).unwrap();
+        assert_eq!(oracle_signed(&a), BigInt::from(10u8).pow(553));
+    }
+
+    #[test]
+    fn unit_string_matches_oracle_for_wide() {
+        let mut lcg = Lcg(0x9abc);
+        for _ in 0..3000 {
+            let a = random_wide_amount(&mut lcg);
+            let base = 1 + lcg.pick(255) as u8; // base 0 falls back to fin form
+            let expected = oracle_unit_string(&a, base);
+            assert_eq!(
+                a.to_unit_string(&base.to_string()),
+                expected,
+                "amount={a:?} base={base}"
+            );
+            // documented fallback: unit 0 and unknown units return the fin form
+            assert_eq!(a.to_unit_string("0"), a.to_fin_string(), "amount={a:?}");
+            assert_eq!(a.to_unit_string("bogus"), a.to_fin_string(), "amount={a:?}");
+        }
+    }
+
+    #[test]
+    fn ordering_matches_oracle_for_wide() {
+        let mut lcg = Lcg(0x0f0f);
+        for _ in 0..3000 {
+            let a = random_wide_amount(&mut lcg);
+            let b = random_wide_amount(&mut lcg);
+            assert_eq!(a.cmp(&b), oracle_cmp(&a, &b), "a={a:?} b={b:?}");
+            assert_eq!(a.cmp(&a.clone()), Ordering::Equal);
+        }
+        // sign/zero sanity beyond random coverage
+        let z = Amount::zero();
+        let p = Amount::small(1, 0);
+        let n = Amount {
+            unit: 0,
+            dist: -1,
+            byte: vec![1],
+        };
+        assert_eq!(z.cmp(&z), Ordering::Equal);
+        assert_eq!(z.cmp(&p), Ordering::Less);
+        assert_eq!(p.cmp(&z), Ordering::Greater);
+        assert_eq!(n.cmp(&z), Ordering::Less);
+        assert_eq!(n.cmp(&p), Ordering::Less);
+        assert_eq!(p.cmp(&n), Ordering::Greater);
+    }
+
+    #[test]
+    fn small_mantissa_matches_oracle() {
+        // u128 fast path and zero-with-arbitrary-unit forms: 1..=20-byte mantissas
+        // straddle the 16-byte u128 boundary and may collapse to zero.
+        let mut lcg = Lcg(0x2020);
+        for _ in 0..1500 {
+            let a = random_amount(&mut lcg);
+            let base = 1 + lcg.pick(255) as u8;
+            assert_eq!(a.to_fin_string(), oracle_fin_string(&a), "amount={a:?}");
+            assert_eq!(
+                a.to_unit_string(&base.to_string()),
+                oracle_unit_string(&a, base),
+                "amount={a:?} base={base}"
+            );
+            let b = random_amount(&mut lcg);
+            assert_eq!(a.cmp(&b), oracle_cmp(&a, &b), "a={a:?} b={b:?}");
+            let got = a.to_unit_u128(base);
+            let expected = if a.is_negative() {
+                Err(())
+            } else {
+                let q = oracle_magnitude(&a) / BigUint::from(10u8).pow(base as u32);
+                q.to_u128().ok_or(())
+            };
+            match (got, expected) {
+                (Ok(g), Ok(e)) => assert_eq!(g, e, "amount={a:?} base={base}"),
+                (Err(_), Err(())) => {}
+                (Ok(g), Err(())) => panic!("Ok({g}) but oracle overflow: {a:?} @{base}"),
+                (Err(e), Ok(_)) => panic!("Err({e}) but oracle ok: {a:?} @{base}"),
+            }
+        }
+    }
+
+    #[test]
+    fn to_unit_u128_matches_oracle_for_wide() {
+        let mut lcg = Lcg(0x5a5a);
+        for _ in 0..2000 {
+            let a = random_wide_amount(&mut lcg);
+            let base = lcg.pick(256) as u8;
+            let got = a.to_unit_u128(base);
+            let expected = if a.is_negative() {
+                Err(())
+            } else {
+                let q = oracle_magnitude(&a) / BigUint::from(10u8).pow(base as u32);
+                q.to_u128().ok_or(())
+            };
+            match (got, expected) {
+                (Ok(g), Ok(e)) => assert_eq!(g, e, "amount={a:?} base={base}"),
+                (Err(_), Err(())) => {}
+                (Ok(g), Err(())) => panic!("Ok({g}) but oracle overflow: {a:?} @{base}"),
+                (Err(e), Ok(_)) => panic!("Err({e}) but oracle ok: {a:?} @{base}"),
+            }
+        }
+    }
+
+    #[test]
+    fn unit_converters_match_oracle_for_wide() {
+        // the 8 public to_*_u64/u128 converters vs an oracle derived directly
+        // from the BigUint magnitude (negative or overflowing => Err)
+        let mut lcg = Lcg(0xfeed);
+        let cases: Vec<(Box<dyn Fn(&Amount) -> Ret<u128>>, u8, bool)> = vec![
+            (
+                Box::new(|a| a.to_mei_u64().map(u128::from)),
+                UNIT_MEI,
+                false,
+            ),
+            (Box::new(|a| a.to_mei_u128()), UNIT_MEI, true),
+            (
+                Box::new(|a| a.to_244_u64().map(u128::from)),
+                UNIT_244,
+                false,
+            ),
+            (Box::new(|a| a.to_244_u128()), UNIT_244, true),
+            (
+                Box::new(|a| a.to_zhu_u64().map(u128::from)),
+                UNIT_ZHU,
+                false,
+            ),
+            (Box::new(|a| a.to_zhu_u128()), UNIT_ZHU, true),
+            (
+                Box::new(|a| a.to_238_u64().map(u128::from)),
+                UNIT_238,
+                false,
+            ),
+            (Box::new(|a| a.to_238_u128()), UNIT_238, true),
+        ];
+        for _ in 0..1500 {
+            let a = random_wide_amount(&mut lcg);
+            for (conv, base, wide) in &cases {
+                let got = conv(&a);
+                let expected = if a.is_negative() {
+                    None
+                } else {
+                    let q = oracle_magnitude(&a) / BigUint::from(10u8).pow(*base as u32);
+                    if *wide {
+                        q.to_u128()
+                    } else {
+                        q.to_u64().map(u128::from)
+                    }
+                };
+                match (got, expected) {
+                    (Ok(g), Some(e)) => assert_eq!(g, e, "amount={a:?} base={base}"),
+                    (Err(_), None) => {}
+                    (Ok(g), None) => panic!("converter Ok({g}) but oracle overflow: {a:?} @{base}"),
+                    (Err(e), Some(_)) => panic!("converter Err({e}) but oracle ok: {a:?} @{base}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn parse_wide_with_unit_matches_oracle() {
+        let mut lcg = Lcg(0x7777);
+        for _ in 0..2000 {
+            let len = 1 + lcg.pick(400);
+            let mut s = String::with_capacity(len);
+            for _ in 0..len {
+                s.push((b'0' + lcg.pick(10) as u8) as char);
+            }
+            let t = s.trim_start_matches('0');
+            let m = if t.is_empty() {
+                BigUint::zero()
+            } else {
+                BigUint::parse_bytes(t.as_bytes(), 10).unwrap()
+            };
+            if m.to_bytes_be().len() > 127 {
+                continue; // over-cap errors covered elsewhere
+            }
+            let unit = lcg.pick(256) as u8;
+            let neg = lcg.pick(2) == 0;
+            let fin = format!("{}{}:{}", if neg { "-" } else { "" }, &s, unit);
+            let a = Amount::from(&fin).unwrap();
+            let expected = m * BigUint::from(10u8).pow(unit as u32);
+            assert_eq!(oracle_magnitude(&a), expected, "fin={fin}");
+        }
+    }
+
+    #[test]
+    fn wire_roundtrip_for_wide() {
+        let mut lcg = Lcg(0x4242);
+        for _ in 0..2000 {
+            let a = random_wide_amount(&mut lcg);
+            let enc = a.encode();
+            let (d, used) = Amount::decode(&enc).unwrap();
+            assert_eq!(used, enc.len());
+            assert_eq!(d, a, "wire roundtrip {a:?}");
+        }
+        // the 127-byte wire cap
+        assert!(Amount::from_unit_byte(0, vec![0u8; 128]).is_err());
+        assert!(Amount::from_unit_byte(0, vec![0xffu8; 127]).is_ok());
+    }
+
+    fn raw_amount(unit: u8, byte: Vec<u8>, negative: bool) -> Amount {
+        let dist = if byte.is_empty() {
+            0
+        } else if negative {
+            -(byte.len() as i8)
+        } else {
+            byte.len() as i8
+        };
+        Amount { unit, dist, byte }
+    }
+
+    #[test]
+    fn equivalent_encodings_compare_equal() {
+        // Parser collapses trailing decimal zeros into unit; these structs
+        // keep distinct (unit, mantissa) pairs of the same value.
+        let a = raw_amount(2, vec![1], false); // 1 × 10^2
+        let b = raw_amount(1, vec![10], false); // 10 × 10^1
+        let c = raw_amount(0, vec![100], false); // 100 × 10^0
+        assert_eq!(a.cmp(&b), Ordering::Equal);
+        assert_eq!(b.cmp(&c), Ordering::Equal);
+        assert_eq!(a.cmp(&c), Ordering::Equal);
+        assert_ne!(a, b); // PartialEq is structural, not numeric
+
+        let na = raw_amount(2, vec![1], true);
+        let nb = raw_amount(1, vec![10], true);
+        assert_eq!(na.cmp(&nb), Ordering::Equal);
+        assert_eq!(na.cmp(&a), Ordering::Less);
+
+        // leading-zero mantissa (non-canonical in-memory) vs canonical
+        let padded = raw_amount(0, vec![0, 100], false);
+        assert_eq!(padded.cmp(&c), Ordering::Equal);
+        assert!(padded.is_zero() == c.is_zero());
+
+        let z_empty = Amount::zero();
+        let z_byte = raw_amount(7, vec![0, 0], false);
+        assert!(z_byte.is_zero());
+        assert_eq!(z_empty.cmp(&z_byte), Ordering::Equal);
+        assert_eq!(z_byte.cmp(&a), Ordering::Less);
+    }
+
+    #[test]
+    fn equivalent_wide_encodings_compare_equal() {
+        let mut lcg = Lcg(0xec0d);
+        for _ in 0..400 {
+            let mut mantissa = vec![0u8; 17 + lcg.pick(8)];
+            for b in mantissa.iter_mut() {
+                *b = lcg.byte();
+            }
+            mantissa[0] |= 0x80;
+            let shift = 1 + lcg.pick(40) as u8;
+            if mantissa.len() + (shift as usize) / 2 + 2 > 120 {
+                continue;
+            }
+            let scaled = b256::mul_pow10_b256(&mantissa, shift);
+            let high = raw_amount(shift, mantissa, false);
+            let low = raw_amount(0, scaled, false);
+            assert_eq!(high.cmp(&low), oracle_cmp(&high, &low));
+            assert_eq!(high.cmp(&low), Ordering::Equal, "high={high:?} low={low:?}");
+        }
+    }
+
+    #[test]
+    fn cmp_falls_back_to_b256_when_u128_scale_overflows() {
+        // 16-byte mantissa × 10^55 exceeds u128, so the fast path must not
+        // silently mis-order; the wide core has to return Equal / Greater.
+        let one = raw_amount(255, vec![1], false);
+        let eq = raw_amount(200, b256::mul_pow10_b256(&[1], 55), false);
+        assert_eq!(one.cmp(&eq), Ordering::Equal);
+        assert_eq!(oracle_cmp(&one, &eq), Ordering::Equal);
+
+        let max16 = vec![0xffu8; 16];
+        let hi = raw_amount(255, max16.clone(), false);
+        let lo = raw_amount(200, max16, false);
+        assert_eq!(hi.cmp(&lo), Ordering::Greater);
+        assert_eq!(oracle_cmp(&hi, &lo), Ordering::Greater);
+        assert_eq!(lo.cmp(&hi), Ordering::Less);
+    }
+
+    #[test]
+    fn u128_fast_path_matches_b256_core() {
+        let cases: &[u128] = &[
+            0,
+            1,
+            10,
+            255,
+            256,
+            u64::MAX as u128,
+            u64::MAX as u128 + 1,
+            u128::MAX,
+        ];
+        for &v in cases {
+            let via_u128 = drop_left_zero(&v.to_be_bytes());
+            let via_b256 = b256::from_decimal_b256(&v.to_string()).unwrap();
+            assert_eq!(via_u128, via_b256, "digits={v}");
+            assert_eq!(mantissa_string(&via_u128), v.to_string());
+            assert_eq!(b256::to_decimal_b256(&via_u128), v.to_string());
+            let amt = Amount::from(&format!("{v}:0")).unwrap();
+            if v == 0 {
+                assert!(amt.is_zero());
+            } else {
+                assert_eq!(oracle_signed(&amt), BigInt::from(v));
+            }
+        }
+        let mut lcg = Lcg(0x1212);
+        for _ in 0..500 {
+            let mut buf = [0u8; 16];
+            for b in buf.iter_mut() {
+                *b = lcg.byte();
+            }
+            buf[0] |= 0x80;
+            let v = u128::from_be_bytes(buf);
+            let via_u128 = drop_left_zero(&buf);
+            let via_b256 = b256::from_decimal_b256(&v.to_string()).unwrap();
+            assert_eq!(via_u128, via_b256);
+            assert_eq!(mantissa_string(&via_u128), b256::to_decimal_b256(&via_b256));
+        }
+    }
+
+    #[test]
+    fn decode_rejects_non_canonical_and_wireamount_zero_fallback() {
+        let canonical_zero = Amount::decode(&[0, 0]).unwrap();
+        assert!(canonical_zero.0.is_zero());
+        assert_eq!(canonical_zero.1, 2);
+
+        let one = Amount::decode(&[248, 1, 1]).unwrap();
+        assert_eq!(one.0, Amount::small(1, 248));
+
+        for (label, buf) in [
+            ("leading zero", &[248u8, 2, 0, 1][..]),
+            ("multi-byte all zero", &[248, 2, 0, 0][..]),
+            ("semantic zero unit", &[248, 0][..]),
+            ("semantic zero dist=1 byte=0", &[0, 1, 0][..]),
+            ("dist i8::MIN", &[0, 128][..]),
+        ] {
+            assert!(
+                Amount::decode(buf).is_err(),
+                "Amount::decode must reject {label}: {buf:?}"
+            );
+        }
+
+        // WireAmount keeps the raw bytes for historical semantic zeros.
+        let (wa, used) = WireAmount::decode(&[248, 0]).unwrap();
+        assert!(wa.amount().is_zero());
+        assert_eq!(used, 2);
+        assert_eq!(wa.wire(), &[248, 0]);
+        assert!(!wa.is_canonical_wire());
+        assert!(wa.require_canonical_wire().is_err());
+
+        let (wa1, used1) = WireAmount::decode(&[248, 1, 0]).unwrap();
+        assert!(wa1.amount().is_zero());
+        assert_eq!(used1, 3);
+        assert_eq!(wa1.wire(), &[248, 1, 0]);
+
+        let (wz, _) = WireAmount::decode(&[0, 0]).unwrap();
+        assert!(wz.amount().is_zero());
+        assert!(wz.is_canonical_wire());
+
+        let stripped = Amount::from_unit_byte(5, vec![0, 0, 7]).unwrap();
+        assert_eq!(stripped.unit(), 5);
+        assert_eq!(stripped.byte(), &vec![7]);
+        assert!(Amount::from_unit_byte(5, vec![0, 0]).unwrap().is_zero());
     }
 }

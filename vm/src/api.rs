@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use base::{
-    api_state_read_error, ApiExecCtx, ApiRequest, ApiResponse, ApiRoute, ApiService, BlockInfo, Env,
-    TransactionCreator, TxCreateRequest, TxInfo,
+    ApiExecCtx, ApiRequest, ApiResponse, ApiRoute, ApiService, BlockInfo, Env, TransactionCreator,
+    TxCreateRequest, TxInfo, api_state_read_error,
 };
 use field::{AddrOrList, Address, Amount, Hash};
 use sys::Ret;
@@ -30,7 +30,9 @@ impl VmApi {
 }
 
 fn json_string(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_owned())
+    // Shared escaper from field (no serde): matches serde_json's default
+    // string output.
+    field::json_escape(s)
 }
 
 fn api_error(errmsg: &str) -> ApiResponse {
@@ -133,9 +135,7 @@ fn vm_logs_delete(ctx: &ApiExecCtx, req: ApiRequest, auth_hash: &str) -> ApiResp
 }
 
 fn peer_ip_from_req(req: &ApiRequest) -> Option<String> {
-    // Forwarding headers are client-controlled unless the deployment has a
-    // separately configured trusted-proxy boundary.  The core server has no
-    // such trust configuration, so rate limiting uses only the TCP peer.
+    // No trusted-proxy config, so forwarding headers are client-controlled; rate limit by TCP peer only.
     req.peer_ip.map(|ip| ip.to_string())
 }
 
@@ -144,18 +144,15 @@ fn contract_sandbox_call(
     req: ApiRequest,
     tx_creator: &dyn TransactionCreator,
 ) -> ApiResponse {
-    // §13.2: acquire a global + per-IP concurrency permit BEFORE touching the
-    // optimistic snapshot.  The permit is held for the whole call duration
-    // (dropped at function exit) and gives the caller a wall-clock deadline
-    // that supersedes any gas-burning loop the contract enters.
+    // §13.2: acquire a global + per-IP concurrency permit (held for the call, gives a
+    // wall-clock deadline that supersedes any gas-burning loop) BEFORE touching the snapshot.
     let permit = match ctx.sandbox_limiter.acquire(peer_ip_from_req(&req)) {
         Ok(p) => p,
         Err(reason) => return api_error(reason),
     };
     let services = ctx.engine.services().clone();
-    // §13.2 VM sandbox uses an optimistic snapshot, no StateGate held. Busy
-    // (`Ok(None)`) reports "state changed"; a fatal/stopping engine (`Err`)
-    // surfaces the unavailable error (§5 of the error-system design).
+    // §13.2: optimistic snapshot, no StateGate held; busy (`Ok(None)`) reports "state changed",
+    // fatal/stopping engine (`Err`) surfaces the unavailable error (§5 error-system design).
     let Some(snapshot) = (match ctx.engine.optimistic_canonical() {
         Ok(snapshot) => snapshot,
         // EngineUnavailable (fatal/stopping) maps to HTTP 503 through the
@@ -219,9 +216,7 @@ fn contract_sandbox_call(
 
     let mut env = Env::default();
     env.chain.id = ctx.engine.consensus().chain_id();
-    // Sandbox caller is the simulated execution identity. Intentionally bind
-    // it as both tx main and block author so every caller-facing VM host read
-    // observes the same identity.
+    // Bind the sandbox caller as both tx main and block author so all caller-facing host reads see it.
     env.block = BlockInfo {
         height,
         hash: Hash::default(),
@@ -239,9 +234,7 @@ fn contract_sandbox_call(
         Ok(c) => c,
         Err(e) => return api_error(&e.to_string()),
     };
-    // Install the permit deadline into the VM.  The interpreter checks it at
-    // every instruction boundary; normal consensus execution leaves this
-    // setting unset.
+    // Install the permit deadline into the VM (checked at each instruction; unset in consensus execution).
     if let Some(vm) = ctxobj.vm_peek() {
         vm.set_deadline(Some(permit.deadline()));
     }
@@ -270,16 +263,13 @@ fn contract_sandbox_call(
 }
 
 fn debug_contract_storage(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
-    // §13.2: same concurrency / wall-clock envelope as contract_sandbox_call.
-    // Debug-only route but still subject to the sandbox limiter so a flood of
-    // debug queries cannot starve root writers.
+    // §13.2: same sandbox limiter envelope as contract_sandbox_call (debug-only, still rate-limited).
     let _permit = match ctx.sandbox_limiter.acquire(peer_ip_from_req(&req)) {
         Ok(p) => p,
         Err(reason) => return api_error(reason),
     };
-    // §13.2 VM sandbox uses an optimistic snapshot, no StateGate held. Busy
-    // (`Ok(None)`) reports "state changed"; a fatal/stopping engine (`Err`)
-    // surfaces the unavailable error (§5 of the error-system design).
+    // §13.2: optimistic snapshot, no StateGate held; busy (`Ok(None)`) reports "state changed",
+    // fatal/stopping engine (`Err`) surfaces the unavailable error (§5 error-system design).
     let Some(snapshot) = (match ctx.engine.optimistic_canonical() {
         Ok(snapshot) => snapshot,
         // EngineUnavailable (fatal/stopping) maps to HTTP 503 through the

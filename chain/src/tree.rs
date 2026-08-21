@@ -1,8 +1,5 @@
-//! The fork tree: a Mutex-guarded {root, head}.
-//!
-//! Every chunk from the root down is strongly held (root owns `children`).
-//! Optimistic readers pin the captured root; critical readers prevent root
-//! movement for the lifetime of their execution.
+//! The fork tree: a Mutex-guarded {root, head}. Optimistic readers pin the
+//! captured root; critical readers prevent root movement during execution.
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -146,9 +143,8 @@ impl Tree {
         })
     }
 
-    /// Candidate ancestry from the current durable root through `hash`.
-    /// Returned blocks are oldest-first and remain alive independently of the
-    /// short tree lock.
+    /// Candidate ancestry from the durable root through `hash`, oldest-first,
+    /// alive independently of the short tree lock.
     pub fn branch_blocks(&self, hash: &Hash) -> Option<Vec<BlockRef>> {
         let inner = self.lock();
         let mut cursor = inner.find(hash)?;
@@ -181,13 +177,8 @@ impl Tree {
         inner.epoch = inner.epoch.wrapping_add(1);
     }
 
-    /// Attach a fully executed block chunk. `unstable_window` is how many
-    /// blocks may stay above the durable root before it advances.
-    ///
-    /// Strict mode: the root advances by exactly one block once the head
-    /// exceeds the window (`head − scheduled > unstable_window`), so the
-    /// durable root is always `head − unstable_block` and the fork survival
-    /// depth is constant.
+    /// Attach a fully executed block chunk; `unstable_window` bounds how many
+    /// blocks stay above the durable root before it advances (strict: one block).
     pub fn attach(
         &self,
         parent_hash: &Hash,
@@ -197,13 +188,8 @@ impl Tree {
         self.attach_inner(parent_hash, chunk, unstable_window, false)
     }
 
-    /// Attach one fast-sync block only if it is a direct canonical extension.
-    /// All checks happen before the chunk is frozen or published.
-    ///
-    /// Fast sync / replay mode: the root advances in `unstable_window` steps
-    /// once the head reaches the scheduled root (`head − scheduled ≥
-    /// unstable_block`), so the state DB batch write frequency drops to
-    /// 1/unstable_block.
+    /// Attach one fast-sync block only as a direct canonical extension, all
+    /// checks before freeze. Fast sync/replay rolls in `unstable_window` steps.
     pub fn attach_linear(
         &self,
         parent_hash: &Hash,
@@ -262,9 +248,8 @@ impl Tree {
         if linear && (!is_head || reorg) {
             return errf!("fast-sync block is not a linear head extension");
         }
-        // Roll policy: strict advances by one block past the window; fast
-        // sync and replay advance by a whole window when the head reaches
-        // the scheduled root.
+        // Roll policy: strict advances one block past the window; fast
+        // sync/replay advance a whole window at the scheduled root.
         let scheduled_height = height_of(&inner.scheduled_root);
         let over_window = if linear {
             height >= scheduled_height.saturating_add(unstable_window)
@@ -300,10 +285,8 @@ impl Tree {
         })
     }
 
-    /// Attach a fully executed side branch block without touching the
-    /// canonical head, epoch or scheduled root. Used by boot side replay:
-    /// restored forks must not move the head; a live block extending them
-    /// later goes through the normal fork-choice path.
+    /// Attach a side branch block without touching the head, epoch or
+    /// scheduled root (boot side replay); live extensions use fork-choice.
     pub fn attach_side(&self, parent_hash: &Hash, chunk: StateChunkRef) -> Ret<()> {
         let inner = self.lock();
         let height = chunk.block_height()?;
@@ -344,9 +327,8 @@ impl Tree {
         Ok(())
     }
 
-    /// The fork-choice key of the current canonical head. Under `inserting`
-    /// the head cannot change between this read and the matching attach, so
-    /// callers can fix the side/canonical commit plan before attaching.
+    /// The canonical head's fork-choice key. Under `inserting` the head cannot
+    /// change before the matching attach, so callers can fix the commit plan.
     pub fn head_fork_choice(&self) -> ForkChoiceKey {
         let inner = self.lock();
         inner
@@ -358,9 +340,7 @@ impl Tree {
     }
 
     /// Drop side subtrees beyond `capacity` in deterministic order (ascending
-    /// fork-choice key, then hash). Only side branches are eligible; the
-    /// canonical chain is never touched. Live inserts and boot side replay
-    /// share this limit.
+    /// fork-choice key, then hash); the canonical chain is never touched.
     pub fn enforce_side_capacity(&self, capacity: usize) {
         let mut inner = self.lock();
         inner.enforce_side_capacity(capacity);
@@ -381,11 +361,8 @@ impl Tree {
             .ok_or_else(|| "durable root is not disk-backed".to_string())?;
         job.new_root.promote_to_root(disk)?;
         inner.root = job.new_root.clone();
-        // The head must descend from the new root (validate_roll checked it).
-        // If it ever does not, the roll pruned the canonical chain: fail
-        // loudly instead of silently re-rooting the head, which would let
-        // in-flight optimistic work pass epoch validation against a head that
-        // was never announced.
+        // The head must descend from the new root; if not, fail loudly
+        // instead of re-rooting a head never announced to optimistic work.
         if inner.find(&hash_of(&inner.head)).is_none() {
             return errf!("root roll pruned the canonical head; engine state is inconsistent");
         }
@@ -526,9 +503,8 @@ impl Inner {
         if job.chain.is_empty() {
             return errf!("root roll has an empty state chain");
         }
-        // The whole chain is streamed to disk as one root batch, so every link
-        // must be verified here: a broken link would persist a state that
-        // never existed and boot would trust the root marker it wrote.
+        // The whole chain streams to disk as one root batch, so every link
+        // must be verified: a broken link persists a state that never existed.
         if job.chain.len() as u64 != height_of(&job.new_root) - current_height {
             return errf!(
                 "root roll chain length {} does not span heights <{}, {}>",
@@ -561,9 +537,8 @@ impl Inner {
         if !prev.ptr_eq(&job.new_root) {
             return errf!("root roll chain does not end at the new root");
         }
-        // The new root must still lie on the current canonical head path.
-        // Planning guarantees it; a head that moved on in the persistence
-        // queue still descends from it, and anything else must not commit.
+        // The new root must still lie on the current canonical head path;
+        // planning guarantees it, and anything off the path must not commit.
         let mut cursor = self.head.clone();
         loop {
             if cursor.ptr_eq(&job.new_root) {
@@ -579,9 +554,8 @@ impl Inner {
         }
     }
 
-    /// Depth-first from the root. The tree only ever holds the unstable window,
-    /// so this is a handful of nodes; the head is checked first because that is
-    /// what every insert looks for.
+    /// Depth-first from the root (only the unstable window is held); the head
+    /// is checked first because that is what every insert looks for.
     fn find(&self, hash: &Hash) -> Option<StateChunkRef> {
         if hash_of(&self.head) == *hash {
             return Some(self.head.clone());
@@ -888,10 +862,8 @@ mod tests {
     #[test]
     fn linear_attach_rolls_in_window_steps() {
         let t = tree();
-        // Strict (window 2) rolls one block at a time; see
-        // root_rolls_once_past_the_window. Fast sync / replay advance the
-        // root by a whole window when the head reaches the scheduled root
-        // (head − scheduled ≥ window).
+        // Strict (window 2) rolls one block at a time; fast sync / replay
+        // advance a whole window when the head reaches the scheduled root.
         let first = attach_linear(&t, hash(0), hash(1), 1, key(1), 2);
         assert!(first.roll.is_none(), "must not roll inside the window");
         let second = attach_linear(&t, hash(1), hash(2), 2, key(2), 2);

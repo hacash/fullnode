@@ -5,24 +5,15 @@ use field::{AddrOrList, Address, Amount, Encode, Fixed16, Hash, Sign, Timestamp}
 use sys::{Rerr, Ret};
 
 use crate::iface::action::ActionRef;
+#[cfg(feature = "execute")]
 use crate::iface::context::Context;
 
-/// Wire/offline view of a transaction. In full builds the same object also
-/// implements `TransactionSign` and `TransactionExecute`, and `TxRef` carries
-/// the execute view; codec-only (SDK/wasm) builds keep the sign-capable view
-/// (hash / req_sign / verify_signature are offline semantics) without the
-/// execution surface — execution is not compiled in.
-#[cfg(feature = "execute")]
-pub type TxRef = Arc<dyn TransactionExecute>;
-#[cfg(not(feature = "execute"))]
+/// Wire/offline view of a transaction (hash / req_sign / verify_signature). Execution
+/// is a separate trait via `as_execute` in full builds — `TxRef` is type-stable across `execute`.
 pub type TxRef = Arc<dyn TransactionSign>;
 
-/// Common input for creating an unsigned user transaction.
-///
-/// Concrete protocol implementations choose which transaction type ids they
-/// support. The request deliberately contains only fields shared by the
-/// standard user transaction envelope; callers add actions and signatures via
-/// the concrete builder API when needed.
+/// Common input for creating an unsigned user transaction. Contains only fields shared
+/// by the standard user envelope; callers add actions/signatures via the concrete builder API.
 #[derive(Clone, Debug)]
 pub struct TxCreateRequest {
     pub ty: u8,
@@ -54,10 +45,8 @@ impl TxCreateRequest {
     }
 }
 
-/// Protocol-independent transaction creation boundary.
-///
-/// The caller selects a wire transaction type through [`TxCreateRequest`]; a
-/// protocol implementation decides whether that type is available.
+/// Protocol-independent transaction creation boundary: the caller picks a wire type via
+/// [`TxCreateRequest`]; a protocol implementation decides whether that type is available.
 pub trait TransactionCreator: Send + Sync {
     fn create(&self, request: TxCreateRequest) -> Ret<TxRef>;
 }
@@ -78,14 +67,8 @@ pub enum MempoolPolicy {
     OnlyLocal,
 }
 
-/// Cross-crate transaction contract owned by `base` and consumed by protocol,
-/// chain, node, and registry code. Standard Type1/2/3 and prelude transactions
-/// live in `protocol/src/codec/tx.rs`; the mining coinbase is in `mint/src/action`.
-///
-/// This is the wire view (type, addresses, fee, actions, signatures,
-/// timestamp, ...). Hashing/signing semantics live on `TransactionSign` and
-/// consensus execution on `TransactionExecute` — the latter exists only in
-/// full builds, so codec-only (SDK/wasm) builds compile no execution surface.
+/// Cross-crate transaction contract (type, addresses, fee, actions, signatures, timestamp).
+/// Hashing/signing live on `TransactionSign`; consensus execution on `TransactionExecute` (full builds only — SDK/wasm compile no execution surface).
 pub trait Transaction: Encode + Send + Sync + std::fmt::Debug {
     fn ty(&self) -> u8;
 
@@ -149,27 +132,13 @@ pub trait Transaction: Encode + Send + Sync + std::fmt::Debug {
         self.author()
     }
 
-    /// Escape hatch back to the concrete transaction type.
-    ///
-    /// **Prefer a trait method** when the capability belongs to the generic
-    /// transaction envelope shared by every chain (type, hash, main address,
-    /// fee, signature set, action list, ...): extend `Transaction` /
-    /// `TransactionBuild` with a new method and have each implementation
-    /// expose it.
-    ///
-    /// **Downcast is the right choice** for consensus-mechanism products
-    /// (e.g. Hacash PoW coinbase mining-nonce, PoS validator signatures) or
-    /// chain-specific transaction payloads (Hacash diamond bidding, channel
-    /// state). Those concepts belong to the owning crate (mint, protocol,
-    /// app composition root); base must not encode them. `downcast_ref`
-    /// returning `None` on a chain that uses a different transaction type is
-    /// the intended fallback, not a defect.
+    /// Escape hatch to the concrete transaction type. Prefer a trait method for generic envelope
+    /// capabilities; downcast is for chain/consensus products owned by mint/protocol — `None` is the intended fallback.
     fn as_any(&self) -> &dyn Any;
 }
 
-/// Offline hashing/signing semantics: the transaction hash, the required
-/// signer set and signature verification. No state is needed — the SDK's
-/// inspect/attach surface is built on this view.
+/// Offline hashing/signing semantics: tx hash, required signer set, signature verification.
+/// No state needed — the SDK's inspect/attach surface is built on this view.
 pub trait TransactionSign: Transaction {
     fn hash(&self) -> Hash;
     fn hash_with_fee(&self) -> Hash {
@@ -180,16 +149,35 @@ pub trait TransactionSign: Transaction {
         Ok(vec![self.main()])
     }
     fn verify_signature(&self) -> Rerr;
+
+    /// Upcast to the consensus execute view. Default `None` (codec-only/test stubs); real
+    /// transactions return `Some(self)` when `execute` is on, keeping `TxRef` type-stable.
+    #[cfg(feature = "execute")]
+    fn as_execute(&self) -> Option<&dyn TransactionExecute> {
+        None
+    }
 }
 
-/// Consensus execution view: `TransactionSign` plus the state-changing
-/// `execute` body. Implemented only when the `execute` feature is on, so the
-/// SDK/wasm dependency graph has no callable execution surface at all.
+/// Consensus execution view: `TransactionSign` plus the state-changing `execute` body.
+/// Implemented only when `execute` is on — SDK/wasm has no callable execution surface.
+#[cfg(feature = "execute")]
 pub trait TransactionExecute: TransactionSign {
     fn execute(&self, ctx: &mut dyn Context) -> Rerr;
 }
 
-/// / trait / trait
+#[cfg(feature = "execute")]
+impl dyn TransactionSign {
+    /// Consensus execution. Looks up the execute view instead of requiring
+    /// `TxRef` to be a different type.
+    pub fn execute(&self, ctx: &mut dyn Context) -> Rerr {
+        match self.as_execute() {
+            Some(exec) => TransactionExecute::execute(exec, ctx),
+            None => sys::errf!("transaction type {} has no execute surface", self.ty()),
+        }
+    }
+}
+
+/// Offline build/mutation view: mutable fee, nonce, signatures and actions for construction.
 pub trait TransactionBuild: Transaction {
     fn set_fee(&mut self, _fee: Amount) {}
     fn set_nonce(&mut self, _nonce: u64) {}
@@ -199,6 +187,11 @@ pub trait TransactionBuild: Transaction {
     }
     fn push_sign(&mut self, _sg: Sign) -> Rerr {
         sys::errf!("transaction does not support push_sign")
+    }
+    /// Insert or replace a signature without verifying it against the digest — validity is
+    /// a separate capability (`verify_signature`); construction must not refuse a well-formed `Sign`.
+    fn insert_sign(&mut self, _sg: Sign) -> Rerr {
+        sys::errf!("transaction does not support insert_sign")
     }
     fn push_action(&mut self, _act: ActionRef) -> Rerr {
         sys::errf!("transaction does not support push_action")

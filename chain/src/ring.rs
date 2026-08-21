@@ -42,11 +42,8 @@ impl Ring {
         }
     }
 
-    /// Poison-tolerant lock. Every pipeline stage shares this mutex, so one
-    /// stage panicking must not wedge the others: the state each method
-    /// mutates is fully updated before its guard is released, so a poisoned
-    /// lock only ever reflects a completed transition, never a torn one. Any
-    /// panic behind a lock here is a programming error the sync join reports.
+    /// Poison-tolerant lock: state is fully updated before the guard is
+    /// released, so a poisoned lock reflects a completed transition, never a torn one.
     fn lock(&self) -> std::sync::MutexGuard<'_, RingState> {
         self.slots.lock().unwrap_or_else(|e| e.into_inner())
     }

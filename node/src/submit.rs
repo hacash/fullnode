@@ -53,10 +53,8 @@ impl P2PNode {
         let peer = except_peer.and_then(|id| self.peertable.get_snapshot(id));
         let hxfe = tx.tx().hash_with_fee();
         let (already, knowkey) = self.check_know(&hxfe, peer.as_deref());
-        // Knowledge is only a relay deduplication hint.  A local submission
-        // must remain retryable after a transient/rejected admission; mirror
-        // dev by suppressing it only when it came from a peer or is already
-        // present in the local pool with the same fee-bearing wire identity.
+        // Knowledge is only a relay dedup hint: keep local submissions retryable
+        // after rejection; suppress only peer-originated or pool-duplicate (same fee-bearing wire id).
         let exact_in_pool = || {
             self.txpool
                 .find(tx.hash().as_ref())
@@ -97,9 +95,8 @@ impl P2PNode {
         let is_remote = except_peer.is_some();
         let peer = except_peer.and_then(|id| self.peertable.get_snapshot(id));
         let (already, knowkey) = self.check_know(&blk.hash(), peer.as_deref());
-        // As with transactions, global knowledge must not prevent a local
-        // block from being retried when an earlier attempt was rejected or
-        // held before persistence.
+        // As with transactions, global knowledge must not block a local block
+        // retry after an earlier rejection or hold before persistence.
         if already
             && (is_remote
                 || self
@@ -179,9 +176,8 @@ impl P2PNode {
                     let parent_hei = blk.height() - 1;
                     let mut request = GetBlocks::new(0, parent_hei);
                     request.max_blocks = 1;
-                    // Raise to the frame ceiling: the responder's collect_blocks
-                    // rejects a first block larger than the requested max_bytes,
-                    // so an oversized parent would otherwise never be served.
+                    // Raise to the frame ceiling: collect_blocks rejects a first
+                    // block over the requested max_bytes, so an oversized parent would never be served.
                     request.max_bytes = (P2P_MSG_DATA_MAX_SIZE - BLOCKS_HEADER_SIZE) as u32;
                     let _ = p.send_msg(MSG_GET_BLOCKS as u16, request.encode());
                 }
@@ -245,10 +241,8 @@ impl P2PNode {
     }
 
     pub(crate) fn handle_block_bytes(&self, body: Vec<u8>, peer: Option<String>) -> Rerr {
-        // An active sync session is the only sanctioned downloader: drop
-        // broadcast blocks without decoding, locking or caching. The sync
-        // stream covers the vast majority of them; a tip block arriving at
-        // the tail is recovered by later broadcasts and orphan retries.
+        // An active sync session is the only sanctioned downloader: drop broadcast
+        // blocks un-decoded; the sync stream and later broadcasts/orphan retries cover them.
         if peer.is_some() && self.sync_session.lock().ok().is_some_and(|g| g.is_some()) {
             return Ok(());
         }
@@ -315,10 +309,8 @@ impl P2PNode {
         }
         // 3. try execute
         if let Err(e) = self.engine.try_execute_tx(tx.tx_ref()) {
-            // A core state read failure must not judge the transaction
-            // invalid: the engine boundary has already set fatal, and the
-            // error propagates as node-unavailable (§5 of the error-system
-            // design). Ordinary execution errors remain a rejection.
+            // A core state read failure must not judge the tx invalid: the engine
+            // boundary already set fatal and propagates node-unavailable (§5); ordinary execution errors stay rejections.
             if e.is_abort() {
                 return Err(e);
             }
@@ -346,19 +338,11 @@ impl P2PNode {
         ))
     }
 
-    /// Periodic / on-demand execution of consensus-owned deferred candidates.
-    /// Batches are extracted one at a time: an `Abort` during execution keeps
-    /// the batch in the bidding state (no result is reported, so it is not
-    /// marked `Exhausted`), the remaining candidates are not destroyed, and
-    /// the rest of this round stops. A polling failure (canonical state read)
-    /// is routed into the single engine boundary, which marks the engine
-    /// fatal; the error propagates as `Err`. After a restart the batch
-    /// becomes visible again from the rebuilt bidding state (§4.2 of the
-    /// error-system design).
+    /// Poll consensus-owned deferred candidates one batch at a time: an `Abort`
+    /// during execution keeps the batch in the bidding state and stops this round (§4.2); polling failures route into the single engine boundary.
     pub fn drain_deferred_blocks(&self) -> sys::Ret<bool> {
-        // Skip while a sync session runs: the periodic worker would only
-        // block on `inserting` until the pipeline ends, and the sync's own
-        // post-processing drains deferred blocks anyway.
+        // Skip while a sync session runs: the periodic worker would only block
+        // on `inserting`; the sync's own post-processing drains deferred blocks anyway.
         if self.sync_session.lock().ok().is_some_and(|g| g.is_some()) {
             return Ok(false);
         }
@@ -375,11 +359,7 @@ impl P2PNode {
                 Ok(None) => break,
                 Err(e) => {
                     // A polling failure is a canonical state read failure
-                    // (`Abort + StorageRead` from the mint's `stable_height`
-                    // read): route it into the single engine boundary, which
-                    // marks fatal and records it once; the error propagates
-                    // and this round stops. Extraction happens after that
-                    // read, so no batch was removed (§4.1/§9).
+                    // (`Abort + StorageRead`): route into the single engine boundary (marks fatal, records once); no batch was removed (§4.1/§9).
                     return self
                         .engine
                         .handle_engine_error("poll_one_deferred_batch", e)
@@ -420,10 +400,8 @@ impl P2PNode {
                             }
                         }
                         Err(e) => {
-                            // An `Abort` (engine fatal already set by the
-                            // discover boundary) requeues the batch: no result
-                            // is reported, remaining candidates stay intact
-                            // and the rest of this round stops (§4.2).
+                            // An `Abort` (engine already fatal) requeues the batch:
+                            // no result is reported, remaining candidates stay intact (§4.2).
                             if e.is_abort() {
                                 return Ok(progressed);
                             }

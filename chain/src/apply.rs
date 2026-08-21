@@ -9,8 +9,7 @@ use crate::engine::{ApplyAccepted, ApplyResult, ChainEngine};
 use crate::history::BranchHistory;
 
 fn tree_fatal(error: sys::Error) -> sys::Error {
-    sys::Error::abort(format!("chain tree invariant failed: {}", error))
-        .with_code("core_failed")
+    sys::Error::abort(format!("chain tree invariant failed: {}", error)).with_code("core_failed")
 }
 
 /// Execute a block into a detached Block chunk. Each transaction gets its own
@@ -70,10 +69,8 @@ pub fn execute_block(
     Ok(block)
 }
 
-/// Resolve the candidate's parent and compute the fork-choice key along the
-/// parent's branch. `Ok(None)` means the parent is not in the tree (orphan).
-/// Shared by the live insert path and boot side replay, which must both see
-/// the same deterministic fork choice over the reconstructed ancestry.
+/// Resolve the candidate's parent and fork-choice key; `Ok(None)` means the
+/// parent is not in the tree (orphan). Shared by live insert and boot replay.
 pub(crate) fn resolve_fork_choice<'a>(
     eng: &'a ChainEngine,
     pkg: &'a BlkPkg,
@@ -95,8 +92,7 @@ pub(crate) fn resolve_fork_choice<'a>(
 }
 
 /// A live side branch failed to commit; drop it without classifying the block
-/// (decision table #5). The canonical tree is untouched and the pipeline
-/// continues. Not an error and not a classification.
+/// (decision table #5). Not an error: the canonical tree is untouched.
 fn side_discard(height: u64, hash: &Hash, phase: &str, error: sys::Error) -> Ret<ApplyResult> {
     eprintln!(
         "[Engine] side block <{}, {:?}> {}: {}; branch discarded",
@@ -106,11 +102,7 @@ fn side_discard(height: u64, hash: &Hash, phase: &str, error: sys::Error) -> Ret
 }
 
 /// Validate, execute and attach one block. Callers serialize this with
-/// `eng.inserting`, which is also what excludes concurrent root movement:
-/// every root-move writer holds the same mutex, so no second lock is needed.
-/// Fast-sync relies on its enforced linear-head invariant instead.
-/// `persist_body` is false only for the internal replay pipeline, whose
-/// bodies already exist.
+/// `eng.inserting`; `persist_body` is false only for the internal replay pipeline.
 pub fn insert_block(
     eng: &ChainEngine,
     pkg: &BlkPkg,
@@ -160,18 +152,16 @@ pub fn insert_block(
     if !fast_sync {
         crate::verify::verify_block(eng, pkg, parent_block.as_ref())?;
     }
-    // The fast-sync flag is handed to the mint: validation-only
-    // implementations skip their checks there, while side-effectful ones
-    // still see every block and decide for themselves.
+    // The fast-sync flag is handed to the mint: validation-only implementations
+    // skip their checks there; side-effectful ones see every block and decide.
     eng.consensus.check_block_before_execute(
         pkg,
         parent_block.as_ref(),
         &branch_history,
         fast_sync,
     )?;
-    // The commit plan (side vs canonical) must be fixed before the side body
-    // write can be ordered ahead of the attach. `inserting` is held, so the
-    // head cannot change and this comparison agrees with the attach below.
+    // Fix the commit plan before the side body write: `inserting` is held, so
+    // the head cannot change and this comparison agrees with the attach below.
     let plan_head = eng.tree.head_fork_choice() < fork_choice;
     let Some((chunk, parent_state)) = eng
         .tree
@@ -180,11 +170,8 @@ pub fn insert_block(
     else {
         return Ok(ApplyResult::Orphan(prev_hash));
     };
-    // Execution errors: a live strict side branch is discarded (decision
-    // table #5); everything else — including any fast-sync failure, which can
-    // never be a legitimate side branch — is a real error. An `Abort` (core
-    // state read failure) on a live side branch is fatal like the canonical
-    // path and must not be swallowed by the discard arm (§7.5).
+    // Execution errors: a live strict side branch is discarded (decision table #5);
+    // everything else is a real error — an `Abort` on a live side branch stays fatal (§7.5).
     let chunk = match execute_block(eng, pkg.block(), chunk, fast_sync) {
         Ok(chunk) => chunk,
         Err(e) if !fast_sync && !plan_head && !e.is_abort() => {
@@ -201,20 +188,16 @@ pub fn insert_block(
         fast_sync,
     ) {
         Ok(()) => {}
-        // A live side branch failing the post-execute state check is
-        // discarded like any other side failure (decision table #5): the
-        // canonical tree is untouched and the stream continues. Only a
-        // canonical candidate returns the error (Rejected-class). An `Abort`
-        // is never branch-level: it stays fatal (§7.5).
+        // A live side branch failing the post-execute state check is discarded
+        // (decision table #5); an `Abort` is never branch-level, it stays fatal (§7.5).
         Err(e) if !fast_sync && !plan_head && !e.is_abort() => {
             return side_discard(height, &pkg.hash(), "post-execute check failed", e);
         }
         Err(e) => return Err(e),
     }
 
-    // Commit: three disjoint arms. Fast sync is strictly linear — attach_linear
-    // rejects a non-head plan, never a side branch. Strict mode follows the
-    // plan fixed above (canonical attach vs side branch).
+    // Commit: three disjoint arms. Fast sync is strictly linear (`attach_linear`
+    // rejects a non-head plan); strict mode follows the plan fixed above.
     if fast_sync {
         let inserted = eng
             .tree
@@ -241,8 +224,7 @@ pub fn insert_block(
     }
 
     // Side branch: the immutable body must be durable before the in-memory
-    // attach, so a body write failure can drop the detached chunk without
-    // touching the tree (no recover, no detach; §3.2).
+    // attach, so a body write failure drops the chunk without touching the tree (§3.2).
     if persist_body {
         if let Err(e) = eng
             .store
@@ -257,9 +239,8 @@ pub fn insert_block(
         .attach(&prev_hash, chunk, eng.config.unstable_block)
     {
         Ok(inserted) => inserted,
-        // An attach failure drops the branch without a recovery hint: the
-        // body stays on disk but is never replayed, so boot's "any invalid
-        // record clears the list" rule cannot nuke the other side branches.
+        // An attach failure drops the branch without a recovery hint, so boot's
+        // "any invalid record clears the list" rule cannot nuke the other side branches.
         Err(e) => return side_discard(height, &pkg.hash(), "attach failed", e),
     };
     // Best-effort recovery hint for a branch that is now live; a dropped hint

@@ -100,8 +100,7 @@ pub(crate) fn submit_transaction_handler(ctx: &ApiExecCtx, req: ApiRequest) -> A
         return resp;
     }
     // Admission pre-checks mirroring the dev node's `/submit/transaction`
-    // (fullnode_api_doc_v2 §2.1): reject with the documented messages before
-    // handing the tx to the node so clients keep seeing the familiar wording.
+    // (fullnode_api_doc_v2 §2.1): reject with the documented messages before handing the tx to the node.
     let min_purity = ctx.node.txpool().min_fee_purity();
     if pkg.fee_purity() < min_purity {
         return api_error(&format!(

@@ -33,13 +33,6 @@ macro_rules! bit4r {
     };
 }
 
-pub(crate) fn bufeat(buf: &[u8], n: usize) -> Ret<Vec<u8>> {
-    if buf.len() < n {
-        return sys::errf!("buffer too short");
-    }
-    Ok(buf[..n].to_vec())
-}
-
 include!("xop.rs");
 pub const IR_NAME_DIV: &str = "div";
 pub const IR_NAME_MUL_DIV: &str = "mul_div";
@@ -49,7 +42,9 @@ use ItrErrCode::*;
 include!("code.rs");
 include!("code_stuff.rs");
 include!("fin.rs");
+#[cfg(feature = "execute")]
 mod lang_min;
+#[cfg(feature = "execute")]
 pub use lang_min::OpTy;
 include!("cap.rs");
 include!("gas.rs");
@@ -65,12 +60,14 @@ pub use call_site::{
     CallSpec, CallTarget, decode_user_call_site, encode_call_body, encode_splice_body,
     encode_user_call_site, is_user_call_inst,
 };
+#[cfg(feature = "execute")]
 mod verify;
+#[cfg(feature = "execute")]
 #[allow(unused_imports)] // entry-stack verify entry points reserved for machine entry checks
 pub use verify::{
-    ensure_terminal_instruction, verify_bytecodes, verify_bytecodes_for_cap,
-    verify_bytecodes_with_registry, VerifyEntryStack, verify_bytecodes_with_entry_stack,
-    verify_bytecodes_with_entry_stack_and_registry,
+    VerifyEntryStack, ensure_terminal_instruction, verify_bytecodes, verify_bytecodes_for_cap,
+    verify_bytecodes_with_entry_stack, verify_bytecodes_with_entry_stack_and_registry,
+    verify_bytecodes_with_registry,
 };
 
 pub fn ascii_show_string(s: &[u8]) -> Option<String> {

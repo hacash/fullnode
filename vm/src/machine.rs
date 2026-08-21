@@ -1,9 +1,5 @@
-//! Native VM adapter.
-//!
-//! The VM is entered through `base::VmEntry`. Raw entries carry VM-owned request
-//! data; transfer notifications from Call-path ACTIONs are driven directly by
-//! the VM's recursive interpreter path, while Top/Ast entries retain the
-//! protocol dispatcher bridge.
+//! Native VM adapter, entered through `base::VmEntry`. Raw entries carry VM-owned request data;
+//! Call-path ACTION transfers are driven by the recursive interpreter; Top/Ast keep the dispatcher bridge.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -64,7 +60,7 @@ struct EntryFrame {
     call_base: i64,
 }
 
-pub struct StubVm {
+pub struct NativeVm {
     runtime: Runtime,
     entries: Vec<EntryFrame>,
     deadline: Option<Instant>,

@@ -1,11 +1,5 @@
-//! Wire schema for the VM contract types that `field::wire_struct_schema!`
-//! cannot generate: composite types whose wire layout is not a plain field
-//! sequence, and leaf element names of value types. All plain structs
-//! (`ContractSto`/`ContractEdit`/`CodeStuff`/...) get
-//! `base::StructSchemaProvider`/`FieldWireShape`/`WireElementName` from the
-//! macro at their definition sites (`contract_codec_struct!` in this module,
-//! `rt/code_stuff.rs`); field order there must match the `Encode` impls
-//! (`codec-schema-gen` cross-tests lock this).
+//! Wire schema for VM contract types that `field::wire_struct_schema!` cannot generate (composites,
+//! value-type leaf names). Plain structs get providers from the macro; field order must match `Encode`.
 
 use field::{FieldWire, FieldWireShape, StructSchema, StructSchemaProvider, WireElementName};
 

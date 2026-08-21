@@ -11,8 +11,9 @@ use mint::minter::block_reward_number;
 use mint::tx_coinbase::CoinbaseTx;
 use protocol::block_std::{StdBlock, calculate_mrkl_prelude_update};
 use reqwest::blocking::Client as HttpClient;
-use serde_json::Value;
 use sys::{Ret, ToHex};
+
+use super::json::JsonObj;
 
 #[cfg(feature = "ocl")]
 use mint::opencl::common;
@@ -215,35 +216,23 @@ fn api_url(conf: &PoWorkConf, path: &str) -> String {
     format!("http://{}{}", conf.rpcaddr, path)
 }
 
-fn get_json(url: &str) -> Ret<Value> {
+fn get_json(url: &str) -> Ret<JsonObj> {
     get_json_with(&HTTP_CLIENT, url)
 }
 
-fn get_json_notice(url: &str) -> Ret<Value> {
+fn get_json_notice(url: &str) -> Ret<JsonObj> {
     get_json_with(&HTTP_CLIENT_NOTICE, url)
 }
 
-fn get_json_with(client: &HttpClient, url: &str) -> Ret<Value> {
+fn get_json_with(client: &HttpClient, url: &str) -> Ret<JsonObj> {
     let text = client
         .get(url)
         .send()
         .map_err(|e| sys::Error::fault(format!("request {} failed: {}", url, e)))?
         .text()
         .map_err(|e| sys::Error::fault(format!("read {} failed: {}", url, e)))?;
-    serde_json::from_str::<Value>(&text)
+    JsonObj::parse(&text)
         .map_err(|e| sys::Error::fault(format!("invalid json from {}: {}; body={}", url, e, text)))
-}
-
-fn json_str<'a>(json: &'a Value, key: &str) -> Ret<&'a str> {
-    json[key]
-        .as_str()
-        .ok_or_else(|| sys::Error::fault(format!("missing json string field {}", key)))
-}
-
-fn json_u64(json: &Value, key: &str) -> Ret<u64> {
-    json[key]
-        .as_u64()
-        .ok_or_else(|| sys::Error::fault(format!("missing json number field {}", key)))
 }
 
 fn parse_hash_hex(s: &str) -> Ret<Hash> {
@@ -258,18 +247,18 @@ fn parse_hash_hex(s: &str) -> Ret<Hash> {
 fn fetch_pending(conf: &PoWorkConf) -> Ret<PendingWork> {
     let url = api_url(conf, "/query/miner/pending?stuff=true");
     let json = get_json(&url)?;
-    if json["ret"].as_i64() != Some(0) {
+    if json.get_i64("ret").unwrap_or(-1) != 0 {
         return sys::errf!(
             "miner pending error: {}",
-            json["err"].as_str().unwrap_or("unknown")
+            json.get_str("err").unwrap_or_else(|_| "unknown".to_owned())
         );
     }
-    let block_intro_bytes = hex::decode(json_str(&json, "block_intro")?)
+    let block_intro_bytes = hex::decode(json.get_str("block_intro")?)
         .map_err(|_| sys::Error::fault("block_intro hex invalid"))?;
     let block_intro = StdBlock::decode_intro(mint::block_hasher, &block_intro_bytes)?;
-    let coinbase_body = hex::decode(json_str(&json, "coinbase_body")?)
+    let coinbase_body = hex::decode(json.get_str("coinbase_body")?)
         .map_err(|_| sys::Error::fault("coinbase_body hex invalid"))?;
-    let coinbase_nonce = parse_hash_hex(json_str(&json, "coinbase_nonce")?)?;
+    let coinbase_nonce = parse_hash_hex(&json.get_str("coinbase_nonce")?)?;
     // Standard registry (protocol + mint + vm) for codec consistency with hacash.
     let reg = crate::standard_registry()?;
     let (coinbase_ref, _) = mint::tx_coinbase::create_coinbase(&reg, &coinbase_body)?;
@@ -280,18 +269,15 @@ fn fetch_pending(conf: &PoWorkConf) -> Ret<PendingWork> {
         .clone();
     coinbase_tx.set_mining_nonce(coinbase_nonce);
     let coinbase_hash = coinbase_tx.hash();
-    let mkrl_modify_list = json["mkrl_modify_list"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .map(|v| parse_hash_hex(v.as_str().unwrap_or_default()))
-                .collect::<Ret<Vec<_>>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
+    let mkrl_modify_list = json
+        .get_str_array("mkrl_modify_list")
+        .unwrap_or_default()
+        .iter()
+        .map(|s| parse_hash_hex(s))
+        .collect::<Ret<Vec<_>>>()?;
     Ok(PendingWork {
-        height: json_u64(&json, "height")?,
-        target_hash: parse_hash_hex(json_str(&json, "target_hash")?)?,
+        height: json.get_u64("height")?,
+        target_hash: parse_hash_hex(&json.get_str("target_hash")?)?,
         block_intro,
         coinbase_nonce,
         coinbase_hash,
@@ -532,10 +518,10 @@ fn miner_notice(conf: &PoWorkConf, height: u64) -> Ret<u64> {
         ),
     );
     let json = get_json_notice(&url)?;
-    if json["ret"].as_i64() != Some(0) {
+    if json.get_i64("ret").unwrap_or(-1) != 0 {
         return Ok(0);
     }
-    Ok(json["height"].as_u64().unwrap_or(0))
+    Ok(json.get_u64("height").unwrap_or(0))
 }
 
 fn submit_success(conf: &PoWorkConf, result: &MiningResult) -> Ret<()> {
@@ -549,6 +535,6 @@ fn submit_success(conf: &PoWorkConf, result: &MiningResult) -> Ret<()> {
         ),
     );
     let json = get_json(&url)?;
-    println!("[poworker] submit {}", json);
+    println!("[poworker] submit {}", json.display());
     Ok(())
 }

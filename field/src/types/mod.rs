@@ -67,6 +67,7 @@ pub use addr_or_list::*;
 pub use addr_or_ptr::*;
 pub use address::*;
 pub use amount::*;
+pub use amount_base256::{divmod_u64_b256, mul_u64_b256};
 pub use asset::*;
 pub use balance::*;
 pub use bool::*;

@@ -121,9 +121,8 @@ impl P2PNode {
         }
     }
 
-    /// Mark the source peer and this node as knowing the hash. This matches the
-    /// original node: knowledge is recorded before admission and is not rolled
-    /// back when validation fails.
+    /// Mark the source peer and this node as knowing the hash, before admission,
+    /// and never roll it back when validation fails (matches the original node).
     pub(crate) fn check_know(
         &self,
         hx: &field::Hash,

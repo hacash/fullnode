@@ -32,6 +32,7 @@ impl TupleItem {
         })
     }
 
+    #[cfg(feature = "execute")]
     pub fn pack(cap: &SpaceCap, ops: &mut Stack) -> VmrtRes<(Value, usize)> {
         let n = ops.pop()?.extract_u16()? as usize;
         Self::check_len(n, cap.tuple_length)?;

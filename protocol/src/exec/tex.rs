@@ -1,11 +1,5 @@
-//! tex
-//!
-//! textoken exchange /  p2sh
-//! `TexLedger`
-//! `do_settlement`
-//!
-//! -  `ExecFrom::Top` `Context::tex_ledger_mut_top`
-//! -  `TexLedger.diatrs`  `record_diamond_pay`
+//! TEX settlement: `do_settlement` verifies the tex ledger residuals cancel and
+//! moves owned diamonds to their `diatrs` addresses; runs only at `ExecFrom::Top`.
 
 use std::collections::HashMap;
 
@@ -15,18 +9,12 @@ use base::{
 use field::{Amount, DiamondName, DiamondNameListMax200, Hash, SatoshiAuto};
 use sys::{Rerr, errf};
 
-// Defined in `params` (non-exec module): the wire codec of `TexCellAct` reads
-// it too. `tex` itself compiles unconditionally (only `exec::context` is
-// execute-gated); in SDK/wasm builds it is dead-code-eliminated.
+// Defined in `params` (non-exec module) because `TexCellAct`'s codec reads it too;
+// `tex` compiles unconditionally and is dead-code-eliminated in SDK/wasm builds.
 pub use crate::params::SETTLEMENT_ADDR;
 
-/// tex
-///
-/// " + "
-/// 1. zhu/sat/dia/asset_map main /
-/// 2. /
-/// 3.  diatrs
-/// 4.  logs  layer
+/// Close the tex ledger: settlement checks (residuals must be zero) then move the
+/// `diatrs`-listed diamonds out of the settlement address to their owners.
 pub fn do_settlement(ctx: &mut dyn Context) -> Rerr {
     if ctx.exec_from() != ExecFrom::Top {
         return errf!("do_settlement only allowed in TOP context");
@@ -111,9 +99,8 @@ fn first6(hash: Hash) -> [u8; DiamondName::SIZE] {
     buf
 }
 
-/// Clear leaked HAC/SAT/Asset on the TEX settlement address after the transaction
-/// has completed its normal settlement path. Diamond ownership is intentionally
-/// left to `do_settlement`, which moves concrete diamond names.
+/// Clear leaked HAC/SAT/Asset on the settlement address after normal settlement;
+/// diamond ownership is intentionally left to `do_settlement`.
 pub fn settlement_addr_postsettle_cleanup(ctx: &mut dyn Context) -> Rerr {
     let mut state = CoreState::wrap(ctx.layer());
     if let Some(mut bls) = state.balance(&SETTLEMENT_ADDR)? {

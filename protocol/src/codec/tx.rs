@@ -4,15 +4,11 @@ use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use base::{
-    ActionRef, BinaryCodecs, Context, CoreState, ExecFrom, TX_ACTIONS_MAX, Transaction,
-    TransactionBuild, TransactionExecute, TransactionSign, TxCreateRequest,
-};
-// Execution-only helpers (used by the `execute` impls and `execute_actions`);
-// gated because they dispatch through the `ActionRef` execute view, which only
-// exists when the `execute` feature is on.
 #[cfg(feature = "execute")]
-use base::{ActionDispatcher, hac_add, hac_sub};
+use base::TransactionExecute;
+use base::{
+    ActionRef, BinaryCodecs, Transaction, TransactionBuild, TransactionSign, TxCreateRequest,
+};
 use field::{
     AddrOrList, Address, Amount, Encode, Fixed1, Fixed16, Hash, Reader, Sign, SignW2, Timestamp,
     Uint1, Uint2,
@@ -131,13 +127,10 @@ impl TransactionSign for DefaultPreludeTx {
     fn verify_signature(&self) -> Rerr {
         errf!("cannot verify signature on prelude tx")
     }
-}
 
-#[cfg(feature = "execute")]
-impl TransactionExecute for DefaultPreludeTx {
-    fn execute(&self, ctx: &mut dyn Context) -> Rerr {
-        hac_add(ctx, &self.address, &self.reward)?;
-        Ok(())
+    #[cfg(feature = "execute")]
+    fn as_execute(&self) -> Option<&dyn TransactionExecute> {
+        Some(self)
     }
 }
 
@@ -214,8 +207,7 @@ pub struct TransactionType3 {
 pub type StdTransaction = TransactionType2;
 
 /// Concrete standard transaction construction (types 1/2/3) from a
-/// `TxCreateRequest`. Shared by `create_standard_transaction` and
-/// `encode_standard_tx`, so the concrete type list exists once.
+/// `TxCreateRequest`; shared so the concrete type list exists once.
 macro_rules! standard_tx_from_request {
     ($request:expr, $ty:ident) => {
         $ty {
@@ -231,22 +223,10 @@ macro_rules! standard_tx_from_request {
     };
 }
 
-/// Standard-protocol gas rule: only type 3 carries a gas budget.
-fn check_standard_gas(ty: u8, gas_max: u8) -> Rerr {
-    if ty != TransactionType3::TYPE && gas_max != 0 {
-        return errf!("transaction type {} does not support gas", ty);
-    }
-    Ok(())
-}
-
-/// Create an empty standard user transaction selected by its wire type.
-///
-/// This is the standard-protocol implementation of
-/// [`base::TransactionCreator`]. It owns the concrete transaction types while
-/// consumers depend only on base's request and creator interface.
+/// Create an empty standard user transaction by wire type; owns the concrete
+/// types behind [`base::TransactionCreator`]. Type 1/2 `gas_max != 0` is wire-legal (execute rejects it); callers use `crate::facts::gas_max_finding`.
 pub fn create_standard_transaction(request: TxCreateRequest) -> Ret<base::TxRef> {
     let ty = request.ty;
-    check_standard_gas(ty, request.gas_max)?;
     match ty {
         TransactionType1::TYPE => Ok(Arc::new(standard_tx_from_request!(
             request,
@@ -264,8 +244,8 @@ pub fn create_standard_transaction(request: TxCreateRequest) -> Ret<base::TxRef>
     }
 }
 
-/// Push actions and signatures into a standard transaction (both go through
-/// the protocol's own `push_action`/`push_sign` validation).
+/// Push actions (up to the u16 wire count) and mechanically insert signatures;
+/// digest/D-set acceptance is separate (`verify_signature` / `signature_report`).
 fn fill_standard_tx<T: TransactionBuild>(
     tx: &mut T,
     actions: &[ActionRef],
@@ -275,24 +255,19 @@ fn fill_standard_tx<T: TransactionBuild>(
         tx.push_action(action.clone())?;
     }
     for sign in signs {
-        tx.push_sign(sign.clone())?;
+        tx.insert_sign(sign.clone())?;
     }
     Ok(())
 }
 
-/// Encode a standard transaction body (types 1/2/3) with the given actions
-/// and signatures. Owns the type list and the gas rule
-/// (`check_standard_gas`/`create_standard_transaction`): callers never
-/// enumerate transaction types or re-declare which type carries a gas
-/// budget. A type without a standard creator fails here with the protocol's
-/// error.
+/// Encode a standard transaction body (types 1/2/3); owns the type list so
+/// callers never enumerate types. Consensus envelope rules are not constructor gates.
 pub fn encode_standard_tx(
     request: TxCreateRequest,
     actions: &[ActionRef],
     signs: &[Sign],
 ) -> Ret<Vec<u8>> {
     let ty = request.ty;
-    check_standard_gas(ty, request.gas_max)?;
     let body = match ty {
         TransactionType1::TYPE => {
             let mut tx = standard_tx_from_request!(request, TransactionType1);
@@ -328,9 +303,6 @@ fn encode_action_list(actions: &[ActionRef], out: &mut Vec<u8>) {
 fn decode_action_list(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(Vec<ActionRef>, usize)> {
     let mut r = Reader::new(buf);
     let count: Uint2 = r.read()?;
-    if count.uint() as usize > TX_ACTIONS_MAX {
-        return sys::normalf!("tx actions count {} exceeds limit", count.uint());
-    }
     let mut actions = Vec::with_capacity(count.uint() as usize);
     for _ in 0..count.uint() {
         let (act, used) = reg.decode_action(&buf[r.used()..])?;
@@ -363,168 +335,14 @@ fn tx_hash(
     Hash::from(sys::calculate_hash(stuff))
 }
 
-fn precheck_tx(ctx: &dyn Context, tx: &dyn Transaction, actions: &[ActionRef]) -> Rerr {
-    let params = crate::execution_params(ctx.services().as_ref())?;
-    if let Some(tx) = tx.as_any().downcast_ref::<TransactionType3>() {
-        tx.validate_signer_limit(params.max_type3_signers)?;
-    }
-    if ctx.env().chain.fast_sync {
-        return Ok(());
-    }
-    if actions.is_empty() {
-        return errf!("transaction actions cannot be empty");
-    }
-    if actions.len() > TX_ACTIONS_MAX {
-        return errf!(
-            "tx actions exceed limit {} > {}",
-            actions.len(),
-            TX_ACTIONS_MAX
-        );
-    }
-    let need = tx.required_flags();
-    if need & !ctx.env().chain.consensus_flags != 0 {
-        return errf!("tx type {} not activated (flags need {:#x})", tx.ty(), need);
-    }
-    crate::level::precheck_tx_actions(
-        tx.ty(),
-        actions,
-        ctx.env().chain.consensus_flags,
-        params.ast_tree_depth_max,
-    )
-}
-
-struct TxExecutePrep {
-    block_height: u64,
-    tx_hash: Hash,
-    main: field::Address,
-    fee: Amount,
-    has_ast_control: bool,
-}
-
-fn prepare_tx_execute(tx: &dyn TransactionSign, ctx: &mut dyn Context) -> Ret<TxExecutePrep> {
-    let env = ctx.env();
-    let block_height = env.block.height;
-    let tx_hash = tx.hash();
-    let main = tx.main();
-    let fee = tx.fee().clone();
-    let has_ast_control = tx.actions().iter().any(|a| a.nested_actions().is_some());
-    if !env.chain.fast_sync {
-        if !main.is_privkey() {
-            return errf!("tx fee address version must be PRIVAKEY type");
-        }
-        if main.is_privkey_unknown() {
-            return errf!(
-                "tx main address {} is a system address with unknown private key",
-                main.to_readable()
-            );
-        }
-        for addr in tx.addrs() {
-            if !addr.is_supported() {
-                return errf!("address version {} not supported", addr.version());
-            }
-        }
-        if block_height > 200_000 {
-            if fee.size() > 6 {
-                return errf!("tx fee size cannot exceed 6 bytes when block height above 200,000");
-            }
-        }
-        if block_height > 33_033 && tx.ty() <= TransactionType1::TYPE {
-            return errf!("Type 1 transactions have been deprecated after height 33,033");
-        }
-        tx.verify_signature()?;
-        let existing = {
-            let state = CoreState::wrap(ctx.layer());
-            state.tx_exist(&tx_hash)
-        };
-        if let Some(existing) = existing? {
-            // Preserve the historical dev exception for the one known duplicate
-            // transaction replayed at height 63,448.
-            const HISTORICAL_DUPLICATE_TX: [u8; Hash::SIZE] = [
-                0xf2, 0x2d, 0xeb, 0x27, 0xdd, 0x28, 0x93, 0x39, 0x7c, 0x2b, 0xc2, 0x03, 0xdd, 0xc9,
-                0xbc, 0x90, 0x34, 0xe4, 0x55, 0xfe, 0x63, 0x0d, 0x8e, 0xe3, 0x10, 0xe8, 0xb5, 0xec,
-                0xc6, 0xdc, 0x56, 0x28,
-            ];
-            if existing.uint() != 63_448 || tx_hash != Hash::from(HISTORICAL_DUPLICATE_TX) {
-                return errf!(
-                    "tx {} already exists in height {}",
-                    tx_hash,
-                    existing.uint()
-                );
-            }
-        }
-    }
-    Ok(TxExecutePrep {
-        block_height,
-        tx_hash,
-        main,
-        fee,
-        has_ast_control,
-    })
-}
-
-fn mark_tx_exist(ctx: &mut dyn Context, hash: &Hash, height: u64) {
-    let mut state = CoreState::wrap(ctx.layer());
-    state.tx_exist_set(hash, &field::BlockHeight::from(height));
-}
-
-fn record_tx_fee_totals(ctx: &mut dyn Context, tx: &dyn Transaction) -> Rerr {
-    let fee_pay = tx.fee_pay().to_238_u64()? as u128;
-    let fee_got = tx.fee_got().to_238_u64()? as u128;
-    let mut state = CoreState::wrap(ctx.layer());
-    base::with_base_total(&mut state, |total| {
-        base::total_add_u12(
-            &mut total.tx_fee_pay_total_238,
-            fee_pay,
-            "tx_fee_pay_total_238",
-        )?;
-        base::total_add_u12(
-            &mut total.tx_fee_got_total_238,
-            fee_got,
-            "tx_fee_got_total_238",
-        )
-    })
-}
-
-fn record_legacy_extra9_burn(ctx: &mut dyn Context, fee: &Amount, fee_got: &Amount) -> Rerr {
-    let burn = fee.sub_mode_u128(fee_got)?;
-    if !burn.is_positive() {
-        return Ok(());
-    }
-    let mut state = CoreState::wrap(ctx.layer());
-    base::with_base_total(&mut state, |total| {
-        base::total_add_amount_238(
-            &mut total.tx_fee_burn90_238,
-            &burn,
-            "legacy_tx_extra9_burn_238",
-        )
-    })
-}
-
-#[cfg(feature = "execute")]
-fn execute_actions(ctx: &mut dyn Context, actions: &[ActionRef], charge_extra9: bool) -> Rerr {
-    for act in actions {
-        ctx.exec_from_set(ExecFrom::Top);
-        if charge_extra9 {
-            let _ = ActionDispatcher::dispatch_top(ctx, act)?;
-        } else {
-            let _ = ActionDispatcher::dispatch_top_without_extra9(ctx, act)?;
-        }
-    }
-    Ok(())
-}
-
 fn req_sign_for(main: Address, addrlist: &AddrOrList, actions: &[ActionRef]) -> Ret<Vec<Address>> {
     let addrs = addrlist.to_list();
     let mut required = vec![main];
     for act in actions {
         for ptr in act.req_sign() {
             let addr = ptr.real(&addrs)?;
-            // Legacy signer semantics: non-PRIVAKEY req_sign targets are not
-            // required to sign. Mainnet history contains FromTo transfers
-            // whose `from` is a SCRIPTMH address; those addresses cannot
-            // produce a signature, so dev (transaction::macro req_sign) drops
-            // them from the required set. Keep the same rule here or the
-            // historical blocks fail signature verification on replay.
+            // Legacy: non-PRIVAKEY req_sign targets are not required to sign (a SCRIPTMH
+            // `from` cannot sign); keep dev's rule or historical blocks fail verification on replay.
             if addr.is_privkey() && !required.contains(&addr) {
                 required.push(addr);
             }
@@ -589,7 +407,7 @@ impl TransactionType3 {
         Ok(d)
     }
 
-    fn validate_signer_limit(&self, max: usize) -> Rerr {
+    pub(crate) fn validate_signer_limit(&self, max: usize) -> Rerr {
         let count = self.deterministic_signers()?.len();
         if count > max {
             return errf!("Type3 signer count {} exceeds maximum {}", count, max);
@@ -808,10 +626,8 @@ pub fn signature_report(tx: &dyn TransactionSign) -> Ret<TxSignatureReport> {
     })
 }
 
-/// Re-encode the transaction with its signature set cleared. Type-2/3 wire
-/// order is preserved exactly; used for the stable `unsigned_body_hash`. The
-/// concrete type list lives here (the crate that owns the types), not in
-/// callers.
+/// Re-encode with the signature set cleared (type-2/3 wire order preserved);
+/// used for the stable `unsigned_body_hash`.
 pub fn encode_without_signs(tx: &dyn Transaction) -> Ret<Vec<u8>> {
     if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
         let mut copy = t.clone();
@@ -831,9 +647,33 @@ pub fn encode_without_signs(tx: &dyn Transaction) -> Ret<Vec<u8>> {
     errf!("transaction type {} has no unsigned-body form", tx.ty())
 }
 
-/// Clone the transaction, attach one signature through the protocol's own
-/// `push_sign` (which verifies it) and return the signed transaction. The
-/// concrete type list lives here, not in callers.
+/// Clone and insert one signature without digest verification; same-key
+/// replacement lives in `insert_sign`, body validity is a separate capability.
+pub fn insert_attached_sign(tx: &dyn Transaction, sign: Sign) -> Ret<base::TxRef> {
+    use base::TransactionBuild;
+    if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
+        let mut copy = t.clone();
+        copy.insert_sign(sign)?;
+        return Ok(Arc::new(copy));
+    }
+    if let Some(t) = tx.as_any().downcast_ref::<TransactionType2>() {
+        let mut copy = t.clone();
+        copy.insert_sign(sign)?;
+        return Ok(Arc::new(copy));
+    }
+    if let Some(t) = tx.as_any().downcast_ref::<TransactionType3>() {
+        let mut copy = t.clone();
+        copy.insert_sign(sign)?;
+        return Ok(Arc::new(copy));
+    }
+    errf!(
+        "transaction type {} does not support insert_attached_sign",
+        tx.ty()
+    )
+}
+
+/// Clone, insert one signature via `push_sign` (insert + digest verify) and return
+/// the signed tx; node/API paths use this, the SDK uses `insert_attached_sign`.
 pub fn attach_sign(tx: &dyn Transaction, sign: Sign) -> Ret<base::TxRef> {
     use base::TransactionBuild;
     if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
@@ -854,11 +694,8 @@ pub fn attach_sign(tx: &dyn Transaction, sign: Sign) -> Ret<base::TxRef> {
     errf!("transaction type {} does not support attach_sign", tx.ty())
 }
 
-/// Protocol signer-cap rule: only type 3 caps its *required* signer set (D)
-/// at `max` (execute-time rule); other types have no protocol cap beyond the
-/// wire's u16 count. The cap is evaluated on the required signers, not the
-/// attached count, so a type-3 body with 2 of 5 required signers already
-/// violates it.
+/// Protocol signer-cap rule: only type 3 caps its *required* signer set (D) at
+/// `max` (execute-time); evaluated on required, not attached, signers.
 pub fn check_signers_cap(tx: &dyn Transaction, max: usize) -> Rerr {
     if tx.ty() == TransactionType3::TYPE {
         let t3 = tx
@@ -1095,58 +932,20 @@ macro_rules! impl_tx_type {
             fn verify_signature(&self) -> Rerr {
                 verify_tx_signature(self)
             }
-        }
 
-        #[cfg(feature = "execute")]
-        impl TransactionExecute for $name {
-            fn execute(&self, ctx: &mut dyn Context) -> Rerr {
-                precheck_tx(ctx, self, &self.actions)?;
-                let prep = prepare_tx_execute(self, ctx)?;
-                if !ctx.env().chain.fast_sync
-                    && Self::TYPE != TransactionType3::TYPE
-                    && prep.has_ast_control
-                {
-                    return errf!(
-                        "tx type {} cannot include AST control-flow actions; requires at least type 3",
-                        Self::TYPE
-                    );
-                }
-                if !ctx.env().chain.fast_sync && self.ano_mark[0] != 0 {
-                    return errf!("tx type {} ano_mark must be zero", Self::TYPE);
-                }
-                if !ctx.env().chain.fast_sync
-                    && Self::TYPE != TransactionType3::TYPE
-                    && self.gas_max.uint() != 0
-                {
-                    return errf!("tx type {} gas_max must be zero", Self::TYPE);
-                }
-
-                mark_tx_exist(ctx, &prep.tx_hash, prep.block_height);
-                record_tx_fee_totals(ctx, self)?;
-                if Self::TYPE == TransactionType3::TYPE {
-                    let gas_initialized = crate::exec::gas::tx_gas_initialize(ctx)?;
-                    execute_actions(ctx, &self.actions, true)?;
-                    crate::exec::tex::do_settlement(ctx)?;
-                    ctx.run_deferred_phase()?;
-                    if gas_initialized {
-                        ctx.gas_refund()?;
-                    }
-                } else {
-                    execute_actions(ctx, &self.actions, false)?;
-                    crate::exec::tex::do_settlement(ctx)?;
-                }
-                hac_sub(ctx, &prep.main, &prep.fee)?;
-                if Self::TYPE != TransactionType3::TYPE {
-                    record_legacy_extra9_burn(ctx, &prep.fee, &self.fee_got())?;
-                }
-                crate::exec::tex::settlement_addr_postsettle_cleanup(ctx)?;
-                Ok(())
+            #[cfg(feature = "execute")]
+            fn as_execute(&self) -> Option<&dyn TransactionExecute> {
+                Some(self)
             }
         }
 
         impl TransactionBuild for $name {
             fn set_fee(&mut self, fee: Amount) {
                 self.fee = fee;
+            }
+
+            fn insert_sign(&mut self, sg: Sign) -> Rerr {
+                insert_sign(&mut self.signs, sg).map(|_| ())
             }
 
             fn push_sign(&mut self, sg: Sign) -> Rerr {
@@ -1158,8 +957,8 @@ macro_rules! impl_tx_type {
             }
 
             fn push_action(&mut self, act: ActionRef) -> Rerr {
-                if self.actions.len() >= TX_ACTIONS_MAX {
-                    return errf!("tx actions exceed limit {}", TX_ACTIONS_MAX);
+                if self.actions.len() >= u16::MAX as usize {
+                    return errf!("tx action count exceeds u16 wire maximum");
                 }
                 self.actions.push(act);
                 Ok(())
@@ -1168,9 +967,24 @@ macro_rules! impl_tx_type {
     };
 }
 
-impl_tx_type!(TransactionType1, 1, TxHashMode::Legacy, false);
-impl_tx_type!(TransactionType2, 2, TxHashMode::Legacy, false);
-impl_tx_type!(TransactionType3, 3, TxHashMode::Type3, true);
+impl_tx_type!(
+    TransactionType1,
+    hacash_params::TX_TYPE_1,
+    TxHashMode::Legacy,
+    false
+);
+impl_tx_type!(
+    TransactionType2,
+    hacash_params::TX_TYPE_2,
+    TxHashMode::Legacy,
+    false
+);
+impl_tx_type!(
+    TransactionType3,
+    hacash_params::TX_TYPE_3,
+    TxHashMode::Type3,
+    true
+);
 
 pub fn create_transaction_type1(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
     let (ty, timestamp, addrlist, fee, actions, signs, gas_max, ano_mark, used) =
@@ -1265,10 +1079,8 @@ mod tests {
         tx
     }
 
-    /// Mainnet history contains FromTo txs whose action req_sign target is a
-    /// SCRIPTMH address (which cannot sign). The legacy required-signer set
-    /// must drop it, exactly like dev's `req_sign` — otherwise the historical
-    /// block fails `verify_signature` on replay.
+    /// Legacy: FromTo txs with a SCRIPTMH req_sign target (cannot sign) must drop it
+    /// from the required set, like dev's `req_sign`, or replay fails verification.
     #[test]
     fn legacy_req_sign_drops_non_privkey_targets() {
         let acc = Account::create_by_secret_key_value([9u8; 32]).unwrap();

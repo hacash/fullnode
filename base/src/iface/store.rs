@@ -1,6 +1,4 @@
-//! Disk / block store / chain store facade.
-//!
-//! `BlockStore` / `DiskDB` / persist keys / `Store`
+//! Disk / block store / chain store facade: `BlockStore`, `DiskDB`, persist keys, `Store`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,31 +12,18 @@ use crate::store::ChainStatus;
 // =============================================================
 // BlockStore
 // =============================================================
-//
-// `DiskDB`state KVblock  state
-// rebuild  block
-//
-// ****`put_block`  fsync  apply
-// root marker canonical  root roll finalize
-// block bytes  root marker  /
-// canonical
 
 pub trait BlockStore: Send + Sync {
-    /// fsync
-    ///
-    /// BlockStore  forkgenesis
-    /// stable root block  hash
+    /// Persist a block body (content-addressed) without changing the
+    /// available cursor; `put_block_available` also advances the index.
     fn put_block(&self, height: u64, hash: &Hash, data: sys::Bytes) -> Rerr;
 
     /// Persist a block body and make it the next available canonical block.
-    /// KV-backed stores override this to commit the body, height index and
-    /// available cursor in one database batch.
+    /// KV-backed stores commit body, height index and available cursor in one batch.
     fn put_block_available(&self, height: u64, hash: &Hash, data: sys::Bytes) -> Rerr;
 
-    /// Atomically persist the new reorg tip body, rewrite the supplied
-    /// canonical height range, remove any canonical tail above `height`, and
-    /// publish the available cursor. `canonical` is ascending and ends at the
-    /// supplied `(height, hash)`.
+    /// Atomically persist the reorg tip body, rewrite the canonical height range, trim any
+    /// tail above `height`, and publish the available cursor. `canonical` is ascending.
     fn commit_reorg(
         &self,
         height: u64,
@@ -47,13 +32,8 @@ pub trait BlockStore: Send + Sync {
         canonical: &[(u64, Hash)],
     ) -> Rerr;
 
-    /// canonical root roll finalize rebuild / open
-    /// `height == 0` genesis
-    ///
-    /// `Ok(None)` is the only not-found answer. Read and decode failures are
-    /// returned as errors: a corrupt stored block must never masquerade as a
-    /// missing one on consensus or boot paths (§3.1 of the engine error
-    /// contract).
+    /// Read a block body by hash; `read_by_height` indexes the canonical chain (`height == 0`
+    /// is genesis). `Ok(None)` is the only not-found answer — failures are errors, never missing (§3.1).
     fn read_by_hash(&self, hash: &Hash) -> sys::Ret<Option<sys::Bytes>>;
     fn read_by_height(&self, height: u64) -> sys::Ret<Option<(Hash, sys::Bytes)>>;
 
@@ -66,9 +46,8 @@ pub trait BlockStore: Send + Sync {
 
     fn available_cursor(&self) -> sys::Ret<Option<u64>>;
 
-    /// Whether the store holds any block records at all (bodies or height
-    /// index). Boot uses this to distinguish a fresh store from a corrupted
-    /// one whose available cursor is missing.
+    /// Whether the store holds any block records (bodies or height index); boot
+    /// uses this to distinguish a fresh store from a corrupted one.
     fn has_records(&self) -> sys::Ret<bool>;
 }
 
@@ -130,9 +109,8 @@ impl MemDB for MemKV {
 }
 
 pub trait DiskDB: Send + Sync {
-    /// Read one key. Backends report I/O or corruption failures as errors:
-    /// they must never be reported as a missing key, which would silently
-    /// diverge state. `Ok(None)` is the only missing-key answer.
+    /// Read one key. I/O or corruption failures are errors, never a missing key (which
+    /// would silently diverge state); `Ok(None)` is the only missing-key answer.
     fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>>;
     fn save(&self, key: &[u8], val: &[u8]);
     fn remove(&self, key: &[u8]);
@@ -163,17 +141,13 @@ pub trait DiskDB: Send + Sync {
 // move_root
 // =============================================================
 
-/// stable root  hash `move_root`  KV  state
-/// state batch write
-pub const PERSIST_KEY_ROOT_HASH: &[u8] = b"_chain.root_hash";
-/// stable root
-pub const PERSIST_KEY_ROOT_HEIGHT: &[u8] = b"_chain.root_height";
+    /// Stable root hash, written by `move_root` in the same state batch.
+    pub const PERSIST_KEY_ROOT_HASH: &[u8] = b"_chain.root_hash";
+    /// Stable root height, written by `move_root` in the same state batch.
+    pub const PERSIST_KEY_ROOT_HEIGHT: &[u8] = b"_chain.root_height";
 
-/// Lifecycle state of the persisted canonical state.
-///
-/// A fresh state store is empty and has no root markers. A ready store has
-/// both markers decoded successfully. Implementations must reject partial,
-/// malformed, or rootless nonempty state rather than treating it as fresh.
+/// Lifecycle of the persisted canonical state: fresh = empty with no root markers;
+/// ready = both markers decoded. Reject partial/malformed/rootless nonempty state.
 #[derive(Clone, Debug)]
 pub enum StateStatus {
     Uninitialized,
@@ -189,32 +163,24 @@ pub trait Store: Send + Sync {
     /// silently replaced by a default status.
     fn status(&self) -> sys::Ret<ChainStatus>;
 
-    /// Distinguish a fresh state store from a valid genesis state at height
-    /// zero. Engine startup owns the resulting initialize/rebuild/replay
-    /// decision.
+    /// Distinguish a fresh state store from a valid genesis state at height zero;
+    /// engine startup owns the initialize/rebuild/replay decision.
     fn state_status(&self) -> sys::Ret<StateStatus>;
 
     fn state_get(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>>;
     fn stable_state(&self) -> Arc<dyn StateRead>;
 
-    /// **State** disk — `move_root` / tree root KV (not the block DB).
-    ///
-    /// `store.disk()` is the state database. Block bytes live in `block_store()`;
-    /// VM logs in `log_backend()`.
+    /// **State** disk — `move_root`/tree root KV, not the block DB. Block bytes
+    /// live in `block_store()`, VM logs in `log_backend()`.
     fn disk(&self) -> Arc<dyn DiskDB>;
 
-    /// ——  state KV
-    /// apply state diff  root marker
-    /// move-root `DiskDB::write` rebuild
+    /// Block-body store; boot rebuilds the state KV from it via `move_root`.
     fn block_store(&self) -> Arc<dyn BlockStore>;
 
     fn log_backend(&self) -> Arc<dyn LogBackend>;
 
-    /// state/root  block bytes
-    /// stable state  state
-    ///
-    /// state KV  BlockStore  state
-    /// column family /  KV  block
+    /// Wipe the state DB (business KV + root markers) while keeping block
+    /// bodies, so boot rebuilds state locally instead of re-syncing.
     fn clear_state_keep_blocks(&self) -> Rerr {
         sys::errf!("store does not support clear_state_keep_blocks")
     }

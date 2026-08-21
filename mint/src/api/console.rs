@@ -1,7 +1,5 @@
-//! `GET /` node console page (documented verification entry, see
-//! fullnode_api_doc_v2). Ported from fullnodedev mint api console.rs; the
-//! miner worker notice count comes from `HacashConsensus` instead of the old
-//! ApiExecCtx counter.
+//! `GET /` node console page (documented verification entry, fullnode_api_doc_v2).
+//! Ported from fullnodedev; the miner worker notice count comes from `HacashConsensus`.
 
 use std::sync::Arc;
 

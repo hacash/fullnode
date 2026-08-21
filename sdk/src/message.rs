@@ -1,8 +1,5 @@
 //! Message signing requests (Unified SDK 2.0, doc 14 §5, audit decision).
-//!
-//! Frozen convention: the caller-provided 32-byte digest is signed as-is
-//! (no domain prefix, matching the current wallet/login ecosystem). The SDK
-//! only prepares and verifies; signing happens in the wallet vault.
+//! Frozen convention: the 32-byte digest is signed as-is (no domain prefix); the SDK only prepares and verifies.
 
 use field::Address;
 
@@ -14,20 +11,19 @@ use crate::schema::SCHEMA_SIGNING_REQUEST;
 pub struct MessagePrepareParams {
     pub digest: String,
     pub signer_address: String,
-        pub origin: Option<String>,
-        pub expires_at: Option<u64>,
+    pub origin: Option<String>,
+    pub expires_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageVerifyResult {
     pub ok: bool,
-        pub address: Option<String>,
-        pub error: Option<String>,
+    pub address: Option<String>,
+    pub error: Option<String>,
 }
 
 /// `message.prepare_signature`: build an authentication `SigningRequest` over
-/// the given 32-byte digest. The digest convention is frozen: raw hash, no
-/// prefix, no domain separation (doc 14 audit decision).
+/// the given 32-byte digest; the digest convention is frozen (raw hash, no prefix).
 pub fn prepare_message_signature(
     params: &MessagePrepareParams,
 ) -> Result<SigningRequest, SdkError> {
@@ -37,15 +33,15 @@ pub fn prepare_message_signature(
             .trim_start_matches("0x")
             .trim_start_matches("0X"),
     )
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| {
-            SdkError::with_detail(
-                SdkErrorCode::ParseFailed,
-                "message digest must be 32-byte hex",
-                format!("{{\"actual\":{}}}", params.digest),
-            )
-        })?;
+    .ok()
+    .and_then(|bytes| bytes.try_into().ok())
+    .ok_or_else(|| {
+        SdkError::with_detail(
+            SdkErrorCode::ParseFailed,
+            "message digest must be 32-byte hex",
+            format!("{{\"actual\":{}}}", params.digest),
+        )
+    })?;
     let signer = Address::from_readable(&params.signer_address).map_err(SdkError::from)?;
     let mut request = SigningRequest {
         schema: SCHEMA_SIGNING_REQUEST.to_owned(),
@@ -67,10 +63,8 @@ pub fn prepare_message_signature(
     Ok(request)
 }
 
-/// `message.verify`: verify a proof over the digest and return the signer
-/// address. The request must be self-consistent (id/binding recompute),
-/// unexpired, purpose "authentication"; the proof envelope, its request
-/// id/binding and the signature are all checked against the request.
+/// `message.verify`: verify a proof over the digest and return the signer address; the request
+/// must be self-consistent, unexpired, purpose "authentication", and the proof must bind to it.
 pub fn verify_message_signature(
     request: &SigningRequest,
     proof: &SignatureProof,
@@ -90,10 +84,11 @@ pub fn verify_message_signature(
             "proof does not match the signing request",
         ));
     }
-    let digest: [u8; 32] = hex::decode(&request.digest)
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| SdkError::new(SdkErrorCode::ParseFailed, "request digest invalid"))?;
+    let digest: [u8; 32] = crate::inspect::decode_hex_fixed(
+        &request.digest,
+        SdkErrorCode::ParseFailed,
+        "request digest invalid",
+    )?;
     if address.to_readable() != request.signer_address {
         return Err(SdkError::with_detail(
             SdkErrorCode::BadSignature,

@@ -1,12 +1,8 @@
-//! Structured SDK errors (Unified SDK 2.0, doc 14 §7).
-//!
-//! Codes are stable strings and additive-only: business logic classifies by
-//! `code`, never by message text. `sys::Error` text is never parsed.
+//! Structured SDK errors (Unified SDK 2.0, doc 14 §7). Codes are stable
+//! additive-only strings; business logic classifies by `code`, never by text.
 
-/// Declares the error-code surface in one place: the `SdkErrorCode` enum, its
-/// snake_case `as_str()` mapping and the positional `ERROR_CODES` ABI table all
-/// come from this list, so adding a code can never desync the enum from the
-/// binary ids (the same pattern as `profile::define_operations!`).
+/// Declares the error-code surface in one place (enum, `as_str()`, `ERROR_CODES`),
+/// so adding a code can never desync the enum from the binary ids.
 macro_rules! define_error_codes {
     ($(($variant:ident, $name:literal)),+ $(,)?) => {
         /// Stable error codes, frozen at ABI major 2 (doc 14 §7).
@@ -23,9 +19,7 @@ macro_rules! define_error_codes {
             }
         }
 
-        /// Stable error codes in ABI id order (index + 1 = binary id; entry 0
-        /// is reserved as "unknown", mirroring `ERROR_NAMES` on the JS side).
-        /// Single source for `error_code_id` and the generated `op_tables.mjs`.
+        /// Stable error codes in ABI id order (index + 1; 0 is unknown).
         pub const ERROR_CODES: &[&str] = &[$($name),+];
     };
 }
@@ -53,9 +47,8 @@ define_error_codes! {
     (CodecProfileMismatch, "codec_profile_mismatch"),
 }
 
-/// `{ code, message, detail? }` — the single error shape across every
-/// operation. `detail` carries `action_index`, `byte_offset`, `expected`,
-/// `actual`, `path` etc. when available.
+/// `{ code, message, detail? }` — the single error shape across every operation.
+/// `detail` carries `action_index`, `byte_offset`, `expected`, `actual`, etc.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SdkError {
     pub schema: String,
@@ -99,10 +92,8 @@ impl std::error::Error for SdkError {}
 
 impl From<sys::Error> for SdkError {
     fn from(error: sys::Error) -> Self {
-        // The codec registry reports unknown kinds/length mismatches as plain
-        // sys::Error text; decode paths call `decode_transaction_exact` /
-        // `decode_action_exact` (the registry's own predicates) and map the
-        // result here. Error text is never parsed to pick an SdkErrorCode.
+        // The codec registry reports failures as plain sys::Error text, mapped
+        // here to ParseFailed; error text is never parsed to pick a code.
         SdkError::new(SdkErrorCode::ParseFailed, error.to_string())
     }
 }

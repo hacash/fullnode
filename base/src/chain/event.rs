@@ -3,12 +3,8 @@ use sys::Rerr;
 
 use crate::chain::PkgOrigin;
 
-/// Notifications are observational only. They run after the relevant chain
-/// transition has completed and cannot reject or roll back a block.
-///
-/// An ordinary `Err` only warns and does not affect the accepted block; an
-/// `Abort` is escalated to engine fatal after all listeners have been notified
-/// (§8.4 of the state-read error contract).
+/// Observational-only notifications: run after the chain transition, cannot reject
+/// a block. `Err` only warns; `Abort` is escalated to engine-fatal (§8.4).
 pub trait ChainListener: Send + Sync {
     fn on_block_accepted(&self, _height: u64, _origin: PkgOrigin) -> Rerr {
         Ok(())

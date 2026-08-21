@@ -9,21 +9,8 @@ pub fn buf_is_empty_or_all_zero(buf: &[u8]) -> bool {
     buf.is_empty() || buf.iter().all(|&b| b == 0)
 }
 
-/// Canonical bool byte decoding for typed/raw byte representations only.
-/// This is intentionally stricter than runtime truthiness (`Value::extract_bool`),
-/// which is used by control flow and explicit `as bool` coercions.
-///
-/// The divergence is intentional and stable:
-/// - `decode_canonical_bool_byte(0)` → `Some(false)`, `(1)` → `Some(true)`, all
-///   other bytes → `None`. Used by `type_from(ValueTy::Bool, ..)` and `Parse` to
-///   enforce canonical wire format.
-/// - `extract_bool` treats any non-zero byte as `true` (including `2..=255`),
-///   and also accepts `Nil`, `uint`, `Bytes`, `Address`. Used by control flow
-///   (`CHOOSE`, `BRL*`) and `as bool` casts.
-///
-/// This does not cause storage splitting — `extract_key_bytes` rejects `Bool`
-/// as a map key regardless. The two rule sets only diverge in serialization vs.
-/// runtime-cast contexts. See `vm/doc/value-cast.md` §9.4.
+/// Canonical bool byte decoding for typed/raw bytes only: `0`→`false`, `1`→`true`, other→`None`;
+/// `extract_bool` (control flow / `as bool`) accepts any non-zero byte. No storage splitting (§9.4).
 #[inline(always)]
 pub fn decode_canonical_bool_byte(byte: u8) -> Option<bool> {
     match byte {
@@ -44,11 +31,8 @@ pub fn trim_leading_zero_bytes(buf: &[u8]) -> &[u8] {
     &buf[first_nz..]
 }
 
-/// Canonical map-key bytes for any uint scalar (value-defined, width-independent).
-///
-/// Leading zero bytes are trimmed; numeric zero maps to `[0x00]` so empty keys are rejected.
-/// `U8(1)`, `U64(1)`, and future wider uints with the same value share one key encoding.
-/// See `vm/doc/value-cast.md` §9.1 and `Value::extract_key_bytes`.
+/// Canonical map-key bytes for any uint scalar (value-defined, width-independent). Leading zero bytes
+/// trimmed; zero maps to `[0x00]` (empty keys rejected); `U8(1)`/`U64(1)` share one encoding (§9.1).
 #[inline(always)]
 pub fn uint_key_bytes(n: u128) -> Vec<u8> {
     let be = n.to_be_bytes();

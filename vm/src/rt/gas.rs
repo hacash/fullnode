@@ -126,7 +126,7 @@ pub struct GasExtra {
 
 impl GasExtra {
     pub fn new(_hei: u64) -> Self {
-        use base::{decode_gas_budget};
+        use hacash_params::decode_gas_budget;
         Self {
             compute_limit: decode_gas_budget(72),  // 18009
             resource_limit: decode_gas_budget(56), // 6100
@@ -341,4 +341,3 @@ impl GasExtra {
 }
 
 /***************************************/
-

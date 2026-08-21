@@ -1,7 +1,5 @@
 //! Diamond bidding state used internally by `HacashConsensus`.
-//!
-//! Ported from fullnodedev `mint/src/check/bidding.rs` without Engine Weak /
-//! discover loops; node polls explicit deferred candidate batches.
+//! Ported from fullnodedev without Engine Weak / discover loops; node polls explicit deferred candidate batches.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -225,10 +223,8 @@ struct DiamondBiddingInner {
     latest: u32,
     books: HashMap<u32, BiddingBook>,
     low_bid_groups: HashMap<u64, LowBidGroup>,
-    /// Batches extracted but not yet reported: they stay out of the ready
-    /// queue until `finish_deferred_batch` removes them (§4.2 — a batch must
-    /// not leave the queue before its result is reported; an `Abort` during
-    /// execution therefore requeues it implicitly).
+    /// Batches extracted but not yet reported: they stay out of the ready queue
+    /// until a result is reported (§4.2 — an `Abort` requeues them implicitly).
     in_flight: HashMap<DeferredId, LowBidGroup>,
     replay_allow: HashMap<DeferredId, HashSet<Hash>>,
     block_arrive_time: HashMap<Hash, u64>,
@@ -404,11 +400,8 @@ impl DiamondBiddingInner {
         None
     }
 
-    /// Take at most one ready deferred group, the oldest. Batches are
-    /// extracted one at a time; the extracted group moves to `in_flight`
-    /// (in `drain_one_deferred_batch`) so an aborted execution requeues it
-    /// and the remaining groups stay queued (§4.2 of the error-system
-    /// design).
+    /// Take at most one ready deferred group, the oldest. The extracted group moves
+    /// to `in_flight` so an aborted execution requeues it (§4.2 of the error-system design).
     fn take_next_deferred_group(&mut self, root_min: u64, head_max: u64) -> Option<LowBidGroup> {
         self.low_bid_groups.retain(|_, group| {
             let keep = group.height >= root_min && group.height <= head_max;
@@ -558,14 +551,8 @@ impl DiamondBidding {
         self.inner.lock().unwrap().pending_count()
     }
 
-    /// Pull the next ready low-bid group (after 40min) and emit its sorted
-    /// branches (best first) so node can try the next branch if an earlier
-    /// one fails. Only one batch is extracted per call: an `Abort` during
-    /// execution leaves the batch in `in_flight` (no result is reported, so
-    /// it is not marked `Exhausted` and stays replay-allowed), the remaining
-    /// groups stay queued, and the rest of the round stops. The batch only
-    /// leaves the bidding state when `finish_deferred_batch` receives a
-    /// result (§4.2 of the error-system design).
+    /// Pull the next ready low-bid group (after 40min) and emit sorted branches (best first).
+    /// One batch per call: an `Abort` leaves it in `in_flight` and replay-allowed (§4.2).
     pub fn drain_one_deferred_batch(
         &self,
         root_min: u64,
@@ -577,9 +564,8 @@ impl DiamondBidding {
         };
         let id = DeferredId::new(group.height);
         let branches = group.replay_branches();
-        // Even an empty batch is reported (the node answers `Exhausted`), so
-        // the group leaves the state through the result path and never
-        // silently disappears.
+        // Even an empty batch is reported (node answers `Exhausted`), so the group
+        // leaves the state through the result path, never silently.
         println!(
             "[MintLowBid] drain begin height={} diamond={} branches={}",
             group.height,
@@ -631,7 +617,6 @@ impl DiamondBidding {
 
     /// Highest-bid gate after execute (OLD `check_highest_bid_of_block`).
     pub fn check_highest_bid(&self, pkg: &BlkPkg, prev_state: &dyn StateRead) -> Rerr {
-        use crate::action::diamond::DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
         use crate::action::util::pickout_diamond_mint_action_from_block;
 
         let curhei = pkg.height();
@@ -642,7 +627,10 @@ impl DiamondBidding {
         let Some((tidx, txp, diamint)) = pickout_diamond_mint_action_from_block(block) else {
             return Ok(());
         };
-        const CKN: u32 = DIAMOND_ABOVE_NUMBER_OF_MIN_FEE_AND_FORCE_CHECK_HIGHEST;
+        let ckn = hacash_params::MAINNET_PARAMS
+            .mint_rules
+            .diamond
+            .minimum_bid_after;
         if tidx != 1 && curhei > 600_000 {
             return errf!("diamond mint transaction must be the first tx in block");
         }
@@ -650,19 +638,19 @@ impl DiamondBidding {
         let bidfee = txp.fee().clone();
         // Min bidding fee (same rule as block_check::check_diamond_mint_minimum_bidding_fee).
         let bidmin = Amount::mei(block_reward_number(curhei) as u64);
-        if bidfee < bidmin && dianum > CKN {
+        if bidfee < bidmin && dianum > ckn {
             return errf!(
                 "diamond bidding fee {} cannot be less than {} after number {}",
                 bidfee,
                 bidmin,
-                CKN
+                ckn
             );
         }
         let mut bidrecord = self.inner.lock().unwrap();
         let t4blkt = bidrecord.prev_block_arrive_time(&block.prev_hash());
         let rhbf = bidrecord.highest(curhei, dianum, prev_state, t4blkt)?;
         if bidfee < rhbf {
-            if dianum > CKN {
+            if dianum > ckn {
                 if bidrecord.is_replay_allowed(&pkg.hash()) {
                     println!(
                         "[MintLowBid] replay low bid accepted height={} hash={} diamond={} fee={} fence={}",
@@ -794,9 +782,8 @@ mod tests {
         assert!(!bidding.inner.lock().unwrap().is_replay_allowed(&pkg.hash()));
     }
 
-    /// Only one batch is extracted per call; the remaining ready groups stay
-    /// queued so an aborted execution can requeue without losing candidates
-    /// (§4.2 of the error-system design).
+    /// Only one batch is extracted per call; the remaining ready groups stay queued
+    /// so an aborted execution can requeue without losing candidates (§4.2).
     #[test]
     fn deferred_batches_extract_one_at_a_time() {
         let bidding = DiamondBidding::new(4);
@@ -814,20 +801,22 @@ mod tests {
         }
         let first = bidding.drain_one_deferred_batch(1, 10).unwrap();
         assert_eq!(first.0.get(), 5);
-        assert!(bidding
-            .inner
-            .lock()
-            .unwrap()
-            .low_bid_groups
-            .contains_key(&6), "the second ready group must stay queued");
+        assert!(
+            bidding
+                .inner
+                .lock()
+                .unwrap()
+                .low_bid_groups
+                .contains_key(&6),
+            "the second ready group must stay queued"
+        );
         let second = bidding.drain_one_deferred_batch(1, 10).unwrap();
         assert_eq!(second.0.get(), 6);
         assert!(bidding.drain_one_deferred_batch(1, 10).is_none());
     }
 
-    /// An aborted batch stays in the bidding state until a result is
-    /// reported: the group leaves the ready queue but remains in `in_flight`
-    /// and replay-allowed, and no further drain re-extracts it (§4.2).
+    /// An aborted batch stays in the bidding state until a result is reported:
+    /// it leaves the ready queue but remains in `in_flight` and replay-allowed (§4.2).
     #[test]
     fn aborted_batch_stays_in_flight_until_result() {
         let bidding = DiamondBidding::new(4);

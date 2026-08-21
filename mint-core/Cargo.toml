@@ -7,17 +7,20 @@ edition.workspace = true
 sys = { workspace = true }
 field = { workspace = true }
 base = { path = "../base", default-features = false }
-# Used only by the execute body (BigUint for channel interest, x16rs mining/hex for diamond mint,
-# protocol execution params/tx types); SDK (wasm) builds keep execute off and never compile them.
+hacash-params = { workspace = true }
+# Used only by the execute body (x16rs mining/hex for diamond mint, Hacash
+# parameter profile); SDK (wasm) builds keep execute off and never compile them.
 # x16rs is a hard gate: its C code cannot build for wasm32-unknown-unknown (no libc headers),
 # so the diamond-mint execute body must stay out of the wasm graph.
 hex = { version = "0.4", optional = true }
-num-bigint = { version = "0.4", optional = true }
-protocol = { workspace = true, optional = true }
 x16rs = { workspace = true, optional = true }
 
 [features]
 default = ["execute"]
 # execute: full consensus execution body (enabled by fullnode/mint); when SDK (wasm) turns it off,
 # the execute body compiles to nothing and the state-machine code it references no longer enters wasm
-execute = ["dep:hex", "dep:num-bigint", "dep:protocol", "dep:x16rs", "base/execute"]
+execute = ["dep:hex", "dep:x16rs", "base/execute"]
+[dev-dependencies]
+# BigUint oracle for the channel-interest equivalence test (interest.rs): a
+# dev-dependency, so it never enters the SDK/wasm graph
+num-bigint = "0.4"

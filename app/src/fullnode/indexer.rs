@@ -1,18 +1,5 @@
-//! External indexer integration for the standard full node.
-//!
-//! # Wiring (only place that knows a concrete indexer)
-//!
-//! ```ignore
-//! let scaner: Arc<dyn Scaner> = Arc::new(NilScaner); // or hascan::open(...)
-//! let node = app::Fullnode::open(
-//!     std::path::Path::new("hacash.config.ini"),
-//!     Some(scaner),
-//! )?;
-//! node.run()?;
-//! ```
-//!
-//! External indexers implement [`base::Scaner`] in their own crate and pass the
-//! instance to [`super::Fullnode::open`]. Engine stays unaware.
+//! External indexer integration for the standard full node. Indexers implement
+//! [`base::Scaner`] and pass the instance to [`super::Fullnode::open`] — the only concrete indexer.
 
 use std::sync::Arc;
 
@@ -62,8 +49,7 @@ impl ScanerView for EngineScanerView {
         const MAX_SNAPSHOT_ATTEMPTS: usize = 3;
         for _ in 0..MAX_SNAPSHOT_ATTEMPTS {
             // `Ok(None)` (branch tip not in the tree) retries; a query failure
-            // (`Err`) propagates instead of being flattened away (§5 of the
-            // error-system design).
+            // (`Err`) propagates instead of being flattened away (§5).
             let session = match self.engine.state_at_session(block_hash) {
                 Ok(Some(session)) => session,
                 Ok(None) => {
@@ -97,9 +83,8 @@ impl ChainListener for ScanerListener {
         if matches!(origin, base::PkgOrigin::Rebuild | base::PkgOrigin::Replay) {
             return Ok(());
         }
-        // A read failure at a stable height is returned so the listener
-        // boundary records it (and escalates an `Abort`); a confirmed-missing
-        // block simply skips this notification.
+        // A read failure at a stable height is returned so the listener boundary
+        // records it (and escalates an `Abort`); a confirmed-missing block skips this.
         let block = match self.view.block_history().block_at_height(height) {
             Ok(Some(block)) => block,
             Ok(None) => return Ok(()),
@@ -109,12 +94,8 @@ impl ChainListener for ScanerListener {
     }
 }
 
-/// Attach a concrete indexer.
-///
-/// - registers a [`ChainListener`]
-/// - extends `services` with `scaner.api_services()`
-/// - asks the scaner to enqueue a checkpoint-based catch-up
-///
+/// Attach a concrete indexer: register a [`ChainListener`], extend `services`
+/// with `scaner.api_services()`, and enqueue a checkpoint-based catch-up.
 pub(super) fn attach(
     engine: Arc<dyn Engine>,
     scaner: Arc<dyn Scaner>,

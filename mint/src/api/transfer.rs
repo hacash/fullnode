@@ -1,14 +1,9 @@
-//! Hacash-specific transfer-build / transfer-scan API.
-//!
-//! These handlers formerly lived in the generic `api` crate; they were moved
-//! here because they encode Hacash transfer semantics (TransactionType2 +
-//! the 13 standard transfer actions of `protocol::action_std`). The scan
-//! handler no longer `downcast_ref`s each concrete action -- instead it
-//! dispatches through `base::TransferLike` (via `act.as_transfer_like()`),
-//! so the JSON shape is derived solely from the `TransferPayload` variant.
+//! Hacash-specific transfer-build / transfer-scan API (TransactionType2 + the 13
+//! standard transfer actions). Scan dispatches via `base::TransferLike`, so the JSON shape comes from `TransferPayload`.
 
 use base::{
-    Action, AddrOrPtr, ApiExecCtx, ApiRequest, ApiResponse, BlkPkg, Transaction, TransactionSign, TransferPayload,
+    Action, AddrOrPtr, ApiExecCtx, ApiRequest, ApiResponse, BlkPkg, Transaction, TransactionSign,
+    TransferPayload,
 };
 use field::{Address, Amount, Decode, DiamondName, DiamondNameListMax200, Encode, Satoshi};
 use protocol::action_std::{
@@ -103,15 +98,8 @@ fn real_addr(ptr: &AddrOrPtr, addrs: &[Address]) -> sys::Ret<Address> {
 // transfer_json -- dispatched via TransferLike, no downcast_ref
 // =============================================================
 
-/// Build the JSON for a single transfer action, or `None` if the action is
-/// not a transfer (or is filtered out by `CoinKind` / from / to filters).
-///
-/// The coin kind, amounts, satoshi, diamonds and asset serial are all
-/// derived from `TransferPayload` -- there is no `downcast_ref` onto the
-/// concrete `protocol::action_std` types. The `from` address is resolved
-/// from `transfer_from()` (falling back to the tx main address when the
-/// action has no explicit payer, e.g. `*ToTrs`). Both endpoints are resolved
-/// against `tx.addrs()`, so address pointers never leak into this API shape.
+/// Build the JSON for a single transfer action, or `None` if not a transfer / filtered out.
+/// All values derive from `TransferPayload` (no `downcast_ref`); `from` resolves via `transfer_from()`, falling back to the tx main address.
 fn transfer_json(
     tx: &dyn Transaction,
     act: &dyn Action,
@@ -193,7 +181,7 @@ fn transfer_json(
 }
 
 // =============================================================
-// /query/coin/transfer  (scan a tx's transfers)
+// /query/coin/transfer (scan a tx's transfers)
 // =============================================================
 
 pub(crate) fn scan_coin_transfer_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
@@ -253,7 +241,7 @@ pub(crate) fn scan_coin_transfer_handler(ctx: &ApiExecCtx, req: ApiRequest) -> A
 }
 
 // =============================================================
-// /create/coin/transfer  (build a signed transfer tx)
+// /create/coin/transfer (build a signed transfer tx)
 // =============================================================
 
 pub(crate) fn create_coin_transfer_handler(_ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {

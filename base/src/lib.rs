@@ -1,42 +1,43 @@
-//! `base` —— trait crate for Context / Action / Transaction / Block / State /
-//! Vm / Engine / ForkTree / Store / Node / Server.
-//!
-//! # Module map
-//!
-//! - `runtime/`    execution context, action dispatch, gas and scopes
-//! - `ledger/`     shared Hacash ledger schema and state transitions
-//! - `registry/`   codec registration, context factories and VM metadata
-//! - `state/`      StateRead / StateLayer / StateChunk
-//! - `store/`      BlockStore / DiskDB / Store
-//! - `sync/`       pipeline source, handle, progress and stream contracts
-//! - `chain/`      packages, apply modes, consensus and chain runtime contracts
-//! - `node/`       TxPool / Peer / Node
-//! - `api/`        ApiRoute / ApiService / Server / ApiExecCtx
-//! - `scaner/`     optional Scaner / NilScaner (indexer extension; not held by Engine)
-//!
-//! Domain paths and flat `base::Foo` re-exports are both supported.
+//! Trait crate for Context / Action / Transaction / Block / State / Vm / Engine / ForkTree / Store / Node / Server.
+//! SDK/wasm compiles it with `execute` off (iface + registry + runtime + state only); the rest is gated on `execute`.
 
-pub mod api;
-pub mod chain;
 pub mod iface;
-pub mod ledger;
-pub mod node;
 pub mod registry;
 pub mod runtime;
+
+#[cfg(feature = "execute")]
+pub mod api;
+#[cfg(feature = "execute")]
+pub mod chain;
+#[cfg(feature = "execute")]
+pub mod ledger;
+#[cfg(feature = "execute")]
+pub mod node;
+#[cfg(feature = "execute")]
 pub mod scaner;
 pub mod state;
+#[cfg(feature = "execute")]
 pub mod store;
+#[cfg(feature = "execute")]
 pub mod sync;
 
-pub use action_codec_derive::ActionCodec;
-pub use api::*;
-pub use chain::*;
+pub use action_derive::ActionCodec;
 pub use iface::*;
-pub use ledger::*;
-pub use node::*;
 pub use registry::*;
 pub use runtime::*;
+
+#[cfg(feature = "execute")]
+pub use api::*;
+#[cfg(feature = "execute")]
+pub use chain::*;
+#[cfg(feature = "execute")]
+pub use ledger::*;
+#[cfg(feature = "execute")]
+pub use node::*;
+#[cfg(feature = "execute")]
 pub use scaner::*;
 pub use state::*;
+#[cfg(feature = "execute")]
 pub use store::*;
+#[cfg(feature = "execute")]
 pub use sync::*;

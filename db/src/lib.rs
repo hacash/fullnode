@@ -1,7 +1,5 @@
-//! `db` - disk KV backends + triple-dir [`StoreInst`] (`block` / `state` / `vmlog`).
-//!
-//! Ops model: wipe state (+ `vmlog`) and rebuild from local `block/` without
-//! re-syncing the network. `Store::disk()` is the **state** database.
+//! `db` — disk KV backends + triple-dir [`StoreInst`] (`block` / `state` / `vmlog`).
+//! Ops model: wipe state and rebuild from local `block/`; `Store::disk()` is the **state** database.
 
 mod block_store;
 mod config;

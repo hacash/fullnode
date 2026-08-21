@@ -1,15 +1,5 @@
-//! Side hash list: the peripheral persistence hint for side branch bodies.
-//!
-//! Side bodies are stored content-addressed in the block DB; this file only
-//! records their hashes (fixed 32-byte records) so boot can rebuild the
-//! volatile side tree. It is not a canonical authority: appends are
-//! best-effort and asynchronous, the file is read only at boot, and the boot
-//! side replay treats the whole file as discardable.
-//!
-//! A single writer thread owns append / compaction / clear ordering. A
-//! compaction rewrites the file through a temporary file + atomic rename,
-//! merging hashes that arrived meanwhile (the channel is drained first), so
-//! no recovery hint is lost while the file is replaced.
+//! Side hash list: the peripheral persistence hint for side branch bodies;
+//! records hashes only, with one writer thread doing append/compaction.
 
 use std::collections::HashSet;
 use std::io::Write;
@@ -21,14 +11,12 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use field::Hash;
 use sys::Ret;
 
-/// One compaction per this many appended hashes. Compaction removes records
-/// that are already canonical or below the durable root so the file cannot
-/// grow without bound and boot reads stay cheap.
+/// One compaction per this many appended hashes, dropping records that are
+/// canonical or below the durable root so the file cannot grow without bound.
 const COMPACT_INTERVAL: usize = 2048;
 
-/// Builds the per-compaction keep predicate. Returned closure answers "should
-/// this side hash stay in the list?" — it drops canonical hashes, hashes
-/// whose body is gone or undecodable, and history below the durable root.
+/// Builds the per-compaction keep predicate: drops canonical hashes, hashes
+/// whose body is gone/undecodable, and history below the durable root.
 pub type SideKeepCtx = Arc<dyn Fn() -> Box<dyn Fn(&Hash) -> bool> + Send + Sync>;
 
 pub(crate) enum SideMsg {
@@ -41,18 +29,15 @@ pub struct SideListWriter {
 }
 
 impl SideListWriter {
-    /// Create the appender without starting the writer thread. The receiver
-    /// is handed to `spawn`; engine boot owns the timing, so a boot failure
-    /// cannot leak the writer thread and boot's direct file reads stay
-    /// race-free.
+    /// Create the appender without starting the writer thread; engine boot
+    /// owns the timing, so a boot failure cannot leak the writer thread.
     pub fn new() -> (Arc<Self>, Receiver<SideMsg>) {
         let (tx, rx) = sync_channel::<SideMsg>(64);
         (Arc::new(Self { tx }), rx)
     }
 
-    /// Start the single writer thread. `path = None` disables persistence (no
-    /// data dir); the writer thread still runs so appends are dropped silently
-    /// instead of erroring.
+    /// Start the single writer thread. `path = None` disables persistence; the
+    /// thread still runs so appends are dropped silently instead of erroring.
     pub fn spawn(
         self: &Arc<Self>,
         path: Option<PathBuf>,
@@ -97,8 +82,7 @@ fn writer_loop(
     let mut appended = 0usize;
     loop {
         // Normal operation blocks briefly for the next append; once cancelled
-        // the channel is drained so a normal shutdown keeps every recorded
-        // hint, while an extreme crash may lose the last window.
+        // the channel is drained so normal shutdown keeps every recorded hint.
         let msg = if cancel.load(Ordering::Acquire) {
             match rx.try_recv() {
                 Ok(msg) => Some(msg),

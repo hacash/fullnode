@@ -11,12 +11,9 @@ pub enum ValueTy {
     U32         = 4,
     U64         = 5,
     U128        = 6,
-    //          = 7,
+    // 7 and 10-12 are reserved (11 formerly HeapSlice)
     Bytes       = 8,
     Address     = 9,
-    //          = 10,
-    //          = 11,  // reserved (formerly HeapSlice)
-    //          = 12,
     Tuple       = 13,
     Compo       = 14,
     Handle      = 15

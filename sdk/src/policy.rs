@@ -1,20 +1,20 @@
-//! Generic application policy (Unified SDK 2.0, doc 14 §4.8). `evaluate`
-//! consumes a Review and a caller-provided Policy and produces a
-//! PolicyDecision; it never changes `protocol_valid`/`signability`.
+//! Generic application policy (Unified SDK 2.0, doc 14 §4.8): `evaluate` turns
+//! a Review + caller Policy into a PolicyDecision, never mutating protocol facts.
 
 use crate::error::SdkError;
 use crate::inspect::Review;
+use crate::json::SdkJsonTo;
 use crate::schema::{DOMAIN_POLICY_DECISION, SCHEMA_POLICY, SCHEMA_POLICY_DECISION};
 
 /// Caller-provided policy, frozen schema `hacash.sdk/policy@1` (doc 14 §4.8).
 /// Absent fields take protocol defaults; nothing here is a product constant.
 #[derive(Debug, Clone, Default)]
 pub struct Policy {
-        pub schema: Option<String>,
-        pub deny_kinds: Option<Vec<u16>>,
-        pub deny_blob: Option<bool>,
-        pub max_diamond_names: Option<u32>,
-        pub confirm_auditability: Option<Vec<String>>,
+    pub schema: Option<String>,
+    pub deny_kinds: Option<Vec<u16>>,
+    pub deny_blob: Option<bool>,
+    pub max_diamond_names: Option<u32>,
+    pub confirm_auditability: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,13 +29,12 @@ pub struct PolicyDecision {
 }
 
 fn policy_hash(policy: &Policy) -> String {
-    let body = policy.to_binary_body();
-    hex::encode(sys::calculate_hash(body))
+    let body = policy.to_json_string();
+    hex::encode(sys::calculate_hash(body.as_bytes()))
 }
 
-/// Depth-first walk of the action review tree (children of AST control-flow
-/// actions included): a policy that only inspects the top level would let
-/// `ast_select`/`ast_if` wrap denied content around it.
+/// Depth-first walk of the action review tree (AST children included), so
+/// nested actions are never a policy bypass.
 fn walk_actions<'a>(
     actions: &'a [crate::audit::ActionDesc],
     visit: &mut impl FnMut(&'a crate::audit::ActionDesc),
@@ -61,9 +60,7 @@ fn count_diamond_names(review: &Review) -> u32 {
 }
 
 /// `policy.evaluate`: apply the policy to a review. Default (empty) policy
-/// allows; AST/TEX/opaque maincall never auto-deny (doc 14 §4.8). All checks
-/// walk the action tree (children included), so nested actions are never a
-/// bypass.
+/// allows; all checks walk the action tree (children included).
 pub fn evaluate_policy(review: &Review, policy: &Policy) -> Result<PolicyDecision, SdkError> {
     if let Some(schema) = &policy.schema {
         if schema != SCHEMA_POLICY {
@@ -136,18 +133,15 @@ pub fn evaluate_policy(review: &Review, policy: &Policy) -> Result<PolicyDecisio
     Ok(decision_obj)
 }
 
-/// Canonical policy-decision binding (sha3-256 over the domain prefix and the
-/// decision JSON minus `policy_binding` itself). Shared by `evaluate_policy`
-/// and the verification side, so a decision whose fields (decision, findings,
-/// review binding, policy hash) were edited after evaluation never
-/// re-verifies.
+/// Canonical policy-decision binding: sha3-256 over the domain prefix and the
+/// decision JSON minus `policy_binding`; edits to any field break re-verification.
 pub fn policy_binding_of(decision: &PolicyDecision) -> String {
     let mut copy = decision.clone();
     copy.policy_binding.clear();
-    let body = copy.to_binary_body();
+    let body = copy.to_json_string();
     let mut data = Vec::with_capacity(DOMAIN_POLICY_DECISION.len() + body.len());
     data.extend_from_slice(DOMAIN_POLICY_DECISION);
-    data.extend_from_slice(&body);
+    data.extend_from_slice(body.as_bytes());
     hex::encode(sys::calculate_hash(data))
 }
 
@@ -177,11 +171,16 @@ mod tests {
             signability: "signable".to_owned(),
             limits_violations: vec![],
             topology_violations: vec![],
+            guard_violations: vec![],
+            schedule_violations: vec![],
             auditability: "opaque".to_owned(),
             requires_user_confirmation: true,
             required_signers: vec![],
             present_signers: vec![],
+            valid_signers: vec![],
             missing_signers: vec![],
+            invalid_signers: vec![],
+            signature_errors: vec![],
             chain_ids_allowed: None,
             valid_height_range: None,
             fee_purity: None,

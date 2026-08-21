@@ -1,5 +1,5 @@
 use base58check::{FromBase58Check, ToBase58Check};
-use sys::{Ret, normalf, errf};
+use sys::{Ret, errf, normalf};
 
 use crate::codec::{Decode, Encode};
 use crate::types::fixed::Fixed21;

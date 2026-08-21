@@ -76,9 +76,8 @@ impl BlockAcceptResult {
         result
     }
 
-    /// A block that could not be classified (e.g. a side branch that was
-    /// discarded after an execution or body-write failure). No peer penalty,
-    /// no relay; the stream continues.
+    /// Unclassifiable block (e.g. a side branch dropped after an execution or
+    /// body-write failure). No peer penalty, no relay; the stream continues.
     pub fn ignored() -> Self {
         Self::empty(BlockAcceptStatus::Ignored)
     }

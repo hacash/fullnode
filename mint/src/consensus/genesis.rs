@@ -20,11 +20,8 @@ pub static GENESIS_BLOCK_HASH: LazyLock<Hash> = LazyLock::new(|| {
     )
 });
 
-/// Expected serialized mainnet genesis block bytes (from fullnodedev
-/// `mint/src/genesis/block.rs`). Byte-level self-check: any drift in the
-/// block/tx codecs or in the genesis construction itself panics at startup
-/// instead of silently booting a genesis whose hash no longer matches its
-/// bytes.
+/// Expected serialized mainnet genesis block bytes (from fullnodedev). Byte-level
+/// self-check: drift in the block/tx codecs panics at startup instead of booting a mismatched genesis.
 const GENESIS_BLOCK_BODY_HEX: &str = "010000000000005c57b08c0000000000000000000000000000000000000000000000000000000000000000ad557702fc70afaf70a855e7b8a4400159643cb5a7fc8a89ba2bce6f818a9b0100000001098b344500000000000000000c1aaa4e6007cc58cfb932052ac0ec25ca356183f80101686172646572746f646f62657474657200";
 
 /// Validate the constructed genesis block against the locked mainnet bytes:

@@ -1,19 +1,25 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use field::{Address, Amount, Encode};
+use field::{Address, Amount, Decode, Encode};
 use sys::Ret;
 
+#[cfg(feature = "execute")]
 use crate::iface::context::Context;
 use crate::runtime::{ActScope, AddrOrPtr};
 
 pub type ActOut = (u32, Vec<u8>);
-/// The wire/offline view of an action. In full builds the same object also
-/// implements `ActionExecute`, and `ActionRef` carries that view; codec-only
-/// (SDK/wasm) builds keep the wire view only — execution is not compiled in.
-#[cfg(feature = "execute")]
-pub type ActionRef = Arc<dyn ActionExecute>;
-#[cfg(not(feature = "execute"))]
+/// Wire/offline view of an action — no signer/topology or execution/JSON semantics;
+/// execution is the separate `ActionExecute` trait via `as_execute` (type-stable across `execute`).
+pub trait ActionCodec: Encode + Send + Sync + std::fmt::Debug {
+    fn kind(&self) -> u16;
+    fn schema(&self) -> Option<&'static crate::ActionSchema> {
+        None
+    }
+    fn as_any(&self) -> &dyn Any;
+}
+
+/// Offline review view. `Action` is retained as the public compatibility name.
 pub type ActionRef = Arc<dyn Action>;
 
 #[derive(Clone, Debug)]
@@ -38,9 +44,6 @@ pub trait TransferLike: Send + Sync {
     }
 }
 
-///
-///
-///
 #[derive(Clone)]
 pub struct TransferRouting {
     pub action_kind: u16,
@@ -51,7 +54,7 @@ pub struct TransferRouting {
     pub receive: bool,
 }
 
-///
+#[cfg(feature = "execute")]
 pub fn resolve_transfer_routing(
     action: &dyn Action,
     ctx: &dyn Context,
@@ -61,6 +64,7 @@ pub fn resolve_transfer_routing(
 
 /// Same as `resolve_transfer_routing` but callable on a `Context`-bounded
 /// type without forming a `&dyn Context` (needed for `?Sized` impls).
+#[cfg(feature = "execute")]
 pub fn resolve_transfer_routing_on<C: Context + ?Sized>(
     action: &dyn Action,
     ctx: &C,
@@ -93,11 +97,8 @@ pub fn resolve_transfer_routing_on<C: Context + ?Sized>(
 
 // ================================ Action ================================
 
-/// Nested control-flow children of an action (AST select/if, and any future
-/// branching kind). `depth_inc` is the protocol AST-depth cost of this node
-/// (`AstSelect` = 1, `AstIf` = 2); `branches` preserves the review-path
-/// grouping (one inner vec per branch). Leaf actions return `None` from
-/// `Action::nested_actions`.
+/// Nested control-flow children of an action. `depth_inc` is the protocol AST-depth
+/// cost (`AstSelect` = 1, `AstIf` = 2); `branches` preserves review-path grouping.
 #[derive(Clone)]
 pub struct NestedActions<'a> {
     pub depth_inc: usize,
@@ -110,28 +111,9 @@ impl<'a> NestedActions<'a> {
     }
 }
 
-/// Cross-crate action contract owned by `base` and consumed by protocol,
-/// mint, VM, and dispatch code. Standard Hacash implementations live in
-/// `protocol/src/codec/action`, `mint/src/action`, and `vm/src/action`.
-/// `ToJSON` is the canonical API-facing representation; it does not
-/// participate in binary encoding, validation, or consensus execution.
-/// Regular payloads derive `base::ActionCodec`; irregular payloads keep an
-/// explicit codec in their owning crate. Neither path generates execution.
-///
-/// This is the wire + offline-semantics view (kind, scope, signers, transfer
-/// routing, flags). Execution lives on the separate `ActionExecute` trait,
-/// implemented only in full builds; codec-only (SDK/wasm) builds compile
-/// without it, so no stub exists.
-///
-/// `ToJSON` is deliberately NOT a supertrait: the SDK's wasm core is JSON-free
-/// (the transport is binary; JSON is a JS-side concern), and a `ToJSON`
-/// supertrait would force every `dyn Action` vtable in the SDK to carry the
-/// JSON formatter machinery. Code that needs the JSON view (fullnode API,
-/// registry JSON decoders) bounds on `ActionJsonCodec` / `field::ToJSON`
-/// explicitly.
-pub trait Action: Encode + Send + Sync + std::fmt::Debug {
-    fn kind(&self) -> u16;
-
+/// Cross-crate offline action-view contract owned by `base` (impls in protocol/mint/vm).
+/// Execution is a separate `ActionExecute` trait; `ToJSON` is not a supertrait so SDK/wasm vtables stay JSON-free.
+pub trait Action: ActionCodec {
     fn as_transfer_like(&self) -> Option<&dyn TransferLike> {
         None
     }
@@ -152,84 +134,93 @@ pub trait Action: Encode + Send + Sync + std::fmt::Debug {
         String::new()
     }
 
-    /// Nested control-flow children. Default `None` (leaf). Protocol topology
-    /// analysis, AST signer collection and the SDK review tree all walk this
-    /// instead of downcasting concrete AST types, so a new branching action
-    /// is complete once it implements this method.
+    /// Nested control-flow children; default `None` (leaf). Topology analysis, AST signer
+    /// collection and the SDK review tree walk this instead of downcasting.
     fn nested_actions(&self) -> Option<NestedActions<'_>> {
         None
     }
 
-    /// Escape hatch back to the concrete action type.
-    ///
-    /// **When to use the trait method instead**: capabilities shared by every
-    /// chain's actions (signing requirements, transfer routing, scope, flags,
-    /// nested children) MUST go through dedicated `Action` methods (`req_sign`,
-    /// `scope`, `required_flags`, `as_transfer_like`, `nested_actions`, ...).
-    /// Adding a new such method is the right fix when multiple callers
-    /// `downcast_ref` to read the same generic field.
-    ///
-    /// **When downcast is correct**: chain-specific or consensus-mechanism
-    /// business (e.g. Hacash diamond minting, inscription edits, PoW coinbase
-    /// payloads). Such logic lives in the crate that owns those types (mint /
-    /// protocol-internal / app composition root); base must not learn those
-    /// concepts. `downcast_ref` returning `None` for an unrecognised chain is
-    /// the intended fallback, not a bug.
-    fn as_any(&self) -> &dyn Any;
+    /// Escape hatch to the concrete action type; downcast is for chain-specific consensus,
+    /// `None` being the intended fallback. In `execute` builds this also upcasts to the execute view.
+    #[cfg(feature = "execute")]
+    fn as_execute(&self) -> Option<&dyn ActionExecute> {
+        None
+    }
+
+    /// Fullnode-only JSON presentation, independent of `ActionExecute`: a
+    /// non-executable action may still be rendered, SDK vtables stay JSON-free.
+    #[cfg(feature = "execute")]
+    fn as_json_view(&self) -> Option<&dyn ActionJsonView> {
+        None
+    }
 }
 
-/// Execution view of an action: `Action` plus the consensus `execute` body.
-/// Implemented (via `impl_action!`) only when the `execute` feature is on, so
-/// the SDK/wasm dependency graph has no callable execution surface at all —
-/// there is no stub to reach.
-///
-/// `ActionExecute` additionally carries the JSON view (`ActionJsonView`), so
-/// full builds that hold `dyn ActionExecute` (the execute `ActionRef`) can
-/// still render action JSON in API services — while the SDK's `dyn Action`
-/// vtables stay JSON-free.
-pub trait ActionExecute: Action + ActionJsonView {
+/// Execution view of an action: `Action` plus the consensus `execute` body, only when
+/// `execute` is on — the SDK/wasm graph has no execution surface. JSON is an independent view.
+#[cfg(feature = "execute")]
+pub trait ActionExecute: Action {
     fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut>;
 }
 
-/// JSON rendering for actions, kept off the `Action` wire trait so SDK/wasm
-/// `dyn Action` vtables carry no JSON formatter machinery. Full-node code that
-/// renders action JSON (API services) holds the execute view or bounds on this
-/// trait explicitly.
+#[cfg(feature = "execute")]
+impl dyn Action {
+    /// Consensus execution. Looks up the execute view instead of requiring
+    /// `ActionRef` to be a different type.
+    pub fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
+        match self.as_execute() {
+            Some(exec) => ActionExecute::execute(exec, ctx),
+            None => sys::errf!("action kind {} has no execute surface", self.kind()),
+        }
+    }
+
+    /// JSON rendering used by full-node API services. JSON is an independent
+    /// presentation view; it does not force an action to implement execute.
+    pub fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
+        match self.as_json_view() {
+            Some(view) => field::ToJSON::to_json_fmt(view, fmt),
+            None => format!("{{\"kind\":{}}}", self.kind()),
+        }
+    }
+
+    /// Default JSON formatter convenience, retained for dynamic-action API
+    /// callers. The result uses `as_json_view`, never `ActionExecute`.
+    pub fn to_json(&self) -> String {
+        self.to_json_fmt(&field::JSONFormater::default())
+    }
+}
+
+/// JSON rendering kept off the `Action` wire trait so SDK/wasm `dyn Action`
+/// vtables carry no JSON machinery; full-node API services request it explicitly.
 pub trait ActionJsonView: field::ToJSON {}
 
 impl<T: field::ToJSON> ActionJsonView for T {}
 
-/// Owned JSON construction for actions whose JSON schema maps directly to
-/// their fields. This is deliberately separate from `Action`: internal or
-/// dynamic actions are not required to expose a generic JSON constructor.
+/// Owned JSON construction for actions whose JSON schema maps directly to their
+/// fields; internal or dynamic actions need not expose a generic constructor.
 pub trait ActionJsonCodec: Action + Sized {
     fn decode_json(json: &str) -> Ret<Self>;
 }
 
-/// Generate the mechanical part of a regular `Action` implementation.
-///
-/// `name` supplies the static protocol/API identifier exposed as the
-/// inherent `NAME` constant (used e.g. by the setup host-definition
-/// registration in `protocol::setup`). It is a type-level constant and does
-/// not enter `dyn Action`, so object safety and `ActionRef` are unaffected.
-///
-/// The macro emits two impls: the wire/offline `Action` surface, and the
-/// `ActionExecute` impl with the real execution body. The execute impl is
-/// gated as a whole block on the expanding crate's `execute` feature (which
-/// forwards to `base/execute`), so codec-only (SDK/wasm) builds compile no
-/// execution body and no stub at all. This macro only removes repeated
-/// metadata, `as_any`, and size-based gas plumbing; it does not add a second
-/// precheck or hook path.
+/// Static consensus placement scope of an action type, alongside its wire schema.
+/// `impl_action_facts!` generates this from the same `scope` fact; handwritten
+/// `Action` impls (e.g. AST control-flow actions) must provide it too, because
+/// `action_codec_binding!` embeds it in every binding so static selection (the
+/// SDK's CALL_ONLY exclusion) never has to guess it from kind arithmetic.
+pub trait ActionScopeProvider {
+    const SCOPE: ActScope;
+}
+
+/// Generate the mechanical wire/offline part of an `ActionCodec` + `Action` impl; the
+/// consensus `execute` body lives in a separate `impl_action_execute!`; with `execute` on, omitting it is a compile error.
 #[macro_export]
-macro_rules! impl_action {
+macro_rules! impl_action_facts {
     ($class:ty {
         name: $name:literal,
         scope: $scope:expr,
         min_tx_type: $min_tx_type:expr,
-        description: $description:expr,
-        execute: ($action_self:ident, $action_ctx:ident) $execute:block $(,)?
+        description: $description:expr $(,)?
     }) => {
-        $crate::impl_action! {
+        $crate::impl_action_facts! {
             $class {
                 name: $name,
                 scope: $scope,
@@ -238,7 +229,6 @@ macro_rules! impl_action {
                 req_sign: |_: &$class| vec![],
                 as_transfer_like: none,
                 description: $description,
-                execute: ($action_self, $action_ctx) $execute
             }
         }
     };
@@ -246,10 +236,9 @@ macro_rules! impl_action {
     ($class:ty {
         name: $name:literal,
         scope: $scope:expr,
-        min_tx_type: $min_tx_type:expr,
-        execute: ($action_self:ident, $action_ctx:ident) $execute:block $(,)?
+        min_tx_type: $min_tx_type:expr $(,)?
     }) => {
-        $crate::impl_action! {
+        $crate::impl_action_facts! {
             $class {
                 name: $name,
                 scope: $scope,
@@ -258,7 +247,6 @@ macro_rules! impl_action {
                 req_sign: |_: &$class| vec![],
                 as_transfer_like: none,
                 description: |_: &$class| String::new(),
-                execute: ($action_self, $action_ctx) $execute
             }
         }
     };
@@ -270,17 +258,32 @@ macro_rules! impl_action {
         extra9: $extra9:expr,
         req_sign: $req_sign:expr,
         as_transfer_like: $as_transfer_like:ident,
-        description: $description:expr,
-        execute: ($action_self:ident, $action_ctx:ident) $execute:block $(,)?
+        description: $description:expr $(,)?
     }) => {
         impl $class {
             pub const NAME: &'static str = $name;
+            pub const SCOPE: $crate::ActScope = $scope;
         }
 
-        impl $crate::Action for $class {
+        impl $crate::ActionScopeProvider for $class {
+            const SCOPE: $crate::ActScope = $scope;
+        }
+
+        impl $crate::ActionCodec for $class {
             fn kind(&self) -> u16 {
                 Self::KIND
             }
+
+            fn schema(&self) -> Option<&'static $crate::ActionSchema> {
+                Some(&<$class as $crate::ActionSchemaProvider>::ACTION_SCHEMA)
+            }
+
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+
+        impl $crate::Action for $class {
 
             fn scope(&self) -> $crate::ActScope {
                 $scope
@@ -299,24 +302,21 @@ macro_rules! impl_action {
             }
 
             fn as_transfer_like(&self) -> Option<&dyn $crate::TransferLike> {
-                $crate::impl_action!(@as_transfer_like self, $as_transfer_like)
+                $crate::impl_action_facts!(@as_transfer_like self, $as_transfer_like)
             }
 
             fn description(&self) -> String {
                 ($description)(self)
             }
 
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
+            #[cfg(feature = "execute")]
+            fn as_execute(&self) -> Option<&dyn $crate::ActionExecute> {
+                Some(self)
             }
-        }
 
-        #[cfg(feature = "execute")]
-        impl $crate::ActionExecute for $class {
-            fn execute(&$action_self, $action_ctx: &mut dyn $crate::Context) -> sys::Ret<$crate::ActOut> {
-                let gas = $action_self.size() as u32;
-                let result: sys::Ret<Vec<u8>> = (|| $execute)();
-                Ok((gas, result?))
+            #[cfg(feature = "execute")]
+            fn as_json_view(&self) -> Option<&dyn $crate::ActionJsonView> {
+                Some(self)
             }
         }
     };
@@ -330,35 +330,96 @@ macro_rules! impl_action {
     };
 }
 
-/// Registry-compatible JSON creator for regular derived actions.
-///
-/// Full builds store the execute view (`ActionRef = Arc<dyn ActionExecute>`),
-/// so the creator needs the concrete type to carry the execution impl;
-/// codec-only builds store the wire view and only need `Action`. The two
-/// bodies are identical — only the bound differs.
-#[cfg(feature = "execute")]
-pub fn decode_regular_action_json<T>(
-    _reg: &dyn crate::CodecRegistry,
-    kind: u16,
-    json: &str,
-) -> Ret<ActionRef>
-where
-    T: ActionJsonCodec + ActionExecute + 'static,
-{
-    let action = T::decode_json(json)?;
-    if action.kind() != kind {
-        return sys::normalf!(
-            "action kind mismatch: expected {} got {}",
-            kind,
-            action.kind()
-        );
-    }
-    Ok(Arc::new(action))
+/// Consensus `ActionExecute` body for a type with `impl_action_facts!`; gated on `execute`,
+/// applies size-based gas, returns `Ret<Vec<u8>>`. Dispatch stays `Action::as_execute`.
+#[macro_export]
+macro_rules! impl_action_execute {
+    ($class:ty {
+        ($action_self:ident, $action_ctx:ident) $execute:block $(,)?
+    }) => {
+        #[cfg(feature = "execute")]
+        impl $crate::ActionExecute for $class {
+            fn execute(
+                &$action_self,
+                $action_ctx: &mut dyn $crate::Context,
+            ) -> sys::Ret<$crate::ActOut> {
+                let gas = field::Encode::size($action_self) as u32;
+                let result: sys::Ret<Vec<u8>> = (|| $execute)();
+                Ok((gas, result?))
+            }
+        }
+    };
 }
 
-/// Registry-compatible JSON creator for regular derived actions (codec-only
-/// builds; see the `execute` variant above).
-#[cfg(not(feature = "execute"))]
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct ExecuteOnlyAction;
+
+    impl Encode for ExecuteOnlyAction {
+        fn size(&self) -> usize {
+            2
+        }
+
+        fn encode_to(&self, out: &mut Vec<u8>) {
+            field::Uint2::from(65_000).encode_to(out);
+        }
+    }
+
+    impl ActionCodec for ExecuteOnlyAction {
+        fn kind(&self) -> u16 {
+            65_000
+        }
+
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+    }
+
+    impl Action for ExecuteOnlyAction {
+        fn scope(&self) -> ActScope {
+            ActScope::TOP
+        }
+
+        fn as_execute(&self) -> Option<&dyn ActionExecute> {
+            Some(self)
+        }
+    }
+
+    // This intentionally has no `field::ToJSON` implementation. It proves
+    // execute is no longer coupled to API JSON presentation.
+    impl ActionExecute for ExecuteOnlyAction {
+        fn execute(&self, _ctx: &mut dyn Context) -> Ret<ActOut> {
+            Ok((0, vec![]))
+        }
+    }
+
+    #[test]
+    fn execute_does_not_require_json_view() {
+        let action = ExecuteOnlyAction;
+        assert_eq!(action.kind(), 65_000);
+        assert!(action.as_execute().is_some());
+        assert!(action.as_json_view().is_none());
+
+        let codec: &dyn ActionCodec = &action;
+        assert_eq!(codec.kind(), 65_000);
+        assert!(codec.schema().is_none());
+    }
+}
+
+/// Wrap a decoded action as `ActionRef`. `ActionRef` is always the wire view,
+/// so a single bound (`Action + Decode`) is enough in every build.
+pub fn decode_regular_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
+where
+    T: Action + Decode + 'static,
+{
+    let (action, used) = T::decode(buf)?;
+    Ok((Arc::new(action), used))
+}
+
+/// Registry-compatible JSON creator for regular derived actions.
 pub fn decode_regular_action_json<T>(
     _reg: &dyn crate::CodecRegistry,
     kind: u16,
@@ -376,92 +437,4 @@ where
         );
     }
     Ok(Arc::new(action))
-}
-
-/// Register binary and JSON codecs from one regular-action type list.
-///
-/// Each group carries its SDK-facing friendly kind name (`""` when the group
-/// has no friendly form, e.g. VM host actions); it is forwarded to
-/// `register_action_family` from the same invocation as the kind list, so the
-/// friendly grouping can never drift from the registered kinds.
-#[macro_export]
-macro_rules! register_regular_actions {
-    ($registry:expr, $( $friendly:literal, $binary:path => [$( $action:ty ),+ $(,)?] ),+ $(,)?) => {{
-        $(
-            let kinds: &[u16] = &[$(<$action>::KIND),+];
-            $registry.register_action(kinds, $binary)?;
-            if !$friendly.is_empty() {
-                $registry.register_action_family($friendly, kinds)?;
-            }
-            $(
-                $registry.register_action_json(
-                    &[<$action>::KIND],
-                    $crate::decode_regular_action_json::<$action>,
-                )?;
-                $registry.register_action_schema(
-                    <$action as $crate::ActionSchemaProvider>::ACTION_SCHEMA,
-                )?;
-            )+
-        )+
-        Ok::<(), sys::Error>(())
-    }};
-}
-
-/// Register a custom binary/JSON action family from one authoritative kind
-/// list. The registry interface stays unchanged while callers can no longer
-/// accidentally use different kind lists for the two codec directions.
-/// `$friendly` is the SDK-facing friendly kind name (`""` when the family has
-/// no friendly form).
-#[macro_export]
-macro_rules! register_custom_actions {
-    ($registry:expr, $friendly:literal, $binary:path, $json:path => [$( $action:ty ),+ $(,)?] $(,)?) => {{
-        let kinds: &[u16] = &[$(<$action>::KIND),+];
-        $registry.register_action(kinds, $binary)?;
-        $registry.register_action_json(kinds, $json)?;
-        if !$friendly.is_empty() {
-            $registry.register_action_family($friendly, kinds)?;
-        }
-        $(
-            $registry.register_action_schema(
-                <$action as $crate::ActionSchemaProvider>::ACTION_SCHEMA,
-            )?;
-        )+
-        Ok::<(), sys::Error>(())
-    }};
-}
-
-/// Keep the JSON-only form for irregular actions whose wire codec is custom.
-///
-/// Builds the object with direct string pushes (no `format!`) so the generated
-/// `to_json_fmt` carries no fmt machinery (wasm size).
-#[macro_export]
-macro_rules! impl_action_to_json {
-    ($class:ty { $($field:ident),* $(,)? }) => {
-        impl field::ToJSON for $class {
-            fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
-                let mut s = String::new();
-                s.push_str("{\"kind\":");
-                s.push_str(&field::ToJSON::to_json_fmt(&self.kind, fmt));
-                $(
-                    s.push(',');
-                    s.push('"');
-                    s.push_str(stringify!($field));
-                    s.push_str("\":");
-                    s.push_str(&field::ToJSON::to_json_fmt(&self.$field, fmt));
-                )*
-                s.push('}');
-                s
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! impl_fields_to_json {
-    ($class:ty { $($field:ident),* $(,)? } optional $optional:ident when $condition:ident) => {
-        field::impl_struct_json!($class { $($field),* } optional $optional when $condition);
-    };
-    ($class:ty { $($field:ident),* $(,)? }) => {
-        field::impl_struct_json!($class { $($field),* });
-    };
 }

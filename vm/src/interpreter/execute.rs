@@ -1,6 +1,4 @@
-﻿/**
-* parse bytecode params
-*/
+﻿/* parse bytecode params */
 #[inline(always)]
 fn finish_ntcall(
     cap: &SpaceCap,
@@ -142,13 +140,8 @@ macro_rules! ostbranch {
     };
 }
 
-/*
-* Execution hot path intentionally trusts verified bytecode.
-* BUG1/2/3 are not runtime bugs: param reads and jumps omit repeated checks,
-* and gas negativity is finalized after each instruction for throughput.
-* Callers must only execute bytecode already accepted by rt/verify.
-* Callers must also seed operand/local stacks with values already valid under SpaceCap.
-*/
+// Hot path trusts verified bytecode: only execute rt/verify-accepted code
+// with SpaceCap-valid stacks (gas is finalized per instruction).
 
 pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + ?Sized>(
     // frame local
@@ -163,7 +156,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
     context_addr: &field::Address,
     current_addr: &field::Address,
     // shared VM machine; accessed only for the duration of individual
-    // instructions so ACTION can synchronously recurse into StubVm.
+    // instructions so ACTION can synchronously recurse into NativeVm.
     machine: &mut M,
     host: &mut H,
 ) -> VmrtRes<CallExit> {
@@ -180,10 +173,6 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
     let kv_limits = crate::space::VolatileKvLimits::from_space_cap(cap);
     let ops = operands;
     let hei: u64 = host.height();
-
-    // check code length
-    // let codelen = codes.len();
-    // let tail = codelen;
 
     macro_rules! nsr {
         () => {
@@ -330,11 +319,8 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                     actbody.append(&mut bdv);
                     gas_resource!(act_bytes, actbody.len());
                 }
-                // ACTION transfers drive Permit/Payable hooks synchronously
-                // after the ledger move, mirroring dev (`action.execute`
-                // then `do_action_hook`). The dispatch tail skips them for
-                // Call (slot law); the VM itself immediately recurses while
-                // the current frame is suspended at this instruction.
+                // ACTION transfers drive Permit/Payable hooks synchronously after the ledger move
+                // (mirroring dev `action.execute` then `do_action_hook`); the VM recurses here.
                 let routing = if matches!(act_kind, Bytecode::ACTION) {
                     host.action_transfer_routing(kid, &actbody).map_err(|e| {
                         ItrErr::new(crate::rt::map_native_action_code(&e), &e.to_string())

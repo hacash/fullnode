@@ -8,14 +8,14 @@ use sys::{Rerr, Ret};
 use crate::rt::AbstCall;
 use crate::value::{ContractAddress, Value};
 
-use super::{StubVm, VmRequest, VolatileState};
+use super::{NativeVm, VmRequest, VolatileState};
 
 #[derive(Clone)]
 struct VmVolatileSnapshot {
     state: VolatileState,
 }
 
-impl Vm for StubVm {
+impl Vm for NativeVm {
     fn set_deadline(&mut self, deadline: Option<Instant>) {
         self.deadline = deadline;
     }

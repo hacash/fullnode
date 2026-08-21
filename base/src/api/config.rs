@@ -1,9 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr};
 
-use serde::Deserialize;
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+/// HTTP API server configuration (`[api]` section). Decoded hand-written in
+/// the app composition layer (no serde).
+#[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub enable: bool,
     pub listen_ip: IpAddr,

@@ -206,11 +206,8 @@ pub fn hac_add(ctx: &mut dyn Context, addr: &Address, amt: &Amount) -> Ret<Vec<u
     hac_add_state(ctx.layer(), addr, amt)
 }
 
-/// Add HAC directly to a state layer when no transaction Context exists.
-///
-/// Block-level fee settlement uses this after all transactions have executed.
-/// It intentionally shares the normal `hac_add` validation and blackhole
-/// accounting semantics.
+/// Add HAC directly to a state layer when no transaction Context exists (block-level fee
+/// settlement). Shares the normal `hac_add` validation and blackhole accounting semantics.
 pub fn hac_add_state(
     layer: &mut dyn crate::StateLayer,
     addr: &Address,

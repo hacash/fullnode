@@ -1,4 +1,4 @@
-use sys::{Rerr, Ret, normalf, errf};
+use sys::{Rerr, Ret, errf, normalf};
 
 use crate::codec::{Decode, Encode};
 use crate::types::fixed::{Fixed6, Fixed10};
@@ -18,9 +18,8 @@ pub type DiamondLifeGene = Fixed10;
 pub type DiamondNameListMax200 = ListW1<DiamondName>;
 pub type DiamondNameListMax60000 = ListW2<DiamondName>;
 
-/// Semantic cap of `DiamondNameListMax200` (its wire form is a u8-counted
-/// list, so this cap is a semantic rule, not a wire one). Single source: the
-/// checks in this module and the SDK's codec profile both read it.
+/// Semantic cap of `DiamondNameListMax200` (u8-counted wire form, so a semantic rule).
+/// Single source — this module's checks and the SDK's codec profile both read it.
 pub const DIAMOND_LIST_MAX: usize = 200;
 
 impl DiamondNumberAuto {
@@ -147,10 +146,7 @@ impl DiamondNameListMax200 {
             return errf!("diamonds quantity cannot be zero");
         }
         if self.0.len() > DIAMOND_LIST_MAX {
-            return errf!(
-                "diamonds quantity cannot exceed {}",
-                DIAMOND_LIST_MAX
-            );
+            return errf!("diamonds quantity cannot exceed {}", DIAMOND_LIST_MAX);
         }
         let mut seen = std::collections::HashSet::with_capacity(self.0.len());
         for name in &self.0 {

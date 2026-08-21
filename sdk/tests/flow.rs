@@ -1,9 +1,8 @@
 //! End-to-end flow tests (doc 14 §12 acceptance #1/#2/#6): decode → inspect →
-//! prepare → vault sign → attach → verify, offline, with the golden Type-2
-//! legacy vector and the strict-context guard paths.
+//! prepare → vault sign → attach → verify, offline, with golden Type-2 vector.
 
 use sdk::attach::{SignatureProof, attach_signature, prepare_signature, verify_signatures};
-use sdk::build::{ActionSpec, TransactionSpec, build_transaction};
+use sdk::build::{ActionSpec, TransactionSpec, WireValue, build_transaction};
 use sdk::inspect::{InspectContext, inspect, inspect_report};
 use sdk::profile::{CodecProfile, FULLNODE_COMMIT};
 use sdk::schema::SCHEMA_SIGNATURE_PROOF;
@@ -16,12 +15,68 @@ fn profile() -> CodecProfile {
 /// Golden signed Type-2 HAC+SAT transfer (legacy vector, prikey "123456").
 const LEGACY_BODY: &str = "0200689e96d400e63c33a796b3032ce6b856f68fccf06608d9ed18f401010002000100e63c33a796b3032ce6b856f68fccf06608d9ed18f8010c000a00e63c33a796b3032ce6b856f68fccf06608d9ed180000000000b71b0000010231745adae24044ff09c3541537160abb8d5d720275bbaeed0b3d035b1e8b263c9b607f2bd9e1031536c13741facb78585755c116aa7d10628ebc2adbb4be96493bc1bb8ac6c3e78dee6717b9c4a27280b698efc91097d5900418a59c9d8e7ac30000";
 
+fn wv_str(s: &str) -> WireValue {
+    WireValue::Str(s.to_owned())
+}
+fn wv_num(n: u64) -> WireValue {
+    WireValue::Num(n)
+}
+fn wv_hex(bytes: impl AsRef<[u8]>) -> WireValue {
+    WireValue::Hex(bytes.as_ref().to_vec())
+}
+fn wv_dia(name: &str) -> WireValue {
+    WireValue::Hex(name.as_bytes().to_vec())
+}
+fn chain_ids(ids: &[u32]) -> WireValue {
+    WireValue::List(ids.iter().map(|id| WireValue::Num(u64::from(*id))).collect())
+}
+fn action(kind: &str, fields: Vec<(&str, WireValue)>) -> ActionSpec {
+    ActionSpec::new(
+        kind,
+        fields
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .collect(),
+    )
+}
+
 fn hac_transfer(to: &str, amount: &str) -> ActionSpec {
-    ActionSpec::HacTransfer {
-        from: None,
-        to: to.to_owned(),
-        amount: amount.to_owned(),
-    }
+    action(
+        "transfer_hac_to",
+        vec![("to", wv_str(to)), ("hacash", wv_str(amount))],
+    )
+}
+fn height_scope(start: u64, end: u64) -> ActionSpec {
+    action(
+        "height_scope",
+        vec![("start", wv_num(start)), ("end", wv_num(end))],
+    )
+}
+fn chain_allow(ids: &[u32]) -> ActionSpec {
+    action("chain_allow", vec![("chains", chain_ids(ids))])
+}
+fn req_sign_list(signers: &[&str]) -> ActionSpec {
+    action(
+        "req_sign_list",
+        vec![(
+            "signers",
+            WireValue::List(signers.iter().map(|s| wv_str(s)).collect()),
+        )],
+    )
+}
+fn insc_push(diamonds: &[&str], content: &str) -> ActionSpec {
+    action(
+        "hacd_insc_push",
+        vec![
+            (
+                "diamonds",
+                WireValue::List(diamonds.iter().map(|d| wv_dia(d)).collect()),
+            ),
+            ("protocol_cost", wv_str("0")),
+            ("engraved_type", wv_num(0)),
+            ("engraved_content", wv_hex(content.as_bytes())),
+        ],
+    )
 }
 
 fn vault_sign(
@@ -85,10 +140,7 @@ fn full_offline_sign_flow_type2() {
         gas_max: None,
         actions: vec![
             hac_transfer(account.readable(), "12:244"),
-            ActionSpec::HeightScope {
-                start: 1_000_000,
-                end: 0,
-            },
+            height_scope(1_000_000, 0),
         ],
     };
     let built = build_transaction(&spec).unwrap();
@@ -101,6 +153,7 @@ fn full_offline_sign_flow_type2() {
         &InspectContext {
             current_height: 1_100_000,
             expected_chain_id: 0,
+            consensus_flags: None,
         },
         &profile,
     )
@@ -185,26 +238,30 @@ fn attach_is_mechanical_and_never_judges_chain_signer_rules() {
     let attached = sdk::attach::attach_signature_unbound(&built.body, &proof, &profile).unwrap();
     assert!(attached.complete);
 
-    // Same key, a signature that is not cryptographically valid for this
-    // signer/digest: the protocol's own push_sign (the chain's insertion
-    // path) verifies each attached signature and rejects it — the SDK
-    // surfaces the protocol boundary error and performs no per-type rule
-    // judgment of its own.
+    // Same key, cryptographically invalid signature: insert is mechanical;
+    // completeness and tx.verify report that it does not check.
     let wrong_hash = {
         let tx = sdk::inspect::decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
         hex::encode(tx.hash().0) // non-main digest for the main signer
     };
     let bad_proof = vault_sign(&account, &wrong_hash, &request.id, &request.request_binding);
-    let error =
-        sdk::attach::attach_signature_unbound(&attached.body, &bad_proof, &profile).unwrap_err();
-    assert_eq!(
-        error.code, "parse_failed",
-        "a signature failing the protocol's push_sign verification is rejected there"
+    let attached_bad =
+        sdk::attach::attach_signature_unbound(&attached.body, &bad_proof, &profile).unwrap();
+    assert!(
+        !attached_bad.complete || !attached_bad.invalid_signers.is_empty(),
+        "bad signature attaches and is reported, got complete={} invalid={:?}",
+        attached_bad.complete,
+        attached_bad.invalid_signers
+    );
+    let verified_bad = verify_signatures(&attached_bad.body).unwrap();
+    assert!(
+        !verified_bad.ok,
+        "tx.verify reports the digest mismatch: {:?}",
+        verified_bad.errors
     );
 
-    // Signer outside the required set: type 2 tolerates the extra signature
-    // (the chain checks only required signers), so the attach succeeds and
-    // completeness is reported instead of being gated.
+    // Signer outside the required set: type 2 tolerates the extra signature,
+    // so attach succeeds and completeness is reported, not gated.
     let other_request = prepare_signature(
         &built.body,
         other.readable(),
@@ -231,9 +288,8 @@ fn attach_is_mechanical_and_never_judges_chain_signer_rules() {
         "type-2 attach of a non-required signer must succeed and report the missing main signer"
     );
 
-    // Type 3 requires the exact deterministic signer set at execute time, but
-    // attach never judges it: a non-D signer attaches mechanically and the
-    // resulting body simply fails `tx.verify` (the chain's boundary).
+    // Type 3 requires the exact signer set at execute time, but attach never
+    // judges it: a non-D signer attaches and the body fails `tx.verify`.
     let type3 = build_transaction(&TransactionSpec {
         schema: None,
         tx_type: 3,
@@ -281,11 +337,8 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
         timestamp: Some(1_755_223_764),
         gas_max: None,
         actions: vec![
-            ActionSpec::HeightScope {
-                start: 1_000_000,
-                end: 2_000_000,
-            },
-            ActionSpec::ChainAllow { chains: vec![0] },
+            height_scope(1_000_000, 2_000_000),
+            chain_allow(&[0]),
         ],
     })
     .unwrap();
@@ -297,6 +350,7 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
         &InspectContext {
             current_height: 1_500_000,
             expected_chain_id: 0,
+            consensus_flags: None,
         },
         &profile,
     )
@@ -313,6 +367,7 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
         &InspectContext {
             current_height: 999_999,
             expected_chain_id: 0,
+            consensus_flags: None,
         },
         &profile,
     )
@@ -327,6 +382,7 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
         &InspectContext {
             current_height: 1_500_000,
             expected_chain_id: 1,
+            consensus_flags: None,
         },
         &profile,
     )
@@ -341,44 +397,24 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
 }
 
 #[test]
-fn type1_is_signable_through_the_full_approval_chain() {
-    use base::TransactionBuild;
+fn type1_is_outside_the_sdk_capability_profile() {
     use field::Encode;
+
     let account = sys::Account::create_by("123456").unwrap();
-    let profile = profile();
-    let mut tx = protocol::tx_std::TransactionType1::new_by(
+    let tx = protocol::tx_std::TransactionType1::new_by(
         field::Address::from(*account.address()),
         field::Amount::from("1:244").unwrap(),
         1_755_223_764,
     );
-    tx.push_action(std::sync::Arc::new(protocol::action_std::HacToTrs::new(
-        field::Address::from(*account.address()),
-        field::Amount::from("1:244").unwrap(),
-    )))
-    .unwrap();
-    let body = hex::encode(tx.encode());
+    let error = inspect_report(&hex::encode(tx.encode()), None, &profile()).unwrap_err();
+    assert_eq!(error.code, "parse_failed");
+    assert!(
+        error
+            .message
+            .contains("transaction type 1 not registered")
+    );
 
-    // Type 1 is a registered user tx type, so the SDK exposes signing; the
-    // chain decides whether it accepts the signed body (flag-gated types).
-    let review = inspect_report(&body, None, &profile).unwrap();
-    assert_eq!(review.tx_type, 1);
-    assert_eq!(review.signability, "signable");
-
-    let request =
-        prepare_signature(&body, account.readable(), Some(&review), None, None, None, &profile)
-            .unwrap();
-    let proof = vault_sign(&account, &request.digest, &request.id, &request.request_binding);
-    let attached = attach_signature(&body, &proof, &review, &request, &profile).unwrap();
-    assert!(attached.complete);
-    let verified = verify_signatures(&attached.body).unwrap();
-    assert!(verified.ok, "type-1 body must verify: {:?}", verified.errors);
-}
-
-#[test]
-fn type1_builds_and_decodes_round_trip() {
-    let account = sys::Account::create_by("123456").unwrap();
-    let profile = profile();
-    let built = build_transaction(&TransactionSpec {
+    let error = build_transaction(&TransactionSpec {
         schema: None,
         tx_type: 1,
         main: account.readable().to_owned(),
@@ -387,15 +423,80 @@ fn type1_builds_and_decodes_round_trip() {
         gas_max: None,
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
+    .unwrap_err();
+    assert_eq!(error.code, "parse_failed");
+    assert!(
+        error
+            .message
+            .contains("transaction type 1 not registered")
+    );
+}
+
+#[test]
+fn inspect_consensus_flags_none_does_not_judge_activation() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let profile = profile();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: account.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![hac_transfer(account.readable(), "1:244")],
+    })
     .unwrap();
-    assert_eq!(built.tx_type, 1);
-    let review = inspect_report(&built.body, None, &profile).unwrap();
-    assert_eq!(review.tx_type, 1);
-    assert_eq!(review.signability, "signable");
-    // decode → encode reproduces the type-1 body exactly.
-    let decoded = sdk::inspect::decode_transaction_json(&built.body).unwrap();
-    let rebuilt = sdk::inspect::encode_transaction_json(&decoded, None, &profile).unwrap();
-    assert_eq!(rebuilt.body, built.body);
+    let without = inspect(
+        &built.body,
+        None,
+        &InspectContext {
+            current_height: 1,
+            expected_chain_id: 0,
+            consensus_flags: None,
+        },
+        &profile,
+    )
+    .unwrap();
+    assert!(
+        without
+            .inspect_context
+            .as_ref()
+            .unwrap()
+            .consensus_flags
+            .is_none()
+    );
+    assert!(
+        without
+            .schedule_violations
+            .iter()
+            .all(|f| !f.contains("not activated")),
+        "{:?}",
+        without.schedule_violations
+    );
+    let with_zero = inspect(
+        &built.body,
+        None,
+        &InspectContext {
+            current_height: 1,
+            expected_chain_id: 0,
+            consensus_flags: Some(0),
+        },
+        &profile,
+    )
+    .unwrap();
+    assert_eq!(
+        with_zero.inspect_context.as_ref().unwrap().consensus_flags,
+        Some(0)
+    );
+    // Ordinary transfers need no flags; Some(0) is judged and still empty.
+    assert!(
+        with_zero
+            .schedule_violations
+            .iter()
+            .all(|f| !f.contains("not activated")),
+        "{:?}",
+        with_zero.schedule_violations
+    );
 }
 
 #[test]
@@ -424,7 +525,13 @@ fn codec_profile_is_pinned() {
     assert_eq!(profile.fullnode_commit, FULLNODE_COMMIT);
     assert_eq!(profile.schema, sdk::schema::SCHEMA_CODEC_PROFILE);
     assert!(profile.limits.max_tx_size >= 16 * 1024);
+    assert_eq!(
+        profile.params_version,
+        hacash_params::MAINNET_PARAMS.version
+    );
+    assert!(!profile.registry_hash.is_empty());
     assert!(!profile.profile_hash.is_empty());
+    assert_eq!(profile.registered_tx_types, vec![2, 3]);
     // Pinned: registry must include the VM actions.
     for kind in [40u16, 41, 44, 46] {
         assert!(profile.registered_kinds.contains(&kind));
@@ -444,9 +551,7 @@ fn type2_multi_signer_attaches_incrementally() {
         timestamp: Some(1_755_223_764),
         gas_max: None,
         actions: vec![
-            ActionSpec::ReqSignList {
-                signers: vec![second.readable().to_owned()],
-            },
+            req_sign_list(&[second.readable()]),
             hac_transfer(main.readable(), "1:244"),
         ],
     })
@@ -454,18 +559,48 @@ fn type2_multi_signer_attaches_incrementally() {
 
     // Attach the non-main required signer first: partial signature sets must
     // be accepted and reported as incomplete.
-    let request =
-        prepare_signature(&built.body, second.readable(), None, None, None, None, &profile)
-            .unwrap();
-    let proof = vault_sign(&second, &request.digest, &request.id, &request.request_binding);
+    let request = prepare_signature(
+        &built.body,
+        second.readable(),
+        None,
+        None,
+        None,
+        None,
+        &profile,
+    )
+    .unwrap();
+    let proof = vault_sign(
+        &second,
+        &request.digest,
+        &request.id,
+        &request.request_binding,
+    );
     let first = sdk::attach::attach_signature_unbound(&built.body, &proof, &profile).unwrap();
     assert!(!first.complete);
-    assert!(first.missing_signers.iter().any(|addr| addr == main.readable()));
+    assert!(
+        first
+            .missing_signers
+            .iter()
+            .any(|addr| addr == main.readable())
+    );
 
     // Then the main signer: the set becomes complete and fully verifiable.
-    let request = prepare_signature(&first.body, main.readable(), None, None, None, None, &profile)
-        .unwrap();
-    let proof = vault_sign(&main, &request.digest, &request.id, &request.request_binding);
+    let request = prepare_signature(
+        &first.body,
+        main.readable(),
+        None,
+        None,
+        None,
+        None,
+        &profile,
+    )
+    .unwrap();
+    let proof = vault_sign(
+        &main,
+        &request.digest,
+        &request.id,
+        &request.request_binding,
+    );
     let attached = sdk::attach::attach_signature_unbound(&first.body, &proof, &profile).unwrap();
     assert!(attached.complete);
     assert!(attached.missing_signers.is_empty());
@@ -487,27 +622,49 @@ fn type3_multi_signer_attaches_incrementally() {
         timestamp: Some(1_755_223_764),
         gas_max: Some(10),
         actions: vec![
-            ActionSpec::ReqSignList {
-                signers: vec![second.readable().to_owned()],
-            },
+            req_sign_list(&[second.readable()]),
             hac_transfer(main.readable(), "1:244"),
         ],
     })
     .unwrap();
 
-    // Type-3 requires the exact deterministic signer set at execute time, but
-    // attach must still build the set up incrementally; completeness is
-    // reported, not enforced, per attach.
-    let request =
-        prepare_signature(&built.body, second.readable(), None, None, None, None, &profile)
-            .unwrap();
-    let proof = vault_sign(&second, &request.digest, &request.id, &request.request_binding);
+    // Type-3 still lets attach build the signer set incrementally; completeness
+    // is reported, not enforced.
+    let request = prepare_signature(
+        &built.body,
+        second.readable(),
+        None,
+        None,
+        None,
+        None,
+        &profile,
+    )
+    .unwrap();
+    let proof = vault_sign(
+        &second,
+        &request.digest,
+        &request.id,
+        &request.request_binding,
+    );
     let first = sdk::attach::attach_signature_unbound(&built.body, &proof, &profile).unwrap();
     assert!(!first.complete);
 
-    let request = prepare_signature(&first.body, main.readable(), None, None, None, None, &profile)
-        .unwrap();
-    let proof = vault_sign(&main, &request.digest, &request.id, &request.request_binding);
+    let request = prepare_signature(
+        &first.body,
+        main.readable(),
+        None,
+        None,
+        None,
+        None,
+        &profile,
+    )
+    .unwrap();
+    let proof = vault_sign(
+        &main,
+        &request.digest,
+        &request.id,
+        &request.request_binding,
+    );
     let attached = sdk::attach::attach_signature_unbound(&first.body, &proof, &profile).unwrap();
     assert!(attached.complete);
 
@@ -537,10 +694,8 @@ fn tx_encode_round_trips_and_rejects_tampered_input() {
     assert_eq!(rebuilt.body, built.body);
     assert_eq!(rebuilt.unsigned_body_hash, built.unsigned_body_hash);
 
-    // Tampering with an action's wire (`raw`) must fail instead of silently
-    // emitting a different transaction than the one the declared hash refers
-    // to. Build a valid sibling transaction with a different amount and swap
-    // its action wire in (decodes fine, produces a different body).
+    // Tampering with an action's wire (`raw`) must fail: swapping in a
+    // sibling action's wire (decodes fine) yields `transaction_json_mismatch`.
     let sibling = build_transaction(&TransactionSpec {
         schema: None,
         tx_type: 2,
@@ -649,9 +804,8 @@ fn attach_rejects_tampered_request_fields() {
     )
     .unwrap();
 
-    // The reported bypass: edit a request field after prepare while keeping
-    // id/request_binding unchanged. The binding recomputation must detect the
-    // edit even though the proof still carries the original id/binding.
+    // Editing a request field after prepare while keeping id/binding unchanged
+    // must be detected by the binding recomputation.
     let mut tampered = request.clone();
     tampered.expires_at = Some(1_000_000_000_000); // far future, original binding kept
     let proof = vault_sign(
@@ -689,19 +843,53 @@ fn attach_enforces_request_binding_and_expiry() {
 
     // A proof for request A attached under request B (different origin →
     // different binding/id) is rejected.
-    let request_a = prepare_signature(&built.body, account.readable(), None, None, None, None, &profile)
-        .unwrap();
-    let request_b = prepare_signature(&built.body, account.readable(), None, None, Some("other"), None, &profile)
-        .unwrap();
+    let request_a = prepare_signature(
+        &built.body,
+        account.readable(),
+        None,
+        None,
+        None,
+        None,
+        &profile,
+    )
+    .unwrap();
+    let request_b = prepare_signature(
+        &built.body,
+        account.readable(),
+        None,
+        None,
+        Some("other"),
+        None,
+        &profile,
+    )
+    .unwrap();
     assert_ne!(request_a.id, request_b.id);
-    let proof = vault_sign(&account, &request_a.digest, &request_a.id, &request_a.request_binding);
+    let proof = vault_sign(
+        &account,
+        &request_a.digest,
+        &request_a.id,
+        &request_a.request_binding,
+    );
     let error = attach_signature(&built.body, &proof, &review, &request_b, &profile).unwrap_err();
     assert_eq!(error.code, "review_binding_mismatch");
 
     // An expired request is rejected before any signature work.
-    let expired = prepare_signature(&built.body, account.readable(), None, None, None, Some(1), &profile)
-        .unwrap();
-    let proof = vault_sign(&account, &expired.digest, &expired.id, &expired.request_binding);
+    let expired = prepare_signature(
+        &built.body,
+        account.readable(),
+        None,
+        None,
+        None,
+        Some(1),
+        &profile,
+    )
+    .unwrap();
+    let proof = vault_sign(
+        &account,
+        &expired.digest,
+        &expired.id,
+        &expired.request_binding,
+    );
     let error = attach_signature(&built.body, &proof, &review, &expired, &profile).unwrap_err();
     assert_eq!(error.code, "request_expired");
 }
@@ -722,9 +910,8 @@ fn prepare_binds_policy_decision_and_attach_never_refuses_for_deny() {
     .unwrap();
     let review = inspect_report(&built.body, Some(account.readable()), &profile).unwrap();
 
-    // A policy that denies the built action kind still mints the request: the
-    // SDK evaluates the caller's policy and binds the decision as a fact; the
-    // caller decides whether a deny stops the flow.
+    // A denying policy still mints the request: the SDK binds the decision as
+    // a fact; the caller decides whether a deny stops the flow.
     let denying = Policy {
         deny_kinds: Some(vec![protocol::action_std::HacToTrs::KIND]),
         ..Default::default()
@@ -793,14 +980,25 @@ fn multiple_chain_allow_reviews_intersect() {
         timestamp: Some(1_755_223_764),
         gas_max: None,
         actions: vec![
-            ActionSpec::ChainAllow { chains: vec![0, 1] },
-            ActionSpec::ChainAllow { chains: vec![1, 2] },
+            chain_allow(&[0, 1]),
+            chain_allow(&[1, 2]),
         ],
     })
     .unwrap();
     let review = inspect_report(&built.body, None, &profile).unwrap();
     assert_eq!(review.chain_ids_allowed, Some(vec![1]));
-    assert!(review.protocol_valid);
+    assert!(review.guard_violations.is_empty());
+    // Two guards and no non-guard is a topology finding; protocol_valid is
+    // the conjunction of every fact bucket, not guard-only.
+    assert!(
+        review
+            .topology_violations
+            .iter()
+            .any(|f| f.contains("all GUARD")),
+        "{:?}",
+        review.topology_violations
+    );
+    assert!(!review.protocol_valid);
 
     // A conflicting pair (no common chain) is a protocol fact: the review
     // reports it instead of claiming a valid chain set.
@@ -812,8 +1010,8 @@ fn multiple_chain_allow_reviews_intersect() {
         timestamp: Some(1_755_223_764),
         gas_max: None,
         actions: vec![
-            ActionSpec::ChainAllow { chains: vec![0] },
-            ActionSpec::ChainAllow { chains: vec![1] },
+            chain_allow(&[0]),
+            chain_allow(&[1]),
         ],
     })
     .unwrap();
@@ -846,12 +1044,7 @@ fn type2_inscription_push_signs_and_verifies() {
         timestamp: Some(1_700_000_000),
         gas_max: Some(0),
         actions: vec![
-            ActionSpec::InscPush {
-                diamonds: vec!["AAABBB".to_owned()],
-                protocol_cost: None,
-                engraved_type: Some(0),
-                engraved_content: "First HACD inscription!".to_owned(),
-            },
+            insc_push(&["AAABBB"], "First HACD inscription!"),
             hac_transfer(to, "0.01"),
         ],
     })
@@ -904,9 +1097,8 @@ fn type2_inscription_push_signs_and_verifies() {
 fn inscription_push_duplicates_build_and_are_chain_execute_rules() {
     let account = sys::Account::create_by("123456").unwrap();
     let main = account.readable();
-    // Duplicate diamond names decode fine (the wire carries them); ownership
-    // and duplication are execute-time chain rules, so the SDK builds and
-    // reports the action instead of refusing to construct it.
+    // Duplicate diamond names decode fine; ownership/duplication are
+    // execute-time chain rules, so the SDK builds rather than refuses.
     let built = build_transaction(&TransactionSpec {
         schema: None,
         tx_type: 2,
@@ -914,12 +1106,7 @@ fn inscription_push_duplicates_build_and_are_chain_execute_rules() {
         fee: "0.0001".to_owned(),
         timestamp: Some(1_700_000_000),
         gas_max: Some(0),
-        actions: vec![ActionSpec::InscPush {
-            diamonds: vec!["AAABBB".to_owned(), "AAABBB".to_owned()],
-            protocol_cost: None,
-            engraved_type: Some(0),
-            engraved_content: "dup".to_owned(),
-        }],
+        actions: vec![insc_push(&["AAABBB", "AAABBB"], "dup")],
     })
     .expect("duplicate diamonds are wire-valid; rejection is a chain execute rule");
     let review = inspect_report(&built.body, None, &profile()).unwrap();
@@ -953,24 +1140,33 @@ fn inscription_edit_move_drop_build_and_decode() {
         timestamp: Some(1_700_000_000),
         gas_max: Some(0),
         actions: vec![
-            ActionSpec::InscEdit {
-                diamond: "AAABBB".to_owned(),
-                index: 0,
-                protocol_cost: None,
-                engraved_type: Some(0),
-                engraved_content: "edited".to_owned(),
-            },
-            ActionSpec::InscMove {
-                from_diamond: "AAABBB".to_owned(),
-                to_diamond: "TTTUUU".to_owned(),
-                index: 0,
-                protocol_cost: None,
-            },
-            ActionSpec::InscDrop {
-                diamond: "AAABBB".to_owned(),
-                index: 0,
-                protocol_cost: None,
-            },
+            action(
+                "hacd_insc_edit",
+                vec![
+                    ("diamond", wv_dia("AAABBB")),
+                    ("index", wv_num(0)),
+                    ("protocol_cost", wv_str("0")),
+                    ("engraved_type", wv_num(0)),
+                    ("engraved_content", wv_hex(b"edited")),
+                ],
+            ),
+            action(
+                "hacd_insc_move",
+                vec![
+                    ("from_diamond", wv_dia("AAABBB")),
+                    ("to_diamond", wv_dia("TTTUUU")),
+                    ("index", wv_num(0)),
+                    ("protocol_cost", wv_str("0")),
+                ],
+            ),
+            action(
+                "hacd_insc_drop",
+                vec![
+                    ("diamond", wv_dia("AAABBB")),
+                    ("index", wv_num(0)),
+                    ("protocol_cost", wv_str("0")),
+                ],
+            ),
         ],
     })
     .unwrap();
@@ -990,9 +1186,8 @@ fn inscription_edit_move_drop_build_and_decode() {
 fn oversized_body_decodes_and_reports_limits_facts() {
     let account = sys::Account::create_by("123456").unwrap();
     let profile = profile();
-    // A 20KB blob action makes the body exceed the consensus size cap. The
-    // SDK decodes it anyway and reports the limit as a review fact instead
-    // of refusing to inspect (the upper layer decides).
+    // A 20KB blob action exceeds the consensus size cap; the SDK still decodes
+    // and reports the limit as a review fact, never refusing to inspect.
     let built = build_transaction(&TransactionSpec {
         schema: None,
         tx_type: 2,
@@ -1000,12 +1195,13 @@ fn oversized_body_decodes_and_reports_limits_facts() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
-        actions: vec![ActionSpec::TxBlob {
-            data: "ab".repeat(20 * 1024),
-        }],
+        actions: vec![action(
+            "tx_blob",
+            vec![("data", wv_hex(vec![0xab; 20 * 1024]))],
+        )],
     })
     .unwrap();
-    assert!(built.body.len() / 2 > base::MAX_TX_SIZE);
+    assert!(built.body.len() / 2 > hacash_params::MAX_TX_SIZE);
 
     let review = inspect_report(&built.body, None, &profile).unwrap();
     assert!(
@@ -1020,33 +1216,72 @@ fn oversized_body_decodes_and_reports_limits_facts() {
 }
 
 #[test]
-fn host_opcode_builds_and_inspect_reports_topology_facts() {
+fn host_opcode_is_outside_the_sdk_capability_profile() {
     let account = sys::Account::create_by("123456").unwrap();
-    // CALL_ONLY host opcodes are wire-valid; the SDK builds and inspects them.
-    // Scope rejection is a chain execute rule, reported here as a topology
-    // fact so the upper layer can decide.
-    let built = build_transaction(&TransactionSpec {
+    let error = build_transaction(&TransactionSpec {
         schema: None,
         tx_type: 3,
         main: account.readable().to_owned(),
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
-        actions: vec![ActionSpec::RawAction {
-            kind: "block_height".to_owned(),
-            fields: vec![],
-        }],
+        actions: vec![ActionSpec::new("block_height", vec![])],
     })
-    .expect("host opcode is wire-valid; rejection is a chain execute rule");
+    .unwrap_err();
+    assert_eq!(error.code, "parse_failed");
+}
+
+#[test]
+fn empty_actions_build_and_inspect_reports_topology() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: account.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![],
+    })
+    .expect("empty action list is wire-legal");
     let review = inspect_report(&built.body, None, &profile()).unwrap();
     assert!(
         review
             .topology_violations
             .iter()
-            .any(|note| note.contains("not allowed from")),
-        "CALL_ONLY at top must be reported as a topology fact, got {:?}",
+            .any(|f| f.contains("action length")),
+        "{:?}",
         review.topology_violations
     );
-    assert_eq!(review.signability, "signable");
-    assert_eq!(review.actions.len(), 1);
+    assert!(!review.protocol_valid);
+}
+
+#[test]
+fn over_tx_actions_max_builds_and_inspect_reports_topology() {
+    let account = sys::Account::create_by("123456").unwrap();
+    let to = account.readable().to_owned();
+    let actions = (0..=hacash_params::TX_ACTIONS_MAX)
+        .map(|_| hac_transfer(&to, "1:244"))
+        .collect();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: to.clone(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions,
+    })
+    .expect("action count above consensus max is wire-legal");
+    let review = inspect_report(&built.body, None, &profile()).unwrap();
+    assert_eq!(review.actions.len(), hacash_params::TX_ACTIONS_MAX + 1);
+    assert!(
+        review
+            .topology_violations
+            .iter()
+            .any(|f| f.contains("action length")),
+        "{:?}",
+        review.topology_violations
+    );
+    assert!(!review.protocol_valid);
 }

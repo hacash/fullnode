@@ -107,50 +107,42 @@ pub(crate) fn parse_one_diamond_param(req: &ApiRequest, key: &str) -> sys::Ret<D
 }
 
 pub(crate) fn append_cost_for_one(state: &CoreStateRead, dia: &DiamondName) -> sys::Ret<Amount> {
+    let rules = hacash_params::MAINNET_PARAMS.mint_rules.inscription;
     let Some(diaobj) = state.diamond(dia)? else {
         return sys::errf!("cannot find diamond {}", dia.to_readable());
     };
-    if diaobj.inscripts.length() >= mint_core::inscription::INSCRIPTION_MAX_PER_DIAMOND {
+    if diaobj.inscripts.length() >= rules.max_per_diamond {
         return sys::errf!(
             "diamond {} inscriptions full (max {})",
             dia.to_readable(),
-            mint_core::inscription::INSCRIPTION_MAX_PER_DIAMOND
+            rules.max_per_diamond
         );
     }
     let Some(diasmelt) = state.diamond_smelt(dia)? else {
         return sys::errf!("cannot find diamond {}", dia.to_readable());
     };
-    Ok(
-        mint_core::inscription::calc_append_inscription_protocol_cost(
-            diaobj.inscripts.length(),
-            diasmelt.average_bid_burn.uint(),
-        ),
-    )
+    Ok(rules.append_cost(diaobj.inscripts.length(), diasmelt.average_bid_burn.uint()))
 }
 
 pub(crate) fn move_cost_for_target(
     state: &CoreStateRead,
     to_diamond: &DiamondName,
 ) -> sys::Ret<Amount> {
+    let rules = hacash_params::MAINNET_PARAMS.mint_rules.inscription;
     let Some(diaobj) = state.diamond(to_diamond)? else {
         return sys::errf!("cannot find diamond {}", to_diamond.to_readable());
     };
-    if diaobj.inscripts.length() >= mint_core::inscription::INSCRIPTION_MAX_PER_DIAMOND {
+    if diaobj.inscripts.length() >= rules.max_per_diamond {
         return sys::errf!(
             "target diamond {} inscriptions full (max {})",
             to_diamond.to_readable(),
-            mint_core::inscription::INSCRIPTION_MAX_PER_DIAMOND
+            rules.max_per_diamond
         );
     }
     let Some(diasmelt) = state.diamond_smelt(to_diamond)? else {
         return sys::errf!("cannot find diamond {}", to_diamond.to_readable());
     };
-    Ok(
-        mint_core::inscription::calc_move_inscription_protocol_cost(
-            diaobj.inscripts.length(),
-            diasmelt.average_bid_burn.uint(),
-        ),
-    )
+    Ok(rules.append_cost(diaobj.inscripts.length(), diasmelt.average_bid_burn.uint()))
 }
 
 pub(crate) fn smelt_average_bid(state: &CoreStateRead, dia: &DiamondName) -> sys::Ret<u16> {

@@ -1,9 +1,5 @@
-//! Transaction inspection: decode → protocol facts → Review (Unified SDK 2.0,
-//! doc 14 §5/§6.1). The SDK never executes transactions and never consults a
-//! node; the chain context is caller input. Guard evaluation (height/chain)
-//! and action-tree topology (scope / min tx type / AST depth / top-rule) are
-//! reported as facts (`expired_height`/`wrong_chain`/`topology_violations`),
-//! never as review denials: the upper layer decides whether to proceed.
+//! Transaction inspection: decode → protocol facts → Review (Unified SDK 2.0, doc 14 §5/§6.1).
+//! The SDK never executes or consults a node; the chain context is caller input, and guard/topology findings are facts, never denials.
 
 use base::{BinaryCodecs, Transaction, TransactionSign};
 use field::Address;
@@ -11,6 +7,7 @@ use field::Address;
 use crate::audit::{self, Auditability};
 use crate::codec::standard_codecs;
 use crate::error::{SdkError, SdkErrorCode};
+use crate::json::SdkJsonTo;
 use crate::profile::CodecProfile;
 use crate::schema::{SCHEMA_REVIEW, SCHEMA_TRANSACTION_JSON};
 
@@ -19,6 +16,9 @@ use crate::schema::{SCHEMA_REVIEW, SCHEMA_TRANSACTION_JSON};
 pub struct InspectContext {
     pub current_height: u64,
     pub expected_chain_id: u32,
+    /// Consensus activation flags at the caller's claimed height. `None` means
+    /// activation is not judged (neither treated as on nor off).
+    pub consensus_flags: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -37,55 +37,55 @@ pub struct Review {
     pub timestamp: u64,
     pub main: String,
     pub fee: String,
-        pub gas_max: Option<u8>,
+    pub gas_max: Option<u8>,
     pub tx_hash: String,
     pub hash_with_fee: String,
     pub unsigned_body_hash: String,
     pub review_binding: String,
-    /// The signer this review's binding was computed for, if any. Stored in
-    /// the review so `review_binding` is recomputable by anyone holding the
-    /// review (see `review_binding_of`).
+    /// The signer this review's binding was computed for, if any; stored so
+    /// `review_binding` is recomputable by anyone holding the review.
     pub signer_address: Option<String>,
     /// The strict-inspect context the binding was computed with; `None` for
     /// report mode. Stored for the same recomputability reason.
     pub inspect_context: Option<InspectContext>,
-    /// Strict-mode derived facts (context provided): whether the caller's
-    /// current height is outside the effective HeightScope range and whether
-    /// the caller's expected chain is outside the effective ChainAllow set.
-    /// Facts, never denials: the upper layer decides whether to proceed.
+    /// Strict-mode facts (context provided): height outside the effective
+    /// HeightScope range / chain outside the ChainAllow set. Facts, never denials.
     pub expired_height: Option<bool>,
     pub wrong_chain: Option<bool>,
+    /// Derived: every fact bucket below is empty. Never used to refuse inspect.
     pub protocol_valid: bool,
     pub signability: String,
     pub auditability: String,
+    /// Alias of `auditability != "full"`. Product policy belongs in
+    /// `policy.evaluate`; this field is kept as a derived convenience.
     pub requires_user_confirmation: bool,
     /// Consensus-level limit violations of the *decoded* transaction (body
-    /// size, type-3 signer count). Facts, never decode denials: the SDK
-    /// reports what the wire carries and the upper layer decides.
+    /// size, type-3 signer count). Facts, never decode denials.
     pub limits_violations: Vec<String>,
-    /// Protocol action-tree topology findings (scope placement, min tx type,
-    /// AST depth, top-rule uniqueness). Facts, never inspect denials: the
-    /// same analysis the chain's `precheck_tx_actions` gates on, reported
-    /// so the upper layer can decide.
+    /// Protocol action-tree topology findings (scope, min tx type, AST depth,
+    /// top-rule). Facts, never inspect denials.
     pub topology_violations: Vec<String>,
+    /// Guard-action protocol violations from `guard_facts`.
+    pub guard_violations: Vec<String>,
+    /// Height / address / gas_max / activation findings from `schedule_facts`.
+    pub schedule_violations: Vec<String>,
     pub required_signers: Vec<String>,
     pub present_signers: Vec<String>,
+    pub valid_signers: Vec<String>,
     pub missing_signers: Vec<String>,
-        pub chain_ids_allowed: Option<Vec<u32>>,
-        pub valid_height_range: Option<HeightRangeDesc>,
-        pub fee_purity: Option<u64>,
-        pub fee_purity_ok: Option<bool>,
+    pub invalid_signers: Vec<String>,
+    /// `signature_report` computation errors. Never an inspect denial.
+    pub signature_errors: Vec<String>,
+    pub chain_ids_allowed: Option<Vec<u32>>,
+    pub valid_height_range: Option<HeightRangeDesc>,
+    pub fee_purity: Option<u64>,
+    pub fee_purity_ok: Option<bool>,
     pub actions: Vec<crate::audit::ActionDesc>,
     pub asset_serials: Vec<u64>,
 }
 
-/// Decode a transaction body with the SDK codec registry and fail-closed
-/// rules: unknown tx type, malformed wire, trailing bytes. Trailing bytes
-/// are the codec's own `decode_transaction_exact` check (the same one the
-/// full node uses on package ingest); the SDK does not re-derive a length
-/// predicate. Consensus-level rules (size caps, signer counts) are reported
-/// as review facts, never as decode denials — the SDK exposes what the wire
-/// carries and lets the upper layer judge.
+/// Decode a transaction body with the SDK codec registry and fail-closed rules (unknown type,
+/// malformed wire, trailing bytes via `decode_transaction_exact`). Consensus-level rules are reported as review facts, never decode denials.
 pub fn decode_tx(body: &[u8]) -> Result<base::TxRef, SdkError> {
     let codecs = standard_codecs().map_err(SdkError::from)?;
     codecs
@@ -93,19 +93,14 @@ pub fn decode_tx(body: &[u8]) -> Result<base::TxRef, SdkError> {
         .map_err(SdkError::from)
 }
 
-/// Re-encode the transaction with its signature set cleared. Used for the
-/// stable `unsigned_body_hash`; Type-2/3 wire order is preserved exactly.
-/// The concrete type list lives in `protocol::tx_std` (the crate that owns
-/// the types), so a new transaction type needs no change here.
+/// Re-encode the transaction with its signature set cleared, preserving
+/// Type-2/3 wire order; used for the stable `unsigned_body_hash`.
 pub fn encode_without_signs(tx: &dyn Transaction) -> Result<Vec<u8>, SdkError> {
     protocol::tx_std::encode_without_signs(tx).map_err(SdkError::from)
 }
 
-// Guard facts come from the protocol's single `guard_facts` analysis
-// (`protocol::action_std`, co-located with the guard action definitions and
-// their execute bodies); the SDK never re-derives guard semantics. The
-// effective chain set is the intersection of all `ChainAllow` actions and
-// the effective height range the intersection of all `HeightScope` actions.
+// Guard facts come from the protocol's single `guard_facts` analysis; the
+// SDK never re-derives guard semantics.
 
 fn parse_signer_address(signer_address: Option<&str>) -> Result<Option<Address>, SdkError> {
     match signer_address {
@@ -129,20 +124,25 @@ fn build_review(
 ) -> Result<Review, SdkError> {
     let tx = decode_tx(body)?;
     let signer = parse_signer_address(signer_address)?;
-    let unsigned_body = encode_without_signs(tx.as_ref())?;
-    let mut data = Vec::with_capacity(audit::DOMAIN_UNSIGNED_BODY.len() + unsigned_body.len());
-    data.extend_from_slice(audit::DOMAIN_UNSIGNED_BODY);
-    data.extend_from_slice(&unsigned_body);
-    let unsigned_body_hash = hex::encode(sys::calculate_hash(data));
+    let unsigned_body_hash = crate::audit::unsigned_body_hash_bytes(body)?;
 
-    let report =
-        protocol::tx_std::signature_report(tx.as_ref()).map_err(|error| SdkError::from(error))?;
+    let (sign_report, signature_errors) = match protocol::tx_std::signature_report(tx.as_ref()) {
+        Ok(report) => (report, Vec::new()),
+        Err(error) => (
+            protocol::tx_std::TxSignatureReport {
+                required: vec![],
+                present: vec![],
+                valid: vec![],
+                missing: vec![],
+                invalid: vec![],
+            },
+            vec![error.to_string()],
+        ),
+    };
     let guard_facts = protocol::action_std::guard_facts(tx.as_ref());
 
-    // Strict-mode guard evaluation against the caller-provided context,
-    // surfaced as facts (never denials): the protocol's own
-    // `GuardFacts::against_context` (height_in_range + chain-set membership).
-    // `None` without a context.
+    // Strict-mode guard evaluation via `GuardFacts::against_context`, surfaced
+    // as facts (never denials); `None` without a context.
     let (expired_height, wrong_chain) = match context {
         Some(ctx) => {
             let (expired, wrong) =
@@ -157,9 +157,8 @@ fn build_review(
     let mut auditability = Auditability::Full;
     for (index, action) in tx.actions().iter().enumerate() {
         let mut desc = audit::describe_action(action.as_ref(), index, &index.to_string(), 0);
-        // Guard notes are protocol violations (the single `guard_facts`
-        // analysis): the per-action `protocol_valid` fact reflects them, so
-        // the descriptor never claims validity the review denies.
+        // Guard notes are protocol violations (`guard_facts`); the per-action
+        // `protocol_valid` fact reflects them.
         if let Some((_, note)) = guard_facts
             .action_notes
             .iter()
@@ -172,46 +171,43 @@ fn build_review(
         collect_asset_serials(action, &mut asset_serials);
         actions.push(desc);
     }
-    let requires_user_confirmation = auditability != Auditability::Full;
 
-    // Consensus-level limit facts, reported (never gated) for the decoded tx.
-    // Size uses `Encode::size` + `tx_exceeds_max_size`, the same pair the
-    // chain engine / verify / submit / API admission run.
     let mut limits_violations = Vec::new();
     let size = field::Encode::size(tx.as_ref());
-    if base::tx_exceeds_max_size(size, base::MAX_TX_SIZE) {
+    if base::tx_exceeds_max_size(size, hacash_params::MAX_TX_SIZE) {
         limits_violations.push(format!(
             "tx body {size} bytes exceeds consensus maximum {}",
-            base::MAX_TX_SIZE
+            hacash_params::MAX_TX_SIZE
         ));
     }
-    // The signer cap (type 3 only) is the protocol's rule, evaluated on the
-    // required signer set; the SDK reports it as a fact.
     if let Err(error) =
         protocol::tx_std::check_signers_cap(tx.as_ref(), profile.protocol_params.max_type3_signers)
     {
         limits_violations.push(error.to_string());
     }
 
-    // Protocol action-tree topology (scope, min tx type, AST depth, top-rule).
-    // The same analysis execute gates on; reported, never used to refuse the
-    // review. Consensus flags are not in the inspect context, so activation
-    // is not judged here.
-    let topology_violations =
-        protocol::topology_facts(tx.ty(), tx.actions(), None, crate::profile::AST_DEPTH_MAX)
-            .findings;
+    let flags = context.and_then(|ctx| ctx.consensus_flags);
+    let topology =
+        protocol::topology_facts(tx.ty(), tx.actions(), flags, crate::profile::AST_DEPTH_MAX);
+    for (index, note) in &topology.action_notes {
+        if let Some(desc) = actions.get_mut(*index) {
+            desc.audit_notes.push(note.clone());
+            desc.protocol_valid = false;
+        }
+    }
+    let topology_violations = topology.findings;
 
-    // Every tx type the codec registry can decode is signable; decode already
-    // failed closed on unregistered types, so this is a fact of the codec
-    // surface, not an SDK-side allow-list.
+    let height = context.map(|ctx| ctx.current_height);
+    let schedule_violations = protocol::schedule_facts(tx.as_ref(), height, flags).findings;
+    let guard_violations = guard_facts.protocol_violations.clone();
+
+    let requires_user_confirmation = auditability != Auditability::Full;
     let signability = "signable".to_owned();
+    let protocol_valid = guard_violations.is_empty()
+        && topology_violations.is_empty()
+        && limits_violations.is_empty()
+        && schedule_violations.is_empty();
 
-    // Fee purity is a protocol trait fact (`Transaction::fee_purity`,
-    // type-specific computation owned by protocol). The floor comparison is
-    // height-dependent (the chain bills gas against the scheduled floor at
-    // the block height), so the strict mode compares against the scheduled
-    // floor at the caller's claimed height; report mode has no height and
-    // reports no comparison (the raw purity fact stays).
     let fee_purity = Some(tx.fee_purity());
     let fee_purity_ok = context.map(|ctx| {
         tx.fee_purity()
@@ -236,15 +232,20 @@ fn build_review(
         inspect_context: context.cloned(),
         expired_height,
         wrong_chain,
-        protocol_valid: guard_facts.protocol_violations.is_empty(),
+        protocol_valid,
         signability,
         auditability: auditability.as_str().to_owned(),
         requires_user_confirmation,
         limits_violations,
         topology_violations,
-        required_signers: readable_signers(&report.required),
-        present_signers: readable_signers(&report.present),
-        missing_signers: readable_signers(&report.missing),
+        guard_violations,
+        schedule_violations,
+        required_signers: readable_signers(&sign_report.required),
+        present_signers: readable_signers(&sign_report.present),
+        valid_signers: readable_signers(&sign_report.valid),
+        missing_signers: readable_signers(&sign_report.missing),
+        invalid_signers: readable_signers(&sign_report.invalid),
+        signature_errors,
         chain_ids_allowed: guard_facts.chains,
         valid_height_range: guard_facts.height_range.map(|range| HeightRangeDesc {
             start: range.0,
@@ -262,13 +263,8 @@ fn build_review(
     Ok(review)
 }
 
-/// Canonical review binding — the single computation shared by `build_review`,
-/// `prepare_signature`, `attach_signature` and `encode_transaction_json`:
-/// sha3-256 over domain + unsigned_body_hash + signer + sign_hash + codec
-/// profile hash + inspect context + canonical review digest (which excludes
-/// `review_binding` itself and non-deterministic display text). Anyone holding
-/// the review can recompute it, so a review whose displayed fields were
-/// edited after inspection never re-verifies.
+/// Canonical review binding — the single computation shared by build/prepare/attach/encode:
+/// sha3-256 over domain + unsigned_body_hash + signer + sign_hash + codec profile hash + inspect context + canonical review digest (excludes `review_binding`); recomputable by anyone holding the review.
 pub fn review_binding_of(
     review: &Review,
     unsigned_body_hash: &str,
@@ -281,7 +277,7 @@ pub fn review_binding_of(
         .and_then(|raw| Address::from_readable(raw).ok())
         .map(|signer| hex::encode(protocol::tx_std::sign_hash_for(tx, &signer).0));
     let context = match &review.inspect_context {
-        Some(context) => context.to_binary_body(),
+        Some(context) => context.to_json_string().into_bytes(),
         None => Vec::new(),
     };
     let review_digest = audit::canonical_review_digest(review);
@@ -325,13 +321,8 @@ pub fn inspect_report(
     build_review(&body, signer_address, None, profile)
 }
 
-/// `tx.inspect`: strict mode. The caller-provided chain context is bound
-/// into the review binding and evaluated into facts (`expired_height`,
-/// `wrong_chain`); the SDK never denies the review for them — the upper
-/// layer decides whether to proceed. The guard facts come from the single
-/// `collect_guard_facts` implementation (the same one that feeds the
-/// report mode), so the per-action semantics can never drift between the
-/// two modes.
+/// `tx.inspect`: strict mode — the caller-provided chain context is bound into the review
+/// binding and evaluated into facts (`expired_height`/`wrong_chain`), never review denials.
 pub fn inspect(
     body_hex: &str,
     signer_address: Option<&str>,
@@ -345,6 +336,19 @@ pub fn inspect(
 pub(crate) fn decode_body_hex(body_hex: &str) -> Result<Vec<u8>, SdkError> {
     hex::decode(body_hex.trim_start_matches("0x").trim_start_matches("0X"))
         .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "body hex invalid"))
+}
+
+/// Strict hex decode into a fixed-size byte array (optional `0x` prefix);
+/// the single helper for public keys/signatures/digests.
+pub(crate) fn decode_hex_fixed<const N: usize>(
+    raw: &str,
+    code: SdkErrorCode,
+    message: &'static str,
+) -> Result<[u8; N], SdkError> {
+    hex::decode(raw.trim_start_matches("0x").trim_start_matches("0X"))
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| SdkError::new(code, message))
 }
 
 /// Signature entries for `tx.decode` (doc 14 §6.4). The low-level encode path
@@ -363,7 +367,7 @@ pub struct TransactionJson {
     pub timestamp: u64,
     pub main: String,
     pub fee: String,
-        pub gas_max: Option<u8>,
+    pub gas_max: Option<u8>,
     pub tx_hash: String,
     pub hash_with_fee: String,
     pub unsigned_body_hash: String,
@@ -391,10 +395,6 @@ pub fn decode_transaction_json(body_hex: &str) -> Result<TransactionJson, SdkErr
             signature: hex::encode(sign.signature),
         })
         .collect();
-    let unsigned = encode_without_signs(tx.as_ref())?;
-    let mut data = Vec::with_capacity(audit::DOMAIN_UNSIGNED_BODY.len() + unsigned.len());
-    data.extend_from_slice(audit::DOMAIN_UNSIGNED_BODY);
-    data.extend_from_slice(&unsigned);
     Ok(TransactionJson {
         schema: SCHEMA_TRANSACTION_JSON.to_owned(),
         tx_type: tx.ty(),
@@ -404,21 +404,14 @@ pub fn decode_transaction_json(body_hex: &str) -> Result<TransactionJson, SdkErr
         gas_max: tx.gas_max_byte(),
         tx_hash: hex::encode(tx.hash().0),
         hash_with_fee: hex::encode(tx.hash_with_fee().0),
-        unsigned_body_hash: hex::encode(sys::calculate_hash(data)),
+        unsigned_body_hash: crate::audit::unsigned_body_hash_bytes(&body)?,
         actions,
         signatures,
     })
 }
 
-/// `tx.encode`: rebuild a body from `tx.decode` output (low-level path, doc
-/// 14 §6.4). Callers may append external signatures to `signatures[]`; the
-/// SDK re-validates action json, signature format, required signers,
-/// duplicates and limits, then re-encodes. The rebuilt body must reproduce
-/// the declared `unsigned_body_hash` — a mismatch fails with
-/// `transaction_json_mismatch` instead of silently emitting a different
-/// transaction (this also catches action jsons that do not round-trip).
-/// When a `review` is provided, its binding must cover the rebuilt body and
-/// the review's declared hash, closing the same chain as `attach_signature`.
+/// `tx.encode`: rebuild a body from `tx.decode` output (doc 14 §6.4), re-validating action
+/// json/signatures. The rebuilt body must reproduce the declared `unsigned_body_hash` (fails with `transaction_json_mismatch`), and a provided review must cover it.
 pub fn encode_transaction_json(
     transaction: &TransactionJson,
     review: Option<&Review>,
@@ -464,33 +457,26 @@ pub fn encode_transaction_json(
     }
     let mut signs = Vec::with_capacity(transaction.signatures.len());
     for entry in &transaction.signatures {
-        let publickey: [u8; 33] = hex::decode(&entry.public_key)
-            .ok()
-            .and_then(|bytes| bytes.try_into().ok())
-            .ok_or_else(|| {
-                SdkError::new(
-                    SdkErrorCode::InvalidPublicKey,
-                    "signature public key must be 33-byte hex",
-                )
-            })?;
-        let signature: [u8; 64] = hex::decode(&entry.signature)
-            .ok()
-            .and_then(|bytes| bytes.try_into().ok())
-            .ok_or_else(|| {
-                SdkError::new(SdkErrorCode::BadSignature, "signature must be 64-byte hex")
-            })?;
-        // Duplicate keys are not judged here: the protocol's own sign
-        // insertion replaces an existing same-key entry, and the chain
-        // decides signer-set acceptance at execute/verify time.
+        let publickey: [u8; 33] = decode_hex_fixed(
+            &entry.public_key,
+            SdkErrorCode::InvalidPublicKey,
+            "signature public key must be 33-byte hex",
+        )?;
+        let signature: [u8; 64] = decode_hex_fixed(
+            &entry.signature,
+            SdkErrorCode::BadSignature,
+            "signature must be 64-byte hex",
+        )?;
+        // Duplicate keys are not judged here: insertion replaces same-key
+        // entries, and the chain decides signer-set acceptance at verify time.
         signs.push(Sign {
             publickey,
             signature,
         });
     }
 
-    // The body is built by the protocol's own standard-tx constructor (type
-    // list and gas rule owned by protocol), then re-decoded for the
-    // round-trip invariant.
+    // Build via the protocol's standard-tx constructor (signatures inserted
+    // mechanically), then re-decode for the round-trip invariant.
     let encoded = protocol::tx_std::encode_standard_tx(
         base::TxCreateRequest::new(transaction.tx_type, main, fee, transaction.timestamp)
             .with_gas_max(transaction.gas_max.unwrap_or(0)),
@@ -508,9 +494,8 @@ pub fn encode_transaction_json(
         ));
     }
     let unsigned_body_hash = crate::audit::unsigned_body_hash(&body_hex)?;
-    // Integrity gate: the rebuilt body must reproduce the declared hash.
-    // Without this, tampering with an action's json would silently emit a
-    // different transaction than the one the review binding was computed over.
+    // Integrity gate: the rebuilt body must reproduce the declared hash,
+    // or action-json tampering would silently emit a different transaction.
     if unsigned_body_hash != transaction.unsigned_body_hash {
         return Err(SdkError::with_detail(
             SdkErrorCode::TransactionJsonMismatch,
@@ -521,40 +506,10 @@ pub fn encode_transaction_json(
             ]),
         ));
     }
-    // When an approval context is supplied, its binding must cover the body
-    // that was actually rebuilt (same chain as attach_signature).
+    // When a review is supplied, its binding must cover the rebuilt body
+    // (same chain as attach_signature); no signer is bound on this path.
     if let Some(review) = review {
-        if review.unsigned_body_hash != unsigned_body_hash {
-            return Err(SdkError::with_detail(
-                SdkErrorCode::ReviewBindingMismatch,
-                "review does not match the rebuilt body",
-                crate::json::obj(vec![
-                    crate::json::kv("expected", crate::json::q(&review.unsigned_body_hash)),
-                    crate::json::kv("actual", crate::json::q(&unsigned_body_hash)),
-                ]),
-            ));
-        }
-        if review.codec_profile_hash != profile.profile_hash {
-            return Err(SdkError::with_detail(
-                SdkErrorCode::CodecProfileMismatch,
-                "review was created under a different codec profile",
-                crate::json::obj(vec![
-                    crate::json::kv("expected", crate::json::q(&profile.profile_hash)),
-                    crate::json::kv("actual", crate::json::q(&review.codec_profile_hash)),
-                ]),
-            ));
-        }
-        let binding = review_binding_of(review, &unsigned_body_hash, decoded.as_ref(), profile);
-        if binding != review.review_binding {
-            return Err(SdkError::with_detail(
-                SdkErrorCode::ReviewBindingMismatch,
-                "review binding does not verify for the rebuilt body",
-                crate::json::obj(vec![
-                    crate::json::kv("expected", crate::json::q(&review.review_binding)),
-                    crate::json::kv("actual", crate::json::q(&binding)),
-                ]),
-            ));
-        }
+        crate::attach::verify_review(review, &unsigned_body_hash, None, decoded.as_ref(), profile)?;
     }
     Ok(crate::build::BuiltTransaction {
         schema: crate::schema::SCHEMA_BUILT_TRANSACTION.to_owned(),

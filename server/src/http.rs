@@ -1,11 +1,5 @@
-//! HTTP server core.
-//!
-//! This module hosts transport, routing, and ApiService dispatch only. Concrete
-//! API services live in sibling modules and may depend on protocol-specific
-//! crates when their routes are chain-specific.
-//!
-//! Prefer `HttpServer::start_on(Handle, Waiter)` under a shared runtime;
-//! `Server::start` keeps a private-runtime fallback that blocks until shutdown.
+//! HTTP server core: transport, routing, ApiService dispatch only. Prefer
+//! `HttpServer::start_on(Handle, Waiter)`; `Server::start` is a private-runtime fallback.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

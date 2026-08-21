@@ -8,14 +8,8 @@ pub fn verify_ir_runtime_safe_bytecodes(codes: &[u8]) -> VmrtErr {
     verify_ir_bytecode_stream(codes, /*require_terminal=*/ true)
 }
 
-/// Verify an IR bytecode sub-stream (the payload of an `IRNodeBytecodes`).
-///
-/// Unlike `verify_ir_runtime_safe_bytecodes`, this allows the stream to be
-/// non-terminal (it is a fragment that will be composed with siblings) and
-/// allows it to be empty (the parser already rejects out-of-range payload
-/// lengths). Everything else — valid opcodes, no IR-only opcodes, no absolute
-/// jumps, parameter byte alignment — must still hold so that downstream
-/// scanners (rewriter, runtime verifier) cannot be derailed.
+/// Verify an IR bytecode sub-stream (payload of an `IRNodeBytecodes`); may be non-terminal/empty,
+/// but opcode validity, no IR-only opcodes/absolute jumps, and param alignment must still hold.
 pub fn verify_ir_bytecode_stream_fragment(codes: &[u8]) -> VmrtErr {
     verify_ir_bytecode_stream(codes, /*require_terminal=*/ false)
 }
@@ -30,10 +24,8 @@ fn verify_ir_bytecode_stream(codes: &[u8], require_terminal: bool) -> VmrtErr {
         if !meta.valid {
             return itr_err_fmt!(InstInvalid, "bytecode {} not found", inst as u8);
         }
-        // IR-only opcodes must have been lowered by codegen. Catching any
-        // residual occurrence here is the first line of defense — without it,
-        // a stray IRBREAK / IRCONTINUE / IRBLOCK / ... slips through with
-        // `meta.param=0` scanning and shifts the rest of the stream.
+        // IR-only opcodes must have been lowered by codegen; a stray one here (e.g. IRBREAK
+        // with `meta.param=0`) would shift the rest of the stream, so reject it.
         if matches!(
             inst,
             IRBYTECODE | IRLIST | IRBLOCK | IRBLOCKR | IRIF | IRIFR | IRWHILE | IRBREAK

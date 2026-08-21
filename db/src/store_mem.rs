@@ -1,11 +1,5 @@
-//! Triple-directory chain store: `block/` + app-selected `state/` + `vmlog/`.
-//!
-//! - **block**: content-addressed bodies + available height index (kept across rebuild)
-//! - **state**: business KV + root markers (wipe to rebuild locally)
-//! - **vmlog**: optional VM logs (cleared with state rebuild)
-//!
-//! `Store::disk()` returns the **state** DB (move_root WriteBatch target).
-//! Block-body storage lives in [`crate::block_store`]; VM logs in [`crate::log_backend`].
+//! Triple-directory chain store: `block/` (content-addressed, kept across rebuild),
+//! `state/` (business KV + root markers, wipe to rebuild), `vmlog/`. `Store::disk()` is the **state** DB.
 
 //! # Persistent key map
 //!

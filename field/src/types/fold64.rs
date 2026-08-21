@@ -1,6 +1,6 @@
 use std::fmt;
 
-use sys::{Ret, normalf, errf};
+use sys::{Ret, errf, normalf};
 
 use crate::codec::{Decode, Encode};
 

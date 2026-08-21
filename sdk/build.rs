@@ -1,11 +1,8 @@
 use std::process::Command;
 
 fn main() {
-    // Pin the codec profile to the fullnode source commit, derived from git
-    // instead of a hand-maintained constant: any protocol/registry-affecting
-    // change rotates `profile_hash` automatically and can never be forgotten.
-    // Builds outside a git checkout fall back to "unknown" (the commit string
-    // is only an identity hint; the schema hash still pins the wire shapes).
+    // Pin the codec profile to the fullnode source commit (from git, not a
+    // hand-maintained constant) so `profile_hash` rotates with any protocol change. Outside a git checkout it falls back to "unknown" — an identity hint only; the schema hash still pins the wire shapes.
     let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let repo = format!("{manifest}/..");
     let commit = Command::new("git")

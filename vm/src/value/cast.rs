@@ -35,11 +35,8 @@ fn bytes_to_fixed_width<const N: usize>(buf: &[u8], bits: u16) -> VmrtRes<[u8; N
     fit_be_bytes::<N>(buf).ok_or_else(|| bytes_width_err(buf, bits))
 }
 
-/// Convert raw bytes to a uint `Value` of a **fixed** target width.
-///
-/// PITFALL: there is a second byte→uint path — `buf_to_uint` (in `convert.rs`) —
-/// which picks the **minimal** active width. Map keys use `uint_key_bytes` on the
-/// numeric value, so equal uints share one slot regardless of which path produced the variant.
+/// Convert raw bytes to a uint `Value` of a **fixed** target width. PITFALL: `buf_to_uint`
+/// (convert.rs) picks the **minimal** width; map keys use `uint_key_bytes`, so equal uints share a slot.
 fn bytes_to_uint_width(buf: &[u8], bits: u16) -> VmrtRes<Value> {
     ensure_active_uint_bits(bits)?;
     Ok(match bits {

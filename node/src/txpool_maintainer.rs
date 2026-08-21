@@ -1,4 +1,4 @@
-//!
+//! TxPool maintenance hooks: periodic status prints and eviction.
 
 use std::sync::Arc;
 
@@ -34,11 +34,8 @@ impl TxPoolMaintainer {
             return Ok(());
         }
 
-        // Evaluate the pool in one cumulative child state. This preserves
-        // valid dependent transactions and lets the engine stop at an
-        // uncertain Type3+ failure, matching dev's fork_sub_state loop. An
-        // `Abort` from `try_execute_batch` propagates so no transaction is
-        // judged invalid (§6.7).
+        // Evaluate the pool in one cumulative child state (preserves valid dependents,
+        // stops at an uncertain Type3+ failure, matching dev's fork_sub_state); an `Abort` from `try_execute_batch` propagates so nothing is judged invalid (§6.7).
         let failed = self.engine.try_execute_batch(
             txs.iter().map(TxPkg::tx_ref).collect(),
             height.saturating_add(1),

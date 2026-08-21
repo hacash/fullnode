@@ -8,14 +8,10 @@ use crate::rt::{CallSpec, FrameBindings, GasExtra, GasTable, ItrErr, SpaceCap, V
 use crate::space::{CtcKVMap, GKVMap, Heap, Stack};
 use crate::value::Value;
 
-use super::{ResolvedCallPlan, StubVm, VmHost};
+use super::{NativeVm, ResolvedCallPlan, VmHost};
 
-/// Shared VM state access used by the interpreter.
-///
-/// The interpreter owns frame-local data and calls these methods only for the
-/// duration of one instruction. In particular, no returned Runtime field
-/// reference is kept across `action_call` or `drive_transfer`, which permits
-/// synchronous `StubVm` recursion without unsafe aliasing.
+/// Shared VM state access used by the interpreter, only for the duration of one instruction; no
+/// Runtime reference is kept across `action_call`/`drive_transfer`, allowing synchronous recursion.
 pub(crate) trait VmMachine {
     fn height(&self) -> u64;
     fn gas_table(&self) -> GasTable;
@@ -60,7 +56,7 @@ pub(crate) trait VmMachine {
     ) -> VmrtRes<()>;
 }
 
-impl VmMachine for StubVm {
+impl VmMachine for NativeVm {
     fn height(&self) -> u64 {
         self.runtime.cfg_height()
     }

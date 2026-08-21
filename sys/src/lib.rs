@@ -1,14 +1,5 @@
-//! `sys` -- foundational primitives shared by all crates.
-//!
-//! - `Error { Normal, Revert, Fault, Abort }` + optional caller-owned string
-//!   code + `Ret<T>` / `Rerr`: unified error system
-//! - `Bytes`: refcounted byte buffer (`Arc<Vec<u8>>` + slice range)
-//! - `Waiter`: graceful-shutdown coordination token (sync + async + barrier)
-//! - `Account`: secp256k1 keypair + address generation
-//! - hash/hex/base64/time/ini/string: utility functions
-//!
-//! Dependency spine: `sys -> field -> base -> {protocol, chain, node, server, api, db}`;
-//! `protocol -> {vm, mint}`; `app` assembles all. (`chain` does not depend on `protocol`.)
+//! `sys` — foundational primitives shared by all crates: error system, `Bytes`,
+//! `Waiter`, `Account`, hash/hex/base64/time/ini utilities. Spine: `sys -> field -> base -> {protocol, chain, node, server, api, db}`.
 
 mod account;
 mod base64;

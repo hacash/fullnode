@@ -137,9 +137,8 @@ fn strip_display_root_block(tokens: &mut Vec<Token>) {
 pub fn lang_to_irnode_with_sourcemap(langscript: &str) -> Ret<(IRNodeArray, SourceMap)> {
     let tkr = Tokenizer::new(langscript.as_bytes());
     let mut tks = tkr.parse()?;
-    // The formatter may emit a file-level `{ ... }` wrapper when `trim_root_block` is disabled.
-    // That wrapper can appear after file-level `lib ...` / `const ...` prelude lines, so skip
-    // those declarations before deciding whether the outermost braces are presentation-only.
+    // A file-level `{ ... }` wrapper (when `trim_root_block` is off) can appear after `lib`/`const`
+    // prelude lines; skip those declarations before judging whether the braces are presentation-only.
     strip_display_root_block(&mut tks);
     let syx = Syntax::new(tks);
     syx.parse()

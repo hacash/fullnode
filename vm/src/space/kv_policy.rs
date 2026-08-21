@@ -56,10 +56,8 @@ pub fn validate_volatile_scalar_put(
     validate_scalar_payload_against_max(val, value_max_bytes, ec)
 }
 
-/// Validates one `(key, value)` pair before put into `GKVMap` / contract `MKVMap`.
-///
-/// - When `allow_nil_value` is true and `val` is `Nil`, only `key` is checked (delete semantics).
-/// - Otherwise requires non-nil scalar value and `extract_bytes_len <= value_max_bytes`.
+/// Validates one `(key, value)` pair before put into `GKVMap` / contract `MKVMap`. With `allow_nil_value`
+/// and `Nil` val only `key` is checked (delete semantics); otherwise non-nil scalar ≤ `value_max_bytes`.
 pub fn validate_volatile_kv_put(
     key: &Value,
     val: &Value,

@@ -4,26 +4,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use base::*;
-use field::{Decode, Uint1, Uint2};
 use sys::{Ret, normalf};
-
-/// Protocol rules selected by this Hacash application.
-pub static CHAIN_PROTOCOL_PARAMS: protocol::ProtocolParams = protocol::PROTOCOL_PARAMS;
 
 pub struct Registry {
     block_hasher: BlockHasherFn,
     block_creator: Option<BlockCreateFn>,
     block_sizer: Option<BlockSizeFn>,
     vm_assigner: Option<VmAssignFn>,
-    tx_codecs: HashMap<u8, TxCreateFn>,
-    tx_json_codecs: HashMap<u8, TxJsonDecodeFn>,
-    action_codecs: HashMap<u16, ActionCreateFn>,
-    action_json_codecs: HashMap<u16, ActionJsonDecodeFn>,
+    wire_codecs: WireCodecTable,
     vm_host_defs: HashMap<(VmHostCallKind, u8), VmHostActionDef>,
     context_creator: Option<ContextCreateFn>,
     context_gas_budget: i64,
     vm_params: Option<VmExecutionParams>,
-    execution_profile: Option<&'static (dyn std::any::Any + Send + Sync)>,
+    execution_profile: Option<&'static dyn ExecutionProfile>,
 }
 
 impl Registry {
@@ -33,10 +26,7 @@ impl Registry {
             block_creator: None,
             block_sizer: None,
             vm_assigner: None,
-            tx_codecs: HashMap::new(),
-            tx_json_codecs: HashMap::new(),
-            action_codecs: HashMap::new(),
-            action_json_codecs: HashMap::new(),
+            wire_codecs: WireCodecTable::new(),
             vm_host_defs: HashMap::new(),
             context_creator: None,
             context_gas_budget: 0,
@@ -47,63 +37,12 @@ impl Registry {
 }
 
 impl base::WireRegistry for Registry {
-    fn register_tx(&mut self, ty: u8, f: TxCreateFn) -> sys::Rerr {
-        if self.tx_codecs.contains_key(&ty) {
-            return sys::errf!("transaction type {} already registered", ty);
-        }
-        self.tx_codecs.insert(ty, f);
-        Ok(())
+    fn register_tx_codec(&mut self, binding: TxCodecBinding) -> sys::Rerr {
+        self.wire_codecs.add_tx(binding)
     }
 
-    fn register_tx_json(&mut self, ty: u8, f: TxJsonDecodeFn) -> sys::Rerr {
-        if self.tx_json_codecs.contains_key(&ty) {
-            return sys::errf!("transaction json type {} already registered", ty);
-        }
-        self.tx_json_codecs.insert(ty, f);
-        Ok(())
-    }
-
-    fn register_action(&mut self, kinds: &[u16], f: ActionCreateFn) -> sys::Rerr {
-        for (index, kind) in kinds.iter().enumerate() {
-            if kinds[..index].contains(kind) {
-                return sys::errf!("action kind {} listed more than once", kind);
-            }
-        }
-        if let Some(kind) = kinds.iter().find(|k| self.action_codecs.contains_key(k)) {
-            return sys::errf!("action kind {} already registered", kind);
-        }
-        for kind in kinds {
-            self.action_codecs.insert(*kind, f);
-        }
-        Ok(())
-    }
-
-    fn register_action_json(&mut self, kinds: &[u16], f: ActionJsonDecodeFn) -> sys::Rerr {
-        for (index, kind) in kinds.iter().enumerate() {
-            if kinds[..index].contains(kind) {
-                return sys::errf!("action json kind {} listed more than once", kind);
-            }
-            if !self.action_codecs.contains_key(kind) {
-                return sys::errf!("action json kind {} has no binary action codec", kind);
-            }
-        }
-        if let Some(kind) = kinds
-            .iter()
-            .find(|k| self.action_json_codecs.contains_key(k))
-        {
-            return sys::errf!("action json kind {} already registered", kind);
-        }
-        for kind in kinds {
-            self.action_json_codecs.insert(*kind, f);
-        }
-        Ok(())
-    }
-
-    fn register_action_family(&mut self, _friendly: &'static str, _kinds: &[u16]) -> sys::Rerr {
-        // The friendly family surface is consumed by the SDK/codegen paths
-        // (`chain_codec::collect_action_families`); the runtime node has no
-        // use for it. Explicit accept, never a silent default.
-        Ok(())
+    fn register_action_codec(&mut self, binding: ActionCodecBinding) -> sys::Rerr {
+        self.wire_codecs.add_action(binding)
     }
 }
 
@@ -159,10 +98,7 @@ impl base::ExecRegistry for Registry {
         Ok(())
     }
 
-    fn set_execution_profile(
-        &mut self,
-        profile: &'static (dyn std::any::Any + Send + Sync),
-    ) -> sys::Rerr {
+    fn set_execution_profile(&mut self, profile: &'static dyn ExecutionProfile) -> sys::Rerr {
         if self.execution_profile.is_some() {
             return sys::errf!("execution profile already registered");
         }
@@ -173,44 +109,11 @@ impl base::ExecRegistry for Registry {
 
 impl BinaryCodecs for Registry {
     fn decode_action(&self, buf: &[u8]) -> Ret<(ActionRef, usize)> {
-        let (kind, _) = Uint2::decode(buf)?;
-        let kind = kind.uint();
-        match self.action_codecs.get(&kind) {
-            Some(codec) => codec(self, kind, buf),
-            None => normalf!("action kind {} not registered", kind),
-        }
+        self.wire_codecs.decode_action(self, buf)
     }
 
-    fn decode_action_exact(&self, buf: &[u8]) -> Ret<ActionRef> {
-        let (obj, used) = self.decode_action(buf)?;
-        if used != buf.len() {
-            return normalf!(
-                "action parse length mismatch: consumed {} but payload length is {}",
-                used,
-                buf.len()
-            );
-        }
-        Ok(obj)
-    }
     fn decode_transaction(&self, buf: &[u8]) -> Ret<(TxRef, usize)> {
-        let (ty, _) = Uint1::decode(buf)?;
-        let ty = ty.uint();
-        match self.tx_codecs.get(&ty) {
-            Some(codec) => codec(self, buf),
-            None => normalf!("transaction type {} not registered", ty),
-        }
-    }
-
-    fn decode_transaction_exact(&self, buf: &[u8]) -> Ret<TxRef> {
-        let (obj, used) = self.decode_transaction(buf)?;
-        if used != buf.len() {
-            return normalf!(
-                "transaction parse length mismatch: consumed {} but payload length is {}",
-                used,
-                buf.len()
-            );
-        }
-        Ok(obj)
+        self.wire_codecs.decode_transaction(self, buf)
     }
     fn block_hash(&self, height: u64, stuff: &[u8]) -> [u8; HASH_SIZE] {
         (self.block_hasher)(height, stuff)
@@ -226,18 +129,6 @@ impl BinaryCodecs for Registry {
         }
     }
 
-    fn decode_block_exact(&self, buf: &[u8]) -> Ret<BlockRef> {
-        let (obj, used) = self.decode_block(buf)?;
-        if used != buf.len() {
-            return normalf!(
-                "block parse length mismatch: consumed {} but payload length is {}",
-                used,
-                buf.len()
-            );
-        }
-        Ok(obj)
-    }
-
     fn peek_block_size(&self, buf: &[u8]) -> Ret<usize> {
         match self.block_sizer {
             Some(sizer) => sizer(self, buf),
@@ -247,18 +138,8 @@ impl BinaryCodecs for Registry {
 }
 
 impl JsonCodecs for Registry {
-    fn decode_tx_json(&self, ty: u8, json: &str) -> Ret<Option<TxRef>> {
-        match self.tx_json_codecs.get(&ty) {
-            Some(codec) => codec(self, ty, json).map(Some),
-            None => Ok(None),
-        }
-    }
-
     fn decode_action_json(&self, kind: u16, json: &str) -> Ret<Option<ActionRef>> {
-        match self.action_json_codecs.get(&kind) {
-            Some(codec) => codec(self, kind, json).map(Some),
-            None => Ok(None),
-        }
+        self.wire_codecs.decode_action_json(self, kind, json)
     }
 }
 
@@ -287,7 +168,7 @@ impl ExecutionServices for Registry {
             .ok_or_else(|| sys::Error::fault("VM execution params not registered"))
     }
 
-    fn execution_profile(&self) -> Ret<&'static (dyn std::any::Any + Send + Sync)> {
+    fn execution_profile(&self) -> Ret<&'static dyn ExecutionProfile> {
         self.execution_profile
             .ok_or_else(|| sys::Error::fault("execution profile not registered"))
     }
@@ -308,20 +189,13 @@ impl ExecutionServices for Registry {
 
 pub fn standard_registry() -> Ret<Registry> {
     let mut registry = Registry::new(mint::block_hasher);
-    // The standard codec surface is assembled once by chain-codec (protocol +
-    // mint-core + vm actions); this application adds its own block-level
-    // CoinbaseTx codec and the VM assigner on top. The SDK and
-    // codec-schema-gen use the same chain-codec entry, so the action set can
-    // never drift between them.
-    chain_codec::register_standard(&mut registry)?;
-    // Execution services are installed by the full node on top of the shared
-    // wire codec surface: protocol profile/VM params/context/host defs,
-    // mint-core's DiaInscEdit EXTACTION host, the mint coinbase and the VM
-    // assigner. The SDK/wasm path stops at `register_standard`.
-    protocol::register_exec(&mut registry, &protocol::PROTOCOL_PARAMS)?;
-    mint_core::setup::register_exec(&mut registry)?;
-    mint::register(&mut registry)?;
-    vm::register(&mut registry)?;
+    protocol::register_wire(&mut registry)?;
+    mint_core::register_wire(&mut registry)?;
+    vm::register_wire(&mut registry)?;
+    protocol::register_exec(&mut registry, &hacash_params::MAINNET_PARAMS)?;
+    mint_core::register_exec(&mut registry)?;
+    mint::register_wire(&mut registry)?;
+    vm::register_exec(&mut registry)?;
     Ok(registry)
 }
 
@@ -390,28 +264,23 @@ mod tests {
         let registry = standard_registry().expect("standard registry");
         assert_eq!(
             protocol::execution_params(&registry).expect("protocol params"),
-            &CHAIN_PROTOCOL_PARAMS
+            &hacash_params::MAINNET_PARAMS.protocol
         );
     }
 
-    /// The app's action codec surface must be exactly the chain-codec capture:
-    /// a new action crate wired into the full node without going through
-    /// `chain_codec::register_standard` fails here (the same guard the SDK and
-    /// codec-schema-gen rely on).
     #[test]
-    fn standard_registry_action_surface_matches_chain_codec() {
+    fn standard_registry_has_the_consensus_codec_surface() {
         let registry = standard_registry().expect("standard registry");
-        let mut registered: Vec<u16> = registry.action_codecs.keys().copied().collect();
-        registered.sort_unstable();
-        let mut expected: Vec<u16> = chain_codec::collect_action_schemas()
-            .iter()
-            .map(|schema| schema.kind)
-            .collect();
-        expected.sort_unstable();
+        let registered = registry.wire_codecs.action_kinds();
         assert_eq!(
-            registered, expected,
-            "app action surface must equal the chain-codec capture"
+            registered,
+            vec![
+                1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19, 22, 25, 26, 32, 33, 34,
+                35, 36, 40, 41, 44, 46, 0x0401, 0x0402, 0x0411, 0x0412, 0x0413, 0x0414, 0x0601,
+                0x0602, 0x0609, 0x0611, 0x0612, 0x0613, 0x0614, 0x0701, 0x0702, 0x0703,
+            ]
         );
+        assert_eq!(registry.wire_codecs.tx_types(), vec![0, 1, 2, 3]);
     }
 
     #[test]
@@ -522,7 +391,7 @@ mod tests {
         .expect("consensus");
         assert_eq!(
             consensus.chain_flags(1),
-            CHAIN_PROTOCOL_PARAMS.diamond_form_flag
+            hacash_params::MAINNET_PARAMS.protocol.diamond_form_flag
         );
     }
 

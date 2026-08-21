@@ -1,20 +1,11 @@
-//! Signing state machine (Unified SDK 2.0, doc 14 §4.5/§4.9): the SDK computes
-//! sign hashes and consumes `SignatureProof`s; private keys never cross the
-//! boundary. `attach` clones first, validates everything, then commits.
-//!
-//! The SDK is a capability provider, never a chain-rule judge: it verifies
-//! the approval-chain bindings it itself issued (review/request/proof
-//! integrity) and the proof's wire format, then attaches the signature
-//! through the protocol's own `attach_sign`. Whether the resulting body
-//! satisfies the chain's per-type signer rules (type-3 exact set D, signer
-//! caps, duplicates) is decided by the chain at execute/verify time — the
-//! SDK does not re-implement those rules and does not reject a body for
-//! them, even when the produced body cannot be executed on the chain.
+//! Signing state machine (Unified SDK 2.0, doc 14 §4.5/§4.9): the SDK computes sign hashes and
+//! consumes `SignatureProof`s; private keys never cross the boundary. It verifies only the bindings it issued and attaches via `insert_attached_sign`; chain-rule outcomes are reported, never judged.
 
 use field::{Address, Sign};
 
 use crate::error::{SdkError, SdkErrorCode};
 use crate::inspect::{decode_body_hex, decode_tx};
+use crate::json::SdkJsonTo;
 use crate::profile::CodecProfile;
 use crate::schema::{
     DOMAIN_SIGNING_REQUEST, SCHEMA_ATTACH_RESULT, SCHEMA_SIGNATURE_PROOF, SCHEMA_SIGNATURE_REPORT,
@@ -22,9 +13,7 @@ use crate::schema::{
 };
 
 /// Structured signing request produced by `prepare_signature` (doc 14 §4.9).
-/// The vault signs `digest` and returns a `SignatureProof`; nothing in here
-/// is secret. `id` and `request_binding` are both the recomputed binding over
-/// the request content, so editing any field after `prepare` breaks them.
+/// The vault signs `digest`; `id`/`request_binding` are the recomputed binding, so any field edit breaks them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SigningRequest {
     pub schema: String,
@@ -33,15 +22,13 @@ pub struct SigningRequest {
     pub algorithm: String,
     pub signer_address: String,
     pub digest: String,
-        pub body_hash: Option<String>,
-        pub review_binding: Option<String>,
-    /// The policy decision the SDK itself computed (when a policy was
-    /// supplied to `prepare_signature`). A `deny` decision is bound into
-    /// the request as a fact like every other field; the SDK never refuses
-    /// to prepare or attach because of it.
-        pub policy_decision: Option<crate::policy::PolicyDecision>,
-        pub origin: Option<String>,
-        pub expires_at: Option<u64>,
+    pub body_hash: Option<String>,
+    pub review_binding: Option<String>,
+    /// The policy decision the SDK itself computed (when a policy was supplied).
+    /// A `deny` is bound in as a fact; the SDK never refuses to prepare/attach for it.
+    pub policy_decision: Option<crate::policy::PolicyDecision>,
+    pub origin: Option<String>,
+    pub expires_at: Option<u64>,
     pub request_binding: String,
 }
 
@@ -61,7 +48,11 @@ pub struct AttachResult {
     pub schema: String,
     pub body: String,
     pub complete: bool,
+    pub present_signers: Vec<String>,
+    pub valid_signers: Vec<String>,
     pub missing_signers: Vec<String>,
+    pub invalid_signers: Vec<String>,
+    pub signature_errors: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,34 +72,21 @@ pub struct SignatureReport {
     pub invalid: Vec<String>,
 }
 
-/// Domain-separated binding of a signing request (sha3-256 over the canonical
-/// request JSON minus `request_binding` and `id`, which is derived from the
-/// binding itself). Used by prepare paths and by proof verification.
+/// Domain-separated binding of a signing request: sha3-256 over the canonical
+/// request JSON minus `request_binding` and `id`. Used by prepare/proof paths.
 pub fn request_binding_of(request: &SigningRequest) -> String {
     let mut copy = request.clone();
     copy.request_binding.clear();
     copy.id.clear();
-    let body = copy.to_binary_body();
+    let body = copy.to_json_string();
     let mut data = Vec::with_capacity(DOMAIN_SIGNING_REQUEST.len() + body.len());
     data.extend_from_slice(DOMAIN_SIGNING_REQUEST);
-    data.extend_from_slice(&body);
+    data.extend_from_slice(body.as_bytes());
     hex::encode(sys::calculate_hash(data))
 }
 
 /// `tx.prepare_signature`: re-validates the body and (when provided) the
-/// review/policy bindings, computes the local sign hash for `signer_address`
-/// and returns a `SigningRequest`. The SDK never signs.
-///
-/// A provided `Review` must fully re-verify: its binding is recomputed from
-/// the body, signer, profile and the review's own content, so a review whose
-/// displayed fields (fee, amounts, actions, context) were edited after
-/// `inspect` is rejected here instead of being carried into the request.
-///
-/// A provided `Policy` is evaluated by the SDK itself over the verified
-/// review: the caller cannot claim an outcome different from the one the
-/// policy produces. The decision is bound into the request as a fact —
-/// whether a `deny` decision stops the signing is the caller's business
-/// call, not the SDK's.
+/// review/policy bindings, computes the local sign hash for `signer_address`, and returns a `SigningRequest`. The SDK never signs.
 pub fn prepare_signature(
     body_hex: &str,
     signer_address: &str,
@@ -123,7 +101,13 @@ pub fn prepare_signature(
     let signer = Address::from_readable(signer_address).map_err(SdkError::from)?;
     let unsigned_body_hash = crate::audit::unsigned_body_hash(body_hex)?;
     if let Some(review) = review {
-        verify_review(review, &unsigned_body_hash, &signer, tx.as_ref(), profile)?;
+        verify_review(
+            review,
+            &unsigned_body_hash,
+            Some(&signer),
+            tx.as_ref(),
+            profile,
+        )?;
     }
     let policy_decision = match policy {
         Some(policy) => {
@@ -158,14 +142,12 @@ pub fn prepare_signature(
     Ok(request)
 }
 
-/// Shared approval-context verification: the review must cover this body,
-/// this signer, this profile, and its binding must recompute from its own
-/// content (see `crate::inspect::review_binding_of`). Used by
-/// `prepare_signature`, `attach_signature` and `encode_transaction_json`.
+/// Shared approval-context verification: the review must cover this body and profile and its
+/// binding must recompute from its own content (see `crate::inspect::review_binding_of`); `signer` is the acting signer, `None` on paths without one.
 pub fn verify_review(
     review: &crate::inspect::Review,
     unsigned_body_hash: &str,
-    signer: &Address,
+    signer: Option<&Address>,
     tx: &dyn base::TransactionSign,
     profile: &CodecProfile,
 ) -> Result<(), SdkError> {
@@ -189,16 +171,18 @@ pub fn verify_review(
             ]),
         ));
     }
-    if let Some(bound_signer) = &review.signer_address {
-        if bound_signer != &signer.to_readable() {
-            return Err(SdkError::with_detail(
-                SdkErrorCode::ReviewBindingMismatch,
-                "review was bound to a different signer",
-                crate::json::obj(vec![
-                    crate::json::kv("expected", crate::json::q(&bound_signer)),
-                    crate::json::kv("actual", crate::json::q(&signer.to_readable())),
-                ]),
-            ));
+    if let Some(signer) = signer {
+        if let Some(bound_signer) = &review.signer_address {
+            if bound_signer != &signer.to_readable() {
+                return Err(SdkError::with_detail(
+                    SdkErrorCode::ReviewBindingMismatch,
+                    "review was bound to a different signer",
+                    crate::json::obj(vec![
+                        crate::json::kv("expected", crate::json::q(&bound_signer)),
+                        crate::json::kv("actual", crate::json::q(&signer.to_readable())),
+                    ]),
+                ));
+            }
         }
     }
     let binding = crate::inspect::review_binding_of(review, unsigned_body_hash, tx, profile);
@@ -255,21 +239,16 @@ pub fn check_request_expiry(request: &SigningRequest) -> Result<(), SdkError> {
 
 pub(crate) fn parse_proof(proof: &SignatureProof) -> Result<(Sign, Address), SdkError> {
     validate_proof_format(proof)?;
-    let publickey: [u8; 33] = hex::decode(&proof.public_key)
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| {
-            SdkError::new(
-                SdkErrorCode::InvalidPublicKey,
-                "public key must be 33-byte hex",
-            )
-        })?;
-    let signature: [u8; 64] = hex::decode(&proof.signature)
-        .ok()
-        .and_then(|bytes| bytes.try_into().ok())
-        .ok_or_else(|| {
-            SdkError::new(SdkErrorCode::BadSignature, "signature must be 64-byte hex")
-        })?;
+    let publickey: [u8; 33] = crate::inspect::decode_hex_fixed(
+        &proof.public_key,
+        SdkErrorCode::InvalidPublicKey,
+        "public key must be 33-byte hex",
+    )?;
+    let signature: [u8; 64] = crate::inspect::decode_hex_fixed(
+        &proof.signature,
+        SdkErrorCode::BadSignature,
+        "signature must be 64-byte hex",
+    )?;
     let signer = Address::from(sys::Account::get_address_by_public_key(publickey));
     Ok((
         Sign {
@@ -280,11 +259,8 @@ pub(crate) fn parse_proof(proof: &SignatureProof) -> Result<(Sign, Address), Sdk
     ))
 }
 
-/// One-shot integrity check of a signing request: `id` and `request_binding`
-/// must both equal the binding recomputed over the request content, so any
-/// field edit after `prepare` (expires_at, digest, body_hash, signer,
-/// purpose, algorithm, bindings, origin) is detected. Also enforces the
-/// frozen algorithm envelope and the request expiry.
+/// One-shot integrity check of a signing request: `id`/`request_binding` must equal the
+/// binding recomputed over the content, so any field edit after `prepare` is detected; also enforces the frozen algorithm envelope and expiry.
 pub fn verify_request_integrity(request: &SigningRequest) -> Result<(), SdkError> {
     let binding = request_binding_of(request);
     if request.id != binding || request.request_binding != binding {
@@ -309,13 +285,8 @@ pub fn verify_request_integrity(request: &SigningRequest) -> Result<(), SdkError
     Ok(())
 }
 
-/// Full approval-context verification for `tx.attach_signature`: the request
-/// must be self-consistent (see `verify_request_integrity`), bound to this
-/// transaction and signer (body_hash, digest, signer_address, purpose), bound
-/// to the provided proof (id/binding) and review; the policy decision carried
-/// by the request must be self-consistent and bound to the review (the
-/// decision value is a business fact, never an attach refusal); and the
-/// review itself must re-verify.
+/// Full approval-context verification for `tx.attach_signature`: request self-consistency
+/// (`verify_request_integrity`), body/digest/signer binding, proof↔request binding, and a policy decision bound to the review — its value is never an attach refusal.
 fn verify_attach_context(
     tx: &dyn base::TransactionSign,
     signer: &Address,
@@ -393,9 +364,8 @@ fn verify_attach_context(
         ));
     }
     if let Some(decision) = &request.policy_decision {
-        // The decision is bound to this review and its own binding must
-        // recompute; the decision VALUE (deny/confirm) is a business fact the
-        // caller acts on — the SDK never refuses to attach for it.
+        // The decision must be bound to this review and its binding recompute;
+        // its VALUE is a business fact the caller acts on, never an attach refusal.
         if decision.review_binding != review.review_binding {
             return Err(SdkError::with_detail(
                 SdkErrorCode::PolicyBindingMismatch,
@@ -418,22 +388,12 @@ fn verify_attach_context(
             ));
         }
     }
-    verify_review(review, unsigned_body_hash, signer, tx, profile)?;
+    verify_review(review, unsigned_body_hash, Some(signer), tx, profile)?;
     Ok(())
 }
 
-/// `tx.attach_signature`: full approval-chain attach. Both the `review`
-/// (approval context from `tx.inspect`) and the `request` (the signing
-/// request the vault signed) are required and fully verified: request
-/// integrity, body/digest/signer binding, proof↔request binding, policy
-/// decision and review binding. Clones first, validates everything, then
-/// commits (doc 14 §4.5/§4.9). The chain's per-type signer rules (type-3
-/// exact set D, signer caps, duplicates) are never judged here: the
-/// signature is attached mechanically through the protocol's own
-/// `attach_sign` (which replaces an existing signature of the same key),
-/// and completeness is reported via `complete`/`missing_signers`. For
-/// attaching pre-signed signatures without an approval chain, use
-/// `attach_signature_unbound`.
+/// `tx.attach_signature`: full approval-chain attach — verifies request integrity,
+/// body/digest/signer binding, proof↔request and review bindings, then inserts mechanically via `insert_attached_sign` (chain signer rules are reported, never judged).
 pub fn attach_signature(
     body_hex: &str,
     proof: &SignatureProof,
@@ -444,11 +404,8 @@ pub fn attach_signature(
     attach_signature_inner(body_hex, proof, Some((review, request)), profile)
 }
 
-/// `tx.attach_signature_unbound`: low-level attach of one external signature
-/// with no approval context. Validates body and proof envelope only; no
-/// review/request binding and no chain-rule judgment is applied. Completeness
-/// is reported, not gated. Use for cold-signer and offline flows that do not
-/// go through the review chain.
+/// `tx.attach_signature_unbound`: low-level attach of one external signature with no approval
+/// context — validates body and proof envelope only; completeness is reported, not gated.
 pub fn attach_signature_unbound(
     body_hex: &str,
     proof: &SignatureProof,
@@ -478,36 +435,52 @@ fn attach_signature_inner(
             profile,
         )?;
     }
-    // Mechanical attach through the protocol's own `push_sign` (the same-key
-    // replacement rule lives there); the chain decides signer-set acceptance
-    // at execute/verify time, never here.
-    let signed = protocol::tx_std::attach_sign(tx.as_ref(), sign.clone())
+    // Mechanical insert via `insert_attached_sign` (same-key replacement, no digest check);
+    // crypto / type-3 D-set acceptance is reported via signature_report / tx.verify.
+    let signed = protocol::tx_std::insert_attached_sign(tx.as_ref(), sign.clone())
         .map_err(|error| SdkError::from(error))?;
     Ok(attach_result(signed.as_ref()))
 }
 
 fn attach_result(tx: &dyn base::TransactionSign) -> AttachResult {
-    let report = protocol::tx_std::signature_report(tx).unwrap_or_else(|_| {
-        protocol::tx_std::TxSignatureReport {
-            required: vec![],
-            present: vec![],
-            valid: vec![],
-            missing: vec![],
-            invalid: vec![],
-        }
-    });
+    let (report, signature_errors) = match protocol::tx_std::signature_report(tx) {
+        Ok(report) => (report, Vec::new()),
+        Err(error) => (
+            protocol::tx_std::TxSignatureReport {
+                required: vec![],
+                present: vec![],
+                valid: vec![],
+                missing: vec![],
+                invalid: vec![],
+            },
+            vec![error.to_string()],
+        ),
+    };
     AttachResult {
         schema: SCHEMA_ATTACH_RESULT.to_owned(),
         body: hex::encode(tx.encode()),
-        complete: report
-            .required
+        complete: signature_errors.is_empty()
+            && report
+                .required
+                .iter()
+                .all(|addr| report.valid.contains(addr)),
+        present_signers: report
+            .present
             .iter()
-            .all(|addr| report.valid.contains(addr)),
+            .map(|addr| addr.to_readable())
+            .collect(),
+        valid_signers: report.valid.iter().map(|addr| addr.to_readable()).collect(),
         missing_signers: report
             .missing
             .iter()
             .map(|addr| addr.to_readable())
             .collect(),
+        invalid_signers: report
+            .invalid
+            .iter()
+            .map(|addr| addr.to_readable())
+            .collect(),
+        signature_errors,
     }
 }
 
@@ -534,30 +507,38 @@ pub fn verify_signatures(body_hex: &str) -> Result<VerifyResult, SdkError> {
 pub fn signature_report(body_hex: &str) -> Result<SignatureReport, SdkError> {
     let body = decode_body_hex(body_hex)?;
     let tx = decode_tx(&body)?;
-    let report =
-        protocol::tx_std::signature_report(tx.as_ref()).map_err(|error| SdkError::from(error))?;
-    Ok(SignatureReport {
-        schema: SCHEMA_SIGNATURE_REPORT.to_owned(),
-        required: report
-            .required
-            .iter()
-            .map(|addr| addr.to_readable())
-            .collect(),
-        present: report
-            .present
-            .iter()
-            .map(|addr| addr.to_readable())
-            .collect(),
-        valid: report.valid.iter().map(|addr| addr.to_readable()).collect(),
-        missing: report
-            .missing
-            .iter()
-            .map(|addr| addr.to_readable())
-            .collect(),
-        invalid: report
-            .invalid
-            .iter()
-            .map(|addr| addr.to_readable())
-            .collect(),
-    })
+    match protocol::tx_std::signature_report(tx.as_ref()) {
+        Ok(report) => Ok(SignatureReport {
+            schema: SCHEMA_SIGNATURE_REPORT.to_owned(),
+            required: report
+                .required
+                .iter()
+                .map(|addr| addr.to_readable())
+                .collect(),
+            present: report
+                .present
+                .iter()
+                .map(|addr| addr.to_readable())
+                .collect(),
+            valid: report.valid.iter().map(|addr| addr.to_readable()).collect(),
+            missing: report
+                .missing
+                .iter()
+                .map(|addr| addr.to_readable())
+                .collect(),
+            invalid: report
+                .invalid
+                .iter()
+                .map(|addr| addr.to_readable())
+                .collect(),
+        }),
+        Err(_error) => Ok(SignatureReport {
+            schema: SCHEMA_SIGNATURE_REPORT.to_owned(),
+            required: vec![],
+            present: vec![],
+            valid: vec![],
+            missing: vec![],
+            invalid: vec![],
+        }),
+    }
 }

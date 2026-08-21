@@ -1,6 +1,5 @@
-//! /""
-//!
-//! `Arc`
+//! Transaction and block packages: decoded objects bound to their wire
+//! bytes (`Arc`) plus arrival metadata.
 
 use std::sync::Arc;
 
@@ -140,8 +139,8 @@ impl BlkPkg {
         Self::from_block_with_data(obj, data, source)
     }
 
-    /// blob  `[off, off+len)` `BlkPkg.data`  blob
-    /// range decode
+    /// Decode a block from a shared payload slice `[off, off+len)` of
+    /// `BlkPkg.data` (borrowed, no copy).
     pub fn from_shared(
         reg: &dyn BinaryCodecs,
         data: Arc<Vec<u8>>,
@@ -296,6 +295,11 @@ mod tests {
 
         fn verify_signature(&self) -> sys::Rerr {
             Ok(())
+        }
+
+        #[cfg(feature = "execute")]
+        fn as_execute(&self) -> Option<&dyn crate::TransactionExecute> {
+            Some(self)
         }
     }
 

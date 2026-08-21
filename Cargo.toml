@@ -4,14 +4,13 @@ members = [
     "sys",
     "field",
     "base",
-    "action-codec-derive",
+    "hacash-params",
+    "action-derive",
     "protocol",
     "vm",
     "mint",
     "mint-core",
     "chain",
-    "codec-schema-gen",
-    "chain-codec",
     "node",
     "server",
     "api",
@@ -25,14 +24,13 @@ default-members = [
     "sys",
     "field",
     "base",
-    "action-codec-derive",
+    "hacash-params",
+    "action-derive",
     "protocol",
     "vm",
     "mint",
     "mint-core",
     "chain",
-    "codec-schema-gen",
-    "chain-codec",
     "node",
     "server",
     "api",
@@ -50,13 +48,13 @@ edition = "2024"
 sys        = { path = "sys" }
 field      = { path = "field", default-features = false }
 base       = { path = "base" }
-action-codec-derive = { path = "action-codec-derive" }
+hacash-params = { path = "hacash-params" }
+action-derive = { path = "action-derive" }
 protocol   = { path = "protocol" }
 vm         = { path = "vm" }
 mint       = { path = "mint" }
 mint-core = { path = "mint-core", default-features = false }
 chain      = { path = "chain" }
-chain-codec = { path = "chain-codec" }
 node       = { path = "node" }
 server     = { path = "server" }
 api        = { path = "api" }
@@ -81,4 +79,3 @@ strip = true
 [profile.wasm-release]
 inherits = "release"
 opt-level = "z"
-

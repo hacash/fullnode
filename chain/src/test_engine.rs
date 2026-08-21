@@ -1,8 +1,5 @@
-//! Engine-level lifecycle tests (§10.2 of the error-system normalization
-//! design): listener abort, post-commit callback abort, query tri-state and
-//! optimistic-consumer propagation. The harness mocks the execution services,
-//! consensus runtime and the store so the real `ChainEngine` lifecycle runs
-//! against in-memory backends.
+//! Engine-level lifecycle tests (§10.2): listener abort, post-commit callback
+//! abort, query tri-state and optimistic-consumer propagation, on in-memory backends.
 
 #![cfg(test)]
 
@@ -11,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use base::{
-    ActionRef, ActOut, BinaryCodecs, Block, BlockAcceptStatus, BlockHasherFn, BlockProducer,
+    ActOut, ActionRef, BinaryCodecs, Block, BlockAcceptStatus, BlockHasherFn, BlockProducer,
     BlockRef, ChainId, ChainListener, ChainView, Consensus, ConsensusNodeHooks, Context, DiskDB,
     Engine, EngineConfig, Env, ExecFrom, ExecutionServices, ForkChoice, JsonCodecs, LogEntry,
     MemDB, MintParams, PkgOrigin, PkgSource, STATE_READ_FAILED_CODE, StateChunkRef, StateLayer,
@@ -75,6 +72,9 @@ impl base::TransactionSign for TestTx {
     fn verify_signature(&self) -> Rerr {
         Ok(())
     }
+    fn as_execute(&self) -> Option<&dyn base::TransactionExecute> {
+        Some(self)
+    }
 }
 
 // `chain` is a fullnode-only crate: its `base` edge always carries `execute`,
@@ -122,6 +122,9 @@ impl base::TransactionSign for AbortTx {
     fn verify_signature(&self) -> Rerr {
         Ok(())
     }
+    fn as_execute(&self) -> Option<&dyn base::TransactionExecute> {
+        Some(self)
+    }
 }
 
 impl base::TransactionExecute for AbortTx {
@@ -162,10 +165,7 @@ impl Block for TestBlock {
     }
     fn mrklroot(&self) -> Hash {
         // Single-tx merkle root is the tx hash itself (see `verify::merkle_root`).
-        self.txs
-            .first()
-            .map(|tx| tx.hash())
-            .unwrap_or_default()
+        self.txs.first().map(|tx| tx.hash()).unwrap_or_default()
     }
     fn timestamp(&self) -> u64 {
         self.timestamp
@@ -270,20 +270,11 @@ impl BinaryCodecs for TestServices {
     fn decode_action(&self, _buf: &[u8]) -> Ret<(ActionRef, usize)> {
         errf!("test services: decode_action")
     }
-    fn decode_action_exact(&self, _buf: &[u8]) -> Ret<ActionRef> {
-        errf!("test services: decode_action_exact")
-    }
     fn decode_transaction(&self, _buf: &[u8]) -> Ret<(TxRef, usize)> {
         errf!("test services: decode_transaction")
     }
-    fn decode_transaction_exact(&self, _buf: &[u8]) -> Ret<TxRef> {
-        errf!("test services: decode_transaction_exact")
-    }
     fn decode_block(&self, _buf: &[u8]) -> Ret<(BlockRef, usize)> {
         errf!("test services: decode_block")
-    }
-    fn decode_block_exact(&self, _buf: &[u8]) -> Ret<BlockRef> {
-        errf!("test services: decode_block_exact")
     }
     fn peek_block_size(&self, _buf: &[u8]) -> Ret<usize> {
         errf!("test services: peek_block_size")
@@ -297,9 +288,6 @@ impl BinaryCodecs for TestServices {
 }
 
 impl JsonCodecs for TestServices {
-    fn decode_tx_json(&self, _ty: u8, _json: &str) -> Ret<Option<TxRef>> {
-        errf!("test services: decode_tx_json")
-    }
     fn decode_action_json(&self, _kind: u16, _json: &str) -> Ret<Option<ActionRef>> {
         errf!("test services: decode_action_json")
     }
@@ -323,7 +311,7 @@ impl ExecutionServices for TestServices {
         };
         Ok(&PARAMS)
     }
-    fn execution_profile(&self) -> Ret<&'static (dyn Any + Send + Sync)> {
+    fn execution_profile(&self) -> Ret<&'static dyn base::ExecutionProfile> {
         static PROFILE: TestProfile = TestProfile;
         Ok(&PROFILE)
     }
@@ -393,8 +381,7 @@ struct AbortListener;
 
 impl ChainListener for AbortListener {
     fn on_block_accepted(&self, _height: u64, _origin: PkgOrigin) -> Rerr {
-        Err(sys::Error::abort("listener state write failed")
-            .with_code("core_failed"))
+        Err(sys::Error::abort("listener state write failed").with_code("core_failed"))
     }
 }
 
@@ -419,9 +406,8 @@ impl ChainListener for ErrorListener {
     }
 }
 
-/// A store whose state-disk `try_write` fails after `fails` successful
-/// writes. Boot's genesis write counts as the first success, so the engine
-/// opens fine and the first root roll fails.
+/// A store whose state-disk `try_write` fails after `fails` successes; the
+/// genesis write counts as the first, so the engine opens and the first roll fails.
 struct FailAfterStore {
     inner: Arc<dyn Store>,
     fails: Arc<AtomicUsize>,
@@ -558,7 +544,10 @@ fn listener_ordinary_error_keeps_block_accepted_and_notifies_others() {
         called.load(Ordering::SeqCst),
         "other listeners must still be notified"
     );
-    assert!(!eng.is_fatal(), "an ordinary listener error must not be fatal");
+    assert!(
+        !eng.is_fatal(),
+        "an ordinary listener error must not be fatal"
+    );
 }
 
 /// Test 2: a listener `Abort` keeps the committed block Accepted, marks the
@@ -578,21 +567,21 @@ fn listener_abort_keeps_accepted_and_stops_future_blocks() {
     );
     // The fatal state stops further work: the waiter is triggered.
     assert!(
-        eng.discover_block(pkg_at(2, eng.latest_block().hash())).is_err(),
+        eng.discover_block(pkg_at(2, eng.latest_block().hash()))
+            .is_err(),
         "no further block may be processed after fatal"
     );
 }
 
-/// Test 3: a post-commit consensus callback `Abort` makes the public
-/// `discover` return Accepted (behavior change, §4.2), marks the engine
-/// fatal, and never rolls back or retries the committed block.
+/// Test 3: a post-commit consensus callback `Abort` returns Accepted, marks
+/// the engine fatal, and never rolls back or retries the committed block (§4.2).
 #[test]
 fn post_commit_callback_abort_returns_accepted_and_marks_fatal() {
     let mut consensus = TestConsensus::new(genesis());
-    consensus.on_block_accepted = Mutex::new(Some(Err(
-        sys::Error::abort("consensus auxiliary write failed")
-            .with_code("core_failed"),
-    )));
+    consensus.on_block_accepted = Mutex::new(Some(Err(sys::Error::abort(
+        "consensus auxiliary write failed",
+    )
+    .with_code("core_failed"))));
     let eng = open_engine(consensus, Arc::new(db::StoreInst::new()));
 
     let result = eng.discover_block(first_block(&eng)).unwrap();
@@ -626,7 +615,8 @@ fn root_commit_failure_returns_error_and_stops_pipeline() {
     assert_eq!(err.code(), Some("persist_failed"));
     assert!(eng.is_fatal());
     assert!(
-        eng.discover_block(pkg_at(2, eng.latest_block().hash())).is_err(),
+        eng.discover_block(pkg_at(2, eng.latest_block().hash()))
+            .is_err(),
         "the pipeline must stop after a root commit failure"
     );
 }
@@ -653,10 +643,8 @@ fn query_boundary_distinguishes_fatal_busy_and_ok() {
     assert!(eng.state_at_session(&Hash::default()).is_err());
 }
 
-/// Test 10: when the engine is fatal/stopping, the optimistic consumers
-/// `try_execute_tx` / `try_execute_batch` return `Err(EngineUnavailable)`;
-/// they must never flatten it into a busy skip or an ordinary execution
-/// failure.
+/// Test 10: when the engine is fatal/stopping, the optimistic consumers return
+/// `Err(EngineUnavailable)`, never a busy skip or ordinary execution failure.
 #[test]
 fn optimistic_consumers_propagate_engine_unavailable() {
     let eng = open_default();
@@ -670,14 +658,16 @@ fn optimistic_consumers_propagate_engine_unavailable() {
     assert_eq!(err.code(), Some("engine_unavailable"));
 }
 
-/// An `Abort` surfaced during an optimistic execution must reach the engine
-/// fatal boundary and propagate, never be judged an ordinary execution
-/// failure.
+/// An `Abort` during optimistic execution must reach the fatal boundary and
+/// propagate, never be judged an ordinary execution failure.
 #[test]
 fn try_execute_tx_propagates_execution_abort_and_marks_fatal() {
     let eng = open_default();
     let err = eng.try_execute_tx(Arc::new(AbortTx)).unwrap_err();
     assert!(err.is_abort());
     assert_eq!(err.code(), Some(STATE_READ_FAILED_CODE));
-    assert!(eng.is_fatal(), "an execution abort must mark the engine fatal");
+    assert!(
+        eng.is_fatal(),
+        "an execution abort must mark the engine fatal"
+    );
 }

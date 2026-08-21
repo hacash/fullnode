@@ -1,23 +1,18 @@
-//! P2SH wallet / SDK tooling. Ported from fullnodedev `vm/src/action/p2sh_tool.rs`.
-//!
-//! Pure tooling: given a set of `(libs, codeconf, lockbox)` leaves it derives the canonical
-//! Merkle tree, the final `scriptmh` address, and per-leaf Merkle proofs / `P2SHScriptProve`
-//! actions. No consensus state is mutated here.
-//!
-//! Adaptations vs dev: `ContractAddressW1` -> `ContractAddrListW1`; `Hash::serialize()` ->
-//! `Hash::as_bytes()`; `MerkelStuffs::from_list(vec)` -> `field::ListW1::from(vec)`.
+//! P2SH wallet / SDK tooling: derives the canonical Merkle tree, `scriptmh` address, and per-leaf
+//! proofs / `P2SHScriptProve` actions from `(libs, codeconf, lockbox)` leaves. No consensus mutation.
+
 
 use field::{Address, BytesW2, Hash, Uint1};
 
 use crate::contract::ContractAddrListW1;
-use crate::rt::{CodeConf, GasExtra, SpaceCap};
+use crate::rt::CodeConf;
+#[cfg(feature = "execute")]
+use crate::rt::{GasExtra, SpaceCap};
 
 use super::p2sh::{MerkelStuffs, P2SHScriptProve, PosiHash, ScriptmhCalc};
 
-/// A single P2SH leaf: `(adrlibs, codeconf, lockbox)`.
-///
-/// Note: both libs and codeconf are part of the leaf commitment. If either differs, even
-/// with identical lockbox bytes, the final scriptmh address differs.
+/// A single P2SH leaf: `(adrlibs, codeconf, lockbox)`. Both `adrlibs` and `codeconf`
+/// are part of the leaf commitment — differing them changes the `scriptmh` address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct P2shLeafSpec {
     pub adrlibs: ContractAddrListW1,
@@ -59,14 +54,8 @@ pub struct P2shMerkleTree {
 pub struct P2shTool;
 
 impl P2shTool {
-    /// Build a canonical Merkle tree from raw leaf specs.
-    ///
-    /// Canonical ordering:
-    /// - Compute each leaf commitment hash (same leaf commitment as consensus).
-    /// - Sort leaves by `leaf_hash` ascending (bytewise).
-    ///
-    /// Safety:
-    /// - Rejects duplicate `leaf_hash` to avoid ambiguous selection APIs.
+    /// Build a canonical Merkle tree from raw leaf specs. Leaves are committed with the
+    /// consensus leaf hash, sorted by `leaf_hash` ascending (bytewise); duplicate hashes are rejected.
     pub fn build_canonical_tree(mut specs: Vec<P2shLeafSpec>) -> Ret<P2shMerkleTree> {
         if specs.is_empty() {
             return sys::errf!("p2sh tool: leaf specs cannot be empty");
@@ -181,10 +170,7 @@ impl P2shMerkleTree {
     }
 
     /// Return the Merkle proof path (siblings + posi) for the leaf at canonical index `idx`.
-    ///
-    /// `posi` semantics match consensus `get_merkel()`:
-    /// - `posi==0`: sibling hash is on the LEFT
-    /// - `posi==1`: sibling hash is on the RIGHT
+    /// `posi` matches consensus `get_merkel()`: `0`=sibling on LEFT, `1`=sibling on RIGHT.
     pub fn proof_for_index(&self, idx: usize) -> Ret<MerkelStuffs> {
         if idx >= self.leaves.len() {
             return sys::errf!(
@@ -248,15 +234,8 @@ impl P2shMerkleTree {
             })
     }
 
-    /// Build a `P2SHScriptProve` action for the leaf at canonical index `idx`.
-    ///
-    /// Returns:
-    /// - the final `scriptmh` address (should be used as `from` address)
-    /// - the filled `P2SHScriptProve` action (ready to be included in tx)
-    /// - the intermediate `ScriptmhCalc` (leaf->root path), for debugging/tooling
-    ///
-    /// This function does NOT validate bytecode (it does not know the current `SpaceCap`).
-    /// The chain will validate in `P2SHScriptProve::execute`.
+    /// Build a `P2SHScriptProve` action for the leaf at `idx`: returns the `scriptmh` address (use as
+    /// `from`), the filled action, and `ScriptmhCalc`; no bytecode validation here (chain validates in execute).
     pub fn build_unlock_script_prove_unchecked(
         &self,
         idx: usize,
@@ -292,9 +271,9 @@ impl P2shMerkleTree {
         Ok((calc.address, act, calc))
     }
 
-    /// Same as `build_unlock_script_prove_unchecked`, but performs local checks using
-    /// the same rules as `P2SHScriptProve::get_stuff`, and enforces Merkle proof depth
-    /// against `SpaceCap::p2sh_merkle_depth_max` for `block_height` (matches on-chain `execute`).
+    /// Same as `build_unlock_script_prove_unchecked`, but locally checks `get_stuff` rules and
+    /// Merkle proof depth against `SpaceCap::p2sh_merkle_depth_max` (matches on-chain `execute`).
+    #[cfg(feature = "execute")]
     pub fn build_unlock_script_prove_checked(
         &self,
         block_height: u64,

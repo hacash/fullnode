@@ -104,16 +104,13 @@ pub enum ItrErrCode {
     IntentError = 153,
     ExecutionDeadline = 154,
 
-    // Canonical state backend read / persisted state decode failures. These
-    // must stay fatal across the `ItrErr -> sys::Error` boundary (they map to
-    // `Error::abort` with state-layer string codes) and must never be
-    // downgraded to ordinary execution failures.
+    // Canonical state backend read / persisted state decode failures: must stay fatal across
+    // the `ItrErr -> sys::Error` boundary (`Error::abort` with state-layer codes), never downgraded.
     StateReadFailed = 161,
     StateDecodeFailed = 162,
 
-    // Reserved error code: returned by the codec-only entry stubs that were
-    // removed when the execution engine became always-compiled. Retained so
-    // the VM error-code space stays stable; no current path produces it.
+    // Reserved: returned by the removed codec-only entry stubs. Kept so the error-code
+    // space stays stable; no current path produces it.
     CodecOnlyUnsupported = 163,
 
     #[default]
@@ -152,11 +149,8 @@ impl ItrErr {
     }
 }
 
-/// Map a native protocol action error (`sys::Error`) to a VM error code at the
-/// `sys::Error -> ItrErr` conversion points. An `Abort` (canonical state read
-/// or persisted-state decode failure) must keep its fatal classification and
-/// its dedicated code instead of being downgraded to an ordinary action-call
-/// failure (§7 of the error-system normalization design).
+/// Map a native protocol action error (`sys::Error`) to a VM code at the `sys::Error -> ItrErr`
+/// points: `Abort` keeps its fatal classification and dedicated code; faults map to `ActCallError` (§7).
 pub fn map_native_action_code(e: &sys::Error) -> ItrErrCode {
     if e.is_abort() {
         match e.code() {
@@ -193,9 +187,8 @@ pub trait MapItrStrErr<T> {
 impl<T> MapItrErr<T> for Ret<T> {
     fn map_ire(self, ec: ItrErrCode) -> Result<T, ItrErr> {
         self.map_err(|e| {
-            // Preserve the classification of an `Abort` source error: map it
-            // to the dedicated state codes instead of the caller-provided
-            // diagnostic code (§7 of the error-system normalization design).
+            // Preserve an `Abort` source's classification: map to the dedicated state codes
+            // instead of the caller-provided diagnostic code (§7 of the error-system design).
             let code = if e.is_abort() {
                 map_native_action_code(&e)
             } else {
@@ -244,9 +237,8 @@ macro_rules! itr_err_fmt {
 mod tests {
     use super::*;
 
-    /// The `ItrErr -> Error` choke point must keep canonical state read and
-    /// persisted-state decode failures fatal (`Abort`) with their stable codes,
-    /// and must not attach a code to validation-class `StorageError` (§7).
+    /// The `ItrErr -> Error` choke point must keep state read / decode failures fatal
+    /// (`Abort`) with their stable codes and not attach a code to `StorageError` (§7).
     #[test]
     fn state_read_failed_stays_abort_at_vm_boundary() {
         let err: Error = ItrErr::new(ItrErrCode::StateReadFailed, "backend down").into();
@@ -277,9 +269,8 @@ mod tests {
         assert!(!err.is_abort());
     }
 
-    /// The `sys::Error -> ItrErr` conversion used at native action dispatch
-    /// points must select the dedicated abort code from the error code, and
-    /// map ordinary faults to `ActCallError` (§7).
+    /// The `sys::Error -> ItrErr` conversion at native action dispatch must select the
+    /// dedicated abort code from the error code and map ordinary faults to `ActCallError` (§7).
     #[test]
     fn native_action_code_preserves_abort_codes() {
         let read =

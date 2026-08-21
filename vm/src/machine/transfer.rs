@@ -10,14 +10,14 @@ use crate::contract::ContractAddrListW1;
 use crate::rt::{AbstCall, CodeConf, CodeType, EntryKind, FnObj, FrameBindings, ItrErr, VmrtRes};
 use crate::value::{ContractAddress, Value};
 
-use super::{StubVm, peek_vm_runtime_limits};
+use super::{NativeVm, peek_vm_runtime_limits};
 
 struct TransferCall {
     kind: AbstCall,
     param: Value,
 }
 
-impl StubVm {
+impl NativeVm {
     fn p2sh_call_raw(
         &mut self,
         ctx: &mut dyn Context,
@@ -62,17 +62,14 @@ impl StubVm {
             Value::Address(to),
         ];
         params.append(&mut payload_args);
-        // The dev P2SH transfer ABI always exposes five arguments. HAC/SAT
-        // payloads occupy one slot, so preserve the trailing second payload
-        // slot with Nil instead of changing the call shape by asset type.
+        // Dev P2SH transfer ABI always exposes five args; HAC/SAT payloads take one slot,
+        // so preserve the trailing second payload slot with Nil regardless of asset type.
         while params.len() < 5 {
             params.push(Value::Nil);
         }
         let param = Value::pack_call_args(params).map_err(sys::Error::from)?;
-        // Mirror dev `run_p2sh_entry`: re-validate the stored unlock inputs at
-        // every p2sh VM entry before dispatch. The object was verified at
-        // P2SHScriptProve set time; re-checking keeps the entry boundary robust
-        // against any future p2sh_set source and guards caches against forged blobs.
+        // Mirror dev `run_p2sh_entry`: re-validate stored unlock inputs at every p2sh VM entry
+        // before dispatch, keeping the boundary robust against any future p2sh_set source.
         verify_p2sh_entry_inputs(ctx, code_conf, &libs, &codes, &param)?;
         let label = format!("p2sh transfer authorize {}", owner.to_readable());
         let (cost, rv) = self.run_entry(ctx, EntryKind::P2sh, move |vm, ctx| {
@@ -131,9 +128,8 @@ impl StubVm {
                 if e.is_revert() {
                     crate::rt::ItrErrCode::ActCallRevert
                 } else {
-                    // Preserve `Abort` classification at this `sys::Error ->
-                    // ItrErr` conversion point so a transfer-hook state read
-                    // failure stays fatal (§5).
+                    // Preserve `Abort` classification at this `sys::Error -> ItrErr` conversion
+                    // point so a transfer-hook state read failure stays fatal (§5).
                     crate::rt::map_native_action_code(&e)
                 },
                 e.as_str(),
@@ -265,9 +261,8 @@ fn extract_p2sh_witness(param: &Value) -> Ret<Vec<u8>> {
     }
 }
 
-/// Dev `run_p2sh_entry` re-validation: parse the stored unlock inputs and run
-/// `P2SHScriptProve::verify_unlock_inputs` (libs allowlist, lockbox size,
-/// code convert+check, witness size) before any VM dispatch or cache warmup.
+/// Dev `run_p2sh_entry` re-validation: parse stored unlock inputs and run
+/// `P2SHScriptProve::verify_unlock_inputs` before any VM dispatch or cache warmup.
 fn verify_p2sh_entry_inputs(
     ctx: &mut dyn Context,
     code_conf: CodeConf,
@@ -329,9 +324,8 @@ mod transfer_tests {
         assert!(err.to_string().contains("witness bytes too long"), "{err}");
     }
 
-    /// Dev `run_p2sh_entry` re-validation: non-contract-version library
-    /// addresses are rejected before VM dispatch (mirrors `ContractAddressW1`
-    /// payload decode failing in fullnodedev).
+    /// Dev `run_p2sh_entry` re-validation: non-contract-version library addresses are
+    /// rejected before VM dispatch (mirrors `ContractAddressW1` payload decode failing in dev).
     #[test]
     fn verify_p2sh_entry_inputs_rejects_non_contract_lib() {
         let mut ctx = TestCtx::new();

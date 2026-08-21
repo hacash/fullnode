@@ -1,10 +1,16 @@
+#[cfg(feature = "execute")]
 use std::any::Any;
 
+#[cfg(feature = "execute")]
 use field::Address;
+#[cfg(feature = "execute")]
 use sys::{Rerr, Ret};
 
+#[cfg(feature = "execute")]
 use crate::iface::action::TransferPayload;
+#[cfg(feature = "execute")]
 use crate::iface::context::Context;
+#[cfg(feature = "execute")]
 use crate::runtime::GasBuckets;
 
 pub trait P2sh: Send + Sync {
@@ -16,16 +22,8 @@ pub trait P2sh: Send + Sync {
 }
 
 // ================================ Vm ================================
-//
-//
-//
-//
-//
-//
-//
-//
-//
 
+#[cfg(feature = "execute")]
 pub enum VmEntry {
     TransferAuthorize {
         owner: Address,
@@ -42,25 +40,24 @@ pub enum VmEntry {
     Raw(Box<dyn Any>),
 }
 
+#[cfg(feature = "execute")]
 pub struct EmptyVm;
 
+#[cfg(feature = "execute")]
 impl Vm for EmptyVm {
     fn call(&mut self, _ctx: &mut dyn Context, _entry: VmEntry) -> Ret<(GasBuckets, Box<dyn Any>)> {
         sys::errf!("vm not supported by this chain (no vm assigner registered)")
     }
 }
 
-/// VM extension contract owned by `base` and consumed through `Context` and
-/// the action dispatcher. The standard Hacash implementation lives in `vm/src`.
-/// Defaults below represent optional capabilities: unsupported hooks are no-op,
-/// absent runtime configuration is `None`, and deferred work is empty.
+/// VM extension contract owned by `base`, consumed via `Context` and the action dispatcher;
+/// the standard implementation lives in `vm/src`. Defaults = optional capabilities (no-op hooks).
+#[cfg(feature = "execute")]
 pub trait Vm {
     fn call(&mut self, ctx: &mut dyn Context, entry: VmEntry) -> Ret<(GasBuckets, Box<dyn Any>)>;
 
-    /// Optional cooperative execution deadline.  Normal consensus execution
-    /// leaves this unset; untrusted sandbox calls set it before entering the
-    /// interpreter so long-running bytecode can be aborted at instruction
-    /// boundaries.
+    /// Optional cooperative execution deadline: normal consensus execution leaves it unset;
+    /// untrusted sandbox calls set it so long-running bytecode aborts at instruction boundaries.
     fn set_deadline(&mut self, _deadline: Option<std::time::Instant>) {}
 
     fn snapshot_volatile(&mut self) -> Box<dyn Any> {

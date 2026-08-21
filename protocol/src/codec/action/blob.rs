@@ -1,9 +1,7 @@
 //! TxMessage / TxBlob actions.
 
-use std::sync::Arc;
-
-use base::{Action, ActionExecute, ActionRef};
-use field::{BytesW1, BytesW2, Decode, Encode, Uint2};
+use base::{ActionRef, decode_regular_action};
+use field::{BytesW1, BytesW2, Uint2};
 use sys::Ret;
 
 use super::common::check_action_kind;
@@ -44,27 +42,21 @@ impl TxBlob {
     }
 }
 
-base::impl_action! {
+base::impl_action_facts! {
     TxMessage {
         name: "tx_message",
         scope: base::ActScope::GUARD,
         min_tx_type: 2,
         description: |_: &TxMessage| "Transaction message".to_owned(),
-        execute: (self, _ctx) {
- Ok(vec![]) 
-        }
     }
 }
 
-base::impl_action! {
+base::impl_action_facts! {
     TxBlob {
         name: "tx_blob",
         scope: base::ActScope::GUARD,
         min_tx_type: 2,
         description: |_: &TxBlob| "Transaction blob data".to_owned(),
-        execute: (self, _ctx) {
- Ok(vec![]) 
-        }
     }
 }
 
@@ -75,27 +67,8 @@ pub fn create_blob_action(
 ) -> Ret<(ActionRef, usize)> {
     check_action_kind(kind, buf)?;
     match kind {
-        TxMessage::KIND => decode_blob_action::<TxMessage>(buf),
-        TxBlob::KIND => decode_blob_action::<TxBlob>(buf),
+        TxMessage::KIND => decode_regular_action::<TxMessage>(buf),
+        TxBlob::KIND => decode_regular_action::<TxBlob>(buf),
         _ => sys::normalf!("blob action kind {} not registered", kind),
     }
-}
-
-
-#[cfg(feature = "execute")]
-fn decode_blob_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
-where
-    T: Action + ActionExecute + Decode + 'static,
-{
-    let (action, used) = T::decode(buf)?;
-    Ok((Arc::new(action), used))
-}
-
-#[cfg(not(feature = "execute"))]
-fn decode_blob_action<T>(buf: &[u8]) -> Ret<(ActionRef, usize)>
-where
-    T: Action + Decode + 'static,
-{
-    let (action, used) = T::decode(buf)?;
-    Ok((Arc::new(action), used))
 }

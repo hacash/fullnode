@@ -8,9 +8,9 @@ use crate::frame::CallFrame;
 use crate::rt::{AbstCall, CodeType, EntryKind, FnObj, FrameBindings, ItrErr};
 use crate::value::Value;
 
-use super::{Runtime, StubVm, VmHost, VmRequest};
+use super::{NativeVm, Runtime, VmHost, VmRequest};
 
-impl StubVm {
+impl NativeVm {
     pub fn new(height: u64) -> Self {
         Self {
             runtime: Runtime::create(height),
@@ -77,16 +77,13 @@ impl StubVm {
         run: impl FnOnce(&mut Self, &mut dyn Context) -> Result<Value, ItrErr>,
     ) -> Ret<(GasBuckets, Value)> {
         self.push_entry(kind)?;
-        // Match dev entry semantics: every VM entry executes under `ExecFrom::Call`
-        // (dev wraps `run_vm_entry_ret/xret` in `with_exec_from(ctx, ExecFrom::Call, ..)`).
-        // Keeps ctx.exec_from() observable by VM-hosted code identical to fullnodedev.
+        // Match dev: every VM entry executes under `ExecFrom::Call` (observable by VM-hosted code).
         let result =
             with_exec_from(ctx, ExecFrom::Call, |ctx| run(self, ctx)).map_err(sys::Error::from);
         let entry = self.pop_entry()?;
         let settle = self.settle_entry_return_cost(ctx, entry);
         match (result, settle) {
-            // Both errors must be preserved without reclassifying the primary
-            // one: merge the secondary message into the primary error's
+            // Preserve both errors: merge the secondary message into the primary error's
             // context, keeping its kind/code (§3.2 of the error-system design).
             (Err(exec_err), Err(settle_err)) => {
                 Err(exec_err.context(format!("secondary: {}", settle_err)))
@@ -267,11 +264,10 @@ mod entry_semantics_tests {
     use base::ExecFrom;
 
     /// Dev entry semantics: every VM entry executes under `ExecFrom::Call`
-    /// (dev wraps `run_vm_entry_ret/xret` in `with_exec_from(ctx, Call, ..)`),
-    /// and the caller's exec_from is restored afterwards.
+    /// (as in dev's `with_exec_from(ctx, Call, ..)`), and the caller's exec_from is restored afterwards.
     #[test]
     fn run_entry_executes_under_exec_from_call_and_restores() {
-        let mut vm = StubVm::new(1);
+        let mut vm = NativeVm::new(1);
         let mut ctx = TestCtx::new();
         assert_eq!(ctx.exec_from(), ExecFrom::Top);
         let (_, rv) = vm
@@ -287,7 +283,7 @@ mod entry_semantics_tests {
 
     #[test]
     fn run_entry_restores_exec_from_on_error() {
-        let mut vm = StubVm::new(1);
+        let mut vm = NativeVm::new(1);
         let mut ctx = TestCtx::new();
         let err = vm
             .run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
@@ -304,7 +300,7 @@ mod entry_semantics_tests {
     /// `ExecFrom::Call` at every level and unwind back to the caller's value.
     #[test]
     fn nested_entries_keep_exec_from_call_and_restore_outer() {
-        let mut vm = StubVm::new(1);
+        let mut vm = NativeVm::new(1);
         let mut ctx = TestCtx::new();
         vm.run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
             assert_eq!(ctx.exec_from(), ExecFrom::Call);

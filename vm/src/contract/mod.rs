@@ -1,4 +1,6 @@
+#[cfg(feature = "execute")]
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "execute")]
 use std::sync::Arc;
 
 use field::{
@@ -50,16 +52,11 @@ macro_rules! contract_codec_struct {
     };
 }
 
-/// Defines the contract wire structs in one place: struct + codec + JSON +
-/// schema registration (`struct_schemas()`), so adding a struct only touches
-/// the single invocation below.
+/// Defines the contract wire structs in one place: struct + codec + JSON.
 macro_rules! contract_structs {
     ($( $name:ident { $($field:ident : $ty:ty),+ $(,)? } ),+ $(,)?) => {
         $(contract_codec_struct!($name { $($field: $ty),+ });)+
-        $(base::impl_fields_to_json!($name { $($field),+ });)+
-        pub fn struct_schemas() -> Vec<base::StructSchema> {
-            vec![$(<$name as base::StructSchemaProvider>::STRUCT_SCHEMA),+]
-        }
+        $(field::impl_struct_json!($name { $($field),+ });)+
     };
 }
 
@@ -152,6 +149,7 @@ impl Decode for ContractEdition {
     }
 }
 
+#[cfg(feature = "execute")]
 #[derive(Default)]
 pub struct ContractObj {
     pub sto: ContractSto,
@@ -207,6 +205,7 @@ impl ContractCalcFunc {
     }
 }
 
+#[cfg(feature = "execute")]
 fn verify_code_stuff(
     cap: &SpaceCap,
     gas: &GasExtra,
@@ -226,6 +225,7 @@ fn verify_code_stuff(
     Ok(())
 }
 
+#[cfg(feature = "execute")]
 pub fn convert_and_check(
     cap: &SpaceCap,
     gas: &GasExtra,
@@ -309,6 +309,7 @@ impl ContractSto {
         }
     }
 
+    #[cfg(feature = "execute")]
     pub fn apply_edit(
         &mut self,
         edit: &ContractEdit,
@@ -467,6 +468,7 @@ impl ContractSto {
             .any(|a| ac as u8 == a.sign[0])
     }
 
+    #[cfg(feature = "execute")]
     pub fn check(
         &self,
         height: u64,
@@ -539,6 +541,7 @@ impl ContractSto {
         Ok(())
     }
 
+    #[cfg(feature = "execute")]
     pub fn into_obj(mut self) -> VmrtRes<ContractObj> {
         let edition = self.calc_edition();
         let mut abstfns = HashMap::with_capacity(self.abstcalls.length());

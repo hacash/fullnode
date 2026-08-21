@@ -55,19 +55,8 @@ pub(crate) fn add_size_saturating(total: usize, add: usize) -> usize {
     total.checked_add(add).unwrap_or(usize::MAX)
 }
 
-// VM/runtime semantic equality. Use this for contract-visible value comparison.
-// IMPORTANT: this is intentionally different from Rust `PartialEq` on `Value`.
-// - uint values compare by numeric value across widths (e.g. U8(1) == U64(1))
-// - Tuple/Compo compare by content
-// - Handle and some cross-type comparisons are invalid and return an error
-// Therefore, do NOT infer VM-level bugs from raw Rust `==` on `Value`/`CompoItem`
-// without first checking whether the surrounding code needs identity semantics or
-// true VM semantic equality.
-//
-// Map-key pitfalls (see `vm/doc/value-cast.md` §9): uint keys are value-normalized via
-// `extract_key_bytes` / `uint_key_bytes`; `scalar_bytes` below is for field serialization
-// only and keeps fixed-width uint encoding. Cross-type key collision (Address vs Bytes)
-// remains possible when raw bytes match.
+// VM semantic equality (contract-visible comparison, NOT Rust `==`): uints by value across widths,
+// tuple/compo by content, cross-type errors. Map keys value-normalized; `scalar_bytes` serialization-only.
 pub(crate) fn value_content_eq(lhs: &Value, rhs: &Value) -> VmrtRes<bool> {
     if lhs.is_uint() && rhs.is_uint() {
         return Ok(lhs.extract_u128()? == rhs.extract_u128()?);
@@ -437,7 +426,7 @@ impl Value {
             U32(n) =>  format!("{}", n),
             U64(n) =>  format!("{}", n),
             U128(n) => format!("{}", n),
-            Bytes(b) => serde_json::to_string(&to_readable_or_base64(b)).unwrap(),
+            Bytes(b) => json_quote(&to_readable_or_base64(b)),
             Address(a) =>  format!("\"{}\"", a.to_readable()),
             Tuple(a) => a.to_json(),
             Compo(a) => a.to_json(),
@@ -456,10 +445,10 @@ impl Value {
             U64(n) => format!("{}", n),
             U128(n) => format!("{}", n),
             Bytes(b) => match bytes_try_to_readable_string(b) {
-                Some(s) => serde_json::to_string(&s).unwrap(),
+                Some(s) => json_quote(&s),
                 None => format!(r#"{{"$bytes_hex":"{}"}}"#, b.to_hex()),
             },
-            Address(a) => serde_json::to_string(&a.to_readable()).unwrap(),
+            Address(a) => json_quote(&a.to_readable()),
             Tuple(a) => a.to_debug_json(),
             Compo(a) => a.to_debug_json(),
             Handle(..) => s!(r#"{"$handle":true}"#),

@@ -6,5 +6,8 @@ edition.workspace = true
 [dependencies]
 sys = { workspace = true }
 base = { workspace = true }
-axum = "0.7.9"
+# default-features=false drops the `json`/`form` features (serde_json/serde
+# URL-encoded deps): the server only uses routing/extract/body, never axum's
+# Json/Form extractors.
+axum = { version = "0.7.9", default-features = false, features = ["http1", "tokio", "query"] }
 tokio = { version = "1.49.0", features = ["rt-multi-thread", "net", "time"] }

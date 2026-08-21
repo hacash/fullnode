@@ -6,7 +6,6 @@ use sys::{Ret, errf};
 pub const LOWEST_DIFFICULTY: u32 = 0xffff_ffff;
 
 /// Mainnet ASERT activation height (inclusive).
-///
 pub const ASERT_UPGRADE_HEIGHT: u64 = 738_654;
 pub const ASERT_START_TARGET_NUM: u32 = 0xe9cf_ffff;
 
@@ -29,7 +28,7 @@ pub struct DifficultyConfig {
 
 impl Default for DifficultyConfig {
     fn default() -> Self {
-        Self::from_mint_params(base::ChainId::MAINNET, crate::MINT_PARAMS)
+        Self::from_mint_params(base::ChainId::MAINNET, hacash_params::MAINNET_PARAMS.mint)
     }
 }
 
@@ -69,11 +68,8 @@ impl DifficultyGnr {
         Self { cnf }
     }
 
-    /// Compute retarget for `hei`.
-    ///
-    /// - **Mainnet**: only ASERT (`hei >= ASERT_UPGRADE_HEIGHT`). Pre-ASERT callers
-    ///   must skip retarget checks (see module comment / `is_pre_asert_mainnet`).
-    /// - **Non-mainnet**: bootstrap + weighted sliding until the chain's early ASERT.
+    /// Compute retarget for `hei`. Mainnet: ASERT only (`hei >= ASERT_UPGRADE_HEIGHT`,
+    /// pre-ASERT callers must skip via `is_pre_asert_mainnet`); non-mainnet: bootstrap + weighted sliding.
     pub fn target(
         &self,
         prevdiff: u32,

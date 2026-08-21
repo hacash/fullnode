@@ -1,6 +1,4 @@
 //! TCP listener, dialer, session loop, and P2P maintenance.
-//!
-//! TCP listener, dialer, session loop, and P2P maintenance.
 
 use std::collections::HashSet;
 use std::net::SocketAddr;
@@ -441,7 +439,6 @@ impl P2PNode {
         let (is_public, session_addr) = if is_inbound {
             maybe_mark_public_from_version(peer_addr, identity.listen_port, &identity.key).await
         } else {
-            // fullnodedev classifies a successfully dialed non-loopback peer
             // A successfully dialed non-loopback peer is public; capability
             // bits do not change table placement.
             let pub_ok = !peer_addr.ip().is_loopback();
@@ -451,12 +448,8 @@ impl P2PNode {
         run_peer_session(self, stream, session_addr, identity, is_inbound, is_public).await
     }
 
-    /// Compute local services bits for VERSION advertisement.
-    ///
-    /// `NODE_NETWORK` / `NODE_PUBLIC` / `NODE_SYNC` are universal P2P
-    /// capabilities named here. Business relay channels are named by the
-    /// consensus layer via `TxPolicy::tx_pool_groups`; we aggregate
-    /// their `service_bit`s verbatim and the node does not interpret them.
+    /// Local services bits for VERSION: `NODE_NETWORK`/`NODE_PUBLIC`/`NODE_SYNC` are
+    /// universal; business relay bits come verbatim from `TxPolicy::tx_pool_groups`.
     fn local_services(&self) -> u64 {
         let mut s = services::NODE_NETWORK | services::NODE_SYNC;
         if self.config.accept_nodes && self.config.listen_port > 0 {
@@ -475,10 +468,8 @@ impl P2PNode {
 // Shared peer session
 // ===================================================================
 
-/// Construct the `RemotePeer`, insert into peertable, then spawn the read loop.
-///
-/// Returns after the peer is live in the table (mainnet `insert_peer` semantics),
-/// so dialers can continue without waiting for disconnect.
+/// Construct the `RemotePeer`, insert into peertable, spawn the read loop; returns
+/// once the peer is live in the table so dialers continue without waiting.
 async fn run_peer_session(
     node: Arc<P2PNode>,
     stream: tokio::net::TcpStream,
@@ -552,9 +543,8 @@ fn pre_dispatch(peer: &RemotePeer) {
     peer.touch();
 }
 
-/// Dispatch an application message (u16 ty) from the read loop.
-/// TX/BLOCK go to the inbound queue with backpressure; everything else
-/// spawns a task to call `handle_message`.
+/// Dispatch an application message (u16 ty): TX/BLOCK go to the inbound queue
+/// with backpressure; everything else spawns a task to call `handle_message`.
 async fn dispatch_app_msg(
     node: &Arc<P2PNode>,
     peer: &Arc<RemotePeer>,

@@ -19,15 +19,8 @@ pub trait VmHost {
     fn vm_host_def(&self, kind: VmHostCallKind, id: u8) -> Option<VmHostActionDef>;
     fn action_call(&mut self, kind: u16, body: Vec<u8>) -> Ret<(u32, Vec<u8>)>;
 
-    /// Resolve the transfer-hook routing for a runtime-dispatched action
-    /// (`kind` || `body`), unified with the Top/Ast dispatch tail through
-    /// `base::resolve_transfer_routing`. Returns `Some` when the action is a
-    /// transfer whose from/to requires VM authorize/receive hooks; `None`
-    /// otherwise (non-transfer, or EOA-to-EOA).
-    ///
-    /// Used by the Call-path interpreter: after `action_call` dispatches (and
-    /// the dispatch tail skips hooks per slot law), the interpreter resolves
-    /// owned routing data and immediately asks its owning StubVm to recurse.
+    /// Resolve transfer-hook routing for a runtime-dispatched action (`kind`||`body`) via
+    /// `base::resolve_transfer_routing`: `Some` = needs VM hooks, `None` = not (Call-path recurses on it).
     fn action_transfer_routing(&self, kind: u16, body: &[u8]) -> Ret<Option<TransferRouting>> {
         let _ = (kind, body);
         Ok(None)
@@ -162,10 +155,8 @@ impl<T: Context + ?Sized> VmHost for T {
     }
 
     fn action_transfer_routing(&self, kind: u16, body: &[u8]) -> Ret<Option<TransferRouting>> {
-        // Rebuild the action wire bytes (kind || body) and decode, then resolve
-        // routing via the unified `base::resolve_transfer_routing` -- the same
-        // function used by the Top/Ast dispatch tail, so from/to/amount/payload
-        // extraction and `is_scriptmh`/`is_contract` gating are identical.
+        // Rebuild (kind || body), decode, and resolve via the same `base::resolve_transfer_routing`
+        // used by the Top/Ast dispatch tail, so gating is identical.
         let mut buf = Vec::with_capacity(2 + body.len());
         buf.extend_from_slice(&kind.to_be_bytes());
         buf.extend_from_slice(body);

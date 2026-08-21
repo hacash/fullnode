@@ -5,9 +5,8 @@ use std::sync::Arc;
 use base::{BlockBatch, BlockSource, BlockStore, ExecutionServices};
 use sys::Ret;
 
-/// Reads stored blocks back out of the block DB, for state rebuilds. Bodies
-/// are decoded once here, and the batch carries the decoded blocks, so the
-/// sync pipeline reuses them instead of decoding every frame a second time.
+/// Reads stored blocks back out of the block DB for state rebuilds; bodies
+/// are decoded once so the sync pipeline reuses them instead of re-decoding.
 pub(crate) struct LocalReplay {
     registry: Arc<dyn ExecutionServices>,
     store: Arc<dyn BlockStore>,

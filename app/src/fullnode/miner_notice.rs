@@ -1,10 +1,5 @@
-//! `/query/miner/notice` long-poll endpoint (async version).
-//!
-//! mint has dropped tokio (`miner_notice_wait_async` removed; only the sync
-//! `miner_notice_wait` and the public `begin_miner_notice` guard remain). This async poll
-//! moved into app with the tokio runtime — HTTP routes are driven by the server crate's
-//! tokio runtime; here we only provide the handling future. Semantics match the old mint
-//! implementation: bump the waiting count, poll the height until target or timeout.
+//! `/query/miner/notice` long-poll endpoint (async version). Moved into app with the
+//! tokio runtime: bump the waiting count, poll the height until target or timeout.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -22,9 +17,10 @@ impl ApiService for MinerNoticeApi {
 
     fn routes(&self) -> Vec<ApiRoute> {
         let consensus = self.consensus.clone();
-        vec![ApiRoute::get_async("/query/miner/notice", move |ctx, req| {
-            miner_notice_long_poll(consensus.clone(), ctx, req)
-        })]
+        vec![ApiRoute::get_async(
+            "/query/miner/notice",
+            move |ctx, req| miner_notice_long_poll(consensus.clone(), ctx, req),
+        )]
     }
 }
 

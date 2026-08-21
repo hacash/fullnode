@@ -1,15 +1,9 @@
-//! Ephemeral contract call sandbox (query API / debugging).
-//!
-//! Operates on a caller-provided `Context` that already has a forked exec layer
-//! and a sandbox transaction. Does **not** use a global RuntimePool — the VM
-//! comes from `Registry::assign_vm` via context construction.
+//! Ephemeral contract call sandbox (query API / debugging). Operates on a caller-provided
+//! forked-sandbox `Context`; the VM comes from `Registry::assign_vm` (no global RuntimePool).
 
 use std::sync::Arc;
 
-use base::{
-    Context, ExecFrom, GasBuckets, TX_GAS_BUDGET_CAP_BYTE, VmEntry, decode_gas_budget, hac_add,
-    with_exec_from,
-};
+use base::{Context, ExecFrom, GasBuckets, VmEntry, hac_add, with_exec_from};
 use field::{Address, Amount};
 use sys::{Rerr, Ret, errf};
 
@@ -76,10 +70,8 @@ pub struct SandboxResult {
     pub ret_val: Value,
 }
 
-/// Run a read-only-ish sandbox call on an already-prepared context.
-///
-/// The context must own a forked state layer and a tx whose `main`/addrlist
-/// match the intended caller and contract. Funding and gas init happen here.
+/// Run a read-only-ish sandbox call on an already-prepared context: must own a forked state layer
+/// and a tx whose `main`/addrlist match the caller and contract. Funding and gas init happen here.
 pub fn sandbox_call(ctx: &mut dyn Context, spec: SandboxSpec) -> Ret<SandboxResult> {
     let (_tx_gas_max, gas_budget) = resolve_sandbox_gas(&spec)?;
     let codes = build_call_codes(&spec.function, &spec.args)?;
@@ -108,17 +100,18 @@ pub fn resolve_sandbox_gas(spec: &SandboxSpec) -> Ret<(u8, i64)> {
     match spec.gas_max_byte {
         Some(0) => errf!("sandbox gas_max byte invalid: 0"),
         Some(gmx) => {
-            let capped = gmx.min(TX_GAS_BUDGET_CAP_BYTE);
-            Ok((gmx, decode_gas_budget(capped)))
+            let capped = gmx.min(hacash_params::TX_GAS_BUDGET_CAP_BYTE);
+            Ok((gmx, hacash_params::decode_gas_budget(capped)))
         }
         None => {
-            let cap_budget = decode_gas_budget(TX_GAS_BUDGET_CAP_BYTE);
+            let cap_budget =
+                hacash_params::decode_gas_budget(hacash_params::TX_GAS_BUDGET_CAP_BYTE);
             let gas_budget = match spec.gas_budget {
                 Some(v) if v > 0 => v.min(cap_budget),
                 Some(v) => return errf!("sandbox gas budget invalid: {}", v),
                 None => cap_budget,
             };
-            Ok((TX_GAS_BUDGET_CAP_BYTE, gas_budget))
+            Ok((hacash_params::TX_GAS_BUDGET_CAP_BYTE, gas_budget))
         }
     }
 }

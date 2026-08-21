@@ -1,6 +1,4 @@
-use base::{
-    read_typed, StateLayer, StateRead, numeric_state_key, numeric_state_prefix,
-};
+use base::{StateLayer, StateRead, numeric_state_key, numeric_state_prefix, read_typed};
 use field::{ChannelId, ChannelSto, Decode, DiamondNumber, Encode, Reader, Uint8, Uint12};
 use sys::Ret;
 
@@ -11,7 +9,6 @@ pub struct MintStateRead<'a>(pub &'a dyn StateRead);
 const KEY_CHANNEL: u8 = numeric_state_prefix(0x0c);
 
 /// Statistics maintained by mint consensus actions.
-///
 /// Field order is part of the state codec and must remain append-only.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MintTotal {

@@ -6,22 +6,20 @@ default-run = "fullnode"
 
 [dependencies]
 sys = { workspace = true, features = ["secp-static-context"] }
-field = { workspace = true, features = ["json-serde", "num-bigint"] }
+field = { workspace = true }
 base = { workspace = true }
+hacash-params = { workspace = true }
 protocol = { workspace = true }
 db = { workspace = true, default-features = false }
 vm = { workspace = true }
 mint = { workspace = true }
 mint-core = { workspace = true }
 chain = { workspace = true }
-chain-codec = { workspace = true }
 node = { workspace = true }
 server = { workspace = true }
 api = { workspace = true }
 x16rs = { workspace = true }
 ctrlc = "3"
-serde_json = "1.0"
-serde = { version = "1", features = ["derive"] }
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "rustls-tls"] }
 getrandom = "0.3"
 hex = "0.4"

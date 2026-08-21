@@ -1,11 +1,5 @@
-//! Sync peer ownership + remote height tracking.
-//!
-//! The `sync_session` slot is the single source of truth for which downloader
-//! is active; this tracker only remembers which peer owns the last sync and
-//! how high that peer's tip was, so a fork-hash reply can estimate the remote
-//! tip without waiting for the next STATUS message. No takeover arbitration
-//! lives here: an active session is never displaced, and a stalled session is
-//! recovered by the watchdog (cancel + REQ_STATUS round).
+//! Sync peer ownership + remote height tracking: the `sync_session` slot is the
+//! source of truth; this only remembers the owning peer and its tip so a fork-hash reply can estimate it. No takeover arbitration here — an active session is never displaced, the watchdog recovers stalled ones.
 
 use std::sync::Mutex;
 
@@ -27,9 +21,8 @@ impl SyncTracker {
         }
     }
 
-    /// Record a sync owner. The caller has already established that no sync
-    /// session is active, so this always succeeds; the previous record is
-    /// simply replaced.
+    /// Record a sync owner; the caller has already established no session is
+    /// active, so this always succeeds and simply replaces the previous record.
     pub fn begin(&self, peer_id: &str, remote_height: u64) {
         *self.inner.lock().unwrap() = Some(SyncState {
             active_peer: Some(peer_id.to_string()),

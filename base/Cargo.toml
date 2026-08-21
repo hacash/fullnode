@@ -5,25 +5,20 @@ edition.workspace = true
 
 #
 [features]
-# `execute` is the shared type-level cut owned by base: the `ActionRef`/`TxRef`
-# aliases and the JSON/binary decode creators flip between the execute view
-# (`dyn ActionExecute`/`dyn TransactionExecute`) and the wire view (`dyn
-# Action`/`dyn TransactionSign`), and the `ActionDispatcher` module + chain
-# gate entry compile only under it. Off in SDK/wasm builds the wire traits
-# (`Action`, `Transaction`, `TransactionSign`) and the registry keep their
-# exact shapes, so execution code cannot reach the wasm graph (no stubs).
-# Default on: only SDK/wasm consumers (sdk, chain-codec, codec-schema-gen, and
+# `execute` gates execution modules (`ActionDispatcher`, chain/store/chunk/
+# ledger/node/api/sync/scaner, `ActionExecute`/`TransactionExecute`).
+# `ActionRef` / `TxRef` are always the wire view (`dyn Action` / `dyn
+# TransactionSign`); full builds reach execute through `as_execute`. Off in
+# SDK/wasm builds so execution bodies never enter the wasm graph. Default on:
+# only SDK/wasm consumers (including SDK codegen and
 # protocol/vm/mint-core under their execute-off edges) disable it via
 # `default-features = false`.
 default = ["execute"]
+# Gates execution modules only; previously also pulled `serde` for the config
+# types, which are now decoded hand-written (no serde anywhere in base).
 execute = []
-
 [dependencies]
 sys = { workspace = true }
 field = { workspace = true }
-action-codec-derive = { workspace = true }
-serde = { version = "1", features = ["derive"] }
+action-derive = { workspace = true }
 sha3 = "0.10"
-
-[dev-dependencies]
-serde_json = "1"

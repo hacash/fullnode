@@ -1,5 +1,3 @@
-//!
-
 mod codec;
 mod json;
 pub mod schema;

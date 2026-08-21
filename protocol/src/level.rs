@@ -1,11 +1,8 @@
-//! Recursive transaction action-tree analysis.
-//!
-//! `topology_facts` is the single protocol-owned walk of scope / min-tx-type /
-//! flags / AST depth / top-rule. The execute path (`precheck_tx_actions`)
-//! gates on the first finding; the SDK reports the full finding list as
-//! review facts and never refuses to inspect or build because of them.
+//! Recursive transaction action-tree analysis. `topology_facts` is the single
+//! protocol-owned walk of scope / min-tx-type / flags / AST depth / top-rule; the execute path gates on the first finding, the SDK reports the full list.
 
-use base::{ActScope, Action, ActionRef, ExecFrom, TX_ACTIONS_MAX, TopRule};
+use base::{ActScope, Action, ActionRef, ExecFrom, TopRule};
+#[cfg(feature = "execute")]
 use sys::{Rerr, errf};
 
 fn is_guard_scope(scope: ActScope) -> bool {
@@ -15,6 +12,7 @@ fn is_guard_scope(scope: ActScope) -> bool {
 #[derive(Default)]
 struct Stats {
     findings: Vec<String>,
+    action_notes: Vec<(usize, String)>,
     top_count: usize,
     top_kinds: std::collections::HashMap<u16, usize>,
     top_guards: usize,
@@ -27,6 +25,9 @@ struct Stats {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TopologyFacts {
     pub findings: Vec<String>,
+    /// Top-level action index → the finding recorded while visiting that node
+    /// (scope / min-tx-type / flags); the SDK marks per-action `protocol_valid`.
+    pub action_notes: Vec<(usize, String)>,
 }
 
 fn visit(
@@ -36,31 +37,42 @@ fn visit(
     depth: usize,
     flags: Option<u64>,
     max_depth: usize,
+    top_index: Option<usize>,
     stats: &mut Stats,
 ) {
     if !act.scope().allows(from) {
-        stats.findings.push(format!(
+        let text = format!(
             "action node invalid: action {} with scope {} not allowed from {}",
             act.kind(),
             format!("{:?}", act.scope()),
             from
-        ));
+        );
+        stats.findings.push(text.clone());
+        if let Some(index) = top_index {
+            stats.action_notes.push((index, text));
+        }
         return;
     }
     if tx_type < act.min_tx_type() {
-        stats.findings.push(format!(
+        let text = format!(
             "action node invalid: action {} requires tx type >= {} but current tx type is {}",
             act.kind(),
             act.min_tx_type(),
             tx_type
-        ));
+        );
+        stats.findings.push(text.clone());
+        if let Some(index) = top_index {
+            stats.action_notes.push((index, text));
+        }
         return;
     }
     if let Some(flags) = flags {
         if act.required_flags() & !flags != 0 {
-            stats
-                .findings
-                .push(format!("action kind {} not activated", act.kind()));
+            let text = format!("action kind {} not activated", act.kind());
+            stats.findings.push(text.clone());
+            if let Some(index) = top_index {
+                stats.action_notes.push((index, text));
+            }
             return;
         }
     }
@@ -101,6 +113,7 @@ fn visit(
             next_depth,
             flags,
             max_depth,
+            None,
             stats,
         );
     }
@@ -140,16 +153,33 @@ pub fn topology_facts(
     flags: Option<u64>,
     max_depth: usize,
 ) -> TopologyFacts {
+    topology_facts_with_action_limit(
+        tx_type,
+        actions,
+        flags,
+        max_depth,
+        hacash_params::MAINNET_PARAMS.protocol.tx_actions_max,
+    )
+}
+
+pub fn topology_facts_with_action_limit(
+    tx_type: u8,
+    actions: &[ActionRef],
+    flags: Option<u64>,
+    max_depth: usize,
+    max_actions: usize,
+) -> TopologyFacts {
     let mut stats = Stats::default();
-    if actions.is_empty() || actions.len() > TX_ACTIONS_MAX {
+    if actions.is_empty() || actions.len() > max_actions {
         stats
             .findings
             .push(format!("action length {} is invalid", actions.len()));
         return TopologyFacts {
             findings: stats.findings,
+            action_notes: stats.action_notes,
         };
     }
-    for act in actions {
+    for (index, act) in actions.iter().enumerate() {
         visit(
             tx_type,
             act.as_ref(),
@@ -157,6 +187,7 @@ pub fn topology_facts(
             0,
             flags,
             max_depth,
+            Some(index),
             &mut stats,
         );
     }
@@ -170,16 +201,20 @@ pub fn topology_facts(
     }
     TopologyFacts {
         findings: stats.findings,
+        action_notes: stats.action_notes,
     }
 }
 
+#[cfg(feature = "execute")]
 pub fn precheck_tx_actions(
     tx_type: u8,
     actions: &[ActionRef],
     flags: u64,
     max_depth: usize,
+    max_actions: usize,
 ) -> Rerr {
-    let facts = topology_facts(tx_type, actions, Some(flags), max_depth);
+    let facts =
+        topology_facts_with_action_limit(tx_type, actions, Some(flags), max_depth, max_actions);
     if let Some(first) = facts.findings.first() {
         return errf!("{}", first);
     }
@@ -227,9 +262,8 @@ mod tests {
 
     #[test]
     fn nested_actions_is_the_single_control_flow_walker() {
-        // A host opcode is a leaf: no nested_actions. A transfer is a leaf.
-        // The AST kinds implement the trait method; this pins that the
-        // topology walk never special-cases kind numbers.
+        // A host opcode and a transfer are leaves (no `nested_actions`); the AST
+        // kinds implement it, so the topology walk never special-cases kind numbers.
         assert!(transfer().nested_actions().is_none());
         assert!(env_height().nested_actions().is_none());
     }

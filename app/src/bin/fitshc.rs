@@ -1,8 +1,5 @@
 //! fitshc — IR hex → executable bytecode (FitSH source frontend pending in vm/fitsh_port).
-//!
-//! Usage:
-//!   fitshc <ir.hex|ir.bin>
-//! Prints verified runtime bytecode as hex.
+//! Usage: `fitshc <ir.hex|ir.bin>`; prints verified runtime bytecode as hex.
 
 use std::env;
 use std::fs;

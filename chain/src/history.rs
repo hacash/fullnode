@@ -70,8 +70,7 @@ impl StoreHistory {
     }
 
     /// Overlay the candidate parent's in-memory ancestry on the durable
-    /// canonical history. Consensus difficulty checks must follow the branch
-    /// being extended, not whichever branch currently owns a height index.
+    /// canonical history; difficulty checks must follow the branch extended.
     pub(crate) fn for_branch(&self, blocks: Vec<BlockRef>) -> BranchHistory<'_> {
         BranchHistory {
             canonical: self,
@@ -84,10 +83,8 @@ impl StoreHistory {
 }
 
 impl BlockHistory for StoreHistory {
-    /// The durable canonical root height. `Store::status` read failures are
-    /// canonical acquisitions (§6.8): classified as
-    /// `Abort + STATE_READ_FAILED_CODE`
-    /// so consensus callers treat them as fatal, never as a zero root.
+    /// The durable canonical root height. Read failures are classified
+    /// `Abort + STATE_READ_FAILED_CODE` (§6.8), never a zero root.
     fn stable_height(&self) -> Ret<u64> {
         match self.store.status() {
             Ok(status) => Ok(status.latest_height),

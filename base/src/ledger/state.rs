@@ -20,10 +20,8 @@ const KEY_DIAMOND_SMELT: u8 = numeric_state_prefix(0x0f);
 const KEY_DIAMOND_OWNED: u8 = numeric_state_prefix(0x10);
 const KEY_ASSET: u8 = numeric_state_prefix(0x11);
 
-/// Decode a typed value out of a `StateRead` layer via the shared
-/// `read_typed` helper (§6.2 of the error-system normalization design):
-/// backend read failures propagate, undecodable bytes surface as
-/// `Abort + STATE_DECODE_FAILED_CODE`, a missing key stays `Ok(None)`.
+/// Decode a typed value via the shared `read_typed` helper (§6.2): backend failures
+/// propagate, undecodable bytes surface as `Abort + STATE_DECODE_FAILED_CODE`, missing key stays `Ok(None)`.
 fn get_typed<T: Decode>(sta: &dyn StateRead, key: &[u8]) -> Ret<Option<T>> {
     read_typed(sta, key)
 }
@@ -286,9 +284,8 @@ mod tests {
         StateChunkRef::new_root(std::sync::Arc::new(NoDisk), test_block(0))
     }
 
-    /// Bytes that were successfully read from persisted state but fail typed
-    /// protocol decode must surface as `Abort + state_decode_failed`, never as
-    /// a missing key (§3/§12.1).
+    /// Bytes read from persisted state that fail protocol decode must surface as
+    /// `Abort + state_decode_failed`, never as a missing key (§3/§12.1).
     #[test]
     fn corrupted_persisted_bytes_decode_as_abort() {
         let root = root();

@@ -2,7 +2,10 @@
 
 use std::collections::HashMap;
 
-use base::{ActionRef, ApiExecCtx, ApiRequest, ApiResponse, Transaction, TransactionBuild, TransactionSign, TxPkg};
+use base::{
+    ActionRef, ApiExecCtx, ApiRequest, ApiResponse, Transaction, TransactionBuild, TransactionSign,
+    TxPkg,
+};
 use field::{
     Address, Amount, Encode, Hash, Sign, Uint1, json_decode_array, json_decode_object,
     json_expect_quoted_decoded, json_expect_unquoted,
@@ -10,8 +13,8 @@ use field::{
 use protocol::tx_std::{TransactionType2, TransactionType3};
 use sys::ToHex;
 
-use mint_core::inscription::DiaInscPush;
 use crate::api::util::*;
+use mint_core::inscription::DiaInscPush;
 
 fn create_transaction_error_response(
     code: &str,
@@ -243,14 +246,14 @@ pub(crate) fn transaction_build_handler(ctx: &ApiExecCtx, req: ApiRequest) -> Ap
                 .get("gas_max")
                 .and_then(|v| json_expect_unquoted(v).ok()?.parse::<u64>().ok())
                 .unwrap_or(0);
-            if gas_max > base::TX_GAS_BUDGET_CAP_BYTE as u64 {
+            if gas_max > hacash_params::TX_GAS_BUDGET_CAP_BYTE as u64 {
                 return create_transaction_error_response(
                     "create_transaction_invalid_gas_max",
                     "gas_max exceeds the current Type3 cap",
                     "parse_gas_max",
                     &[
                         ("field", json_string("gas_max")),
-                        ("max", base::TX_GAS_BUDGET_CAP_BYTE.to_string()),
+                        ("max", hacash_params::TX_GAS_BUDGET_CAP_BYTE.to_string()),
                     ],
                 );
             }

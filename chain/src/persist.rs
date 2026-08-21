@@ -1,8 +1,5 @@
 //! Root advance: write the newly stable blocks to disk, then move the root.
-//!
-//! State writes and root markers go into one batch, so a crash either loses
-//! the whole advance or keeps all of it.
-//! That is what lets boot trust `root_height` and replay from it safely.
+//! State writes and root markers share one batch, so boot can trust `root_height`.
 
 use base::{
     MemDB, PERSIST_KEY_ROOT_HASH, PERSIST_KEY_ROOT_HEIGHT, PkgOrigin, STATE_DECODE_FAILED_CODE,
@@ -14,13 +11,8 @@ use sys::{Rerr, Ret};
 use crate::engine::{ChainEngine, Phase, PostCommitPolicy, persist_fatal};
 use crate::tree::{RollJob, hash_of, height_of};
 
-/// Persist a root advance and then move the tree root. The root-move writer
-/// excludes critical execution and marks the disk/tree transition unstable to
-/// optimistic validators.
-///
-/// Disk/root write failures are engine-fatal `PostAttach` errors recorded at
-/// this boundary; stable-block callbacks are `PostCommit` and are recorded
-/// inside `notify_stable` (§4.1/§4.2).
+/// Persist a root advance and move the tree root, marking the disk/tree
+/// transition unstable. Write failures are `PostAttach`, callbacks `PostCommit` (§4.1/§4.2).
 pub fn roll_root(
     eng: &ChainEngine,
     job: RollJob,
@@ -30,10 +22,8 @@ pub fn roll_root(
 ) -> Ret<Vec<(u64, Hash)>> {
     {
         let mut root_move = eng.begin_root_move();
-        // Reject a broken ordering before it can publish an incomplete root
-        // batch. Commit validates again after the write. Only the disk/root
-        // writes are tagged `persist_failed`; callback errors keep their own
-        // classification (§8.3).
+        // Reject a broken ordering before it publishes an incomplete root
+        // batch; only disk/root writes are tagged `persist_failed` (§8.3).
         eng.tree.validate_roll(&job).map_err(persist_fatal)?;
         eng.store
             .disk()
@@ -68,20 +58,12 @@ fn notify_stable(
     stored_replay: bool,
     post_commit: PostCommitPolicy,
 ) -> Rerr {
-    // Consensus tracks stable blocks to age out its bidding state. Replaying
-    // stored blocks re-derives that from the state it already loaded, and the
-    // callback would cost a disk read plus a full decode per block. Replay
-    // also skips every external listener: restart must not re-publish
-    // non-durable events (§8 of the error contract). The pending-cache forget
-    // still runs so replayed blocks do not accumulate in memory.
+    // Replay skips stable-block callbacks and listeners: restart must not
+    // re-publish non-durable events (§8). The pending-cache forget still runs.
     for (height, hash) in stable {
         if !stored_replay {
-            // Stable-block notification is consensus-critical (§8.3): a body
-            // read failure is `Abort + STATE_READ_FAILED_CODE`, a decode
-            // failure `Abort + STATE_DECODE_FAILED_CODE`. A missing body is
-            // never skipped. These
-            // are PostCommit failures: `Abort` is fatal and the committed
-            // root is never rolled back (§4.2).
+            // Stable-block notification is consensus-critical (§8.3): read/decode
+            // failures are `Abort + STATE_*_FAILED_CODE`, PostCommit, never rolled back (§4.2).
             let block = match eng.block_history.cached(*height, hash) {
                 Some(block) => block,
                 None => {
@@ -141,10 +123,8 @@ fn notify_stable(
             // Listeners that query BlockHistory during this callback reuse
             // the same decoded object.
             eng.block_history.remember(block.clone());
-            // A consensus callback error is engine-fatal: preserve an already
-            // `Abort` error as-is, otherwise escalate to `Abort +
-            // "core_failed"` (§8.1). The accepted root is never rolled back;
-            // the `discover` path keeps it, the sync pipeline stops.
+            // A consensus callback error is engine-fatal: keep an `Abort`
+            // as-is, otherwise escalate to `Abort + "core_failed"` (§8.1).
             if let Err(e) = eng.consensus.on_stable_block(block.as_ref(), eng) {
                 let fatal = if e.is_abort() {
                     e
@@ -166,9 +146,7 @@ fn notify_stable(
                 }
             }
             // Listener registry mutex is released before any external callback
-            // (§4.3): ordinary `Err` only warns; `Abort` escalates to engine
-            // fatal after every listener has been notified. The committed
-            // result is kept; the pipeline stops through the fatal state.
+            // (§4.3); ordinary `Err` warns, `Abort` escalates after all notified.
             if let Err(error) = eng.notify_listeners(|l| l.on_stable_block(*height, *hash, origin))
             {
                 let _ = eng.handle_error(

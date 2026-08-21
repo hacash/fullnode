@@ -1,19 +1,21 @@
+#[cfg(feature = "execute")]
+#[cfg(feature = "execute")]
 use crate::iface::context::Context;
 
-/// `TX_ACTIONS_MAX` — per-transaction action count cap, enforced by the
-/// protocol codecs (`protocol/src/codec/tx.rs`). Single source: the SDK
-/// re-exports it instead of re-declaring the number.
-pub const TX_ACTIONS_MAX: usize = 200;
+/// Consensus-defined wire and transaction limits. The generic chain runtime
+/// carries this shape while each consensus profile owns its values.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MintParams {
+    pub max_block_txs: usize,
+    pub max_block_size: usize,
+    pub max_tx_size: usize,
+    pub difficulty_adjust_blocks: u64,
+    pub difficulty_group_blocks: u64,
+    pub each_block_target_time: u64,
+}
 
-/// `MAX_TX_SIZE` — consensus transaction size cap (bytes). Single source:
-/// `mint::MINT_PARAMS.max_tx_size` and the SDK both read this constant, so a
-/// limit change never drifts between the full node and the wallet surface.
-pub const MAX_TX_SIZE: usize = 16 * 1024;
-
-/// Whether `size` exceeds the consensus cap. `max == 0` means unlimited
-/// (the same rule `MintParams.max_tx_size` uses on pending / submit / verify
-/// / API admission). The SDK inspect path reports this as a review fact;
-/// the full node gates on it.
+/// Whether `size` exceeds the consensus cap; `max == 0` means unlimited (the rule
+/// `MintParams.max_tx_size` uses on pending / submit / verify / API admission).
 pub fn tx_exceeds_max_size(size: usize, max: usize) -> bool {
     max > 0 && size > max
 }
@@ -85,9 +87,8 @@ impl ActScope {
         allow_call: false,
     };
     pub const AST: Self = Self {
-        // Dev's AST scope is TopAndAst: structural VM entry actions such as
-        // ContractMainCall may be a top-level Type3 action or an AST child,
-        // but never a CALL action.
+        // Dev's AST scope is TopAndAst: structural VM entry actions (ContractMainCall) may be a
+        // top-level Type3 action or an AST child, but never a CALL action.
         top: Some(TopRule::None),
         allow_ast: true,
         allow_call: false,
@@ -129,18 +130,19 @@ impl ActScope {
 
 pub use field::AddrOrPtr;
 
-/// VM intent `None`= VM`Some(None)`= VM  intent`Some(Some(id))`= intent
+/// Optional VM intent: `None` = no VM context, `Some(None)` = VM entry
+/// without an intent, `Some(Some(id))` = bound to intent `id`.
 pub type IntentScope = Option<Option<usize>>;
 
-/// RAII guard that sets `ExecFrom` on a context for the duration of a closure
-/// and restores the previous value on drop. Execution-dispatch-independent
-/// (used by the VM entry/sandbox), so it lives outside the execute-gated
-/// dispatcher module.
+/// RAII guard setting `ExecFrom` on a context for a closure, restoring the previous value
+/// on drop. Lives with the VM entry/sandbox (both `execute`-only).
+#[cfg(feature = "execute")]
 pub struct ExecFromGuard<'a> {
     ctx: &'a mut dyn Context,
     prev: ExecFrom,
 }
 
+#[cfg(feature = "execute")]
 impl<'a> ExecFromGuard<'a> {
     pub fn enter(ctx: &'a mut dyn Context, from: ExecFrom) -> Self {
         let prev = ctx.exec_from();
@@ -153,12 +155,14 @@ impl<'a> ExecFromGuard<'a> {
     }
 }
 
+#[cfg(feature = "execute")]
 impl Drop for ExecFromGuard<'_> {
     fn drop(&mut self) {
         self.ctx.exec_from_set(self.prev);
     }
 }
 
+#[cfg(feature = "execute")]
 pub fn with_exec_from<R>(
     ctx: &mut dyn Context,
     from: ExecFrom,

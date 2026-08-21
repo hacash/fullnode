@@ -11,7 +11,7 @@ use crate::chain::PkgOrigin;
 use field::Hash;
 use sys::{Rerr, Ret};
 
-/// Pipeline  `Default`
+/// Pipeline tuning options (see `Default`).
 #[derive(Clone)]
 pub struct PipelineOptions {
     pub decode_workers: usize,
@@ -57,7 +57,7 @@ pub trait ProgressSink: Send + Sync {
     fn on_pipeline_progress(&self, report: &PipelineReport);
 }
 
-/// Pipeline  -- `run_sync`
+/// Progress/result report of one pipeline run.
 #[derive(Clone, Debug, Default)]
 pub struct PipelineReport {
     pub accepted: u64,
@@ -71,7 +71,7 @@ pub struct PipelineReport {
     pub failure_message: Option<String>,
 }
 
-/// `run_sync`  wait --
+/// Handle to a running pipeline: `wait`, `progress`, `cancel`.
 pub struct SyncHandle {
     cancel: Option<Arc<AtomicBool>>,
     progress: Arc<Mutex<PipelineReport>>,
@@ -156,14 +156,12 @@ impl BackgroundSyncHandle {
     }
 }
 
-/// `run_sync`  -- P2P stream /  replay /  oneshot
-/// trait
+/// Block source feeding a pipeline: P2P stream, replay, or oneshot.
 pub trait BlockSource: Send + 'static {
     fn set_cancel(&mut self, _cancel: Option<Arc<AtomicBool>>) {}
 
-    /// blob
-    /// pipeline  feeder  `Registry::peek_block_size`
-    /// None
+    /// Yield the next batch; `Ok(None)` ends the stream. With a registry block sizer present,
+    /// `block_count`/`block_offsets` are filled by the pipeline feeder (`Registry::peek_block_size`).
     fn next(&mut self) -> Ret<Option<BlockBatch>>;
 }
 
@@ -177,9 +175,8 @@ pub struct BlockBatch {
     /// Start offsets for validated blocks. An empty vector has the same
     /// compatibility meaning as `block_count == 0`.
     pub block_offsets: Arc<Vec<u32>>,
-    /// Blocks decoded while validating the network payload. When present,
-    /// pipeline workers reuse these objects instead of decoding each frame a
-    /// second time.
+    /// Blocks decoded while validating the network payload; pipeline workers reuse these
+    /// objects instead of decoding each frame a second time.
     pub decoded_blocks: Arc<Vec<BlockRef>>,
 }
 

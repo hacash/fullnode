@@ -2,20 +2,6 @@
   "vectors": [
     {
       "name": "hac_transfer_to",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "hac_transfer",
-            "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "amount": "12:244"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -29,26 +15,10 @@
             "hacash": "12:244"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d400000100010022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b39000631323a323434"
+      }
     },
     {
       "name": "hac_transfer_from",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "hac_transfer",
-            "from": "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr",
-            "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "amount": "12:244"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -63,25 +33,10 @@
             "hacash": "12:244"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001000e0022314c526936576e33384a7455707062467632755779417774637463444c74464446720022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b39000631323a323434"
+      }
     },
     {
       "name": "sat_transfer",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "sat_transfer",
-            "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "satoshi": 500
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -95,26 +50,10 @@
             "satoshi": 500
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001000a0022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390003353030"
+      }
     },
     {
       "name": "sat_transfer_from",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "sat_transfer",
-            "from": "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr",
-            "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "satoshi": 500
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -129,27 +68,10 @@
             "satoshi": 500
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001000c0022314c526936576e33384a7455707062467632755779417774637463444c74464446720022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390003353030"
+      }
     },
     {
       "name": "hacd_single",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "hacd_transfer",
-            "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "names": [
-              "WTYUIA"
-            ]
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -160,31 +82,13 @@
           {
             "kind": "transfer_hacd_single_to",
             "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "diamond": "575459554941"
+            "diamond": "WTYUIA"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001000500065754595549410022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b39"
+      }
     },
     {
       "name": "hacd_list",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "hacd_transfer",
-            "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "names": [
-              "WTYUIA",
-              "XVMEKB"
-            ]
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -196,34 +100,15 @@
             "kind": "transfer_hacd_to",
             "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
             "diamonds": [
-              "575459554941",
-              "58564d454b42"
-            ]
-          }
-        ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d400000100070022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b3900020006575459554941000658564d454b42"
-    },
-    {
-      "name": "hacd_from",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "hacd_transfer",
-            "from": "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr",
-            "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "names": [
               "WTYUIA",
               "XVMEKB"
             ]
           }
         ]
-      },
+      }
+    },
+    {
+      "name": "hacd_from",
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -236,31 +121,15 @@
             "from": "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr",
             "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
             "diamonds": [
-              "575459554941",
-              "58564d454b42"
+              "WTYUIA",
+              "XVMEKB"
             ]
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d400000100060022314c526936576e33384a7455707062467632755779417774637463444c74464446720022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b3900020006575459554941000658564d454b42"
+      }
     },
     {
       "name": "asset_transfer",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "asset_transfer",
-            "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "serial": 7,
-            "amount": "100"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -277,25 +146,10 @@
             }
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d400000100110022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390001370003313030"
+      }
     },
     {
       "name": "height_scope",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "height_scope",
-            "start": 1000000,
-            "end": 0
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -309,27 +163,10 @@
             "end": 0
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d40000010412000731303030303030000130"
+      }
     },
     {
       "name": "chain_allow",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "chain_allow",
-            "chains": [
-              1,
-              2
-            ]
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -345,27 +182,10 @@
             ]
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001041100020000000100000002"
+      }
     },
     {
       "name": "req_sign_list",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "req_sign_list",
-            "signers": [
-              "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-              "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr"
-            ]
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -381,24 +201,10 @@
             ]
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001041400020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390022314c526936576e33384a7455707062467632755779417774637463444c7446444672"
+      }
     },
     {
       "name": "tx_message",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "tx_message",
-            "data": "686920686163617368"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -411,24 +217,10 @@
             "data": "686920686163617368"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d400000104010009686920686163617368"
+      }
     },
     {
       "name": "tx_blob",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "tx_blob",
-            "data": "01020304"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -441,28 +233,10 @@
             "data": "01020304"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d40000010402000401020304"
+      }
     },
     {
       "name": "insc_push",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "insc_push",
-            "diamonds": [
-              "WTYUIA"
-            ],
-            "engraved_content": "hello",
-            "engraved_type": 2
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -473,33 +247,17 @@
           {
             "kind": "hacd_insc_push",
             "diamonds": [
-              "575459554941"
+              "WTYUIA"
             ],
             "engraved_content": "68656c6c6f",
             "engraved_type": 2,
             "protocol_cost": "0"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d400000100200001000657545955494100013002000568656c6c6f"
+      }
     },
     {
       "name": "insc_clean",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "insc_clean",
-            "diamonds": [
-              "WTYUIA"
-            ]
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -510,31 +268,15 @@
           {
             "kind": "hacd_insc_clean",
             "diamonds": [
-              "575459554941"
+              "WTYUIA"
             ],
             "protocol_cost": "0"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001002100010006575459554941000130"
+      }
     },
     {
       "name": "insc_edit",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "insc_edit",
-            "diamond": "WTYUIA",
-            "index": 1,
-            "engraved_content": "0x00ff"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -544,33 +286,17 @@
         "actions": [
           {
             "kind": "hacd_insc_edit",
-            "diamond": "575459554941",
+            "diamond": "WTYUIA",
             "index": 1,
             "engraved_content": "00ff",
             "protocol_cost": "0",
             "engraved_type": 0
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001002200065754595549410100013000000200ff"
+      }
     },
     {
       "name": "insc_move",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "insc_move",
-            "from_diamond": "WTYUIA",
-            "to_diamond": "XVMEKB",
-            "index": 2
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -580,31 +306,16 @@
         "actions": [
           {
             "kind": "hacd_insc_move",
-            "from_diamond": "575459554941",
-            "to_diamond": "58564d454b42",
+            "from_diamond": "WTYUIA",
+            "to_diamond": "XVMEKB",
             "index": 2,
             "protocol_cost": "0"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d400000100230006575459554941000658564d454b4202000130"
+      }
     },
     {
       "name": "insc_drop",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "insc_drop",
-            "diamond": "WTYUIA",
-            "index": 0
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -614,33 +325,15 @@
         "actions": [
           {
             "kind": "hacd_insc_drop",
-            "diamond": "575459554941",
+            "diamond": "WTYUIA",
             "index": 0,
             "protocol_cost": "0"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d40000010024000657545955494100000130"
+      }
     },
     {
       "name": "channel_open",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "channel_open",
-            "channel_id": "0xabababababababababababababababab",
-            "left_address": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "left_amount": "1:244",
-            "right_address": "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr",
-            "right_amount": "2:244"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -661,24 +354,10 @@
             }
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d40000010002abababababababababababababababab0022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a3234340022314c526936576e33384a7455707062467632755779417774637463444c74464446720005323a323434"
+      }
     },
     {
       "name": "channel_close",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "channel_close",
-            "channel_id": "abcdabcdabcdabcdabcdabcdabcdabcd"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -691,29 +370,10 @@
             "channel_id": "abcdabcdabcdabcdabcdabcdabcdabcd"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d40000010003abcdabcdabcdabcdabcdabcdabcdabcd"
+      }
     },
     {
       "name": "asset_create",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "asset_create",
-            "ticket": "ticket1",
-            "name": "asset",
-            "serial": "1",
-            "supply": "100",
-            "decimal": 2,
-            "issuer": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -734,29 +394,10 @@
             }
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d400000100100001310003313030020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b3900077469636b65743100056173736574000130"
+      }
     },
     {
       "name": "diamond_mint",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "diamond_mint",
-            "diamond": "WTYUIA",
-            "number": "100",
-            "prev_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "nonce": "0xbbbbbbbbbbbbbbbb",
-            "address": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "custom_message": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -767,7 +408,7 @@
           {
             "kind": "diamond_mint",
             "d": {
-              "diamond": "575459554941",
+              "diamond": "WTYUIA",
               "number": "100",
               "prev_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "nonce": "bbbbbbbbbbbbbbbb",
@@ -776,28 +417,10 @@
             }
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001000400065754595549410003313030aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390020cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
     },
     {
       "name": "diamond_mint_no_custom",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "diamond_mint",
-            "diamond": "WTYUIA",
-            "number": "100",
-            "prev_hash": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "nonce": "0xbbbbbbbbbbbbbbbb",
-            "address": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -808,7 +431,7 @@
           {
             "kind": "diamond_mint",
             "d": {
-              "diamond": "575459554941",
+              "diamond": "WTYUIA",
               "number": "100",
               "prev_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               "nonce": "bbbbbbbbbbbbbbbb",
@@ -816,33 +439,10 @@
             }
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001000400065754595549410003313030aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390000"
+      }
     },
     {
       "name": "raw_balance_floor",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "balance_floor",
-            "addr": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-            "hacash": "12:244",
-            "satoshi": "100",
-            "diamond": "5",
-            "assets": [
-              {
-                "serial": "7",
-                "amount": "100"
-              }
-            ]
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -864,26 +464,10 @@
             ]
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d400000104130022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b39000631323a323434000331303000013500010001370003313030"
+      }
     },
     {
       "name": "raw_contract_main_call",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "contract_main_call",
-            "marks": "000000",
-            "codeconf": 1,
-            "codes": "010203"
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -898,32 +482,10 @@
             "codes": "010203"
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001002c000000010003010203"
+      }
     },
     {
       "name": "raw_ast_select",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "ast_select",
-            "exe_min": 1,
-            "exe_max": 1,
-            "actions": [
-              {
-                "kind": "transfer_hac_to",
-                "to": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-                "hacash": "12:244"
-              }
-            ]
-          }
-        ]
-      },
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -944,36 +506,7 @@
             ]
           }
         ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d4000001001901010100010022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b39000631323a323434"
-    },
-    {
-      "name": "raw_block_height",
-      "friendly": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "block_height"
-          }
-        ]
-      },
-      "wire": {
-        "tx_type": 2,
-        "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
-        "fee": "1:244",
-        "timestamp": 1755223764,
-        "gas_max": 0,
-        "actions": [
-          {
-            "kind": "block_height"
-          }
-        ]
-      },
-      "payload": "020022314d7a4e59316f41336b6667596937357a71756a3353525550597a747a58487a4b390005313a32343400000000689e96d40000010701"
+      }
     }
   ]
 }

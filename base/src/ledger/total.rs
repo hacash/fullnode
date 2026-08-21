@@ -1,9 +1,8 @@
 use field::{Decode, Encode, Reader, Uint8, Uint12};
 use sys::Ret;
 
-/// Statistics maintained by the base execution layer.
-///
-/// Field order is part of the state codec and must remain append-only.
+/// Statistics maintained by the base execution layer. Field order is part of the
+/// state codec and must remain append-only.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BaseTotal {
     pub tx_fee_burn90_238: Uint12,

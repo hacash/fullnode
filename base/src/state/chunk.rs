@@ -1,8 +1,5 @@
-//! Unified state chunks for block branches and transient execution.
-//!
-//! Block chunks are frozen and retained by the fork tree. Tx and AST chunks
-//! are short-lived overlays: they point weakly at the caller-held parent and
-//! merge into it only after successful execution.
+//! Unified state chunks for block branches and transient execution. Block chunks are frozen
+//! and retained by the fork tree; Tx/AST chunks are short-lived weak overlays that merge only after successful execution.
 
 use std::sync::{Arc, RwLock, Weak};
 
@@ -292,9 +289,8 @@ impl StateChunkRef {
             | (Origin::Ast { .. }, Origin::Tx { .. } | Origin::Ast { .. }) => {}
             _ => return errf!("invalid execution chunk parent relationship"),
         }
-        // Parent-first is the global lock order for nested execution commits.
-        // Holding both body locks makes validation and the delta move atomic
-        // with respect to state/log writes and parent finalization.
+        // Parent-first is the global lock order for nested execution commits; holding both body
+        // locks makes validation and the delta move atomic with respect to state/log writes.
         let mut parent_body = parent.0.body.write().unwrap();
         let Some(target) = parent_body.writable_mut() else {
             return errf!("execution chunk parent is already finalized");
@@ -414,10 +410,8 @@ impl StateChunkRef {
         Ok(())
     }
 
-    /// Detach a previously attached child (side-capacity eviction). Returns
-    /// whether the child was present. The detached subtree becomes
-    /// unreachable and is dropped with its state; the canonical chain never
-    /// goes through this path.
+    /// Detach a previously attached child (side-capacity eviction); returns whether it was
+    /// present. The subtree becomes unreachable and drops with its state — not a canonical path.
     pub fn remove_block_child(&self, child: &Self) -> bool {
         let mut children = self.0.children.write().unwrap();
         let before = children.len();

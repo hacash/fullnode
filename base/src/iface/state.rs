@@ -10,7 +10,7 @@ pub const STATE_READ_FAILED_CODE: &'static str = "storage_read_failed";
 pub const STATE_DECODE_FAILED_CODE: &'static str = "state_decode_failed";
 
 // =============================================================
-// StateRead / StateLayer  KV
+// StateRead / StateLayer KV
 // =============================================================
 
 pub trait StateRead: Send + Sync {

@@ -20,10 +20,7 @@ fn new_string_from_char_ptr(message: *const c_char) -> String {
     }
 }
 
-/// Bytes allocated by leveldb
-///
-/// It's basically the same thing as `Box<[u8]>` except that it uses
-/// leveldb_free() as a destructor.
+/// Bytes allocated by leveldb — like `Box<[u8]>` but freed with `leveldb_free()`.
 pub struct RawBytes {
     // We use static reference instead of pointer to inform the compiler that
     // it can't be null. (Because `NonZero` is unstable now.)
@@ -32,9 +29,7 @@ pub struct RawBytes {
 }
 
 impl RawBytes {
-    /// Creates instance of `RawBytes` from leveldb-allocated data.
-    ///
-    /// Returns `None` if `ptr` is `null`.
+    /// Creates a `RawBytes` from leveldb-allocated data; returns `None` if `ptr` is null.
     pub unsafe fn from_raw(ptr: *mut u8, size: usize) -> Option<Self> {
         if ptr.is_null() {
             None

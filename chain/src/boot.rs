@@ -1,14 +1,5 @@
-//! Boot: bring the in-memory tree up to the tip of the block store.
-//!
-//! The state DB records the root; blocks above it are replayed from the block
-//! store on every start. A missing or stale state DB triggers a full rebuild
-//! from genesis. Any probe/validate/replay/rebuild failure rejects startup
-//! with a structured boot error; the process exit decision belongs to the
-//! outermost caller.
-//!
-//! After the canonical replay the side hash list is read and the volatile
-//! side tree is rebuilt from it. That step is peripheral: failures only clear
-//! the list and skip the side replay, never the canonical boot.
+//! Boot: replay the block store up to the state root and rebuild the tree;
+//! failures reject startup with a structured boot error. Side list replay is peripheral.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -24,11 +15,8 @@ use sys::errf;
 
 use crate::engine::ChainEngine;
 
-/// Build a boot failure. `kind` only distinguishes the ops action:
-/// "repair/rebuild the store" vs "switch binary / migrate offline". The outer
-/// layer prints the message and refuses to enter Running. Boot failures are
-/// startup-fatal: they keep the `Abort` severity so storage read failures are
-/// never downgraded to ordinary faults (§7.2).
+/// Build a boot failure; `kind` distinguishes repair/rebuild from offline
+/// migration. Startup-fatal: keeps `Abort` severity (§7.2).
 pub(crate) fn boot_fault(
     phase: &'static str,
     kind: &'static str,
@@ -112,9 +100,7 @@ pub fn open_state(eng: &ChainEngine, status: StateStatus) -> sys::Rerr {
 }
 
 /// Resolve the block available cursor. A missing cursor is a storage boot
-/// failure unless the block store is provably empty (fresh install); it must
-/// never silently fall back to zero, which would treat a non-empty store as
-/// empty and restart from genesis.
+/// failure unless the store is provably empty; never fall back to zero.
 fn resolve_available_cursor(eng: &ChainEngine) -> sys::Ret<u64> {
     let tip = eng
         .store
@@ -198,10 +184,8 @@ fn replay(eng: &ChainEngine, from: u64, to: u64, origin: PkgOrigin) -> sys::Rerr
     Ok(())
 }
 
-/// Rebuild the volatile side tree from the side hash list after the canonical
-/// replay. Peripheral: any root-above record that is missing, corrupt, or
-/// unexecutable clears the whole list and skips this replay; canonical boot
-/// is unaffected. No arrival/admission records and no listener notifications.
+/// Rebuild the volatile side tree from the side hash list after canonical
+/// replay. Peripheral: any bad record clears the whole list; canonical boot is unaffected.
 fn replay_side_branches(eng: &ChainEngine) -> sys::Rerr {
     let Some(path) = &eng.side_list_path else {
         return Ok(());
@@ -234,10 +218,8 @@ fn replay_side_branches(eng: &ChainEngine) -> sys::Rerr {
     hashes.sort_unstable();
     hashes.dedup();
 
-    // A failed replay is either a bad record (the whole list is cleared and
-    // the side replay skipped) or a storage failure (boot aborts: the store
-    // cannot be trusted). Storage failures are `Abort`; everything else is a
-    // bad record (§7.2).
+    // A failed replay is a bad record (list cleared, side replay skipped) or
+    // a storage failure (`Abort`, boot aborts) (§7.2).
     if let Err(e) = replay_side(eng, &hashes) {
         if e.is_abort() {
             return Err(rebuild_fault(format!("side replay storage failure: {}", e)));
@@ -248,12 +230,8 @@ fn replay_side_branches(eng: &ChainEngine) -> sys::Rerr {
     Ok(())
 }
 
-/// Decode every recoverable side record and re-attach it to the recovered
-/// tree. Blocks are replayed in topological order (height, hash): earlier
-/// blocks are already attached, so the tree itself holds the side parents.
-/// The body was fully validated before live persistence, so replay skips the
-/// live consensus checks and body writes. Every error names the offending
-/// block hash.
+/// Decode and re-attach every recoverable side record in topological order;
+/// bodies were validated before live persistence, so replay skips consensus checks.
 fn replay_side(eng: &ChainEngine, hashes: &[Hash]) -> sys::Ret<()> {
     let root_height = eng.tree.root_height();
     let head_hash = eng.tree.head_tip().0;
@@ -272,9 +250,8 @@ fn replay_side(eng: &ChainEngine, hashes: &[Hash]) -> sys::Ret<()> {
             continue;
         }
         let data = eng.store.block_data(hash).map_err(|e| {
-            // Storage failures during side replay must stay `Abort` so
-            // `replay_side_branches` refuses startup instead of clearing the
-            // whole list (§7.2).
+            // Storage failures during side replay stay `Abort` so startup is
+            // refused instead of clearing the whole list (§7.2).
             sys::Error::abort(format!("block {:?}: side body read failed: {}", hash, e))
                 .with_code(STATE_READ_FAILED_CODE)
         })?;
@@ -297,9 +274,8 @@ fn replay_side(eng: &ChainEngine, hashes: &[Hash]) -> sys::Ret<()> {
     }
     pending.sort_by_key(|(height, hash, _)| (*height, *hash));
 
-    // Re-execute the deterministic state and attach without moving the head.
-    // Branches over `side_tree_capacity` are pruned weakest-first by the
-    // shared capacity bound below.
+    // Re-execute deterministic state and attach without moving the head;
+    // over-capacity branches are pruned weakest-first by the shared bound below.
     for (_height, hash, blk) in pending {
         let prev_hash = blk.prev_hash();
         let pkg = BlkPkg::from_block(blk.clone(), PkgSource::new(PkgOrigin::Replay));

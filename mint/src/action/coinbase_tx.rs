@@ -155,6 +155,10 @@ impl base::TransactionSign for CoinbaseTx {
     fn verify_signature(&self) -> Rerr {
         Ok(())
     }
+
+    fn as_execute(&self) -> Option<&dyn base::TransactionExecute> {
+        Some(self)
+    }
 }
 
 impl base::TransactionExecute for CoinbaseTx {

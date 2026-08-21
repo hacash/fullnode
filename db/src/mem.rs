@@ -5,7 +5,6 @@ use base::{DiskDB, MemDB};
 use sys::Rerr;
 
 /// In-memory KV (`HashMap` + `RwLock`) for tests / no-disk mode.
-///
 /// Lock poison panics so a crashed writer cannot silently drop later writes.
 #[derive(Default)]
 pub struct MemDiskDB {
@@ -20,9 +19,8 @@ impl MemDiskDB {
 
 impl DiskDB for MemDiskDB {
     fn read(&self, key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
-        // Reads are recoverable and poison-tolerant: a crashed writer must
-        // not wedge later reads. Writes below still panic on poison so a
-        // crashed writer cannot silently drop later writes.
+        // Reads are recoverable and poison-tolerant (a crashed writer must not
+        // wedge later reads); writes below still panic on poison.
         Ok(self
             .inner
             .read()

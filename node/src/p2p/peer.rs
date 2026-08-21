@@ -38,10 +38,8 @@ pub(crate) struct RemotePeer {
     pub is_public: AtomicBool,
     pub is_inbound: AtomicBool,
     pub last_active: Mutex<Instant>,
-    /// Business relay channels the peer opted into via its advertised services
-    /// mask captured from VERSION.services.
-    /// Channel bits are named by the consensus layer; the node only checks
-    /// membership via `relays_channel(bit)`.
+    /// Business relay channels the peer opted into via VERSION.services; bits are
+    /// consensus-named, the node only checks membership via `relays_channel(bit)`.
     pub service_mask: std::sync::atomic::AtomicU64,
     pub relay: AtomicBool,
     pub custom_types: Vec<u8>,
@@ -137,9 +135,8 @@ impl RemotePeer {
         self.custom_types.binary_search(&ty).is_ok()
     }
 
-    /// Whether this peer has opted into the given business relay channel
-    /// (declared via `TxPolicy::tx_pool_groups`). Channel bits are
-    /// consensus-defined service bits; the node only inspects membership.
+    /// Whether the peer opted into the given business relay channel; channel bits
+    /// are consensus-defined service bits and the node only inspects membership.
     pub(crate) fn relays_channel(&self, channel_bit: u64) -> bool {
         self.service_mask.load(Ordering::Acquire) & channel_bit != 0
     }

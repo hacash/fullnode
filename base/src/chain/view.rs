@@ -27,34 +27,24 @@ pub trait ChainView: Send + Sync {
     }
     fn latest_block(&self) -> BlockRef;
 
-    /// Optimistic canonical snapshot. Captures head, state tip, root pin and
-    /// epoch together under the Tree lock. API queries and VM sandbox validate
-    /// at the end; transaction relay may use execution only as a best-effort
-    /// filter and skip validation.
-    ///
-    /// `Ok(None)` means the engine is busy (syncing / root moving) and the
-    /// caller should retry; `Err(EngineUnavailable)` means the engine is fatal
-    /// or stopping and no snapshot will ever be created again (§5 of the
-    /// error-system normalization design).
+    /// Optimistic canonical snapshot: head, state tip, root pin, epoch captured together
+    /// under the Tree lock. `Ok(None)` = engine busy (retry); `Err(EngineUnavailable)` = fatal/stopping (§5).
     fn optimistic_canonical(&self) -> Result<Option<OptimisticState>, sys::Error>;
 
     /// Exact canonical-head validation for work whose result is only useful on
     /// the same head, such as block-template construction.
     fn validate_optimistic(&self, start_epoch: u64) -> bool;
 
-    /// Validate that a captured branch tip still belongs to the current
-    /// durable-root subtree. This checks state-view consistency without
-    /// requiring the canonical head to remain unchanged.
+    /// Check a captured branch tip still belongs to the current durable-root
+    /// subtree — state-view consistency without requiring the head to be unchanged.
     fn validate_state_view(&self, tip_hash: &Hash) -> bool;
 
-    /// Root-pinned read session for miner packing. The session pins the tree
-    /// root captured with the head, so root rolls stay readable; the epoch
-    /// check still detects an ordinary head change.
+    /// Root-pinned read session for miner packing: root rolls stay readable; the
+    /// epoch check still detects an ordinary head change.
     fn state_canonical(&self) -> Result<Option<StateReadSession>, sys::Error>;
 
-    /// Optimistic branch snapshot for indexer reads. The complete read must be
-    /// followed by `validate_state_view(&session.tip_hash())`. `Ok(None)` is
-    /// the branch tip not being present in the tree.
+    /// Optimistic branch snapshot for indexer reads. Follow the read with
+    /// `validate_state_view(&session.tip_hash())`; `Ok(None)` = tip not in the tree.
     fn state_at_session(
         &self,
         branch_tip: &Hash,
@@ -75,22 +65,14 @@ pub trait Engine: ChainView {
 
     fn try_execute_tx(&self, tx: TxRef) -> Rerr;
 
-    /// §8.1 step 1 / §10: whether miner packing should be inhibited right now.
-    /// Returns `true` when the activity channel is owned by `Sync`,
-    /// `Recovery`, `Stopping`, or when sync has been requested
-    /// (`sync_waiting`).  The miner consults this BEFORE attempting the strict
-    /// `state_canonical` session so it can return `None` (Busy) without
-    /// contending for the StateGate read while a sync writer is committing.
-    /// This query does NOT take the StateGate and does NOT enter the activity
-    /// channel - it is a non-blocking ownership snapshot.
+    /// §8.1 step 1 / §10: whether miner packing should be inhibited (activity channel
+    /// owned by `Sync`/`Recovery`/`Stopping`). Consulted before `state_canonical`; non-blocking.
     fn is_packing_inhibited(&self) -> bool {
         false
     }
 
-    /// Execute a batch against pending state and return the hashes whose
-    /// execution failed (removable from the txpool). An `Abort` (core state
-    /// read failure) is returned as `Err` so no transaction is judged invalid
-    /// and the error can reach the engine fatal boundary (§6.7).
+    /// Execute a batch against pending state; returns failed-tx hashes (removable from
+    /// the txpool). An `Abort` returns as `Err` so it reaches the engine fatal boundary (§6.7).
     fn try_execute_batch(&self, _txs: Vec<TxRef>, _pending_height: u64) -> Ret<Vec<Hash>> {
         Ok(vec![])
     }
@@ -113,9 +95,8 @@ pub trait Engine: ChainView {
         picked
     }
 
-    /// Best-effort packing filter on a root-pinned session. An `Abort` (core
-    /// state read failure) is returned as `Err` so the error reaches the
-    /// engine fatal boundary instead of judging transactions unsuitable (§5).
+    /// Best-effort packing filter on a root-pinned session. An `Abort` (core state read
+    /// failure) returns as `Err` so it reaches the engine fatal boundary, not judged unsuitable (§5).
     #[allow(clippy::too_many_arguments)]
     fn try_pick_pending_txs_on_session(
         &self,
@@ -128,20 +109,17 @@ pub trait Engine: ChainView {
         max_block_size: usize,
     ) -> Ret<Vec<TxRef>>;
 
-    /// Route an error observed outside the engine (a canonical state read
-    /// failure during deferred polling) into the single engine boundary
-    /// (§4.1): `Abort` marks the engine fatal and is recorded once, then
-    /// returned unchanged for propagation; other errors only warn. The
-    /// default passes the error through without marking.
+    /// Route an error observed outside the engine into the single engine boundary (§4.1):
+    /// `Abort` marks the engine fatal (recorded once), other errors only warn. Default passes through.
     fn handle_engine_error(&self, _operation: &'static str, err: sys::Error) -> Rerr {
         Err(err)
     }
 
-    /// try_execute_tx  sync/rebuild
+    /// Insert a single block (discover path); sync/rebuild use the stream APIs.
     fn discover_block(&self, blk: BlkPkg) -> Ret<BlockAcceptResult>;
 
-    /// `src`
-    /// `mode` Strict  P2PFastSync
+    /// Insert a block stream from `src`. `mode` is `Strict` (P2P) or
+    /// `P2pFastSync`.
     fn run_sync(
         &self,
         src: Box<dyn BlockSource>,
@@ -149,7 +127,7 @@ pub trait Engine: ChainView {
         opts: PipelineOptions,
     ) -> Ret<SyncHandle>;
 
-    /// block  + FastSync
+    /// Run `run_sync` on a background task (including `P2pFastSync`).
     fn run_sync_background(
         self: Arc<Self>,
         src: Box<dyn BlockSource>,
@@ -157,7 +135,7 @@ pub trait Engine: ChainView {
         opts: PipelineOptions,
     ) -> Ret<BackgroundSyncHandle>;
 
-    /// `open`
+    /// Register a chain listener.
     fn add_chain_listener(&self, _listener: Arc<dyn ChainListener>) -> Rerr {
         sys::errf!("chain listener registration not supported")
     }

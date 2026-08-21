@@ -1,18 +1,15 @@
 use std::net::{IpAddr, Ipv4Addr};
 
-use serde::Deserialize;
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+/// P2P networking configuration (`[node]` section), decoded by hand in the app layer (no serde);
+/// `node_key`/`data_dir` are node-local runtime state populated after load, not INI keys.
+#[derive(Clone, Debug)]
 pub struct P2PConfig {
     pub listen_ip: IpAddr,
     pub block_queue_cap: usize,
     pub boot_nodes: Vec<String>,
-    #[serde(skip)]
     pub node_key: [u8; 16],
     pub node_name: String,
     pub listen_port: u16,
-    #[serde(skip)]
     pub data_dir: String,
     pub find_nodes: bool,
     pub accept_nodes: bool,

@@ -5,10 +5,9 @@ edition.workspace = true
 
 [dependencies]
 sys = { workspace = true, features = ["secp-static-context"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-field = { workspace = true, features = ["json-serde", "num-bigint"] }
+field = { workspace = true }
 base = { workspace = true }
+hacash-params = { workspace = true }
 protocol = { workspace = true }
 x16rs = { workspace = true }
 mint-core = { workspace = true, features = ["execute"] }
@@ -19,3 +18,8 @@ ocl = { version = "0.19.7", optional = true }
 
 [features]
 ocl = ["dep:ocl"]
+
+[dev-dependencies]
+# Test oracle only (serde_json::Value assertions on the hand-written JSON
+# output of the API layer): never enters the production dependency graph.
+serde_json = "1"

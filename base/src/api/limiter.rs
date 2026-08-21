@@ -1,25 +1,5 @@
-//! Concurrency and wall-clock limits for VM sandbox calls (§13.2).
-//!
-//! The VM sandbox runs untrusted contract bytecodes against an optimistic
-//! snapshot.  Per §13.2 a single or a stream of sandbox requests must NOT be
-//! able to:
-//!   - starve root writers by pinning worker threads (gas-burning loops);
-//!   - exhaust the server's thread pool via unbounded concurrent calls;
-//!   - monopolise the API from one peer.
-//!
-//! This module exposes a `SandboxLimiter` providing:
-//!   * a global concurrent-call cap (returns `Err` when exceeded);
-//!   * a per-source-IP concurrent-call cap;
-//!   * a wall-clock deadline guard that aborts a sandbox call even if the
-//!     contract enters a low-gas-burning but non-terminating loop.
-//!
-//! All checks are non-blocking - the caller is responsible for returning a
-//! `429 / sandbox busy` response when a permit cannot be acquired.  The server
-//! never queues sandbox requests: §13.2 forbids unbounded queues behind the
-//! gate.
-//!
-//! The limiter is shared via `ApiExecCtx` so that every route handler sees the
-//! same counters regardless of which HTTP worker served the request.
+//! Concurrency and wall-clock limits for VM sandbox calls (§13.2): a global + per-IP
+//! concurrent-call cap and a wall-clock deadline guard, so untrusted bytecode cannot starve writers or exhaust the worker pool.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -29,18 +9,12 @@ use std::time::{Duration, Instant};
 /// needs different limits.
 pub const DEFAULT_GLOBAL_CONCURRENCY: usize = 8;
 pub const DEFAULT_PER_IP_CONCURRENCY: usize = 2;
-/// Default wall-clock deadline for a single sandbox call.  Generous enough for
-/// legitimate contract queries, well below any sensible request timeout so a
-/// stuck call cannot pin a worker indefinitely.
+/// Default wall-clock deadline for a single sandbox call: generous for legitimate
+/// queries, far below any request timeout so a stuck call cannot pin a worker.
 pub const DEFAULT_WALL_CLOCK_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// RAII permit returned by `SandboxLimiter::acquire`.  Drops release the
-/// global + per-IP counters even if the caller forgets to call
-/// `check_deadline` (the deadline guard is best-effort - it does NOT forcibly
-/// kill the running sandbox thread, since the VM has no native cancellation
-/// hook; instead it makes the API handler return `state_changed` /
-/// `sandbox_timeout` to the peer, and the limiter slot stays held until the
-/// sandbox_call function actually returns).
+/// RAII permit returned by `SandboxLimiter::acquire`; `Drop` releases the global
+/// + per-IP counters. `check_deadline` is best-effort — it cannot kill the VM thread.
 pub struct SandboxPermit {
     limiter: Arc<Inner>,
     ip: Option<String>,
@@ -128,14 +102,8 @@ impl SandboxLimiter {
         }
     }
 
-    /// Try to acquire a permit for a sandbox call originating from `peer_ip`
-    /// (or `None` if the caller has no peer - e.g. localhost).  Non-blocking:
-    /// returns `Err` immediately if either the global or per-IP cap is
-    /// exceeded, so the caller can return a `sandbox_busy` response without
-    /// queueing the request (§13.2 forbids unbounded queues).
-    ///
-    /// Returns a `SandboxPermit` whose `Drop` releases the counters, and
-    /// whose `check_deadline` enforces the wall-clock budget.
+    /// Non-blocking acquire from `peer_ip` (or `None`); `Err` immediately if either
+    /// cap is exceeded, so the caller answers `sandbox_busy` without queueing (§13.2).
     pub fn acquire(&self, peer_ip: Option<String>) -> Result<SandboxPermit, &'static str> {
         let mut g = self.inner.state.lock().expect("sandbox limiter poisoned");
         if g.global_inflight >= self.inner.global_cap {
