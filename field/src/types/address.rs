@@ -57,14 +57,15 @@ impl Address {
             return false;
         }
         let b = self.as_bytes();
+        // The tail is exactly `UNKNOWN_PRIVKEY_TAIL_SIZE` (4) bytes by
+        // construction; copy instead of `try_into().expect()` so no panic
+        // path is linked into the wasm.
+        let mut tail = [0u8; Self::UNKNOWN_PRIVKEY_TAIL_SIZE];
+        tail.copy_from_slice(&b[Self::UNKNOWN_PRIVKEY_PREFIX_SIZE..]);
         b[..Self::UNKNOWN_PRIVKEY_PREFIX_SIZE]
             .iter()
             .all(|&x| x == 0)
-            && u32::from_be_bytes(
-                b[Self::UNKNOWN_PRIVKEY_PREFIX_SIZE..]
-                    .try_into()
-                    .expect("Address private-key tail size is fixed"),
-            ) < u32::MAX
+            && u32::from_be_bytes(tail) < u32::MAX
     }
 
     pub fn must_privkey(&self) -> Ret<()> {

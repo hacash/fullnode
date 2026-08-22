@@ -1,10 +1,10 @@
 use dyn_clone::clone_box;
 use field::Address as FieldAddress;
+use sys::*;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 
 use crate::ir::*;
-use crate::native::*;
 use crate::rt::*;
 use crate::value::*;
 use crate::*;

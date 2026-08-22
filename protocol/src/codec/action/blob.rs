@@ -1,10 +1,6 @@
 //! TxMessage / TxBlob actions.
 
-use base::{ActionRef, decode_regular_action};
 use field::{BytesW1, BytesW2, Uint2};
-use sys::Ret;
-
-use super::common::check_action_kind;
 
 #[derive(Debug, Clone, base::ActionCodec)]
 #[action_codec(audit = "full", blob)]
@@ -57,18 +53,5 @@ base::impl_action_facts! {
         scope: base::ActScope::GUARD,
         min_tx_type: 2,
         description: |_: &TxBlob| "Transaction blob data".to_owned(),
-    }
-}
-
-pub fn create_blob_action(
-    _reg: &dyn base::BinaryCodecs,
-    kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    check_action_kind(kind, buf)?;
-    match kind {
-        TxMessage::KIND => decode_regular_action::<TxMessage>(buf),
-        TxBlob::KIND => decode_regular_action::<TxBlob>(buf),
-        _ => sys::normalf!("blob action kind {} not registered", kind),
     }
 }

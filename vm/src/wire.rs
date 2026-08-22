@@ -1,16 +1,13 @@
 use base::{ActionCodecBinding, StructSchema, WireRegistry};
 
-use crate::action::{
-    ContractDeploy, ContractMainCall, ContractUpdate, P2SHScriptProve, create_contract_action,
-    create_p2sh_script_prove,
-};
+use crate::action::{ContractDeploy, ContractMainCall, ContractUpdate, P2SHScriptProve};
 
 /// VM-owned transaction action codecs.
 pub const ACTION_CODECS: &[ActionCodecBinding] = &[
-    base::action_codec_binding!(ContractDeploy, create_contract_action),
-    base::action_codec_binding!(ContractUpdate, create_contract_action),
-    base::action_codec_binding!(ContractMainCall, create_contract_action),
-    base::action_codec_binding!(P2SHScriptProve, create_p2sh_script_prove),
+    base::action_codec_binding!(ContractDeploy),
+    base::action_codec_binding!(ContractUpdate),
+    base::action_codec_binding!(ContractMainCall),
+    base::action_codec_binding!(P2SHScriptProve),
 ];
 
 /// Nested structs referenced by VM action schemas.

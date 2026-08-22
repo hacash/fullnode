@@ -718,8 +718,11 @@ fn normalize_grouping(value: &str) -> Ret<String> {
 
 fn mantissa_string(bytes: &[u8]) -> String {
     if bytes.len() <= size_of::<u128>() {
-        let value = tail_to_u128(bytes, u128::MAX).expect("16-byte amount fits u128");
-        u128_to_decimal(value)
+        // bytes.len() <= 16 means `tail_to_u128(bytes, u128::MAX)` cannot fail;
+        // copy in place so no panic path is linked into the wasm.
+        let mut padded = [0u8; size_of::<u128>()];
+        padded[size_of::<u128>() - bytes.len()..].copy_from_slice(bytes);
+        u128_to_decimal(u128::from_be_bytes(padded))
     } else {
         b256::to_decimal_b256(bytes)
     }

@@ -2,11 +2,14 @@ use crate::codec::action::*;
 use crate::codec::block::create_std_block;
 use base::{
     Context, Env, ExecRegistry, ExecutionServices, StateChunkRef, TxRef, VmHostActionDef,
-    VmHostAllowedPolicy, VmHostCallKind, VmValueType,
+    VmValueType,
 };
+#[cfg(test)]
+use base::VmHostCallKind;
 use std::sync::Arc;
 use sys::Rerr;
 use sys::Ret;
+#[cfg(test)]
 use sys::errf;
 fn create_context(
     env: Env,
@@ -28,22 +31,8 @@ fn register_action_def(
     name: &'static str,
     argc: usize,
 ) -> Rerr {
-    if kind > 0xff {
-        return errf!(
-            "VM ACTION host {} kind {:#06x} cannot fit the u8 opcode id",
-            name,
-            kind
-        );
-    }
     // Transfer EXTACTION is Main+depth0 only (vm ensure_act_allowed); metadata matches.
-    reg.register_vm_host_def(VmHostActionDef {
-        id: kind as u8,
-        name,
-        kind: VmHostCallKind::Action,
-        ret: VmValueType::Nil,
-        argc,
-        allowed_policy: VmHostAllowedPolicy::TopOnly,
-    })
+    reg.register_vm_host_def(VmHostActionDef::action_host(kind, name, argc)?)
 }
 
 /// ACTENV hosts live in the 0x07xx opcode space; the opcode id is the low byte.
@@ -53,21 +42,7 @@ fn register_env_def(
     name: &'static str,
     ret: VmValueType,
 ) -> Rerr {
-    if kind >> 8 != 0x07 {
-        return errf!(
-            "VM ACTENV host {} kind {:#06x} must be in the 0x07xx opcode space",
-            name,
-            kind
-        );
-    }
-    reg.register_vm_host_def(VmHostActionDef {
-        id: kind as u8,
-        name,
-        kind: VmHostCallKind::Env,
-        ret,
-        argc: 0,
-        allowed_policy: VmHostAllowedPolicy::Any,
-    })
+    reg.register_vm_host_def(VmHostActionDef::env_host(kind, name, ret)?)
 }
 
 /// ACTVIEW hosts live in the 0x06xx opcode space; the opcode id is the low byte.
@@ -78,21 +53,7 @@ fn register_view_def(
     ret: VmValueType,
     argc: usize,
 ) -> Rerr {
-    if kind >> 8 != 0x06 {
-        return errf!(
-            "VM ACTVIEW host {} kind {:#06x} must be in the 0x06xx opcode space",
-            name,
-            kind
-        );
-    }
-    reg.register_vm_host_def(VmHostActionDef {
-        id: kind as u8,
-        name,
-        kind: VmHostCallKind::View,
-        ret,
-        argc,
-        allowed_policy: VmHostAllowedPolicy::ViewOnly,
-    })
+    reg.register_vm_host_def(VmHostActionDef::view_host(kind, name, ret, argc)?)
 }
 
 /// Registration sugar: the action type declares `KIND`/`NAME` once, entries only
@@ -191,9 +152,6 @@ mod tests {
     impl ExecRegistry for TestReg {
         fn set_block_creator(&mut self, _f: base::BlockCreateFn) -> Rerr {
             errf!("unexpected set_block_creator")
-        }
-        fn set_block_sizer(&mut self, _f: base::BlockSizeFn) -> Rerr {
-            errf!("unexpected set_block_sizer")
         }
         fn set_vm_assigner(&mut self, _f: base::VmAssignFn) -> Rerr {
             errf!("unexpected set_vm_assigner")

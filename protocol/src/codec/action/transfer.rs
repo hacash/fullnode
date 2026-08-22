@@ -1,12 +1,18 @@
 //! Hac / Sat / Asset / Diamond transfer actions.
 
-use base::{ActScope, ActionRef, AddrOrPtr, TransferLike, TransferPayload, decode_regular_action};
+use base::{ActScope, AddrOrPtr, TransferLike, TransferPayload};
 use field::{
     Address, Amount, AssetAmt, DiamondName, DiamondNameListMax200, Encode, Satoshi, Uint2,
 };
 use sys::Ret;
 
-use super::common::{addr_or_ptr_readable, check_action_kind};
+/// Readable rendering of a wire destination / source (address or pointer).
+pub(super) fn addr_or_ptr_readable(ptr: &AddrOrPtr) -> String {
+    match ptr {
+        AddrOrPtr::Addr(addr) => addr.to_readable(),
+        AddrOrPtr::Ptr(index) => format!("<address pointer {}>", index),
+    }
+}
 
 #[derive(Debug, Clone, base::ActionCodec)]
 #[action_codec(audit = "full")]
@@ -15,8 +21,6 @@ pub struct HacToTrs {
     pub to: AddrOrPtr,
     pub hacash: Amount,
 }
-
-pub type HacTransfer = HacToTrs;
 
 #[derive(Debug, Clone, base::ActionCodec)]
 #[action_codec(audit = "full")]
@@ -744,63 +748,6 @@ base::impl_action_facts! {
         as_transfer_like: self,
         description: |this: &DiaFromTrs| format!("Transfer {} HACD ({}) from {}", this.diamonds.length(), this.diamonds.splitstr(), addr_or_ptr_readable(&this.from)),
 
-    }
-}
-
-pub fn create_hac_transfer(
-    _reg: &dyn base::BinaryCodecs,
-    kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    check_action_kind(kind, buf)?;
-    match kind {
-        HacToTrs::KIND => decode_regular_action::<HacToTrs>(buf),
-        HacFromTrs::KIND => decode_regular_action::<HacFromTrs>(buf),
-        HacFromToTrs::KIND => decode_regular_action::<HacFromToTrs>(buf),
-        _ => sys::normalf!("hac action kind {} not registered", kind),
-    }
-}
-
-pub fn create_sat_transfer(
-    _reg: &dyn base::BinaryCodecs,
-    kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    check_action_kind(kind, buf)?;
-    match kind {
-        SatToTrs::KIND => decode_regular_action::<SatToTrs>(buf),
-        SatFromTrs::KIND => decode_regular_action::<SatFromTrs>(buf),
-        SatFromToTrs::KIND => decode_regular_action::<SatFromToTrs>(buf),
-        _ => sys::normalf!("sat action kind {} not registered", kind),
-    }
-}
-
-pub fn create_asset_transfer(
-    _reg: &dyn base::BinaryCodecs,
-    kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    check_action_kind(kind, buf)?;
-    match kind {
-        AssetToTrs::KIND => decode_regular_action::<AssetToTrs>(buf),
-        AssetFromTrs::KIND => decode_regular_action::<AssetFromTrs>(buf),
-        AssetFromToTrs::KIND => decode_regular_action::<AssetFromToTrs>(buf),
-        _ => sys::normalf!("asset action kind {} not registered", kind),
-    }
-}
-
-pub fn create_diamond_transfer(
-    _reg: &dyn base::BinaryCodecs,
-    kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    check_action_kind(kind, buf)?;
-    match kind {
-        DiaSingleTrs::KIND => decode_regular_action::<DiaSingleTrs>(buf),
-        DiaFromToTrs::KIND => decode_regular_action::<DiaFromToTrs>(buf),
-        DiaToTrs::KIND => decode_regular_action::<DiaToTrs>(buf),
-        DiaFromTrs::KIND => decode_regular_action::<DiaFromTrs>(buf),
-        _ => sys::normalf!("diamond action kind {} not registered", kind),
     }
 }
 

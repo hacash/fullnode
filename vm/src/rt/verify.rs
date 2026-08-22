@@ -1,11 +1,11 @@
 use base::{ExecutionServices, VmHostCallKind};
 
-use crate::native::{NativeCtl, NativeEnv, NativeFunc};
 use crate::value::{parse_cto_target_ty_param, parse_value_ty_param};
 
 use super::{
-    Bytecode, ItrErr, ItrErrCode, VmrtErr, VmrtRes, decode_user_call_site, is_fin_family,
-    is_user_call_inst, verify_fin_runtime_supported,
+    Bytecode, ItrErr, ItrErrCode, NativeCtl, NativeEnv, NativeFunc, VmrtErr, VmrtRes,
+    decode_user_call_site, ensure_terminal_instruction, is_fin_family, is_user_call_inst,
+    verify_fin_runtime_supported,
 };
 use Bytecode::*;
 use ItrErrCode::*;
@@ -98,14 +98,8 @@ fn verify_bytecodes_with_limits(
     Ok(instable)
 }
 
-/// Ensure the last instruction is terminal (RET/END/ERR/ABT or exposed call opcode). Failure
-/// (CodeNotWithEnd) propagates to the compiler via compile_body -> parse_function -> fitshc::compile.
-pub fn ensure_terminal_instruction(inst: Bytecode) -> VmrtErr {
-    if matches!(inst, RET | END | ERR | ABT) || is_user_call_inst(inst) {
-        return Ok(());
-    }
-    itr_err_code!(CodeNotWithEnd)
-}
+/// Terminal-instruction check lives in `rt::ensure_terminal_instruction`
+/// (codec-safe, shared with the IR decompile/build path).
 
 fn ensure_act_id(registry: Option<&dyn ExecutionServices>, act_kind: Bytecode, id: u8) -> VmrtErr {
     let Some(reg) = registry else {

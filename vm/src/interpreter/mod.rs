@@ -68,16 +68,6 @@ fn ensure_act_allowed<H: VmHost + ?Sized>(
             }
             Ok(())
         }
-        VmHostAllowedPolicy::CallOnly => {
-            // Nested / non-top Edit calls only (not Main depth-0).
-            if exec.effect != EffectMode::Edit || exec.is_outer_entry() {
-                return Err(ItrErr::new(
-                    ItrErrCode::ActDisabled,
-                    "action only supported in nested call context",
-                ));
-            }
-            Ok(())
-        }
         VmHostAllowedPolicy::ViewOnly => {
             // Readable from Edit or View; Pure already rejected above.
             Ok(())

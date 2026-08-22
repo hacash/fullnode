@@ -1,7 +1,7 @@
 //! Action descriptors and review bindings (Unified SDK 2.0, doc 14 §5/§6).
 //! Auditability classes are schema-declared at each action's definition site, so the SDK never keeps a separate grading table.
 
-use base::Action;
+use base::{Action, BinaryCodecs};
 use field::Decode;
 
 use crate::error::{SdkError, SdkErrorCode};
@@ -130,6 +130,59 @@ fn readable_diamond_names(names: &[u8]) -> Vec<String> {
     Vec::new()
 }
 
+/// Per-action describe knobs (Unified SDK 2.0 §6.5). Each switch independently
+/// controls one output facet so callers can trim payload and decompile load:
+/// `description` is the schema-declared one-line text, `json` the canonical
+/// field-level JSON (can be large for contract deploy/update), `code` the VM
+/// code metadata of code-carrying actions (`contract_main_call`, `p2sh`).
+/// All default on; `tx.inspect` / `tx.decode` / `action.describe` accept a
+/// `describe` object with any subset of these keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DescribeOptions {
+    pub with_description: bool,
+    pub with_json: bool,
+    pub with_code: bool,
+}
+
+impl Default for DescribeOptions {
+    fn default() -> Self {
+        Self {
+            with_description: true,
+            with_json: true,
+            with_code: true,
+        }
+    }
+}
+
+impl DescribeOptions {
+    pub(crate) fn from_json_pairs(pairs: &[(&str, &str)]) -> Result<Self, SdkError> {
+        let mut opts = Self::default();
+        for (key, value) in pairs {
+            let parsed = match value.trim() {
+                "true" => true,
+                "false" => false,
+                _ => {
+                    return Err(crate::jsonparse::parse_failed(format!(
+                        "describe field {key} must be a boolean"
+                    )))
+                }
+            };
+            match *key {
+                "description" => opts.with_description = parsed,
+                "json" => opts.with_json = parsed,
+                "code" => opts.with_code = parsed,
+                _ => {
+                    return Err(SdkError::new(
+                        SdkErrorCode::UnknownField,
+                        format!("describe field {key} is unknown"),
+                    ))
+                }
+            }
+        }
+        Ok(opts)
+    }
+}
+
 /// One action in the review tree. `path` is the nested index path ("0", "1/2").
 /// AST control-flow children are collected into `children` when present.
 #[derive(Debug, Clone, PartialEq)]
@@ -144,6 +197,17 @@ pub struct ActionDesc {
     pub protocol_valid: bool,
     pub auditability: String,
     pub audit_notes: Vec<String>,
+    /// Schema-declared one-line description (`base::Action::description`),
+    /// e.g. "Run main codes with conf 0". Omitted when `with_description=false`.
+    pub description: Option<String>,
+    /// Canonical field-level JSON (registry `to_json` view), e.g. the full
+    /// contract structure for deploy/update. Omitted when `with_json=false`.
+    pub json: Option<String>,
+    /// VM code metadata for code-carrying actions (single-code payloads such
+    /// as `contract_main_call` / `p2sh`); multi-code payloads (deploy/update)
+    /// expose their per-function code through `json`. Omitted when
+    /// `with_code=false` or the action carries no single code payload.
+    pub code: Option<ActionCodeDesc>,
     pub transfer: Option<TransferDesc>,
     pub children: Option<Vec<ActionDesc>>,
     /// Schema-declared blob fact (opaque byte-carrier action such as
@@ -151,10 +215,67 @@ pub struct ActionDesc {
     pub blob: bool,
 }
 
-pub fn describe_action(action: &dyn Action, index: usize, path: &str, depth: usize) -> ActionDesc {
+/// VM code metadata of a code-carrying action (schema `hacash.sdk/action-desc@2`
+/// `code` field). `codeconf` low bits are the code type (0 = bytecode,
+/// 1 = ir_node); `codes_preview` is the first up-to-64 bytes hex (identity
+/// without echoing a large payload).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ActionCodeDesc {
+    pub codeconf: u8,
+    pub code_type: u8,
+    pub code_type_name: String,
+    pub codes_len: usize,
+    pub codes_hash: String,
+    pub codes_preview: String,
+}
+
+/// `code_type` names for the `codeconf` low bits (mirror of `vm::rt::CodeType`;
+/// the constants are re-declared because `vm::rt` is crate-private).
+pub fn code_type_name(raw: u8) -> (&'static str, u8) {
+    match raw & crate::vm::CODECONF_TYPE_MASK {
+        0 => ("bytecode", 0),
+        1 => ("ir_node", 1),
+        _ => ("invalid", 2),
+    }
+}
+
+/// Build the code metadata of a decoded action, or `None` when the action
+/// carries no single code payload (multi-code contract deploy/update expose
+/// their structure through the canonical `json` view instead).
+fn action_code_desc(action: &dyn Action) -> Option<ActionCodeDesc> {
+    let (codeconf, codes): (u8, Vec<u8>) = if let Some(call) = action
+        .as_any()
+        .downcast_ref::<vm::action::ContractMainCall>()
+    {
+        (call.codeconf.uint(), call.codes.as_vec().clone())
+    } else if let Some(p2sh) = action.as_any().downcast_ref::<vm::action::P2SHScriptProve>()
+    {
+        (p2sh.codeconf.uint(), p2sh.lockbox.as_vec().clone())
+    } else {
+        return None;
+    };
+    let (type_name, type_id) = code_type_name(codeconf);
+    let preview_len = codes.len().min(64);
+    Some(ActionCodeDesc {
+        codeconf,
+        code_type: type_id,
+        code_type_name: type_name.to_owned(),
+        codes_len: codes.len(),
+        codes_hash: hex::encode(sys::calculate_hash(&codes)),
+        codes_preview: hex::encode(&codes[..preview_len]),
+    })
+}
+
+pub fn describe_action(
+    action: &dyn Action,
+    index: usize,
+    path: &str,
+    depth: usize,
+    options: &DescribeOptions,
+) -> ActionDesc {
     let kind = action.kind();
     let mut notes = Vec::new();
-    let children = collect_children(action, depth, &mut notes);
+    let children = collect_children(action, depth, options, &mut notes);
     let name = crate::selection::action_schema(kind).map(|schema| schema.name);
     let (auditability, grade_note) = classify_auditability(name.unwrap_or(""));
     if let Some(note) = grade_note {
@@ -173,6 +294,28 @@ pub fn describe_action(action: &dyn Action, index: usize, path: &str, depth: usi
             amount: transfer.transfer_amount().to_fin_string(),
         }),
     });
+    let description = if options.with_description {
+        Some(action.description())
+    } else {
+        None
+    };
+    let json = if options.with_json {
+        crate::codec::standard_codecs()
+            .ok()
+            .and_then(|codecs| codecs.action_json_to(kind))
+            .map(|render| render(action, &field::JSONFormater::default()))
+    } else {
+        None
+    };
+    let code = if options.with_code {
+        crate::selection::action_schema(kind)
+            .map(|schema| schema.has_code)
+            .unwrap_or(false)
+            .then(|| action_code_desc(action))
+            .flatten()
+    } else {
+        None
+    };
     ActionDesc {
         schema: SCHEMA_ACTION_DESC.to_owned(),
         index,
@@ -184,6 +327,9 @@ pub fn describe_action(action: &dyn Action, index: usize, path: &str, depth: usi
         protocol_valid: true,
         auditability: auditability.as_str().to_owned(),
         audit_notes: notes,
+        description,
+        json,
+        code,
         transfer,
         children,
         blob: crate::selection::action_schema(kind)
@@ -192,11 +338,24 @@ pub fn describe_action(action: &dyn Action, index: usize, path: &str, depth: usi
     }
 }
 
+/// `action.describe`: describe a single raw action wire independently of any
+/// transaction body — the on-demand detail entry for signature pages and
+/// long-code viewers. Same `DescribeOptions` knobs as `tx.inspect`/`tx.decode`.
+pub fn describe_single(action_hex: &str, options: &DescribeOptions) -> Result<ActionDesc, SdkError> {
+    let wire = crate::inspect::decode_body_hex(action_hex)?;
+    let codecs = crate::codec::standard_codecs().map_err(SdkError::from)?;
+    let action = codecs
+        .decode_action_exact(&wire)
+        .map_err(SdkError::from)?;
+    Ok(describe_action(action.as_ref(), 0, "0", 0, options))
+}
+
 /// Collect nested control-flow children via `Action::nested_actions`; depth overflow or a
 /// schema-declared `branching` action without a walker is an audit note (fail-closed), never a decode failure.
 fn collect_children(
     action: &dyn Action,
     depth: usize,
+    options: &DescribeOptions,
     notes: &mut Vec<String>,
 ) -> Option<Vec<ActionDesc>> {
     match action.nested_actions() {
@@ -224,7 +383,7 @@ fn collect_children(
                     } else {
                         idx.to_string()
                     };
-                    list.push(describe_action(*child, idx, &path, next_depth));
+                    list.push(describe_action(*child, idx, &path, next_depth, options));
                 }
             }
             Some(list)
@@ -360,7 +519,7 @@ mod tests {
         ));
         let select = AstSelect::create_by(1, 1, vec![transfer.clone()]).unwrap();
         let select: base::ActionRef = std::sync::Arc::new(select);
-        let desc = describe_action(select.as_ref(), 0, "0", 0);
+        let desc = describe_action(select.as_ref(), 0, "0", 0, &DescribeOptions::default());
         let children = desc.children.expect("ast_select collects children");
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].path, "0");
@@ -372,7 +531,7 @@ mod tests {
             AstSelect::create_by(1, 1, vec![transfer.clone()]).unwrap(),
         );
         let ast_if: base::ActionRef = std::sync::Arc::new(ast_if);
-        let desc = describe_action(ast_if.as_ref(), 0, "0", 0);
+        let desc = describe_action(ast_if.as_ref(), 0, "0", 0, &DescribeOptions::default());
         let children = desc.children.expect("ast_if collects children");
         assert_eq!(children.len(), 3);
         assert_eq!(children[0].path, "0/0");
@@ -384,7 +543,7 @@ mod tests {
     #[test]
     fn non_branching_ast_scope_actions_have_no_missing_walker_note() {
         let maincall: base::ActionRef = std::sync::Arc::new(vm::action::ContractMainCall::new());
-        let desc = describe_action(maincall.as_ref(), 0, "0", 0);
+        let desc = describe_action(maincall.as_ref(), 0, "0", 0, &DescribeOptions::default());
         assert!(desc.children.is_none());
         assert!(
             desc.audit_notes
@@ -394,4 +553,100 @@ mod tests {
             desc.audit_notes
         );
     }
+}
+
+// ================================ describe options / action.describe tests ================================
+
+#[cfg(test)]
+fn maincall_body() -> String {
+    // Minimal bytecode: push 1, return (END). The codec-only SDK build has no
+    // fitsh compiler; the code payload just needs to be wire-legal.
+    let codes = vec![0x25u8, 0xef];
+    let built = crate::build::build_transaction(&crate::build::TransactionSpec {
+        schema: None,
+        tx_type: 3,
+        main: "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9".to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        actions: vec![crate::build::ActionSpec::new(
+            "contract_main_call",
+            vec![
+                ("marks".to_owned(), crate::spec_codec::WireValue::Hex(vec![0, 0, 0])),
+                ("codeconf".to_owned(), crate::spec_codec::WireValue::Num(0)),
+                ("codes".to_owned(), crate::spec_codec::WireValue::Hex(codes)),
+            ],
+        )],
+    })
+    .unwrap();
+    let decoded =
+        crate::inspect::decode_transaction_json(&built.body, &DescribeOptions::default()).unwrap();
+    decoded.actions[0].raw.clone()
+}
+
+#[test]
+fn describe_single_carries_description_json_and_code() {
+    let raw = maincall_body();
+    let desc = describe_single(&raw, &DescribeOptions::default()).unwrap();
+    assert_eq!(desc.name.as_deref(), Some("contract_main_call"));
+    assert!(!desc.scope.is_empty());
+    // description: schema-declared one-liner.
+    let text = desc.description.as_deref().unwrap();
+    assert!(text.contains("Run main codes"), "description: {text}");
+    // json: canonical field-level view.
+    let json = desc.json.as_deref().unwrap();
+    assert!(json.contains("\"kind\"") && json.contains("\"codes\""), "json: {json}");
+    // code: single-code payload metadata (bytecode type 0).
+    let code = desc.code.as_ref().expect("maincall has code metadata");
+    assert_eq!(code.code_type_name, "bytecode");
+    assert!(code.codes_len > 0);
+    assert_eq!(code.codes_hash.len(), 64);
+}
+
+#[test]
+fn describe_options_independently_trim_facets() {
+    let raw = maincall_body();
+    let bare = describe_single(&raw, &DescribeOptions {
+        with_description: false,
+        with_json: false,
+        with_code: false,
+    })
+    .unwrap();
+    assert!(bare.description.is_none());
+    assert!(bare.json.is_none());
+    assert!(bare.code.is_none());
+
+    let code_only = describe_single(&raw, &DescribeOptions {
+        with_description: false,
+        with_json: false,
+        with_code: true,
+    })
+    .unwrap();
+    assert!(code_only.code.is_some());
+    assert!(code_only.json.is_none());
+}
+
+#[test]
+fn describe_options_reject_unknown_and_non_boolean() {
+    let ok = DescribeOptions::from_json_pairs(&[("code", "false")]).unwrap();
+    assert!(!ok.with_code);
+    assert!(ok.with_description);
+    let err = DescribeOptions::from_json_pairs(&[("bogus", "true")]).unwrap_err();
+    assert_eq!(err.code, "unknown_field");
+    let err = DescribeOptions::from_json_pairs(&[("json", "maybe")]).unwrap_err();
+    assert_eq!(err.code, "parse_failed");
+}
+
+#[test]
+fn action_desc_json_roundtrips_through_tx_encode() {
+    // The tx.encode path parses ActionDesc@2 strictly; the new facets must
+    // survive (optional fields default to None on the from side).
+    let raw = maincall_body();
+    let desc = describe_single(&raw, &DescribeOptions::default()).unwrap();
+    let encoded = crate::json::SdkJsonTo::to_json_string(&desc);
+    let back = <ActionDesc as crate::json::SdkJsonFrom>::from_json_str(&encoded).unwrap();
+    assert_eq!(back.kind, desc.kind);
+    assert_eq!(back.description, desc.description);
+    assert_eq!(back.json, desc.json);
+    assert_eq!(back.code, desc.code);
 }

@@ -90,6 +90,7 @@ pub fn validate_schema_set(
             name: s.name,
             audit_class: AuditClass::Full,
             blob: false,
+            has_code: false,
             fields: s.fields,
         }))
         .collect();
@@ -252,6 +253,7 @@ mod tests {
                 name: "b",
                 audit_class: AuditClass::Full,
                 blob: false,
+                has_code: false,
                 fields: B_FIELDS,
             },
             ActionSchema {
@@ -259,6 +261,7 @@ mod tests {
                 name: "a",
                 audit_class: AuditClass::Opaque,
                 blob: true,
+                has_code: false,
                 fields: A_FIELDS,
             },
         ];
@@ -291,6 +294,7 @@ mod tests {
             name: "duplicate_fields",
             audit_class: AuditClass::Full,
             blob: false,
+            has_code: false,
             fields: DUP_FIELDS,
         }];
         let error = validate_schema_set(&actions, &[]).unwrap_err();

@@ -1,10 +1,7 @@
 //! Channel open/close action (kind 2/3, moved from mint; execution body gated by the `execute` feature).
 
-use std::sync::Arc;
-
-use base::{ActionRef, AddrOrPtr};
-use field::{AddrHac, ChannelId, Decode, Uint2};
-use sys::Ret;
+use base::AddrOrPtr;
+use field::{AddrHac, ChannelId, Uint2};
 
 #[derive(Debug, Clone, base::ActionCodec)]
 #[action_codec(audit = "full")]
@@ -70,24 +67,6 @@ base::impl_action_facts! {
         description: |this: &ChannelClose| format!("Close channel {}", this.channel_id),
 
     }
-}
-
-pub fn create_channel_open(
-    _reg: &dyn base::BinaryCodecs,
-    _kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    let (action, used) = ChannelOpen::decode(buf)?;
-    Ok((Arc::new(action), used))
-}
-
-pub fn create_channel_close(
-    _reg: &dyn base::BinaryCodecs,
-    _kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    let (action, used) = ChannelClose::decode(buf)?;
-    Ok((Arc::new(action), used))
 }
 
 #[cfg(test)]

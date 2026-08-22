@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::HashSet as PrintHashSet;
 use std::rc::Rc;
 
-use crate::rt::SourceMap;
 
 #[derive(Clone)]
 pub struct PrintOption<'a> {

@@ -74,9 +74,6 @@ impl ExecutionServices for StubServices {
     fn vm_host_def(&self, _kind: VmHostCallKind, _id: u8) -> Option<&VmHostActionDef> {
         None
     }
-    fn vm_host_defs(&self, _kind: VmHostCallKind) -> Vec<&VmHostActionDef> {
-        vec![]
-    }
     fn vm_params(&self) -> Ret<&VmExecutionParams> {
         errf!("stub services: vm_params")
     }

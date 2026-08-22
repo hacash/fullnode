@@ -2,7 +2,7 @@
 //! `profile_hash` pins the codec identity: any protocol or registry change rotates it, invalidating outstanding review bindings.
 
 use crate::json::SdkJsonTo;
-use crate::schema::{DOMAIN_CODEC_PROFILE, SCHEMA_CAPABILITIES, SCHEMA_CODEC_PROFILE};
+use crate::schema::{DOMAIN_CODEC_PROFILE, SCHEMA_CODEC_PROFILE};
 
 pub const SDK_VERSION: &str = "0.2.1";
 pub const ABI_MAJOR: u32 = 2;
@@ -163,19 +163,43 @@ pub struct AbiVersion {
     pub minor: u32,
 }
 
+/// Mainnet chain id (base's `ChainId::MAINNET`; that module is execution-gated
+/// and not compiled into the SDK build, so the constant is re-declared here).
+pub const MAINNET_CHAIN_ID: u32 = 0;
+
+/// Lightweight chain parameters (`system.params`) — the fee/limit/tx-type
+/// facts wallets and exchanges need, without the full codec profile.
 #[derive(Debug, Clone, PartialEq)]
-pub struct FeatureItem {
-    pub id: String,
-    pub version: u32,
+pub struct ChainParams {
+    pub schema: String,
+    pub params_version: u32,
+    pub chain_id: u32,
+    pub ast_tree_depth_max: usize,
+    pub max_type3_signers: usize,
+    pub fee_purity_floor: u64,
+    pub fee_purity_reductions: Vec<(u64, u64)>,
+    pub max_tx_size: usize,
+    pub tx_actions_max: usize,
+    pub registered_tx_types: Vec<u16>,
+    pub diamond_form_flag: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Capabilities {
-    pub schema: String,
-    pub package_version: String,
-    pub abi: AbiVersion,
-    pub codec_profile_hash: String,
-    pub features: Vec<FeatureItem>,
+/// `system.params`: snapshot of the chain parameters that drive fee/size/signer
+/// decisions, single-sourced from the codec profile.
+pub fn params(profile: &CodecProfile) -> ChainParams {
+    ChainParams {
+        schema: crate::schema::SCHEMA_CHAIN_PARAMS.to_owned(),
+        params_version: profile.params_version,
+        chain_id: MAINNET_CHAIN_ID,
+        ast_tree_depth_max: profile.protocol_params.ast_tree_depth_max,
+        max_type3_signers: profile.protocol_params.max_type3_signers,
+        fee_purity_floor: profile.protocol_params.fee_purity_floor,
+        fee_purity_reductions: profile.protocol_params.fee_purity_reductions.clone(),
+        max_tx_size: profile.limits.max_tx_size,
+        tx_actions_max: profile.limits.tx_actions_max,
+        registered_tx_types: profile.registered_tx_types.clone(),
+        diamond_form_flag: profile.protocol_params.diamond_form_flag,
+    }
 }
 
 /// One field of a JSON request layout. A dotted name (`options.review`) is a
@@ -268,47 +292,33 @@ macro_rules! define_operations {
     };
 }
 
+// Routed operation set — the public interface of `sdk_invoke_json`.
+// Each operation is exposed at version 1; new ops extend `OPERATIONS`;
+// semantic changes need a schema major.
 define_operations! {
-    (OP_SYSTEM_CAPABILITIES, "system.capabilities", []),
     (OP_SYSTEM_SDK_VERSION, "system.sdk_version", []),
-    (OP_SYSTEM_CODEC_PROFILE, "system.codec_profile", []),
     (OP_TX_BUILD, "tx.build", [tx_spec("spec")]),
-    (OP_TX_INSPECT_REPORT, "tx.inspect_report", [string("body"), optional_string("signer_address")]),
-    (OP_TX_INSPECT, "tx.inspect", [string("body"), optional_string("signer_address"), opt_ctx("context")]),
+    (OP_TX_INSPECT_REPORT, "tx.inspect_report", [string("body"), optional_string("signer_address"), optional_json("describe")]),
+    (OP_TX_INSPECT, "tx.inspect", [string("body"), optional_string("signer_address"), opt_ctx("context"), optional_json("describe")]),
     (OP_TX_PREPARE_SIGNATURE, "tx.prepare_signature", [string("body"), string("signer_address"), optional_json("options.review"), optional_json("options.policy"), optional_string("options.origin"), opt_u64("options.expires_at")]),
     (OP_TX_ATTACH_SIGNATURE, "tx.attach_signature", [string("body"), json("proof"), json("review"), json("request")]),
     (OP_TX_ATTACH_SIGNATURE_UNBOUND, "tx.attach_signature_unbound", [string("body"), json("proof")]),
     (OP_TX_VERIFY, "tx.verify", [string("body")]),
     (OP_TX_SIGNATURE_REPORT, "tx.signature_report", [string("body")]),
-    (OP_TX_DECODE, "tx.decode", [string("body")]),
+    (OP_TX_DECODE, "tx.decode", [string("body"), optional_json("describe")]),
     (OP_TX_ENCODE, "tx.encode", [json("transaction"), optional_json("review")]),
     (OP_ACCOUNT_VERIFY_ADDRESS, "account.verify_address", [string("address")]),
     (OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY, "account.address_from_public_key", [string("public_key")]),
-    (OP_AMOUNT_PARSE_PROTOCOL, "amount.parse_protocol", [string("value")]),
-    (OP_AMOUNT_FORMAT_PROTOCOL, "amount.format_protocol", [string("value"), u8("unit")]),
+    (OP_AMOUNT_PARSE, "amount.parse", [string("value")]),
+    (OP_AMOUNT_FORMAT, "amount.format", [string("value"), u8("unit")]),
     (OP_MESSAGE_PREPARE_SIGNATURE, "message.prepare_signature", [json("params")]),
     (OP_MESSAGE_VERIFY, "message.verify", [json("request"), json("proof")]),
     (OP_POLICY_EVALUATE, "policy.evaluate", [json("review"), optional_json("policy")]),
-}
-
-/// Frozen feature baseline of Unified SDK 2.0 — the routed operation set, each
-/// at version 1. New ops extend `OPERATIONS`; semantic changes need a schema major.
-pub fn capabilities(profile: &CodecProfile) -> Capabilities {
-    let features = OPERATIONS
-        .iter()
-        .map(|operation| FeatureItem {
-            id: operation.name.to_owned(),
-            version: 1,
-        })
-        .collect();
-    Capabilities {
-        schema: SCHEMA_CAPABILITIES.to_owned(),
-        package_version: SDK_VERSION.to_owned(),
-        abi: AbiVersion {
-            major: ABI_MAJOR,
-            minor: ABI_MINOR,
-        },
-        codec_profile_hash: profile.profile_hash.clone(),
-        features,
-    }
+    (OP_SYSTEM_PARAMS, "system.params", []),
+    (OP_TX_ESTIMATE_FEE, "tx.estimate_fee", [string("body"), opt_u64("height")]),
+    (OP_ACCOUNT_VERIFY_SIGNATURE, "account.verify_signature", [string("public_key"), string("digest"), string("signature")]),
+    (OP_DIAMOND_LOOKUP, "diamond.lookup", [optional_string("name"), optional_string("serial")]),
+    (OP_VM_DECODE_CALL, "vm.decode_call", [string("action")]),
+    (OP_ACTION_DESCRIBE, "action.describe", [string("action"), optional_json("describe")]),
+    (OP_VM_CODE, "vm.code", [string("codes"), string("code_type"), optional_string("format"), optional_json("sourcemap"), opt_u64("limit"), opt_u64("offset")]),
 }

@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use sys::{Ret, errf};
 
 use crate::codec::{Decode, Encode, Reader};
@@ -61,12 +59,13 @@ impl Balance {
                 BALANCE_ASSET_MAX
             );
         }
-        let mut seen = HashSet::with_capacity(assets.length());
+        let mut seen: Vec<u64> = Vec::with_capacity(assets.length());
         for asset in assets.as_list() {
             asset.clone().checked()?;
-            if !seen.insert(asset.serial.uint()) {
+            if seen.contains(&asset.serial.uint()) {
                 return errf!("balance asset serial {} duplicated", asset.serial);
             }
+            seen.push(asset.serial.uint());
         }
         Ok(())
     }

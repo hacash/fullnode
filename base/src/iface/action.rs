@@ -419,6 +419,21 @@ where
     Ok((Arc::new(action), used))
 }
 
+/// Generic wire creator for regular derived actions. The registry has already
+/// dispatched on `kind` and the derived `Decode` re-validates it, so there is
+/// nothing left to pre-check; actions with hand-written wire decoders (AST,
+/// diamond mint) register a custom creator instead.
+pub fn create_regular_action<T>(
+    _reg: &dyn crate::BinaryCodecs,
+    _kind: u16,
+    buf: &[u8],
+) -> Ret<(ActionRef, usize)>
+where
+    T: Action + Decode + 'static,
+{
+    decode_regular_action::<T>(buf)
+}
+
 /// Registry-compatible JSON creator for regular derived actions.
 pub fn decode_regular_action_json<T>(
     _reg: &dyn crate::CodecRegistry,
@@ -437,4 +452,18 @@ where
         );
     }
     Ok(Arc::new(action))
+}
+
+/// Canonical JSON view of a regular derived action, downcast from the `dyn
+/// Action` the registry hands out. The `ActionCodec` derive generates
+/// `field::ToJSON` for every derived action; a type mismatch (impossible via
+/// the binding macro) degrades to the kind-only object.
+pub fn action_json_of<T>(action: &dyn Action, fmt: &field::JSONFormater) -> String
+where
+    T: Action + field::ToJSON + 'static,
+{
+    match action.as_any().downcast_ref::<T>() {
+        Some(typed) => field::ToJSON::to_json_fmt(typed, fmt),
+        None => format!("{{\"kind\":{}}}", action.kind()),
+    }
 }

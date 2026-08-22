@@ -13,10 +13,11 @@ pub fn derive_action_codec(input: TokenStream) -> TokenStream {
     }
 }
 
-/// Parse the `#[action_codec(...)]` helper attribute (audit class + blob flag).
-fn parse_action_codec_attr(input: &DeriveInput) -> syn::Result<(String, bool, Option<syn::Path>)> {
+/// Parse the `#[action_codec(...)]` helper attribute (audit class + blob/code flags).
+fn parse_action_codec_attr(input: &DeriveInput) -> syn::Result<(String, bool, bool, Option<syn::Path>)> {
     let mut audit_class: Option<String> = None;
     let mut blob = false;
+    let mut has_code = false;
     let mut validate = None;
     for attr in &input.attrs {
         if !attr.path().is_ident("action_codec") {
@@ -40,6 +41,9 @@ fn parse_action_codec_attr(input: &DeriveInput) -> syn::Result<(String, bool, Op
             } else if meta.path.is_ident("blob") {
                 blob = true;
                 Ok(())
+            } else if meta.path.is_ident("code") {
+                has_code = true;
+                Ok(())
             } else if meta.path.is_ident("validate") {
                 let value = meta.value()?;
                 let lit: syn::LitStr = value.parse()?;
@@ -47,7 +51,7 @@ fn parse_action_codec_attr(input: &DeriveInput) -> syn::Result<(String, bool, Op
                 Ok(())
             } else {
                 Err(meta.error(
-                    "unsupported action_codec attribute; expected audit = \"...\", blob, or validate = \"path\"",
+                    "unsupported action_codec attribute; expected audit = \"...\", blob, code, or validate = \"path\"",
                 ))
             }
         })?;
@@ -58,12 +62,12 @@ fn parse_action_codec_attr(input: &DeriveInput) -> syn::Result<(String, bool, Op
             "ActionCodec requires #[action_codec(audit = \"full\"|\"structured\"|\"branching\"|\"opaque\")]",
         )
     })?;
-    Ok((audit_class, blob, validate))
+    Ok((audit_class, blob, has_code, validate))
 }
 
 fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     // Review facts are parsed first (they only need `attrs` + the ident).
-    let (audit_class, blob, validate) = parse_action_codec_attr(&input)?;
+    let (audit_class, blob, has_code, validate) = parse_action_codec_attr(&input)?;
     let name = input.ident;
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -206,11 +210,11 @@ fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStre
                 // explicit value for validation and backwards compatibility.
                 let mut kind = field::Uint2::from(Self::KIND);
                 #( let mut #value_fields: Option<#value_types> = None; )*
-                field::json_object_fields(json, &["kind", #( #value_names ),*], |key, value| {
+                field::json_object_fields(json, &["kind", #( #value_names ),*], &mut |key, value| {
                     match key {
                         "kind" => kind = field::json_decode_value(value)?,
                         #( #value_names => #value_fields = Some(field::json_decode_value(value)?), )*
-                        _ => unreachable!("allowed field checked by json_object_fields"),
+                        _ => return sys::errf!("action {} JSON field {} is unknown", Self::KIND, key),
                     }
                     Ok(())
                 })?;
@@ -250,6 +254,7 @@ fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStre
                 name: Self::NAME,
                 audit_class: #audit_class,
                 blob: #blob,
+                has_code: #has_code,
                 fields: &[ #(#schema_fields),* ],
             };
         }

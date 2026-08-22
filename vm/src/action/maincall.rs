@@ -1,16 +1,14 @@
 //! `ContractMainCall` (kind 44) top-level action. Runs arbitrary VM bytecode at tx
 //! scope; codes are verified against the runtime `SpaceCap`/`GasExtra` before `VmRequest::Main`.
 
-use std::sync::Arc;
-
-use base::{ActScope, ActionRef};
-use field::{BytesW2, Decode, Fixed3, Uint1, Uint2};
+use base::ActScope;
+use field::{BytesW2, Fixed3, Uint1, Uint2};
 use sys::Ret;
 
 use crate::rt::{CodeConf, CodeType};
 
 #[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
-#[action_codec(audit = "opaque")]
+#[action_codec(audit = "opaque", code)]
 pub struct ContractMainCall {
     pub kind: Uint2,
     pub marks: Fixed3,
@@ -57,13 +55,4 @@ base::impl_action_facts! {
         },
 
     }
-}
-
-pub fn create_contract_main_call(
-    _reg: &dyn base::BinaryCodecs,
-    _kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    let (action, used) = ContractMainCall::decode(buf)?;
-    Ok((Arc::new(action), used))
 }

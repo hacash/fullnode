@@ -121,6 +121,7 @@ fn build_review(
     signer_address: Option<&str>,
     context: Option<&InspectContext>,
     profile: &CodecProfile,
+    options: &crate::audit::DescribeOptions,
 ) -> Result<Review, SdkError> {
     let tx = decode_tx(body)?;
     let signer = parse_signer_address(signer_address)?;
@@ -156,7 +157,7 @@ fn build_review(
     let mut asset_serials = Vec::new();
     let mut auditability = Auditability::Full;
     for (index, action) in tx.actions().iter().enumerate() {
-        let mut desc = audit::describe_action(action.as_ref(), index, &index.to_string(), 0);
+        let mut desc = audit::describe_action(action.as_ref(), index, &index.to_string(), 0, options);
         // Guard notes are protocol violations (`guard_facts`); the per-action
         // `protocol_valid` fact reflects them.
         if let Some((_, note)) = guard_facts
@@ -316,9 +317,10 @@ pub fn inspect_report(
     body_hex: &str,
     signer_address: Option<&str>,
     profile: &CodecProfile,
+    options: &crate::audit::DescribeOptions,
 ) -> Result<Review, SdkError> {
     let body = decode_body_hex(body_hex)?;
-    build_review(&body, signer_address, None, profile)
+    build_review(&body, signer_address, None, profile, options)
 }
 
 /// `tx.inspect`: strict mode — the caller-provided chain context is bound into the review
@@ -328,9 +330,10 @@ pub fn inspect(
     signer_address: Option<&str>,
     context: &InspectContext,
     profile: &CodecProfile,
+    options: &crate::audit::DescribeOptions,
 ) -> Result<Review, SdkError> {
     let body = decode_body_hex(body_hex)?;
-    build_review(&body, signer_address, Some(context), profile)
+    build_review(&body, signer_address, Some(context), profile, options)
 }
 
 pub(crate) fn decode_body_hex(body_hex: &str) -> Result<Vec<u8>, SdkError> {
@@ -375,7 +378,10 @@ pub struct TransactionJson {
     pub signatures: Vec<SignatureEntry>,
 }
 
-pub fn decode_transaction_json(body_hex: &str) -> Result<TransactionJson, SdkError> {
+pub fn decode_transaction_json(
+    body_hex: &str,
+    options: &crate::audit::DescribeOptions,
+) -> Result<TransactionJson, SdkError> {
     let body = decode_body_hex(body_hex)?;
     let tx = decode_tx(&body)?;
     let mut actions = Vec::with_capacity(tx.action_count());
@@ -385,6 +391,7 @@ pub fn decode_transaction_json(body_hex: &str) -> Result<TransactionJson, SdkErr
             index,
             &index.to_string(),
             0,
+            options,
         ));
     }
     let signatures = tx

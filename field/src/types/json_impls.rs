@@ -119,7 +119,9 @@ impl FromJSON for Address {
                 data.len()
             );
         }
-        let address = Address::from(data.try_into().expect("Address size checked"));
+        let mut addr_bytes = [0u8; Address::SIZE];
+        addr_bytes.copy_from_slice(&data);
+        let address = Address::from(addr_bytes);
         if !address.is_supported() {
             return errf!("address version {} not supported", address.version());
         }
@@ -359,11 +361,12 @@ impl FromJSON for AssetAmt {
     fn from_json(&mut self, json: &str) -> Ret<()> {
         let mut serial = self.serial;
         let mut amount = self.amount;
-        let mut seen = std::collections::HashSet::new();
+        let mut seen: Vec<&str> = Vec::new();
         for (key, value) in json_split_object(json)? {
-            if !seen.insert(key) {
+            if seen.contains(&key) {
                 return errf!("AssetAmt JSON field {} is duplicated", key);
             }
+            seen.push(key);
             match key {
                 "serial" => serial.from_json(value)?,
                 "amount" => amount.from_json(value)?,
@@ -397,11 +400,12 @@ impl FromJSON for Balance {
         let mut satoshi = self.satoshi;
         let mut diamond = self.diamond;
         let mut assets = self.assets.clone();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen: Vec<&str> = Vec::new();
         for (key, value) in json_split_object(json)? {
-            if !seen.insert(key) {
+            if seen.contains(&key) {
                 return errf!("Balance JSON field {} is duplicated", key);
             }
+            seen.push(key);
             match key {
                 "hacash" => hacash.from_json(value)?,
                 "satoshi" => satoshi.from_json(value)?,

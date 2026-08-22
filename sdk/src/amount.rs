@@ -12,8 +12,8 @@ pub struct ParsedAmount {
     pub is_negative: bool,
 }
 
-/// `amount.parse_protocol`: canonicalize one amount string via `Amount::from`.
-pub fn parse_protocol(value: &str) -> Result<ParsedAmount, SdkError> {
+/// `amount.parse`: canonicalize one amount string via `Amount::from`.
+pub fn parse(value: &str) -> Result<ParsedAmount, SdkError> {
     let amount = Amount::from(value).map_err(SdkError::from)?;
     Ok(ParsedAmount {
         value: amount.to_fin_string(),
@@ -22,9 +22,9 @@ pub fn parse_protocol(value: &str) -> Result<ParsedAmount, SdkError> {
     })
 }
 
-/// `amount.format_protocol`: exact decimal string at the given unit via
+/// `amount.format`: exact decimal string at the given unit via
 /// `Amount::to_unit_string` — no float, so it is safe for comparison/arithmetic.
-pub fn format_protocol(value: &str, unit: u8) -> Result<String, SdkError> {
+pub fn format(value: &str, unit: u8) -> Result<String, SdkError> {
     let amount = Amount::from(value).map_err(SdkError::from)?;
     Ok(amount.to_unit_string(&unit.to_string()))
 }
@@ -36,17 +36,17 @@ mod tests {
 
     #[test]
     fn canonical_forms_parse() {
-        let parsed = parse_protocol("12:244").unwrap();
+        let parsed = parse("12:244").unwrap();
         assert_eq!(parsed.value, "12:244");
         assert_eq!(parsed.unit, 244);
-        let decimal = parse_protocol("0.0012").unwrap();
+        let decimal = parse("0.0012").unwrap();
         assert_eq!(decimal.value, "12:244");
     }
 
     #[test]
     fn prefixed_and_malformed_forms_are_rejected() {
         for bad in ["ㄜ12:244", "HAC 12:244", "12.0.1", ""] {
-            assert!(parse_protocol(bad).is_err(), "must reject amount {bad:?}");
+            assert!(parse(bad).is_err(), "must reject amount {bad:?}");
             assert!(
                 Amount::from(bad).is_err(),
                 "Amount::from must also reject {bad:?}"
@@ -57,7 +57,7 @@ mod tests {
     #[test]
     fn grouping_forms_follow_amount_from() {
         for value in ["12,000", "12,000:244"] {
-            let parsed = parse_protocol(value).unwrap();
+            let parsed = parse(value).unwrap();
             let amount = Amount::from(value).unwrap();
             assert_eq!(parsed.value, amount.to_fin_string());
             assert_eq!(parsed.unit, amount.unit());
@@ -68,13 +68,13 @@ mod tests {
     #[test]
     fn formats_to_decimal() {
         assert_eq!(
-            format_protocol("12:244", field::UNIT_MEI).unwrap(),
+            format("12:244", field::UNIT_MEI).unwrap(),
             "0.0012"
         );
         let amount = Amount::from("12:244").unwrap();
         let unit = field::UNIT_MEI + 1;
         assert_eq!(
-            format_protocol("12:244", unit).unwrap(),
+            format("12:244", unit).unwrap(),
             amount.to_unit_string(&unit.to_string())
         );
     }

@@ -6,13 +6,15 @@ use std::sync::OnceLock;
 
 use crate::error::{SdkError, SdkErrorCode};
 use crate::json::{SdkJsonFrom, SdkJsonTo};
+use crate::jsonparse;
 use crate::profile::{
-    capabilities, CodecProfile, RequestField, OPERATIONS, OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY,
-    OP_ACCOUNT_VERIFY_ADDRESS, OP_AMOUNT_FORMAT_PROTOCOL, OP_AMOUNT_PARSE_PROTOCOL,
-    OP_MESSAGE_PREPARE_SIGNATURE, OP_MESSAGE_VERIFY, OP_POLICY_EVALUATE, OP_SYSTEM_CAPABILITIES,
-    OP_SYSTEM_CODEC_PROFILE, OP_SYSTEM_SDK_VERSION, OP_TX_ATTACH_SIGNATURE,
-    OP_TX_ATTACH_SIGNATURE_UNBOUND, OP_TX_BUILD, OP_TX_DECODE, OP_TX_ENCODE, OP_TX_INSPECT,
-    OP_TX_INSPECT_REPORT, OP_TX_PREPARE_SIGNATURE, OP_TX_SIGNATURE_REPORT, OP_TX_VERIFY,
+    CodecProfile, RequestField, OPERATIONS, OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY,
+    OP_ACCOUNT_VERIFY_ADDRESS, OP_ACCOUNT_VERIFY_SIGNATURE, OP_ACTION_DESCRIBE, OP_AMOUNT_FORMAT,
+    OP_AMOUNT_PARSE, OP_DIAMOND_LOOKUP, OP_MESSAGE_PREPARE_SIGNATURE, OP_MESSAGE_VERIFY,
+    OP_POLICY_EVALUATE, OP_SYSTEM_PARAMS, OP_SYSTEM_SDK_VERSION, OP_TX_ATTACH_SIGNATURE,
+    OP_TX_ATTACH_SIGNATURE_UNBOUND, OP_TX_BUILD, OP_TX_DECODE, OP_TX_ENCODE, OP_TX_ESTIMATE_FEE,
+    OP_TX_INSPECT, OP_TX_INSPECT_REPORT, OP_TX_PREPARE_SIGNATURE, OP_TX_SIGNATURE_REPORT,
+    OP_TX_VERIFY, OP_VM_CODE, OP_VM_DECODE_CALL,
 };
 
 pub(crate) fn profile() -> &'static CodecProfile {
@@ -22,7 +24,10 @@ pub(crate) fn profile() -> &'static CodecProfile {
 
 /// Transport version of the JSON WASM surface (§5). Bumping this means the
 /// envelope/payload semantics changed.
-pub const TRANSPORT_VERSION: u32 = 8;
+pub const TRANSPORT_VERSION: u32 = 9;
+// v9: dropped system.capabilities / system.codec_profile; renamed
+//     amount.parse_protocol -> amount.parse and amount.format_protocol ->
+//     amount.format (operation ids shifted).
 // v8: JS facade forwards JSON as-is (no Number/BigInt or ActionSpec adapters).
 // v7: every operation (incl. tx.build) uses a JSON request object. History:
 // v6 moved the boundary to JSON; v5 was bjson field streams; v4 added guard facts; v3 added W2 detail.
@@ -149,31 +154,6 @@ impl ReqValue {
     }
 }
 
-fn parse_failed(msg: impl Into<String>) -> SdkError {
-    SdkError::new(SdkErrorCode::ParseFailed, msg)
-}
-
-fn jstr_value(raw: &str, name: &str) -> Result<String, SdkError> {
-    field::json_expect_quoted_decoded(raw)
-        .map_err(|e| parse_failed(format!("request field {name} is not a string: {e}")))
-}
-
-fn jopt_str_value(raw: Option<&str>, name: &str) -> Result<Option<String>, SdkError> {
-    raw.map(|v| jstr_value(v, name)).transpose()
-}
-
-fn jnum_value<T: std::str::FromStr>(raw: &str, name: &str) -> Result<T, SdkError> {
-    let trimmed = raw.trim();
-    let text = if trimmed.starts_with('"') {
-        field::json_expect_quoted_decoded(trimmed)
-            .map_err(|e| parse_failed(format!("request field {name} is not a number: {e}")))?
-    } else {
-        trimmed.to_owned()
-    };
-    text.parse()
-        .map_err(|_| parse_failed(format!("request field {name} is not a number")))
-}
-
 /// Parse one operation's JSON request strictly from its `OPERATIONS` layout;
 /// unknown fields and duplicated keys are rejected, recursively for nested objects.
 fn parse_request_json(
@@ -207,49 +187,40 @@ fn parse_request_json(
         }
         return Ok(Vec::new());
     }
-    let pairs = field::json_split_object(payload)
-        .map_err(|e| parse_failed(format!("request payload is not a JSON object: {e}")))?;
-    let mut seen = std::collections::HashSet::new();
-    for (key, _) in &pairs {
-        if !seen.insert(*key) {
-            return Err(parse_failed(format!("request field {key} is duplicated")));
-        }
-        if !operation.request.iter().any(|f| f.arg_name() == *key) {
-            return Err(SdkError::new(
-                SdkErrorCode::UnknownField,
-                format!("request field {key} is unknown"),
-            ));
-        }
-    }
+    // Field-level errors carry the operation name so raw callers can locate
+    // the registry entry (`operation tx.build field spec missing`).
+    let context = format!("operation {}", operation.name);
+    let pairs = jsonparse::object_pairs(payload, &context)?;
+    let allowed: Vec<&str> = operation.request.iter().map(|f| f.arg_name()).collect();
+    jsonparse::reject_unknown(&pairs, &allowed, &context)?;
     let mut values = Vec::with_capacity(operation.request.len());
     for field in operation.request {
         let name = field.arg_name();
-        let raw = pairs.iter().find(|(k, _)| *k == name).map(|(_, v)| *v);
         let value = match field {
-            RequestField::String(_) => ReqValue::Str(jstr_value(
-                raw.ok_or_else(|| parse_failed(format!("request field {name} missing")))?,
-                name,
-            )?),
-            RequestField::OptionalString(_) => ReqValue::OptStr(jopt_str_value(raw, name)?),
-            RequestField::Json(_) | RequestField::TransactionSpec(_) => ReqValue::Json(
-                raw.ok_or_else(|| parse_failed(format!("request field {name} missing")))?
-                    .to_owned(),
-            ),
-            RequestField::OptionalJson(_) => ReqValue::OptJson(raw.map(str::to_owned)),
+            RequestField::String(_) => {
+                ReqValue::Str(jsonparse::required_string(&pairs, name, &context)?)
+            }
+            RequestField::OptionalString(_) => {
+                ReqValue::OptStr(jsonparse::optional_string(&pairs, name, &context)?)
+            }
+            RequestField::Json(_) | RequestField::TransactionSpec(_) => {
+                ReqValue::Json(jsonparse::required(&pairs, name, &context)?.to_owned())
+            }
+            RequestField::OptionalJson(_) => {
+                ReqValue::OptJson(jsonparse::find(&pairs, name).map(str::to_owned))
+            }
             RequestField::OptionalU64(_) => {
-                ReqValue::OptU64(raw.map(|v| jnum_value(v, name)).transpose()?)
+                ReqValue::OptU64(jsonparse::optional_number(&pairs, name, &context)?)
             }
             RequestField::U8(_) => {
-                let raw =
-                    raw.ok_or_else(|| parse_failed(format!("request field {name} missing")))?;
-                ReqValue::U8(jnum_value(raw, name)?)
+                ReqValue::U8(jsonparse::required_number(&pairs, name, &context)?)
             }
             RequestField::OptionalInspectContext(_) => {
-                let value = match raw {
+                let value = match jsonparse::find(&pairs, name) {
                     Some(raw) => Some(crate::inspect::InspectContext::from_json_str(raw).map_err(
                         |e| {
-                            parse_failed(format!(
-                                "request field {name} is not an inspect context: {e}"
+                            jsonparse::parse_failed(format!(
+                                "{context} field {name} is not an inspect context: {e}"
                             ))
                         },
                     )?),
@@ -279,19 +250,27 @@ fn req_field<'a>(
         })
 }
 
+/// Parse the optional `describe` facet-control object (`{description, json,
+/// code}` booleans); absent → all on.
+fn describe_options(values: &[(&'static str, ReqValue)]) -> Result<crate::audit::DescribeOptions, SdkError> {
+    match req_field(values, "describe")?.opt_json()? {
+        Some(raw) => {
+            let pairs = crate::jsonparse::object_pairs(&raw, "request field describe")?;
+            crate::audit::DescribeOptions::from_json_pairs(&pairs)
+        }
+        None => Ok(crate::audit::DescribeOptions::default()),
+    }
+}
+
 fn route(operation_id: u16, payload: &[u8]) -> Result<String, SdkError> {
     let text = std::str::from_utf8(payload)
-        .map_err(|_| parse_failed("request payload is not UTF-8 JSON"))?;
+        .map_err(|_| jsonparse::parse_failed("request payload is not UTF-8 JSON"))?;
     route_json(operation_id, text)
 }
 
 fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
     let profile = profile();
     match operation_id {
-        OP_SYSTEM_CAPABILITIES => {
-            parse_request_json(operation_id, payload)?;
-            Ok(capabilities(profile).to_json_string())
-        }
         OP_SYSTEM_SDK_VERSION => {
             parse_request_json(operation_id, payload)?;
             Ok(crate::json::SdkVersion {
@@ -303,10 +282,6 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
                 },
             }
             .to_json_string())
-        }
-        OP_SYSTEM_CODEC_PROFILE => {
-            parse_request_json(operation_id, payload)?;
-            Ok(profile.to_json_string())
         }
         OP_TX_BUILD => {
             let v = parse_request_json(operation_id, payload)?;
@@ -320,6 +295,7 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
                 req_field(&v, "body")?.str()?,
                 req_field(&v, "signer_address")?.opt_str()?,
                 profile,
+                &describe_options(&v)?,
             )?
             .to_json_string())
         }
@@ -338,6 +314,7 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
                 req_field(&v, "signer_address")?.opt_str()?,
                 &context,
                 profile,
+                &describe_options(&v)?,
             )?
             .to_json_string())
         }
@@ -400,8 +377,11 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
         OP_TX_DECODE => {
             let v = parse_request_json(operation_id, payload)?;
             Ok(
-                crate::inspect::decode_transaction_json(req_field(&v, "body")?.str()?)?
-                    .to_json_string(),
+                crate::inspect::decode_transaction_json(
+                    req_field(&v, "body")?.str()?,
+                    &describe_options(&v)?,
+                )?
+                .to_json_string(),
             )
         }
         OP_TX_ENCODE => {
@@ -429,14 +409,14 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
                     .to_json_string(),
             )
         }
-        OP_AMOUNT_PARSE_PROTOCOL => {
+        OP_AMOUNT_PARSE => {
             let v = parse_request_json(operation_id, payload)?;
-            Ok(crate::amount::parse_protocol(req_field(&v, "value")?.str()?)?.to_json_string())
+            Ok(crate::amount::parse(req_field(&v, "value")?.str()?)?.to_json_string())
         }
-        OP_AMOUNT_FORMAT_PROTOCOL => {
+        OP_AMOUNT_FORMAT => {
             let v = parse_request_json(operation_id, payload)?;
             Ok(crate::json::AmountFormatResult {
-                value: crate::amount::format_protocol(
+                value: crate::amount::format(
                     req_field(&v, "value")?.str()?,
                     req_field(&v, "unit")?.u8()?,
                 )?,
@@ -466,6 +446,58 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
                 None => crate::policy::Policy::default(),
             };
             Ok(crate::policy::evaluate_policy(&review, &policy)?.to_json_string())
+        }
+        OP_SYSTEM_PARAMS => {
+            parse_request_json(operation_id, payload)?;
+            Ok(crate::profile::params(profile).to_json_string())
+        }
+        OP_TX_ESTIMATE_FEE => {
+            let v = parse_request_json(operation_id, payload)?;
+            Ok(crate::fee::estimate_fee(
+                req_field(&v, "body")?.str()?,
+                req_field(&v, "height")?.opt_u64()?,
+            )?
+            .to_json_string())
+        }
+        OP_ACCOUNT_VERIFY_SIGNATURE => {
+            let v = parse_request_json(operation_id, payload)?;
+            Ok(crate::account::verify_signature(
+                req_field(&v, "public_key")?.str()?,
+                req_field(&v, "digest")?.str()?,
+                req_field(&v, "signature")?.str()?,
+            )?
+            .to_json_string())
+        }
+        OP_DIAMOND_LOOKUP => {
+            let v = parse_request_json(operation_id, payload)?;
+            Ok(crate::diamond::lookup(
+                req_field(&v, "name")?.opt_str()?,
+                req_field(&v, "serial")?.opt_str()?,
+            )?
+            .to_json_string())
+        }
+        OP_VM_DECODE_CALL => {
+            let v = parse_request_json(operation_id, payload)?;
+            Ok(crate::vm::decode_call(req_field(&v, "action")?.str()?)?.to_json_string())
+        }
+        OP_ACTION_DESCRIBE => {
+            let v = parse_request_json(operation_id, payload)?;
+            Ok(
+                crate::audit::describe_single(req_field(&v, "action")?.str()?, &describe_options(&v)?)?
+                    .to_json_string(),
+            )
+        }
+        OP_VM_CODE => {
+            let v = parse_request_json(operation_id, payload)?;
+            Ok(crate::vm::code(
+                req_field(&v, "codes")?.str()?,
+                req_field(&v, "code_type")?.str()?,
+                req_field(&v, "format")?.opt_str()?.as_deref(),
+                req_field(&v, "sourcemap")?.opt_json()?.as_deref(),
+                req_field(&v, "limit")?.opt_u64()?,
+                req_field(&v, "offset")?.opt_u64()?,
+            )?
+            .to_json_string())
         }
         _ => Err(SdkError::new(
             SdkErrorCode::UnknownOperation,
@@ -517,16 +549,9 @@ mod tests {
 
     #[test]
     fn system_operations() {
-        let caps = field_names(&invoke_ok(OP_SYSTEM_CAPABILITIES, ""));
-        assert!(caps.iter().any(|n| n == "schema"));
-        assert!(caps.iter().any(|n| n == "features"));
         let version = field_names(&invoke_ok(OP_SYSTEM_SDK_VERSION, ""));
         assert!(version.iter().any(|n| n == "package_version"));
-        let profile = field_names(&invoke_ok(OP_SYSTEM_CODEC_PROFILE, ""));
-        assert!(profile.iter().any(|n| n == "profile_hash"));
-        assert!(profile.iter().any(|n| n == "params_version"));
-        assert!(profile.iter().any(|n| n == "registry_hash"));
-        assert!(profile.iter().any(|n| n == "registered_tx_types"));
+        assert!(version.iter().any(|n| n == "abi"));
     }
 
     #[test]
@@ -575,6 +600,38 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Operation names are the public interface: unique, non-empty, and
+    /// `domain.name` shaped; ids are the sequential registry position (1-based).
+    #[test]
+    fn operation_names_are_unique_and_well_formed() {
+        let mut seen = std::collections::HashSet::new();
+        for (index, operation) in crate::profile::OPERATIONS.iter().enumerate() {
+            assert!(
+                seen.insert(operation.name),
+                "duplicate operation name {}",
+                operation.name
+            );
+            let mut parts = operation.name.split('.');
+            let domain = parts.next().expect("operation name has a domain");
+            let name = parts.next().expect("operation name has a name");
+            assert!(
+                !domain.is_empty() && !name.is_empty() && parts.next().is_none(),
+                "operation name {} is not `domain.name` shaped",
+                operation.name
+            );
+            // Pin the 1-based sequential numbering the dispatcher relies on.
+            assert_eq!(u16::try_from(index + 1).unwrap(), id_from_name(operation.name));
+        }
+    }
+
+    fn id_from_name(name: &str) -> u16 {
+        crate::profile::OPERATIONS
+            .iter()
+            .position(|operation| operation.name == name)
+            .map(|index| index as u16 + 1)
+            .unwrap_or(0)
     }
 
     #[test]

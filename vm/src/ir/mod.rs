@@ -19,6 +19,8 @@ pub trait IRNode: DynClone {
     fn level(&self) -> u8 {
         0
     }
+
+    #[cfg(feature = "execute")]
     fn checkretval(&self) -> Rerr {
         if self.hasretval() {
             return Ok(());
@@ -36,24 +38,34 @@ pub trait IRNode: DynClone {
             Err(_) => format!("bytecode({})", self.bytecode()),
         }
     }
+
+    #[cfg(feature = "execute")]
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
         let mut buf = Vec::new();
         self.codegen_into(&mut buf)?;
         Ok(buf)
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         buf.push(self.bytecode());
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         vec![]
     }
+
+    #[cfg(feature = "execute")]
     fn is_serialization_elided(&self) -> bool {
         false
     }
     fn as_any(&self) -> &dyn Any {
         unimplemented!()
     }
+
+    #[cfg(feature = "execute")]
     fn as_any_mut(&mut self) -> &mut dyn Any {
         unimplemented!()
     }
@@ -69,7 +81,9 @@ impl std::fmt::Debug for dyn IRNode {
 
 include!("node.rs");
 include!("parse.rs");
+#[cfg(feature = "execute")]
 include!("compile.rs");
+#[cfg(feature = "execute")]
 include!("build.rs");
 
 // Helper functions - moved from helper.rs for public export

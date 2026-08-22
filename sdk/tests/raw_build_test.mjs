@@ -28,7 +28,7 @@ const base = {
     timestamp: 1755223764,
 };
 
-const balanceFloor = invoke(4, { spec: {
+const balanceFloor = invoke(2, { spec: {
     ...base,
     actions: [
         {
@@ -41,12 +41,12 @@ const balanceFloor = invoke(4, { spec: {
         },
     ],
 } });
-const decodedFloor = invoke(12, { body: balanceFloor.body });
+const decodedFloor = invoke(10, { body: balanceFloor.body });
 if (decodedFloor.actions[0].name !== "balance_floor") {
     throw new Error(`balance_floor built with wrong name ${decodedFloor.actions[0].name}`);
 }
 
-const astSelect = invoke(4, { spec: {
+const astSelect = invoke(2, { spec: {
     ...base,
     actions: [
         {
@@ -57,13 +57,13 @@ const astSelect = invoke(4, { spec: {
         },
     ],
 } });
-const decodedAst = invoke(12, { body: astSelect.body });
+const decodedAst = invoke(10, { body: astSelect.body });
 if (decodedAst.actions[0].name !== "ast_select") {
     throw new Error(`ast_select built with wrong name ${decodedAst.actions[0].name}`);
 }
 
 try {
-    const envelope = sdk.sdk_invoke_json(4, { spec: {
+    const envelope = sdk.sdk_invoke_json(2, { spec: {
         ...base,
         actions: [{ kind: "block_height" }],
     } });

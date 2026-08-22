@@ -46,15 +46,20 @@ pub trait FromJSON {
 
 /// Visit a JSON object under the canonical codec rules: duplicated and
 /// unknown fields are rejected before the caller decodes any value.
-pub fn json_object_fields<'a, F>(json: &'a str, allowed: &[&str], mut visit: F) -> Ret<()>
-where
-    F: FnMut(&'a str, &'a str) -> Ret<()>,
-{
-    let mut seen = std::collections::HashSet::new();
+/// The visitor is `dyn` rather than generic so the walk framework is compiled
+/// once instead of once per decoder call site (wasm size); object field lists
+/// are short, so duplicate detection is a linear scan over a `Vec`, not a hash set.
+pub fn json_object_fields<'a>(
+    json: &'a str,
+    allowed: &[&str],
+    visit: &mut dyn FnMut(&'a str, &'a str) -> Ret<()>,
+) -> Ret<()> {
+    let mut seen: Vec<&str> = Vec::new();
     for (key, value) in json_split_object(json)? {
-        if !seen.insert(key) {
+        if seen.contains(&key) {
             return errf!("JSON field {} is duplicated", key);
         }
+        seen.push(key);
         if !allowed.contains(&key) {
             return errf!("JSON field {} is unknown", key);
         }
@@ -66,12 +71,13 @@ where
 /// Split a JSON object while enforcing the codec-wide duplicate-key rule.
 /// Dynamic counterpart to [`json_object_fields`] for second-stage registry decoders (no allow-list).
 pub fn json_object_entries<'a>(json: &'a str) -> Ret<Vec<(&'a str, &'a str)>> {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen: Vec<&str> = Vec::new();
     let mut entries = Vec::new();
     for (key, value) in json_split_object(json)? {
-        if !seen.insert(key) {
+        if seen.contains(&key) {
             return errf!("JSON field {} is duplicated", key);
         }
+        seen.push(key);
         entries.push((key, value));
     }
     Ok(entries)
@@ -95,18 +101,18 @@ macro_rules! impl_struct_from_json {
         impl $crate::FromJSON for $class {
             fn from_json(&mut self, json: &str) -> sys::Ret<()> {
                 let mut next = self.clone();
-                let mut seen = std::collections::HashSet::new();
-                $crate::json_object_fields(json, &[$(stringify!($field)),*, stringify!($optional)], |key, value| {
-                    seen.insert(key);
+                let mut seen: Vec<&str> = Vec::new();
+                $crate::json_object_fields(json, &[$(stringify!($field)),*, stringify!($optional)], &mut |key, value| {
+                    seen.push(key);
                     match key {
                         $(stringify!($field) => next.$field.from_json(value)?,)*
                         stringify!($optional) => next.$optional.from_json(value)?,
-                        _ => unreachable!("allowed field checked by json_object_fields"),
+                        _ => return sys::errf!("{} JSON field {} is unknown", stringify!($class), key),
                     }
                     Ok(())
                 })?;
                 $(
-                    if !seen.contains(stringify!($field)) {
+                    if !seen.contains(&stringify!($field)) {
                         return sys::errf!("{} JSON missing field {}", stringify!($class), stringify!($field));
                     }
                 )*
@@ -119,17 +125,17 @@ macro_rules! impl_struct_from_json {
         impl $crate::FromJSON for $class {
             fn from_json(&mut self, json: &str) -> sys::Ret<()> {
                 let mut next = self.clone();
-                let mut seen = std::collections::HashSet::new();
-                $crate::json_object_fields(json, &[$(stringify!($field)),*], |key, value| {
-                    seen.insert(key);
+                let mut seen: Vec<&str> = Vec::new();
+                $crate::json_object_fields(json, &[$(stringify!($field)),*], &mut |key, value| {
+                    seen.push(key);
                     match key {
                         $(stringify!($field) => next.$field.from_json(value)?,)*
-                        _ => unreachable!("allowed field checked by json_object_fields"),
+                        _ => return sys::errf!("{} JSON field {} is unknown", stringify!($class), key),
                     }
                     Ok(())
                 })?;
                 $(
-                    if !seen.contains(stringify!($field)) {
+                    if !seen.contains(&stringify!($field)) {
                         return sys::errf!("{} JSON missing field {}", stringify!($class), stringify!($field));
                     }
                 )*

@@ -5,6 +5,7 @@
 
 mod codec;
 mod json;
+mod jsonparse;
 mod selection;
 mod spec_codec;
 
@@ -13,27 +14,33 @@ pub mod amount;
 pub mod attach;
 pub mod audit;
 pub mod build;
+pub mod diamond;
 pub mod error;
+pub mod fee;
 pub mod inspect;
 pub mod message;
 pub mod policy;
 pub mod profile;
 pub mod schema;
 pub mod service;
+pub mod vm;
 
-pub use account::{address_from_public_key, verify_address};
-pub use amount::{format_protocol, parse_protocol};
+pub use account::{address_from_public_key, verify_address, verify_signature};
+pub use amount::{format, parse};
 pub use attach::{
     attach_signature, prepare_signature, signature_report, verify_signatures, SignatureProof,
     SigningRequest,
 };
-pub use audit::{ActionDesc, TransferDesc};
+pub use audit::{ActionCodeDesc, ActionDesc, DescribeOptions, TransferDesc, describe_single};
 pub use build::{build_transaction, ActionSpec, TransactionSpec};
+pub use diamond::lookup;
 pub use error::{SdkError, SdkErrorCode};
+pub use fee::estimate_fee;
 pub use inspect::{inspect, inspect_report, Review};
 pub use policy::{evaluate_policy, Policy, PolicyDecision};
-pub use profile::{capabilities, CodecProfile, SDK_VERSION};
+pub use profile::{CodecProfile, SDK_VERSION};
 pub use spec_codec::{decode_transaction_spec_json, WireValue};
+pub use vm::{code, decode_call};
 
 /// Current UNIX time in seconds (`sys::curtimes` natively; `Date.now` on wasm32, where
 /// `SystemTime::now()` is unavailable). Fallback for raw `sdk_invoke` callers and expiry checks.

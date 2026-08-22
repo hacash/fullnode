@@ -9,6 +9,7 @@ use field::Encode;
 
 use crate::build::{ActionSpec, TransactionSpec};
 use crate::error::{SdkError, SdkErrorCode};
+use crate::jsonparse::{find, number_value, object_pairs, optional_number, optional_string, parse_failed, reject_unknown, required, required_number, required_string, semantic_string, string_value};
 
 /// One schema field value after JSON parse (and before native encode).
 #[derive(Debug, Clone, PartialEq)]
@@ -81,8 +82,8 @@ fn struct_fields_of(name: &str) -> Option<&'static [base::FieldSchema]> {
 /// Decode the public JSON TransactionSpec: top-level layout is fixed,
 /// action/struct fields resolve from the same schema registry as encode.
 pub fn decode_transaction_spec_json(json: &str) -> Result<TransactionSpec, SdkError> {
-    let pairs = json_object_pairs(json, "transaction spec")?;
-    reject_unknown_json_fields(
+    let pairs = object_pairs(json, "transaction spec")?;
+    reject_unknown(
         &pairs,
         &[
             "schema",
@@ -95,15 +96,15 @@ pub fn decode_transaction_spec_json(json: &str) -> Result<TransactionSpec, SdkEr
         ],
         "transaction spec",
     )?;
-    let schema = json_optional_string(&pairs, "schema")?;
-    let tx_type = json_required_number(&pairs, "tx_type")?;
-    let main = json_required_string(&pairs, "main")?;
-    let fee = json_required_string(&pairs, "fee")?;
-    let timestamp = json_optional_number(&pairs, "timestamp")?;
-    let gas_max = json_optional_number(&pairs, "gas_max")?;
-    let actions_raw = json_required(&pairs, "actions")?;
+    let schema = optional_string(&pairs, "schema", "JSON")?;
+    let tx_type = required_number(&pairs, "tx_type", "JSON")?;
+    let main = required_string(&pairs, "main", "JSON")?;
+    let fee = required_string(&pairs, "fee", "JSON")?;
+    let timestamp = optional_number(&pairs, "timestamp", "JSON")?;
+    let gas_max = optional_number(&pairs, "gas_max", "JSON")?;
+    let actions_raw = required(&pairs, "actions", "JSON")?;
     let action_items = field::json_split_array(actions_raw)
-        .map_err(|e| json_parse_failed(format!("transaction spec actions is not an array: {e}")))?;
+        .map_err(|e| parse_failed(format!("transaction spec actions is not an array: {e}")))?;
     let mut actions = Vec::with_capacity(action_items.len());
     for (index, raw) in action_items.iter().enumerate() {
         actions.push(parse_action_spec_json(raw, index)?);
@@ -119,110 +120,6 @@ pub fn decode_transaction_spec_json(json: &str) -> Result<TransactionSpec, SdkEr
     })
 }
 
-fn json_parse_failed(message: impl Into<String>) -> SdkError {
-    SdkError::new(SdkErrorCode::ParseFailed, message)
-}
-
-fn json_object_pairs<'a>(raw: &'a str, context: &str) -> Result<Vec<(&'a str, &'a str)>, SdkError> {
-    let pairs = field::json_split_object(raw)
-        .map_err(|e| json_parse_failed(format!("{context} is not a JSON object: {e}")))?;
-    let mut seen = std::collections::HashSet::new();
-    for (key, _) in &pairs {
-        if !seen.insert(*key) {
-            return Err(json_parse_failed(format!(
-                "{context} field {key} is duplicated"
-            )));
-        }
-    }
-    Ok(pairs)
-}
-
-fn reject_unknown_json_fields(
-    pairs: &[(&str, &str)],
-    allowed: &[&str],
-    context: &str,
-) -> Result<(), SdkError> {
-    for (key, _) in pairs {
-        if !allowed.iter().any(|known| *known == *key) {
-            return Err(SdkError::new(
-                SdkErrorCode::UnknownField,
-                format!("{context} field {key} is unknown"),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn json_find<'a>(pairs: &'a [(&'a str, &'a str)], name: &str) -> Option<&'a str> {
-    pairs
-        .iter()
-        .find(|(key, _)| *key == name)
-        .map(|(_, value)| *value)
-}
-
-fn json_required<'a>(pairs: &'a [(&'a str, &'a str)], name: &str) -> Result<&'a str, SdkError> {
-    json_find(pairs, name).ok_or_else(|| json_parse_failed(format!("JSON field {name} missing")))
-}
-
-fn json_string_value(raw: &str, name: &str) -> Result<String, SdkError> {
-    field::json_expect_quoted_decoded(raw)
-        .map_err(|e| json_parse_failed(format!("JSON field {name} is not a string: {e}")))
-}
-
-fn json_semantic_string(raw: &str, name: &str) -> Result<String, SdkError> {
-    let trimmed = raw.trim();
-    if trimmed.starts_with('"') {
-        json_string_value(trimmed, name)
-    } else if !trimmed.is_empty()
-        && trimmed
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'+' | b'-' | b'.' | b':'))
-    {
-        Ok(trimmed.to_owned())
-    } else {
-        Err(json_parse_failed(format!(
-            "JSON field {name} is not a semantic string"
-        )))
-    }
-}
-
-fn json_required_string(pairs: &[(&str, &str)], name: &str) -> Result<String, SdkError> {
-    json_string_value(json_required(pairs, name)?, name)
-}
-
-fn json_optional_string(pairs: &[(&str, &str)], name: &str) -> Result<Option<String>, SdkError> {
-    json_find(pairs, name)
-        .map(|raw| json_string_value(raw, name))
-        .transpose()
-}
-
-fn json_number_value<T: std::str::FromStr>(raw: &str, name: &str) -> Result<T, SdkError> {
-    let raw = raw.trim();
-    let text = if raw.starts_with('"') {
-        json_string_value(raw, name)?
-    } else {
-        raw.to_owned()
-    };
-    text.parse()
-        .map_err(|_| json_parse_failed(format!("JSON field {name} is not a number")))
-}
-
-fn json_required_number<T: std::str::FromStr>(
-    pairs: &[(&str, &str)],
-    name: &str,
-) -> Result<T, SdkError> {
-    json_number_value(json_required(pairs, name)?, name)
-}
-
-fn json_optional_number<T: std::str::FromStr>(
-    pairs: &[(&str, &str)],
-    name: &str,
-) -> Result<Option<T>, SdkError> {
-    json_find(pairs, name)
-        .map(|raw| json_number_value(raw, name))
-        .transpose()
-}
-
 fn parse_action_spec_json(raw: &str, index: usize) -> Result<ActionSpec, SdkError> {
     let context = format!("transaction action {index}");
     let (kind, fields) = parse_action_json_fields(raw, &context)?;
@@ -233,8 +130,8 @@ fn parse_action_json_fields(
     raw: &str,
     context: &str,
 ) -> Result<(String, Vec<(String, WireValue)>), SdkError> {
-    let pairs = json_object_pairs(raw, context)?;
-    let kind = json_required_string(&pairs, "kind")?;
+    let pairs = object_pairs(raw, context)?;
+    let kind = required_string(&pairs, "kind", context)?;
     let schema = crate::selection::action_schema_named(&kind).ok_or_else(|| {
         SdkError::new(
             SdkErrorCode::UnknownAction,
@@ -250,7 +147,7 @@ fn parse_action_json_fields(
                 .map(|field| field.name),
         )
         .collect();
-    reject_unknown_json_fields(&pairs, &allowed, context)?;
+    reject_unknown(&pairs, &allowed, context)?;
     let fields = parse_schema_json_fields(&pairs, schema.fields, context)?;
     Ok((kind, fields))
 }
@@ -265,11 +162,11 @@ fn parse_schema_json_fields(
         if field.name == "kind" {
             continue;
         }
-        let Some(raw) = json_find(pairs, field.name) else {
+        let Some(raw) = find(pairs, field.name) else {
             if field.optional {
                 continue;
             }
-            return Err(json_parse_failed(format!(
+            return Err(parse_failed(format!(
                 "{context} field {} missing",
                 field.name
             )));
@@ -283,90 +180,56 @@ fn parse_schema_json_fields(
 }
 
 fn parse_hex_bytes(raw: &str, context: &str) -> Result<Vec<u8>, SdkError> {
-    let text = json_string_value(raw, context)?;
+    let text = string_value(raw, context, "JSON")?;
     let clean = text.trim_start_matches("0x").trim_start_matches("0X");
-    hex::decode(clean).map_err(|_| json_parse_failed(format!("{context} must be hex")))
+    hex::decode(clean).map_err(|_| parse_failed(format!("{context} must be hex")))
 }
 
 fn parse_wire_json(raw: &str, wire: &FieldWire, context: &str) -> Result<WireValue, SdkError> {
     match wire {
         FieldWire::U1 | FieldWire::U2 | FieldWire::U4 | FieldWire::U5 | FieldWire::U8 => {
-            Ok(WireValue::Num(json_number_value(raw, context)?))
+            Ok(WireValue::Num(number_value(raw, context, "JSON")?))
         }
         FieldWire::Address | FieldWire::AddrOrPtr | FieldWire::AddrOrList => {
-            Ok(WireValue::Str(json_string_value(raw, context)?))
+            Ok(WireValue::Str(string_value(raw, context, "JSON")?))
         }
         FieldWire::Amount
         | FieldWire::WireAmount
         | FieldWire::Satoshi
         | FieldWire::Fold64
         | FieldWire::Timestamp
-        | FieldWire::DiamondNumber => Ok(WireValue::Str(json_semantic_string(raw, context)?)),
-        FieldWire::Fixed(_)
-        | FieldWire::BytesW1
-        | FieldWire::BytesW2
-        | FieldWire::SignW2
-        | FieldWire::AssetAmtW1 => Ok(WireValue::Hex(parse_hex_bytes(raw, context)?)),
+        | FieldWire::DiamondNumber => Ok(WireValue::Str(semantic_string(raw, context, "JSON")?)),
+        FieldWire::Fixed(_) | FieldWire::BytesW1 | FieldWire::BytesW2 | FieldWire::SignW2 => {
+            Ok(WireValue::Hex(parse_hex_bytes(raw, context)?))
+        }
         FieldWire::DiamondName => Ok(WireValue::Hex(
-            json_string_value(raw, context)?.into_bytes(),
+            string_value(raw, context, "JSON")?.into_bytes(),
         )),
-        FieldWire::DiamondNameList => {
-            let items = field::json_split_array(raw)
-                .map_err(|e| json_parse_failed(format!("{context} is not an array: {e}")))?;
-            items
-                .iter()
-                .map(|item| {
-                    Ok(WireValue::Hex(
-                        json_string_value(item, context)?.into_bytes(),
-                    ))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(WireValue::List)
-        }
-        FieldWire::ChainIDList => {
-            let items = field::json_split_array(raw)
-                .map_err(|e| json_parse_failed(format!("{context} is not an array: {e}")))?;
-            items
-                .iter()
-                .map(|item| {
-                    let id: u32 = json_number_value(item, context)?;
-                    Ok(WireValue::Hex(id.to_be_bytes().to_vec()))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(WireValue::List)
-        }
-        FieldWire::ContractAddrListW1 => {
-            let items = field::json_split_array(raw)
-                .map_err(|e| json_parse_failed(format!("{context} is not an array: {e}")))?;
-            items
-                .iter()
-                .map(|item| Ok(WireValue::Str(json_string_value(item, context)?)))
-                .collect::<Result<Vec<_>, _>>()
-                .map(WireValue::List)
-        }
         FieldWire::AssetAmt => {
-            let pairs = json_object_pairs(raw, context)?;
-            reject_unknown_json_fields(&pairs, &["serial", "amount"], context)?;
+            let pairs = object_pairs(raw, context)?;
+            reject_unknown(&pairs, &["serial", "amount"], context)?;
             Ok(WireValue::Struct(vec![
                 (
                     "serial".to_owned(),
-                    WireValue::Str(json_semantic_string(
-                        json_required(&pairs, "serial")?,
+                    WireValue::Str(semantic_string(
+                        required(&pairs, "serial", "JSON")?,
                         "serial",
+                        "JSON",
                     )?),
                 ),
                 (
                     "amount".to_owned(),
-                    WireValue::Str(json_semantic_string(
-                        json_required(&pairs, "amount")?,
+                    WireValue::Str(semantic_string(
+                        required(&pairs, "amount", "JSON")?,
                         "amount",
+                        "JSON",
                     )?),
                 ),
             ]))
         }
         FieldWire::ListW1(_) | FieldWire::ListW2(_) => {
             let items = field::json_split_array(raw)
-                .map_err(|e| json_parse_failed(format!("{context} is not an array: {e}")))?;
+                .map_err(|e| parse_failed(format!("{context} is not an array: {e}")))?;
             let elem = element_wire(wire);
             items
                 .iter()
@@ -376,21 +239,21 @@ fn parse_wire_json(raw: &str, wire: &FieldWire, context: &str) -> Result<WireVal
                 .map(WireValue::List)
         }
         FieldWire::Struct(name) => {
-            let pairs = json_object_pairs(raw, context)?;
+            let pairs = object_pairs(raw, context)?;
             let fields = struct_fields_of(name).ok_or_else(|| {
-                json_parse_failed(format!("{context} references unknown struct {name}"))
+                parse_failed(format!("{context} references unknown struct {name}"))
             })?;
             let allowed: Vec<&str> = fields
                 .iter()
                 .filter(|field| field.name != "kind")
                 .map(|field| field.name)
                 .collect();
-            reject_unknown_json_fields(&pairs, &allowed, context)?;
+            reject_unknown(&pairs, &allowed, context)?;
             parse_schema_json_fields(&pairs, fields, context).map(WireValue::Struct)
         }
-        FieldWire::ActionList | FieldWire::ActionListW1 => {
+        FieldWire::ActionListW1 => {
             let items = field::json_split_array(raw)
-                .map_err(|e| json_parse_failed(format!("{context} is not an array: {e}")))?;
+                .map_err(|e| parse_failed(format!("{context} is not an array: {e}")))?;
             let mut values = Vec::with_capacity(items.len());
             for (index, item) in items.iter().enumerate() {
                 let nested_context = format!("{context}[{index}]");
@@ -400,6 +263,17 @@ fn parse_wire_json(raw: &str, wire: &FieldWire, context: &str) -> Result<WireVal
             }
             Ok(WireValue::List(values))
         }
+        // Legacy named list wires with no registered schema producer today
+        // (diamond/chain/address lists are generic `ListW1`/`ListW2` of a leaf
+        // name, timestamps are not action fields). Kept explicit so a future
+        // schema cannot silently take a wrong shape here.
+        FieldWire::ChainIDList
+        | FieldWire::DiamondNameList
+        | FieldWire::ContractAddrListW1
+        | FieldWire::AssetAmtW1
+        | FieldWire::ActionList => Err(parse_failed(format!(
+            "{context}: wire {wire:?} is not produced by any registered schema"
+        ))),
     }
 }
 
@@ -499,7 +373,12 @@ pub(crate) fn encode_wire(out: &mut Vec<u8>, wire: &FieldWire, value: &WireValue
                     bytes.len()
                 );
             }
-            DiamondName::from(bytes.try_into().expect("diamond name size checked")).encode_to(out);
+            // Length checked above: copy into the fixed array instead of a
+            // `try_into().expect()` so no panic path (and its location string)
+            // is linked into the wasm.
+            let mut name = [0u8; DiamondName::SIZE];
+            name.copy_from_slice(bytes);
+            DiamondName::from(name).encode_to(out);
         }
         FieldWire::BytesW1 => {
             BytesW1::from(value.as_hex()?.to_vec())?.encode_to(out);
@@ -512,55 +391,15 @@ pub(crate) fn encode_wire(out: &mut Vec<u8>, wire: &FieldWire, value: &WireValue
             if bytes.len() != Sign::SIZE {
                 return errf!("sign must be {} bytes, got {}", Sign::SIZE, bytes.len());
             }
+            let mut publickey = [0u8; Sign::PUBLICKEY_SIZE];
+            publickey.copy_from_slice(&bytes[..Sign::PUBLICKEY_SIZE]);
+            let mut signature = [0u8; Sign::SIGNATURE_SIZE];
+            signature.copy_from_slice(&bytes[Sign::PUBLICKEY_SIZE..]);
             Sign {
-                publickey: bytes[..Sign::PUBLICKEY_SIZE]
-                    .try_into()
-                    .expect("sign split"),
-                signature: bytes[Sign::PUBLICKEY_SIZE..]
-                    .try_into()
-                    .expect("sign split"),
+                publickey,
+                signature,
             }
             .encode_to(out);
-        }
-        FieldWire::AssetAmtW1 => {
-            out.extend_from_slice(value.as_hex()?);
-        }
-        FieldWire::DiamondNameList => {
-            let items = value.as_list()?;
-            Uint1::from_usize(items.len())?.encode_to(out);
-            for item in items {
-                let bytes = item.as_hex()?;
-                if bytes.len() != DiamondName::SIZE {
-                    return errf!(
-                        "diamond name must be {} bytes, got {}",
-                        DiamondName::SIZE,
-                        bytes.len()
-                    );
-                }
-                DiamondName::from(bytes.try_into().expect("diamond name size checked"))
-                    .encode_to(out);
-            }
-        }
-        FieldWire::ChainIDList => {
-            let items = value.as_list()?;
-            Uint1::from_usize(items.len())?.encode_to(out);
-            for item in items {
-                let bytes = item.as_hex()?;
-                if bytes.len() != 4 {
-                    return errf!("chain id must be 4 bytes, got {}", bytes.len());
-                }
-                Uint4::from(u32::from_be_bytes(
-                    bytes.try_into().expect("chain id size checked"),
-                ))
-                .encode_to(out);
-            }
-        }
-        FieldWire::ContractAddrListW1 => {
-            let items = value.as_list()?;
-            Uint1::from_usize(items.len())?.encode_to(out);
-            for item in items {
-                Address::from_readable(item.as_str()?)?.encode_to(out);
-            }
         }
         FieldWire::AssetAmt => {
             let items = value.as_struct()?;
@@ -588,19 +427,21 @@ pub(crate) fn encode_wire(out: &mut Vec<u8>, wire: &FieldWire, value: &WireValue
         FieldWire::Struct(name) => {
             encode_struct_fields(out, name, value.as_struct()?)?;
         }
-        FieldWire::ActionList => {
-            let items = value.as_list()?;
-            Uint2::from_usize(items.len())?.encode_to(out);
-            for item in items {
-                encode_nested_action(out, item)?;
-            }
-        }
         FieldWire::ActionListW1 => {
             let items = value.as_list()?;
             Uint1::from_usize(items.len())?.encode_to(out);
             for item in items {
                 encode_nested_action(out, item)?;
             }
+        }
+        // Legacy named list wires with no registered schema producer today;
+        // parsing already rejects them, encoding must not silently pick a shape.
+        FieldWire::ChainIDList
+        | FieldWire::DiamondNameList
+        | FieldWire::ContractAddrListW1
+        | FieldWire::AssetAmtW1
+        | FieldWire::ActionList => {
+            return errf!("wire {wire:?} is not produced by any registered schema");
         }
     }
     Ok(())

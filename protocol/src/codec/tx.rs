@@ -1,7 +1,7 @@
 //! Registry
 
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[cfg(feature = "execute")]
@@ -138,28 +138,6 @@ impl TransactionBuild for DefaultPreludeTx {
     fn set_mining_nonce(&mut self, nonce: Hash) {
         self.miner_nonce = nonce;
     }
-}
-
-pub fn create_default_prelude_tx(_reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
-    let mut r = Reader::new(buf);
-    let ty: Uint1 = r.read()?;
-    if ty.uint() != DefaultPreludeTx::TYPE {
-        return sys::normalf!("prelude tx type must be 0, got {}", ty.uint());
-    }
-    let address: Address = r.read()?;
-    let reward: Amount = r.read()?;
-    let message: Fixed16 = r.read()?;
-    let miner_nonce: Hash = r.read()?;
-    Ok((
-        Arc::new(DefaultPreludeTx {
-            ty,
-            address,
-            reward,
-            message,
-            miner_nonce,
-        }),
-        r.used(),
-    ))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -355,17 +333,19 @@ impl TransactionType3 {
     pub const SIGN_ITEM_SIZE: usize = 97;
 
     /// Intrinsic R0: main ∪ static action req_sign, excluding ReqSignList.
-    pub fn intrinsic_req_sign(&self) -> Ret<HashSet<Address>> {
+    /// Signer sets are small; `Vec` with a linear duplicate scan keeps the
+    /// hash-table machinery out of the wasm graph.
+    pub fn intrinsic_req_sign(&self) -> Ret<Vec<Address>> {
         let addrs = self.addrs();
-        let mut adrsets = HashSet::from([self.main()]);
+        let mut adrsets = vec![self.main()];
         for act in &self.actions {
             if act.kind() == ReqSignList::KIND {
                 continue;
             }
             for ptr in act.req_sign() {
                 let adr = ptr.real(&addrs)?;
-                if adr.is_privkey() {
-                    adrsets.insert(adr);
+                if adr.is_privkey() && !adrsets.contains(&adr) {
+                    adrsets.push(adr);
                 }
             }
         }
@@ -373,7 +353,7 @@ impl TransactionType3 {
     }
 
     /// Extra signers E from the unique top-level ReqSignList (if any).
-    pub fn declared_extra_signers(&self) -> Ret<HashSet<Address>> {
+    pub fn declared_extra_signers(&self) -> Ret<Vec<Address>> {
         let addrs = self.addrs();
         let mut found: Option<&ReqSignList> = None;
         for act in &self.actions {
@@ -385,24 +365,23 @@ impl TransactionType3 {
             }
         }
         match found {
-            None => Ok(HashSet::new()),
+            None => Ok(Vec::new()),
             Some(list) => list.validate_against(&addrs),
         }
     }
 
     /// D = R0 union E with overlap checks.
-    pub fn deterministic_signers(&self) -> Ret<HashSet<Address>> {
-        let r0 = self.intrinsic_req_sign()?;
+    pub fn deterministic_signers(&self) -> Ret<Vec<Address>> {
+        let mut d = self.intrinsic_req_sign()?;
         let e = self.declared_extra_signers()?;
         for adr in &e {
-            if r0.contains(adr) {
+            if d.contains(adr) {
                 return errf!(
                     "ReqSignList address {} overlaps intrinsic req_sign",
                     adr.to_readable()
                 );
             }
         }
-        let mut d = r0;
         d.extend(e);
         Ok(d)
     }
@@ -416,7 +395,7 @@ impl TransactionType3 {
     }
 
     pub fn deterministic_signers_vec(&self) -> Ret<Vec<Address>> {
-        let mut v: Vec<_> = self.deterministic_signers()?.into_iter().collect();
+        let mut v = self.deterministic_signers()?;
         sort_addresses(&mut v);
         Ok(v)
     }
@@ -462,7 +441,7 @@ impl TransactionType3 {
 
 /// Exact Type3 signature verification: SignW2 must match D exactly.
 pub fn verify_type3_signatures_exact(tx: &TransactionType3) -> Rerr {
-    let d = tx.deterministic_signers()?;
+    let d = tx.deterministic_signers_vec()?;
     if tx.signs.length() != d.len() {
         return errf!(
             "Type3 SignW2 length {} != deterministic signer count {}",
@@ -470,7 +449,7 @@ pub fn verify_type3_signatures_exact(tx: &TransactionType3) -> Rerr {
             d.len()
         );
     }
-    let mut present = HashSet::new();
+    let mut present_keys: Vec<[u8; Sign::PUBLICKEY_SIZE]> = Vec::new();
     for sig in tx.signs.as_list() {
         if sig.size() != TransactionType3::SIGN_ITEM_SIZE {
             return errf!(
@@ -479,22 +458,21 @@ pub fn verify_type3_signatures_exact(tx: &TransactionType3) -> Rerr {
                 sig.size()
             );
         }
-        let adr = sign_address(sig);
-        if !present.insert(sig.publickey) {
+        if present_keys.contains(&sig.publickey) {
             return errf!("Type3 SignW2 contains duplicate public key");
         }
-        // re-check address uniqueness via a second set
-        let _ = adr;
+        present_keys.push(sig.publickey);
     }
-    let mut present_addrs = HashSet::new();
+    let mut present_addrs: Vec<Address> = Vec::new();
     for sig in tx.signs.as_list() {
         let adr = sign_address(sig);
-        if !present_addrs.insert(adr) {
+        if present_addrs.contains(&adr) {
             return errf!(
                 "Type3 SignW2 contains duplicate signer address {}",
                 adr.to_readable()
             );
         }
+        present_addrs.push(adr);
         if !d.contains(&adr) {
             return errf!("undeclared Type3 signer {}", adr.to_readable());
         }
@@ -503,6 +481,7 @@ pub fn verify_type3_signatures_exact(tx: &TransactionType3) -> Rerr {
             return errf!("{:?} signature verification failed", adr);
         }
     }
+    sort_addresses(&mut present_addrs);
     if present_addrs != d {
         return errf!("Type3 signer address set does not equal deterministic set D");
     }
@@ -986,72 +965,36 @@ impl_tx_type!(
     true
 );
 
-pub fn create_transaction_type1(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
-    let (ty, timestamp, addrlist, fee, actions, signs, gas_max, ano_mark, used) =
-        decode_tx_fields(reg, buf)?;
-    if ty.uint() != TransactionType1::TYPE {
-        return sys::normalf!("transaction type1 codec got type {}", ty.uint());
-    }
-    Ok((
-        Arc::new(TransactionType1 {
-            ty,
-            timestamp,
-            addrlist,
-            fee,
-            actions,
-            signs,
-            gas_max,
-            ano_mark,
-        }),
-        used,
-    ))
+/// Wire creator for one standard tx type: shared field decode plus the
+/// type-byte check against the concrete type's own `TYPE`.
+macro_rules! create_tx_codec {
+    ($fn:ident, $ty:ident) => {
+        pub fn $fn(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
+            let (ty, timestamp, addrlist, fee, actions, signs, gas_max, ano_mark, used) =
+                decode_tx_fields(reg, buf)?;
+            if ty.uint() != <$ty>::TYPE {
+                return sys::normalf!("transaction type codec got type {}", ty.uint());
+            }
+            Ok((
+                Arc::new($ty {
+                    ty,
+                    timestamp,
+                    addrlist,
+                    fee,
+                    actions,
+                    signs,
+                    gas_max,
+                    ano_mark,
+                }),
+                used,
+            ))
+        }
+    };
 }
 
-pub fn create_transaction_type2(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
-    let (ty, timestamp, addrlist, fee, actions, signs, gas_max, ano_mark, used) =
-        decode_tx_fields(reg, buf)?;
-    if ty.uint() != TransactionType2::TYPE {
-        return sys::normalf!("transaction type2 codec got type {}", ty.uint());
-    }
-    Ok((
-        Arc::new(TransactionType2 {
-            ty,
-            timestamp,
-            addrlist,
-            fee,
-            actions,
-            signs,
-            gas_max,
-            ano_mark,
-        }),
-        used,
-    ))
-}
-
-pub fn create_transaction_type3(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
-    let (ty, timestamp, addrlist, fee, actions, signs, gas_max, ano_mark, used) =
-        decode_tx_fields(reg, buf)?;
-    if ty.uint() != TransactionType3::TYPE {
-        return sys::normalf!("transaction type3 codec got type {}", ty.uint());
-    }
-    Ok((
-        Arc::new(TransactionType3 {
-            ty,
-            timestamp,
-            addrlist,
-            fee,
-            actions,
-            signs,
-            gas_max,
-            ano_mark,
-        }),
-        used,
-    ))
-}
-
-pub fn create_std_tx(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
-    create_transaction_type2(reg, buf)
-}
+create_tx_codec!(create_transaction_type1, TransactionType1);
+create_tx_codec!(create_transaction_type2, TransactionType2);
+create_tx_codec!(create_transaction_type3, TransactionType3);
 
 #[cfg(test)]
 mod tests {

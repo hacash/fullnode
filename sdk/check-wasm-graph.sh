@@ -6,11 +6,12 @@
 # reach the wasm binary (`ActionRef`/`TxRef` are the wire view in every build;
 # execute is a separate trait reached only when this feature is on).
 #
-# serde_json, dyn-clone, blake2, and tiny-keccak are execute-only on `vm`
-# (IR/machine engine + native hashes). sha2 stays in the wasm graph via
-# libsecp256k1, not vm. `serde` must not enter via `base`. Other crates may
-# still carry serde. The codec path uses a local JSON string escape and
-# sha3/ripemd only for P2SH address hashing.
+# serde_json, blake2, and tiny-keccak are execute-only on `vm` (native hashes).
+# dyn-clone is a codec-only dependency of `vm::ir` (the `IRNode` trait object
+# backing the fitsh decompiler, which the SDK wasm consumes for vm.code).
+# sha2 stays in the wasm graph via libsecp256k1, not vm. `serde` must not
+# enter via `base`. Other crates may still carry serde. The codec path uses
+# a local JSON string escape and sha3/ripemd only for P2SH address hashing.
 #
 # Run from anywhere:  ./sdk/check-wasm-graph.sh
 # Requires the wasm32-unknown-unknown target (rustup target add
@@ -39,7 +40,6 @@ FORBIDDEN=(
     num-bigint num-integer
     sled ocl
     serde_json
-    dyn-clone
     blake2
     tiny-keccak
 )

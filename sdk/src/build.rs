@@ -8,7 +8,7 @@ use field::{Address, Amount};
 use crate::error::{SdkError, SdkErrorCode};
 use crate::inspect::decode_tx;
 use crate::schema::{SCHEMA_BUILT_TRANSACTION, SCHEMA_TRANSACTION_SPEC};
-pub use crate::spec_codec::WireValue;
+use crate::spec_codec::WireValue;
 
 /// One wire action: `kind` is the schema name, `fields` are schema fields
 /// excluding `kind`.
@@ -227,6 +227,7 @@ mod tests {
             &built.body,
             None,
             &crate::profile::CodecProfile::standard(),
+            &crate::audit::DescribeOptions::default(),
         )
         .unwrap();
         assert!(

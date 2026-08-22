@@ -2,9 +2,7 @@
 //! from dev: field-crate macros replaced with manual `Encode`/`Decode` structs and local hashing helpers.
 
 
-use std::sync::Arc;
-
-use base::{ActScope, ActionRef, P2sh};
+use base::{ActScope, P2sh};
 use field::{Address, BytesW2, Decode, Encode, Hash, Reader, Uint1, Uint2};
 use ripemd::{Digest, Ripemd160};
 use sha3::Sha3_256;
@@ -145,7 +143,7 @@ impl P2shEntryPayload {
 // ================================ P2SHScriptProve ================================
 
 #[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
-#[action_codec(audit = "structured")]
+#[action_codec(audit = "structured", code)]
 pub struct P2SHScriptProve {
     pub kind: Uint2,
     // calc hash: script + calibs
@@ -355,15 +353,4 @@ fn must_scriptmh(addr: &Address) -> Ret<()> {
         return errf!("address {} is not scriptmh type", addr.to_readable());
     }
     Ok(())
-}
-
-// ================================ decoder ================================
-
-pub fn create_p2sh_script_prove(
-    _reg: &dyn base::BinaryCodecs,
-    _kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    let (action, used) = P2SHScriptProve::decode(buf)?;
-    Ok((Arc::new(action), used))
 }

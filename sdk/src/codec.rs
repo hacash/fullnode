@@ -44,6 +44,11 @@ impl SdkCodecs {
     pub fn registered_tx_types(&self) -> Vec<u8> {
         self.table.tx_types()
     }
+
+    /// Canonical JSON view of a decoded action, if the binding provides one.
+    pub(crate) fn action_json_to(&self, kind: u16) -> Option<base::ActionJsonToFn> {
+        self.table.action_json_to(kind)
+    }
 }
 
 pub(crate) fn standard_codecs() -> Ret<&'static SdkCodecs> {
@@ -81,12 +86,6 @@ impl BinaryCodecs for SdkCodecs {
 
     fn block_hasher_fn(&self) -> BlockHasherFn {
         sdk_block_hash
-    }
-}
-
-impl base::JsonCodecs for SdkCodecs {
-    fn decode_action_json(&self, kind: u16, json: &str) -> Ret<Option<ActionRef>> {
-        self.table.decode_action_json(self, kind, json)
     }
 }
 

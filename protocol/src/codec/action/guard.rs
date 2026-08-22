@@ -1,14 +1,13 @@
 //! ChainAllow / HeightScope / BalanceFloor / ReqSignList guard actions.
 
-use std::collections::HashSet;
 #[cfg(test)]
 use std::sync::Arc;
 
-use base::{ActScope, ActionRef, AddrOrPtr, Transaction, decode_regular_action};
+use base::{ActScope, AddrOrPtr, Transaction};
 use field::{Amount, AssetAmtW1, BlockHeight, ChainIDList, DiamondNumber, ListW2, Satoshi, Uint2};
 use sys::{Rerr, Ret, errf};
 
-use super::common::addr_or_ptr_readable;
+use super::transfer::addr_or_ptr_readable;
 
 #[derive(Debug, Clone, base::ActionCodec)]
 #[action_codec(audit = "full")]
@@ -101,11 +100,13 @@ impl ReqSignList {
     }
 
     /// Resolve and validate E: non-empty, unique, PRIVAKEY, not unknown system.
-    pub fn validate_against(&self, addrs: &[field::Address]) -> Ret<HashSet<field::Address>> {
+    /// Signer lists are short; a `Vec` with a linear duplicate scan keeps the
+    /// hash-table machinery out of the wasm graph.
+    pub fn validate_against(&self, addrs: &[field::Address]) -> Ret<Vec<field::Address>> {
         if self.signers.0.is_empty() {
             return errf!("ReqSignList cannot be empty");
         }
-        let mut e = HashSet::new();
+        let mut e: Vec<field::Address> = Vec::new();
         for ptr in self.signers.as_list() {
             let adr = ptr.real(addrs)?;
             if !adr.is_privkey() {
@@ -120,9 +121,10 @@ impl ReqSignList {
                     adr.to_readable()
                 );
             }
-            if !e.insert(adr) {
+            if e.contains(&adr) {
                 return errf!("ReqSignList address {} is duplicated", adr.to_readable());
             }
+            e.push(adr);
         }
         Ok(e)
     }
@@ -143,7 +145,7 @@ fn check_balance_floor_assets(assets: &AssetAmtW1) -> Rerr {
             BALANCE_ASSET_MAX
         );
     }
-    let mut seen = std::collections::HashSet::new();
+    let mut seen: Vec<u64> = Vec::new();
     for ast in assets.as_list() {
         let serial = ast.serial.uint();
         let amount = ast.amount.uint();
@@ -153,9 +155,10 @@ fn check_balance_floor_assets(assets: &AssetAmtW1) -> Rerr {
         if amount == 0 {
             return errf!("balance floor asset {} amount cannot be zero", serial);
         }
-        if !seen.insert(serial) {
+        if seen.contains(&serial) {
             return errf!("balance floor asset serial {} is duplicated", serial);
         }
+        seen.push(serial);
     }
     Ok(())
 }
@@ -217,20 +220,6 @@ base::impl_action_facts! {
         as_transfer_like: none,
         description: |this: &ReqSignList| format!("Require extra signers ({})", this.signers.length()),
 
-    }
-}
-
-pub fn create_chain_guard_action(
-    _reg: &dyn base::BinaryCodecs,
-    kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    match kind {
-        ChainAllow::KIND => decode_regular_action::<ChainAllow>(buf),
-        HeightScope::KIND => decode_regular_action::<HeightScope>(buf),
-        BalanceFloor::KIND => decode_regular_action::<BalanceFloor>(buf),
-        ReqSignList::KIND => decode_regular_action::<ReqSignList>(buf),
-        _ => sys::normalf!("chain guard action kind {} not registered", kind),
     }
 }
 

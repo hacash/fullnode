@@ -228,7 +228,7 @@ impl Syntax {
     fn parse_generic_call_spec(&mut self) -> Ret<CallSpec> {
         let first = self.cursor.next()?;
         if let Ok(body) = Self::parse_fixed_body_token::<CALL_BODY_WIDTH>(&first, "call body") {
-            return decode_call_body(&body).map_err(|e| e.to_string());
+            return decode_call_body(&body).map_err(|e| sys::Error::normal(e.to_string()));
         }
         let effect = Self::parse_call_effect_token(&first, "call effect format invalid")?;
         let head = self.cursor.next()?;
@@ -245,7 +245,7 @@ impl Syntax {
     fn parse_codecall_spec(&mut self) -> Ret<CallSpec> {
         let first = self.cursor.next()?;
         if let Ok(body) = Self::parse_codecall_body_token(&first) {
-            return decode_splice_body(&body).map_err(|e| e.to_string());
+            return decode_splice_body(&body).map_err(|e| sys::Error::normal(e.to_string()));
         }
         let (idx, selector) =
             self.parse_codecall_target_selector(first, "codecall target format invalid")?;
@@ -465,7 +465,7 @@ impl Syntax {
     {
         let first = self.cursor.next()?;
         if let Ok(body) = Self::parse_fixed_body_token::<5>(&first, body_label) {
-            return decode_user_call_site(inst, &body).map_err(|e| e.to_string());
+            return decode_user_call_site(inst, &body).map_err(|e| sys::Error::normal(e.to_string()));
         }
         let (idx, selector) = self.parse_shortcut_lib_selector(first, err_msg)?;
         Ok(build(idx, selector))
@@ -497,7 +497,7 @@ impl Syntax {
     {
         let first = self.cursor.next()?;
         if let Ok(body) = Self::parse_fixed_body_token::<4>(&first, body_label) {
-            return decode_user_call_site(inst, &body).map_err(|e| e.to_string());
+            return decode_user_call_site(inst, &body).map_err(|e| sys::Error::normal(e.to_string()));
         }
         let idx = Self::parse_lib_index_token(&first).map_err(|_| err_msg.to_string())?;
         if idx != 0 {
@@ -541,7 +541,7 @@ fn build_fin_ir_func(
     argvs: Vec<Box<dyn IRNode>>,
     hrtv: bool,
 ) -> Ret<Box<dyn IRNode>> {
-    build_param1_multi_node(hrtv, inst, fin_id, argvs).map_err(|e| e.to_string())
+    build_param1_multi_node(hrtv, inst, fin_id, argvs).map_err(|e| sys::Error::normal(e.to_string()))
 }
 
 pub(super) fn build_log_irnode(

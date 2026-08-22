@@ -132,6 +132,7 @@ impl base::ActionSchemaProvider for DiamondMint {
         name: "diamond_mint",
         audit_class: base::AuditClass::Full,
         blob: false,
+        has_code: false,
         fields: &[
             base::FieldSchema::new("kind", base::FieldWire::U2),
             base::FieldSchema::new("d", base::FieldWire::Struct("DiamondMintData")),
@@ -201,16 +202,19 @@ pub fn create_diamond_mint(
 }
 
 fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
-    let mut seen = std::collections::HashSet::new();
+    // Field lists are short; `Vec` with a linear duplicate scan keeps the
+    // hash-table machinery out of the wasm graph.
+    let mut seen: Vec<&str> = Vec::new();
     let mut declared_kind = Uint2::from(DiamondMint::KIND);
     let mut data_json = None;
     let mut data = DiamondMintData::default();
     let mut flat_fields = Vec::new();
 
     for (key, value) in json_split_object(json)? {
-        if !seen.insert(key) {
+        if seen.contains(&key) {
             return sys::normalf!("DiamondMint JSON field {} is duplicated", key);
         }
+        seen.push(key);
         match key {
             "kind" => declared_kind = json_decode_value(value)?,
             "d" => data_json = Some(value),
@@ -232,11 +236,12 @@ fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
         Some(nested) => json_split_object(nested)?,
         None => flat_fields,
     };
-    let mut data_seen = std::collections::HashSet::new();
+    let mut data_seen: Vec<&str> = Vec::new();
     for (key, value) in fields {
-        if !data_seen.insert(key) {
+        if data_seen.contains(&key) {
             return sys::normalf!("DiamondMint data field {} is duplicated", key);
         }
+        data_seen.push(key);
         match key {
             "diamond" => data.diamond.from_json(value)?,
             "number" => data.number.from_json(value)?,
@@ -247,7 +252,7 @@ fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
             _ => {}
         }
     }
-    if !data_seen.contains("diamond") || !data_seen.contains("number") {
+    if !data_seen.contains(&"diamond") || !data_seen.contains(&"number") {
         return sys::errf!("DiamondMint JSON requires diamond and number");
     }
     Ok(DiamondMint {

@@ -14,7 +14,9 @@ struct Stats {
     findings: Vec<String>,
     action_notes: Vec<(usize, String)>,
     top_count: usize,
-    top_kinds: std::collections::HashMap<u16, usize>,
+    /// Top-level kind → occurrence count. Kind spaces are small; a `Vec` with
+    /// linear lookup keeps the hash-table machinery out of the wasm graph.
+    top_kinds: Vec<(u16, usize)>,
     top_guards: usize,
     terminal_non_guards: usize,
     terminal_guards: bool,
@@ -78,7 +80,10 @@ fn visit(
     }
     if from == ExecFrom::Top {
         stats.top_count += 1;
-        *stats.top_kinds.entry(act.kind()).or_insert(0) += 1;
+        match stats.top_kinds.iter_mut().find(|(kind, _)| *kind == act.kind()) {
+            Some((_, count)) => *count += 1,
+            None => stats.top_kinds.push((act.kind(), 1)),
+        }
         if is_guard_scope(act.scope()) {
             stats.top_guards += 1;
         }
@@ -135,7 +140,15 @@ fn check_top_rule(act: &dyn Action, stats: &mut Stats) {
                 act.kind()
             ));
         }
-        Some(TopRule::Unique) if stats.top_kinds.get(&act.kind()).copied().unwrap_or(0) != 1 => {
+        Some(TopRule::Unique)
+            if stats
+                .top_kinds
+                .iter()
+                .find(|(kind, _)| *kind == act.kind())
+                .map(|(_, count)| *count)
+                .unwrap_or(0)
+                != 1 =>
+        {
             stats.findings.push(format!(
                 "tx topology invalid: action {} must be unique in tx",
                 act.kind()

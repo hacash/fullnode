@@ -2,14 +2,13 @@
 
 use field::{Decode, Uint1, Uint2};
 use std::any::Any;
-use std::collections::HashMap;
 #[cfg(feature = "execute")]
 use std::sync::Arc;
 use sys::{Rerr, Ret, normalf};
 
 #[cfg(feature = "execute")]
 use crate::runtime::Env;
-use crate::{ActionRef, BlockRef, TxRef};
+use crate::{Action, ActionRef, BlockRef, TxRef};
 #[cfg(feature = "execute")]
 use crate::{Context, StateChunkRef, Vm};
 
@@ -22,10 +21,11 @@ pub type ActionCreateFn = fn(&dyn BinaryCodecs, u16, &[u8]) -> Ret<(ActionRef, u
 pub type TxCreateFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<(TxRef, usize)>;
 #[cfg(feature = "execute")]
 pub type BlockCreateFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<(BlockRef, usize)>;
-/// Header pipeline feeder
-#[cfg(feature = "execute")]
-pub type BlockSizeFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<usize>;
 pub type ActionJsonDecodeFn = fn(&dyn CodecRegistry, u16, &str) -> Ret<ActionRef>;
+/// Canonical JSON rendering of a decoded action (field-level, `field::ToJSON`),
+/// driven by the caller-chosen `JSONFormater`. `None` at the binding site means
+/// the action has no typed JSON view and degrades to `{"kind":N}`.
+pub type ActionJsonToFn = fn(&dyn Action, &field::JSONFormater) -> String;
 
 /// Opaque chain profile selected by an application composition root. `base` owns no
 /// concrete network type; a concrete chain exposes typed accessors in its parameter crate.
@@ -51,6 +51,8 @@ pub struct ActionCodecBinding {
     pub scope: crate::ActScope,
     pub decode_wire: ActionCreateFn,
     pub decode_json: Option<ActionJsonDecodeFn>,
+    /// Canonical JSON view (`field::ToJSON`); `None` degrades to `{"kind":N}`.
+    pub to_json: Option<ActionJsonToFn>,
 }
 
 /// Transaction codec registration. Transactions are a separate wire namespace
@@ -61,16 +63,30 @@ pub struct TxCodecBinding {
     pub decode_wire: TxCreateFn,
 }
 
-/// Construct a regular action registration whose JSON shape is derived from
-/// the action's `ActionCodec` implementation.
+/// Construct a regular action binding whose wire and JSON creators are both
+/// derived from the action's own `ActionCodec` implementation. The two
+/// longer forms override the JSON creator and/or the wire creator for
+/// actions whose decode needs custom logic (AST, diamond mint, inscriptions).
+/// The two shorter forms also wire the typed canonical JSON view; the fully
+/// custom three-argument form leaves `to_json` unset (kind-only fallback).
 #[macro_export]
 macro_rules! action_codec_binding {
-    ($ty:ty, $wire:path) => {
+    ($ty:ty) => {
         $crate::ActionCodecBinding {
             schema: <$ty as $crate::ActionSchemaProvider>::ACTION_SCHEMA,
             scope: <$ty as $crate::ActionScopeProvider>::SCOPE,
-            decode_wire: $wire,
+            decode_wire: $crate::create_regular_action::<$ty>,
             decode_json: Some($crate::decode_regular_action_json::<$ty>),
+            to_json: Some($crate::action_json_of::<$ty>),
+        }
+    };
+    ($ty:ty, $json:path) => {
+        $crate::ActionCodecBinding {
+            schema: <$ty as $crate::ActionSchemaProvider>::ACTION_SCHEMA,
+            scope: <$ty as $crate::ActionScopeProvider>::SCOPE,
+            decode_wire: $crate::create_regular_action::<$ty>,
+            decode_json: Some($json),
+            to_json: Some($crate::action_json_of::<$ty>),
         }
     };
     ($ty:ty, $wire:path, $json:path) => {
@@ -79,17 +95,21 @@ macro_rules! action_codec_binding {
             scope: <$ty as $crate::ActionScopeProvider>::SCOPE,
             decode_wire: $wire,
             decode_json: Some($json),
+            to_json: None,
         }
     };
 }
 
 /// Shared validated storage used by both native and SDK codec containers.
 /// Registration of an action binding is atomic across binary and JSON maps.
+/// Tables are small (a few tx types, tens of actions): linear `Vec` lookup
+/// instead of `HashMap` keeps the hash-table machinery out of the wasm graph.
 #[derive(Default)]
 pub struct WireCodecTable {
-    transactions: HashMap<u8, TxCreateFn>,
-    actions: HashMap<u16, ActionCreateFn>,
-    action_json: HashMap<u16, ActionJsonDecodeFn>,
+    transactions: Vec<(u8, TxCreateFn)>,
+    actions: Vec<(u16, ActionCreateFn)>,
+    action_json: Vec<(u16, ActionJsonDecodeFn)>,
+    action_json_to: Vec<(u16, ActionJsonToFn)>,
 }
 
 impl WireCodecTable {
@@ -98,35 +118,59 @@ impl WireCodecTable {
     }
 
     pub fn add_tx(&mut self, binding: TxCodecBinding) -> Rerr {
-        if self.transactions.contains_key(&binding.ty) {
+        if self
+            .transactions
+            .iter()
+            .any(|(ty, _)| *ty == binding.ty)
+        {
             return sys::errf!("transaction type {} already registered", binding.ty);
         }
-        self.transactions.insert(binding.ty, binding.decode_wire);
+        self.transactions.push((binding.ty, binding.decode_wire));
         Ok(())
     }
 
     pub fn add_action(&mut self, binding: ActionCodecBinding) -> Rerr {
         let kind = binding.schema.kind;
-        if self.actions.contains_key(&kind) {
+        if self.actions.iter().any(|(k, _)| *k == kind) {
             return sys::errf!("action kind {} already registered", kind);
         }
-        self.actions.insert(kind, binding.decode_wire);
+        self.actions.push((kind, binding.decode_wire));
         if let Some(decode_json) = binding.decode_json {
-            self.action_json.insert(kind, decode_json);
+            self.action_json.push((kind, decode_json));
+        }
+        if let Some(to_json) = binding.to_json {
+            self.action_json_to.push((kind, to_json));
         }
         Ok(())
     }
 
     pub fn tx(&self, ty: u8) -> Option<TxCreateFn> {
-        self.transactions.get(&ty).copied()
+        self.transactions
+            .iter()
+            .find(|(k, _)| *k == ty)
+            .map(|(_, f)| *f)
     }
 
     pub fn action(&self, kind: u16) -> Option<ActionCreateFn> {
-        self.actions.get(&kind).copied()
+        self.actions
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, f)| *f)
     }
 
     pub fn action_json(&self, kind: u16) -> Option<ActionJsonDecodeFn> {
-        self.action_json.get(&kind).copied()
+        self.action_json
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, f)| *f)
+    }
+
+    /// Canonical JSON view of a decoded action, if the binding provides one.
+    pub fn action_json_to(&self, kind: u16) -> Option<ActionJsonToFn> {
+        self.action_json_to
+            .iter()
+            .find(|(k, _)| *k == kind)
+            .map(|(_, f)| *f)
     }
 
     pub fn decode_action(&self, host: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(ActionRef, usize)> {
@@ -160,13 +204,13 @@ impl WireCodecTable {
     }
 
     pub fn tx_types(&self) -> Vec<u8> {
-        let mut values: Vec<_> = self.transactions.keys().copied().collect();
+        let mut values: Vec<_> = self.transactions.iter().map(|(ty, _)| *ty).collect();
         values.sort_unstable();
         values
     }
 
     pub fn action_kinds(&self) -> Vec<u16> {
-        let mut values: Vec<_> = self.actions.keys().copied().collect();
+        let mut values: Vec<_> = self.actions.iter().map(|(k, _)| *k).collect();
         values.sort_unstable();
         values
     }
@@ -203,8 +247,6 @@ pub enum VmHostAllowedPolicy {
     Any,
     /// Main entry, Edit effect, call depth 0 only (e.g. transfer EXTACTION).
     TopOnly,
-    /// Nested Edit calls only (not top-level Main depth 0).
-    CallOnly,
     /// Edit or View call sites (not Pure).
     ViewOnly,
 }
@@ -224,6 +266,69 @@ pub struct VmHostActionDef {
 
 #[cfg(feature = "execute")]
 impl VmHostActionDef {
+    /// ACTION host: the opcode id is the action kind itself (`id = kind`), so a
+    /// kind above `0xff` is rejected instead of silently truncating into the u8 id.
+    pub fn action_host(kind: u16, name: &'static str, argc: usize) -> Ret<Self> {
+        if kind > 0xff {
+            return sys::errf!(
+                "VM ACTION host {} kind {:#06x} cannot fit the u8 opcode id",
+                name,
+                kind
+            );
+        }
+        Ok(Self {
+            id: kind as u8,
+            name,
+            kind: VmHostCallKind::Action,
+            ret: VmValueType::Nil,
+            argc,
+            allowed_policy: VmHostAllowedPolicy::TopOnly,
+        })
+    }
+
+    /// ACTENV host: kinds live in the 0x07xx opcode space; the id is the low byte.
+    pub fn env_host(kind: u16, name: &'static str, ret: VmValueType) -> Ret<Self> {
+        if kind >> 8 != 0x07 {
+            return sys::errf!(
+                "VM ACTENV host {} kind {:#06x} must be in the 0x07xx opcode space",
+                name,
+                kind
+            );
+        }
+        Ok(Self {
+            id: kind as u8,
+            name,
+            kind: VmHostCallKind::Env,
+            ret,
+            argc: 0,
+            allowed_policy: VmHostAllowedPolicy::Any,
+        })
+    }
+
+    /// ACTVIEW host: kinds live in the 0x06xx opcode space; the id is the low byte.
+    pub fn view_host(
+        kind: u16,
+        name: &'static str,
+        ret: VmValueType,
+        argc: usize,
+    ) -> Ret<Self> {
+        if kind >> 8 != 0x06 {
+            return sys::errf!(
+                "VM ACTVIEW host {} kind {:#06x} must be in the 0x06xx opcode space",
+                name,
+                kind
+            );
+        }
+        Ok(Self {
+            id: kind as u8,
+            name,
+            kind: VmHostCallKind::View,
+            ret,
+            argc,
+            allowed_policy: VmHostAllowedPolicy::ViewOnly,
+        })
+    }
+
     /// Validate fields constrained by the ACTION / ACTENV / ACTVIEW opcodes. Body consumption
     /// and stack output are opcode semantics, deliberately not configurable host-definition fields.
     pub fn validate_opcode_abi(&self) -> Rerr {
@@ -321,7 +426,6 @@ impl<T: BinaryCodecs + JsonCodecs + ?Sized> CodecRegistry for T {}
 pub trait ExecutionServices: BinaryCodecs + JsonCodecs {
     fn assign_vm(&self, height: u64) -> Option<Box<dyn Vm>>;
     fn vm_host_def(&self, kind: VmHostCallKind, id: u8) -> Option<&VmHostActionDef>;
-    fn vm_host_defs(&self, kind: VmHostCallKind) -> Vec<&VmHostActionDef>;
     fn vm_params(&self) -> Ret<&VmExecutionParams>;
     /// Concrete protocol-owned profile selected during registry assembly.
     fn execution_profile(&self) -> Ret<&'static dyn ExecutionProfile>;
@@ -340,12 +444,11 @@ pub trait WireRegistry {
     fn register_action_codec(&mut self, binding: ActionCodecBinding) -> Rerr;
 }
 
-/// Registration-time write surface for execution services (block creator/sizer, VM assigner,
+/// Registration-time write surface for execution services (block creator, VM assigner,
 /// context creator, VM params, execution profile). Implemented by the composition root only.
 #[cfg(feature = "execute")]
 pub trait ExecRegistry {
     fn set_block_creator(&mut self, f: BlockCreateFn) -> Rerr;
-    fn set_block_sizer(&mut self, f: BlockSizeFn) -> Rerr;
     fn set_vm_assigner(&mut self, f: VmAssignFn) -> Rerr;
     fn register_vm_host_def(&mut self, def: VmHostActionDef) -> Rerr;
     fn set_context_creator(&mut self, f: ContextCreateFn, gas_budget: i64) -> Rerr;

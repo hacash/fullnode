@@ -1,6 +1,6 @@
 //! TexCellAct (kind 22) and TEX cell codecs.
 
-use base::{ActScope, ActionRef, decode_regular_action};
+use base::ActScope;
 #[cfg(feature = "execute")]
 use field::Hash;
 use field::{
@@ -67,26 +67,34 @@ macro_rules! define_tex_cells {
         }
 
         fn decode_tex_cell_json(json: &str) -> Ret<TexCell> {
-            let mut fields = std::collections::HashMap::new();
+            // Field lists are short (cellid + one payload field); a `Vec` with
+            // linear lookup keeps the hash-table machinery out of the wasm graph.
+            let mut fields: Vec<(&str, &str)> = Vec::new();
             for (key, value) in json_split_object(json)? {
-                if fields.insert(key, value).is_some() {
+                if fields.iter().any(|(k, _)| *k == key) {
                     return sys::normalf!("TEX cell JSON field {} is duplicated", key);
                 }
+                fields.push((key, value));
             }
             let cid: field::Uint1 = fields
-                .get("cellid")
-                .copied()
+                .iter()
+                .find(|(k, _)| *k == "cellid")
+                .map(|(_, v)| *v)
                 .ok_or_else(|| sys::Error::normal("TEX cell JSON missing cellid"))
                 .and_then(json_decode_value)?;
             match cid.uint() {
                 $($id => {
                     let field_name = stringify!($field);
-                    if let Some(unknown) = fields.keys().find(|key| **key != "cellid" && **key != field_name) {
-                        return sys::normalf!("TEX cell {} JSON field {} is unknown", $id, unknown);
+                    if let Some(unknown) = fields.iter().find(|(k, _)| *k != "cellid" && *k != field_name) {
+                        return sys::normalf!("TEX cell {} JSON field {} is unknown", $id, unknown.0);
                     }
-                    let raw = fields.get(field_name).copied().ok_or_else(|| {
-                        sys::Error::normal(format!("TEX cell {} JSON missing {}", $id, field_name))
-                    })?;
+                    let raw = fields
+                        .iter()
+                        .find(|(k, _)| *k == field_name)
+                        .map(|(_, v)| *v)
+                        .ok_or_else(|| {
+                            sys::Error::normal(format!("TEX cell {} JSON missing {}", $id, field_name))
+                        })?;
                     Ok(TexCell::$variant { $field: json_decode_value(raw)? })
                 }),+,
                 id => sys::normalf!("cannot find tex cell id '{}'", id),
@@ -181,22 +189,6 @@ base::impl_action_facts! {
         },
 
     }
-}
-
-pub fn create_tex_cell_act(
-    _reg: &dyn base::BinaryCodecs,
-    kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    let (kind_field, _) = Uint2::decode(buf)?;
-    if kind_field.uint() != kind {
-        return sys::normalf!(
-            "action kind mismatch: expected {} got {}",
-            kind,
-            kind_field.uint()
-        );
-    }
-    decode_regular_action::<TexCellAct>(buf)
 }
 
 // ================================ wire schema ================================

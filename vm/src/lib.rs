@@ -48,12 +48,17 @@ pub mod fitshc;
 #[cfg(feature = "execute")]
 #[allow(dead_code)] // Internal frame API also backs the optional compiler/tooling surface.
 pub(crate) mod frame;
+// fitsh language front-end: source parser, formatter/decompiler (IR or
+// bytecode to readable text) and source-map-aware rendering. Codec-safe —
+// the SDK/wasm boundary consumes the decompiler; compiled in codec-only builds.
+pub mod lang;
 #[cfg(feature = "execute")]
 #[allow(dead_code)] // Instruction helpers intentionally expose the complete VM opcode surface.
 pub(crate) mod interpreter;
-#[cfg(feature = "execute")]
-#[allow(dead_code)] // IR builders are re-exported selectively through `fitshc`.
-pub(crate) mod ir;
+// IR node model and serialized parse: codec-safe, consumed by the fitsh
+// decompiler (`lang`) in codec-only (SDK) builds; IR builders are
+// re-exported selectively through `fitshc`.
+pub mod ir;
 #[cfg(feature = "execute")]
 #[allow(dead_code)] // The VM service owns lifecycle methods not all used by the fullnode path.
 pub(crate) mod machine;
@@ -80,5 +85,7 @@ pub use setup::register_exec;
 pub use state::{StorageDebug, VMState, VMStateRead, VmLog};
 pub use value::ContractAddress;
 pub use wire::{ACTION_CODECS, STRUCT_SCHEMAS, register_wire};
+pub use ir::{IRNode, IRNodeArray};
+pub use lang::SourceMap;
 
 pub const MAX_FUNC_PARAM_LEN: usize = 15;

@@ -8,21 +8,25 @@ use super::rt::*;
 use super::*;
 // use super::rt::TokenType::*;
 
-use super::native::*;
-
 include! {"print_option.rs"}
 include! {"decompilation_helper.rs"}
 include! {"ir_payload.rs"}
 include! {"ir_literal.rs"}
 
+#[cfg(feature = "execute")]
 pub mod syntax;
+#[cfg(feature = "execute")]
 pub use syntax::Syntax;
 
+#[cfg(feature = "execute")]
 include! {"const_literal.rs"}
+#[cfg(feature = "execute")]
 include! {"tokenizer.rs"}
 include! {"formater.rs"}
+#[cfg(all(test, feature = "execute"))]
 include! {"test.rs"}
 
+#[cfg(feature = "execute")]
 fn try_consume_display_lib_prelude(tokens: &[Token], start: usize) -> Option<usize> {
     let mut idx = start;
     if !matches!(tokens.get(idx), Some(Token::Keyword(KwTy::Lib))) {
@@ -57,6 +61,7 @@ fn try_consume_display_lib_prelude(tokens: &[Token], start: usize) -> Option<usi
     Some(idx)
 }
 
+#[cfg(feature = "execute")]
 fn try_consume_display_const_prelude(tokens: &[Token], start: usize) -> Option<usize> {
     let mut idx = start;
     if !matches!(tokens.get(idx), Some(Token::Keyword(KwTy::Const))) {
@@ -80,6 +85,7 @@ fn try_consume_display_const_prelude(tokens: &[Token], start: usize) -> Option<u
     Some(idx + 1)
 }
 
+#[cfg(feature = "execute")]
 fn skip_display_prelude(tokens: &[Token]) -> usize {
     let mut idx = 0usize;
     loop {
@@ -96,6 +102,7 @@ fn skip_display_prelude(tokens: &[Token]) -> usize {
     idx
 }
 
+#[cfg(feature = "execute")]
 fn strip_display_root_block(tokens: &mut Vec<Token>) {
     let body_start = skip_display_prelude(tokens);
     if tokens.len() < body_start + 2 {
@@ -134,6 +141,7 @@ fn strip_display_root_block(tokens: &mut Vec<Token>) {
     *tokens = stripped;
 }
 
+#[cfg(feature = "execute")]
 pub fn lang_to_irnode_with_sourcemap(langscript: &str) -> Ret<(IRNodeArray, SourceMap)> {
     let tkr = Tokenizer::new(langscript.as_bytes());
     let mut tks = tkr.parse()?;
@@ -144,16 +152,19 @@ pub fn lang_to_irnode_with_sourcemap(langscript: &str) -> Ret<(IRNodeArray, Sour
     syx.parse()
 }
 
+#[cfg(feature = "execute")]
 pub fn lang_to_irnode(langscript: &str) -> Ret<IRNodeArray> {
     let (block, _) = lang_to_irnode_with_sourcemap(langscript)?;
     Ok(block)
 }
 
+#[cfg(feature = "execute")]
 pub fn lang_to_ircode(langscript: &str) -> Ret<Vec<u8>> {
     let ir = lang_to_irnode(langscript)?;
     drop_irblock_wrap(ir.serialize())
 }
 
+#[cfg(feature = "execute")]
 pub fn lang_to_ircode_with_sourcemap(langscript: &str) -> Ret<(Vec<u8>, SourceMap)> {
     let (ir, smap) = lang_to_irnode_with_sourcemap(langscript)?;
     Ok((drop_irblock_wrap(ir.serialize())?, smap))
@@ -172,7 +183,22 @@ pub fn irnode_to_lang(block: IRNodeArray) -> Ret<String> {
     Ok(Formater::new(&opt).print(&block))
 }
 
-pub fn format_ircode_to_lang(ircode: &Vec<u8>, map: Option<&SourceMap>) -> VmrtRes<String> {
+pub use crate::rt::SourceMap;
+
+/// Bytecode disassembly to assembly text (the `BytecodePrint` view used by IR
+/// node printing and the SDK `vm.code` operation). Codec-safe.
+pub fn disassemble_bytecode(codes: &[u8], desc: bool) -> Ret<String> {
+    use crate::rt::BytecodePrint;
+    codes
+        .to_vec()
+        .bytecode_print(desc)
+        .map_err(|e| sys::Error::normal(e.to_string()))
+}
+
+/// Decompile serialized IR to fitsh text. `map` supplies source names (libs,
+/// functions, slots, consts) for maximum readability; `None` degrades to
+/// structural names. Codec-safe.
+pub fn format_ircode_to_lang(ircode: &[u8], map: Option<&SourceMap>) -> Ret<String> {
     let mut seek = 0;
     let block = parse_ir_block(ircode, &mut seek)?;
     let mut opt = PrintOption::new("  ", 0);
@@ -195,17 +221,27 @@ pub fn format_ircode_to_lang(ircode: &Vec<u8>, map: Option<&SourceMap>) -> VmrtR
 pub fn ircode_to_lang_with_sourcemap(ircode: &Vec<u8>, smap: &SourceMap) -> Ret<String> {
     let mut seek = 0;
     let block = parse_ir_block(ircode, &mut seek)?;
-    irnode_to_lang_with_sourcemap(block, smap).map_err(|e| e.to_string())
+    irnode_to_lang_with_sourcemap(block, smap)
 }
 
 pub fn ircode_to_lang(ircode: &Vec<u8>) -> Ret<String> {
     let mut seek = 0;
     let block = parse_ir_block(ircode, &mut seek)?;
-    irnode_to_lang(block).map_err(|e| e.to_string())
+    irnode_to_lang(block)
 }
 
+#[cfg(feature = "execute")]
 pub fn lang_to_bytecode(langscript: &str) -> Ret<Vec<u8>> {
     let ir = lang_to_irnode(langscript)?;
     let codes = ir.codegen()?;
     Ok(codes)
+}
+
+/// Structural IR tree view (node types and raw params), codec-safe. Lower
+/// fidelity than fitsh text but never ambiguous — useful for debugging and
+/// for rendering IR whose fitsh recovery fails.
+pub fn ir_tree_text(ircode: &[u8]) -> Ret<String> {
+    let mut seek = 0;
+    let block = parse_ir_block(ircode, &mut seek).map_err(|e| sys::Error::normal(e.to_string()))?;
+    Ok(block.print())
 }

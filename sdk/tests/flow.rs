@@ -2,11 +2,11 @@
 //! prepare → vault sign → attach → verify, offline, with golden Type-2 vector.
 
 use sdk::attach::{SignatureProof, attach_signature, prepare_signature, verify_signatures};
-use sdk::build::{ActionSpec, TransactionSpec, WireValue, build_transaction};
+use sdk::build::{ActionSpec, TransactionSpec, build_transaction};
 use sdk::inspect::{InspectContext, inspect, inspect_report};
 use sdk::profile::{CodecProfile, FULLNODE_COMMIT};
 use sdk::schema::SCHEMA_SIGNATURE_PROOF;
-use sdk::{Policy, evaluate_policy};
+use sdk::{Policy, WireValue, evaluate_policy};
 
 fn profile() -> CodecProfile {
     CodecProfile::standard()
@@ -99,7 +99,7 @@ fn vault_sign(
 
 #[test]
 fn legacy_golden_vector_inspects_and_signature_report_matches() {
-    let review = inspect_report(LEGACY_BODY, None, &profile()).unwrap();
+    let review = inspect_report(LEGACY_BODY, None, &profile(), &sdk::DescribeOptions::default()).unwrap();
     assert_eq!(review.tx_type, 2);
     assert_eq!(review.signability, "signable");
     assert_eq!(review.auditability, "full");
@@ -156,6 +156,7 @@ fn full_offline_sign_flow_type2() {
             consensus_flags: None,
         },
         &profile,
+        &sdk::DescribeOptions::default(),
     )
     .unwrap();
     assert_eq!(review.valid_height_range.as_ref().unwrap().start, 1_000_000);
@@ -353,6 +354,7 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
             consensus_flags: None,
         },
         &profile,
+        &sdk::DescribeOptions::default(),
     )
     .unwrap();
     assert_eq!(review.valid_height_range.as_ref().unwrap().start, 1_000_000);
@@ -370,6 +372,7 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
             consensus_flags: None,
         },
         &profile,
+        &sdk::DescribeOptions::default(),
     )
     .unwrap();
     assert_eq!(review.expired_height, Some(true));
@@ -385,13 +388,14 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
             consensus_flags: None,
         },
         &profile,
+        &sdk::DescribeOptions::default(),
     )
     .unwrap();
     assert_eq!(review.expired_height, Some(false));
     assert_eq!(review.wrong_chain, Some(true));
 
     // Report mode (no context) carries no derived facts.
-    let review = inspect_report(&built.body, None, &profile).unwrap();
+    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
     assert_eq!(review.expired_height, None);
     assert_eq!(review.wrong_chain, None);
 }
@@ -406,7 +410,7 @@ fn type1_is_outside_the_sdk_capability_profile() {
         field::Amount::from("1:244").unwrap(),
         1_755_223_764,
     );
-    let error = inspect_report(&hex::encode(tx.encode()), None, &profile()).unwrap_err();
+    let error = inspect_report(&hex::encode(tx.encode()), None, &profile(), &sdk::DescribeOptions::default()).unwrap_err();
     assert_eq!(error.code, "parse_failed");
     assert!(
         error
@@ -455,6 +459,7 @@ fn inspect_consensus_flags_none_does_not_judge_activation() {
             consensus_flags: None,
         },
         &profile,
+        &sdk::DescribeOptions::default(),
     )
     .unwrap();
     assert!(
@@ -482,6 +487,7 @@ fn inspect_consensus_flags_none_does_not_judge_activation() {
             consensus_flags: Some(0),
         },
         &profile,
+        &sdk::DescribeOptions::default(),
     )
     .unwrap();
     assert_eq!(
@@ -513,7 +519,7 @@ fn policy_evaluate_over_review() {
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let review = inspect_report(&built.body, None, &profile).unwrap();
+    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
     let decision = evaluate_policy(&review, &Policy::default()).unwrap();
     assert_eq!(decision.decision, "allow");
     assert_eq!(decision.review_binding, review.review_binding);
@@ -689,7 +695,7 @@ fn tx_encode_round_trips_and_rejects_tampered_input() {
     .unwrap();
 
     // Untampered round trip reproduces the exact body and hash.
-    let decoded = sdk::inspect::decode_transaction_json(&built.body).unwrap();
+    let decoded = sdk::inspect::decode_transaction_json(&built.body, &sdk::DescribeOptions::default()).unwrap();
     let rebuilt = sdk::inspect::encode_transaction_json(&decoded, None, &profile).unwrap();
     assert_eq!(rebuilt.body, built.body);
     assert_eq!(rebuilt.unsigned_body_hash, built.unsigned_body_hash);
@@ -706,7 +712,7 @@ fn tx_encode_round_trips_and_rejects_tampered_input() {
         actions: vec![hac_transfer(account.readable(), "12:000")],
     })
     .unwrap();
-    let sibling_decoded = sdk::inspect::decode_transaction_json(&sibling.body).unwrap();
+    let sibling_decoded = sdk::inspect::decode_transaction_json(&sibling.body, &sdk::DescribeOptions::default()).unwrap();
     let mut tampered = decoded.clone();
     tampered.actions[0].raw = sibling_decoded.actions[0].raw.clone();
     let error = sdk::inspect::encode_transaction_json(&tampered, None, &profile).unwrap_err();
@@ -714,7 +720,7 @@ fn tx_encode_round_trips_and_rejects_tampered_input() {
 
     // Supplying the matching review passes and the review is bound to the
     // rebuilt body; a tampered review fails the binding recomputation.
-    let review = inspect_report(&built.body, None, &profile).unwrap();
+    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
     let rebuilt = sdk::inspect::encode_transaction_json(&decoded, Some(&review), &profile).unwrap();
     assert_eq!(rebuilt.body, built.body);
     let mut tampered_review = review.clone();
@@ -738,7 +744,7 @@ fn prepare_and_attach_reject_tampered_review() {
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let review = inspect_report(&built.body, Some(account.readable()), &profile).unwrap();
+    let review = inspect_report(&built.body, Some(account.readable()), &profile, &sdk::DescribeOptions::default()).unwrap();
 
     // Editing a displayed field after inspect must break the binding chain at
     // prepare (the request is never minted for a tampered approval).
@@ -792,7 +798,7 @@ fn attach_rejects_tampered_request_fields() {
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let review = inspect_report(&built.body, Some(account.readable()), &profile).unwrap();
+    let review = inspect_report(&built.body, Some(account.readable()), &profile, &sdk::DescribeOptions::default()).unwrap();
     let request = prepare_signature(
         &built.body,
         account.readable(),
@@ -839,7 +845,7 @@ fn attach_enforces_request_binding_and_expiry() {
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let review = inspect_report(&built.body, Some(account.readable()), &profile).unwrap();
+    let review = inspect_report(&built.body, Some(account.readable()), &profile, &sdk::DescribeOptions::default()).unwrap();
 
     // A proof for request A attached under request B (different origin →
     // different binding/id) is rejected.
@@ -908,7 +914,7 @@ fn prepare_binds_policy_decision_and_attach_never_refuses_for_deny() {
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let review = inspect_report(&built.body, Some(account.readable()), &profile).unwrap();
+    let review = inspect_report(&built.body, Some(account.readable()), &profile, &sdk::DescribeOptions::default()).unwrap();
 
     // A denying policy still mints the request: the SDK binds the decision as
     // a fact; the caller decides whether a deny stops the flow.
@@ -985,7 +991,7 @@ fn multiple_chain_allow_reviews_intersect() {
         ],
     })
     .unwrap();
-    let review = inspect_report(&built.body, None, &profile).unwrap();
+    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
     assert_eq!(review.chain_ids_allowed, Some(vec![1]));
     assert!(review.guard_violations.is_empty());
     // Two guards and no non-guard is a topology finding; protocol_valid is
@@ -1015,7 +1021,7 @@ fn multiple_chain_allow_reviews_intersect() {
         ],
     })
     .unwrap();
-    let review = inspect_report(&built.body, None, &profile).unwrap();
+    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
     assert_eq!(review.chain_ids_allowed, Some(vec![]));
     assert!(!review.protocol_valid);
 }
@@ -1050,7 +1056,7 @@ fn type2_inscription_push_signs_and_verifies() {
     })
     .unwrap();
 
-    let review = inspect_report(&built.body, Some(&main), &profile()).unwrap();
+    let review = inspect_report(&built.body, Some(&main), &profile(), &sdk::DescribeOptions::default()).unwrap();
     assert_eq!(review.signability, "signable");
     assert_eq!(review.auditability, "full");
     assert_eq!(review.actions[0].kind, 32);
@@ -1085,7 +1091,7 @@ fn type2_inscription_push_signs_and_verifies() {
 
     // decode round-trip preserves the inscription action and re-encodes
     // identically under the same review binding.
-    let decoded = sdk::inspect::decode_transaction_json(&attached.body).unwrap();
+    let decoded = sdk::inspect::decode_transaction_json(&attached.body, &sdk::DescribeOptions::default()).unwrap();
     assert_eq!(decoded.actions[0].kind, 32);
     assert_eq!(decoded.actions[0].name.as_deref(), Some("hacd_insc_push"));
     let encoded =
@@ -1109,7 +1115,7 @@ fn inscription_push_duplicates_build_and_are_chain_execute_rules() {
         actions: vec![insc_push(&["AAABBB", "AAABBB"], "dup")],
     })
     .expect("duplicate diamonds are wire-valid; rejection is a chain execute rule");
-    let review = inspect_report(&built.body, None, &profile()).unwrap();
+    let review = inspect_report(&built.body, None, &profile(), &sdk::DescribeOptions::default()).unwrap();
     assert_eq!(review.actions[0].kind, 32);
     assert_eq!(review.actions[0].name.as_deref(), Some("hacd_insc_push"));
     assert!(review.protocol_valid);
@@ -1170,7 +1176,7 @@ fn inscription_edit_move_drop_build_and_decode() {
         ],
     })
     .unwrap();
-    let decoded = sdk::inspect::decode_transaction_json(&built.body).unwrap();
+    let decoded = sdk::inspect::decode_transaction_json(&built.body, &sdk::DescribeOptions::default()).unwrap();
     let names: Vec<&str> = decoded
         .actions
         .iter()
@@ -1203,7 +1209,7 @@ fn oversized_body_decodes_and_reports_limits_facts() {
     .unwrap();
     assert!(built.body.len() / 2 > hacash_params::MAX_TX_SIZE);
 
-    let review = inspect_report(&built.body, None, &profile).unwrap();
+    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
     assert!(
         review
             .limits_violations
@@ -1244,7 +1250,7 @@ fn empty_actions_build_and_inspect_reports_topology() {
         actions: vec![],
     })
     .expect("empty action list is wire-legal");
-    let review = inspect_report(&built.body, None, &profile()).unwrap();
+    let review = inspect_report(&built.body, None, &profile(), &sdk::DescribeOptions::default()).unwrap();
     assert!(
         review
             .topology_violations
@@ -1273,7 +1279,7 @@ fn over_tx_actions_max_builds_and_inspect_reports_topology() {
         actions,
     })
     .expect("action count above consensus max is wire-legal");
-    let review = inspect_report(&built.body, None, &profile()).unwrap();
+    let review = inspect_report(&built.body, None, &profile(), &sdk::DescribeOptions::default()).unwrap();
     assert_eq!(review.actions.len(), hacash_params::TX_ACTIONS_MAX + 1);
     assert!(
         review

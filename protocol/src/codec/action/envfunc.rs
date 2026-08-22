@@ -1,11 +1,7 @@
 //! VM syscall actions: ACTENV (0x07xx) / ACTVIEW (0x06xx), invoked via
 //! `Context::action_call` with kid = `[0x07|0x06, idx]` where idx = KIND % 256.
 
-use base::{ActionRef, decode_regular_action};
 use field::{Address, DiamondName, DiamondNameListMax200, DiamondNumber, Fold64, Uint1, Uint2};
-use sys::Ret;
-
-use super::common::check_action_kind;
 
 #[derive(Debug, Clone, base::ActionCodec)]
 #[action_codec(audit = "full")]
@@ -215,26 +211,5 @@ base::impl_action_facts! {
         min_tx_type: 3,
         description: |this: &ViewDiaOwnerAddrs| format!("Syscall: Get HACD owner addresses for {}", this.diamonds.splitstr()),
 
-    }
-}
-
-pub fn create_envfunc_action(
-    _reg: &dyn base::BinaryCodecs,
-    kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    check_action_kind(kind, buf)?;
-    match kind {
-        EnvHeight::KIND => decode_regular_action::<EnvHeight>(buf),
-        EnvMainAddr::KIND => decode_regular_action::<EnvMainAddr>(buf),
-        EnvBlockAuthorAddr::KIND => decode_regular_action::<EnvBlockAuthorAddr>(buf),
-        ViewBalance::KIND => decode_regular_action::<ViewBalance>(buf),
-        ViewAssetBalance::KIND => decode_regular_action::<ViewAssetBalance>(buf),
-        ViewCheckSign::KIND => decode_regular_action::<ViewCheckSign>(buf),
-        ViewDiaInscNum::KIND => decode_regular_action::<ViewDiaInscNum>(buf),
-        ViewDiaInscGet::KIND => decode_regular_action::<ViewDiaInscGet>(buf),
-        ViewDiaNameList::KIND => decode_regular_action::<ViewDiaNameList>(buf),
-        ViewDiaOwnerAddrs::KIND => decode_regular_action::<ViewDiaOwnerAddrs>(buf),
-        _ => sys::normalf!("envfunc action kind {} not registered", kind),
     }
 }

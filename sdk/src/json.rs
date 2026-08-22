@@ -2,24 +2,25 @@
 //! engine; serde_json test-oracle only). Amounts/addresses/hex and numeric fields
 //! are strings on the boundary so JS `JSON.parse` cannot lose precision.
 
-use std::collections::HashSet;
-
 use sys::errf;
 
-use crate::account::{AddressFromPublicKeyResult, VerifyAddressResult};
+use crate::account::{AddressFromPublicKeyResult, VerifyAddressResult, VerifySignatureResult};
 use crate::amount::ParsedAmount;
 use crate::attach::{AttachResult, SignatureProof, SignatureReport, SigningRequest, VerifyResult};
-use crate::audit::{ActionDesc, PayloadDesc, TransferDesc};
+use crate::audit::{ActionCodeDesc, ActionDesc, PayloadDesc, TransferDesc};
 use crate::build::BuiltTransaction;
+use crate::error::SdkError;
 use crate::inspect::{HeightRangeDesc, InspectContext, Review, SignatureEntry, TransactionJson};
+use crate::jsonparse;
 use crate::message::{MessagePrepareParams, MessageVerifyResult};
 use crate::policy::{Policy, PolicyDecision};
 use crate::profile::{
-    AbiVersion, Capabilities, CodecProfile, FeatureItem, LimitsProfile, ProtocolParamsProfile,
+    AbiVersion, ChainParams, CodecProfile, LimitsProfile, ProtocolParamsProfile,
 };
 
-// ================================ error-detail JSON builders ================================
-// Retained only for `SdkError.detail` and native-side tests, not the boundary serializer.
+// ================================ JSON builders ================================
+// Hand-written object/array builders shared by the boundary serializers,
+// `SdkError.detail` and native-side tests.
 
 /// JSON string escaping (for `"`, `\`, and control characters).
 pub(crate) fn esc(s: &str) -> String {
@@ -72,7 +73,7 @@ pub(crate) fn kv_opt(key: &str, value: Option<String>) -> String {
 
 /// Quoted decimal string of a numeric value (boundary convention: numbers
 /// travel as strings so JS never loses precision).
-fn qnum(v: impl std::fmt::Display) -> String {
+pub(crate) fn qnum(v: impl std::fmt::Display) -> String {
     format!("\"{v}\"")
 }
 
@@ -92,76 +93,47 @@ pub(crate) trait SdkJsonFrom: Sized {
 
 // ================================ parse-side helpers ================================
 
+/// Map the shared parse errors onto the boundary's `sys::Ret` flavor.
+fn sdk_parse_error(error: SdkError) -> sys::Error {
+    sys::Error::fault(error.message)
+}
+
 /// Split a JSON object for one boundary type, rejecting duplicated or unknown
 /// keys; the allowed list comes from the same layout declaration as the reader.
 fn sdk_json_pairs<'a>(json: &'a str, allowed: &[&str]) -> sys::Ret<Vec<(&'a str, &'a str)>> {
-    let pairs = field::json_split_object(json)
-        .map_err(|e| sys::Error::fault(format!("json object parse failed: {e}")))?;
-    let mut seen = HashSet::new();
-    for (key, _) in &pairs {
-        if !seen.insert(*key) {
-            return errf!("json field {key} is duplicated");
-        }
-        if !allowed.iter().any(|name| *name == *key) {
-            return errf!("json field {key} is unknown");
-        }
-    }
+    let pairs = jsonparse::object_pairs(json, "json object").map_err(sdk_parse_error)?;
+    jsonparse::reject_unknown(&pairs, allowed, "json field").map_err(sdk_parse_error)?;
     Ok(pairs)
 }
 
 fn jfind<'a>(pairs: &'a [(&'a str, &'a str)], name: &str) -> Option<&'a str> {
-    pairs
-        .iter()
-        .find(|(key, _)| *key == name)
-        .map(|(_, value)| *value)
+    jsonparse::find(pairs, name)
 }
 
 fn ensure_allowed_fields(pairs: &[(&str, &str)], allowed: &[&str]) -> sys::Ret<()> {
-    for (key, _) in pairs {
-        if !allowed.iter().any(|name| *name == *key) {
-            return errf!("json field {key} is unknown");
-        }
-    }
-    Ok(())
+    jsonparse::reject_unknown(pairs, allowed, "json field").map_err(sdk_parse_error)
 }
 
 fn jneed<'a>(pairs: &'a [(&'a str, &'a str)], name: &str) -> sys::Ret<&'a str> {
-    jfind(pairs, name).ok_or_else(|| sys::Error::fault(format!("json field {name} missing")))
+    jsonparse::required(pairs, name, "json field").map_err(sdk_parse_error)
 }
 
 fn jstr(pairs: &[(&str, &str)], name: &str) -> sys::Ret<String> {
-    field::json_expect_quoted_decoded(jneed(pairs, name)?)
-        .map_err(|e| sys::Error::fault(format!("json field {name} is not a string: {e}")))
+    jsonparse::string_value(jneed(pairs, name)?, name, "json field").map_err(sdk_parse_error)
 }
 
 fn jopt_str(pairs: &[(&str, &str)], name: &str) -> sys::Ret<Option<String>> {
-    match jfind(pairs, name) {
-        Some(raw) => field::json_expect_quoted_decoded(raw)
-            .map(Some)
-            .map_err(|e| sys::Error::fault(format!("json field {name} is not a string: {e}"))),
-        None => Ok(None),
-    }
+    jsonparse::optional_string(pairs, name, "json field").map_err(sdk_parse_error)
 }
 
 /// Numeric value: the boundary convention is decimal strings, but bare
 /// numbers are accepted too (hand-written JS callers).
 fn jnum<T: std::str::FromStr>(pairs: &[(&str, &str)], name: &str) -> sys::Ret<T> {
-    let raw = jneed(pairs, name)?.trim();
-    let text = if raw.starts_with('"') {
-        field::json_expect_quoted_decoded(raw)
-            .map_err(|e| sys::Error::fault(format!("json field {name} is not a number: {e}")))?
-    } else {
-        raw.to_owned()
-    };
-    text.parse()
-        .map_err(|_| sys::Error::fault(format!("json field {name} is not a number")))
+    jsonparse::number_value(jneed(pairs, name)?, name, "json field").map_err(sdk_parse_error)
 }
 
 fn jopt_num<T: std::str::FromStr>(pairs: &[(&str, &str)], name: &str) -> sys::Ret<Option<T>> {
-    match jfind(pairs, name) {
-        Some(_) => jnum(pairs, name).map(Some),
-        None => Ok(None),
-    }
+    jsonparse::optional_number(pairs, name, "json field").map_err(sdk_parse_error)
 }
 
 fn jbool(pairs: &[(&str, &str)], name: &str) -> sys::Ret<bool> {
@@ -534,6 +506,9 @@ impl_sdk_json! {
 impl_sdk_json! {
     MessageVerifyResult { ok: bool, address: opt_str, error: opt_str } to
 }
+impl_sdk_json! {
+    VerifySignatureResult { ok: bool, address: opt_str, error: opt_str } to
+}
 
 // ================================ profile ================================
 
@@ -585,18 +560,36 @@ impl_sdk_json! {
 impl_sdk_json! {
     AbiVersion { major: u32, minor: u32 } to
 }
-impl_sdk_json! {
-    FeatureItem { id: str, version: u32 } to
+
+impl ChainParams {
+    pub(crate) fn to_json_string(&self) -> String {
+        // Reductions travel flattened (activation, next) alternating, like the
+        // codec profile's protocol params.
+        let flat: Vec<String> = self
+            .fee_purity_reductions
+            .iter()
+            .flat_map(|(activation, next)| [qnum(activation), qnum(next)])
+            .collect();
+        obj(vec![
+            kv("schema", q(&self.schema)),
+            kv("params_version", qnum(self.params_version)),
+            kv("chain_id", qnum(self.chain_id)),
+            kv("ast_tree_depth_max", qnum(self.ast_tree_depth_max as u64)),
+            kv("max_type3_signers", qnum(self.max_type3_signers as u64)),
+            kv("fee_purity_floor", qnum(self.fee_purity_floor)),
+            kv("fee_purity_reductions", arr(flat)),
+            kv("max_tx_size", qnum(self.max_tx_size as u64)),
+            kv("tx_actions_max", qnum(self.tx_actions_max as u64)),
+            kv("registered_tx_types", arr(self.registered_tx_types.iter().map(|v| qnum(*v)).collect())),
+            kv("diamond_form_flag", qnum(self.diamond_form_flag)),
+        ])
+    }
 }
 
-impl_sdk_json! {
-    Capabilities {
-        schema: str,
-        package_version: str,
-        abi: obj AbiVersion,
-        codec_profile_hash: str,
-        features: obj_arr FeatureItem,
-    } to
+impl SdkJsonTo for ChainParams {
+    fn to_json_string(&self) -> String {
+        ChainParams::to_json_string(self)
+    }
 }
 
 /// The `system.sdk_version` response body.
@@ -611,7 +604,7 @@ impl_sdk_json! {
     SdkVersion { schema: str, package_version: str, abi: obj AbiVersion } to
 }
 
-/// The `amount.format_protocol` response body (`{value}`).
+/// The `amount.format` response body (`{value}`).
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct AmountFormatResult {
     pub value: String,
@@ -702,6 +695,17 @@ impl_sdk_json! {
 }
 
 impl_sdk_json! {
+    ActionCodeDesc {
+        codeconf: u8,
+        code_type: u8,
+        code_type_name: str,
+        codes_len: usize_def,
+        codes_hash: str,
+        codes_preview: str,
+    } both
+}
+
+impl_sdk_json! {
     ActionDesc {
         schema: str_def,
         index: usize_def,
@@ -713,6 +717,9 @@ impl_sdk_json! {
         protocol_valid: bool_def_true,
         auditability: str_def,
         audit_notes: str_arr,
+        description: opt_str,
+        json: opt_str,
+        code: opt_obj ActionCodeDesc,
         blob: bool_def_false,
         transfer: opt_obj TransferDesc,
         children: opt_obj_arr ActionDesc,

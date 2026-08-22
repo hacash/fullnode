@@ -1,11 +1,8 @@
 //! `ContractDeploy` (kind 40) + `ContractUpdate` (kind 41) wire codecs.
 //! Execute bodies, store prechecks and `peek_vm_runtime_limits` live in `contract_exec.rs` (`execute` feature only).
 
-use std::sync::Arc;
-
-use base::{ActScope, ActionRef};
-use field::{Address, Amount, BytesW2, Decode, Fixed2, Fixed4, Uint2, Uint4};
-use sys::Ret;
+use base::ActScope;
+use field::{Address, Amount, BytesW2, Fixed2, Fixed4, Uint2, Uint4};
 
 use crate::contract::{ContractEdit, ContractSto};
 use crate::rt::AbstCall;
@@ -35,7 +32,7 @@ pub struct ContractUpdateAnalysis {
 // ================================ ContractDeploy ================================
 
 #[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
-#[action_codec(audit = "structured")]
+#[action_codec(audit = "structured", code)]
 pub struct ContractDeploy {
     pub kind: Uint2,
     pub protocol_cost: Amount,
@@ -84,7 +81,7 @@ base::impl_action_facts! {
 // ================================ ContractUpdate ================================
 
 #[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
-#[action_codec(audit = "structured")]
+#[action_codec(audit = "structured", code)]
 pub struct ContractUpdate {
     pub kind: Uint2,
     pub protocol_cost: Amount,
@@ -126,26 +123,4 @@ base::impl_action_facts! {
         },
 
     }
-}
-
-/**************************************/
-
-// Decoders ----------------------------------------------------------------
-
-pub fn create_contract_deploy(
-    _reg: &dyn base::BinaryCodecs,
-    _kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    let (action, used) = ContractDeploy::decode(buf)?;
-    Ok((Arc::new(action), used))
-}
-
-pub fn create_contract_update(
-    _reg: &dyn base::BinaryCodecs,
-    _kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    let (action, used) = ContractUpdate::decode(buf)?;
-    Ok((Arc::new(action), used))
 }

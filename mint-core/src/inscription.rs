@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use base::{ActScope, ActionJsonCodec, ActionRef, decode_regular_action};
+use base::{ActScope, ActionJsonCodec, ActionRef};
 use field::{
     Amount, BytesW1, DiamondName, DiamondNameListMax200, Encode, Uint1, Uint2, WireAmount,
 };
@@ -317,21 +317,6 @@ pub fn calc_edit_inscription_protocol_cost(average_bid_burn_mei: u16) -> Amount 
 
 pub fn calc_drop_inscription_protocol_cost(average_bid_burn_mei: u16) -> Amount {
     wire_rules().drop_cost(average_bid_burn_mei)
-}
-
-pub fn create_dia_insc_action(
-    _reg: &dyn base::BinaryCodecs,
-    kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    match kind {
-        DiaInscPush::KIND => decode_regular_action::<DiaInscPush>(buf),
-        DiaInscClean::KIND => decode_regular_action::<DiaInscClean>(buf),
-        DiaInscEdit::KIND => decode_regular_action::<DiaInscEdit>(buf),
-        DiaInscMove::KIND => decode_regular_action::<DiaInscMove>(buf),
-        DiaInscDrop::KIND => decode_regular_action::<DiaInscDrop>(buf),
-        _ => sys::normalf!("inscription action kind {} not registered", kind),
-    }
 }
 
 /// JSON decoder for inscription actions. Diamond lists keep the same

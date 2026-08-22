@@ -9,7 +9,6 @@ use sys::{Ret, normalf};
 pub struct Registry {
     block_hasher: BlockHasherFn,
     block_creator: Option<BlockCreateFn>,
-    block_sizer: Option<BlockSizeFn>,
     vm_assigner: Option<VmAssignFn>,
     wire_codecs: WireCodecTable,
     vm_host_defs: HashMap<(VmHostCallKind, u8), VmHostActionDef>,
@@ -24,7 +23,6 @@ impl Registry {
         Self {
             block_hasher,
             block_creator: None,
-            block_sizer: None,
             vm_assigner: None,
             wire_codecs: WireCodecTable::new(),
             vm_host_defs: HashMap::new(),
@@ -52,14 +50,6 @@ impl base::ExecRegistry for Registry {
             return sys::errf!("block creator already registered");
         }
         self.block_creator = Some(f);
-        Ok(())
-    }
-
-    fn set_block_sizer(&mut self, f: BlockSizeFn) -> sys::Rerr {
-        if self.block_sizer.is_some() {
-            return sys::errf!("block sizer already registered");
-        }
-        self.block_sizer = Some(f);
         Ok(())
     }
 
@@ -130,10 +120,7 @@ impl BinaryCodecs for Registry {
     }
 
     fn peek_block_size(&self, buf: &[u8]) -> Ret<usize> {
-        match self.block_sizer {
-            Some(sizer) => sizer(self, buf),
-            None => self.decode_block(buf).map(|(_, used)| used),
-        }
+        self.decode_block(buf).map(|(_, used)| used)
     }
 }
 
@@ -150,16 +137,6 @@ impl ExecutionServices for Registry {
 
     fn vm_host_def(&self, kind: VmHostCallKind, id: u8) -> Option<&VmHostActionDef> {
         self.vm_host_defs.get(&(kind, id))
-    }
-
-    fn vm_host_defs(&self, kind: VmHostCallKind) -> Vec<&VmHostActionDef> {
-        let mut defs: Vec<_> = self
-            .vm_host_defs
-            .values()
-            .filter(|def| def.kind == kind)
-            .collect();
-        defs.sort_unstable_by_key(|def| (def.id, def.name));
-        defs
     }
 
     fn vm_params(&self) -> Ret<&VmExecutionParams> {

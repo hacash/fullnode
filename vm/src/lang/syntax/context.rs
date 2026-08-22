@@ -238,7 +238,9 @@ impl Syntax {
             return errf!("lib index {} binding already exists", idx);
         }
         if let Some(addr) = addr {
-            addr.must_contract()?;
+            if !addr.is_contract() {
+                return errf!("lib address {} is not a contract address", addr.to_readable());
+            }
         }
         self.libs.insert(name.clone(), (idx, addr.clone()));
         self.emit.source_map.register_lib(idx, name, addr)?;

@@ -16,6 +16,11 @@ mod intent;
 use ascii::*;
 pub use call::{call_ntctl, call_ntenv, call_ntfunc};
 
+// Native enums and their metadata tables live in the codec-safe
+// `rt::native_catalog` (shared with the fitsh decompiler); the `use crate::rt::*`
+// glob above brings them into this module's scope. The execution dispatch for
+// `NativeFunc` is generated here where the implementation functions live.
+
 macro_rules! native_dispatch_method {
     (func, $EnumName:ident, $ErrCode:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $_tar_uint_tys:expr )+) => {
         pub fn call(height: u64, idx: u8, v: &[u8]) -> VmrtRes<(Value, i64)> {
@@ -31,109 +36,33 @@ macro_rules! native_dispatch_method {
             }
         }
     };
-    (ctl, $EnumName:ident, $ErrCode:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $_tar_uint_tys:expr )+) => {};
-    (env, $EnumName:ident, $ErrCode:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $_tar_uint_tys:expr )+) => {};
 }
 
-macro_rules! native_tar_uint_tys_api {
-    (func, $EnumName:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $tar_uint_tys:expr )+) => {
-        pub fn tar_uint_tys_of(&self) -> &'static [ValueTy] {
-            match self {
-                $( Self::$name => $tar_uint_tys, )+
-                Self::Null => &[],
-            }
-        }
+use ValueTy::*;
 
-        pub fn tar_uint_tys(idx: u8) -> Option<&'static [ValueTy]> {
-            Self::try_from_u8(idx).ok().and_then(|n| {
-                let tys = n.tar_uint_tys_of();
-                if tys.is_empty() {
-                    None
-                } else {
-                    Some(tys)
-                }
-            })
-        }
-    };
-    (ctl, $EnumName:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $tar_uint_tys:expr )+) => {};
-    (env, $EnumName:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $tar_uint_tys:expr )+) => {};
-}
-
-macro_rules! native_func_env_define {
-    ( $kind:ident, $EnumName:ident, $ErrCode:ident,
-      $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $tar_uint_tys:expr )+ ) => {
-        #[allow(non_camel_case_types)]
-        #[repr(u8)]
-        #[derive(Default, PartialEq, Debug, Clone, Copy)]
-        pub enum $EnumName {
-            #[default] Null = 0u8,
-            $( $name = $v, )+
-        }
-
-        impl $EnumName {
-            $(
-            #[allow(non_upper_case_globals)]
-            pub const $name: u8 = $v;
-            )+
-
-            #[inline]
-            pub fn try_from_u8(idx: u8) -> VmrtRes<Self> {
-                match idx {
-                    $( x if x == Self::$name as u8 => Ok(Self::$name), )+
-                    _ => itr_err_fmt!($ErrCode, "not find {} idx {}", stringify!($EnumName), idx),
-                }
-            }
-
-            native_dispatch_method!($kind, $EnumName, $ErrCode, $( $name = $v, $argv_len, $gas, $rty, $tar_uint_tys )+);
-            native_tar_uint_tys_api!($kind, $EnumName, $( $name = $v, $argv_len, $gas, $rty, $tar_uint_tys )+);
-
-            pub const fn gas_of(&self) -> i64 {
-                match self {
-                    $( Self::$name => $gas, )+
-                    Self::Null => 0,
-                }
-            }
-
-            pub fn gas(idx: u8) -> VmrtRes<i64> {
-                Ok(Self::try_from_u8(idx)?.gas_of())
-            }
-
-            pub fn name(&self) -> &'static str {
-                match self {
-                    $( Self::$name => stringify!($name), )+
-                    _ => unreachable!(),
-                }
-            }
-
-            pub fn from_name(name: &str) -> Option<(u8, $EnumName)> {
-                Some(match name {
-                    $( stringify!($name) => (Self::$name as u8, Self::$name), )+
-                    _ => return None,
-                })
-            }
-
-            pub fn has_idx(idx: u8) -> bool {
-                match idx {
-                    $( $v => true, )+
-                    _ => false,
-                }
-            }
-
-            pub fn argv_len(idx: u8) -> Option<usize> {
-                match idx {
-                    $( $v => Some($argv_len), )+
-                    _ => None,
-                }
-            }
-
-            pub fn argv_len_of(&self) -> usize {
-                match self {
-                    $( Self::$name => $argv_len, )+
-                    Self::Null => 0,
-                }
-            }
-        }
-    };
+impl NativeFunc {
+    native_dispatch_method!(func, NativeFunc, NativeFuncError,
+        hac_to_mei         = 31,   1,        6,    U64,        &[]
+        hac_to_zhu         = 32,   1,        6,    U128,       &[]
+        u64_to_fold64      = 33,   1,        8,    Bytes,      &[]
+        fold64_to_u64      = 34,   1,        8,    U64,        &[]
+        pack_asset         = 37,   2,        8,    Bytes,      &[U64, U64]
+        mei_to_hac         = 35,   1,        6,    Bytes,      &[]
+        zhu_to_hac         = 36,   1,        6,    Bytes,      &[]
+        address_ptr        = 41,   1,        4,    U8,         &[]
+        sha2               = 101, 1,       32,    Bytes,      &[]
+        sha3               = 102, 1,       32,    Bytes,      &[]
+        ripemd160          = 103, 1,       20,    Bytes,      &[]
+        verify_signature   = 104, 3,       96,    Bool,       &[]
+        keccak256          = 105, 1,       32,    Bytes,      &[]
+        blake2s256         = 106, 1,       32,    Bytes,      &[]
+        blake2b256         = 107, 1,       32,    Bytes,      &[]
+        ascii_parse_flat_kv = 120, 2,      64,    Tuple,      &[]
+        ascii_validate_transform = 121, 2, 24,    Tuple,      &[]
+        ascii_u128_dec_unit = 122, 2,      24,    Tuple,      &[]
+        ascii_hex_lower    = 123, 1,       20,    Tuple,      &[]
+        ascii_base58_validate_or_echo = 124, 1, 20, Tuple,      &[]
+    );
 }
 
 fn digest_value<D: sha2::Digest>(buf: &[u8]) -> Value {
@@ -281,35 +210,6 @@ fn verify_signature(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     let ok = sys::Account::verify_signature(&hash.0, &sign.publickey, &sign.signature)
         && sys::Account::get_address_by_public_key(sign.publickey) == *addr.as_array();
     Ok(Value::Bool(ok))
-}
-
-use ValueTy::*;
-
-native_func_env_define! { env, NativeEnv, NativeEnvError,
-    context_address    = 1,    0,        6,    Address,    &[]
-}
-
-native_func_env_define! { func, NativeFunc, NativeFuncError,
-    hac_to_mei         = 31,   1,        6,    U64,        &[]
-    hac_to_zhu         = 32,   1,        6,    U128,       &[]
-    u64_to_fold64      = 33,   1,        8,    Bytes,      &[]
-    fold64_to_u64      = 34,   1,        8,    U64,        &[]
-    pack_asset         = 37,   2,        8,    Bytes,      &[U64, U64]
-    mei_to_hac         = 35,   1,        6,    Bytes,      &[]
-    zhu_to_hac         = 36,   1,        6,    Bytes,      &[]
-    address_ptr        = 41,   1,        4,    U8,         &[]
-    sha2               = 101, 1,       32,    Bytes,      &[]
-    sha3               = 102, 1,       32,    Bytes,      &[]
-    ripemd160          = 103, 1,       20,    Bytes,      &[]
-    verify_signature   = 104, 3,       96,    Bool,       &[]
-    keccak256          = 105, 1,       32,    Bytes,      &[]
-    blake2s256         = 106, 1,       32,    Bytes,      &[]
-    blake2b256         = 107, 1,       32,    Bytes,      &[]
-    ascii_parse_flat_kv = 120, 2,      64,    Tuple,      &[]
-    ascii_validate_transform = 121, 2, 24,    Tuple,      &[]
-    ascii_u128_dec_unit = 122, 2,      24,    Tuple,      &[]
-    ascii_hex_lower    = 123, 1,       20,    Tuple,      &[]
-    ascii_base58_validate_or_echo = 124, 1, 20, Tuple,      &[]
 }
 
 native_func_env_define! { ctl, NativeCtl, NativeCtlError,

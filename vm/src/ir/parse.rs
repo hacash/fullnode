@@ -1,3 +1,70 @@
+
+/// Verify an IR bytecode sub-stream (payload of an `IRNodeBytecodes`); may be non-terminal/empty,
+/// but opcode validity, no IR-only opcodes/absolute jumps, and param alignment must still hold.
+pub fn verify_ir_bytecode_stream_fragment(codes: &[u8]) -> VmrtErr {
+    verify_ir_bytecode_stream(codes, /*require_terminal=*/ false)
+}
+
+fn verify_ir_bytecode_stream(codes: &[u8], require_terminal: bool) -> VmrtErr {
+    let mut i = 0usize;
+    let mut last = None;
+    while i < codes.len() {
+        let inst = Bytecode::try_from_u8(codes[i])?;
+        last = Some(inst);
+        let meta = inst.metadata();
+        if !meta.valid {
+            return itr_err_fmt!(InstInvalid, "bytecode {} not found", inst as u8);
+        }
+        // IR-only opcodes must have been lowered by codegen; a stray one here (e.g. IRBREAK
+        // with `meta.param=0`) would shift the rest of the stream, so reject it.
+        if matches!(
+            inst,
+            IRBYTECODE | IRLIST | IRBLOCK | IRBLOCKR | IRIF | IRIFR | IRWHILE | IRBREAK
+                | IRCONTINUE
+        ) {
+            return itr_err_fmt!(
+                InstInvalid,
+                "IR bytecode {:?} leaked into runtime stream",
+                inst
+            );
+        }
+        if matches!(inst, JMPL | BRL) {
+            return itr_err_fmt!(
+                InstInvalid,
+                "absolute jumps are not allowed in IRNode code; use relative jumps"
+            );
+        }
+        i += 1;
+        let end = match inst {
+            PBUF => {
+                if i >= codes.len() {
+                    return itr_err_code!(InstParamsErr);
+                }
+                i + 1 + codes[i] as usize
+            }
+            PBUFL => {
+                if i + 2 > codes.len() {
+                    return itr_err_code!(InstParamsErr);
+                }
+                let len = u16::from_be_bytes(codes[i..i + 2].try_into().unwrap()) as usize;
+                i + 2 + len
+            }
+            _ => i + meta.param as usize,
+        };
+        if end > codes.len() {
+            return itr_err_code!(InstParamsErr);
+        }
+        i = end;
+    }
+    if require_terminal {
+        let Some(last) = last else {
+            return itr_err_code!(CodeEmpty);
+        };
+        ensure_terminal_instruction(last)?;
+    }
+    Ok(())
+}
+
 /* parse ir list */
 pub fn parse_ir_list(stuff: &[u8], seek: &mut usize) -> VmrtRes<IRNodeArray> {
     let u16max = u16::MAX as usize;

@@ -15,12 +15,18 @@ impl IRNode for IRNodeEmpty {
     fn bytecode(&self) -> u8 {
         0
     }
+
+    #[cfg(feature = "execute")]
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
         Ok(vec![])
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, _buf: &mut Vec<u8>) -> VmrtRes<()> {
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn is_serialization_elided(&self) -> bool {
         true
     }
@@ -45,13 +51,19 @@ impl IRNode for IRNodeTopStackValue {
         0
     }
 
+
+    #[cfg(feature = "execute")]
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
         Ok(vec![])
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, _buf: &mut Vec<u8>) -> VmrtRes<()> {
         Ok(())
     }
 
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         panic!("IRNodeTopStackValue is codegen-only and cannot be serialized")
     }
@@ -76,9 +88,13 @@ impl IRNode for IRNodeText {
     fn bytecode(&self) -> u8 {
         0
     }
+
+    #[cfg(feature = "execute")]
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
         Ok(vec![])
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, _buf: &mut Vec<u8>) -> VmrtRes<()> {
         Ok(())
     }
@@ -109,6 +125,8 @@ impl IRNode for IRNodeLeaf {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         // IRBREAK / IRCONTINUE must be lowered to JMPSL by the while-loop `LoopPatch`
         // sink (compile.rs); reaching here means they leaked outside a while body — fail loudly.
@@ -122,6 +140,8 @@ impl IRNode for IRNodeLeaf {
         buf.push(self.bytecode());
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         // Serialized IR keeps IRBREAK/IRCONTINUE as 1-byte leaves; they are lowered to JMPSL
         // in while-loop codegen and never appear in runtime bytecode.
@@ -175,11 +195,15 @@ impl IRNode for IRNodeParam1 {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         buf.push(self.bytecode());
         buf.push(self.para);
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         // IR serialized form is prefix-coded: [opcode][param...]
         vec![self.bytecode(), self.para]
@@ -218,11 +242,15 @@ impl IRNode for IRNodeParam2 {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         buf.push(self.bytecode());
         buf.extend_from_slice(&self.para);
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         // IR serialized form is prefix-coded: [opcode][param...]
         iter::once(self.bytecode()).chain(self.para).collect()
@@ -249,11 +277,15 @@ impl IRNode for IRNodeParams {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         buf.push(self.bytecode());
         buf.extend_from_slice(&self.para);
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         // IR serialized form is prefix-coded: [opcode][param...]
         iter::once(self.bytecode())
@@ -287,12 +319,16 @@ impl IRNode for IRNodeParamsSingle {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         self.subx.codegen_into(buf)?;
         buf.push(self.bytecode());
         buf.extend_from_slice(&self.para);
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
             .chain(self.para.clone())
@@ -339,9 +375,13 @@ impl IRNode for IRNodeWrapOne {
     fn bytecode(&self) -> u8 {
         self.node.bytecode()
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         self.node.codegen_into(buf)
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         self.node.serialize()
     }
@@ -372,6 +412,8 @@ impl IRNode for IRNodeSingle {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
             .chain(self.subx.serialize())
@@ -381,6 +423,8 @@ impl IRNode for IRNodeSingle {
         let substr = self.subx.print();
         format!("{:?} {}", self.inst, substr)
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         self.subx.codegen_into(buf)?;
         buf.push(self.bytecode());
@@ -400,6 +444,8 @@ impl IRNode for IRNodeDouble {
     fn as_any(&self) -> &dyn Any {
         self
     }
+
+    #[cfg(feature = "execute")]
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
@@ -418,6 +464,8 @@ impl IRNode for IRNodeDouble {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         if let Some(c) = compile_double(self.inst, &self.subx, &self.suby)? {
             buf.extend(c);
@@ -428,6 +476,8 @@ impl IRNode for IRNodeDouble {
         buf.push(self.bytecode());
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
             .chain(self.subx.serialize())
@@ -463,6 +513,8 @@ impl IRNode for IRNodeTriple {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         if let Some(c) = compile_triple(self.inst, &self.subx, &self.suby, &self.subz)? {
             buf.extend(c);
@@ -474,6 +526,8 @@ impl IRNode for IRNodeTriple {
         buf.push(self.bytecode());
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
             .chain(self.subx.serialize())
@@ -514,6 +568,8 @@ impl IRNode for IRNodeQuad {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         self.subx.codegen_into(buf)?;
         self.suby.codegen_into(buf)?;
@@ -522,6 +578,8 @@ impl IRNode for IRNodeQuad {
         buf.push(self.bytecode());
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
             .chain(self.subx.serialize())
@@ -568,6 +626,8 @@ impl IRNode for IRNodeQuint {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         self.suba.codegen_into(buf)?;
         self.subb.codegen_into(buf)?;
@@ -577,6 +637,8 @@ impl IRNode for IRNodeQuint {
         buf.push(self.bytecode());
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
             .chain(self.suba.serialize())
@@ -624,12 +686,16 @@ impl IRNode for IRNodeParam1Single {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         self.subx.codegen_into(buf)?;
         buf.push(self.bytecode());
         buf.push(self.para);
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
             .chain([self.para])
@@ -672,6 +738,8 @@ pub(crate) fn validate_param1_multi_arity(
     Ok(())
 }
 
+#[cfg(feature = "execute")]
+#[cfg(feature = "execute")]
 fn validate_param1_multi_node(
     inst: Bytecode,
     para: u8,
@@ -696,6 +764,7 @@ fn validate_param1_multi_node(
     Ok(())
 }
 
+#[cfg(feature = "execute")]
 fn codegen_param1_multi_into(
     buf: &mut Vec<u8>,
     inst: Bytecode,
@@ -712,6 +781,7 @@ fn codegen_param1_multi_into(
     Ok(())
 }
 
+#[cfg(feature = "execute")]
 fn serialize_param1_multi(
     inst: Bytecode,
     para: u8,
@@ -771,6 +841,7 @@ pub(crate) fn param1_multi_parts<'a>(node: &'a dyn IRNode) -> Option<Param1Multi
     None
 }
 
+#[cfg(feature = "execute")]
 pub(crate) fn build_param1_multi_node(
     hrtv: bool,
     inst: Bytecode,
@@ -845,6 +916,8 @@ impl IRNode for IRNodeParam1Double {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         codegen_param1_multi_into(
             buf,
@@ -854,6 +927,8 @@ impl IRNode for IRNodeParam1Double {
             &[&*self.subx, &*self.suby],
         )
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         serialize_param1_multi(
             self.inst,
@@ -891,6 +966,8 @@ impl IRNode for IRNodeParam1Triple {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         codegen_param1_multi_into(
             buf,
@@ -900,6 +977,8 @@ impl IRNode for IRNodeParam1Triple {
             &[&*self.subx, &*self.suby, &*self.subz],
         )
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         serialize_param1_multi(
             self.inst,
@@ -942,6 +1021,8 @@ impl IRNode for IRNodeParam1Quad {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         codegen_param1_multi_into(
             buf,
@@ -951,6 +1032,8 @@ impl IRNode for IRNodeParam1Quad {
             &[&*self.subx, &*self.suby, &*self.subz, &*self.subw],
         )
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         serialize_param1_multi(
             self.inst,
@@ -990,12 +1073,16 @@ impl IRNode for IRNodeParam2Single {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         self.subx.codegen_into(buf)?;
         buf.push(self.bytecode());
         buf.extend_from_slice(&self.para);
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         iter::once(self.bytecode())
             .chain(self.para)
@@ -1029,15 +1116,21 @@ impl IRNode for IRNodeBytecodes {
     fn bytecode(&self) -> u8 {
         IRBYTECODE as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
         // Codegen is a pure splice; `verify_ir_runtime_safe_bytecodes` / `IRNodeBytecodes::new`
         // gate the final composed stream, keeping unchecked conversion distinct from runtime rejection.
         Ok(self.codes.clone())
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         buf.extend_from_slice(&self.codes);
         Ok(())
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         // Deliberate panic: a truncated serialize would silently drop trailing instructions and
         // change program semantics. All construction paths enforce the length before this point.
@@ -1115,6 +1208,8 @@ impl IRNode for IRNodeArray {
     fn bytecode(&self) -> u8 {
         self.inst as u8
     }
+
+    #[cfg(feature = "execute")]
     fn codegen(&self) -> VmrtRes<Vec<u8>> {
         match self.inst {
             Bytecode::IRLIST => compile_list(&self.subs),
@@ -1122,6 +1217,8 @@ impl IRNode for IRNodeArray {
             _ => errf!("IRNodeArray: invalid opcode {:?}", self.inst).map_ire(InstInvalid),
         }
     }
+
+    #[cfg(feature = "execute")]
     fn codegen_into(&self, buf: &mut Vec<u8>) -> VmrtRes<()> {
         match self.inst {
             Bytecode::IRLIST => compile_list_into(&self.subs, buf),
@@ -1131,6 +1228,8 @@ impl IRNode for IRNodeArray {
             _ => errf!("IRNodeArray: invalid opcode {:?}", self.inst).map_ire(InstInvalid),
         }
     }
+
+    #[cfg(feature = "execute")]
     fn serialize(&self) -> Vec<u8> {
         // I-5: serialization is not a 1:1 mirror of construction — elided children (IRNodeEmpty) vanish and
         // `count` is recomputed. Visible count must fit u16; panic rather than emit a truncated prefix.

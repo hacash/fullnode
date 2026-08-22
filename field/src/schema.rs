@@ -182,8 +182,9 @@ impl<T: WireElementName> FieldWireShape for ListW2<T> {
     const WIRE: FieldWire = FieldWire::ListW2(T::NAME);
 }
 
-/// Complete wire schema of an action (or nested struct). `audit_class` and `blob`
-/// are static review facts from the definition site, hashed into `schema_set_hash`.
+/// Complete wire schema of an action (or nested struct). `audit_class`, `blob`
+/// and `has_code` are static review facts from the definition site, hashed into
+/// `schema_set_hash`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuditClass {
     Full,
@@ -210,6 +211,10 @@ pub struct ActionSchema {
     pub fields: &'static [FieldSchema],
     pub audit_class: AuditClass,
     pub blob: bool,
+    /// The action carries executable VM code (`contract_main_call` /
+    /// `contract_deploy` / `contract_update` / `p2sh`); the SDK surfaces its
+    /// metadata in `ActionDesc.code` and feeds `vm.code` for decompilation.
+    pub has_code: bool,
 }
 
 /// Wire schema of a nested struct (not an action, no kind).

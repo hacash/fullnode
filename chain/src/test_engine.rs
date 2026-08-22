@@ -300,9 +300,6 @@ impl ExecutionServices for TestServices {
     fn vm_host_def(&self, _kind: VmHostCallKind, _id: u8) -> Option<&VmHostActionDef> {
         None
     }
-    fn vm_host_defs(&self, _kind: VmHostCallKind) -> Vec<&VmHostActionDef> {
-        vec![]
-    }
     fn vm_params(&self) -> Ret<&VmExecutionParams> {
         static PARAMS: VmExecutionParams = VmExecutionParams {
             contract_store_perm_periods: 10_000,

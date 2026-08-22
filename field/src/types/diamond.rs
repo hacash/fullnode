@@ -148,15 +148,16 @@ impl DiamondNameListMax200 {
         if self.0.len() > DIAMOND_LIST_MAX {
             return errf!("diamonds quantity cannot exceed {}", DIAMOND_LIST_MAX);
         }
-        let mut seen = std::collections::HashSet::with_capacity(self.0.len());
+        let mut seen: Vec<DiamondName> = Vec::with_capacity(self.0.len());
         for name in &self.0 {
             DiamondName::check_bytes(name.as_ref())?;
-            if !seen.insert(*name) {
+            if seen.contains(name) {
                 return errf!(
                     "diamond name {} is duplicated",
                     String::from_utf8_lossy(name.as_ref())
                 );
             }
+            seen.push(*name);
         }
         Ok(self.0.len())
     }
@@ -192,12 +193,13 @@ impl DiamondNameListMax60000 {
         if self.0.len() > 60_000 {
             return errf!("diamonds quantity cannot exceed 60000");
         }
-        let mut seen = std::collections::HashSet::with_capacity(self.0.len());
+        let mut seen: Vec<DiamondName> = Vec::with_capacity(self.0.len());
         for name in &self.0 {
             DiamondName::check_bytes(name.as_ref())?;
-            if !seen.insert(*name) {
+            if seen.contains(name) {
                 return errf!("diamond name {} is duplicated", name.to_readable());
             }
+            seen.push(*name);
         }
         Ok(self.0.len())
     }
@@ -226,12 +228,13 @@ fn parse_diamond_name_list(stuff: &str, max: usize) -> Ret<Vec<DiamondName>> {
         return errf!("diamond list max {} overflow", max);
     }
     let mut out = Vec::with_capacity(num);
-    let mut seen = std::collections::HashSet::with_capacity(num);
+    let mut seen: Vec<DiamondName> = Vec::with_capacity(num);
     for chunk in s.as_bytes().chunks_exact(DiamondName::SIZE) {
         let dia = DiamondName::from_readable(chunk)?;
-        if !seen.insert(dia) {
+        if seen.contains(&dia) {
             return errf!("diamond name {} is duplicated", dia.to_readable());
         }
+        seen.push(dia);
         out.push(dia);
     }
     Ok(out)

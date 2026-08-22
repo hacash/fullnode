@@ -169,13 +169,13 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
     json_object_fields(
         json,
         &["kind", "exe_min", "exe_max", "actions"],
-        |key, value| {
+        &mut |key, value| {
             match key {
                 "kind" => kind = json_decode_value(value)?,
                 "exe_min" => exe_min = Some(json_decode_value(value)?),
                 "exe_max" => exe_max = Some(json_decode_value(value)?),
                 "actions" => actions = Some(value),
-                _ => unreachable!("allowed field checked by json_object_fields"),
+                _ => return sys::errf!("AstSelect JSON field {} is unknown", key),
             }
             Ok(())
         },
@@ -220,13 +220,13 @@ pub fn decode_ast_if_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret
     let mut cond = None;
     let mut br_if = None;
     let mut br_else = None;
-    json_object_fields(json, &["kind", "cond", "br_if", "br_else"], |key, value| {
+    json_object_fields(json, &["kind", "cond", "br_if", "br_else"], &mut |key, value| {
         match key {
             "kind" => declared = json_decode_value(value)?,
             "cond" => cond = Some(value),
             "br_if" => br_if = Some(value),
             "br_else" => br_else = Some(value),
-            _ => unreachable!("allowed field checked by json_object_fields"),
+            _ => return sys::errf!("AstIf JSON field {} is unknown", key),
         }
         Ok(())
     })?;
@@ -490,6 +490,7 @@ impl base::ActionSchemaProvider for AstSelect {
         name: Self::NAME,
         audit_class: base::AuditClass::Branching,
         blob: false,
+        has_code: false,
         fields: &[
             base::FieldSchema::new("kind", base::FieldWire::U2),
             base::FieldSchema::new("exe_min", base::FieldWire::U1),
@@ -507,6 +508,7 @@ impl base::ActionSchemaProvider for AstIf {
         name: Self::NAME,
         audit_class: base::AuditClass::Branching,
         blob: false,
+        has_code: false,
         fields: &[
             base::FieldSchema::new("kind", base::FieldWire::U2),
             base::FieldSchema::new("cond", base::FieldWire::Struct("ast_select")),
