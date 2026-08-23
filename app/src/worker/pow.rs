@@ -122,6 +122,9 @@ struct MiningResult {
 }
 
 static MINING_HEIGHT: AtomicU64 = AtomicU64::new(0);
+/// Set when the background notice long-poll observed a new chain height.
+/// Cleared whenever a fresh height begins mining; see `spawn_miner_notice`.
+static MINING_NOTICE_DONE: AtomicBool = AtomicBool::new(false);
 
 pub fn run() -> Ret<()> {
     let conf = PoWorkConf::load()?;
@@ -138,6 +141,7 @@ pub fn run_with_stop(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) -> Re
         conf.rpcaddr, conf.threads, conf.nonce_max, conf.nonce_chunk, conf.use_opencl
     );
     let backends = build_miner_backends(&conf);
+    spawn_miner_notice(conf.clone(), stop_flag.clone());
     loop {
         if should_stop(&stop_flag) {
             return Ok(());
@@ -151,6 +155,7 @@ pub fn run_with_stop(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) -> Re
             }
         };
         MINING_HEIGHT.store(work.height, Ordering::Relaxed);
+        MINING_NOTICE_DONE.store(false, Ordering::Relaxed);
         println!(
             "[poworker] mining height={} target={}",
             work.height, work.target_hash
@@ -158,6 +163,35 @@ pub fn run_with_stop(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) -> Re
         mine_height(&conf, &backends, work, &stop_flag)?;
     }
 }
+
+/// Background new-block watcher: long-polls `/query/miner/notice` with a
+/// bounded wait so a stop request is observed within ~`NOTICE_WAIT_STEP`s,
+/// then flags `MINING_NOTICE_DONE` when the chain moved past the watched
+/// height. Mining keeps running while this thread waits.
+fn spawn_miner_notice(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) {
+    thread::spawn(move || loop {
+        if should_stop(&stop_flag) {
+            return;
+        }
+        let watch_height = MINING_HEIGHT.load(Ordering::Relaxed);
+        if watch_height == 0 {
+            thread::sleep(Duration::from_secs(1));
+            continue;
+        }
+        let wait = conf.notice_wait.clamp(1, NOTICE_WAIT_STEP);
+        match miner_notice(&conf, watch_height, wait) {
+            Ok(height) if height >= watch_height => {
+                MINING_NOTICE_DONE.store(true, Ordering::Relaxed);
+                // Keep waiting until the mining loop observes it or moves to
+                // a higher height; re-arm for the (now stale) watch target.
+                thread::sleep(Duration::from_secs(1));
+            }
+            _ => {} // timeout or transient error; long-poll again
+        }
+    });
+}
+
+const NOTICE_WAIT_STEP: u64 = 10;
 
 fn should_stop(stop_flag: &Option<Arc<AtomicBool>>) -> bool {
     stop_flag
@@ -299,6 +333,9 @@ fn mine_height(
         if should_stop(stop_flag) {
             return Ok(());
         }
+        if MINING_NOTICE_DONE.load(Ordering::Relaxed) {
+            return Ok(());
+        }
         if next_start >= conf.nonce_max {
             return Ok(());
         }
@@ -339,8 +376,8 @@ fn mine_height(
                 .join()
                 .map_err(|_| sys::Error::fault("poworker mining thread panicked"))?;
             if result.hash.as_ref() < best_hash.as_ref() {
-                best_hash = result.hash.clone();
                 print_result(&result, &work.target_hash, &best_hash);
+                best_hash = result.hash.clone();
             }
             // Match server check: success when hash <= target.
             if conf.debug || result.hash.as_ref() <= work.target_hash.as_ref() {
@@ -355,10 +392,6 @@ fn mine_height(
                 let next = ((round_scanned as f64 / secs) * MINING_INTERVAL) as u32;
                 cpu_chunk = next.max(1);
             }
-        }
-        let height = miner_notice(conf, work.height)?;
-        if height >= work.height {
-            return Ok(());
         }
     }
 }
@@ -508,13 +541,13 @@ fn print_result(result: &MiningResult, target: &Hash, best_seen: &Hash) {
     );
 }
 
-fn miner_notice(conf: &PoWorkConf, height: u64) -> Ret<u64> {
+fn miner_notice(conf: &PoWorkConf, height: u64, wait: u64) -> Ret<u64> {
     let rqid = sys::curtimes();
     let url = api_url(
         conf,
         &format!(
             "/query/miner/notice?wait={}&height={}&rqid={}",
-            conf.notice_wait, height, rqid
+            wait, height, rqid
         ),
     );
     let json = get_json_notice(&url)?;

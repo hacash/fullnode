@@ -25,13 +25,15 @@ pub const ACTION_DEFS: [ActDefTy; 14] = [
     (0x13, "transfer_asset_from_to", ValueTy::Nil, 3),
 ];
 
-pub const ACTION_ENV_DEFS: [ActDefTy; 3] = [
+pub const ACTION_ENV_DEFS: [ActDefTy; 5] = [
     (0x01, "block_height", ValueTy::U64, 0),
     (0x02, "tx_main_addr", ValueTy::Address, 0),
     (0x03, "block_author_addr", ValueTy::Address, 0),
+    (0x04, "tx_message_num", ValueTy::U8, 0),
+    (0x05, "tx_blob_num", ValueTy::U8, 0),
 ];
 
-pub const ACTION_VIEW_DEFS: [ActDefTy; 7] = [
+pub const ACTION_VIEW_DEFS: [ActDefTy; 10] = [
     (0x01, "balance", ValueTy::Bytes, 1),
     (0x02, "asset_balance", ValueTy::U64, 2),
     (0x09, "check_signature", ValueTy::Bool, 1),
@@ -39,6 +41,9 @@ pub const ACTION_VIEW_DEFS: [ActDefTy; 7] = [
     (0x12, "hacd_insc_get", ValueTy::Bytes, 2),
     (0x13, "hacd_name_list", ValueTy::Bytes, 3),
     (0x14, "hacd_owner_addrs", ValueTy::Bytes, 1),
+    (0x15, "tx_message", ValueTy::Bytes, 1),
+    (0x16, "tx_blob", ValueTy::Bytes, 3),
+    (0x17, "tx_blob_size", ValueTy::U64, 1),
 ];
 
 pub fn search_act_by_id<'a>(id: u8, exts: &'a [ActDefTy]) -> Option<&'a ActDefTy> {

@@ -14,8 +14,9 @@ pub use ast::{
 };
 pub use blob::{TxBlob, TxMessage};
 pub use envfunc::{
-    EnvBlockAuthorAddr, EnvHeight, EnvMainAddr, ViewAssetBalance, ViewBalance, ViewCheckSign,
-    ViewDiaInscGet, ViewDiaInscNum, ViewDiaNameList, ViewDiaOwnerAddrs,
+    EnvBlobNum, EnvBlockAuthorAddr, EnvHeight, EnvMainAddr, EnvMessageNum, ViewAssetBalance,
+    ViewBalance, ViewBlob, ViewBlobSize, ViewCheckSign, ViewDiaInscGet, ViewDiaInscNum,
+    ViewDiaNameList, ViewDiaOwnerAddrs, ViewMessage,
 };
 pub use guard::{BalanceFloor, ChainAllow, GuardFacts, HeightScope, ReqSignList, guard_facts, height_in_range};
 pub use tex::{TEX_CELL_SCHEMA, TexCellAct};

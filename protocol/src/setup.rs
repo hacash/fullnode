@@ -16,7 +16,6 @@ fn create_context(
     registry: Arc<dyn ExecutionServices>,
     chunk: StateChunkRef,
     tx: TxRef,
-    _gas_budget: i64,
 ) -> Ret<Box<dyn Context>> {
     Ok(Box::new(crate::exec::context::ContextInst::new(
         env, registry, chunk, tx,
@@ -103,6 +102,8 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
         EnvHeight = U64,
         EnvMainAddr = Address,
         EnvBlockAuthorAddr = Address,
+        EnvMessageNum = U8,
+        EnvBlobNum = U8,
     )?;
 
     register_vm_hosts!(reg, view;
@@ -113,6 +114,9 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
         ViewDiaInscGet = (Bytes, 2),
         ViewDiaNameList = (Bytes, 3),
         ViewDiaOwnerAddrs = (Bytes, 1),
+        ViewMessage = (Bytes, 1),
+        ViewBlob = (Bytes, 3),
+        ViewBlobSize = (U64, 1),
     )?;
     Ok(())
 }
@@ -125,7 +129,7 @@ pub fn register_exec(
     reg.set_execution_profile(params)?;
     reg.set_vm_params(params.protocol.vm)?;
     reg.set_block_creator(create_std_block)?;
-    reg.set_context_creator(create_context, params.protocol.default_gas_budget)?;
+    reg.set_context_creator(create_context)?;
     register_vm_host_defs(reg)?;
     Ok(())
 }
@@ -164,7 +168,7 @@ mod tests {
             }
             Ok(())
         }
-        fn set_context_creator(&mut self, _f: base::ContextCreateFn, _gas_budget: i64) -> Rerr {
+        fn set_context_creator(&mut self, _f: base::ContextCreateFn) -> Rerr {
             errf!("unexpected set_context_creator")
         }
         fn set_vm_params(&mut self, _params: base::VmExecutionParams) -> Rerr {
@@ -215,6 +219,8 @@ mod tests {
                 EnvBlockAuthorAddr::NAME,
                 VmValueType::Address,
             ),
+            (EnvMessageNum::KIND, EnvMessageNum::NAME, VmValueType::U8),
+            (EnvBlobNum::KIND, EnvBlobNum::NAME, VmValueType::U8),
         ] {
             let def = reg.host(VmHostCallKind::Env, kind as u8).unwrap();
             assert_eq!(def.name, name);
@@ -222,6 +228,9 @@ mod tests {
         }
         for (kind, name, ret, argc) in [
             (ViewBalance::KIND, ViewBalance::NAME, VmValueType::Bytes, 1),
+            (ViewMessage::KIND, ViewMessage::NAME, VmValueType::Bytes, 1),
+            (ViewBlob::KIND, ViewBlob::NAME, VmValueType::Bytes, 3),
+            (ViewBlobSize::KIND, ViewBlobSize::NAME, VmValueType::U64, 1),
             (
                 ViewAssetBalance::KIND,
                 ViewAssetBalance::NAME,
@@ -269,7 +278,7 @@ mod tests {
     /// ENV / VIEW full KIND high byte is the ACTENV / ACTVIEW opcode prefix.
     #[test]
     fn env_view_full_kind_matches_the_opcode_prefix() {
-        for kind in [EnvHeight::KIND, EnvMainAddr::KIND, EnvBlockAuthorAddr::KIND] {
+        for kind in [EnvHeight::KIND, EnvMainAddr::KIND, EnvBlockAuthorAddr::KIND, EnvMessageNum::KIND, EnvBlobNum::KIND] {
             assert_eq!(kind >> 8, 0x07);
         }
         for kind in [
@@ -280,6 +289,9 @@ mod tests {
             ViewDiaInscGet::KIND,
             ViewDiaNameList::KIND,
             ViewDiaOwnerAddrs::KIND,
+            ViewMessage::KIND,
+            ViewBlob::KIND,
+            ViewBlobSize::KIND,
         ] {
             assert_eq!(kind >> 8, 0x06);
         }

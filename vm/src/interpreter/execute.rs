@@ -344,8 +344,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 }
                 gas_resource_raw!(bgasu);
                 if opcode_abi.produces_value {
-                    let resv =
-                        Value::type_from(act_retv_type(host, act_kind, idx)?, cres)?.valid(cap)?;
+                    let resv = Value::type_from(act_retv_type(host, act_kind, idx)?, cres)?.valid(cap)?;
                     gas_resource!(act_bytes, resv.val_size());
                     if opcode_abi.consumes_body {
                         *ops.peek()? = resv;

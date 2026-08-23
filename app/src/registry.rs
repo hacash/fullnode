@@ -13,7 +13,6 @@ pub struct Registry {
     wire_codecs: WireCodecTable,
     vm_host_defs: HashMap<(VmHostCallKind, u8), VmHostActionDef>,
     context_creator: Option<ContextCreateFn>,
-    context_gas_budget: i64,
     vm_params: Option<VmExecutionParams>,
     execution_profile: Option<&'static dyn ExecutionProfile>,
 }
@@ -27,7 +26,6 @@ impl Registry {
             wire_codecs: WireCodecTable::new(),
             vm_host_defs: HashMap::new(),
             context_creator: None,
-            context_gas_budget: 0,
             vm_params: None,
             execution_profile: None,
         }
@@ -71,12 +69,11 @@ impl base::ExecRegistry for Registry {
         Ok(())
     }
 
-    fn set_context_creator(&mut self, f: ContextCreateFn, gas_budget: i64) -> sys::Rerr {
+    fn set_context_creator(&mut self, f: ContextCreateFn) -> sys::Rerr {
         if self.context_creator.is_some() {
             return sys::errf!("context creator already registered");
         }
         self.context_creator = Some(f);
-        self.context_gas_budget = gas_budget;
         Ok(())
     }
 
@@ -156,9 +153,8 @@ impl ExecutionServices for Registry {
         tx: TxRef,
     ) -> Ret<Box<dyn Context>> {
         chunk.validate_tx_identity(&tx.hash())?;
-        let gas_budget = self.context_gas_budget;
         match self.context_creator {
-            Some(create) => create(env, self, chunk, tx, gas_budget),
+            Some(create) => create(env, self, chunk, tx),
             None => sys::errf!("context creator not registered"),
         }
     }
@@ -241,7 +237,6 @@ mod tests {
         _registry: Arc<dyn ExecutionServices>,
         _chunk: StateChunkRef,
         _tx: TxRef,
-        _gas_budget: i64,
     ) -> Ret<Box<dyn Context>> {
         CUSTOM_CONTEXT_CALLED.store(true, Ordering::SeqCst);
         sys::errf!("custom context creator called")
@@ -265,7 +260,8 @@ mod tests {
             vec![
                 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19, 22, 25, 26, 32, 33, 34,
                 35, 36, 40, 41, 44, 46, 0x0401, 0x0402, 0x0411, 0x0412, 0x0413, 0x0414, 0x0601,
-                0x0602, 0x0609, 0x0611, 0x0612, 0x0613, 0x0614, 0x0701, 0x0702, 0x0703,
+                0x0602, 0x0609, 0x0611, 0x0612, 0x0613, 0x0614, 0x0615, 0x0616, 0x0617, 0x0701,
+                0x0702, 0x0703, 0x0704, 0x0705,
             ]
         );
         assert_eq!(registry.wire_codecs.tx_types(), vec![0, 1, 2, 3]);
@@ -388,7 +384,7 @@ mod tests {
         CUSTOM_CONTEXT_CALLED.store(false, Ordering::SeqCst);
         let mut registry = Registry::new(mint::block_hasher);
         registry
-            .set_context_creator(custom_context_creator, 0)
+            .set_context_creator(custom_context_creator)
             .unwrap();
         let registry = Arc::new(registry);
         let tx: TxRef = Arc::new(protocol::tx_std::DefaultPreludeTx::default());

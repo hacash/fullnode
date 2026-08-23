@@ -5,10 +5,75 @@ use field::{Address, DiamondName, Encode};
 use sys::errf;
 
 use crate::codec::action::{
-    EnvBlockAuthorAddr, EnvHeight, EnvMainAddr, ViewAssetBalance, ViewBalance, ViewCheckSign,
-    ViewDiaInscGet, ViewDiaInscNum, ViewDiaNameList, ViewDiaOwnerAddrs,
+    EnvBlobNum, EnvBlockAuthorAddr, EnvHeight, EnvMainAddr, EnvMessageNum, ViewAssetBalance,
+    ViewBalance, ViewBlob, ViewBlobSize, ViewCheckSign, ViewDiaInscGet, ViewDiaInscNum,
+    ViewDiaNameList, ViewDiaOwnerAddrs, ViewMessage,
 };
 
+base::impl_action_execute! {
+    ViewMessage {
+        (self, ctx) {
+            let mut n = 0u8;
+            for action in ctx.tx().actions() {
+                if let Some(msg) = action.as_any().downcast_ref::<crate::codec::action::TxMessage>() {
+                    if n == self.idx.uint() { return Ok(msg.data.as_ref().to_vec()); }
+                    n = n.saturating_add(1);
+                }
+            }
+            errf!("transaction message index {} out of range", self.idx.uint())
+        }
+    }
+}
+
+base::impl_action_execute! {
+    ViewBlob {
+        (self, ctx) {
+            let mut n = 0u8;
+            for action in ctx.tx().actions() {
+                if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::TxBlob>() {
+                    if n == self.idx.uint() {
+                        let start = self.start.uint() as usize;
+                        let end = self.end.uint() as usize;
+                        let data = blob.data.as_ref();
+                        if start > end || end > data.len() {
+                            return errf!("blob range [{}..{}] out of range for size {}", start, end, data.len());
+                        }
+                        return Ok(data[start..end].to_vec());
+                    }
+                    n = n.saturating_add(1);
+                }
+            }
+            errf!("transaction blob index {} out of range", self.idx.uint())
+        }
+    }
+}
+
+base::impl_action_execute! {
+    EnvMessageNum { (self, ctx) {
+        let n = ctx.tx().actions().iter().filter(|a| a.as_any().is::<crate::codec::action::TxMessage>()).count();
+        if n > u8::MAX as usize { return errf!("message count exceeds u8"); }
+        Ok(vec![n as u8])
+    } }
+}
+base::impl_action_execute! {
+    EnvBlobNum { (self, ctx) {
+        let n = ctx.tx().actions().iter().filter(|a| a.as_any().is::<crate::codec::action::TxBlob>()).count();
+        if n > u8::MAX as usize { return errf!("blob count exceeds u8"); }
+        Ok(vec![n as u8])
+    } }
+}
+base::impl_action_execute! {
+    ViewBlobSize { (self, ctx) {
+        let mut n = 0u8;
+        for action in ctx.tx().actions() {
+            if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::TxBlob>() {
+                if n == self.idx.uint() { return Ok((blob.data.as_ref().len() as u64).to_be_bytes().to_vec()); }
+                n = n.saturating_add(1);
+            }
+        }
+        errf!("transaction blob index {} out of range", self.idx.uint())
+    } }
+}
 base::impl_action_execute! {
     EnvHeight {
         (self, ctx) {

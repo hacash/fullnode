@@ -20,6 +20,12 @@ pub struct EnvMainAddr {
 pub struct EnvBlockAuthorAddr {
     pub kind: Uint2,
 }
+#[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
+pub struct EnvMessageNum { pub kind: Uint2 }
+#[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
+pub struct EnvBlobNum { pub kind: Uint2 }
 
 #[derive(Debug, Clone, base::ActionCodec)]
 #[action_codec(audit = "full")]
@@ -74,6 +80,25 @@ pub struct ViewDiaOwnerAddrs {
     pub diamonds: DiamondNameListMax200,
 }
 
+#[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
+pub struct ViewMessage {
+    pub kind: Uint2,
+    pub idx: Uint1,
+}
+
+#[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
+pub struct ViewBlob {
+    pub kind: Uint2,
+    pub idx: Uint1,
+    pub start: Uint2,
+    pub end: Uint2,
+}
+#[derive(Debug, Clone, base::ActionCodec)]
+#[action_codec(audit = "full")]
+pub struct ViewBlobSize { pub kind: Uint2, pub idx: Uint1 }
+
 impl EnvHeight {
     pub const KIND: u16 = 0x0701;
 }
@@ -85,6 +110,8 @@ impl EnvMainAddr {
 impl EnvBlockAuthorAddr {
     pub const KIND: u16 = 0x0703;
 }
+impl EnvMessageNum { pub const KIND: u16 = 0x0704; }
+impl EnvBlobNum { pub const KIND: u16 = 0x0705; }
 
 impl ViewBalance {
     pub const KIND: u16 = 0x0601;
@@ -114,6 +141,10 @@ impl ViewDiaOwnerAddrs {
     pub const KIND: u16 = 0x0614;
 }
 
+impl ViewMessage { pub const KIND: u16 = 0x0615; }
+impl ViewBlob { pub const KIND: u16 = 0x0616; }
+impl ViewBlobSize { pub const KIND: u16 = 0x0617; }
+
 base::impl_action_facts! {
     EnvHeight {
         name: "block_height",
@@ -123,6 +154,29 @@ base::impl_action_facts! {
 
     }
 }
+
+base::impl_action_facts! { ViewMessage {
+    name: "tx_message", scope: base::ActScope::CALL_ONLY, min_tx_type: 3,
+    description: |this: &ViewMessage| format!("Syscall: Get transaction message {}", this.idx.uint()),
+} }
+
+base::impl_action_facts! { EnvMessageNum {
+    name: "tx_message_num", scope: base::ActScope::CALL_ONLY, min_tx_type: 3,
+    description: |_: &EnvMessageNum| "Syscall: Get transaction message count".to_owned(),
+} }
+base::impl_action_facts! { EnvBlobNum {
+    name: "tx_blob_num", scope: base::ActScope::CALL_ONLY, min_tx_type: 3,
+    description: |_: &EnvBlobNum| "Syscall: Get transaction blob count".to_owned(),
+} }
+base::impl_action_facts! { ViewBlobSize {
+    name: "tx_blob_size", scope: base::ActScope::CALL_ONLY, min_tx_type: 3,
+    description: |this: &ViewBlobSize| format!("Syscall: Get transaction blob {} size", this.idx.uint()),
+} }
+
+base::impl_action_facts! { ViewBlob {
+    name: "tx_blob", scope: base::ActScope::CALL_ONLY, min_tx_type: 3,
+    description: |this: &ViewBlob| format!("Syscall: Get transaction blob {} [{}..{}]", this.idx.uint(), this.start.uint(), this.end.uint()),
+} }
 
 base::impl_action_facts! {
     EnvMainAddr {

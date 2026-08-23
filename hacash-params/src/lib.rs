@@ -13,7 +13,6 @@ pub struct ProtocolParams {
     pub tex_diamond_pay_max: usize,
     pub tex_diamond_get_max_per_tx: usize,
     pub tx_actions_max: usize,
-    pub default_gas_budget: i64,
     pub tx_gas_budget_cap_byte: u8,
     pub tx_type_1: u8,
     pub tx_type_2: u8,
@@ -121,7 +120,6 @@ pub const MAINNET_PARAMS: HacashParams = HacashParams {
         tex_diamond_pay_max: 60_000,
         tex_diamond_get_max_per_tx: 200,
         tx_actions_max: 200,
-        default_gas_budget: 1_000_000,
         tx_gas_budget_cap_byte: 99,
         tx_type_1: 1,
         tx_type_2: 2,
@@ -171,7 +169,6 @@ pub const TX_ACTIONS_MAX: usize = MAINNET_PARAMS.protocol.tx_actions_max;
 pub const TX_TYPE_1: u8 = MAINNET_PARAMS.protocol.tx_type_1;
 pub const TX_TYPE_2: u8 = MAINNET_PARAMS.protocol.tx_type_2;
 pub const TX_TYPE_3: u8 = MAINNET_PARAMS.protocol.tx_type_3;
-pub const DEFAULT_GAS_BUDGET: i64 = MAINNET_PARAMS.protocol.default_gas_budget;
 pub const TX_GAS_BUDGET_CAP_BYTE: u8 = MAINNET_PARAMS.protocol.tx_gas_budget_cap_byte;
 
 /// Height after which type-1 user transactions are rejected at execute.
@@ -226,7 +223,6 @@ pub fn params_hash(params: &HacashParams) -> [u8; 32] {
     hasher.update(params.mint.difficulty_group_blocks.to_be_bytes());
     hasher.update(params.mint.each_block_target_time.to_be_bytes());
     hasher.update((params.protocol.tx_actions_max as u64).to_be_bytes());
-    hasher.update(params.protocol.default_gas_budget.to_be_bytes());
     hasher.update([
         params.protocol.tx_gas_budget_cap_byte,
         params.protocol.tx_type_1,
@@ -330,7 +326,6 @@ mod tests {
         assert_eq!(MAINNET_PARAMS.mint.max_tx_size, 16 * 1024);
         assert_eq!(MAINNET_PARAMS.mint.max_block_txs, 1000);
         assert_eq!(MAINNET_PARAMS.protocol.tx_actions_max, 200);
-        assert_eq!(MAINNET_PARAMS.protocol.default_gas_budget, 1_000_000);
         assert_eq!(MAINNET_PARAMS.protocol.tx_gas_budget_cap_byte, 99);
         assert_eq!(MAINNET_PARAMS.protocol.tx_type_2, 2);
     }
@@ -340,8 +335,8 @@ mod tests {
         assert_eq!(
             params_hash(&MAINNET_PARAMS),
             [
-                212, 180, 77, 38, 118, 234, 47, 29, 136, 156, 23, 232, 198, 130, 118, 153, 9, 205,
-                16, 91, 142, 14, 151, 110, 122, 132, 20, 183, 64, 150, 96, 252,
+                201, 181, 36, 249, 226, 143, 170, 129, 214, 125, 138, 26, 26, 105, 115, 107, 66,
+                160, 201, 52, 139, 128, 178, 130, 233, 16, 183, 74, 230, 70, 96, 42,
             ]
         );
     }

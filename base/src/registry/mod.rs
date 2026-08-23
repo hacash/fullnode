@@ -217,7 +217,7 @@ impl WireCodecTable {
 }
 #[cfg(feature = "execute")]
 pub type ContextCreateFn =
-    fn(Env, Arc<dyn ExecutionServices>, StateChunkRef, TxRef, i64) -> Ret<Box<dyn Context>>;
+    fn(Env, Arc<dyn ExecutionServices>, StateChunkRef, TxRef) -> Ret<Box<dyn Context>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg(feature = "execute")]
@@ -451,7 +451,7 @@ pub trait ExecRegistry {
     fn set_block_creator(&mut self, f: BlockCreateFn) -> Rerr;
     fn set_vm_assigner(&mut self, f: VmAssignFn) -> Rerr;
     fn register_vm_host_def(&mut self, def: VmHostActionDef) -> Rerr;
-    fn set_context_creator(&mut self, f: ContextCreateFn, gas_budget: i64) -> Rerr;
+    fn set_context_creator(&mut self, f: ContextCreateFn) -> Rerr;
     fn set_vm_params(&mut self, params: VmExecutionParams) -> Rerr;
     fn set_execution_profile(&mut self, profile: &'static dyn ExecutionProfile) -> Rerr;
 }
