@@ -5,12 +5,12 @@ use base::TxPolicy;
 use base::{ApiExecCtx, ApiRequest, ApiResponse};
 use sys::ToHex;
 
-use crate::HacashConsensus;
+use crate::ConsensusApi;
 
 use super::util::*;
 
 pub(crate) fn miner_pending_handler(
-    cons: Arc<HacashConsensus>,
+    cons: Arc<dyn ConsensusApi>,
     ctx: &ApiExecCtx,
     req: ApiRequest,
 ) -> ApiResponse {
@@ -32,13 +32,13 @@ pub(crate) fn miner_pending_handler(
             .tx_pool_groups()
             .into_iter()
             .find_map(|spec| {
-                if spec.relay_service_bit == Some(HacashConsensus::SERVICE_BIT_DIAMOND_RELAY) {
+                if spec.relay_service_bit == Some(crate::HacashConsensus::SERVICE_BIT_DIAMOND_RELAY) {
                     Some(spec.id)
                 } else {
                     None
                 }
             })
-            .unwrap_or(HacashConsensus::TX_GROUP_DIAMOND_MINT);
+            .unwrap_or(crate::HacashConsensus::TX_GROUP_DIAMOND_MINT);
         let got_diam = ctx.node.txpool().first(diam_group).is_some();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -56,7 +56,7 @@ pub(crate) fn miner_pending_handler(
 }
 
 pub(crate) fn miner_success_handler(
-    cons: Arc<HacashConsensus>,
+    cons: Arc<dyn ConsensusApi>,
     ctx: &ApiExecCtx,
     req: ApiRequest,
 ) -> ApiResponse {
@@ -89,7 +89,7 @@ pub(crate) fn miner_success_handler(
 }
 
 pub(crate) fn diamondminer_init_handler(
-    cons: Arc<HacashConsensus>,
+    cons: Arc<dyn ConsensusApi>,
     _ctx: &ApiExecCtx,
     _req: ApiRequest,
 ) -> ApiResponse {
@@ -109,7 +109,7 @@ pub(crate) fn diamondminer_init_handler(
 }
 
 pub(crate) fn diamondminer_success_handler(
-    cons: Arc<HacashConsensus>,
+    cons: Arc<dyn ConsensusApi>,
     ctx: &ApiExecCtx,
     req: ApiRequest,
 ) -> ApiResponse {

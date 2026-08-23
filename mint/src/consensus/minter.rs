@@ -40,6 +40,14 @@ pub struct MinerNoticeGuard {
     count: Arc<AtomicU64>,
 }
 
+impl MinerNoticeGuard {
+    /// Public constructor for side/test-chain consensus implementations that
+    /// reuse the miner-notice long-poll surface (see `ConsensusApi`).
+    pub fn new(count: Arc<AtomicU64>) -> Self {
+        Self { count }
+    }
+}
+
 impl Drop for MinerNoticeGuard {
     fn drop(&mut self) {
         self.count.fetch_sub(1, Ordering::Relaxed);
@@ -64,6 +72,11 @@ pub struct HacashConsensus {
     genesis: BlockRef,
     diamond_form_flag: u64,
     mint_conf: MintConf,
+    /// Consensus mint parameters from the registered execution profile
+    /// (fallback mainnet), consumed by `Consensus::mint_params`.
+    mint_params: base::MintParams,
+    /// Reward curve from the registered profile's `mint_rules`.
+    mint_rules: hacash_params::MintRules,
     bidding: DiamondBidding,
     difficulty: DifficultyGnr,
     miner: MinerConf,
@@ -150,13 +163,25 @@ impl HacashConsensus {
         miner: MinerConf,
     ) -> Ret<Self> {
         let diamond_form_flag = protocol::execution_params(services)?.diamond_form_flag;
-        let mint_params = hacash_params::MAINNET_PARAMS.mint;
+        // Mint parameters / reward curve come from the registered execution
+        // profile (mainnet by default); a side/test chain registers its own
+        // profile to customize them without forking the consensus.
+        let registered = hacash_params::as_hacash_params(services.execution_profile()?);
+        let (mint_params, mint_rules) = match registered {
+            Some(params) => (params.mint, params.mint_rules),
+            None => (
+                hacash_params::MAINNET_PARAMS.mint,
+                hacash_params::MAINNET_PARAMS.mint_rules,
+            ),
+        };
         let diff_cfg = DifficultyConfig::from_mint_params(mint.chain_id, mint_params);
         let max_shadow = diff_cfg.difficulty_group_blocks.saturating_mul(10).max(1) as usize;
         Ok(Self {
             genesis: crate::genesis::genesis_block(),
             diamond_form_flag,
             mint_conf: mint,
+            mint_params,
+            mint_rules,
             bidding: DiamondBidding::new(max_shadow),
             difficulty: DifficultyGnr::new(diff_cfg),
             miner,
@@ -575,7 +600,7 @@ impl Consensus for HacashConsensus {
     }
 
     fn mint_params(&self) -> base::MintParams {
-        hacash_params::MAINNET_PARAMS.mint
+        self.mint_params
     }
 
     fn genesis_block(&self) -> BlockRef {
@@ -792,7 +817,7 @@ impl BlockProducer for HacashConsensus {
         let coinbase_tx = Arc::new(CoinbaseTx {
             ty: Uint1::from(CoinbaseTx::TYPE),
             address: self.miner.reward,
-            reward: Amount::mei(block_reward_number(pre_height) as u64),
+            reward: Amount::mei(self.mint_rules.block_reward_number(pre_height) as u64),
             message: self.miner.message,
             extend: CoinbaseExtend::must(CoinbaseExtendDataV1 {
                 miner_nonce: Hash::default(),

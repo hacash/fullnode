@@ -3,7 +3,9 @@
 
 mod assemble;
 mod bider;
-mod config;
+/// INI config parsing (public for side/test-chain nodes that assemble a
+/// custom consensus from `config.mint` / `config.miner`).
+pub mod config;
 mod indexer;
 mod miner_notice;
 mod storage;
@@ -41,6 +43,17 @@ pub fn run_with_scaner(scaner: Arc<dyn Scaner>) -> Rerr {
     Fullnode::open(&config_path_from_args(), Some(scaner))?.run()
 }
 
+/// Run a node assembled with an injected registry and consensus
+/// (`consensus` must also implement `mint::ConsensusApi` for the miner
+/// HTTP surface). Used by side/test-chain nodes that register their own
+/// parameter profile and consensus implementation.
+pub fn run_with<C>(scaner: Option<Arc<dyn Scaner>>, registry: Arc<dyn base::ExecutionServices>, consensus: Arc<C>) -> Rerr
+where
+    C: base::ConsensusRuntime + mint::ConsensusApi + 'static,
+{
+    Fullnode::open_with(&config_path_from_args(), scaner, registry, consensus)?.run()
+}
+
 /// Default config path for the standard full-node command.
 fn config_path_from_args() -> std::path::PathBuf {
     std::env::args()
@@ -54,6 +67,20 @@ impl Fullnode {
     /// start P2P, HTTP, miner hooks, or indexer work yet.
     pub fn open(path: &Path, scaner: Option<Arc<dyn Scaner>>) -> sys::Ret<Self> {
         assemble::open(path, scaner)
+    }
+
+    /// Assemble with an injected registry and consensus (mainnet defaults in
+    /// `open`; side/test chains inject their own profile + consensus).
+    pub fn open_with<C>(
+        path: &Path,
+        scaner: Option<Arc<dyn Scaner>>,
+        registry: Arc<dyn base::ExecutionServices>,
+        consensus: Arc<C>,
+    ) -> sys::Ret<Self>
+    where
+        C: base::ConsensusRuntime + mint::ConsensusApi + 'static,
+    {
+        assemble::open_with(path, scaner, registry, consensus)
     }
 
     /// Start services in dependency order and own the complete shutdown path.

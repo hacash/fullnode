@@ -13,6 +13,42 @@ pub enum CompiledCode {
     Bytecode(Vec<u8>),
 }
 
+#[cfg(test)]
+mod compile_body_tests {
+    use super::*;
+    use crate::lang::Tokenizer;
+
+    #[test]
+    fn parse_const_bytes_keeps_first_byte() {
+        let parsed = crate::lang::parse_const_literal(Token::Bytes(vec![0x57, 0x54, 0x59]), None)
+            .unwrap()
+            .node;
+        let expected = crate::ir::push_bytes(&vec![0x57, 0x54, 0x59]).unwrap();
+        assert_eq!(parsed.serialize(), expected.serialize());
+    }
+
+    #[test]
+    fn rejects_contract_lib_count_overflow() {
+        let body_tokens = Tokenizer::new(b"return 1").parse().unwrap();
+        let addr = Address::from_readable("emqjNS9PscqdBpMtnC3Jfuc4mvZUPYTPS").unwrap();
+        let libs: Vec<_> = (0..=u8::MAX as usize)
+            .map(|idx| (format!("L{}", idx), addr.clone()))
+            .collect();
+        let err = match compile_body(body_tokens, vec![], &libs, &[], true) {
+            Ok(_) => panic!("compile_body should fail for overflowing lib count"),
+            Err(err) => err,
+        };
+        assert!(err.to_string().contains("too many contract libs: max 255"));
+    }
+
+    #[test]
+    fn manual_param_block_with_empty_signature_compiles() {
+        let body_tokens = Tokenizer::new(b"param { a b }\nreturn a + b")
+            .parse()
+            .unwrap();
+        let _ = compile_body(body_tokens, vec![], &[], &[], true).unwrap();
+    }
+}
 
 /// Compile function/abstract body tokens to IR or bytecode
 pub fn compile_body(

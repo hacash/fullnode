@@ -12,6 +12,16 @@ use crate::json::{FromJSON, JSONFormater, ToJSON, json_expect_quoted_decoded};
 /// `num-bigint` remains only as a dev-dependency test oracle.
 use crate::types::amount_base256 as b256;
 
+// Amount units: `value:unit` = value × 10^(unit−248) HAC, i.e. the anchor is
+// 1 HAC = 1:248 (MEI). A smaller unit means a smaller amount: converting
+// U → 248 divides by 10^(248−U) (e.g. 549:244 = 0.0549:248 = 0.0549 HAC).
+//   UNIT_MEI  = 248  → 1:248 = 1 HAC
+//   UNIT_244  = 244  → 1:244 = 10⁻⁴ HAC
+//   UNIT_ZHU  = 240  → 1:240 = 10⁻⁸ HAC
+//   UNIT_238  = 238  → 1:238 = 10⁻¹⁰ HAC（协议 fee_purity 计价单位）
+//   UNIT_SHUO = 232  → 1:232 = 10⁻¹⁶ HAC
+//   UNIT_AI   = 224  → 1:224 = 10⁻²⁴ HAC
+//   UNIT_MIAO = 216  → 1:216 = 10⁻³² HAC
 pub const UNIT_MEI: u8 = 248;
 pub const UNIT_244: u8 = 244;
 pub const UNIT_ZHU: u8 = 240;

@@ -164,12 +164,23 @@ impl ExecutionServices for Registry {
     }
 }
 
+/// Standard mainnet assembly.
 pub fn standard_registry() -> Ret<Registry> {
+    standard_registry_with_params(&hacash_params::MAINNET_PARAMS)
+}
+
+/// Assembly with an explicit parameter profile. Side/test-chain nodes register
+/// their own `HacashParams` (e.g. cheaper VM storage rent) and select the
+/// matching consensus (`Consensus::mint_params`/reward curve read the
+/// registered profile, see `mint::consensus::minter`).
+pub fn standard_registry_with_params(
+    params: &'static hacash_params::HacashParams,
+) -> Ret<Registry> {
     let mut registry = Registry::new(mint::block_hasher);
     protocol::register_wire(&mut registry)?;
     mint_core::register_wire(&mut registry)?;
     vm::register_wire(&mut registry)?;
-    protocol::register_exec(&mut registry, &hacash_params::MAINNET_PARAMS)?;
+    protocol::register_exec(&mut registry, params)?;
     mint_core::register_exec(&mut registry)?;
     mint::register_wire(&mut registry)?;
     vm::register_exec(&mut registry)?;

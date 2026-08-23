@@ -255,3 +255,32 @@ pub fn parse_func_body_tokens(state: &mut ParseState) -> Ret<Vec<Token>> {
     errf!("bracket mismatch")
 }
 
+#[cfg(test)]
+mod parse_func_tests {
+    use super::*;
+    use crate::lang::Tokenizer;
+
+    fn parse_sig(src: &str) -> Ret<(Func, SourceMap, String)> {
+        let tokens = Tokenizer::new(src.as_bytes()).parse()?;
+        let mut state = ParseState::new(tokens);
+        parse_function(&mut state, true)
+    }
+
+    #[test]
+    fn parse_function_rejects_unknown_argument_type() {
+        let err = match parse_sig("function probe(a: u256) { return a }") {
+            Ok(_) => panic!("expected unknown type error"),
+            Err(err) => err,
+        };
+        assert!(err.contains("unknown type"), "{}", err);
+    }
+
+    #[test]
+    fn parse_function_rejects_unknown_return_type() {
+        let err = match parse_sig("function probe() -> uint { return 1 }") {
+            Ok(_) => panic!("expected unknown type error"),
+            Err(err) => err,
+        };
+        assert!(err.contains("unknown return type"), "{}", err);
+    }
+}

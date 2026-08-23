@@ -5,9 +5,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use base::{ApiExecCtx, ApiRequest, ApiResponse, ApiRoute, ApiService, ChainView};
+use mint::ConsensusApi;
 
 pub struct MinerNoticeApi {
-    pub consensus: Arc<mint::HacashConsensus>,
+    pub consensus: Arc<dyn ConsensusApi>,
 }
 
 impl ApiService for MinerNoticeApi {
@@ -25,7 +26,7 @@ impl ApiService for MinerNoticeApi {
 }
 
 async fn miner_notice_long_poll(
-    consensus: Arc<mint::HacashConsensus>,
+    consensus: Arc<dyn ConsensusApi>,
     ctx: ApiExecCtx,
     req: ApiRequest,
 ) -> ApiResponse {
@@ -36,7 +37,7 @@ async fn miner_notice_long_poll(
 }
 
 async fn wait_notice_async(
-    consensus: Arc<mint::HacashConsensus>,
+    consensus: Arc<dyn ConsensusApi>,
     view: &dyn ChainView,
     target_height: u64,
     wait_secs: u64,

@@ -3,14 +3,14 @@
 
 use std::sync::Arc;
 
-use base::{ApiExecCtx, ApiRequest, ApiResponse, Consensus};
+use base::{ApiExecCtx, ApiRequest, ApiResponse};
 
-use crate::HacashConsensus;
+use crate::ConsensusApi;
 
 use super::util::api_html;
 
 pub(crate) fn console_handler(
-    cons: Arc<HacashConsensus>,
+    cons: Arc<dyn ConsensusApi>,
     ctx: &ApiExecCtx,
     _req: ApiRequest,
 ) -> ApiResponse {

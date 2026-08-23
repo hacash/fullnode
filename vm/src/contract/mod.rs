@@ -14,6 +14,11 @@ use crate::rt::*;
 use crate::value::ContractAddress;
 
 mod schema;
+#[cfg(feature = "execute")]
+mod builder;
+
+#[cfg(feature = "execute")]
+pub use builder::{Abst, Contract, Func};
 
 pub type ContractAddrListW1 = ListW1<ContractAddress>;
 pub type ContractAbstCallList = ListW1<ContractAbstCall>;

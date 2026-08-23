@@ -312,7 +312,9 @@ fn parse_addr_list(state: &mut ParseState) -> Ret<Vec<(String, field::Address)>>
         } else {
             return errf!("expected address but got {:?}", state.current());
         };
-        addr.must_contract()?;
+        if !addr.is_contract() {
+            return errf!("address {} must be CONTRACT type", addr.to_readable());
+        }
 
         list.push((name, addr));
 

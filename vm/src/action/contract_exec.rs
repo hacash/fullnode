@@ -65,6 +65,10 @@ fn contract_deploy_execute(this: &ContractDeploy, ctx: &mut dyn Context) -> Rerr
     let periods = ctx.services().vm_params()?.contract_store_perm_periods;
     if !fast_sync {
         check_sub_contract_protocol_cost(ctx, &this.protocol_cost, charge_bytes, periods)?;
+    } else if this.protocol_cost.is_positive() {
+        // fast-sync replay still deducts the paid protocol cost so the burn
+        // total below balances with the on-chain deduction (dev parity).
+        hac_sub(ctx, &maddr, &this.protocol_cost)?;
     }
     if this.protocol_cost.is_positive() {
         let mut state = CoreState::wrap(ctx.layer());
@@ -693,5 +697,136 @@ base::impl_action_execute! {
             contract_update_execute(self, ctx)?;
             Ok(vec![])
         }
+    }
+}
+
+// ================================ tests ================================
+
+#[cfg(all(test, feature = "execute"))]
+mod contract_deploy_exec_tests {
+    use super::*;
+    use base::ActionExecute;
+    use field::{BytesW2, UNIT_238, Uint1, Uint4};
+
+    use crate::contract::ContractUserFunc;
+    use crate::machine::test_ctx::TestCtx;
+    use crate::rt::{Bytecode, CodeConf, CodeStuff};
+
+    /// Supported PRIVAKEY-version main address for the deploy tests.
+    fn main_addr() -> Address {
+        let mut bytes = [0u8; Address::SIZE];
+        bytes[20] = 1;
+        Address::from(bytes)
+    }
+
+    fn deploy_ctx(fast_sync: bool) -> TestCtx {
+        let mut ctx = TestCtx::new();
+        ctx.env.chain.fast_sync = fast_sync;
+        let addr = main_addr();
+        ctx.env.tx.main = addr;
+        ctx.tx.0 = addr;
+        ctx
+    }
+
+    fn prefund(ctx: &mut TestCtx, addr: &Address, amt: &Amount) {
+        base::hac_add(ctx, addr, amt).unwrap();
+    }
+
+    fn balance_hac(ctx: &mut TestCtx, addr: &Address) -> Amount {
+        CoreState::wrap(&mut ctx.layer)
+            .balance(addr)
+            .unwrap()
+            .map(|b| b.hacash)
+            .unwrap_or_default()
+    }
+
+    fn burn_total(ctx: &mut TestCtx) -> u128 {
+        CoreState::wrap(&mut ctx.layer)
+            .get_base_total()
+            .unwrap()
+            .contract_protocol_cost_burn_238
+            .uint()
+    }
+
+    fn make_deploy(protocol_cost: Amount) -> ContractDeploy {
+        let mut act = ContractDeploy::new();
+        act.nonce = Uint4::from(7);
+        act.protocol_cost = protocol_cost;
+        act
+    }
+
+    /// Minimal valid non-empty contract: one userfunc with a single END bytecode
+    /// instruction, so `size() > 0` and `contract.check` passes.
+    fn nonempty_contract() -> ContractSto {
+        let mut contract = ContractSto::default();
+        let mut f = ContractUserFunc::default();
+        f.code_stuff = CodeStuff {
+            conf: Uint1::from(CodeConf::from_type(CodeType::Bytecode).raw()),
+            data: BytesW2::from(vec![Bytecode::END as u8]).unwrap(),
+        };
+        contract.userfuncs.push(f).unwrap();
+        contract
+    }
+
+    /// fast_sync replay of a paid deploy must deduct the protocol cost from the
+    /// main address so the burn total below stays symmetric (dev parity).
+    #[test]
+    fn fast_sync_deploy_deducts_positive_protocol_cost_and_burns() {
+        let mut ctx = deploy_ctx(true);
+        let addr = ctx.env.tx.main;
+        let initial = Amount::coin_u128(1_000_000_000, UNIT_238);
+        let cost = Amount::coin_u128(1_234, UNIT_238);
+        prefund(&mut ctx, &addr, &initial);
+
+        let mut act = make_deploy(cost.clone());
+        act.contract = ContractSto::default();
+        let (_, out) = act.execute(&mut ctx).unwrap();
+        assert!(out.is_empty());
+
+        let expect = initial.sub_mode_u128(&cost).unwrap();
+        assert_eq!(balance_hac(&mut ctx, &addr), expect);
+        assert_eq!(burn_total(&mut ctx), 1_234);
+    }
+
+    /// Zero protocol cost in fast_sync: no deduction, no burn.
+    #[test]
+    fn fast_sync_deploy_zero_protocol_cost_skips_deduction_and_burn() {
+        let mut ctx = deploy_ctx(true);
+        let addr = ctx.env.tx.main;
+        let initial = Amount::coin_u128(1_000_000_000, UNIT_238);
+        prefund(&mut ctx, &addr, &initial);
+
+        let mut act = make_deploy(Amount::zero());
+        act.contract = ContractSto::default();
+        let (_, out) = act.execute(&mut ctx).unwrap();
+        assert!(out.is_empty());
+
+        assert_eq!(balance_hac(&mut ctx, &addr), initial);
+        assert_eq!(burn_total(&mut ctx), 0);
+    }
+
+    /// Non-fast-sync (strict) path keeps deducting and burning through
+    /// `check_sub_contract_protocol_cost` — regression guard for the untouched branch.
+    #[test]
+    fn non_fast_sync_deploy_deducts_and_burns() {
+        let mut ctx = deploy_ctx(false);
+        let addr = ctx.env.tx.main;
+        let initial = Amount::coin_u128(1_000_000_000_000_000, UNIT_238);
+        prefund(&mut ctx, &addr, &initial);
+
+        let mut act = make_deploy(Amount::zero());
+        act.contract = nonempty_contract();
+        let size = act.contract.size();
+        let periods = ctx.services().vm_params().unwrap().contract_store_perm_periods;
+        let min_fee = contract_protocol_cost_min(&ctx, size, periods).unwrap();
+        let cost = Amount::coin_u128(min_fee.to_238_u128().unwrap() + 1_000, UNIT_238);
+        act.protocol_cost = cost.clone();
+
+        let (_, out) = act.execute(&mut ctx).unwrap();
+        assert!(out.is_empty());
+
+        let expect = initial.sub_mode_u128(&cost).unwrap();
+        assert_eq!(balance_hac(&mut ctx, &addr), expect);
+        assert_eq!(burn_total(&mut ctx), cost.to_238_u128().unwrap());
     }
 }

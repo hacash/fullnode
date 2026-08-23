@@ -6,7 +6,7 @@ use sys::{
 };
 
 #[derive(Clone, Default)]
-pub(super) struct RuntimeConfig {
+pub struct RuntimeConfig {
     pub engine: base::EngineConfig,
     pub p2p: base::P2PConfig,
     pub server: base::ServerConfig,
@@ -222,7 +222,7 @@ fn decode_diamond_miner(sec: &IniSec) -> sys::Ret<DiamondMinerFileConfig> {
     Ok(cfg)
 }
 
-pub(super) fn load(path: &std::path::Path) -> sys::Ret<RuntimeConfig> {
+pub fn load(path: &std::path::Path) -> sys::Ret<RuntimeConfig> {
     let mut ini = sys::load_config(path.to_string_lossy().as_ref())?;
     // These options were exposed but never consumed: accept and discard them during
     // upgrades so removing them from EngineConfig does not break old configurations.

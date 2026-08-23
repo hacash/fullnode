@@ -39,10 +39,16 @@ pub mod api;
 #[macro_use]
 #[allow(dead_code)] // Shared wire types retain execution helpers in codec-only builds.
 pub(crate) mod rt;
+// Contract wire types plus the FitSH compiler builders (`Contract`/`Func`/`Abst`);
+// `ContractSto` is the deploy payload type, so the module is public for tooling
+// that assembles deploy actions (e.g. the `fitshc` CLI binary).
 #[allow(dead_code)] // Contract editing helpers are consumed only by selected VM entry paths.
-pub(crate) mod contract;
+pub mod contract;
 #[cfg(feature = "execute")]
 pub mod fitshc;
+// FitSH token stream (shared with `lang`); re-exported at the root for the
+// compiler frontend (`vm::fitshc`) which imports `crate::Token::*`.
+pub use rt::{KwTy, Token};
 // Execution engine: compiled only with `execute`. Codec stays on
 // `action` / `contract` / `rt` (wire types) / `value` (`ContractAddress`).
 #[cfg(feature = "execute")]

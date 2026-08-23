@@ -87,7 +87,7 @@ fn parse_amount_ctor(state: &mut ParseState) -> Ret<Amount> {
         .map_err(|_| "amount string must be ascii bytes".to_string())?;
     state.advance();
     state.eat_partition(')')?;
-    Amount::from(text.as_str()).map_err(|e| e.to_string())
+    Amount::from(text.as_str())
 }
 
 fn parse_nonce(state: &mut ParseState) -> Ret<u32> {
@@ -107,3 +107,26 @@ fn parse_nonce(state: &mut ParseState) -> Ret<u32> {
     }
 }
 
+#[cfg(test)]
+mod parse_deploy_tests {
+    use super::*;
+    use crate::lang::Tokenizer;
+
+    fn parse_snippet(src: &str) -> Ret<DeployInfo> {
+        let tokens = Tokenizer::new(src.as_bytes()).parse().unwrap();
+        let mut state = ParseState::new(tokens);
+        parse_deploy(&mut state)
+    }
+
+    #[test]
+    fn rejects_nonce_integer_overflow() {
+        let err = parse_snippet("deploy { nonce: 4294967296 }").unwrap_err();
+        assert!(err.to_string().contains("nonce overflow"));
+    }
+
+    #[test]
+    fn rejects_unknown_deploy_field() {
+        let err = parse_snippet("deploy { nonec: 1 }").unwrap_err();
+        assert!(err.to_string().contains("unknown deploy field 'nonec'"));
+    }
+}

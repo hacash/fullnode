@@ -9,6 +9,7 @@ field = { workspace = true }
 base = { workspace = true }
 hacash-params = { workspace = true }
 protocol = { workspace = true }
+vm = { workspace = true }
 x16rs = { workspace = true }
 mint-core = { workspace = true, features = ["execute"] }
 num-bigint = "0.4"

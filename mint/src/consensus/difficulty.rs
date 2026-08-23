@@ -99,7 +99,7 @@ impl DifficultyGnr {
         }
     }
 
-    pub(crate) fn is_asert_height(&self, hei: u64) -> bool {
+    pub fn is_asert_height(&self, hei: u64) -> bool {
         hei >= self.asert_upgrade_height()
     }
 

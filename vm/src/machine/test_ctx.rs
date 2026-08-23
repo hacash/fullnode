@@ -40,6 +40,14 @@ fn stub_block_hasher(_height: u64, _stuff: &[u8]) -> [u8; base::HASH_SIZE] {
 /// bytecode verification that does not reference ACTION/ACTENV/ACTVIEW ids.
 pub struct StubServices;
 
+/// Default VM execution params for stub services. No fee-purity schedule
+/// reductions: the initial floor applies at every height.
+static STUB_VM_PARAMS: VmExecutionParams = VmExecutionParams {
+    contract_store_perm_periods: 10_000,
+    initial_fee_purity_floor: 50_000,
+    fee_purity_reductions: &[],
+};
+
 impl BinaryCodecs for StubServices {
     fn decode_action(&self, _buf: &[u8]) -> Ret<(ActionRef, usize)> {
         errf!("stub services: decode_action")
@@ -75,7 +83,7 @@ impl ExecutionServices for StubServices {
         None
     }
     fn vm_params(&self) -> Ret<&VmExecutionParams> {
-        errf!("stub services: vm_params")
+        Ok(&STUB_VM_PARAMS)
     }
     fn execution_profile(&self) -> Ret<&'static dyn base::ExecutionProfile> {
         errf!("stub services: execution_profile")

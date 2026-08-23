@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use base::{ApiResponse, ApiRoute, ApiService};
 
-use crate::HacashConsensus;
+use crate::ConsensusApi;
 
 mod console;
 mod miner;
@@ -35,7 +35,7 @@ use transaction::{
 use transfer::{create_coin_transfer_handler, scan_coin_transfer_handler};
 
 pub struct MintApi {
-    consensus: Arc<HacashConsensus>,
+    consensus: Arc<dyn ConsensusApi>,
 }
 
 impl ApiService for MintApi {
@@ -125,6 +125,6 @@ impl ApiService for MintApi {
     }
 }
 
-pub fn api_services(consensus: Arc<HacashConsensus>) -> Vec<Arc<dyn ApiService>> {
+pub fn api_services(consensus: Arc<dyn ConsensusApi>) -> Vec<Arc<dyn ApiService>> {
     vec![Arc::new(MintApi { consensus })]
 }

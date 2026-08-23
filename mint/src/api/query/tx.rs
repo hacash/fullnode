@@ -4,6 +4,49 @@ use crate::api::util::*;
 
 use sys::ToHex;
 
+/// `contract_address` for transactions carrying a `ContractDeploy` action
+/// (deterministic: sha3-256(deployer ‖ nonce) → ripemd160, version 1 prefix).
+fn contract_address_field(tx: &dyn base::TransactionSign) -> Option<String> {
+    for act in tx.actions() {
+        if let Some(d) = act.as_any().downcast_ref::<vm::action::ContractDeploy>() {
+            let caddr = vm::ContractAddress::calculate(&tx.main(), &d.nonce);
+            return Some(format!(
+                "\"contract_address\":{}",
+                json_string(&caddr.to_readable())
+            ));
+        }
+    }
+    None
+}
+
+fn basic_json_with_contract_address(
+    tx: &dyn base::TransactionSign,
+    block: Option<&dyn base::Block>,
+    last_height: u64,
+    unit: &str,
+    body: bool,
+    action: bool,
+    signature: bool,
+    description: bool,
+    pending: bool,
+) -> String {
+    let mut json = transaction_basic_json(
+        tx,
+        block,
+        last_height,
+        unit,
+        body,
+        action,
+        signature,
+        description,
+        pending,
+    );
+    if let Some(field) = contract_address_field(tx) {
+        json = json.replacen("\"ret\":0,", &format!("\"ret\":0,{},", field), 1);
+    }
+    json
+}
+
 pub(crate) fn transaction_query_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
     let unit = q_string(&req, "unit", "fin");
     let hash = q_string(&req, "hash", "");
@@ -25,7 +68,7 @@ pub(crate) fn transaction_query_handler(ctx: &ApiExecCtx, req: ApiRequest) -> Ap
     let tx_hash = field::Hash::from(raw);
 
     if let Some(pkg) = ctx.node.txpool().find(tx_hash.as_ref()) {
-        return ApiResponse::json(transaction_basic_json(
+        return ApiResponse::json(basic_json_with_contract_address(
             pkg.tx(),
             None,
             last_height,
@@ -70,7 +113,7 @@ pub(crate) fn transaction_query_handler(ctx: &ApiExecCtx, req: ApiRequest) -> Ap
     else {
         return api_error("transaction not found in the block");
     };
-    ApiResponse::json(transaction_basic_json(
+    ApiResponse::json(basic_json_with_contract_address(
         tx.as_ref(),
         Some(pkg.block()),
         last_height,

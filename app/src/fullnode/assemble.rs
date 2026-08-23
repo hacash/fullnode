@@ -7,24 +7,41 @@ use super::Fullnode;
 use super::config::{self, RuntimeConfig};
 
 pub(super) fn open(path: &Path, scaner: Option<Arc<dyn Scaner>>) -> sys::Ret<Fullnode> {
-    let registry = Arc::new(crate::standard_registry()?);
     let config = config::load(path)?;
-    let miner_enabled = config.miner.enable;
+    let registry = Arc::new(crate::standard_registry()?);
     let consensus = Arc::new(mint::HacashConsensus::with_config(
         registry.as_ref(),
         config.mint.clone(),
         config.miner.clone(),
     )?);
+    open_with(path, scaner, registry, consensus)
+}
+
+/// Assembly with an injected registry and consensus (used by side/test-chain
+/// nodes that register their own parameter profile and consensus).
+pub(super) fn open_with<C>(
+    path: &Path,
+    scaner: Option<Arc<dyn Scaner>>,
+    registry: Arc<dyn base::ExecutionServices>,
+    consensus: Arc<C>,
+) -> sys::Ret<Fullnode>
+where
+    C: base::ConsensusRuntime + mint::ConsensusApi + 'static,
+{
+    let config = config::load(path)?;
+    let miner_enabled = config.miner.enable;
+    let consensus_runtime: Arc<dyn ConsensusRuntime> = consensus.clone();
+    let api_consensus: Arc<dyn mint::ConsensusApi> = consensus;
 
     let waiter = sys::Waiter::new();
-    let engine = open_engine(registry, &config, consensus.clone(), waiter.clone())?;
+    let engine = open_engine(registry, &config, consensus_runtime, waiter.clone())?;
     let node = open_node(engine.clone(), &config, miner_enabled)?;
     engine.add_chain_listener(Arc::new(node::TxPoolMaintainer::new(
         engine.clone(),
         node.txpool(),
     )))?;
 
-    let mut services = standard_api_services(consensus, &config.engine.vm);
+    let mut services = standard_api_services(api_consensus, &config.engine.vm);
     let scaner = scaner
         .map(|scaner| super::indexer::attach(engine.clone(), scaner, &mut services))
         .transpose()?;
@@ -46,14 +63,14 @@ pub(super) fn open(path: &Path, scaner: Option<Arc<dyn Scaner>>) -> sys::Ret<Ful
 fn open_engine(
     registry: Arc<dyn base::ExecutionServices>,
     config: &RuntimeConfig,
-    consensus: Arc<mint::HacashConsensus>,
+    consensus: Arc<dyn ConsensusRuntime>,
     waiter: sys::Waiter,
 ) -> sys::Ret<Arc<chain::ChainEngine>> {
     let store = open_store(&config.engine)?;
     chain::ChainEngine::open(
         registry,
         config.engine.clone(),
-        consensus as Arc<dyn ConsensusRuntime>,
+        consensus,
         store,
         waiter,
         config.txpool_min_fee_purity,
@@ -79,7 +96,7 @@ fn open_node(
 }
 
 fn standard_api_services(
-    consensus: Arc<mint::HacashConsensus>,
+    consensus: Arc<dyn mint::ConsensusApi>,
     vm: &base::VmConfig,
 ) -> Vec<Arc<dyn ApiService>> {
     let mut services: Vec<Arc<dyn ApiService>> = vec![
