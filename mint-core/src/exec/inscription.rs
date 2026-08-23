@@ -266,7 +266,7 @@ fn diamond_inscription_push(this: &DiaInscPush, ctx: &mut dyn Context) -> Rerr {
                 this.engraved_type.uint(),
                 &this.engraved_content,
             )?;
-            ttcost = ttcost.add_mode_u128(&cc)?;
+            ttcost = ttcost.add_mode_u64(&cc)?;
             if prev_len == 0 {
                 live_diamond_add += 1;
             }
@@ -322,7 +322,7 @@ fn diamond_inscription_clean(this: &DiaInscClean, ctx: &mut dyn Context) -> Rerr
                 .inscripts
                 .length();
             let cc = engraved_clean_one_diamond(&mut state, &main_addr, dia)?;
-            ttcost = ttcost.add_mode_u128(&cc)?;
+            ttcost = ttcost.add_mode_u64(&cc)?;
             cleared_entries += prev_len as u64;
             if prev_len > 0 {
                 cleared_diamonds += 1;

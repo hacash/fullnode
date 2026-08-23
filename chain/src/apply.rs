@@ -148,6 +148,13 @@ pub fn insert_block(
     let Some((parent_block, branch_history, fork_choice)) = resolve_fork_choice(eng, pkg)? else {
         return Ok(ApplyResult::Orphan(prev_hash));
     };
+    if parent_block.height().saturating_add(1) != height {
+        return errf!(
+            "prev block <{}, {:?}> not found",
+            height.saturating_sub(1),
+            prev_hash
+        );
+    }
 
     if !fast_sync {
         crate::verify::verify_block(eng, pkg, parent_block.as_ref())?;

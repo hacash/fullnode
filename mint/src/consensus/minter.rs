@@ -664,11 +664,14 @@ impl Consensus for HacashConsensus {
         if fast_sync {
             return Ok(());
         }
-        block_check::check_block_arrive(&self.difficulty, &self.mint_conf, pkg, view)
+        block_check::check_block_arrive(&self.difficulty, &self.mint_conf, pkg, view)?;
+        // Old `impl_blk_arrive`: stamp %5==4 wall-clock here, not after accept.
+        self.bidding.mark_block_arrival(pkg.height(), pkg.hash());
+        Ok(())
     }
 
-    /// Publish the arrival record only after the block is durably accepted
-    /// (§6 of the engine error contract): orphans never pollute the bidding map.
+    /// Idempotent fallback if a path attaches without going through arrive.
+    /// `mark_block_arrival` no-ops when the hash is already recorded.
     fn on_block_accepted(&self, pkg: &BlkPkg, _view: &dyn ChainView) -> Rerr {
         self.bidding.mark_block_arrival(pkg.height(), pkg.hash());
         Ok(())
@@ -841,34 +844,39 @@ impl BlockProducer for HacashConsensus {
         let mut scanned = 0usize;
         let max_candidate_bytes = (mint_params.max_block_size > 0)
             .then(|| mint_params.max_block_size.saturating_sub(base_tx_size));
-        // Hard bound: at most one diamond-mint tx per block (old check/block_build.rs rule);
-        // the diamond group is fee-descending, so the first pickable entry is the highest bid.
-        let mut diamond_kept = false;
-        let mut collect_candidate = |txpkg: &base::TxPkg| {
+        // Old check/block_build.rs: try diamond-mint txs in fee-descending order
+        // until one executes; a failed top bid must not hide the next. Execute
+        // itself admits at most one mint (subsequent diamonds fail the number check).
+        let mut diamond_candidates = Vec::<TxRef>::new();
+        if pre_height > 0 && pre_height % 5 == 0 {
+            txpool.iter(Self::TX_GROUP_DIAMOND_MINT, &mut |txpkg: &base::TxPkg| {
+                if diamond_candidates.len() >= max_candidates {
+                    return false;
+                }
+                let size = txpkg.tx().size();
+                if max_candidate_bytes.is_some_and(|max| size > max) {
+                    return true;
+                }
+                diamond_candidates.push(txpkg.tx_ref());
+                true
+            })?;
+        }
+        txpool.iter(Self::TX_GROUP_NORMAL, &mut |txpkg: &base::TxPkg| {
             if candidates.len() >= max_candidates || scanned >= max_scanned {
                 return false;
-            }
-            let is_diamond = crate::action::util::pickout_diamond_mint_action(txpkg.tx()).is_some();
-            if is_diamond && diamond_kept {
-                return true;
             }
             scanned = scanned.saturating_add(1);
             let next_bytes = candidate_bytes.saturating_add(txpkg.tx().size());
             if max_candidate_bytes.is_some_and(|max| next_bytes > max) {
-                // One oversized/stale high-fee entry must not hide smaller
-                // candidates; continue only within the separate scan bound above.
                 return true;
             }
             candidate_bytes = next_bytes;
             candidates.push(txpkg.tx_ref());
-            diamond_kept |= is_diamond;
             true
-        };
-        if pre_height > 0 && pre_height % 5 == 0 {
-            txpool.iter(Self::TX_GROUP_DIAMOND_MINT, &mut collect_candidate)?;
-        }
-        txpool.iter(Self::TX_GROUP_NORMAL, &mut collect_candidate)?;
-        drop(collect_candidate);
+        })?;
+        let mut all_candidates = diamond_candidates;
+        all_candidates.append(&mut candidates);
+        let candidates = all_candidates;
 
         // §8.1 steps 3-6: strict read session. `state_canonical()` captures head hash,
         // height and branch snapshot under one read guard (no interleaved root persist).

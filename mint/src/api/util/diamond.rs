@@ -156,6 +156,6 @@ pub(crate) fn smelt_average_bid(state: &CoreStateRead, dia: &DiamondName) -> sys
 }
 
 pub(crate) fn add_amount(total: &mut Amount, add: &Amount) -> sys::Rerr {
-    *total = total.add_mode_u128(add)?;
+    *total = total.add_mode_u64(add)?;
     Ok(())
 }

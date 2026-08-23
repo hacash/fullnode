@@ -201,7 +201,7 @@ fn check_transfer_recipient_allowed(to: &Address) -> Rerr {
 }
 
 fn is_privakey_unknown(addr: &Address) -> bool {
-    addr.version() == 0 && addr.as_ref()[..17].iter().all(|&x| x == 0)
+    addr.is_privkey_unknown()
 }
 
 fn calculate_diamond_life_gene(
@@ -245,5 +245,21 @@ base::impl_action_execute! {
             diamond_mint(self, ctx)?;
             Ok(vec![])
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diamond_mint_recipient_allows_u32_max_tail() {
+        let mut bytes = [0u8; Address::SIZE];
+        bytes[17..].copy_from_slice(&u32::MAX.to_be_bytes());
+        let addr = Address::from(bytes);
+        assert!(
+            !is_privakey_unknown(&addr),
+            "00..00||0xFFFFFFFF must match Address::is_privkey_unknown (old mint allow)"
+        );
     }
 }
