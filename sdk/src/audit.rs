@@ -84,7 +84,7 @@ impl Auditability {
 
 pub fn scope_name(scope: base::ActScope) -> &'static str {
     use base::ActScope;
-    if scope == ActScope::GUARD || scope == ActScope::TOP_GUARD_UNIQUE {
+    if scope.is_guard() {
         "guard"
     } else if scope == ActScope::CALL || scope == ActScope::CALL_ONLY {
         "call"
@@ -164,7 +164,7 @@ impl DescribeOptions {
                 _ => {
                     return Err(crate::jsonparse::parse_failed(format!(
                         "describe field {key} must be a boolean"
-                    )))
+                    )));
                 }
             };
             match *key {
@@ -175,7 +175,7 @@ impl DescribeOptions {
                     return Err(SdkError::new(
                         SdkErrorCode::UnknownField,
                         format!("describe field {key} is unknown"),
-                    ))
+                    ));
                 }
             }
         }
@@ -245,10 +245,12 @@ pub fn code_type_name(raw: u8) -> (&'static str, u8) {
 fn action_code_desc(action: &dyn Action) -> Option<ActionCodeDesc> {
     let (codeconf, codes): (u8, Vec<u8>) = if let Some(call) = action
         .as_any()
-        .downcast_ref::<vm::action::ContractMainCall>()
-    {
+        .downcast_ref::<vm::action::ContractMainCall>(
+    ) {
         (call.codeconf.uint(), call.codes.as_vec().clone())
-    } else if let Some(p2sh) = action.as_any().downcast_ref::<vm::action::P2SHScriptProve>()
+    } else if let Some(p2sh) = action
+        .as_any()
+        .downcast_ref::<vm::action::P2SHScriptProve>()
     {
         (p2sh.codeconf.uint(), p2sh.lockbox.as_vec().clone())
     } else {
@@ -341,12 +343,13 @@ pub fn describe_action(
 /// `action.describe`: describe a single raw action wire independently of any
 /// transaction body — the on-demand detail entry for signature pages and
 /// long-code viewers. Same `DescribeOptions` knobs as `tx.inspect`/`tx.decode`.
-pub fn describe_single(action_hex: &str, options: &DescribeOptions) -> Result<ActionDesc, SdkError> {
+pub fn describe_single(
+    action_hex: &str,
+    options: &DescribeOptions,
+) -> Result<ActionDesc, SdkError> {
     let wire = crate::inspect::decode_body_hex(action_hex)?;
     let codecs = crate::codec::standard_codecs().map_err(SdkError::from)?;
-    let action = codecs
-        .decode_action_exact(&wire)
-        .map_err(SdkError::from)?;
+    let action = codecs.decode_action_exact(&wire).map_err(SdkError::from)?;
     Ok(describe_action(action.as_ref(), 0, "0", 0, options))
 }
 
@@ -572,7 +575,10 @@ fn maincall_body() -> String {
         actions: vec![crate::build::ActionSpec::new(
             "contract_main_call",
             vec![
-                ("marks".to_owned(), crate::spec_codec::WireValue::Hex(vec![0, 0, 0])),
+                (
+                    "marks".to_owned(),
+                    crate::spec_codec::WireValue::Hex(vec![0, 0, 0]),
+                ),
                 ("codeconf".to_owned(), crate::spec_codec::WireValue::Num(0)),
                 ("codes".to_owned(), crate::spec_codec::WireValue::Hex(codes)),
             ],
@@ -595,7 +601,10 @@ fn describe_single_carries_description_json_and_code() {
     assert!(text.contains("Run main codes"), "description: {text}");
     // json: canonical field-level view.
     let json = desc.json.as_deref().unwrap();
-    assert!(json.contains("\"kind\"") && json.contains("\"codes\""), "json: {json}");
+    assert!(
+        json.contains("\"kind\"") && json.contains("\"codes\""),
+        "json: {json}"
+    );
     // code: single-code payload metadata (bytecode type 0).
     let code = desc.code.as_ref().expect("maincall has code metadata");
     assert_eq!(code.code_type_name, "bytecode");
@@ -606,21 +615,27 @@ fn describe_single_carries_description_json_and_code() {
 #[test]
 fn describe_options_independently_trim_facets() {
     let raw = maincall_body();
-    let bare = describe_single(&raw, &DescribeOptions {
-        with_description: false,
-        with_json: false,
-        with_code: false,
-    })
+    let bare = describe_single(
+        &raw,
+        &DescribeOptions {
+            with_description: false,
+            with_json: false,
+            with_code: false,
+        },
+    )
     .unwrap();
     assert!(bare.description.is_none());
     assert!(bare.json.is_none());
     assert!(bare.code.is_none());
 
-    let code_only = describe_single(&raw, &DescribeOptions {
-        with_description: false,
-        with_json: false,
-        with_code: true,
-    })
+    let code_only = describe_single(
+        &raw,
+        &DescribeOptions {
+            with_description: false,
+            with_json: false,
+            with_code: true,
+        },
+    )
     .unwrap();
     assert!(code_only.code.is_some());
     assert!(code_only.json.is_none());

@@ -1,7 +1,6 @@
 //! `ContractDeploy` (kind 40) + `ContractUpdate` (kind 41) wire codecs.
 //! Execute bodies, store prechecks and `peek_vm_runtime_limits` live in `contract_exec.rs` (`execute` feature only).
 
-use base::ActScope;
 use field::{Address, Amount, BytesW2, Fixed2, Fixed4, Uint2, Uint4};
 
 use crate::contract::{ContractEdit, ContractSto};
@@ -31,10 +30,10 @@ pub struct ContractUpdateAnalysis {
 
 // ================================ ContractDeploy ================================
 
-#[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
-#[action_codec(audit = "structured", code)]
+#[base::action(kind = 40, tx_min = 3, scope = TOP_ONLY_CAN_WITH_GUARD, audit = "structured", name = "contract_deploy", code, ctor = none,
+    description = |this: &ContractDeploy| format!("Deploy smart contract with nonce {}", this.nonce.uint()))]
+#[derive(PartialEq, Eq)]
 pub struct ContractDeploy {
-    pub kind: Uint2,
     pub protocol_cost: Amount,
     pub nonce: Uint4,
     pub construct_argv: BytesW2, // checked by SpaceCap::value_size at runtime
@@ -43,8 +42,6 @@ pub struct ContractDeploy {
 }
 
 impl ContractDeploy {
-    pub const KIND: u16 = 40;
-
     pub fn new() -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
@@ -63,27 +60,12 @@ impl Default for ContractDeploy {
     }
 }
 
-base::impl_action_facts! {
-    ContractDeploy {
-        name: "contract_deploy",
-        scope: ActScope::TOP_ONLY_CAN_WITH_GUARD,
-        min_tx_type: 3,
-        extra9: |_: &ContractDeploy| false,
-        req_sign: |_: &ContractDeploy| vec![],
-        as_transfer_like: none,
-        description: |this: &ContractDeploy| {
-            format!("Deploy smart contract with nonce {}", this.nonce.uint())
-        },
-
-    }
-}
-
 // ================================ ContractUpdate ================================
 
-#[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
-#[action_codec(audit = "structured", code)]
+#[base::action(kind = 41, tx_min = 3, scope = TOP_ONLY_CAN_WITH_GUARD, audit = "structured", name = "contract_update", code, ctor = none,
+    description = |this: &ContractUpdate| format!("Update smart contract {}", this.address.to_readable()))]
+#[derive(PartialEq, Eq)]
 pub struct ContractUpdate {
-    pub kind: Uint2,
     pub protocol_cost: Amount,
     pub address: Address, // contract address
     pub marks: Fixed2,    // zero
@@ -91,8 +73,6 @@ pub struct ContractUpdate {
 }
 
 impl ContractUpdate {
-    pub const KIND: u16 = 41;
-
     pub fn new() -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
@@ -107,20 +87,5 @@ impl ContractUpdate {
 impl Default for ContractUpdate {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-base::impl_action_facts! {
-    ContractUpdate {
-        name: "contract_update",
-        scope: ActScope::TOP_ONLY_CAN_WITH_GUARD,
-        min_tx_type: 3,
-        extra9: |_: &ContractUpdate| false,
-        req_sign: |_: &ContractUpdate| vec![],
-        as_transfer_like: none,
-        description: |this: &ContractUpdate| {
-            format!("Update smart contract {}", this.address.to_readable())
-        },
-
     }
 }

@@ -1,254 +1,77 @@
 use std::sync::Arc;
 
-use base::{ActScope, ActionJsonCodec, ActionRef};
-use field::{
-    Amount, BytesW1, DiamondName, DiamondNameListMax200, Encode, Uint1, Uint2, WireAmount,
-};
+use base::{ActionJsonCodec, ActionRef};
+use field::{Amount, BytesW1, DiamondName, DiamondNameListMax200, Encode, Uint1, WireAmount};
 use sys::{Rerr, Ret, errf};
 
 fn wire_rules() -> &'static hacash_params::InscriptionRules {
     &hacash_params::MAINNET_PARAMS.mint_rules.inscription
 }
 
-#[derive(Debug, Clone, base::ActionCodec)]
-#[action_codec(audit = "full")]
-pub struct DiaInscPush {
-    pub kind: Uint2,
-    pub diamonds: DiamondNameListMax200,
-    pub protocol_cost: WireAmount,
-    pub engraved_type: Uint1,
-    pub engraved_content: BytesW1,
-}
-
-#[derive(Debug, Clone, base::ActionCodec)]
-#[action_codec(audit = "full")]
-pub struct DiaInscClean {
-    pub kind: Uint2,
-    pub diamonds: DiamondNameListMax200,
-    pub protocol_cost: Amount,
-}
-
-#[derive(Debug, Clone, base::ActionCodec)]
-#[action_codec(audit = "full")]
-pub struct DiaInscEdit {
-    pub kind: Uint2,
-    pub diamond: DiamondName,
-    pub index: Uint1,
-    pub protocol_cost: Amount,
-    pub engraved_type: Uint1,
-    pub engraved_content: BytesW1,
-}
-
-#[derive(Debug, Clone, base::ActionCodec)]
-#[action_codec(audit = "full")]
-pub struct DiaInscMove {
-    pub kind: Uint2,
-    pub from_diamond: DiamondName,
-    pub to_diamond: DiamondName,
-    pub index: Uint1,
-    pub protocol_cost: Amount,
-}
-
-#[derive(Debug, Clone, base::ActionCodec)]
-#[action_codec(audit = "full")]
-pub struct DiaInscDrop {
-    pub kind: Uint2,
-    pub diamond: DiamondName,
-    pub index: Uint1,
-    pub protocol_cost: Amount,
-}
-
-impl DiaInscClean {
-    pub const KIND: u16 = 33;
-
-    pub fn new(diamonds: DiamondNameListMax200, protocol_cost: Amount) -> Self {
-        Self {
-            kind: Uint2::from(Self::KIND),
-            diamonds,
-            protocol_cost,
-        }
+base::action_simple! { DiaInscPush, 32, 2, TOP, {
+    diamonds: DiamondNameListMax200,
+    protocol_cost: WireAmount,
+    engraved_type: Uint1,
+    engraved_content: BytesW1
+}, this, {
+    name: "hacd_insc_push",
+    extra9: true,
+    description: {
+        let mut desc = format!("Inscript {} HACD ({}) with \"{}\"", this.diamonds.length(), this.diamonds.splitstr(), this.engraved_content.to_readable_or_hex());
+        if this.protocol_cost.is_positive() { desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string())); }
+        desc
     }
-}
+}}
 
-impl DiaInscPush {
-    pub const KIND: u16 = 32;
+base::action_simple! { DiaInscClean, 33, 2, TOP, {
+    diamonds: DiamondNameListMax200,
+    protocol_cost: Amount
+}, this, {
+    name: "hacd_insc_clean",
+    extra9: true,
+    description: format!("Clean inscript {} HACD ({}) cost {} HAC fee", this.diamonds.length(), this.diamonds.splitstr(), this.protocol_cost.to_fin_string())
+}}
 
-    pub fn new(
-        diamonds: DiamondNameListMax200,
-        protocol_cost: WireAmount,
-        engraved_type: Uint1,
-        engraved_content: BytesW1,
-    ) -> Self {
-        Self {
-            kind: Uint2::from(Self::KIND),
-            diamonds,
-            protocol_cost,
-            engraved_type,
-            engraved_content,
-        }
+base::action_simple! { DiaInscEdit, 34, 2, CALL, {
+    diamond: DiamondName,
+    index: Uint1,
+    protocol_cost: Amount,
+    engraved_type: Uint1,
+    engraved_content: BytesW1
+}, this, {
+    name: "hacd_insc_edit",
+    extra9: true,
+    description: {
+        let mut desc = format!("Edit inscription #{} of HACD {} to \"{}\"", this.index.uint(), this.diamond.to_readable(), this.engraved_content.to_readable_or_hex());
+        if this.protocol_cost.is_positive() { desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string())); }
+        desc
     }
-}
+}}
 
-impl DiaInscEdit {
-    pub const KIND: u16 = 34;
-
-    pub fn new(
-        diamond: DiamondName,
-        index: Uint1,
-        protocol_cost: Amount,
-        engraved_type: Uint1,
-        engraved_content: BytesW1,
-    ) -> Self {
-        Self {
-            kind: Uint2::from(Self::KIND),
-            diamond,
-            index,
-            protocol_cost,
-            engraved_type,
-            engraved_content,
-        }
+base::action_simple! { DiaInscMove, 35, 2, AST, {
+    from_diamond: DiamondName,
+    to_diamond: DiamondName,
+    index: Uint1,
+    protocol_cost: Amount
+}, this, {
+    name: "hacd_insc_move",
+    extra9: true,
+    description: {
+        let mut desc = format!("Move inscription #{} from HACD {} to HACD {}", this.index.uint(), this.from_diamond.to_readable(), this.to_diamond.to_readable());
+        if this.protocol_cost.is_positive() { desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string())); }
+        desc
     }
-}
+}}
 
-impl DiaInscMove {
-    pub const KIND: u16 = 35;
-
-    pub fn new(
-        from_diamond: DiamondName,
-        to_diamond: DiamondName,
-        index: Uint1,
-        protocol_cost: Amount,
-    ) -> Self {
-        Self {
-            kind: Uint2::from(Self::KIND),
-            from_diamond,
-            to_diamond,
-            index,
-            protocol_cost,
-        }
-    }
-}
-
-impl DiaInscDrop {
-    pub const KIND: u16 = 36;
-
-    pub fn new(diamond: DiamondName, index: Uint1, protocol_cost: Amount) -> Self {
-        Self {
-            kind: Uint2::from(Self::KIND),
-            diamond,
-            index,
-            protocol_cost,
-        }
-    }
-}
-
-base::impl_action_facts! {
-    DiaInscPush {
-        name: "hacd_insc_push",
-        scope: ActScope::TOP,
-        min_tx_type: 2,
-        extra9: |_: &DiaInscPush| true,
-        req_sign: |_: &DiaInscPush| vec![],
-        as_transfer_like: none,
-        description: |this: &DiaInscPush| {
-            let mut desc = format!(
-                "Inscript {} HACD ({}) with \"{}\"",
-                this.diamonds.length(),
-                this.diamonds.splitstr(),
-                this.engraved_content.to_readable_or_hex()
-            );
-            if this.protocol_cost.is_positive() {
-                desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string()));
-            }
-            desc
-        },
-
-    }
-}
-
-base::impl_action_facts! {
-    DiaInscClean {
-        name: "hacd_insc_clean",
-        scope: ActScope::TOP,
-        min_tx_type: 2,
-        extra9: |_: &DiaInscClean| true,
-        req_sign: |_: &DiaInscClean| vec![],
-        as_transfer_like: none,
-        description: |this: &DiaInscClean| format!(
-            "Clean inscript {} HACD ({}) cost {} HAC fee",
-            this.diamonds.length(),
-            this.diamonds.splitstr(),
-            this.protocol_cost.to_fin_string()
-        ),
-
-    }
-}
-
-base::impl_action_facts! {
-    DiaInscEdit {
-        name: "hacd_insc_edit",
-        scope: ActScope::CALL,
-        min_tx_type: 2,
-        extra9: |_: &DiaInscEdit| true,
-        req_sign: |_: &DiaInscEdit| vec![],
-        as_transfer_like: none,
-        description: |this: &DiaInscEdit| {
-            let mut desc = format!(
-                "Edit inscription #{} of HACD {} to \"{}\"",
-                this.index.uint(),
-                this.diamond.to_readable(),
-                this.engraved_content.to_readable_or_hex()
-            );
-            if this.protocol_cost.is_positive() {
-                desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string()));
-            }
-            desc
-        },
-
-    }
-}
-
-base::impl_action_facts! {
-    DiaInscMove {
-        name: "hacd_insc_move",
-        scope: ActScope::AST,
-        min_tx_type: 2,
-        extra9: |_: &DiaInscMove| true,
-        req_sign: |_: &DiaInscMove| vec![],
-        as_transfer_like: none,
-        description: |this: &DiaInscMove| {
-            let mut desc = format!(
-                "Move inscription #{} from HACD {} to HACD {}",
-                this.index.uint(),
-                this.from_diamond.to_readable(),
-                this.to_diamond.to_readable()
-            );
-            if this.protocol_cost.is_positive() {
-                desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string()));
-            }
-            desc
-        },
-
-    }
-}
-
-base::impl_action_facts! {
-    DiaInscDrop {
-        name: "hacd_insc_drop",
-        scope: ActScope::TOP,
-        min_tx_type: 2,
-        extra9: |_: &DiaInscDrop| true,
-        req_sign: |_: &DiaInscDrop| vec![],
-        as_transfer_like: none,
-        description: |this: &DiaInscDrop| format!(
-            "Drop inscription #{} from HACD {} cost {} HAC fee",
-            this.index.uint(),
-            this.diamond.to_readable(),
-            this.protocol_cost.to_fin_string()
-        ),
-
-    }
-}
+base::action_simple! { DiaInscDrop, 36, 2, TOP, {
+    diamond: DiamondName,
+    index: Uint1,
+    protocol_cost: Amount
+}, this, {
+    name: "hacd_insc_drop",
+    extra9: true,
+    description: format!("Drop inscription #{} from HACD {} cost {} HAC fee", this.index.uint(), this.diamond.to_readable(), this.protocol_cost.to_fin_string())
+}}
 
 pub fn check_protocol_cost(pfee: &Amount) -> Rerr {
     if pfee.is_negative() {

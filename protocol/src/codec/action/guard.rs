@@ -3,41 +3,39 @@
 #[cfg(test)]
 use std::sync::Arc;
 
-use base::{ActScope, AddrOrPtr, Transaction};
+use base::{AddrOrPtr, Transaction};
 use field::{Amount, AssetAmtW1, BlockHeight, ChainIDList, DiamondNumber, ListW2, Satoshi, Uint2};
 use sys::{Rerr, Ret, errf};
 
 use super::transfer::addr_or_ptr_readable;
 
-#[derive(Debug, Clone, base::ActionCodec)]
-#[action_codec(audit = "full")]
-pub struct ChainAllow {
-    pub kind: Uint2,
-    pub chains: ChainIDList,
-}
+base::action_simple! { ChainAllow, 0x0411, 2, GUARD, {
+    chains: ChainIDList
+}, this, {
+    ctor: manual,
+    description: format!("Valid chain ID list {}", this.chains.as_list().iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","))
+}}
 
-#[derive(Debug, Clone, base::ActionCodec)]
-#[action_codec(audit = "full")]
-pub struct HeightScope {
-    pub kind: Uint2,
-    pub start: BlockHeight,
-    pub end: BlockHeight,
-}
+base::action_simple! { HeightScope, 0x0412, 2, GUARD, {
+    start: BlockHeight,
+    end: BlockHeight
+}, this, {
+    ctor: manual,
+    description: format!("Limit height range ({}, {})", this.start.uint(), if this.end.uint() == 0 { "Unlimited".to_owned() } else { this.end.uint().to_string() })
+}}
 
-#[derive(Debug, Clone, base::ActionCodec)]
-#[action_codec(audit = "full")]
-pub struct BalanceFloor {
-    pub kind: Uint2,
-    pub addr: AddrOrPtr,
-    pub hacash: Amount,
-    pub satoshi: Satoshi,
-    pub diamond: DiamondNumber,
-    pub assets: AssetAmtW1,
-}
+base::action_simple! { BalanceFloor, 0x0413, 2, GUARD, {
+    addr: AddrOrPtr,
+    hacash: Amount,
+    satoshi: Satoshi,
+    diamond: DiamondNumber,
+    assets: AssetAmtW1
+}, this, {
+    ctor: manual,
+    description: format!("Balance floor for {} (hac={}, sat={}, dia={}, assets={})", addr_or_ptr_readable(&this.addr), this.hacash, this.satoshi.uint(), this.diamond.uint(), this.assets.length())
+}}
 
 impl ChainAllow {
-    pub const KIND: u16 = 0x0411;
-
     pub fn new(chains: ChainIDList) -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
@@ -47,8 +45,6 @@ impl ChainAllow {
 }
 
 impl HeightScope {
-    pub const KIND: u16 = 0x0412;
-
     pub fn new(start: BlockHeight, end: BlockHeight) -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
@@ -59,8 +55,6 @@ impl HeightScope {
 }
 
 impl BalanceFloor {
-    pub const KIND: u16 = 0x0413;
-
     pub fn new(addr: AddrOrPtr, hacash: Amount, satoshi: Satoshi, diamond: DiamondNumber) -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
@@ -73,18 +67,18 @@ impl BalanceFloor {
     }
 }
 
-/// Explicit extra required signers beyond intrinsic action req_sign.
-/// Type3 uses this as E in D = R0 ∪ E (exact SignW2 match).
-#[derive(Debug, Clone, base::ActionCodec)]
-#[action_codec(audit = "full", validate = "Self::validate_codec")]
-pub struct ReqSignList {
-    pub kind: Uint2,
-    pub signers: ListW2<AddrOrPtr>,
-}
+// Explicit extra required signers beyond intrinsic action req_sign.
+// Type3 uses this as E in D = R0 ∪ E (exact SignW2 match).
+base::action_simple! { ReqSignList, 0x0414, 2, TOP_GUARD_UNIQUE, {
+    signers: ListW2<AddrOrPtr>
+}, this, {
+    validate: "Self::validate_codec",
+    req_sign: this.signers.0.clone(),
+    ctor: none,
+    description: format!("Require extra signers ({})", this.signers.length())
+}}
 
 impl ReqSignList {
-    pub const KIND: u16 = 0x0414;
-
     pub fn create_by(signers: Vec<AddrOrPtr>) -> Ret<Self> {
         let value = Self {
             kind: Uint2::from(Self::KIND),
@@ -178,49 +172,6 @@ pub(crate) fn validate_balance_floor_struct(floor: &BalanceFloor) -> Ret<(bool, 
         return errf!("balance floor is empty");
     }
     Ok((check_hac, check_sat, check_dia, check_assets))
-}
-
-base::impl_action_facts! {
-    ChainAllow {
-        name: "chain_allow",
-        scope: ActScope::GUARD,
-        min_tx_type: 2,
-        description: |this: &ChainAllow| format!("Valid chain ID list {}", this.chains.as_list().iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")),
-
-    }
-}
-
-base::impl_action_facts! {
-    HeightScope {
-        name: "height_scope",
-        scope: ActScope::GUARD,
-        min_tx_type: 2,
-        description: |this: &HeightScope| format!("Limit height range ({}, {})", this.start.uint(), if this.end.uint() == 0 { "Unlimited".to_owned() } else { this.end.uint().to_string() }),
-
-    }
-}
-
-base::impl_action_facts! {
-    BalanceFloor {
-        name: "balance_floor",
-        scope: ActScope::GUARD,
-        min_tx_type: 2,
-        description: |this: &BalanceFloor| format!("Balance floor for {} (hac={}, sat={}, dia={}, assets={})", addr_or_ptr_readable(&this.addr), this.hacash, this.satoshi.uint(), this.diamond.uint(), this.assets.length()),
-
-    }
-}
-
-base::impl_action_facts! {
-    ReqSignList {
-        name: "req_sign_list",
-        scope: ActScope::TOP_GUARD_UNIQUE,
-        min_tx_type: 2,
-        extra9: |_: &ReqSignList| false,
-        req_sign: |this: &ReqSignList| this.signers.0.clone(),
-        as_transfer_like: none,
-        description: |this: &ReqSignList| format!("Require extra signers ({})", this.signers.length()),
-
-    }
 }
 
 // ================================ review facts ================================
@@ -357,9 +308,7 @@ pub fn guard_facts(tx: &dyn Transaction) -> GuardFacts {
                     }
                 }
             }
-            kind if action.scope() == ActScope::GUARD
-                || action.scope() == ActScope::TOP_GUARD_UNIQUE =>
-            {
+            kind if action.scope().is_guard() => {
                 push_guard_note(
                     &mut facts,
                     index,

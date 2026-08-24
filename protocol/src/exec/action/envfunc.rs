@@ -67,7 +67,13 @@ base::impl_action_execute! {
         let mut n = 0u8;
         for action in ctx.tx().actions() {
             if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::TxBlob>() {
-                if n == self.idx.uint() { return Ok((blob.data.as_ref().len() as u64).to_be_bytes().to_vec()); }
+                if n == self.idx.uint() {
+                    let len = blob.data.as_ref().len();
+                    if len > u16::MAX as usize {
+                        return errf!("transaction blob {} size {} exceeds u16::MAX", self.idx.uint(), len);
+                    }
+                    return Ok((len as u16).to_be_bytes().to_vec());
+                }
                 n = n.saturating_add(1);
             }
         }

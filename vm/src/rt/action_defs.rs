@@ -8,43 +8,61 @@
 /// protocol/mint; keep in sync with the protocol registration tables.
 pub type ActDefTy = (u8, &'static str, ValueTy, usize);
 
-pub const ACTION_DEFS: [ActDefTy; 14] = [
-    (0x01, "transfer_hac_to", ValueTy::Nil, 2),
-    (0x0d, "transfer_hac_from", ValueTy::Nil, 2),
-    (0x0e, "transfer_hac_from_to", ValueTy::Nil, 3),
-    (0x0a, "transfer_sat_to", ValueTy::Nil, 2),
-    (0x0b, "transfer_sat_from", ValueTy::Nil, 2),
-    (0x0c, "transfer_sat_from_to", ValueTy::Nil, 3),
-    (0x05, "transfer_hacd_single_to", ValueTy::Nil, 2),
-    (0x07, "transfer_hacd_to", ValueTy::Nil, 2),
-    (0x08, "transfer_hacd_from", ValueTy::Nil, 2),
-    (0x06, "transfer_hacd_from_to", ValueTy::Nil, 3),
-    (0x22, "hacd_insc_edit", ValueTy::Nil, 5),
-    (0x11, "transfer_asset_to", ValueTy::Nil, 2),
-    (0x12, "transfer_asset_from", ValueTy::Nil, 2),
-    (0x13, "transfer_asset_from_to", ValueTy::Nil, 3),
-];
+macro_rules! vm_defs {
+    (
+        actions[$alen:literal]: { $(($id:literal, $name:literal, $ret:ident, $argc:literal)),* $(,)? },
+        env[$elen:literal]: { $(($eid:literal, $ename:literal, $eret:ident, $eargc:literal)),* $(,)? },
+        view[$vlen:literal]: { $(($vid:literal, $vname:literal, $vret:ident, $vargc:literal)),* $(,)? }
+    ) => {
+        pub const ACTION_DEFS: [ActDefTy; $alen] = [
+            $(($id, $name, ValueTy::$ret, $argc)),*
+        ];
+        pub const ACTION_ENV_DEFS: [ActDefTy; $elen] = [
+            $(($eid, $ename, ValueTy::$eret, $eargc)),*
+        ];
+        pub const ACTION_VIEW_DEFS: [ActDefTy; $vlen] = [
+            $(($vid, $vname, ValueTy::$vret, $vargc)),*
+        ];
+    };
+}
 
-pub const ACTION_ENV_DEFS: [ActDefTy; 5] = [
-    (0x01, "block_height", ValueTy::U64, 0),
-    (0x02, "tx_main_addr", ValueTy::Address, 0),
-    (0x03, "block_author_addr", ValueTy::Address, 0),
-    (0x04, "tx_message_num", ValueTy::U8, 0),
-    (0x05, "tx_blob_num", ValueTy::U8, 0),
-];
-
-pub const ACTION_VIEW_DEFS: [ActDefTy; 10] = [
-    (0x01, "balance", ValueTy::Bytes, 1),
-    (0x02, "asset_balance", ValueTy::U64, 2),
-    (0x09, "check_signature", ValueTy::Bool, 1),
-    (0x11, "hacd_insc_num", ValueTy::U8, 1),
-    (0x12, "hacd_insc_get", ValueTy::Bytes, 2),
-    (0x13, "hacd_name_list", ValueTy::Bytes, 3),
-    (0x14, "hacd_owner_addrs", ValueTy::Bytes, 1),
-    (0x15, "tx_message", ValueTy::Bytes, 1),
-    (0x16, "tx_blob", ValueTy::Bytes, 3),
-    (0x17, "tx_blob_size", ValueTy::U64, 1),
-];
+vm_defs! {
+    actions[14]: {
+    (0x01, "transfer_hac_to", Nil, 2),
+    (0x0d, "transfer_hac_from", Nil, 2),
+    (0x0e, "transfer_hac_from_to", Nil, 3),
+    (0x0a, "transfer_sat_to", Nil, 2),
+    (0x0b, "transfer_sat_from", Nil, 2),
+    (0x0c, "transfer_sat_from_to", Nil, 3),
+    (0x05, "transfer_hacd_single_to", Nil, 2),
+    (0x07, "transfer_hacd_to", Nil, 2),
+    (0x08, "transfer_hacd_from", Nil, 2),
+    (0x06, "transfer_hacd_from_to", Nil, 3),
+    (0x22, "hacd_insc_edit", Nil, 5),
+    (0x11, "transfer_asset_to", Nil, 2),
+    (0x12, "transfer_asset_from", Nil, 2),
+    (0x13, "transfer_asset_from_to", Nil, 3),
+    },
+    env[5]: {
+    (0x01, "block_height", U64, 0),
+    (0x02, "tx_main_addr", Address, 0),
+    (0x03, "block_author_addr", Address, 0),
+    (0x04, "tx_message_num", U8, 0),
+    (0x05, "tx_blob_num", U8, 0),
+    },
+    view[10]: {
+    (0x01, "balance", Bytes, 1),
+    (0x02, "asset_balance", U64, 2),
+    (0x09, "check_signature", Bool, 1),
+    (0x11, "hacd_insc_num", U8, 1),
+    (0x12, "hacd_insc_get", Bytes, 2),
+    (0x13, "hacd_name_list", Bytes, 3),
+    (0x14, "hacd_owner_addrs", Bytes, 1),
+    (0x15, "tx_message", Bytes, 1),
+    (0x16, "tx_blob", Bytes, 3),
+    (0x17, "tx_blob_size", U16, 1),
+    }
+}
 
 pub fn search_act_by_id<'a>(id: u8, exts: &'a [ActDefTy]) -> Option<&'a ActDefTy> {
     exts.iter().find(|def| def.0 == id)

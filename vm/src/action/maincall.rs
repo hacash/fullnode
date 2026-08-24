@@ -1,24 +1,21 @@
 //! `ContractMainCall` (kind 44) top-level action. Runs arbitrary VM bytecode at tx
 //! scope; codes are verified against the runtime `SpaceCap`/`GasExtra` before `VmRequest::Main`.
 
-use base::ActScope;
 use field::{BytesW2, Fixed3, Uint1, Uint2};
 use sys::Ret;
 
 use crate::rt::{CodeConf, CodeType};
 
-#[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
-#[action_codec(audit = "opaque", code)]
+#[base::action(kind = 44, tx_min = 3, scope = AST, audit = "opaque", name = "contract_main_call", code, ctor = none,
+    description = |this: &ContractMainCall| format!("Run main codes with conf {}", this.codeconf.uint()))]
+#[derive(PartialEq, Eq)]
 pub struct ContractMainCall {
-    pub kind: Uint2,
     pub marks: Fixed3,
     pub codeconf: Uint1,
     pub codes: BytesW2,
 }
 
 impl ContractMainCall {
-    pub const KIND: u16 = 44;
-
     pub fn new() -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
@@ -39,20 +36,5 @@ impl ContractMainCall {
 impl Default for ContractMainCall {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-base::impl_action_facts! {
-    ContractMainCall {
-        name: "contract_main_call",
-        scope: ActScope::AST,
-        min_tx_type: 3,
-        extra9: |_: &ContractMainCall| false,
-        req_sign: |_: &ContractMainCall| vec![],
-        as_transfer_like: none,
-        description: |this: &ContractMainCall| {
-            format!("Run main codes with conf {}", this.codeconf.uint())
-        },
-
     }
 }

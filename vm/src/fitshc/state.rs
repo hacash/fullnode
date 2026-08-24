@@ -7,7 +7,6 @@ use crate::contract::Contract;
 use crate::rt::SourceMap;
 use crate::rt::*;
 use field::Address;
-use sys::*;
 use sys::{Ret, errf};
 
 pub struct ParseState {

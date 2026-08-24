@@ -1,11 +1,10 @@
 //! TexCellAct (kind 22) and TEX cell codecs.
 
-use base::ActScope;
 #[cfg(feature = "execute")]
 use field::Hash;
 use field::{
     Address, AssetAmt, BlockHeight, Decode, DiamondNameListMax200, DiamondNumber, Encode, Fold64,
-    FromJSON, ListW1, Sign, Uint2, Uint4, json_decode_value, json_split_object,
+    FromJSON, ListW1, Sign, Uint4, json_decode_value, json_split_object,
 };
 use sys::{Ret, errf};
 
@@ -151,18 +150,17 @@ impl Default for TexCell {
     }
 }
 
-#[derive(Debug, Clone, base::ActionCodec)]
-#[action_codec(audit = "full")]
-pub struct TexCellAct {
-    pub kind: Uint2,
-    pub addr: Address,
+base::action_simple! { TexCellAct, 22, 3, TOP, {
+    addr: Address,
     pub(crate) cells: ListW1<TexCell>,
-    pub sign: Sign,
-}
+    sign: Sign
+}, this, {
+    extra9: this.has_asset_transfer_cell(),
+    ctor: none,
+    description: format!("Execute {} tex cells by {}", this.cells.len(), this.addr.to_readable())
+}}
 
 impl TexCellAct {
-    pub const KIND: u16 = 22;
-
     fn has_asset_transfer_cell(&self) -> bool {
         self.cells.iter().any(|c| c.is_asset_transfer())
     }
@@ -173,21 +171,6 @@ impl TexCellAct {
         self.addr.encode_to(&mut stf);
         self.cells.encode_to(&mut stf);
         Hash::from(sys::calculate_hash(stf))
-    }
-}
-
-base::impl_action_facts! {
-    TexCellAct {
-        name: "tex_cell_act",
-        scope: ActScope::TOP,
-        min_tx_type: 3,
-        extra9: |this: &TexCellAct| this.has_asset_transfer_cell(),
-        req_sign: |_: &TexCellAct| vec![],
-        as_transfer_like: none,
-        description: |this: &TexCellAct| {
-            format!("Execute {} tex cells by {}", this.cells.len(), this.addr.to_readable())
-        },
-
     }
 }
 

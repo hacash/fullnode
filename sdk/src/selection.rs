@@ -21,7 +21,7 @@
 //!   instead of guessing from kind arithmetic, so a future CALL_ONLY action in a
 //!   different kind space is excluded correctly too.
 
-use base::{ActionCodecBinding, ActionSchema, ActScope, StructSchema, TxCodecBinding};
+use base::{ActScope, ActionCodecBinding, ActionSchema, StructSchema, TxCodecBinding};
 
 /// Envelope rule: every `TX_CODECS` entry except Type 1 (deprecated).
 fn is_sdk_tx_type(ty: u8) -> bool {
@@ -126,10 +126,14 @@ mod tests {
             .collect();
         call_only.sort_unstable();
         // Today the CALL_ONLY entries are exactly the VM env/view syscalls
-        // (0x06xx / 0x07xx kind space).
+        // (0x06xx / 0x07xx kind space), including the tx message/blob reads
+        // (0x0615/0x0616/0x0617) and counts (0x0704/0x0705).
         assert_eq!(
             call_only,
-            vec![0x0601, 0x0602, 0x0609, 0x0611, 0x0612, 0x0613, 0x0614, 0x0701, 0x0702, 0x0703]
+            vec![
+                0x0601, 0x0602, 0x0609, 0x0611, 0x0612, 0x0613, 0x0614, 0x0615, 0x0616, 0x0617,
+                0x0701, 0x0702, 0x0703, 0x0704, 0x0705
+            ]
         );
 
         // Every selected action's scope is indeed not CALL_ONLY, and every
@@ -140,7 +144,10 @@ mod tests {
         }
         let selected_set: std::collections::HashSet<_> = selected.into_iter().collect();
         for kind in &call_only {
-            assert!(!selected_set.contains(kind), "CALL_ONLY kind {kind:#06x} leaked into SDK");
+            assert!(
+                !selected_set.contains(kind),
+                "CALL_ONLY kind {kind:#06x} leaked into SDK"
+            );
         }
     }
 
@@ -159,9 +166,21 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "asset_balance", "balance", "block_author_addr", "block_height", "check_signature",
-                "hacd_insc_get", "hacd_insc_num", "hacd_name_list", "hacd_owner_addrs",
+                "asset_balance",
+                "balance",
+                "block_author_addr",
+                "block_height",
+                "check_signature",
+                "hacd_insc_get",
+                "hacd_insc_num",
+                "hacd_name_list",
+                "hacd_owner_addrs",
+                "tx_blob",
+                "tx_blob_num",
+                "tx_blob_size",
                 "tx_main_addr",
+                "tx_message",
+                "tx_message_num",
             ]
         );
     }

@@ -141,10 +141,10 @@ pub trait DiskDB: Send + Sync {
 // move_root
 // =============================================================
 
-    /// Stable root hash, written by `move_root` in the same state batch.
-    pub const PERSIST_KEY_ROOT_HASH: &[u8] = b"_chain.root_hash";
-    /// Stable root height, written by `move_root` in the same state batch.
-    pub const PERSIST_KEY_ROOT_HEIGHT: &[u8] = b"_chain.root_height";
+/// Stable root hash, written by `move_root` in the same state batch.
+pub const PERSIST_KEY_ROOT_HASH: &[u8] = b"_chain.root_hash";
+/// Stable root height, written by `move_root` in the same state batch.
+pub const PERSIST_KEY_ROOT_HEIGHT: &[u8] = b"_chain.root_height";
 
 /// Lifecycle of the persisted canonical state: fresh = empty with no root markers;
 /// ready = both markers decoded. Reject partial/malformed/rootless nonempty state.

@@ -119,6 +119,7 @@ fn act_retv_type<H: VmHost + ?Sized>(host: &H, act_kind: Bytecode, idx: u8) -> V
         VmValueType::Nil => ValueTy::Nil,
         VmValueType::Bool => ValueTy::Bool,
         VmValueType::U8 => ValueTy::U8,
+        VmValueType::U16 => ValueTy::U16,
         VmValueType::U64 => ValueTy::U64,
         VmValueType::Address => ValueTy::Address,
         VmValueType::Bytes => ValueTy::Bytes,

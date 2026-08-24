@@ -57,7 +57,7 @@ pub trait ConsensusApi: Send + Sync {
 
 impl ConsensusApi for HacashConsensus {
     fn mint_params(&self) -> base::MintParams {
-        self.mint_params()
+        <Self as base::Consensus>::mint_params(self)
     }
     fn pending_replay_count(&self) -> usize {
         self.pending_replay_count()

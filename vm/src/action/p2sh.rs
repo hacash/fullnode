@@ -1,8 +1,7 @@
 //! `P2SHScriptProve` (kind 46) top-level action + P2SH lock-script hashing helpers, ported
 //! from dev: field-crate macros replaced with manual `Encode`/`Decode` structs and local hashing helpers.
 
-
-use base::{ActScope, P2sh};
+use base::P2sh;
 use field::{Address, BytesW2, Decode, Encode, Hash, Reader, Uint1, Uint2};
 use ripemd::{Digest, Ripemd160};
 use sha3::Sha3_256;
@@ -142,10 +141,10 @@ impl P2shEntryPayload {
 
 // ================================ P2SHScriptProve ================================
 
-#[derive(Debug, Clone, PartialEq, Eq, base::ActionCodec)]
-#[action_codec(audit = "structured", code)]
+#[base::action(kind = 46, tx_min = 3, scope = TOP, audit = "structured", name = "p2sh_script_prove", code, ctor = none,
+    description = |_: &P2SHScriptProve| "Prove P2SH unlock script".to_owned())]
+#[derive(PartialEq, Eq)]
 pub struct P2SHScriptProve {
-    pub kind: Uint2,
     // calc hash: script + calibs
     pub argvkey: BytesW2,            // unlock witness bytes (not executed)
     pub adrlibs: ContractAddrListW1, // lib address list for pure and codecall
@@ -158,8 +157,6 @@ pub struct P2SHScriptProve {
 use field::Fixed2;
 
 impl P2SHScriptProve {
-    pub const KIND: u16 = 46;
-
     pub fn new() -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
@@ -176,19 +173,6 @@ impl P2SHScriptProve {
 impl Default for P2SHScriptProve {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-base::impl_action_facts! {
-    P2SHScriptProve {
-        name: "p2sh_script_prove",
-        scope: ActScope::TOP,
-        min_tx_type: 3,
-        extra9: |_: &P2SHScriptProve| false,
-        req_sign: |_: &P2SHScriptProve| vec![],
-        as_transfer_like: none,
-        description: |_: &P2SHScriptProve| "Prove P2SH unlock script".to_owned(),
-
     }
 }
 

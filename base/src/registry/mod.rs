@@ -118,11 +118,7 @@ impl WireCodecTable {
     }
 
     pub fn add_tx(&mut self, binding: TxCodecBinding) -> Rerr {
-        if self
-            .transactions
-            .iter()
-            .any(|(ty, _)| *ty == binding.ty)
-        {
+        if self.transactions.iter().any(|(ty, _)| *ty == binding.ty) {
             return sys::errf!("transaction type {} already registered", binding.ty);
         }
         self.transactions.push((binding.ty, binding.decode_wire));
@@ -233,6 +229,7 @@ pub enum VmValueType {
     Nil,
     Bool,
     U8,
+    U16,
     U64,
     Address,
     Bytes,
@@ -306,12 +303,7 @@ impl VmHostActionDef {
     }
 
     /// ACTVIEW host: kinds live in the 0x06xx opcode space; the id is the low byte.
-    pub fn view_host(
-        kind: u16,
-        name: &'static str,
-        ret: VmValueType,
-        argc: usize,
-    ) -> Ret<Self> {
+    pub fn view_host(kind: u16, name: &'static str, ret: VmValueType, argc: usize) -> Ret<Self> {
         if kind >> 8 != 0x06 {
             return sys::errf!(
                 "VM ACTVIEW host {} kind {:#06x} must be in the 0x06xx opcode space",

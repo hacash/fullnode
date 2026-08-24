@@ -3,11 +3,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use base::{
-    ActScope, Action, ActionCodec, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry, TopRule,
-};
-#[cfg(feature = "execute")]
-use base::{ActionExecute, ActionJsonView};
+use base::{Action, ActionCodec, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry};
 use field::{
     Decode, Encode, Reader, Uint1, Uint2, json_decode_value, json_expect_unquoted,
     json_object_entries, json_object_fields, json_split_array,
@@ -49,6 +45,22 @@ pub struct ActionListW1 {
     actions: Vec<ActionRef>,
 }
 
+#[base::action(
+    kind = 25,
+    tx_min = 3,
+    scope = AST,
+    audit = "branching",
+    wire = manual,
+    nested = (1, actions),
+    req_sign = |this: &AstSelect| this.collect_req_sign(),
+    description = |this: &AstSelect| format!(
+        "Execute select {} to {} in {} actions",
+        this.exe_min.uint(),
+        this.exe_max.uint(),
+        this.actions.length()
+    ),
+    ctor = none,
+)]
 #[derive(Debug, Clone)]
 pub struct AstSelect {
     pub kind: Uint2,
@@ -57,6 +69,17 @@ pub struct AstSelect {
     pub actions: ActionListW1,
 }
 
+#[base::action(
+    kind = 26,
+    tx_min = 3,
+    scope = AST,
+    audit = "branching",
+    wire = manual,
+    nested = (2, cond, br_if, br_else),
+    req_sign = |this: &AstIf| this.collect_req_sign(),
+    description = |_this: &AstIf| "Asset if-else execute".to_owned(),
+    ctor = none,
+)]
 #[derive(Debug, Clone)]
 pub struct AstIf {
     pub kind: Uint2,
@@ -93,9 +116,6 @@ impl ActionListW1 {
 }
 
 impl AstSelect {
-    pub const KIND: u16 = 25;
-    pub const NAME: &'static str = "ast_select";
-
     pub fn create_by(min: u8, max: u8, actions: Vec<ActionRef>) -> Ret<Self> {
         Ok(Self {
             kind: Uint2::from(Self::KIND),
@@ -123,9 +143,6 @@ impl AstSelect {
 }
 
 impl AstIf {
-    pub const KIND: u16 = 26;
-    pub const NAME: &'static str = "ast_if";
-
     pub fn create_by(cond: AstSelect, br_if: AstSelect, br_else: AstSelect) -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
@@ -220,16 +237,20 @@ pub fn decode_ast_if_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret
     let mut cond = None;
     let mut br_if = None;
     let mut br_else = None;
-    json_object_fields(json, &["kind", "cond", "br_if", "br_else"], &mut |key, value| {
-        match key {
-            "kind" => declared = json_decode_value(value)?,
-            "cond" => cond = Some(value),
-            "br_if" => br_if = Some(value),
-            "br_else" => br_else = Some(value),
-            _ => return sys::errf!("AstIf JSON field {} is unknown", key),
-        }
-        Ok(())
-    })?;
+    json_object_fields(
+        json,
+        &["kind", "cond", "br_if", "br_else"],
+        &mut |key, value| {
+            match key {
+                "kind" => declared = json_decode_value(value)?,
+                "cond" => cond = Some(value),
+                "br_if" => br_if = Some(value),
+                "br_else" => br_else = Some(value),
+                _ => return sys::errf!("AstIf JSON field {} is unknown", key),
+            }
+            Ok(())
+        },
+    )?;
     if declared.uint() != AstIf::KIND {
         return sys::normalf!(
             "action kind mismatch: expected {} got {}",
@@ -317,54 +338,6 @@ impl ActionCodec for AstSelect {
     }
 }
 
-impl base::ActionScopeProvider for AstSelect {
-    const SCOPE: ActScope = ActScope::AST;
-}
-
-impl Action for AstSelect {
-    fn scope(&self) -> ActScope {
-        ActScope {
-            top: Some(TopRule::None),
-            allow_ast: true,
-            allow_call: false,
-        }
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-
-    fn description(&self) -> String {
-        format!(
-            "Execute select {} to {} in {} actions",
-            self.exe_min.uint(),
-            self.exe_max.uint(),
-            self.actions.length()
-        )
-    }
-
-    fn req_sign(&self) -> Vec<AddrOrPtr> {
-        self.collect_req_sign()
-    }
-
-    fn nested_actions(&self) -> Option<base::NestedActions<'_>> {
-        Some(base::NestedActions {
-            depth_inc: 1,
-            branches: vec![self.child_actions()],
-        })
-    }
-
-    #[cfg(feature = "execute")]
-    fn as_execute(&self) -> Option<&dyn ActionExecute> {
-        Some(self)
-    }
-
-    #[cfg(feature = "execute")]
-    fn as_json_view(&self) -> Option<&dyn ActionJsonView> {
-        Some(self)
-    }
-}
-
 impl ActionCodec for AstIf {
     fn kind(&self) -> u16 {
         Self::KIND
@@ -376,53 +349,6 @@ impl ActionCodec for AstIf {
 
     fn as_any(&self) -> &dyn Any {
         self
-    }
-}
-
-impl base::ActionScopeProvider for AstIf {
-    const SCOPE: ActScope = ActScope::AST;
-}
-
-impl Action for AstIf {
-    fn scope(&self) -> ActScope {
-        ActScope {
-            top: Some(TopRule::None),
-            allow_ast: true,
-            allow_call: false,
-        }
-    }
-
-    fn min_tx_type(&self) -> u8 {
-        3
-    }
-
-    fn description(&self) -> String {
-        "Asset if-else execute".to_owned()
-    }
-
-    fn req_sign(&self) -> Vec<AddrOrPtr> {
-        self.collect_req_sign()
-    }
-
-    fn nested_actions(&self) -> Option<base::NestedActions<'_>> {
-        Some(base::NestedActions {
-            depth_inc: 2,
-            branches: vec![
-                self.cond.child_actions(),
-                self.br_if.child_actions(),
-                self.br_else.child_actions(),
-            ],
-        })
-    }
-
-    #[cfg(feature = "execute")]
-    fn as_execute(&self) -> Option<&dyn ActionExecute> {
-        Some(self)
-    }
-
-    #[cfg(feature = "execute")]
-    fn as_json_view(&self) -> Option<&dyn ActionJsonView> {
-        Some(self)
     }
 }
 

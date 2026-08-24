@@ -6,7 +6,7 @@ use base::{ActScope, Action, ActionRef, ExecFrom, TopRule};
 use sys::{Rerr, errf};
 
 fn is_guard_scope(scope: ActScope) -> bool {
-    scope == ActScope::GUARD || scope == ActScope::TOP_GUARD_UNIQUE
+    scope.is_guard()
 }
 
 #[derive(Default)]
@@ -80,7 +80,11 @@ fn visit(
     }
     if from == ExecFrom::Top {
         stats.top_count += 1;
-        match stats.top_kinds.iter_mut().find(|(kind, _)| *kind == act.kind()) {
+        match stats
+            .top_kinds
+            .iter_mut()
+            .find(|(kind, _)| *kind == act.kind())
+        {
             Some((_, count)) => *count += 1,
             None => stats.top_kinds.push((act.kind(), 1)),
         }

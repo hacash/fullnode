@@ -21,7 +21,7 @@ pub mod store;
 #[cfg(feature = "execute")]
 pub mod sync;
 
-pub use action_derive::ActionCodec;
+pub use action_derive::{ActionCodec, action, action_simple};
 pub use iface::*;
 pub use registry::*;
 pub use runtime::*;

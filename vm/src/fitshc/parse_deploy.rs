@@ -3,7 +3,6 @@ use crate::Token::*;
 use crate::rt::*;
 use field::{Amount, BytesW2, Uint4};
 use std::collections::HashSet;
-use sys::*;
 use sys::{Ret, errf};
 
 #[derive(Default, Debug, Clone)]

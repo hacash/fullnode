@@ -52,11 +52,33 @@ pub enum TopRule {
     Unique,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum ScopeKind {
+    #[default]
+    Top,
+    Ast,
+    Guard,
+    Call,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ActScope {
+    kind: ScopeKind,
     pub top: Option<TopRule>,
     pub allow_ast: bool,
     pub allow_call: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ActScope;
+
+    #[test]
+    fn ast_and_guard_are_distinct_scope_kinds() {
+        assert_ne!(ActScope::AST, ActScope::GUARD);
+        assert!(!ActScope::AST.is_guard());
+        assert!(ActScope::GUARD.is_guard());
+    }
 }
 
 impl Default for ActScope {
@@ -67,26 +89,31 @@ impl Default for ActScope {
 
 impl ActScope {
     pub const TOP: Self = Self {
+        kind: ScopeKind::Top,
         top: Some(TopRule::None),
         allow_ast: false,
         allow_call: false,
     };
     pub const TOP_ONLY: Self = Self {
+        kind: ScopeKind::Top,
         top: Some(TopRule::Only),
         allow_ast: false,
         allow_call: false,
     };
     pub const TOP_ONLY_CAN_WITH_GUARD: Self = Self {
+        kind: ScopeKind::Top,
         top: Some(TopRule::OnlyCanWithGuard),
         allow_ast: false,
         allow_call: false,
     };
     pub const TOP_UNIQUE: Self = Self {
+        kind: ScopeKind::Top,
         top: Some(TopRule::Unique),
         allow_ast: false,
         allow_call: false,
     };
     pub const AST: Self = Self {
+        kind: ScopeKind::Ast,
         // Dev's AST scope is TopAndAst: structural VM entry actions (ContractMainCall) may be a
         // top-level Type3 action or an AST child, but never a CALL action.
         top: Some(TopRule::None),
@@ -94,22 +121,26 @@ impl ActScope {
         allow_call: false,
     };
     pub const GUARD: Self = Self {
+        kind: ScopeKind::Guard,
         top: Some(TopRule::None),
         allow_ast: true,
         allow_call: false,
     };
     /// Top-only guard companion; at most one action of this kind (e.g. ReqSignList).
     pub const TOP_GUARD_UNIQUE: Self = Self {
+        kind: ScopeKind::Guard,
         top: Some(TopRule::Unique),
         allow_ast: false,
         allow_call: false,
     };
     pub const CALL: Self = Self {
+        kind: ScopeKind::Call,
         top: Some(TopRule::None),
         allow_ast: true,
         allow_call: true,
     };
     pub const CALL_ONLY: Self = Self {
+        kind: ScopeKind::Call,
         top: None,
         allow_ast: false,
         allow_call: true,
@@ -121,6 +152,10 @@ impl ActScope {
             ExecFrom::Ast => self.allow_ast,
             ExecFrom::Call => self.allow_call,
         }
+    }
+
+    pub const fn is_guard(self) -> bool {
+        matches!(self.kind, ScopeKind::Guard)
     }
 
     pub fn top_rule(&self) -> Option<TopRule> {

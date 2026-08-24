@@ -19,6 +19,13 @@ pub trait ActionCodec: Encode + Send + Sync + std::fmt::Debug {
     fn as_any(&self) -> &dyn Any;
 }
 
+/// Canonical SDK-facing name for an action. The `ActionCodec` derive generates
+/// this from the Rust type name; callers may override it via the `name` option
+/// of `#[base::action(...)]` / `base::action_simple!`.
+pub trait ActionName {
+    const NAME: &'static str;
+}
+
 /// Offline review view. `Action` is retained as the public compatibility name.
 pub type ActionRef = Arc<dyn Action>;
 
@@ -202,136 +209,18 @@ pub trait ActionJsonCodec: Action + Sized {
 }
 
 /// Static consensus placement scope of an action type, alongside its wire schema.
-/// `impl_action_facts!` generates this from the same `scope` fact; handwritten
-/// `Action` impls (e.g. AST control-flow actions) must provide it too, because
-/// `action_codec_binding!` embeds it in every binding so static selection (the
-/// SDK's CALL_ONLY exclusion) never has to guess it from kind arithmetic.
+/// `#[base::action(...)]` / `base::action_simple!` generate this from the same
+/// `scope` fact; handwritten `Action` impls (e.g. AST control-flow actions) must
+/// provide it too, because `action_codec_binding!` embeds it in every binding so
+/// static selection (the SDK's CALL_ONLY exclusion) never has to guess it from
+/// kind arithmetic.
 pub trait ActionScopeProvider {
     const SCOPE: ActScope;
 }
 
-/// Generate the mechanical wire/offline part of an `ActionCodec` + `Action` impl; the
-/// consensus `execute` body lives in a separate `impl_action_execute!`; with `execute` on, omitting it is a compile error.
-#[macro_export]
-macro_rules! impl_action_facts {
-    ($class:ty {
-        name: $name:literal,
-        scope: $scope:expr,
-        min_tx_type: $min_tx_type:expr,
-        description: $description:expr $(,)?
-    }) => {
-        $crate::impl_action_facts! {
-            $class {
-                name: $name,
-                scope: $scope,
-                min_tx_type: $min_tx_type,
-                extra9: |_: &$class| false,
-                req_sign: |_: &$class| vec![],
-                as_transfer_like: none,
-                description: $description,
-            }
-        }
-    };
-
-    ($class:ty {
-        name: $name:literal,
-        scope: $scope:expr,
-        min_tx_type: $min_tx_type:expr $(,)?
-    }) => {
-        $crate::impl_action_facts! {
-            $class {
-                name: $name,
-                scope: $scope,
-                min_tx_type: $min_tx_type,
-                extra9: |_: &$class| false,
-                req_sign: |_: &$class| vec![],
-                as_transfer_like: none,
-                description: |_: &$class| String::new(),
-            }
-        }
-    };
-
-    ($class:ty {
-        name: $name:literal,
-        scope: $scope:expr,
-        min_tx_type: $min_tx_type:expr,
-        extra9: $extra9:expr,
-        req_sign: $req_sign:expr,
-        as_transfer_like: $as_transfer_like:ident,
-        description: $description:expr $(,)?
-    }) => {
-        impl $class {
-            pub const NAME: &'static str = $name;
-            pub const SCOPE: $crate::ActScope = $scope;
-        }
-
-        impl $crate::ActionScopeProvider for $class {
-            const SCOPE: $crate::ActScope = $scope;
-        }
-
-        impl $crate::ActionCodec for $class {
-            fn kind(&self) -> u16 {
-                Self::KIND
-            }
-
-            fn schema(&self) -> Option<&'static $crate::ActionSchema> {
-                Some(&<$class as $crate::ActionSchemaProvider>::ACTION_SCHEMA)
-            }
-
-            fn as_any(&self) -> &dyn std::any::Any {
-                self
-            }
-        }
-
-        impl $crate::Action for $class {
-
-            fn scope(&self) -> $crate::ActScope {
-                $scope
-            }
-
-            fn min_tx_type(&self) -> u8 {
-                $min_tx_type
-            }
-
-            fn extra9(&self) -> bool {
-                ($extra9)(self)
-            }
-
-            fn req_sign(&self) -> Vec<$crate::AddrOrPtr> {
-                ($req_sign)(self)
-            }
-
-            fn as_transfer_like(&self) -> Option<&dyn $crate::TransferLike> {
-                $crate::impl_action_facts!(@as_transfer_like self, $as_transfer_like)
-            }
-
-            fn description(&self) -> String {
-                ($description)(self)
-            }
-
-            #[cfg(feature = "execute")]
-            fn as_execute(&self) -> Option<&dyn $crate::ActionExecute> {
-                Some(self)
-            }
-
-            #[cfg(feature = "execute")]
-            fn as_json_view(&self) -> Option<&dyn $crate::ActionJsonView> {
-                Some(self)
-            }
-        }
-    };
-
-    (@as_transfer_like $action_self:ident, self) => {
-        Some($action_self)
-    };
-
-    (@as_transfer_like $action_self:ident, none) => {
-        None
-    };
-}
-
-/// Consensus `ActionExecute` body for a type with `impl_action_facts!`; gated on `execute`,
-/// applies size-based gas, returns `Ret<Vec<u8>>`. Dispatch stays `Action::as_execute`.
+/// Consensus `ActionExecute` body for an action declared by `#[base::action(...)]` /
+/// `base::action_simple!`; gated on `execute`, applies size-based gas, returns
+/// `Ret<Vec<u8>>`. Dispatch stays `Action::as_execute`.
 #[macro_export]
 macro_rules! impl_action_execute {
     ($class:ty {

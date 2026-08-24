@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use base::{ActScope, ActionRef};
+use base::ActionRef;
 use field::{
     Address, DiamondName, DiamondNumber, Encode, Fixed8, FromJSON, Hash, Reader, Uint2,
     json_decode_value, json_split_object,
@@ -105,6 +105,20 @@ impl Encode for DiamondMintData {
     }
 }
 
+#[base::action(
+    kind = 4,
+    tx_min = 2,
+    scope = TOP_ONLY,
+    audit = "full",
+    wire = manual,
+    ctor = none,
+    extra9 = |this: &DiamondMint| this.d.number.uint() > wire_rules().burn_90_percent_after,
+    description = |this: &DiamondMint| format!(
+        "Mint diamond <{}> number {}",
+        this.d.diamond.to_readable(),
+        this.d.number.uint()
+    ),
+)]
 #[derive(Debug, Clone)]
 pub struct DiamondMint {
     pub kind: Uint2,
@@ -112,8 +126,6 @@ pub struct DiamondMint {
 }
 
 impl DiamondMint {
-    pub const KIND: u16 = 4;
-
     pub fn with(diamond: DiamondName, number: DiamondNumber) -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
@@ -123,6 +135,20 @@ impl DiamondMint {
                 ..Default::default()
             },
         }
+    }
+}
+
+impl base::ActionCodec for DiamondMint {
+    fn kind(&self) -> u16 {
+        Self::KIND
+    }
+
+    fn schema(&self) -> Option<&'static base::ActionSchema> {
+        Some(&<Self as base::ActionSchemaProvider>::ACTION_SCHEMA)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -148,20 +174,6 @@ impl Encode for DiamondMint {
     fn encode_to(&self, out: &mut Vec<u8>) {
         self.kind.encode_to(out);
         self.d.encode_to(out);
-    }
-}
-
-base::impl_action_facts! {
-    DiamondMint {
-        name: "diamond_mint",
-        scope: ActScope::TOP_ONLY,
-        min_tx_type: 2,
-        extra9: |this: &DiamondMint| {
-            this.d.number.uint() > wire_rules().burn_90_percent_after
-        },
-        req_sign: |_: &DiamondMint| vec![],
-        as_transfer_like: none,
-        description: |this: &DiamondMint| format!("Mint diamond <{}> number {}", this.d.diamond.to_readable(), this.d.number.uint()),
     }
 }
 

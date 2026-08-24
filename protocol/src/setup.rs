@@ -1,11 +1,11 @@
 use crate::codec::action::*;
 use crate::codec::block::create_std_block;
+#[cfg(test)]
+use base::VmHostCallKind;
 use base::{
     Context, Env, ExecRegistry, ExecutionServices, StateChunkRef, TxRef, VmHostActionDef,
     VmValueType,
 };
-#[cfg(test)]
-use base::VmHostCallKind;
 use std::sync::Arc;
 use sys::Rerr;
 use sys::Ret;
@@ -116,7 +116,7 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
         ViewDiaOwnerAddrs = (Bytes, 1),
         ViewMessage = (Bytes, 1),
         ViewBlob = (Bytes, 3),
-        ViewBlobSize = (U64, 1),
+        ViewBlobSize = (U16, 1),
     )?;
     Ok(())
 }
@@ -230,7 +230,7 @@ mod tests {
             (ViewBalance::KIND, ViewBalance::NAME, VmValueType::Bytes, 1),
             (ViewMessage::KIND, ViewMessage::NAME, VmValueType::Bytes, 1),
             (ViewBlob::KIND, ViewBlob::NAME, VmValueType::Bytes, 3),
-            (ViewBlobSize::KIND, ViewBlobSize::NAME, VmValueType::U64, 1),
+            (ViewBlobSize::KIND, ViewBlobSize::NAME, VmValueType::U16, 1),
             (
                 ViewAssetBalance::KIND,
                 ViewAssetBalance::NAME,
@@ -278,7 +278,13 @@ mod tests {
     /// ENV / VIEW full KIND high byte is the ACTENV / ACTVIEW opcode prefix.
     #[test]
     fn env_view_full_kind_matches_the_opcode_prefix() {
-        for kind in [EnvHeight::KIND, EnvMainAddr::KIND, EnvBlockAuthorAddr::KIND, EnvMessageNum::KIND, EnvBlobNum::KIND] {
+        for kind in [
+            EnvHeight::KIND,
+            EnvMainAddr::KIND,
+            EnvBlockAuthorAddr::KIND,
+            EnvMessageNum::KIND,
+            EnvBlobNum::KIND,
+        ] {
             assert_eq!(kind >> 8, 0x07);
         }
         for kind in [
