@@ -9,7 +9,7 @@ use base::{
 use field::{Amount, DiamondName, DiamondNameListMax200, Hash, SatoshiAuto};
 use sys::{Rerr, errf};
 
-// Defined in `params` (non-exec module) because `TexCellAct`'s codec reads it too;
+// Defined in `params` (non-exec module) because `TexCellExecute`'s codec reads it too;
 // `tex` compiles unconditionally and is dead-code-eliminated in SDK/wasm builds.
 pub use crate::params::SETTLEMENT_ADDR;
 

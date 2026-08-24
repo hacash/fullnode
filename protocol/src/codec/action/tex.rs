@@ -1,4 +1,4 @@
-//! TexCellAct (kind 22) and TEX cell codecs.
+//! TexCellExecute (kind 22) and TEX cell codecs.
 
 #[cfg(feature = "execute")]
 use field::Hash;
@@ -150,7 +150,7 @@ impl Default for TexCell {
     }
 }
 
-base::action_simple! { TexCellAct, 22, 3, TOP, {
+base::action_simple! { TexCellExecute, 22, 3, TOP, {
     addr: Address,
     pub(crate) cells: ListW1<TexCell>,
     sign: Sign
@@ -160,7 +160,7 @@ base::action_simple! { TexCellAct, 22, 3, TOP, {
     description: format!("Execute {} tex cells by {}", this.cells.len(), this.addr.to_readable())
 }}
 
-impl TexCellAct {
+impl TexCellExecute {
     fn has_asset_transfer_cell(&self) -> bool {
         self.cells.iter().any(|c| c.is_asset_transfer())
     }

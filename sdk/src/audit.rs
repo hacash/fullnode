@@ -484,10 +484,10 @@ mod tests {
     /// The schema-declared blob flag must be exactly the two opaque
     /// byte-carrier actions; anything else fails here.
     #[test]
-    fn blob_class_is_exactly_tx_message_and_tx_blob() {
+    fn blob_class_is_exactly_message_and_blob() {
         let schemas = crate::selection::action_schemas();
         let blobs: Vec<&str> = schemas.iter().filter(|s| s.blob).map(|s| s.name).collect();
-        assert_eq!(blobs, vec!["tx_message", "tx_blob"]);
+        assert_eq!(blobs, vec!["message", "blob"]);
     }
 
     #[test]
@@ -515,8 +515,8 @@ mod tests {
     /// (`ast_select`/`ast_if`); a missing walker is a fail-closed note, not a silent child drop.
     #[test]
     fn ast_control_flow_kinds_collect_children() {
-        use protocol::action_std::{AstIf, AstSelect, HacToTrs};
-        let transfer = std::sync::Arc::new(HacToTrs::new(
+        use protocol::action_std::{AstIf, AstSelect, TransferHacTo};
+        let transfer = std::sync::Arc::new(TransferHacTo::new(
             field::Address::from(*sys::Account::create_by("123456").unwrap().address()),
             field::Amount::from("1:244").unwrap(),
         ));

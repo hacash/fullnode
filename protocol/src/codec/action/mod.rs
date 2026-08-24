@@ -12,15 +12,15 @@ pub use ast::{
     ActionListW1, AstIf, AstSelect, create_ast_if, create_ast_select, decode_ast_if_json,
     decode_ast_select_json,
 };
-pub use blob::{TxBlob, TxMessage};
+pub use blob::{Blob, Message};
 pub use envfunc::{
-    EnvBlobNum, EnvBlockAuthorAddr, EnvHeight, EnvMainAddr, EnvMessageNum, ViewAssetBalance,
-    ViewBalance, ViewBlob, ViewBlobSize, ViewCheckSign, ViewDiaInscGet, ViewDiaInscNum,
-    ViewDiaNameList, ViewDiaOwnerAddrs, ViewMessage,
+    TxBlobNum, BlockAuthorAddr, EnvHeight, TxMainAddr, TxMessageNum, BalanceAsset,
+    BalanceCoin, TxBlob, TxBlobSize, CheckSignature, HacdInscGet, HacdInscNum,
+    HacdNameList, HacdOwnerAddrs, TxMessage,
 };
-pub use guard::{BalanceFloor, ChainAllow, GuardFacts, HeightScope, ReqSignList, guard_facts, height_in_range};
-pub use tex::{TEX_CELL_SCHEMA, TexCellAct};
+pub use guard::{BalanceFloor, ChainAllow, GuardFacts, HeightScope, RequiredSigners, guard_facts, height_in_range};
+pub use tex::{TEX_CELL_SCHEMA, TexCellExecute};
 pub use transfer::{
-    AssetFromToTrs, AssetFromTrs, AssetToTrs, DiaFromToTrs, DiaFromTrs, DiaSingleTrs, DiaToTrs,
-    HacFromToTrs, HacFromTrs, HacToTrs, SatFromToTrs, SatFromTrs, SatToTrs,
+    TransferAssetFromTo, TransferAssetFrom, TransferAssetTo, TransferHacdFromTo, TransferHacdFrom, TransferHacdSingleTo, TransferHacdTo,
+    TransferHacFromTo, TransferHacFrom, TransferHacTo, TransferSatFromTo, TransferSatFrom, TransferSatTo,
 };

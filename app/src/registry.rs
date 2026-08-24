@@ -267,44 +267,125 @@ mod tests {
         assert_eq!(registry.wire_codecs.tx_types(), vec![0, 1, 2, 3]);
     }
 
+    /// Every entry of the VM display tables (`vm::ACTION_*_DEFS` — the fitsh
+    /// decompiler/parser's hand-written id -> name maps) must match the
+    /// registered VM host def, and through it the action type's `NAME`
+    /// constant. The VM cannot depend on protocol/mint, so this app-level
+    /// cross-check is the mechanical lock that keeps the hardcoded display
+    /// table in sync with action renames.
     #[test]
-    fn standard_registry_host_defs_match_the_action_name_constants() {
+    fn vm_host_display_tables_match_the_registered_host_defs_exactly() {
+        use vm::ValueTy;
+
         let registry = standard_registry().expect("standard registry");
-        let name = |k: VmHostCallKind, id: u8| registry.vm_host_def(k, id).map(|d| d.name);
-        // protocol transfer EXTACTION hosts: id == kind, name == Type::NAME
+        let host = |k: VmHostCallKind, id: u8| {
+            registry
+                .vm_host_def(k, id)
+                .unwrap_or_else(|| panic!("vm host {k:?}/{id:#04x} not registered"))
+        };
+        let vm_ty = |t: ValueTy| match t {
+            ValueTy::Nil => VmValueType::Nil,
+            ValueTy::Bool => VmValueType::Bool,
+            ValueTy::U8 => VmValueType::U8,
+            ValueTy::U16 => VmValueType::U16,
+            ValueTy::U64 => VmValueType::U64,
+            ValueTy::Address => VmValueType::Address,
+            ValueTy::Bytes => VmValueType::Bytes,
+            other => panic!("vm display table uses non-host value type {other:?}"),
+        };
+
+        // EXTACTION hosts: the wire id is the action kind itself.
+        for (id, name, ret, argc) in vm::ACTION_DEFS {
+            let def = host(VmHostCallKind::Action, id);
+            assert_eq!(def.id, id, "ACTION id mismatch");
+            assert_eq!(def.name, name, "ACTION {id:#04x} display name drifted");
+            assert_eq!(def.ret, vm_ty(ret), "ACTION {id:#04x} return type drifted");
+            assert_eq!(def.argc, argc, "ACTION {id:#04x} arity drifted");
+        }
+        // ACTENV / ACTVIEW hosts: id is the low byte of the 0x07xx / 0x06xx kind.
+        for (id, name, ret, argc) in vm::ACTION_ENV_DEFS {
+            let def = host(VmHostCallKind::Env, id);
+            assert_eq!(def.id, id, "ENV id mismatch");
+            assert_eq!(def.name, name, "ENV {id:#04x} display name drifted");
+            assert_eq!(def.ret, vm_ty(ret), "ENV {id:#04x} return type drifted");
+            assert_eq!(def.argc, argc, "ENV {id:#04x} arity drifted");
+        }
+        for (id, name, ret, argc) in vm::ACTION_VIEW_DEFS {
+            let def = host(VmHostCallKind::View, id);
+            assert_eq!(def.id, id, "VIEW id mismatch");
+            assert_eq!(def.name, name, "VIEW {id:#04x} display name drifted");
+            assert_eq!(def.ret, vm_ty(ret), "VIEW {id:#04x} return type drifted");
+            assert_eq!(def.argc, argc, "VIEW {id:#04x} arity drifted");
+        }
+    }
+
+    /// Canonical (kind, name) snapshot of every wire action across the three
+    /// catalogs. Renaming a struct (which re-derives the snake_case name) or
+    /// touching an explicit `name` override updates this table consciously.
+    #[test]
+    fn action_name_snapshot_is_stable() {
+        use base::ActionCodecBinding;
+        let mut rows: Vec<(u16, &'static str)> = protocol::ACTION_CODECS
+            .iter()
+            .chain(mint_core::ACTION_CODECS.iter())
+            .chain(vm::ACTION_CODECS.iter())
+            .map(|b: &ActionCodecBinding| (b.schema.kind, b.schema.name))
+            .collect();
+        rows.sort_unstable();
         assert_eq!(
-            name(VmHostCallKind::Action, 1),
-            Some(protocol::action_std::HacToTrs::NAME)
-        );
-        assert_eq!(
-            name(VmHostCallKind::Action, 10),
-            Some(protocol::action_std::SatToTrs::NAME)
-        );
-        assert_eq!(
-            name(VmHostCallKind::Action, 7),
-            Some(protocol::action_std::DiaToTrs::NAME)
-        );
-        // mint inscription host
-        assert_eq!(
-            name(VmHostCallKind::Action, 34),
-            Some(mint_core::inscription::DiaInscEdit::NAME)
-        );
-        // ACTENV / ACTVIEW hosts: id == KIND low byte, name == Type::NAME
-        assert_eq!(
-            name(VmHostCallKind::Env, 1),
-            Some(protocol::action_std::EnvHeight::NAME)
-        );
-        assert_eq!(
-            name(VmHostCallKind::Env, 2),
-            Some(protocol::action_std::EnvMainAddr::NAME)
-        );
-        assert_eq!(
-            name(VmHostCallKind::View, 18),
-            Some(protocol::action_std::ViewDiaInscGet::NAME)
-        );
-        assert_eq!(
-            name(VmHostCallKind::View, 20),
-            Some(protocol::action_std::ViewDiaOwnerAddrs::NAME)
+            rows,
+            vec![
+                (1, "transfer_hac_to"),
+                (2, "channel_open"),
+                (3, "channel_close"),
+                (4, "hacd_mint"),
+                (5, "transfer_hacd_single_to"),
+                (6, "transfer_hacd_from_to"),
+                (7, "transfer_hacd_to"),
+                (8, "transfer_hacd_from"),
+                (10, "transfer_sat_to"),
+                (11, "transfer_sat_from"),
+                (12, "transfer_sat_from_to"),
+                (13, "transfer_hac_from"),
+                (14, "transfer_hac_from_to"),
+                (16, "asset_create"),
+                (17, "transfer_asset_to"),
+                (18, "transfer_asset_from"),
+                (19, "transfer_asset_from_to"),
+                (22, "tex_cell_execute"),
+                (25, "ast_select"),
+                (26, "ast_if"),
+                (32, "hacd_insc_push"),
+                (33, "hacd_insc_clean"),
+                (34, "hacd_insc_edit"),
+                (35, "hacd_insc_move"),
+                (36, "hacd_insc_drop"),
+                (40, "contract_deploy"),
+                (41, "contract_update"),
+                (44, "contract_main_call"),
+                (46, "p2sh_script_prove"),
+                (0x0401, "message"),
+                (0x0402, "blob"),
+                (0x0411, "chain_allow"),
+                (0x0412, "height_scope"),
+                (0x0413, "balance_floor"),
+                (0x0414, "required_signers"),
+                (0x0601, "balance_coin"),
+                (0x0602, "balance_asset"),
+                (0x0609, "check_signature"),
+                (0x0611, "hacd_insc_num"),
+                (0x0612, "hacd_insc_get"),
+                (0x0613, "hacd_name_list"),
+                (0x0614, "hacd_owner_addrs"),
+                (0x0615, "tx_message"),
+                (0x0616, "tx_blob"),
+                (0x0617, "tx_blob_size"),
+                (0x0701, "block_height"),
+                (0x0702, "tx_main_addr"),
+                (0x0703, "block_author_addr"),
+                (0x0704, "tx_message_num"),
+                (0x0705, "tx_blob_num"),
+            ]
         );
     }
 
@@ -314,7 +395,7 @@ mod tests {
 
         let registry = standard_registry().expect("standard registry");
         let source =
-            protocol::action_std::SatToTrs::new(field::Address::default(), field::Satoshi::from(7));
+            protocol::action_std::TransferSatTo::new(field::Address::default(), field::Satoshi::from(7));
         let decoded = registry
             .decode_action_json(source.kind(), &source.to_json())
             .expect("json codec")
@@ -337,7 +418,7 @@ mod tests {
 
         let registry = standard_registry().expect("standard registry");
         let child =
-            protocol::action_std::SatToTrs::new(field::Address::default(), field::Satoshi::from(1));
+            protocol::action_std::TransferSatTo::new(field::Address::default(), field::Satoshi::from(1));
         let ast =
             protocol::action_std::AstSelect::create_by(0, 1, vec![Arc::new(child)]).expect("AST");
         let decoded = registry
@@ -346,18 +427,18 @@ mod tests {
             .expect("registered AST action");
         assert_eq!(decoded.to_json(), ast.to_json());
 
-        let signers = protocol::action_std::ReqSignList::create_by(vec![field::AddrOrPtr::Ptr(0)])
+        let signers = protocol::action_std::RequiredSigners::create_by(vec![field::AddrOrPtr::Ptr(0)])
             .expect("signer list");
         let decoded = registry
             .decode_action_json(signers.kind(), &signers.to_json())
-            .expect("ReqSignList JSON codec")
-            .expect("registered ReqSignList action");
+            .expect("RequiredSigners JSON codec")
+            .expect("registered RequiredSigners action");
         assert_eq!(decoded.to_json(), signers.to_json());
 
         assert!(
             registry
                 .decode_action_json(
-                    protocol::action_std::DiaToTrs::KIND,
+                    protocol::action_std::TransferHacdTo::KIND,
                     "{\"kind\":7,\"to\":0,\"diamonds\":[]}"
                 )
                 .is_err()

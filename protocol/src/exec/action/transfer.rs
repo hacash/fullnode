@@ -8,12 +8,12 @@ use field::{Address, DiamondNameListMax200, DiamondNumber, ToJSON};
 use sys::Ret;
 
 use crate::codec::action::{
-    AssetFromToTrs, AssetFromTrs, AssetToTrs, DiaFromToTrs, DiaFromTrs, DiaSingleTrs, DiaToTrs,
-    HacFromToTrs, HacFromTrs, HacToTrs, SatFromToTrs, SatFromTrs, SatToTrs,
+    TransferAssetFromTo, TransferAssetFrom, TransferAssetTo, TransferHacdFromTo, TransferHacdFrom, TransferHacdSingleTo, TransferHacdTo,
+    TransferHacFromTo, TransferHacFrom, TransferHacTo, TransferSatFromTo, TransferSatFrom, TransferSatTo,
 };
 
 base::impl_action_execute! {
-    HacToTrs {
+    TransferHacTo {
         (self, ctx) {
             let from = ctx.env().tx.main;
             let to = ctx.addr(&self.to)?;
@@ -24,7 +24,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    HacFromTrs {
+    TransferHacFrom {
         (self, ctx) {
             let from = ctx.addr(&self.from)?;
             let to = ctx.env().tx.main;
@@ -35,7 +35,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    HacFromToTrs {
+    TransferHacFromTo {
         (self, ctx) {
             let from = ctx.addr(&self.from)?;
             let to = ctx.addr(&self.to)?;
@@ -46,7 +46,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    SatToTrs {
+    TransferSatTo {
         (self, ctx) {
             let from = ctx.env().tx.main;
             let to = ctx.addr(&self.to)?;
@@ -57,7 +57,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    SatFromTrs {
+    TransferSatFrom {
         (self, ctx) {
             let from = ctx.addr(&self.from)?;
             let to = ctx.env().tx.main;
@@ -68,7 +68,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    SatFromToTrs {
+    TransferSatFromTo {
         (self, ctx) {
             let from = ctx.addr(&self.from)?;
             let to = ctx.addr(&self.to)?;
@@ -79,7 +79,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    AssetToTrs {
+    TransferAssetTo {
         (self, ctx) {
             let from = ctx.env().tx.main;
             let to = ctx.addr(&self.to)?;
@@ -90,7 +90,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    AssetFromTrs {
+    TransferAssetFrom {
         (self, ctx) {
             let from = ctx.addr(&self.from)?;
             let to = ctx.env().tx.main;
@@ -101,7 +101,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    AssetFromToTrs {
+    TransferAssetFromTo {
         (self, ctx) {
             let from = ctx.addr(&self.from)?;
             let to = ctx.addr(&self.to)?;
@@ -141,7 +141,7 @@ fn do_diamonds_transfer(
 }
 
 base::impl_action_execute! {
-    DiaSingleTrs {
+    TransferHacdSingleTo {
         (self, ctx) {
             let from = ctx.env().tx.main;
             let to = ctx.addr(&self.to)?;
@@ -155,7 +155,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    DiaFromToTrs {
+    TransferHacdFromTo {
         (self, ctx) {
             let from = ctx.addr(&self.from)?;
             let to = ctx.addr(&self.to)?;
@@ -168,7 +168,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    DiaToTrs {
+    TransferHacdTo {
         (self, ctx) {
             let from = ctx.env().tx.main;
             let to = ctx.addr(&self.to)?;
@@ -181,7 +181,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    DiaFromTrs {
+    TransferHacdFrom {
         (self, ctx) {
             let from = ctx.addr(&self.from)?;
             let to = ctx.env().tx.main;

@@ -3,7 +3,6 @@
 
 use std::sync::Arc;
 
-use base::ActionRef;
 use field::{
     Address, DiamondName, DiamondNumber, Encode, Fixed8, FromJSON, Hash, Reader, Uint2,
     json_decode_value, json_split_object,
@@ -13,21 +12,21 @@ use sys::Ret;
 #[cfg(feature = "execute")]
 pub use crate::exec::diamond::calculate_diamond_visual_gene;
 
-field::impl_struct_json!(DiamondMintData {
+field::impl_struct_json!(HacdMintData {
     diamond,
     number,
     prev_hash,
     nonce,
     address
 } optional custom_message when has_custom_message);
-field::impl_action_json!(DiamondMint { d });
+field::impl_action_json!(HacdMint { d });
 
 fn wire_rules() -> &'static hacash_params::DiamondRules {
     &hacash_params::MAINNET_PARAMS.mint_rules.diamond
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DiamondMintData {
+pub struct HacdMintData {
     pub diamond: DiamondName,
     pub number: DiamondNumber,
     pub prev_hash: Hash,
@@ -38,9 +37,9 @@ pub struct DiamondMintData {
 
 // `custom_message` exists on the wire only above the consensus threshold (see
 // `has_custom_message`/`Encode`); declared optional, so the provider is written out (no marker syntax).
-impl field::StructSchemaProvider for DiamondMintData {
+impl field::StructSchemaProvider for HacdMintData {
     const STRUCT_SCHEMA: field::StructSchema = field::StructSchema {
-        name: "DiamondMintData",
+        name: "HacdMintData",
         fields: &[
             field::FieldSchema::new("diamond", field::FieldWire::DiamondName),
             field::FieldSchema::new("number", field::FieldWire::DiamondNumber),
@@ -52,15 +51,15 @@ impl field::StructSchemaProvider for DiamondMintData {
     };
 }
 
-impl field::FieldWireShape for DiamondMintData {
-    const WIRE: field::FieldWire = field::FieldWire::Struct("DiamondMintData");
+impl field::FieldWireShape for HacdMintData {
+    const WIRE: field::FieldWire = field::FieldWire::Struct("HacdMintData");
 }
 
-impl field::WireElementName for DiamondMintData {
-    const NAME: &'static str = "DiamondMintData";
+impl field::WireElementName for HacdMintData {
+    const NAME: &'static str = "HacdMintData";
 }
 
-impl Default for DiamondMintData {
+impl Default for HacdMintData {
     fn default() -> Self {
         Self {
             diamond: DiamondName::default(),
@@ -73,13 +72,13 @@ impl Default for DiamondMintData {
     }
 }
 
-impl DiamondMintData {
+impl HacdMintData {
     fn has_custom_message(&self) -> bool {
         self.number.uint() > wire_rules().custom_message_after
     }
 }
 
-impl Encode for DiamondMintData {
+impl Encode for HacdMintData {
     fn size(&self) -> usize {
         self.diamond.size()
             + self.number.size()
@@ -112,24 +111,24 @@ impl Encode for DiamondMintData {
     audit = "full",
     wire = manual,
     ctor = none,
-    extra9 = |this: &DiamondMint| this.d.number.uint() > wire_rules().burn_90_percent_after,
-    description = |this: &DiamondMint| format!(
+    extra9 = |this: &HacdMint| this.d.number.uint() > wire_rules().burn_90_percent_after,
+    description = |this: &HacdMint| format!(
         "Mint diamond <{}> number {}",
         this.d.diamond.to_readable(),
         this.d.number.uint()
     ),
 )]
 #[derive(Debug, Clone)]
-pub struct DiamondMint {
+pub struct HacdMint {
     pub kind: Uint2,
-    pub d: DiamondMintData,
+    pub d: HacdMintData,
 }
 
-impl DiamondMint {
+impl HacdMint {
     pub fn with(diamond: DiamondName, number: DiamondNumber) -> Self {
         Self {
             kind: Uint2::from(Self::KIND),
-            d: DiamondMintData {
+            d: HacdMintData {
                 diamond,
                 number,
                 ..Default::default()
@@ -138,7 +137,7 @@ impl DiamondMint {
     }
 }
 
-impl base::ActionCodec for DiamondMint {
+impl base::ActionCodec for HacdMint {
     fn kind(&self) -> u16 {
         Self::KIND
     }
@@ -152,21 +151,21 @@ impl base::ActionCodec for DiamondMint {
     }
 }
 
-impl base::ActionSchemaProvider for DiamondMint {
+impl base::ActionSchemaProvider for HacdMint {
     const ACTION_SCHEMA: base::ActionSchema = base::ActionSchema {
         kind: Self::KIND,
-        name: "diamond_mint",
+        name: "hacd_mint",
         audit_class: base::AuditClass::Full,
         blob: false,
         has_code: false,
         fields: &[
             base::FieldSchema::new("kind", base::FieldWire::U2),
-            base::FieldSchema::new("d", base::FieldWire::Struct("DiamondMintData")),
+            base::FieldSchema::new("d", base::FieldWire::Struct("HacdMintData")),
         ],
     };
 }
 
-impl Encode for DiamondMint {
+impl Encode for HacdMint {
     fn size(&self) -> usize {
         self.kind.size() + self.d.size()
     }
@@ -177,54 +176,63 @@ impl Encode for DiamondMint {
     }
 }
 
-pub fn create_diamond_mint(
-    _reg: &dyn base::BinaryCodecs,
-    _kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != DiamondMint::KIND {
-        return sys::normalf!("DiamondMint codec got kind {}", kind.uint());
-    }
-    let diamond: DiamondName = r.read()?;
-    let number: DiamondNumber = r.read()?;
-    let prev_hash: Hash = r.read()?;
-    let nonce: Fixed8 = r.read()?;
-    let address: Address = r.read()?;
-    let custom_message = if number.uint() > wire_rules().custom_message_after {
-        r.read()?
-    } else {
-        Hash::default()
-    };
-    Ok((
-        Arc::new(DiamondMint {
-            kind,
-            d: DiamondMintData {
-                diamond,
-                number,
-                prev_hash,
-                nonce,
-                address,
-                custom_message,
-            },
-        }),
-        r.used(),
-    ))
-}
+// Codec entry points — `create_hacd_mint` / `decode_hacd_mint_json` are
+// derived from the type name, so a struct rename re-derives them instead of
+// leaving hand-written names to drift.
+base::action_codec_entries! { HacdMint {
+    wire = (_reg, _kind, buf) {
+        let mut r = Reader::new(buf);
+        let kind: Uint2 = r.read()?;
+        if kind.uint() != HacdMint::KIND {
+            return sys::normalf!("HacdMint codec got kind {}", kind.uint());
+        }
+        let diamond: DiamondName = r.read()?;
+        let number: DiamondNumber = r.read()?;
+        let prev_hash: Hash = r.read()?;
+        let nonce: Fixed8 = r.read()?;
+        let address: Address = r.read()?;
+        let custom_message = if number.uint() > wire_rules().custom_message_after {
+            r.read()?
+        } else {
+            Hash::default()
+        };
+        Ok((
+            Arc::new(HacdMint {
+                kind,
+                d: HacdMintData {
+                    diamond,
+                    number,
+                    prev_hash,
+                    nonce,
+                    address,
+                    custom_message,
+                },
+            }),
+            r.used(),
+        ))
+    },
+    json = (_reg, kind, json) {
+        // Accepts both `{"kind":4,"d":{...}}` and the historical flat form,
+        // keeping the API contract stable.
+        if kind != HacdMint::KIND {
+            return sys::normalf!("HacdMint JSON codec got kind {}", kind);
+        }
+        Ok(Arc::new(parse_hacd_mint_json(json)?))
+    },
+}}
 
-fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
+fn parse_hacd_mint_json(json: &str) -> Ret<HacdMint> {
     // Field lists are short; `Vec` with a linear duplicate scan keeps the
     // hash-table machinery out of the wasm graph.
     let mut seen: Vec<&str> = Vec::new();
-    let mut declared_kind = Uint2::from(DiamondMint::KIND);
+    let mut declared_kind = Uint2::from(HacdMint::KIND);
     let mut data_json = None;
-    let mut data = DiamondMintData::default();
+    let mut data = HacdMintData::default();
     let mut flat_fields = Vec::new();
 
     for (key, value) in json_split_object(json)? {
         if seen.contains(&key) {
-            return sys::normalf!("DiamondMint JSON field {} is duplicated", key);
+            return sys::normalf!("HacdMint JSON field {} is duplicated", key);
         }
         seen.push(key);
         match key {
@@ -236,10 +244,10 @@ fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
             _ => {}
         }
     }
-    if declared_kind.uint() != DiamondMint::KIND {
+    if declared_kind.uint() != HacdMint::KIND {
         return sys::normalf!(
             "action kind mismatch: expected {} got {}",
-            DiamondMint::KIND,
+            HacdMint::KIND,
             declared_kind.uint()
         );
     }
@@ -251,7 +259,7 @@ fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
     let mut data_seen: Vec<&str> = Vec::new();
     for (key, value) in fields {
         if data_seen.contains(&key) {
-            return sys::normalf!("DiamondMint data field {} is duplicated", key);
+            return sys::normalf!("HacdMint data field {} is duplicated", key);
         }
         data_seen.push(key);
         match key {
@@ -265,36 +273,23 @@ fn parse_diamond_mint_json(json: &str) -> Ret<DiamondMint> {
         }
     }
     if !data_seen.contains(&"diamond") || !data_seen.contains(&"number") {
-        return sys::errf!("DiamondMint JSON requires diamond and number");
+        return sys::errf!("HacdMint JSON requires diamond and number");
     }
-    Ok(DiamondMint {
+    Ok(HacdMint {
         kind: declared_kind,
         d: data,
     })
 }
 
-impl base::ActionJsonCodec for DiamondMint {
+impl base::ActionJsonCodec for HacdMint {
     fn decode_json(json: &str) -> Ret<Self> {
-        parse_diamond_mint_json(json)
+        parse_hacd_mint_json(json)
     }
 }
 
-impl field::FromJSON for DiamondMint {
+impl field::FromJSON for HacdMint {
     fn from_json(&mut self, json: &str) -> Ret<()> {
-        *self = parse_diamond_mint_json(json)?;
+        *self = parse_hacd_mint_json(json)?;
         Ok(())
     }
-}
-
-/// JSON creator for the consensus-specific diamond mint payload.
-/// Accepts both `{"kind":4,"d":{...}}` and the historical flat form, keeping the API contract stable.
-pub fn decode_diamond_mint_json(
-    _reg: &dyn base::CodecRegistry,
-    kind: u16,
-    json: &str,
-) -> Ret<ActionRef> {
-    if kind != DiamondMint::KIND {
-        return sys::normalf!("DiamondMint JSON codec got kind {}", kind);
-    }
-    Ok(Arc::new(parse_diamond_mint_json(json)?))
 }

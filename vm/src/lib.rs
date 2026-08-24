@@ -90,6 +90,11 @@ pub use setup::register_exec;
 #[cfg(feature = "execute")]
 pub use state::{StorageDebug, VMState, VMStateRead, VmLog};
 pub use value::ContractAddress;
+// ACTENV / ACTVIEW / EXTACTION host display tables (defined in `rt` via
+// `include!`), exported for cross-crate sync verification (app asserts them
+// against the registered host defs); not part of the codec/wire surface.
+pub use rt::{ACTION_DEFS, ACTION_ENV_DEFS, ACTION_VIEW_DEFS};
+pub use value::ValueTy;
 pub use wire::{ACTION_CODECS, STRUCT_SCHEMAS, register_wire};
 pub use ir::{IRNode, IRNodeArray};
 pub use lang::SourceMap;

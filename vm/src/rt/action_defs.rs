@@ -2,9 +2,9 @@
 /// decompiler (`lang::Formater`). Each entry is (id, display name, return
 /// value type, argument count).
 ///
-/// The numeric ids are the low byte of the protocol `HacToTrs` / `EnvHeight` /
-/// `ViewBalance` KIND constants (`protocol::codec::action`, `mint` for
-/// `DiaInscEdit`). They are hardcoded here because the VM cannot depend on
+/// The numeric ids are the low byte of the protocol `TransferHacTo` / `EnvHeight` /
+/// `BalanceCoin` KIND constants (`protocol::codec::action`, `mint` for
+/// `HacdInscEdit`). They are hardcoded here because the VM cannot depend on
 /// protocol/mint; keep in sync with the protocol registration tables.
 pub type ActDefTy = (u8, &'static str, ValueTy, usize);
 
@@ -51,8 +51,8 @@ vm_defs! {
     (0x05, "tx_blob_num", U8, 0),
     },
     view[10]: {
-    (0x01, "balance", Bytes, 1),
-    (0x02, "asset_balance", U64, 2),
+    (0x01, "balance_coin", Bytes, 1),
+    (0x02, "balance_asset", U64, 2),
     (0x09, "check_signature", Bool, 1),
     (0x11, "hacd_insc_num", U8, 1),
     (0x12, "hacd_insc_get", Bytes, 2),

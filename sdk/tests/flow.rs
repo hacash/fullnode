@@ -57,7 +57,7 @@ fn chain_allow(ids: &[u32]) -> ActionSpec {
 }
 fn req_sign_list(signers: &[&str]) -> ActionSpec {
     action(
-        "req_sign_list",
+        "required_signers",
         vec![(
             "signers",
             WireValue::List(signers.iter().map(|s| wv_str(s)).collect()),
@@ -919,7 +919,7 @@ fn prepare_binds_policy_decision_and_attach_never_refuses_for_deny() {
     // A denying policy still mints the request: the SDK binds the decision as
     // a fact; the caller decides whether a deny stops the flow.
     let denying = Policy {
-        deny_kinds: Some(vec![protocol::action_std::HacToTrs::KIND]),
+        deny_kinds: Some(vec![protocol::action_std::TransferHacTo::KIND]),
         ..Default::default()
     };
     let request = prepare_signature(
@@ -1202,7 +1202,7 @@ fn oversized_body_decodes_and_reports_limits_facts() {
         timestamp: Some(1_755_223_764),
         gas_max: None,
         actions: vec![action(
-            "tx_blob",
+            "blob",
             vec![("data", wv_hex(vec![0xab; 20 * 1024]))],
         )],
     })

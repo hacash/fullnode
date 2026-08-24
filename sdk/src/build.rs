@@ -257,7 +257,7 @@ mod tests {
         let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
         assert_eq!(
             decoded.actions()[0].kind(),
-            protocol::action_std::HacFromToTrs::KIND
+            protocol::action_std::TransferHacFromTo::KIND
         );
         let required = decoded.req_sign().unwrap();
         let other_address = field::Address::from_readable(other.readable()).unwrap();
@@ -279,7 +279,7 @@ mod tests {
         let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
         assert_eq!(
             decoded.actions()[0].kind(),
-            protocol::action_std::HacFromToTrs::KIND,
+            protocol::action_std::TransferHacFromTo::KIND,
             "an explicit from equal to main must keep the from_to wire form (the SDK never rewrites it)"
         );
     }

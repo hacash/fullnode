@@ -1,9 +1,9 @@
-//! TxMessage / TxBlob execute bodies.
+//! Message / Blob execute bodies.
 
-use crate::codec::action::{TxBlob, TxMessage};
+use crate::codec::action::{Blob, Message};
 
 base::impl_action_execute! {
-    TxMessage {
+    Message {
         (self, _ctx) {
             Ok(vec![])
         }
@@ -11,7 +11,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    TxBlob {
+    Blob {
         (self, _ctx) {
             Ok(vec![])
         }

@@ -5,17 +5,17 @@ use field::{Address, DiamondName, Encode};
 use sys::errf;
 
 use crate::codec::action::{
-    EnvBlobNum, EnvBlockAuthorAddr, EnvHeight, EnvMainAddr, EnvMessageNum, ViewAssetBalance,
-    ViewBalance, ViewBlob, ViewBlobSize, ViewCheckSign, ViewDiaInscGet, ViewDiaInscNum,
-    ViewDiaNameList, ViewDiaOwnerAddrs, ViewMessage,
+    TxBlobNum, BlockAuthorAddr, EnvHeight, TxMainAddr, TxMessageNum, BalanceAsset,
+    BalanceCoin, TxBlob, TxBlobSize, CheckSignature, HacdInscGet, HacdInscNum,
+    HacdNameList, HacdOwnerAddrs, TxMessage,
 };
 
 base::impl_action_execute! {
-    ViewMessage {
+    TxMessage {
         (self, ctx) {
             let mut n = 0u8;
             for action in ctx.tx().actions() {
-                if let Some(msg) = action.as_any().downcast_ref::<crate::codec::action::TxMessage>() {
+                if let Some(msg) = action.as_any().downcast_ref::<crate::codec::action::Message>() {
                     if n == self.idx.uint() { return Ok(msg.data.as_ref().to_vec()); }
                     n = n.saturating_add(1);
                 }
@@ -26,11 +26,11 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    ViewBlob {
+    TxBlob {
         (self, ctx) {
             let mut n = 0u8;
             for action in ctx.tx().actions() {
-                if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::TxBlob>() {
+                if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::Blob>() {
                     if n == self.idx.uint() {
                         let start = self.start.uint() as usize;
                         let end = self.end.uint() as usize;
@@ -49,24 +49,24 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    EnvMessageNum { (self, ctx) {
-        let n = ctx.tx().actions().iter().filter(|a| a.as_any().is::<crate::codec::action::TxMessage>()).count();
+    TxMessageNum { (self, ctx) {
+        let n = ctx.tx().actions().iter().filter(|a| a.as_any().is::<crate::codec::action::Message>()).count();
         if n > u8::MAX as usize { return errf!("message count exceeds u8"); }
         Ok(vec![n as u8])
     } }
 }
 base::impl_action_execute! {
-    EnvBlobNum { (self, ctx) {
-        let n = ctx.tx().actions().iter().filter(|a| a.as_any().is::<crate::codec::action::TxBlob>()).count();
+    TxBlobNum { (self, ctx) {
+        let n = ctx.tx().actions().iter().filter(|a| a.as_any().is::<crate::codec::action::Blob>()).count();
         if n > u8::MAX as usize { return errf!("blob count exceeds u8"); }
         Ok(vec![n as u8])
     } }
 }
 base::impl_action_execute! {
-    ViewBlobSize { (self, ctx) {
+    TxBlobSize { (self, ctx) {
         let mut n = 0u8;
         for action in ctx.tx().actions() {
-            if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::TxBlob>() {
+            if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::Blob>() {
                 if n == self.idx.uint() {
                     let len = blob.data.as_ref().len();
                     if len > u16::MAX as usize {
@@ -89,7 +89,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    EnvMainAddr {
+    TxMainAddr {
         (self, ctx) {
             Ok(ctx.env().tx.main.as_ref().to_vec())
         }
@@ -97,7 +97,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    EnvBlockAuthorAddr {
+    BlockAuthorAddr {
         (self, ctx) {
             Ok(ctx.env().block.author.as_ref().to_vec())
         }
@@ -105,7 +105,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    ViewBalance {
+    BalanceCoin {
         (self, ctx) {
             let bls = CoreState::wrap(ctx.layer())
                 .balance(&self.addr)?
@@ -129,7 +129,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    ViewAssetBalance {
+    BalanceAsset {
         (self, ctx) {
             let serial = self.serial.uint();
             if serial == 0 {
@@ -151,7 +151,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    ViewCheckSign {
+    CheckSignature {
         (self, ctx) {
             let ok = match ctx.check_sign(&self.addr) {
                 Ok(()) => 1u8,
@@ -163,7 +163,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    ViewDiaInscNum {
+    HacdInscNum {
         (self, ctx) {
             let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond)? else {
                 return errf!("diamond {} not found", self.diamond.to_readable());
@@ -181,7 +181,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    ViewDiaInscGet {
+    HacdInscGet {
         (self, ctx) {
             let Some(diaobj) = CoreState::wrap(ctx.layer()).diamond(&self.diamond)? else {
                 return errf!("diamond {} not found", self.diamond.to_readable());
@@ -200,7 +200,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    ViewDiaNameList {
+    HacdNameList {
         (self, ctx) {
             const DNM_SZ: usize = DiamondName::SIZE;
             let owned = CoreState::wrap(ctx.layer())
@@ -234,7 +234,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    ViewDiaOwnerAddrs {
+    HacdOwnerAddrs {
         (self, ctx) {
             let num = self.diamonds.check()?;
             if num > 50 {

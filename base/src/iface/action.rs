@@ -20,8 +20,10 @@ pub trait ActionCodec: Encode + Send + Sync + std::fmt::Debug {
 }
 
 /// Canonical SDK-facing name for an action. The `ActionCodec` derive generates
-/// this from the Rust type name; callers may override it via the `name` option
-/// of `#[base::action(...)]` / `base::action_simple!`.
+/// this from the Rust type name (snake_case); an explicit `name` overrides the
+/// automatic conversion — `#[base::action(...)]` / `base::action_simple!`
+/// forward it into `#[action_codec(name = "...")]`, keeping this trait and the
+/// type's inherent `NAME` const in lockstep.
 pub trait ActionName {
     const NAME: &'static str;
 }

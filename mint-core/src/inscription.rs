@@ -8,13 +8,12 @@ fn wire_rules() -> &'static hacash_params::InscriptionRules {
     &hacash_params::MAINNET_PARAMS.mint_rules.inscription
 }
 
-base::action_simple! { DiaInscPush, 32, 2, TOP, {
+base::action_simple! { HacdInscPush, 32, 2, TOP, {
     diamonds: DiamondNameListMax200,
     protocol_cost: WireAmount,
     engraved_type: Uint1,
     engraved_content: BytesW1
 }, this, {
-    name: "hacd_insc_push",
     extra9: true,
     description: {
         let mut desc = format!("Inscript {} HACD ({}) with \"{}\"", this.diamonds.length(), this.diamonds.splitstr(), this.engraved_content.to_readable_or_hex());
@@ -23,23 +22,21 @@ base::action_simple! { DiaInscPush, 32, 2, TOP, {
     }
 }}
 
-base::action_simple! { DiaInscClean, 33, 2, TOP, {
+base::action_simple! { HacdInscClean, 33, 2, TOP, {
     diamonds: DiamondNameListMax200,
     protocol_cost: Amount
 }, this, {
-    name: "hacd_insc_clean",
     extra9: true,
     description: format!("Clean inscript {} HACD ({}) cost {} HAC fee", this.diamonds.length(), this.diamonds.splitstr(), this.protocol_cost.to_fin_string())
 }}
 
-base::action_simple! { DiaInscEdit, 34, 2, CALL, {
+base::action_simple! { HacdInscEdit, 34, 2, CALL, {
     diamond: DiamondName,
     index: Uint1,
     protocol_cost: Amount,
     engraved_type: Uint1,
     engraved_content: BytesW1
 }, this, {
-    name: "hacd_insc_edit",
     extra9: true,
     description: {
         let mut desc = format!("Edit inscription #{} of HACD {} to \"{}\"", this.index.uint(), this.diamond.to_readable(), this.engraved_content.to_readable_or_hex());
@@ -48,13 +45,12 @@ base::action_simple! { DiaInscEdit, 34, 2, CALL, {
     }
 }}
 
-base::action_simple! { DiaInscMove, 35, 2, AST, {
+base::action_simple! { HacdInscMove, 35, 2, AST, {
     from_diamond: DiamondName,
     to_diamond: DiamondName,
     index: Uint1,
     protocol_cost: Amount
 }, this, {
-    name: "hacd_insc_move",
     extra9: true,
     description: {
         let mut desc = format!("Move inscription #{} from HACD {} to HACD {}", this.index.uint(), this.from_diamond.to_readable(), this.to_diamond.to_readable());
@@ -63,12 +59,11 @@ base::action_simple! { DiaInscMove, 35, 2, AST, {
     }
 }}
 
-base::action_simple! { DiaInscDrop, 36, 2, TOP, {
+base::action_simple! { HacdInscDrop, 36, 2, TOP, {
     diamond: DiamondName,
     index: Uint1,
     protocol_cost: Amount
 }, this, {
-    name: "hacd_insc_drop",
     extra9: true,
     description: format!("Drop inscription #{} from HACD {} cost {} HAC fee", this.index.uint(), this.diamond.to_readable(), this.protocol_cost.to_fin_string())
 }}
@@ -144,7 +139,7 @@ pub fn calc_drop_inscription_protocol_cost(average_bid_burn_mei: u16) -> Amount 
 
 /// JSON decoder for inscription actions. Diamond lists keep the same
 /// duplicate/quantity checks as the legacy transaction API.
-pub fn decode_dia_insc_json(
+pub fn decode_hacd_insc_json(
     _reg: &dyn base::CodecRegistry,
     kind: u16,
     json: &str,
@@ -156,19 +151,19 @@ pub fn decode_dia_insc_json(
         }};
     }
     match kind {
-        DiaInscPush::KIND => {
-            let action = DiaInscPush::decode_json(json)?;
+        HacdInscPush::KIND => {
+            let action = HacdInscPush::decode_json(json)?;
             action.diamonds.check()?;
             Ok(Arc::new(action))
         }
-        DiaInscClean::KIND => {
-            let action = DiaInscClean::decode_json(json)?;
+        HacdInscClean::KIND => {
+            let action = HacdInscClean::decode_json(json)?;
             action.diamonds.check()?;
             Ok(Arc::new(action))
         }
-        DiaInscEdit::KIND => decode_action!(DiaInscEdit),
-        DiaInscMove::KIND => decode_action!(DiaInscMove),
-        DiaInscDrop::KIND => decode_action!(DiaInscDrop),
+        HacdInscEdit::KIND => decode_action!(HacdInscEdit),
+        HacdInscMove::KIND => decode_action!(HacdInscMove),
+        HacdInscDrop::KIND => decode_action!(HacdInscDrop),
         _ => sys::normalf!("inscription JSON action kind {} not registered", kind),
     }
 }

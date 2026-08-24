@@ -6,7 +6,7 @@ use sys::Ret;
 
 use crate::rt::{CodeConf, CodeType};
 
-#[base::action(kind = 44, tx_min = 3, scope = AST, audit = "opaque", name = "contract_main_call", code, ctor = none,
+#[base::action(kind = 44, tx_min = 3, scope = AST, audit = "opaque", code, ctor = none,
     description = |this: &ContractMainCall| format!("Run main codes with conf {}", this.codeconf.uint()))]
 #[derive(PartialEq, Eq)]
 pub struct ContractMainCall {

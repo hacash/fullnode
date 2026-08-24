@@ -185,7 +185,7 @@
       }
     },
     {
-      "name": "req_sign_list",
+      "name": "required_signers",
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -194,7 +194,7 @@
         "gas_max": 0,
         "actions": [
           {
-            "kind": "req_sign_list",
+            "kind": "required_signers",
             "signers": [
               "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
               "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr"
@@ -204,7 +204,7 @@
       }
     },
     {
-      "name": "tx_message",
+      "name": "message",
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -213,14 +213,14 @@
         "gas_max": 0,
         "actions": [
           {
-            "kind": "tx_message",
+            "kind": "message",
             "data": "686920686163617368"
           }
         ]
       }
     },
     {
-      "name": "tx_blob",
+      "name": "blob",
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -229,7 +229,7 @@
         "gas_max": 0,
         "actions": [
           {
-            "kind": "tx_blob",
+            "kind": "blob",
             "data": "01020304"
           }
         ]
@@ -397,7 +397,7 @@
       }
     },
     {
-      "name": "diamond_mint",
+      "name": "hacd_mint",
       "wire": {
         "tx_type": 2,
         "main": "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9",
@@ -406,7 +406,7 @@
         "gas_max": 0,
         "actions": [
           {
-            "kind": "diamond_mint",
+            "kind": "hacd_mint",
             "d": {
               "diamond": "WTYUIA",
               "number": "100",
@@ -429,7 +429,7 @@
         "gas_max": 0,
         "actions": [
           {
-            "kind": "diamond_mint",
+            "kind": "hacd_mint",
             "d": {
               "diamond": "WTYUIA",
               "number": "100",

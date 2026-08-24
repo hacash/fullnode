@@ -138,6 +138,17 @@ mod tests {
         assert_eq!(snake_case("P2SHScriptProve"), "p2sh_script_prove");
         assert_eq!(snake_case("HACDTransfer"), "hacd_transfer");
         assert_eq!(snake_case("V2Action"), "v2_action");
+        assert_eq!(snake_case("Message"), "message");
+        assert_eq!(snake_case("Blob"), "blob");
+        assert_eq!(snake_case("BalanceCoin"), "balance_coin");
+        assert_eq!(snake_case("BalanceAsset"), "balance_asset");
+        assert_eq!(snake_case("TxBlobSize"), "tx_blob_size");
+        assert_eq!(snake_case("TransferHacdSingleTo"), "transfer_hacd_single_to");
+        assert_eq!(snake_case("EnvHeight"), "env_height");
+        assert_eq!(snake_case("HacdInscNum"), "hacd_insc_num");
+        assert_eq!(snake_case("RequiredSigners"), "required_signers");
+        assert_eq!(snake_case("TexCellExecute"), "tex_cell_execute");
+        assert_eq!(snake_case("HacdMint"), "hacd_mint");
     }
 }
 
@@ -211,6 +222,42 @@ mod simple_tests {
         let err = expand_simple_action(input).unwrap_err();
         assert!(err.to_string().contains("bogus"), "{err}");
     }
+
+    fn expand_entries(src: &str) -> String {
+        let input: CodecEntries = syn::parse_str(src).expect("parse codec entries");
+        expand_codec_entries(input)
+            .expect("expand codec entries")
+            .to_string()
+    }
+
+    #[test]
+    fn codec_entry_names_are_derived_from_the_type() {
+        let out = expand_entries(
+            "HacdMint { wire = (reg, _kind, buf) { Ok((reg.as_any(), buf.len())) }, \
+             json = (reg, kind, json) { Ok(reg.as_any()) } }",
+        );
+        assert!(out.contains("pub fn create_hacd_mint"), "{out}");
+        assert!(out.contains("pub fn decode_hacd_mint_json"), "{out}");
+        assert!(out.contains("& dyn :: base :: BinaryCodecs"), "{out}");
+        assert!(out.contains("& dyn :: base :: CodecRegistry"), "{out}");
+        let ast = expand_entries(
+            "AstIf { wire = (reg, _kind, buf) { Ok((reg.as_any(), buf.len())) }, \
+             json = (reg, kind, json) { Ok(reg.as_any()) } }",
+        );
+        assert!(ast.contains("pub fn create_ast_if"), "{ast}");
+        assert!(ast.contains("pub fn decode_ast_if_json"), "{ast}");
+    }
+
+    #[test]
+    fn codec_entries_require_both_bodies() {
+        let err = match syn::parse_str::<CodecEntries>(
+            "AstSelect { wire = (reg, _kind, buf) { Ok((reg.as_any(), buf.len())) } }",
+        ) {
+            Err(e) => e,
+            Ok(_) => panic!("expected parse error for missing json body"),
+        };
+        assert!(err.to_string().contains("requires a json body"), "{err}");
+    }
 }
 
 /// Generates an action's mechanical codecs (`Encode/Decode/ToJSON/FromJSON/ActionJsonCodec`) plus the
@@ -264,6 +311,113 @@ pub fn action_simple(input: TokenStream) -> TokenStream {
         Ok(tokens) => tokens.into(),
         Err(error) => error.into_compile_error().into(),
     }
+}
+
+/// Codec entry points for manual-wire actions. Generates the `create_<snake>`
+/// wire and `decode_<snake>_json` JSON creator free functions from the action
+/// type name — the same snake_case the `action` attribute uses for `NAME` — so
+/// a struct rename re-derives the entry names instead of leaving hand-written
+/// copies to drift. Custom bodies are written inline next to the type,
+/// mirroring `impl_action_execute!`:
+///
+/// ```text
+/// base::action_codec_entries! { AstSelect {
+///     wire = (reg, _kind, buf) { /* custom wire decode body */ },
+///     json = (reg, kind, json) { /* custom JSON decode body */ },
+/// }}
+/// ```
+///
+/// Wire params are `(&dyn base::BinaryCodecs, u16, &[u8])`, JSON params are
+/// `(&dyn base::CodecRegistry, u16, &str)`; the caller names them so bodies
+/// read naturally and unused ones can be `_`-prefixed.
+#[proc_macro]
+pub fn action_codec_entries(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as CodecEntries);
+    match expand_codec_entries(input) {
+        Ok(tokens) => tokens.into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
+struct CodecEntries {
+    ty: Ident,
+    wire: (Vec<Ident>, syn::Block),
+    json: (Vec<Ident>, syn::Block),
+}
+
+impl syn::parse::Parse for CodecEntries {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let ty: Ident = input.parse()?;
+        let content;
+        syn::braced!(content in input);
+        let mut wire = None;
+        let mut json = None;
+        while !content.is_empty() {
+            let key: Ident = content.parse()?;
+            let _: syn::Token![=] = content.parse()?;
+            let params_content;
+            syn::parenthesized!(params_content in content);
+            let mut params = Vec::new();
+            while !params_content.is_empty() {
+                params.push(params_content.parse::<Ident>()?);
+                if params_content.peek(syn::Token![,]) {
+                    let _: syn::Token![,] = params_content.parse()?;
+                }
+            }
+            let body: syn::Block = content.parse()?;
+            match key.to_string().as_str() {
+                "wire" => wire = Some((params, body)),
+                "json" => json = Some((params, body)),
+                _ => {
+                    return Err(syn::Error::new(
+                        key.span(),
+                        "action_codec_entries expects wire or json",
+                    ));
+                }
+            }
+            if content.peek(syn::Token![,]) {
+                let _: syn::Token![,] = content.parse()?;
+            }
+        }
+        let wire = wire.ok_or_else(|| {
+            syn::Error::new(ty.span(), "action_codec_entries requires a wire body")
+        })?;
+        let json = json.ok_or_else(|| {
+            syn::Error::new(ty.span(), "action_codec_entries requires a json body")
+        })?;
+        Ok(CodecEntries { ty, wire, json })
+    }
+}
+
+fn expand_codec_entries(input: CodecEntries) -> syn::Result<proc_macro2::TokenStream> {
+    let CodecEntries {
+        ty,
+        wire: (wparams, wbody),
+        json: (jparams, jbody),
+    } = input;
+    let snake = snake_case(&ty.to_string());
+    let create_name = Ident::new(&format!("create_{snake}"), ty.span());
+    let json_name = Ident::new(&format!("decode_{snake}_json"), ty.span());
+    let wire_params = wparams.iter().enumerate().map(|(i, p)| {
+        let ty = match i {
+            0 => quote! { &dyn ::base::BinaryCodecs },
+            1 => quote! { u16 },
+            _ => quote! { &[u8] },
+        };
+        quote! { #p: #ty }
+    });
+    let json_params = jparams.iter().enumerate().map(|(i, p)| {
+        let ty = match i {
+            0 => quote! { &dyn ::base::CodecRegistry },
+            1 => quote! { u16 },
+            _ => quote! { &str },
+        };
+        quote! { #p: #ty }
+    });
+    Ok(quote! {
+        pub fn #create_name(#(#wire_params),*) -> ::sys::Ret<(::base::ActionRef, usize)> #wbody
+        pub fn #json_name(#(#json_params),*) -> ::sys::Ret<::base::ActionRef> #jbody
+    })
 }
 
 struct SimpleAction {
@@ -805,7 +959,18 @@ fn expand_transfer(
             let names_expr = if matches!(count, syn::Expr::Lit(_)) {
                 quote! { self.#names.to_vec() }
             } else {
-                quote! { ::field::Encode::encode(&self.#names).get(1..).unwrap_or_default().to_vec() }
+                quote! { {
+                    // The list wire encoding starts with a 1-byte count; `count`
+                    // carries it separately, so the payload keeps only the entries.
+                    // Guard the assumption where it is cheap instead of relying on it silently.
+                    let encoded = ::field::Encode::encode(&self.#names);
+                    debug_assert_eq!(
+                        encoded.first().copied().unwrap_or(0) as usize,
+                        self.#names.length(),
+                        "Hacd payload names encoding must start with the count byte"
+                    );
+                    encoded.get(1..).unwrap_or_default().to_vec()
+                } }
             };
             let count_expr = if matches!(count, syn::Expr::Lit(_)) {
                 quote! { (#count) as u32 }

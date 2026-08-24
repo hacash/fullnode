@@ -12,7 +12,7 @@ use field::{Address, Amount, Hash};
 use num_bigint::BigUint;
 use sys::{Rerr, Ret, curtimes, errf};
 
-use crate::action::diamond::DiamondMint;
+use crate::action::diamond::HacdMint;
 use crate::difficulty::{biguint_to_hash, hash_bigger_than, u32_to_biguint};
 use crate::minter::block_reward_number;
 
@@ -255,7 +255,7 @@ impl DiamondBiddingInner {
         }
     }
 
-    fn record(&mut self, curr_hei: u64, tx: &TxPkg, act: &DiamondMint) {
+    fn record(&mut self, curr_hei: u64, tx: &TxPkg, act: &HacdMint) {
         let dianum = act.d.number.uint();
         if dianum > self.latest {
             self.latest = dianum;
@@ -499,7 +499,7 @@ impl DiamondBidding {
         }
     }
 
-    pub fn record(&self, curr_hei: u64, tx: &TxPkg, act: &DiamondMint) {
+    pub fn record(&self, curr_hei: u64, tx: &TxPkg, act: &HacdMint) {
         self.inner.lock().unwrap().record(curr_hei, tx, act);
     }
 

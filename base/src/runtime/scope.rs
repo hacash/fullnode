@@ -126,7 +126,7 @@ impl ActScope {
         allow_ast: true,
         allow_call: false,
     };
-    /// Top-only guard companion; at most one action of this kind (e.g. ReqSignList).
+    /// Top-only guard companion; at most one action of this kind (e.g. RequiredSigners).
     pub const TOP_GUARD_UNIQUE: Self = Self {
         kind: ScopeKind::Guard,
         top: Some(TopRule::Unique),

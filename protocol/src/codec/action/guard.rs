@@ -1,4 +1,4 @@
-//! ChainAllow / HeightScope / BalanceFloor / ReqSignList guard actions.
+//! ChainAllow / HeightScope / BalanceFloor / RequiredSigners guard actions.
 
 #[cfg(test)]
 use std::sync::Arc;
@@ -69,7 +69,7 @@ impl BalanceFloor {
 
 // Explicit extra required signers beyond intrinsic action req_sign.
 // Type3 uses this as E in D = R0 ∪ E (exact SignW2 match).
-base::action_simple! { ReqSignList, 0x0414, 2, TOP_GUARD_UNIQUE, {
+base::action_simple! { RequiredSigners, 0x0414, 2, TOP_GUARD_UNIQUE, {
     signers: ListW2<AddrOrPtr>
 }, this, {
     validate: "Self::validate_codec",
@@ -78,7 +78,7 @@ base::action_simple! { ReqSignList, 0x0414, 2, TOP_GUARD_UNIQUE, {
     description: format!("Require extra signers ({})", this.signers.length())
 }}
 
-impl ReqSignList {
+impl RequiredSigners {
     pub fn create_by(signers: Vec<AddrOrPtr>) -> Ret<Self> {
         let value = Self {
             kind: Uint2::from(Self::KIND),
@@ -98,25 +98,25 @@ impl ReqSignList {
     /// hash-table machinery out of the wasm graph.
     pub fn validate_against(&self, addrs: &[field::Address]) -> Ret<Vec<field::Address>> {
         if self.signers.0.is_empty() {
-            return errf!("ReqSignList cannot be empty");
+            return errf!("RequiredSigners cannot be empty");
         }
         let mut e: Vec<field::Address> = Vec::new();
         for ptr in self.signers.as_list() {
             let adr = ptr.real(addrs)?;
             if !adr.is_privkey() {
                 return errf!(
-                    "ReqSignList address {} must be PRIVAKEY type",
+                    "RequiredSigners address {} must be PRIVAKEY type",
                     adr.to_readable()
                 );
             }
             if adr.is_privkey_unknown() {
                 return errf!(
-                    "ReqSignList address {} is a system address with unknown private key",
+                    "RequiredSigners address {} is a system address with unknown private key",
                     adr.to_readable()
                 );
             }
             if e.contains(&adr) {
-                return errf!("ReqSignList address {} is duplicated", adr.to_readable());
+                return errf!("RequiredSigners address {} is duplicated", adr.to_readable());
             }
             e.push(adr);
         }
@@ -125,7 +125,7 @@ impl ReqSignList {
 
     fn validate_codec(&self) -> Ret<()> {
         if self.signers.0.is_empty() {
-            return errf!("ReqSignList cannot be empty");
+            return errf!("RequiredSigners cannot be empty");
         }
         Ok(())
     }
@@ -294,8 +294,8 @@ pub fn guard_facts(tx: &dyn Transaction) -> GuardFacts {
                     );
                 }
             }
-            ReqSignList::KIND => {
-                if let Some(list) = action.as_any().downcast_ref::<ReqSignList>() {
+            RequiredSigners::KIND => {
+                if let Some(list) = action.as_any().downcast_ref::<RequiredSigners>() {
                     if let Err(error) = list.validate_against(&tx.addrs()) {
                         push_guard_note(&mut facts, index, error.to_string());
                     }
@@ -356,7 +356,7 @@ mod tests {
             BlockHeight::from(100),
             BlockHeight::from(200),
         )));
-        tx.push_action_in(Arc::new(ReqSignList::create_by_addrs(vec![main]).unwrap()));
+        tx.push_action_in(Arc::new(RequiredSigners::create_by_addrs(vec![main]).unwrap()));
         tx.push_action_in(Arc::new(BalanceFloor::new(
             AddrOrPtr::Addr(main),
             Amount::from("1:244").unwrap(),
@@ -457,7 +457,7 @@ mod tests {
     #[test]
     fn req_sign_list_rejects_count_that_would_truncate() {
         let signer = AddrOrPtr::Addr(main_address());
-        let error = ReqSignList::create_by(vec![signer; u16::MAX as usize + 1]).unwrap_err();
+        let error = RequiredSigners::create_by(vec![signer; u16::MAX as usize + 1]).unwrap_err();
         assert!(error.to_string().contains("65535"), "{error}");
     }
 }

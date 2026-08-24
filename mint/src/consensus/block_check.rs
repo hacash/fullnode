@@ -6,7 +6,7 @@ use protocol::block_std::StdBlock;
 use sys::{Rerr, errf};
 
 use crate::MintConf;
-use crate::action::diamond::DiamondMint;
+use crate::action::diamond::HacdMint;
 use crate::action::util::pickout_diamond_mint_action;
 use crate::bidding::DiamondBidding;
 use crate::coinbase::{verify_coinbase, verify_coinbase_privakey};
@@ -35,7 +35,7 @@ pub fn check_tx(bidding: &DiamondBidding, view: &dyn ChainView, txp: &TxPkg) -> 
 pub fn check_diamond_mint_minimum_bidding_fee(
     next_hei: u64,
     tx: &dyn Transaction,
-    dmact: &DiamondMint,
+    dmact: &HacdMint,
 ) -> Rerr {
     let ckn = hacash_params::MAINNET_PARAMS
         .mint_rules

@@ -15,7 +15,7 @@ use field::{
 };
 use sys::{Account, Rerr, Ret, errf};
 
-use crate::codec::action::ReqSignList;
+use crate::codec::action::RequiredSigners;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DefaultPreludeTx {
     pub ty: Uint1,
@@ -332,14 +332,14 @@ fn req_sign_for(main: Address, addrlist: &AddrOrList, actions: &[ActionRef]) -> 
 impl TransactionType3 {
     pub const SIGN_ITEM_SIZE: usize = 97;
 
-    /// Intrinsic R0: main ∪ static action req_sign, excluding ReqSignList.
+    /// Intrinsic R0: main ∪ static action req_sign, excluding RequiredSigners.
     /// Signer sets are small; `Vec` with a linear duplicate scan keeps the
     /// hash-table machinery out of the wasm graph.
     pub fn intrinsic_req_sign(&self) -> Ret<Vec<Address>> {
         let addrs = self.addrs();
         let mut adrsets = vec![self.main()];
         for act in &self.actions {
-            if act.kind() == ReqSignList::KIND {
+            if act.kind() == RequiredSigners::KIND {
                 continue;
             }
             for ptr in act.req_sign() {
@@ -352,14 +352,14 @@ impl TransactionType3 {
         Ok(adrsets)
     }
 
-    /// Extra signers E from the unique top-level ReqSignList (if any).
+    /// Extra signers E from the unique top-level RequiredSigners (if any).
     pub fn declared_extra_signers(&self) -> Ret<Vec<Address>> {
         let addrs = self.addrs();
-        let mut found: Option<&ReqSignList> = None;
+        let mut found: Option<&RequiredSigners> = None;
         for act in &self.actions {
-            if let Some(list) = act.as_any().downcast_ref::<ReqSignList>() {
+            if let Some(list) = act.as_any().downcast_ref::<RequiredSigners>() {
                 if found.is_some() {
-                    return errf!("ReqSignList must be TOP_GUARD_UNIQUE (duplicate found)");
+                    return errf!("RequiredSigners must be TOP_GUARD_UNIQUE (duplicate found)");
                 }
                 found = Some(list);
             }
@@ -377,7 +377,7 @@ impl TransactionType3 {
         for adr in &e {
             if d.contains(adr) {
                 return errf!(
-                    "ReqSignList address {} overlaps intrinsic req_sign",
+                    "RequiredSigners address {} overlaps intrinsic req_sign",
                     adr.to_readable()
                 );
             }
@@ -999,7 +999,7 @@ create_tx_codec!(create_transaction_type3, TransactionType3);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::action::HacFromToTrs;
+    use crate::codec::action::TransferHacFromTo;
     use field::AddrOrPtr;
 
     fn scriptmh_address() -> Address {
@@ -1013,8 +1013,8 @@ mod tests {
     fn fromto_tx(from: Address, to: Address, acc: &Account) -> TransactionType1 {
         let main = Address::from(*acc.address());
         let mut tx = TransactionType1::new(main, Amount::mei(1));
-        tx.push_action_in(Arc::new(HacFromToTrs {
-            kind: Uint2::from(HacFromToTrs::KIND),
+        tx.push_action_in(Arc::new(TransferHacFromTo {
+            kind: Uint2::from(TransferHacFromTo::KIND),
             from: AddrOrPtr::Addr(from),
             to: AddrOrPtr::Addr(to),
             hacash: Amount::mei(1),

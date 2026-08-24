@@ -141,7 +141,7 @@ impl P2shEntryPayload {
 
 // ================================ P2SHScriptProve ================================
 
-#[base::action(kind = 46, tx_min = 3, scope = TOP, audit = "structured", name = "p2sh_script_prove", code, ctor = none,
+#[base::action(kind = 46, tx_min = 3, scope = TOP, audit = "structured", code, ctor = none,
     description = |_: &P2SHScriptProve| "Prove P2SH unlock script".to_owned())]
 #[derive(PartialEq, Eq)]
 pub struct P2SHScriptProve {

@@ -164,7 +164,7 @@ mod tests {
     use std::sync::Arc;
 
     use field::{Address, Amount, Satoshi};
-    use protocol::action_std::SatFromToTrs;
+    use protocol::action_std::TransferSatFromTo;
     use protocol::tx_std::TransactionType2;
 
     use super::*;
@@ -178,13 +178,13 @@ mod tests {
             0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ]);
         let mut tx = TransactionType2::new_by(from, Amount::zero(), 1);
-        tx.push_action_in(Arc::new(SatFromToTrs::new(from, to, Satoshi::from(7))));
+        tx.push_action_in(Arc::new(TransferSatFromTo::new(from, to, Satoshi::from(7))));
 
         let json = action_desc_array_json(&tx, "fin", true);
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         let action = &value[0];
 
-        assert_eq!(action["kind"], SatFromToTrs::KIND);
+        assert_eq!(action["kind"], TransferSatFromTo::KIND);
         assert_eq!(action["from"], from.to_readable());
         assert_eq!(action["to"], to.to_readable());
         assert_eq!(action["satoshi"], 7);

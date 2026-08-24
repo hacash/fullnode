@@ -82,41 +82,41 @@ macro_rules! register_vm_hosts {
 /// into one Registry: protocol owns transfer/env/view defs, mint owns its own.
 fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
     register_vm_hosts!(reg, action;
-        HacToTrs = 2,
-        HacFromTrs = 2,
-        HacFromToTrs = 3,
-        SatToTrs = 2,
-        SatFromTrs = 2,
-        SatFromToTrs = 3,
-        DiaSingleTrs = 2,
-        DiaToTrs = 2,
-        DiaFromTrs = 2,
-        DiaFromToTrs = 3,
-        AssetToTrs = 2,
-        AssetFromTrs = 2,
-        AssetFromToTrs = 3,
+        TransferHacTo = 2,
+        TransferHacFrom = 2,
+        TransferHacFromTo = 3,
+        TransferSatTo = 2,
+        TransferSatFrom = 2,
+        TransferSatFromTo = 3,
+        TransferHacdSingleTo = 2,
+        TransferHacdTo = 2,
+        TransferHacdFrom = 2,
+        TransferHacdFromTo = 3,
+        TransferAssetTo = 2,
+        TransferAssetFrom = 2,
+        TransferAssetFromTo = 3,
     )?;
 
     // Host ids = KIND low byte (mainnet-compatible ACTENV / ACTVIEW idx).
     register_vm_hosts!(reg, env;
         EnvHeight = U64,
-        EnvMainAddr = Address,
-        EnvBlockAuthorAddr = Address,
-        EnvMessageNum = U8,
-        EnvBlobNum = U8,
+        TxMainAddr = Address,
+        BlockAuthorAddr = Address,
+        TxMessageNum = U8,
+        TxBlobNum = U8,
     )?;
 
     register_vm_hosts!(reg, view;
-        ViewBalance = (Bytes, 1),
-        ViewAssetBalance = (U64, 2),
-        ViewCheckSign = (Bool, 1),
-        ViewDiaInscNum = (U8, 1),
-        ViewDiaInscGet = (Bytes, 2),
-        ViewDiaNameList = (Bytes, 3),
-        ViewDiaOwnerAddrs = (Bytes, 1),
-        ViewMessage = (Bytes, 1),
-        ViewBlob = (Bytes, 3),
-        ViewBlobSize = (U16, 1),
+        BalanceCoin = (Bytes, 1),
+        BalanceAsset = (U64, 2),
+        CheckSignature = (Bool, 1),
+        HacdInscNum = (U8, 1),
+        HacdInscGet = (Bytes, 2),
+        HacdNameList = (Bytes, 3),
+        HacdOwnerAddrs = (Bytes, 1),
+        TxMessage = (Bytes, 1),
+        TxBlob = (Bytes, 3),
+        TxBlobSize = (U16, 1),
     )?;
     Ok(())
 }
@@ -193,19 +193,19 @@ mod tests {
     fn host_names_match_the_action_name_constants() {
         let reg = registered();
         for (kind, name, argc) in [
-            (HacToTrs::KIND, HacToTrs::NAME, 2),
-            (HacFromTrs::KIND, HacFromTrs::NAME, 2),
-            (HacFromToTrs::KIND, HacFromToTrs::NAME, 3),
-            (SatToTrs::KIND, SatToTrs::NAME, 2),
-            (SatFromTrs::KIND, SatFromTrs::NAME, 2),
-            (SatFromToTrs::KIND, SatFromToTrs::NAME, 3),
-            (DiaSingleTrs::KIND, DiaSingleTrs::NAME, 2),
-            (DiaToTrs::KIND, DiaToTrs::NAME, 2),
-            (DiaFromTrs::KIND, DiaFromTrs::NAME, 2),
-            (DiaFromToTrs::KIND, DiaFromToTrs::NAME, 3),
-            (AssetToTrs::KIND, AssetToTrs::NAME, 2),
-            (AssetFromTrs::KIND, AssetFromTrs::NAME, 2),
-            (AssetFromToTrs::KIND, AssetFromToTrs::NAME, 3),
+            (TransferHacTo::KIND, TransferHacTo::NAME, 2),
+            (TransferHacFrom::KIND, TransferHacFrom::NAME, 2),
+            (TransferHacFromTo::KIND, TransferHacFromTo::NAME, 3),
+            (TransferSatTo::KIND, TransferSatTo::NAME, 2),
+            (TransferSatFrom::KIND, TransferSatFrom::NAME, 2),
+            (TransferSatFromTo::KIND, TransferSatFromTo::NAME, 3),
+            (TransferHacdSingleTo::KIND, TransferHacdSingleTo::NAME, 2),
+            (TransferHacdTo::KIND, TransferHacdTo::NAME, 2),
+            (TransferHacdFrom::KIND, TransferHacdFrom::NAME, 2),
+            (TransferHacdFromTo::KIND, TransferHacdFromTo::NAME, 3),
+            (TransferAssetTo::KIND, TransferAssetTo::NAME, 2),
+            (TransferAssetFrom::KIND, TransferAssetFrom::NAME, 2),
+            (TransferAssetFromTo::KIND, TransferAssetFromTo::NAME, 3),
         ] {
             let def = reg.host(VmHostCallKind::Action, kind as u8).unwrap();
             assert_eq!(def.name, name);
@@ -213,57 +213,57 @@ mod tests {
         }
         for (kind, name, ret) in [
             (EnvHeight::KIND, EnvHeight::NAME, VmValueType::U64),
-            (EnvMainAddr::KIND, EnvMainAddr::NAME, VmValueType::Address),
+            (TxMainAddr::KIND, TxMainAddr::NAME, VmValueType::Address),
             (
-                EnvBlockAuthorAddr::KIND,
-                EnvBlockAuthorAddr::NAME,
+                BlockAuthorAddr::KIND,
+                BlockAuthorAddr::NAME,
                 VmValueType::Address,
             ),
-            (EnvMessageNum::KIND, EnvMessageNum::NAME, VmValueType::U8),
-            (EnvBlobNum::KIND, EnvBlobNum::NAME, VmValueType::U8),
+            (TxMessageNum::KIND, TxMessageNum::NAME, VmValueType::U8),
+            (TxBlobNum::KIND, TxBlobNum::NAME, VmValueType::U8),
         ] {
             let def = reg.host(VmHostCallKind::Env, kind as u8).unwrap();
             assert_eq!(def.name, name);
             assert_eq!(def.ret, ret);
         }
         for (kind, name, ret, argc) in [
-            (ViewBalance::KIND, ViewBalance::NAME, VmValueType::Bytes, 1),
-            (ViewMessage::KIND, ViewMessage::NAME, VmValueType::Bytes, 1),
-            (ViewBlob::KIND, ViewBlob::NAME, VmValueType::Bytes, 3),
-            (ViewBlobSize::KIND, ViewBlobSize::NAME, VmValueType::U16, 1),
+            (BalanceCoin::KIND, BalanceCoin::NAME, VmValueType::Bytes, 1),
+            (TxMessage::KIND, TxMessage::NAME, VmValueType::Bytes, 1),
+            (TxBlob::KIND, TxBlob::NAME, VmValueType::Bytes, 3),
+            (TxBlobSize::KIND, TxBlobSize::NAME, VmValueType::U16, 1),
             (
-                ViewAssetBalance::KIND,
-                ViewAssetBalance::NAME,
+                BalanceAsset::KIND,
+                BalanceAsset::NAME,
                 VmValueType::U64,
                 2,
             ),
             (
-                ViewCheckSign::KIND,
-                ViewCheckSign::NAME,
+                CheckSignature::KIND,
+                CheckSignature::NAME,
                 VmValueType::Bool,
                 1,
             ),
             (
-                ViewDiaInscNum::KIND,
-                ViewDiaInscNum::NAME,
+                HacdInscNum::KIND,
+                HacdInscNum::NAME,
                 VmValueType::U8,
                 1,
             ),
             (
-                ViewDiaInscGet::KIND,
-                ViewDiaInscGet::NAME,
+                HacdInscGet::KIND,
+                HacdInscGet::NAME,
                 VmValueType::Bytes,
                 2,
             ),
             (
-                ViewDiaNameList::KIND,
-                ViewDiaNameList::NAME,
+                HacdNameList::KIND,
+                HacdNameList::NAME,
                 VmValueType::Bytes,
                 3,
             ),
             (
-                ViewDiaOwnerAddrs::KIND,
-                ViewDiaOwnerAddrs::NAME,
+                HacdOwnerAddrs::KIND,
+                HacdOwnerAddrs::NAME,
                 VmValueType::Bytes,
                 1,
             ),
@@ -280,24 +280,24 @@ mod tests {
     fn env_view_full_kind_matches_the_opcode_prefix() {
         for kind in [
             EnvHeight::KIND,
-            EnvMainAddr::KIND,
-            EnvBlockAuthorAddr::KIND,
-            EnvMessageNum::KIND,
-            EnvBlobNum::KIND,
+            TxMainAddr::KIND,
+            BlockAuthorAddr::KIND,
+            TxMessageNum::KIND,
+            TxBlobNum::KIND,
         ] {
             assert_eq!(kind >> 8, 0x07);
         }
         for kind in [
-            ViewBalance::KIND,
-            ViewAssetBalance::KIND,
-            ViewCheckSign::KIND,
-            ViewDiaInscNum::KIND,
-            ViewDiaInscGet::KIND,
-            ViewDiaNameList::KIND,
-            ViewDiaOwnerAddrs::KIND,
-            ViewMessage::KIND,
-            ViewBlob::KIND,
-            ViewBlobSize::KIND,
+            BalanceCoin::KIND,
+            BalanceAsset::KIND,
+            CheckSignature::KIND,
+            HacdInscNum::KIND,
+            HacdInscGet::KIND,
+            HacdNameList::KIND,
+            HacdOwnerAddrs::KIND,
+            TxMessage::KIND,
+            TxBlob::KIND,
+            TxBlobSize::KIND,
         ] {
             assert_eq!(kind >> 8, 0x06);
         }
@@ -327,17 +327,18 @@ mod tests {
         );
     }
 
-    /// The mainnet-compatible ACTENV / ACTVIEW id -> name mapping is unchanged.
+    /// The ACTENV / ACTVIEW id -> name mapping pins the canonical syscall names
+    /// (balance syscall renamed `balance_coin` in the struct-name unification).
     #[test]
-    fn legacy_capability_id_name_mapping_is_preserved() {
+    fn capability_id_name_mapping_matches_the_action_names() {
         let reg = registered();
         let name = |k: VmHostCallKind, id: u8| reg.host(k, id).map(|d| d.name);
-        assert_eq!(name(VmHostCallKind::Action, 1), Some(HacToTrs::NAME));
+        assert_eq!(name(VmHostCallKind::Action, 1), Some(TransferHacTo::NAME));
         assert_eq!(name(VmHostCallKind::Env, 1), Some("block_height"));
         assert_eq!(name(VmHostCallKind::Env, 2), Some("tx_main_addr"));
         assert_eq!(name(VmHostCallKind::Env, 3), Some("block_author_addr"));
-        assert_eq!(name(VmHostCallKind::View, 1), Some("balance"));
-        assert_eq!(name(VmHostCallKind::View, 2), Some("asset_balance"));
+        assert_eq!(name(VmHostCallKind::View, 1), Some("balance_coin"));
+        assert_eq!(name(VmHostCallKind::View, 2), Some("balance_asset"));
         assert_eq!(name(VmHostCallKind::View, 9), Some("check_signature"));
         assert_eq!(name(VmHostCallKind::View, 17), Some("hacd_insc_num"));
         assert_eq!(name(VmHostCallKind::View, 18), Some("hacd_insc_get"));

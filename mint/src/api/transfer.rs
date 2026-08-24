@@ -7,7 +7,7 @@ use base::{
 };
 use field::{Address, Amount, Decode, DiamondName, DiamondNameListMax200, Encode, Satoshi};
 use protocol::action_std::{
-    DiaFromToTrs, DiaSingleTrs, DiaToTrs, HacFromToTrs, HacToTrs, SatFromToTrs, SatToTrs,
+    TransferHacdFromTo, TransferHacdSingleTo, TransferHacdTo, TransferHacFromTo, TransferHacTo, TransferSatFromTo, TransferSatTo,
 };
 use protocol::tx_std::TransactionType2;
 use sys::ToHex;
@@ -282,11 +282,11 @@ pub(crate) fn create_coin_transfer_handler(_ctx: &ApiExecCtx, req: ApiRequest) -
     if satoshi > 0 {
         let sat = Satoshi::from(satoshi);
         if is_from {
-            tx.push_action_in(std::sync::Arc::new(SatFromToTrs::new(
+            tx.push_action_in(std::sync::Arc::new(TransferSatFromTo::new(
                 from_addr, to_addr, sat,
             )));
         } else {
-            tx.push_action_in(std::sync::Arc::new(SatToTrs::new(to_addr, sat)));
+            tx.push_action_in(std::sync::Arc::new(TransferSatTo::new(to_addr, sat)));
         }
     }
 
@@ -296,16 +296,16 @@ pub(crate) fn create_coin_transfer_handler(_ctx: &ApiExecCtx, req: ApiRequest) -
             Err(e) => return api_error(&format!("diamonds invalid: {}", e)),
         };
         if is_from {
-            tx.push_action_in(std::sync::Arc::new(DiaFromToTrs::new(
+            tx.push_action_in(std::sync::Arc::new(TransferHacdFromTo::new(
                 from_addr, to_addr, list,
             )));
         } else if list.length() == 1 {
-            tx.push_action_in(std::sync::Arc::new(DiaSingleTrs::new(
+            tx.push_action_in(std::sync::Arc::new(TransferHacdSingleTo::new(
                 list.as_list()[0],
                 to_addr,
             )));
         } else {
-            tx.push_action_in(std::sync::Arc::new(DiaToTrs::new(to_addr, list)));
+            tx.push_action_in(std::sync::Arc::new(TransferHacdTo::new(to_addr, list)));
         }
     }
 
@@ -315,11 +315,11 @@ pub(crate) fn create_coin_transfer_handler(_ctx: &ApiExecCtx, req: ApiRequest) -
             Err(e) => return api_error(&format!("hacash amount {} invalid: {}", hacash, e)),
         };
         if is_from {
-            tx.push_action_in(std::sync::Arc::new(HacFromToTrs::new(
+            tx.push_action_in(std::sync::Arc::new(TransferHacFromTo::new(
                 from_addr, to_addr, amount,
             )));
         } else {
-            tx.push_action_in(std::sync::Arc::new(HacToTrs::new(to_addr, amount)));
+            tx.push_action_in(std::sync::Arc::new(TransferHacTo::new(to_addr, amount)));
         }
     }
 
@@ -357,8 +357,8 @@ mod tests {
         ]);
         let mut tx = TransactionType2::new_by(from, Amount::zero(), 1);
         tx.addrlist = field::AddrOrList::from_list(vec![from, to]).expect("address list");
-        let action: Arc<dyn Action> = Arc::new(SatFromToTrs {
-            kind: field::Uint2::from(SatFromToTrs::KIND),
+        let action: Arc<dyn Action> = Arc::new(TransferSatFromTo {
+            kind: field::Uint2::from(TransferSatFromTo::KIND),
             from: AddrOrPtr::Ptr(0),
             to: AddrOrPtr::Ptr(1),
             satoshi: Satoshi::from(7),
@@ -375,7 +375,7 @@ mod tests {
         .expect("transfer JSON");
         let value: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
 
-        assert_eq!(value["kind"], SatFromToTrs::KIND);
+        assert_eq!(value["kind"], TransferSatFromTo::KIND);
         assert_eq!(value["satoshi"], 7);
         assert_eq!(value["from"], from.to_readable());
         assert_eq!(value["to"], to.to_readable());

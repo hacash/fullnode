@@ -14,7 +14,7 @@ use protocol::tx_std::{TransactionType2, TransactionType3};
 use sys::ToHex;
 
 use crate::api::util::*;
-use mint_core::inscription::DiaInscPush;
+use mint_core::inscription::HacdInscPush;
 
 fn create_transaction_error_response(
     code: &str,
@@ -93,10 +93,10 @@ fn action_from_json_obj(
 
 pub(crate) fn reject_non_canonical_dia_insc_push(tx: &dyn Transaction) -> Option<ApiResponse> {
     for act in tx.actions() {
-        if let Some(a) = act.as_any().downcast_ref::<DiaInscPush>() {
+        if let Some(a) = act.as_any().downcast_ref::<HacdInscPush>() {
             if let Err(e) = a.protocol_cost.require_canonical_wire() {
                 return Some(api_error(&format!(
-                    "DiaInscPush protocol_cost must use canonical amount encoding: {}",
+                    "HacdInscPush protocol_cost must use canonical amount encoding: {}",
                     e
                 )));
             }
@@ -353,7 +353,7 @@ pub(crate) fn transaction_build_handler(ctx: &ApiExecCtx, req: ApiRequest) -> Ap
     if reject_non_canonical_dia_insc_push(owned.as_tx()).is_some() {
         return create_transaction_error_response(
             "create_transaction_non_canonical_protocol_cost",
-            "DiaInscPush protocol_cost must use canonical amount encoding",
+            "HacdInscPush protocol_cost must use canonical amount encoding",
             "validate_protocol_cost_wire",
             &[],
         );

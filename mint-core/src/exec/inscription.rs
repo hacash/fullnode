@@ -11,7 +11,7 @@ use field::{
 use sys::{Rerr, Ret, errf};
 
 use crate::inscription::{
-    DiaInscClean, DiaInscDrop, DiaInscEdit, DiaInscMove, DiaInscPush,
+    HacdInscClean, HacdInscDrop, HacdInscEdit, HacdInscMove, HacdInscPush,
     check_inscription_content_with_rules, check_protocol_cost,
 };
 use crate::state::{MintState, MintTotal, with_mint_total};
@@ -235,7 +235,7 @@ pub fn engraved_clean_one_diamond(
     Ok(cost)
 }
 
-fn diamond_inscription_push(this: &DiaInscPush, ctx: &mut dyn Context) -> Rerr {
+fn diamond_inscription_push(this: &HacdInscPush, ctx: &mut dyn Context) -> Rerr {
     let rules = mint_rules(ctx)?;
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
@@ -304,7 +304,7 @@ fn diamond_inscription_push(this: &DiaInscPush, ctx: &mut dyn Context) -> Rerr {
     Ok(())
 }
 
-fn diamond_inscription_clean(this: &DiaInscClean, ctx: &mut dyn Context) -> Rerr {
+fn diamond_inscription_clean(this: &HacdInscClean, ctx: &mut dyn Context) -> Rerr {
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
     let pfee = &this.protocol_cost;
@@ -351,7 +351,7 @@ fn diamond_inscription_clean(this: &DiaInscClean, ctx: &mut dyn Context) -> Rerr
     Ok(())
 }
 
-fn diamond_inscription_edit(this: &DiaInscEdit, ctx: &mut dyn Context) -> Rerr {
+fn diamond_inscription_edit(this: &HacdInscEdit, ctx: &mut dyn Context) -> Rerr {
     let rules = mint_rules(ctx)?;
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
@@ -399,7 +399,7 @@ fn diamond_inscription_edit(this: &DiaInscEdit, ctx: &mut dyn Context) -> Rerr {
     Ok(())
 }
 
-fn diamond_inscription_move(this: &DiaInscMove, ctx: &mut dyn Context) -> Rerr {
+fn diamond_inscription_move(this: &HacdInscMove, ctx: &mut dyn Context) -> Rerr {
     let rules = mint_rules(ctx)?;
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
@@ -481,7 +481,7 @@ fn diamond_inscription_move(this: &DiaInscMove, ctx: &mut dyn Context) -> Rerr {
     Ok(())
 }
 
-fn diamond_inscription_drop(this: &DiaInscDrop, ctx: &mut dyn Context) -> Rerr {
+fn diamond_inscription_drop(this: &HacdInscDrop, ctx: &mut dyn Context) -> Rerr {
     let rules = mint_rules(ctx)?;
     let env = ctx.env().clone();
     let main_addr = env.tx.main;
@@ -528,7 +528,7 @@ fn diamond_inscription_drop(this: &DiaInscDrop, ctx: &mut dyn Context) -> Rerr {
 }
 
 base::impl_action_execute! {
-    DiaInscPush {
+    HacdInscPush {
         (self, ctx) {
             diamond_inscription_push(self, ctx)?;
             Ok(vec![])
@@ -537,7 +537,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    DiaInscClean {
+    HacdInscClean {
         (self, ctx) {
             diamond_inscription_clean(self, ctx)?;
             Ok(vec![])
@@ -546,7 +546,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    DiaInscEdit {
+    HacdInscEdit {
         (self, ctx) {
             diamond_inscription_edit(self, ctx)?;
             Ok(vec![])
@@ -555,7 +555,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    DiaInscMove {
+    HacdInscMove {
         (self, ctx) {
             diamond_inscription_move(self, ctx)?;
             Ok(vec![])
@@ -564,7 +564,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    DiaInscDrop {
+    HacdInscDrop {
         (self, ctx) {
             diamond_inscription_drop(self, ctx)?;
             Ok(vec![])

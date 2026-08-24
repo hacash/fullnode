@@ -1,4 +1,4 @@
-use crate::action::diamond::DiamondMint;
+use crate::action::diamond::HacdMint;
 
 pub const HASH_WIDTH: usize = 32;
 
@@ -9,7 +9,7 @@ pub struct DiamondMiningResult {
     pub nonce_space: u64,
     pub nonce: u64,
     pub diamond_string: [u8; 16],
-    pub success: Option<DiamondMint>,
+    pub success: Option<HacdMint>,
     pub elapsed_secs: f64,
 }
 

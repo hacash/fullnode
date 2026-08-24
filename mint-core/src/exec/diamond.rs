@@ -11,7 +11,7 @@ use field::{
 use sys::{Rerr, Ret, errf};
 use x16rs;
 
-use crate::action::diamond::DiamondMint;
+use crate::action::diamond::HacdMint;
 use crate::state::{MintState, with_mint_total};
 
 const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
@@ -40,7 +40,7 @@ pub fn calculate_diamond_visual_gene(name: &DiamondName, life_gene: &Hash) -> Di
     DiamondVisualGene::from(genehex.try_into().unwrap())
 }
 
-fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Rerr {
+fn diamond_mint(this: &HacdMint, ctx: &mut dyn Context) -> Rerr {
     let act = &this.d;
     let env = ctx.env().clone();
     let profile = ctx.services().execution_profile()?;
@@ -174,7 +174,7 @@ fn diamond_mint(this: &DiamondMint, ctx: &mut dyn Context) -> Rerr {
 
 fn check_diamond_mint_tx_type(ctx: &dyn Context, params: &hacash_params::HacashParams) -> Rerr {
     if ctx.env().tx.ty != params.protocol.tx_type_2 {
-        return errf!("DiamondMint can only be executed in tx type 2");
+        return errf!("HacdMint can only be executed in tx type 2");
     }
     Ok(())
 }
@@ -240,7 +240,7 @@ fn calculate_diamond_average_bid_burn(
 }
 
 base::impl_action_execute! {
-    DiamondMint {
+    HacdMint {
         (self, ctx) {
             diamond_mint(self, ctx)?;
             Ok(vec![])

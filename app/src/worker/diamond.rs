@@ -6,7 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use field::{Address, DiamondName, DiamondNumber, Encode, Fixed8, Hash};
-use mint::action_diamond::DiamondMint;
+use mint::action_diamond::HacdMint;
 use mint::diamond_mining::{
     DiamondMiningResult, HASH_WIDTH, check_diamond_success, diamond_more_power,
 };
@@ -343,7 +343,7 @@ fn do_diamond_group_mining(
         best.diamond_string,
     ) {
         let mut act =
-            DiamondMint::with(DiamondName::from(diamond_name), DiamondNumber::from(number));
+            HacdMint::with(DiamondName::from(diamond_name), DiamondNumber::from(number));
         act.d.prev_hash = *prev_hash;
         act.d.nonce = Fixed8::from(best_nonce_bytes);
         act.d.address = *reward_address;
@@ -426,7 +426,7 @@ fn pull_next_diamond(conf: &DiaWorkConf) {
     println!("[diaworker] mining diamond number {}", next_number);
 }
 
-fn push_diamond_mining_success(conf: &DiaWorkConf, success: DiamondMint) {
+fn push_diamond_mining_success(conf: &DiaWorkConf, success: HacdMint) {
     let url = api_url(conf, "/submit/diamondminer/success");
     let resp = HTTP_CLIENT
         .post(&url)

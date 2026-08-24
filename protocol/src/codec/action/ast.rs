@@ -222,58 +222,107 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
     })
 }
 
-pub fn decode_ast_select_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret<ActionRef> {
-    if kind != AstSelect::KIND {
-        return sys::normalf!("AstSelect JSON codec got kind {}", kind);
-    }
-    Ok(Arc::new(decode_ast_select_value(reg, json)?))
-}
+// Codec entry points — `create_ast_select` / `decode_ast_select_json` and
+// `create_ast_if` / `decode_ast_if_json` are derived from the type names, so a
+// struct rename re-derives them instead of leaving hand-written names to drift.
+base::action_codec_entries! { AstSelect {
+    wire = (reg, _kind, buf) {
+        let mut r = Reader::new(buf);
+        let kind: Uint2 = r.read()?;
+        if kind.uint() != AstSelect::KIND {
+            return sys::normalf!("AstSelect codec got kind {}", kind.uint());
+        }
+        let exe_min: Uint1 = r.read()?;
+        let exe_max: Uint1 = r.read()?;
+        let (actions, used) = ActionListW1::decode(reg, &buf[r.used()..])?;
+        r.read_bytes(used)?;
+        Ok((
+            Arc::new(AstSelect {
+                kind,
+                exe_min,
+                exe_max,
+                actions,
+            }),
+            r.used(),
+        ))
+    },
+    json = (reg, kind, json) {
+        if kind != AstSelect::KIND {
+            return sys::normalf!("AstSelect JSON codec got kind {}", kind);
+        }
+        Ok(Arc::new(decode_ast_select_value(reg, json)?))
+    },
+}}
 
-pub fn decode_ast_if_json(reg: &dyn CodecRegistry, kind: u16, json: &str) -> Ret<ActionRef> {
-    if kind != AstIf::KIND {
-        return sys::normalf!("AstIf JSON codec got kind {}", kind);
-    }
-    let mut declared = Uint2::from(AstIf::KIND);
-    let mut cond = None;
-    let mut br_if = None;
-    let mut br_else = None;
-    json_object_fields(
-        json,
-        &["kind", "cond", "br_if", "br_else"],
-        &mut |key, value| {
-            match key {
-                "kind" => declared = json_decode_value(value)?,
-                "cond" => cond = Some(value),
-                "br_if" => br_if = Some(value),
-                "br_else" => br_else = Some(value),
-                _ => return sys::errf!("AstIf JSON field {} is unknown", key),
-            }
-            Ok(())
-        },
-    )?;
-    if declared.uint() != AstIf::KIND {
-        return sys::normalf!(
-            "action kind mismatch: expected {} got {}",
-            AstIf::KIND,
-            declared.uint()
-        );
-    }
-    Ok(Arc::new(AstIf {
-        kind: declared,
-        cond: decode_ast_select_value(
-            reg,
-            cond.ok_or_else(|| sys::Error::normal("AstIf JSON missing cond"))?,
-        )?,
-        br_if: decode_ast_select_value(
-            reg,
-            br_if.ok_or_else(|| sys::Error::normal("AstIf JSON missing br_if"))?,
-        )?,
-        br_else: decode_ast_select_value(
-            reg,
-            br_else.ok_or_else(|| sys::Error::normal("AstIf JSON missing br_else"))?,
-        )?,
-    }))
-}
+base::action_codec_entries! { AstIf {
+    wire = (reg, _kind, buf) {
+        let mut r = Reader::new(buf);
+        let kind: Uint2 = r.read()?;
+        if kind.uint() != AstIf::KIND {
+            return sys::normalf!("AstIf codec got kind {}", kind.uint());
+        }
+        let (cond, used) = decode_ast_select_inline(reg, &buf[r.used()..])?;
+        r.read_bytes(used)?;
+        let (br_if, used) = decode_ast_select_inline(reg, &buf[r.used()..])?;
+        r.read_bytes(used)?;
+        let (br_else, used) = decode_ast_select_inline(reg, &buf[r.used()..])?;
+        r.read_bytes(used)?;
+        Ok((
+            Arc::new(AstIf {
+                kind,
+                cond,
+                br_if,
+                br_else,
+            }),
+            r.used(),
+        ))
+    },
+    json = (reg, kind, json) {
+        if kind != AstIf::KIND {
+            return sys::normalf!("AstIf JSON codec got kind {}", kind);
+        }
+        let mut declared = Uint2::from(AstIf::KIND);
+        let mut cond = None;
+        let mut br_if = None;
+        let mut br_else = None;
+        json_object_fields(
+            json,
+            &["kind", "cond", "br_if", "br_else"],
+            &mut |key, value| {
+                match key {
+                    "kind" => declared = json_decode_value(value)?,
+                    "cond" => cond = Some(value),
+                    "br_if" => br_if = Some(value),
+                    "br_else" => br_else = Some(value),
+                    _ => return sys::errf!("AstIf JSON field {} is unknown", key),
+                }
+                Ok(())
+            },
+        )?;
+        if declared.uint() != AstIf::KIND {
+            return sys::normalf!(
+                "action kind mismatch: expected {} got {}",
+                AstIf::KIND,
+                declared.uint()
+            );
+        }
+        Ok(Arc::new(AstIf {
+            kind: declared,
+            cond: decode_ast_select_value(
+                reg,
+                cond.ok_or_else(|| sys::Error::normal("AstIf JSON missing cond"))?,
+            )?,
+            br_if: decode_ast_select_value(
+                reg,
+                br_if.ok_or_else(|| sys::Error::normal("AstIf JSON missing br_if"))?,
+            )?,
+            br_else: decode_ast_select_value(
+                reg,
+                br_else.ok_or_else(|| sys::Error::normal("AstIf JSON missing br_else"))?,
+            )?,
+        }))
+    },
+}}
 
 fn collect_ast_req_sign(req: &mut Vec<AddrOrPtr>, act: &dyn Action) {
     if let Some(nested) = act.nested_actions() {
@@ -352,60 +401,12 @@ impl ActionCodec for AstIf {
     }
 }
 
-pub fn create_ast_select(
-    reg: &dyn BinaryCodecs,
-    _kind: u16,
-    buf: &[u8],
-) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != AstSelect::KIND {
-        return sys::normalf!("AstSelect codec got kind {}", kind.uint());
-    }
-    let exe_min: Uint1 = r.read()?;
-    let exe_max: Uint1 = r.read()?;
-    let (actions, used) = ActionListW1::decode(reg, &buf[r.used()..])?;
-    r.read_bytes(used)?;
-    Ok((
-        Arc::new(AstSelect {
-            kind,
-            exe_min,
-            exe_max,
-            actions,
-        }),
-        r.used(),
-    ))
-}
-
 fn decode_ast_select_inline(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(AstSelect, usize)> {
     let (act, used) = create_ast_select(reg, AstSelect::KIND, buf)?;
     let Some(ast) = act.as_any().downcast_ref::<AstSelect>() else {
         return sys::normalf!("AstSelect decode type mismatch");
     };
     Ok((ast.clone(), used))
-}
-
-pub fn create_ast_if(reg: &dyn BinaryCodecs, _kind: u16, buf: &[u8]) -> Ret<(ActionRef, usize)> {
-    let mut r = Reader::new(buf);
-    let kind: Uint2 = r.read()?;
-    if kind.uint() != AstIf::KIND {
-        return sys::normalf!("AstIf codec got kind {}", kind.uint());
-    }
-    let (cond, used) = decode_ast_select_inline(reg, &buf[r.used()..])?;
-    r.read_bytes(used)?;
-    let (br_if, used) = decode_ast_select_inline(reg, &buf[r.used()..])?;
-    r.read_bytes(used)?;
-    let (br_else, used) = decode_ast_select_inline(reg, &buf[r.used()..])?;
-    r.read_bytes(used)?;
-    Ok((
-        Arc::new(AstIf {
-            kind,
-            cond,
-            br_if,
-            br_else,
-        }),
-        r.used(),
-    ))
 }
 
 // ================================ wire schema ================================

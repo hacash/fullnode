@@ -6,7 +6,7 @@ use field::ToJSON;
 use sys::errf;
 
 use crate::codec::action::guard::validate_balance_floor_struct;
-use crate::codec::action::{BalanceFloor, ChainAllow, HeightScope, ReqSignList};
+use crate::codec::action::{BalanceFloor, ChainAllow, HeightScope, RequiredSigners};
 
 base::impl_action_execute! {
     ChainAllow {
@@ -119,7 +119,7 @@ base::impl_action_execute! {
 }
 
 base::impl_action_execute! {
-    ReqSignList {
+    RequiredSigners {
         (self, ctx) {
             self.validate_against(&ctx.env().tx.addrs)?;
             Ok(vec![])

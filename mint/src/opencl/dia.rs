@@ -2,7 +2,7 @@ use ocl::{Buffer, EventList, Kernel};
 
 use field::{Address, DiamondName, DiamondNumber, Fixed8, Hash};
 
-use crate::action::diamond::DiamondMint;
+use crate::action::diamond::HacdMint;
 use crate::diamond_mining::{
     DiamondMiningResult, HASH_WIDTH, check_diamond_success, diamond_more_power,
 };
@@ -118,7 +118,7 @@ pub fn do_diamond_group_mining_opencl(
         if let Some(diamond_name) = check_diamond_success(number, first_hash, hash, diamond_string)
         {
             let mut act =
-                DiamondMint::with(DiamondName::from(diamond_name), DiamondNumber::from(number));
+                HacdMint::with(DiamondName::from(diamond_name), DiamondNumber::from(number));
             act.d.prev_hash = *prevblockhash;
             act.d.nonce = Fixed8::from(nonce_bytes);
             act.d.address = *reward_address;

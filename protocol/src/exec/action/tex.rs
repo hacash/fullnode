@@ -1,4 +1,4 @@
-//! TexCellAct execute body and TEX cell state changes.
+//! TexCellExecute execute body and TEX cell state changes.
 
 use base::{
     Context, CoreState, ExecFrom, asset_add, asset_sub, diamond_owned_move, hac_add, hac_sub,
@@ -7,7 +7,7 @@ use base::{
 use field::{Address, Amount, DiamondNameListMax200, DiamondNumber, Fold64, Hash, Satoshi, Sign};
 use sys::{Account, Rerr, Ret, errf};
 
-use crate::codec::action::tex::{TexCell, TexCellAct};
+use crate::codec::action::tex::{TexCell, TexCellExecute};
 use crate::params::SETTLEMENT_ADDR;
 
 fn tex_check_settlement_addr_privakey() -> Rerr {
@@ -346,11 +346,11 @@ impl TexCell {
 }
 
 base::impl_action_execute! {
-    TexCellAct {
+    TexCellExecute {
         (self, ctx) {
             if ctx.exec_from() != ExecFrom::Top {
                 return errf!(
-                    "TexCellAct can only run in TOP context, got {}",
+                    "TexCellExecute can only run in TOP context, got {}",
                     ctx.exec_from()
                 );
             }

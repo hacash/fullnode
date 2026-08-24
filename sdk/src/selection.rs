@@ -166,8 +166,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "asset_balance",
-                "balance",
+                "balance_asset",
+                "balance_coin",
                 "block_author_addr",
                 "block_height",
                 "check_signature",

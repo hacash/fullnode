@@ -2,7 +2,7 @@ use base::{ApiExecCtx, ApiRequest, ApiResponse, CoreStateRead, TransactionSign};
 
 use crate::action::util::pickout_diamond_mint_action;
 use crate::api::util::*;
-use mint_core::inscription::{DiaInscClean, DiaInscDrop, DiaInscEdit, DiaInscMove, DiaInscPush};
+use mint_core::inscription::{HacdInscClean, HacdInscDrop, HacdInscEdit, HacdInscMove, HacdInscPush};
 
 use field::{Amount, DiamondName, DiamondNameListMax200, DiamondNumber};
 use sys::ToHex;
@@ -371,7 +371,7 @@ pub(crate) fn diamond_engrave_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiR
     let mut pick_engrave = |tx: &dyn TransactionSign| {
         let txhx = tx.hash();
         for act in tx.actions() {
-            if let Some(a) = act.as_any().downcast_ref::<DiaInscPush>() {
+            if let Some(a) = act.as_any().downcast_ref::<HacdInscPush>() {
                 push_diamond_engrave_item(
                     &mut datalist,
                     &txhx,
@@ -390,7 +390,7 @@ pub(crate) fn diamond_engrave_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiR
                         ),
                     ],
                 );
-            } else if let Some(a) = act.as_any().downcast_ref::<DiaInscClean>() {
+            } else if let Some(a) = act.as_any().downcast_ref::<HacdInscClean>() {
                 push_diamond_engrave_item(
                     &mut datalist,
                     &txhx,
@@ -406,7 +406,7 @@ pub(crate) fn diamond_engrave_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiR
                         ),
                     ],
                 );
-            } else if let Some(a) = act.as_any().downcast_ref::<DiaInscMove>() {
+            } else if let Some(a) = act.as_any().downcast_ref::<HacdInscMove>() {
                 let from = a.from_diamond.to_readable();
                 let to = a.to_diamond.to_readable();
                 push_diamond_engrave_item(
@@ -423,7 +423,7 @@ pub(crate) fn diamond_engrave_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiR
                         ),
                     ],
                 );
-            } else if let Some(a) = act.as_any().downcast_ref::<DiaInscDrop>() {
+            } else if let Some(a) = act.as_any().downcast_ref::<HacdInscDrop>() {
                 push_diamond_engrave_item(
                     &mut datalist,
                     &txhx,
@@ -438,7 +438,7 @@ pub(crate) fn diamond_engrave_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiR
                         ),
                     ],
                 );
-            } else if let Some(a) = act.as_any().downcast_ref::<DiaInscEdit>() {
+            } else if let Some(a) = act.as_any().downcast_ref::<HacdInscEdit>() {
                 push_diamond_engrave_item(
                     &mut datalist,
                     &txhx,

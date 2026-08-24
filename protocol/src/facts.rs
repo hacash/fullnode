@@ -169,14 +169,14 @@ pub fn schedule_facts_with_params(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::action::HacToTrs;
+    use crate::codec::action::TransferHacTo;
     use crate::codec::tx::{TransactionType1, TransactionType2};
     use base::{ActionRef, TransactionBuild};
     use field::{Amount, Timestamp, Uint1};
     use std::sync::Arc;
 
     fn transfer() -> ActionRef {
-        Arc::new(HacToTrs::new(
+        Arc::new(TransferHacTo::new(
             Address::from(*sys::Account::create_by("123456").unwrap().address()),
             Amount::from("1:244").unwrap(),
         ))

@@ -3,26 +3,26 @@ use sys::Rerr;
 
 use crate::action::asset::AssetCreate;
 use crate::action::channel::{ChannelClose, ChannelOpen};
-use crate::action::diamond::{DiamondMint, DiamondMintData, create_diamond_mint, decode_diamond_mint_json};
-use crate::inscription::{DiaInscClean, DiaInscDrop, DiaInscEdit, DiaInscMove, DiaInscPush, decode_dia_insc_json};
+use crate::action::diamond::{HacdMint, HacdMintData, create_hacd_mint, decode_hacd_mint_json};
+use crate::inscription::{HacdInscClean, HacdInscDrop, HacdInscEdit, HacdInscMove, HacdInscPush, decode_hacd_insc_json};
 
 /// Complete mint-core-owned action catalog.
 pub const ACTION_CODECS: &[ActionCodecBinding] = &[
-    base::action_codec_binding!(DiaInscPush, decode_dia_insc_json),
-    base::action_codec_binding!(DiaInscClean, decode_dia_insc_json),
-    base::action_codec_binding!(DiaInscEdit, decode_dia_insc_json),
-    base::action_codec_binding!(DiaInscMove, decode_dia_insc_json),
-    base::action_codec_binding!(DiaInscDrop, decode_dia_insc_json),
+    base::action_codec_binding!(HacdInscPush, decode_hacd_insc_json),
+    base::action_codec_binding!(HacdInscClean, decode_hacd_insc_json),
+    base::action_codec_binding!(HacdInscEdit, decode_hacd_insc_json),
+    base::action_codec_binding!(HacdInscMove, decode_hacd_insc_json),
+    base::action_codec_binding!(HacdInscDrop, decode_hacd_insc_json),
     base::action_codec_binding!(ChannelOpen),
     base::action_codec_binding!(ChannelClose),
     base::action_codec_binding!(AssetCreate),
-    base::action_codec_binding!(DiamondMint, create_diamond_mint, decode_diamond_mint_json),
+    base::action_codec_binding!(HacdMint, create_hacd_mint, decode_hacd_mint_json),
 ];
 
 /// Nested structs referenced by mint-core action schemas.
 pub const STRUCT_SCHEMAS: &[StructSchema] = &[
     <field::AssetSmelt as base::StructSchemaProvider>::STRUCT_SCHEMA,
-    <DiamondMintData as base::StructSchemaProvider>::STRUCT_SCHEMA,
+    <HacdMintData as base::StructSchemaProvider>::STRUCT_SCHEMA,
 ];
 
 /// Installs the complete mint-core-owned wire surface into a dynamic profile.

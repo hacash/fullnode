@@ -17,7 +17,7 @@ use protocol::tx_std::TransactionType2;
 use sys::{Rerr, Ret, Waiter};
 
 use crate::MintConf;
-use crate::action::diamond::DiamondMint;
+use crate::action::diamond::HacdMint;
 use crate::bidding::DiamondBidding;
 use crate::block_check;
 use crate::difficulty::{DifficultyConfig, DifficultyGnr, LOWEST_DIFFICULTY, u32_to_hash};
@@ -459,11 +459,11 @@ impl HacashConsensus {
             return sys::errf!("diamond miner not enabled");
         }
         let (act_ref, used) =
-            crate::action::diamond::create_diamond_mint(reg, DiamondMint::KIND, &action_body)?;
+            crate::action::diamond::create_hacd_mint(reg, HacdMint::KIND, &action_body)?;
         if used != action_body.len() {
             return sys::errf!("diamond mint action trailing bytes");
         }
-        let Some(mint) = act_ref.as_any().downcast_ref::<DiamondMint>() else {
+        let Some(mint) = act_ref.as_any().downcast_ref::<HacdMint>() else {
             return sys::errf!("diamond mint action type invalid");
         };
 
@@ -744,7 +744,7 @@ impl TxPolicy for HacashConsensus {
             TxPoolGroupSpec::new(Self::TX_GROUP_NORMAL, "normal", TxOrdering::FeePurity);
         normal.default_capacity = 2000;
         let mut diamond =
-            TxPoolGroupSpec::new(Self::TX_GROUP_DIAMOND_MINT, "diamond_mint", TxOrdering::Fee);
+            TxPoolGroupSpec::new(Self::TX_GROUP_DIAMOND_MINT, "hacd_mint", TxOrdering::Fee);
         diamond.default_capacity = 100;
         diamond.revalidate_interval = None;
         diamond.relay_service_bit = Some(Self::SERVICE_BIT_DIAMOND_RELAY);
@@ -756,7 +756,7 @@ impl TxPolicy for HacashConsensus {
             .tx()
             .actions()
             .iter()
-            .any(|act| act.as_any().is::<DiamondMint>())
+            .any(|act| act.as_any().is::<HacdMint>())
         {
             Self::TX_GROUP_DIAMOND_MINT
         } else {

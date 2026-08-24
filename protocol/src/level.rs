@@ -241,12 +241,12 @@ pub fn precheck_tx_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::action::{EnvHeight, HacToTrs};
+    use crate::codec::action::{EnvHeight, TransferHacTo};
     use field::{Address, Amount, Uint2};
     use std::sync::Arc;
 
     fn transfer() -> ActionRef {
-        Arc::new(HacToTrs::new(
+        Arc::new(TransferHacTo::new(
             Address::from(*sys::Account::create_by("123456").unwrap().address()),
             Amount::from("1:244").unwrap(),
         ))

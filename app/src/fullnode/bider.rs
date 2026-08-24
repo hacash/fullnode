@@ -5,7 +5,7 @@ use std::time::Duration;
 use base::{ChainId, Node, PkgOrigin, PkgSource, Transaction, TransactionBuild, TxPkg, TxPool};
 use field::{Address, Amount, AmtCpr, Encode};
 use mint::MinerConf;
-use mint::action_diamond::DiamondMint;
+use mint::action_diamond::HacdMint;
 use protocol::tx_std::TransactionType2;
 use sys::Waiter;
 
@@ -190,8 +190,8 @@ fn pick_first_and_my_bid_tx(
     (first, mine)
 }
 
-fn pick_diamond_mint_action(tx: &dyn Transaction) -> Option<&DiamondMint> {
+fn pick_diamond_mint_action(tx: &dyn Transaction) -> Option<&HacdMint> {
     tx.actions()
         .iter()
-        .find_map(|act| act.as_any().downcast_ref::<DiamondMint>())
+        .find_map(|act| act.as_any().downcast_ref::<HacdMint>())
 }

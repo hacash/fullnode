@@ -30,7 +30,7 @@ pub struct ContractUpdateAnalysis {
 
 // ================================ ContractDeploy ================================
 
-#[base::action(kind = 40, tx_min = 3, scope = TOP_ONLY_CAN_WITH_GUARD, audit = "structured", name = "contract_deploy", code, ctor = none,
+#[base::action(kind = 40, tx_min = 3, scope = TOP_ONLY_CAN_WITH_GUARD, audit = "structured", code, ctor = none,
     description = |this: &ContractDeploy| format!("Deploy smart contract with nonce {}", this.nonce.uint()))]
 #[derive(PartialEq, Eq)]
 pub struct ContractDeploy {
@@ -62,7 +62,7 @@ impl Default for ContractDeploy {
 
 // ================================ ContractUpdate ================================
 
-#[base::action(kind = 41, tx_min = 3, scope = TOP_ONLY_CAN_WITH_GUARD, audit = "structured", name = "contract_update", code, ctor = none,
+#[base::action(kind = 41, tx_min = 3, scope = TOP_ONLY_CAN_WITH_GUARD, audit = "structured", code, ctor = none,
     description = |this: &ContractUpdate| format!("Update smart contract {}", this.address.to_readable()))]
 #[derive(PartialEq, Eq)]
 pub struct ContractUpdate {
