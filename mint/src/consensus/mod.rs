@@ -25,6 +25,13 @@ use sys::Ret;
 /// layer stays consensus-agnostic.
 pub trait ConsensusApi: Send + Sync {
     fn mint_params(&self) -> base::MintParams;
+    fn tx_pool_groups(&self) -> Vec<base::TxPoolGroupSpec> {
+        vec![base::TxPoolGroupSpec::new(
+            base::TxGroupId::DEFAULT,
+            "default",
+            base::TxOrdering::FeePurity,
+        )]
+    }
     fn pending_replay_count(&self) -> usize;
     fn miner_enabled(&self) -> bool;
     fn diamond_miner_enabled(&self) -> bool;
@@ -58,6 +65,9 @@ pub trait ConsensusApi: Send + Sync {
 impl ConsensusApi for HacashConsensus {
     fn mint_params(&self) -> base::MintParams {
         <Self as base::Consensus>::mint_params(self)
+    }
+    fn tx_pool_groups(&self) -> Vec<base::TxPoolGroupSpec> {
+        <Self as base::TxPolicy>::tx_pool_groups(self)
     }
     fn pending_replay_count(&self) -> usize {
         self.pending_replay_count()

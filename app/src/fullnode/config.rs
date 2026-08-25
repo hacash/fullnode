@@ -18,7 +18,7 @@ pub struct RuntimeConfig {
 }
 
 #[derive(Clone)]
-pub(super) struct TokioRuntimeConfig {
+pub struct TokioRuntimeConfig {
     pub worker_threads: usize,
     pub max_blocking_threads: usize,
 }

@@ -70,7 +70,21 @@ type / AST depth / top-rule) is reported as facts, and the SDK never refuses
 inspect or build because of them.
 
 Errors remain in the Rust envelope (`ok: 0`, numeric `code`, `msg`, `detail`).
-The JS layer does not map numeric codes to friendly names.
+The JS layer does not map numeric codes to friendly names. Stable error codes,
+in numeric order (`1` through `20`; `0` means unknown), are:
+
+```text
+1 unknown_operation          11 unsupported_tx_type
+2 unsupported_feature        12 invalid_address
+3 unsupported_schema          13 invalid_public_key
+4 unknown_field              14 bad_signature
+5 unknown_action             15 review_binding_mismatch
+6 trailing_bytes             16 transaction_json_mismatch
+7 parse_failed               17 request_expired
+8 wrong_chain_id             18 invalid_signing_request
+9 expired_height             19 policy_binding_mismatch
+10 missing_inspect_context   20 codec_profile_mismatch
+```
 
 ## External interface (compiled `dist/` artifacts)
 
@@ -90,10 +104,11 @@ surface** — only the operation table below grows.
 | JS (node) | `create_hacash_sdk({ target: "auto"\|"node"\|"web", wasm? })` | `() -> Promise<{ sdk_invoke_json, sdk_transport_version }>` | Loads the matching backend: node auto-imports `../nodejs/`, web fetches `../web/` (optionally `{ wasm }` for a custom URL/Response). |
 | JS (web) | `default __wbg_init(module_or_path?)`, `initSync(module)` | — | wasm-bindgen boilerplate for embedding; normal users go through `create_hacash_sdk`. |
 
-All numeric request/response fields travel as **decimal strings** (JSON
-`JSON.parse` never loses precision); hex strings may carry an optional `0x`
-prefix. Private keys never cross the boundary — only public keys, digests,
-signing requests, and signature proofs.
+Numeric response fields and canonical numeric values travel as **decimal
+strings** (JSON `JSON.parse` never loses precision). Numeric request fields
+also accept JSON numbers for convenience, but decimal strings are recommended.
+Hex strings may carry an optional `0x` prefix. Private keys never cross the
+boundary — only public keys, digests, signing requests, and signature proofs.
 
 ### 2. Result envelope
 
@@ -105,8 +120,9 @@ Every call returns one of:
 ```
 
 `code` is the numeric id of a stable error code (`SdkErrorCode::ERROR_CODES`
-order, `1` = `unknown_operation`, `0` = unknown code). `detail` is optional
-JSON carrying `action_index`, `byte_offset`, `expected`/`actual`, etc.
+order, `1` = `unknown_operation`, `0` = unknown code). `detail` is a JSON
+string field (empty when absent); when present its contents carry structured
+fields such as `action_index`, `byte_offset`, `expected`, and `actual`.
 
 ### 3. Operations (`OP_*` registry, transport version 9)
 
@@ -114,14 +130,14 @@ JSON carrying `action_index`, `byte_offset`, `expected`/`actual`, etc.
 |---|---|---|---|
 | 1 | `system.sdk_version` | — | `sdk-version@1`: `schema`, `package_version`, `abi{major,minor}` |
 | 2 | `tx.build` | `spec` (TransactionSpec JSON: `tx_type` 2/3, `main`, `fee`, `timestamp?`, `gas_max?`, `actions[{kind, ...schema fields}]`) | `built-transaction@1`: `schema`, `tx_type`, `timestamp`, `main`, `fee`, `hash`, `hash_with_fee`, `unsigned_body_hash`, `body` (hex) |
-| 3 | `tx.inspect_report` | `body` (hex), `signer_address?`, `describe?` | `review@5` (protocol facts; never a denial) |
-| 4 | `tx.inspect` | `body`, `signer_address?`, `context{current_height, expected_chain_id, consensus_flags?}`, `describe?` | `review@5` with `expired_height`/`wrong_chain` facts bound in |
+| 3 | `tx.inspect_report` | `body` (hex), `signer_address?`, `describe?` | `review@4` (protocol facts; never a denial) |
+| 4 | `tx.inspect` | `body`, `signer_address?`, `context{current_height, expected_chain_id, consensus_flags?}`, `describe?` | `review@4` with `expired_height`/`wrong_chain` facts bound in |
 | 5 | `tx.prepare_signature` | `body`, `signer_address`, `options.review?`, `options.policy?`, `options.origin?`, `options.expires_at?` | `signing-request@1`: `id`, `purpose`, `algorithm`, `signer_address`, `digest`, `body_hash`, `review_binding?`, `policy_decision?`, `origin?`, `expires_at?`, `request_binding` |
 | 6 | `tx.attach_signature` | `body`, `proof`, `review`, `request` | `attach-result@2`: `body`, `complete`, `present_signers`, `valid_signers`, `missing_signers`, `invalid_signers`, `signature_errors` |
 | 7 | `tx.attach_signature_unbound` | `body`, `proof` | `attach-result@2` (no approval-chain checks) |
 | 8 | `tx.verify` | `body` | `verify-result@1`: `ok`, `errors` |
 | 9 | `tx.signature_report` | `body` | `signature-report@1`: `required`, `present`, `valid`, `missing`, `invalid` |
-| 10 | `tx.decode` | `body`, `describe?` | `transaction-json@2`: `tx_type`, `timestamp`, `main`, `fee`, `gas_max`, `tx_hash`, `hash_with_fee`, `unsigned_body_hash`, `actions[]` (`action-desc@2`), `signatures[{public_key, signature}]` |
+| 10 | `tx.decode` | `body`, `describe?` | `transaction-json@1`: `tx_type`, `timestamp`, `main`, `fee`, `gas_max`, `tx_hash`, `hash_with_fee`, `unsigned_body_hash`, `actions[]` (`action-desc@2`), `signatures[{public_key, signature}]` |
 | 11 | `tx.encode` | `transaction` (a `tx.decode` output), `review?` | `built-transaction@1`; rebuilt `unsigned_body_hash` must match (else `transaction_json_mismatch`) |
 | 12 | `account.verify_address` | `address` | `{ok, error?, address?}` (canonical readable form) |
 | 13 | `account.address_from_public_key` | `public_key` (33-byte compressed hex) | `{address, version}` |
@@ -244,16 +260,15 @@ build.
 ## Testing
 
 ```sh
-cargo test -p sdk          # unit/flow tests (wire-spec build, signature flows, guard/topology facts)
-node ./sdk/tests/...       # packaged-JS smoke tests (after ./sdk/pack.sh)
+cargo test -p sdk
+node ./sdk/tests/raw_build_test.mjs   # after ./sdk/pack.sh
 ```
 
-## Status (M1)
+## Status
 
-- Implemented: dispatcher, decode/inspect/Review,
-  prepare/attach/verify/signature_report, tx.build, tx.decode/encode,
-  account/amount/message/policy, VM 40/41/44/46 registration, all three wasm
-  targets.
-- TODO (M2+): AST/TEX branch display refinement, VM maincall bytecode
-  print/IR. WASM gzip is about 0.24MB after dropping the JS codec/adapter
-  layers (under the §9 page 1MB budget).
+Implemented: the JSON dispatcher, transaction build/decode/encode/inspect,
+signature preparation/attachment/verification/reporting, account/amount/message
+and policy operations, diamond lookup, fee estimation, action descriptions, VM
+call decoding and bytecode/IR display, plus the nodejs/web/page wasm targets.
+The SDK's current wasm output is about 0.30MB gzip and stays below the page
+bundle budget.

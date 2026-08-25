@@ -1,9 +1,8 @@
-# Hacash fullnodenext build and run guide
+# Hacash fullnode build and run guide
 
-This document replaces the `fullnodedev/build.md` instructions. The old project
-was a root package; `fullnodenext` has a virtual Cargo workspace and the node
-executable is the `fullnode` binary of package `app`. Build commands therefore
-need `-p app --bin fullnode`.
+This repository uses a virtual Cargo workspace, and the node executable is the
+`fullnode` binary of package `app`. Build commands therefore use
+`-p app --bin fullnode`.
 
 ## 1. Toolchain and native dependencies
 
@@ -111,9 +110,9 @@ compiled. A build with no DB feature compiles, but opening a disk-backed node
 fails with `no db backend feature enabled`.
 
 The backend is a compile-time choice, not an INI setting. Do not open an
-existing data directory with a different backend. In particular, do not point
-fnext at fdev's production data directory; use a new directory and let fnext
-synchronize or import data through an explicitly verified migration process.
+existing data directory with a different backend. Use a new directory when
+changing backend and let the node synchronize or import data through an
+explicitly verified migration process.
 
 Database durability can be adjusted at process startup:
 
@@ -168,13 +167,14 @@ cargo build --release -p app --bin fullnode --target x86_64-apple-darwin
 ```
 
 Cross-compiling native C++ DB backends still requires the target platform's
-compiler, linker and SDK. The old fdev instructions that manually changed the
-`leveldb-sys` version are obsolete: fnext already pins `leveldb-sys = 2.0.9`.
+compiler, linker and SDK. The `leveldb-sys` dependency is currently pinned to
+`=2.0.4` in `db/Cargo.toml`; do not change that version as part of a normal
+build.
 
 ## 7. Configuration file
 
-The repository contains a conservative mainnet example at
-`hacash.config.ini`. The first positional argument is the config path:
+Create `hacash.config.ini` from the example in `config.md` (or provide your
+own configuration). The first positional argument is the config path:
 
 ```sh
 ./target/release/fullnode "$(pwd)/hacash.config.ini"
@@ -205,11 +205,10 @@ INI rules:
 | `recent_blocks` | `true` | Maintain recent-block indexes. |
 | `average_fee_purity` | `true` | Maintain rolling fee-purity samples. |
 | `show_miner_name` | `false` | Print miner details in block logs. |
-| `vm_log_enable` | `false` | Persist VM logs. |
-| `vm_log_open_height` | `0` | First height at which VM logs are persisted. |
 
-Persistent storage is split below `data_dir` into `block/`, `state_v4/`, and
-`vmlog/`. When `DB_VERSION` changes, fnext renames an old state/log directory
+Persistent storage is split below `data_dir` into `block/`, `state_v1/`, and
+`vmlog/` (the `state_vN` suffix follows the compiled `DB_VERSION`). When
+`DB_VERSION` changes, the node renames an old state/log directory
 to a timestamped backup and rebuilds state from local block history.
 
 `HACASH_DATA_DIR` overrides `[engine].data_dir` for the runtime storage path.
@@ -231,7 +230,7 @@ to a timestamped backup and rebuilds state from local block history.
 
 The node creates `node.id` and `stable.nodes` under the data directory.
 
-### `[server]`, `[txpool]`, and `[vm_api]`
+### `[server]`, `[txpool]`, and `[vm]`
 
 | Section/key | Default | Meaning |
 | --- | ---: | --- |
@@ -241,7 +240,9 @@ The node creates `node.id` and `stable.nodes` under the data directory.
 | `server.debug_routes` | `false` | Register routes marked debug. Do not expose them on a public listener. |
 | `txpool.maxs` | empty | Comma-separated capacities for consensus-defined transaction groups. Missing entries keep group defaults. |
 | `txpool.min_fee_purity` | `6024` | Local mempool minimum fee purity (`1000000 / 166`, integer division). |
-| `vm_api.log_delete_auth_hash` | empty | Authorization hash used by the VM log deletion API. |
+| `vm.log_enable` | `false` | Persist VM logs. |
+| `vm.log_open_height` | `0` | First height at which VM logs are persisted. |
+| `vm.log_delete_auth_hash` | empty | Authorization hash used by the VM log deletion API. |
 
 `poworker` and `diaworker` do not open local listeners. Their `connect` value is
 a remote full-node endpoint and therefore remains a single `host:port` value;
@@ -272,7 +273,7 @@ Hacash chain rules and are not INI settings.
 
 ## 8. Startup and shutdown flow
 
-The fnext composition root is `app::fullnode`:
+The `app::fullnode` composition root is:
 
 1. Load and type-check INI configuration; load/create the P2P node identity.
 2. Build the action/transaction registry and Hacash consensus runtime.

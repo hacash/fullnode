@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-#[cfg(not(debug_assertions))]
-use base::TxPolicy;
 use base::{ApiExecCtx, ApiRequest, ApiResponse};
 use sys::ToHex;
 

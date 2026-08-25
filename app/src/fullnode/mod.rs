@@ -99,7 +99,7 @@ impl Fullnode {
         }
 
         println!(
-            "[hacash] ready: height={} consensus={} scaner={} services={:?}",
+            "[Hacash] height={} consensus={} scaner={} services={:?}",
             self.engine.latest_height(),
             self.engine.consensus().name(),
             self.indexer.as_ref().map_or("off", AttachedIndexer::name),

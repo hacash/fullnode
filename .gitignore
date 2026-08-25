@@ -6,6 +6,7 @@ dist/
 *.loc/
 
 hacash_*_ubuntu*
+hacash_*.zip
 
 .claude
 .zcode
