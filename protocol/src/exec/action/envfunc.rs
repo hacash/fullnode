@@ -10,9 +10,26 @@ use crate::codec::action::{
     HacdNameList, HacdOwnerAddrs, TxMessage,
 };
 
+/// Temporary upgrade gate for the tx message/blob read syscalls (0x0615/0x0616/
+/// 0x0617/0x0704/0x0705), which take effect at height 777000. Hand-written on
+/// purpose — remove the const, this helper and the five call sites together with
+/// the syscalls in the next release.
+const TX_MSG_BLOB_ENABLE_HEIGHT: u64 = 777_000;
+
+fn tx_message_blob_gate(ctx: &dyn base::Context) -> sys::Rerr {
+    if ctx.env().block.height < TX_MSG_BLOB_ENABLE_HEIGHT {
+        return errf!(
+            "tx message/blob syscall not enabled until height {}",
+            TX_MSG_BLOB_ENABLE_HEIGHT
+        );
+    }
+    Ok(())
+}
+
 base::impl_action_execute! {
     TxMessage {
         (self, ctx) {
+            tx_message_blob_gate(ctx)?;
             let mut n = 0u8;
             for action in ctx.tx().actions() {
                 if let Some(msg) = action.as_any().downcast_ref::<crate::codec::action::Message>() {
@@ -28,6 +45,7 @@ base::impl_action_execute! {
 base::impl_action_execute! {
     TxBlob {
         (self, ctx) {
+            tx_message_blob_gate(ctx)?;
             let mut n = 0u8;
             for action in ctx.tx().actions() {
                 if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::Blob>() {
@@ -50,6 +68,7 @@ base::impl_action_execute! {
 
 base::impl_action_execute! {
     TxMessageNum { (self, ctx) {
+        tx_message_blob_gate(ctx)?;
         let n = ctx.tx().actions().iter().filter(|a| a.as_any().is::<crate::codec::action::Message>()).count();
         if n > u8::MAX as usize { return errf!("message count exceeds u8"); }
         Ok(vec![n as u8])
@@ -57,6 +76,7 @@ base::impl_action_execute! {
 }
 base::impl_action_execute! {
     TxBlobNum { (self, ctx) {
+        tx_message_blob_gate(ctx)?;
         let n = ctx.tx().actions().iter().filter(|a| a.as_any().is::<crate::codec::action::Blob>()).count();
         if n > u8::MAX as usize { return errf!("blob count exceeds u8"); }
         Ok(vec![n as u8])
@@ -64,6 +84,7 @@ base::impl_action_execute! {
 }
 base::impl_action_execute! {
     TxBlobSize { (self, ctx) {
+        tx_message_blob_gate(ctx)?;
         let mut n = 0u8;
         for action in ctx.tx().actions() {
             if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::Blob>() {

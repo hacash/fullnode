@@ -14,6 +14,35 @@ pub enum ErrorKind {
     Abort,
 }
 
+impl ErrorKind {
+    /// Handling rank. Combinations may only move toward a stricter kind.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Normal => 0,
+            Self::Revert => 1,
+            Self::Fault => 2,
+            Self::Abort => 3,
+        }
+    }
+
+    /// Merge two kinds. A `Revert` mixed with any other kind cannot stay
+    /// `Revert` (AST would capture a path that also had a harder failure);
+    /// the floor is `Fault` unless the other kind is already `Abort`.
+    pub fn merge_upgrade(self, other: Self) -> Self {
+        let max = if self.rank() >= other.rank() {
+            self
+        } else {
+            other
+        };
+        let mixed_revert = (self == Self::Revert) != (other == Self::Revert);
+        if mixed_revert && max.rank() < Self::Fault.rank() {
+            Self::Fault
+        } else {
+            max
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Error {
     pub kind: ErrorKind,
@@ -87,6 +116,48 @@ impl Error {
         self.msg = format!("{}: {}", prefix, self.msg);
         self
     }
+
+    fn append_secondary_message(primary: String, secondary: String) -> String {
+        if secondary.is_empty() || primary.contains(&secondary) {
+            primary
+        } else {
+            format!("{} | secondary: {}", primary, secondary)
+        }
+    }
+
+    /// Combine two execution errors. Kind only upgrades: if either is `Fault`,
+    /// the result is at least `Fault`; `Abort` wins over `Fault`; a `Revert`
+    /// mixed with a non-`Revert` becomes `Fault` (or `Abort` if the other is
+    /// `Abort`). When exec is revert and the other is not, the other is the
+    /// primary message — matching live `merge_xret_failure`.
+    pub fn merge_upgrade(self, other: Self) -> Self {
+        let kind = self.kind.merge_upgrade(other.kind);
+        let self_is_primary = if self.kind == kind {
+            true
+        } else if other.kind == kind {
+            false
+        } else {
+            // Floor (typically Revert + Normal → Fault): live uses the
+            // non-revert side as primary when exec was revert.
+            !self.is_revert()
+        };
+        let (mut primary, secondary) = if self_is_primary {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        let secondary_text = secondary.to_string();
+        let secondary_code = secondary.code();
+        let primary_was_abort = primary.is_abort();
+        primary.msg = Self::append_secondary_message(primary.msg, secondary_text);
+        primary.kind = kind;
+        if kind == ErrorKind::Abort && !primary_was_abort {
+            if let Some(code) = secondary_code {
+                primary = primary.with_code(code);
+            }
+        }
+        primary
+    }
 }
 
 impl fmt::Display for Error {
@@ -147,5 +218,54 @@ mod tests {
         const CODE: &'static str = "example_code";
         let error = Error::normal("example").with_code(CODE);
         assert_eq!(error.code(), Some(CODE));
+    }
+
+    #[test]
+    fn merge_upgrade_kind_never_downgrades() {
+        use ErrorKind::*;
+        assert_eq!(Revert.merge_upgrade(Fault), Fault);
+        assert_eq!(Fault.merge_upgrade(Revert), Fault);
+        assert_eq!(Revert.merge_upgrade(Revert), Revert);
+        assert_eq!(Fault.merge_upgrade(Fault), Fault);
+        assert_eq!(Abort.merge_upgrade(Fault), Abort);
+        assert_eq!(Fault.merge_upgrade(Abort), Abort);
+        assert_eq!(Revert.merge_upgrade(Abort), Abort);
+        assert_eq!(Abort.merge_upgrade(Revert), Abort);
+        assert_eq!(Revert.merge_upgrade(Normal), Fault);
+        assert_eq!(Normal.merge_upgrade(Revert), Fault);
+        assert_eq!(Normal.merge_upgrade(Fault), Fault);
+        assert_eq!(Normal.merge_upgrade(Normal), Normal);
+    }
+
+    #[test]
+    fn merge_upgrade_revert_plus_fault_is_fault_with_settle_primary() {
+        let exec = Error::revert("biz fail");
+        let settle = Error::fault("Main gas cost invalid: 0");
+        let merged = exec.merge_upgrade(settle);
+        assert!(merged.is_fault(), "{merged}");
+        assert!(!merged.is_revert(), "{merged}");
+        assert!(merged.contains("gas cost invalid"), "{merged}");
+        assert!(merged.contains("biz fail"), "{merged}");
+    }
+
+    #[test]
+    fn merge_upgrade_fault_plus_revert_stays_fault_with_exec_primary() {
+        let exec = Error::fault("ThrowAbort(151): boom");
+        let settle = Error::revert("should not win");
+        let merged = exec.merge_upgrade(settle);
+        assert!(merged.is_fault(), "{merged}");
+        assert!(merged.as_str().starts_with("ThrowAbort"), "{merged}");
+        assert!(merged.contains("should not win"), "{merged}");
+    }
+
+    #[test]
+    fn merge_upgrade_abort_is_not_downgraded_to_fault() {
+        const CODE: &'static str = "storage_read_failed";
+        let exec = Error::revert("biz fail");
+        let settle = Error::abort("backend down").with_code(CODE);
+        let merged = exec.merge_upgrade(settle);
+        assert!(merged.is_abort(), "{merged}");
+        assert_eq!(merged.code(), Some(CODE));
+        assert!(merged.contains("backend down"), "{merged}");
     }
 }

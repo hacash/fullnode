@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use base::{Context, ExecFrom, GasBuckets, IntentScope, with_exec_from};
+use base::{with_exec_from, Context, ExecFrom, GasBuckets, IntentScope};
 use sys::Ret;
 
 use crate::frame::CallFrame;
@@ -83,11 +83,9 @@ impl NativeVm {
         let entry = self.pop_entry()?;
         let settle = self.settle_entry_return_cost(ctx, entry);
         match (result, settle) {
-            // Preserve both errors: merge the secondary message into the primary error's
-            // context, keeping its kind/code (§3.2 of the error-system design).
-            (Err(exec_err), Err(settle_err)) => {
-                Err(exec_err.context(format!("secondary: {}", settle_err)))
-            }
+            // Live `merge_xret_failure`: kind only upgrades. A revert mixed with a
+            // settle fault becomes fault so AstSelect cannot capture the entry.
+            (Err(exec_err), Err(settle_err)) => Err(exec_err.merge_upgrade(settle_err)),
             (Err(exec_err), _) => Err(exec_err),
             (Ok(_), Err(settle_err)) => Err(settle_err),
             (Ok(retv), Ok(cost)) => Ok((cost, retv)),
@@ -315,5 +313,67 @@ mod entry_semantics_tests {
         })
         .unwrap();
         assert_eq!(ctx.exec_from(), ExecFrom::Top);
+    }
+
+    /// Live `merge_xret_failure`: execute revert + settle fault → whole entry is fault
+    /// (settle primary). AstSelect must not capture this combination.
+    #[test]
+    fn run_entry_revert_plus_settle_fault_upgrades_to_fault() {
+        let mut vm = NativeVm::new(1);
+        let mut ctx = TestCtx::new();
+        ctx.gas = 10;
+        let err = vm
+            .run_entry(&mut ctx, EntryKind::Main, |_vm, _ctx| {
+                Err(ItrErr::new(ItrErrCode::ActCallRevert, "biz fail"))
+            })
+            .unwrap_err();
+        assert!(
+            err.is_fault(),
+            "revert+settle-fault must upgrade to fault: {err}"
+        );
+        assert!(
+            !err.is_revert(),
+            "AstSelect must not capture this entry: {err}"
+        );
+        assert!(
+            err.contains("out of gas") || err.contains("OutOfGas") || err.contains("gas"),
+            "settle should be the primary error: {err}"
+        );
+        assert!(
+            err.contains("biz fail"),
+            "exec revert must remain in the message: {err}"
+        );
+    }
+
+    #[test]
+    fn run_entry_revert_alone_stays_revert() {
+        let mut vm = NativeVm::new(1);
+        let mut ctx = TestCtx::new();
+        let err = vm
+            .run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
+                vm.runtime.settle_compute_gas(ctx, 5).unwrap();
+                Err(ItrErr::new(ItrErrCode::ActCallRevert, "biz fail"))
+            })
+            .unwrap_err();
+        assert!(
+            err.is_revert(),
+            "execute revert with successful settle stays revert: {err}"
+        );
+        assert!(err.contains("biz fail"), "{err}");
+    }
+
+    #[test]
+    fn run_entry_fault_plus_settle_fault_stays_fault() {
+        let mut vm = NativeVm::new(1);
+        let mut ctx = TestCtx::new();
+        ctx.gas = 10;
+        let err = vm
+            .run_entry(&mut ctx, EntryKind::Main, |_vm, _ctx| {
+                Err(ItrErr::new(ItrErrCode::ThrowAbort, "boom"))
+            })
+            .unwrap_err();
+        assert!(err.is_fault(), "{err}");
+        assert!(!err.is_revert(), "{err}");
+        assert!(err.contains("boom"), "{err}");
     }
 }
