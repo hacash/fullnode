@@ -10,7 +10,8 @@ use crate::types::satoshi::SatoshiAuto;
 
 pub const BALANCE_ASSET_MAX: usize = 20;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, field::FieldCodec)]
+#[field_codec(json_only, check = Balance::checked)]
 pub struct Balance {
     pub hacash: Amount,
     pub satoshi: SatoshiAuto,
@@ -70,6 +71,10 @@ impl Balance {
         Ok(())
     }
 
+    pub fn checked(self) -> Ret<Self> {
+        Self::check_assets(&self.assets).map(|()| self)
+    }
+
     pub fn hac(amt: Amount) -> Self {
         Self {
             hacash: amt,
@@ -117,22 +122,56 @@ impl Balance {
     }
 }
 
-codec_struct!(AddrHac {
-    address: Address,
-    amount: Amount,
-} json);
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct AddrHac {
+    pub address: Address,
+    pub amount: Amount,
+}
 
-codec_struct!(HacSat {
-    amount: Amount,
-    satoshi: SatoshiAuto,
-});
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct HacSat {
+    pub amount: Amount,
+    pub satoshi: SatoshiAuto,
+}
 
-codec_struct!(AddrHacSat {
-    address: Address,
-    hacsat: HacSat,
-});
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct AddrHacSat {
+    pub address: Address,
+    pub hacsat: HacSat,
+}
 
-codec_struct!(AddrBalance {
-    address: Address,
-    balance: Balance,
-});
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct AddrBalance {
+    pub address: Address,
+    pub balance: Balance,
+}
+
+#[cfg(test)]
+mod json_tests {
+    use super::*;
+    use crate::json::{FromJSON, ToJSON};
+    use crate::types::fold64::Fold64;
+
+    #[test]
+    fn balance_json_roundtrip_runs_check_assets() {
+        let empty = Balance::default();
+        let mut back = Balance::default();
+        back.from_json(&empty.to_json()).unwrap();
+        assert_eq!(back, empty);
+
+        let mut dup = Balance::default();
+        dup.assets = AssetAmtW1::from(vec![
+            AssetAmt {
+                serial: Fold64::from(1).unwrap(),
+                amount: Fold64::from(1).unwrap(),
+            },
+            AssetAmt {
+                serial: Fold64::from(1).unwrap(),
+                amount: Fold64::from(2).unwrap(),
+            },
+        ])
+        .unwrap();
+        let mut parsed = Balance::default();
+        assert!(parsed.from_json(&dup.to_json()).is_err());
+    }
+}

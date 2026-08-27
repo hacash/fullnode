@@ -6,5 +6,6 @@ edition.workspace = true
 [dependencies]
 sys = { workspace = true }
 base = { workspace = true }
+field = { workspace = true }
 hacash-params = { workspace = true }
 getrandom = "0.3.2"

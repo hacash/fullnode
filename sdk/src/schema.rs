@@ -11,7 +11,7 @@ pub const SCHEMA_REVIEW: &str = "hacash.sdk/review@4";
 /// v2: adds `description` / `json` / `code` facets (DescribeOptions).
 pub const SCHEMA_ACTION_DESC: &str = "hacash.sdk/action-desc@2";
 pub const SCHEMA_TRANSFER_DESC: &str = "hacash.sdk/transfer-desc@1";
-pub const SCHEMA_TRANSACTION_SPEC: &str = "hacash.sdk/transaction-spec@1";
+pub const SCHEMA_TRANSACTION_SPEC: &str = "hacash.sdk/transaction-spec@2";
 pub const SCHEMA_TRANSACTION_JSON: &str = "hacash.sdk/transaction-json@1";
 pub const SCHEMA_BUILT_TRANSACTION: &str = "hacash.sdk/built-transaction@1";
 pub const SCHEMA_SIGNING_REQUEST: &str = "hacash.sdk/signing-request@1";

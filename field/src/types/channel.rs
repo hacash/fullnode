@@ -8,18 +8,20 @@ use crate::types::uint::{BlockHeight, Uint1, Uint2, Uint4, Uint8};
 
 pub type ChannelId = Fixed16;
 
-codec_struct!(ChallengePeriodData {
-    is_have_challenge_log: Bool,
-    challenge_launch_height: BlockHeight,
-    assert_bill_auto_number: Uint8,
-    assert_address_is_left_or_right: Bool,
-    assert_bill: HacSat,
-});
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct ChallengePeriodData {
+    pub is_have_challenge_log: Bool,
+    pub challenge_launch_height: BlockHeight,
+    pub assert_bill_auto_number: Uint8,
+    pub assert_address_is_left_or_right: Bool,
+    pub assert_bill: HacSat,
+}
 
-codec_struct!(ClosedDistributionData {
-    left_bill: Balance,
-    right_bill: Balance,
-});
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct ClosedDistributionData {
+    pub left_bill: Balance,
+    pub right_bill: Balance,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChallengePeriodDataOptional {

@@ -6,6 +6,7 @@ members = [
     "base",
     "hacash-params",
     "action-derive",
+    "field-derive",
     "protocol",
     "vm",
     "mint",
@@ -26,6 +27,7 @@ default-members = [
     "base",
     "hacash-params",
     "action-derive",
+    "field-derive",
     "protocol",
     "vm",
     "mint",
@@ -50,6 +52,7 @@ field      = { path = "field", default-features = false }
 base       = { path = "base" }
 hacash-params = { path = "hacash-params" }
 action-derive = { path = "action-derive" }
+field-derive = { path = "field-derive" }
 protocol   = { path = "protocol" }
 vm         = { path = "vm" }
 mint       = { path = "mint" }

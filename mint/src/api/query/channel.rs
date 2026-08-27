@@ -67,7 +67,7 @@ pub(crate) fn fee_average_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespo
         }
         let mut setfee = base.clone();
         if extra9 {
-            if txty < protocol::tx_std::TransactionType3::TYPE {
+            if txty < hacash_params::TX_TYPE_3 {
                 if let Ok(f) = base.dist_mul(10) {
                     setfee = f;
                 }

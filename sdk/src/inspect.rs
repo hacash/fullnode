@@ -157,7 +157,8 @@ fn build_review(
     let mut asset_serials = Vec::new();
     let mut auditability = Auditability::Full;
     for (index, action) in tx.actions().iter().enumerate() {
-        let mut desc = audit::describe_action(action.as_ref(), index, &index.to_string(), 0, options);
+        let mut desc =
+            audit::describe_action(action.as_ref(), index, &index.to_string(), 0, options);
         // Guard notes are protocol violations (`guard_facts`); the per-action
         // `protocol_valid` fact reflects them.
         if let Some((_, note)) = guard_facts
@@ -442,8 +443,8 @@ pub fn encode_transaction_json(
     let fee_fin = fee.to_fin_string();
     let mut actions = Vec::with_capacity(transaction.actions.len());
     for desc in &transaction.actions {
-        // Re-encode from the wire form (the wasm core is JSON-free; the action
-        // carrier in `TransactionJson` is `raw` = wire hex).
+        // `TransactionJson` carries actions as wire hex (`raw`); action JSON
+        // views come from `ToJSON`.
         let wire = hex::decode(&desc.raw)
             .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "action raw must be wire hex"))?;
         let action = codecs
@@ -477,8 +478,8 @@ pub fn encode_transaction_json(
         // Duplicate keys are not judged here: insertion replaces same-key
         // entries, and the chain decides signer-set acceptance at verify time.
         signs.push(Sign {
-            publickey,
-            signature,
+            publickey: publickey.into(),
+            signature: signature.into(),
         });
     }
 

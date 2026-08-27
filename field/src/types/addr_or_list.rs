@@ -1,6 +1,6 @@
 use sys::{Ret, errf, normalf};
 
-use crate::codec::{Decode, Encode, ParsePrefix};
+use crate::codec::{Decode, Encode, Reader};
 use crate::json::{FromJSON, JSONFormater, ToJSON, json_decode_array};
 use crate::types::addr_or_ptr::ADDR_REF_MARKER_BASE;
 use crate::types::address::Address;
@@ -82,8 +82,13 @@ impl Decode for AddrOrList {
         if count == 0 {
             return normalf!("AddrOrList list cannot be empty");
         }
-        let (list, used) = AddressW1::create_with_prefix(&[count], &buf[1..])?;
-        Ok((Self::List(list), used))
+        let mut r = Reader::new(&buf[1..]);
+        let mut addrs = Vec::with_capacity(count as usize);
+        for _ in 0..count {
+            addrs.push(r.read()?);
+        }
+        let list = AddressW1::from(addrs)?;
+        Ok((Self::List(list), 1 + r.used()))
     }
 }
 
@@ -126,5 +131,42 @@ impl FromJSON for AddrOrList {
         }
         *self = Self::from_list(list)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::addr_or_ptr::ADDR_REF_MARKER_BASE;
+
+    fn n_addrs(n: usize) -> Vec<Address> {
+        vec![Address::default(); n]
+    }
+
+    #[test]
+    fn addr_or_list_marker_roundtrip_and_bounds() {
+        let single = AddrOrList::from_addr(Address::default());
+        assert_eq!(single.size(), single.encode().len());
+        let (decoded, used) = AddrOrList::decode(&single.encode()).unwrap();
+        assert_eq!(used, single.encode().len());
+        assert_eq!(decoded, single);
+
+        let two = AddrOrList::from_list(n_addrs(2)).unwrap();
+        assert_eq!(two.size(), two.encode().len());
+        let wire = two.encode();
+        assert!(wire[0] >= ADDR_REF_MARKER_BASE);
+        let (decoded, used) = AddrOrList::decode(&wire).unwrap();
+        assert_eq!(used, wire.len());
+        assert_eq!(decoded, two);
+
+        assert!(AddrOrList::from_list(n_addrs(0)).is_err());
+        let max = u8::MAX as usize - ADDR_REF_MARKER_BASE as usize;
+        let at_max = AddrOrList::from_list(n_addrs(max)).unwrap();
+        assert_eq!(at_max.size(), at_max.encode().len());
+        assert!(AddrOrList::from_list(n_addrs(max + 1)).is_err());
+
+        let mut empty_marker = at_max.encode();
+        empty_marker[0] = ADDR_REF_MARKER_BASE;
+        assert!(AddrOrList::decode(&empty_marker).is_err());
     }
 }

@@ -73,7 +73,9 @@ fn do_diamonds_transfer(
 }
 
 fn verify_signature(hash: &Hash, addr: &Address, sign: &Sign) -> bool {
-    let got = Address::from(Account::get_address_by_public_key(sign.publickey));
+    let got = Address::from(Account::get_address_by_public_key(
+        sign.publickey.into_array(),
+    ));
     got == *addr && Account::verify_signature(&hash.0, &sign.publickey, &sign.signature)
 }
 

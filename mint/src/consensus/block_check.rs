@@ -14,9 +14,6 @@ use crate::difficulty::{DifficultyGnr, hash_bigger_than, u32_to_hash};
 use crate::minter::block_reward_number;
 use crate::tx_coinbase::CoinbaseTx;
 
-/// StdBlock intro byte length (fixed header fields, no txs).
-const BLOCK_INTRO_SIZE: usize = 1 + 5 + 5 + 32 + 32 + 4 + 4 + 4 + 2;
-
 pub fn check_tx(bidding: &DiamondBidding, view: &dyn ChainView, txp: &TxPkg) -> Rerr {
     let txr = txp.tx();
     let curr_hei = view.latest_height();
@@ -65,12 +62,13 @@ pub fn check_block_data(data: &[u8], view: &dyn ChainView) -> Rerr {
             max
         );
     }
-    if data.len() < BLOCK_INTRO_SIZE {
+    if data.len() < StdBlock::INTRO_SIZE {
         return Ok(());
     }
-    let Ok(intro) =
-        StdBlock::decode_intro(view.services().block_hasher_fn(), &data[..BLOCK_INTRO_SIZE])
-    else {
+    let Ok(intro) = StdBlock::decode_intro(
+        view.services().block_hasher_fn(),
+        &data[..StdBlock::INTRO_SIZE],
+    ) else {
         return Ok(());
     };
     let hei = intro.height();
@@ -99,12 +97,13 @@ pub fn check_block_arrive_data(
     data: &[u8],
     view: &dyn ChainView,
 ) -> Rerr {
-    if data.len() < BLOCK_INTRO_SIZE {
+    if data.len() < StdBlock::INTRO_SIZE {
         return Ok(());
     }
-    let Ok(intro) =
-        StdBlock::decode_intro(view.services().block_hasher_fn(), &data[..BLOCK_INTRO_SIZE])
-    else {
+    let Ok(intro) = StdBlock::decode_intro(
+        view.services().block_hasher_fn(),
+        &data[..StdBlock::INTRO_SIZE],
+    ) else {
         return Ok(());
     };
     check_block_arrive_block(difficulty, &intro, view)

@@ -7,7 +7,7 @@
 use base::Transaction;
 use field::{Address, Encode};
 
-use crate::codec::tx::{TransactionType1, TransactionType2, TransactionType3};
+use crate::codec::tx::StdTransaction;
 
 /// Envelope / height / flag findings for one transaction body.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -16,29 +16,15 @@ pub struct ScheduleFacts {
 }
 
 fn wire_gas_max(tx: &dyn Transaction) -> Option<u8> {
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
-        return Some(t.gas_max.uint());
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType2>() {
-        return Some(t.gas_max.uint());
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType3>() {
-        return Some(t.gas_max.uint());
-    }
-    None
+    tx.as_any()
+        .downcast_ref::<StdTransaction>()
+        .map(|t| t.gas_max.uint())
 }
 
 fn wire_ano_mark(tx: &dyn Transaction) -> Option<u8> {
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
-        return Some(t.ano_mark[0]);
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType2>() {
-        return Some(t.ano_mark[0]);
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType3>() {
-        return Some(t.ano_mark[0]);
-    }
-    None
+    tx.as_any()
+        .downcast_ref::<StdTransaction>()
+        .map(|t| t.ano_mark[0])
 }
 
 /// Type 1/2 carry a `gas_max` byte on the wire but execute requires it to be 0.
@@ -170,7 +156,7 @@ pub fn schedule_facts_with_params(
 mod tests {
     use super::*;
     use crate::codec::action::TransferHacTo;
-    use crate::codec::tx::{TransactionType1, TransactionType2};
+    use crate::codec::tx::StdTransaction;
     use base::{ActionRef, TransactionBuild};
     use field::{Amount, Timestamp, Uint1};
     use std::sync::Arc;
@@ -188,7 +174,7 @@ mod tests {
 
     #[test]
     fn type2_nonzero_gas_max_is_a_finding_not_a_constructor_error() {
-        let mut body = TransactionType2 {
+        let mut body = StdTransaction {
             ty: Uint1::from(hacash_params::TX_TYPE_2),
             timestamp: Timestamp::from(1),
             addrlist: field::AddrOrList::from_addr(main_addr()),
@@ -212,7 +198,7 @@ mod tests {
 
     #[test]
     fn type1_deprecated_only_with_height() {
-        let mut body = TransactionType1 {
+        let mut body = StdTransaction {
             ty: Uint1::from(hacash_params::TX_TYPE_1),
             timestamp: Timestamp::from(1),
             addrlist: field::AddrOrList::from_addr(main_addr()),

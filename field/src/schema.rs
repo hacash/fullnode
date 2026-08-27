@@ -4,8 +4,7 @@
 /// Wire shape of a field (authoritative description of its binary layout).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldWire {
-    /// Fixed-size big-endian unsigned integer: 1/2/4/5 bytes.
-    U1,
+    /// Fixed-size big-endian unsigned integer: 2/4/5 bytes (`U8` is the 1-byte case).
     U2,
     U4,
     U5,
@@ -25,11 +24,13 @@ pub enum FieldWire {
     BytesW1,
     /// `W2 length prefix + data`.
     BytesW2,
+    /// `W4 length prefix + data`.
+    BytesW4,
     /// 8-byte big-endian.
     Satoshi,
     /// Fold64 variable-length compression.
     Fold64,
-    /// 4-byte big-endian (`Timestamp(u32)`).
+    /// 5-byte big-endian (`Timestamp(Uint5)`).
     Timestamp,
     /// 7 bytes.
     DiamondName,
@@ -45,7 +46,7 @@ pub enum FieldWire {
     ChainIDList,
     /// `W1 count + 21n` (`ListW1<ContractAddress>`).
     ContractAddrListW1,
-    /// `W2 count + 65n`.
+    /// `W2 count + 97n` (`ListW2<Sign>` of `{publickey, signature}` objects).
     SignW2,
     /// `1-byte count + elements`; the element name resolves to a nested struct
     /// (`StructSchema`) or a built-in leaf (`builtin_leaf_wire`).
@@ -56,22 +57,24 @@ pub enum FieldWire {
     Struct(&'static str),
     /// `U2 count + recursive actions` (dynamic dispatch, `ActionListW2`).
     ActionList,
-    /// `U1 count + recursive actions` (dynamic dispatch, `ActionListW1`, e.g.
+    /// `Uint1` count + recursive actions (dynamic dispatch, `ActionListW1`, e.g.
     /// `AstSelect.actions`).
     ActionListW1,
-    /// 1 byte.
+    /// 1-byte unsigned integer (`Uint1`). JS tag `u8` (bit width, not byte count).
     U8,
+    /// 1-byte 0/1 boolean. JSON is `true`/`false`; binary is still byte 0/1.
+    Bool,
 }
 
 impl FieldWire {
     /// Canonical tag used by generated JavaScript metadata.
     pub fn js_wire_tag(self) -> String {
         match self {
-            Self::U1 => "u1".to_owned(),
-            Self::U2 => "u2".to_owned(),
-            Self::U4 => "u4".to_owned(),
-            Self::U5 => "u5".to_owned(),
             Self::U8 => "u8".to_owned(),
+            Self::U2 => "u16".to_owned(),
+            Self::U4 => "u32".to_owned(),
+            Self::U5 => "u40".to_owned(),
+            Self::Bool => "bool".to_owned(),
             Self::Fixed(n) => format!("fixed:{n}"),
             Self::Amount => "amount".to_owned(),
             Self::WireAmount => "wire_amount".to_owned(),
@@ -80,6 +83,7 @@ impl FieldWire {
             Self::AddrOrList => "addr_or_list".to_owned(),
             Self::BytesW1 => "bytes_w1".to_owned(),
             Self::BytesW2 => "bytes_w2".to_owned(),
+            Self::BytesW4 => "bytes_w4".to_owned(),
             Self::Satoshi => "satoshi".to_owned(),
             Self::Fold64 => "fold64".to_owned(),
             Self::Timestamp => "timestamp".to_owned(),
@@ -102,9 +106,10 @@ impl FieldWire {
     /// Generated JavaScript handler for non-parameterized wire tags.
     pub const fn js_handler(self) -> Option<&'static str> {
         Some(match self {
-            Self::U1 | Self::U8 => "raw_u8",
+            Self::U8 => "raw_u8",
             Self::U2 => "raw_u16",
             Self::U4 => "raw_u32",
+            Self::Bool => "bool",
             Self::U5
             | Self::Amount
             | Self::WireAmount
@@ -115,14 +120,18 @@ impl FieldWire {
             | Self::Fold64
             | Self::Timestamp
             | Self::DiamondNumber => "decimal_str",
-            Self::BytesW1 | Self::BytesW2 | Self::DiamondName | Self::SignW2 | Self::AssetAmtW1 => {
-                "hex_w2"
-            }
+            Self::BytesW1
+            | Self::BytesW2
+            | Self::BytesW4
+            | Self::DiamondName
+            | Self::AssetAmtW1 => "hex_w2",
             Self::AssetAmt => "asset_amt",
             Self::DiamondNameList | Self::ChainIDList | Self::ContractAddrListW1 => "hex_list",
             Self::ActionList => "action_list",
             Self::ActionListW1 => "action_list_w1",
-            Self::Fixed(_) | Self::ListW1(_) | Self::ListW2(_) | Self::Struct(_) => return None,
+            Self::Fixed(_) | Self::ListW1(_) | Self::ListW2(_) | Self::Struct(_) | Self::SignW2 => {
+                return None;
+            }
         })
     }
 }
@@ -230,8 +239,8 @@ pub trait ActionSchemaProvider {
     const ACTION_SCHEMA: ActionSchema;
 }
 
-/// Schema provider for nested structs (hand-written impls, e.g.
-/// `ContractSto`/`CodeStuff`).
+/// Schema provider for nested structs (`FieldCodec` derive, plus handwritten
+/// composites such as `FuncArgvTypes`).
 pub trait StructSchemaProvider {
     const STRUCT_SCHEMA: StructSchema;
 }
@@ -242,7 +251,7 @@ pub trait StructSchemaProvider {
 use crate::types::*;
 
 impl FieldWireShape for Uint1 {
-    const WIRE: FieldWire = FieldWire::U1;
+    const WIRE: FieldWire = FieldWire::U8;
 }
 impl FieldWireShape for Uint2 {
     const WIRE: FieldWire = FieldWire::U2;
@@ -284,8 +293,17 @@ impl FieldWireShape for BytesW1 {
 impl FieldWireShape for BytesW2 {
     const WIRE: FieldWire = FieldWire::BytesW2;
 }
+impl FieldWireShape for BytesW4 {
+    const WIRE: FieldWire = FieldWire::BytesW4;
+}
 impl FieldWireShape for Fold64 {
     const WIRE: FieldWire = FieldWire::Fold64;
+}
+impl FieldWireShape for Timestamp {
+    const WIRE: FieldWire = FieldWire::Timestamp;
+}
+impl FieldWireShape for Bool {
+    const WIRE: FieldWire = FieldWire::Bool;
 }
 impl FieldWireShape for DiamondName {
     const WIRE: FieldWire = FieldWire::DiamondName;
@@ -293,84 +311,58 @@ impl FieldWireShape for DiamondName {
 impl FieldWireShape for DiamondNumber {
     const WIRE: FieldWire = FieldWire::DiamondNumber;
 }
+impl FieldWireShape for SatoshiAuto {
+    const WIRE: FieldWire = FieldWire::Fold64;
+}
+impl FieldWireShape for DiamondNumberAuto {
+    const WIRE: FieldWire = FieldWire::Fold64;
+}
+// Diamond name lists are dedicated wrapper types (not generic `ListW1<T>`),
+// keeping the generic `ListW1/ListW2("DiamondName")` wire shape.
+impl FieldWireShape for DiamondNameListMax200 {
+    const WIRE: FieldWire = FieldWire::ListW1("DiamondName");
+}
+impl FieldWireShape for DiamondNameListMax60000 {
+    const WIRE: FieldWire = FieldWire::ListW2("DiamondName");
+}
 impl FieldWireShape for AssetAmt {
     const WIRE: FieldWire = FieldWire::AssetAmt;
-}
-impl FieldWireShape for Sign {
-    const WIRE: FieldWire = FieldWire::Fixed(97);
-}
-impl FieldWireShape for AddrHac {
-    const WIRE: FieldWire = FieldWire::Struct("AddrHac");
-}
-impl FieldWireShape for AssetSmelt {
-    const WIRE: FieldWire = FieldWire::Struct("AssetSmelt");
-}
-
-impl StructSchemaProvider for AddrHac {
-    const STRUCT_SCHEMA: StructSchema = StructSchema {
-        name: "AddrHac",
-        fields: &[
-            FieldSchema::new("address", FieldWire::Address),
-            FieldSchema::new("amount", FieldWire::Amount),
-        ],
-    };
-}
-
-impl StructSchemaProvider for AssetSmelt {
-    const STRUCT_SCHEMA: StructSchema = StructSchema {
-        name: "AssetSmelt",
-        fields: &[
-            FieldSchema::new("serial", FieldWire::Fold64),
-            FieldSchema::new("supply", FieldWire::Fold64),
-            FieldSchema::new("decimal", FieldWire::U1),
-            FieldSchema::new("issuer", FieldWire::Address),
-            FieldSchema::new("ticket", FieldWire::BytesW1),
-            FieldSchema::new("name", FieldWire::BytesW1),
-        ],
-    };
 }
 
 // ---- List element names (the `ListW1/ListW2<T>` generic shape resolves element wires here) ----
 
-impl WireElementName for DiamondName {
-    const NAME: &'static str = "DiamondName";
-}
 impl WireElementName for AssetAmt {
     const NAME: &'static str = "AssetAmt";
 }
 impl WireElementName for Uint4 {
     const NAME: &'static str = "Uint4";
 }
-impl WireElementName for Sign {
-    const NAME: &'static str = "Sign";
-}
 impl WireElementName for AddrOrPtr {
     const NAME: &'static str = "AddrOrPtr";
 }
 
-// ================================ Derivation macro ================================
-// `wire_struct_schema!` generates the full schema-impl set for a named-field struct (fields in declaration order; the literal `optional` marker is validated at compile time).
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[macro_export]
-macro_rules! wire_struct_schema {
-    ($name:ident { $($field:ident : $ty:ty),+ $(,)? }) => {
-        impl $crate::schema::StructSchemaProvider for $name {
-            const STRUCT_SCHEMA: $crate::schema::StructSchema = $crate::schema::StructSchema {
-                name: stringify!($name),
-                fields: &[
-                    $($crate::schema::FieldSchema::new(
-                        stringify!($field),
-                        <$ty as $crate::schema::FieldWireShape>::WIRE,
-                    )),+
-                ],
-            };
+    #[test]
+    fn js_wire_tags_use_bit_width() {
+        assert_eq!(FieldWire::U8.js_wire_tag(), "u8");
+        assert_eq!(FieldWire::U2.js_wire_tag(), "u16");
+        assert_eq!(FieldWire::U4.js_wire_tag(), "u32");
+        assert_eq!(FieldWire::U5.js_wire_tag(), "u40");
+        assert_eq!(FieldWire::Bool.js_wire_tag(), "bool");
+        assert_eq!(FieldWire::U8.js_handler(), Some("raw_u8"));
+        assert_eq!(FieldWire::Bool.js_handler(), Some("bool"));
+        // There is no `u1` tag: 1-byte unsigned integers are `u8`.
+        for tag in [
+            FieldWire::U8.js_wire_tag(),
+            FieldWire::U2.js_wire_tag(),
+            FieldWire::U4.js_wire_tag(),
+            FieldWire::U5.js_wire_tag(),
+            FieldWire::Bool.js_wire_tag(),
+        ] {
+            assert_ne!(tag, "u1");
         }
-        impl $crate::schema::FieldWireShape for $name {
-            const WIRE: $crate::schema::FieldWire =
-                $crate::schema::FieldWire::Struct(stringify!($name));
-        }
-        impl $crate::schema::WireElementName for $name {
-            const NAME: &'static str = stringify!($name);
-        }
-    };
+    }
 }

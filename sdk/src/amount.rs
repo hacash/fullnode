@@ -67,10 +67,7 @@ mod tests {
 
     #[test]
     fn formats_to_decimal() {
-        assert_eq!(
-            format("12:244", field::UNIT_MEI).unwrap(),
-            "0.0012"
-        );
+        assert_eq!(format("12:244", field::UNIT_MEI).unwrap(), "0.0012");
         let amount = Amount::from("12:244").unwrap();
         let unit = field::UNIT_MEI + 1;
         assert_eq!(

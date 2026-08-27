@@ -817,7 +817,11 @@ mod contract_deploy_exec_tests {
         let mut act = make_deploy(Amount::zero());
         act.contract = nonempty_contract();
         let size = act.contract.size();
-        let periods = ctx.services().vm_params().unwrap().contract_store_perm_periods;
+        let periods = ctx
+            .services()
+            .vm_params()
+            .unwrap()
+            .contract_store_perm_periods;
         let min_fee = contract_protocol_cost_min(&ctx, size, periods).unwrap();
         let cost = Amount::coin_u128(min_fee.to_238_u128().unwrap() + 1_000, UNIT_238);
         act.protocol_cost = cost.clone();

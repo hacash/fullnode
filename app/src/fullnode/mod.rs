@@ -47,7 +47,11 @@ pub fn run_with_scaner(scaner: Arc<dyn Scaner>) -> Rerr {
 /// (`consensus` must also implement `mint::ConsensusApi` for the miner
 /// HTTP surface). Used by side/test-chain nodes that register their own
 /// parameter profile and consensus implementation.
-pub fn run_with<C>(scaner: Option<Arc<dyn Scaner>>, registry: Arc<dyn base::ExecutionServices>, consensus: Arc<C>) -> Rerr
+pub fn run_with<C>(
+    scaner: Option<Arc<dyn Scaner>>,
+    registry: Arc<dyn base::ExecutionServices>,
+    consensus: Arc<C>,
+) -> Rerr
 where
     C: base::ConsensusRuntime + mint::ConsensusApi + 'static,
 {

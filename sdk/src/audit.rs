@@ -230,7 +230,7 @@ pub struct ActionCodeDesc {
 }
 
 /// `code_type` names for the `codeconf` low bits (mirror of `vm::rt::CodeType`;
-/// the constants are re-declared because `vm::rt` is crate-private).
+/// mask is `vm::action::CODECONF_TYPE_MASK`, re-exported at `crate::vm`).
 pub fn code_type_name(raw: u8) -> (&'static str, u8) {
     match raw & crate::vm::CODECONF_TYPE_MASK {
         0 => ("bytecode", 0),
@@ -302,10 +302,7 @@ pub fn describe_action(
         None
     };
     let json = if options.with_json {
-        crate::codec::standard_codecs()
-            .ok()
-            .and_then(|codecs| codecs.action_json_to(kind))
-            .map(|render| render(action, &field::JSONFormater::default()))
+        Some(action.to_json())
     } else {
         None
     };
@@ -572,17 +569,14 @@ fn maincall_body() -> String {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
-        actions: vec![crate::build::ActionSpec::new(
-            "contract_main_call",
-            vec![
-                (
-                    "marks".to_owned(),
-                    crate::spec_codec::WireValue::Hex(vec![0, 0, 0]),
-                ),
-                ("codeconf".to_owned(), crate::spec_codec::WireValue::Num(0)),
-                ("codes".to_owned(), crate::spec_codec::WireValue::Hex(codes)),
-            ],
-        )],
+        addrlist: None,
+        actions: vec![
+            crate::build::ActionSpec::new(format!(
+                r#"{{"kind":44,"marks":"0x000000","codeconf":0,"codes":"0x{}"}}"#,
+                hex::encode(&codes)
+            ))
+            .expect("test action spec"),
+        ],
     })
     .unwrap();
     let decoded =

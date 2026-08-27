@@ -16,16 +16,7 @@ pub(crate) fn object_pairs<'a>(
     raw: &'a str,
     context: &str,
 ) -> Result<Vec<(&'a str, &'a str)>, SdkError> {
-    let pairs = field::json_split_object(raw)
-        .map_err(|e| parse_failed(format!("{context} is not a JSON object: {e}")))?;
-    let mut seen: Vec<&str> = Vec::new();
-    for (key, _) in &pairs {
-        if seen.contains(key) {
-            return Err(parse_failed(format!("{context} field {key} is duplicated")));
-        }
-        seen.push(*key);
-    }
-    Ok(pairs)
+    field::json_object_pairs(raw, context).map_err(|e| parse_failed(e.as_str().to_owned()))
 }
 
 /// Reject keys outside the allowed list.
@@ -34,15 +25,13 @@ pub(crate) fn reject_unknown(
     allowed: &[&str],
     context: &str,
 ) -> Result<(), SdkError> {
-    for (key, _) in pairs {
-        if !allowed.iter().any(|known| *known == *key) {
-            return Err(SdkError::new(
-                SdkErrorCode::UnknownField,
-                format!("{context} field {key} is unknown"),
-            ));
+    field::json_reject_unknown(pairs, allowed, context).map_err(|e| {
+        if e.code() == Some(field::JSON_UNKNOWN_FIELD) {
+            SdkError::new(SdkErrorCode::UnknownField, e.as_str().to_owned())
+        } else {
+            parse_failed(e.as_str().to_owned())
         }
-    }
-    Ok(())
+    })
 }
 
 pub(crate) fn find<'a>(pairs: &'a [(&'a str, &'a str)], name: &str) -> Option<&'a str> {
@@ -65,25 +54,6 @@ pub(crate) fn required<'a>(
 pub(crate) fn string_value(raw: &str, name: &str, context: &str) -> Result<String, SdkError> {
     field::json_expect_quoted_decoded(raw)
         .map_err(|e| parse_failed(format!("{context} field {name} is not a string: {e}")))
-}
-
-/// Semantic decimal string (quoted or bare `12:244` / `1.5` / `+3` / `-4`),
-/// the amount-family boundary convention.
-pub(crate) fn semantic_string(raw: &str, name: &str, context: &str) -> Result<String, SdkError> {
-    let trimmed = raw.trim();
-    if trimmed.starts_with('"') {
-        string_value(trimmed, name, context)
-    } else if !trimmed.is_empty()
-        && trimmed
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'+' | b'-' | b'.' | b':'))
-    {
-        Ok(trimmed.to_owned())
-    } else {
-        Err(parse_failed(format!(
-            "{context} field {name} is not a semantic string"
-        )))
-    }
 }
 
 /// Numeric value: decimal strings are the boundary convention, bare numbers

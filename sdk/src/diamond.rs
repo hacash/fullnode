@@ -84,7 +84,14 @@ impl SdkJsonTo for DiamondLookup {
         use crate::json::{kv, kv_opt, obj, q};
         obj(vec![
             kv("schema", q(&self.schema)),
-            kv("valid", if self.valid { "true".to_owned() } else { "false".to_owned() }),
+            kv(
+                "valid",
+                if self.valid {
+                    "true".to_owned()
+                } else {
+                    "false".to_owned()
+                },
+            ),
             kv_opt("name", self.name.as_deref().map(q)),
             kv_opt("serial", self.serial.as_deref().map(q)),
             kv_opt("error", self.error.as_deref().map(q)),

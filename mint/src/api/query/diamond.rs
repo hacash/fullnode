@@ -2,7 +2,9 @@ use base::{ApiExecCtx, ApiRequest, ApiResponse, CoreStateRead, TransactionSign};
 
 use crate::action::util::pickout_diamond_mint_action;
 use crate::api::util::*;
-use mint_core::inscription::{HacdInscClean, HacdInscDrop, HacdInscEdit, HacdInscMove, HacdInscPush};
+use mint_core::inscription::{
+    HacdInscClean, HacdInscDrop, HacdInscEdit, HacdInscMove, HacdInscPush,
+};
 
 use field::{Amount, DiamondName, DiamondNameListMax200, DiamondNumber};
 use sys::ToHex;

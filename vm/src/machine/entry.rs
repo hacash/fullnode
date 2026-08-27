@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use base::{with_exec_from, Context, ExecFrom, GasBuckets, IntentScope};
+use base::{Context, ExecFrom, GasBuckets, IntentScope, with_exec_from};
 use sys::Ret;
 
 use crate::frame::CallFrame;

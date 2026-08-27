@@ -45,7 +45,10 @@ pub fn estimate_fee(body_hex: &str, height: Option<u64>) -> Result<FeeEstimate, 
         let floor_fee = (floor as u128)
             .checked_mul(billing_size as u128)
             .ok_or_else(|| {
-                SdkError::new(SdkErrorCode::ParseFailed, "fee floor * billing size overflow")
+                SdkError::new(
+                    SdkErrorCode::ParseFailed,
+                    "fee floor * billing size overflow",
+                )
             })?;
         Some(Amount::coin_u128(floor_fee, UNIT_238).to_fin_string())
     } else {
@@ -82,11 +85,21 @@ impl SdkJsonTo for FeeEstimate {
             kv("billing_size", qnum(self.billing_size as u64)),
             kv(
                 "minimum_fee",
-                self.minimum_fee.as_deref().map(q).unwrap_or_else(|| "null".to_owned()),
+                self.minimum_fee
+                    .as_deref()
+                    .map(q)
+                    .unwrap_or_else(|| "null".to_owned()),
             ),
             kv("fee", q(&self.fee)),
             kv("fee_purity", qnum(self.fee_purity)),
-            kv("fee_enough", if self.fee_enough { "true".to_owned() } else { "false".to_owned() }),
+            kv(
+                "fee_enough",
+                if self.fee_enough {
+                    "true".to_owned()
+                } else {
+                    "false".to_owned()
+                },
+            ),
         ])
     }
 }
@@ -95,7 +108,6 @@ impl SdkJsonTo for FeeEstimate {
 mod tests {
     use super::*;
     use crate::build::{ActionSpec, TransactionSpec, build_transaction};
-    use crate::spec_codec::WireValue;
 
     const MAIN: &str = "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9";
 
@@ -107,13 +119,11 @@ mod tests {
             fee: "1:244".to_owned(),
             timestamp: Some(1_755_223_764),
             gas_max: None,
-            actions: vec![ActionSpec::new(
-                "transfer_hac_to",
-                vec![
-                    ("to".to_owned(), WireValue::Str(MAIN.to_owned())),
-                    ("hacash".to_owned(), WireValue::Str("12:244".to_owned())),
-                ],
-            )],
+            addrlist: None,
+            actions: vec![
+                ActionSpec::new(format!(r#"{{"kind":1,"to":"{MAIN}","hacash":"12:244"}}"#))
+                    .expect("test action spec"),
+            ],
         }
     }
 

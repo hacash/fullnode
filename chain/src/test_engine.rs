@@ -288,7 +288,7 @@ impl BinaryCodecs for TestServices {
 }
 
 impl JsonCodecs for TestServices {
-    fn decode_action_json(&self, _kind: u16, _json: &str) -> Ret<Option<ActionRef>> {
+    fn decode_action_json(&self, _json: &str) -> Ret<ActionRef> {
         errf!("test services: decode_action_json")
     }
 }

@@ -54,12 +54,6 @@ impl ContractDeploy {
     }
 }
 
-impl Default for ContractDeploy {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 // ================================ ContractUpdate ================================
 
 #[base::action(kind = 41, tx_min = 3, scope = TOP_ONLY_CAN_WITH_GUARD, audit = "structured", code, ctor = none,
@@ -81,11 +75,5 @@ impl ContractUpdate {
             marks: Fixed2::default(),
             edit: ContractEdit::default(),
         }
-    }
-}
-
-impl Default for ContractUpdate {
-    fn default() -> Self {
-        Self::new()
     }
 }

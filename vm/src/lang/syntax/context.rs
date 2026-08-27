@@ -239,7 +239,10 @@ impl Syntax {
         }
         if let Some(addr) = addr {
             if !addr.is_contract() {
-                return errf!("lib address {} is not a contract address", addr.to_readable());
+                return errf!(
+                    "lib address {} is not a contract address",
+                    addr.to_readable()
+                );
             }
         }
         self.libs.insert(name.clone(), (idx, addr.clone()));

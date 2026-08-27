@@ -143,7 +143,10 @@ mod tests {
         assert_eq!(snake_case("BalanceCoin"), "balance_coin");
         assert_eq!(snake_case("BalanceAsset"), "balance_asset");
         assert_eq!(snake_case("TxBlobSize"), "tx_blob_size");
-        assert_eq!(snake_case("TransferHacdSingleTo"), "transfer_hacd_single_to");
+        assert_eq!(
+            snake_case("TransferHacdSingleTo"),
+            "transfer_hacd_single_to"
+        );
         assert_eq!(snake_case("EnvHeight"), "env_height");
         assert_eq!(snake_case("HacdInscNum"), "hacd_insc_num");
         assert_eq!(snake_case("RequiredSigners"), "required_signers");
@@ -232,35 +235,30 @@ mod simple_tests {
 
     #[test]
     fn codec_entry_names_are_derived_from_the_type() {
-        let out = expand_entries(
-            "HacdMint { wire = (reg, _kind, buf) { Ok((reg.as_any(), buf.len())) }, \
-             json = (reg, kind, json) { Ok(reg.as_any()) } }",
-        );
+        let out =
+            expand_entries("HacdMint { wire = (reg, buf) { Ok((reg.as_any(), buf.len())) } }");
         assert!(out.contains("pub fn create_hacd_mint"), "{out}");
-        assert!(out.contains("pub fn decode_hacd_mint_json"), "{out}");
+        assert!(!out.contains("pub fn decode_hacd_mint_json"), "{out}");
         assert!(out.contains("& dyn :: base :: BinaryCodecs"), "{out}");
-        assert!(out.contains("& dyn :: base :: CodecRegistry"), "{out}");
         let ast = expand_entries(
-            "AstIf { wire = (reg, _kind, buf) { Ok((reg.as_any(), buf.len())) }, \
-             json = (reg, kind, json) { Ok(reg.as_any()) } }",
+            "AstIf { wire = (reg, buf) { Ok((reg.as_any(), buf.len())) }, \
+             json = (reg, json) { Ok(reg.as_any()) } }",
         );
         assert!(ast.contains("pub fn create_ast_if"), "{ast}");
         assert!(ast.contains("pub fn decode_ast_if_json"), "{ast}");
+        assert!(ast.contains("& dyn :: base :: CodecRegistry"), "{ast}");
     }
 
     #[test]
-    fn codec_entries_require_both_bodies() {
-        let err = match syn::parse_str::<CodecEntries>(
-            "AstSelect { wire = (reg, _kind, buf) { Ok((reg.as_any(), buf.len())) } }",
-        ) {
-            Err(e) => e,
-            Ok(_) => panic!("expected parse error for missing json body"),
-        };
-        assert!(err.to_string().contains("requires a json body"), "{err}");
+    fn codec_entries_json_body_is_optional() {
+        let out =
+            expand_entries("AstSelect { wire = (reg, buf) { Ok((reg.as_any(), buf.len())) } }");
+        assert!(out.contains("pub fn create_ast_select"), "{out}");
+        assert!(!out.contains("decode_ast_select_json"), "{out}");
     }
 }
 
-/// Generates an action's mechanical codecs (`Encode/Decode/ToJSON/FromJSON/ActionJsonCodec`) plus the
+/// Generates an action's mechanical codecs (`Default/Encode/Decode/ToJSON/FromJSON`) plus the
 /// wire schema (`ACTION_SCHEMA`); field types without a `field::FieldWireShape` impl fail to compile. Review facts come from the definition-site `#[action_codec(...)]` attribute.
 #[proc_macro_derive(ActionCodec, attributes(action_codec))]
 pub fn derive_action_codec(input: TokenStream) -> TokenStream {
@@ -314,21 +312,23 @@ pub fn action_simple(input: TokenStream) -> TokenStream {
 }
 
 /// Codec entry points for manual-wire actions. Generates the `create_<snake>`
-/// wire and `decode_<snake>_json` JSON creator free functions from the action
-/// type name — the same snake_case the `action` attribute uses for `NAME` — so
-/// a struct rename re-derives the entry names instead of leaving hand-written
+/// wire function, and optionally `decode_<snake>_json`, from the action type
+/// name — the same snake_case the `action` attribute uses for `NAME` — so a
+/// struct rename re-derives the entry names instead of leaving hand-written
 /// copies to drift. Custom bodies are written inline next to the type,
 /// mirroring `impl_action_execute!`:
 ///
 /// ```text
 /// base::action_codec_entries! { AstSelect {
-///     wire = (reg, _kind, buf) { /* custom wire decode body */ },
-///     json = (reg, kind, json) { /* custom JSON decode body */ },
+///     wire = (reg, buf) { /* custom wire decode body */ },
+///     json = (reg, json) { /* custom JSON decode body */ },
 /// }}
 /// ```
 ///
-/// Wire params are `(&dyn base::BinaryCodecs, u16, &[u8])`, JSON params are
-/// `(&dyn base::CodecRegistry, u16, &str)`; the caller names them so bodies
+/// The `json` body is optional: omit it when the action uses regular
+/// `Default + FromJSON` decoding (e.g. HacdMint). Wire params are
+/// `(&dyn base::BinaryCodecs, &[u8])`, JSON params are
+/// `(&dyn base::CodecRegistry, &str)`; the caller names them so bodies
 /// read naturally and unused ones can be `_`-prefixed.
 #[proc_macro]
 pub fn action_codec_entries(input: TokenStream) -> TokenStream {
@@ -342,7 +342,7 @@ pub fn action_codec_entries(input: TokenStream) -> TokenStream {
 struct CodecEntries {
     ty: Ident,
     wire: (Vec<Ident>, syn::Block),
-    json: (Vec<Ident>, syn::Block),
+    json: Option<(Vec<Ident>, syn::Block)>,
 }
 
 impl syn::parse::Parse for CodecEntries {
@@ -382,9 +382,6 @@ impl syn::parse::Parse for CodecEntries {
         let wire = wire.ok_or_else(|| {
             syn::Error::new(ty.span(), "action_codec_entries requires a wire body")
         })?;
-        let json = json.ok_or_else(|| {
-            syn::Error::new(ty.span(), "action_codec_entries requires a json body")
-        })?;
         Ok(CodecEntries { ty, wire, json })
     }
 }
@@ -393,30 +390,41 @@ fn expand_codec_entries(input: CodecEntries) -> syn::Result<proc_macro2::TokenSt
     let CodecEntries {
         ty,
         wire: (wparams, wbody),
-        json: (jparams, jbody),
+        json,
     } = input;
     let snake = snake_case(&ty.to_string());
     let create_name = Ident::new(&format!("create_{snake}"), ty.span());
-    let json_name = Ident::new(&format!("decode_{snake}_json"), ty.span());
+    if wparams.len() != 2 {
+        return Err(syn::Error::new(
+            ty.span(),
+            "wire codec takes two parameters (reg, buf)",
+        ));
+    }
     let wire_params = wparams.iter().enumerate().map(|(i, p)| {
         let ty = match i {
             0 => quote! { &dyn ::base::BinaryCodecs },
-            1 => quote! { u16 },
             _ => quote! { &[u8] },
         };
         quote! { #p: #ty }
     });
-    let json_params = jparams.iter().enumerate().map(|(i, p)| {
-        let ty = match i {
-            0 => quote! { &dyn ::base::CodecRegistry },
-            1 => quote! { u16 },
-            _ => quote! { &str },
-        };
-        quote! { #p: #ty }
-    });
+    let json_fn = if let Some((jparams, jbody)) = json {
+        let json_name = Ident::new(&format!("decode_{snake}_json"), ty.span());
+        let json_params = jparams.iter().enumerate().map(|(i, p)| {
+            let ty = match i {
+                0 => quote! { &dyn ::base::CodecRegistry },
+                _ => quote! { &str },
+            };
+            quote! { #p: #ty }
+        });
+        quote! {
+            pub fn #json_name(#(#json_params),*) -> ::sys::Ret<::base::ActionRef> #jbody
+        }
+    } else {
+        quote! {}
+    };
     Ok(quote! {
         pub fn #create_name(#(#wire_params),*) -> ::sys::Ret<(::base::ActionRef, usize)> #wbody
-        pub fn #json_name(#(#json_params),*) -> ::sys::Ret<::base::ActionRef> #jbody
+        #json_fn
     })
 }
 
@@ -881,8 +889,6 @@ fn expand_action(
             #nested_tokens
             #[cfg(feature = "execute")]
             fn as_execute(&self) -> Option<&dyn ::base::ActionExecute> { Some(self) }
-            #[cfg(feature = "execute")]
-            fn as_json_view(&self) -> Option<&dyn ::base::ActionJsonView> { Some(self) }
         }
         #transfer_tokens
         #ctor_tokens
@@ -1216,28 +1222,39 @@ fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStre
             }
         }
 
-        impl base::ActionJsonCodec for #name {
-            fn decode_json(json: &str) -> sys::Ret<Self> {
-                // `kind` is implied by the action registry. Keep accepting an
-                // explicit value for validation and backwards compatibility.
-                let mut kind = field::Uint2::from(Self::KIND);
+        impl Default for #name {
+            fn default() -> Self {
+                Self {
+                    kind: field::Uint2::from(Self::KIND),
+                    #( #value_fields: Default::default(), )*
+                }
+            }
+        }
+
+        impl field::FromJSON for #name {
+            fn from_json(&mut self, json: &str) -> sys::Ret<()> {
+                let mut kind: Option<&str> = None;
                 #( let mut #value_fields: Option<#value_types> = None; )*
                 field::json_object_fields(json, &["kind", #( #value_names ),*], &mut |key, value| {
                     match key {
-                        "kind" => kind = field::json_decode_value(value)?,
+                        "kind" => kind = Some(value),
                         #( #value_names => #value_fields = Some(field::json_decode_value(value)?), )*
                         _ => return sys::errf!("action {} JSON field {} is unknown", Self::KIND, key),
                     }
                     Ok(())
                 })?;
 
-                if kind.uint() != Self::KIND {
+                let Some(kind_raw) = kind else {
                     return sys::normalf!(
-                        "action kind mismatch: expected {} got {}",
-                        Self::KIND,
-                        kind.uint()
+                        "action {} JSON missing required field kind",
+                        Self::KIND
                     );
-                }
+                };
+                let kind = field::Uint2::from(field::json_action_kind(
+                    kind_raw,
+                    <Self as field::ActionSchemaProvider>::ACTION_SCHEMA.name,
+                    Self::KIND,
+                )?);
                 #(
                     let Some(#value_fields) = #value_fields else {
                         return sys::normalf!(
@@ -1249,13 +1266,7 @@ fn expand_action_codec(input: DeriveInput) -> syn::Result<proc_macro2::TokenStre
                 )*
                 let value = Self { kind, #( #value_fields ),* };
                 #validate_json
-                Ok(value)
-            }
-        }
-
-        impl field::FromJSON for #name {
-            fn from_json(&mut self, json: &str) -> sys::Ret<()> {
-                *self = <Self as base::ActionJsonCodec>::decode_json(json)?;
+                *self = value;
                 Ok(())
             }
         }

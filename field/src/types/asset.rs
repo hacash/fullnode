@@ -7,7 +7,8 @@ use crate::types::fold64::Fold64;
 use crate::types::list::ListW1;
 use crate::types::uint::Uint1;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, field::FieldCodec)]
+#[field_codec(json_only, schema = false, check = AssetAmt::checked)]
 pub struct AssetAmt {
     pub serial: Fold64,
     pub amount: Fold64,
@@ -97,11 +98,12 @@ impl PartialOrd for AssetAmt {
 
 pub type AssetAmtW1 = ListW1<AssetAmt>;
 
-codec_struct!(AssetSmelt {
-    serial: Fold64,
-    supply: Fold64,
-    decimal: Uint1,
-    issuer: Address,
-    ticket: BytesW1,
-    name: BytesW1,
-} json);
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct AssetSmelt {
+    pub serial: Fold64,
+    pub supply: Fold64,
+    pub decimal: Uint1,
+    pub issuer: Address,
+    pub ticket: BytesW1,
+    pub name: BytesW1,
+}

@@ -78,10 +78,6 @@ pub(crate) fn struct_schema_refs() -> impl Iterator<Item = &'static StructSchema
         .chain(vm::STRUCT_SCHEMAS.iter())
 }
 
-pub(crate) fn struct_schema_named(name: &str) -> Option<&'static StructSchema> {
-    struct_schema_refs().find(|schema| schema.name == name)
-}
-
 pub(crate) fn struct_schemas() -> Vec<StructSchema> {
     struct_schema_refs().copied().collect()
 }

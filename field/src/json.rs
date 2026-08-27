@@ -12,6 +12,10 @@ pub enum JSONBinaryFormat {
 pub struct JSONFormater {
     pub binary: JSONBinaryFormat,
     pub unit: String,
+    /// Diamond-name lists serialize as a comma-joined CSV string (`A,B,C`);
+    /// `false` emits the bare concatenation (`ABC`). `FromJSON` accepts both
+    /// forms regardless of this option.
+    pub diamond_list_csv: bool,
 }
 
 impl Default for JSONFormater {
@@ -19,6 +23,7 @@ impl Default for JSONFormater {
         Self {
             binary: JSONBinaryFormat::Hex,
             unit: String::new(),
+            diamond_list_csv: true,
         }
     }
 }
@@ -28,6 +33,7 @@ impl JSONFormater {
         Self {
             binary: JSONBinaryFormat::Hex,
             unit: unit.to_owned(),
+            diamond_list_csv: true,
         }
     }
 }
@@ -43,6 +49,10 @@ pub trait ToJSON {
 pub trait FromJSON {
     fn from_json(&mut self, json: &str) -> Ret<()>;
 }
+
+/// `sys::Error::code()` set by [`json_reject_unknown`] so callers can map
+/// unknown-key failures without parsing the message text.
+pub const JSON_UNKNOWN_FIELD: &str = "unknown_field";
 
 /// Visit a JSON object under the canonical codec rules: duplicated and
 /// unknown fields are rejected before the caller decodes any value.
@@ -68,19 +78,46 @@ pub fn json_object_fields<'a>(
     Ok(())
 }
 
+fn json_reject_duplicate_keys<'a>(
+    pairs: Vec<(&'a str, &'a str)>,
+    context: &str,
+) -> Ret<Vec<(&'a str, &'a str)>> {
+    let mut seen: Vec<&str> = Vec::new();
+    for (key, _) in &pairs {
+        if seen.contains(key) {
+            return errf!("{context} field {key} is duplicated");
+        }
+        seen.push(*key);
+    }
+    Ok(pairs)
+}
+
 /// Split a JSON object while enforcing the codec-wide duplicate-key rule.
 /// Dynamic counterpart to [`json_object_fields`] for second-stage registry decoders (no allow-list).
 pub fn json_object_entries<'a>(json: &'a str) -> Ret<Vec<(&'a str, &'a str)>> {
-    let mut seen: Vec<&str> = Vec::new();
-    let mut entries = Vec::new();
-    for (key, value) in json_split_object(json)? {
-        if seen.contains(&key) {
-            return errf!("JSON field {} is duplicated", key);
+    json_reject_duplicate_keys(json_split_object(json)?, "JSON")
+}
+
+/// Split a JSON object and reject duplicate keys, with `context`-prefixed
+/// messages (`"{context} is not a JSON object: …"` / `"{context} field K is duplicated"`).
+pub fn json_object_pairs<'a>(json: &'a str, context: &str) -> Ret<Vec<(&'a str, &'a str)>> {
+    let pairs = json_split_object(json)
+        .map_err(|e| sys::Error::fault(format!("{context} is not a JSON object: {e}")))?;
+    json_reject_duplicate_keys(pairs, context)
+}
+
+/// Reject keys outside `allowed`. Failure carries [`JSON_UNKNOWN_FIELD`] and
+/// the message `"{context} field {key} is unknown"`.
+pub fn json_reject_unknown(pairs: &[(&str, &str)], allowed: &[&str], context: &str) -> Ret<()> {
+    for (key, _) in pairs {
+        if !allowed.iter().any(|known| *known == *key) {
+            return Err(
+                sys::Error::fault(format!("{context} field {key} is unknown"))
+                    .with_code(JSON_UNKNOWN_FIELD),
+            );
         }
-        seen.push(key);
-        entries.push((key, value));
     }
-    Ok(entries)
+    Ok(())
 }
 
 /// Construct a JSON value through the field's existing mutable decoder.
@@ -94,69 +131,32 @@ where
     Ok(value)
 }
 
-/// Generate the standard object JSON decoder for a field struct.
-#[macro_export]
-macro_rules! impl_struct_from_json {
-    ($class:ty { $($field:ident),* $(,)? } optional $optional:ident when $condition:ident) => {
-        impl $crate::FromJSON for $class {
-            fn from_json(&mut self, json: &str) -> sys::Ret<()> {
-                let mut next = self.clone();
-                let mut seen: Vec<&str> = Vec::new();
-                $crate::json_object_fields(json, &[$(stringify!($field)),*, stringify!($optional)], &mut |key, value| {
-                    seen.push(key);
-                    match key {
-                        $(stringify!($field) => next.$field.from_json(value)?,)*
-                        stringify!($optional) => next.$optional.from_json(value)?,
-                        _ => return sys::errf!("{} JSON field {} is unknown", stringify!($class), key),
-                    }
-                    Ok(())
-                })?;
-                $(
-                    if !seen.contains(&stringify!($field)) {
-                        return sys::errf!("{} JSON missing field {}", stringify!($class), stringify!($field));
-                    }
-                )*
-                *self = next;
-                Ok(())
-            }
+/// Parse an action JSON `kind` value: the numeric id `kind`, or a string equal
+/// to the action's registered `name`. Returns the numeric kind so callers can
+/// build the `Uint2` field. Both the registry dispatch and the action's own
+/// `FromJSON` accept the name form, so `"kind":"transfer_hac_to"` and
+/// `"kind":1` decode identically.
+pub fn json_action_kind(kind_raw: &str, name: &str, kind: u16) -> Ret<u16> {
+    if let Ok(raw) = json_expect_unquoted(kind_raw) {
+        let parsed: u16 = raw.parse().map_err(|_| {
+            sys::Error::normal("action kind must be a number or its registered name")
+        })?;
+        if parsed != kind {
+            return sys::normalf!("action kind mismatch: expected {} got {}", kind, parsed);
         }
-    };
-    ($class:ty { $($field:ident),* $(,)? }) => {
-        impl $crate::FromJSON for $class {
-            fn from_json(&mut self, json: &str) -> sys::Ret<()> {
-                let mut next = self.clone();
-                let mut seen: Vec<&str> = Vec::new();
-                $crate::json_object_fields(json, &[$(stringify!($field)),*], &mut |key, value| {
-                    seen.push(key);
-                    match key {
-                        $(stringify!($field) => next.$field.from_json(value)?,)*
-                        _ => return sys::errf!("{} JSON field {} is unknown", stringify!($class), key),
-                    }
-                    Ok(())
-                })?;
-                $(
-                    if !seen.contains(&stringify!($field)) {
-                        return sys::errf!("{} JSON missing field {}", stringify!($class), stringify!($field));
-                    }
-                )*
-                *self = next;
-                Ok(())
-            }
+        return Ok(kind);
+    }
+    if let Ok(decoded) = json_expect_quoted_decoded(kind_raw) {
+        if decoded.trim() == name {
+            return Ok(kind);
         }
-    };
-}
-
-/// Generate both directions of the standard object JSON representation.
-#[macro_export]
-macro_rules! impl_struct_json {
-    ($class:ty { $($field:ident),* $(,)? } optional $optional:ident when $condition:ident) => {
-        $crate::impl_struct_to_json!($class { $($field),* } optional $optional when $condition);
-        $crate::impl_struct_from_json!($class { $($field),* } optional $optional when $condition);
-    };
-    ($class:ty { $($field:ident),* $(,)? }) => {
-        $crate::impl_struct_to_json!($class { $($field),* });
-        $crate::impl_struct_from_json!($class { $($field),* });
-    };
+        return sys::normalf!(
+            "action kind name {} does not match {}",
+            decoded.trim(),
+            name
+        );
+    }
+    errf!("action kind must be a number or its registered name")
 }
 
 /// Generate the wire-action JSON object: numeric `kind` plus action body fields.
@@ -183,59 +183,6 @@ macro_rules! impl_action_json {
     };
 }
 
-/// Generate the standard object JSON representation for a field struct.
-/// Uses direct string pushes instead of `format!` so generated bodies carry no fmt machinery (wasm size).
-#[macro_export]
-macro_rules! impl_struct_to_json {
-    ($class:ty { $($field:ident),* $(,)? } optional $optional:ident when $condition:ident) => {
-        impl $crate::ToJSON for $class {
-            fn to_json_fmt(&self, fmt: &$crate::JSONFormater) -> String {
-                let mut s = String::new();
-                s.push('{');
-                $(
-                    s.push('"');
-                    s.push_str(stringify!($field));
-                    s.push_str("\":");
-                    s.push_str(&$crate::ToJSON::to_json_fmt(&self.$field, fmt));
-                    s.push(',');
-                )*
-                if self.$condition() {
-                    s.push('"');
-                    s.push_str(stringify!($optional));
-                    s.push_str("\":");
-                    s.push_str(&$crate::ToJSON::to_json_fmt(&self.$optional, fmt));
-                    s.push(',');
-                }
-                if s.len() > 1 {
-                    s.pop();
-                }
-                s.push('}');
-                s
-            }
-        }
-    };
-    ($class:ty { $($field:ident),* $(,)? }) => {
-        impl $crate::ToJSON for $class {
-            fn to_json_fmt(&self, fmt: &$crate::JSONFormater) -> String {
-                let mut s = String::new();
-                s.push('{');
-                $(
-                    s.push('"');
-                    s.push_str(stringify!($field));
-                    s.push_str("\":");
-                    s.push_str(&$crate::ToJSON::to_json_fmt(&self.$field, fmt));
-                    s.push(',');
-                )*
-                if s.len() > 1 {
-                    s.pop();
-                }
-                s.push('}');
-                s
-            }
-        }
-    };
-}
-
 pub fn json_unquote(s: &str) -> &str {
     let s = s.trim();
     if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
@@ -245,11 +192,7 @@ pub fn json_unquote(s: &str) -> &str {
     }
 }
 
-/// Escape `s` as a JSON string literal, matching serde_json's default output.
-/// The single shared escaper — mint's API and the VM sandbox API delegate here.
-pub fn json_escape(s: &str) -> String {
-    let mut encoded = String::with_capacity(s.len() + 2);
-    encoded.push('"');
+fn json_escape_into(s: &str, encoded: &mut String) {
     for ch in s.chars() {
         match ch {
             '"' => encoded.push_str("\\\""),
@@ -261,11 +204,28 @@ pub fn json_escape(s: &str) -> String {
             '\t' => encoded.push_str("\\t"),
             c if c <= '\u{1F}' => {
                 use std::fmt::Write;
-                let _ = write!(&mut encoded, "\\u{:04x}", c as u32);
+                let _ = write!(encoded, "\\u{:04x}", c as u32);
             }
             c => encoded.push(c),
         }
     }
+}
+
+/// Escape `s` as JSON string content (no surrounding quotes).
+/// SDK `esc` uses this; `q()` then adds quotes.
+pub fn json_escape_raw(s: &str) -> String {
+    let mut encoded = String::with_capacity(s.len());
+    json_escape_into(s, &mut encoded);
+    encoded
+}
+
+/// Escape `s` as a JSON string literal, matching serde_json's default output
+/// (includes the surrounding quotes). Mint's API and the VM sandbox API
+/// delegate here.
+pub fn json_escape(s: &str) -> String {
+    let mut encoded = String::with_capacity(s.len() + 2);
+    encoded.push('"');
+    json_escape_into(s, &mut encoded);
     encoded.push('"');
     encoded
 }
@@ -1093,6 +1053,10 @@ mod engine_equivalence {
                 serde_json::to_string(s).unwrap(),
                 "json_escape diverged on {s:?}"
             );
+            let mut quoted = String::from("\"");
+            quoted.push_str(&super::json_escape_raw(s));
+            quoted.push('"');
+            assert_eq!(quoted, super::json_escape(s));
             // And it round-trips through the engine's own decoder.
             assert_eq!(
                 super::json_expect_quoted_decoded(&super::json_escape(s)).unwrap(),
@@ -1272,5 +1236,28 @@ mod engine_equivalence {
         let entries = super::json_object_entries(r#"{"kind":1,"amount":2}"#).unwrap();
         assert_eq!(entries, vec![("kind", "1"), ("amount", "2")]);
         assert!(super::json_object_entries(r#"{"kind":1,"kind":2}"#).is_err());
+    }
+
+    #[test]
+    fn object_pairs_prefix_context_and_reject_unknown_sets_code() {
+        let pairs = super::json_object_pairs(r#"{"kind":1,"amount":2}"#, "request").unwrap();
+        assert_eq!(pairs, vec![("kind", "1"), ("amount", "2")]);
+
+        let dup = super::json_object_pairs(r#"{"kind":1,"kind":2}"#, "request").unwrap_err();
+        assert_eq!(dup.as_str(), "request field kind is duplicated");
+
+        let not_obj = super::json_object_pairs("[]", "request").unwrap_err();
+        assert!(
+            not_obj
+                .as_str()
+                .starts_with("request is not a JSON object:"),
+            "{}",
+            not_obj.as_str()
+        );
+
+        super::json_reject_unknown(&pairs, &["kind", "amount"], "request").unwrap();
+        let unknown = super::json_reject_unknown(&pairs, &["kind"], "request").unwrap_err();
+        assert_eq!(unknown.code(), Some(super::JSON_UNKNOWN_FIELD));
+        assert_eq!(unknown.as_str(), "request field amount is unknown");
     }
 }

@@ -1,4 +1,4 @@
-//! Hacash-specific transfer-build / transfer-scan API (TransactionType2 + the 13
+//! Hacash-specific transfer-build / transfer-scan API (StdTransaction type 2 + the 13
 //! standard transfer actions). Scan dispatches via `base::TransferLike`, so the JSON shape comes from `TransferPayload`.
 
 use base::{
@@ -7,9 +7,10 @@ use base::{
 };
 use field::{Address, Amount, Decode, DiamondName, DiamondNameListMax200, Encode, Satoshi};
 use protocol::action_std::{
-    TransferHacdFromTo, TransferHacdSingleTo, TransferHacdTo, TransferHacFromTo, TransferHacTo, TransferSatFromTo, TransferSatTo,
+    TransferHacFromTo, TransferHacTo, TransferHacdFromTo, TransferHacdSingleTo, TransferHacdTo,
+    TransferSatFromTo, TransferSatTo,
 };
-use protocol::tx_std::TransactionType2;
+use protocol::tx_std::StdTransaction;
 use sys::ToHex;
 
 use super::util::{api_error, diamond_names_readable, json_string, q_string};
@@ -277,7 +278,7 @@ pub(crate) fn create_coin_transfer_handler(_ctx: &ApiExecCtx, req: ApiRequest) -
     let is_from = from_acc != main_acc;
     let main_addr = Address::from(*main_acc.address());
     let from_addr = Address::from(*from_acc.address());
-    let mut tx = TransactionType2::new_by(main_addr, fee, timestamp);
+    let mut tx = StdTransaction::new_by(hacash_params::TX_TYPE_2, main_addr, fee, timestamp);
 
     if satoshi > 0 {
         let sat = Satoshi::from(satoshi);
@@ -355,7 +356,7 @@ mod tests {
         let to = Address::from([
             0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         ]);
-        let mut tx = TransactionType2::new_by(from, Amount::zero(), 1);
+        let mut tx = StdTransaction::new_by(hacash_params::TX_TYPE_2, from, Amount::zero(), 1);
         tx.addrlist = field::AddrOrList::from_list(vec![from, to]).expect("address list");
         let action: Arc<dyn Action> = Arc::new(TransferSatFromTo {
             kind: field::Uint2::from(TransferSatFromTo::KIND),

@@ -30,7 +30,8 @@ pub(crate) fn miner_pending_handler(
             .tx_pool_groups()
             .into_iter()
             .find_map(|spec| {
-                if spec.relay_service_bit == Some(crate::HacashConsensus::SERVICE_BIT_DIAMOND_RELAY) {
+                if spec.relay_service_bit == Some(crate::HacashConsensus::SERVICE_BIT_DIAMOND_RELAY)
+                {
                     Some(spec.id)
                 } else {
                     None

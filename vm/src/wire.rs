@@ -21,6 +21,7 @@ pub const STRUCT_SCHEMAS: &[StructSchema] = &[
     <crate::contract::ContractSto as base::StructSchemaProvider>::STRUCT_SCHEMA,
     <crate::rt::CodeStuff as base::StructSchemaProvider>::STRUCT_SCHEMA,
     <crate::rt::FuncArgvTypes as base::StructSchemaProvider>::STRUCT_SCHEMA,
+    <crate::action::p2sh::PosiHash as base::StructSchemaProvider>::STRUCT_SCHEMA,
 ];
 
 /// Installs the VM-owned transaction action codecs into a dynamic wire profile.

@@ -1,7 +1,5 @@
 //! Transaction build / check / sign APIs (ported from fullnodedev mint api).
 
-use std::collections::HashMap;
-
 use base::{
     ActionRef, ApiExecCtx, ApiRequest, ApiResponse, Transaction, TransactionBuild, TransactionSign,
     TxPkg,
@@ -10,7 +8,7 @@ use field::{
     Address, Amount, Encode, Hash, Sign, Uint1, json_decode_array, json_decode_object,
     json_expect_quoted_decoded, json_expect_unquoted,
 };
-use protocol::tx_std::{TransactionType2, TransactionType3};
+use protocol::tx_std::StdTransaction;
 use sys::ToHex;
 
 use crate::api::util::*;
@@ -45,50 +43,8 @@ fn parse_amount_value(v: &str) -> sys::Ret<Amount> {
     Amount::from(&json_expect_quoted_decoded(v)?)
 }
 
-fn parse_hex_bytes(v: &str) -> sys::Ret<Vec<u8>> {
-    let raw = json_expect_quoted_decoded(v)?;
-    let trimmed = raw.trim();
-    let hex = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .unwrap_or(trimmed);
-    hex::decode(hex).map_err(|e| sys::Error::fault(e.to_string()))
-}
-
-fn action_from_json_obj(
-    reg: &dyn base::ExecutionServices,
-    json: &str,
-    obj: &HashMap<String, String>,
-) -> sys::Ret<ActionRef> {
-    if let Some(body) = obj.get("body") {
-        let action = reg.decode_action_exact(&parse_hex_bytes(body)?)?;
-        if let Some(kind) = obj.get("kind") {
-            let kind: u16 = json_expect_unquoted(kind)?
-                .parse()
-                .map_err(|_| sys::Error::fault("kind format invalid"))?;
-            if kind != action.kind() {
-                return sys::errf!(
-                    "action body kind {} does not match declared kind {}",
-                    action.kind(),
-                    kind
-                );
-            }
-        }
-        return Ok(action);
-    }
-    let kind_s = obj
-        .get("kind")
-        .map(String::as_str)
-        .ok_or_else(|| sys::Error::fault("missing required field(s): kind"))?;
-    let kind: u16 = json_expect_unquoted(kind_s)?
-        .parse()
-        .map_err(|_| sys::Error::fault("kind format invalid"))?;
-    reg.decode_action_json(kind, json)?.ok_or_else(|| {
-        sys::Error::fault(format!(
-            "action kind {} not supported by create/transaction subset (Type3/VM/AST stubbed)",
-            kind
-        ))
-    })
+fn action_from_json_obj(reg: &dyn base::ExecutionServices, json: &str) -> sys::Ret<ActionRef> {
+    reg.decode_action_json(json)
 }
 
 pub(crate) fn reject_non_canonical_dia_insc_push(tx: &dyn Transaction) -> Option<ApiResponse> {
@@ -105,58 +61,35 @@ pub(crate) fn reject_non_canonical_dia_insc_push(tx: &dyn Transaction) -> Option
     None
 }
 
-enum OwnedTx {
-    Type2(TransactionType2),
-    Type3(TransactionType3),
-}
+struct OwnedTx(StdTransaction);
 
 impl OwnedTx {
     fn as_build(&mut self) -> &mut dyn TransactionBuild {
-        match self {
-            Self::Type2(tx) => tx,
-            Self::Type3(tx) => tx,
-        }
+        &mut self.0
     }
 
     fn as_tx(&self) -> &dyn TransactionSign {
-        match self {
-            Self::Type2(tx) => tx,
-            Self::Type3(tx) => tx,
-        }
+        &self.0
     }
 
     fn fill_sign_account(&mut self, acc: &sys::Account) -> sys::Ret<Sign> {
-        match self {
-            Self::Type2(tx) => tx.fill_sign_account(acc),
-            Self::Type3(tx) => tx.fill_sign_account(acc),
-        }
+        self.0.fill_sign_account(acc)
     }
 
     fn encode(&self) -> Vec<u8> {
-        match self {
-            Self::Type2(tx) => tx.encode(),
-            Self::Type3(tx) => tx.encode(),
-        }
+        self.0.encode()
     }
 
     fn from_bytes(reg: &dyn base::BinaryCodecs, data: &[u8]) -> sys::Ret<Self> {
         let tx = reg.decode_transaction_exact(data)?;
         match tx.ty() {
-            v if v == TransactionType2::TYPE => {
+            v if v == hacash_params::TX_TYPE_2 || v == hacash_params::TX_TYPE_3 => {
                 let owned = tx
                     .as_any()
-                    .downcast_ref::<TransactionType2>()
-                    .ok_or_else(|| sys::Error::fault("transaction type2 downcast failed"))?
+                    .downcast_ref::<StdTransaction>()
+                    .ok_or_else(|| sys::Error::fault("std transaction downcast failed"))?
                     .clone();
-                Ok(Self::Type2(owned))
-            }
-            v if v == TransactionType3::TYPE => {
-                let owned = tx
-                    .as_any()
-                    .downcast_ref::<TransactionType3>()
-                    .ok_or_else(|| sys::Error::fault("transaction type3 downcast failed"))?
-                    .clone();
-                Ok(Self::Type3(owned))
+                Ok(Self(owned))
             }
             other => sys::errf!("unsupported transaction type {}", other),
         }
@@ -231,17 +164,20 @@ pub(crate) fn transaction_build_handler(ctx: &ApiExecCtx, req: ApiRequest) -> Ap
         .get("tx_type")
         .or_else(|| root.get("type"))
         .and_then(|v| json_expect_unquoted(v).ok()?.parse::<u64>().ok())
-        .unwrap_or(TransactionType2::TYPE as u64);
+        .unwrap_or(hacash_params::TX_TYPE_2 as u64);
     let timestamp = root
         .get("timestamp")
         .and_then(|v| json_expect_unquoted(v).ok()?.parse::<u64>().ok())
         .unwrap_or_else(sys::curtimes);
 
     let mut owned = match tx_type {
-        v if v == TransactionType2::TYPE as u64 => {
-            OwnedTx::Type2(TransactionType2::new_by(main_addr, fee, timestamp))
-        }
-        v if v == TransactionType3::TYPE as u64 => {
+        v if v == hacash_params::TX_TYPE_2 as u64 => OwnedTx(StdTransaction::new_by(
+            hacash_params::TX_TYPE_2,
+            main_addr,
+            fee,
+            timestamp,
+        )),
+        v if v == hacash_params::TX_TYPE_3 as u64 => {
             let gas_max = root
                 .get("gas_max")
                 .and_then(|v| json_expect_unquoted(v).ok()?.parse::<u64>().ok())
@@ -257,9 +193,10 @@ pub(crate) fn transaction_build_handler(ctx: &ApiExecCtx, req: ApiRequest) -> Ap
                     ],
                 );
             }
-            let mut tx = TransactionType3::new_by(main_addr, fee, timestamp);
+            let mut tx =
+                StdTransaction::new_by(hacash_params::TX_TYPE_3, main_addr, fee, timestamp);
             tx.gas_max = Uint1::from(gas_max as u8);
-            OwnedTx::Type3(tx)
+            OwnedTx(tx)
         }
         _ => {
             return create_transaction_error_response(
@@ -303,7 +240,7 @@ pub(crate) fn transaction_build_handler(ctx: &ApiExecCtx, req: ApiRequest) -> Ap
         let action_kind = act_obj
             .get("kind")
             .and_then(|v| json_expect_unquoted(v).ok()?.parse::<u64>().ok());
-        let a = match action_from_json_obj(ctx.engine.services().as_ref(), act_raw, &act_obj) {
+        let a = match action_from_json_obj(ctx.engine.services().as_ref(), act_raw) {
             Ok(v) => v,
             Err(e) => {
                 let message = match action_kind {
@@ -479,8 +416,8 @@ pub(crate) fn transaction_sign_handler(ctx: &ApiExecCtx, req: ApiRequest) -> Api
             return api_error("sigdts format invalid");
         };
         let signobj = Sign {
-            publickey: pbk,
-            signature: sig,
+            publickey: pbk.into(),
+            signature: sig.into(),
         };
         if let Err(e) = owned.as_build().push_sign(signobj.clone()) {
             return api_error(&format!("fill sign failed: {}", e));

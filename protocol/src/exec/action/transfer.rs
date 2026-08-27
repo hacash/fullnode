@@ -8,8 +8,9 @@ use field::{Address, DiamondNameListMax200, DiamondNumber, ToJSON};
 use sys::Ret;
 
 use crate::codec::action::{
-    TransferAssetFromTo, TransferAssetFrom, TransferAssetTo, TransferHacdFromTo, TransferHacdFrom, TransferHacdSingleTo, TransferHacdTo,
-    TransferHacFromTo, TransferHacFrom, TransferHacTo, TransferSatFromTo, TransferSatFrom, TransferSatTo,
+    TransferAssetFrom, TransferAssetFromTo, TransferAssetTo, TransferHacFrom, TransferHacFromTo,
+    TransferHacTo, TransferHacdFrom, TransferHacdFromTo, TransferHacdSingleTo, TransferHacdTo,
+    TransferSatFrom, TransferSatFromTo, TransferSatTo,
 };
 
 base::impl_action_execute! {
@@ -148,7 +149,7 @@ base::impl_action_execute! {
             if is_privakey_unknown(&to) {
                 return sys::errf!("cannot transfer diamond to system address {}", to.to_json());
             }
-            let diamonds = DiamondNameListMax200::one(self.diamond);
+            let diamonds = DiamondNameListMax200::one(self.diamond)?;
             do_diamonds_transfer(ctx, &diamonds, &from, &to)
         }
     }

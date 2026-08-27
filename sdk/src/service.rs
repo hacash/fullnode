@@ -8,13 +8,13 @@ use crate::error::{SdkError, SdkErrorCode};
 use crate::json::{SdkJsonFrom, SdkJsonTo};
 use crate::jsonparse;
 use crate::profile::{
-    CodecProfile, RequestField, OPERATIONS, OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY,
-    OP_ACCOUNT_VERIFY_ADDRESS, OP_ACCOUNT_VERIFY_SIGNATURE, OP_ACTION_DESCRIBE, OP_AMOUNT_FORMAT,
-    OP_AMOUNT_PARSE, OP_DIAMOND_LOOKUP, OP_MESSAGE_PREPARE_SIGNATURE, OP_MESSAGE_VERIFY,
-    OP_POLICY_EVALUATE, OP_SYSTEM_PARAMS, OP_SYSTEM_SDK_VERSION, OP_TX_ATTACH_SIGNATURE,
+    CodecProfile, OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY, OP_ACCOUNT_VERIFY_ADDRESS,
+    OP_ACCOUNT_VERIFY_SIGNATURE, OP_ACTION_DESCRIBE, OP_AMOUNT_FORMAT, OP_AMOUNT_PARSE,
+    OP_DIAMOND_LOOKUP, OP_MESSAGE_PREPARE_SIGNATURE, OP_MESSAGE_VERIFY, OP_POLICY_EVALUATE,
+    OP_SYSTEM_PARAMS, OP_SYSTEM_SDK_VERSION, OP_TX_ATTACH_SIGNATURE,
     OP_TX_ATTACH_SIGNATURE_UNBOUND, OP_TX_BUILD, OP_TX_DECODE, OP_TX_ENCODE, OP_TX_ESTIMATE_FEE,
     OP_TX_INSPECT, OP_TX_INSPECT_REPORT, OP_TX_PREPARE_SIGNATURE, OP_TX_SIGNATURE_REPORT,
-    OP_TX_VERIFY, OP_VM_CODE, OP_VM_DECODE_CALL,
+    OP_TX_VERIFY, OP_VM_CODE, OP_VM_DECODE_CALL, OPERATIONS, RequestField,
 };
 
 pub(crate) fn profile() -> &'static CodecProfile {
@@ -252,7 +252,9 @@ fn req_field<'a>(
 
 /// Parse the optional `describe` facet-control object (`{description, json,
 /// code}` booleans); absent → all on.
-fn describe_options(values: &[(&'static str, ReqValue)]) -> Result<crate::audit::DescribeOptions, SdkError> {
+fn describe_options(
+    values: &[(&'static str, ReqValue)],
+) -> Result<crate::audit::DescribeOptions, SdkError> {
     match req_field(values, "describe")?.opt_json()? {
         Some(raw) => {
             let pairs = crate::jsonparse::object_pairs(&raw, "request field describe")?;
@@ -376,13 +378,11 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
         }
         OP_TX_DECODE => {
             let v = parse_request_json(operation_id, payload)?;
-            Ok(
-                crate::inspect::decode_transaction_json(
-                    req_field(&v, "body")?.str()?,
-                    &describe_options(&v)?,
-                )?
-                .to_json_string(),
-            )
+            Ok(crate::inspect::decode_transaction_json(
+                req_field(&v, "body")?.str()?,
+                &describe_options(&v)?,
+            )?
+            .to_json_string())
         }
         OP_TX_ENCODE => {
             let v = parse_request_json(operation_id, payload)?;
@@ -482,10 +482,11 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
         }
         OP_ACTION_DESCRIBE => {
             let v = parse_request_json(operation_id, payload)?;
-            Ok(
-                crate::audit::describe_single(req_field(&v, "action")?.str()?, &describe_options(&v)?)?
-                    .to_json_string(),
-            )
+            Ok(crate::audit::describe_single(
+                req_field(&v, "action")?.str()?,
+                &describe_options(&v)?,
+            )?
+            .to_json_string())
         }
         OP_VM_CODE => {
             let v = parse_request_json(operation_id, payload)?;
@@ -622,7 +623,10 @@ mod tests {
                 operation.name
             );
             // Pin the 1-based sequential numbering the dispatcher relies on.
-            assert_eq!(u16::try_from(index + 1).unwrap(), id_from_name(operation.name));
+            assert_eq!(
+                u16::try_from(index + 1).unwrap(),
+                id_from_name(operation.name)
+            );
         }
     }
 
@@ -638,7 +642,7 @@ mod tests {
     fn build_with_json_spec_roundtrip() {
         let main = "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr";
         let payload = format!(
-            r#"{{"spec":{{"schema":"{}","tx_type":"2","main":"{main}","fee":"0.001","timestamp":"1700000000","actions":[{{"kind":"transfer_hac_to","to":"{main}","hacash":"1.5"}}]}}}}"#,
+            r#"{{"spec":{{"schema":"{}","tx_type":"2","main":"{main}","fee":"0.001","timestamp":"1700000000","actions":[{{"kind":1,"to":"{main}","hacash":"1.5"}}]}}}}"#,
             crate::schema::SCHEMA_TRANSACTION_SPEC
         );
         let body = invoke_ok(OP_TX_BUILD, &payload);

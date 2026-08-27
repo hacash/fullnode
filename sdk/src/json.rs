@@ -14,36 +14,20 @@ use crate::inspect::{HeightRangeDesc, InspectContext, Review, SignatureEntry, Tr
 use crate::jsonparse;
 use crate::message::{MessagePrepareParams, MessageVerifyResult};
 use crate::policy::{Policy, PolicyDecision};
-use crate::profile::{
-    AbiVersion, ChainParams, CodecProfile, LimitsProfile, ProtocolParamsProfile,
-};
+use crate::profile::{AbiVersion, ChainParams, CodecProfile, LimitsProfile, ProtocolParamsProfile};
 
 // ================================ JSON builders ================================
 // Hand-written object/array builders shared by the boundary serializers,
 // `SdkError.detail` and native-side tests.
 
-/// JSON string escaping (for `"`, `\`, and control characters).
+/// JSON string escaping (for `"`, `\`, and control characters); no quotes.
 pub(crate) fn esc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out
+    field::json_escape_raw(s)
 }
 
 /// Quoted string `"..."`.
 pub(crate) fn q(s: &str) -> String {
-    format!("\"{}\"", esc(s))
+    field::json_escape(s)
 }
 
 /// Object `{"k":v,...}` (empty-string entries are skipped, used for Option fields).
@@ -580,7 +564,10 @@ impl ChainParams {
             kv("fee_purity_reductions", arr(flat)),
             kv("max_tx_size", qnum(self.max_tx_size as u64)),
             kv("tx_actions_max", qnum(self.tx_actions_max as u64)),
-            kv("registered_tx_types", arr(self.registered_tx_types.iter().map(|v| qnum(*v)).collect())),
+            kv(
+                "registered_tx_types",
+                arr(self.registered_tx_types.iter().map(|v| qnum(*v)).collect()),
+            ),
             kv("diamond_form_flag", qnum(self.diamond_form_flag)),
         ])
     }
@@ -958,9 +945,10 @@ mod tests {
         let decoded = InspectContext::from_json_str(&ctx.to_json_string()).unwrap();
         assert_eq!(decoded, ctx);
         // Numeric fields travel as decimal strings on the boundary.
-        assert!(ctx
-            .to_json_string()
-            .contains("\"current_height\":\"123456\""));
+        assert!(
+            ctx.to_json_string()
+                .contains("\"current_height\":\"123456\"")
+        );
 
         let built = crate::build::BuiltTransaction {
             schema: "s".to_owned(),
@@ -1046,10 +1034,12 @@ mod tests {
         // Missing required field is rejected.
         assert!(InspectContext::from_json_str("{}").is_err());
         // Duplicated keys are rejected.
-        assert!(InspectContext::from_json_str(
-            r#"{"current_height":"1","current_height":"2","expected_chain_id":"0"}"#
-        )
-        .is_err());
+        assert!(
+            InspectContext::from_json_str(
+                r#"{"current_height":"1","current_height":"2","expected_chain_id":"0"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]

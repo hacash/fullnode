@@ -3,7 +3,7 @@
 use base::ApiResponse;
 
 pub(crate) fn json_string(v: &str) -> String {
-    format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
+    field::json_escape(v)
 }
 
 pub(crate) fn api_json_error(err: &str) -> ApiResponse {
@@ -16,4 +16,17 @@ pub(crate) fn hex_short(b: &[u8]) -> String {
 
 pub(crate) fn hex_bytes(b: &[u8]) -> String {
     b.iter().map(|c| format!("{:02x}", c)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_json_error_escapes_newlines() {
+        let resp = api_json_error("line1\nline2");
+        let body = String::from_utf8(resp.body).unwrap();
+        assert_eq!(body, "{\"ret\":1,\"err\":\"line1\\nline2\"}");
+        assert!(!body.contains('\n'));
+    }
 }

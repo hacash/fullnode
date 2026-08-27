@@ -121,8 +121,10 @@ impl<'a> NestedActions<'a> {
 }
 
 /// Cross-crate offline action-view contract owned by `base` (impls in protocol/mint/vm).
-/// Execution is a separate `ActionExecute` trait; `ToJSON` is not a supertrait so SDK/wasm vtables stay JSON-free.
-pub trait Action: ActionCodec {
+/// Execution is a separate `ActionExecute` trait. JSON encoding is `field::ToJSON`
+/// on the action type itself (`Action: ActionCodec + ToJSON`); the registry only
+/// decodes.
+pub trait Action: ActionCodec + field::ToJSON {
     fn as_transfer_like(&self) -> Option<&dyn TransferLike> {
         None
     }
@@ -155,17 +157,11 @@ pub trait Action: ActionCodec {
     fn as_execute(&self) -> Option<&dyn ActionExecute> {
         None
     }
-
-    /// Fullnode-only JSON presentation, independent of `ActionExecute`: a
-    /// non-executable action may still be rendered, SDK vtables stay JSON-free.
-    #[cfg(feature = "execute")]
-    fn as_json_view(&self) -> Option<&dyn ActionJsonView> {
-        None
-    }
 }
 
 /// Execution view of an action: `Action` plus the consensus `execute` body, only when
-/// `execute` is on — the SDK/wasm graph has no execution surface. JSON is an independent view.
+/// `execute` is on — the SDK/wasm graph has no execution surface. JSON encoding is
+/// `ToJSON` on `Action` and does not go through execute.
 #[cfg(feature = "execute")]
 pub trait ActionExecute: Action {
     fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut>;
@@ -181,33 +177,6 @@ impl dyn Action {
             None => sys::errf!("action kind {} has no execute surface", self.kind()),
         }
     }
-
-    /// JSON rendering used by full-node API services. JSON is an independent
-    /// presentation view; it does not force an action to implement execute.
-    pub fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
-        match self.as_json_view() {
-            Some(view) => field::ToJSON::to_json_fmt(view, fmt),
-            None => format!("{{\"kind\":{}}}", self.kind()),
-        }
-    }
-
-    /// Default JSON formatter convenience, retained for dynamic-action API
-    /// callers. The result uses `as_json_view`, never `ActionExecute`.
-    pub fn to_json(&self) -> String {
-        self.to_json_fmt(&field::JSONFormater::default())
-    }
-}
-
-/// JSON rendering kept off the `Action` wire trait so SDK/wasm `dyn Action`
-/// vtables carry no JSON machinery; full-node API services request it explicitly.
-pub trait ActionJsonView: field::ToJSON {}
-
-impl<T: field::ToJSON> ActionJsonView for T {}
-
-/// Owned JSON construction for actions whose JSON schema maps directly to their
-/// fields; internal or dynamic actions need not expose a generic constructor.
-pub trait ActionJsonCodec: Action + Sized {
-    fn decode_json(json: &str) -> Ret<Self>;
 }
 
 /// Static consensus placement scope of an action type, alongside its wire schema.
@@ -218,6 +187,28 @@ pub trait ActionJsonCodec: Action + Sized {
 /// kind arithmetic.
 pub trait ActionScopeProvider {
     const SCOPE: ActScope;
+}
+
+/// Hand-written `ActionCodec` shell for `#[base::action(wire = manual)]` types
+/// (derive skips `ActionCodec` in that mode). `kind` / `schema` / `as_any` only;
+/// wire and JSON stay on the type.
+#[macro_export]
+macro_rules! impl_action_codec {
+    ($ty:ty) => {
+        impl $crate::ActionCodec for $ty {
+            fn kind(&self) -> u16 {
+                Self::KIND
+            }
+
+            fn schema(&self) -> Option<&'static $crate::ActionSchema> {
+                Some(&<Self as $crate::ActionSchemaProvider>::ACTION_SCHEMA)
+            }
+
+            fn as_any(&self) -> &dyn ::std::any::Any {
+                self
+            }
+        }
+    };
 }
 
 /// Consensus `ActionExecute` body for an action declared by `#[base::action(...)]` /
@@ -269,6 +260,12 @@ mod tests {
         }
     }
 
+    impl field::ToJSON for ExecuteOnlyAction {
+        fn to_json_fmt(&self, _fmt: &field::JSONFormater) -> String {
+            "{\"kind\":65000}".to_owned()
+        }
+    }
+
     impl Action for ExecuteOnlyAction {
         fn scope(&self) -> ActScope {
             ActScope::TOP
@@ -279,8 +276,6 @@ mod tests {
         }
     }
 
-    // This intentionally has no `field::ToJSON` implementation. It proves
-    // execute is no longer coupled to API JSON presentation.
     impl ActionExecute for ExecuteOnlyAction {
         fn execute(&self, _ctx: &mut dyn Context) -> Ret<ActOut> {
             Ok((0, vec![]))
@@ -288,11 +283,11 @@ mod tests {
     }
 
     #[test]
-    fn execute_does_not_require_json_view() {
+    fn execute_stays_independent_of_json() {
         let action = ExecuteOnlyAction;
         assert_eq!(action.kind(), 65_000);
         assert!(action.as_execute().is_some());
-        assert!(action.as_json_view().is_none());
+        assert_eq!(field::ToJSON::to_json(&action), "{\"kind\":65000}");
 
         let codec: &dyn ActionCodec = &action;
         assert_eq!(codec.kind(), 65_000);
@@ -310,13 +305,12 @@ where
     Ok((Arc::new(action), used))
 }
 
-/// Generic wire creator for regular derived actions. The registry has already
-/// dispatched on `kind` and the derived `Decode` re-validates it, so there is
-/// nothing left to pre-check; actions with hand-written wire decoders (AST,
-/// diamond mint) register a custom creator instead.
+/// Generic wire creator for regular derived actions. The registry peeks `kind`
+/// to dispatch, then hands the **full** buffer to this creator; derived `Decode`
+/// re-reads and validates the prefix. Hand-written wire decoders (AST, diamond
+/// mint) register a custom creator instead.
 pub fn create_regular_action<T>(
     _reg: &dyn crate::BinaryCodecs,
-    _kind: u16,
     buf: &[u8],
 ) -> Ret<(ActionRef, usize)>
 where
@@ -326,35 +320,20 @@ where
 }
 
 /// Registry-compatible JSON creator for regular derived actions.
-pub fn decode_regular_action_json<T>(
-    _reg: &dyn crate::CodecRegistry,
-    kind: u16,
-    json: &str,
-) -> Ret<ActionRef>
+/// `kind` is read from the JSON object (required); the registry has already
+/// dispatched to this type's decoder.
+pub fn decode_regular_action_json<T>(_reg: &dyn crate::CodecRegistry, json: &str) -> Ret<ActionRef>
 where
-    T: ActionJsonCodec + 'static,
+    T: Action + Default + field::FromJSON + crate::ActionSchemaProvider + 'static,
 {
-    let action = T::decode_json(json)?;
-    if action.kind() != kind {
+    let mut value = T::default();
+    value.from_json(json)?;
+    if value.kind() != T::ACTION_SCHEMA.kind {
         return sys::normalf!(
             "action kind mismatch: expected {} got {}",
-            kind,
-            action.kind()
+            T::ACTION_SCHEMA.kind,
+            value.kind()
         );
     }
-    Ok(Arc::new(action))
-}
-
-/// Canonical JSON view of a regular derived action, downcast from the `dyn
-/// Action` the registry hands out. The `ActionCodec` derive generates
-/// `field::ToJSON` for every derived action; a type mismatch (impossible via
-/// the binding macro) degrades to the kind-only object.
-pub fn action_json_of<T>(action: &dyn Action, fmt: &field::JSONFormater) -> String
-where
-    T: Action + field::ToJSON + 'static,
-{
-    match action.as_any().downcast_ref::<T>() {
-        Some(typed) => field::ToJSON::to_json_fmt(typed, fmt),
-        None => format!("{{\"kind\":{}}}", action.kind()),
-    }
+    Ok(Arc::new(value))
 }

@@ -231,30 +231,15 @@ mod tests {
             (TxMessage::KIND, TxMessage::NAME, VmValueType::Bytes, 1),
             (TxBlob::KIND, TxBlob::NAME, VmValueType::Bytes, 3),
             (TxBlobSize::KIND, TxBlobSize::NAME, VmValueType::U16, 1),
-            (
-                BalanceAsset::KIND,
-                BalanceAsset::NAME,
-                VmValueType::U64,
-                2,
-            ),
+            (BalanceAsset::KIND, BalanceAsset::NAME, VmValueType::U64, 2),
             (
                 CheckSignature::KIND,
                 CheckSignature::NAME,
                 VmValueType::Bool,
                 1,
             ),
-            (
-                HacdInscNum::KIND,
-                HacdInscNum::NAME,
-                VmValueType::U8,
-                1,
-            ),
-            (
-                HacdInscGet::KIND,
-                HacdInscGet::NAME,
-                VmValueType::Bytes,
-                2,
-            ),
+            (HacdInscNum::KIND, HacdInscNum::NAME, VmValueType::U8, 1),
+            (HacdInscGet::KIND, HacdInscGet::NAME, VmValueType::Bytes, 2),
             (
                 HacdNameList::KIND,
                 HacdNameList::NAME,

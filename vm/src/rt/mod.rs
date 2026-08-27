@@ -69,9 +69,9 @@ pub use abst_call::AbstCall;
 mod call_site;
 #[allow(unused_imports)] // encode_call_body/encode_splice_body used only in tests
 pub use call_site::{
-    CallSpec, CallTarget, CALL_BODY_WIDTH, SPLICE_BODY_WIDTH, decode_call_body,
-    decode_splice_body, decode_user_call_site, encode_call_body, encode_splice_body,
-    encode_user_call_site, is_user_call_inst,
+    CALL_BODY_WIDTH, CallSpec, CallTarget, SPLICE_BODY_WIDTH, decode_call_body, decode_splice_body,
+    decode_user_call_site, encode_call_body, encode_splice_body, encode_user_call_site,
+    is_user_call_inst,
 };
 include!("action_defs.rs");
 include!("parse.rs");

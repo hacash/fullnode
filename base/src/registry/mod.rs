@@ -1,6 +1,8 @@
 //! `Registry`: binary/json codec, block hasher / vm assigner / action hooks, VM host metadata.
 
-use field::{Decode, Uint1, Uint2};
+use field::{
+    Decode, Uint1, Uint2, json_expect_quoted_decoded, json_expect_unquoted, json_object_entries,
+};
 use std::any::Any;
 #[cfg(feature = "execute")]
 use std::sync::Arc;
@@ -8,7 +10,7 @@ use sys::{Rerr, Ret, normalf};
 
 #[cfg(feature = "execute")]
 use crate::runtime::Env;
-use crate::{Action, ActionRef, BlockRef, TxRef};
+use crate::{ActionRef, BlockRef, TxRef};
 #[cfg(feature = "execute")]
 use crate::{Context, StateChunkRef, Vm};
 
@@ -17,15 +19,11 @@ pub const HASH_SIZE: usize = 32;
 pub type BlockHasherFn = fn(u64, &[u8]) -> [u8; HASH_SIZE];
 #[cfg(feature = "execute")]
 pub type VmAssignFn = fn(&dyn ExecutionServices, u64) -> Box<dyn Vm>;
-pub type ActionCreateFn = fn(&dyn BinaryCodecs, u16, &[u8]) -> Ret<(ActionRef, usize)>;
+pub type ActionCreateFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<(ActionRef, usize)>;
 pub type TxCreateFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<(TxRef, usize)>;
 #[cfg(feature = "execute")]
 pub type BlockCreateFn = fn(&dyn BinaryCodecs, &[u8]) -> Ret<(BlockRef, usize)>;
-pub type ActionJsonDecodeFn = fn(&dyn CodecRegistry, u16, &str) -> Ret<ActionRef>;
-/// Canonical JSON rendering of a decoded action (field-level, `field::ToJSON`),
-/// driven by the caller-chosen `JSONFormater`. `None` at the binding site means
-/// the action has no typed JSON view and degrades to `{"kind":N}`.
-pub type ActionJsonToFn = fn(&dyn Action, &field::JSONFormater) -> String;
+pub type ActionJsonDecodeFn = fn(&dyn CodecRegistry, &str) -> Ret<ActionRef>;
 
 /// Opaque chain profile selected by an application composition root. `base` owns no
 /// concrete network type; a concrete chain exposes typed accessors in its parameter crate.
@@ -50,9 +48,7 @@ pub struct ActionCodecBinding {
     /// without kind arithmetic or decoding.
     pub scope: crate::ActScope,
     pub decode_wire: ActionCreateFn,
-    pub decode_json: Option<ActionJsonDecodeFn>,
-    /// Canonical JSON view (`field::ToJSON`); `None` degrades to `{"kind":N}`.
-    pub to_json: Option<ActionJsonToFn>,
+    pub decode_json: ActionJsonDecodeFn,
 }
 
 /// Transaction codec registration. Transactions are a separate wire namespace
@@ -63,12 +59,11 @@ pub struct TxCodecBinding {
     pub decode_wire: TxCreateFn,
 }
 
-/// Construct a regular action binding whose wire and JSON creators are both
-/// derived from the action's own `ActionCodec` implementation. The two
-/// longer forms override the JSON creator and/or the wire creator for
-/// actions whose decode needs custom logic (AST, diamond mint, inscriptions).
-/// The two shorter forms also wire the typed canonical JSON view; the fully
-/// custom three-argument form leaves `to_json` unset (kind-only fallback).
+/// Construct an action binding. JSON encoding lives on `Action: ToJSON`, not
+/// in the binding. The one-argument form uses derived wire + regular JSON
+/// (`Default + FromJSON`). The two-argument form supplies a custom wire
+/// decoder and still uses regular JSON (HacdMint). The three-argument form
+/// supplies custom wire and custom JSON (AST).
 #[macro_export]
 macro_rules! action_codec_binding {
     ($ty:ty) => {
@@ -76,17 +71,15 @@ macro_rules! action_codec_binding {
             schema: <$ty as $crate::ActionSchemaProvider>::ACTION_SCHEMA,
             scope: <$ty as $crate::ActionScopeProvider>::SCOPE,
             decode_wire: $crate::create_regular_action::<$ty>,
-            decode_json: Some($crate::decode_regular_action_json::<$ty>),
-            to_json: Some($crate::action_json_of::<$ty>),
+            decode_json: $crate::decode_regular_action_json::<$ty>,
         }
     };
-    ($ty:ty, $json:path) => {
+    ($ty:ty, $wire:path) => {
         $crate::ActionCodecBinding {
             schema: <$ty as $crate::ActionSchemaProvider>::ACTION_SCHEMA,
             scope: <$ty as $crate::ActionScopeProvider>::SCOPE,
-            decode_wire: $crate::create_regular_action::<$ty>,
-            decode_json: Some($json),
-            to_json: Some($crate::action_json_of::<$ty>),
+            decode_wire: $wire,
+            decode_json: $crate::decode_regular_action_json::<$ty>,
         }
     };
     ($ty:ty, $wire:path, $json:path) => {
@@ -94,22 +87,21 @@ macro_rules! action_codec_binding {
             schema: <$ty as $crate::ActionSchemaProvider>::ACTION_SCHEMA,
             scope: <$ty as $crate::ActionScopeProvider>::SCOPE,
             decode_wire: $wire,
-            decode_json: Some($json),
-            to_json: None,
+            decode_json: $json,
         }
     };
 }
 
 /// Shared validated storage used by both native and SDK codec containers.
-/// Registration of an action binding is atomic across binary and JSON maps.
-/// Tables are small (a few tx types, tens of actions): linear `Vec` lookup
-/// instead of `HashMap` keeps the hash-table machinery out of the wasm graph.
+/// One action row holds schema, scope, and both decoders (`ActionCodecBinding`);
+/// binary decode, JSON decode, and `action_kinds()` read that single table.
+/// Transactions stay a separate wire namespace. Tables are small (a few tx
+/// types, tens of actions): linear `Vec` lookup instead of `HashMap` keeps
+/// the hash-table machinery out of the wasm graph.
 #[derive(Default)]
 pub struct WireCodecTable {
     transactions: Vec<(u8, TxCreateFn)>,
-    actions: Vec<(u16, ActionCreateFn)>,
-    action_json: Vec<(u16, ActionJsonDecodeFn)>,
-    action_json_to: Vec<(u16, ActionJsonToFn)>,
+    actions: Vec<ActionCodecBinding>,
 }
 
 impl WireCodecTable {
@@ -127,16 +119,10 @@ impl WireCodecTable {
 
     pub fn add_action(&mut self, binding: ActionCodecBinding) -> Rerr {
         let kind = binding.schema.kind;
-        if self.actions.iter().any(|(k, _)| *k == kind) {
+        if self.actions.iter().any(|entry| entry.schema.kind == kind) {
             return sys::errf!("action kind {} already registered", kind);
         }
-        self.actions.push((kind, binding.decode_wire));
-        if let Some(decode_json) = binding.decode_json {
-            self.action_json.push((kind, decode_json));
-        }
-        if let Some(to_json) = binding.to_json {
-            self.action_json_to.push((kind, to_json));
-        }
+        self.actions.push(binding);
         Ok(())
     }
 
@@ -150,30 +136,22 @@ impl WireCodecTable {
     pub fn action(&self, kind: u16) -> Option<ActionCreateFn> {
         self.actions
             .iter()
-            .find(|(k, _)| *k == kind)
-            .map(|(_, f)| *f)
+            .find(|entry| entry.schema.kind == kind)
+            .map(|entry| entry.decode_wire)
     }
 
     pub fn action_json(&self, kind: u16) -> Option<ActionJsonDecodeFn> {
-        self.action_json
+        self.actions
             .iter()
-            .find(|(k, _)| *k == kind)
-            .map(|(_, f)| *f)
-    }
-
-    /// Canonical JSON view of a decoded action, if the binding provides one.
-    pub fn action_json_to(&self, kind: u16) -> Option<ActionJsonToFn> {
-        self.action_json_to
-            .iter()
-            .find(|(k, _)| *k == kind)
-            .map(|(_, f)| *f)
+            .find(|entry| entry.schema.kind == kind)
+            .map(|entry| entry.decode_json)
     }
 
     pub fn decode_action(&self, host: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(ActionRef, usize)> {
         let (kind, _) = Uint2::decode(buf)?;
         let kind = kind.uint();
         match self.action(kind) {
-            Some(codec) => codec(host, kind, buf),
+            Some(codec) => codec(host, buf),
             None => normalf!("action kind {} not registered", kind),
         }
     }
@@ -187,16 +165,45 @@ impl WireCodecTable {
         }
     }
 
-    pub fn decode_action_json(
-        &self,
-        host: &dyn CodecRegistry,
-        kind: u16,
-        json: &str,
-    ) -> Ret<Option<ActionRef>> {
+    pub fn decode_action_json(&self, host: &dyn CodecRegistry, json: &str) -> Ret<ActionRef> {
+        let entries = json_object_entries(json)?;
+        let kind_raw = entries
+            .iter()
+            .find(|(key, _)| *key == "kind")
+            .map(|(_, value)| *value)
+            .ok_or_else(|| sys::Error::normal("action JSON missing kind"))?;
+        let kind = match self.action_kind_from_json(kind_raw)? {
+            Some(kind) => kind,
+            None => return normalf!("action kind/name {} not registered", kind_raw),
+        };
         match self.action_json(kind) {
-            Some(codec) => codec(host, kind, json).map(Some),
-            None => Ok(None),
+            Some(codec) => codec(host, json),
+            None => normalf!("action kind {} not registered", kind),
         }
+    }
+
+    /// Resolve the `kind` value of an action JSON object: a numeric id or a
+    /// registered action name (quoted or bare). `None` means the value is
+    /// neither a number nor any registered name.
+    fn action_kind_from_json(&self, kind_raw: &str) -> Ret<Option<u16>> {
+        if let Ok(raw) = json_expect_unquoted(kind_raw) {
+            if let Ok(kind) = raw.parse::<u16>() {
+                return Ok(Some(kind));
+            }
+            return self.action_kind_by_name(raw.trim());
+        }
+        if let Ok(name) = json_expect_quoted_decoded(kind_raw) {
+            return self.action_kind_by_name(name.trim());
+        }
+        Ok(None)
+    }
+
+    fn action_kind_by_name(&self, name: &str) -> Ret<Option<u16>> {
+        Ok(self
+            .actions
+            .iter()
+            .find(|binding| binding.schema.name == name)
+            .map(|binding| binding.schema.kind))
     }
 
     pub fn tx_types(&self) -> Vec<u8> {
@@ -206,7 +213,7 @@ impl WireCodecTable {
     }
 
     pub fn action_kinds(&self) -> Vec<u16> {
-        let mut values: Vec<_> = self.actions.iter().map(|(k, _)| *k).collect();
+        let mut values: Vec<_> = self.actions.iter().map(|entry| entry.schema.kind).collect();
         values.sort_unstable();
         values
     }
@@ -386,6 +393,50 @@ fn require_exact<T>(what: &str, decoded: Ret<(T, usize)>, total: usize) -> Ret<T
     Ok(obj)
 }
 
+/// Test codec host: implements `BinaryCodecs` + `JsonCodecs` by forwarding
+/// action/tx decode to `$ty.table: WireCodecTable`. The caller constructs `$ty`
+/// and fills `table`. Block methods are stubs (no block catalog).
+///
+/// `BinaryCodecs` has six required methods (`decode_action`, `decode_transaction`,
+/// `decode_block`, `peek_block_size`, `block_hash`, `block_hasher_fn`); the
+/// `*_exact` helpers stay on the trait defaults.
+#[macro_export]
+macro_rules! test_codec_host {
+    ($ty:ty) => {
+        impl $crate::BinaryCodecs for $ty {
+            fn decode_action(&self, buf: &[u8]) -> sys::Ret<($crate::ActionRef, usize)> {
+                self.table.decode_action(self, buf)
+            }
+
+            fn decode_transaction(&self, buf: &[u8]) -> sys::Ret<($crate::TxRef, usize)> {
+                self.table.decode_transaction(self, buf)
+            }
+
+            fn decode_block(&self, _buf: &[u8]) -> sys::Ret<($crate::BlockRef, usize)> {
+                sys::normalf!("no block decode")
+            }
+
+            fn peek_block_size(&self, buf: &[u8]) -> sys::Ret<usize> {
+                self.decode_block(buf).map(|(_, used)| used)
+            }
+
+            fn block_hash(&self, _height: u64, _stuff: &[u8]) -> [u8; $crate::HASH_SIZE] {
+                [0u8; $crate::HASH_SIZE]
+            }
+
+            fn block_hasher_fn(&self) -> $crate::BlockHasherFn {
+                |_, _| [0u8; $crate::HASH_SIZE]
+            }
+        }
+
+        impl $crate::JsonCodecs for $ty {
+            fn decode_action_json(&self, json: &str) -> sys::Ret<$crate::ActionRef> {
+                self.table.decode_action_json(self, json)
+            }
+        }
+    };
+}
+
 pub trait BinaryCodecs: Send + Sync {
     fn decode_action(&self, buf: &[u8]) -> Ret<(ActionRef, usize)>;
     fn decode_action_exact(&self, buf: &[u8]) -> Ret<ActionRef> {
@@ -405,11 +456,11 @@ pub trait BinaryCodecs: Send + Sync {
 }
 
 pub trait JsonCodecs: Send + Sync {
-    fn decode_action_json(&self, kind: u16, json: &str) -> Ret<Option<ActionRef>>;
+    fn decode_action_json(&self, json: &str) -> Ret<ActionRef>;
 }
 
-/// View passed to JSON creators. Recursive/dynamic JSON actions need both
-/// binary decoding (for legacy `body` fields) and JSON registry dispatch.
+/// View passed to JSON creators. Recursive/dynamic JSON actions (AST children)
+/// need binary decoding and JSON registry dispatch.
 pub trait CodecRegistry: BinaryCodecs + JsonCodecs {}
 
 impl<T: BinaryCodecs + JsonCodecs + ?Sized> CodecRegistry for T {}

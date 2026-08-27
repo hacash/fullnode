@@ -12,7 +12,7 @@ pub struct BlockV1 {
     pub timestamp: Timestamp,
     pub prevhash: Hash,
     pub mrklroot: Hash,
-    pub transaction_count: Uint4,
+    transaction_count: Uint4,
     pub nonce: Uint4,
     pub difficulty: Uint4,
     pub witness_stage: Fixed2,
@@ -24,6 +24,17 @@ pub type StdBlock = BlockV1;
 
 impl BlockV1 {
     pub const VERSION: u8 = 1;
+    /// Fixed header size: version + height + timestamp + prevhash + mrklroot
+    /// + transaction_count + nonce + difficulty + witness_stage.
+    pub const INTRO_SIZE: usize = Uint1::SIZE
+        + BlockHeight::SIZE
+        + Timestamp::SIZE
+        + Hash::SIZE
+        + Hash::SIZE
+        + Uint4::SIZE
+        + Uint4::SIZE
+        + Uint4::SIZE
+        + Fixed2::SIZE;
 
     pub fn new(hasher: BlockHasherFn) -> Self {
         Self {
@@ -41,6 +52,13 @@ impl BlockV1 {
         }
     }
 
+    /// Intro-header transaction count (wire field). Distinct from
+    /// [`Block::transaction_count`](base::Block::transaction_count), which is
+    /// `transactions().len()`.
+    pub fn header_transaction_count(&self) -> Uint4 {
+        self.transaction_count
+    }
+
     pub fn genesis(hasher: BlockHasherFn) -> Self {
         let mut blk = Self::new(hasher);
         blk.difficulty = Uint4::from(1);
@@ -48,15 +66,7 @@ impl BlockV1 {
     }
 
     fn intro_size(&self) -> usize {
-        self.version.size()
-            + self.height.size()
-            + self.timestamp.size()
-            + self.prevhash.size()
-            + self.mrklroot.size()
-            + self.transaction_count.size()
-            + self.nonce.size()
-            + self.difficulty.size()
-            + self.witness_stage.size()
+        Self::INTRO_SIZE
     }
 
     fn encode_intro_to(&self, out: &mut Vec<u8>) {
@@ -77,7 +87,20 @@ impl BlockV1 {
         out
     }
 
-    pub fn decode_intro(hasher: BlockHasherFn, buf: &[u8]) -> Ret<Self> {
+    fn read_intro(
+        buf: &[u8],
+    ) -> Ret<(
+        Uint1,
+        BlockHeight,
+        Timestamp,
+        Hash,
+        Hash,
+        Uint4,
+        Uint4,
+        Uint4,
+        Fixed2,
+        usize,
+    )> {
         let mut r = Reader::new(buf);
         let version: Uint1 = r.read()?;
         if version.uint() != Self::VERSION {
@@ -91,10 +114,37 @@ impl BlockV1 {
         let nonce: Uint4 = r.read()?;
         let difficulty: Uint4 = r.read()?;
         let witness_stage: Fixed2 = r.read()?;
-        if r.used() != buf.len() {
+        Ok((
+            version,
+            height,
+            timestamp,
+            prevhash,
+            mrklroot,
+            transaction_count,
+            nonce,
+            difficulty,
+            witness_stage,
+            r.used(),
+        ))
+    }
+
+    pub fn decode_intro(hasher: BlockHasherFn, buf: &[u8]) -> Ret<Self> {
+        let (
+            version,
+            height,
+            timestamp,
+            prevhash,
+            mrklroot,
+            transaction_count,
+            nonce,
+            difficulty,
+            witness_stage,
+            used,
+        ) = Self::read_intro(buf)?;
+        if used != buf.len() {
             return sys::normalf!(
                 "block intro length mismatch: consumed {} but payload length is {}",
-                r.used(),
+                used,
                 buf.len()
             );
         }
@@ -125,6 +175,15 @@ impl Encode for BlockV1 {
     }
 
     fn encode_to(&self, out: &mut Vec<u8>) {
+        let actual =
+            Uint4::from_usize(self.transactions.len()).expect("block transaction count overflow");
+        assert_eq!(
+            self.header_transaction_count(),
+            actual,
+            "block transaction_count {} != transactions.len() {}",
+            self.header_transaction_count().uint(),
+            self.transactions.len()
+        );
         self.encode_intro_to(out);
         for tx in &self.transactions {
             tx.encode_to(out);
@@ -271,26 +330,26 @@ pub fn calculate_mrkl_prelude_update(cbhx: Hash, list: &[Hash]) -> Hash {
 }
 
 pub fn create_std_block(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::BlockRef, usize)> {
+    let (
+        version,
+        height,
+        timestamp,
+        prevhash,
+        mrklroot,
+        transaction_count,
+        nonce,
+        difficulty,
+        witness_stage,
+        used,
+    ) = BlockV1::read_intro(buf)?;
     let mut r = Reader::new(buf);
-    let version: Uint1 = r.read()?;
-    if version.uint() != BlockV1::VERSION {
-        return sys::normalf!("block version {} not supported", version.uint());
-    }
-    let height: BlockHeight = r.read()?;
-    let timestamp: Timestamp = r.read()?;
-    let prevhash: Hash = r.read()?;
-    let mrklroot: Hash = r.read()?;
-    let transaction_count: Uint4 = r.read()?;
-    let nonce: Uint4 = r.read()?;
-    let difficulty: Uint4 = r.read()?;
-    let witness_stage: Fixed2 = r.read()?;
+    r.skip(used)?;
 
     // Do not preallocate from the untrusted wire count: a malformed `u32::MAX` count
     // must fail during bounded decoding, not allocate before the consistency check.
     let mut transactions = Vec::new();
     for _ in 0..transaction_count.uint() {
-        let (tx, used) = reg.decode_transaction(&buf[r.used()..])?;
-        let _ = r.read_bytes(used)?;
+        let tx = r.read_with(|rest| reg.decode_transaction(rest))?;
         transactions.push(tx);
     }
 
@@ -310,4 +369,64 @@ pub fn create_std_block(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::BlockR
         }),
         r.used(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::action::TransferHacTo;
+    use crate::codec::test_reg::{TestRegistry, hasher};
+    use crate::codec::tx::StdTransaction;
+    use base::{BlockBuild, TransactionBuild};
+    use field::{Address, Amount, Encode};
+    use std::sync::Arc;
+
+    #[test]
+    fn intro_size_is_fixed_and_decode_paths_share_read_intro() {
+        assert_eq!(BlockV1::INTRO_SIZE, 89);
+        let block = BlockV1::new(hasher());
+        let intro = block.encode_intro();
+        assert_eq!(intro.len(), BlockV1::INTRO_SIZE);
+        assert_eq!(block.size(), intro.len());
+
+        let decoded = BlockV1::decode_intro(hasher(), &intro).unwrap();
+        assert_eq!(decoded.header_transaction_count().uint(), 0);
+        assert!(decoded.transactions.is_empty());
+        assert_eq!(decoded.encode_intro(), intro);
+
+        let mut longer = intro.clone();
+        longer.extend_from_slice(&[0xaa]);
+        assert!(BlockV1::decode_intro(hasher(), &longer).is_err());
+        let (fields_used, _) = {
+            let (_, _, _, _, _, _, _, _, _, used) = BlockV1::read_intro(&longer).unwrap();
+            (used, ())
+        };
+        assert_eq!(fields_used, BlockV1::INTRO_SIZE);
+
+        let mut wrong = intro.clone();
+        wrong[0] = 2;
+        assert!(BlockV1::decode_intro(hasher(), &wrong).is_err());
+        let reg = TestRegistry::protocol().unwrap();
+        assert!(create_std_block(&reg, &wrong).is_err());
+    }
+
+    #[test]
+    fn full_block_roundtrip_size_matches_encode() {
+        let reg = TestRegistry::protocol().unwrap();
+        let mut block = BlockV1::new(hasher());
+        let mut tx =
+            StdTransaction::new(hacash_params::TX_TYPE_2, Address::default(), Amount::mei(1));
+        tx.push_action(Arc::new(TransferHacTo::new(
+            Address::default(),
+            Amount::mei(1),
+        )))
+        .unwrap();
+        block.push_transaction(Arc::new(tx)).unwrap();
+        assert_eq!(block.size(), block.encode().len());
+        let wire = block.encode();
+        let (decoded, used) = create_std_block(&reg, &wire).unwrap();
+        assert_eq!(used, wire.len());
+        assert_eq!(decoded.encode(), wire);
+        assert_eq!(decoded.transactions().len(), 1);
+    }
 }

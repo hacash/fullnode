@@ -146,8 +146,10 @@ enum TxHashMode {
     Type3,
 }
 
+/// Standard user transaction (wire types 1/2/3). `ty` is a data field set at
+/// construct/decode and written on encode; behavior branches on `ty.uint()`.
 #[derive(Debug, Clone)]
-pub struct TransactionType1 {
+pub struct StdTransaction {
     pub ty: Uint1,
     pub timestamp: Timestamp,
     pub addrlist: AddrOrList,
@@ -158,77 +160,33 @@ pub struct TransactionType1 {
     pub ano_mark: Fixed1,
 }
 
-#[derive(Debug, Clone)]
-pub struct TransactionType2 {
-    pub ty: Uint1,
-    pub timestamp: Timestamp,
-    pub addrlist: AddrOrList,
-    pub fee: Amount,
-    pub actions: Vec<ActionRef>,
-    pub signs: SignW2,
-    pub gas_max: Uint1,
-    pub ano_mark: Fixed1,
-}
-
-#[derive(Debug, Clone)]
-pub struct TransactionType3 {
-    pub ty: Uint1,
-    pub timestamp: Timestamp,
-    pub addrlist: AddrOrList,
-    pub fee: Amount,
-    pub actions: Vec<ActionRef>,
-    pub signs: SignW2,
-    pub gas_max: Uint1,
-    pub ano_mark: Fixed1,
-}
-
-pub type StdTransaction = TransactionType2;
-
-/// Concrete standard transaction construction (types 1/2/3) from a
-/// `TxCreateRequest`; shared so the concrete type list exists once.
-macro_rules! standard_tx_from_request {
-    ($request:expr, $ty:ident) => {
-        $ty {
-            ty: Uint1::from($request.ty),
-            timestamp: Timestamp::from($request.timestamp),
-            addrlist: $request.addrlist,
-            fee: $request.fee,
-            actions: Vec::new(),
-            signs: SignW2::default(),
-            gas_max: Uint1::from($request.gas_max),
-            ano_mark: Fixed1::default(),
+fn std_tx_from_request(request: TxCreateRequest) -> Ret<StdTransaction> {
+    match request.ty {
+        hacash_params::TX_TYPE_1 | hacash_params::TX_TYPE_2 | hacash_params::TX_TYPE_3 => {
+            Ok(StdTransaction {
+                ty: Uint1::from(request.ty),
+                timestamp: Timestamp::from(request.timestamp),
+                addrlist: request.addrlist,
+                fee: request.fee,
+                actions: Vec::new(),
+                signs: SignW2::default(),
+                gas_max: Uint1::from(request.gas_max),
+                ano_mark: Fixed1::default(),
+            })
         }
-    };
+        ty => errf!("unsupported standard user transaction type {}", ty),
+    }
 }
 
 /// Create an empty standard user transaction by wire type; owns the concrete
-/// types behind [`base::TransactionCreator`]. Type 1/2 `gas_max != 0` is wire-legal (execute rejects it); callers use `crate::facts::gas_max_finding`.
+/// type behind [`base::TransactionCreator`]. Type 1/2 `gas_max != 0` is wire-legal (execute rejects it); callers use `crate::facts::gas_max_finding`.
 pub fn create_standard_transaction(request: TxCreateRequest) -> Ret<base::TxRef> {
-    let ty = request.ty;
-    match ty {
-        TransactionType1::TYPE => Ok(Arc::new(standard_tx_from_request!(
-            request,
-            TransactionType1
-        ))),
-        TransactionType2::TYPE => Ok(Arc::new(standard_tx_from_request!(
-            request,
-            TransactionType2
-        ))),
-        TransactionType3::TYPE => Ok(Arc::new(standard_tx_from_request!(
-            request,
-            TransactionType3
-        ))),
-        _ => errf!("unsupported standard user transaction type {}", ty),
-    }
+    Ok(Arc::new(std_tx_from_request(request)?))
 }
 
 /// Push actions (up to the u16 wire count) and mechanically insert signatures;
 /// digest/D-set acceptance is separate (`verify_signature` / `signature_report`).
-fn fill_standard_tx<T: TransactionBuild>(
-    tx: &mut T,
-    actions: &[ActionRef],
-    signs: &[Sign],
-) -> Rerr {
+fn fill_standard_tx(tx: &mut StdTransaction, actions: &[ActionRef], signs: &[Sign]) -> Rerr {
     for action in actions {
         tx.push_action(action.clone())?;
     }
@@ -238,33 +196,15 @@ fn fill_standard_tx<T: TransactionBuild>(
     Ok(())
 }
 
-/// Encode a standard transaction body (types 1/2/3); owns the type list so
-/// callers never enumerate types. Consensus envelope rules are not constructor gates.
+/// Encode a standard transaction body (types 1/2/3). Consensus envelope rules are not constructor gates.
 pub fn encode_standard_tx(
     request: TxCreateRequest,
     actions: &[ActionRef],
     signs: &[Sign],
 ) -> Ret<Vec<u8>> {
-    let ty = request.ty;
-    let body = match ty {
-        TransactionType1::TYPE => {
-            let mut tx = standard_tx_from_request!(request, TransactionType1);
-            fill_standard_tx(&mut tx, actions, signs)?;
-            tx.encode()
-        }
-        TransactionType2::TYPE => {
-            let mut tx = standard_tx_from_request!(request, TransactionType2);
-            fill_standard_tx(&mut tx, actions, signs)?;
-            tx.encode()
-        }
-        TransactionType3::TYPE => {
-            let mut tx = standard_tx_from_request!(request, TransactionType3);
-            fill_standard_tx(&mut tx, actions, signs)?;
-            tx.encode()
-        }
-        _ => return errf!("unsupported standard user transaction type {}", ty),
-    };
-    Ok(body)
+    let mut tx = std_tx_from_request(request)?;
+    fill_standard_tx(&mut tx, actions, signs)?;
+    Ok(tx.encode())
 }
 
 fn action_list_size(actions: &[ActionRef]) -> usize {
@@ -272,7 +212,9 @@ fn action_list_size(actions: &[ActionRef]) -> usize {
 }
 
 fn encode_action_list(actions: &[ActionRef], out: &mut Vec<u8>) {
-    Uint2::from(actions.len() as u16).encode_to(out);
+    Uint2::from_usize(actions.len())
+        .expect("action list length overflow")
+        .encode_to(out);
     for act in actions {
         act.encode_to(out);
     }
@@ -283,8 +225,7 @@ fn decode_action_list(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(Vec<ActionRef>
     let count: Uint2 = r.read()?;
     let mut actions = Vec::with_capacity(count.uint() as usize);
     for _ in 0..count.uint() {
-        let (act, used) = reg.decode_action(&buf[r.used()..])?;
-        let _ = r.read_bytes(used)?;
+        let act = r.read_with(|rest| reg.decode_action(rest))?;
         actions.push(act);
     }
     Ok((actions, r.used()))
@@ -329,8 +270,67 @@ fn req_sign_for(main: Address, addrlist: &AddrOrList, actions: &[ActionRef]) -> 
     Ok(required)
 }
 
-impl TransactionType3 {
+impl StdTransaction {
     pub const SIGN_ITEM_SIZE: usize = 97;
+
+    pub fn new(ty: u8, main: Address, fee: Amount) -> Self {
+        Self::new_by(ty, main, fee, 0)
+    }
+
+    pub fn new_by(ty: u8, main: Address, fee: Amount, ts: u64) -> Self {
+        Self {
+            ty: Uint1::from(ty),
+            timestamp: Timestamp::from(ts),
+            addrlist: AddrOrList::from_addr(main),
+            fee,
+            actions: Vec::new(),
+            signs: SignW2::default(),
+            gas_max: Uint1::default(),
+            ano_mark: Fixed1::default(),
+        }
+    }
+
+    pub fn push_action_in(&mut self, act: ActionRef) {
+        self.try_push_action(act)
+            .expect("tx action count exceeds u16 wire maximum");
+    }
+
+    fn try_push_action(&mut self, act: ActionRef) -> Rerr {
+        Uint2::from_usize(self.actions.len() + 1)?;
+        self.actions.push(act);
+        Ok(())
+    }
+
+    pub fn fill_sign_account(&mut self, acc: &Account) -> Ret<Sign> {
+        let fhx = if acc.address() == self.main().as_bytes()
+            && self.ty.uint() != hacash_params::TX_TYPE_1
+        {
+            self.hash_with_fee()
+        } else {
+            self.hash()
+        };
+        let signobj = Sign::create_by(acc, &fhx);
+        self.push_sign(signobj.clone())?;
+        Ok(signobj)
+    }
+
+    fn hash_ex(&self, fee_bytes: Vec<u8>) -> Hash {
+        let mode = if self.ty.uint() == hacash_params::TX_TYPE_3 {
+            TxHashMode::Type3
+        } else {
+            TxHashMode::Legacy
+        };
+        tx_hash(
+            mode,
+            &self.ty,
+            &self.timestamp,
+            &self.addrlist,
+            &fee_bytes,
+            &self.actions,
+            &self.gas_max,
+            &self.ano_mark,
+        )
+    }
 
     /// Intrinsic R0: main ∪ static action req_sign, excluding RequiredSigners.
     /// Signer sets are small; `Vec` with a linear duplicate scan keeps the
@@ -440,7 +440,7 @@ impl TransactionType3 {
 }
 
 /// Exact Type3 signature verification: SignW2 must match D exactly.
-pub fn verify_type3_signatures_exact(tx: &TransactionType3) -> Rerr {
+pub fn verify_type3_signatures_exact(tx: &StdTransaction) -> Rerr {
     let d = tx.deterministic_signers_vec()?;
     if tx.signs.length() != d.len() {
         return errf!(
@@ -451,17 +451,17 @@ pub fn verify_type3_signatures_exact(tx: &TransactionType3) -> Rerr {
     }
     let mut present_keys: Vec<[u8; Sign::PUBLICKEY_SIZE]> = Vec::new();
     for sig in tx.signs.as_list() {
-        if sig.size() != TransactionType3::SIGN_ITEM_SIZE {
+        if sig.size() != StdTransaction::SIGN_ITEM_SIZE {
             return errf!(
                 "Type3 Sign encoding size must be {}, got {}",
-                TransactionType3::SIGN_ITEM_SIZE,
+                StdTransaction::SIGN_ITEM_SIZE,
                 sig.size()
             );
         }
-        if present_keys.contains(&sig.publickey) {
+        if present_keys.contains(sig.publickey.as_array()) {
             return errf!("Type3 SignW2 contains duplicate public key");
         }
-        present_keys.push(sig.publickey);
+        present_keys.push(sig.publickey.into_array());
     }
     let mut present_addrs: Vec<Address> = Vec::new();
     for sig in tx.signs.as_list() {
@@ -488,19 +488,6 @@ pub fn verify_type3_signatures_exact(tx: &TransactionType3) -> Rerr {
     Ok(())
 }
 
-fn type3_req_sign(any: &dyn Any) -> Ret<Vec<Address>> {
-    let t3 = any
-        .downcast_ref::<TransactionType3>()
-        .ok_or_else(|| sys::Error::fault("Type3 req_sign cast failed"))?;
-    t3.deterministic_signers_vec()
-}
-
-fn type3_fee_purity(any: &dyn Any) -> u64 {
-    any.downcast_ref::<TransactionType3>()
-        .map(|t| t.type3_fee_purity())
-        .unwrap_or(0)
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TxSignatureReport {
     pub required: Vec<Address>,
@@ -516,7 +503,9 @@ fn sort_addresses(addrs: &mut Vec<Address>) {
 }
 
 fn sign_address(sign: &Sign) -> Address {
-    Address::from(Account::get_address_by_public_key(sign.publickey))
+    Address::from(Account::get_address_by_public_key(
+        sign.publickey.into_array(),
+    ))
 }
 
 fn signature_present_for(addr: &Address, signs: &[Sign]) -> bool {
@@ -526,7 +515,7 @@ fn signature_present_for(addr: &Address, signs: &[Sign]) -> bool {
 /// Canonical per-signer sign hash: the main signer of Type-2/3 signs
 /// `hash_with_fee`, everyone else (and all Type-1 signers) signs `hash`.
 pub fn sign_hash_for(tx: &dyn TransactionSign, adr: &Address) -> Hash {
-    if *adr == tx.main() && tx.ty() != TransactionType1::TYPE {
+    if *adr == tx.main() && tx.ty() != hacash_params::TX_TYPE_1 {
         tx.hash_with_fee()
     } else {
         tx.hash()
@@ -550,8 +539,8 @@ pub fn verify_target_signature(adr: &Address, tx: &dyn TransactionSign) -> Ret<b
 }
 
 pub fn verify_tx_signature(tx: &dyn TransactionSign) -> Rerr {
-    if tx.ty() == TransactionType3::TYPE {
-        if let Some(t3) = tx.as_any().downcast_ref::<TransactionType3>() {
+    if tx.ty() == hacash_params::TX_TYPE_3 {
+        if let Some(t3) = tx.as_any().downcast_ref::<StdTransaction>() {
             return verify_type3_signatures_exact(t3);
         }
     }
@@ -605,81 +594,52 @@ pub fn signature_report(tx: &dyn TransactionSign) -> Ret<TxSignatureReport> {
     })
 }
 
+fn clone_std_tx(tx: &dyn Transaction) -> Option<StdTransaction> {
+    tx.as_any().downcast_ref::<StdTransaction>().cloned()
+}
+
 /// Re-encode with the signature set cleared (type-2/3 wire order preserved);
 /// used for the stable `unsigned_body_hash`.
 pub fn encode_without_signs(tx: &dyn Transaction) -> Ret<Vec<u8>> {
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
-        let mut copy = t.clone();
-        copy.signs = SignW2::default();
-        return Ok(copy.encode());
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType2>() {
-        let mut copy = t.clone();
-        copy.signs = SignW2::default();
-        return Ok(copy.encode());
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType3>() {
-        let mut copy = t.clone();
-        copy.signs = SignW2::default();
-        return Ok(copy.encode());
-    }
-    errf!("transaction type {} has no unsigned-body form", tx.ty())
+    let Some(mut copy) = clone_std_tx(tx) else {
+        return errf!("transaction type {} has no unsigned-body form", tx.ty());
+    };
+    copy.signs = SignW2::default();
+    Ok(copy.encode())
 }
 
 /// Clone and insert one signature without digest verification; same-key
 /// replacement lives in `insert_sign`, body validity is a separate capability.
 pub fn insert_attached_sign(tx: &dyn Transaction, sign: Sign) -> Ret<base::TxRef> {
     use base::TransactionBuild;
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
-        let mut copy = t.clone();
-        copy.insert_sign(sign)?;
-        return Ok(Arc::new(copy));
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType2>() {
-        let mut copy = t.clone();
-        copy.insert_sign(sign)?;
-        return Ok(Arc::new(copy));
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType3>() {
-        let mut copy = t.clone();
-        copy.insert_sign(sign)?;
-        return Ok(Arc::new(copy));
-    }
-    errf!(
-        "transaction type {} does not support insert_attached_sign",
-        tx.ty()
-    )
+    let Some(mut copy) = clone_std_tx(tx) else {
+        return errf!(
+            "transaction type {} does not support insert_attached_sign",
+            tx.ty()
+        );
+    };
+    copy.insert_sign(sign)?;
+    Ok(Arc::new(copy))
 }
 
 /// Clone, insert one signature via `push_sign` (insert + digest verify) and return
 /// the signed tx; node/API paths use this, the SDK uses `insert_attached_sign`.
 pub fn attach_sign(tx: &dyn Transaction, sign: Sign) -> Ret<base::TxRef> {
     use base::TransactionBuild;
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType1>() {
-        let mut copy = t.clone();
-        copy.push_sign(sign)?;
-        return Ok(Arc::new(copy));
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType2>() {
-        let mut copy = t.clone();
-        copy.push_sign(sign)?;
-        return Ok(Arc::new(copy));
-    }
-    if let Some(t) = tx.as_any().downcast_ref::<TransactionType3>() {
-        let mut copy = t.clone();
-        copy.push_sign(sign)?;
-        return Ok(Arc::new(copy));
-    }
-    errf!("transaction type {} does not support attach_sign", tx.ty())
+    let Some(mut copy) = clone_std_tx(tx) else {
+        return errf!("transaction type {} does not support attach_sign", tx.ty());
+    };
+    copy.push_sign(sign)?;
+    Ok(Arc::new(copy))
 }
 
 /// Protocol signer-cap rule: only type 3 caps its *required* signer set (D) at
 /// `max` (execute-time); evaluated on required, not attached, signers.
 pub fn check_signers_cap(tx: &dyn Transaction, max: usize) -> Rerr {
-    if tx.ty() == TransactionType3::TYPE {
+    if tx.ty() == hacash_params::TX_TYPE_3 {
         let t3 = tx
             .as_any()
-            .downcast_ref::<TransactionType3>()
+            .downcast_ref::<StdTransaction>()
             .ok_or_else(|| sys::Error::fault("Type3 signer cap cast failed"))?;
         t3.validate_signer_limit(max)?;
     }
@@ -703,304 +663,200 @@ fn insert_sign(signs: &mut SignW2, signobj: Sign) -> Ret<Address> {
     Ok(curaddr)
 }
 
-fn decode_tx_fields(
+fn decode_std_tx(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(StdTransaction, usize)> {
+    let mut r = Reader::new(buf);
+    let tx = StdTransaction {
+        ty: r.read()?,
+        timestamp: r.read()?,
+        addrlist: r.read()?,
+        fee: r.read()?,
+        actions: r.read_with(|rest| decode_action_list(reg, rest))?,
+        signs: r.read()?,
+        gas_max: r.read()?,
+        ano_mark: r.read()?,
+    };
+    Ok((tx, r.used()))
+}
+
+fn create_std_tx_of_type(
     reg: &dyn BinaryCodecs,
     buf: &[u8],
-) -> Ret<(
-    Uint1,
-    Timestamp,
-    AddrOrList,
-    Amount,
-    Vec<ActionRef>,
-    SignW2,
-    Uint1,
-    Fixed1,
-    usize,
-)> {
-    let mut r = Reader::new(buf);
-    let ty: Uint1 = r.read()?;
-    let timestamp: Timestamp = r.read()?;
-    let addrlist: AddrOrList = r.read()?;
-    let fee: Amount = r.read()?;
-    let (actions, used) = decode_action_list(reg, &buf[r.used()..])?;
-    let _ = r.read_bytes(used)?;
-    let signs: SignW2 = r.read()?;
-    let gas_max: Uint1 = r.read()?;
-    let ano_mark: Fixed1 = r.read()?;
-    Ok((
-        ty,
-        timestamp,
-        addrlist,
-        fee,
-        actions,
-        signs,
-        gas_max,
-        ano_mark,
-        r.used(),
-    ))
+    expected: u8,
+) -> Ret<(base::TxRef, usize)> {
+    let (tx, used) = decode_std_tx(reg, buf)?;
+    if tx.ty.uint() != expected {
+        return sys::normalf!("transaction type codec got type {}", tx.ty.uint());
+    }
+    Ok((Arc::new(tx), used))
 }
 
-macro_rules! impl_tx_type {
-    ($name:ident, $tyid:expr, $hash_mode:expr, $has_gas:expr) => {
-        impl $name {
-            pub const TYPE: u8 = $tyid;
-
-            pub fn new(main: Address, fee: Amount) -> Self {
-                Self::new_by(main, fee, 0)
-            }
-
-            pub fn new_by(main: Address, fee: Amount, ts: u64) -> Self {
-                Self {
-                    ty: Uint1::from(Self::TYPE),
-                    timestamp: Timestamp::from(ts),
-                    addrlist: AddrOrList::from_addr(main),
-                    fee,
-                    actions: Vec::new(),
-                    signs: SignW2::default(),
-                    gas_max: Uint1::default(),
-                    ano_mark: Fixed1::default(),
-                }
-            }
-
-            pub fn push_action_in(&mut self, act: ActionRef) {
-                self.actions.push(act);
-            }
-
-            pub fn fill_sign_account(&mut self, acc: &Account) -> Ret<Sign> {
-                let fhx = if acc.address() == self.main().as_bytes()
-                    && Self::TYPE != TransactionType1::TYPE
-                {
-                    self.hash_with_fee()
-                } else {
-                    self.hash()
-                };
-                let signobj = Sign::create_by(acc, &fhx);
-                self.push_sign(signobj.clone())?;
-                Ok(signobj)
-            }
-
-            fn hash_ex(&self, fee_bytes: Vec<u8>) -> Hash {
-                tx_hash(
-                    $hash_mode,
-                    &self.ty,
-                    &self.timestamp,
-                    &self.addrlist,
-                    &fee_bytes,
-                    &self.actions,
-                    &self.gas_max,
-                    &self.ano_mark,
-                )
-            }
-        }
-
-        impl Encode for $name {
-            fn size(&self) -> usize {
-                self.ty.size()
-                    + self.timestamp.size()
-                    + self.addrlist.size()
-                    + self.fee.size()
-                    + action_list_size(&self.actions)
-                    + self.signs.size()
-                    + self.gas_max.size()
-                    + self.ano_mark.size()
-            }
-
-            fn encode_to(&self, out: &mut Vec<u8>) {
-                self.ty.encode_to(out);
-                self.timestamp.encode_to(out);
-                self.addrlist.encode_to(out);
-                self.fee.encode_to(out);
-                encode_action_list(&self.actions, out);
-                self.signs.encode_to(out);
-                self.gas_max.encode_to(out);
-                self.ano_mark.encode_to(out);
-            }
-        }
-
-        impl Transaction for $name {
-            fn ty(&self) -> u8 {
-                self.ty.uint()
-            }
-
-            fn main(&self) -> Address {
-                self.addrlist.to_list()[0]
-            }
-
-            fn addrs(&self) -> Vec<Address> {
-                self.addrlist.to_list()
-            }
-
-            fn fee(&self) -> &Amount {
-                &self.fee
-            }
-
-            fn fee_got(&self) -> Amount {
-                if Self::TYPE == TransactionType3::TYPE {
-                    return self.fee.clone();
-                }
-                let mut fee = self.fee.clone();
-                if self.actions.iter().any(|action| action.extra9()) && fee.unit() > 1 {
-                    fee = fee.unit_sub(1).expect("fee unit is greater than one");
-                }
-                fee
-            }
-
-            fn timestamp(&self) -> &Timestamp {
-                &self.timestamp
-            }
-
-            fn gas_max_byte(&self) -> Option<u8> {
-                if $has_gas {
-                    Some(self.gas_max.uint())
-                } else {
-                    None
-                }
-            }
-
-            fn actions(&self) -> &[ActionRef] {
-                &self.actions
-            }
-
-            fn signs(&self) -> &[Sign] {
-                self.signs.as_list()
-            }
-
-            fn fee_purity(&self) -> u64 {
-                if Self::TYPE == TransactionType3::TYPE {
-                    return type3_fee_purity(self as &dyn Any);
-                }
-                let txsz = Encode::size(self) as u64;
-                if txsz == 0 {
-                    return 0;
-                }
-                let fee238 = self.fee_got().to_238_u128().unwrap_or(u128::MAX);
-                let purity = fee238 / txsz as u128;
-                purity.min(u64::MAX as u128) as u64
-            }
-
-            fn billing_size(&self) -> Ret<usize> {
-                if Self::TYPE == TransactionType3::TYPE {
-                    if let Some(t3) = (self as &dyn Any).downcast_ref::<TransactionType3>() {
-                        return t3.canonical_billing_size();
-                    }
-                }
-                Ok(Encode::size(self))
-            }
-
-            fn as_any(&self) -> &dyn Any {
-                self
-            }
-        }
-
-        impl TransactionSign for $name {
-            fn hash(&self) -> Hash {
-                self.hash_ex(Vec::new())
-            }
-
-            fn hash_with_fee(&self) -> Hash {
-                self.hash_ex(self.fee.encode())
-            }
-
-            fn req_sign(&self) -> Ret<Vec<Address>> {
-                if Self::TYPE == TransactionType3::TYPE {
-                    return type3_req_sign(self as &dyn Any);
-                }
-                req_sign_for(self.main(), &self.addrlist, &self.actions)
-            }
-
-            fn verify_signature(&self) -> Rerr {
-                verify_tx_signature(self)
-            }
-
-            #[cfg(feature = "execute")]
-            fn as_execute(&self) -> Option<&dyn TransactionExecute> {
-                Some(self)
-            }
-        }
-
-        impl TransactionBuild for $name {
-            fn set_fee(&mut self, fee: Amount) {
-                self.fee = fee;
-            }
-
-            fn insert_sign(&mut self, sg: Sign) -> Rerr {
-                insert_sign(&mut self.signs, sg).map(|_| ())
-            }
-
-            fn push_sign(&mut self, sg: Sign) -> Rerr {
-                let curaddr = insert_sign(&mut self.signs, sg)?;
-                if verify_target_signature(&curaddr, self).unwrap_or(false) {
-                    return Ok(());
-                }
-                errf!("address {:?} signature verification failed", curaddr)
-            }
-
-            fn push_action(&mut self, act: ActionRef) -> Rerr {
-                if self.actions.len() >= u16::MAX as usize {
-                    return errf!("tx action count exceeds u16 wire maximum");
-                }
-                self.actions.push(act);
-                Ok(())
-            }
-        }
-    };
+/// Wire creator for type-1: shared field decode plus the type-byte check.
+pub fn create_transaction_type1(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
+    create_std_tx_of_type(reg, buf, hacash_params::TX_TYPE_1)
 }
 
-impl_tx_type!(
-    TransactionType1,
-    hacash_params::TX_TYPE_1,
-    TxHashMode::Legacy,
-    false
-);
-impl_tx_type!(
-    TransactionType2,
-    hacash_params::TX_TYPE_2,
-    TxHashMode::Legacy,
-    false
-);
-impl_tx_type!(
-    TransactionType3,
-    hacash_params::TX_TYPE_3,
-    TxHashMode::Type3,
-    true
-);
-
-/// Wire creator for one standard tx type: shared field decode plus the
-/// type-byte check against the concrete type's own `TYPE`.
-macro_rules! create_tx_codec {
-    ($fn:ident, $ty:ident) => {
-        pub fn $fn(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
-            let (ty, timestamp, addrlist, fee, actions, signs, gas_max, ano_mark, used) =
-                decode_tx_fields(reg, buf)?;
-            if ty.uint() != <$ty>::TYPE {
-                return sys::normalf!("transaction type codec got type {}", ty.uint());
-            }
-            Ok((
-                Arc::new($ty {
-                    ty,
-                    timestamp,
-                    addrlist,
-                    fee,
-                    actions,
-                    signs,
-                    gas_max,
-                    ano_mark,
-                }),
-                used,
-            ))
-        }
-    };
+/// Wire creator for type-2: shared field decode plus the type-byte check.
+pub fn create_transaction_type2(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
+    create_std_tx_of_type(reg, buf, hacash_params::TX_TYPE_2)
 }
 
-create_tx_codec!(create_transaction_type1, TransactionType1);
-create_tx_codec!(create_transaction_type2, TransactionType2);
-create_tx_codec!(create_transaction_type3, TransactionType3);
+/// Wire creator for type-3: shared field decode plus the type-byte check.
+pub fn create_transaction_type3(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(base::TxRef, usize)> {
+    create_std_tx_of_type(reg, buf, hacash_params::TX_TYPE_3)
+}
+
+impl Encode for StdTransaction {
+    fn size(&self) -> usize {
+        self.ty.size()
+            + self.timestamp.size()
+            + self.addrlist.size()
+            + self.fee.size()
+            + action_list_size(&self.actions)
+            + self.signs.size()
+            + self.gas_max.size()
+            + self.ano_mark.size()
+    }
+
+    fn encode_to(&self, out: &mut Vec<u8>) {
+        self.ty.encode_to(out);
+        self.timestamp.encode_to(out);
+        self.addrlist.encode_to(out);
+        self.fee.encode_to(out);
+        encode_action_list(&self.actions, out);
+        self.signs.encode_to(out);
+        self.gas_max.encode_to(out);
+        self.ano_mark.encode_to(out);
+    }
+}
+
+impl Transaction for StdTransaction {
+    fn ty(&self) -> u8 {
+        self.ty.uint()
+    }
+
+    fn main(&self) -> Address {
+        self.addrlist.to_list()[0]
+    }
+
+    fn addrs(&self) -> Vec<Address> {
+        self.addrlist.to_list()
+    }
+
+    fn fee(&self) -> &Amount {
+        &self.fee
+    }
+
+    fn fee_got(&self) -> Amount {
+        if self.ty.uint() == hacash_params::TX_TYPE_3 {
+            return self.fee.clone();
+        }
+        let mut fee = self.fee.clone();
+        if self.actions.iter().any(|action| action.extra9()) && fee.unit() > 1 {
+            fee = fee.unit_sub(1).expect("fee unit is greater than one");
+        }
+        fee
+    }
+
+    fn timestamp(&self) -> &Timestamp {
+        &self.timestamp
+    }
+
+    fn gas_max_byte(&self) -> Option<u8> {
+        if self.ty.uint() == hacash_params::TX_TYPE_3 {
+            Some(self.gas_max.uint())
+        } else {
+            None
+        }
+    }
+
+    fn actions(&self) -> &[ActionRef] {
+        &self.actions
+    }
+
+    fn signs(&self) -> &[Sign] {
+        self.signs.as_list()
+    }
+
+    fn fee_purity(&self) -> u64 {
+        if self.ty.uint() == hacash_params::TX_TYPE_3 {
+            return self.type3_fee_purity();
+        }
+        let txsz = Encode::size(self) as u64;
+        if txsz == 0 {
+            return 0;
+        }
+        let fee238 = self.fee_got().to_238_u128().unwrap_or(u128::MAX);
+        let purity = fee238 / txsz as u128;
+        purity.min(u64::MAX as u128) as u64
+    }
+
+    fn billing_size(&self) -> Ret<usize> {
+        if self.ty.uint() == hacash_params::TX_TYPE_3 {
+            return self.canonical_billing_size();
+        }
+        Ok(Encode::size(self))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl TransactionSign for StdTransaction {
+    fn hash(&self) -> Hash {
+        self.hash_ex(Vec::new())
+    }
+
+    fn hash_with_fee(&self) -> Hash {
+        self.hash_ex(self.fee.encode())
+    }
+
+    fn req_sign(&self) -> Ret<Vec<Address>> {
+        if self.ty.uint() == hacash_params::TX_TYPE_3 {
+            return self.deterministic_signers_vec();
+        }
+        req_sign_for(self.main(), &self.addrlist, &self.actions)
+    }
+
+    fn verify_signature(&self) -> Rerr {
+        verify_tx_signature(self)
+    }
+
+    #[cfg(feature = "execute")]
+    fn as_execute(&self) -> Option<&dyn TransactionExecute> {
+        Some(self)
+    }
+}
+
+impl TransactionBuild for StdTransaction {
+    fn set_fee(&mut self, fee: Amount) {
+        self.fee = fee;
+    }
+
+    fn insert_sign(&mut self, sg: Sign) -> Rerr {
+        insert_sign(&mut self.signs, sg).map(|_| ())
+    }
+
+    fn push_sign(&mut self, sg: Sign) -> Rerr {
+        let curaddr = insert_sign(&mut self.signs, sg)?;
+        if verify_target_signature(&curaddr, self).unwrap_or(false) {
+            return Ok(());
+        }
+        errf!("address {:?} signature verification failed", curaddr)
+    }
+
+    fn push_action(&mut self, act: ActionRef) -> Rerr {
+        self.try_push_action(act)
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::action::TransferHacFromTo;
+    use crate::codec::action::{TransferHacFromTo, TransferHacTo};
+    use base::{ActionRef, TransactionBuild};
     use field::AddrOrPtr;
+    use sys::ToHex;
 
     fn scriptmh_address() -> Address {
         // VERSION_SCRIPTMH = 5; such addresses cannot produce signatures.
@@ -1010,9 +866,9 @@ mod tests {
         Address::from(raw)
     }
 
-    fn fromto_tx(from: Address, to: Address, acc: &Account) -> TransactionType1 {
+    fn fromto_tx(from: Address, to: Address, acc: &Account) -> StdTransaction {
         let main = Address::from(*acc.address());
-        let mut tx = TransactionType1::new(main, Amount::mei(1));
+        let mut tx = StdTransaction::new(hacash_params::TX_TYPE_1, main, Amount::mei(1));
         tx.push_action_in(Arc::new(TransferHacFromTo {
             kind: Uint2::from(TransferHacFromTo::KIND),
             from: AddrOrPtr::Addr(from),
@@ -1056,5 +912,129 @@ mod tests {
         let sign = Sign::create_by(&acc_to, &tx.hash());
         tx.push_sign(sign).unwrap();
         tx.verify_signature().unwrap();
+    }
+
+    fn w2_actions(n: usize) -> Vec<ActionRef> {
+        let act: ActionRef = Arc::new(TransferHacFromTo {
+            kind: Uint2::from(TransferHacFromTo::KIND),
+            from: AddrOrPtr::Addr(Address::default()),
+            to: AddrOrPtr::Addr(Address::default()),
+            hacash: Amount::mei(1),
+        });
+        vec![act; n]
+    }
+
+    #[test]
+    fn action_list_w2_count_bounds() {
+        let empty = w2_actions(0);
+        let mut out = Vec::new();
+        encode_action_list(&empty, &mut out);
+        assert_eq!(out, vec![0, 0]);
+        assert_eq!(action_list_size(&empty), out.len());
+
+        let one = w2_actions(1);
+        let mut out = Vec::new();
+        encode_action_list(&one, &mut out);
+        assert_eq!(action_list_size(&one), out.len());
+
+        let mut tx =
+            StdTransaction::new(hacash_params::TX_TYPE_2, Address::default(), Amount::mei(1));
+        tx.push_action(w2_actions(1).pop().unwrap()).unwrap();
+        assert_eq!(tx.size(), tx.encode().len());
+
+        let max = w2_actions(u16::MAX as usize);
+        let mut out = Vec::new();
+        encode_action_list(&max, &mut out);
+        assert_eq!(&out[..2], &[0xff, 0xff]);
+        assert_eq!(action_list_size(&max), out.len());
+
+        let mut tx =
+            StdTransaction::new(hacash_params::TX_TYPE_2, Address::default(), Amount::mei(1));
+        tx.actions = w2_actions(u16::MAX as usize);
+        assert!(tx.push_action(w2_actions(1).pop().unwrap()).is_err());
+    }
+
+    /// Locked wire / hash / sign-hash vectors for types 1/2/3, captured before
+    /// merging into StdTransaction. Must stay byte-identical.
+    #[test]
+    fn std_tx_golden_vectors() {
+        let acc = Account::create_by("123456").unwrap();
+        let main = Address::from(*acc.address());
+        let fee = Amount::from("1:244").unwrap();
+        let ts = 1_755_223_764u64;
+        let act: ActionRef = Arc::new(TransferHacTo::new(main, Amount::from("1:244").unwrap()));
+
+        let mut t1 = StdTransaction::new_by(hacash_params::TX_TYPE_1, main, fee.clone(), ts);
+        t1.push_action_in(act.clone());
+        assert_eq!(
+            t1.encode().to_hex(),
+            "0100689e96d400e63c33a796b3032ce6b856f68fccf06608d9ed18f401010001000100e63c33a796b3032ce6b856f68fccf06608d9ed18f4010100000000"
+        );
+        assert_eq!(
+            t1.hash().as_ref().to_hex(),
+            "1bab63647f5ded3b68b735157dc4da2e06edc4034451292ee549bc10748016fa"
+        );
+        assert_eq!(
+            t1.hash_with_fee().as_ref().to_hex(),
+            "8d4cd2288ae0cc095a94e0f870efcd24677a2ff0e8352a39c2ea6eb03aeab465"
+        );
+        t1.fill_sign_account(&acc).unwrap();
+        assert_eq!(
+            t1.encode().to_hex(),
+            "0100689e96d400e63c33a796b3032ce6b856f68fccf06608d9ed18f401010001000100e63c33a796b3032ce6b856f68fccf06608d9ed18f4010100010231745adae24044ff09c3541537160abb8d5d720275bbaeed0b3d035b1e8b263cd82e71e372d1309493c12789730efee19c93be3dd0f8c21d83012dfd56b61bdb7fc6e526fa93acae092eb13387d332fe8b74ab3b7a9162c0f664e42d8d1308a70000"
+        );
+        assert_eq!(
+            sign_hash_for(&t1, &main).as_ref().to_hex(),
+            "1bab63647f5ded3b68b735157dc4da2e06edc4034451292ee549bc10748016fa"
+        );
+
+        let mut t2 = StdTransaction::new_by(hacash_params::TX_TYPE_2, main, fee.clone(), ts);
+        t2.push_action_in(act.clone());
+        assert_eq!(
+            t2.encode().to_hex(),
+            "0200689e96d400e63c33a796b3032ce6b856f68fccf06608d9ed18f401010001000100e63c33a796b3032ce6b856f68fccf06608d9ed18f4010100000000"
+        );
+        assert_eq!(
+            t2.hash().as_ref().to_hex(),
+            "b22e61f3e6ebef5e35f6b2885965109ae410f08abf6060173b8e30565f8ec181"
+        );
+        assert_eq!(
+            t2.hash_with_fee().as_ref().to_hex(),
+            "c82b6f0e2cd75f9e450cb6750d6f95b1eced0decb360c4e26d476c9d380e5496"
+        );
+        t2.fill_sign_account(&acc).unwrap();
+        assert_eq!(
+            t2.encode().to_hex(),
+            "0200689e96d400e63c33a796b3032ce6b856f68fccf06608d9ed18f401010001000100e63c33a796b3032ce6b856f68fccf06608d9ed18f4010100010231745adae24044ff09c3541537160abb8d5d720275bbaeed0b3d035b1e8b263ce786aa6d1bf37bc185661a28a27835ca28f400d7af348cd60abd75f3b0f484ad62a0ce5d6b47262ac53bed6c010fbc59ab4aa1ad2689c2097b0cfe34a3b600b50000"
+        );
+        assert_eq!(
+            sign_hash_for(&t2, &main).as_ref().to_hex(),
+            "c82b6f0e2cd75f9e450cb6750d6f95b1eced0decb360c4e26d476c9d380e5496"
+        );
+
+        let mut t3 = StdTransaction::new_by(hacash_params::TX_TYPE_3, main, fee, ts);
+        t3.gas_max = Uint1::from(8);
+        t3.push_action_in(act);
+        assert_eq!(
+            t3.encode().to_hex(),
+            "0300689e96d400e63c33a796b3032ce6b856f68fccf06608d9ed18f401010001000100e63c33a796b3032ce6b856f68fccf06608d9ed18f4010100000800"
+        );
+        assert_eq!(
+            t3.hash().as_ref().to_hex(),
+            "b493df21802eb0541f51903fa4c1bc4f1f192f8d667e48659c4e4b682063975d"
+        );
+        assert_eq!(
+            t3.hash_with_fee().as_ref().to_hex(),
+            "d54ffea812748050fcbf4dcacd8ed0a1571a9b4080ed20c0d9f105252a8305dd"
+        );
+        t3.fill_sign_account(&acc).unwrap();
+        assert_eq!(
+            t3.encode().to_hex(),
+            "0300689e96d400e63c33a796b3032ce6b856f68fccf06608d9ed18f401010001000100e63c33a796b3032ce6b856f68fccf06608d9ed18f4010100010231745adae24044ff09c3541537160abb8d5d720275bbaeed0b3d035b1e8b263c72bf4a192a8cfb7f03a7e2aae6d645fc3f1ac94878b9177b56b0e29346364c315c814fae040b4017762504b759418d1d456850b0f911ba6cea0670e8f01611ff0800"
+        );
+        assert_eq!(
+            sign_hash_for(&t3, &main).as_ref().to_hex(),
+            "d54ffea812748050fcbf4dcacd8ed0a1571a9b4080ed20c0d9f105252a8305dd"
+        );
     }
 }

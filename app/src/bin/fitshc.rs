@@ -6,7 +6,7 @@
 
 use field::*;
 use hacash_params::MAINNET_PARAMS;
-use protocol::tx_std::TransactionType3;
+use protocol::tx_std::StdTransaction;
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
@@ -58,7 +58,8 @@ fn estimate_protocol_cost_auto_with_periods(
 
         let acc = Account::create_by_password("123456").unwrap();
         let addr = Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
-        let mut tx = TransactionType3::new_by(addr, txfee.clone(), curtimes());
+        let mut tx =
+            StdTransaction::new_by(hacash_params::TX_TYPE_3, addr, txfee.clone(), curtimes());
         tx.push_action_in(Arc::new(act));
         tx.gas_max = Uint1::from(8);
         tx.fill_sign_account(&acc).unwrap();

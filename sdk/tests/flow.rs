@@ -6,7 +6,7 @@ use sdk::build::{ActionSpec, TransactionSpec, build_transaction};
 use sdk::inspect::{InspectContext, inspect, inspect_report};
 use sdk::profile::{CodecProfile, FULLNODE_COMMIT};
 use sdk::schema::SCHEMA_SIGNATURE_PROOF;
-use sdk::{Policy, WireValue, evaluate_policy};
+use sdk::{Policy, evaluate_policy};
 
 fn profile() -> CodecProfile {
     CodecProfile::standard()
@@ -15,68 +15,41 @@ fn profile() -> CodecProfile {
 /// Golden signed Type-2 HAC+SAT transfer (legacy vector, prikey "123456").
 const LEGACY_BODY: &str = "0200689e96d400e63c33a796b3032ce6b856f68fccf06608d9ed18f401010002000100e63c33a796b3032ce6b856f68fccf06608d9ed18f8010c000a00e63c33a796b3032ce6b856f68fccf06608d9ed180000000000b71b0000010231745adae24044ff09c3541537160abb8d5d720275bbaeed0b3d035b1e8b263c9b607f2bd9e1031536c13741facb78585755c116aa7d10628ebc2adbb4be96493bc1bb8ac6c3e78dee6717b9c4a27280b698efc91097d5900418a59c9d8e7ac30000";
 
-fn wv_str(s: &str) -> WireValue {
-    WireValue::Str(s.to_owned())
-}
-fn wv_num(n: u64) -> WireValue {
-    WireValue::Num(n)
-}
-fn wv_hex(bytes: impl AsRef<[u8]>) -> WireValue {
-    WireValue::Hex(bytes.as_ref().to_vec())
-}
-fn wv_dia(name: &str) -> WireValue {
-    WireValue::Hex(name.as_bytes().to_vec())
-}
-fn chain_ids(ids: &[u32]) -> WireValue {
-    WireValue::List(ids.iter().map(|id| WireValue::Num(u64::from(*id))).collect())
-}
-fn action(kind: &str, fields: Vec<(&str, WireValue)>) -> ActionSpec {
-    ActionSpec::new(
-        kind,
-        fields
-            .into_iter()
-            .map(|(name, value)| (name.to_owned(), value))
-            .collect(),
-    )
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn hac_transfer(to: &str, amount: &str) -> ActionSpec {
-    action(
-        "transfer_hac_to",
-        vec![("to", wv_str(to)), ("hacash", wv_str(amount))],
-    )
+    ActionSpec::new(format!(r#"{{"kind":1,"to":"{to}","hacash":"{amount}"}}"#))
+        .expect("test action spec")
 }
 fn height_scope(start: u64, end: u64) -> ActionSpec {
-    action(
-        "height_scope",
-        vec![("start", wv_num(start)), ("end", wv_num(end))],
-    )
+    ActionSpec::new(format!(r#"{{"kind":1042,"start":{start},"end":{end}}}"#))
+        .expect("test action spec")
 }
 fn chain_allow(ids: &[u32]) -> ActionSpec {
-    action("chain_allow", vec![("chains", chain_ids(ids))])
+    let list = ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    ActionSpec::new(format!(r#"{{"kind":1041,"chains":[{list}]}}"#)).expect("test action spec")
 }
 fn req_sign_list(signers: &[&str]) -> ActionSpec {
-    action(
-        "required_signers",
-        vec![(
-            "signers",
-            WireValue::List(signers.iter().map(|s| wv_str(s)).collect()),
-        )],
-    )
+    let list = signers
+        .iter()
+        .map(|s| format!("\"{s}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    ActionSpec::new(format!(r#"{{"kind":1044,"signers":[{list}]}}"#)).expect("test action spec")
 }
 fn insc_push(diamonds: &[&str], content: &str) -> ActionSpec {
-    action(
-        "hacd_insc_push",
-        vec![
-            (
-                "diamonds",
-                WireValue::List(diamonds.iter().map(|d| wv_dia(d)).collect()),
-            ),
-            ("protocol_cost", wv_str("0")),
-            ("engraved_type", wv_num(0)),
-            ("engraved_content", wv_hex(content.as_bytes())),
-        ],
-    )
+    ActionSpec::new(format!(
+        r#"{{"kind":32,"diamonds":"{}","protocol_cost":"0","engraved_type":0,"engraved_content":"0x{}"}}"#,
+        diamonds.join(","),
+        to_hex(content.as_bytes())
+    ))
+    .expect("test action spec")
 }
 
 fn vault_sign(
@@ -99,7 +72,13 @@ fn vault_sign(
 
 #[test]
 fn legacy_golden_vector_inspects_and_signature_report_matches() {
-    let review = inspect_report(LEGACY_BODY, None, &profile(), &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        LEGACY_BODY,
+        None,
+        &profile(),
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     assert_eq!(review.tx_type, 2);
     assert_eq!(review.signability, "signable");
     assert_eq!(review.auditability, "full");
@@ -138,6 +117,7 @@ fn full_offline_sign_flow_type2() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![
             hac_transfer(account.readable(), "12:244"),
             height_scope(1_000_000, 0),
@@ -214,6 +194,7 @@ fn attach_is_mechanical_and_never_judges_chain_signer_rules() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
@@ -298,6 +279,7 @@ fn attach_is_mechanical_and_never_judges_chain_signer_rules() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: Some(10),
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
@@ -337,10 +319,8 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
-        actions: vec![
-            height_scope(1_000_000, 2_000_000),
-            chain_allow(&[0]),
-        ],
+        addrlist: None,
+        actions: vec![height_scope(1_000_000, 2_000_000), chain_allow(&[0])],
     })
     .unwrap();
 
@@ -395,7 +375,13 @@ fn strict_inspect_reports_guard_facts_instead_of_denying() {
     assert_eq!(review.wrong_chain, Some(true));
 
     // Report mode (no context) carries no derived facts.
-    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        None,
+        &profile,
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     assert_eq!(review.expired_height, None);
     assert_eq!(review.wrong_chain, None);
 }
@@ -405,18 +391,21 @@ fn type1_is_outside_the_sdk_capability_profile() {
     use field::Encode;
 
     let account = sys::Account::create_by("123456").unwrap();
-    let tx = protocol::tx_std::TransactionType1::new_by(
+    let tx = protocol::tx_std::StdTransaction::new_by(
+        hacash_params::TX_TYPE_1,
         field::Address::from(*account.address()),
         field::Amount::from("1:244").unwrap(),
         1_755_223_764,
     );
-    let error = inspect_report(&hex::encode(tx.encode()), None, &profile(), &sdk::DescribeOptions::default()).unwrap_err();
+    let error = inspect_report(
+        &hex::encode(tx.encode()),
+        None,
+        &profile(),
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap_err();
     assert_eq!(error.code, "parse_failed");
-    assert!(
-        error
-            .message
-            .contains("transaction type 1 not registered")
-    );
+    assert!(error.message.contains("transaction type 1 not registered"));
 
     let error = build_transaction(&TransactionSpec {
         schema: None,
@@ -425,15 +414,12 @@ fn type1_is_outside_the_sdk_capability_profile() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap_err();
     assert_eq!(error.code, "parse_failed");
-    assert!(
-        error
-            .message
-            .contains("transaction type 1 not registered")
-    );
+    assert!(error.message.contains("transaction type 1 not registered"));
 }
 
 #[test]
@@ -447,6 +433,7 @@ fn inspect_consensus_flags_none_does_not_judge_activation() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
@@ -516,10 +503,17 @@ fn policy_evaluate_over_review() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        None,
+        &profile,
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     let decision = evaluate_policy(&review, &Policy::default()).unwrap();
     assert_eq!(decision.decision, "allow");
     assert_eq!(decision.review_binding, review.review_binding);
@@ -556,6 +550,7 @@ fn type2_multi_signer_attaches_incrementally() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![
             req_sign_list(&[second.readable()]),
             hac_transfer(main.readable(), "1:244"),
@@ -627,6 +622,7 @@ fn type3_multi_signer_attaches_incrementally() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: Some(10),
+        addrlist: None,
         actions: vec![
             req_sign_list(&[second.readable()]),
             hac_transfer(main.readable(), "1:244"),
@@ -690,12 +686,15 @@ fn tx_encode_round_trips_and_rejects_tampered_input() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "12:244")],
     })
     .unwrap();
 
     // Untampered round trip reproduces the exact body and hash.
-    let decoded = sdk::inspect::decode_transaction_json(&built.body, &sdk::DescribeOptions::default()).unwrap();
+    let decoded =
+        sdk::inspect::decode_transaction_json(&built.body, &sdk::DescribeOptions::default())
+            .unwrap();
     let rebuilt = sdk::inspect::encode_transaction_json(&decoded, None, &profile).unwrap();
     assert_eq!(rebuilt.body, built.body);
     assert_eq!(rebuilt.unsigned_body_hash, built.unsigned_body_hash);
@@ -709,10 +708,13 @@ fn tx_encode_round_trips_and_rejects_tampered_input() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "12:000")],
     })
     .unwrap();
-    let sibling_decoded = sdk::inspect::decode_transaction_json(&sibling.body, &sdk::DescribeOptions::default()).unwrap();
+    let sibling_decoded =
+        sdk::inspect::decode_transaction_json(&sibling.body, &sdk::DescribeOptions::default())
+            .unwrap();
     let mut tampered = decoded.clone();
     tampered.actions[0].raw = sibling_decoded.actions[0].raw.clone();
     let error = sdk::inspect::encode_transaction_json(&tampered, None, &profile).unwrap_err();
@@ -720,7 +722,13 @@ fn tx_encode_round_trips_and_rejects_tampered_input() {
 
     // Supplying the matching review passes and the review is bound to the
     // rebuilt body; a tampered review fails the binding recomputation.
-    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        None,
+        &profile,
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     let rebuilt = sdk::inspect::encode_transaction_json(&decoded, Some(&review), &profile).unwrap();
     assert_eq!(rebuilt.body, built.body);
     let mut tampered_review = review.clone();
@@ -741,10 +749,17 @@ fn prepare_and_attach_reject_tampered_review() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let review = inspect_report(&built.body, Some(account.readable()), &profile, &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        Some(account.readable()),
+        &profile,
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
 
     // Editing a displayed field after inspect must break the binding chain at
     // prepare (the request is never minted for a tampered approval).
@@ -795,10 +810,17 @@ fn attach_rejects_tampered_request_fields() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let review = inspect_report(&built.body, Some(account.readable()), &profile, &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        Some(account.readable()),
+        &profile,
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     let request = prepare_signature(
         &built.body,
         account.readable(),
@@ -842,10 +864,17 @@ fn attach_enforces_request_binding_and_expiry() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let review = inspect_report(&built.body, Some(account.readable()), &profile, &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        Some(account.readable()),
+        &profile,
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
 
     // A proof for request A attached under request B (different origin →
     // different binding/id) is rejected.
@@ -911,10 +940,17 @@ fn prepare_binds_policy_decision_and_attach_never_refuses_for_deny() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![hac_transfer(account.readable(), "1:244")],
     })
     .unwrap();
-    let review = inspect_report(&built.body, Some(account.readable()), &profile, &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        Some(account.readable()),
+        &profile,
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
 
     // A denying policy still mints the request: the SDK binds the decision as
     // a fact; the caller decides whether a deny stops the flow.
@@ -985,13 +1021,17 @@ fn multiple_chain_allow_reviews_intersect() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
-        actions: vec![
-            chain_allow(&[0, 1]),
-            chain_allow(&[1, 2]),
-        ],
+        addrlist: None,
+        actions: vec![chain_allow(&[0, 1]), chain_allow(&[1, 2])],
     })
     .unwrap();
-    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        None,
+        &profile,
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     assert_eq!(review.chain_ids_allowed, Some(vec![1]));
     assert!(review.guard_violations.is_empty());
     // Two guards and no non-guard is a topology finding; protocol_valid is
@@ -1015,13 +1055,17 @@ fn multiple_chain_allow_reviews_intersect() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
-        actions: vec![
-            chain_allow(&[0]),
-            chain_allow(&[1]),
-        ],
+        addrlist: None,
+        actions: vec![chain_allow(&[0]), chain_allow(&[1])],
     })
     .unwrap();
-    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        None,
+        &profile,
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     assert_eq!(review.chain_ids_allowed, Some(vec![]));
     assert!(!review.protocol_valid);
 }
@@ -1049,6 +1093,7 @@ fn type2_inscription_push_signs_and_verifies() {
         fee: "0.0001".to_owned(),
         timestamp: Some(1_700_000_000),
         gas_max: Some(0),
+        addrlist: None,
         actions: vec![
             insc_push(&["AAABBB"], "First HACD inscription!"),
             hac_transfer(to, "0.01"),
@@ -1056,7 +1101,13 @@ fn type2_inscription_push_signs_and_verifies() {
     })
     .unwrap();
 
-    let review = inspect_report(&built.body, Some(&main), &profile(), &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        Some(&main),
+        &profile(),
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     assert_eq!(review.signability, "signable");
     assert_eq!(review.auditability, "full");
     assert_eq!(review.actions[0].kind, 32);
@@ -1091,7 +1142,9 @@ fn type2_inscription_push_signs_and_verifies() {
 
     // decode round-trip preserves the inscription action and re-encodes
     // identically under the same review binding.
-    let decoded = sdk::inspect::decode_transaction_json(&attached.body, &sdk::DescribeOptions::default()).unwrap();
+    let decoded =
+        sdk::inspect::decode_transaction_json(&attached.body, &sdk::DescribeOptions::default())
+            .unwrap();
     assert_eq!(decoded.actions[0].kind, 32);
     assert_eq!(decoded.actions[0].name.as_deref(), Some("hacd_insc_push"));
     let encoded =
@@ -1100,38 +1153,22 @@ fn type2_inscription_push_signs_and_verifies() {
 }
 
 #[test]
-fn inscription_push_duplicates_build_and_are_chain_execute_rules() {
+fn inscription_push_duplicates_are_rejected_at_codec() {
     let account = sys::Account::create_by("123456").unwrap();
     let main = account.readable();
-    // Duplicate diamond names decode fine; ownership/duplication are
-    // execute-time chain rules, so the SDK builds rather than refuses.
-    let built = build_transaction(&TransactionSpec {
+    let error = build_transaction(&TransactionSpec {
         schema: None,
         tx_type: 2,
         main: main.to_owned(),
         fee: "0.0001".to_owned(),
         timestamp: Some(1_700_000_000),
         gas_max: Some(0),
+        addrlist: None,
         actions: vec![insc_push(&["AAABBB", "AAABBB"], "dup")],
     })
-    .expect("duplicate diamonds are wire-valid; rejection is a chain execute rule");
-    let review = inspect_report(&built.body, None, &profile(), &sdk::DescribeOptions::default()).unwrap();
-    assert_eq!(review.actions[0].kind, 32);
-    assert_eq!(review.actions[0].name.as_deref(), Some("hacd_insc_push"));
-    assert!(review.protocol_valid);
-    assert!(
-        review.topology_violations.is_empty(),
-        "inscription at top is protocol-valid topology, got {:?}",
-        review.topology_violations
-    );
-    assert!(
-        review.actions[0]
-            .audit_notes
-            .iter()
-            .all(|n| !n.contains("nested_actions") && !n.contains("children collection")),
-        "ActScope::AST must not be treated as missing control-flow, got {:?}",
-        review.actions[0].audit_notes
-    );
+    .expect_err("duplicate diamond names fail diamond-list check at codec decode");
+    assert_eq!(error.code, "parse_failed");
+    assert!(error.message.contains("duplicated"), "{error:?}");
 }
 
 #[test]
@@ -1145,38 +1182,28 @@ fn inscription_edit_move_drop_build_and_decode() {
         fee: "0.0001".to_owned(),
         timestamp: Some(1_700_000_000),
         gas_max: Some(0),
+        addrlist: None,
         actions: vec![
-            action(
-                "hacd_insc_edit",
-                vec![
-                    ("diamond", wv_dia("AAABBB")),
-                    ("index", wv_num(0)),
-                    ("protocol_cost", wv_str("0")),
-                    ("engraved_type", wv_num(0)),
-                    ("engraved_content", wv_hex(b"edited")),
-                ],
-            ),
-            action(
-                "hacd_insc_move",
-                vec![
-                    ("from_diamond", wv_dia("AAABBB")),
-                    ("to_diamond", wv_dia("TTTUUU")),
-                    ("index", wv_num(0)),
-                    ("protocol_cost", wv_str("0")),
-                ],
-            ),
-            action(
-                "hacd_insc_drop",
-                vec![
-                    ("diamond", wv_dia("AAABBB")),
-                    ("index", wv_num(0)),
-                    ("protocol_cost", wv_str("0")),
-                ],
-            ),
+            ActionSpec::new(format!(
+                r#"{{"kind":34,"diamond":"AAABBB","index":0,"protocol_cost":"0","engraved_type":0,"engraved_content":"0x{}"}}"#,
+                to_hex(b"edited")
+            ))
+            .expect("test action spec"),
+            ActionSpec::new(
+                r#"{"kind":35,"from_diamond":"AAABBB","to_diamond":"TTTUUU","index":0,"protocol_cost":"0"}"#
+                    .to_owned(),
+            )
+            .expect("test action spec"),
+            ActionSpec::new(
+                r#"{"kind":36,"diamond":"AAABBB","index":0,"protocol_cost":"0"}"#.to_owned(),
+            )
+            .expect("test action spec"),
         ],
     })
     .unwrap();
-    let decoded = sdk::inspect::decode_transaction_json(&built.body, &sdk::DescribeOptions::default()).unwrap();
+    let decoded =
+        sdk::inspect::decode_transaction_json(&built.body, &sdk::DescribeOptions::default())
+            .unwrap();
     let names: Vec<&str> = decoded
         .actions
         .iter()
@@ -1201,15 +1228,25 @@ fn oversized_body_decodes_and_reports_limits_facts() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
-        actions: vec![action(
-            "blob",
-            vec![("data", wv_hex(vec![0xab; 20 * 1024]))],
-        )],
+        addrlist: None,
+        actions: vec![
+            ActionSpec::new(format!(
+                r#"{{"kind":1026,"data":"0x{}"}}"#,
+                "ab".repeat(20 * 1024)
+            ))
+            .expect("test action spec"),
+        ],
     })
     .unwrap();
     assert!(built.body.len() / 2 > hacash_params::MAX_TX_SIZE);
 
-    let review = inspect_report(&built.body, None, &profile, &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        None,
+        &profile,
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     assert!(
         review
             .limits_violations
@@ -1231,7 +1268,8 @@ fn host_opcode_is_outside_the_sdk_capability_profile() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
-        actions: vec![ActionSpec::new("block_height", vec![])],
+        addrlist: None,
+        actions: vec![ActionSpec::new(r#"{"kind":1793}"#.to_owned()).expect("test action spec")],
     })
     .unwrap_err();
     assert_eq!(error.code, "parse_failed");
@@ -1247,10 +1285,17 @@ fn empty_actions_build_and_inspect_reports_topology() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions: vec![],
     })
     .expect("empty action list is wire-legal");
-    let review = inspect_report(&built.body, None, &profile(), &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        None,
+        &profile(),
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     assert!(
         review
             .topology_violations
@@ -1276,10 +1321,17 @@ fn over_tx_actions_max_builds_and_inspect_reports_topology() {
         fee: "1:244".to_owned(),
         timestamp: Some(1_755_223_764),
         gas_max: None,
+        addrlist: None,
         actions,
     })
     .expect("action count above consensus max is wire-legal");
-    let review = inspect_report(&built.body, None, &profile(), &sdk::DescribeOptions::default()).unwrap();
+    let review = inspect_report(
+        &built.body,
+        None,
+        &profile(),
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
     assert_eq!(review.actions.len(), hacash_params::TX_ACTIONS_MAX + 1);
     assert!(
         review

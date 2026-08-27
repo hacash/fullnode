@@ -32,12 +32,12 @@ const balanceFloor = invoke(2, { spec: {
     ...base,
     actions: [
         {
-            kind: "balance_floor",
+            kind: 1043,
             addr: MAIN,
             hacash: "12:244",
-            satoshi: "100",
-            diamond: "5",
-            assets: [{ serial: "7", amount: "100" }],
+            satoshi: 100,
+            diamond: 5,
+            assets: [{ serial: 7, amount: 100 }],
         },
     ],
 } });
@@ -50,10 +50,10 @@ const astSelect = invoke(2, { spec: {
     ...base,
     actions: [
         {
-            kind: "ast_select",
+            kind: 25,
             exe_min: 1,
             exe_max: 1,
-            actions: [{ kind: "transfer_hac_to", to: MAIN, hacash: "12:244" }],
+            actions: [{ kind: 1, to: MAIN, hacash: "12:244" }],
         },
     ],
 } });
@@ -65,7 +65,7 @@ if (decodedAst.actions[0].name !== "ast_select") {
 try {
     const envelope = sdk.sdk_invoke_json(2, { spec: {
         ...base,
-        actions: [{ kind: "block_height" }],
+        actions: [{ kind: 1793 }],
     } });
     if (envelope.ok !== 0 || envelope.code !== 5) {
         throw new Error(`unexpected invalid-action result ${JSON.stringify(envelope)}`);

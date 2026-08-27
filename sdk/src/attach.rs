@@ -252,8 +252,8 @@ pub(crate) fn parse_proof(proof: &SignatureProof) -> Result<(Sign, Address), Sdk
     let signer = Address::from(sys::Account::get_address_by_public_key(publickey));
     Ok((
         Sign {
-            publickey,
-            signature,
+            publickey: publickey.into(),
+            signature: signature.into(),
         },
         signer,
     ))

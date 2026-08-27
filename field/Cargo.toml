@@ -19,6 +19,7 @@ default = []
 
 [dependencies]
 sys = { workspace = true }
+field-derive = { workspace = true }
 base64 = "0.22"
 hex = "0.4"
 base58check = "0.1"

@@ -20,11 +20,11 @@ pub use consensus::difficulty;
 pub use consensus::genesis;
 pub use consensus::minter;
 
-pub use consensus::{
-    DIAMOND_FORM_STATE_KEY, DiamondBidding, HacashConsensus, LOW_BID_CACHE_FULL_ERR,
-    LOW_BID_PENDING_ERR, ConsensusApi, MinerConf, MintConf, block_hasher,
-};
 pub use consensus::block_check;
+pub use consensus::{
+    ConsensusApi, DIAMOND_FORM_STATE_KEY, DiamondBidding, HacashConsensus, LOW_BID_CACHE_FULL_ERR,
+    LOW_BID_PENDING_ERR, MinerConf, MintConf, block_hasher,
+};
 pub use wire::{TX_CODECS, register_wire};
 
 // crate-internal path aliases (keep existing `crate::foo` style inside mint)

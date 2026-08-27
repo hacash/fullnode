@@ -208,7 +208,7 @@ fn verify_signature(_: u64, buf: &[u8]) -> VmrtRes<Value> {
         );
     }
     let ok = sys::Account::verify_signature(&hash.0, &sign.publickey, &sign.signature)
-        && sys::Account::get_address_by_public_key(sign.publickey) == *addr.as_array();
+        && sys::Account::get_address_by_public_key(sign.publickey.into_array()) == *addr.as_array();
     Ok(Value::Bool(ok))
 }
 

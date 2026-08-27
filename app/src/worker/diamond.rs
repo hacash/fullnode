@@ -342,8 +342,7 @@ fn do_diamond_group_mining(
         best_result_hash,
         best.diamond_string,
     ) {
-        let mut act =
-            HacdMint::with(DiamondName::from(diamond_name), DiamondNumber::from(number));
+        let mut act = HacdMint::with(DiamondName::from(diamond_name), DiamondNumber::from(number));
         act.d.prev_hash = *prev_hash;
         act.d.nonce = Fixed8::from(best_nonce_bytes);
         act.d.address = *reward_address;

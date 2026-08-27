@@ -1,8 +1,8 @@
 //! `vm.decode_call`: structured view of a `contract_main_call` action
 //! (Unified SDK 2.0, doc 14 §6.3). The wire carries `marks` (reserved, must be
 //! zero), `codeconf` (2-bit code type + 6 reserved bits) and the bytecode
-//! (`codes`). The code type ABI is frozen in the VM (`vm::rt::CodeType` /
-//! `CodeConf`, crate-private here, so the constants are re-declared).
+//! (`codes`). Code-type masks are `vm::action::CODECONF_*` (authority:
+//! `CodeType::TYPE_MASK` / `CodeConf::RESERVED_MASK`).
 
 use base::BinaryCodecs;
 use field::{BytesW2, Decode, Fixed3, Uint1, Uint2};
@@ -11,10 +11,7 @@ use crate::error::{SdkError, SdkErrorCode};
 use crate::json::SdkJsonTo;
 use crate::schema::SCHEMA_VM_CALL;
 
-/// `codeconf` low bits: code type (0 = bytecode, 1 = IR node); the remaining
-/// bits are reserved and must be zero (`CodeConf::RESERVED_MASK`).
-pub const CODECONF_TYPE_MASK: u8 = 0b0000_0011;
-pub const CODECONF_RESERVED_MASK: u8 = 0b1111_1100;
+pub use vm::action::{CODECONF_RESERVED_MASK, CODECONF_TYPE_MASK};
 
 fn code_type_name(raw: u8) -> (&'static str, u8) {
     crate::audit::code_type_name(raw)
@@ -148,7 +145,14 @@ impl CodeOutput {
             kv("format", q(&self.format)),
             kv("lines", qnum(self.lines as u64)),
             kv("text", q(&self.text)),
-            kv("truncated", if self.truncated { "true".to_owned() } else { "false".to_owned() }),
+            kv(
+                "truncated",
+                if self.truncated {
+                    "true".to_owned()
+                } else {
+                    "false".to_owned()
+                },
+            ),
             kv("limit", qnum(self.limit)),
             kv("offset", qnum(self.offset)),
         ])
@@ -256,7 +260,14 @@ impl SdkJsonTo for VmCall {
             kv("name", q(&self.name)),
             kv("scope", q(&self.scope)),
             kv("marks", q(&self.marks)),
-            kv("marks_valid", if self.marks_valid { "true".to_owned() } else { "false".to_owned() }),
+            kv(
+                "marks_valid",
+                if self.marks_valid {
+                    "true".to_owned()
+                } else {
+                    "false".to_owned()
+                },
+            ),
             kv("codeconf", qnum(self.codeconf)),
             kv("code_type", qnum(self.code_type)),
             kv("code_type_name", q(&self.code_type_name)),
@@ -271,9 +282,13 @@ impl SdkJsonTo for VmCall {
 mod tests {
     use super::*;
     use crate::build::{ActionSpec, TransactionSpec, build_transaction};
-    use crate::spec_codec::WireValue;
+    use field::Encode;
 
     const MAIN: &str = "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9";
+
+    fn bytes_json(bytes: &[u8]) -> String {
+        format!("0x{}", hex::encode(bytes))
+    }
 
     fn maincall_spec(codes: Vec<u8>) -> TransactionSpec {
         TransactionSpec {
@@ -283,14 +298,14 @@ mod tests {
             fee: "1:244".to_owned(),
             timestamp: Some(1_755_223_764),
             gas_max: None,
-            actions: vec![ActionSpec::new(
-                "contract_main_call",
-                vec![
-                    ("marks".to_owned(), WireValue::Hex(vec![0, 0, 0])),
-                    ("codeconf".to_owned(), WireValue::Num(0)),
-                    ("codes".to_owned(), WireValue::Hex(codes)),
-                ],
-            )],
+            addrlist: None,
+            actions: vec![
+                ActionSpec::new(format!(
+                    r#"{{"kind":44,"marks":"0x000000","codeconf":0,"codes":"{}"}}"#,
+                    bytes_json(&codes)
+                ))
+                .expect("test action spec"),
+            ],
         }
     }
 
@@ -298,7 +313,11 @@ mod tests {
     fn decodes_a_built_maincall() {
         let codes = vec![0x01u8, 0x02, 0x03];
         let built = build_transaction(&maincall_spec(codes.clone())).unwrap();
-        let decoded = crate::inspect::decode_transaction_json(&built.body, &crate::audit::DescribeOptions::default()).unwrap();
+        let decoded = crate::inspect::decode_transaction_json(
+            &built.body,
+            &crate::audit::DescribeOptions::default(),
+        )
+        .unwrap();
         let call = decode_call(&decoded.actions[0].raw).unwrap();
         assert_eq!(call.kind, vm::action::ContractMainCall::KIND);
         assert_eq!(call.name, "contract_main_call");
@@ -315,7 +334,11 @@ mod tests {
     fn flags_nonzero_marks_as_invalid() {
         let built =
             build_transaction(&maincall_spec_with_marks(vec![1, 2, 3], vec![0x01])).unwrap();
-        let decoded = crate::inspect::decode_transaction_json(&built.body, &crate::audit::DescribeOptions::default()).unwrap();
+        let decoded = crate::inspect::decode_transaction_json(
+            &built.body,
+            &crate::audit::DescribeOptions::default(),
+        )
+        .unwrap();
         let call = decode_call(&decoded.actions[0].raw).unwrap();
         assert!(!call.marks_valid);
     }
@@ -328,15 +351,41 @@ mod tests {
             fee: "1:244".to_owned(),
             timestamp: Some(1_755_223_764),
             gas_max: None,
-            actions: vec![ActionSpec::new(
-                "contract_main_call",
-                vec![
-                    ("marks".to_owned(), WireValue::Hex(marks)),
-                    ("codeconf".to_owned(), WireValue::Num(1)),
-                    ("codes".to_owned(), WireValue::Hex(codes)),
-                ],
-            )],
+            addrlist: None,
+            actions: vec![
+                ActionSpec::new(format!(
+                    r#"{{"kind":44,"marks":"{}","codeconf":1,"codes":"{}"}}"#,
+                    bytes_json(&marks),
+                    bytes_json(&codes)
+                ))
+                .expect("test action spec"),
+            ],
         }
+    }
+
+    #[test]
+    fn decode_call_matches_vm_contract_main_call_wire() {
+        let codes = vec![0xdeu8, 0xad, 0xbe, 0xef, 0x01, 0x02];
+        let mut call = vm::action::ContractMainCall::new();
+        call.marks = Fixed3::from([0xaa, 0xbb, 0xcc]);
+        call.codeconf = Uint1::from(1);
+        call.codes = BytesW2::from(codes.clone()).unwrap();
+        let decoded = decode_call(&hex::encode(call.encode())).unwrap();
+        assert_eq!(decoded.kind, vm::action::ContractMainCall::KIND);
+        assert_eq!(decoded.marks, "aabbcc");
+        assert!(!decoded.marks_valid);
+        assert_eq!(decoded.codeconf, 1);
+        assert_eq!(decoded.code_type, 1);
+        assert_eq!(decoded.code_type_name, "ir_node");
+        assert_eq!(decoded.codes_len, codes.len());
+        assert_eq!(decoded.codes_preview, hex::encode(&codes));
+        assert_eq!(decoded.codes_hash, hex::encode(sys::calculate_hash(&codes)));
+        // Masks are `vm::action` re-exports of `CodeType::TYPE_MASK` /
+        // `CodeConf::RESERVED_MASK` (batch 2 cross-assert kept as a numeric lock).
+        assert_eq!(CODECONF_TYPE_MASK, vm::action::CODECONF_TYPE_MASK);
+        assert_eq!(CODECONF_RESERVED_MASK, vm::action::CODECONF_RESERVED_MASK);
+        assert_eq!(CODECONF_TYPE_MASK, 0b0000_0011);
+        assert_eq!(CODECONF_RESERVED_MASK, 0b1111_1100);
     }
 
     #[test]
@@ -348,16 +397,18 @@ mod tests {
             fee: "1:244".to_owned(),
             timestamp: Some(1_755_223_764),
             gas_max: None,
-            actions: vec![ActionSpec::new(
-                "transfer_hac_to",
-                vec![
-                    ("to".to_owned(), WireValue::Str(MAIN.to_owned())),
-                    ("hacash".to_owned(), WireValue::Str("12:244".to_owned())),
-                ],
-            )],
+            addrlist: None,
+            actions: vec![
+                ActionSpec::new(format!(r#"{{"kind":1,"to":"{MAIN}","hacash":"12:244"}}"#))
+                    .expect("test action spec"),
+            ],
         })
         .unwrap();
-        let decoded = crate::inspect::decode_transaction_json(&built.body, &crate::audit::DescribeOptions::default()).unwrap();
+        let decoded = crate::inspect::decode_transaction_json(
+            &built.body,
+            &crate::audit::DescribeOptions::default(),
+        )
+        .unwrap();
         let error = decode_call(&decoded.actions[0].raw).unwrap_err();
         assert_eq!(error.code, "parse_failed");
         assert!(error.message.contains("not contract_main_call"));
@@ -409,7 +460,11 @@ fn vm_code_ir_fitsh_roundtrip_and_paging() {
     .unwrap();
     assert_eq!(out.code_type_name, "ir_node");
     assert_eq!(out.format, "fitsh");
-    assert!(out.text.len() <= 16, "limit applied, got {}", out.text.len());
+    assert!(
+        out.text.len() <= 16,
+        "limit applied, got {}",
+        out.text.len()
+    );
     assert!(out.truncated, "short limit must truncate");
     // Full decode still recovers the original source shape.
     let full = code(&hex::encode(&ircode), "1", None, None, None, None).unwrap();

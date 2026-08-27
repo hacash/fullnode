@@ -2,7 +2,7 @@
 //! from dev: field-crate macros replaced with manual `Encode`/`Decode` structs and local hashing helpers.
 
 use base::P2sh;
-use field::{Address, BytesW2, Decode, Encode, Hash, Reader, Uint1, Uint2};
+use field::{Address, BytesW2, Encode, Hash, Reader, Uint1, Uint2};
 use ripemd::{Digest, Ripemd160};
 use sha3::Sha3_256;
 use sys::{Ret, errf};
@@ -12,46 +12,18 @@ use crate::rt::CodeConf;
 #[cfg(feature = "execute")]
 use crate::rt::{GasExtra, SpaceCap};
 
-field::impl_struct_json!(PosiHash { posi, hash });
 // ================================ PosiHash / MerkelStuffs ================================
 
 /// One Merkle proof step: sibling hash + left/right position.
 /// `posi==0` -> sibling on the LEFT, `posi==1` -> sibling on the RIGHT.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
 pub struct PosiHash {
     pub posi: Uint1,
     pub hash: Hash,
 }
 
-impl Encode for PosiHash {
-    fn size(&self) -> usize {
-        self.posi.size() + self.hash.size()
-    }
-    fn encode_to(&self, out: &mut Vec<u8>) {
-        self.posi.encode_to(out);
-        self.hash.encode_to(out);
-    }
-}
-
-impl Decode for PosiHash {
-    fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
-        let mut r = Reader::new(buf);
-        let posi = r.read()?;
-        let hash = r.read()?;
-        Ok((Self { posi, hash }, r.used()))
-    }
-}
-
 /// Merkle proof path (list of `PosiHash` siblings).
 pub type MerkelStuffs = field::ListW1<PosiHash>;
-
-impl field::FieldWireShape for PosiHash {
-    // `posi: Uint1 (1B) + hash: Hash (32B)` = 33 bytes
-    const WIRE: field::FieldWire = field::FieldWire::Fixed(33);
-}
-impl field::WireElementName for PosiHash {
-    const NAME: &'static str = "PosiHash";
-}
 
 // ================================ UnlockScript / ScriptmhCalc ================================
 
@@ -167,12 +139,6 @@ impl P2SHScriptProve {
             merkels: MerkelStuffs::default(),
             marks: Fixed2::default(),
         }
-    }
-}
-
-impl Default for P2SHScriptProve {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -337,4 +303,41 @@ fn must_scriptmh(addr: &Address) -> Ret<()> {
         return errf!("address {} is not scriptmh type", addr.to_readable());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+    use field::{Decode, Encode, FieldWire, FieldWireShape, StructSchemaProvider, ToJSON};
+
+    #[test]
+    fn posi_hash_is_a_named_struct_not_fixed_33() {
+        assert_eq!(PosiHash::WIRE, FieldWire::Struct("PosiHash"));
+        let schema = PosiHash::STRUCT_SCHEMA;
+        assert_eq!(schema.name, "PosiHash");
+        assert_eq!(schema.fields[0].name, "posi");
+        assert_eq!(schema.fields[0].wire, FieldWire::U8);
+        assert_eq!(schema.fields[1].name, "hash");
+        assert_eq!(schema.fields[1].wire, FieldWire::Fixed(32));
+    }
+
+    #[test]
+    fn posi_hash_binary_stays_33_bytes_and_json_is_object() {
+        let step = PosiHash {
+            posi: Uint1::from(1),
+            hash: Hash::from([7u8; 32]),
+        };
+        let bytes = step.encode();
+        assert_eq!(bytes.len(), 33);
+        assert_eq!(bytes[0], 1);
+        assert_eq!(&bytes[1..], &[7u8; 32]);
+        let (back, used) = PosiHash::decode(&bytes).unwrap();
+        assert_eq!(used, 33);
+        assert_eq!(back, step);
+
+        let json = step.to_json();
+        assert!(json.starts_with('{'), "{json}");
+        assert!(json.contains("\"posi\":1"), "{json}");
+        assert!(json.contains("\"hash\":"), "{json}");
+    }
 }

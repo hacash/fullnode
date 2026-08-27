@@ -3,20 +3,20 @@ use sys::Rerr;
 
 use crate::action::asset::AssetCreate;
 use crate::action::channel::{ChannelClose, ChannelOpen};
-use crate::action::diamond::{HacdMint, HacdMintData, create_hacd_mint, decode_hacd_mint_json};
-use crate::inscription::{HacdInscClean, HacdInscDrop, HacdInscEdit, HacdInscMove, HacdInscPush, decode_hacd_insc_json};
+use crate::action::diamond::{HacdMint, HacdMintData, create_hacd_mint};
+use crate::inscription::{HacdInscClean, HacdInscDrop, HacdInscEdit, HacdInscMove, HacdInscPush};
 
 /// Complete mint-core-owned action catalog.
 pub const ACTION_CODECS: &[ActionCodecBinding] = &[
-    base::action_codec_binding!(HacdInscPush, decode_hacd_insc_json),
-    base::action_codec_binding!(HacdInscClean, decode_hacd_insc_json),
-    base::action_codec_binding!(HacdInscEdit, decode_hacd_insc_json),
-    base::action_codec_binding!(HacdInscMove, decode_hacd_insc_json),
-    base::action_codec_binding!(HacdInscDrop, decode_hacd_insc_json),
+    base::action_codec_binding!(HacdInscPush),
+    base::action_codec_binding!(HacdInscClean),
+    base::action_codec_binding!(HacdInscEdit),
+    base::action_codec_binding!(HacdInscMove),
+    base::action_codec_binding!(HacdInscDrop),
     base::action_codec_binding!(ChannelOpen),
     base::action_codec_binding!(ChannelClose),
     base::action_codec_binding!(AssetCreate),
-    base::action_codec_binding!(HacdMint, create_hacd_mint, decode_hacd_mint_json),
+    base::action_codec_binding!(HacdMint, create_hacd_mint),
 ];
 
 /// Nested structs referenced by mint-core action schemas.

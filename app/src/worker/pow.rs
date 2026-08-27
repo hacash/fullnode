@@ -169,24 +169,26 @@ pub fn run_with_stop(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) -> Re
 /// then flags `MINING_NOTICE_DONE` when the chain moved past the watched
 /// height. Mining keeps running while this thread waits.
 fn spawn_miner_notice(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) {
-    thread::spawn(move || loop {
-        if should_stop(&stop_flag) {
-            return;
-        }
-        let watch_height = MINING_HEIGHT.load(Ordering::Relaxed);
-        if watch_height == 0 {
-            thread::sleep(Duration::from_secs(1));
-            continue;
-        }
-        let wait = conf.notice_wait.clamp(1, NOTICE_WAIT_STEP);
-        match miner_notice(&conf, watch_height, wait) {
-            Ok(height) if height >= watch_height => {
-                MINING_NOTICE_DONE.store(true, Ordering::Relaxed);
-                // Keep waiting until the mining loop observes it or moves to
-                // a higher height; re-arm for the (now stale) watch target.
-                thread::sleep(Duration::from_secs(1));
+    thread::spawn(move || {
+        loop {
+            if should_stop(&stop_flag) {
+                return;
             }
-            _ => {} // timeout or transient error; long-poll again
+            let watch_height = MINING_HEIGHT.load(Ordering::Relaxed);
+            if watch_height == 0 {
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+            let wait = conf.notice_wait.clamp(1, NOTICE_WAIT_STEP);
+            match miner_notice(&conf, watch_height, wait) {
+                Ok(height) if height >= watch_height => {
+                    MINING_NOTICE_DONE.store(true, Ordering::Relaxed);
+                    // Keep waiting until the mining loop observes it or moves to
+                    // a higher height; re-arm for the (now stale) watch target.
+                    thread::sleep(Duration::from_secs(1));
+                }
+                _ => {} // timeout or transient error; long-poll again
+            }
         }
     });
 }

@@ -54,8 +54,7 @@ mod tests {
         let short = Blob::new(BytesW2::from(vec![0x01, 0xab]).unwrap());
         assert_eq!(short.description(), "01ab... (2)");
 
-        let exact =
-            Blob::new(BytesW2::from(vec![0x5a; TX_BLOB_DESCRIPTION_PREVIEW_LEN]).unwrap());
+        let exact = Blob::new(BytesW2::from(vec![0x5a; TX_BLOB_DESCRIPTION_PREVIEW_LEN]).unwrap());
         assert_eq!(
             exact.description(),
             format!("{}... (128)", "5a".repeat(128))

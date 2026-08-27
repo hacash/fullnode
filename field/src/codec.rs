@@ -14,15 +14,6 @@ pub trait Decode: Sized {
     fn decode(buf: &[u8]) -> Ret<(Self, usize)>;
 }
 
-/// Decode a value whose length prefix has already been consumed by its caller.
-pub trait ParsePrefix: Sized {
-    fn create_with_prefix(prefix: &[u8], rest: &[u8]) -> Ret<(Self, usize)>;
-}
-
-pub trait Field: Encode + Decode + Clone + std::fmt::Debug {}
-
-impl<T: Encode + Decode + Clone + std::fmt::Debug> Field for T {}
-
 pub struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -39,7 +30,8 @@ impl<'a> Reader<'a> {
         Ok(v)
     }
 
-    pub fn read_bytes(&mut self, n: usize) -> Ret<&'a [u8]> {
+    /// Bounds-check and advance the cursor without returning the skipped bytes.
+    pub fn skip(&mut self, n: usize) -> Ret<()> {
         if self.pos + n > self.buf.len() {
             return normalf!(
                 "buffer too short: need {} got {}",
@@ -47,9 +39,25 @@ impl<'a> Reader<'a> {
                 self.buf.len() - self.pos
             );
         }
-        let s = &self.buf[self.pos..self.pos + n];
         self.pos += n;
-        Ok(s)
+        Ok(())
+    }
+
+    pub fn read_bytes(&mut self, n: usize) -> Ret<&'a [u8]> {
+        let start = self.pos;
+        self.skip(n)?;
+        Ok(&self.buf[start..self.pos])
+    }
+
+    /// Decode from the remaining slice via `decode`, then advance by the
+    /// reported byte count. Dynamic dispatch still takes `&[u8]`.
+    pub fn read_with<T, F>(&mut self, decode: F) -> Ret<T>
+    where
+        F: FnOnce(&[u8]) -> Ret<(T, usize)>,
+    {
+        let (value, used) = decode(&self.buf[self.pos..])?;
+        self.skip(used)?;
+        Ok(value)
     }
 
     pub fn used(&self) -> usize {
@@ -58,5 +66,28 @@ impl<'a> Reader<'a> {
 
     pub fn remaining(&self) -> usize {
         self.buf.len() - self.pos
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skip_and_read_with_advance_the_cursor() {
+        let buf = [1u8, 2, 3, 4];
+        let mut r = Reader::new(&buf);
+        r.skip(1).unwrap();
+        assert_eq!(r.used(), 1);
+        let n: u8 = r
+            .read_with(|rest| {
+                assert_eq!(rest, &[2, 3, 4]);
+                Ok((rest[0], 1usize))
+            })
+            .unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(r.used(), 2);
+        let err = r.skip(8).unwrap_err();
+        assert_eq!(err.as_str(), "buffer too short: need 8 got 2");
     }
 }

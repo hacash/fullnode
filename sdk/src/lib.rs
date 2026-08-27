@@ -28,18 +28,18 @@ pub mod vm;
 pub use account::{address_from_public_key, verify_address, verify_signature};
 pub use amount::{format, parse};
 pub use attach::{
-    attach_signature, prepare_signature, signature_report, verify_signatures, SignatureProof,
-    SigningRequest,
+    SignatureProof, SigningRequest, attach_signature, prepare_signature, signature_report,
+    verify_signatures,
 };
 pub use audit::{ActionCodeDesc, ActionDesc, DescribeOptions, TransferDesc, describe_single};
-pub use build::{build_transaction, ActionSpec, TransactionSpec};
+pub use build::{ActionSpec, TransactionSpec, build_transaction};
 pub use diamond::lookup;
 pub use error::{SdkError, SdkErrorCode};
 pub use fee::estimate_fee;
-pub use inspect::{inspect, inspect_report, Review};
-pub use policy::{evaluate_policy, Policy, PolicyDecision};
+pub use inspect::{Review, inspect, inspect_report};
+pub use policy::{Policy, PolicyDecision, evaluate_policy};
 pub use profile::{CodecProfile, SDK_VERSION};
-pub use spec_codec::{decode_transaction_spec_json, WireValue};
+pub use spec_codec::decode_transaction_spec_json;
 pub use vm::{code, decode_call};
 
 /// Current UNIX time in seconds (`sys::curtimes` natively; `Date.now` on wasm32, where

@@ -1,24 +1,22 @@
 //! AstSelect / AstIf compositional actions.
 
-use std::any::Any;
 use std::sync::Arc;
 
-use base::{Action, ActionCodec, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry};
+use base::{Action, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry};
 use field::{
-    Decode, Encode, Reader, Uint1, Uint2, json_decode_value, json_expect_unquoted,
-    json_object_entries, json_object_fields, json_split_array,
+    Encode, Reader, Uint1, Uint2, json_decode_value, json_object_fields, json_split_array,
 };
 use sys::Ret;
 
 impl field::ToJSON for ActionListW1 {
-    fn to_json_fmt(&self, _fmt: &field::JSONFormater) -> String {
-        // `Action` has no JSON view (SDK wasm core is JSON-free): serialize each child
-        // from its wire form as `{"body":"<hex>"}`, decoded by `decode_ast_child` via `decode_action_exact`.
+    fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
+        // `dyn Action` carries JSON rendering in every build (`Action: ToJSON`),
+        // so children render as field objects (`{"kind":N,...}`) on SDK/wasm too.
         format!(
             "[{}]",
             self.actions
                 .iter()
-                .map(|action| format!("{{\"body\":\"0x{}\"}}", hex::encode(action.encode())))
+                .map(|action| action.to_json_fmt(fmt))
                 .collect::<Vec<_>>()
                 .join(",")
         )
@@ -102,16 +100,21 @@ impl ActionListW1 {
         self.actions.len()
     }
 
-    fn decode(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(Self, usize)> {
-        let (count, mut used) = Uint1::decode(buf)?;
+    pub fn push(&mut self, act: ActionRef) -> Ret<()> {
+        Uint1::from_usize(self.actions.len() + 1)?;
+        self.actions.push(act);
+        Ok(())
+    }
+
+    pub(crate) fn decode(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(Self, usize)> {
+        let mut r = Reader::new(buf);
+        let count: Uint1 = r.read()?;
         let mut actions = Vec::with_capacity(count.uint() as usize);
         for _ in 0..count.uint() {
-            let rest = &buf[used..];
-            let (act, n) = reg.decode_action(rest)?;
+            let act = r.read_with(|rest| reg.decode_action(rest))?;
             actions.push(act);
-            used += n;
         }
-        Ok((Self { actions }, used))
+        Ok((Self { actions }, r.used()))
     }
 }
 
@@ -161,25 +164,11 @@ impl AstIf {
 }
 
 fn decode_ast_child(reg: &dyn CodecRegistry, json: &str) -> Ret<ActionRef> {
-    let entries = json_object_entries(json)?;
-    if let Some((_, body)) = entries.iter().find(|(key, _)| *key == "body") {
-        return reg.decode_action_exact(&field::json_decode_binary(body)?);
-    }
-    let kind = entries
-        .iter()
-        .find(|(key, _)| *key == "kind")
-        .map(|(_, value)| *value)
-        .ok_or_else(|| sys::Error::fault("AST child action missing kind"))?;
-    let kind: u16 = json_expect_unquoted(kind)?
-        .parse()
-        .map_err(|_| sys::Error::normal("AST child action kind invalid"))?;
-    reg.decode_action_json(kind, json)?.ok_or_else(|| {
-        sys::Error::normal(format!("AST child action kind {} has no JSON codec", kind))
-    })
+    reg.decode_action_json(json)
 }
 
 fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect> {
-    let mut kind = Uint2::from(AstSelect::KIND);
+    let mut kind = None;
     let mut exe_min = None;
     let mut exe_max = None;
     let mut actions = None;
@@ -188,7 +177,7 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
         &["kind", "exe_min", "exe_max", "actions"],
         &mut |key, value| {
             match key {
-                "kind" => kind = json_decode_value(value)?,
+                "kind" => kind = Some(value),
                 "exe_min" => exe_min = Some(json_decode_value(value)?),
                 "exe_max" => exe_max = Some(json_decode_value(value)?),
                 "actions" => actions = Some(value),
@@ -197,13 +186,8 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
             Ok(())
         },
     )?;
-    if kind.uint() != AstSelect::KIND {
-        return sys::normalf!(
-            "action kind mismatch: expected {} got {}",
-            AstSelect::KIND,
-            kind.uint()
-        );
-    }
+    let kind_raw = kind.ok_or_else(|| sys::Error::normal("AstSelect JSON missing kind"))?;
+    let kind = Uint2::from(field::json_action_kind(kind_raw, AstSelect::NAME, AstSelect::KIND)?);
     let exe_min: Uint1 =
         exe_min.ok_or_else(|| sys::Error::normal("AstSelect JSON missing exe_min"))?;
     let exe_max: Uint1 =
@@ -222,51 +206,57 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
     })
 }
 
+fn decode_ast_select(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(AstSelect, usize)> {
+    let mut r = Reader::new(buf);
+    let kind: Uint2 = r.read()?;
+    if kind.uint() != AstSelect::KIND {
+        return sys::normalf!(
+            "action kind mismatch: expected {} got {}",
+            AstSelect::KIND,
+            kind.uint()
+        );
+    }
+    let exe_min: Uint1 = r.read()?;
+    let exe_max: Uint1 = r.read()?;
+    let actions = r.read_with(|rest| ActionListW1::decode(reg, rest))?;
+    Ok((
+        AstSelect {
+            kind,
+            exe_min,
+            exe_max,
+            actions,
+        },
+        r.used(),
+    ))
+}
+
 // Codec entry points — `create_ast_select` / `decode_ast_select_json` and
 // `create_ast_if` / `decode_ast_if_json` are derived from the type names, so a
 // struct rename re-derives them instead of leaving hand-written names to drift.
 base::action_codec_entries! { AstSelect {
-    wire = (reg, _kind, buf) {
-        let mut r = Reader::new(buf);
-        let kind: Uint2 = r.read()?;
-        if kind.uint() != AstSelect::KIND {
-            return sys::normalf!("AstSelect codec got kind {}", kind.uint());
-        }
-        let exe_min: Uint1 = r.read()?;
-        let exe_max: Uint1 = r.read()?;
-        let (actions, used) = ActionListW1::decode(reg, &buf[r.used()..])?;
-        r.read_bytes(used)?;
-        Ok((
-            Arc::new(AstSelect {
-                kind,
-                exe_min,
-                exe_max,
-                actions,
-            }),
-            r.used(),
-        ))
+    wire = (reg, buf) {
+        let (ast, used) = decode_ast_select(reg, buf)?;
+        Ok((Arc::new(ast), used))
     },
-    json = (reg, kind, json) {
-        if kind != AstSelect::KIND {
-            return sys::normalf!("AstSelect JSON codec got kind {}", kind);
-        }
+    json = (reg, json) {
         Ok(Arc::new(decode_ast_select_value(reg, json)?))
     },
 }}
 
 base::action_codec_entries! { AstIf {
-    wire = (reg, _kind, buf) {
+    wire = (reg, buf) {
         let mut r = Reader::new(buf);
         let kind: Uint2 = r.read()?;
         if kind.uint() != AstIf::KIND {
-            return sys::normalf!("AstIf codec got kind {}", kind.uint());
+            return sys::normalf!(
+                "action kind mismatch: expected {} got {}",
+                AstIf::KIND,
+                kind.uint()
+            );
         }
-        let (cond, used) = decode_ast_select_inline(reg, &buf[r.used()..])?;
-        r.read_bytes(used)?;
-        let (br_if, used) = decode_ast_select_inline(reg, &buf[r.used()..])?;
-        r.read_bytes(used)?;
-        let (br_else, used) = decode_ast_select_inline(reg, &buf[r.used()..])?;
-        r.read_bytes(used)?;
+        let cond = r.read_with(|rest| decode_ast_select(reg, rest))?;
+        let br_if = r.read_with(|rest| decode_ast_select(reg, rest))?;
+        let br_else = r.read_with(|rest| decode_ast_select(reg, rest))?;
         Ok((
             Arc::new(AstIf {
                 kind,
@@ -277,11 +267,8 @@ base::action_codec_entries! { AstIf {
             r.used(),
         ))
     },
-    json = (reg, kind, json) {
-        if kind != AstIf::KIND {
-            return sys::normalf!("AstIf JSON codec got kind {}", kind);
-        }
-        let mut declared = Uint2::from(AstIf::KIND);
+    json = (reg, json) {
+        let mut declared = None;
         let mut cond = None;
         let mut br_if = None;
         let mut br_else = None;
@@ -290,7 +277,7 @@ base::action_codec_entries! { AstIf {
             &["kind", "cond", "br_if", "br_else"],
             &mut |key, value| {
                 match key {
-                    "kind" => declared = json_decode_value(value)?,
+                    "kind" => declared = Some(value),
                     "cond" => cond = Some(value),
                     "br_if" => br_if = Some(value),
                     "br_else" => br_else = Some(value),
@@ -299,13 +286,9 @@ base::action_codec_entries! { AstIf {
                 Ok(())
             },
         )?;
-        if declared.uint() != AstIf::KIND {
-            return sys::normalf!(
-                "action kind mismatch: expected {} got {}",
-                AstIf::KIND,
-                declared.uint()
-            );
-        }
+        let declared_raw =
+            declared.ok_or_else(|| sys::Error::normal("AstIf JSON missing kind"))?;
+        let declared = Uint2::from(field::json_action_kind(declared_raw, AstIf::NAME, AstIf::KIND)?);
         Ok(Arc::new(AstIf {
             kind: declared,
             cond: decode_ast_select_value(
@@ -340,7 +323,9 @@ impl Encode for ActionListW1 {
     }
 
     fn encode_to(&self, out: &mut Vec<u8>) {
-        Uint1::from(self.actions.len() as u8).encode_to(out);
+        Uint1::from_usize(self.actions.len())
+            .expect("ActionListW1 length overflow")
+            .encode_to(out);
         for action in &self.actions {
             action.encode_to(out);
         }
@@ -373,43 +358,8 @@ impl Encode for AstIf {
     }
 }
 
-impl ActionCodec for AstSelect {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn schema(&self) -> Option<&'static base::ActionSchema> {
-        Some(&<Self as base::ActionSchemaProvider>::ACTION_SCHEMA)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-impl ActionCodec for AstIf {
-    fn kind(&self) -> u16 {
-        Self::KIND
-    }
-
-    fn schema(&self) -> Option<&'static base::ActionSchema> {
-        Some(&<Self as base::ActionSchemaProvider>::ACTION_SCHEMA)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-fn decode_ast_select_inline(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(AstSelect, usize)> {
-    let (act, used) = create_ast_select(reg, AstSelect::KIND, buf)?;
-    let Some(ast) = act.as_any().downcast_ref::<AstSelect>() else {
-        return sys::normalf!("AstSelect decode type mismatch");
-    };
-    Ok((ast.clone(), used))
-}
-
-// ================================ wire schema ================================
+base::impl_action_codec!(AstSelect);
+base::impl_action_codec!(AstIf);
 
 impl base::ActionSchemaProvider for AstSelect {
     const ACTION_SCHEMA: base::ActionSchema = base::ActionSchema {
@@ -420,8 +370,8 @@ impl base::ActionSchemaProvider for AstSelect {
         has_code: false,
         fields: &[
             base::FieldSchema::new("kind", base::FieldWire::U2),
-            base::FieldSchema::new("exe_min", base::FieldWire::U1),
-            base::FieldSchema::new("exe_max", base::FieldWire::U1),
+            base::FieldSchema::new("exe_min", base::FieldWire::U8),
+            base::FieldSchema::new("exe_max", base::FieldWire::U8),
             // `ActionListW1`: the actual wire is a 1-byte count (Uint1), unlike
             // `ActionListW2`'s 2-byte count.
             base::FieldSchema::new("actions", base::FieldWire::ActionListW1),
@@ -443,4 +393,128 @@ impl base::ActionSchemaProvider for AstIf {
             base::FieldSchema::new("br_else", base::FieldWire::Struct("ast_select")),
         ],
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::action::{TransferHacTo, TransferHacdTo};
+    use crate::codec::test_reg::TestRegistry;
+    use field::{Address, Amount, Decode, DiamondNameListMax200, Encode, ToJSON};
+
+    #[test]
+    fn ast_select_json_emits_nested_child_objects() {
+        let child = TransferHacTo::new(Address::default(), Amount::mei(1));
+        let ast = AstSelect::create_by(1, 1, vec![Arc::new(child)]).unwrap();
+        let json = ast.to_json();
+        assert!(
+            json.contains("\"kind\":1") && json.contains("\"hacash\""),
+            "{json}"
+        );
+        assert!(!json.contains("\"body\""), "{json}");
+    }
+
+    #[test]
+    fn ast_select_json_roundtrip_via_nested_children() {
+        let reg = TestRegistry::protocol().unwrap();
+        let child = TransferHacTo::new(Address::default(), Amount::mei(1));
+        let ast = AstSelect::create_by(1, 2, vec![Arc::new(child)]).unwrap();
+        let json = ast.to_json();
+
+        let decoded = decode_ast_select_json(&reg, &json).unwrap();
+        assert_eq!(decoded.encode(), ast.encode());
+        assert_eq!(decoded.to_json(), json);
+    }
+
+    #[test]
+    fn ast_if_json_roundtrip_with_nested_selects_and_empty_list() {
+        let reg = TestRegistry::protocol().unwrap();
+        let child = TransferHacTo::new(Address::default(), Amount::mei(1));
+        let empty = AstSelect::create_by(0, 0, vec![]).unwrap();
+        let cond = AstSelect::create_by(1, 1, vec![Arc::new(child)]).unwrap();
+        let ast = AstIf::create_by(cond, empty, AstSelect::create_by(1, 1, vec![]).unwrap());
+        let json = ast.to_json();
+
+        let decoded = decode_ast_if_json(&reg, &json).unwrap();
+        assert_eq!(decoded.encode(), ast.encode());
+        assert_eq!(decoded.to_json(), json);
+    }
+
+    #[test]
+    fn ast_child_rejects_body_hex_form() {
+        let reg = TestRegistry::protocol().unwrap();
+        // The `{"body":"0x..."}` shim was removed: children must carry `kind`.
+        let json = "{\"kind\":25,\"exe_min\":1,\"exe_max\":1,\"actions\":[{\"body\":\"0x00\"}]}";
+        assert!(decode_ast_select_json(&reg, json).is_err());
+    }
+
+    #[test]
+    fn ast_select_json_roundtrip_nested_diamond_transfer_csv() {
+        let reg = TestRegistry::protocol().unwrap();
+        let diamonds = DiamondNameListMax200::from_readable("WTYUIA,HYXYHY").unwrap();
+        let child = TransferHacdTo::new(Address::default(), diamonds);
+        let ast = AstSelect::create_by(1, 1, vec![Arc::new(child)]).unwrap();
+        let json = ast.to_json();
+        assert!(json.contains("\"diamonds\":\"WTYUIA,HYXYHY\""), "{json}");
+        let decoded = decode_ast_select_json(&reg, &json).unwrap();
+        assert_eq!(decoded.encode(), ast.encode());
+        assert_eq!(decoded.to_json(), json);
+    }
+
+    fn child() -> TransferHacTo {
+        TransferHacTo::new(Address::default(), Amount::mei(1))
+    }
+
+    #[test]
+    fn action_list_w1_count_bounds() {
+        let empty = ActionListW1::from_vec(vec![]).unwrap();
+        assert_eq!(empty.size(), empty.encode().len());
+        let (decoded, used) =
+            ActionListW1::decode(&TestRegistry::protocol().unwrap(), &empty.encode()).unwrap();
+        assert_eq!(used, empty.encode().len());
+        assert_eq!(decoded.length(), 0);
+
+        let one = ActionListW1::from_vec(vec![Arc::new(child())]).unwrap();
+        assert_eq!(one.size(), one.encode().len());
+        let (decoded, used) =
+            ActionListW1::decode(&TestRegistry::protocol().unwrap(), &one.encode()).unwrap();
+        assert_eq!(used, one.encode().len());
+        assert_eq!(decoded.length(), 1);
+
+        let max =
+            ActionListW1::from_vec((0..u8::MAX).map(|_| Arc::new(child()) as _).collect()).unwrap();
+        assert_eq!(max.length(), u8::MAX as usize);
+        assert_eq!(max.size(), max.encode().len());
+        assert!(
+            ActionListW1::from_vec(
+                (0..u8::MAX as usize + 1)
+                    .map(|_| Arc::new(child()) as _)
+                    .collect()
+            )
+            .is_err()
+        );
+        let mut list =
+            ActionListW1::from_vec((0..u8::MAX).map(|_| Arc::new(child()) as _).collect()).unwrap();
+        assert!(list.push(Arc::new(child())).is_err());
+    }
+
+    #[test]
+    fn ast_wire_roundtrip_and_wrong_kind() {
+        let reg = TestRegistry::protocol().unwrap();
+        let ast = AstSelect::create_by(1, 1, vec![Arc::new(child())]).unwrap();
+        assert_eq!(ast.size(), ast.encode().len());
+        let wire = ast.encode();
+        let (decoded, used) = decode_ast_select(&reg, &wire).unwrap();
+        assert_eq!(used, wire.len());
+        assert_eq!(decoded.encode(), wire);
+        let (via_create, used) = create_ast_select(&reg, &wire).unwrap();
+        assert_eq!(used, wire.len());
+        assert_eq!(via_create.encode(), wire);
+
+        let mut wrong = wire.clone();
+        wrong[1] = 1;
+        assert!(decode_ast_select(&reg, &wrong).is_err());
+        assert!(create_ast_select(&reg, &wrong).is_err());
+        assert!(TransferHacTo::decode(&wire).is_err());
+    }
 }

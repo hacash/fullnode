@@ -1,10 +1,7 @@
-use std::sync::Arc;
-
-use base::{ActionJsonCodec, ActionRef};
 use field::{Amount, BytesW1, DiamondName, DiamondNameListMax200, Encode, Uint1, WireAmount};
-use sys::{Rerr, Ret, errf};
+use sys::{Rerr, errf};
 
-fn wire_rules() -> &'static hacash_params::InscriptionRules {
+fn consensus_rules() -> &'static hacash_params::InscriptionRules {
     &hacash_params::MAINNET_PARAMS.mint_rules.inscription
 }
 
@@ -79,7 +76,7 @@ pub fn check_protocol_cost(pfee: &Amount) -> Rerr {
 }
 
 pub fn check_inscription_content(engraved_type: u8, content: &BytesW1) -> Rerr {
-    check_inscription_content_with_rules(wire_rules(), engraved_type, content)
+    check_inscription_content_with_rules(consensus_rules(), engraved_type, content)
 }
 
 pub fn check_inscription_content_with_rules(
@@ -106,10 +103,10 @@ pub fn check_inscription_content_with_rules(
 /// Build-time index range check for inscription edit/move/drop: enforces only the
 /// protocol maximum; the executor validates against the diamond's live list.
 pub fn check_inscription_index_max(index: u8) -> Rerr {
-    if index as usize >= wire_rules().max_per_diamond {
+    if index as usize >= consensus_rules().max_per_diamond {
         return errf!(
             "inscription index out of range, max per diamond is {}",
-            wire_rules().max_per_diamond
+            consensus_rules().max_per_diamond
         );
     }
     Ok(())
@@ -119,7 +116,7 @@ pub fn calc_append_inscription_protocol_cost(
     cur_inscriptions: usize,
     average_bid_burn_mei: u16,
 ) -> Amount {
-    wire_rules().append_cost(cur_inscriptions, average_bid_burn_mei)
+    consensus_rules().append_cost(cur_inscriptions, average_bid_burn_mei)
 }
 
 pub fn calc_move_inscription_protocol_cost(
@@ -130,40 +127,9 @@ pub fn calc_move_inscription_protocol_cost(
 }
 
 pub fn calc_edit_inscription_protocol_cost(average_bid_burn_mei: u16) -> Amount {
-    wire_rules().edit_cost(average_bid_burn_mei)
+    consensus_rules().edit_cost(average_bid_burn_mei)
 }
 
 pub fn calc_drop_inscription_protocol_cost(average_bid_burn_mei: u16) -> Amount {
-    wire_rules().drop_cost(average_bid_burn_mei)
-}
-
-/// JSON decoder for inscription actions. Diamond lists keep the same
-/// duplicate/quantity checks as the legacy transaction API.
-pub fn decode_hacd_insc_json(
-    _reg: &dyn base::CodecRegistry,
-    kind: u16,
-    json: &str,
-) -> Ret<ActionRef> {
-    macro_rules! decode_action {
-        ($ty:ty) => {{
-            let action = <$ty as ActionJsonCodec>::decode_json(json)?;
-            Ok(Arc::new(action) as ActionRef)
-        }};
-    }
-    match kind {
-        HacdInscPush::KIND => {
-            let action = HacdInscPush::decode_json(json)?;
-            action.diamonds.check()?;
-            Ok(Arc::new(action))
-        }
-        HacdInscClean::KIND => {
-            let action = HacdInscClean::decode_json(json)?;
-            action.diamonds.check()?;
-            Ok(Arc::new(action))
-        }
-        HacdInscEdit::KIND => decode_action!(HacdInscEdit),
-        HacdInscMove::KIND => decode_action!(HacdInscMove),
-        HacdInscDrop::KIND => decode_action!(HacdInscDrop),
-        _ => sys::normalf!("inscription JSON action kind {} not registered", kind),
-    }
+    consensus_rules().drop_cost(average_bid_burn_mei)
 }

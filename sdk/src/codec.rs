@@ -7,8 +7,10 @@
 
 use std::sync::OnceLock;
 
-use base::{ActionRef, BinaryCodecs, BlockHasherFn, BlockRef, TxRef, WireCodecTable, HASH_SIZE};
-use sys::{normalf, Ret};
+use base::{
+    ActionRef, BinaryCodecs, BlockHasherFn, BlockRef, HASH_SIZE, JsonCodecs, TxRef, WireCodecTable,
+};
+use sys::{Ret, normalf};
 
 use crate::selection::{sdk_action_codecs, sdk_tx_codecs};
 
@@ -44,11 +46,6 @@ impl SdkCodecs {
     pub fn registered_tx_types(&self) -> Vec<u8> {
         self.table.tx_types()
     }
-
-    /// Canonical JSON view of a decoded action, if the binding provides one.
-    pub(crate) fn action_json_to(&self, kind: u16) -> Option<base::ActionJsonToFn> {
-        self.table.action_json_to(kind)
-    }
 }
 
 pub(crate) fn standard_codecs() -> Ret<&'static SdkCodecs> {
@@ -61,6 +58,12 @@ pub(crate) fn standard_codecs() -> Ret<&'static SdkCodecs> {
 
 fn sdk_block_hash(_height: u64, stuff: &[u8]) -> [u8; HASH_SIZE] {
     sys::calculate_hash(stuff)
+}
+
+impl JsonCodecs for SdkCodecs {
+    fn decode_action_json(&self, json: &str) -> Ret<ActionRef> {
+        self.table.decode_action_json(self, json)
+    }
 }
 
 impl BinaryCodecs for SdkCodecs {
@@ -104,8 +107,8 @@ mod tests {
     fn standard_protocol_and_vm_actions_are_registered() {
         let codecs = standard_codecs().unwrap();
         let types = codecs.registered_tx_types();
-        assert!(types.contains(&protocol::tx_std::TransactionType2::TYPE));
-        assert!(types.contains(&protocol::tx_std::TransactionType3::TYPE));
+        assert!(types.contains(&hacash_params::TX_TYPE_2));
+        assert!(types.contains(&hacash_params::TX_TYPE_3));
         for kind in [
             vm::action::ContractDeploy::KIND,
             vm::action::ContractUpdate::KIND,

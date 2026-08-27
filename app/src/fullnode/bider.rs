@@ -6,7 +6,7 @@ use base::{ChainId, Node, PkgOrigin, PkgSource, Transaction, TransactionBuild, T
 use field::{Address, Amount, AmtCpr, Encode};
 use mint::MinerConf;
 use mint::action_diamond::HacdMint;
-use protocol::tx_std::TransactionType2;
+use protocol::tx_std::StdTransaction;
 use sys::Waiter;
 
 const TX_POOL_GROUP_DIAMOND_MINT: base::TxGroupId = base::TxGroupId::new(1);
@@ -144,8 +144,9 @@ fn check_bidding_step(
     let Some(mut tx) = my_bid
         .tx()
         .as_any()
-        .downcast_ref::<TransactionType2>()
+        .downcast_ref::<StdTransaction>()
         .cloned()
+        .filter(|tx| tx.ty() == hacash_params::TX_TYPE_2)
     else {
         return;
     };

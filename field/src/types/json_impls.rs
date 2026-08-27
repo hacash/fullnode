@@ -1,9 +1,8 @@
 use sys::{Ret, errf};
 
-use crate::codec::{Decode, Encode};
 use crate::json::{
     FromJSON, JSONBinaryFormat, JSONFormater, ToJSON, json_decode_binary,
-    json_expect_quoted_decoded, json_expect_unquoted, json_split_array, json_split_object,
+    json_expect_quoted_decoded, json_expect_unquoted, json_split_array,
 };
 use crate::types::*;
 
@@ -21,7 +20,14 @@ macro_rules! impl_uint_json {
                     let v = json_expect_unquoted(json)?
                         .parse()
                         .map_err(|_| sys::Error::normal(format!("cannot parse {}", stringify!($name))))?;
-                    *self = <$name>::from(v);
+                    *self = <$name>::from_checked(v).ok_or_else(|| {
+                        sys::Error::normal(format!(
+                            "{} value {} exceeds max {}",
+                            stringify!($name),
+                            v,
+                            <$name>::MAX
+                        ))
+                    })?;
                     Ok(())
                 }
             }
@@ -107,32 +113,33 @@ impl ToJSON for Address {
 impl FromJSON for Address {
     fn from_json(&mut self, json: &str) -> Ret<()> {
         let raw = json_expect_quoted_decoded(json)?;
-        if let Ok(address) = Address::from_readable(raw.trim()) {
-            *self = address;
+        let raw = raw.trim();
+        if let Some(hex) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
+            let data = hex::decode(hex)
+                .map_err(|e| sys::Error::normal(format!("address hex invalid: {e}")))?;
+            if data.len() != Address::SIZE {
+                return errf!(
+                    "address hex length {} invalid, expected {}",
+                    data.len(),
+                    Address::SIZE
+                );
+            }
+            let mut bytes = [0u8; Address::SIZE];
+            bytes.copy_from_slice(&data);
+            *self = Address::from(bytes);
+            if !self.is_supported() {
+                return errf!("address version {} not supported", self.version());
+            }
             return Ok(());
         }
-        let data = json_decode_binary(json)?;
-        if data.len() != Address::SIZE {
-            return errf!(
-                "Address size invalid: expected {}, got {}",
-                Address::SIZE,
-                data.len()
-            );
-        }
-        let mut addr_bytes = [0u8; Address::SIZE];
-        addr_bytes.copy_from_slice(&data);
-        let address = Address::from(addr_bytes);
-        if !address.is_supported() {
-            return errf!("address version {} not supported", address.version());
-        }
-        *self = address;
+        *self = Address::from_readable(raw)?;
         Ok(())
     }
 }
 
 impl ToJSON for Bool {
     fn to_json_fmt(&self, _fmt: &JSONFormater) -> String {
-        if self.is_true() { "1" } else { "0" }.to_owned()
+        if self.is_true() { "true" } else { "false" }.to_owned()
     }
 }
 
@@ -220,29 +227,6 @@ impl FromJSON for Amount {
     }
 }
 
-impl ToJSON for Sign {
-    fn to_json_fmt(&self, _fmt: &JSONFormater) -> String {
-        let mut s = String::with_capacity(2 + self.encode().len() * 2);
-        s.push('"');
-        s.push_str("0x");
-        s.push_str(&hex::encode(self.encode()));
-        s.push('"');
-        s
-    }
-}
-
-impl FromJSON for Sign {
-    fn from_json(&mut self, json: &str) -> Ret<()> {
-        let data = json_decode_binary(json)?;
-        let (v, used) = Sign::decode(&data)?;
-        if used != data.len() {
-            return errf!("Sign JSON has {} trailing bytes", data.len() - used);
-        }
-        *self = v;
-        Ok(())
-    }
-}
-
 macro_rules! impl_list_json {
     ($($name:ident),+ $(,)?) => {
         $(
@@ -288,6 +272,54 @@ macro_rules! impl_list_from_json {
 
 impl_list_from_json!(ListW1, ListW2);
 
+/// Diamond name lists keep the legacy CSV-string JSON contract instead of the
+/// generic list array: `"WTYUIA,HYXYHY"`. `FromJSON` accepts the quoted CSV
+/// string (comma-separated or directly concatenated) and the array form.
+macro_rules! impl_diamond_name_list_json {
+    ($($name:ident),+ $(,)?) => {
+        $(
+            impl ToJSON for $name {
+                fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
+                    let joined = if fmt.diamond_list_csv {
+                        self.splitstr()
+                    } else {
+                        self.readable()
+                    };
+                    let mut s = String::with_capacity(
+                        2 + self.length() * (DiamondName::SIZE + 1),
+                    );
+                    s.push('"');
+                    s.push_str(&joined);
+                    s.push('"');
+                    s
+                }
+            }
+
+            impl FromJSON for $name {
+                fn from_json(&mut self, json: &str) -> Ret<()> {
+                    let tmp = if json.trim().starts_with('[') {
+                        let items = json_split_array(json)?;
+                        let mut names = Vec::with_capacity(items.len());
+                        for item in items {
+                            let mut name = DiamondName::default();
+                            name.from_json(item)?;
+                            names.push(name);
+                        }
+                        $name::from(names)?
+                    } else {
+                        $name::from_readable(&json_expect_quoted_decoded(json)?)?
+                    };
+                    tmp.check()?;
+                    *self = tmp;
+                    Ok(())
+                }
+            }
+        )+
+    };
+}
+
+impl_diamond_name_list_json!(DiamondNameListMax200, DiamondNameListMax60000);
+
 impl ToJSON for DiamondName {
     fn to_json_fmt(&self, _fmt: &JSONFormater) -> String {
         let mut s = String::with_capacity(self.as_ref().len() + 2);
@@ -301,13 +333,7 @@ impl ToJSON for DiamondName {
 impl FromJSON for DiamondName {
     fn from_json(&mut self, json: &str) -> Ret<()> {
         let raw = json_expect_quoted_decoded(json)?;
-        if let Ok(name) = DiamondName::from_readable(raw.trim()) {
-            *self = name;
-            return Ok(());
-        }
-        let data = json_decode_binary(json)?;
-        let name = DiamondName::from_readable(data)?;
-        *self = name;
+        *self = DiamondName::from_readable(raw.trim())?;
         Ok(())
     }
 }
@@ -345,82 +371,218 @@ impl FromJSON for DiamondNumberAuto {
     }
 }
 
-impl ToJSON for AssetAmt {
-    fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
-        let mut s = String::new();
-        s.push_str("{\"serial\":");
-        s.push_str(&self.serial.to_json_fmt(fmt));
-        s.push_str(",\"amount\":");
-        s.push_str(&self.amount.to_json_fmt(fmt));
-        s.push('}');
-        s
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::{Decode, Encode};
+    use crate::json::{FromJSON, ToJSON};
 
-impl FromJSON for AssetAmt {
-    fn from_json(&mut self, json: &str) -> Ret<()> {
-        let mut serial = self.serial;
-        let mut amount = self.amount;
-        let mut seen: Vec<&str> = Vec::new();
-        for (key, value) in json_split_object(json)? {
-            if seen.contains(&key) {
-                return errf!("AssetAmt JSON field {} is duplicated", key);
-            }
-            seen.push(key);
-            match key {
-                "serial" => serial.from_json(value)?,
-                "amount" => amount.from_json(value)?,
-                _ => {}
-            }
+    fn sample_sign() -> Sign {
+        Sign {
+            publickey: Fixed::from([0x02; Sign::PUBLICKEY_SIZE]),
+            signature: Fixed::from([0xab; Sign::SIGNATURE_SIZE]),
         }
-        *self = AssetAmt { serial, amount }.checked()?;
-        Ok(())
     }
-}
 
-impl ToJSON for Balance {
-    fn to_json_fmt(&self, fmt: &JSONFormater) -> String {
-        let mut s = String::new();
-        s.push_str("{\"hacash\":");
-        s.push_str(&self.hacash.to_json_fmt(fmt));
-        s.push_str(",\"satoshi\":");
-        s.push_str(&self.satoshi.to_json_fmt(fmt));
-        s.push_str(",\"diamond\":");
-        s.push_str(&self.diamond.to_json_fmt(fmt));
-        s.push_str(",\"assets\":");
-        s.push_str(&self.assets.to_json_fmt(fmt));
-        s.push('}');
-        s
+    fn sample_sign_json() -> String {
+        let pk = hex::encode([0x02u8; 33]);
+        let sig = hex::encode([0xabu8; 64]);
+        format!("{{\"publickey\":\"0x{pk}\",\"signature\":\"0x{sig}\"}}")
     }
-}
 
-impl FromJSON for Balance {
-    fn from_json(&mut self, json: &str) -> Ret<()> {
-        let mut hacash = self.hacash.clone();
-        let mut satoshi = self.satoshi;
-        let mut diamond = self.diamond;
-        let mut assets = self.assets.clone();
-        let mut seen: Vec<&str> = Vec::new();
-        for (key, value) in json_split_object(json)? {
-            if seen.contains(&key) {
-                return errf!("Balance JSON field {} is duplicated", key);
-            }
-            seen.push(key);
-            match key {
-                "hacash" => hacash.from_json(value)?,
-                "satoshi" => satoshi.from_json(value)?,
-                "diamond" => diamond.from_json(value)?,
-                "assets" => assets.from_json(value)?,
-                _ => {}
-            }
-        }
-        Balance::check_assets(&assets)?;
-        *self = Balance {
-            hacash,
-            satoshi,
-            diamond,
-            assets,
+    #[test]
+    fn uint_json_rejects_overflow_without_panic() {
+        let mut v = Uint3::default();
+        assert!(v.from_json("16777216").is_err());
+        assert!(v.from_json("16777215").is_ok());
+
+        let mut h = Uint5::default();
+        assert!(h.from_json("1099511627776").is_err());
+        assert!(h.from_json("1099511627775").is_ok());
+
+        let mut big = Uint10::default();
+        assert!(big.from_json("1208925819614629174706176").is_err());
+        assert!(big.from_json("1208925819614629174706175").is_ok());
+
+        // Uint1/2/4 parse through their exact underlying types and stay fine
+        let mut small = Uint1::default();
+        assert!(small.from_json("255").is_ok());
+        assert!(small.from_json("256").is_err());
+    }
+
+    #[test]
+    fn sign_json_matches_old_object_form() {
+        let sign = sample_sign();
+        let json = sign.to_json();
+        let pk = sign.publickey.to_json();
+        let sig = sign.signature.to_json();
+        assert_eq!(json, format!("{{\"publickey\":{pk},\"signature\":{sig}}}"));
+
+        let mut back = Sign::default();
+        back.from_json(&json).unwrap();
+        assert_eq!(back, sign);
+    }
+
+    #[test]
+    fn sign_json_rejects_concatenated_hex_and_incomplete_objects() {
+        let mut sign = Sign::default();
+        let hex = format!(
+            "\"0x{}{}\"",
+            hex::encode([0x02u8; 33]),
+            hex::encode([0xabu8; 64])
+        );
+        assert!(sign.from_json(&hex).is_err());
+        assert!(sign.from_json("{}").is_err());
+        assert!(
+            sign.from_json(&format!(
+                "{{\"publickey\":\"0x{}\"}}",
+                hex::encode([0x02u8; 33])
+            ))
+            .is_err()
+        );
+        assert!(
+            sign.from_json(&format!(
+                "{{\"signature\":\"0x{}\"}}",
+                hex::encode([0xabu8; 64])
+            ))
+            .is_err()
+        );
+        assert!(
+            sign.from_json(&format!(
+                "{{\"publickey\":\"0x{}\",\"signature\":\"0x{}\",\"junk\":1}}",
+                hex::encode([0x02u8; 33]),
+                hex::encode([0xabu8; 64])
+            ))
+            .is_err()
+        );
+
+        sign.from_json(&sample_sign_json()).unwrap();
+        assert_eq!(sign, sample_sign());
+    }
+
+    #[test]
+    fn sign_json_b64_follows_fixed_formatter() {
+        use base64::prelude::*;
+
+        let sign = sample_sign();
+        let fmt = JSONFormater {
+            binary: JSONBinaryFormat::Base64,
+            ..Default::default()
         };
-        Ok(())
+        let json = sign.to_json_fmt(&fmt);
+        let pk = format!("b64:{}", BASE64_STANDARD.encode([0x02u8; 33]));
+        let sig = format!("b64:{}", BASE64_STANDARD.encode([0xabu8; 64]));
+        assert_eq!(
+            json,
+            format!("{{\"publickey\":\"{pk}\",\"signature\":\"{sig}\"}}")
+        );
+
+        let mut back = Sign::default();
+        back.from_json(&json).unwrap();
+        assert_eq!(back, sign);
+    }
+
+    #[test]
+    fn address_json_accepts_hex_and_readable_forms() {
+        let addr = Address::from([0u8; Address::SIZE]);
+        let readable = format!("\"{}\"", addr.to_readable());
+        let hex = format!("\"0x{}\"", hex::encode(addr.as_bytes()));
+
+        let mut back = Address::default();
+        back.from_json(&readable).unwrap();
+        assert_eq!(back, addr);
+        back.from_json(&hex).unwrap();
+        assert_eq!(back, addr);
+        back.from_json(&hex.replace("0x", "0X")).unwrap();
+        assert_eq!(back, addr);
+
+        // Wrong length and invalid hex are rejected.
+        assert!(
+            back.from_json(&format!("\"0x{}\"", hex::encode([0u8; 20])))
+                .is_err()
+        );
+        assert!(back.from_json("\"0xzz\"").is_err());
+        // Unsupported version byte is rejected like the readable path.
+        let mut raw = [0u8; Address::SIZE];
+        raw[0] = 0x09;
+        assert!(back.from_json(&format!("\"0x{}\"", hex::encode(raw))).is_err());
+    }
+
+    #[test]
+    fn diamond_name_json_rejects_wire_hex() {
+        let mut name = DiamondName::default();
+        assert!(name.from_json("\"0x575459554941\"").is_err());
+        name.from_json("\"WTYUIA\"").unwrap();
+        assert_eq!(name.to_readable(), "WTYUIA");
+    }
+
+    #[test]
+    fn diamond_name_list_json_matches_old_csv_string() {
+        let a = DiamondName::from_readable("WTYUIA").unwrap();
+        let b = DiamondName::from_readable("HYXYHY").unwrap();
+        let list = DiamondNameListMax200::from(vec![a, b]).unwrap();
+        assert_eq!(list.to_json(), "\"WTYUIA,HYXYHY\"");
+
+        let mut parsed = DiamondNameListMax200::default();
+        parsed.from_json("\"WTYUIA,HYXYHY\"").unwrap();
+        assert_eq!(parsed, list);
+        parsed.from_json("\"WTYUIAHYXYHY\"").unwrap();
+        assert_eq!(parsed, list);
+        parsed.from_json("[\"WTYUIA\",\"HYXYHY\"]").unwrap();
+        assert_eq!(parsed, list);
+
+        assert!(parsed.from_json("[]").is_err());
+        assert!(parsed.from_json("[\"WTYUIA\",\"WTYUIA\"]").is_err());
+
+        let wide = DiamondNameListMax60000::from(vec![a, b]).unwrap();
+        assert_eq!(wide.to_json(), "\"WTYUIA,HYXYHY\"");
+        let mut wide_parsed = DiamondNameListMax60000::default();
+        wide_parsed.from_json("\"WTYUIA,HYXYHY\"").unwrap();
+        assert_eq!(wide_parsed, wide);
+
+        let addrs = AddressW1::from(vec![Address::default()]).unwrap();
+        assert!(addrs.to_json().starts_with('['));
+    }
+
+    #[test]
+    fn diamond_name_list_json_csv_option() {
+        let a = DiamondName::from_readable("WTYUIA").unwrap();
+        let b = DiamondName::from_readable("HYXYHY").unwrap();
+        let list = DiamondNameListMax200::from(vec![a, b]).unwrap();
+
+        assert_eq!(list.to_json(), "\"WTYUIA,HYXYHY\"");
+        let no_csv = JSONFormater {
+            diamond_list_csv: false,
+            ..Default::default()
+        };
+        assert_eq!(list.to_json_fmt(&no_csv), "\"WTYUIAHYXYHY\"");
+        // The concatenated output is still accepted on input.
+        let mut back = DiamondNameListMax200::default();
+        back.from_json("\"WTYUIAHYXYHY\"").unwrap();
+        assert_eq!(back, list);
+    }
+
+    #[test]
+    fn bool_json_emits_true_false_and_accepts_legacy_digits() {
+        assert_eq!(Bool::new(true).to_json(), "true");
+        assert_eq!(Bool::new(false).to_json(), "false");
+
+        let mut value = Bool::new(false);
+        for input in ["true", "True", "TRUE", "1"] {
+            value.from_json(input).unwrap();
+            assert!(value.is_true(), "{input}");
+        }
+        for input in ["false", "False", "FALSE", "0"] {
+            value.from_json(input).unwrap();
+            assert!(!value.is_true(), "{input}");
+        }
+        assert!(value.from_json("\"true\"").is_err());
+        assert!(value.from_json("2").is_err());
+        assert!(value.from_json("yes").is_err());
+
+        // Binary contract is still a single 0/1 byte.
+        assert_eq!(Bool::new(true).encode(), vec![1]);
+        assert_eq!(Bool::new(false).encode(), vec![0]);
+        assert!(Bool::decode(&[2]).is_err());
     }
 }

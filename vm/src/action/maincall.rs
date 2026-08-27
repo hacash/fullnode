@@ -32,9 +32,3 @@ impl ContractMainCall {
         Ok(s)
     }
 }
-
-impl Default for ContractMainCall {
-    fn default() -> Self {
-        Self::new()
-    }
-}

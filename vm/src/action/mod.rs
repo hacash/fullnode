@@ -19,3 +19,8 @@ pub use contract_exec::{
 pub use maincall::ContractMainCall;
 pub use p2sh::{P2SHScriptProve, P2shEntryPayload, ScriptmhCalc, UnlockScript};
 pub use p2sh_tool::{P2shLeaf, P2shLeafSpec, P2shMerkleTree, P2shTool, P2shTreeCalc};
+
+/// `codeconf` type bits. Authority: `crate::rt::CodeType::TYPE_MASK`.
+pub const CODECONF_TYPE_MASK: u8 = crate::rt::CodeType::TYPE_MASK;
+/// `codeconf` reserved bits (must be zero). Authority: `crate::rt::CodeConf::RESERVED_MASK`.
+pub const CODECONF_RESERVED_MASK: u8 = crate::rt::CodeConf::RESERVED_MASK;

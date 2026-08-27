@@ -100,7 +100,11 @@ pub fn verify_signature(
     let address = Address::from(sys::Account::get_address_by_public_key(public_key));
     Ok(VerifySignatureResult {
         ok,
-        address: if ok { Some(address.to_readable()) } else { None },
+        address: if ok {
+            Some(address.to_readable())
+        } else {
+            None
+        },
         error: if ok {
             None
         } else {

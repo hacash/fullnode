@@ -1,41 +1,43 @@
-//! `tx.build`: construct unsigned Type-2/3 bodies from a wire-shaped action spec.
-//! JSON fields follow `ActionSchema` names and shapes; the protocol decoder
-//! is the only construction path. Kinds outside the SDK codec profile are rejected.
+//! `tx.build`: construct unsigned Type-2/3 bodies from a protocol-JSON action spec.
+//! Each action object is decoded by the registry; kinds outside the SDK codec
+//! profile are rejected.
 
-use base::{BinaryCodecs, TxCreateRequest};
-use field::{Address, Amount};
+use base::{JsonCodecs, TxCreateRequest};
+use field::{AddrOrList, Address, Amount};
 
 use crate::error::{SdkError, SdkErrorCode};
 use crate::inspect::decode_tx;
 use crate::schema::{SCHEMA_BUILT_TRANSACTION, SCHEMA_TRANSACTION_SPEC};
-use crate::spec_codec::WireValue;
 
-/// One wire action: `kind` is the schema name, `fields` are schema fields
-/// excluding `kind`.
+/// One protocol action object, stored as its original JSON text plus the
+/// cached numeric `kind` extracted when the spec is parsed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionSpec {
-    pub kind: String,
-    pub fields: Vec<(String, WireValue)>,
+    pub json: String,
+    pub kind: u16,
 }
 
 impl ActionSpec {
-    pub fn new(kind: impl Into<String>, fields: Vec<(String, WireValue)>) -> Self {
-        Self {
-            kind: kind.into(),
-            fields,
-        }
+    pub fn new(json: impl Into<String>) -> Result<Self, SdkError> {
+        let json = json.into();
+        let kind = parse_action_kind(&json)?;
+        Ok(Self { json, kind })
     }
+}
 
-    pub fn to_json_string(&self) -> String {
-        use crate::json::{kv, obj, q};
-        let mut parts = vec![kv("kind", q(&self.kind))];
-        parts.extend(
-            self.fields
-                .iter()
-                .map(|(name, value)| kv(name, wire_value_json(value))),
-        );
-        obj(parts)
-    }
+fn parse_action_kind(json: &str) -> Result<u16, SdkError> {
+    let pairs = field::json_object_pairs(json, "action").map_err(SdkError::from)?;
+    let raw = pairs
+        .iter()
+        .find(|(key, _)| *key == "kind")
+        .map(|(_, value)| *value)
+        .ok_or_else(|| {
+            SdkError::new(SdkErrorCode::ParseFailed, "action is missing numeric kind")
+        })?;
+    let text = field::json_expect_unquoted(raw)
+        .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "action kind must be a number"))?;
+    text.parse::<u16>()
+        .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "action kind must be a number"))
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +48,7 @@ pub struct TransactionSpec {
     pub fee: String,
     pub timestamp: Option<u64>,
     pub gas_max: Option<u8>,
+    pub addrlist: Option<AddrOrList>,
     pub actions: Vec<ActionSpec>,
 }
 
@@ -76,18 +79,27 @@ pub fn build_transaction(spec: &TransactionSpec) -> Result<BuiltTransaction, Sdk
     let fee_fin = fee.to_fin_string();
     let timestamp = spec.timestamp.unwrap_or_else(crate::now_secs);
 
-    let mut actions = Vec::with_capacity(spec.actions.len());
-    for action in &spec.actions {
-        actions.push(build_action(action)?);
+    let mut request = TxCreateRequest::new(spec.tx_type, main, fee, timestamp)
+        .with_gas_max(spec.gas_max.unwrap_or(0));
+    if let Some(addrlist) = spec.addrlist.clone() {
+        let primary = addrlist.to_list().into_iter().next();
+        if primary.as_ref() != Some(&main) {
+            return Err(SdkError::new(
+                SdkErrorCode::ParseFailed,
+                "transaction spec main must equal addrlist primary address",
+            ));
+        }
+        request = request.with_addrlist(addrlist);
     }
 
-    let body = protocol::tx_std::encode_standard_tx(
-        TxCreateRequest::new(spec.tx_type, main, fee, timestamp)
-            .with_gas_max(spec.gas_max.unwrap_or(0)),
-        &actions,
-        &[],
-    )
-    .map_err(SdkError::from)?;
+    let codecs = crate::codec::standard_codecs().map_err(SdkError::from)?;
+    let mut actions = Vec::with_capacity(spec.actions.len());
+    for (i, action) in spec.actions.iter().enumerate() {
+        actions.push(build_action(i, action, codecs)?);
+    }
+
+    let body =
+        protocol::tx_std::encode_standard_tx(request, &actions, &[]).map_err(SdkError::from)?;
 
     let body_hex = hex::encode(&body);
     let decoded = decode_tx(&body)?;
@@ -98,6 +110,7 @@ pub fn build_transaction(spec: &TransactionSpec) -> Result<BuiltTransaction, Sdk
             "built body failed the encode(decode(body)) == body round-trip",
         ));
     }
+    decoded.req_sign().map_err(SdkError::from)?;
     let unsigned_body_hash = crate::audit::unsigned_body_hash(&body_hex)?;
     Ok(BuiltTransaction {
         schema: SCHEMA_BUILT_TRANSACTION.to_owned(),
@@ -112,68 +125,32 @@ pub fn build_transaction(spec: &TransactionSpec) -> Result<BuiltTransaction, Sdk
     })
 }
 
-fn build_action(spec: &ActionSpec) -> Result<base::ActionRef, SdkError> {
-    build_raw(&spec.kind, &spec.fields)
-}
-
-/// Schema fields → native payload bytes → the protocol's own action decoder.
-fn build_raw(kind: &str, fields: &[(String, WireValue)]) -> Result<base::ActionRef, SdkError> {
-    let mut buf = Vec::new();
-    crate::spec_codec::encode_action(&mut buf, kind, fields).map_err(SdkError::from)?;
-    let codecs = crate::codec::standard_codecs().map_err(SdkError::from)?;
-    let (action, used) = codecs.decode_action(&buf).map_err(|error| {
+fn build_action(
+    index: usize,
+    spec: &ActionSpec,
+    codecs: &impl JsonCodecs,
+) -> Result<base::ActionRef, SdkError> {
+    codecs.decode_action_json(&spec.json).map_err(|error| {
         SdkError::new(
             SdkErrorCode::ParseFailed,
-            format!("action {kind:?} has no usable transaction action codec ({error})"),
+            format!("actions[{index}] kind {}: {error}", spec.kind),
         )
-    })?;
-    let canonical = action.encode();
-    if canonical.len() > buf.len() || &buf[..canonical.len()] != canonical.as_slice() {
-        return Err(SdkError::new(
-            SdkErrorCode::ParseFailed,
-            format!(
-                "action {kind:?} decoded {used} of {} bytes and the consumed form does not re-encode",
-                buf.len()
-            ),
-        ));
-    }
-    Ok(action)
-}
-
-fn wire_value_json(value: &WireValue) -> String {
-    use crate::json::{arr, obj, q};
-    match value {
-        WireValue::Num(n) => n.to_string(),
-        WireValue::Str(s) => q(s),
-        WireValue::Hex(b) => q(&hex::encode(b)),
-        WireValue::List(items) => arr(items.iter().map(wire_value_json).collect()),
-        WireValue::Struct(items) => obj(items
-            .iter()
-            .map(|(name, value)| crate::json::kv(name, wire_value_json(value)))
-            .collect()),
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use field::{AddrOrList, Address, ToJSON};
 
     const MAIN: &str = "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9";
 
-    fn wv_str(s: &str) -> WireValue {
-        WireValue::Str(s.to_owned())
+    fn action_json(json: impl Into<String>) -> ActionSpec {
+        ActionSpec::new(json.into()).expect("test action spec")
     }
-    fn wv_num(n: u64) -> WireValue {
-        WireValue::Num(n)
-    }
-    fn action(kind: &str, fields: Vec<(&str, WireValue)>) -> ActionSpec {
-        ActionSpec::new(
-            kind,
-            fields
-                .into_iter()
-                .map(|(name, value)| (name.to_owned(), value))
-                .collect(),
-        )
+
+    fn hac_to(to: &str, amount: &str) -> ActionSpec {
+        action_json(format!(r#"{{"kind":1,"to":"{to}","hacash":"{amount}"}}"#))
     }
 
     fn sample_spec() -> TransactionSpec {
@@ -184,16 +161,24 @@ mod tests {
             fee: "1:244".to_owned(),
             timestamp: Some(1_755_223_764),
             gas_max: None,
+            addrlist: None,
             actions: vec![
-                action(
-                    "transfer_hac_to",
-                    vec![("to", wv_str(MAIN)), ("hacash", wv_str("12:244"))],
-                ),
-                action(
-                    "height_scope",
-                    vec![("start", wv_num(1_000_000)), ("end", wv_num(0))],
-                ),
+                hac_to(MAIN, "12:244"),
+                action_json(r#"{"kind":1042,"start":1000000,"end":0}"#),
             ],
+        }
+    }
+
+    fn raw_spec(json: &str) -> TransactionSpec {
+        TransactionSpec {
+            schema: Some(SCHEMA_TRANSACTION_SPEC.to_owned()),
+            tx_type: 3,
+            main: MAIN.to_owned(),
+            fee: "1:244".to_owned(),
+            timestamp: Some(1_755_223_764),
+            gas_max: None,
+            addrlist: None,
+            actions: vec![ActionSpec::new(json.to_owned()).expect("test action spec")],
         }
     }
 
@@ -212,9 +197,11 @@ mod tests {
         spec.tx_type = 0;
         let error = build_transaction(&spec).unwrap_err();
         assert_eq!(error.code, "parse_failed");
-        assert!(error
-            .message
-            .contains("unsupported standard user transaction type 0"));
+        assert!(
+            error
+                .message
+                .contains("unsupported standard user transaction type 0")
+        );
     }
 
     #[test]
@@ -245,14 +232,10 @@ mod tests {
     fn explicit_from_builds_from_to_transfer_and_becomes_signer() {
         let other = sys::Account::create_by("654321").unwrap();
         let mut spec = sample_spec();
-        spec.actions[0] = action(
-            "transfer_hac_from_to",
-            vec![
-                ("from", wv_str(other.readable())),
-                ("to", wv_str(MAIN)),
-                ("hacash", wv_str("12:244")),
-            ],
-        );
+        spec.actions[0] = action_json(format!(
+            r#"{{"kind":14,"from":"{}","to":"{MAIN}","hacash":"12:244"}}"#,
+            other.readable()
+        ));
         let built = build_transaction(&spec).unwrap();
         let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
         assert_eq!(
@@ -260,21 +243,16 @@ mod tests {
             protocol::action_std::TransferHacFromTo::KIND
         );
         let required = decoded.req_sign().unwrap();
-        let other_address = field::Address::from_readable(other.readable()).unwrap();
+        let other_address = Address::from_readable(other.readable()).unwrap();
         assert!(required.contains(&other_address));
     }
 
     #[test]
     fn explicit_from_equal_to_main_keeps_the_from_to_form() {
         let mut spec = sample_spec();
-        spec.actions[0] = action(
-            "transfer_hac_from_to",
-            vec![
-                ("from", wv_str(MAIN)),
-                ("to", wv_str(MAIN)),
-                ("hacash", wv_str("12:244")),
-            ],
-        );
+        spec.actions[0] = action_json(format!(
+            r#"{{"kind":14,"from":"{MAIN}","to":"{MAIN}","hacash":"12:244"}}"#
+        ));
         let built = build_transaction(&spec).unwrap();
         let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
         assert_eq!(
@@ -284,88 +262,87 @@ mod tests {
         );
     }
 
-    fn raw_spec(kind: &str, fields: Vec<(String, WireValue)>) -> TransactionSpec {
-        TransactionSpec {
-            schema: Some(SCHEMA_TRANSACTION_SPEC.to_owned()),
-            tx_type: 3,
-            main: MAIN.to_owned(),
-            fee: "1:244".to_owned(),
-            timestamp: Some(1_755_223_764),
-            gas_max: None,
-            actions: vec![ActionSpec::new(kind, fields)],
-        }
-    }
-
-    /// Every registered action builds through the schema path and the
-    /// encode(decode(body)) == body invariant holds.
     #[test]
     fn raw_actions_build_through_the_protocol_codec() {
-        let cases: Vec<(&str, Vec<(String, WireValue)>)> = vec![
-            (
-                "balance_floor",
-                vec![
-                    ("addr".to_owned(), wv_str(MAIN)),
-                    ("hacash".to_owned(), wv_str("12:244")),
-                    ("satoshi".to_owned(), wv_str("100")),
-                    ("diamond".to_owned(), wv_str("5")),
-                    (
-                        "assets".to_owned(),
-                        WireValue::List(vec![WireValue::Struct(vec![
-                            ("serial".to_owned(), wv_str("7")),
-                            ("amount".to_owned(), wv_str("100")),
-                        ])]),
-                    ),
-                ],
-            ),
-            (
-                "contract_main_call",
-                vec![
-                    ("marks".to_owned(), WireValue::Hex(vec![0, 0, 0])),
-                    ("codeconf".to_owned(), wv_num(1)),
-                    ("codes".to_owned(), WireValue::Hex(vec![0x01, 0x02, 0x03])),
-                ],
-            ),
-            (
-                "ast_select",
-                vec![
-                    ("exe_min".to_owned(), wv_num(1)),
-                    ("exe_max".to_owned(), wv_num(1)),
-                    (
-                        "actions".to_owned(),
-                        WireValue::List(vec![WireValue::Struct(vec![
-                            ("kind".to_owned(), wv_str("transfer_hac_to")),
-                            ("to".to_owned(), wv_str(MAIN)),
-                            ("hacash".to_owned(), wv_str("12:244")),
-                        ])]),
-                    ),
-                ],
-            ),
-        ];
+        let floor = protocol::action_std::BalanceFloor::new(
+            field::AddrOrPtr::Addr(Address::from_readable(MAIN).unwrap()),
+            Amount::from("12:244").unwrap(),
+            field::Satoshi::from(100),
+            field::DiamondNumber::from(5),
+        );
+        let mut floor = floor;
+        floor.assets = field::AssetAmtW1::from(vec![field::AssetAmt {
+            serial: field::Fold64::from(7).unwrap(),
+            amount: field::Fold64::from(100).unwrap(),
+        }])
+        .unwrap();
+        let mut maincall = vm::action::ContractMainCall::new();
+        maincall.codeconf = field::Uint1::from(1);
+        maincall.codes = field::BytesW2::from(vec![0x01, 0x02, 0x03]).unwrap();
+        let child = protocol::action_std::TransferHacTo::new(
+            Address::from_readable(MAIN).unwrap(),
+            Amount::from("12:244").unwrap(),
+        );
+        let ast =
+            protocol::action_std::AstSelect::create_by(1, 1, vec![std::sync::Arc::new(child)])
+                .unwrap();
+        let cases = [floor.to_json(), maincall.to_json(), ast.to_json()];
         let expected_kinds = [
             protocol::action_std::BalanceFloor::KIND,
             vm::action::ContractMainCall::KIND,
             protocol::action_std::AstSelect::KIND,
         ];
-        for ((kind, fields), expected) in cases.into_iter().zip(expected_kinds) {
-            let built = build_transaction(&raw_spec(kind, fields)).expect(kind);
+        for (json, expected) in cases.iter().zip(expected_kinds) {
+            let built = build_transaction(&raw_spec(json)).expect(json);
             let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
             assert_eq!(
                 hex::encode(decoded.encode()),
                 built.body,
-                "{kind}: raw build must round-trip the tx body"
+                "{json}: raw build must round-trip the tx body"
             );
             assert_eq!(
                 decoded.actions()[0].kind(),
                 expected,
-                "{kind}: the protocol's own decoder must construct the native action"
+                "{json}: the protocol's own decoder must construct the native action"
             );
         }
     }
 
     #[test]
     fn raw_host_opcode_kind_is_outside_the_sdk_profile() {
-        let error = build_transaction(&raw_spec("block_height", vec![])).unwrap_err();
+        let error = build_transaction(&raw_spec(r#"{"kind":1793}"#)).unwrap_err();
         assert_eq!(error.code, "parse_failed");
+        assert!(
+            error.message.starts_with("actions[0] kind 1793:"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn addrlist_resolves_pointer_actions_and_omitting_it_fails() {
+        let extra = sys::Account::create_by("654321").unwrap();
+        let main_addr = Address::from_readable(MAIN).unwrap();
+        let extra_addr = Address::from_readable(extra.readable()).unwrap();
+        let addrlist = AddrOrList::from_list(vec![main_addr, extra_addr]).unwrap();
+        let pointer_from = action_json(r#"{"kind":13,"from":1,"hacash":"12:244"}"#);
+        let mut spec = sample_spec();
+        spec.actions = vec![pointer_from.clone()];
+        spec.addrlist = Some(addrlist);
+        let built = build_transaction(&spec).expect("pointer with addrlist");
+        let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
+        assert_eq!(
+            decoded.actions()[0].kind(),
+            protocol::action_std::TransferHacFrom::KIND
+        );
+
+        spec.addrlist = None;
+        let error = build_transaction(&spec).unwrap_err();
+        assert_eq!(error.code, "parse_failed");
+        assert!(
+            error.message.contains("addr ptr") || error.message.contains("out of range"),
+            "{error:?}"
+        );
     }
 
     #[test]

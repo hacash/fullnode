@@ -4,13 +4,13 @@
 //! this workspace's macro-generated contract wire structs (`Default` instead of
 //! hand-written `new()`).
 
+use super::{ContractAbstCall, ContractSto, ContractUserFunc};
 use crate::ir::{IRNode, convert_ir_to_runtime_bytecode, drop_irblock_wrap};
 use crate::lang::{Syntax, Tokenizer};
 use crate::rt::{
-    AbstCall, CodeConf, CodeType, FuncArgvTypes, calc_func_sign, verify_bytecodes, FnConf,
+    AbstCall, CodeConf, CodeType, FnConf, FuncArgvTypes, calc_func_sign, verify_bytecodes,
 };
 use crate::value::{ContractAddress, ValueTy};
-use super::{ContractAbstCall, ContractSto, ContractUserFunc};
 use field::{Address, BytesW2, Fixed1, Fixed4, Uint1};
 use sys::{Ret, errf};
 
@@ -72,10 +72,10 @@ pub struct Func {
 impl Func {
     pub fn new(fname: &str) -> Ret<Self> {
         let Some(c0) = fname.as_bytes().first().copied() else {
-            return errf!("userfunc name cannot be empty")
+            return errf!("userfunc name cannot be empty");
         };
         if c0.is_ascii_uppercase() {
-            return errf!("userfunc name '{}' cannot start with uppercase", fname)
+            return errf!("userfunc name '{}' cannot start with uppercase", fname);
         }
         let mut func = ContractUserFunc::default();
         func.sign = Fixed4::from(calc_func_sign(fname));

@@ -1,6 +1,5 @@
 use sys::{Ret, errf};
 
-use crate::codec::{Decode, Encode, Reader};
 use crate::types::address::Address;
 use crate::types::amount::Amount;
 use crate::types::bytes_w::{BytesW1, BytesW4};
@@ -9,10 +8,11 @@ use crate::types::fixed::{Fixed8, Hash};
 use crate::types::list::ListW1;
 use crate::types::uint::{BlockHeight, Uint1, Uint2};
 
-codec_struct!(DiamondInscript {
-    engraved_type: Uint1,
-    content: BytesW1,
-});
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct DiamondInscript {
+    pub engraved_type: Uint1,
+    pub content: BytesW1,
+}
 
 impl DiamondInscript {
     pub fn to_readable_or_hex(&self) -> String {
@@ -31,27 +31,32 @@ impl Inscripts {
     }
 }
 
-codec_struct!(DiamondSto {
-    status: Uint1,
-    address: Address,
-    prev_engraved_height: BlockHeight,
-    inscripts: Inscripts,
-});
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct DiamondSto {
+    pub status: Uint1,
+    pub address: Address,
+    pub prev_engraved_height: BlockHeight,
+    pub inscripts: Inscripts,
+}
 
-codec_struct!(DiamondSmelt {
-    diamond: DiamondName,
-    number: DiamondNumber,
-    born_height: BlockHeight,
-    born_hash: Hash,
-    prev_hash: Hash,
-    miner_address: Address,
-    bid_fee: Amount,
-    nonce: Fixed8,
-    average_bid_burn: Uint2,
-    life_gene: Hash,
-});
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct DiamondSmelt {
+    pub diamond: DiamondName,
+    pub number: DiamondNumber,
+    pub born_height: BlockHeight,
+    pub born_hash: Hash,
+    pub prev_hash: Hash,
+    pub miner_address: Address,
+    pub bid_fee: Amount,
+    pub nonce: Fixed8,
+    pub average_bid_burn: Uint2,
+    pub life_gene: Hash,
+}
 
-codec_struct!(DiamondOwnedForm { names: BytesW4 });
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct DiamondOwnedForm {
+    pub names: BytesW4,
+}
 
 impl DiamondOwnedForm {
     fn contains_diamond(&self, dian: &DiamondName) -> bool {

@@ -57,10 +57,10 @@ pub(crate) mod frame;
 // fitsh language front-end: source parser, formatter/decompiler (IR or
 // bytecode to readable text) and source-map-aware rendering. Codec-safe —
 // the SDK/wasm boundary consumes the decompiler; compiled in codec-only builds.
-pub mod lang;
 #[cfg(feature = "execute")]
 #[allow(dead_code)] // Instruction helpers intentionally expose the complete VM opcode surface.
 pub(crate) mod interpreter;
+pub mod lang;
 // IR node model and serialized parse: codec-safe, consumed by the fitsh
 // decompiler (`lang`) in codec-only (SDK) builds; IR builders are
 // re-exported selectively through `fitshc`.
@@ -93,10 +93,10 @@ pub use value::ContractAddress;
 // ACTENV / ACTVIEW / EXTACTION host display tables (defined in `rt` via
 // `include!`), exported for cross-crate sync verification (app asserts them
 // against the registered host defs); not part of the codec/wire surface.
+pub use ir::{IRNode, IRNodeArray};
+pub use lang::SourceMap;
 pub use rt::{ACTION_DEFS, ACTION_ENV_DEFS, ACTION_VIEW_DEFS};
 pub use value::ValueTy;
 pub use wire::{ACTION_CODECS, STRUCT_SCHEMAS, register_wire};
-pub use ir::{IRNode, IRNodeArray};
-pub use lang::SourceMap;
 
 pub const MAX_FUNC_PARAM_LEN: usize = 15;

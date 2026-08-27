@@ -9,7 +9,6 @@ pub use field::schema::{
 /// (name, wire) pairs for every built-in leaf; the single table behind
 /// `builtin_leaf_wire`, also rendered into the generated TS codec by SDK codegen.
 pub const BUILTIN_LEAVES: &[(&str, FieldWire)] = &[
-    ("U1", FieldWire::U8),
     ("Uint1", FieldWire::U8),
     ("U8", FieldWire::U8),
     ("U2", FieldWire::U2),
@@ -27,15 +26,16 @@ pub const BUILTIN_LEAVES: &[(&str, FieldWire)] = &[
     ("AddrOrList", FieldWire::AddrOrList),
     ("BytesW1", FieldWire::BytesW1),
     ("BytesW2", FieldWire::BytesW2),
+    ("BytesW4", FieldWire::BytesW4),
     ("Satoshi", FieldWire::Satoshi),
     ("Fold64", FieldWire::Fold64),
     ("Timestamp", FieldWire::Timestamp),
     ("DiamondName", FieldWire::DiamondName),
     ("DiamondNumber", FieldWire::DiamondNumber),
     ("AssetAmt", FieldWire::AssetAmt),
-    ("Sign", FieldWire::Fixed(97)),
+    ("Sign", FieldWire::Struct("Sign")),
     ("Hash", FieldWire::Fixed(32)),
-    ("PosiHash", FieldWire::Fixed(33)),
+    ("Bool", FieldWire::Bool),
 ];
 
 /// Built-in leaf element name → wire shape (`ListW1/ListW2` element references).
@@ -186,7 +186,6 @@ pub fn schema_set_hash(schemas: &[ActionSchema], struct_schemas: &[StructSchema]
 
 fn write_wire_hash<D: sha3::digest::Update>(hasher: &mut D, wire: &FieldWire) {
     match wire {
-        FieldWire::U1 => hasher.update(&[1]),
         FieldWire::U2 => hasher.update(&[2]),
         FieldWire::U4 => hasher.update(&[3]),
         FieldWire::U5 => hasher.update(&[4]),
@@ -198,6 +197,7 @@ fn write_wire_hash<D: sha3::digest::Update>(hasher: &mut D, wire: &FieldWire) {
         FieldWire::AddrOrList => hasher.update(&[10]),
         FieldWire::BytesW1 => hasher.update(&[11]),
         FieldWire::BytesW2 => hasher.update(&[12]),
+        FieldWire::BytesW4 => hasher.update(&[31]),
         FieldWire::Satoshi => hasher.update(&[13]),
         FieldWire::Fold64 => hasher.update(&[14]),
         FieldWire::Timestamp => hasher.update(&[15]),
@@ -227,6 +227,7 @@ fn write_wire_hash<D: sha3::digest::Update>(hasher: &mut D, wire: &FieldWire) {
         FieldWire::ActionList => hasher.update(&[27]),
         FieldWire::ActionListW1 => hasher.update(&[28]),
         FieldWire::U8 => hasher.update(&[29]),
+        FieldWire::Bool => hasher.update(&[30]),
     }
 }
 
@@ -286,7 +287,7 @@ mod tests {
     #[test]
     fn schema_validation_rejects_duplicate_field_names() {
         const DUP_FIELDS: &[FieldSchema] = &[
-            FieldSchema::new("value", FieldWire::U1),
+            FieldSchema::new("value", FieldWire::U8),
             FieldSchema::new("value", FieldWire::U2),
         ];
         let actions = [ActionSchema {
@@ -299,5 +300,70 @@ mod tests {
         }];
         let error = validate_schema_set(&actions, &[]).unwrap_err();
         assert!(error.contains("duplicate field value"), "{error}");
+    }
+
+    #[test]
+    fn builtin_leaves_match_field_wire_shape() {
+        use field::{
+            AddrOrList, AddrOrPtr, Address, Amount, AssetAmt, BlockHeight, Bool, BytesW1, BytesW2,
+            DiamondName, DiamondNumber, Fold64, Hash, Satoshi, Timestamp, Uint1, Uint2, Uint4,
+            Uint5, Uint8,
+        };
+
+        fn leaf(name: &str) -> FieldWire {
+            builtin_leaf_wire(name).unwrap_or_else(|| panic!("missing builtin leaf {name}"))
+        }
+
+        // 1:1 types: the leaf table must match FieldWireShape::WIRE.
+        assert_eq!(leaf("Uint1"), Uint1::WIRE);
+        assert_eq!(Uint1::WIRE, FieldWire::U8);
+        assert_eq!(leaf("Uint2"), Uint2::WIRE);
+        assert_eq!(Uint2::WIRE, FieldWire::U2);
+        assert_eq!(leaf("Uint4"), Uint4::WIRE);
+        assert_eq!(Uint4::WIRE, FieldWire::U4);
+        assert_eq!(leaf("Uint5"), Uint5::WIRE);
+        assert_eq!(Uint5::WIRE, FieldWire::U5);
+        assert_eq!(leaf("Amount"), Amount::WIRE);
+        assert_eq!(leaf("Address"), Address::WIRE);
+        assert_eq!(leaf("AddrOrPtr"), AddrOrPtr::WIRE);
+        assert_eq!(leaf("AddrOrList"), AddrOrList::WIRE);
+        assert_eq!(leaf("BytesW1"), BytesW1::WIRE);
+        assert_eq!(leaf("BytesW2"), BytesW2::WIRE);
+        assert_eq!(leaf("Satoshi"), Satoshi::WIRE);
+        assert_eq!(Satoshi::WIRE, FieldWire::Satoshi);
+        assert_eq!(Uint8::WIRE, FieldWire::Satoshi);
+        assert_eq!(leaf("Fold64"), Fold64::WIRE);
+        assert_eq!(leaf("Timestamp"), Timestamp::WIRE);
+        assert_eq!(Timestamp::WIRE, FieldWire::Timestamp);
+        assert_eq!(leaf("DiamondName"), DiamondName::WIRE);
+        assert_eq!(leaf("DiamondNumber"), DiamondNumber::WIRE);
+        assert_eq!(leaf("AssetAmt"), AssetAmt::WIRE);
+        assert_eq!(leaf("Hash"), Hash::WIRE);
+        assert_eq!(Hash::WIRE, FieldWire::Fixed(32));
+        assert_eq!(leaf("Bool"), Bool::WIRE);
+        assert_eq!(Bool::WIRE, FieldWire::Bool);
+
+        // Explicit aliases (not a second 1:1 type): U8/Uint1 → U8; U2/Uint2;
+        // U4/Uint4; U5/Uint5; BlockHeight → U5; ContractAddress → Address.
+        assert_eq!(leaf("U8"), FieldWire::U8);
+        assert_eq!(leaf("U2"), FieldWire::U2);
+        assert_eq!(leaf("U4"), FieldWire::U4);
+        assert_eq!(leaf("U5"), FieldWire::U5);
+        assert_eq!(leaf("BlockHeight"), FieldWire::U5);
+        assert_eq!(leaf("BlockHeight"), BlockHeight::WIRE);
+        assert_eq!(leaf("ContractAddress"), FieldWire::Address);
+        assert_eq!(leaf("ContractAddress"), Address::WIRE);
+
+        // Retired: no U1 leaf, and PosiHash is a struct (not a Fixed(33) leaf).
+        assert!(
+            BUILTIN_LEAVES
+                .iter()
+                .all(|(name, _)| *name != "U1" && *name != "PosiHash"),
+            "BUILTIN_LEAVES must not contain U1 or PosiHash"
+        );
+
+        // Sensitivity: changing Uint1::WIRE away from U8, or re-adding
+        // ("U1", ...) / ("PosiHash", FieldWire::Fixed(33)) to BUILTIN_LEAVES,
+        // must fail this test.
     }
 }

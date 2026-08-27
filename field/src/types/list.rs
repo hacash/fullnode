@@ -1,7 +1,7 @@
 use std::ops::Deref;
 use sys::{Ret, errf};
 
-use crate::codec::{Decode, Encode, ParsePrefix, Reader};
+use crate::codec::{Decode, Encode, Reader};
 use crate::types::address::Address;
 use crate::types::uint::{Uint1, Uint2, Uint4};
 
@@ -102,20 +102,56 @@ macro_rules! list_w {
 list_w!(ListW1, Uint1);
 list_w!(ListW2, Uint2);
 
-impl<T: Decode> ParsePrefix for ListW1<T> {
-    fn create_with_prefix(prefix: &[u8], rest: &[u8]) -> Ret<(Self, usize)> {
-        if prefix.len() != Uint1::SIZE {
-            return errf!("ListW1 prefix must be {} byte", Uint1::SIZE);
-        }
-        let count = prefix[0] as usize;
-        let mut r = Reader::new(rest);
-        let mut vals = Vec::with_capacity(count);
-        for _ in 0..count {
-            vals.push(r.read()?);
-        }
-        Ok((Self(vals), prefix.len() + r.used()))
-    }
-}
-
 pub type AddressW1 = ListW1<Address>;
 pub type ChainIDList = ListW1<Uint4>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_w1_count_bounds() {
+        let empty = ListW1::<Uint1>::from(vec![]).unwrap();
+        assert_eq!(empty.encode(), vec![0]);
+        assert_eq!(empty.size(), empty.encode().len());
+
+        let one = ListW1::from(vec![Uint1::from(7)]).unwrap();
+        assert_eq!(one.size(), one.encode().len());
+        let (decoded, used) = ListW1::<Uint1>::decode(&one.encode()).unwrap();
+        assert_eq!(used, one.encode().len());
+        assert_eq!(decoded.as_list(), one.as_list());
+
+        let max = ListW1::from(vec![Uint1::from(1); u8::MAX as usize]).unwrap();
+        assert_eq!(max.length(), u8::MAX as usize);
+        assert_eq!(max.size(), max.encode().len());
+        let (decoded, used) = ListW1::<Uint1>::decode(&max.encode()).unwrap();
+        assert_eq!(used, max.encode().len());
+        assert_eq!(decoded.length(), u8::MAX as usize);
+
+        assert!(ListW1::<Uint1>::from(vec![Uint1::from(1); u8::MAX as usize + 1]).is_err());
+        let mut list = ListW1::from(vec![Uint1::from(1); u8::MAX as usize]).unwrap();
+        assert!(list.push(Uint1::from(1)).is_err());
+    }
+
+    #[test]
+    fn list_w2_count_bounds() {
+        let empty = ListW2::<Uint1>::from(vec![]).unwrap();
+        assert_eq!(empty.encode(), vec![0, 0]);
+        assert_eq!(empty.size(), empty.encode().len());
+
+        let one = ListW2::from(vec![Uint1::from(7)]).unwrap();
+        assert_eq!(one.size(), one.encode().len());
+        let (decoded, used) = ListW2::<Uint1>::decode(&one.encode()).unwrap();
+        assert_eq!(used, one.encode().len());
+        assert_eq!(decoded.as_list(), one.as_list());
+
+        let max = ListW2::from(vec![Uint1::from(1); u16::MAX as usize]).unwrap();
+        assert_eq!(max.length(), u16::MAX as usize);
+        assert_eq!(max.size(), max.encode().len());
+        assert_eq!(&max.encode()[..2], &[0xff, 0xff]);
+
+        assert!(ListW2::<Uint1>::from(vec![Uint1::from(1); u16::MAX as usize + 1]).is_err());
+        let mut list = ListW2::from(vec![Uint1::from(1); u16::MAX as usize]).unwrap();
+        assert!(list.push(Uint1::from(1)).is_err());
+    }
+}

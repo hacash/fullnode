@@ -116,7 +116,10 @@ impl RequiredSigners {
                 );
             }
             if e.contains(&adr) {
-                return errf!("RequiredSigners address {} is duplicated", adr.to_readable());
+                return errf!(
+                    "RequiredSigners address {} is duplicated",
+                    adr.to_readable()
+                );
             }
             e.push(adr);
         }
@@ -330,7 +333,7 @@ pub fn guard_facts(tx: &dyn Transaction) -> GuardFacts {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::tx::TransactionType2;
+    use crate::codec::tx::StdTransaction;
     use field::{Amount, BlockHeight, ChainIDList, DiamondNumber, Satoshi, Uint4};
 
     fn main_address() -> field::Address {
@@ -338,9 +341,14 @@ mod tests {
         field::Address::from(*account.address())
     }
 
-    fn sample_tx() -> TransactionType2 {
+    fn sample_tx() -> StdTransaction {
         let main = main_address();
-        TransactionType2::new_by(main, Amount::from("1:244").unwrap(), 0)
+        StdTransaction::new_by(
+            hacash_params::TX_TYPE_2,
+            main,
+            Amount::from("1:244").unwrap(),
+            0,
+        )
     }
 
     /// Every standard guard kind must produce a specific fact (chains, height range,
@@ -356,7 +364,9 @@ mod tests {
             BlockHeight::from(100),
             BlockHeight::from(200),
         )));
-        tx.push_action_in(Arc::new(RequiredSigners::create_by_addrs(vec![main]).unwrap()));
+        tx.push_action_in(Arc::new(
+            RequiredSigners::create_by_addrs(vec![main]).unwrap(),
+        ));
         tx.push_action_in(Arc::new(BalanceFloor::new(
             AddrOrPtr::Addr(main),
             Amount::from("1:244").unwrap(),

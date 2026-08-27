@@ -5,9 +5,9 @@ use field::{Address, DiamondName, Encode};
 use sys::errf;
 
 use crate::codec::action::{
-    TxBlobNum, BlockAuthorAddr, EnvHeight, TxMainAddr, TxMessageNum, BalanceAsset,
-    BalanceCoin, TxBlob, TxBlobSize, CheckSignature, HacdInscGet, HacdInscNum,
-    HacdNameList, HacdOwnerAddrs, TxMessage,
+    BalanceAsset, BalanceCoin, BlockAuthorAddr, CheckSignature, EnvHeight, HacdInscGet,
+    HacdInscNum, HacdNameList, HacdOwnerAddrs, TxBlob, TxBlobNum, TxBlobSize, TxMainAddr,
+    TxMessage, TxMessageNum,
 };
 
 /// Temporary upgrade gate for the tx message/blob read syscalls (0x0615/0x0616/

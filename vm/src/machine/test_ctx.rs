@@ -70,7 +70,7 @@ impl BinaryCodecs for StubServices {
 }
 
 impl JsonCodecs for StubServices {
-    fn decode_action_json(&self, _kind: u16, _json: &str) -> Ret<Option<ActionRef>> {
+    fn decode_action_json(&self, _json: &str) -> Ret<ActionRef> {
         errf!("stub services: decode_action_json")
     }
 }

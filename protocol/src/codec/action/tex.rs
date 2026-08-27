@@ -187,3 +187,80 @@ impl base::StructSchemaProvider for TexCell {
 
 pub const TEX_CELL_SCHEMA: base::StructSchema =
     <TexCell as base::StructSchemaProvider>::STRUCT_SCHEMA;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use field::{Decode, Encode, Fold64, FromJSON, ListW1, ToJSON};
+
+    fn sample_sign() -> Sign {
+        Sign {
+            publickey: [0x02; Sign::PUBLICKEY_SIZE].into(),
+            signature: [0xab; Sign::SIGNATURE_SIZE].into(),
+        }
+    }
+
+    fn sample_action() -> TexCellExecute {
+        TexCellExecute {
+            kind: field::Uint2::from(TexCellExecute::KIND),
+            addr: Address::default(),
+            cells: ListW1::from(vec![TexCell::ZhuPay {
+                haczhu: Fold64::from(1).unwrap(),
+            }])
+            .unwrap(),
+            sign: sample_sign(),
+        }
+    }
+
+    #[test]
+    fn tex_cell_execute_json_uses_sign_object_and_rejects_hex_blob() {
+        let action = sample_action();
+        let json = action.to_json();
+        assert!(json.contains("\"publickey\""), "{json}");
+        assert!(json.contains("\"signature\""), "{json}");
+
+        let mut back = sample_action();
+        back.from_json(&json).unwrap();
+        assert_eq!(back.encode(), action.encode());
+
+        let sign_json = action.sign.to_json();
+        let hex = format!("\"0x{}\"", hex::encode(action.sign.encode()));
+        let as_hex = json.replace(&sign_json, &hex);
+        assert!(
+            TexCellExecute::default().from_json(&as_hex).is_err(),
+            "{as_hex}"
+        );
+
+        let only_pk = format!(
+            "{{\"publickey\":\"0x{}\"}}",
+            hex::encode(action.sign.publickey)
+        );
+        let missing_sig = json.replace(&sign_json, &only_pk);
+        assert!(
+            TexCellExecute::default().from_json(&missing_sig).is_err(),
+            "{missing_sig}"
+        );
+    }
+
+    #[test]
+    fn tex_cell_wire_roundtrip_size_and_unknown_variant() {
+        let action = sample_action();
+        assert_eq!(action.size(), action.encode().len());
+        let wire = action.encode();
+        let (decoded, used) = TexCellExecute::decode(&wire).unwrap();
+        assert_eq!(used, wire.len());
+        assert_eq!(decoded.encode(), wire);
+
+        let mut wrong_kind = wire.clone();
+        wrong_kind[1] = 1;
+        assert!(TexCellExecute::decode(&wrong_kind).is_err());
+
+        let cell = TexCell::ZhuPay {
+            haczhu: Fold64::from(1).unwrap(),
+        };
+        assert_eq!(cell.size(), cell.encode().len());
+        let mut cell_wire = cell.encode();
+        cell_wire[0] = 99;
+        assert!(TexCell::decode(&cell_wire).is_err());
+    }
+}

@@ -122,8 +122,8 @@ impl BinaryCodecs for Registry {
 }
 
 impl JsonCodecs for Registry {
-    fn decode_action_json(&self, kind: u16, json: &str) -> Ret<Option<ActionRef>> {
-        self.wire_codecs.decode_action_json(self, kind, json)
+    fn decode_action_json(&self, json: &str) -> Ret<ActionRef> {
+        self.wire_codecs.decode_action_json(self, json)
     }
 }
 
@@ -394,19 +394,17 @@ mod tests {
         use field::{Encode, ToJSON};
 
         let registry = standard_registry().expect("standard registry");
-        let source =
-            protocol::action_std::TransferSatTo::new(field::Address::default(), field::Satoshi::from(7));
+        let source = protocol::action_std::TransferSatTo::new(
+            field::Address::default(),
+            field::Satoshi::from(7),
+        );
         let decoded = registry
-            .decode_action_json(source.kind(), &source.to_json())
-            .expect("json codec")
-            .expect("registered action");
+            .decode_action_json(&source.to_json())
+            .expect("json codec");
         assert_eq!(decoded.encode(), source.encode());
         assert!(
             registry
-                .decode_action_json(
-                    source.kind(),
-                    "{\"kind\":10,\"to\":0,\"to\":0,\"satoshi\":7}"
-                )
+                .decode_action_json("{\"kind\":10,\"to\":0,\"to\":0,\"satoshi\":7}")
                 .is_err()
         );
     }
@@ -417,30 +415,28 @@ mod tests {
         use std::sync::Arc;
 
         let registry = standard_registry().expect("standard registry");
-        let child =
-            protocol::action_std::TransferSatTo::new(field::Address::default(), field::Satoshi::from(1));
+        let child = protocol::action_std::TransferSatTo::new(
+            field::Address::default(),
+            field::Satoshi::from(1),
+        );
         let ast =
             protocol::action_std::AstSelect::create_by(0, 1, vec![Arc::new(child)]).expect("AST");
         let decoded = registry
-            .decode_action_json(ast.kind(), &ast.to_json())
-            .expect("AST JSON codec")
-            .expect("registered AST action");
+            .decode_action_json(&ast.to_json())
+            .expect("AST JSON codec");
         assert_eq!(decoded.to_json(), ast.to_json());
 
-        let signers = protocol::action_std::RequiredSigners::create_by(vec![field::AddrOrPtr::Ptr(0)])
-            .expect("signer list");
+        let signers =
+            protocol::action_std::RequiredSigners::create_by(vec![field::AddrOrPtr::Ptr(0)])
+                .expect("signer list");
         let decoded = registry
-            .decode_action_json(signers.kind(), &signers.to_json())
-            .expect("RequiredSigners JSON codec")
-            .expect("registered RequiredSigners action");
+            .decode_action_json(&signers.to_json())
+            .expect("RequiredSigners JSON codec");
         assert_eq!(decoded.to_json(), signers.to_json());
 
         assert!(
             registry
-                .decode_action_json(
-                    protocol::action_std::TransferHacdTo::KIND,
-                    "{\"kind\":7,\"to\":0,\"diamonds\":[]}"
-                )
+                .decode_action_json("{\"kind\":7,\"to\":0,\"diamonds\":[]}")
                 .is_err()
         );
     }

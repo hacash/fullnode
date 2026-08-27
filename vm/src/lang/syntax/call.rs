@@ -465,7 +465,8 @@ impl Syntax {
     {
         let first = self.cursor.next()?;
         if let Ok(body) = Self::parse_fixed_body_token::<5>(&first, body_label) {
-            return decode_user_call_site(inst, &body).map_err(|e| sys::Error::normal(e.to_string()));
+            return decode_user_call_site(inst, &body)
+                .map_err(|e| sys::Error::normal(e.to_string()));
         }
         let (idx, selector) = self.parse_shortcut_lib_selector(first, err_msg)?;
         Ok(build(idx, selector))
@@ -497,7 +498,8 @@ impl Syntax {
     {
         let first = self.cursor.next()?;
         if let Ok(body) = Self::parse_fixed_body_token::<4>(&first, body_label) {
-            return decode_user_call_site(inst, &body).map_err(|e| sys::Error::normal(e.to_string()));
+            return decode_user_call_site(inst, &body)
+                .map_err(|e| sys::Error::normal(e.to_string()));
         }
         let idx = Self::parse_lib_index_token(&first).map_err(|_| err_msg.to_string())?;
         if idx != 0 {
@@ -541,7 +543,8 @@ fn build_fin_ir_func(
     argvs: Vec<Box<dyn IRNode>>,
     hrtv: bool,
 ) -> Ret<Box<dyn IRNode>> {
-    build_param1_multi_node(hrtv, inst, fin_id, argvs).map_err(|e| sys::Error::normal(e.to_string()))
+    build_param1_multi_node(hrtv, inst, fin_id, argvs)
+        .map_err(|e| sys::Error::normal(e.to_string()))
 }
 
 pub(super) fn build_log_irnode(

@@ -1,4 +1,4 @@
-//! Transaction execute bodies for prelude + type 1/2/3.
+//! Transaction execute bodies for prelude + standard (types 1/2/3) txs.
 
 use base::{
     ActionDispatcher, ActionRef, Context, CoreState, ExecFrom, Transaction, TransactionExecute,
@@ -7,12 +7,14 @@ use base::{
 use field::{Amount, Encode, Hash};
 use sys::{Rerr, Ret, errf};
 
-use crate::codec::tx::{DefaultPreludeTx, TransactionType1, TransactionType2, TransactionType3};
+use crate::codec::tx::{DefaultPreludeTx, StdTransaction};
 
 fn precheck_tx(ctx: &dyn Context, tx: &dyn Transaction, actions: &[ActionRef]) -> Rerr {
     let params = crate::execution_params(ctx.services().as_ref())?;
-    if let Some(tx) = tx.as_any().downcast_ref::<TransactionType3>() {
-        tx.validate_signer_limit(params.max_type3_signers)?;
+    if tx.ty() == hacash_params::TX_TYPE_3 {
+        if let Some(tx) = tx.as_any().downcast_ref::<StdTransaction>() {
+            tx.validate_signer_limit(params.max_type3_signers)?;
+        }
     }
     if ctx.env().chain.fast_sync {
         return Ok(());
@@ -163,62 +165,49 @@ impl TransactionExecute for DefaultPreludeTx {
     }
 }
 
-macro_rules! impl_tx_type_execute {
-    ($name:ty) => {
-        impl TransactionExecute for $name {
-            fn execute(&self, ctx: &mut dyn Context) -> Rerr {
-                precheck_tx(ctx, self, &self.actions)?;
-                let prep = prepare_tx_execute(self, ctx)?;
-                if !ctx.env().chain.fast_sync
-                    && <$name>::TYPE != TransactionType3::TYPE
-                    && prep.has_ast_control
-                {
-                    return errf!(
-                        "tx type {} cannot include AST control-flow actions; requires at least type 3",
-                        <$name>::TYPE
-                    );
-                }
-                if !ctx.env().chain.fast_sync {
-                    if let Some(note) = crate::facts::ano_mark_finding(<$name>::TYPE, self.ano_mark[0])
-                    {
-                        return errf!("{}", note);
-                    }
-                    if let Some(note) =
-                        crate::facts::gas_max_finding_with_params(
-                            crate::execution_params(ctx.services().as_ref())?,
-                            <$name>::TYPE,
-                            self.gas_max.uint(),
-                        )
-                    {
-                        return errf!("{}", note);
-                    }
-                }
-
-                mark_tx_exist(ctx, &prep.tx_hash, prep.block_height);
-                record_tx_fee_totals(ctx, self)?;
-                if <$name>::TYPE == TransactionType3::TYPE {
-                    let gas_initialized = crate::exec::gas::tx_gas_initialize(ctx)?;
-                    execute_actions(ctx, &self.actions, true)?;
-                    crate::exec::tex::do_settlement(ctx)?;
-                    ctx.run_deferred_phase()?;
-                    if gas_initialized {
-                        ctx.gas_refund()?;
-                    }
-                } else {
-                    execute_actions(ctx, &self.actions, false)?;
-                    crate::exec::tex::do_settlement(ctx)?;
-                }
-                hac_sub(ctx, &prep.main, &prep.fee)?;
-                if <$name>::TYPE != TransactionType3::TYPE {
-                    record_legacy_extra9_burn(ctx, &prep.fee, &self.fee_got())?;
-                }
-                crate::exec::tex::settlement_addr_postsettle_cleanup(ctx)?;
-                Ok(())
+impl TransactionExecute for StdTransaction {
+    fn execute(&self, ctx: &mut dyn Context) -> Rerr {
+        precheck_tx(ctx, self, &self.actions)?;
+        let prep = prepare_tx_execute(self, ctx)?;
+        let is_type3 = self.ty.uint() == hacash_params::TX_TYPE_3;
+        if !ctx.env().chain.fast_sync && !is_type3 && prep.has_ast_control {
+            return errf!(
+                "tx type {} cannot include AST control-flow actions; requires at least type 3",
+                self.ty.uint()
+            );
+        }
+        if !ctx.env().chain.fast_sync {
+            if let Some(note) = crate::facts::ano_mark_finding(self.ty.uint(), self.ano_mark[0]) {
+                return errf!("{}", note);
+            }
+            if let Some(note) = crate::facts::gas_max_finding_with_params(
+                crate::execution_params(ctx.services().as_ref())?,
+                self.ty.uint(),
+                self.gas_max.uint(),
+            ) {
+                return errf!("{}", note);
             }
         }
-    };
-}
 
-impl_tx_type_execute!(TransactionType1);
-impl_tx_type_execute!(TransactionType2);
-impl_tx_type_execute!(TransactionType3);
+        mark_tx_exist(ctx, &prep.tx_hash, prep.block_height);
+        record_tx_fee_totals(ctx, self)?;
+        if is_type3 {
+            let gas_initialized = crate::exec::gas::tx_gas_initialize(ctx)?;
+            execute_actions(ctx, &self.actions, true)?;
+            crate::exec::tex::do_settlement(ctx)?;
+            ctx.run_deferred_phase()?;
+            if gas_initialized {
+                ctx.gas_refund()?;
+            }
+        } else {
+            execute_actions(ctx, &self.actions, false)?;
+            crate::exec::tex::do_settlement(ctx)?;
+        }
+        hac_sub(ctx, &prep.main, &prep.fee)?;
+        if !is_type3 {
+            record_legacy_extra9_burn(ctx, &prep.fee, &self.fee_got())?;
+        }
+        crate::exec::tex::settlement_addr_postsettle_cleanup(ctx)?;
+        Ok(())
+    }
+}

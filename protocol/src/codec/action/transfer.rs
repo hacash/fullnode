@@ -162,16 +162,18 @@ impl TransferHacdFrom {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use field::{Address, Decode, Encode, ToJSON};
+    use field::{Address, Decode, Encode, FromJSON, ToJSON};
 
     #[test]
     fn derived_codec_round_trips_wire_and_json_fields() {
-        let action = TransferSatFromTo::new(Address::default(), Address::default(), Satoshi::from(7));
+        let action =
+            TransferSatFromTo::new(Address::default(), Address::default(), Satoshi::from(7));
         let mut wire = action.encode();
         let action_size = wire.len();
         wire.extend_from_slice(&[0xaa, 0xbb]);
         let (decoded, used) = TransferSatFromTo::decode(&wire).expect("decode action");
         assert_eq!(used, action_size);
+        assert_eq!(action.size(), action_size);
         assert_eq!(decoded.encode(), wire[..action_size]);
 
         let json = action.to_json();
@@ -188,20 +190,18 @@ mod tests {
         let wrong_kind = TransferSatTo::new(Address::default(), Satoshi::from(7)).encode();
         assert!(TransferSatFromTo::decode(&wrong_kind).is_err());
 
-        let decoded = <TransferSatFromTo as base::ActionJsonCodec>::decode_json(&json)
-            .expect("decode action json");
+        let mut decoded = TransferSatFromTo::default();
+        decoded.from_json(&json).expect("decode action json");
         assert_eq!(decoded.encode(), action.encode());
         assert!(
-            <TransferSatFromTo as base::ActionJsonCodec>::decode_json(
-                "{\"kind\":12,\"from\":0,\"from\":0,\"to\":0,\"satoshi\":7}"
-            )
-            .is_err()
+            TransferSatFromTo::default()
+                .from_json("{\"kind\":12,\"from\":0,\"from\":0,\"to\":0,\"satoshi\":7}")
+                .is_err()
         );
         assert!(
-            <TransferSatFromTo as base::ActionJsonCodec>::decode_json(
-                "{\"kind\":12,\"from\":0,\"to\":0}"
-            )
-            .is_err()
+            TransferSatFromTo::default()
+                .from_json("{\"kind\":12,\"from\":0,\"to\":0}")
+                .is_err()
         );
     }
 }

@@ -1,4 +1,4 @@
-//! Wire schema for VM contract types that `field::wire_struct_schema!` cannot generate (composites,
+//! Wire schema for VM contract types that `FieldCodec` cannot generate (composites,
 //! value-type leaf names). Plain structs get providers from the macro; field order must match `Encode`.
 
 use field::{FieldWire, FieldWireShape, StructSchema, StructSchemaProvider, WireElementName};

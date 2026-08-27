@@ -13,9 +13,9 @@ use crate::rt::ItrErrCode::*;
 use crate::rt::*;
 use crate::value::ContractAddress;
 
-mod schema;
 #[cfg(feature = "execute")]
 mod builder;
+mod schema;
 
 #[cfg(feature = "execute")]
 pub use builder::{Abst, Contract, Func};
@@ -26,94 +26,66 @@ pub type ContractUserFuncList = ListW2<ContractUserFunc>;
 pub type ContractCalcFuncList = ListW2<ContractCalcFunc>;
 pub type ContractAddrReplaceAtList = ListW1<ContractAddrReplaceAt>;
 
-macro_rules! contract_codec_struct {
-    ($name:ident { $($field:ident : $ty:ty),+ $(,)? }) => {
-        #[derive(Debug, Clone, Default, PartialEq, Eq)]
-        pub struct $name {
-            $(pub $field: $ty),+
-        }
-
-        impl Encode for $name {
-            fn size(&self) -> usize {
-                0 $(+ field::Encode::size(&self.$field))+
-            }
-
-            fn encode_to(&self, out: &mut Vec<u8>) {
-                $(self.$field.encode_to(out);)+
-            }
-        }
-
-        impl Decode for $name {
-            fn decode(buf: &[u8]) -> Ret<(Self, usize)> {
-                let mut r = Reader::new(buf);
-                $(let $field: $ty = r.read()?;)+
-                Ok((Self { $($field),+ }, r.used()))
-            }
-        }
-
-        // Wire schema (struct + field shapes) comes from the shared macro; the
-        // field names on the wire match the struct fields 1:1.
-        field::wire_struct_schema!($name { $($field: $ty),+ });
-    };
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct ContractMeta {
+    pub vrsn: Fixed1,
+    pub revision: Uint2,
+    pub mark: Fixed3,
+    pub mext: Fixed4,
 }
 
-/// Defines the contract wire structs in one place: struct + codec + JSON.
-macro_rules! contract_structs {
-    ($( $name:ident { $($field:ident : $ty:ty),+ $(,)? } ),+ $(,)?) => {
-        $(contract_codec_struct!($name { $($field: $ty),+ });)+
-        $(field::impl_struct_json!($name { $($field),+ });)+
-    };
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct ContractAbstCall {
+    pub sign: Fixed1,
+    pub mark: Fixed2,
+    pub fncnf: Fixed1,
+    pub code_stuff: CodeStuff,
 }
 
-contract_structs! {
-    ContractMeta {
-        vrsn: Fixed1,
-        revision: Uint2,
-        mark: Fixed3,
-        mext: Fixed4,
-    },
-    ContractAbstCall {
-        sign: Fixed1,
-        mark: Fixed2,
-        fncnf: Fixed1,
-        code_stuff: CodeStuff,
-    },
-    ContractUserFunc {
-        sign: Fixed4,
-        mark: Fixed3,
-        fncnf: Fixed1,
-        pmdf: FuncArgvTypes,
-        code_stuff: CodeStuff,
-    },
-    ContractCalcFunc {
-        sign: Fixed4,
-        mark: Fixed1,
-        fncnf: Fixed1,
-        code_stuff: CodeStuff,
-    },
-    ContractAddrReplaceAt {
-        idx: Uint1,
-        addr: ContractAddress,
-    },
-    ContractEdit {
-        new_revision: Uint2,
-        inherit_add: ContractAddrListW1,
-        inherit_replace_at: ContractAddrReplaceAtList,
-        library_add: ContractAddrListW1,
-        library_replace_at: ContractAddrReplaceAtList,
-        abstcalls: ContractAbstCallList,
-        userfuncs: ContractUserFuncList,
-        calcfuncs: ContractCalcFuncList,
-    },
-    ContractSto {
-        metas: ContractMeta,
-        inherit: ContractAddrListW1,
-        library: ContractAddrListW1,
-        abstcalls: ContractAbstCallList,
-        userfuncs: ContractUserFuncList,
-        calcfuncs: ContractCalcFuncList,
-        morextend: Uint8,
-    },
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct ContractUserFunc {
+    pub sign: Fixed4,
+    pub mark: Fixed3,
+    pub fncnf: Fixed1,
+    pub pmdf: FuncArgvTypes,
+    pub code_stuff: CodeStuff,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct ContractCalcFunc {
+    pub sign: Fixed4,
+    pub mark: Fixed1,
+    pub fncnf: Fixed1,
+    pub code_stuff: CodeStuff,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct ContractAddrReplaceAt {
+    pub idx: Uint1,
+    pub addr: ContractAddress,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct ContractEdit {
+    pub new_revision: Uint2,
+    pub inherit_add: ContractAddrListW1,
+    pub inherit_replace_at: ContractAddrReplaceAtList,
+    pub library_add: ContractAddrListW1,
+    pub library_replace_at: ContractAddrReplaceAtList,
+    pub abstcalls: ContractAbstCallList,
+    pub userfuncs: ContractUserFuncList,
+    pub calcfuncs: ContractCalcFuncList,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
+pub struct ContractSto {
+    pub metas: ContractMeta,
+    pub inherit: ContractAddrListW1,
+    pub library: ContractAddrListW1,
+    pub abstcalls: ContractAbstCallList,
+    pub userfuncs: ContractUserFuncList,
+    pub calcfuncs: ContractCalcFuncList,
+    pub morextend: Uint8,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

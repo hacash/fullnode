@@ -13,7 +13,7 @@ use base::{
 };
 use field::{Address, Amount, Encode, Fixed16, Hash, Timestamp, Uint1, Uint4};
 use protocol::block_std::{StdBlock, calculate_mrkl_prelude_modify, calculate_mrkl_prelude_update};
-use protocol::tx_std::TransactionType2;
+use protocol::tx_std::StdTransaction;
 use sys::{Rerr, Ret, Waiter};
 
 use crate::MintConf;
@@ -458,8 +458,7 @@ impl HacashConsensus {
         if !self.miner.diamond_enable {
             return sys::errf!("diamond miner not enabled");
         }
-        let (act_ref, used) =
-            crate::action::diamond::create_hacd_mint(reg, HacdMint::KIND, &action_body)?;
+        let (act_ref, used) = crate::action::diamond::create_hacd_mint(reg, &action_body)?;
         if used != action_body.len() {
             return sys::errf!("diamond mint action trailing bytes");
         }
@@ -517,7 +516,12 @@ impl HacashConsensus {
         if !view.validate_optimistic(start_epoch) {
             return sys::errf!("state changed during diamond mint tx creation");
         }
-        let mut tx = TransactionType2::new_by(bid_addr, bid_offer, sys::curtimes());
+        let mut tx = StdTransaction::new_by(
+            hacash_params::TX_TYPE_2,
+            bid_addr,
+            bid_offer,
+            sys::curtimes(),
+        );
         tx.push_action(act_ref)?;
         tx.fill_sign_account(&self.miner.diamond_bid_account)?;
         let pkg = TxPkg::from_bytes(reg, tx.encode(), PkgSource::new(PkgOrigin::Mining))?;

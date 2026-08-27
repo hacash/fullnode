@@ -1,7 +1,6 @@
 //! P2SH wallet / SDK tooling: derives the canonical Merkle tree, `scriptmh` address, and per-leaf
 //! proofs / `P2SHScriptProve` actions from `(libs, codeconf, lockbox)` leaves. No consensus mutation.
 
-
 use field::{Address, BytesW2, Hash, Uint1};
 
 use crate::contract::ContractAddrListW1;

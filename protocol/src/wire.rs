@@ -1,5 +1,5 @@
 use base::{ActionCodecBinding, StructSchema, TxCodecBinding, WireRegistry};
-use field::AddrHac;
+use field::{AddrHac, Sign};
 use sys::Rerr;
 
 use crate::codec::action::*;
@@ -8,15 +8,15 @@ use crate::codec::tx::*;
 /// Protocol-owned transaction codecs (types 1/2/3). Coinbase lives in `mint`.
 pub const TX_CODECS: &[TxCodecBinding] = &[
     TxCodecBinding {
-        ty: TransactionType1::TYPE,
+        ty: hacash_params::TX_TYPE_1,
         decode_wire: create_transaction_type1,
     },
     TxCodecBinding {
-        ty: TransactionType2::TYPE,
+        ty: hacash_params::TX_TYPE_2,
         decode_wire: create_transaction_type2,
     },
     TxCodecBinding {
-        ty: TransactionType3::TYPE,
+        ty: hacash_params::TX_TYPE_3,
         decode_wire: create_transaction_type3,
     },
 ];
@@ -66,6 +66,7 @@ pub const ACTION_CODECS: &[ActionCodecBinding] = &[
 pub const STRUCT_SCHEMAS: &[StructSchema] = &[
     TEX_CELL_SCHEMA,
     <AddrHac as base::StructSchemaProvider>::STRUCT_SCHEMA,
+    <Sign as base::StructSchemaProvider>::STRUCT_SCHEMA,
 ];
 
 /// Installs the complete protocol-owned wire surface into a dynamic profile.
