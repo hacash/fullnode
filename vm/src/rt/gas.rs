@@ -125,15 +125,14 @@ pub struct GasExtra {
 }
 
 impl GasExtra {
-    pub fn new(_hei: u64) -> Self {
-        use hacash_params::decode_gas_budget;
+    pub fn new(_hei: u64, params: &base::VmExecutionParams) -> Self {
         Self {
-            compute_limit: decode_gas_budget(72),  // 18009
-            resource_limit: decode_gas_budget(56), // 6100
-            storage_limit: decode_gas_budget(99),  // 111911
+            compute_limit: params.decode_gas_budget(params.compute_limit_byte),
+            resource_limit: params.decode_gas_budget(params.resource_limit_byte),
+            storage_limit: params.decode_gas_budget(params.storage_limit_byte),
             // Load or alloc
-            one_local_alloc: 5,    // 5 * num
-            new_contract_load: 32, // base gas for loading a new contract
+            one_local_alloc: 5,     // 5 * num
+            new_contract_load: 32,  // base gas for loading a new contract
             main_call_base: 3 * 16, // 48
             p2sh_call_base: 4 * 16, // 64
             abst_call_base: 5 * 16, // 80

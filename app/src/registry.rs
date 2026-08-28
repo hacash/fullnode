@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use base::*;
-use sys::{Ret, normalf};
+use sys::{normalf, Ret};
 
 pub struct Registry {
     block_hasher: BlockHasherFn,
@@ -206,16 +206,12 @@ mod tests {
     #[test]
     fn registry_rejects_host_defs_that_conflict_with_opcode_abi() {
         let mut registry = Registry::new(mint::block_hasher);
-        assert!(
-            registry
-                .register_vm_host_def(host_def(VmHostCallKind::Action, VmValueType::U64, 0))
-                .is_err()
-        );
-        assert!(
-            registry
-                .register_vm_host_def(host_def(VmHostCallKind::Env, VmValueType::U64, 1))
-                .is_err()
-        );
+        assert!(registry
+            .register_vm_host_def(host_def(VmHostCallKind::Action, VmValueType::U64, 0))
+            .is_err());
+        assert!(registry
+            .register_vm_host_def(host_def(VmHostCallKind::Env, VmValueType::U64, 1))
+            .is_err());
         registry
             .register_vm_host_def(host_def(VmHostCallKind::View, VmValueType::U64, 1))
             .expect("valid view host definition");
@@ -249,6 +245,33 @@ mod tests {
             protocol::execution_params(&registry).expect("protocol params"),
             &hacash_params::MAINNET_PARAMS.protocol
         );
+    }
+
+    /// VM no longer depends on `hacash-params`; the injected `VmExecutionParams`
+    /// must still decode the three engine limits and the tx cap through the
+    /// same vocabulary the protocol profile owns.
+    #[test]
+    fn vm_gas_budget_limits_match_the_chain_vocabulary() {
+        let vm = hacash_params::MAINNET_PARAMS.protocol.vm;
+        let protocol = &hacash_params::MAINNET_PARAMS.protocol;
+        let registry = standard_registry().expect("standard registry");
+        let injected = *registry.vm_params().expect("vm params");
+        assert_eq!(injected, vm);
+        assert_eq!(vm.tx_gas_budget_cap_byte, protocol.tx_gas_budget_cap_byte);
+        assert_eq!(vm.decode_gas_budget(vm.compute_limit_byte), 18009);
+        assert_eq!(vm.decode_gas_budget(vm.resource_limit_byte), 6100);
+        assert_eq!(vm.decode_gas_budget(vm.storage_limit_byte), 111911);
+        assert_eq!(
+            vm.decode_gas_budget(vm.tx_gas_budget_cap_byte),
+            protocol.decode_gas_budget(protocol.tx_gas_budget_cap_byte)
+        );
+        for b in 0u8..=255 {
+            assert_eq!(
+                vm.decode_gas_budget(b),
+                protocol.decode_gas_budget(b),
+                "gas-budget byte {b} diverged between vm params and protocol table"
+            );
+        }
     }
 
     #[test]
@@ -390,6 +413,37 @@ mod tests {
     }
 
     #[test]
+    fn call_scope_transfer_named_actions_are_exactly_the_thirteen() {
+        use base::{ActionCodecBinding, ExecFrom};
+        let mut rows: Vec<(u16, &'static str)> = protocol::ACTION_CODECS
+            .iter()
+            .filter(|b: &&ActionCodecBinding| {
+                b.schema.name.starts_with("transfer_") && b.scope.allows(ExecFrom::Call)
+            })
+            .map(|b| (b.schema.kind, b.schema.name))
+            .collect();
+        rows.sort_unstable();
+        assert_eq!(
+            rows,
+            vec![
+                (1, "transfer_hac_to"),
+                (5, "transfer_hacd_single_to"),
+                (6, "transfer_hacd_from_to"),
+                (7, "transfer_hacd_to"),
+                (8, "transfer_hacd_from"),
+                (10, "transfer_sat_to"),
+                (11, "transfer_sat_from"),
+                (12, "transfer_sat_from_to"),
+                (13, "transfer_hac_from"),
+                (14, "transfer_hac_from_to"),
+                (17, "transfer_asset_to"),
+                (18, "transfer_asset_from"),
+                (19, "transfer_asset_from_to"),
+            ]
+        );
+    }
+
+    #[test]
     fn standard_registry_decodes_regular_action_json() {
         use field::{Encode, ToJSON};
 
@@ -402,11 +456,9 @@ mod tests {
             .decode_action_json(&source.to_json())
             .expect("json codec");
         assert_eq!(decoded.encode(), source.encode());
-        assert!(
-            registry
-                .decode_action_json("{\"kind\":10,\"to\":0,\"to\":0,\"satoshi\":7}")
-                .is_err()
-        );
+        assert!(registry
+            .decode_action_json("{\"kind\":10,\"to\":0,\"to\":0,\"satoshi\":7}")
+            .is_err());
     }
 
     #[test]
@@ -434,11 +486,9 @@ mod tests {
             .expect("RequiredSigners JSON codec");
         assert_eq!(decoded.to_json(), signers.to_json());
 
-        assert!(
-            registry
-                .decode_action_json("{\"kind\":7,\"to\":0,\"diamonds\":[]}")
-                .is_err()
-        );
+        assert!(registry
+            .decode_action_json("{\"kind\":7,\"to\":0,\"diamonds\":[]}")
+            .is_err());
     }
 
     #[test]

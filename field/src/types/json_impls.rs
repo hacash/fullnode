@@ -505,7 +505,10 @@ mod tests {
         // Unsupported version byte is rejected like the readable path.
         let mut raw = [0u8; Address::SIZE];
         raw[0] = 0x09;
-        assert!(back.from_json(&format!("\"0x{}\"", hex::encode(raw))).is_err());
+        assert!(
+            back.from_json(&format!("\"0x{}\"", hex::encode(raw)))
+                .is_err()
+        );
     }
 
     #[test]

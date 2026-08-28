@@ -34,10 +34,10 @@ pub struct UnlockScript {
 }
 
 /// Result of `scriptmh` derivation for a P2SH lock script. Leaf: `sha3("p2sh_leaf_"||libs||codeconf||lockbox)`;
-/// branch i: `sha3("p2sh_branch_"||left||right)` (order from `posi`); address = version-byte-`5` `scriptmh` of `ripemd160(root_sha3)`.
+/// branch i: `sha3("p2sh_branch_"||left||right)` (order from `posi`); address = `Address::VERSION_SCRIPTMH` `scriptmh` of `ripemd160(root_sha3)`.
 #[derive(Debug, Clone)]
 pub struct ScriptmhCalc {
-    /// Final `SCRIPTMH` address (dev-compatible version byte `5`).
+    /// Final `SCRIPTMH` address (`Address::VERSION_SCRIPTMH`).
     pub address: Address,
     /// `ripemd160(root_sha3)` that becomes the address payload (20 bytes).
     pub payload20: [u8; 20],
@@ -290,10 +290,10 @@ pub(crate) fn p2sh_ripemd160(data: impl AsRef<[u8]>) -> [u8; 20] {
     hasher.finalize().into()
 }
 
-/// Construct a dev-compatible scriptmh-version (`5`) address carrying the given 20-byte payload.
+/// Construct a scriptmh-version address carrying the given 20-byte payload.
 pub(crate) fn create_scriptmh_addr(payload20: [u8; 20]) -> Address {
     let mut raw = [0u8; Address::SIZE];
-    raw[0] = 5;
+    raw[0] = Address::VERSION_SCRIPTMH;
     raw[1..].copy_from_slice(&payload20);
     Address::from(raw)
 }

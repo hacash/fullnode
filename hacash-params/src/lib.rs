@@ -114,6 +114,11 @@ pub const MAINNET_PARAMS: HacashParams = HacashParams {
             contract_store_perm_periods: 10_000,
             initial_fee_purity_floor: 50_000,
             fee_purity_reductions: &[],
+            gas_budget_lookup: &GAS_BUDGET_LOOKUP_1P07_FROM_138,
+            tx_gas_budget_cap_byte: 99,
+            compute_limit_byte: 72,
+            resource_limit_byte: 56,
+            storage_limit_byte: 99,
         },
         diamond_form_flag: 1,
         max_type3_signers: 200,
@@ -212,6 +217,12 @@ pub fn params_hash(params: &HacashParams) -> [u8; 32] {
         hasher.update(height.to_be_bytes());
         hasher.update(floor.to_be_bytes());
     }
+    hasher.update([
+        params.protocol.vm.tx_gas_budget_cap_byte,
+        params.protocol.vm.compute_limit_byte,
+        params.protocol.vm.resource_limit_byte,
+        params.protocol.vm.storage_limit_byte,
+    ]);
     hasher.update(params.protocol.diamond_form_flag.to_be_bytes());
     hasher.update((params.protocol.max_type3_signers as u64).to_be_bytes());
     hasher.update((params.protocol.tex_diamond_pay_max as u64).to_be_bytes());
@@ -323,6 +334,14 @@ mod tests {
         assert_eq!(MAINNET_PARAMS.protocol.ast_tree_depth_max, 6);
         assert_eq!(MAINNET_PARAMS.protocol.diamond_form_flag, 1);
         assert_eq!(MAINNET_PARAMS.protocol.vm.initial_fee_purity_floor, 50_000);
+        assert_eq!(MAINNET_PARAMS.protocol.vm.tx_gas_budget_cap_byte, 99);
+        assert_eq!(MAINNET_PARAMS.protocol.vm.compute_limit_byte, 72);
+        assert_eq!(MAINNET_PARAMS.protocol.vm.resource_limit_byte, 56);
+        assert_eq!(MAINNET_PARAMS.protocol.vm.storage_limit_byte, 99);
+        assert_eq!(
+            MAINNET_PARAMS.protocol.vm.gas_budget_lookup as *const [u32; 256],
+            MAINNET_PARAMS.protocol.gas_budget_lookup as *const [u32; 256]
+        );
         assert_eq!(MAINNET_PARAMS.mint.max_tx_size, 16 * 1024);
         assert_eq!(MAINNET_PARAMS.mint.max_block_txs, 1000);
         assert_eq!(MAINNET_PARAMS.protocol.tx_actions_max, 200);
@@ -335,8 +354,8 @@ mod tests {
         assert_eq!(
             params_hash(&MAINNET_PARAMS),
             [
-                201, 181, 36, 249, 226, 143, 170, 129, 214, 125, 138, 26, 26, 105, 115, 107, 66,
-                160, 201, 52, 139, 128, 178, 130, 233, 16, 183, 74, 230, 70, 96, 42,
+                124, 209, 215, 158, 99, 253, 14, 207, 194, 6, 25, 184, 210, 114, 201, 240, 145,
+                117, 252, 243, 52, 18, 156, 29, 172, 178, 82, 186, 170, 131, 55, 119,
             ]
         );
     }

@@ -7,6 +7,11 @@ use sys::Rerr;
 use crate::machine::NativeVm;
 
 pub fn register_exec(reg: &mut dyn ExecRegistry) -> Rerr {
-    reg.set_vm_assigner(|_reg, height| Box::new(NativeVm::new(height)))?;
+    reg.set_vm_assigner(|svc, height| {
+        let params = *svc
+            .vm_params()
+            .expect("VM execution params must be registered before assign_vm");
+        Box::new(NativeVm::new(height, params))
+    })?;
     Ok(())
 }

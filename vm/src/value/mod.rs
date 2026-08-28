@@ -28,7 +28,7 @@ impl ContractAddress {
         let hash = sys::calculate_hash(data);
         let digest = Ripemd160::digest(hash);
         let mut raw = [0u8; field::Address::SIZE];
-        raw[0] = 1;
+        raw[0] = field::Address::VERSION_CONTRACT;
         raw[1..].copy_from_slice(&digest);
         Self::from_addr(field::Address::from(raw)).unwrap()
     }

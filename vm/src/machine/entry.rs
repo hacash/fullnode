@@ -11,9 +11,9 @@ use crate::value::Value;
 use super::{NativeVm, Runtime, VmHost, VmRequest};
 
 impl NativeVm {
-    pub fn new(height: u64) -> Self {
+    pub fn new(height: u64, params: base::VmExecutionParams) -> Self {
         Self {
-            runtime: Runtime::create(height),
+            runtime: Runtime::create(height, params),
             entries: Vec::new(),
             deadline: None,
         }
@@ -257,7 +257,7 @@ impl NativeVm {
 #[cfg(test)]
 mod entry_semantics_tests {
     use super::*;
-    use crate::machine::test_ctx::TestCtx;
+    use crate::machine::test_ctx::{STUB_VM_PARAMS, TestCtx};
     use crate::rt::{ItrErr, ItrErrCode};
     use base::ExecFrom;
 
@@ -265,7 +265,7 @@ mod entry_semantics_tests {
     /// (as in dev's `with_exec_from(ctx, Call, ..)`), and the caller's exec_from is restored afterwards.
     #[test]
     fn run_entry_executes_under_exec_from_call_and_restores() {
-        let mut vm = NativeVm::new(1);
+        let mut vm = NativeVm::new(1, STUB_VM_PARAMS);
         let mut ctx = TestCtx::new();
         assert_eq!(ctx.exec_from(), ExecFrom::Top);
         let (_, rv) = vm
@@ -281,7 +281,7 @@ mod entry_semantics_tests {
 
     #[test]
     fn run_entry_restores_exec_from_on_error() {
-        let mut vm = NativeVm::new(1);
+        let mut vm = NativeVm::new(1, STUB_VM_PARAMS);
         let mut ctx = TestCtx::new();
         let err = vm
             .run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
@@ -298,7 +298,7 @@ mod entry_semantics_tests {
     /// `ExecFrom::Call` at every level and unwind back to the caller's value.
     #[test]
     fn nested_entries_keep_exec_from_call_and_restore_outer() {
-        let mut vm = NativeVm::new(1);
+        let mut vm = NativeVm::new(1, STUB_VM_PARAMS);
         let mut ctx = TestCtx::new();
         vm.run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
             assert_eq!(ctx.exec_from(), ExecFrom::Call);
@@ -319,7 +319,7 @@ mod entry_semantics_tests {
     /// (settle primary). AstSelect must not capture this combination.
     #[test]
     fn run_entry_revert_plus_settle_fault_upgrades_to_fault() {
-        let mut vm = NativeVm::new(1);
+        let mut vm = NativeVm::new(1, STUB_VM_PARAMS);
         let mut ctx = TestCtx::new();
         ctx.gas = 10;
         let err = vm
@@ -347,7 +347,7 @@ mod entry_semantics_tests {
 
     #[test]
     fn run_entry_revert_alone_stays_revert() {
-        let mut vm = NativeVm::new(1);
+        let mut vm = NativeVm::new(1, STUB_VM_PARAMS);
         let mut ctx = TestCtx::new();
         let err = vm
             .run_entry(&mut ctx, EntryKind::Main, |vm, ctx| {
@@ -364,7 +364,7 @@ mod entry_semantics_tests {
 
     #[test]
     fn run_entry_fault_plus_settle_fault_stays_fault() {
-        let mut vm = NativeVm::new(1);
+        let mut vm = NativeVm::new(1, STUB_VM_PARAMS);
         let mut ctx = TestCtx::new();
         ctx.gas = 10;
         let err = vm

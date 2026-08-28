@@ -7,7 +7,7 @@ use field::Address;
 use sys::{Rerr, Ret};
 
 #[cfg(feature = "execute")]
-use crate::iface::action::TransferPayload;
+use crate::iface::action::TransferAsset;
 #[cfg(feature = "execute")]
 use crate::iface::context::Context;
 #[cfg(feature = "execute")]
@@ -29,13 +29,13 @@ pub enum VmEntry {
         owner: Address,
         to: Address,
         action_kind: u16,
-        payload: TransferPayload,
+        payload: TransferAsset,
     },
     TransferReceive {
         from: Address,
         to: Address,
         action_kind: u16,
-        payload: TransferPayload,
+        payload: TransferAsset,
     },
     Raw(Box<dyn Any>),
 }

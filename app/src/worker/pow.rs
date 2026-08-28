@@ -20,6 +20,7 @@ use mint::opencl::common;
 #[cfg(feature = "ocl")]
 use mint::opencl::pow;
 
+#[cfg_attr(feature = "testsleep", allow(dead_code))]
 const MINING_INTERVAL: f64 = 3.0;
 const TARGET_BLOCK_TIME: f64 = 300.0;
 const ONEDAY_BLOCK_NUM: f64 = 288.0;
@@ -139,6 +140,10 @@ pub fn run_with_stop(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) -> Re
     println!(
         "[poworker] connect={} threads={} nonce_max={} chunk={} opencl={}",
         conf.rpcaddr, conf.threads, conf.nonce_max, conf.nonce_chunk, conf.use_opencl
+    );
+    #[cfg(feature = "testsleep")]
+    println!(
+        "[poworker] testsleep: 500ms pause after each mining round (testnet CPU throttle)"
     );
     let backends = build_miner_backends(&conf);
     spawn_miner_notice(conf.clone(), stop_flag.clone());
@@ -330,6 +335,11 @@ fn mine_height(
     let mut next_start = 0u32;
     let mut best_hash = Hash::from([255u8; HASH_WIDTH]);
     let mut cpu_chunk = conf.nonce_chunk.max(1);
+    #[cfg(feature = "testsleep")]
+    {
+        // Keep each round short so the 500ms pause actually drops CPU duty cycle.
+        cpu_chunk = cpu_chunk.min(4_096);
+    }
     let worker_count = backends.len().max(1);
     loop {
         if should_stop(stop_flag) {
@@ -387,7 +397,14 @@ fn mine_height(
                 return Ok(());
             }
         }
+        #[cfg(feature = "testsleep")]
+        {
+            let _ = (round_started, round_scanned);
+            thread::sleep(Duration::from_millis(500));
+        }
         // CPU adaptive batch size (align with diaworker / fullnodedev).
+        // testsleep keeps a small fixed chunk; growing it would peg CPU again.
+        #[cfg(not(feature = "testsleep"))]
         if backends.iter().any(|b| matches!(b, MinerBackend::Cpu)) {
             let secs = round_started.elapsed().as_secs_f64();
             if secs.is_finite() && secs > 0.0 && round_scanned > 0 {

@@ -1,11 +1,11 @@
 //! Hacash-specific transfer-build / transfer-scan API (StdTransaction type 2 + the 13
-//! standard transfer actions). Scan dispatches via `base::TransferLike`, so the JSON shape comes from `TransferPayload`.
+//! standard transfer actions). Scan dispatches via `transfer_intent`, so the JSON shape comes from `TransferAsset`.
 
 use base::{
-    Action, AddrOrPtr, ApiExecCtx, ApiRequest, ApiResponse, BlkPkg, Transaction, TransactionSign,
-    TransferPayload,
+    Action, ApiExecCtx, ApiRequest, ApiResponse, BlkPkg, Transaction, TransactionSign,
+    TransferAsset,
 };
-use field::{Address, Amount, Decode, DiamondName, DiamondNameListMax200, Encode, Satoshi};
+use field::{Address, Amount, DiamondName, DiamondNameListMax200, Encode, Satoshi};
 use protocol::action_std::{
     TransferHacFromTo, TransferHacTo, TransferHacdFromTo, TransferHacdSingleTo, TransferHacdTo,
     TransferSatFromTo, TransferSatTo,
@@ -91,16 +91,12 @@ pub(crate) fn load_block_by_height(ctx: &ApiExecCtx, height: u64) -> sys::Ret<Bl
     .map_err(|e| sys::Error::fault(format!("block parse failed: {}", e)))
 }
 
-fn real_addr(ptr: &AddrOrPtr, addrs: &[Address]) -> sys::Ret<Address> {
-    ptr.real(addrs)
-}
-
 // =============================================================
-// transfer_json -- dispatched via TransferLike, no downcast_ref
+// transfer_json -- dispatched via transfer_intent, no downcast_ref
 // =============================================================
 
 /// Build the JSON for a single transfer action, or `None` if not a transfer / filtered out.
-/// All values derive from `TransferPayload` (no `downcast_ref`); `from` resolves via `transfer_from()`, falling back to the tx main address.
+/// Endpoints use `TransferIntent::resolve_with` against the tx addrlist (`None` → main).
 fn transfer_json(
     tx: &dyn Transaction,
     act: &dyn Action,
@@ -109,61 +105,50 @@ fn transfer_json(
     from_filter: Option<&str>,
     to_filter: Option<&str>,
 ) -> Option<String> {
-    let t = act.as_transfer_like()?;
+    let intent = act.transfer_intent()?;
     let addrs = tx.addrs();
-    let main = tx.main();
+    let (from, to) = intent
+        .resolve_with(tx.main(), |ptr| ptr.real(&addrs))
+        .ok()?;
 
     let mut fields = vec![format!("\"kind\":{}", act.kind())];
 
-    let from = match t.transfer_from() {
-        Some(ptr) => real_addr(&ptr, &addrs).ok()?,
-        None => main,
-    };
-    let to = match t.transfer_to_ptr() {
-        Some(ptr) => real_addr(&ptr, &addrs).ok()?,
-        None => main,
-    };
-
-    match t.transfer_payload() {
-        TransferPayload::Hac { amount } => {
+    match intent.asset {
+        TransferAsset::Hac(amt) => {
             if !ck.hacash {
                 return None;
             }
-            // `amount` is the wire encoding of the Amount (unit + dist + bytes);
-            // decode it back to recover the unit for `to_unit_string`.
-            let amt = match Amount::decode(&amount) {
-                Ok((a, _)) => a,
-                Err(_) => Amount::zero(),
-            };
             fields.push(format!(
                 "\"hacash\":{}",
                 json_string(&amt.to_unit_string(unit))
             ));
         }
-        TransferPayload::Sat { satoshi } => {
+        TransferAsset::Sat(satoshi) => {
             if !ck.satoshi {
                 return None;
             }
-            fields.push(format!("\"satoshi\":{}", satoshi));
+            fields.push(format!("\"satoshi\":{}", satoshi.uint()));
         }
-        TransferPayload::Hacd { count, names } => {
+        TransferAsset::Diamond(list) => {
             if !ck.diamond {
                 return None;
             }
-            fields.push(format!("\"diamond\":{}", count));
-            // Prefer the payload's raw name bytes for the readable list.
+            fields.push(format!("\"diamond\":{}", list.length()));
+            let names = TransferAsset::packed_hacd_names(&list);
             fields.push(format!(
                 "\"diamonds\":{}",
                 json_string(&diamond_names_readable(&names))
             ));
         }
-        TransferPayload::Asset { serial, amount } => {
+        TransferAsset::Asset(asset) => {
+            let serial = asset.serial.uint();
             if !(ck.assets_all || ck.assets.contains(&serial)) {
                 return None;
             }
             fields.push(format!(
                 "\"asset\":{{\"serial\":{},\"amount\":{}}}",
-                serial, amount
+                serial,
+                asset.amount.uint()
             ));
         }
     }
@@ -347,6 +332,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use base::AddrOrPtr;
 
     #[test]
     fn transfer_json_keeps_readable_endpoints_and_payload_shape() {

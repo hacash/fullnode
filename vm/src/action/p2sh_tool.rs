@@ -286,7 +286,8 @@ impl P2shMerkleTree {
             .ok_or_else(|| sys::Error::fault(format!("p2sh tool: leaf index {} overflow", idx)))?
             .spec
             .clone();
-        let gst = GasExtra::new(block_height);
+        let params = *registry.vm_params()?;
+        let gst = GasExtra::new(block_height, &params);
         let cap = SpaceCap::new(block_height);
         P2SHScriptProve::verify_unlock_inputs(
             block_height,

@@ -194,7 +194,10 @@ fn contract_sandbox_call(
         spec = spec.gas_max_byte(gmx);
     }
 
-    let (tx_gas_max, _) = match machine::resolve_sandbox_gas(&spec) {
+    let (tx_gas_max, _) = match services
+        .vm_params()
+        .and_then(|p| machine::resolve_sandbox_gas(&spec, p))
+    {
         Ok(v) => v,
         Err(e) => return api_error(&e.to_string()),
     };
@@ -301,7 +304,11 @@ fn debug_contract_storage(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
         return api_error("key must decode to exactly one value");
     }
     let key = args.into_iter().next().unwrap_or(Value::Nil);
-    let gst = GasExtra::new(height);
+    let services = ctx.engine.services();
+    let gst = match services.vm_params() {
+        Ok(p) => GasExtra::new(height, p),
+        Err(e) => return api_error(&e.to_string()),
+    };
     let cap = SpaceCap::new(height);
     let state = VMStateRead::wrap(snapshot.view());
 

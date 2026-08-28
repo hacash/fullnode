@@ -21,7 +21,6 @@ execute = [
 sys = { workspace = true }
 field = { workspace = true }
 base = { path = "../base", default-features = false }
-hacash-params = { workspace = true }
 hex = "0.4"
 dyn-clone = "1.0"
 ripemd = "0.1"

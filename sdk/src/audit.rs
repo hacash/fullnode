@@ -2,7 +2,6 @@
 //! Auditability classes are schema-declared at each action's definition site, so the SDK never keeps a separate grading table.
 
 use base::{Action, BinaryCodecs};
-use field::Decode;
 
 use crate::error::{SdkError, SdkErrorCode};
 use crate::json::SdkJsonTo;
@@ -25,7 +24,7 @@ pub enum PayloadDesc {
 pub struct TransferDesc {
     pub schema: String,
     pub from: Option<String>,
-    pub to: String,
+    pub to: Option<String>,
     pub payload: PayloadDesc,
 }
 
@@ -95,39 +94,37 @@ pub fn scope_name(scope: base::ActScope) -> &'static str {
     }
 }
 
-fn payload_desc(action: &dyn Action) -> Option<PayloadDesc> {
-    let transfer = action.as_transfer_like()?;
-    match transfer.transfer_payload() {
-        base::TransferPayload::Hac { .. } => Some(PayloadDesc::Hac {
-            amount: transfer.transfer_amount().to_fin_string(),
-        }),
-        base::TransferPayload::Sat { satoshi } => Some(PayloadDesc::Satoshi {
-            atoms: satoshi.to_string(),
-        }),
-        base::TransferPayload::Hacd { count, names } => Some(PayloadDesc::Hacd {
-            count,
-            names: readable_diamond_names(&names),
-        }),
-        base::TransferPayload::Asset { serial, amount } => Some(PayloadDesc::Asset {
-            serial: serial.to_string(),
-            atoms: amount.to_string(),
-        }),
+fn addr_or_ptr_desc(ptr: Option<&base::AddrOrPtr>) -> Option<String> {
+    match ptr {
+        Some(base::AddrOrPtr::Addr(addr)) => Some(addr.to_readable()),
+        // Address-table pointers resolve against the tx addrlist; a
+        // pointer without the list is left unresolved in M1.
+        Some(base::AddrOrPtr::Ptr(_)) => None,
+        None => None,
     }
 }
 
-/// Diamond names ride the wire packed; decode for display. Unreadable payloads
-/// degrade to an empty list rather than failing the descriptor.
-fn readable_diamond_names(names: &[u8]) -> Vec<String> {
-    if let Ok((list, used)) = <field::DiamondNameListMax200 as Decode>::decode(names) {
-        if used == names.len() {
-            return list
+fn payload_desc(asset: &base::TransferAsset) -> PayloadDesc {
+    match asset {
+        base::TransferAsset::Hac(amount) => PayloadDesc::Hac {
+            amount: amount.to_fin_string(),
+        },
+        base::TransferAsset::Sat(satoshi) => PayloadDesc::Satoshi {
+            atoms: satoshi.uint().to_string(),
+        },
+        base::TransferAsset::Diamond(list) => PayloadDesc::Hacd {
+            count: list.length() as u32,
+            names: list
                 .as_list()
                 .iter()
                 .map(|name| name.to_readable())
-                .collect();
-        }
+                .collect(),
+        },
+        base::TransferAsset::Asset(asset) => PayloadDesc::Asset {
+            serial: asset.serial.uint().to_string(),
+            atoms: asset.amount.uint().to_string(),
+        },
     }
-    Vec::new()
 }
 
 /// Per-action describe knobs (Unified SDK 2.0 §6.5). Each switch independently
@@ -283,18 +280,11 @@ pub fn describe_action(
     if let Some(note) = grade_note {
         notes.push(note.to_owned());
     }
-    let transfer = action.as_transfer_like().map(|transfer| TransferDesc {
+    let transfer = action.transfer_intent().map(|intent| TransferDesc {
         schema: SCHEMA_TRANSFER_DESC.to_owned(),
-        from: transfer.transfer_from().and_then(|from| match from {
-            base::AddrOrPtr::Addr(addr) => Some(addr.to_readable()),
-            // Address-table pointers resolve against the tx addrlist; a
-            // pointer without the list is left unresolved in M1.
-            base::AddrOrPtr::Ptr(_) => None,
-        }),
-        to: transfer.transfer_to().to_readable(),
-        payload: payload_desc(action).unwrap_or(PayloadDesc::Hac {
-            amount: transfer.transfer_amount().to_fin_string(),
-        }),
+        from: addr_or_ptr_desc(intent.from.as_ref()),
+        to: addr_or_ptr_desc(intent.to.as_ref()),
+        payload: payload_desc(&intent.asset),
     });
     let description = if options.with_description {
         Some(action.description())
@@ -570,13 +560,11 @@ fn maincall_body() -> String {
         timestamp: Some(1_755_223_764),
         gas_max: None,
         addrlist: None,
-        actions: vec![
-            crate::build::ActionSpec::new(format!(
-                r#"{{"kind":44,"marks":"0x000000","codeconf":0,"codes":"0x{}"}}"#,
-                hex::encode(&codes)
-            ))
-            .expect("test action spec"),
-        ],
+        actions: vec![crate::build::ActionSpec::new(format!(
+            r#"{{"kind":44,"marks":"0x000000","codeconf":0,"codes":"0x{}"}}"#,
+            hex::encode(&codes)
+        ))
+        .expect("test action spec")],
     })
     .unwrap();
     let decoded =

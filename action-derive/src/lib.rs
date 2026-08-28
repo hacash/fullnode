@@ -1,16 +1,16 @@
 use proc_macro::TokenStream;
-use quote::ToTokens;
 use quote::quote;
+use quote::ToTokens;
 use syn::{
-    Attribute, Data, DeriveInput, Fields, Ident, ItemStruct, LitInt, Type, Visibility,
-    parse::Parser, parse_macro_input, spanned::Spanned,
+    parse::Parser, parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields,
+    Ident, ItemStruct, LitInt, Type, Visibility,
 };
 
 #[derive(Clone)]
 enum TransferPayloadSpec {
     Hac(syn::Expr),
     Sat(syn::Expr),
-    Asset(syn::Expr, syn::Expr),
+    Asset(syn::Expr),
     Hacd(syn::Expr, syn::Expr),
 }
 #[derive(Clone, Default)]
@@ -71,11 +71,7 @@ impl syn::parse::Parse for TransferSpec {
                 let payload = match kind.to_string().as_str() {
                     "Hac" => TransferPayloadSpec::Hac(inner.parse()?),
                     "Sat" => TransferPayloadSpec::Sat(inner.parse()?),
-                    "Asset" => {
-                        let a = inner.parse()?;
-                        let _: syn::Token![,] = inner.parse()?;
-                        TransferPayloadSpec::Asset(a, inner.parse()?)
-                    }
+                    "Asset" => TransferPayloadSpec::Asset(inner.parse()?),
                     "Hacd" => {
                         let a = inner.parse()?;
                         let _: syn::Token![,] = inner.parse()?;
@@ -202,7 +198,8 @@ mod simple_tests {
             "HacToTrs, 1, 1, CALL, { to: AddrOrPtr, hacash: Amount }, this, \
              { transfer: (to = to, payload = Hac(hacash)) }",
         );
-        assert!(out.contains("TransferPayload :: Hac"), "{out}");
+        assert!(out.contains("TransferAsset :: Hac"), "{out}");
+        assert!(out.contains("fn transfer_intent"), "{out}");
     }
 
     #[test]
@@ -794,14 +791,10 @@ fn expand_action(
     let desc_expr = description
         .map(|e| quote! { (#e)(self) })
         .unwrap_or_else(|| quote! { String::new() });
-    let transfer_tokens = transfer
-        .map(|spec| expand_transfer(&ident, &spec))
-        .transpose()?;
-    let transfer_impl = if transfer_tokens.is_some() {
-        quote! { Some(self) }
-    } else {
-        quote! { None }
-    };
+    let transfer_method = transfer
+        .map(|spec| expand_transfer(&spec))
+        .transpose()?
+        .unwrap_or_default();
     let attrs = &item.attrs;
     let has_debug = item
         .attrs
@@ -885,12 +878,11 @@ fn expand_action(
             fn extra9(&self) -> bool { #extra_expr }
             fn req_sign(&self) -> Vec<::base::AddrOrPtr> { #req_expr }
             fn description(&self) -> String { #desc_expr }
-            fn as_transfer_like(&self) -> Option<&dyn ::base::TransferLike> { #transfer_impl }
+            #transfer_method
             #nested_tokens
             #[cfg(feature = "execute")]
             fn as_execute(&self) -> Option<&dyn ::base::ActionExecute> { Some(self) }
         }
-        #transfer_tokens
         #ctor_tokens
     })
 }
@@ -934,68 +926,47 @@ fn expand_ctor(ident: &syn::Ident, fields: &syn::Fields) -> syn::Result<proc_mac
     )
 }
 
-fn expand_transfer(
-    ident: &syn::Ident,
-    spec: &TransferSpec,
-) -> syn::Result<proc_macro2::TokenStream> {
-    let to = spec.to.as_ref().map(|e| quote! { self.#e.clone() });
-    let from = spec.from.as_ref().map(|e| quote! { self.#e.clone() });
-    let to_addr = spec.to.as_ref().map(|e| quote! { match self.#e.clone() { ::base::AddrOrPtr::Addr(a) => a, ::base::AddrOrPtr::Ptr(_) => ::field::Address::default() } }).unwrap_or_else(|| quote! { ::field::Address::default() });
-    let to_ptr = to
-        .clone()
-        .map(|e| quote! { Some(#e) })
+fn expand_transfer(spec: &TransferSpec) -> syn::Result<proc_macro2::TokenStream> {
+    let to_ptr = spec
+        .to
+        .as_ref()
+        .map(|e| quote! { Some(self.#e.clone()) })
         .unwrap_or_else(|| quote! { None });
-    let from_ptr = from
-        .map(|e| quote! { Some(#e) })
+    let from_ptr = spec
+        .from
+        .as_ref()
+        .map(|e| quote! { Some(self.#e.clone()) })
         .unwrap_or_else(|| quote! { None });
-    let (amount, payload) = match spec.payload.as_ref().expect("validated") {
-        TransferPayloadSpec::Hac(e) => (
-            quote! { &self.#e },
-            quote! { ::base::TransferPayload::Hac { amount: ::field::Encode::encode(&self.#e) } },
-        ),
-        TransferPayloadSpec::Sat(e) => (
-            quote! { ::field::Amount::zero_ref() },
-            quote! { ::base::TransferPayload::Sat { satoshi: self.#e.uint() } },
-        ),
-        TransferPayloadSpec::Asset(serial, amt) => (
-            quote! { ::field::Amount::zero_ref() },
-            quote! { ::base::TransferPayload::Asset { serial: self.#serial.uint(), amount: self.#amt.uint() } },
-        ),
+    let asset = match spec.payload.as_ref().expect("validated") {
+        TransferPayloadSpec::Hac(e) => {
+            quote! { ::base::TransferAsset::Hac(self.#e.clone()) }
+        }
+        TransferPayloadSpec::Sat(e) => {
+            quote! { ::base::TransferAsset::Sat(self.#e.clone()) }
+        }
+        TransferPayloadSpec::Asset(e) => {
+            quote! { ::base::TransferAsset::Asset(self.#e.clone()) }
+        }
         TransferPayloadSpec::Hacd(count, names) => {
-            let names_expr = if matches!(count, syn::Expr::Lit(_)) {
-                quote! { self.#names.to_vec() }
+            if matches!(count, syn::Expr::Lit(_)) {
+                quote! {
+                    ::base::TransferAsset::Diamond(
+                        ::field::DiamondNameListMax200::one(self.#names.clone())
+                            .expect("codec-validated diamond name")
+                    )
+                }
             } else {
-                quote! { {
-                    // The list wire encoding starts with a 1-byte count; `count`
-                    // carries it separately, so the payload keeps only the entries.
-                    // Guard the assumption where it is cheap instead of relying on it silently.
-                    let encoded = ::field::Encode::encode(&self.#names);
-                    debug_assert_eq!(
-                        encoded.first().copied().unwrap_or(0) as usize,
-                        self.#names.length(),
-                        "Hacd payload names encoding must start with the count byte"
-                    );
-                    encoded.get(1..).unwrap_or_default().to_vec()
-                } }
-            };
-            let count_expr = if matches!(count, syn::Expr::Lit(_)) {
-                quote! { (#count) as u32 }
-            } else {
-                quote! { self.#names.length() as u32 }
-            };
-            (
-                quote! { ::field::Amount::zero_ref() },
-                quote! { ::base::TransferPayload::Hacd { count: #count_expr, names: #names_expr } },
-            )
+                quote! { ::base::TransferAsset::Diamond(self.#names.clone()) }
+            }
         }
     };
     Ok(quote! {
-        impl ::base::TransferLike for #ident {
-            fn transfer_to(&self) -> ::field::Address { #to_addr }
-            fn transfer_to_ptr(&self) -> Option<::base::AddrOrPtr> { #to_ptr }
-            fn transfer_amount(&self) -> &::field::Amount { #amount }
-            fn transfer_from(&self) -> Option<::base::AddrOrPtr> { #from_ptr }
-            fn transfer_payload(&self) -> ::base::TransferPayload { #payload }
+        fn transfer_intent(&self) -> Option<::base::TransferIntent> {
+            Some(::base::TransferIntent {
+                from: #from_ptr,
+                to: #to_ptr,
+                asset: #asset,
+            })
         }
     })
 }

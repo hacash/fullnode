@@ -1,7 +1,7 @@
 use field::Address;
 use sys::Ret;
 
-use crate::iface::action::{ActOut, ActionRef, resolve_transfer_routing};
+use crate::iface::action::{resolve_transfer_routing, ActOut, ActionRef};
 use crate::iface::context::Context;
 use crate::iface::vm::VmEntry;
 use crate::runtime::ExecFrom;
@@ -78,7 +78,7 @@ impl ActionDispatcher {
                         owner: r.from,
                         to: r.to,
                         action_kind: r.action_kind,
-                        payload: r.payload.clone(),
+                        payload: r.asset.clone(),
                     })?;
                 }
                 if r.receive {
@@ -86,7 +86,7 @@ impl ActionDispatcher {
                         from: r.from,
                         to: r.to,
                         action_kind: r.action_kind,
-                        payload: r.payload,
+                        payload: r.asset,
                     })?;
                 }
             }

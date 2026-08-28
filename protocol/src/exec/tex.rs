@@ -3,11 +3,11 @@
 
 use std::collections::HashMap;
 
-use base::{
-    Context, CoreState, ExecFrom, diamond_owned_move, hacd_move_one_diamond, hacd_transfer,
-};
+use base::{Context, CoreState, ExecFrom};
 use field::{Amount, DiamondName, DiamondNameListMax200, Hash, SatoshiAuto};
-use sys::{Rerr, errf};
+use sys::{errf, Rerr};
+
+use crate::exec::apply::{diamonds_transfer, DiamondMove};
 
 // Defined in `params` (non-exec module) because `TexCellExecute`'s codec reads it too;
 // `tex` compiles unconditionally and is dead-code-eliminated in SDK/wasm builds.
@@ -56,21 +56,12 @@ pub fn do_settlement(ctx: &mut dyn Context) -> Rerr {
         tex.diamonds = diamonds;
     }
     for (addr, dialist) in diamond_trs {
-        let diamond_form_flag = crate::execution_params(ctx.services().as_ref())?.diamond_form_flag;
-        let diamond_form = ctx.env().chain.consensus_flags & diamond_form_flag != 0;
-        let mut state = CoreState::wrap(ctx.layer());
-        for name in dialist.as_list() {
-            hacd_move_one_diamond(&mut state, &SETTLEMENT_ADDR, &addr, name)?;
-        }
-        if diamond_form {
-            diamond_owned_move(&mut state, &SETTLEMENT_ADDR, &addr, &dialist)?;
-        }
-        hacd_transfer(
-            &mut state,
+        diamonds_transfer(
+            ctx,
             &SETTLEMENT_ADDR,
             &addr,
-            &field::DiamondNumber::from(dialist.length() as u32),
             &dialist,
+            DiamondMove::TexEscrow,
         )?;
     }
     Ok(())

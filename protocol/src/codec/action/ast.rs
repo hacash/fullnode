@@ -187,7 +187,11 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
         },
     )?;
     let kind_raw = kind.ok_or_else(|| sys::Error::normal("AstSelect JSON missing kind"))?;
-    let kind = Uint2::from(field::json_action_kind(kind_raw, AstSelect::NAME, AstSelect::KIND)?);
+    let kind = Uint2::from(field::json_action_kind(
+        kind_raw,
+        AstSelect::NAME,
+        AstSelect::KIND,
+    )?);
     let exe_min: Uint1 =
         exe_min.ok_or_else(|| sys::Error::normal("AstSelect JSON missing exe_min"))?;
     let exe_max: Uint1 =

@@ -1,15 +1,19 @@
 //! Protocol-side Hacash transaction billing (`TxGasMeter`): final burn/refund from
 //! `used_net()`; returned-gas charges only the extra9 delta. Modes: Soft (Type1/2 budget, no escrow), Running (Type3 escrow + `gas_refund` settle).
 
-use base::{Context, CoreState, hac_add, hac_sub, total_add_u12, with_base_total};
+use base::{hac_add, hac_sub, total_add_u12, with_base_total, Context, CoreState};
 use field::Amount;
-use sys::{Rerr, Ret, errf};
+use sys::{errf, Rerr, Ret};
 
 /// Returned-gas extra9 delta only (plain actions add no returned-gas charge).
 #[allow(dead_code)] // reserved for future gas accounting extensions
 #[inline(always)]
 pub fn extra9_surcharge(extra9: bool, gas: u32) -> u32 {
-    if extra9 { gas.saturating_mul(9) } else { 0 }
+    if extra9 {
+        gas.saturating_mul(9)
+    } else {
+        0
+    }
 }
 
 #[derive(Clone, Copy)]

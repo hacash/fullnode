@@ -71,7 +71,7 @@ base::action_simple! { TransferAssetTo, 17, 2, CALL, {
     asset: AssetAmt
 }, this, {
     extra9: true,
-    transfer: (to = to, payload = Asset(asset.serial, asset.amount)),
+    transfer: (to = to, payload = Asset(asset)),
     description: format!("Transfer {{{}:{}}} to {}", this.asset.serial.uint(), this.asset.amount.uint(), addr_or_ptr_readable(&this.to))
 }}
 
@@ -81,7 +81,7 @@ base::action_simple! { TransferAssetFrom, 18, 2, CALL, {
 }, this, {
     extra9: true,
     req_sign: vec![this.from.clone()],
-    transfer: (from = from, payload = Asset(asset.serial, asset.amount)),
+    transfer: (from = from, payload = Asset(asset)),
     description: format!("Transfer {{{}:{}}} from {}", this.asset.serial.uint(), this.asset.amount.uint(), addr_or_ptr_readable(&this.from))
 }}
 
@@ -92,7 +92,7 @@ base::action_simple! { TransferAssetFromTo, 19, 2, CALL, {
 }, this, {
     extra9: true,
     req_sign: vec![this.from.clone()],
-    transfer: (to = to, from = from, payload = Asset(asset.serial, asset.amount)),
+    transfer: (to = to, from = from, payload = Asset(asset)),
     description: format!("Transfer {{{}:{}}} from {} to {}", this.asset.serial.uint(), this.asset.amount.uint(), addr_or_ptr_readable(&this.from), addr_or_ptr_readable(&this.to))
 }}
 
@@ -193,15 +193,152 @@ mod tests {
         let mut decoded = TransferSatFromTo::default();
         decoded.from_json(&json).expect("decode action json");
         assert_eq!(decoded.encode(), action.encode());
-        assert!(
-            TransferSatFromTo::default()
-                .from_json("{\"kind\":12,\"from\":0,\"from\":0,\"to\":0,\"satoshi\":7}")
-                .is_err()
-        );
-        assert!(
-            TransferSatFromTo::default()
-                .from_json("{\"kind\":12,\"from\":0,\"to\":0}")
-                .is_err()
+        assert!(TransferSatFromTo::default()
+            .from_json("{\"kind\":12,\"from\":0,\"from\":0,\"to\":0,\"satoshi\":7}")
+            .is_err());
+        assert!(TransferSatFromTo::default()
+            .from_json("{\"kind\":12,\"from\":0,\"to\":0}")
+            .is_err());
+    }
+
+    fn addr(n: u8) -> Address {
+        let mut bytes = [0u8; 21];
+        bytes[1] = n;
+        Address::from(bytes)
+    }
+
+    #[test]
+    fn transfer_intent_shapes_match_the_thirteen_kinds() {
+        use base::{Action, TransferAsset, TransferIntent};
+
+        fn shape(intent: TransferIntent) -> (bool, bool, &'static str) {
+            let tag = match &intent.asset {
+                TransferAsset::Hac(_) => "hac",
+                TransferAsset::Sat(_) => "sat",
+                TransferAsset::Diamond(_) => "diamond",
+                TransferAsset::Asset(_) => "asset",
+            };
+            (intent.from.is_some(), intent.to.is_some(), tag)
+        }
+
+        let a = addr(1);
+        let b = addr(2);
+        let hac = Amount::from("1:244").unwrap();
+        let sat = Satoshi::from(7);
+        let diamonds = DiamondNameListMax200::from_readable("WTYUIA,HYXYHY").unwrap();
+        let diamond = diamonds.as_list()[0];
+        let asset = AssetAmt {
+            serial: field::Fold64::from(1).expect("serial"),
+            amount: field::Fold64::from(9).expect("amount"),
+        };
+
+        let shapes = vec![
+            (
+                TransferHacTo::KIND,
+                shape(
+                    TransferHacTo::new(a, hac.clone())
+                        .transfer_intent()
+                        .unwrap(),
+                ),
+            ),
+            (
+                TransferHacFrom::KIND,
+                shape(
+                    TransferHacFrom::new(a, hac.clone())
+                        .transfer_intent()
+                        .unwrap(),
+                ),
+            ),
+            (
+                TransferHacFromTo::KIND,
+                shape(TransferHacFromTo::new(a, b, hac).transfer_intent().unwrap()),
+            ),
+            (
+                TransferSatTo::KIND,
+                shape(TransferSatTo::new(a, sat).transfer_intent().unwrap()),
+            ),
+            (
+                TransferSatFrom::KIND,
+                shape(TransferSatFrom::new(a, sat).transfer_intent().unwrap()),
+            ),
+            (
+                TransferSatFromTo::KIND,
+                shape(TransferSatFromTo::new(a, b, sat).transfer_intent().unwrap()),
+            ),
+            (
+                TransferAssetTo::KIND,
+                shape(
+                    TransferAssetTo::new(a, asset.clone())
+                        .transfer_intent()
+                        .unwrap(),
+                ),
+            ),
+            (
+                TransferAssetFrom::KIND,
+                shape(
+                    TransferAssetFrom::new(a, asset.clone())
+                        .transfer_intent()
+                        .unwrap(),
+                ),
+            ),
+            (
+                TransferAssetFromTo::KIND,
+                shape(
+                    TransferAssetFromTo::new(a, b, asset)
+                        .transfer_intent()
+                        .unwrap(),
+                ),
+            ),
+            (
+                TransferHacdSingleTo::KIND,
+                shape(
+                    TransferHacdSingleTo::new(diamond, a)
+                        .transfer_intent()
+                        .unwrap(),
+                ),
+            ),
+            (
+                TransferHacdFromTo::KIND,
+                shape(
+                    TransferHacdFromTo::new(a, b, diamonds.clone())
+                        .transfer_intent()
+                        .unwrap(),
+                ),
+            ),
+            (
+                TransferHacdTo::KIND,
+                shape(
+                    TransferHacdTo::new(a, diamonds.clone())
+                        .transfer_intent()
+                        .unwrap(),
+                ),
+            ),
+            (
+                TransferHacdFrom::KIND,
+                shape(
+                    TransferHacdFrom::new(a, diamonds)
+                        .transfer_intent()
+                        .unwrap(),
+                ),
+            ),
+        ];
+        assert_eq!(
+            shapes,
+            vec![
+                (1, (false, true, "hac")),
+                (13, (true, false, "hac")),
+                (14, (true, true, "hac")),
+                (10, (false, true, "sat")),
+                (11, (true, false, "sat")),
+                (12, (true, true, "sat")),
+                (17, (false, true, "asset")),
+                (18, (true, false, "asset")),
+                (19, (true, true, "asset")),
+                (5, (false, true, "diamond")),
+                (6, (true, true, "diamond")),
+                (7, (false, true, "diamond")),
+                (8, (true, false, "diamond")),
+            ]
         );
     }
 }

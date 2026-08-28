@@ -303,8 +303,9 @@ fn classify(grade: &str) -> Auditability {
 }
 
 fn collect_asset_serials(action: &base::ActionRef, out: &mut Vec<u64>) {
-    if let Some(transfer) = action.as_transfer_like() {
-        if let base::TransferPayload::Asset { serial, .. } = transfer.transfer_payload() {
+    if let Some(intent) = action.transfer_intent() {
+        if let base::TransferAsset::Asset(asset) = intent.asset {
+            let serial = asset.serial.uint();
             if !out.contains(&serial) {
                 out.push(serial);
             }

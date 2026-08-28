@@ -305,6 +305,11 @@ impl ExecutionServices for TestServices {
             contract_store_perm_periods: 10_000,
             initial_fee_purity_floor: 100,
             fee_purity_reductions: &[],
+            gas_budget_lookup: &base::GAS_BUDGET_LOOKUP_NONE,
+            tx_gas_budget_cap_byte: 0,
+            compute_limit_byte: 0,
+            resource_limit_byte: 0,
+            storage_limit_byte: 0,
         };
         Ok(&PARAMS)
     }

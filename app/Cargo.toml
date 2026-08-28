@@ -33,3 +33,5 @@ db-rusty-leveldb = ["db/db-rusty-leveldb"]
 db-leveldb-sys = ["db/db-leveldb-sys"]
 db-rocksdb = ["db/db-rocksdb"]
 ocl = ["mint/ocl"]
+# Testnet CPU throttle: 500ms pause after each mining round. Off by default.
+testsleep = []

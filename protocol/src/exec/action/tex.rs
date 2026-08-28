@@ -1,30 +1,14 @@
 //! TexCellExecute execute body and TEX cell state changes.
 
 use base::{
-    Context, CoreState, ExecFrom, asset_add, asset_sub, diamond_owned_move, hac_add, hac_sub,
-    hacd_move_one_diamond, hacd_transfer, sat_add, sat_sub,
+    asset_add, asset_sub, hac_add, hac_sub, sat_add, sat_sub, Context, CoreState, ExecFrom,
 };
-use field::{Address, Amount, DiamondNameListMax200, DiamondNumber, Fold64, Hash, Satoshi, Sign};
-use sys::{Account, Rerr, Ret, errf};
+use field::{Address, Amount, Fold64, Hash, Satoshi, Sign};
+use sys::{errf, Account, Rerr};
 
 use crate::codec::action::tex::{TexCell, TexCellExecute};
+use crate::exec::apply::{diamonds_transfer, DiamondMove};
 use crate::params::SETTLEMENT_ADDR;
-
-fn tex_check_settlement_addr_privakey() -> Rerr {
-    if !SETTLEMENT_ADDR.is_privkey() {
-        return errf!(
-            "tex settlement address {} must be PRIVAKEY type",
-            SETTLEMENT_ADDR.to_readable()
-        );
-    }
-    if !SETTLEMENT_ADDR.is_privkey_unknown() {
-        return errf!(
-            "tex settlement address {} must be a system address (value < u32::MAX)",
-            SETTLEMENT_ADDR.to_readable()
-        );
-    }
-    Ok(())
-}
 
 fn tex_check_asset_serial(ctx: &mut dyn Context, serial: Fold64) -> Rerr {
     if serial.is_zero() {
@@ -45,31 +29,6 @@ fn tex_check_asset_serial(ctx: &mut dyn Context, serial: Fold64) -> Rerr {
     }
     ctx.tex_ledger_mut_top()?.mark_asset_checked(serial);
     Ok(())
-}
-
-fn do_diamonds_transfer(
-    ctx: &mut dyn Context,
-    diamonds: &DiamondNameListMax200,
-    from: &Address,
-    to: &Address,
-) -> Ret<Vec<u8>> {
-    let dianum = diamonds.check()?;
-    let diamond_form_flag = crate::execution_params(ctx.services().as_ref())?.diamond_form_flag;
-    let diamond_form = ctx.env().chain.consensus_flags & diamond_form_flag != 0;
-    let mut state = CoreState::wrap(ctx.layer());
-    for name in diamonds.as_list() {
-        hacd_move_one_diamond(&mut state, from, to, name)?;
-    }
-    if diamond_form {
-        diamond_owned_move(&mut state, from, to, diamonds)?;
-    }
-    hacd_transfer(
-        &mut state,
-        from,
-        to,
-        &DiamondNumber::from(dianum as u32),
-        diamonds,
-    )
 }
 
 fn verify_signature(hash: &Hash, addr: &Address, sign: &Sign) -> bool {
@@ -139,9 +98,13 @@ impl TexCell {
                 Ok(())
             }
             Self::DiaPay { diamonds } => {
-                tex_check_settlement_addr_privakey()?;
-                diamonds.check()?;
-                do_diamonds_transfer(ctx, diamonds, taradr, &SETTLEMENT_ADDR)?;
+                diamonds_transfer(
+                    ctx,
+                    taradr,
+                    &SETTLEMENT_ADDR,
+                    diamonds,
+                    DiamondMove::TexEscrow,
+                )?;
                 let max = crate::execution_params(ctx.services().as_ref())?.tex_diamond_pay_max;
                 ctx.tex_ledger_mut_top()?.record_diamond_pay(diamonds, max)
             }

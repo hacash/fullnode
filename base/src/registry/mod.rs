@@ -347,12 +347,24 @@ impl VmHostActionDef {
     }
 }
 
+/// Empty gas-budget vocabulary: every bytecode decodes to 0 (limits disabled).
+/// Test/stub `VmExecutionParams` use this; production profiles inject the chain table.
+pub const GAS_BUDGET_LOOKUP_NONE: [u32; 256] = [0; 256];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VmExecutionParams {
     pub contract_store_perm_periods: u64,
     pub initial_fee_purity_floor: u64,
     /// Height-gated floor reductions: `(activation_height, next_floor)`.
     pub fee_purity_reductions: &'static [(u64, u64)],
+    /// Chain gas-budget vocabulary: bytecode → budget units. Engine pricing
+    /// constants stay in the VM; only this table and the four budget bytes
+    /// below are chain-injected.
+    pub gas_budget_lookup: &'static [u32; 256],
+    pub tx_gas_budget_cap_byte: u8,
+    pub compute_limit_byte: u8,
+    pub resource_limit_byte: u8,
+    pub storage_limit_byte: u8,
 }
 
 /// Fee purity floor selected by the consensus schedule at `height` — single computation
@@ -380,6 +392,26 @@ impl VmExecutionParams {
     /// Effective fee purity floor at `height`, then `raw.max(floor)`.
     pub fn effective_fee_purity(&self, height: u64, raw: u64) -> u64 {
         raw.max(self.fee_purity_floor_at(height))
+    }
+
+    #[inline(always)]
+    pub const fn decode_gas_budget(&self, byte: u8) -> i64 {
+        self.gas_budget_lookup[byte as usize] as i64
+    }
+}
+
+impl Default for VmExecutionParams {
+    fn default() -> Self {
+        Self {
+            contract_store_perm_periods: 0,
+            initial_fee_purity_floor: 0,
+            fee_purity_reductions: &[],
+            gas_budget_lookup: &GAS_BUDGET_LOOKUP_NONE,
+            tx_gas_budget_cap_byte: 0,
+            compute_limit_byte: 0,
+            resource_limit_byte: 0,
+            storage_limit_byte: 0,
+        }
     }
 }
 
@@ -507,6 +539,11 @@ mod tests {
         contract_store_perm_periods: 10_000,
         initial_fee_purity_floor: 100,
         fee_purity_reductions: &[(10, 80), (20, 50)],
+        gas_budget_lookup: &super::GAS_BUDGET_LOOKUP_NONE,
+        tx_gas_budget_cap_byte: 0,
+        compute_limit_byte: 0,
+        resource_limit_byte: 0,
+        storage_limit_byte: 0,
     };
 
     #[test]

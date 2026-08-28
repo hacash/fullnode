@@ -1,10 +1,10 @@
 use crate::Context;
 use field::{
     Address, Amount, AssetAmt, DiamondName, DiamondNameListMax200, DiamondNameListMax60000,
-    DiamondNumber, DiamondNumberAuto, DiamondSto, Satoshi, SatoshiAuto, ToJSON, Uint1, Uint8,
-    Uint12,
+    DiamondNumber, DiamondNumberAuto, DiamondSto, Satoshi, SatoshiAuto, ToJSON, Uint1, Uint12,
+    Uint8,
 };
-use sys::{Ret, errf, revertf};
+use sys::{errf, revertf, Ret};
 
 use super::{BaseTotal, CoreState};
 
@@ -432,12 +432,11 @@ pub fn hacd_sub(state: &mut CoreState, addr: &Address, hacd: &DiamondNumber) -> 
     Ok(next)
 }
 
-pub fn hacd_transfer(
+fn hacd_adjust_count(
     state: &mut CoreState,
     from: &Address,
     to: &Address,
     hacd: &DiamondNumber,
-    _dlist: &DiamondNameListMax200,
 ) -> Ret<Vec<u8>> {
     if from == to {
         return errf!("cannot transfer to self");
@@ -445,6 +444,26 @@ pub fn hacd_transfer(
     hacd_sub(state, from, hacd)?;
     hacd_add(state, to, hacd)?;
     Ok(vec![])
+}
+
+/// Named diamond transfer: per-name ownership, optional owned-list, then count.
+/// Recipient policy lives in `protocol::exec::apply` (`User` vs `TexEscrow`).
+pub fn hacd_transfer(
+    ctx: &mut dyn Context,
+    from: &Address,
+    to: &Address,
+    diamonds: &DiamondNameListMax200,
+    diamond_form: bool,
+) -> Ret<Vec<u8>> {
+    let dianum = diamonds.check()?;
+    let mut state = CoreState::wrap(ctx.layer());
+    for name in diamonds.as_list() {
+        hacd_move_one_diamond(&mut state, from, to, name)?;
+    }
+    if diamond_form {
+        diamond_owned_move(&mut state, from, to, diamonds)?;
+    }
+    hacd_adjust_count(&mut state, from, to, &DiamondNumber::from(dianum as u32))
 }
 
 pub fn check_diamond_status(

@@ -1,8 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use base::{Context, GasBuckets, IntentScope, TransferPayload, TransferRouting};
-use field::{Address, BytesW2};
+use base::{Context, GasBuckets, IntentScope, TransferAsset, TransferRouting};
+use field::{Address, BytesW2, Encode};
 use sys::Ret;
 
 use crate::action::P2SHScriptProve;
@@ -10,7 +10,7 @@ use crate::contract::ContractAddrListW1;
 use crate::rt::{AbstCall, CodeConf, CodeType, EntryKind, FnObj, FrameBindings, ItrErr, VmrtRes};
 use crate::value::{ContractAddress, Value};
 
-use super::{NativeVm, peek_vm_runtime_limits};
+use super::{peek_vm_runtime_limits, NativeVm};
 
 struct TransferCall {
     kind: AbstCall,
@@ -49,7 +49,7 @@ impl NativeVm {
         owner: Address,
         to: Address,
         action_kind: u16,
-        payload: TransferPayload,
+        payload: TransferAsset,
         intent_scope: IntentScope,
     ) -> Ret<(GasBuckets, Box<dyn Any>)> {
         let p2sh = ctx.p2sh(&owner)?;
@@ -93,7 +93,7 @@ impl NativeVm {
         owner: Address,
         to: Address,
         action_kind: u16,
-        payload: TransferPayload,
+        payload: TransferAsset,
         intent_scope: IntentScope,
     ) -> Ret<(GasBuckets, Box<dyn Any>)> {
         if owner.is_scriptmh() {
@@ -109,7 +109,7 @@ impl NativeVm {
         ctx: &mut dyn Context,
         from: Address,
         to: Address,
-        payload: TransferPayload,
+        payload: TransferAsset,
         intent_scope: IntentScope,
     ) -> Ret<(GasBuckets, Box<dyn Any>)> {
         let contract_addr = ContractAddress::from_addr(to)?;
@@ -141,13 +141,13 @@ impl NativeVm {
                 routing.from,
                 routing.to,
                 routing.action_kind,
-                routing.payload.clone(),
+                routing.asset.clone(),
                 intent_scope,
             )
             .map_err(map_error)?;
         }
         if routing.receive {
-            self.run_transfer_receive(ctx, routing.from, routing.to, routing.payload, intent_scope)
+            self.run_transfer_receive(ctx, routing.from, routing.to, routing.asset, intent_scope)
                 .map_err(map_error)?;
         }
         Ok(())
@@ -157,26 +157,26 @@ impl NativeVm {
 fn transfer_call(
     authorize: bool,
     counterparty: Address,
-    payload: TransferPayload,
+    asset: TransferAsset,
 ) -> Ret<TransferCall> {
-    let (kind, args) = match payload {
-        TransferPayload::Hac { amount } => (
+    let (kind, args) = match asset {
+        TransferAsset::Hac(amount) => (
             if authorize {
                 AbstCall::PermitHAC
             } else {
                 AbstCall::PayableHAC
             },
-            vec![Value::Address(counterparty), Value::Bytes(amount)],
+            vec![Value::Address(counterparty), Value::Bytes(amount.encode())],
         ),
-        TransferPayload::Sat { satoshi } => (
+        TransferAsset::Sat(satoshi) => (
             if authorize {
                 AbstCall::PermitSAT
             } else {
                 AbstCall::PayableSAT
             },
-            vec![Value::Address(counterparty), Value::U64(satoshi)],
+            vec![Value::Address(counterparty), Value::U64(satoshi.uint())],
         ),
-        TransferPayload::Hacd { count, names } => (
+        TransferAsset::Diamond(list) => (
             if authorize {
                 AbstCall::PermitHACD
             } else {
@@ -184,11 +184,11 @@ fn transfer_call(
             },
             vec![
                 Value::Address(counterparty),
-                Value::U32(count),
-                Value::Bytes(names),
+                Value::U32(list.length() as u32),
+                Value::Bytes(TransferAsset::packed_hacd_names(&list)),
             ],
         ),
-        TransferPayload::Asset { serial, amount } => (
+        TransferAsset::Asset(asset) => (
             if authorize {
                 AbstCall::PermitAsset
             } else {
@@ -196,8 +196,8 @@ fn transfer_call(
             },
             vec![
                 Value::Address(counterparty),
-                Value::U64(serial),
-                Value::U64(amount),
+                Value::U64(asset.serial.uint()),
+                Value::U64(asset.amount.uint()),
             ],
         ),
     };
@@ -205,15 +205,19 @@ fn transfer_call(
     Ok(TransferCall { kind, param })
 }
 
-fn p2sh_transfer_args(payload: TransferPayload) -> Vec<Value> {
-    match payload {
-        TransferPayload::Hac { amount } => vec![Value::Bytes(amount)],
-        TransferPayload::Sat { satoshi } => vec![Value::U64(satoshi)],
-        TransferPayload::Hacd { count, names } => {
-            vec![Value::U32(count), Value::Bytes(names)]
-        }
-        TransferPayload::Asset { serial, amount } => {
-            vec![Value::U64(serial), Value::U64(amount)]
+fn p2sh_transfer_args(asset: TransferAsset) -> Vec<Value> {
+    match asset {
+        TransferAsset::Hac(amount) => vec![Value::Bytes(amount.encode())],
+        TransferAsset::Sat(satoshi) => vec![Value::U64(satoshi.uint())],
+        TransferAsset::Diamond(list) => vec![
+            Value::U32(list.length() as u32),
+            Value::Bytes(TransferAsset::packed_hacd_names(&list)),
+        ],
+        TransferAsset::Asset(asset) => {
+            vec![
+                Value::U64(asset.serial.uint()),
+                Value::U64(asset.amount.uint()),
+            ]
         }
     }
 }

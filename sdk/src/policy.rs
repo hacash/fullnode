@@ -266,7 +266,7 @@ mod tests {
         d.transfer = Some(crate::audit::TransferDesc {
             schema: crate::schema::SCHEMA_TRANSFER_DESC.to_owned(),
             from: None,
-            to: "1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9".to_owned(),
+            to: Some("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9".to_owned()),
             payload: crate::audit::PayloadDesc::Hacd {
                 count,
                 names: vec![],

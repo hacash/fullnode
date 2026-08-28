@@ -4,7 +4,8 @@ use base::Context;
 
 use crate::rt::{GasExtra, SpaceCap};
 
-/// Prefer the warm `(GasExtra, SpaceCap)` from the active VM; otherwise height defaults.
+/// Prefer the warm `(GasExtra, SpaceCap)` from the active VM; otherwise height defaults
+/// from the injected chain budget params.
 /// Uses `vm_peek` (no take), so safe before/alongside `vm_call` under slot law.
 pub fn peek_vm_runtime_limits(ctx: &mut dyn Context, height: u64) -> (GasExtra, SpaceCap) {
     if let Some(vm) = ctx.vm_peek() {
@@ -16,5 +17,9 @@ pub fn peek_vm_runtime_limits(ctx: &mut dyn Context, height: u64) -> (GasExtra, 
             }
         }
     }
-    (GasExtra::new(height), SpaceCap::new(height))
+    let params = *ctx
+        .services()
+        .vm_params()
+        .expect("VM execution params must be registered");
+    (GasExtra::new(height, &params), SpaceCap::new(height))
 }

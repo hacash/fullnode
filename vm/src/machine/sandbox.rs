@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use base::{Context, ExecFrom, GasBuckets, VmEntry, hac_add, with_exec_from};
+use base::{Context, ExecFrom, GasBuckets, VmEntry, VmExecutionParams, hac_add, with_exec_from};
 use field::{Address, Amount};
 use sys::{Rerr, Ret, errf};
 
@@ -73,7 +73,8 @@ pub struct SandboxResult {
 /// Run a read-only-ish sandbox call on an already-prepared context: must own a forked state layer
 /// and a tx whose `main`/addrlist match the caller and contract. Funding and gas init happen here.
 pub fn sandbox_call(ctx: &mut dyn Context, spec: SandboxSpec) -> Ret<SandboxResult> {
-    let (_tx_gas_max, gas_budget) = resolve_sandbox_gas(&spec)?;
+    let params = *ctx.services().vm_params()?;
+    let (_tx_gas_max, gas_budget) = resolve_sandbox_gas(&spec, &params)?;
     let codes = build_call_codes(&spec.function, &spec.args)?;
     verify_bytecodes_with_registry(&codes, ctx.services().as_ref())
         .map_err(|e| sys::Error::from(e))?;
@@ -96,22 +97,21 @@ pub fn sandbox_call(ctx: &mut dyn Context, spec: SandboxSpec) -> Ret<SandboxResu
     })
 }
 
-pub fn resolve_sandbox_gas(spec: &SandboxSpec) -> Ret<(u8, i64)> {
+pub fn resolve_sandbox_gas(spec: &SandboxSpec, params: &VmExecutionParams) -> Ret<(u8, i64)> {
     match spec.gas_max_byte {
         Some(0) => errf!("sandbox gas_max byte invalid: 0"),
         Some(gmx) => {
-            let capped = gmx.min(hacash_params::TX_GAS_BUDGET_CAP_BYTE);
-            Ok((gmx, hacash_params::decode_gas_budget(capped)))
+            let capped = gmx.min(params.tx_gas_budget_cap_byte);
+            Ok((gmx, params.decode_gas_budget(capped)))
         }
         None => {
-            let cap_budget =
-                hacash_params::decode_gas_budget(hacash_params::TX_GAS_BUDGET_CAP_BYTE);
+            let cap_budget = params.decode_gas_budget(params.tx_gas_budget_cap_byte);
             let gas_budget = match spec.gas_budget {
                 Some(v) if v > 0 => v.min(cap_budget),
                 Some(v) => return errf!("sandbox gas budget invalid: {}", v),
                 None => cap_budget,
             };
-            Ok((hacash_params::TX_GAS_BUDGET_CAP_BYTE, gas_budget))
+            Ok((params.tx_gas_budget_cap_byte, gas_budget))
         }
     }
 }

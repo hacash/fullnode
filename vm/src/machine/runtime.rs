@@ -51,20 +51,23 @@ pub struct Runtime {
     /// Number of active VM entry frames (gas-independent); guards synchronous
     /// contract-to-contract transfer callbacks from exhausting the native call stack.
     reentry_depth: usize,
+    vm_params: base::VmExecutionParams,
     pub warm: WarmState,
     pub volatile: VolatileState,
 }
 
 impl Runtime {
-    pub fn create(height: u64) -> Self {
+    pub fn create(height: u64, params: base::VmExecutionParams) -> Self {
         let cap = SpaceCap::new(height);
+        let gas_extra = GasExtra::new(height, &params);
         Self {
             cfg_height: height,
             next_upgrade: Self::next_upgrade_after(height),
             reentry_depth: 0,
+            vm_params: params,
             warm: WarmState {
                 space_cap: cap.clone(),
-                gas_extra: GasExtra::new(height),
+                gas_extra,
                 gas_table: GasTable::new(height),
                 ..Default::default()
             },
@@ -134,7 +137,7 @@ impl Runtime {
             .intents
             .reset(IntentRuntimeLimits::from_space_cap(&cap));
         self.warm.space_cap = cap;
-        self.warm.gas_extra = GasExtra::new(height);
+        self.warm.gas_extra = GasExtra::new(height, &self.vm_params);
         self.warm.gas_table = GasTable::new(height);
         self.warm.log_bytes_total = 0;
     }

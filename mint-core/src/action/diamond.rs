@@ -212,7 +212,11 @@ impl field::FromJSON for HacdMint {
             Ok(())
         })?;
         let kind_raw = kind.ok_or_else(|| sys::Error::normal("HacdMint JSON missing kind"))?;
-        let kind = Uint2::from(field::json_action_kind(kind_raw, HacdMint::NAME, HacdMint::KIND)?);
+        let kind = Uint2::from(field::json_action_kind(
+            kind_raw,
+            HacdMint::NAME,
+            HacdMint::KIND,
+        )?);
         let d: HacdMintData = data.ok_or_else(|| sys::Error::normal("HacdMint JSON missing d"))?;
         *self = HacdMint { kind, d };
         Ok(())

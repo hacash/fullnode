@@ -676,7 +676,7 @@ impl_sdk_json! {
     TransferDesc {
         schema: str_def,
         from: opt_str,
-        to: str,
+        to: opt_str,
         payload: obj PayloadDesc,
     } both
 }
@@ -945,10 +945,9 @@ mod tests {
         let decoded = InspectContext::from_json_str(&ctx.to_json_string()).unwrap();
         assert_eq!(decoded, ctx);
         // Numeric fields travel as decimal strings on the boundary.
-        assert!(
-            ctx.to_json_string()
-                .contains("\"current_height\":\"123456\"")
-        );
+        assert!(ctx
+            .to_json_string()
+            .contains("\"current_height\":\"123456\""));
 
         let built = crate::build::BuiltTransaction {
             schema: "s".to_owned(),
@@ -1034,12 +1033,10 @@ mod tests {
         // Missing required field is rejected.
         assert!(InspectContext::from_json_str("{}").is_err());
         // Duplicated keys are rejected.
-        assert!(
-            InspectContext::from_json_str(
-                r#"{"current_height":"1","current_height":"2","expected_chain_id":"0"}"#
-            )
-            .is_err()
-        );
+        assert!(InspectContext::from_json_str(
+            r#"{"current_height":"1","current_height":"2","expected_chain_id":"0"}"#
+        )
+        .is_err());
     }
 
     #[test]

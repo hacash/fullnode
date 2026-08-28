@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use field::{Address, Amount, Decode, Encode};
+use field::{Address, Amount, AssetAmt, Decode, DiamondNameListMax200, Encode, Satoshi};
 use sys::Ret;
 
 #[cfg(feature = "execute")]
@@ -31,25 +31,60 @@ pub trait ActionName {
 /// Offline review view. `Action` is retained as the public compatibility name.
 pub type ActionRef = Arc<dyn Action>;
 
+/// Domain-typed value moved by a declared transfer. VM Permit/Payable ABI
+/// encodes this at the hook boundary; execute applies it via ledger primitives.
 #[derive(Clone, Debug)]
-pub enum TransferPayload {
-    Hac { amount: Vec<u8> },
-    Sat { satoshi: u64 },
-    Hacd { count: u32, names: Vec<u8> },
-    Asset { serial: u64, amount: u64 },
+pub enum TransferAsset {
+    Hac(Amount),
+    Sat(Satoshi),
+    Diamond(DiamondNameListMax200),
+    Asset(AssetAmt),
 }
 
-pub trait TransferLike: Send + Sync {
-    fn transfer_to(&self) -> Address;
-    /// Wire-level destination, preserving address-table pointers. `None`
-    /// means the transaction's main address is the implicit destination.
-    fn transfer_to_ptr(&self) -> Option<AddrOrPtr> {
-        Some(AddrOrPtr::Addr(self.transfer_to()))
+impl TransferAsset {
+    /// Packed HACD names without the list count prefix (PermitHACD / PayableHACD ABI).
+    pub fn packed_hacd_names(list: &DiamondNameListMax200) -> Vec<u8> {
+        let mut names = Vec::with_capacity(list.length() * field::DiamondName::SIZE);
+        for name in list.as_list() {
+            names.extend_from_slice(name.as_ref());
+        }
+        names
     }
-    fn transfer_amount(&self) -> &Amount;
-    fn transfer_payload(&self) -> TransferPayload;
-    fn transfer_from(&self) -> Option<AddrOrPtr> {
-        None
+}
+
+/// Declared value-flow of an action. `None` endpoints mean the tx main address.
+#[derive(Clone, Debug)]
+pub struct TransferIntent {
+    pub from: Option<AddrOrPtr>,
+    pub to: Option<AddrOrPtr>,
+    pub asset: TransferAsset,
+}
+
+impl TransferIntent {
+    /// Single endpoint rule: `None` is `main`, `Some` is handed to `resolve`.
+    /// Execute wraps this as `resolve_endpoints` (`ctx.addr`); offline scan
+    /// passes the tx address list. Ledger apply and Permit/Payable routing
+    /// must not reimplement this match.
+    pub fn resolve_with(
+        &self,
+        main: Address,
+        resolve: impl Fn(&AddrOrPtr) -> Ret<Address>,
+    ) -> Ret<(Address, Address)> {
+        let from = match &self.from {
+            Some(ptr) => resolve(ptr)?,
+            None => main,
+        };
+        let to = match &self.to {
+            Some(ptr) => resolve(ptr)?,
+            None => main,
+        };
+        Ok((from, to))
+    }
+
+    /// Execute-path wrapper: `resolve_with` + `ctx.addr`.
+    #[cfg(feature = "execute")]
+    pub fn resolve_endpoints<C: Context + ?Sized>(&self, ctx: &C) -> Ret<(Address, Address)> {
+        self.resolve_with(ctx.env().tx.main, |ptr| ctx.addr(ptr))
     }
 }
 
@@ -58,7 +93,7 @@ pub struct TransferRouting {
     pub action_kind: u16,
     pub from: Address,
     pub to: Address,
-    pub payload: TransferPayload,
+    pub asset: TransferAsset,
     pub authorize: bool,
     pub receive: bool,
 }
@@ -78,17 +113,10 @@ pub fn resolve_transfer_routing_on<C: Context + ?Sized>(
     action: &dyn Action,
     ctx: &C,
 ) -> Ret<Option<TransferRouting>> {
-    let Some(t) = action.as_transfer_like() else {
+    let Some(intent) = action.transfer_intent() else {
         return Ok(None);
     };
-    let to = match t.transfer_to_ptr() {
-        Some(ptr) => ctx.addr(&ptr)?,
-        None => ctx.env().tx.main,
-    };
-    let from = match t.transfer_from() {
-        Some(ptr) => ctx.addr(&ptr)?,
-        None => ctx.env().tx.main,
-    };
+    let (from, to) = intent.resolve_endpoints(ctx)?;
     let authorize = from.is_scriptmh() || from.is_contract();
     let receive = to.is_contract();
     if !authorize && !receive {
@@ -98,7 +126,7 @@ pub fn resolve_transfer_routing_on<C: Context + ?Sized>(
         action_kind: action.kind(),
         from,
         to,
-        payload: t.transfer_payload(),
+        asset: intent.asset,
         authorize,
         receive,
     }))
@@ -125,7 +153,16 @@ impl<'a> NestedActions<'a> {
 /// on the action type itself (`Action: ActionCodec + ToJSON`); the registry only
 /// decodes.
 pub trait Action: ActionCodec + field::ToJSON {
-    fn as_transfer_like(&self) -> Option<&dyn TransferLike> {
+    /// Declared value flow (not a type probe).
+    /// `transfer = (...)` is expanded here by action-derive
+    ///   → `TransferIntent::resolve_with` (`None` → main; execute: `resolve_endpoints`)
+    ///   → execute: `apply_transfer_intent`
+    ///   → `resolve_transfer_routing` adds authorize/receive on the same endpoints
+    ///   → Top/Ast: dispatcher drives hooks after execute
+    ///   → Call: dispatcher skips; the interpreter drives `drive_transfer` after `action_call`
+    /// Undeclared actions do not fire Permit/Payable. CALL-scope user transfers
+    /// that move named value must declare this (see the app-layer lock).
+    fn transfer_intent(&self) -> Option<TransferIntent> {
         None
     }
     fn required_flags(&self) -> u64 {
@@ -231,6 +268,65 @@ macro_rules! impl_action_execute {
             }
         }
     };
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+
+    fn addr(n: u8) -> Address {
+        let mut bytes = [0u8; 21];
+        bytes[1] = n;
+        Address::from(bytes)
+    }
+
+    fn intent(from: Option<AddrOrPtr>, to: Option<AddrOrPtr>) -> TransferIntent {
+        TransferIntent {
+            from,
+            to,
+            asset: TransferAsset::Hac(Amount::zero()),
+        }
+    }
+
+    fn take_addr(ptr: &AddrOrPtr) -> Ret<Address> {
+        match ptr {
+            AddrOrPtr::Addr(a) => Ok(*a),
+            AddrOrPtr::Ptr(_) => sys::errf!("unexpected ptr"),
+        }
+    }
+
+    #[test]
+    fn none_endpoints_fall_back_to_main() {
+        let main = addr(9);
+        let (from, to) = intent(None, None)
+            .resolve_with(main, |_| sys::errf!("should not resolve"))
+            .unwrap();
+        assert_eq!(from, main);
+        assert_eq!(to, main);
+    }
+
+    #[test]
+    fn some_endpoints_are_resolved() {
+        let main = addr(9);
+        let a = addr(1);
+        let b = addr(2);
+        let (from, to) = intent(Some(AddrOrPtr::Addr(a)), Some(AddrOrPtr::Addr(b)))
+            .resolve_with(main, take_addr)
+            .unwrap();
+        assert_eq!(from, a);
+        assert_eq!(to, b);
+    }
+
+    #[test]
+    fn mixed_endpoints_resolve_only_the_declared_side() {
+        let main = addr(9);
+        let a = addr(1);
+        let (from, to) = intent(Some(AddrOrPtr::Addr(a)), None)
+            .resolve_with(main, take_addr)
+            .unwrap();
+        assert_eq!(from, a);
+        assert_eq!(to, main);
+    }
 }
 
 #[cfg(all(test, feature = "execute"))]

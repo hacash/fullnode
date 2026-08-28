@@ -42,10 +42,15 @@ pub struct StubServices;
 
 /// Default VM execution params for stub services. No fee-purity schedule
 /// reductions: the initial floor applies at every height.
-static STUB_VM_PARAMS: VmExecutionParams = VmExecutionParams {
+pub(crate) static STUB_VM_PARAMS: VmExecutionParams = VmExecutionParams {
     contract_store_perm_periods: 10_000,
     initial_fee_purity_floor: 50_000,
     fee_purity_reductions: &[],
+    gas_budget_lookup: &base::GAS_BUDGET_LOOKUP_NONE,
+    tx_gas_budget_cap_byte: 0,
+    compute_limit_byte: 0,
+    resource_limit_byte: 0,
+    storage_limit_byte: 0,
 };
 
 impl BinaryCodecs for StubServices {
