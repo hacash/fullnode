@@ -17,6 +17,11 @@ const KEY_CONTRACT_EDITION: u8 = numeric_state_prefix(0xca);
 const KEY_CONTRACT_KV: u8 = numeric_state_prefix(0xcd);
 const KEY_CONTRACT_STATUS: u8 = numeric_state_prefix(0xce);
 
+/// Disk tag for `addr||key` stored verbatim (`concat.len() <= 32`).
+const SKEY_TAG_PLAIN: u8 = 0x00;
+/// Disk tag for `sha3(addr||key)` (`concat.len() > 32`).
+const SKEY_TAG_HASHED: u8 = 0x01;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageDebug {
     pub value: Value,
@@ -293,11 +298,7 @@ impl<'a> VMState<'a> {
                 k.len()
             );
         }
-        let mut k = [cadr.as_ref(), &k].concat();
-        if k.len() > Hash::SIZE {
-            k = sys::calculate_hash(k).to_vec();
-        }
-        Ok(ValueKey::from(k))
+        Ok(ValueKey::from(encode_ctrt_kv_slot(cadr.as_ref(), &k)))
     }
 
     fn sfetch(&mut self, curhei: u64, gst: &GasExtra, sk: &ValueKey) -> VmrtRes<Option<ValueSto>> {
@@ -533,6 +534,27 @@ impl<'a> VMState<'a> {
     }
 }
 
+/// `0xCD` inner key: tag plaintext and hashed forms so an 11-byte user key
+/// (`addr||key` is 32 bytes) cannot occupy the same disk width as `sha3(addr||long)`.
+fn encode_ctrt_kv_slot(cadr: &[u8], key: &[u8]) -> Vec<u8> {
+    let concat_len = cadr.len().saturating_add(key.len());
+    if concat_len > Hash::SIZE {
+        let mut stuff = Vec::with_capacity(concat_len);
+        stuff.extend_from_slice(cadr);
+        stuff.extend_from_slice(key);
+        let mut out = Vec::with_capacity(1 + Hash::SIZE);
+        out.push(SKEY_TAG_HASHED);
+        out.extend_from_slice(&sys::calculate_hash(&stuff));
+        out
+    } else {
+        let mut out = Vec::with_capacity(1 + concat_len);
+        out.push(SKEY_TAG_PLAIN);
+        out.extend_from_slice(cadr);
+        out.extend_from_slice(key);
+        out
+    }
+}
+
 fn state_key<K: Encode>(idx: u8, key: &K) -> Vec<u8> {
     numeric_state_key(idx, key)
 }
@@ -647,5 +669,42 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    fn contract_addr() -> Address {
+        let mut raw = [0u8; Address::SIZE];
+        raw[0] = Address::VERSION_CONTRACT;
+        raw[1] = 0x42;
+        Address::from(raw)
+    }
+
+    #[test]
+    fn ctrt_kv_slot_tags_plain_and_hashed() {
+        let addr = contract_addr();
+        let short = vec![0xab; 11];
+        let long = vec![0xab; 12];
+        let plain = encode_ctrt_kv_slot(addr.as_ref(), &short);
+        let hashed = encode_ctrt_kv_slot(addr.as_ref(), &long);
+
+        assert_eq!(plain[0], SKEY_TAG_PLAIN);
+        assert_eq!(&plain[1..], [addr.as_ref(), short.as_slice()].concat());
+        assert_eq!(plain.len(), 1 + Address::SIZE + 11);
+
+        assert_eq!(hashed[0], SKEY_TAG_HASHED);
+        let expect_hash = sys::calculate_hash([addr.as_ref(), long.as_slice()].concat());
+        assert_eq!(&hashed[1..], expect_hash.as_slice());
+        assert_eq!(hashed.len(), 1 + Hash::SIZE);
+        assert_ne!(plain[0], hashed[0]);
+    }
+
+    #[test]
+    fn skey_rejects_oversize_and_keeps_tag() {
+        let addr = contract_addr();
+        let sk = VMState::skey(&addr, &Value::Bytes(vec![0x01; 11]), 128).unwrap();
+        assert_eq!(sk.encode()[0], SKEY_TAG_PLAIN);
+        let sk = VMState::skey(&addr, &Value::Bytes(vec![0x01; 12]), 128).unwrap();
+        assert_eq!(sk.encode()[0], SKEY_TAG_HASHED);
+        let err = VMState::skey(&addr, &Value::Bytes(vec![0x01; 129]), 128).unwrap_err();
+        assert_eq!(err.0, StorageKeyInvalid);
     }
 }

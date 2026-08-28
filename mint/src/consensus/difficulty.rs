@@ -250,6 +250,11 @@ impl DifficultyTarget {
     }
 }
 
+/// Compact PoW bound for `scale ×` a header difficulty. Same `from_big` path as ASERT.
+pub fn scaled_compact_hash(diff: u32, scale: u32) -> [u8; 32] {
+    DifficultyTarget::from_big(u32_to_biguint(diff) * BigUint::from(scale)).hash
+}
+
 pub fn rates_to_show(rates: f64) -> String {
     const VK: f64 = 1000.0;
     const HNS: [&str; 9] = ["K", "M", "G", "T", "P", "E", "Z", "Y", "B"];
@@ -452,4 +457,26 @@ fn byte_to_bits(b: u8) -> [u8; 8] {
         (b >> 1) & 0x1,
         (b >> 0) & 0x1,
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scaled_compact_hash_matches_from_big() {
+        let diff = ASERT_START_TARGET_NUM;
+        let exact4 = u32_to_biguint(diff) * BigUint::from(4u32);
+        let got4 = scaled_compact_hash(diff, 4);
+        let via4 = DifficultyTarget::from_big(exact4.clone());
+        assert_eq!(got4, via4.hash);
+        assert_eq!(got4, u32_to_hash(via4.num));
+        // ×4 of a compact target is a 2-bit shift, still 24-bit mantissa.
+        assert_eq!(got4, biguint_to_hash(&exact4));
+
+        let exact3 = u32_to_biguint(diff) * BigUint::from(3u32);
+        let got3 = scaled_compact_hash(diff, 3);
+        assert_eq!(got3, DifficultyTarget::from_big(exact3.clone()).hash);
+        assert_ne!(got3, biguint_to_hash(&exact3));
+    }
 }

@@ -443,6 +443,12 @@ fn admission_after_pool_insert(
 ) -> TxSubmitResult {
     match outcome {
         TxPoolInsertOutcome::Stored => TxSubmitResult::accepted(hash, group, !only_pool),
+        // Capacity / replacement are local retention only. A tx that already
+        // passed execution and policy must still be relayed; `only_pool`
+        // opts out of that relay and therefore still surfaces the miss.
+        TxPoolInsertOutcome::NotStored(_) if !only_pool => {
+            TxSubmitResult::accepted(hash, group, true)
+        }
         TxPoolInsertOutcome::NotStored(TxPoolInsertReject::Capacity) => {
             TxSubmitResult::rejected(hash, TxRejectReason::PoolFull)
         }
@@ -466,31 +472,55 @@ mod tests {
     use field::Hash;
 
     #[test]
-    fn pool_capacity_rejects_in_all_submission_modes() {
-        for only_pool in [false, true] {
-            let result = admission_after_pool_insert(
-                Hash::default(),
-                TxGroupId::DEFAULT,
-                only_pool,
-                TxPoolInsertOutcome::NotStored(TxPoolInsertReject::Capacity),
-            );
-            assert_eq!(result.status, TxAdmissionStatus::Rejected);
-            assert_eq!(result.reason, Some(TxRejectReason::PoolFull));
-        }
+    fn pool_capacity_relays_when_not_only_pool() {
+        let result = admission_after_pool_insert(
+            Hash::default(),
+            TxGroupId::DEFAULT,
+            false,
+            TxPoolInsertOutcome::NotStored(TxPoolInsertReject::Capacity),
+        );
+        assert_eq!(result.status, TxAdmissionStatus::AcceptedBroadcast);
+        assert!(result.should_relay());
+        assert!(result.reason.is_none());
     }
 
     #[test]
-    fn underpriced_replacement_rejects_in_all_submission_modes() {
-        for only_pool in [false, true] {
-            let result = admission_after_pool_insert(
-                Hash::default(),
-                TxGroupId::DEFAULT,
-                only_pool,
-                TxPoolInsertOutcome::NotStored(TxPoolInsertReject::UnderpricedReplacement),
-            );
-            assert_eq!(result.status, TxAdmissionStatus::Rejected);
-            assert!(matches!(result.reason, Some(TxRejectReason::Policy(_))));
-        }
+    fn pool_capacity_rejects_only_pool_submissions() {
+        let result = admission_after_pool_insert(
+            Hash::default(),
+            TxGroupId::DEFAULT,
+            true,
+            TxPoolInsertOutcome::NotStored(TxPoolInsertReject::Capacity),
+        );
+        assert_eq!(result.status, TxAdmissionStatus::Rejected);
+        assert_eq!(result.reason, Some(TxRejectReason::PoolFull));
+        assert!(!result.should_relay());
+    }
+
+    #[test]
+    fn underpriced_replacement_relays_when_not_only_pool() {
+        let result = admission_after_pool_insert(
+            Hash::default(),
+            TxGroupId::DEFAULT,
+            false,
+            TxPoolInsertOutcome::NotStored(TxPoolInsertReject::UnderpricedReplacement),
+        );
+        assert_eq!(result.status, TxAdmissionStatus::AcceptedBroadcast);
+        assert!(result.should_relay());
+        assert!(result.reason.is_none());
+    }
+
+    #[test]
+    fn underpriced_replacement_rejects_only_pool_submissions() {
+        let result = admission_after_pool_insert(
+            Hash::default(),
+            TxGroupId::DEFAULT,
+            true,
+            TxPoolInsertOutcome::NotStored(TxPoolInsertReject::UnderpricedReplacement),
+        );
+        assert_eq!(result.status, TxAdmissionStatus::Rejected);
+        assert!(matches!(result.reason, Some(TxRejectReason::Policy(_))));
+        assert!(!result.should_relay());
     }
 }
 

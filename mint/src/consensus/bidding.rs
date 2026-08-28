@@ -9,11 +9,10 @@ use base::{
     BlkPkg, Block, BlockAdmissionDecision, CoreStateRead, DeferredId, PowBlockExt, StateRead, TxPkg,
 };
 use field::{Address, Amount, Hash};
-use num_bigint::BigUint;
 use sys::{Rerr, Ret, curtimes, errf};
 
 use crate::action::diamond::HacdMint;
-use crate::difficulty::{biguint_to_hash, hash_bigger_than, u32_to_biguint};
+use crate::difficulty::{hash_bigger_than, scaled_compact_hash};
 use crate::minter::block_reward_number;
 
 /// Low-bid tip held pending replay (after-execute reject code).
@@ -380,8 +379,7 @@ impl DiamondBiddingInner {
                 if branch.tip_hash() != *prev {
                     continue;
                 }
-                let max_hash = u32_to_biguint(branch.root_difficulty()) * BigUint::from(4u32);
-                return Some(biguint_to_hash(&max_hash));
+                return Some(scaled_compact_hash(branch.root_difficulty(), 4));
             }
         }
         None
