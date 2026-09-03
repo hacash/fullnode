@@ -1,10 +1,10 @@
 use crate::Context;
 use field::{
     Address, Amount, AssetAmt, DiamondName, DiamondNameListMax200, DiamondNameListMax60000,
-    DiamondNumber, DiamondNumberAuto, DiamondSto, Satoshi, SatoshiAuto, ToJSON, Uint1, Uint12,
-    Uint8,
+    DiamondNumber, DiamondNumberAuto, DiamondSto, Satoshi, SatoshiAuto, ToJSON, Uint1, Uint8,
+    Uint12,
 };
-use sys::{errf, revertf, Ret};
+use sys::{Ret, errf, revertf};
 
 use super::{BaseTotal, CoreState};
 

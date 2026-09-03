@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use base::*;
-use sys::{normalf, Ret};
+use sys::{Ret, normalf};
 
 pub struct Registry {
     block_hasher: BlockHasherFn,
@@ -206,12 +206,16 @@ mod tests {
     #[test]
     fn registry_rejects_host_defs_that_conflict_with_opcode_abi() {
         let mut registry = Registry::new(mint::block_hasher);
-        assert!(registry
-            .register_vm_host_def(host_def(VmHostCallKind::Action, VmValueType::U64, 0))
-            .is_err());
-        assert!(registry
-            .register_vm_host_def(host_def(VmHostCallKind::Env, VmValueType::U64, 1))
-            .is_err());
+        assert!(
+            registry
+                .register_vm_host_def(host_def(VmHostCallKind::Action, VmValueType::U64, 0))
+                .is_err()
+        );
+        assert!(
+            registry
+                .register_vm_host_def(host_def(VmHostCallKind::Env, VmValueType::U64, 1))
+                .is_err()
+        );
         registry
             .register_vm_host_def(host_def(VmHostCallKind::View, VmValueType::U64, 1))
             .expect("valid view host definition");
@@ -456,9 +460,11 @@ mod tests {
             .decode_action_json(&source.to_json())
             .expect("json codec");
         assert_eq!(decoded.encode(), source.encode());
-        assert!(registry
-            .decode_action_json("{\"kind\":10,\"to\":0,\"to\":0,\"satoshi\":7}")
-            .is_err());
+        assert!(
+            registry
+                .decode_action_json("{\"kind\":10,\"to\":0,\"to\":0,\"satoshi\":7}")
+                .is_err()
+        );
     }
 
     #[test]
@@ -486,9 +492,11 @@ mod tests {
             .expect("RequiredSigners JSON codec");
         assert_eq!(decoded.to_json(), signers.to_json());
 
-        assert!(registry
-            .decode_action_json("{\"kind\":7,\"to\":0,\"diamonds\":[]}")
-            .is_err());
+        assert!(
+            registry
+                .decode_action_json("{\"kind\":7,\"to\":0,\"diamonds\":[]}")
+                .is_err()
+        );
     }
 
     #[test]

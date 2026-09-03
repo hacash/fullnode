@@ -203,7 +203,35 @@ fn append_push_value_code(codes: &mut Vec<u8>, value: &Value) -> Rerr {
             codes.push(CTO as u8);
             codes.push(ValueTy::Address as u8);
         }
-        Tuple(_) | Handle(_) | Compo(_) => {
+        Tuple(t) => {
+            for v in t.as_slice() {
+                append_push_value_code(codes, v)?;
+            }
+            let n = t.len();
+            if n > u8::MAX as usize {
+                return errf!("sandbox tuple argument length overflow");
+            }
+            codes.push(PU8 as u8);
+            codes.push(n as u8);
+            codes.push(PACKTUPLE as u8);
+        }
+        Compo(c) => {
+            if c.is_map() {
+                return errf!("sandbox argument type {:?} not supported", value.ty());
+            }
+            let list = c.list_ref().map_err(sys::Error::from)?;
+            for v in list.iter() {
+                append_push_value_code(codes, v)?;
+            }
+            let n = list.len();
+            if n > u8::MAX as usize {
+                return errf!("sandbox list argument length overflow");
+            }
+            codes.push(PU8 as u8);
+            codes.push(n as u8);
+            codes.push(PACKLIST as u8);
+        }
+        Handle(_) => {
             return errf!("sandbox argument type {:?} not supported", value.ty());
         }
     }

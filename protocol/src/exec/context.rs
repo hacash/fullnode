@@ -9,9 +9,9 @@ use base::{
     StateChunkRef, StateLayer, TexLedger, Transaction, TxRef, Vm,
 };
 use field::Address;
-use sys::{errf, Rerr, Ret};
+use sys::{Rerr, Ret, errf};
 
-use super::gas::{gas_initialize_on, gas_refund_on, GasDiag, TxGasMeter};
+use super::gas::{GasDiag, TxGasMeter, gas_initialize_on, gas_refund_on};
 
 /// Diagnostic snapshot of `ContextInst` (reserved for future debug tooling).
 #[allow(dead_code)]

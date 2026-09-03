@@ -319,6 +319,14 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                     actbody.append(&mut bdv);
                     gas_resource!(act_bytes, actbody.len());
                 }
+                /*if matches!(act_kind, Bytecode::ACTVIEW) {
+                    eprintln!(
+                        "[actview-dbg] kid={:04x} body={}B {}",
+                        kid,
+                        actbody.len(),
+                        hex::encode(&actbody)
+                    );
+                }*/
                 // ACTION transfers drive Permit/Payable hooks synchronously after the ledger move
                 // (mirroring dev `action.execute` then `do_action_hook`); the VM recurses here.
                 let routing = if matches!(act_kind, Bytecode::ACTION) {

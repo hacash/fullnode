@@ -10,7 +10,7 @@ use crate::contract::ContractAddrListW1;
 use crate::rt::{AbstCall, CodeConf, CodeType, EntryKind, FnObj, FrameBindings, ItrErr, VmrtRes};
 use crate::value::{ContractAddress, Value};
 
-use super::{peek_vm_runtime_limits, NativeVm};
+use super::{NativeVm, peek_vm_runtime_limits};
 
 struct TransferCall {
     kind: AbstCall,

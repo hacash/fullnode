@@ -1,8 +1,8 @@
 //! Shared apply path for declared transfers and TEX named-diamond moves.
 
 use base::{
-    asset_transfer, hac_transfer, hacd_transfer, sat_transfer, Context, TransferAsset,
-    TransferIntent,
+    Context, TransferAsset, TransferIntent, asset_transfer, hac_transfer, hacd_transfer,
+    sat_transfer,
 };
 use field::{Address, DiamondNameListMax200, ToJSON};
 use sys::Ret;

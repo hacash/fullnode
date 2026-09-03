@@ -143,7 +143,7 @@ pub fn run_with_stop(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) -> Re
     );
     #[cfg(feature = "testsleep")]
     println!(
-        "[poworker] testsleep: 500ms pause after each mining round (testnet CPU throttle)"
+        "[poworker] testsleep: 2.5s pause at each CPU chunk / mining round / height (~5s per block, testnet CPU throttle)"
     );
     let backends = build_miner_backends(&conf);
     spawn_miner_notice(conf.clone(), stop_flag.clone());
@@ -166,6 +166,8 @@ pub fn run_with_stop(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) -> Re
             work.height, work.target_hash
         );
         mine_height(&conf, &backends, work, &stop_flag)?;
+        #[cfg(feature = "testsleep")]
+        thread::sleep(Duration::from_millis(2_500));
     }
 }
 
@@ -400,7 +402,7 @@ fn mine_height(
         #[cfg(feature = "testsleep")]
         {
             let _ = (round_started, round_scanned);
-            thread::sleep(Duration::from_millis(500));
+            thread::sleep(Duration::from_millis(2_500));
         }
         // CPU adaptive batch size (align with diaworker / fullnodedev).
         // testsleep keeps a small fixed chunk; growing it would peg CPU again.
@@ -465,6 +467,8 @@ fn mine_chunk_cpu(
     nonce_start: u32,
     nonce_space: u32,
 ) -> (u32, Hash) {
+    #[cfg(feature = "testsleep")]
+    thread::sleep(Duration::from_millis(2_500));
     let mut best_nonce = nonce_start;
     let mut best_hash = Hash::from([255u8; HASH_WIDTH]);
     let end = nonce_start.saturating_add(nonce_space);

@@ -1,7 +1,7 @@
 use field::Address;
 use sys::Ret;
 
-use crate::iface::action::{resolve_transfer_routing, ActOut, ActionRef};
+use crate::iface::action::{ActOut, ActionRef, resolve_transfer_routing};
 use crate::iface::context::Context;
 use crate::iface::vm::VmEntry;
 use crate::runtime::ExecFrom;

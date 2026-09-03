@@ -1,9 +1,9 @@
 use proc_macro::TokenStream;
-use quote::quote;
 use quote::ToTokens;
+use quote::quote;
 use syn::{
-    parse::Parser, parse_macro_input, spanned::Spanned, Attribute, Data, DeriveInput, Fields,
-    Ident, ItemStruct, LitInt, Type, Visibility,
+    Attribute, Data, DeriveInput, Fields, Ident, ItemStruct, LitInt, Type, Visibility,
+    parse::Parser, parse_macro_input, spanned::Spanned,
 };
 
 #[derive(Clone)]

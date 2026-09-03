@@ -84,19 +84,20 @@ pub(crate) mod value;
 mod wire;
 
 #[cfg(feature = "execute")]
+pub use machine::build_call_codes;
+#[cfg(feature = "execute")]
 pub use machine::peek_vm_runtime_limits;
 #[cfg(feature = "execute")]
 pub use setup::register_exec;
 #[cfg(feature = "execute")]
 pub use state::{StorageDebug, VMState, VMStateRead, VmLog};
-pub use value::ContractAddress;
+pub use value::{CompoItem, ContractAddress, TupleItem, Value, ValueTy};
 // ACTENV / ACTVIEW / EXTACTION host display tables (defined in `rt` via
 // `include!`), exported for cross-crate sync verification (app asserts them
 // against the registered host defs); not part of the codec/wire surface.
 pub use ir::{IRNode, IRNodeArray};
 pub use lang::SourceMap;
 pub use rt::{ACTION_DEFS, ACTION_ENV_DEFS, ACTION_VIEW_DEFS};
-pub use value::ValueTy;
 pub use wire::{ACTION_CODECS, STRUCT_SCHEMAS, register_wire};
 
 pub const MAX_FUNC_PARAM_LEN: usize = 15;

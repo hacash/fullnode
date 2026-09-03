@@ -1,13 +1,13 @@
 //! TexCellExecute execute body and TEX cell state changes.
 
 use base::{
-    asset_add, asset_sub, hac_add, hac_sub, sat_add, sat_sub, Context, CoreState, ExecFrom,
+    Context, CoreState, ExecFrom, asset_add, asset_sub, hac_add, hac_sub, sat_add, sat_sub,
 };
 use field::{Address, Amount, Fold64, Hash, Satoshi, Sign};
-use sys::{errf, Account, Rerr};
+use sys::{Account, Rerr, errf};
 
 use crate::codec::action::tex::{TexCell, TexCellExecute};
-use crate::exec::apply::{diamonds_transfer, DiamondMove};
+use crate::exec::apply::{DiamondMove, diamonds_transfer};
 use crate::params::SETTLEMENT_ADDR;
 
 fn tex_check_asset_serial(ctx: &mut dyn Context, serial: Fold64) -> Rerr {

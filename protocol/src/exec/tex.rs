@@ -5,9 +5,9 @@ use std::collections::HashMap;
 
 use base::{Context, CoreState, ExecFrom};
 use field::{Amount, DiamondName, DiamondNameListMax200, Hash, SatoshiAuto};
-use sys::{errf, Rerr};
+use sys::{Rerr, errf};
 
-use crate::exec::apply::{diamonds_transfer, DiamondMove};
+use crate::exec::apply::{DiamondMove, diamonds_transfer};
 
 // Defined in `params` (non-exec module) because `TexCellExecute`'s codec reads it too;
 // `tex` compiles unconditionally and is dead-code-eliminated in SDK/wasm builds.

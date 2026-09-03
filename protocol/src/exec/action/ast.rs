@@ -1,7 +1,7 @@
 //! AstSelect / AstIf execute bodies.
 
 use base::{ActOut, ActionDispatcher, ActionExecute, ActionRef, Context};
-use sys::{errf, Rerr, Ret};
+use sys::{Rerr, Ret, errf};
 
 use crate::codec::action::{AstIf, AstSelect};
 

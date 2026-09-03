@@ -560,11 +560,13 @@ fn maincall_body() -> String {
         timestamp: Some(1_755_223_764),
         gas_max: None,
         addrlist: None,
-        actions: vec![crate::build::ActionSpec::new(format!(
-            r#"{{"kind":44,"marks":"0x000000","codeconf":0,"codes":"0x{}"}}"#,
-            hex::encode(&codes)
-        ))
-        .expect("test action spec")],
+        actions: vec![
+            crate::build::ActionSpec::new(format!(
+                r#"{{"kind":44,"marks":"0x000000","codeconf":0,"codes":"0x{}"}}"#,
+                hex::encode(&codes)
+            ))
+            .expect("test action spec"),
+        ],
     })
     .unwrap();
     let decoded =
