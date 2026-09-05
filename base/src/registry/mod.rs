@@ -1,7 +1,8 @@
 //! `Registry`: binary/json codec, block hasher / vm assigner / action hooks, VM host metadata.
 
 use field::{
-    Decode, Uint1, Uint2, json_expect_quoted_decoded, json_expect_unquoted, json_object_entries,
+    Decode, Uint1, Uint2, Uint12, json_expect_quoted_decoded, json_expect_unquoted,
+    json_object_entries,
 };
 use std::any::Any;
 #[cfg(feature = "execute")]
@@ -351,9 +352,279 @@ impl VmHostActionDef {
 /// Test/stub `VmExecutionParams` use this; production profiles inject the chain table.
 pub const GAS_BUDGET_LOOKUP_NONE: [u32; 256] = [0; 256];
 
+/// Rule identifier of the linear limited-capacity storage discount curve
+/// (`contract-storage-fee-budget-design.md` §3). v1: step curve with an all-or-nothing
+/// per-tx discount and no congestion penalty above full price.
+pub const CONTRACT_STORAGE_RULE_V1: u8 = 1;
+
+/// Height-gated contract storage fee discount parameters (§3.1, §7.1).
+///
+/// The only governance surface is the append-only `supplement_schedule` of
+/// `(activation_height, R bytes/block)` pairs; capacity is derived as `C = T × R`.
+/// No per-block history, EMA, or retune-effect snapshots are stored.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContractStorageFeeParams {
+    /// Curve/rule version identifier; only `CONTRACT_STORAGE_RULE_V1` exists.
+    pub rule_version: u8,
+    /// `H0`: first height where the discount rules apply (a multiple of `T`).
+    pub activation_height: u64,
+    /// `T`: target fill period in blocks (v1: 1000).
+    pub target_capacity_blocks: u64,
+    /// `N`: number of linear curve steps (v1: 1000).
+    pub curve_steps: u64,
+    /// `P_min`: discount floor in periods (v1: 10); full price is `P_min × N`.
+    pub period_floor: u64,
+    /// `K_max`: per-block cap on discount-consumed billed bytes (§3.1).
+    pub max_block_discount_bytes: u64,
+    /// Append-only `(activation_height, R)` supplement schedule. The first entry
+    /// must sit at `H0`; heights strictly increase by multiples of `T`, `R` strictly
+    /// increases (capacity expansion family only, §7.1).
+    pub supplement_schedule: &'static [(u64, u64)],
+}
+
+impl ContractStorageFeeParams {
+    /// Disabled parameters: no schedule entry means the discount mechanism never
+    /// activates and contract storage stays on the fixed `contract_store_perm_periods`
+    /// rule (test/codec profiles use this).
+    pub const fn disabled() -> Self {
+        Self {
+            rule_version: CONTRACT_STORAGE_RULE_V1,
+            activation_height: 0,
+            target_capacity_blocks: 0,
+            curve_steps: 0,
+            period_floor: 0,
+            max_block_discount_bytes: 0,
+            supplement_schedule: &[],
+        }
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.supplement_schedule.is_empty()
+    }
+
+    /// Whether the discount rules apply at `height`.
+    pub fn is_active_at(&self, height: u64) -> bool {
+        !self.is_disabled() && height >= self.activation_height
+    }
+
+    /// Active `(activation_height, R)` schedule entry at `height`, `None` before `H0`.
+    pub fn active_entry(&self, height: u64) -> Option<(u64, u64)> {
+        if !self.is_active_at(height) {
+            return None;
+        }
+        self.supplement_schedule
+            .iter()
+            .filter(|(h, _)| *h <= height)
+            .last()
+            .copied()
+    }
+
+    /// Active per-block supplement rate `R` at `height`.
+    pub fn active_rate(&self, height: u64) -> Option<u64> {
+        self.active_entry(height).map(|(_, r)| r)
+    }
+
+    /// Derived capacity ceiling `C = T × R` at `height` (checked, §7.1).
+    pub fn capacity_at(&self, height: u64) -> Ret<u128> {
+        let Some((_, rate)) = self.active_entry(height) else {
+            return sys::errf!(
+                "contract storage fee schedule has no active entry at height {}",
+                height
+            );
+        };
+        u128::from(rate)
+            .checked_mul(u128::from(self.target_capacity_blocks))
+            .ok_or_else(|| {
+                sys::Error::abort(format!(
+                    "contract storage capacity overflow: T {} × R {}",
+                    self.target_capacity_blocks, rate
+                ))
+                .with_code("core_failed")
+            })
+    }
+
+    /// Block-level discount quota `K = min(B_start, K_max)` (§3.1/§4.2).
+    pub fn block_quota(&self, remaining_bytes: u128) -> u128 {
+        remaining_bytes.min(u128::from(self.max_block_discount_bytes))
+    }
+
+    /// Linear integer price curve (§3.3):
+    /// `used = C - B; step = clamp(ceil(N × used / C), 1, N); periods = P_min × step`.
+    /// Bounded inputs; overflow is a deterministic consensus error, never truncation.
+    pub fn discount_periods(
+        &self,
+        remaining_bytes: u128,
+        capacity_bytes: u128,
+        max_periods: u64,
+    ) -> Ret<u64> {
+        if capacity_bytes == 0 {
+            return Err(sys::Error::abort("contract storage capacity is zero")
+                .with_code("core_failed"));
+        }
+        let remaining = remaining_bytes.min(capacity_bytes);
+        let used = capacity_bytes - remaining;
+        let steps = u128::from(self.curve_steps);
+        let step = if used == 0 {
+            1u128
+        } else {
+            // step = ceil(N × used / C), evaluated as 1 + (N × used − 1) / C so the
+            // ceiling never needs an overflowing `+ C − 1` (A18: overflow anywhere is
+            // a deterministic consensus error, never a silent clamp).
+            let numer = used.checked_mul(steps).ok_or_else(|| {
+                sys::Error::abort(format!(
+                    "contract storage price curve overflow: used {used} × steps {steps}"
+                ))
+                .with_code("core_failed")
+            })?;
+            (((numer - 1) / capacity_bytes) + 1).min(steps)
+        };
+        let periods = u128::from(self.period_floor)
+            .checked_mul(step)
+            .ok_or_else(|| {
+                sys::Error::abort("contract storage price curve overflow in periods")
+                    .with_code("core_failed")
+            })?;
+        let max = u128::from(max_periods);
+        if periods > max {
+            return Err(sys::Error::abort(format!(
+                "contract storage curve exceeds full price: periods {periods} > P_max {max}"
+            ))
+            .with_code("core_failed"));
+        }
+        Ok(periods as u64)
+    }
+
+    /// Consensus validation of the parameter profile (§8.A2): append-only schedule
+    /// monotonicity, capacity derivation, and the fixed v1 curve constants against
+    /// the full-price periods `P_max`.
+    pub fn validate(&self, max_periods: u64) -> Rerr {
+        if self.is_disabled() {
+            return Ok(());
+        }
+        if self.rule_version != CONTRACT_STORAGE_RULE_V1 {
+            return sys::errf!(
+                "unsupported contract storage rule version {}",
+                self.rule_version
+            );
+        }
+        // v1 freezes the curve: 1000 steps of 10 periods, full price = P_max.
+        if self.curve_steps != 1000 || self.period_floor != 10 {
+            return sys::errf!(
+                "contract storage rule v1 requires curve_steps=1000 and period_floor=10, got {}/{}",
+                self.curve_steps,
+                self.period_floor
+            );
+        }
+        if u64::from(self.period_floor).checked_mul(self.curve_steps) != Some(max_periods) {
+            return sys::errf!(
+                "contract storage period_floor {} × curve_steps {} must equal P_max {}",
+                self.period_floor,
+                self.curve_steps,
+                max_periods
+            );
+        }
+        if self.target_capacity_blocks == 0 {
+            return sys::errf!("contract storage target_capacity_blocks must be positive");
+        }
+        if self.activation_height == 0 || self.activation_height % self.target_capacity_blocks != 0
+        {
+            return sys::errf!(
+                "contract storage activation height {} must be a positive multiple of T {}",
+                self.activation_height,
+                self.target_capacity_blocks
+            );
+        }
+        if self.max_block_discount_bytes == 0 {
+            return sys::errf!("contract storage max_block_discount_bytes must be positive");
+        }
+        let mut prev: Option<(u64, u64)> = None;
+        for &(height, rate) in self.supplement_schedule {
+            if rate == 0 {
+                return sys::errf!(
+                    "contract storage schedule rate must be positive (height {})",
+                    height
+                );
+            }
+            if height % self.target_capacity_blocks != 0 {
+                return sys::errf!(
+                    "contract storage schedule height {} must be a multiple of T {}",
+                    height,
+                    self.target_capacity_blocks
+                );
+            }
+            match prev {
+                None => {
+                    if height != self.activation_height {
+                        return sys::errf!(
+                            "contract storage schedule must start at activation height {} (H0), got {}",
+                            self.activation_height,
+                            height
+                        );
+                    }
+                }
+                Some((ph, pr)) => {
+                    // §7.1: strictly increasing heights and rates; governance-sized
+                    // expansions use 1000-byte rate steps; capacity stays derivable
+                    // and strictly larger (no shrink path).
+                    if height <= ph || rate <= pr {
+                        return sys::errf!(
+                            "contract storage schedule entry ({}, {}) violates monotonicity after ({}, {})",
+                            height,
+                            rate,
+                            ph,
+                            pr
+                        );
+                    }
+                    if (rate - pr) % 1000 != 0 {
+                        return sys::errf!(
+                            "contract storage rate delta {}-{} must be a multiple of 1000 bytes/block",
+                            rate,
+                            pr
+                        );
+                    }
+                }
+            }
+            if u128::from(rate) >= u128::from(self.max_block_discount_bytes) {
+                // K_max > R keeps the budget able to drain, so prices can recover
+                // (§3.1); equal or lower rates are rejected.
+                return sys::errf!(
+                    "contract storage K_max {} must exceed every schedule rate (found R {})",
+                    self.max_block_discount_bytes,
+                    rate
+                );
+            }
+            let capacity = u128::from(rate)
+                .checked_mul(u128::from(self.target_capacity_blocks))
+                .ok_or_else(|| {
+                    sys::Error::fault(format!(
+                        "contract storage capacity T {} × R {} overflows",
+                        self.target_capacity_blocks, rate
+                    ))
+                })?;
+            if capacity > Uint12::MAX {
+                return sys::errf!(
+                    "contract storage capacity {} exceeds Uint12 maximum {}",
+                    capacity,
+                    Uint12::MAX
+                );
+            }
+            prev = Some((height, rate));
+        }
+        Ok(())
+    }
+}
+
+impl Default for ContractStorageFeeParams {
+    fn default() -> Self {
+        Self::disabled()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VmExecutionParams {
     pub contract_store_perm_periods: u64,
+    /// Limited-capacity discount schedule over the full-price `contract_store_perm_periods`.
+    pub contract_storage_fee: ContractStorageFeeParams,
     pub initial_fee_purity_floor: u64,
     /// Height-gated floor reductions: `(activation_height, next_floor)`.
     pub fee_purity_reductions: &'static [(u64, u64)],
@@ -394,6 +665,15 @@ impl VmExecutionParams {
         raw.max(self.fee_purity_floor_at(height))
     }
 
+    /// Consensus validation of the whole profile: the contract storage discount
+    /// schedule must satisfy the §7.1 monotonicity/derivation gates against the
+    /// full-price `contract_store_perm_periods`. Composition roots call this when
+    /// registering a profile, so an invalid table cannot silently boot a node.
+    pub fn validate(&self) -> Rerr {
+        self.contract_storage_fee
+            .validate(self.contract_store_perm_periods)
+    }
+
     #[inline(always)]
     pub const fn decode_gas_budget(&self, byte: u8) -> i64 {
         self.gas_budget_lookup[byte as usize] as i64
@@ -404,6 +684,7 @@ impl Default for VmExecutionParams {
     fn default() -> Self {
         Self {
             contract_store_perm_periods: 0,
+            contract_storage_fee: ContractStorageFeeParams::disabled(),
             initial_fee_purity_floor: 0,
             fee_purity_reductions: &[],
             gas_budget_lookup: &GAS_BUDGET_LOOKUP_NONE,
@@ -533,10 +814,11 @@ pub trait ExecRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::VmExecutionParams;
+    use super::{ContractStorageFeeParams, VmExecutionParams};
 
     const PARAMS: VmExecutionParams = VmExecutionParams {
         contract_store_perm_periods: 10_000,
+        contract_storage_fee: ContractStorageFeeParams::disabled(),
         initial_fee_purity_floor: 100,
         fee_purity_reductions: &[(10, 80), (20, 50)],
         gas_budget_lookup: &super::GAS_BUDGET_LOOKUP_NONE,
@@ -558,5 +840,51 @@ mod tests {
     fn effective_fee_purity_applies_the_scheduled_floor() {
         assert_eq!(PARAMS.effective_fee_purity(20, 40), 50);
         assert_eq!(PARAMS.effective_fee_purity(20, 60), 60);
+    }
+
+    /// The profile-level validator must reject illegal storage fee tables exactly
+    /// like the table validator, so a composition root cannot boot them (§A14).
+    #[test]
+    fn profile_validate_rejects_illegal_storage_schedule() {
+        assert!(PARAMS.validate().is_ok(), "disabled profile validates");
+        // disabled profile passes even when P_max would be inconsistent
+        let good = VmExecutionParams {
+            contract_storage_fee: super::ContractStorageFeeParams {
+                rule_version: super::CONTRACT_STORAGE_RULE_V1,
+                activation_height: 10_000,
+                target_capacity_blocks: 1_000,
+                curve_steps: 1_000,
+                period_floor: 10,
+                max_block_discount_bytes: 16_384,
+                supplement_schedule: &[(10_000, 1_000)],
+            },
+            ..PARAMS
+        };
+        assert!(good.validate().is_ok());
+        // shrink / non-monotone / curve-breaking tables fail the profile gate
+        let mut shrink = good;
+        shrink.contract_storage_fee.supplement_schedule = &[(10_000, 1_000), (20_000, 500)];
+        assert!(shrink.validate().is_err());
+        let mut floor = good;
+        floor.contract_storage_fee.period_floor = 11;
+        assert!(floor.validate().is_err());
+        let mut kmax = good;
+        kmax.contract_storage_fee.max_block_discount_bytes = 999;
+        assert!(kmax.validate().is_err());
+
+        let mut zero_rate = good;
+        zero_rate.contract_storage_fee.supplement_schedule = &[(10_000, 0)];
+        assert!(zero_rate.validate().is_err(), "zero supplement rate is invalid");
+
+        let mut oversized_capacity = good;
+        oversized_capacity.contract_storage_fee.target_capacity_blocks = u64::MAX;
+        oversized_capacity.contract_storage_fee.activation_height = u64::MAX;
+        oversized_capacity.contract_storage_fee.max_block_discount_bytes = u64::MAX;
+        oversized_capacity.contract_storage_fee.supplement_schedule =
+            &[(u64::MAX, u64::MAX - 1)];
+        assert!(
+            oversized_capacity.validate().is_err(),
+            "capacity must fit the Uint12 persisted representation"
+        );
     }
 }

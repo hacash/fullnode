@@ -1,7 +1,20 @@
 //! Execute-free, versioned Hacash consensus parameters. `base` owns the
 //! reusable shapes; this crate owns the standard network values (one profile for protocol, mint, SDK, app).
 
-use base::{MintParams, VmExecutionParams};
+use base::{ContractStorageFeeParams, MintParams, VmExecutionParams};
+
+/// Mainnet contract storage discount parameters (§3.1 of the storage fee budget
+/// design): decimal 1 MB capacity refilled at 1,000 bytes/block over a 1000-block
+/// target period, activation `H0` pending governance freeze.
+pub const MAINNET_CONTRACT_STORAGE_FEE: ContractStorageFeeParams = ContractStorageFeeParams {
+    rule_version: base::CONTRACT_STORAGE_RULE_V1,
+    activation_height: 784_000,
+    target_capacity_blocks: 1_000,
+    curve_steps: 1_000,
+    period_floor: 10,
+    max_block_discount_bytes: 16 * 1024,
+    supplement_schedule: &[(784_000, 1_000)],
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProtocolParams {
@@ -112,6 +125,7 @@ pub const MAINNET_PARAMS: HacashParams = HacashParams {
         ast_snapshot_try_gas: 40,
         vm: VmExecutionParams {
             contract_store_perm_periods: 10_000,
+            contract_storage_fee: MAINNET_CONTRACT_STORAGE_FEE,
             initial_fee_purity_floor: 50_000,
             fee_purity_reductions: &[],
             gas_budget_lookup: &GAS_BUDGET_LOOKUP_1P07_FROM_138,
@@ -211,6 +225,19 @@ pub fn params_hash(params: &HacashParams) -> [u8; 32] {
     hasher.update((params.protocol.ast_tree_depth_max as u64).to_be_bytes());
     hasher.update(params.protocol.ast_snapshot_try_gas.to_be_bytes());
     hasher.update(params.protocol.vm.contract_store_perm_periods.to_be_bytes());
+    let csf = params.protocol.vm.contract_storage_fee;
+    hasher.update(b"hacash-csf/v1\0");
+    hasher.update([csf.rule_version]);
+    hasher.update(csf.activation_height.to_be_bytes());
+    hasher.update(csf.target_capacity_blocks.to_be_bytes());
+    hasher.update(csf.curve_steps.to_be_bytes());
+    hasher.update(csf.period_floor.to_be_bytes());
+    hasher.update(csf.max_block_discount_bytes.to_be_bytes());
+    hasher.update((csf.supplement_schedule.len() as u64).to_be_bytes());
+    for &(height, rate) in csf.supplement_schedule {
+        hasher.update(height.to_be_bytes());
+        hasher.update(rate.to_be_bytes());
+    }
     hasher.update(params.protocol.vm.initial_fee_purity_floor.to_be_bytes());
     hasher.update((params.protocol.vm.fee_purity_reductions.len() as u64).to_be_bytes());
     for &(height, floor) in params.protocol.vm.fee_purity_reductions {
@@ -349,14 +376,130 @@ mod tests {
         assert_eq!(MAINNET_PARAMS.protocol.tx_type_2, 2);
     }
 
+    /// Published consensus fingerprint after the storage-fee-budget upgrade:
+    /// `ef9f644f5d4e3de53428ce32124d8e4536a8a65786c1b28d02abc0d8f43693a8`
+    /// (v1 profile + §3.1 discount parameters, H0 = 784,000). Any change to the
+    /// storage fee schedule or activation height must move this value (A14).
     #[test]
     fn mainnet_params_hash_is_locked() {
         assert_eq!(
             params_hash(&MAINNET_PARAMS),
             [
-                124, 209, 215, 158, 99, 253, 14, 207, 194, 6, 25, 184, 210, 114, 201, 240, 145,
-                117, 252, 243, 52, 18, 156, 29, 172, 178, 82, 186, 170, 131, 55, 119,
+                239, 159, 100, 79, 93, 78, 61, 229, 52, 40, 206, 50, 18, 77, 142, 69, 54, 168, 166,
+                87, 134, 193, 178, 141, 2, 171, 192, 216, 244, 54, 147, 168,
             ]
         );
+    }
+
+    /// §3.1 design matrix, frozen as a test: decimal 1 MB capacity, 1000-block
+    /// target period, 1,000 bytes/block fill rate, activation on a 1000-multiple.
+    #[test]
+    fn mainnet_contract_storage_fee_matches_design_matrix() {
+        let csf = MAINNET_CONTRACT_STORAGE_FEE;
+        let p_max = MAINNET_PARAMS.protocol.vm.contract_store_perm_periods;
+        assert_eq!(csf.rule_version, base::CONTRACT_STORAGE_RULE_V1);
+        assert_eq!(csf.activation_height, 784_000);
+        assert_eq!(csf.activation_height % 1000, 0);
+        assert_eq!(csf.target_capacity_blocks, 1_000);
+        assert_eq!(csf.curve_steps, 1_000);
+        assert_eq!(csf.period_floor, 10);
+        assert_eq!(p_max, 10_000);
+        assert_eq!(csf.max_block_discount_bytes, 16 * 1024);
+        // Decimal 1 MB, NOT 1 MiB: R0 × T = C0 exactly (§3.2).
+        assert_eq!(csf.capacity_at(csf.activation_height).unwrap(), 1_000_000);
+        assert_ne!(csf.capacity_at(csf.activation_height).unwrap(), 1_048_576);
+        // K_max > R0, otherwise the budget can never drain and the price cannot
+        // recover (§3.1). K_max equals the current max tx size.
+        assert!(csf.max_block_discount_bytes > 1_000);
+        assert_eq!(
+            csf.max_block_discount_bytes as usize,
+            MAINNET_PARAMS.mint.max_tx_size
+        );
+        csf.validate(p_max).expect("mainnet storage fee params must validate");
+    }
+
+    /// §3.3/§3.4 fixed price vectors over the linear integer ceil curve.
+    #[test]
+    fn mainnet_contract_storage_price_curve_vectors() {
+        let csf = MAINNET_CONTRACT_STORAGE_FEE;
+        let c = 1_000_000u128;
+        let p_max = 10_000u64;
+        let periods = |remaining: u128| csf.discount_periods(remaining, c, p_max).unwrap();
+        assert_eq!(periods(c), 10); // B=C floor, never below P_min
+        assert_eq!(periods(c * 9 / 10), 1_000); // 90% remaining
+        assert_eq!(periods(500_000), 5_000); // 50% remaining
+        assert_eq!(periods(c / 10), 9_000); // 10% remaining
+        assert_eq!(periods(0), 10_000); // B=0 → full price, never above
+        // Integer ceil rounding: 1 byte of usage still sits in step 1; step 2
+        // starts just after the 1000-byte granularity.
+        assert_eq!(periods(c - 1), 10);
+        assert_eq!(periods(c - 1_000), 10);
+        assert_eq!(periods(c - 1_001), 20);
+        // Monotonicity over all reachable capacities.
+        let mut last = periods(0);
+        for b in (1..=c).step_by(7919) {
+            let p = periods(b);
+            assert!(p <= last, "periods must not rise as remaining grows");
+            assert!((10..=p_max).contains(&p));
+            last = p;
+        }
+        // Out-of-range inputs clamp into the curve, never panic.
+        assert_eq!(periods(c + 12345), 10);
+    }
+
+    /// The height-gated schedule must stay append-only monotone (§7.1/§7.4):
+    /// every violation is rejected by `validate`.
+    #[test]
+    fn storage_schedule_rejects_non_governance_changes() {
+        let base_pmax = MAINNET_PARAMS.protocol.vm.contract_store_perm_periods;
+        let mk = |supplement_schedule: &'static [(u64, u64)]| ContractStorageFeeParams {
+            supplement_schedule,
+            activation_height: 784_000,
+            ..MAINNET_CONTRACT_STORAGE_FEE
+        };
+        // valid expansion: R 1000 → 2000 (ΔR is a 1000-multiple, C = T×R = 2 MB)
+        mk(&[(784_000, 1_000), (1_000_000, 2_000)])
+            .validate(base_pmax)
+            .expect("governance expansion must validate");
+        // rate decrease (would raise future prices) rejected
+        assert!(mk(&[(784_000, 1_000), (1_000_000, 500)]).validate(base_pmax).is_err());
+        // height not a multiple of T rejected
+        assert!(mk(&[(784_000, 1_000), (1_000_500, 2_000)]).validate(base_pmax).is_err());
+        // non-increasing heights rejected
+        assert!(mk(&[(784_000, 1_000), (784_000, 2_000)]).validate(base_pmax).is_err());
+        // schedule must start at H0
+        assert!(mk(&[(781_000, 1_000)]).validate(base_pmax).is_err());
+        // fine-grained delta (governance must review separately) rejected
+        assert!(mk(&[(784_000, 1_000), (1_000_000, 1_500)]).validate(base_pmax).is_err());
+        // K_max must stay strictly above every rate
+        assert!(
+            ContractStorageFeeParams {
+                max_block_discount_bytes: 1_000,
+                ..MAINNET_CONTRACT_STORAGE_FEE
+            }
+            .validate(base_pmax)
+            .is_err()
+        );
+        // curve constants are frozen by rule version: any tweak fails validation
+        assert!(
+            ContractStorageFeeParams {
+                period_floor: 11,
+                ..MAINNET_CONTRACT_STORAGE_FEE
+            }
+            .validate(base_pmax)
+            .is_err()
+        );
+    }
+
+    /// Every schedule/parameter change must move the consensus params hash.
+    #[test]
+    fn storage_fee_params_are_hash_committed() {
+        let mut altered = MAINNET_PARAMS;
+        let schedule: &'static [(u64, u64)] = Box::leak(vec![(784_000, 1_000), (1_000_000, 2_000)].into_boxed_slice());
+        altered.protocol.vm.contract_storage_fee.supplement_schedule = schedule;
+        assert_ne!(params_hash(&MAINNET_PARAMS), params_hash(&altered));
+        let mut altered2 = MAINNET_PARAMS;
+        altered2.protocol.vm.contract_storage_fee.activation_height = 779_000;
+        assert_ne!(params_hash(&MAINNET_PARAMS), params_hash(&altered2));
     }
 }

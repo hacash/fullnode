@@ -127,6 +127,9 @@ pub fn register_exec(
     params: &'static hacash_params::HacashParams,
 ) -> Rerr {
     reg.set_execution_profile(params)?;
+    // Validate the whole VM profile before installation: an illegal storage fee
+    // schedule (shrink, non-monotone, curve mismatch) must fail registration.
+    params.protocol.vm.validate()?;
     reg.set_vm_params(params.protocol.vm)?;
     reg.set_block_creator(create_std_block)?;
     reg.set_context_creator(create_context)?;

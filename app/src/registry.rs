@@ -81,6 +81,9 @@ impl base::ExecRegistry for Registry {
         if self.vm_params.is_some() {
             return sys::errf!("VM execution params already registered");
         }
+        // A profile must not boot with an invalid contract storage discount table
+        // (height/rate monotonicity, C = T×R, v1 curve, K_max > R).
+        params.validate()?;
         self.vm_params = Some(params);
         Ok(())
     }

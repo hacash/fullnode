@@ -15,6 +15,7 @@ pub use contract::{ContractDeploy, ContractStoreAnalysis, ContractUpdate, Contra
 #[cfg(feature = "execute")]
 pub use contract_exec::{
     analyze_contract_store, analyze_contract_update, contract_protocol_cost_min,
+    quote_contract_storage_fee, ContractStorageFeeQuote,
 };
 pub use maincall::ContractMainCall;
 pub use p2sh::{P2SHScriptProve, P2shEntryPayload, ScriptmhCalc, UnlockScript};

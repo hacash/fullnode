@@ -17,22 +17,6 @@ use vm::action::ContractDeploy;
 use vm::contract::ContractSto;
 use vm::fitshc::compiler::compile;
 
-fn estimate_protocol_cost_auto(
-    txfee: &Amount,
-    nonce: Uint4,
-    argv: BytesW2,
-    sto: &ContractSto,
-) -> Amount {
-    estimate_protocol_cost_auto_with_periods(
-        txfee,
-        nonce,
-        argv,
-        sto,
-        sto.size() as u128,
-        MAINNET_PARAMS.protocol.vm.contract_store_perm_periods,
-    )
-}
-
 fn estimate_protocol_cost_auto_with_periods(
     txfee: &Amount,
     nonce: Uint4,
@@ -90,11 +74,56 @@ fn estimate_protocol_cost_auto_with_periods(
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        println!("Usage: fitshc <file.fitsh> [fee] [nonce]");
+        println!(
+            "Usage: fitshc <file.fitsh> [fee] [nonce] [--periods N]\n\
+             The emitted deploy protocol_cost is estimated at the given storage\n\
+             period basis. Full price (P_max = {}) guarantees inclusion; once the\n\
+             storage-fee discount is active, query the local node\n\
+             /query/contract/storage_fee for the current periods and pass it via\n\
+             --periods (or env HACASH_STORAGE_FEE_PERIODS) to deploy at the\n\
+             discounted price.",
+            MAINNET_PARAMS.protocol.vm.contract_store_perm_periods
+        );
         return;
     }
-    let file_path = &args[1];
-    let source = match fs::read_to_string(file_path) {
+    // Optional `--periods N` (or HACASH_STORAGE_FEE_PERIODS) selects the storage
+    // fee basis for the deploy estimate. Defaults to full price (guaranteed entry).
+    let full_periods = MAINNET_PARAMS.protocol.vm.contract_store_perm_periods;
+    let mut periods = full_periods;
+    let mut rest: Vec<String> = Vec::new();
+    let mut i = 1usize;
+    while i < args.len() {
+        if args[i] == "--periods" && i + 1 < args.len() {
+            periods = match args[i + 1].parse::<u64>() {
+                Ok(v) if v > 0 => v,
+                _ => {
+                    println!("Error: --periods expects a positive integer");
+                    return;
+                }
+            };
+            i += 2;
+            continue;
+        }
+        rest.push(args[i].clone());
+        i += 1;
+    }
+    if periods == full_periods {
+        if let Ok(env_p) = env::var("HACASH_STORAGE_FEE_PERIODS") {
+            if let Ok(v) = env_p.parse::<u64>() {
+                if v > 0 {
+                    periods = v;
+                }
+            }
+        }
+    }
+    let file_path = match rest.first() {
+        Some(v) => v.clone(),
+        None => {
+            println!("Error: missing <file.fitsh>");
+            return;
+        }
+    };
+    let source = match fs::read_to_string(&file_path) {
         Ok(s) => s,
         Err(e) => {
             println!("Error reading file: {}", e);
@@ -112,7 +141,7 @@ fn main() {
 
     println!("Compile success!");
 
-    let path = Path::new(file_path);
+    let path = Path::new(&file_path);
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy())
@@ -169,17 +198,30 @@ fn main() {
         (None, None, None)
     };
 
-    let fee_str = args.get(2).map(|s| s.as_str()).unwrap_or("1:248");
+    let fee_str = rest.get(1).map(|s| s.as_str()).unwrap_or("1:248");
     let txfee = Amount::from(fee_str).unwrap_or(Amount::default());
 
-    let nonce_val = args.get(3).and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
+    let nonce_val = rest
+        .get(2)
+        .and_then(|s| s.parse::<u32>().ok())
+        .unwrap_or(1);
     let nonce = d_nonce.unwrap_or(Uint4::from(nonce_val));
 
     let argv = d_argv.unwrap_or_default();
-    let protocol_cost =
-        d_fee.unwrap_or_else(|| estimate_protocol_cost_auto(&txfee, nonce, argv.clone(), &sto));
+    let charge_bytes = sto.size() as u128;
+    let protocol_cost = d_fee.unwrap_or_else(|| {
+        estimate_protocol_cost_auto_with_periods(
+            &txfee,
+            nonce,
+            argv.clone(),
+            &sto,
+            charge_bytes,
+            periods,
+        )
+    });
 
     let mut action = ContractDeploy::default();
+    let protocol_cost_u238 = protocol_cost.to_238_u128().unwrap_or(0);
     action.protocol_cost = protocol_cost;
     action.nonce = nonce;
     action.construct_argv = argv;
@@ -187,7 +229,15 @@ fn main() {
 
     let action_body_bytes = action.encode();
     let deploy_json = json!({
-        "action": hex::encode(&action_body_bytes)
+        "action": hex::encode(&action_body_bytes),
+        "storage_periods": periods,
+        "storage_full_periods": full_periods,
+        "protocol_cost_u238": protocol_cost_u238,
+        "protocol_cost_basis": if periods >= full_periods {
+            "full_price"
+        } else {
+            "discount"
+        },
     });
 
     let deploy_file = parent.join(format!("{}.deploy.json", stem));
@@ -197,4 +247,15 @@ fn main() {
     )
     .ok();
     println!("Generated: {}", deploy_file.display());
+    if periods < full_periods {
+        println!(
+            "Deploy priced at the discounted basis ({} periods): the transaction is only valid while the block budget still grants that discount.",
+            periods
+        );
+    } else {
+        println!(
+            "Deploy priced at full price ({} periods): guaranteed inclusion. Use --periods N (current discount periods) to deploy discounted.",
+            full_periods
+        );
+    }
 }

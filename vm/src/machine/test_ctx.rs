@@ -38,12 +38,25 @@ fn stub_block_hasher(_height: u64, _stuff: &[u8]) -> [u8; base::HASH_SIZE] {
 
 /// Registry-less services stub: no host defs, no VM assignment. Enough for
 /// bytecode verification that does not reference ACTION/ACTENV/ACTVIEW ids.
-pub struct StubServices;
+/// Carries the VM execution params so tests can install height-gated schedules.
+#[derive(Clone, Copy, Default)]
+pub struct StubServices {
+    pub params: VmExecutionParams,
+}
+
+impl StubServices {
+    pub fn new(params: VmExecutionParams) -> Self {
+        Self { params }
+    }
+}
 
 /// Default VM execution params for stub services. No fee-purity schedule
-/// reductions: the initial floor applies at every height.
+/// reductions: the initial floor applies at every height. The storage discount
+/// schedule stays disabled by default (legacy fixed-period rule); tests that
+/// exercise it override `TestCtx::vm_params`.
 pub(crate) static STUB_VM_PARAMS: VmExecutionParams = VmExecutionParams {
     contract_store_perm_periods: 10_000,
+    contract_storage_fee: base::ContractStorageFeeParams::disabled(),
     initial_fee_purity_floor: 50_000,
     fee_purity_reductions: &[],
     gas_budget_lookup: &base::GAS_BUDGET_LOOKUP_NONE,
@@ -88,7 +101,7 @@ impl ExecutionServices for StubServices {
         None
     }
     fn vm_params(&self) -> Ret<&VmExecutionParams> {
-        Ok(&STUB_VM_PARAMS)
+        Ok(&self.params)
     }
     fn execution_profile(&self) -> Ret<&'static dyn base::ExecutionProfile> {
         errf!("stub services: execution_profile")
@@ -159,9 +172,21 @@ pub struct TestCtx {
     pub exec_from: ExecFrom,
     pub tex: TexLedger,
     pub gas: i64,
+    pub vm_params: VmExecutionParams,
+    vm: Option<Box<dyn Vm>>,
+    vm_active: bool,
 }
 
 impl TestCtx {
+    /// Install a real `NativeVm` so action bodies that dispatch VM entries (e.g. the
+    /// Change/Append update hooks) execute instead of hitting an `EmptyVm`.
+    pub fn install_native_vm(&mut self) {
+        self.vm = Some(Box::new(crate::machine::NativeVm::new(
+            self.env.block.height,
+            self.vm_params,
+        )));
+    }
+
     pub fn new() -> Self {
         let mut env = Env::default();
         env.tx.ty = 3;
@@ -174,6 +199,9 @@ impl TestCtx {
             exec_from: ExecFrom::Top,
             tex: TexLedger::default(),
             gas: 1 << 30,
+            vm_params: STUB_VM_PARAMS,
+            vm: None,
+            vm_active: false,
         }
     }
 
@@ -188,7 +216,7 @@ impl TestCtx {
 
 impl Context for TestCtx {
     fn services(&self) -> Arc<dyn ExecutionServices> {
-        Arc::new(StubServices)
+        Arc::new(StubServices::new(self.vm_params))
     }
     fn env(&self) -> &Env {
         &self.env
@@ -233,9 +261,22 @@ impl Context for TestCtx {
         errf!("stub ctx: action_call")
     }
     fn vm_take(&mut self) -> Option<Box<dyn Vm>> {
-        None
+        if self.vm_active {
+            return None;
+        }
+        self.vm_active = true;
+        self.vm.take()
     }
-    fn vm_put(&mut self, _vm: Box<dyn Vm>) {}
+    fn vm_put(&mut self, vm: Box<dyn Vm>) {
+        self.vm = Some(vm);
+        self.vm_active = false;
+    }
+    fn vm_peek(&mut self) -> Option<&mut (dyn Vm + 'static)> {
+        if self.vm_active {
+            return None;
+        }
+        self.vm.as_deref_mut()
+    }
     fn as_context_mut(&mut self) -> &mut dyn Context {
         self
     }

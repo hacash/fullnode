@@ -174,12 +174,17 @@ impl Engine for ChainEngine {
             Err(e) => return Err(e),
         };
         self.check_pending(tx.as_ref())?;
-        let chunk = snapshot.begin_tx(tx.hash());
+        let mut chunk = snapshot.begin_tx(tx.hash());
         let env = self.build_tx_env(
             snapshot.head_height + 1,
             self.block_producer().external_exec_author(),
             tx.as_ref(),
         );
+        // Single-tx admission runs at the next block's height: the contract
+        // storage fee rules must see the same budget snapshot as execution
+        // would (fresh block usage D=0, B_start from head state).
+        let vp = *self.registry.vm_params()?;
+        base::init_block_contract_storage_budget(&mut chunk, &vp, env.block.height)?;
         let mut ctx = self
             .registry
             .clone()
@@ -211,7 +216,12 @@ impl Engine for ChainEngine {
         }) else {
             return Ok(vec![]);
         };
-        let root = snapshot.begin_block_draft(pending_height);
+        let mut root = snapshot.begin_block_draft(pending_height);
+        // The draft reuses the block lifecycle so candidates classify fees under
+        // the same `B_start`; the draft is discarded, so no settlement happens
+        // here — only the real block execution persists budget state.
+        let vp = *self.registry.vm_params()?;
+        base::init_block_contract_storage_budget(&mut root, &vp, pending_height)?;
         let author = self.block_producer().external_exec_author();
         let mut failed = Vec::new();
         for tx in &txs {
@@ -243,6 +253,10 @@ impl Engine for ChainEngine {
         max_block_size: usize,
     ) -> Ret<Vec<TxRef>> {
         let mut execution = session.begin_execution();
+        // Packing candidates must see the same budget snapshot rules as execution
+        // (same lifecycle helper; the draft is discarded, never settled).
+        let vp = *self.registry.vm_params()?;
+        execution.init_contract_storage_budget(&vp, pending_height)?;
         let mut picked = Vec::new();
         let mut total = base_tx_size;
         for tx in candidates {

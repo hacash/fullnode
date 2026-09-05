@@ -40,6 +40,12 @@ pub fn execute_block(
     }
     let fee_receiver = prelude.fee_receiver();
 
+    // Contract storage discount budget: install the block-start snapshot before
+    // any transaction runs, so every contract fee in the block prices off the
+    // same `B_start` (strict, fast-sync, and replay share this lifecycle).
+    let vp = *eng.registry.vm_params()?;
+    base::init_block_contract_storage_budget(&mut block, &vp, blk.height())?;
+
     let mut total_fee = field::Amount::zero();
     for (idx, tx) in txs.iter().enumerate() {
         if idx > 0 && tx.is_block_prelude() {
@@ -66,7 +72,34 @@ pub fn execute_block(
     if let Some(receiver) = fee_receiver.filter(|_| total_fee.is_positive()) {
         base::hac_add_state(&mut block, &receiver, &total_fee)?;
     }
+    settle_contract_storage_budget(&mut block, &vp, blk.height())?;
     Ok(block)
+}
+
+/// Close the block budget lifecycle: `B_next = min(C, B_start - D + R)`, persist the
+/// record, drop the transient keys, and verify the settled state has no leaked
+/// snapshot keys or broken budget invariants. Failed execution never reaches this
+/// point, so the whole block overlay — budget included — is discarded atomically.
+fn settle_contract_storage_budget(
+    block: &mut StateChunkRef,
+    vp: &base::VmExecutionParams,
+    height: u64,
+) -> Ret<()> {
+    if let Some(s) = base::settle_block_contract_storage_budget(block, vp, height)?
+        && s.discount_used > 0
+    {
+        eprintln!(
+            "[Budget] block {} storage discount used {}/{} bytes: B {} -> {} (C {}, R {})",
+            height,
+            s.discount_used,
+            s.b_start.min(vp.contract_storage_fee.max_block_discount_bytes as u128),
+            s.b_start,
+            s.b_next,
+            s.capacity,
+            s.rate,
+        );
+    }
+    base::verify_block_contract_storage_state(block.as_ref(), vp, height)
 }
 
 /// Resolve the candidate's parent and fork-choice key; `Ok(None)` means the

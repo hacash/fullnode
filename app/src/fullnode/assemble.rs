@@ -102,6 +102,7 @@ fn standard_api_services(
     let mut services: Vec<Arc<dyn ApiService>> = vec![
         Arc::new(api::StatusApi),
         Arc::new(api::ChainApi),
+        Arc::new(api::ContractStorageApi),
         Arc::new(api::PoolApi),
         Arc::new(api::AccountApi),
     ];

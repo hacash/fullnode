@@ -6,7 +6,7 @@ use std::sync::Arc;
 use field::Hash;
 
 use crate::state::StateRead;
-use crate::{Env, ExecutionServices, StateChunkRef, TxRef};
+use crate::{Env, ExecutionServices, StateChunkRef, TxRef, VmExecutionParams};
 
 /// Root-pinned session for miner packing: the pin keeps the tip's weak parent chain
 /// alive across root rolls; callers still validate `epoch()`. Fields are private.
@@ -79,6 +79,19 @@ pub struct StateExecSession<'s> {
 }
 
 impl StateExecSession<'_> {
+    /// Install the block contract storage budget snapshot on the packing draft so
+    /// candidate transactions classify under the same `B_start` as execution
+    /// (throwaway layer: never settled, candidates still compete for quota).
+    #[cfg(feature = "execute")]
+    pub fn init_contract_storage_budget(
+        &mut self,
+        vp: &VmExecutionParams,
+        height: u64,
+    ) -> sys::Rerr {
+        crate::init_block_contract_storage_budget(&mut self.root, vp, height)?;
+        Ok(())
+    }
+
     /// Execution entry: only exists in full builds (codec-only builds have no
     /// callable `TransactionExecute` surface).
     #[cfg(feature = "execute")]

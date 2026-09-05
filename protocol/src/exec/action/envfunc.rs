@@ -11,13 +11,13 @@ use crate::codec::action::{
 };
 
 /// Temporary upgrade gate for the tx message/blob read syscalls (0x0615/0x0616/
-/// 0x0617/0x0704/0x0705), which take effect at height 780_000. Hand-written on
+/// 0x0617/0x0704/0x0705), which take effect at height 784_000. Hand-written on
 /// purpose — remove the const, this helper and the five call sites together with
 /// the syscalls in the next release.
-const TX_MSG_BLOB_ENABLE_HEIGHT: u64 = 780_000;
+const TX_MSG_BLOB_ENABLE_HEIGHT: u64 = 784_000;
 
 fn tx_message_blob_gate(ctx: &dyn base::Context) -> sys::Rerr {
-    // Mainnet activates at height 780_000. Non-mainnet (hacash-testnet chain_id=1)
+    // Mainnet activates at height 784_000. Non-mainnet (hacash-testnet chain_id=1)
     // enables immediately so deposit hooks can ViewMessage on a local chain.
     if ctx.env().chain.id.is_mainnet() && ctx.env().block.height < TX_MSG_BLOB_ENABLE_HEIGHT {
         return errf!(

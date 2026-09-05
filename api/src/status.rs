@@ -28,13 +28,41 @@ fn status_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse {
             )
         })
         .unwrap_or((0, 0));
+    // Contract storage discount, state-aware: the full price `p_max` and, once the
+    // mechanism is active, the discount periods applying to the next block's
+    // deploy/update fees. Quoting wallets use `/query/contract/storage_fee` for the
+    // full fact set (B, C, R, quota, schedule, params hash).
+    let (csf_enabled, csf_periods) = match ctx.engine.services().vm_params() {
+        Ok(vp) => {
+            let vp = *vp;
+            let p_max = vp.contract_store_perm_periods;
+            if !vp.contract_storage_fee.is_active_at(height + 1) {
+                (false, p_max)
+            } else {
+                let periods = ctx
+                    .engine
+                    .state_canonical()
+                    .ok()
+                    .flatten()
+                    .and_then(|session| {
+                        base::contract_storage_fee_facts(session.view(), &vp, height + 1).ok()
+                    })
+                    .map(|facts| facts.periods)
+                    .unwrap_or(p_max);
+                (true, periods)
+            }
+        }
+        Err(_) => (false, 0),
+    };
     ApiResponse::json(format!(
-        "{{\"height\":{},\"uptime\":{},\"peers\":{},\"vm_fee_purity_floor\":{},\"vm_contract_store_perm_periods\":{}}}",
+        "{{\"height\":{},\"uptime\":{},\"peers\":{},\"vm_fee_purity_floor\":{},\"vm_contract_store_perm_periods\":{},\"vm_contract_storage_enabled\":{},\"vm_contract_storage_periods\":{}}}",
         height,
         uptime,
         ctx.node.all_peer_prints().len(),
         fee_purity_floor,
         perm_periods,
+        csf_enabled,
+        csf_periods,
     ))
 }
 
