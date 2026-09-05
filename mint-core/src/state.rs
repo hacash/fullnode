@@ -125,10 +125,23 @@ impl<'a> MintStateRead<'a> {
     pub fn get_mint_total(&self) -> Ret<MintTotal> {
         Ok(self.mint_total()?.unwrap_or_default())
     }
+
+    pub fn hacd_bid_burn_238(&self) -> Ret<Option<Uint12>> {
+        read_typed(self.0, MintState::HACD_BID_BURN_KEY)
+    }
+
+    pub fn get_hacd_bid_burn_238(&self) -> Ret<Uint12> {
+        Ok(self.hacd_bid_burn_238()?.unwrap_or_default())
+    }
 }
 
 impl<'a> MintState<'a> {
     pub const TOTAL_KEY: &'static [u8] = b"_mint.total";
+    /// Consensus accumulator for diamond bid-fee HAC burned (238 units).
+    /// `MintTotal.hacd_bid_burn_238` is a display copy of this value, not a
+    /// second increment. Missing reads as 0; accumulation starts at the first
+    /// burn (this node resyncs from genesis).
+    pub const HACD_BID_BURN_KEY: &'static [u8] = b"_mint.hacd_bid_burn";
     pub fn wrap(layer: &'a mut dyn StateLayer) -> Self {
         Self(layer)
     }
@@ -155,6 +168,30 @@ impl<'a> MintState<'a> {
 
     pub fn set_mint_total(&mut self, total: &MintTotal) {
         self.0.set(Self::TOTAL_KEY, total.encode());
+    }
+
+    pub fn hacd_bid_burn_238(&self) -> Ret<Option<Uint12>> {
+        read_typed(&*self.0, Self::HACD_BID_BURN_KEY)
+    }
+
+    pub fn get_hacd_bid_burn_238(&self) -> Ret<Uint12> {
+        Ok(self.hacd_bid_burn_238()?.unwrap_or_default())
+    }
+
+    pub fn set_hacd_bid_burn_238(&mut self, burn: &Uint12) {
+        self.0.set(Self::HACD_BID_BURN_KEY, burn.encode());
+    }
+
+    /// Add to the consensus accumulator. Zero is a no-op (key stays absent).
+    /// Callers copy the returned value into `MintTotal` for display.
+    #[cfg(feature = "execute")]
+    pub fn add_hacd_bid_burn(&mut self, burn_238: u128) -> Ret<Uint12> {
+        let mut acc = self.get_hacd_bid_burn_238()?;
+        if burn_238 != 0 {
+            base::total_add_u12(&mut acc, burn_238, "hacd_bid_burn")?;
+            self.set_hacd_bid_burn_238(&acc);
+        }
+        Ok(acc)
     }
 
     #[allow(dead_code)]

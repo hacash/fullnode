@@ -2,7 +2,7 @@
 
 use base::{
     BLACKHOLE_ADDR, Context, CoreState, DIAMOND_STATUS_NORMAL, diamond_owned_push_one, hacd_add,
-    total_add_diamond_number, total_add_u12,
+    total_add_diamond_number,
 };
 use field::{
     Address, Amount, BlockHeight, DiamondName, DiamondNumber, DiamondSmelt, DiamondSto,
@@ -123,8 +123,7 @@ fn diamond_mint(this: &HacdMint, ctx: &mut dyn Context) -> Rerr {
     }
 
     let projected_burn = MintState::wrap(&mut *state.0)
-        .get_mint_total()?
-        .hacd_bid_burn_238
+        .get_hacd_bid_burn_238()?
         .uint()
         + tx_bid_burn_238.unwrap_or(0);
     let average_bid_burn = calculate_diamond_average_bid_burn(dianum, projected_burn, rules)?;
@@ -158,15 +157,14 @@ fn diamond_mint(this: &HacdMint, ctx: &mut dyn Context) -> Rerr {
         diamond_owned_push_one(&mut state, &address, &name)?;
     }
     hacd_add(&mut state, &address, &DiamondNumber::from(1))?;
-    with_mint_total(&mut MintState::wrap(&mut *state.0), |ttcount| {
+    let mut mint = MintState::wrap(&mut *state.0);
+    let burn_acc = match tx_bid_burn_238 {
+        Some(burn) => mint.add_hacd_bid_burn(burn)?,
+        None => mint.get_hacd_bid_burn_238()?,
+    };
+    with_mint_total(&mut mint, |ttcount| {
         total_add_diamond_number(&mut ttcount.minted_diamond, 1, "minted_diamond")?;
-        if let Some(burn_238) = tx_bid_burn_238 {
-            total_add_u12(
-                &mut ttcount.hacd_bid_burn_238,
-                burn_238,
-                "hacd_bid_burn_238",
-            )?;
-        }
+        ttcount.hacd_bid_burn_238 = burn_acc;
         Ok(())
     })?;
     Ok(())
@@ -251,6 +249,7 @@ base::impl_action_execute! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state::MintState;
 
     #[test]
     fn diamond_mint_recipient_allows_u32_max_tail() {
@@ -260,6 +259,42 @@ mod tests {
         assert!(
             !is_privakey_unknown(&addr),
             "00..00||0xFFFFFFFF must match Address::is_privkey_unknown (old mint allow)"
+        );
+    }
+
+    #[test]
+    fn hacd_bid_burn_key_is_independent_of_mint_total() {
+        assert_ne!(MintState::HACD_BID_BURN_KEY, MintState::TOTAL_KEY);
+    }
+
+    #[test]
+    fn average_bid_burn_is_fixed_before_threshold() {
+        let rules = hacash_params::MAINNET_PARAMS.mint_rules.diamond;
+        assert_eq!(
+            calculate_diamond_average_bid_burn(rules.average_bid_burn_after, 0, rules)
+                .unwrap()
+                .uint(),
+            10
+        );
+    }
+
+    #[test]
+    fn average_bid_burn_uses_running_total_after_threshold() {
+        let rules = hacash_params::MAINNET_PARAMS.mint_rules.diamond;
+        let number = rules.average_bid_burn_after + 1;
+        let bsnum = (number - rules.burn_90_percent_after) as u128;
+        let total = bsnum * 1_000_000_0000 * 5;
+        assert_eq!(
+            calculate_diamond_average_bid_burn(number, total, rules)
+                .unwrap()
+                .uint(),
+            6
+        );
+        assert_eq!(
+            calculate_diamond_average_bid_burn(number, 0, rules)
+                .unwrap()
+                .uint(),
+            1
         );
     }
 }
