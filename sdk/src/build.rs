@@ -34,10 +34,32 @@ fn parse_action_kind(json: &str) -> Result<u16, SdkError> {
         .ok_or_else(|| {
             SdkError::new(SdkErrorCode::ParseFailed, "action is missing numeric kind")
         })?;
-    let text = field::json_expect_unquoted(raw)
-        .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "action kind must be a number"))?;
-    text.parse::<u16>()
-        .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "action kind must be a number"))
+    // Same semantics as the registry's `action_kind_from_json`, which decodes
+    // the very JSON this gate feeds: a numeric id, or a registered action name
+    // (quoted or bare). The spec gate must not be stricter than the codec.
+    let name = if let Ok(text) = field::json_expect_unquoted(raw) {
+        if let Ok(kind) = text.parse::<u16>() {
+            return Ok(kind);
+        }
+        text.trim().to_owned()
+    } else {
+        field::json_expect_quoted_decoded(raw)
+            .map(|decoded| decoded.trim().to_owned())
+            .map_err(|_| {
+                SdkError::new(
+                    SdkErrorCode::ParseFailed,
+                    "action kind must be a number or its registered name",
+                )
+            })?
+    };
+    crate::selection::action_schema_named(&name)
+        .map(|schema| schema.kind)
+        .ok_or_else(|| {
+            SdkError::new(
+                SdkErrorCode::ParseFailed,
+                format!("unknown action kind name {name:?}"),
+            )
+        })
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +211,34 @@ mod tests {
         let decoded = decode_tx(&hex::decode(&built.body).unwrap()).unwrap();
         assert_eq!(hex::encode(decoded.encode()), built.body);
         assert_eq!(decoded.action_count(), 2);
+    }
+
+    /// The spec gate accepts the registered action name wherever it accepts the
+    /// numeric id — both must produce byte-identical bodies.
+    #[test]
+    fn name_kind_specs_build_like_numeric_ones() {
+        let named = raw_spec(&format!(
+            r#"{{"kind":"transfer_hacd_to","to":"{MAIN}","diamonds":"WMEKBS"}}"#
+        ));
+        let numeric = raw_spec(&format!(
+            r#"{{"kind":7,"to":"{MAIN}","diamonds":"WMEKBS"}}"#
+        ));
+        assert_eq!(named.actions[0].kind, numeric.actions[0].kind);
+        let a = build_transaction(&named).unwrap();
+        let b = build_transaction(&numeric).unwrap();
+        assert_eq!(a.body, b.body, "name and numeric kind must build identical bodies");
+    }
+
+    #[test]
+    fn unknown_action_kind_name_is_rejected() {
+        let error = ActionSpec::new(r#"{"kind":"no_such_action","to":"x"}"#.to_owned())
+            .unwrap_err();
+        assert_eq!(error.code, "parse_failed");
+        assert!(
+            error.message.contains("unknown action kind name"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

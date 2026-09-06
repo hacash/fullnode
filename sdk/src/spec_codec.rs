@@ -116,9 +116,11 @@ mod tests {
             "{}",
             missing.message
         );
+        // A quoted "1" is not a registered action name: the gate resolves the
+        // same name space as the registry dispatch (numbers must be unquoted).
         let quoted = decode_transaction_spec_json(&envelope(r#"[{"kind":"1"}]"#)).unwrap_err();
         assert!(
-            quoted.message.contains("kind must be a number"),
+            quoted.message.contains("unknown action kind name"),
             "{}",
             quoted.message
         );
