@@ -279,7 +279,9 @@ impl Frame {
             .unwrap_or(context_addr);
         if self.ir_format_fee_pending > 0 {
             let fee = self.ir_format_fee_pending;
-            machine.settle_resource_gas(host, fee)?;
+            // IR-format/compile cost is CPU work: settle against the compute bucket
+            // (not resource), consistent with the other entry/call base charges.
+            machine.settle_compute_gas(host, fee)?;
             self.ir_format_fee_pending = 0;
         }
         execute_code_in_frame(

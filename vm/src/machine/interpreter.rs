@@ -32,6 +32,7 @@ pub(crate) trait VmMachine {
     fn heap_reclaim(&mut self, heap: Heap);
 
     fn settle_resource_gas<H: VmHost + ?Sized>(&mut self, host: &mut H, gas: i64) -> VmrtErr;
+    fn settle_compute_gas<H: VmHost + ?Sized>(&mut self, host: &mut H, gas: i64) -> VmrtErr;
     fn call_ntctl(
         &mut self,
         exec: crate::rt::ExecCtx,
@@ -128,6 +129,10 @@ impl VmMachine for NativeVm {
 
     fn settle_resource_gas<H: VmHost + ?Sized>(&mut self, host: &mut H, gas: i64) -> VmrtErr {
         self.runtime.settle_resource_gas(host, gas)
+    }
+
+    fn settle_compute_gas<H: VmHost + ?Sized>(&mut self, host: &mut H, gas: i64) -> VmrtErr {
+        self.runtime.settle_compute_gas(host, gas)
     }
 
     fn call_ntctl(

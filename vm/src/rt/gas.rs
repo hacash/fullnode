@@ -156,7 +156,7 @@ impl GasExtra {
             heap_read_div: 16,
             heap_write_div: 12,
             log_div: 1,
-            compile_div: 16,
+            compile_div: 20,
             contract_div: 64,
             ntfunc_div: 16,
             act_div: 12,
