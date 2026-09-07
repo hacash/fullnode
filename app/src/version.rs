@@ -1,7 +1,7 @@
 //! Node / worker version banner constants (aligned with fullnodedev `app::version`).
 
 #[allow(unused)]
-pub const HACASH_NODE_VERSION: &str = "1.2.1";
+pub const HACASH_NODE_VERSION: &str = "1.1.0";
 #[allow(unused)]
 pub const HACASH_NODE_BUILD_TIME: &str = "2026/9/6 #1";
 
