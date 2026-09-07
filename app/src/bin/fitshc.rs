@@ -13,7 +13,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use sys::{Account, curtimes};
-use vm::action::ContractDeploy;
+use vm::action::{ContractDeploy, contract_deploy_charge_bytes};
 use vm::contract::ContractSto;
 use vm::fitshc::compiler::compile;
 
@@ -208,7 +208,7 @@ fn main() {
     let nonce = d_nonce.unwrap_or(Uint4::from(nonce_val));
 
     let argv = d_argv.unwrap_or_default();
-    let charge_bytes = sto.size() as u128;
+    let charge_bytes = contract_deploy_charge_bytes(&sto) as u128;
     let protocol_cost = d_fee.unwrap_or_else(|| {
         estimate_protocol_cost_auto_with_periods(
             &txfee,

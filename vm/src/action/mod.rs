@@ -11,7 +11,10 @@ pub(crate) mod p2sh;
 pub(crate) mod p2sh_exec;
 pub(crate) mod p2sh_tool;
 
-pub use contract::{ContractDeploy, ContractStoreAnalysis, ContractUpdate, ContractUpdateAnalysis};
+pub use contract::{
+    CONTRACT_DEPLOY_CHARGE_OVERHEAD_BYTES, ContractDeploy, ContractStoreAnalysis, ContractUpdate,
+    ContractUpdateAnalysis, contract_deploy_charge_bytes,
+};
 #[cfg(feature = "execute")]
 pub use contract_exec::{
     analyze_contract_store, analyze_contract_update, contract_protocol_cost_min,

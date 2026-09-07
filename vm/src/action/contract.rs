@@ -1,11 +1,22 @@
 //! `ContractDeploy` (kind 40) + `ContractUpdate` (kind 41) wire codecs.
 //! Execute bodies, store prechecks and `peek_vm_runtime_limits` live in `contract_exec.rs` (`execute` feature only).
 
-use field::{Address, Amount, BytesW2, Fixed2, Fixed4, Uint2, Uint4};
+use field::{Address, Amount, BytesW2, Encode, Fixed2, Fixed4, Uint2, Uint4};
 
 use crate::contract::{ContractEdit, ContractSto};
 use crate::rt::AbstCall;
 use crate::value::ContractAddress;
+
+/// Stable protocol accounting overhead for creating a new contract object.
+/// This is a consensus resource unit, rather than a measurement of a specific
+/// state backend's physical storage representation.
+pub const CONTRACT_DEPLOY_CHARGE_OVERHEAD_BYTES: usize = 64;
+
+/// Billable bytes for a deployment. Updates overwrite the existing contract
+/// object and therefore use their edit payload size instead.
+pub fn contract_deploy_charge_bytes(contract: &ContractSto) -> usize {
+    contract.size() + CONTRACT_DEPLOY_CHARGE_OVERHEAD_BYTES
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContractStoreAnalysis {
