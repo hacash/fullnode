@@ -38,6 +38,10 @@ pub struct P2PNode {
     /// Unified window sync downloader -> one BlockStream apply thread.
     pub(crate) sync_session: Arc<SyncSlot>,
     pub(crate) sync_generation: AtomicU64,
+    /// Serializes MSG_BLOCKS planning + enqueue. Every block message runs in
+    /// its own task and the blocking enqueue can yield, so without this gate a
+    /// later window can overtake an earlier one into the single FIFO stream.
+    pub(crate) sync_enqueue: tokio::sync::Mutex<()>,
     pub(crate) orphan_blocks: Mutex<HashMap<Hash, Vec<BlkPkg>>>,
     pub(crate) inbound: Arc<InboundHub>,
     pub(crate) stopping: AtomicBool,
@@ -63,6 +67,7 @@ impl P2PNode {
             inserting: Arc::new(Mutex::new(())),
             sync_session: Arc::new(Mutex::new(None)),
             sync_generation: AtomicU64::new(0),
+            sync_enqueue: tokio::sync::Mutex::new(()),
             orphan_blocks: Mutex::new(HashMap::new()),
             inbound: Arc::new(InboundHub::new(4000)),
             stopping: AtomicBool::new(false),

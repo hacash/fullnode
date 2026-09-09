@@ -324,8 +324,10 @@ impl P2PNode {
                             return;
                         }
                         println!("{}", e);
-                        node_for_apply
-                            .stop_sync_session(&cleanup_peer_id, "apply pipeline failure");
+                        node_for_apply.stop_sync_session(
+                            &cleanup_peer_id,
+                            &format!("apply pipeline failure: {}", e),
+                        );
                     }
                 }
             });
@@ -510,6 +512,14 @@ impl P2PNode {
             .map_err(|e| sys::Error::fault(format!("p2p one-shot apply task failed: {}", e)))?;
         }
 
+        // Each MSG_BLOCKS is handled in its own task, but the session feeds a
+        // single FIFO BlockStream whose apply stage requires strictly ascending
+        // heights. The session lock only orders the *planning*; the blocking
+        // enqueue below can yield, so serialize plan+enqueue to stop a later
+        // window from overtaking an earlier one (symptom: "block N is missing
+        // parent" right after a full window boundary).
+        let enqueue_guard = self.sync_enqueue.lock().await;
+
         let (sender, ready, caught_up, pending_print_batches) = {
             let mut g = self.sync_session.lock().unwrap();
             let Some(sess) = g.as_mut() else {
@@ -619,6 +629,7 @@ impl P2PNode {
             sender.finish();
             return Ok(());
         }
+        drop(enqueue_guard);
         self.sync_fill_window(peer)
     }
 }
