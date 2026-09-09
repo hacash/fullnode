@@ -4,10 +4,11 @@ version.workspace = true
 edition.workspace = true
 
 [features]
-# Embed libsecp256k1 precomputed tables (~1MB data segment): enabled by full nodes (mint/app etc.),
-# so the first sign/verify has zero initialization cost. SDK (wasm/codec-only builds) does not enable
-# it; the tables are computed at runtime on first use to keep ~1MB of precomputed tables out of wasm.
-# Note: feature union within the build graph means this must only be enabled by full-node crates.
+# Optional: embed libsecp256k1 precomputed tables (~1MB in the binary) so the
+# first sign/verify has no init cost. Workspace members leave this off — native
+# binaries and the SDK both compute the tables once on first use (`OnceLock`).
+# Enabling it from any crate in a build unifies onto `sys` and bloats every
+# linked binary (workers share the `app`/`mint` graph with fullnode).
 secp-static-context = ["libsecp256k1/static-context"]
 
 [dependencies]

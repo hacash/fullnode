@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-sys = { workspace = true, features = ["secp-static-context"] }
+sys = { workspace = true }
 field = { workspace = true }
 base = { workspace = true }
 hacash-params = { workspace = true }

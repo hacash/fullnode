@@ -282,3 +282,4 @@ log_delete_auth_hash =
 5. **Worker binaries use separate config files**, not `hacash.config.ini`:
    * `poworker.config.ini` — PoW worker (sections `[default]` and `[gpu]`).
    * `diaworker.config.ini` — diamond worker (sections `[default]` and `[gpu]`).
+   * Worker `connect` is **plaintext HTTP only** (`http://host:port`). `https://` is rejected.

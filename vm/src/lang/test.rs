@@ -234,6 +234,40 @@ mod token_t {
     }
 
     #[test]
+    fn test_memory_once_compiles_to_monce_and_roundtrips() {
+        use super::{irnode_to_lang, lang_to_bytecode, lang_to_irnode};
+        use crate::rt::Bytecode;
+
+        let script = "memory_once(1, 1)";
+        let bytecode = lang_to_bytecode(script).expect("Failed to compile memory_once");
+        assert!(
+            bytecode.contains(&(Bytecode::MONCE as u8)),
+            "Expected MONCE (0x94) in bytecode, got: {:02x?}",
+            bytecode
+        );
+        // 反编译回源码必须保留内建名（证明 intro 名字表已接线）
+        let back = irnode_to_lang(lang_to_irnode(script).unwrap()).unwrap();
+        assert!(
+            back.contains("memory_once"),
+            "decompiled output lost builtin name: {}",
+            back
+        );
+
+        // 基础 step gas 表必须显式登记 MONCE：否则落到默认 1，低于 MPUT(10)。
+        use crate::rt::GasTable;
+        let gst = GasTable::new(1);
+        assert_eq!(
+            gst.gas(Bytecode::MONCE as u8),
+            gst.gas(Bytecode::MPUT as u8),
+            "MONCE base gas must match MPUT"
+        );
+        assert!(
+            gst.gas(Bytecode::MONCE as u8) > 1,
+            "MONCE must not fall back to the default base gas"
+        );
+    }
+
+    #[test]
     fn test_char_escapes_compile_correctly() {
         use super::lang_to_bytecode;
 

@@ -13,8 +13,9 @@ const ADDRESS_SIZE: usize = 21;
 const PRIVATE_SIZE: usize = 32;
 const PUBLIC_SIZE: usize = 33;
 
-// Two secp256k1 context strategies (see `secp-static-context`): fullnode embeds
-// precomputed tables (free sign/verify); SDK/wasm computes the ~1MB ecmult tables once on first use.
+// Two secp256k1 context strategies (see `secp-static-context`): with the feature,
+// precomputed tables are embedded in the binary; without it (workspace default),
+// the ~1MB ecmult tables are computed once on first sign/verify.
 #[cfg(feature = "secp-static-context")]
 fn pubkey_from_secret_key(seckey: &SecretKey) -> PublicKey {
     PublicKey::from_secret_key(seckey)

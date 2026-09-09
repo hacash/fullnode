@@ -73,7 +73,7 @@ impl PoWorkConf {
         let debug =
             sys::ini_must_bool(sec, "debug", false) || sys::ini_must_u64(gpu, "debug", 0) == 1;
         Ok(Self {
-            rpcaddr: sys::ini_must(sec, "connect", "127.0.0.1:8082"),
+            rpcaddr: super::plain_http_host(&sys::ini_must(sec, "connect", "127.0.0.1:8082"))?,
             threads: sys::ini_must_u64(sec, "supervene", 2).max(1) as usize,
             nonce_max: sys::ini_must_u64(sec, "nonce_max", u32::MAX as u64) as u32,
             nonce_chunk: sys::ini_must_u64(sec, "nonce_chunk", 100_000).max(1) as u32,

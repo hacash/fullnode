@@ -99,6 +99,8 @@ pub enum ItrErrCode {
     StorageKeyExists = 109,
     StorageNilNotAllowed = 110,
 
+    MemoryKeyExists = 131,
+
     ThrowAbort = 151,    // user code call
     DeferredError = 152, // defer callback error
     IntentError = 153,

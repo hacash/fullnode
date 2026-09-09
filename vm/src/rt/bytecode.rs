@@ -158,10 +158,10 @@ pub enum Bytecode {
     GGET = 0x91,     // &     global get
     MPUT = 0x92,     // a,b   memory put
     MGET = 0x93,     // &     memory get
-    MTAKE = 0x94,    // &     memory take
-    SPUT = 0x95,     // a,b   status put
-    SGET = 0x96,     // &     status get
-    ____________97 = 0x97,
+    MONCE = 0x94,    // a,b   memory once
+    MTAKE = 0x95,    // &     memory take
+    SPUT = 0x96,     // a,b   status put
+    SGET = 0x97,     // &     status get
     ____________98 = 0x98,
     SSTAT = 0x99, // &      storage info
     SLOAD = 0x9a, // &      storage load
@@ -452,6 +452,7 @@ bytecode_metadata_define! {
     GGET       : 0, 1, 1,     global_get
     MPUT       : 0, 2, 0,     memory_put
     MGET       : 0, 1, 1,     memory_get
+    MONCE      : 0, 2, 0,     memory_once
     MTAKE      : 0, 1, 1,     memory_take
     SPUT       : 0, 2, 0,     status_put
     SGET       : 0, 1, 1,     status_get

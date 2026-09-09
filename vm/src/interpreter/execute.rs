@@ -961,6 +961,26 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                         memory_map.entry_mut(context_addr)?.put(k, v)?;
                     }
                 }
+                MONCE => {
+                    nsw!();
+                    let v = ops.pop()?;
+                    let k = ops.pop()?;
+                    crate::space::validate_volatile_kv_put(&k, &v, &kv_limits, false, MemoryError)?;
+                    let klen = k.extract_key_bytes_with_error_code(MemoryError)?.len();
+                    let vlen = v.val_size();
+                    let memory_map = machine.memory_map_mut();
+                    let exists = match memory_map.entry(context_addr)? {
+                        Some(mem) => mem.contains_key(&k)?,
+                        None => false,
+                    };
+                    if exists {
+                        return itr_err_fmt!(MemoryKeyExists, "memory_once key already initialized");
+                    }
+                    gas_resource!(stack_write, klen);
+                    gas_resource!(stack_write, vlen);
+                    gas_resource_raw!(gst.memory_key_cost);
+                    memory_map.entry_mut(context_addr)?.put(k, v)?;
+                }
                 MGET => {
                     let memory_map = machine.memory_map_mut();
                     kvget!(k => memory_map.get(context_addr, k)?)

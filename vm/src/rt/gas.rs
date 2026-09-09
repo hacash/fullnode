@@ -52,7 +52,7 @@ impl GasTable {
         gst.set(6, &[CLEAR, KEYS, VALUES, TUPLE2LIST, UNPACK]);
         gst.set(8, &[CLONE, MERGE, PACKLIST, PACKMAP, PACKTUPLE]);
         gst.set(10, &[MPUT, GPUT, CALLSELF, CALLSELFVIEW, CALLSELFPURE]);
-        gst.set(12, &[MTAKE, CALLUSEVIEW, CALLUSEPURE]);
+        gst.set(12, &[MONCE, MTAKE, CALLUSEVIEW, CALLUSEPURE]);
         gst.set(16, &[NTENV, NTCTL, NTFUNC, CALLTHIS, CALLSUPER, CODECALL]);
         gst.set(20, &[LOG1, CALLEXTVIEW]);
         gst.set(24, &[LOG2, CALLEXT, CALL]);

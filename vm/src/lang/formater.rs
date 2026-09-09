@@ -468,6 +468,7 @@ impl<'a> Formater<'a> {
         let code: Bytecode = std_mem_transmute!(node.bytecode());
         let meta = match code {
             MPUT => MPUT.metadata(),
+            MONCE => MONCE.metadata(),
             SPUT => SPUT.metadata(),
             _ => return None,
         };

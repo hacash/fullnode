@@ -72,7 +72,7 @@ impl DiaWorkConf {
         let sec = sys::ini_section(&ini, "default");
         let gpu = sys::ini_section(&ini, "gpu");
         Ok(Self {
-            rpcaddr: sys::ini_must(sec, "connect", "127.0.0.1:8082"),
+            rpcaddr: super::plain_http_host(&sys::ini_must(sec, "connect", "127.0.0.1:8082"))?,
             threads: sys::ini_must_u64(sec, "supervene", 2).max(1) as usize,
             bid_address: Address::default(),
             reward_address: Address::default(),

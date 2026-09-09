@@ -292,6 +292,7 @@ irfn_define! {
     global_get
     memory_put
     memory_get
+    memory_once
     memory_take
     status_put
     status_get
