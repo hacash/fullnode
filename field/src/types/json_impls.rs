@@ -2,7 +2,7 @@ use sys::{Ret, errf};
 
 use crate::json::{
     FromJSON, JSONBinaryFormat, JSONFormater, ToJSON, json_decode_binary,
-    json_expect_quoted_decoded, json_expect_unquoted, json_split_array,
+    json_expect_quoted_decoded, json_expect_uint_text, json_expect_unquoted, json_split_array,
 };
 use crate::types::*;
 
@@ -17,7 +17,7 @@ macro_rules! impl_uint_json {
 
             impl FromJSON for $name {
                 fn from_json(&mut self, json: &str) -> Ret<()> {
-                    let v = json_expect_unquoted(json)?
+                    let v = json_expect_uint_text(json)?
                         .parse()
                         .map_err(|_| sys::Error::normal(format!("cannot parse {}", stringify!($name))))?;
                     *self = <$name>::from_checked(v).ok_or_else(|| {
@@ -198,7 +198,7 @@ impl ToJSON for Fold64 {
 impl FromJSON for Fold64 {
     fn from_json(&mut self, json: &str) -> Ret<()> {
         *self = Fold64::from(
-            json_expect_unquoted(json)?
+            json_expect_uint_text(json)?
                 .parse()
                 .map_err(|_| sys::Error::normal("cannot parse Fold64"))?,
         )?;
@@ -408,6 +408,52 @@ mod tests {
         let mut small = Uint1::default();
         assert!(small.from_json("255").is_ok());
         assert!(small.from_json("256").is_err());
+    }
+
+    #[test]
+    fn uint_json_accepts_exact_decimal_strings() {
+        macro_rules! check {
+            ($name:ty, $max:expr) => {{
+                let mut value = <$name>::default();
+                value.from_json(&format!("\"{}\"", $max)).unwrap();
+                assert_eq!(value.uint(), $max);
+            }};
+        }
+        check!(Uint1, Uint1::MAX);
+        check!(Uint2, Uint2::MAX);
+        check!(Uint3, Uint3::MAX);
+        check!(Uint4, Uint4::MAX);
+        check!(Uint5, Uint5::MAX);
+        check!(Uint6, Uint6::MAX);
+        check!(Uint7, Uint7::MAX);
+        check!(Uint8, Uint8::MAX);
+        check!(Uint10, Uint10::MAX);
+        check!(Uint12, Uint12::MAX);
+        check!(Uint16, Uint16::MAX);
+
+        let mut fold = Fold64::default();
+        fold.from_json(&format!("\"{}\"", Fold64::MAX)).unwrap();
+        assert_eq!(fold.uint(), Fold64::MAX);
+
+        let mut leading_zero = Uint2::default();
+        leading_zero.from_json("\"00042\"").unwrap();
+        assert_eq!(leading_zero.uint(), 42);
+    }
+
+    #[test]
+    fn uint_json_strings_reject_non_integer_and_overflow_values() {
+        let invalid = [
+            "\"\"", "\" 1\"", "\"1 \"", "\"+1\"", "\"-1\"", "\"1.0\"", "\"1e2\"", "\"true\"", "001",
+        ];
+        for raw in invalid {
+            let mut value = Uint8::default();
+            assert!(value.from_json(raw).is_err(), "accepted {raw}");
+        }
+
+        let mut small = Uint1::default();
+        assert!(small.from_json("\"256\"").is_err());
+        let mut fold = Fold64::default();
+        assert!(fold.from_json("\"2305843009213693952\"").is_err());
     }
 
     #[test]

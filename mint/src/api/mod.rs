@@ -19,9 +19,10 @@ use miner::{
     miner_success_handler,
 };
 use query::{
-    balance_handler, block_datas_handler, block_intro_handler, block_pool_stats_handler,
-    block_recents_handler, block_views_handler, channel_handler, diamond_bidding_handler,
-    diamond_engrave_handler, diamond_handler, diamond_inscription_protocol_cost_append_handler,
+    asset_query_handler, balance_handler, block_datas_handler, block_intro_handler,
+    block_pool_stats_handler, block_recents_handler, block_views_handler, channel_handler,
+    diamond_bidding_handler, diamond_engrave_handler, diamond_handler,
+    diamond_inscription_protocol_cost_append_handler,
     diamond_inscription_protocol_cost_drop_handler, diamond_inscription_protocol_cost_edit_handler,
     diamond_inscription_protocol_cost_handler, diamond_inscription_protocol_cost_move_handler,
     diamond_views_handler, fee_average_handler, hashrate_handler, hashrate_logs_handler,
@@ -77,6 +78,7 @@ impl ApiService for MintApi {
             ApiRoute::get("/query/latest", latest_handler),
             ApiRoute::get("/query/supply", supply_handler),
             ApiRoute::get("/query/balance", balance_handler),
+            ApiRoute::get("/query/asset", asset_query_handler),
             ApiRoute::get("/query/diamond", diamond_handler),
             ApiRoute::get("/query/diamond/bidding", diamond_bidding_handler),
             ApiRoute::get("/query/diamond/views", diamond_views_handler),

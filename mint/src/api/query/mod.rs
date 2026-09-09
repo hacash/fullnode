@@ -1,5 +1,6 @@
 //! Mint query / submit HTTP handlers.
 
+mod asset;
 mod balance;
 mod block;
 mod channel;
@@ -8,6 +9,7 @@ mod hashrate;
 mod supply;
 mod tx;
 
+pub(crate) use asset::asset_query_handler;
 pub(crate) use balance::balance_handler;
 pub(crate) use block::{
     block_datas_handler, block_intro_handler, block_pool_stats_handler, block_recents_handler,

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use sys::{Ret, errf};
@@ -244,6 +245,28 @@ pub fn json_expect_unquoted(s: &str) -> Ret<&str> {
         return errf!("json value must not be quoted");
     }
     Ok(s)
+}
+
+/// Return an unsigned base-10 integer from either a JSON number or string.
+/// Quoted values are decoded as JSON strings first, preserving integers that
+/// cannot be represented exactly by JavaScript's `Number` type.
+pub fn json_expect_uint_text(s: &str) -> Ret<Cow<'_, str>> {
+    let s = s.trim();
+    let (text, quoted) = if s.starts_with('"') {
+        (Cow::Owned(json_expect_quoted_decoded(s)?), true)
+    } else {
+        (Cow::Borrowed(json_expect_unquoted(s)?), false)
+    };
+    let bytes = text.as_bytes();
+    if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+        return errf!("json value must be an unsigned decimal integer");
+    }
+    // A string is decimal text and may contain leading zeroes. An unquoted
+    // value must also obey the JSON number grammar.
+    if !quoted && bytes.len() > 1 && bytes[0] == b'0' {
+        return errf!("json number has leading zeros");
+    }
+    Ok(text)
 }
 
 // ─── JSON engine (single implementation) ───────────────────────────────
