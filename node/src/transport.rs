@@ -91,6 +91,18 @@ impl P2PNode {
 
     /// Dial a peer and run the handshake.
     pub async fn connect_addr(self: &Arc<Self>, addr: SocketAddr) -> Rerr {
+        // Never open a second live connection to an address already held: the
+        // duplicate would replace the existing peer in the table, which cancels
+        // the active sync session mid-flight (and can restart it from a stale
+        // local height).
+        if self
+            .peertable
+            .values_snapshot()
+            .iter()
+            .any(|peer| peer.addr == addr)
+        {
+            return Ok(());
+        }
         let stream =
             tokio::time::timeout(Duration::from_secs(6), tokio::net::TcpStream::connect(addr))
                 .await

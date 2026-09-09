@@ -244,6 +244,15 @@ fn process_block(
         check_replay_index(ctx.eng, pkg)?;
     }
 
+    // A session can be (re)created with a start height the canonical head has
+    // already passed: a duplicate connection replaces the sync peer, the old
+    // apply thread keeps draining its queued batch, and the replacement session
+    // was planned from the older local height. Those blocks are already applied;
+    // skip them instead of failing on a pruned parent or a non-extending head.
+    if ctx.replay.is_none() && height <= ctx.eng.tree.head_height() {
+        return Ok(None);
+    }
+
     // Wire-level checks (fast-sync blocks come from a trusted source).
     if !ctx.pipelined {
         crate::verify::check_intrinsic(ctx.eng, pkg)?;
