@@ -1,4 +1,4 @@
-﻿/* parse bytecode params */
+/* parse bytecode params */
 #[inline(always)]
 fn finish_ntcall(
     cap: &SpaceCap,
@@ -263,7 +263,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
         // read inst
         // #[cfg(debug_assertions)]  // uncomment for debug-only check
         if *pc >= codes.len() {
-            return itr_err_code!(CodeOverflow)
+            return itr_err_code!(CodeOverflow);
         }
         let instbyte = codes[*pc];
         let instruction = Bytecode::try_from_u8(instbyte)?;
@@ -315,7 +315,13 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 let kid = u16::from_be_bytes([instbyte, idx]);
                 let mut actbody = vec![];
                 if opcode_abi.consumes_body {
-                    let mut bdv = ops.peek()?.extract_call_data()?;
+                    let tos = ops.peek()?;
+                    if let Compo(c) = tos {
+                        if c.is_list() {
+                            gas_resource!(compo_items_read, c.len());
+                        }
+                    }
+                    let mut bdv = tos.extract_call_data(cap)?;
                     actbody.append(&mut bdv);
                     gas_resource!(act_bytes, actbody.len());
                 }
@@ -352,7 +358,8 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 }
                 gas_resource_raw!(bgasu);
                 if opcode_abi.produces_value {
-                    let resv = Value::type_from(act_retv_type(host, act_kind, idx)?, cres)?.valid(cap)?;
+                    let resv =
+                        Value::type_from(act_retv_type(host, act_kind, idx)?, cres)?.valid(cap)?;
                     gas_resource!(act_bytes, resv.val_size());
                     if opcode_abi.consumes_body {
                         *ops.peek()? = resv;
@@ -384,10 +391,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 let current_total = machine.log_bytes_total();
                 let next_total = current_total
                     .checked_add(log_bytes)
-                    .ok_or_else(|| ItrErr::new(
-                        OutOfLogSize,
-                        "log bytes overflow",
-                    ))?;
+                    .ok_or_else(|| ItrErr::new(OutOfLogSize, "log bytes overflow"))?;
                 if next_total > cap.log_size {
                     return itr_err_fmt!(
                         OutOfLogSize,
@@ -530,9 +534,25 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 // native func (pure computation, always allowed)
                 NTFUNC => {
                     let nt_idx = pu8!();
-                    let argv = ops.pop()?.extract_call_data()?;
-                    gas_resource!(nt_bytes, argv.len());
-                    let (r, g) = call_ntfunc(hei, nt_idx, &argv)?;
+                    let argv = ops.pop()?.valid(cap)?;
+                    argv.check_vm_boundary_argv()?;
+                    let (r, g) = match NativeFunc::argv_pack(nt_idx)? {
+                        NativeArgvPack::Concat => {
+                            if let Compo(c) = &argv {
+                                if c.is_list() {
+                                    gas_resource!(compo_items_read, c.len());
+                                }
+                            }
+                            let raw = argv.extract_call_data(cap)?;
+                            gas_resource!(nt_bytes, raw.len());
+                            call_ntfunc(hei, nt_idx, &raw)?
+                        }
+                        NativeArgvPack::Packed => {
+                            gas_resource!(nt_bytes, packed_payload_bytes(&argv));
+                            gas_resource!(compo_items_read, packed_item_count(&argv));
+                            call_ntfunc_packed(hei, nt_idx, argv)?
+                        }
+                    };
                     finish_ntcall(cap, gst, &mut step_gas_use, ops, r, g)?;
                 }
                 // native env (VM context read, forbidden in Pure mode)
@@ -896,6 +916,25 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                     gas_add!(storage, raw, fee);
                     rebate_add!(rebate);
                 }
+                SPATCH => {
+                    nsw!();
+                    let patch_set = ops.pop()?.valid(cap)?;
+                    let expected = ops.pop()?.valid(cap)?;
+                    let patch_len = match &patch_set {
+                        Bytes(b) => b.len(),
+                        _ => return itr_err_code!(StoragePatchInvalid),
+                    };
+                    if !matches!(&expected, Bytes(_)) {
+                        return itr_err_code!(StoragePatchInvalid);
+                    }
+                    let k = ops.pop()?;
+                    let (digest, fee, rebate, final_len) =
+                        host.spatch(gst, cap, context_addr, k, expected, patch_set)?;
+                    gas_resource_raw!(32 + gst.nt_bytes(patch_len + final_len));
+                    gas_add!(storage, raw, fee);
+                    rebate_add!(rebate);
+                    ops.push(digest)?;
+                }
                 SDEL => {
                     nsw!();
                     let k = ops.pop()?;
@@ -974,7 +1013,10 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                         None => false,
                     };
                     if exists {
-                        return itr_err_fmt!(MemoryKeyExists, "memory_once key already initialized");
+                        return itr_err_fmt!(
+                            MemoryKeyExists,
+                            "memory_once key already initialized"
+                        );
                     }
                     gas_resource!(stack_write, klen);
                     gas_resource!(stack_write, vlen);
@@ -1139,8 +1181,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
 
         // reduce gas for use: charge protocol first, then commit VM bucket
         let current_gas_use = machine.gas_use();
-        let (step_total, next_gas_use) =
-            check_add_gas_use(&current_gas_use, &step_gas_use, gst)?;
+        let (step_total, next_gas_use) = check_add_gas_use(&current_gas_use, &step_gas_use, gst)?;
         VmHost::gas_charge(host, step_total)?;
         VmHost::gas_rebate(host, step_gas_rebate)?;
         machine.commit_gas_use(next_gas_use);

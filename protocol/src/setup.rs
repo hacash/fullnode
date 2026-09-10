@@ -7,10 +7,10 @@ use base::{
     VmValueType,
 };
 use std::sync::Arc;
-use sys::Rerr;
-use sys::Ret;
 #[cfg(test)]
 use sys::errf;
+use sys::Rerr;
+use sys::Ret;
 fn create_context(
     env: Env,
     registry: Arc<dyn ExecutionServices>,
@@ -110,6 +110,8 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
         BalanceCoin = (Bytes, 1),
         BalanceAsset = (U64, 2),
         CheckSignature = (Bool, 1),
+        SigsetCount = (U8, 1),
+        SigsetAtLeast = (Bool, 2),
         HacdInscNum = (U8, 1),
         HacdInscGet = (Bytes, 2),
         HacdNameList = (Bytes, 3),
@@ -241,6 +243,13 @@ mod tests {
                 VmValueType::Bool,
                 1,
             ),
+            (SigsetCount::KIND, SigsetCount::NAME, VmValueType::U8, 1),
+            (
+                SigsetAtLeast::KIND,
+                SigsetAtLeast::NAME,
+                VmValueType::Bool,
+                2,
+            ),
             (HacdInscNum::KIND, HacdInscNum::NAME, VmValueType::U8, 1),
             (HacdInscGet::KIND, HacdInscGet::NAME, VmValueType::Bytes, 2),
             (
@@ -279,6 +288,8 @@ mod tests {
             BalanceCoin::KIND,
             BalanceAsset::KIND,
             CheckSignature::KIND,
+            SigsetCount::KIND,
+            SigsetAtLeast::KIND,
             HacdInscNum::KIND,
             HacdInscGet::KIND,
             HacdNameList::KIND,
@@ -328,6 +339,8 @@ mod tests {
         assert_eq!(name(VmHostCallKind::View, 1), Some("balance_coin"));
         assert_eq!(name(VmHostCallKind::View, 2), Some("balance_asset"));
         assert_eq!(name(VmHostCallKind::View, 9), Some("check_signature"));
+        assert_eq!(name(VmHostCallKind::View, 10), Some("sigset_count"));
+        assert_eq!(name(VmHostCallKind::View, 11), Some("sigset_at_least"));
         assert_eq!(name(VmHostCallKind::View, 17), Some("hacd_insc_num"));
         assert_eq!(name(VmHostCallKind::View, 18), Some("hacd_insc_get"));
         assert_eq!(name(VmHostCallKind::View, 19), Some("hacd_name_list"));

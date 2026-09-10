@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use base::{AddrOrPtr, Transaction};
 use field::{Amount, AssetAmtW1, BlockHeight, ChainIDList, DiamondNumber, ListW2, Satoshi, Uint2};
-use sys::{Rerr, Ret, errf};
+use sys::{errf, Rerr, Ret};
 
 use super::transfer::addr_or_ptr_readable;
 

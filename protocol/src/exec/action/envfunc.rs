@@ -1,13 +1,13 @@
 //! VM syscall action execute bodies.
 
 use base::CoreState;
-use field::{Address, DiamondName, Encode};
+use field::{Address, AddressW1, DiamondName, Encode};
 use sys::errf;
 
 use crate::codec::action::{
     BalanceAsset, BalanceCoin, BlockAuthorAddr, CheckSignature, EnvHeight, HacdInscGet,
-    HacdInscNum, HacdNameList, HacdOwnerAddrs, TxBlob, TxBlobNum, TxBlobSize, TxMainAddr,
-    TxMessage, TxMessageNum,
+    HacdInscNum, HacdNameList, HacdOwnerAddrs, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum,
+    TxBlobSize, TxMainAddr, TxMessage, TxMessageNum,
 };
 
 /// Temporary upgrade gate for the tx message/blob read syscalls (0x0615/0x0616/
@@ -185,6 +185,70 @@ base::impl_action_execute! {
     }
 }
 
+const SIGSET_MAX: u8 = 200;
+
+fn sigset_validate_keys(keys: &AddressW1) -> sys::Ret<u8> {
+    let n = keys.length();
+    if n == 0 || n > SIGSET_MAX as usize {
+        return errf!("sigset key count {} not in 1..={}", n, SIGSET_MAX);
+    }
+    let list = keys.as_list();
+    for (i, addr) in list.iter().enumerate() {
+        addr.must_privkey()?;
+        if addr.as_ref() == &[0u8; Address::SIZE] {
+            return errf!("sigset address cannot be the zero address");
+        }
+        if addr.is_privkey_unknown() {
+            return errf!(
+                "sigset address {} is a system address with unknown private key",
+                addr.to_readable()
+            );
+        }
+        if list[..i].contains(addr) {
+            return errf!("sigset address {} is duplicated", addr.to_readable());
+        }
+    }
+    Ok(n as u8)
+}
+
+fn sigset_signed_count(ctx: &mut dyn base::Context, keys: &AddressW1) -> sys::Ret<u8> {
+    sigset_validate_keys(keys)?;
+    let mut count = 0u8;
+    for addr in keys.as_list() {
+        if ctx.check_sign(addr).is_ok() {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+base::impl_action_execute! {
+    SigsetCount {
+        (self, ctx) {
+            Ok(vec![sigset_signed_count(ctx, &self.keys)?])
+        }
+    }
+}
+
+base::impl_action_execute! {
+    SigsetAtLeast {
+        (self, ctx) {
+            let n = sigset_validate_keys(&self.keys)?;
+            let threshold = self.threshold.uint();
+            if threshold == 0 || threshold > n {
+                return errf!("sigset threshold {} not in 1..={}", threshold, n);
+            }
+            let mut count = 0u8;
+            for addr in self.keys.as_list() {
+                if ctx.check_sign(addr).is_ok() {
+                    count += 1;
+                }
+            }
+            Ok(vec![u8::from(count >= threshold)])
+        }
+    }
+}
+
 base::impl_action_execute! {
     HacdInscNum {
         (self, ctx) {
@@ -273,5 +337,336 @@ base::impl_action_execute! {
             }
             Ok(res)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base::{
+        ActOut, ActionExecute, ActionRef, BinaryCodecs, BlockHasherFn, BlockRef, Context, Env,
+        ExecFrom, ExecutionServices, JsonCodecs, LogEntry, P2sh, StateLayer, StateRead, TexLedger,
+        Transaction, TxRef, Vm, VmExecutionParams, VmHostActionDef, VmHostCallKind,
+    };
+    use field::{Amount, Encode, Uint1};
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+    use sys::{Rerr, Ret};
+
+    fn privkey_addr(n: u8) -> Address {
+        let mut bytes = [0u8; Address::SIZE];
+        bytes[1] = n;
+        Address::from(bytes)
+    }
+
+    fn keys(addrs: Vec<Address>) -> AddressW1 {
+        AddressW1::from(addrs).unwrap()
+    }
+
+    fn contract_addr() -> Address {
+        let mut bytes = [0u8; Address::SIZE];
+        bytes[0] = Address::VERSION_CONTRACT;
+        bytes[1] = 1;
+        Address::from(bytes)
+    }
+
+    fn zero_addr() -> Address {
+        Address::from([0u8; Address::SIZE])
+    }
+
+    fn unknown_addr() -> Address {
+        crate::params::SETTLEMENT_ADDR
+    }
+
+    #[derive(Debug)]
+    struct DummyTx;
+
+    impl Encode for DummyTx {
+        fn size(&self) -> usize {
+            0
+        }
+        fn encode_to(&self, _out: &mut Vec<u8>) {}
+    }
+
+    impl Transaction for DummyTx {
+        fn ty(&self) -> u8 {
+            3
+        }
+        fn main(&self) -> Address {
+            privkey_addr(1)
+        }
+        fn fee(&self) -> &Amount {
+            Amount::zero_ref()
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Default)]
+    struct MemLayer(HashMap<Vec<u8>, Vec<u8>>);
+
+    impl StateRead for MemLayer {
+        fn get(&self, key: &[u8]) -> Ret<Option<Vec<u8>>> {
+            Ok(self.0.get(key).cloned())
+        }
+    }
+
+    impl StateLayer for MemLayer {
+        fn set(&mut self, key: &[u8], val: Vec<u8>) {
+            self.0.insert(key.to_vec(), val);
+        }
+        fn del(&mut self, key: &[u8]) {
+            self.0.remove(key);
+        }
+    }
+
+    struct StubServices;
+
+    fn stub_hasher(_height: u64, _stuff: &[u8]) -> [u8; base::HASH_SIZE] {
+        [0u8; base::HASH_SIZE]
+    }
+
+    impl BinaryCodecs for StubServices {
+        fn decode_action(&self, _buf: &[u8]) -> Ret<(ActionRef, usize)> {
+            errf!("stub: decode_action")
+        }
+        fn decode_transaction(&self, _buf: &[u8]) -> Ret<(TxRef, usize)> {
+            errf!("stub: decode_transaction")
+        }
+        fn decode_block(&self, _buf: &[u8]) -> Ret<(BlockRef, usize)> {
+            errf!("stub: decode_block")
+        }
+        fn peek_block_size(&self, _buf: &[u8]) -> Ret<usize> {
+            errf!("stub: peek_block_size")
+        }
+        fn block_hash(&self, _height: u64, _stuff: &[u8]) -> [u8; base::HASH_SIZE] {
+            [0u8; base::HASH_SIZE]
+        }
+        fn block_hasher_fn(&self) -> BlockHasherFn {
+            stub_hasher
+        }
+    }
+
+    impl JsonCodecs for StubServices {
+        fn decode_action_json(&self, _json: &str) -> Ret<ActionRef> {
+            errf!("stub: decode_action_json")
+        }
+    }
+
+    impl ExecutionServices for StubServices {
+        fn assign_vm(&self, _height: u64) -> Option<Box<dyn Vm>> {
+            None
+        }
+        fn vm_host_def(&self, _kind: VmHostCallKind, _id: u8) -> Option<&VmHostActionDef> {
+            None
+        }
+        fn vm_params(&self) -> Ret<&VmExecutionParams> {
+            errf!("stub: vm_params")
+        }
+        fn execution_profile(&self) -> Ret<&'static dyn base::ExecutionProfile> {
+            errf!("stub: execution_profile")
+        }
+        fn create_context(
+            self: Arc<Self>,
+            _env: Env,
+            _chunk: base::StateChunkRef,
+            _tx: TxRef,
+        ) -> Ret<Box<dyn Context>> {
+            errf!("stub: create_context")
+        }
+    }
+
+    struct SigsetCtx {
+        env: Env,
+        tx: DummyTx,
+        layer: MemLayer,
+        exec_from: ExecFrom,
+        tex: TexLedger,
+        signed: HashSet<Address>,
+    }
+
+    impl SigsetCtx {
+        fn new(signed: impl IntoIterator<Item = Address>) -> Self {
+            Self {
+                env: Env::default(),
+                tx: DummyTx,
+                layer: MemLayer::default(),
+                exec_from: ExecFrom::Call,
+                tex: TexLedger::default(),
+                signed: signed.into_iter().collect(),
+            }
+        }
+    }
+
+    impl Context for SigsetCtx {
+        fn services(&self) -> Arc<dyn ExecutionServices> {
+            Arc::new(StubServices)
+        }
+        fn env(&self) -> &Env {
+            &self.env
+        }
+        fn tx(&self) -> &dyn Transaction {
+            &self.tx
+        }
+        fn exec_from(&self) -> ExecFrom {
+            self.exec_from
+        }
+        fn exec_from_set(&mut self, from: ExecFrom) {
+            self.exec_from = from;
+        }
+        fn check_sign(&mut self, adr: &Address) -> Rerr {
+            if self.signed.contains(adr) {
+                Ok(())
+            } else {
+                errf!("unsigned")
+            }
+        }
+        fn layer(&mut self) -> &mut dyn StateLayer {
+            &mut self.layer
+        }
+        fn emit_log(&mut self, _entry: LogEntry) {}
+        fn gas_remaining(&self) -> i64 {
+            i64::MAX
+        }
+        fn gas_charge(&mut self, _gas: i64) -> Rerr {
+            Ok(())
+        }
+        fn gas_rebate(&mut self, _gas: i64) -> Rerr {
+            Ok(())
+        }
+        fn gas_initialize(&mut self, _budget: i64) -> Rerr {
+            Ok(())
+        }
+        fn gas_refund(&mut self) -> Rerr {
+            Ok(())
+        }
+        fn snapshot_volatile(&self) -> Box<dyn std::any::Any> {
+            Box::new(())
+        }
+        fn restore_volatile(&mut self, _snap: Box<dyn std::any::Any>) {}
+        fn action_call(&mut self, _kind: u16, _body: Vec<u8>) -> Ret<ActOut> {
+            errf!("stub: action_call")
+        }
+        fn vm_take(&mut self) -> Option<Box<dyn Vm>> {
+            None
+        }
+        fn vm_put(&mut self, _vm: Box<dyn Vm>) {}
+        fn as_context_mut(&mut self) -> &mut dyn Context {
+            self
+        }
+        fn tex_ledger(&self) -> &TexLedger {
+            &self.tex
+        }
+        fn p2sh_set(&mut self, _addr: Address, _p2sh: Box<dyn P2sh>) -> Rerr {
+            errf!("stub: p2sh_set")
+        }
+    }
+
+    fn run_count(addrs: AddressW1, signed: &[Address]) -> sys::Ret<ActOut> {
+        ActionExecute::execute(
+            &SigsetCount::new(addrs),
+            &mut SigsetCtx::new(signed.iter().copied()),
+        )
+    }
+
+    fn run_at_least(addrs: AddressW1, threshold: u8, signed: &[Address]) -> sys::Ret<ActOut> {
+        ActionExecute::execute(
+            &SigsetAtLeast::new(addrs, Uint1::from(threshold)),
+            &mut SigsetCtx::new(signed.iter().copied()),
+        )
+    }
+
+    fn assert_err(res: sys::Ret<ActOut>) {
+        assert!(res.is_err(), "expected error, got {res:?}");
+    }
+
+    #[test]
+    fn sigset_malformed_sets_are_errors_not_zero_or_false() {
+        assert_err(run_count(keys(vec![]), &[]));
+        assert_err(run_at_least(keys(vec![]), 1, &[]));
+
+        let n51 = keys((1u8..=51).map(privkey_addr).collect());
+        let (_, ret) = run_count(n51.clone(), &[]).unwrap();
+        assert_eq!(ret, vec![0]);
+        let (_, ret) = run_at_least(n51, 1, &[]).unwrap();
+        assert_eq!(ret, vec![0]);
+
+        let n201 = keys((1u8..=201).map(privkey_addr).collect());
+        assert_err(run_count(n201.clone(), &[]));
+        assert_err(run_at_least(n201, 1, &[]));
+
+        assert_err(run_count(keys(vec![zero_addr()]), &[]));
+        assert_err(run_at_least(keys(vec![zero_addr()]), 1, &[]));
+
+        assert_err(run_count(keys(vec![unknown_addr()]), &[]));
+        assert_err(run_at_least(keys(vec![unknown_addr()]), 1, &[]));
+
+        assert_err(run_count(keys(vec![contract_addr()]), &[]));
+        assert_err(run_at_least(keys(vec![contract_addr()]), 1, &[]));
+
+        let a = privkey_addr(1);
+        assert_err(run_count(keys(vec![a, a]), &[a]));
+        assert_err(run_at_least(keys(vec![a, a]), 1, &[a]));
+
+        assert_err(run_at_least(keys(vec![a]), 0, &[a]));
+        assert_err(run_at_least(keys(vec![a]), 2, &[a]));
+    }
+
+    #[test]
+    fn sigset_duplicate_after_threshold_still_fails() {
+        let a = privkey_addr(1);
+        let b = privkey_addr(2);
+        assert_err(run_at_least(keys(vec![a, b, a]), 2, &[a, b]));
+        assert_err(run_count(keys(vec![a, b, a]), &[a, b]));
+    }
+
+    #[test]
+    fn sigset_legal_counts_match_check_sign() {
+        let a = privkey_addr(1);
+        let (gas, ret) = run_count(keys(vec![a]), &[a]).unwrap();
+        assert_eq!(ret, vec![1]);
+        assert_eq!(gas, Encode::size(&SigsetCount::new(keys(vec![a]))) as u32);
+        let (_, ret) = run_at_least(keys(vec![a]), 1, &[a]).unwrap();
+        assert_eq!(ret, vec![1]);
+
+        let b = privkey_addr(2);
+        let c = privkey_addr(3);
+        let trio = keys(vec![a, b, c]);
+        let signed = [a, b];
+        let (_, ret) = run_count(trio.clone(), &signed).unwrap();
+        assert_eq!(ret, vec![2]);
+        let (_, ret) = run_at_least(trio.clone(), 2, &signed).unwrap();
+        assert_eq!(ret, vec![1]);
+        let (_, ret) = run_at_least(trio, 3, &signed).unwrap();
+        assert_eq!(ret, vec![0]);
+    }
+
+    #[test]
+    fn sigset_n50_executes_and_costs_at_least_n1() {
+        let n50 = keys((1u8..=50).map(privkey_addr).collect());
+        let n1 = keys(vec![privkey_addr(1)]);
+        let (gas50, ret) = run_count(n50.clone(), &[]).unwrap();
+        assert_eq!(ret, vec![0]);
+        let (gas1, _) = run_count(n1, &[]).unwrap();
+        assert!(gas50 >= gas1);
+        assert_eq!(gas50, Encode::size(&SigsetCount::new(n50.clone())) as u32);
+
+        let (_, ret) = run_at_least(n50, 1, &[]).unwrap();
+        assert_eq!(ret, vec![0]);
+    }
+
+    #[test]
+    fn sigset_n200_executes_and_costs_at_least_n1() {
+        let n200 = keys((1u8..=200).map(privkey_addr).collect());
+        let n1 = keys(vec![privkey_addr(1)]);
+        let (gas200, ret) = run_count(n200.clone(), &[]).unwrap();
+        assert_eq!(ret, vec![0]);
+        let (gas1, _) = run_count(n1, &[]).unwrap();
+        assert!(gas200 >= gas1);
+        assert_eq!(gas200, Encode::size(&SigsetCount::new(n200.clone())) as u32);
+
+        let (_, ret) = run_at_least(n200, 1, &[]).unwrap();
+        assert_eq!(ret, vec![0]);
     }
 }

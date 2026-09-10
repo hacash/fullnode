@@ -96,6 +96,16 @@ pub trait VmHost {
         value: Value,
     ) -> VmrtRes<(i64, i64)>;
 
+    fn spatch(
+        &mut self,
+        gas: &GasExtra,
+        cap: &SpaceCap,
+        addr: &Address,
+        key: Value,
+        expected: Value,
+        patch_set: Value,
+    ) -> VmrtRes<(Value, i64, i64, usize)>;
+
     fn srent(
         &mut self,
         gas: &GasExtra,
@@ -252,6 +262,19 @@ impl<T: Context + ?Sized> VmHost for T {
     ) -> VmrtRes<(i64, i64)> {
         let height = self.env().block.height;
         VMState::wrap(self.layer()).sedit(gas, cap, height, addr, key, value)
+    }
+
+    fn spatch(
+        &mut self,
+        gas: &GasExtra,
+        cap: &SpaceCap,
+        addr: &Address,
+        key: Value,
+        expected: Value,
+        patch_set: Value,
+    ) -> VmrtRes<(Value, i64, i64, usize)> {
+        let height = self.env().block.height;
+        VMState::wrap(self.layer()).spatch(gas, cap, height, addr, key, expected, patch_set)
     }
 
     fn srent(

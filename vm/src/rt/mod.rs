@@ -58,6 +58,9 @@ include!("lang.rs");
 // in `vm::native`). Codec-safe: the fitsh decompiler renders NTCTL/NTENV/NTFUNC
 // by name in codec-only builds.
 include!("native_catalog.rs");
+mod packed_argv;
+#[allow(unused_imports)] // interpreter NTFUNC Packed branch (wired by parent)
+pub use packed_argv::{packed_item_count, packed_payload_bytes};
 include!("cap.rs");
 include!("gas.rs");
 mod func_argv;

@@ -1272,4 +1272,177 @@ mod token_t {
             assert_eq!(expect, reparsed, "all-off roundtrip mismatch (map_enabled={})\n{}", map_enabled, text);
         }
     }
+
+    #[test]
+    fn patches_list_literal_roundtrips_without_flattening_concat_args() {
+        use super::lang_to_irnode;
+        use super::Formater;
+        use super::PrintOption;
+
+        let ir = lang_to_irnode("return patches([0, 1, 1 as u8])").expect("compile patches");
+        let mut opt = PrintOption::new("  ", 0);
+        opt.recover_literals = true;
+        opt.flatten_array_list = true;
+        opt.simplify_numeric_as_suffix = true;
+        let decompiled = Formater::new(&opt).print(&ir);
+        assert!(
+            decompiled.contains("patches(["),
+            "Packed patches must print the list as one argument, got: {}",
+            decompiled
+        );
+        assert!(
+            !decompiled.contains("patches(0,"),
+            "Packed list must not flatten into Concat CAT args, got: {}",
+            decompiled
+        );
+        let ir2 = lang_to_irnode(&decompiled).expect("recompile decompiled patches");
+        let decompiled2 = Formater::new(&opt).print(&ir2);
+        assert!(
+            decompiled2.contains("patches(["),
+            "roundtrip must keep packed list argv, got: {}",
+            decompiled2
+        );
+    }
+
+    fn ir_contains_cat(node: &dyn super::IRNode) -> bool {
+        use crate::ir::{
+            IRNodeArray, IRNodeDouble, IRNodeParam1Single, IRNodeSingle, IRNodeWrapOne,
+        };
+        use crate::rt::Bytecode;
+        if node.bytecode() == Bytecode::CAT as u8 {
+            return true;
+        }
+        if let Some(arr) = node.as_any().downcast_ref::<IRNodeArray>() {
+            return arr.subs.iter().any(|n| ir_contains_cat(n.as_ref()));
+        }
+        if let Some(d) = node.as_any().downcast_ref::<IRNodeDouble>() {
+            return ir_contains_cat(d.subx.as_ref()) || ir_contains_cat(d.suby.as_ref());
+        }
+        if let Some(s) = node.as_any().downcast_ref::<IRNodeSingle>() {
+            return ir_contains_cat(s.subx.as_ref());
+        }
+        if let Some(p) = node.as_any().downcast_ref::<IRNodeParam1Single>() {
+            return ir_contains_cat(p.subx.as_ref());
+        }
+        if let Some(w) = node.as_any().downcast_ref::<IRNodeWrapOne>() {
+            return ir_contains_cat(w.node.as_ref());
+        }
+        false
+    }
+
+    fn print_sigset_call(src: &str) -> String {
+        use super::lang_to_irnode;
+        use super::Formater;
+        use super::PrintOption;
+
+        let ir = lang_to_irnode(src).expect(src);
+        let mut opt = PrintOption::new("  ", 0);
+        opt.recover_literals = true;
+        opt.flatten_array_list = true;
+        opt.flatten_syscall_cat = true;
+        opt.simplify_numeric_as_suffix = true;
+        Formater::new(&opt).print(&ir)
+    }
+
+    #[test]
+    fn sigset_at_least_two_arg_compiles_with_cat_and_decompiles_as_two_args() {
+        use super::irnode_to_lang;
+        use super::lang_to_bytecode;
+        use super::lang_to_irnode;
+        use crate::rt::Bytecode;
+
+        let src = r#"return sigset_at_least("ab", 1)"#;
+        let ir = lang_to_irnode(src).expect("2-arg sigset_at_least must compile");
+        let codes = lang_to_bytecode(src).expect("2-arg sigset_at_least bytecode");
+        assert!(
+            ir_contains_cat(&ir) && codes.contains(&(Bytecode::CAT as u8)),
+            "2-arg sigset_at_least must emit CAT"
+        );
+
+        let decompiled = print_sigset_call(src);
+        assert!(
+            decompiled.contains(r#"sigset_at_least("ab", 1)"#)
+                || (decompiled.contains("sigset_at_least(")
+                    && decompiled.contains(',')
+                    && !decompiled.contains("sigset_at_least([")),
+            "2-arg decompile must stay two args, got: {}",
+            decompiled
+        );
+        assert!(
+            !decompiled.contains(r#"sigset_at_least(["ab", 1])"#),
+            "2-arg decompile must not collapse into a list, got: {}",
+            decompiled
+        );
+
+        let via_helper = irnode_to_lang(lang_to_irnode(src).unwrap()).unwrap();
+        assert!(
+            via_helper.contains("sigset_at_least(") && via_helper.contains(','),
+            "irnode_to_lang 2-arg must stay two args, got: {}",
+            via_helper
+        );
+    }
+
+    #[test]
+    fn sigset_at_least_one_arg_list_compiles_without_cat_and_decompiles_as_list() {
+        use super::irnode_to_lang;
+        use super::lang_to_bytecode;
+        use super::lang_to_irnode;
+        use crate::rt::Bytecode;
+
+        let src = r#"return sigset_at_least(["ab", 1])"#;
+        let ir = lang_to_irnode(src).expect("1-arg sigset_at_least must compile");
+        let codes = lang_to_bytecode(src).expect("1-arg sigset_at_least bytecode");
+        assert!(
+            !ir_contains_cat(&ir) && !codes.contains(&(Bytecode::CAT as u8)),
+            "1-arg raw body must not emit CAT"
+        );
+
+        let decompiled = print_sigset_call(src);
+        assert!(
+            decompiled.contains("sigset_at_least([") || decompiled.contains("sigset_at_least(list"),
+            "1-arg decompile must be a single list arg, got: {}",
+            decompiled
+        );
+        assert!(
+            !decompiled.contains(r#"sigset_at_least("ab", 1)"#),
+            "1-arg list must not flatten into two CAT args, got: {}",
+            decompiled
+        );
+
+        let via_helper = irnode_to_lang(lang_to_irnode(src).unwrap()).unwrap();
+        assert!(
+            !via_helper.contains(r#"sigset_at_least("ab", 1)"#),
+            "irnode_to_lang 1-arg must not flatten, got: {}",
+            via_helper
+        );
+    }
+
+    #[test]
+    fn sigset_count_list_compiles_without_cat() {
+        use super::lang_to_bytecode;
+        use super::lang_to_irnode;
+        use crate::rt::Bytecode;
+
+        let src = r#"return sigset_count(["a", "b"])"#;
+        let ir = lang_to_irnode(src).expect("sigset_count list must compile");
+        let codes = lang_to_bytecode(src).expect("sigset_count list bytecode");
+        assert!(
+            !ir_contains_cat(&ir) && !codes.contains(&(Bytecode::CAT as u8)),
+            "sigset_count([c0, c1]) must not emit CAT"
+        );
+    }
+
+    #[test]
+    fn sigset_at_least_arity_zero_and_three_still_fail() {
+        use super::lang_to_irnode;
+
+        assert!(
+            lang_to_irnode("return sigset_at_least()").is_err(),
+            "zero-arg sigset_at_least must fail"
+        );
+        assert!(
+            lang_to_irnode(r#"return sigset_at_least("a", "b", "c")"#).is_err(),
+            "three-arg sigset_at_least must fail"
+        );
+    }
 }

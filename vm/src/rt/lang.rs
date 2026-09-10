@@ -303,6 +303,7 @@ irfn_define! {
     storage_load
     storage_del
     storage_edit
+    storage_patch
     storage_rent
 
     div_up
@@ -336,4 +337,3 @@ pub enum Token {
     Bytes(Vec<u8>),
     Address(Address),
 }
-

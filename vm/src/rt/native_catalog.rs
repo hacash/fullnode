@@ -5,8 +5,21 @@
 /// (SDK) builds. Keep the tables here in sync with `vm::native`.
 use crate::value::ValueTy;
 
+/// How a NativeFunc's single NTFUNC argv slot is filled.
+/// Concat: compiler `CAT`s params to bytes (eager, ≤ `value_size`); interpreter
+/// uses `extract_call_data`. `extract_call_data` also accepts a one-layer list of
+/// Bytes as deferred CAT (≤ `call_data_size`). Concat list = fragments. Packed
+/// list = argv vector. Runtime disambiguates via `argv_pack`.
+/// Packed: compiler uses NativeCtl packing (0 Nil, 1 Raw, ≥2 Tuple); interpreter
+/// passes the `Value` to `call_packed`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeArgvPack {
+    Concat,
+    Packed,
+}
+
 macro_rules! native_tar_uint_tys_api {
-    (func, $EnumName:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $tar_uint_tys:expr )+) => {
+    (func, $EnumName:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $argv_pack:ident, $tar_uint_tys:expr )+) => {
         pub fn tar_uint_tys_of(&self) -> &'static [ValueTy] {
             match self {
                 $( Self::$name => $tar_uint_tys, )+
@@ -25,15 +38,31 @@ macro_rules! native_tar_uint_tys_api {
             })
         }
     };
-    (ctl, $EnumName:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $tar_uint_tys:expr )+) => {};
-    (env, $EnumName:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $tar_uint_tys:expr )+) => {};
+    (ctl, $EnumName:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $argv_pack:ident, $tar_uint_tys:expr )+) => {};
+    (env, $EnumName:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $argv_pack:ident, $tar_uint_tys:expr )+) => {};
 }
 
-/// Catalog-only generation: the enum, its idx constants and the metadata
-/// accessors. The `call` dispatch is generated in `vm::native` (execute).
-macro_rules! native_func_env_define {
-    ( $kind:ident, $EnumName:ident, $ErrCode:ident,
-      $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $tar_uint_tys:expr )+ ) => {
+macro_rules! native_catalog_argv_pack_api {
+    (with_argv_pack, $( $name:ident, $argv_pack:ident )+) => {
+        pub const fn argv_pack_of(&self) -> NativeArgvPack {
+            match self {
+                $( Self::$name => NativeArgvPack::$argv_pack, )+
+                Self::Null => NativeArgvPack::Concat,
+            }
+        }
+
+        pub fn argv_pack(idx: u8) -> VmrtRes<NativeArgvPack> {
+            Ok(Self::try_from_u8(idx)?.argv_pack_of())
+        }
+    };
+    (no_argv_pack, $( $name:ident, $argv_pack:ident )+) => {};
+}
+
+/// Shared enum + metadata expansion. Func rows carry an explicit `argv_pack`;
+/// ctl/env keep the 5-field source form and pass a dummy Concat internally.
+macro_rules! native_catalog_enum {
+    ( $kind:ident, $EnumName:ident, $ErrCode:ident, $pack_flag:ident,
+      $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $argv_pack:ident, $tar_uint_tys:expr )+ ) => {
         #[allow(non_camel_case_types)]
         #[repr(u8)]
         #[derive(Default, PartialEq, Debug, Clone, Copy)]
@@ -56,7 +85,9 @@ macro_rules! native_func_env_define {
                 }
             }
 
-            native_tar_uint_tys_api!($kind, $EnumName, $( $name = $v, $argv_len, $gas, $rty, $tar_uint_tys )+);
+            native_tar_uint_tys_api!($kind, $EnumName, $( $name = $v, $argv_len, $gas, $rty, $argv_pack, $tar_uint_tys )+);
+
+            native_catalog_argv_pack_api!($pack_flag, $( $name, $argv_pack )+);
 
             pub const fn gas_of(&self) -> i64 {
                 match self {
@@ -107,31 +138,55 @@ macro_rules! native_func_env_define {
     };
 }
 
+/// Catalog-only generation: the enum, its idx constants and the metadata
+/// accessors. The `call` dispatch is generated in `vm::native` (execute).
+///
+/// Func rows: `$name = idx, argv_len, gas, rty, argv_pack, tar_uint_tys`
+/// (every idx must name Concat or Packed; no default).
+/// Ctl/env rows keep the old 5-field form.
+macro_rules! native_func_env_define {
+    ( func, $EnumName:ident, $ErrCode:ident,
+      $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $argv_pack:ident, $tar_uint_tys:expr )+ ) => {
+        native_catalog_enum! {
+            func, $EnumName, $ErrCode, with_argv_pack,
+            $( $name = $v, $argv_len, $gas, $rty, $argv_pack, $tar_uint_tys )+
+        }
+    };
+    ( $kind:ident, $EnumName:ident, $ErrCode:ident,
+      $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $tar_uint_tys:expr )+ ) => {
+        native_catalog_enum! {
+            $kind, $EnumName, $ErrCode, no_argv_pack,
+            $( $name = $v, $argv_len, $gas, $rty, Concat, $tar_uint_tys )+
+        }
+    };
+}
+
 native_func_env_define! { env, NativeEnv, NativeEnvError,
     context_address    = 1,    0,        6,    ValueTy::Address,    &[]
 }
 
 native_func_env_define! { func, NativeFunc, NativeFuncError,
-    hac_to_mei         = 31,   1,        6,    ValueTy::U64,        &[]
-    hac_to_zhu         = 32,   1,        6,    ValueTy::U128,       &[]
-    u64_to_fold64      = 33,   1,        8,    ValueTy::Bytes,      &[]
-    fold64_to_u64      = 34,   1,        8,    ValueTy::U64,        &[]
-    pack_asset         = 37,   2,        8,    ValueTy::Bytes,      &[ValueTy::U64, ValueTy::U64]
-    mei_to_hac         = 35,   1,        6,    ValueTy::Bytes,      &[]
-    zhu_to_hac         = 36,   1,        6,    ValueTy::Bytes,      &[]
-    address_ptr        = 41,   1,        4,    ValueTy::U8,         &[]
-    sha2               = 101, 1,       32,    ValueTy::Bytes,      &[]
-    sha3               = 102, 1,       32,    ValueTy::Bytes,      &[]
-    ripemd160          = 103, 1,       20,    ValueTy::Bytes,      &[]
-    verify_signature   = 104, 3,       96,    ValueTy::Bool,       &[]
-    keccak256          = 105, 1,       32,    ValueTy::Bytes,      &[]
-    blake2s256         = 106, 1,       32,    ValueTy::Bytes,      &[]
-    blake2b256         = 107, 1,       32,    ValueTy::Bytes,      &[]
-    ascii_parse_flat_kv = 120, 2,      64,    ValueTy::Tuple,      &[]
-    ascii_validate_transform = 121, 2, 24,    ValueTy::Tuple,      &[]
-    ascii_u128_dec_unit = 122, 2,      24,    ValueTy::Tuple,      &[]
-    ascii_hex_lower    = 123, 1,       20,    ValueTy::Tuple,      &[]
-    ascii_base58_validate_or_echo = 124, 1, 20, ValueTy::Tuple,      &[]
+    hac_to_mei         = 31,   1,        6,    ValueTy::U64,        Concat, &[]
+    hac_to_zhu         = 32,   1,        6,    ValueTy::U128,       Concat, &[]
+    u64_to_fold64      = 33,   1,        8,    ValueTy::Bytes,      Concat, &[]
+    fold64_to_u64      = 34,   1,        8,    ValueTy::U64,        Concat, &[]
+    pack_asset         = 37,   2,        8,    ValueTy::Bytes,      Concat, &[ValueTy::U64, ValueTy::U64]
+    mei_to_hac         = 35,   1,        6,    ValueTy::Bytes,      Concat, &[]
+    zhu_to_hac         = 36,   1,        6,    ValueTy::Bytes,      Concat, &[]
+    address_ptr        = 41,   1,        4,    ValueTy::U8,         Concat, &[]
+    sha2               = 101, 1,       32,    ValueTy::Bytes,      Concat, &[]
+    sha3               = 102, 1,       32,    ValueTy::Bytes,      Concat, &[]
+    ripemd160          = 103, 1,       20,    ValueTy::Bytes,      Concat, &[]
+    verify_signature   = 104, 3,       96,    ValueTy::Bool,       Concat, &[]
+    keccak256          = 105, 1,       32,    ValueTy::Bytes,      Concat, &[]
+    blake2s256         = 106, 1,       32,    ValueTy::Bytes,      Concat, &[]
+    blake2b256         = 107, 1,       32,    ValueTy::Bytes,      Concat, &[]
+    patches            = 108, 1,       24,    ValueTy::Bytes,      Packed, &[]
+    ascii_parse_flat_kv = 120, 2,      64,    ValueTy::Tuple,      Concat, &[]
+    ascii_validate_transform = 121, 2, 24,    ValueTy::Tuple,      Concat, &[]
+    ascii_u128_dec_unit = 122, 2,      24,    ValueTy::Tuple,      Concat, &[]
+    ascii_hex_lower    = 123, 1,       20,    ValueTy::Tuple,      Concat, &[]
+    ascii_base58_validate_or_echo = 124, 1, 20, ValueTy::Tuple,      Concat, &[]
 }
 
 native_func_env_define! { ctl, NativeCtl, NativeCtlError,

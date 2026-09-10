@@ -3,10 +3,10 @@
 #[cfg(feature = "execute")]
 use field::Hash;
 use field::{
-    Address, AssetAmt, BlockHeight, Decode, DiamondNameListMax200, DiamondNumber, Encode, Fold64,
-    FromJSON, ListW1, Sign, Uint4, json_decode_value, json_split_object,
+    json_decode_value, json_split_object, Address, AssetAmt, BlockHeight, Decode,
+    DiamondNameListMax200, DiamondNumber, Encode, Fold64, FromJSON, ListW1, Sign, Uint4,
 };
-use sys::{Ret, errf};
+use sys::{errf, Ret};
 
 macro_rules! define_tex_cells {
     ($( $variant:ident = $id:literal { $field:ident : $ty:ty } asset=$asset:literal ),+ $(,)?) => {

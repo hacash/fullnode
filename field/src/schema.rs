@@ -340,6 +340,9 @@ impl WireElementName for Uint4 {
 impl WireElementName for AddrOrPtr {
     const NAME: &'static str = "AddrOrPtr";
 }
+impl WireElementName for Address {
+    const NAME: &'static str = "Address";
+}
 
 #[cfg(test)]
 mod tests {

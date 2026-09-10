@@ -48,6 +48,8 @@ pub const ACTION_CODECS: &[ActionCodecBinding] = &[
     base::action_codec_binding!(BalanceCoin),
     base::action_codec_binding!(BalanceAsset),
     base::action_codec_binding!(CheckSignature),
+    base::action_codec_binding!(SigsetCount),
+    base::action_codec_binding!(SigsetAtLeast),
     base::action_codec_binding!(HacdInscNum),
     base::action_codec_binding!(HacdInscGet),
     base::action_codec_binding!(HacdNameList),

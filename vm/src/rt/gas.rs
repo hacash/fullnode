@@ -59,7 +59,7 @@ impl GasTable {
         gst.set(28, &[LOG3, ACTENV, SDEL]);
         gst.set(32, &[LOG4, ACTVIEW, SLOAD, SSTAT]);
         gst.set(48, &[ACTION]);
-        gst.set(64, &[SNEW, SEDIT, SRENT, SRECV, SGET]);
+        gst.set(64, &[SNEW, SEDIT, SPATCH, SRENT, SRECV, SGET]);
         gst.set(128, &[SPUT]);
         gst
     }

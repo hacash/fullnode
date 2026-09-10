@@ -6,7 +6,7 @@ use sys::Ret;
 
 use crate::rt::ItrErrCode::*;
 use crate::rt::{ItrErr, ItrErrCode, SpaceCap, VmrtErr, VmrtRes};
-use crate::space::{VolatileKvLimits, validate_volatile_scalar_put};
+use crate::space::{validate_volatile_scalar_put, VolatileKvLimits};
 use crate::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

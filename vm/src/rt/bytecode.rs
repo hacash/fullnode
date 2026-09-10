@@ -162,9 +162,9 @@ pub enum Bytecode {
     MTAKE = 0x95,    // &     memory take
     SPUT = 0x96,     // a,b   status put
     SGET = 0x97,     // &     status get
-    ____________98 = 0x98,
-    SSTAT = 0x99, // &      storage info
-    SLOAD = 0x9a, // &      storage load
+    SSTAT = 0x98, // &      storage info
+    SLOAD = 0x99, // &      storage load
+    SPATCH = 0x9a, // a,b,c+  key, expected, patch_set → sha2(final)
     SEDIT = 0x9b, // a,b    storage edit
     SDEL = 0x9c,  // a      storage delete
     SNEW = 0x9d,  // a,b,c  storage create
@@ -459,6 +459,7 @@ bytecode_metadata_define! {
 
     SSTAT      : 0, 1, 1,     storage_stat
     SLOAD      : 0, 1, 1,     storage_load
+    SPATCH     : 0, 3, 1,     storage_patch
     SEDIT      : 0, 2, 0,     storage_edit
     SDEL       : 0, 1, 0,     storage_del
     SNEW       : 0, 3, 0,     storage_new

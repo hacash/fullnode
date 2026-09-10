@@ -193,16 +193,12 @@ mod tests {
         let mut decoded = TransferSatFromTo::default();
         decoded.from_json(&json).expect("decode action json");
         assert_eq!(decoded.encode(), action.encode());
-        assert!(
-            TransferSatFromTo::default()
-                .from_json("{\"kind\":12,\"from\":0,\"from\":0,\"to\":0,\"satoshi\":7}")
-                .is_err()
-        );
-        assert!(
-            TransferSatFromTo::default()
-                .from_json("{\"kind\":12,\"from\":0,\"to\":0}")
-                .is_err()
-        );
+        assert!(TransferSatFromTo::default()
+            .from_json("{\"kind\":12,\"from\":0,\"from\":0,\"to\":0,\"satoshi\":7}")
+            .is_err());
+        assert!(TransferSatFromTo::default()
+            .from_json("{\"kind\":12,\"from\":0,\"to\":0}")
+            .is_err());
     }
 
     fn addr(n: u8) -> Address {

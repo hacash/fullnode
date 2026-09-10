@@ -4,6 +4,9 @@ pub struct SpaceCap {
     pub call_depth: usize,      // 32
 
     pub value_size: usize, // 1280
+    /// Max materialized ACTION / Concat-NTFUNC body length (`extract_call_data` only).
+    /// Does not apply to `Value::valid`, CAT, PUT, HREAD, or return values.
+    pub call_data_size: usize, // 4608
     pub tuple_length: usize,
     pub compo_length: usize,
 
@@ -23,16 +26,16 @@ pub struct SpaceCap {
 
     /// Max total log bytes per execution context (sum of `val_size()` across all LOG1..LOG4 calls).
     /// Set to 0 to disable logging entirely.
-    pub log_size: usize,   // 9600
+    pub log_size: usize, // 9600
 
-    pub contract_size: usize, // 65535 * 1
-    pub function_size: usize, // 65535 / 4
-    pub inherit: usize,       // 12
-    pub library: usize,       // 64
-    pub p2sh_set: usize,      // 128
+    pub contract_size: usize,         // 65535 * 1
+    pub function_size: usize,         // 65535 / 4
+    pub inherit: usize,               // 12
+    pub library: usize,               // 64
+    pub p2sh_set: usize,              // 128
     pub p2sh_merkle_depth_max: usize, // 8
     pub p2sh_lockbox_size_max: usize, // 4096
-    pub reentry_level: u32,   // 1, ACTION re-entry level limit
+    pub reentry_level: u32,           // 1, ACTION re-entry level limit
 
     pub intent_bind_depth: usize, // 10
     /// Max intent instances creatable per execution context (`IntentRuntime` total_created cap).
@@ -54,6 +57,7 @@ impl SpaceCap {
             loaded_contract: 20,
             call_depth: 32,
             value_size: 1280, // = 32 * 40, diamond name list max bytes: 200*6 = 1200
+            call_data_size: 4608,
             tuple_length: Self::DEFAULT_TUPLE_LENGTH,
             compo_length: 128,
             storage_period: 100,
@@ -111,4 +115,3 @@ impl SpaceCap {
             .saturating_mul(self.storage_recv_max_periods)
     }
 }
-

@@ -1,14 +1,17 @@
-use base::{StateLayer, StateRead, numeric_state_key, numeric_state_prefix};
+use base::{numeric_state_key, numeric_state_prefix, StateLayer, StateRead};
 use field::*;
 use field::{Address, Hash, Uint4};
 
+use sha2::{Digest, Sha256};
+
 use crate::contract::{ContractEdition, ContractSto};
 use crate::rt::{GasExtra, ItrErr, ItrErrCode::*, MapItrStrErr, SpaceCap, VmrtErr, VmrtRes};
-use crate::space::{VolatileKvLimits, validate_scalar_payload_len};
+use crate::space::{validate_scalar_payload_len, VolatileKvLimits};
+use crate::state::patch::decode_and_apply;
 use crate::state::status::{StatusMap, StatusSto};
 use crate::state::storage::{
-    ValueSto, clamp_credit_to_cap, credit_cap_for_blocks, parse_period, period_credit,
-    refund_for_live_credit, u64_to_i64_sat,
+    clamp_credit_to_cap, credit_cap_for_blocks, parse_period, period_credit,
+    refund_for_live_credit, u64_to_i64_sat, ValueSto,
 };
 use crate::value::{ContractAddress, Value, ValueKey};
 
@@ -376,25 +379,14 @@ impl<'a> VMState<'a> {
         Ok(gas)
     }
 
-    pub(crate) fn sedit(
+    fn commit_edit(
         &mut self,
         gst: &GasExtra,
         cap: &SpaceCap,
         curhei: u64,
-        cadr: &Address,
-        k: Value,
-        v: Value,
+        sk: &ValueKey,
+        mut old: ValueSto,
     ) -> VmrtRes<(i64, i64)> {
-        v.check_non_nil_scalar(StorageNilNotAllowed)?;
-        validate_scalar_payload_len(&v, cap.value_size, StorageValSizeErr)?;
-        let sk = Self::skey(cadr, &k, cap.kv_key_size)?;
-        let Some(mut old) = self.sfetch(curhei, gst, &sk)? else {
-            return itr_err_code!(StorageKeyNotFind);
-        };
-        if !old.is_active() {
-            return itr_err_code!(StorageNotActive);
-        }
-        old.data = v;
         old.charge = field::BlockHeight::from(curhei);
         let unit = ValueSto::unit_for(gst, &old.data)?;
         let live_cap = credit_cap_for_blocks(
@@ -419,10 +411,70 @@ impl<'a> VMState<'a> {
             recover_credit,
             "edit recover credit overflow",
         )?);
-        self.ctrtkvdb_set(&sk, &old);
+        self.ctrtkvdb_set(sk, &old);
         let fee = u64_to_i64_sat(unit).saturating_mul(gst.storage_edit_mul);
         let rebate = refund_for_live_credit(trimmed_live, cap.storage_period);
         Ok((fee, rebate))
+    }
+
+    pub(crate) fn sedit(
+        &mut self,
+        gst: &GasExtra,
+        cap: &SpaceCap,
+        curhei: u64,
+        cadr: &Address,
+        k: Value,
+        v: Value,
+    ) -> VmrtRes<(i64, i64)> {
+        v.check_non_nil_scalar(StorageNilNotAllowed)?;
+        validate_scalar_payload_len(&v, cap.value_size, StorageValSizeErr)?;
+        let sk = Self::skey(cadr, &k, cap.kv_key_size)?;
+        let Some(mut old) = self.sfetch(curhei, gst, &sk)? else {
+            return itr_err_code!(StorageKeyNotFind);
+        };
+        if !old.is_active() {
+            return itr_err_code!(StorageNotActive);
+        }
+        old.data = v;
+        self.commit_edit(gst, cap, curhei, &sk, old)
+    }
+
+    pub(crate) fn spatch(
+        &mut self,
+        gst: &GasExtra,
+        cap: &SpaceCap,
+        curhei: u64,
+        cadr: &Address,
+        k: Value,
+        expected: Value,
+        patch_set: Value,
+    ) -> VmrtRes<(Value, i64, i64, usize)> {
+        let sk = Self::skey(cadr, &k, cap.kv_key_size)?;
+        let Some(mut old) = self.sfetch(curhei, gst, &sk)? else {
+            return itr_err_code!(StorageKeyNotFind);
+        };
+        if !old.is_active() {
+            return itr_err_code!(StorageNotActive);
+        }
+        let expected_bytes = match (&old.data, &expected) {
+            (Value::Bytes(old_b), Value::Bytes(exp_b)) => {
+                if old_b.as_slice() != exp_b.as_slice() {
+                    return itr_err_code!(StoragePatchExpected);
+                }
+                exp_b.clone()
+            }
+            _ => return itr_err_code!(StoragePatchInvalid),
+        };
+        let patch_bytes = match &patch_set {
+            Value::Bytes(b) => b,
+            _ => return itr_err_code!(StoragePatchInvalid),
+        };
+        let final_bytes = decode_and_apply(&expected_bytes, patch_bytes, cap)?;
+        let digest = Value::Bytes(Sha256::digest(&final_bytes).to_vec());
+        let final_len = final_bytes.len();
+        old.data = Value::Bytes(final_bytes);
+        let (fee, rebate) = self.commit_edit(gst, cap, curhei, &sk, old)?;
+        Ok((digest, fee, rebate, final_len))
     }
 
     pub(crate) fn srent(
@@ -664,11 +716,9 @@ mod tests {
     fn missing_key_is_ok_none() {
         let map = CorruptLayer(Default::default());
         let k = ValueKey::from(vec![0x04, 0x05, 0x06]);
-        assert!(
-            state_get::<_, ValueSto>(&map, KEY_CONTRACT_KV, &k)
-                .unwrap()
-                .is_none()
-        );
+        assert!(state_get::<_, ValueSto>(&map, KEY_CONTRACT_KV, &k)
+            .unwrap()
+            .is_none());
     }
 
     fn contract_addr() -> Address {
@@ -706,5 +756,135 @@ mod tests {
         assert_eq!(sk.encode()[0], SKEY_TAG_HASHED);
         let err = VMState::skey(&addr, &Value::Bytes(vec![0x01; 129]), 128).unwrap_err();
         assert_eq!(err.0, StorageKeyInvalid);
+    }
+
+    fn gst() -> GasExtra {
+        GasExtra::new(0, &base::VmExecutionParams::default())
+    }
+
+    fn cap() -> SpaceCap {
+        SpaceCap::new(0)
+    }
+
+    #[test]
+    fn spatch_expected_mismatch_does_not_write() {
+        let mut map = CorruptLayer(Default::default());
+        let mut sta = VMState::wrap(&mut map);
+        let gst = gst();
+        let cap = cap();
+        let addr = contract_addr();
+        let key = Value::Bytes(b"k".to_vec());
+        let original = Value::Bytes(b"hello".to_vec());
+        sta.snew(
+            &gst,
+            &cap,
+            1,
+            &addr,
+            key.clone(),
+            original.clone(),
+            Value::U8(10),
+        )
+        .unwrap();
+        let patch = crate::state::patch::encode_patch_set(&[(0, 1, b"H")]).unwrap();
+        let err = sta
+            .spatch(
+                &gst,
+                &cap,
+                1,
+                &addr,
+                key.clone(),
+                Value::Bytes(b"HELLO".to_vec()),
+                Value::Bytes(patch),
+            )
+            .unwrap_err();
+        assert_eq!(err.0, StoragePatchExpected);
+        let loaded = sta.sload(&gst, &cap, 1, &addr, &key).unwrap();
+        assert_eq!(loaded, original);
+    }
+
+    #[test]
+    fn spatch_rejects_non_bytes_and_matches_sedit_fee() {
+        let mut map = CorruptLayer(Default::default());
+        let mut sta = VMState::wrap(&mut map);
+        let gst = gst();
+        let cap = cap();
+        let addr = contract_addr();
+        let key_u = Value::Bytes(b"u".to_vec());
+        sta.snew(
+            &gst,
+            &cap,
+            1,
+            &addr,
+            key_u.clone(),
+            Value::U64(7),
+            Value::U8(10),
+        )
+        .unwrap();
+        let patch = crate::state::patch::encode_patch_set(&[(0, 1, b"H")]).unwrap();
+        let err = sta
+            .spatch(
+                &gst,
+                &cap,
+                1,
+                &addr,
+                key_u,
+                Value::Bytes(b"hello".to_vec()),
+                Value::Bytes(patch.clone()),
+            )
+            .unwrap_err();
+        assert_eq!(err.0, StoragePatchInvalid);
+
+        let key_a = Value::Bytes(b"a".to_vec());
+        let key_b = Value::Bytes(b"b".to_vec());
+        let original = Value::Bytes(b"hello".to_vec());
+        sta.snew(
+            &gst,
+            &cap,
+            1,
+            &addr,
+            key_a.clone(),
+            original.clone(),
+            Value::U8(10),
+        )
+        .unwrap();
+        sta.snew(
+            &gst,
+            &cap,
+            1,
+            &addr,
+            key_b.clone(),
+            original.clone(),
+            Value::U8(10),
+        )
+        .unwrap();
+        let (digest, fee, rebate, final_len) = sta
+            .spatch(
+                &gst,
+                &cap,
+                1,
+                &addr,
+                key_a.clone(),
+                original.clone(),
+                Value::Bytes(patch),
+            )
+            .unwrap();
+        let final_bytes = b"Hello".to_vec();
+        assert_eq!(final_len, final_bytes.len());
+        assert_eq!(digest, Value::Bytes(Sha256::digest(&final_bytes).to_vec()));
+        let (fee2, rebate2) = sta
+            .sedit(
+                &gst,
+                &cap,
+                1,
+                &addr,
+                key_b,
+                Value::Bytes(final_bytes.clone()),
+            )
+            .unwrap();
+        assert_eq!((fee, rebate), (fee2, rebate2));
+        assert_eq!(
+            sta.sload(&gst, &cap, 1, &addr, &key_a).unwrap(),
+            Value::Bytes(final_bytes)
+        );
     }
 }

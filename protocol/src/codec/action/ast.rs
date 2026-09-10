@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use base::{Action, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry};
 use field::{
-    Encode, Reader, Uint1, Uint2, json_decode_value, json_object_fields, json_split_array,
+    json_decode_value, json_object_fields, json_split_array, Encode, Reader, Uint1, Uint2,
 };
 use sys::Ret;
 
@@ -489,14 +489,12 @@ mod tests {
             ActionListW1::from_vec((0..u8::MAX).map(|_| Arc::new(child()) as _).collect()).unwrap();
         assert_eq!(max.length(), u8::MAX as usize);
         assert_eq!(max.size(), max.encode().len());
-        assert!(
-            ActionListW1::from_vec(
-                (0..u8::MAX as usize + 1)
-                    .map(|_| Arc::new(child()) as _)
-                    .collect()
-            )
-            .is_err()
-        );
+        assert!(ActionListW1::from_vec(
+            (0..u8::MAX as usize + 1)
+                .map(|_| Arc::new(child()) as _)
+                .collect()
+        )
+        .is_err());
         let mut list =
             ActionListW1::from_vec((0..u8::MAX).map(|_| Arc::new(child()) as _).collect()).unwrap();
         assert!(list.push(Arc::new(child())).is_err());

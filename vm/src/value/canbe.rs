@@ -5,7 +5,6 @@ fn is_scalar_value(value: &Value) -> bool {
     )
 }
 
-
 fn check_scalar_as(value: &Value, ec: ItrErrCode) -> VmrtErr {
     if is_scalar_value(value) {
         Ok(())
@@ -172,11 +171,42 @@ impl Value {
         }
     }
 
-    pub fn extract_call_data(&self) -> VmrtRes<Vec<u8>> {
+    /// Materialize ACTION / Concat-NTFUNC call-data bytes (Concat/ACTION only).
+    ///
+    /// Concat list = byte fragments (deferred CAT). Packed list = argv vector.
+    /// Packed NTFUNC must not call this function.
+    ///
+    /// - `Nil` → `[]` (no `call_data_size` check).
+    /// - One-layer `Compo` list: each element uses CAT's `extract_bytes` rules
+    ///   (`extract_bytes_with_error_code`, `Nil` rejected) with `CastBeCallDataFail`;
+    ///   concatenate in order; running length ≤ `cap.call_data_size`.
+    /// - Other scalars: same extract, then length ≤ `call_data_size`.
+    /// - `Tuple` / `Handle` / Map / nested `Compo` / element `Nil` → `CastBeCallDataFail`.
+    pub fn extract_call_data(&self, cap: &SpaceCap) -> VmrtRes<Vec<u8>> {
         let ec = CastBeCallDataFail;
         match self {
             Nil => Ok(vec![]),
-            _ => self.extract_bytes_with_error_code(ec),
+            Compo(c) => {
+                let Ok(list) = c.list_ref() else {
+                    return itr_err_code!(ec);
+                };
+                let mut out = Vec::new();
+                for item in list.iter() {
+                    let chunk = item.extract_bytes_with_error_code(ec)?;
+                    if out.len() + chunk.len() > cap.call_data_size {
+                        return itr_err_code!(OutOfValueSize);
+                    }
+                    out.extend_from_slice(&chunk);
+                }
+                Ok(out)
+            }
+            _ => {
+                let bytes = self.extract_bytes_with_error_code(ec)?;
+                if bytes.len() > cap.call_data_size {
+                    return itr_err_code!(OutOfValueSize);
+                }
+                Ok(bytes)
+            }
         }
     }
 
@@ -241,4 +271,133 @@ impl Value {
             _ => Ok(()),
         }
     }
+}
+
+#[cfg(test)]
+fn extract_call_data_list(items: Vec<Value>) -> Value {
+    Value::Compo(CompoItem::list(VecDeque::from(items)).unwrap())
+}
+
+#[cfg(test)]
+#[test]
+fn extract_call_data_nil_is_empty() {
+    assert_eq!(
+        Value::Nil.extract_call_data(&SpaceCap::new(0)).unwrap(),
+        Vec::<u8>::new()
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn extract_call_data_scalars_match_extract_bytes() {
+    let cap = SpaceCap::new(0);
+    let bytes = Value::bytes(b"abc".to_vec());
+    assert_eq!(
+        bytes.extract_call_data(&cap).unwrap(),
+        bytes.extract_bytes().unwrap()
+    );
+    let u8v = Value::U8(7);
+    assert_eq!(
+        u8v.extract_call_data(&cap).unwrap(),
+        u8v.extract_bytes().unwrap()
+    );
+    let addr = Value::Address(field::Address::from([7u8; 21]));
+    assert_eq!(
+        addr.extract_call_data(&cap).unwrap(),
+        addr.extract_bytes().unwrap()
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn extract_call_data_concat_list_of_bytes() {
+    let a = b"aa".to_vec();
+    let b = b"bbb".to_vec();
+    let c = b"c".to_vec();
+    let v = extract_call_data_list(vec![
+        Value::bytes(a.clone()),
+        Value::bytes(b.clone()),
+        Value::bytes(c.clone()),
+    ]);
+    let mut want = a;
+    want.extend_from_slice(&b);
+    want.extend_from_slice(&c);
+    assert_eq!(v.extract_call_data(&SpaceCap::new(0)).unwrap(), want);
+}
+
+#[cfg(test)]
+#[test]
+fn extract_call_data_concat_list_u8_and_bytes() {
+    let v = extract_call_data_list(vec![Value::U8(1), Value::bytes(b"ab".to_vec())]);
+    let mut want = Value::U8(1).extract_bytes().unwrap();
+    want.extend_from_slice(b"ab");
+    assert_eq!(v.extract_call_data(&SpaceCap::new(0)).unwrap(), want);
+}
+
+#[cfg(test)]
+#[test]
+fn extract_call_data_empty_list_is_empty() {
+    assert_eq!(
+        extract_call_data_list(vec![])
+            .extract_call_data(&SpaceCap::new(0))
+            .unwrap(),
+        Vec::<u8>::new()
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn extract_call_data_rejects_nested_nil_tuple_handle_map() {
+    let cap = SpaceCap::new(0);
+    let inner = extract_call_data_list(vec![Value::bytes(b"x".to_vec())]);
+    let nested = CompoItem::new_list();
+    nested.list_mut().unwrap().push_back(inner);
+    assert_eq!(
+        Value::Compo(nested).extract_call_data(&cap).unwrap_err().0,
+        CastBeCallDataFail
+    );
+    assert_eq!(
+        extract_call_data_list(vec![Value::Nil])
+            .extract_call_data(&cap)
+            .unwrap_err()
+            .0,
+        CastBeCallDataFail
+    );
+    let tuple = Value::Tuple(TupleItem::new(vec![Value::bytes(b"x".to_vec())]).unwrap());
+    assert_eq!(
+        tuple.extract_call_data(&cap).unwrap_err().0,
+        CastBeCallDataFail
+    );
+    assert_eq!(
+        Value::Handle(HandleItem::new(0u8))
+            .extract_call_data(&cap)
+            .unwrap_err()
+            .0,
+        CastBeCallDataFail
+    );
+    let map = Value::Compo(CompoItem::map(BTreeMap::new()).unwrap());
+    assert_eq!(
+        map.extract_call_data(&cap).unwrap_err().0,
+        CastBeCallDataFail
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn extract_call_data_call_data_size_cap() {
+    let cap = SpaceCap::new(0);
+    let ok = extract_call_data_list(vec![
+        Value::bytes(vec![1u8; 1280]),
+        Value::bytes(vec![2u8; 1280]),
+        Value::bytes(vec![3u8; 1280]),
+        Value::bytes(vec![4u8; 768]),
+    ]);
+    assert_eq!(ok.extract_call_data(&cap).unwrap().len(), 4608);
+    let over = extract_call_data_list(vec![
+        Value::bytes(vec![1u8; 1280]),
+        Value::bytes(vec![2u8; 1280]),
+        Value::bytes(vec![3u8; 1280]),
+        Value::bytes(vec![4u8; 769]),
+    ]);
+    assert_eq!(over.extract_call_data(&cap).unwrap_err().0, OutOfValueSize);
 }

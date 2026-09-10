@@ -127,8 +127,8 @@ mod tests {
         assert_eq!(
             call_only,
             vec![
-                0x0601, 0x0602, 0x0609, 0x0611, 0x0612, 0x0613, 0x0614, 0x0615, 0x0616, 0x0617,
-                0x0701, 0x0702, 0x0703, 0x0704, 0x0705
+                0x0601, 0x0602, 0x0609, 0x060A, 0x060B, 0x0611, 0x0612, 0x0613, 0x0614, 0x0615,
+                0x0616, 0x0617, 0x0701, 0x0702, 0x0703, 0x0704, 0x0705
             ]
         );
 
@@ -171,6 +171,8 @@ mod tests {
                 "hacd_insc_num",
                 "hacd_name_list",
                 "hacd_owner_addrs",
+                "sigset_at_least",
+                "sigset_count",
                 "tx_blob",
                 "tx_blob_num",
                 "tx_blob_size",

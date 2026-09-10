@@ -98,6 +98,8 @@ pub enum ItrErrCode {
     StorageNotActive = 108,
     StorageKeyExists = 109,
     StorageNilNotAllowed = 110,
+    StoragePatchExpected = 111,
+    StoragePatchInvalid = 112,
 
     MemoryKeyExists = 131,
 

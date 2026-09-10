@@ -13,24 +13,69 @@ use crate::value::*;
 mod ascii;
 mod call;
 mod intent;
+mod patches;
 use ascii::*;
+#[allow(unused_imports)] // interpreter NTFUNC Packed branch (wired by parent)
+pub use call::call_ntfunc_packed;
 pub use call::{call_ntctl, call_ntenv, call_ntfunc};
+use patches::patches;
 
 // Native enums and their metadata tables live in the codec-safe
 // `rt::native_catalog` (shared with the fitsh decompiler); the `use crate::rt::*`
 // glob above brings them into this module's scope. The execution dispatch for
 // `NativeFunc` is generated here where the implementation functions live.
 
+macro_rules! native_concat_dispatch_arm {
+    (Concat, $name:ident, $rty:expr, $gas:expr, $height:expr, $v:expr) => {
+        $name($height, $v).map(|r| {
+            assert_eq!($rty, r.ty());
+            (r, $gas)
+        })
+    };
+    (Packed, $name:ident, $rty:expr, $gas:expr, $height:expr, $v:expr) => {{
+        let _ = ($rty, $gas, $height, $v);
+        itr_err_fmt!(
+            NativeFuncError,
+            "native func {} requires packed argv",
+            stringify!($name)
+        )
+    }};
+}
+
+macro_rules! native_packed_dispatch_arm {
+    (Packed, $name:ident, $rty:expr, $gas:expr, $height:expr, $argv:expr) => {
+        $name($height, $argv).map(|r| {
+            assert_eq!($rty, r.ty());
+            (r, $gas)
+        })
+    };
+    (Concat, $name:ident, $rty:expr, $gas:expr, $height:expr, $argv:expr) => {{
+        let _ = ($rty, $gas, $height, $argv);
+        itr_err_fmt!(
+            NativeFuncError,
+            "native func {} requires concat argv",
+            stringify!($name)
+        )
+    }};
+}
+
 macro_rules! native_dispatch_method {
-    (func, $EnumName:ident, $ErrCode:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $_tar_uint_tys:expr )+) => {
+    (func, $EnumName:ident, $ErrCode:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $argv_pack:ident, $_tar_uint_tys:expr )+) => {
         pub fn call(height: u64, idx: u8, v: &[u8]) -> VmrtRes<(Value, i64)> {
             let cty = Self::try_from_u8(idx)?;
             match cty {
                 $(
-                    Self::$name => $name(height, v).map(|r| {
-                        assert_eq!($rty, r.ty());
-                        (r, $gas)
-                    }),
+                    Self::$name => native_concat_dispatch_arm!($argv_pack, $name, $rty, $gas, height, v),
+                )+
+                _ => unreachable!(),
+            }
+        }
+
+        pub fn call_packed(height: u64, idx: u8, argv: Value) -> VmrtRes<(Value, i64)> {
+            let cty = Self::try_from_u8(idx)?;
+            match cty {
+                $(
+                    Self::$name => native_packed_dispatch_arm!($argv_pack, $name, $rty, $gas, height, argv),
                 )+
                 _ => unreachable!(),
             }
@@ -42,26 +87,30 @@ use ValueTy::*;
 
 impl NativeFunc {
     native_dispatch_method!(func, NativeFunc, NativeFuncError,
-        hac_to_mei         = 31,   1,        6,    U64,        &[]
-        hac_to_zhu         = 32,   1,        6,    U128,       &[]
-        u64_to_fold64      = 33,   1,        8,    Bytes,      &[]
-        fold64_to_u64      = 34,   1,        8,    U64,        &[]
-        pack_asset         = 37,   2,        8,    Bytes,      &[U64, U64]
-        mei_to_hac         = 35,   1,        6,    Bytes,      &[]
-        zhu_to_hac         = 36,   1,        6,    Bytes,      &[]
-        address_ptr        = 41,   1,        4,    U8,         &[]
-        sha2               = 101, 1,       32,    Bytes,      &[]
-        sha3               = 102, 1,       32,    Bytes,      &[]
-        ripemd160          = 103, 1,       20,    Bytes,      &[]
-        verify_signature   = 104, 3,       96,    Bool,       &[]
-        keccak256          = 105, 1,       32,    Bytes,      &[]
-        blake2s256         = 106, 1,       32,    Bytes,      &[]
-        blake2b256         = 107, 1,       32,    Bytes,      &[]
-        ascii_parse_flat_kv = 120, 2,      64,    Tuple,      &[]
-        ascii_validate_transform = 121, 2, 24,    Tuple,      &[]
-        ascii_u128_dec_unit = 122, 2,      24,    Tuple,      &[]
-        ascii_hex_lower    = 123, 1,       20,    Tuple,      &[]
-        ascii_base58_validate_or_echo = 124, 1, 20, Tuple,      &[]
+        hac_to_mei         = 31,   1,       6,    U64,        Concat, &[]
+        hac_to_zhu         = 32,   1,       6,    U128,       Concat, &[]
+        u64_to_fold64      = 33,   1,       8,    Bytes,      Concat, &[]
+        fold64_to_u64      = 34,   1,       8,    U64,        Concat, &[]
+        mei_to_hac         = 35,   1,       6,    Bytes,      Concat, &[]
+        zhu_to_hac         = 36,   1,       6,    Bytes,      Concat, &[]
+
+        address_ptr        = 51,   1,       4,    U8,         Concat, &[]
+        pack_asset         = 52,   2,       8,    Bytes,      Concat, &[U64, U64]
+        patches            = 53,   1,      24,    Bytes,      Packed, &[]
+
+        sha2               = 101,  1,      32,    Bytes,      Concat, &[]
+        sha3               = 102,  1,      32,    Bytes,      Concat, &[]
+        ripemd160          = 103,  1,      20,    Bytes,      Concat, &[]
+        verify_signature   = 104,  3,      96,    Bool,       Concat, &[]
+        keccak256          = 105,  1,      32,    Bytes,      Concat, &[]
+        blake2s256         = 106,  1,      32,    Bytes,      Concat, &[]
+        blake2b256         = 107,  1,      32,    Bytes,      Concat, &[]
+
+        ascii_parse_flat_kv = 120, 2,      64,    Tuple,      Concat, &[]
+        ascii_validate_transform = 121, 2, 24,    Tuple,      Concat, &[]
+        ascii_u128_dec_unit = 122, 2,      24,    Tuple,      Concat, &[]
+        ascii_hex_lower    = 123, 1,       20,    Tuple,      Concat, &[]
+        ascii_base58_validate_or_echo = 124, 1, 20, Tuple,    Concat, &[]
     );
 }
 

@@ -1113,10 +1113,40 @@ impl<'a> Formater<'a> {
                 format!("{}({})", ntfn.name(), argv)
             }
             NTFUNC => {
-                let expect = NativeFunc::argv_len(node.para).map(|n| n as usize);
-                let argv = self.build_call_args(&*node.subx, true, expect);
                 let Ok(ntfn) = NativeFunc::try_from_u8(node.para) else {
+                    let expect = NativeFunc::argv_len(node.para);
+                    let argv = self.build_call_args(&*node.subx, true, expect);
                     return format!("__unknown_native_func_{}({})", node.para, argv);
+                };
+                let argv = match ntfn.argv_pack_of() {
+                    NativeArgvPack::Packed => {
+                        // Packed: 0 Nil, 1 Raw, ≥2 Tuple. Never CAT-flatten a list literal.
+                        match ntfn.argv_len_of() {
+                            0 => String::new(),
+                            1 => self.print_inline(&*node.subx),
+                            n => {
+                                if let Some(arr) = node.subx.as_any().downcast_ref::<IRNodeArray>()
+                                {
+                                    if let Some(elems) =
+                                        self.extract_packed_call_elements(arr.inst, &arr.subs)
+                                    {
+                                        if elems.len() == n {
+                                            self.format_call_args(&elems)
+                                        } else {
+                                            self.print_inline(&*node.subx)
+                                        }
+                                    } else {
+                                        self.print_inline(&*node.subx)
+                                    }
+                                } else {
+                                    self.print_inline(&*node.subx)
+                                }
+                            }
+                        }
+                    }
+                    NativeArgvPack::Concat => {
+                        self.build_call_args(&*node.subx, true, Some(ntfn.argv_len_of()))
+                    }
                 };
                 format!("{}({})", ntfn.name(), argv)
             }

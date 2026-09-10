@@ -58,7 +58,11 @@ impl Syntax {
                 );
             }
             let arg_nodes = self.apply_native_tar_uint_literal_coercion(&id, idx, arg_nodes)?;
-            let argvs = concat_func_args(arg_nodes)?;
+            let pack = NativeFunc::argv_pack(idx).map_err(|e| e.to_string())?;
+            let argvs = match pack {
+                NativeArgvPack::Packed => pack_call_args(arg_nodes)?,
+                NativeArgvPack::Concat => concat_func_args(arg_nodes)?,
+            };
             return Ok(push_single_p1_hr(true, Bytecode::NTFUNC, idx, argvs));
         }
 
@@ -93,7 +97,7 @@ impl Syntax {
 
         if let Some((hrtv, inst, para, arg_len)) = pick_action_func(&id) {
             let (num, argvs) = self.parse_call_args(ArgPackMode::Concat)?;
-            if num != arg_len {
+            if num != arg_len && !(id == "sigset_at_least" && num == 1) {
                 return errf!(
                     "action function '{}' argv length must {} but got {}",
                     id,
