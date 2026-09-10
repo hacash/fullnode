@@ -11,30 +11,16 @@ fn encode_patches_bytes(records: &[(u16, u16, Vec<u8>)]) -> VmrtRes<Vec<u8>> {
 }
 
 fn patches_u16(v: &Value, label: &str) -> VmrtRes<u16> {
-    if !v.is_uint() {
-        return itr_err_fmt!(NativeFuncError, "patches {} must be an unsigned int", label);
-    }
-    let n = v.extract_u128()?;
-    if n > u16::MAX as u128 {
-        return itr_err_fmt!(NativeFuncError, "patches {} exceeds u16::MAX", label);
-    }
-    Ok(n as u16)
+    super::argv::func_u16(v, NativeFunc::patches, label)
 }
 
 fn patches_insert(v: &Value) -> VmrtRes<Vec<u8>> {
-    let bytes = match v {
-        Value::Bytes(b) => b.clone(),
-        Value::U8(_)
-        | Value::U16(_)
-        | Value::U32(_)
-        | Value::U64(_)
-        | Value::U128(_)
-        | Value::Address(_) => v
-            .scalar_bytes()
-            .expect("uint and address have scalar bytes"),
-        _ => {
-            return itr_err_fmt!(NativeFuncError, "patches insert type invalid");
-        }
+    let Some(bytes) = v.scalar_bytes() else {
+        return itr_err_fmt!(
+            NativeFuncError,
+            "patches insert cannot serialize {:?}",
+            v.ty()
+        );
     };
     if bytes.len() > u16::MAX as usize {
         return itr_err_fmt!(NativeFuncError, "patches insert exceeds u16::MAX length");
@@ -42,14 +28,8 @@ fn patches_insert(v: &Value) -> VmrtRes<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(super) fn patches(_height: u64, argv: Value) -> VmrtRes<Value> {
-    let Value::Compo(compo) = argv else {
-        return itr_err_fmt!(NativeFuncError, "patches expects a list");
-    };
-    if !compo.is_list() {
-        return itr_err_fmt!(NativeFuncError, "patches expects a list");
-    }
-    let items = compo.list_ref()?;
+pub(super) fn patches(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let items = super::argv::func_list(argv, NativeFunc::patches)?;
     let len = items.len();
     if len % 3 != 0 {
         return itr_err_fmt!(
@@ -107,15 +87,30 @@ mod tests {
         }
     }
 
+    fn call_env(f: impl FnOnce(NativeFnEnv<'_>) -> VmrtRes<Value>) -> VmrtRes<Value> {
+        let cap = SpaceCap::new(0);
+        f(NativeFnEnv::new(&cap))
+    }
+
     fn call_patches(argv: Value) -> VmrtRes<Value> {
-        NativeFunc::call_packed(0, NativeFunc::patches as u8, argv).map(|(v, gas)| {
-            assert_eq!(gas, 24);
-            v
+        call_env(|env| {
+            NativeFunc::call_packed(env, NativeFunc::patches as u8, argv).map(|(v, gas)| {
+                assert_eq!(
+                    gas,
+                    NativeFunc::try_from_u8(NativeFunc::patches as u8)
+                        .unwrap()
+                        .gas_of()
+                );
+                v
+            })
         })
     }
 
     #[test]
-    fn argv_pack_sha2_concat_and_patches_packed() {
+    fn argv_pack_and_canonical_idx() {
+        assert_eq!(NativeFunc::address_ptr as u8, 51);
+        assert_eq!(NativeFunc::pack_asset as u8, 52);
+        assert_eq!(NativeFunc::patches as u8, 53);
         assert_eq!(
             NativeFunc::argv_pack(NativeFunc::sha2 as u8).unwrap(),
             NativeArgvPack::Concat
@@ -126,13 +121,21 @@ mod tests {
         );
         assert_eq!(
             NativeFunc::argv_pack(NativeFunc::pack_asset as u8).unwrap(),
-            NativeArgvPack::Concat
+            NativeArgvPack::Packed
         );
         assert_eq!(
             NativeFunc::argv_pack(NativeFunc::verify_signature as u8).unwrap(),
-            NativeArgvPack::Concat
+            NativeArgvPack::Packed
         );
         assert_eq!(NativeFunc::argv_len(NativeFunc::patches as u8), Some(1));
+        assert_eq!(
+            NativeFunc::argv_len(NativeFunc::ascii_parse_flat_kv as u8),
+            Some(8)
+        );
+        assert_eq!(
+            NativeFunc::argv_len(NativeFunc::ascii_validate_transform as u8),
+            Some(3)
+        );
     }
 
     #[test]
@@ -149,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn patches_u64_insert_and_empty_bytes() {
+    fn patches_insert_serializes_scalars_big_endian() {
         let argv = list(vec![
             Value::U8(0),
             Value::U8(0),
@@ -163,6 +166,17 @@ mod tests {
         assert_eq!(&buf[1..3], &0u16.to_be_bytes());
         assert_eq!(&buf[3..5], &0u16.to_be_bytes());
         assert_eq!(&buf[5..7], &8u16.to_be_bytes());
+        assert_eq!(&buf[7..], &[1, 2, 3, 4, 5, 6, 7, 8]);
+
+        let argv = list(vec![
+            Value::U8(0),
+            Value::U8(0),
+            Value::bytes(vec![1, 2, 3, 4, 5, 6, 7, 8]),
+        ]);
+        let got = call_patches(argv).unwrap();
+        let Value::Bytes(buf) = got else {
+            panic!("expected bytes");
+        };
         assert_eq!(&buf[7..], &[1, 2, 3, 4, 5, 6, 7, 8]);
 
         let argv = list(vec![Value::U8(0), Value::U8(1), Value::bytes(vec![])]);
@@ -231,41 +245,50 @@ mod tests {
             Value::bytes(b"ab".to_vec()),
             Value::bytes(b"c".to_vec()),
         ]);
-        let raw = argv.extract_call_data(&SpaceCap::new(0)).unwrap();
-        let (h, _) = NativeFunc::call(0, NativeFunc::sha2 as u8, &raw).unwrap();
+        let cap = SpaceCap::new(0);
+        let env = NativeFnEnv::new(&cap);
+        let raw = argv.extract_call_data(&cap).unwrap();
+        let (h, _) = NativeFunc::call(env, NativeFunc::sha2 as u8, &raw).unwrap();
         assert_eq!(
             h,
-            NativeFunc::call(0, NativeFunc::sha2 as u8, b"abc")
+            NativeFunc::call(env, NativeFunc::sha2 as u8, b"abc")
                 .unwrap()
                 .0
         );
     }
 
     #[test]
-    fn concat_sha2_pack_asset_verify_signature_not_patches_packed() {
-        let (hash, gas) = NativeFunc::call(0, NativeFunc::sha2 as u8, b"abc").unwrap();
+    fn concat_sha2_pack_asset_packed_not_concat() {
+        let cap = SpaceCap::new(0);
+        let env = NativeFnEnv::new(&cap);
+        let (hash, gas) = NativeFunc::call(env, NativeFunc::sha2 as u8, b"abc").unwrap();
         assert_eq!(gas, 32);
         assert_eq!(hash.ty(), ValueTy::Bytes);
         assert!(
-            NativeFunc::call_packed(0, NativeFunc::sha2 as u8, Value::bytes(b"abc".to_vec()))
+            NativeFunc::call_packed(env, NativeFunc::sha2 as u8, Value::bytes(b"abc".to_vec()))
                 .is_err()
         );
-        let mut pack = [0u8; 16];
-        pack[7] = 1;
-        pack[15] = 1;
-        let (asset, gas) = NativeFunc::call(0, NativeFunc::pack_asset as u8, &pack).unwrap();
+        let argv = Value::pack_call_args(vec![Value::U8(1), Value::U8(1)]).unwrap();
+        let (asset, gas) =
+            NativeFunc::call_packed(env, NativeFunc::pack_asset as u8, argv).unwrap();
         assert_eq!(gas, 8);
         assert_eq!(asset.ty(), ValueTy::Bytes);
-        assert_eq!(
-            NativeFunc::argv_pack(NativeFunc::verify_signature as u8).unwrap(),
-            NativeArgvPack::Concat
+        assert!(NativeFunc::call(env, NativeFunc::patches as u8, &[]).is_err());
+        assert!(
+            NativeFunc::call_packed(env, NativeFunc::pack_asset as u8, Value::bytes(vec![0; 16]))
+                .is_err()
         );
-        assert!(NativeFunc::call(0, NativeFunc::patches as u8, &[]).is_err());
-        assert!(NativeFunc::call_packed(
-            0,
-            NativeFunc::pack_asset as u8,
-            Value::bytes(pack.to_vec())
-        )
-        .is_err());
+        assert!(NativeFunc::call(env, NativeFunc::pack_asset as u8, &[0; 16]).is_err());
+    }
+
+    #[test]
+    fn zhu_to_hac_roundtrips_u128_over_u64() {
+        let cap = SpaceCap::new(0);
+        let env = NativeFnEnv::new(&cap);
+        let n = (u64::MAX as u128) + 1;
+        let (bytes, _) =
+            NativeFunc::call_packed(env, NativeFunc::zhu_to_hac as u8, Value::U128(n)).unwrap();
+        let (back, _) = NativeFunc::call_packed(env, NativeFunc::hac_to_zhu as u8, bytes).unwrap();
+        assert_eq!(back, Value::U128(n));
     }
 }

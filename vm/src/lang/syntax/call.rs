@@ -57,7 +57,6 @@ impl Syntax {
                     arg_nodes.len()
                 );
             }
-            let arg_nodes = self.apply_native_tar_uint_literal_coercion(&id, idx, arg_nodes)?;
             let pack = NativeFunc::argv_pack(idx).map_err(|e| e.to_string())?;
             let argvs = match pack {
                 NativeArgvPack::Packed => pack_call_args(arg_nodes)?,
@@ -117,61 +116,6 @@ impl Syntax {
         }
 
         errf!("unknown function '{}'", id)
-    }
-
-    fn apply_native_tar_uint_literal_coercion(
-        &self,
-        name: &str,
-        idx: u8,
-        argvs: Vec<Box<dyn IRNode>>,
-    ) -> Ret<Vec<Box<dyn IRNode>>> {
-        let Some(tys) = NativeFunc::tar_uint_tys(idx) else {
-            return Ok(argvs);
-        };
-        if tys.len() != argvs.len() {
-            return errf!(
-                "native func '{}' tar_uint_tys length {} does not match arity {}",
-                name,
-                tys.len(),
-                argvs.len()
-            );
-        }
-        let mut out = Vec::with_capacity(argvs.len());
-        for (i, (arg, &ty)) in argvs.into_iter().zip(tys.iter()).enumerate() {
-            out.push(self.apply_native_tar_uint_literal_one(name, i, arg, ty)?);
-        }
-        Ok(out)
-    }
-
-    fn apply_native_tar_uint_literal_one(
-        &self,
-        name: &str,
-        pos: usize,
-        arg: Box<dyn IRNode>,
-        ty: ValueTy,
-    ) -> Ret<Box<dyn IRNode>> {
-        if !ty.is_uint() {
-            return Ok(arg);
-        }
-        let Some(literal) = Self::extract_literal_value(arg.as_ref())? else {
-            return Ok(arg);
-        };
-        if !literal.ty().is_uint() {
-            return Ok(arg);
-        }
-        if crate::lang::ir_node_effective_ty(arg.as_ref()) == Some(ty) {
-            return Ok(arg);
-        }
-        if let Err(e) = Self::check_literal_as_cast(arg.as_ref(), ty) {
-            return errf!(
-                "native func '{}' argument {} literal requires type {}, {}",
-                name,
-                pos + 1,
-                ty.name(),
-                e
-            );
-        }
-        Ok(Self::build_cast_node(arg, ty))
     }
 
     fn track_special_ir_func(&mut self, inst: Bytecode, argvs: &[Box<dyn IRNode>]) -> Rerr {

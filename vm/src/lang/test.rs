@@ -125,7 +125,11 @@ mod token_t {
         for input in invalid_inputs {
             let tkr = super::Tokenizer::new(input.as_bytes());
             let result = tkr.parse();
-            assert!(result.is_err(), "Should fail for invalid string escape: {}", input);
+            assert!(
+                result.is_err(),
+                "Should fail for invalid string escape: {}",
+                input
+            );
         }
     }
 
@@ -145,7 +149,10 @@ mod token_t {
     fn test_binary_literal_too_wide_fails_cleanly() {
         let input = format!("0b{}", "1".repeat(136));
         let result = super::Tokenizer::new(input.as_bytes()).parse();
-        assert!(result.is_err(), "oversized binary literal must fail cleanly");
+        assert!(
+            result.is_err(),
+            "oversized binary literal must fail cleanly"
+        );
     }
 
     #[test]
@@ -245,7 +252,6 @@ mod token_t {
             "Expected MONCE (0x94) in bytecode, got: {:02x?}",
             bytecode
         );
-        // 反编译回源码必须保留内建名（证明 intro 名字表已接线）
         let back = irnode_to_lang(lang_to_irnode(script).unwrap()).unwrap();
         assert!(
             back.contains("memory_once"),
@@ -253,12 +259,11 @@ mod token_t {
             back
         );
 
-        // 基础 step gas 表必须显式登记 MONCE：否则落到默认 1，低于 MPUT(10)。
         use crate::rt::GasTable;
         let gst = GasTable::new(1);
         assert_eq!(
             gst.gas(Bytecode::MONCE as u8),
-            gst.gas(Bytecode::MPUT as u8),
+            gst.gas(Bytecode::MTAKE as u8),
             "MONCE base gas must match MPUT"
         );
         assert!(
@@ -326,7 +331,10 @@ mod token_t {
             return 1 + byte("abc", 3 - 1)
         "#;
         let result = lang_to_irnode(script);
-        assert!(result.is_ok(), "nested call arg with subtraction on binary rhs must compile");
+        assert!(
+            result.is_ok(),
+            "nested call arg with subtraction on binary rhs must compile"
+        );
     }
 
     #[test]
@@ -402,13 +410,16 @@ mod token_t {
         let b3 = lang_to_bytecode(s3).expect("compile codecall C.f(nil) failed");
 
         assert_eq!(b1, b2, "codecall C.f and codecall C.f() must be equivalent");
-        assert_eq!(b1, b3, "codecall C.f and codecall C.f(nil) must be equivalent");
+        assert_eq!(
+            b1, b3,
+            "codecall C.f and codecall C.f(nil) must be equivalent"
+        );
     }
 
     #[test]
     fn test_codecall_with_argument_emits_argument_push_before_opcode() {
         use super::lang_to_bytecode;
-        use crate::rt::{verify_bytecodes, Bytecode};
+        use crate::rt::{Bytecode, verify_bytecodes};
 
         let codes = lang_to_bytecode("codecall 1.0x01020304(7)").expect("compile failed");
         let marks = verify_bytecodes(&codes).expect("verify failed");
@@ -621,7 +632,10 @@ mod token_t {
             codecall C.probe
         "#;
         let result = lang_to_irnode(script);
-        assert!(result.is_ok(), "codecall without source-level end must be valid");
+        assert!(
+            result.is_ok(),
+            "codecall without source-level end must be valid"
+        );
     }
 
     #[test]
@@ -634,11 +648,14 @@ mod token_t {
             end
         "#;
         let result = lang_to_irnode(script);
-        assert!(result.is_ok(), "redundant source-level end after codecall must be valid");
+        assert!(
+            result.is_ok(),
+            "redundant source-level end after codecall must be valid"
+        );
     }
 
     fn collect_user_call_opcodes(codes: &[u8]) -> Vec<u8> {
-        use crate::rt::{verify_bytecodes, Bytecode};
+        use crate::rt::{Bytecode, verify_bytecodes};
 
         verify_bytecodes(codes)
             .unwrap()
@@ -674,7 +691,10 @@ mod token_t {
         use crate::rt::Bytecode;
 
         let codes = lang_to_bytecode("return call edit self.0x01020304(1)").unwrap();
-        assert_eq!(collect_user_call_opcodes(&codes), vec![Bytecode::CALLSELF as u8]);
+        assert_eq!(
+            collect_user_call_opcodes(&codes),
+            vec![Bytecode::CALLSELF as u8]
+        );
     }
 
     #[test]
@@ -683,7 +703,10 @@ mod token_t {
         use crate::rt::Bytecode;
 
         let codes = lang_to_bytecode("return call view use(1).0x01020304(1)").unwrap();
-        assert_eq!(collect_user_call_opcodes(&codes), vec![Bytecode::CALLUSEVIEW as u8]);
+        assert_eq!(
+            collect_user_call_opcodes(&codes),
+            vec![Bytecode::CALLUSEVIEW as u8]
+        );
     }
 
     #[test]
@@ -692,7 +715,10 @@ mod token_t {
         use crate::rt::Bytecode;
 
         let codes = lang_to_bytecode("return call pure use(1).0x01020304(1)").unwrap();
-        assert_eq!(collect_user_call_opcodes(&codes), vec![Bytecode::CALLUSEPURE as u8]);
+        assert_eq!(
+            collect_user_call_opcodes(&codes),
+            vec![Bytecode::CALLUSEPURE as u8]
+        );
     }
 
     #[test]
@@ -701,7 +727,10 @@ mod token_t {
         use crate::rt::Bytecode;
 
         let codes = lang_to_bytecode("return call view upper.0x01020304(1)").unwrap();
-        assert_eq!(collect_user_call_opcodes(&codes), vec![Bytecode::CALL as u8]);
+        assert_eq!(
+            collect_user_call_opcodes(&codes),
+            vec![Bytecode::CALL as u8]
+        );
     }
 
     // ==================== Number Type Suffix Tests ====================
@@ -901,9 +930,9 @@ mod token_t {
 
     #[test]
     fn test_simplify_numeric_as_suffix_option_off_uses_as_cast() {
-        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let script = "var x = 100u64";
         let ir = lang_to_irnode(script).expect("Failed to compile");
@@ -927,9 +956,9 @@ mod token_t {
 
     #[test]
     fn test_hide_default_call_argv_keeps_explicit_empty_bytes_for_ntfunc() {
-        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return sha2(\"\")").expect("Failed to compile");
         let mut opt = PrintOption::new("  ", 0);
@@ -949,9 +978,9 @@ mod token_t {
 
     #[test]
     fn test_keccak256_roundtrips_as_single_arg_ntfunc() {
-        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return keccak256(\"abc\")").expect("Failed to compile");
         let decompiled = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
@@ -964,9 +993,9 @@ mod token_t {
 
     #[test]
     fn test_blake2s256_roundtrips_as_single_arg_ntfunc() {
-        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return blake2s256(\"abc\")").expect("Failed to compile");
         let decompiled = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
@@ -979,9 +1008,9 @@ mod token_t {
 
     #[test]
     fn test_blake2b256_roundtrips_as_single_arg_ntfunc() {
-        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return blake2b256(\"abc\")").expect("Failed to compile");
         let decompiled = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
@@ -994,9 +1023,9 @@ mod token_t {
 
     #[test]
     fn test_hide_default_call_argv_applies_to_ntenv() {
-        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return context_address()").expect("Failed to compile");
         let plain = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
@@ -1017,9 +1046,9 @@ mod token_t {
 
     #[test]
     fn test_hide_default_call_argv_applies_to_ntreg() {
-        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("intent_pop()\nreturn 0").expect("Failed to compile");
         let plain = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
@@ -1040,9 +1069,9 @@ mod token_t {
 
     #[test]
     fn test_syscall_single_arg_cat_not_split() {
-        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return sha2(\"a\" ++ \"b\")").expect("Failed to compile");
         let mut opt = PrintOption::new("  ", 0);
@@ -1062,65 +1091,69 @@ mod token_t {
     }
 
     #[test]
-    fn pack_asset_small_literals_compile_with_u64_coercion() {
+    fn pack_asset_compiles_as_packed_tuple_without_uint_coercion() {
         use super::lang_to_bytecode;
-        use crate::rt::NativeFunc;
         use crate::rt::Bytecode;
+        use crate::rt::NativeArgvPack;
+        use crate::rt::NativeFunc;
 
+        assert_eq!(NativeFunc::pack_asset as u8, 52);
+        assert_eq!(
+            NativeFunc::argv_pack(NativeFunc::pack_asset as u8).unwrap(),
+            NativeArgvPack::Packed
+        );
         lang_to_bytecode("return pack_asset(1, 2)").expect("compile");
-        assert!(NativeFunc::tar_uint_tys(37).is_some());
 
         let codes = lang_to_bytecode("return pack_asset(1, 100)").expect("compile");
-        let cu64_count = codes
-            .iter()
-            .filter(|&&b| b == Bytecode::CU64 as u8)
-            .count();
-        assert_eq!(
-            cu64_count, 2,
-            "both numeric literals should get CU64, got {}",
-            cu64_count
+        let cu64_count = codes.iter().filter(|&&b| b == Bytecode::CU64 as u8).count();
+        assert_eq!(cu64_count, 0, "Packed uints stay native width, got CU64");
+        assert!(
+            codes.contains(&(Bytecode::PACKTUPLE as u8)),
+            "arity-2 Packed must emit PACKTUPLE"
+        );
+        assert!(
+            !codes.contains(&(Bytecode::CAT as u8)),
+            "Packed pack_asset must not CAT"
         );
     }
 
     #[test]
-    fn pack_asset_variables_do_not_get_compile_time_u64_coercion() {
+    fn ascii_u128_dec_unit_compiles_as_packed_three_args() {
         use super::lang_to_bytecode;
+        use super::lang_to_irnode;
         use crate::rt::Bytecode;
 
-        let codes = lang_to_bytecode("var s = 1\nreturn pack_asset(s, 100)").expect("compile");
-        let cu64_count = codes
-            .iter()
-            .filter(|&&b| b == Bytecode::CU64 as u8)
-            .count();
-        assert_eq!(
-            cu64_count, 1,
-            "only literal 100 should get CU64, not variable s, got {}",
-            cu64_count
-        );
-    }
-
-    #[test]
-    fn pack_asset_literal_overflow_fails_at_compile() {
-        use super::lang_to_irnode;
-
-        let err = lang_to_irnode(&format!(
-            "return pack_asset({}, 1)",
-            u64::MAX as u128 + 1
-        ))
-        .expect_err("u128 literal over u64 must fail");
-        let text = format!("{:?}", err);
+        lang_to_bytecode(r#"return ascii_u128_dec_unit(2, 0, "21k")"#).expect("compile");
         assert!(
-            text.contains("u64") || text.contains("overflow"),
-            "unexpected error: {}",
-            text
+            lang_to_irnode(r#"return ascii_u128_dec_unit(2, "21k")"#).is_err(),
+            "old 2-arg Concat form must not compile"
+        );
+        let codes = lang_to_bytecode(r#"return ascii_u128_dec_unit(2, 0, "21k")"#).unwrap();
+        assert!(
+            codes.contains(&(Bytecode::PACKTUPLE as u8)),
+            "arity-3 Packed must emit PACKTUPLE"
+        );
+        assert!(
+            !codes.contains(&(Bytecode::CAT as u8)),
+            "Packed ascii_u128_dec_unit must not CAT"
         );
     }
 
     #[test]
-    fn test_syscall_multi_arg_cat_chain_splits_by_arity() {
+    fn pack_asset_variable_and_wide_literal_still_compile() {
+        use super::lang_to_bytecode;
         use super::lang_to_irnode;
+
+        lang_to_bytecode("var s = 1\nreturn pack_asset(s, 100)").expect("compile");
+        lang_to_irnode(&format!("return pack_asset({}, 1)", u64::MAX as u128 + 1))
+            .expect("wide literal compiles; range is checked at runtime");
+    }
+
+    #[test]
+    fn test_syscall_multi_arg_packed_decompiles_as_two_args() {
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return pack_asset(1, 2)").expect("Failed to compile");
 
@@ -1192,7 +1225,12 @@ mod token_t {
             let expect = lang_to_ircode(src).expect(src);
             let text = ircode_to_lang(&expect).expect(src);
             let reparsed = lang_to_ircode(&text)
-                .map_err(|e| format!("{}\n---- decompiled ----\n{}\n--------------------", e, text))
+                .map_err(|e| {
+                    format!(
+                        "{}\n---- decompiled ----\n{}\n--------------------",
+                        e, text
+                    )
+                })
                 .unwrap();
             assert_eq!(expect, reparsed, "src={}\ndecompiled={}", src, text);
         }
@@ -1207,7 +1245,12 @@ mod token_t {
             let expect = lang_to_ircode(src).expect(src);
             let text = ircode_to_lang(&expect).expect(src);
             let reparsed = lang_to_ircode(&text)
-                .map_err(|e| format!("{}\n---- decompiled ----\n{}\n--------------------", e, text))
+                .map_err(|e| {
+                    format!(
+                        "{}\n---- decompiled ----\n{}\n--------------------",
+                        e, text
+                    )
+                })
                 .unwrap();
             assert_eq!(expect, reparsed, "src={}\ndecompiled={}", src, text);
         }
@@ -1222,17 +1265,22 @@ mod token_t {
         let expect = lang_to_ircode(src).expect(src);
         let text = ircode_to_lang(&expect).expect(src);
         let reparsed = lang_to_ircode(&text)
-            .map_err(|e| format!("{}\n---- decompiled ----\n{}\n--------------------", e, text))
+            .map_err(|e| {
+                format!(
+                    "{}\n---- decompiled ----\n{}\n--------------------",
+                    e, text
+                )
+            })
             .unwrap();
         assert_eq!(expect, reparsed, "decompiled={}", text);
     }
 
     #[test]
     fn test_all_print_options_disabled_preserve_ircode_semantics() {
-        use super::lang_to_ircode;
-        use super::lang_to_irnode_with_sourcemap;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_ircode;
+        use super::lang_to_irnode_with_sourcemap;
 
         let script = r#"
             param { amt }
@@ -1269,15 +1317,19 @@ mod token_t {
             let reparsed = lang_to_ircode(&text)
                 .map_err(|e| format!("{}\n---- all-off printed (map_enabled={}) ----\n{}\n---------------------\n", e, map_enabled, text))
                 .unwrap();
-            assert_eq!(expect, reparsed, "all-off roundtrip mismatch (map_enabled={})\n{}", map_enabled, text);
+            assert_eq!(
+                expect, reparsed,
+                "all-off roundtrip mismatch (map_enabled={})\n{}",
+                map_enabled, text
+            );
         }
     }
 
     #[test]
     fn patches_list_literal_roundtrips_without_flattening_concat_args() {
-        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return patches([0, 1, 1 as u8])").expect("compile patches");
         let mut opt = PrintOption::new("  ", 0);
@@ -1331,9 +1383,9 @@ mod token_t {
     }
 
     fn print_sigset_call(src: &str) -> String {
-        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
+        use super::lang_to_irnode;
 
         let ir = lang_to_irnode(src).expect(src);
         let mut opt = PrintOption::new("  ", 0);

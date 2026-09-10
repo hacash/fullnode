@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
-use crate::rt::SpaceCap;
+use crate::rt::{ItrErrCode::NativeFuncError, NativeFnEnv};
 use crate::value::checked_value_output_len;
 
+use super::argv::*;
 use super::*;
 
 const ASCII_ERR_OK: u16 = 0;
@@ -28,23 +29,40 @@ const KV_FLAG_ALLOW_EMPTY_DOC: u8 = 1 << 2;
 const KV_FLAG_QUOTED_VALUE: u8 = 1 << 3;
 const KV_FLAG_LOWER_KEYS: u8 = 1 << 4;
 const KV_FLAG_LOWER_VALUES: u8 = 1 << 5;
+const KV_FLAG_ALL: u8 = KV_FLAG_ALLOW_OUTER_WS
+    | KV_FLAG_ALLOW_INNER_WS
+    | KV_FLAG_ALLOW_EMPTY_DOC
+    | KV_FLAG_QUOTED_VALUE
+    | KV_FLAG_LOWER_KEYS
+    | KV_FLAG_LOWER_VALUES;
 
 const TXT_FLAG_TRIM_ASCII_WS: u8 = 1 << 0;
 const TXT_FLAG_ALLOW_EMPTY: u8 = 1 << 1;
 const TXT_FLAG_ALLOW_DASH_AS_EMPTY: u8 = 1 << 2;
 const TXT_FLAG_TO_LOWER: u8 = 1 << 3;
 const TXT_FLAG_TO_UPPER: u8 = 1 << 4;
+const TXT_FLAG_ALL: u8 = TXT_FLAG_TRIM_ASCII_WS
+    | TXT_FLAG_ALLOW_EMPTY
+    | TXT_FLAG_ALLOW_DASH_AS_EMPTY
+    | TXT_FLAG_TO_LOWER
+    | TXT_FLAG_TO_UPPER;
 
 const DEC_FLAG_TRIM_ASCII_WS: u8 = 1 << 0;
 const DEC_FLAG_ALLOW_EMPTY_AS_ZERO: u8 = 1 << 1;
 const DEC_FLAG_ALLOW_DASH_AS_ZERO: u8 = 1 << 2;
 const DEC_FLAG_SUFFIX_CASE_INSENSITIVE: u8 = 1 << 3;
+const DEC_FLAG_ALL: u8 = DEC_FLAG_TRIM_ASCII_WS
+    | DEC_FLAG_ALLOW_EMPTY_AS_ZERO
+    | DEC_FLAG_ALLOW_DASH_AS_ZERO
+    | DEC_FLAG_SUFFIX_CASE_INSENSITIVE;
 
 const DEC_UNIT_H100: u8 = 1 << 0;
 const DEC_UNIT_K1E3: u8 = 1 << 1;
 const DEC_UNIT_M1E6: u8 = 1 << 2;
 const DEC_UNIT_B1E9: u8 = 1 << 3;
 const DEC_UNIT_T1E12: u8 = 1 << 4;
+const DEC_UNIT_ALL: u8 =
+    DEC_UNIT_H100 | DEC_UNIT_K1E3 | DEC_UNIT_M1E6 | DEC_UNIT_B1E9 | DEC_UNIT_T1E12;
 
 fn ascii_ws(ch: u8) -> bool {
     matches!(ch, b' ' | b'\t' | b'\n' | b'\r')
@@ -80,28 +98,18 @@ fn class_byte_predicate(class_id: u8) -> VmrtRes<fn(u8) -> bool> {
     })
 }
 
-fn decode_prefixed_u16<'a>(buf: &'a [u8], name: &str) -> VmrtRes<(u16, &'a [u8])> {
-    if buf.len() < 2 {
+fn reject_unknown_bits(bits: u8, allowed: u8, what: &str) -> VmrtErr {
+    // Policy errors (unknown flag/class/delimiter) are NativeFuncError.
+    // Content errors return (U16 errno, payload).
+    if bits & !allowed != 0 {
         return itr_err_fmt!(
             NativeFuncError,
-            "{} expects at least 2 bytes, got {}",
-            name,
-            buf.len()
+            "ascii {} has unknown bits 0x{:02x}",
+            what,
+            bits
         );
     }
-    Ok((u16::from_be_bytes([buf[0], buf[1]]), &buf[2..]))
-}
-
-fn decode_prefixed_u64<'a>(buf: &'a [u8], name: &str) -> VmrtRes<(u64, &'a [u8])> {
-    if buf.len() < 8 {
-        return itr_err_fmt!(
-            NativeFuncError,
-            "{} expects at least 8 bytes, got {}",
-            name,
-            buf.len()
-        );
-    }
-    Ok((u64::from_be_bytes(buf[0..8].try_into().unwrap()), &buf[8..]))
+    Ok(())
 }
 
 fn ascii_trim_range(buf: &[u8]) -> &[u8] {
@@ -207,6 +215,9 @@ fn parse_quoted_ascii_value(raw: &[u8], start: usize) -> Result<(Vec<u8>, usize)
                 i += 2;
             }
             b => {
+                if !b.is_ascii() {
+                    return Err(ASCII_ERR_INVALID_CHAR);
+                }
                 out.push(b);
                 i += 1;
             }
@@ -215,16 +226,20 @@ fn parse_quoted_ascii_value(raw: &[u8], start: usize) -> Result<(Vec<u8>, usize)
     Err(ASCII_ERR_FORMAT)
 }
 
-pub(super) fn ascii_validate_transform(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    let (mode, raw) = decode_prefixed_u16(buf, "ascii_validate_transform")?;
-    let class_id = (mode & 0x00ff) as u8;
-    let flags = (mode >> 8) as u8;
+pub(super) fn ascii_validate_transform(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::ascii_validate_transform;
+    let args = func_argv(argv, cty)?;
+    let class_id = func_u8(&args[0], cty, "class")?;
+    let flags = func_u8(&args[1], cty, "flags")?;
+    let raw = func_bytes(&args[2], cty, "data")?;
+    reject_unknown_bits(flags, TXT_FLAG_ALL, "validate flags")?;
+    let class_ok = class_byte_predicate(class_id)?;
+
     let trim = flags & TXT_FLAG_TRIM_ASCII_WS != 0;
     let allow_empty = flags & TXT_FLAG_ALLOW_EMPTY != 0;
     let allow_dash = flags & TXT_FLAG_ALLOW_DASH_AS_EMPTY != 0;
     let to_lower = flags & TXT_FLAG_TO_LOWER != 0;
     let to_upper = flags & TXT_FLAG_TO_UPPER != 0;
-
     if to_lower && to_upper {
         return itr_err_fmt!(
             NativeFuncError,
@@ -232,7 +247,11 @@ pub(super) fn ascii_validate_transform(_: u64, buf: &[u8]) -> VmrtRes<Value> {
         );
     }
 
-    let data = if trim { ascii_trim_range(raw) } else { raw };
+    let data = if trim {
+        ascii_trim_range(&raw)
+    } else {
+        raw.as_slice()
+    };
     if data.is_empty() {
         return tuple_errno_bytes(
             if allow_empty {
@@ -248,13 +267,12 @@ pub(super) fn ascii_validate_transform(_: u64, buf: &[u8]) -> VmrtRes<Value> {
             if allow_dash {
                 ASCII_ERR_OK
             } else {
-                ASCII_ERR_FORMAT
+                ASCII_ERR_INVALID_CHAR
             },
             vec![],
         );
     }
 
-    let class_ok = class_byte_predicate(class_id)?;
     let mut out = Vec::with_capacity(data.len());
     for &ch in data {
         if !class_ok(ch) {
@@ -266,26 +284,34 @@ pub(super) fn ascii_validate_transform(_: u64, buf: &[u8]) -> VmrtRes<Value> {
             _ => ch,
         });
     }
-
     tuple_errno_bytes(ASCII_ERR_OK, out)
 }
 
-pub(super) fn ascii_u128_dec_unit(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    let (mode, raw) = decode_prefixed_u16(buf, "ascii_u128_dec_unit")?;
-    let flags = (mode >> 8) as u8;
-    let unit_mask = (mode & 0x00ff) as u8;
+pub(super) fn ascii_u128_dec_unit(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::ascii_u128_dec_unit;
+    let args = func_argv(argv, cty)?;
+    let unit_mask = func_u8(&args[0], cty, "unit_mask")?;
+    let flags = func_u8(&args[1], cty, "flags")?;
+    let raw = func_bytes(&args[2], cty, "data")?;
+    reject_unknown_bits(unit_mask, DEC_UNIT_ALL, "dec unit mask")?;
+    reject_unknown_bits(flags, DEC_FLAG_ALL, "dec flags")?;
+
     let trim = flags & DEC_FLAG_TRIM_ASCII_WS != 0;
     let allow_empty = flags & DEC_FLAG_ALLOW_EMPTY_AS_ZERO != 0;
     let allow_dash = flags & DEC_FLAG_ALLOW_DASH_AS_ZERO != 0;
     let case_fold = flags & DEC_FLAG_SUFFIX_CASE_INSENSITIVE != 0;
-    let data = if trim { ascii_trim_range(raw) } else { raw };
+    let data = if trim {
+        ascii_trim_range(&raw)
+    } else {
+        raw.as_slice()
+    };
 
     if data.is_empty() {
         return tuple_errno_u128(
             if allow_empty {
                 ASCII_ERR_OK
             } else {
-                ASCII_ERR_FORMAT
+                ASCII_ERR_EMPTY
             },
             0,
         );
@@ -295,7 +321,7 @@ pub(super) fn ascii_u128_dec_unit(_: u64, buf: &[u8]) -> VmrtRes<Value> {
             if allow_dash {
                 ASCII_ERR_OK
             } else {
-                ASCII_ERR_FORMAT
+                ASCII_ERR_INVALID_CHAR
             },
             0,
         );
@@ -305,7 +331,6 @@ pub(super) fn ascii_u128_dec_unit(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     let mut mul = 1u128;
     let mut seen_digit = false;
     let mut in_suffix = false;
-
     for &raw_ch in data {
         let ch = if case_fold {
             ascii_to_lower(raw_ch)
@@ -324,7 +349,6 @@ pub(super) fn ascii_u128_dec_unit(_: u64, buf: &[u8]) -> VmrtRes<Value> {
             };
             continue;
         }
-
         in_suffix = true;
         let factor = match ch {
             b'h' if unit_mask & DEC_UNIT_H100 != 0 => 100u128,
@@ -339,7 +363,6 @@ pub(super) fn ascii_u128_dec_unit(_: u64, buf: &[u8]) -> VmrtRes<Value> {
             None => return tuple_errno_u128(ASCII_ERR_OVERFLOW, 0),
         };
     }
-
     if !seen_digit {
         return tuple_errno_u128(ASCII_ERR_FORMAT, 0);
     }
@@ -350,12 +373,15 @@ pub(super) fn ascii_u128_dec_unit(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     tuple_errno_u128(ASCII_ERR_OK, out)
 }
 
-pub(super) fn ascii_hex_lower(_: u64, buf: &[u8]) -> VmrtRes<Value> {
+pub(super) fn ascii_hex_lower(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::ascii_hex_lower;
+    let args = func_argv(argv, cty)?;
+    let buf = func_bytes(&args[0], cty, "data")?;
     if buf.len() % 2 != 0 {
         return tuple_errno_bytes(ASCII_ERR_HEX_ODD, vec![]);
     }
     let mut out = Vec::with_capacity(buf.len());
-    for &ch in buf {
+    for &ch in &buf {
         let lowered = ascii_to_lower(ch);
         if !lowered.is_ascii_hexdigit() {
             return tuple_errno_bytes(ASCII_ERR_INVALID_CHAR, vec![]);
@@ -365,32 +391,54 @@ pub(super) fn ascii_hex_lower(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     tuple_errno_bytes(ASCII_ERR_OK, out)
 }
 
-pub(super) fn ascii_base58_validate_or_echo(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    for &ch in buf {
+pub(super) fn ascii_base58_validate_or_echo(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::ascii_base58_validate_or_echo;
+    let args = func_argv(argv, cty)?;
+    let buf = func_bytes(&args[0], cty, "data")?;
+    for &ch in &buf {
         if !ascii_is_base58(ch) {
             return tuple_errno_bytes(ASCII_ERR_INVALID_CHAR, vec![]);
         }
     }
-    tuple_errno_bytes(ASCII_ERR_OK, buf.to_vec())
+    tuple_errno_bytes(ASCII_ERR_OK, buf)
 }
 
-pub(super) fn ascii_parse_flat_kv(height: u64, buf: &[u8]) -> VmrtRes<Value> {
-    parse_flat_kv_impl(&SpaceCap::new(height), buf)
+pub(super) fn ascii_parse_flat_kv(env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::ascii_parse_flat_kv;
+    let args = func_argv(argv, cty)?;
+    let open = func_u8(&args[0], cty, "open")?;
+    let kv_sep = func_u8(&args[1], cty, "kv_sep")?;
+    let pair_sep = func_u8(&args[2], cty, "pair_sep")?;
+    let close = func_u8(&args[3], cty, "close")?;
+    let key_class = func_u8(&args[4], cty, "key_class")?;
+    let value_class = func_u8(&args[5], cty, "value_class")?;
+    let flags = func_u8(&args[6], cty, "flags")?;
+    let raw = func_bytes(&args[7], cty, "doc")?;
+    parse_flat_kv_impl(
+        env.cap,
+        open,
+        kv_sep,
+        pair_sep,
+        close,
+        key_class,
+        value_class,
+        flags,
+        &raw,
+    )
 }
 
-fn parse_flat_kv_impl(cap: &SpaceCap, buf: &[u8]) -> VmrtRes<Value> {
-    let (spec, raw) = decode_prefixed_u64(buf, "ascii_parse_flat_kv")?;
-    let parts = spec.to_be_bytes();
-    let open = parts[0];
-    let kv_sep = parts[1];
-    let pair_sep = parts[2];
-    let close = parts[3];
-    let key_class = parts[4];
-    let value_class = parts[5];
-    if parts[6] != 0 {
-        return itr_err_fmt!(NativeFuncError, "ascii_parse_flat_kv spec byte 6 must be 0");
-    }
-    let flags = parts[7];
+fn parse_flat_kv_impl(
+    cap: &SpaceCap,
+    open: u8,
+    kv_sep: u8,
+    pair_sep: u8,
+    close: u8,
+    key_class: u8,
+    value_class: u8,
+    flags: u8,
+    raw: &[u8],
+) -> VmrtRes<Value> {
+    reject_unknown_bits(flags, KV_FLAG_ALL, "kv flags")?;
     let key_ok = class_byte_predicate(key_class)?;
     let value_ok = class_byte_predicate(value_class)?;
     if open == 0 || kv_sep == 0 || pair_sep == 0 || close == 0 {
@@ -411,6 +459,13 @@ fn parse_flat_kv_impl(cap: &SpaceCap, buf: &[u8]) -> VmrtRes<Value> {
             "ascii_parse_flat_kv delimiters must be distinct"
         );
     }
+    let seps = [open, kv_sep, pair_sep, close];
+    if seps.iter().any(|&s| key_ok(s) || value_ok(s)) {
+        return itr_err_fmt!(
+            NativeFuncError,
+            "ascii_parse_flat_kv delimiters must not match key or value class"
+        );
+    }
 
     let allow_outer_ws = flags & KV_FLAG_ALLOW_OUTER_WS != 0;
     let allow_inner_ws = flags & KV_FLAG_ALLOW_INNER_WS != 0;
@@ -418,6 +473,12 @@ fn parse_flat_kv_impl(cap: &SpaceCap, buf: &[u8]) -> VmrtRes<Value> {
     let quoted_value = flags & KV_FLAG_QUOTED_VALUE != 0;
     let lower_keys = flags & KV_FLAG_LOWER_KEYS != 0;
     let lower_values = flags & KV_FLAG_LOWER_VALUES != 0;
+    if allow_inner_ws && seps.iter().any(|&s| ascii_ws(s)) {
+        return itr_err_fmt!(
+            NativeFuncError,
+            "ascii_parse_flat_kv inner-ws cannot use whitespace delimiters"
+        );
+    }
 
     let mut i = 0usize;
     if allow_outer_ws {
@@ -431,7 +492,6 @@ fn parse_flat_kv_impl(cap: &SpaceCap, buf: &[u8]) -> VmrtRes<Value> {
     i += 1;
 
     let mut map = BTreeMap::<Vec<u8>, Value>::new();
-
     loop {
         if allow_inner_ws {
             while i < raw.len() && ascii_ws(raw[i]) {
@@ -486,6 +546,8 @@ fn parse_flat_kv_impl(cap: &SpaceCap, buf: &[u8]) -> VmrtRes<Value> {
         }
 
         let mut value = if quoted_value && i < raw.len() && raw[i] == b'"' {
+            // Quoted payload may include delimiter bytes (the point of quoting)
+            // but must still be ASCII. value_class applies only to unquoted tokens.
             match parse_quoted_ascii_value(raw, i) {
                 Ok((v, next_i)) => {
                     i = next_i;
@@ -545,5 +607,281 @@ fn parse_flat_kv_impl(cap: &SpaceCap, buf: &[u8]) -> VmrtRes<Value> {
             return tuple_errno_map_ok_kv(cap, map);
         }
         return tuple_errno_map(ASCII_ERR_FORMAT, BTreeMap::new());
+    }
+}
+
+#[cfg(test)]
+mod ascii_native_tests {
+    use super::*;
+    use crate::rt::SpaceCap;
+
+    fn tuple_items(v: Value) -> Vec<Value> {
+        let Value::Tuple(tp) = v else {
+            panic!("must be tuple");
+        };
+        tp.to_vec()
+    }
+
+    fn cap() -> SpaceCap {
+        SpaceCap::new(0)
+    }
+
+    fn env_on(cap: &SpaceCap) -> NativeFnEnv<'_> {
+        NativeFnEnv::new(cap)
+    }
+
+    fn packed_n(items: Vec<Value>) -> Value {
+        Value::pack_call_args(items).unwrap()
+    }
+
+    #[test]
+    fn validate_transform_trims_and_lowers() {
+        let cap = cap();
+        let argv = packed_n(vec![
+            Value::U8(ASCII_CLASS_IDENT),
+            Value::U8(TXT_FLAG_TRIM_ASCII_WS | TXT_FLAG_TO_LOWER),
+            Value::bytes(b"  AbC_9  ".to_vec()),
+        ]);
+        let res = tuple_items(ascii_validate_transform(env_on(&cap), argv).unwrap());
+        assert_eq!(res[0], Value::U16(ASCII_ERR_OK));
+        assert_eq!(res[1], Value::Bytes(b"abc_9".to_vec()));
+    }
+
+    #[test]
+    fn validate_transform_small_int_class_is_not_prefix_sliced() {
+        let cap = cap();
+        let argv = packed_n(vec![
+            Value::U8(ASCII_CLASS_DEC),
+            Value::U8(0),
+            Value::bytes(b"99".to_vec()),
+        ]);
+        let res = tuple_items(ascii_validate_transform(env_on(&cap), argv).unwrap());
+        assert_eq!(res[0], Value::U16(ASCII_ERR_OK));
+        assert_eq!(res[1], Value::Bytes(b"99".to_vec()));
+    }
+
+    #[test]
+    fn parse_u128_dec_unit_parses_metric_suffix() {
+        let cap = cap();
+        let argv = packed_n(vec![
+            Value::U8(DEC_UNIT_K1E3 | DEC_UNIT_M1E6),
+            Value::U8(DEC_FLAG_SUFFIX_CASE_INSENSITIVE),
+            Value::bytes(b"21K".to_vec()),
+        ]);
+        let res = tuple_items(ascii_u128_dec_unit(env_on(&cap), argv).unwrap());
+        assert_eq!(res[0], Value::U16(ASCII_ERR_OK));
+        assert_eq!(res[1], Value::U128(21_000));
+    }
+
+    #[test]
+    fn parse_u128_u8_unit_mask_does_not_swallow_payload() {
+        let cap = cap();
+        let argv = packed_n(vec![
+            Value::U8(DEC_UNIT_K1E3),
+            Value::U8(0),
+            Value::bytes(b"21k".to_vec()),
+        ]);
+        let res = tuple_items(ascii_u128_dec_unit(env_on(&cap), argv).unwrap());
+        assert_eq!(res[0], Value::U16(ASCII_ERR_OK));
+        assert_eq!(res[1], Value::U128(21_000));
+    }
+
+    #[test]
+    fn hex_lower_rejects_odd_length_and_lowers() {
+        let cap = cap();
+        let err =
+            tuple_items(ascii_hex_lower(env_on(&cap), Value::bytes(b"ABC".to_vec())).unwrap());
+        assert_eq!(err[0], Value::U16(ASCII_ERR_HEX_ODD));
+
+        let ok =
+            tuple_items(ascii_hex_lower(env_on(&cap), Value::bytes(b"AB12ef".to_vec())).unwrap());
+        assert_eq!(ok[0], Value::U16(ASCII_ERR_OK));
+        assert_eq!(ok[1], Value::Bytes(b"ab12ef".to_vec()));
+    }
+
+    #[test]
+    fn base58_validate_or_echo_rejects_forbidden_chars() {
+        let cap = cap();
+        let ok = tuple_items(
+            ascii_base58_validate_or_echo(env_on(&cap), Value::bytes(b"123ABCxyz".to_vec()))
+                .unwrap(),
+        );
+        assert_eq!(ok[0], Value::U16(ASCII_ERR_OK));
+        assert_eq!(ok[1], Value::Bytes(b"123ABCxyz".to_vec()));
+
+        let err = tuple_items(
+            ascii_base58_validate_or_echo(env_on(&cap), Value::bytes(b"10OIl".to_vec())).unwrap(),
+        );
+        assert_eq!(err[0], Value::U16(ASCII_ERR_INVALID_CHAR));
+    }
+
+    fn kv_argv(flags: u8, doc: &[u8]) -> Value {
+        packed_n(vec![
+            Value::U8(b'{'),
+            Value::U8(b';'),
+            Value::U8(b','),
+            Value::U8(b'}'),
+            Value::U8(ASCII_CLASS_ALNUM),
+            Value::U8(ASCII_CLASS_ALNUM),
+            Value::U8(flags),
+            Value::bytes(doc.to_vec()),
+        ])
+    }
+
+    #[test]
+    fn parse_flat_kv_builds_map() {
+        let cap = cap();
+        let res = tuple_items(
+            ascii_parse_flat_kv(
+                env_on(&cap),
+                kv_argv(
+                    KV_FLAG_ALLOW_OUTER_WS | KV_FLAG_ALLOW_INNER_WS,
+                    b"{ id;key123,ab9;Z1 }",
+                ),
+            )
+            .unwrap(),
+        );
+        assert_eq!(res[0], Value::U16(ASCII_ERR_OK));
+        let Value::Compo(map) = &res[1] else {
+            panic!("must be map");
+        };
+        let map = map.map_ref().unwrap();
+        assert_eq!(
+            map.get(b"id".as_slice()).unwrap(),
+            &Value::Bytes(b"key123".to_vec())
+        );
+        assert_eq!(
+            map.get(b"ab9".as_slice()).unwrap(),
+            &Value::Bytes(b"Z1".to_vec())
+        );
+    }
+
+    #[test]
+    fn parse_flat_kv_quoted_value_comma_and_escape() {
+        let cap = cap();
+        let flags = KV_FLAG_ALLOW_OUTER_WS | KV_FLAG_ALLOW_INNER_WS | KV_FLAG_QUOTED_VALUE;
+        let res = tuple_items(
+            ascii_parse_flat_kv(env_on(&cap), kv_argv(flags, br#"{x;"a,b",y;z}"#)).unwrap(),
+        );
+        assert_eq!(res[0], Value::U16(ASCII_ERR_OK));
+        let Value::Compo(map) = &res[1] else {
+            panic!("must be map");
+        };
+        let map = map.map_ref().unwrap();
+        assert_eq!(
+            map.get(b"x".as_slice()).unwrap(),
+            &Value::Bytes(b"a,b".to_vec())
+        );
+        assert_eq!(
+            map.get(b"y".as_slice()).unwrap(),
+            &Value::Bytes(b"z".to_vec())
+        );
+
+        let res2 = tuple_items(
+            ascii_parse_flat_kv(
+                env_on(&cap),
+                kv_argv(
+                    flags,
+                    &[b'{', b'k', b';', b'"', b'a', b'\\', b'"', b'b', b'"', b'}'],
+                ),
+            )
+            .unwrap(),
+        );
+        let Value::Compo(m2) = &res2[1] else {
+            panic!("must be map");
+        };
+        let m2 = m2.map_ref().unwrap();
+        assert_eq!(
+            m2.get(b"k".as_slice()).unwrap(),
+            &Value::Bytes(vec![b'a', b'"', b'b'])
+        );
+
+        let res3 = tuple_items(
+            ascii_parse_flat_kv(
+                env_on(&cap),
+                kv_argv(flags, &[b'{', b'x', b';', b'"', b'"', b'}']),
+            )
+            .unwrap(),
+        );
+        let Value::Compo(m3) = &res3[1] else {
+            panic!("must be map");
+        };
+        let m3 = m3.map_ref().unwrap();
+        assert_eq!(
+            m3.get(b"x".as_slice()).unwrap(),
+            &Value::Bytes(b"".to_vec())
+        );
+    }
+
+    #[test]
+    fn parse_flat_kv_rejects_over_compo_length() {
+        let mut cap = SpaceCap::new(1);
+        cap.compo_length = 1;
+        let res = tuple_items(
+            parse_flat_kv_impl(
+                &cap,
+                b'{',
+                b';',
+                b',',
+                b'}',
+                ASCII_CLASS_ALNUM,
+                ASCII_CLASS_ALNUM,
+                KV_FLAG_ALLOW_OUTER_WS | KV_FLAG_ALLOW_INNER_WS,
+                b"{a;b,c;d}",
+            )
+            .unwrap(),
+        );
+        assert_eq!(res[0], Value::U16(ASCII_ERR_SPACE_CAP));
+    }
+
+    #[test]
+    fn parse_flat_kv_rejects_key_over_value_size() {
+        let mut cap = SpaceCap::new(1);
+        cap.value_size = 2;
+        let res = tuple_items(
+            parse_flat_kv_impl(
+                &cap,
+                b'{',
+                b';',
+                b',',
+                b'}',
+                ASCII_CLASS_ALNUM,
+                ASCII_CLASS_ALNUM,
+                KV_FLAG_ALLOW_OUTER_WS | KV_FLAG_ALLOW_INNER_WS,
+                b"{abc;d}",
+            )
+            .unwrap(),
+        );
+        assert_eq!(res[0], Value::U16(ASCII_ERR_SPACE_CAP));
+    }
+
+    #[test]
+    fn parse_flat_kv_rejects_delimiter_in_class() {
+        let cap = cap();
+        let argv = packed_n(vec![
+            Value::U8(b'{'),
+            Value::U8(b'_'),
+            Value::U8(b','),
+            Value::U8(b'}'),
+            Value::U8(ASCII_CLASS_IDENT),
+            Value::U8(ASCII_CLASS_IDENT),
+            Value::U8(0),
+            Value::bytes(b"{a_b}".to_vec()),
+        ]);
+        assert!(ascii_parse_flat_kv(env_on(&cap), argv).is_err());
+    }
+
+    #[test]
+    fn parse_flat_kv_quoted_rejects_non_ascii() {
+        let cap = cap();
+        let flags = KV_FLAG_QUOTED_VALUE;
+        let res = tuple_items(
+            ascii_parse_flat_kv(
+                env_on(&cap),
+                kv_argv(flags, &[b'{', b'x', b';', b'"', 0x80, b'"', b'}']),
+            )
+            .unwrap(),
+        );
+        assert_eq!(res[0], Value::U16(ASCII_ERR_INVALID_CHAR));
     }
 }

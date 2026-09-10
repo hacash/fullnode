@@ -172,7 +172,6 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
     let cap = &space_cap;
     let kv_limits = crate::space::VolatileKvLimits::from_space_cap(cap);
     let ops = operands;
-    let hei: u64 = host.height();
 
     macro_rules! nsr {
         () => {
@@ -545,12 +544,12 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                             }
                             let raw = argv.extract_call_data(cap)?;
                             gas_resource!(nt_bytes, raw.len());
-                            call_ntfunc(hei, nt_idx, &raw)?
+                            call_ntfunc(NativeFnEnv::new(cap), nt_idx, &raw)?
                         }
                         NativeArgvPack::Packed => {
                             gas_resource!(nt_bytes, packed_payload_bytes(&argv));
                             gas_resource!(compo_items_read, packed_item_count(&argv));
-                            call_ntfunc_packed(hei, nt_idx, argv)?
+                            call_ntfunc_packed(NativeFnEnv::new(cap), nt_idx, argv)?
                         }
                     };
                     finish_ntcall(cap, gst, &mut step_gas_use, ops, r, g)?;

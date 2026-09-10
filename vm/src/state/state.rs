@@ -1,4 +1,4 @@
-use base::{numeric_state_key, numeric_state_prefix, StateLayer, StateRead};
+use base::{StateLayer, StateRead, numeric_state_key, numeric_state_prefix};
 use field::*;
 use field::{Address, Hash, Uint4};
 
@@ -6,12 +6,12 @@ use sha2::{Digest, Sha256};
 
 use crate::contract::{ContractEdition, ContractSto};
 use crate::rt::{GasExtra, ItrErr, ItrErrCode::*, MapItrStrErr, SpaceCap, VmrtErr, VmrtRes};
-use crate::space::{validate_scalar_payload_len, VolatileKvLimits};
+use crate::space::{VolatileKvLimits, validate_scalar_payload_len};
 use crate::state::patch::decode_and_apply;
 use crate::state::status::{StatusMap, StatusSto};
 use crate::state::storage::{
-    clamp_credit_to_cap, credit_cap_for_blocks, parse_period, period_credit,
-    refund_for_live_credit, u64_to_i64_sat, ValueSto,
+    ValueSto, clamp_credit_to_cap, credit_cap_for_blocks, parse_period, period_credit,
+    refund_for_live_credit, u64_to_i64_sat,
 };
 use crate::value::{ContractAddress, Value, ValueKey};
 
@@ -716,9 +716,11 @@ mod tests {
     fn missing_key_is_ok_none() {
         let map = CorruptLayer(Default::default());
         let k = ValueKey::from(vec![0x04, 0x05, 0x06]);
-        assert!(state_get::<_, ValueSto>(&map, KEY_CONTRACT_KV, &k)
-            .unwrap()
-            .is_none());
+        assert!(
+            state_get::<_, ValueSto>(&map, KEY_CONTRACT_KV, &k)
+                .unwrap()
+                .is_none()
+        );
     }
 
     fn contract_addr() -> Address {

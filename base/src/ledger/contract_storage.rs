@@ -1213,7 +1213,7 @@ mod economic_sim_tests {
     }
 
     const MAX_TX: u128 = 16 * 1024; // bytes (max single tx / K_max)
-    const MAX_BLOCK: u128 = 1024 * 1024; // bytes (max block payload)
+    // const MAX_BLOCK: u128 = 1024 * 1024; // bytes (max block payload)
     const P_MAX: u64 = 10_000;
 
     fn periods(storage: &ContractStorageFeeParams, b: u128) -> u64 {

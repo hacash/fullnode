@@ -298,8 +298,7 @@ pub fn quote_contract_storage_fee(
             let periods = vp
                 .contract_storage_fee
                 .discount_periods(remaining, capacity, p_max)?;
-            let minimum =
-                calc_contract_protocol_cost_min_with_periods(ctx, charge_bytes, periods)?;
+            let minimum = calc_contract_protocol_cost_min_with_periods(ctx, charge_bytes, periods)?;
             Some((minimum, periods))
         }
         None => None,
@@ -682,10 +681,10 @@ fn enforce_contract_storage_fee(
     let snapshot = match read_block_contract_storage_snapshot(ctx.layer(), &vp, height)? {
         Some(snapshot) => snapshot,
         None => {
-            return Err(
-                sys::Error::abort("contract storage budget snapshot missing at active height")
-                    .with_code("core_failed"),
-            );
+            return Err(sys::Error::abort(
+                "contract storage budget snapshot missing at active height",
+            )
+            .with_code("core_failed"));
         }
     };
     if protocol_cost >= &min_full {
@@ -809,8 +808,8 @@ base::impl_action_execute! {
 #[cfg(all(test, feature = "execute"))]
 mod contract_deploy_exec_tests {
     use super::*;
-    use base::ActionExecute;
     use crate::machine::test_ctx::STUB_VM_PARAMS;
+    use base::ActionExecute;
     use field::{BytesW2, Decode, UNIT_238, Uint1, Uint2, Uint4};
 
     use crate::contract::ContractUserFunc;
@@ -1018,13 +1017,20 @@ mod contract_deploy_exec_tests {
         ctx.vm_params = discount_profile();
         ctx.env.block.height = DISCOUNT_H0 - 1;
         let addr = ctx.env.tx.main;
-        prefund(&mut ctx, &addr, &Amount::coin_u128(1_000_000_000_000, UNIT_238));
+        prefund(
+            &mut ctx,
+            &addr,
+            &Amount::coin_u128(1_000_000_000_000, UNIT_238),
+        );
         let size = contract_deploy_charge_bytes(&nonempty_contract());
         let min_full = contract_protocol_cost_min(&ctx, size, 10_000).unwrap();
 
         let mut below = make_deploy(Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238));
         below.contract = nonempty_contract();
-        assert!(below.execute(&mut ctx).is_err(), "legacy minimum is enforced");
+        assert!(
+            below.execute(&mut ctx).is_err(),
+            "legacy minimum is enforced"
+        );
         assert_eq!(used_discount_bytes(&ctx), 0);
 
         let mut ok = make_deploy(min_full.clone());
@@ -1040,19 +1046,22 @@ mod contract_deploy_exec_tests {
         ctx.env.block.height = DISCOUNT_H0;
         {
             let params = ctx.vm_params;
-            base::init_block_contract_storage_budget(
-                &mut ctx.layer,
-                &params,
-                DISCOUNT_H0,
-            )
-            .unwrap();
+            base::init_block_contract_storage_budget(&mut ctx.layer, &params, DISCOUNT_H0).unwrap();
         }
         let addr = ctx.env.tx.main;
-        prefund(&mut ctx, &addr, &Amount::coin_u128(10_000_000_000_000, UNIT_238));
+        prefund(
+            &mut ctx,
+            &addr,
+            &Amount::coin_u128(10_000_000_000_000, UNIT_238),
+        );
         let charge_bytes = contract_deploy_charge_bytes(&nonempty_contract());
         let min_full = contract_protocol_cost_min(&ctx, charge_bytes, 10_000).unwrap();
         let min_disc = contract_protocol_cost_min(&ctx, charge_bytes, 10).unwrap();
-        assert_eq!(u238_of(&min_disc) * 1000, u238_of(&min_full), "full budget floor price");
+        assert_eq!(
+            u238_of(&min_disc) * 1000,
+            u238_of(&min_full),
+            "full budget floor price"
+        );
         let mut nonce = 1u32;
         let mut deploy_at = |ctx: &mut TestCtx, cost: Amount, body: ContractSto| {
             let mut act = make_deploy(cost);
@@ -1070,12 +1079,14 @@ mod contract_deploy_exec_tests {
         .unwrap();
         assert_eq!(used_discount_bytes(&ctx), charge_bytes as u128);
         // below the discount floor is still rejected
-        assert!(deploy_at(
-            &mut ctx,
-            Amount::coin_u128(u238_of(&min_disc) - 1, UNIT_238),
-            nonempty_contract(),
-        )
-        .is_err());
+        assert!(
+            deploy_at(
+                &mut ctx,
+                Amount::coin_u128(u238_of(&min_disc) - 1, UNIT_238),
+                nonempty_contract(),
+            )
+            .is_err()
+        );
         // full price passes and books nothing
         deploy_at(&mut ctx, min_full, nonempty_contract()).unwrap();
         assert_eq!(
@@ -1092,7 +1103,11 @@ mod contract_deploy_exec_tests {
     fn deploy_discount_consumes_contract_size_quota_only_below_full_price() {
         let mut ctx = seeded_discount_ctx(false, DISCOUNT_H0 + 1000, 1_000_000, 1_000_000);
         let addr = ctx.env.tx.main;
-        prefund(&mut ctx, &addr, &Amount::coin_u128(10_000_000_000_000, UNIT_238));
+        prefund(
+            &mut ctx,
+            &addr,
+            &Amount::coin_u128(10_000_000_000_000, UNIT_238),
+        );
         let contract = nonempty_contract();
         let size = contract_deploy_charge_bytes(&contract);
         assert_eq!(size, contract.size() + 64);
@@ -1111,13 +1126,21 @@ mod contract_deploy_exec_tests {
             act.contract = body;
             act.execute(ctx)
         };
-        deploy_at(&mut ctx, Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238), contract.clone())
-            .unwrap();
+        deploy_at(
+            &mut ctx,
+            Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238),
+            contract.clone(),
+        )
+        .unwrap();
         assert_eq!(used_discount_bytes(&ctx), size as u128);
 
         // full-price deploy does not consume any quota
         deploy_at(&mut ctx, min_full.clone(), contract.clone()).unwrap();
-        assert_eq!(used_discount_bytes(&ctx), size as u128, "full price skips quota");
+        assert_eq!(
+            used_discount_bytes(&ctx),
+            size as u128,
+            "full price skips quota"
+        );
 
         // below the discount minimum is rejected and consumes nothing
         assert!(
@@ -1140,7 +1163,11 @@ mod contract_deploy_exec_tests {
         // periods at used 980,000 ≈ 9,800, so the discount is almost full price.
         let mut ctx = seeded_discount_ctx(false, DISCOUNT_H0 + 1000, 20_000, 1_000_000);
         let addr = ctx.env.tx.main;
-        prefund(&mut ctx, &addr, &Amount::coin_u128(10_000_000_000_000, UNIT_238));
+        prefund(
+            &mut ctx,
+            &addr,
+            &Amount::coin_u128(10_000_000_000_000, UNIT_238),
+        );
         // craft a contract larger than the block quota (fills the wire via a long
         // dead-code PBUF? simpler: many zero userfuncs inflate size past 16 KiB is
         // overkill — instead use the quota math with a payload above K_max by
@@ -1172,7 +1199,11 @@ mod contract_deploy_exec_tests {
             !err.to_string().contains("already exists"),
             "expected a quota error, got: {err}"
         );
-        assert_eq!(used_discount_bytes(&ctx), used, "rejected deploy must not consume");
+        assert_eq!(
+            used_discount_bytes(&ctx),
+            used,
+            "rejected deploy must not consume"
+        );
     }
 
     /// §3.4 fixed fee vector: a 10,000-byte deploy at the 50,000 u238/byte floor
@@ -1183,10 +1214,10 @@ mod contract_deploy_exec_tests {
         let bytes = 10_000usize;
         // periods → HAC, per the §3.4 table (1 HAC = 10^10 u238)
         let table: [(u64, u128); 5] = [
-            (10, 5_000_000_000), // 0.5 HAC
-            (1_000, 500_000_000_000), // 50 HAC
-            (5_000, 2_500_000_000_000), // 250 HAC
-            (9_000, 4_500_000_000_000), // 450 HAC
+            (10, 5_000_000_000),         // 0.5 HAC
+            (1_000, 500_000_000_000),    // 50 HAC
+            (5_000, 2_500_000_000_000),  // 250 HAC
+            (9_000, 4_500_000_000_000),  // 450 HAC
             (10_000, 5_000_000_000_000), // 500 HAC
         ];
         for (periods, expected_u238) in table {
@@ -1198,8 +1229,14 @@ mod contract_deploy_exec_tests {
             );
         }
         // purity above the floor scales linearly (§3.4 closing note)
-        let disc = contract_protocol_cost_min(&ctx, bytes, 10).unwrap().to_238_u128().unwrap();
-        let full = contract_protocol_cost_min(&ctx, bytes, 10_000).unwrap().to_238_u128().unwrap();
+        let disc = contract_protocol_cost_min(&ctx, bytes, 10)
+            .unwrap()
+            .to_238_u128()
+            .unwrap();
+        let full = contract_protocol_cost_min(&ctx, bytes, 10_000)
+            .unwrap()
+            .to_238_u128()
+            .unwrap();
         assert_eq!(disc * 1000, full);
     }
 
@@ -1214,7 +1251,11 @@ mod contract_deploy_exec_tests {
     fn fast_sync_books_identical_quota_without_floor_check() {
         let mut ctx = seeded_discount_ctx(true, DISCOUNT_H0 + 1000, 1_000_000, 1_000_000);
         let addr = ctx.env.tx.main;
-        prefund(&mut ctx, &addr, &Amount::coin_u128(10_000_000_000_000, UNIT_238));
+        prefund(
+            &mut ctx,
+            &addr,
+            &Amount::coin_u128(10_000_000_000_000, UNIT_238),
+        );
         let size = contract_deploy_charge_bytes(&nonempty_contract());
         let min_full = contract_protocol_cost_min(&ctx, size, 10_000).unwrap();
         // discount-band fee (below full price) books quota exactly like strict mode
@@ -1226,7 +1267,11 @@ mod contract_deploy_exec_tests {
         let mut full = make_deploy(min_full);
         full.contract = nonempty_contract();
         full.execute(&mut ctx).unwrap();
-        assert_eq!(used_discount_bytes(&ctx), size as u128, "full price skips quota");
+        assert_eq!(
+            used_discount_bytes(&ctx),
+            size as u128,
+            "full price skips quota"
+        );
         // below the discount floor: no price-curve check in fast sync (still booked)
         let min_disc = contract_protocol_cost_min(&ctx, size, 10).unwrap();
         let mut below = make_deploy(Amount::coin_u128(u238_of(&min_disc) - 1, UNIT_238));
@@ -1296,7 +1341,10 @@ mod contract_deploy_exec_tests {
         update.edit = edit;
         update.execute(ctx).unwrap();
         let delta = used_discount_bytes(ctx) - before;
-        assert_eq!(delta, edit_size as u128, "update consumes edit.size() exactly");
+        assert_eq!(
+            delta, edit_size as u128,
+            "update consumes edit.size() exactly"
+        );
         let stored = crate::state::VMState::wrap(&mut ctx.layer)
             .contract(caddr)
             .unwrap()
@@ -1312,7 +1360,11 @@ mod contract_deploy_exec_tests {
         let mut ctx = seeded_discount_ctx(false, DISCOUNT_H0 + 1000, 1_000_000, 1_000_000);
         ctx.install_native_vm();
         let addr = ctx.env.tx.main;
-        prefund(&mut ctx, &addr, &Amount::coin_u128(10_000_000_000_000, UNIT_238));
+        prefund(
+            &mut ctx,
+            &addr,
+            &Amount::coin_u128(10_000_000_000_000, UNIT_238),
+        );
 
         // deploy with two-byte code [P0, END]
         let deploy_codes = vec![Bytecode::P0 as u8, Bytecode::END as u8];
@@ -1334,13 +1386,21 @@ mod contract_deploy_exec_tests {
         // must stay identical because the replacement payload has the same length.
         let equal_codes = vec![Bytecode::P1 as u8, Bytecode::END as u8];
         let (_delta, stored_eq) = run_code_replacing_update(&mut ctx, &caddr, 0, &equal_codes);
-        assert_eq!(stored_eq.size(), contract_size, "equal-length keeps the same size");
+        assert_eq!(
+            stored_eq.size(),
+            contract_size,
+            "equal-length keeps the same size"
+        );
 
         // shrink: replace with a one-byte code
         let shrink_codes = vec![Bytecode::END as u8];
         let (delta_shrink, stored_shrink) =
             run_code_replacing_update(&mut ctx, &caddr, 1, &shrink_codes);
-        assert_eq!(stored_shrink.size(), contract_size - 1, "contract actually shrank");
+        assert_eq!(
+            stored_shrink.size(),
+            contract_size - 1,
+            "contract actually shrank"
+        );
         assert_eq!(
             delta_shrink,
             // edit.size() is the full replacement payload length, not the size delta
@@ -1371,16 +1431,17 @@ mod contract_deploy_exec_tests {
         let mut ctx = seeded_discount_ctx(false, DISCOUNT_H0 + 1000, 1_000_000, 1_000_000);
         ctx.install_native_vm();
         let addr = ctx.env.tx.main;
-        prefund(&mut ctx, &addr, &Amount::coin_u128(10_000_000_000_000, UNIT_238));
+        prefund(
+            &mut ctx,
+            &addr,
+            &Amount::coin_u128(10_000_000_000_000, UNIT_238),
+        );
         let contract = contract_with_codes(&[Bytecode::P0 as u8, Bytecode::END as u8]);
         let nonce = Uint4::from(1);
         let caddr = ContractAddress::calculate(&addr, &nonce);
-        let min_full = contract_protocol_cost_min(
-            &ctx,
-            contract_deploy_charge_bytes(&contract),
-            10_000,
-        )
-        .unwrap();
+        let min_full =
+            contract_protocol_cost_min(&ctx, contract_deploy_charge_bytes(&contract), 10_000)
+                .unwrap();
         let mut deploy = make_deploy(Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238));
         deploy.nonce = nonce;
         deploy.contract = contract;

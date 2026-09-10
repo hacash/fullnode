@@ -115,3 +115,17 @@ impl SpaceCap {
             .saturating_mul(self.storage_recv_max_periods)
     }
 }
+
+/// Execution context for NTFUNC dispatch. Catalog metadata stays in
+/// `native_catalog`; the interpreter supplies the active `SpaceCap`.
+#[derive(Clone, Copy)]
+pub struct NativeFnEnv<'a> {
+    pub cap: &'a SpaceCap,
+}
+
+impl<'a> NativeFnEnv<'a> {
+    #[inline]
+    pub fn new(cap: &'a SpaceCap) -> Self {
+        Self { cap }
+    }
+}

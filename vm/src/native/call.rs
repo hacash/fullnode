@@ -1,33 +1,19 @@
 use crate::frame::IntentScopeState;
 use crate::machine::{DeferredRegistry, IntentRuntime};
 use crate::rt::{
-    EffectMode, ExecCtx, FrameBindings, ItrErr, ItrErrCode, NativeArgvPack, SpaceCap, VmrtRes,
+    EffectMode, ExecCtx, FrameBindings, ItrErr, ItrErrCode, NativeFnEnv, SpaceCap, VmrtRes,
 };
 use crate::value::Value;
 
 use super::intent::*;
 use super::{NativeCtl, NativeEnv, NativeFunc};
 
-pub fn call_ntfunc(hei: u64, idx: u8, argv: &[u8]) -> VmrtRes<(Value, i64)> {
-    match NativeFunc::argv_pack(idx)? {
-        NativeArgvPack::Concat => NativeFunc::call(hei, idx, argv),
-        NativeArgvPack::Packed => itr_err_fmt!(
-            ItrErrCode::NativeFuncError,
-            "native func idx {} requires packed argv",
-            idx
-        ),
-    }
+pub fn call_ntfunc(env: NativeFnEnv<'_>, idx: u8, argv: &[u8]) -> VmrtRes<(Value, i64)> {
+    NativeFunc::call(env, idx, argv)
 }
 
-pub fn call_ntfunc_packed(hei: u64, idx: u8, argv: Value) -> VmrtRes<(Value, i64)> {
-    match NativeFunc::argv_pack(idx)? {
-        NativeArgvPack::Packed => NativeFunc::call_packed(hei, idx, argv),
-        NativeArgvPack::Concat => itr_err_fmt!(
-            ItrErrCode::NativeFuncError,
-            "native func idx {} requires concat argv",
-            idx
-        ),
-    }
+pub fn call_ntfunc_packed(env: NativeFnEnv<'_>, idx: u8, argv: Value) -> VmrtRes<(Value, i64)> {
+    NativeFunc::call_packed(env, idx, argv)
 }
 
 pub fn call_ntctl(

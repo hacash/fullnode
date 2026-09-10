@@ -10,123 +10,122 @@ use crate::rt::ItrErrCode::*;
 use crate::rt::*;
 use crate::value::*;
 
+mod argv;
 mod ascii;
 mod call;
 mod intent;
 mod patches;
+use argv::{func_address, func_argv, func_bytes, func_u8, func_u64, func_u128};
 use ascii::*;
 #[allow(unused_imports)] // interpreter NTFUNC Packed branch (wired by parent)
 pub use call::call_ntfunc_packed;
 pub use call::{call_ntctl, call_ntenv, call_ntfunc};
 use patches::patches;
 
-// Native enums and their metadata tables live in the codec-safe
-// `rt::native_catalog` (shared with the fitsh decompiler); the `use crate::rt::*`
-// glob above brings them into this module's scope. The execution dispatch for
-// `NativeFunc` is generated here where the implementation functions live.
+pub use crate::rt::{NativeArgvPack, NativeCtl, NativeEnv, NativeFnEnv, NativeFunc};
 
-macro_rules! native_concat_dispatch_arm {
-    (Concat, $name:ident, $rty:expr, $gas:expr, $height:expr, $v:expr) => {
-        $name($height, $v).map(|r| {
-            assert_eq!($rty, r.ty());
-            (r, $gas)
-        })
-    };
-    (Packed, $name:ident, $rty:expr, $gas:expr, $height:expr, $v:expr) => {{
-        let _ = ($rty, $gas, $height, $v);
-        itr_err_fmt!(
+fn finish_ntfunc(cty: NativeFunc, r: Value) -> VmrtRes<(Value, i64)> {
+    if cty.rty_of() != r.ty() {
+        return itr_err_fmt!(
             NativeFuncError,
-            "native func {} requires packed argv",
-            stringify!($name)
-        )
-    }};
+            "native func {} return type mismatch: catalog {:?}, got {:?}",
+            cty.name(),
+            cty.rty_of(),
+            r.ty()
+        );
+    }
+    Ok((r, cty.gas_of()))
 }
-
-macro_rules! native_packed_dispatch_arm {
-    (Packed, $name:ident, $rty:expr, $gas:expr, $height:expr, $argv:expr) => {
-        $name($height, $argv).map(|r| {
-            assert_eq!($rty, r.ty());
-            (r, $gas)
-        })
-    };
-    (Concat, $name:ident, $rty:expr, $gas:expr, $height:expr, $argv:expr) => {{
-        let _ = ($rty, $gas, $height, $argv);
-        itr_err_fmt!(
-            NativeFuncError,
-            "native func {} requires concat argv",
-            stringify!($name)
-        )
-    }};
-}
-
-macro_rules! native_dispatch_method {
-    (func, $EnumName:ident, $ErrCode:ident, $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:expr, $argv_pack:ident, $_tar_uint_tys:expr )+) => {
-        pub fn call(height: u64, idx: u8, v: &[u8]) -> VmrtRes<(Value, i64)> {
-            let cty = Self::try_from_u8(idx)?;
-            match cty {
-                $(
-                    Self::$name => native_concat_dispatch_arm!($argv_pack, $name, $rty, $gas, height, v),
-                )+
-                _ => unreachable!(),
-            }
-        }
-
-        pub fn call_packed(height: u64, idx: u8, argv: Value) -> VmrtRes<(Value, i64)> {
-            let cty = Self::try_from_u8(idx)?;
-            match cty {
-                $(
-                    Self::$name => native_packed_dispatch_arm!($argv_pack, $name, $rty, $gas, height, argv),
-                )+
-                _ => unreachable!(),
-            }
-        }
-    };
-}
-
-use ValueTy::*;
 
 impl NativeFunc {
-    native_dispatch_method!(func, NativeFunc, NativeFuncError,
-        hac_to_mei         = 31,   1,       6,    U64,        Concat, &[]
-        hac_to_zhu         = 32,   1,       6,    U128,       Concat, &[]
-        u64_to_fold64      = 33,   1,       8,    Bytes,      Concat, &[]
-        fold64_to_u64      = 34,   1,       8,    U64,        Concat, &[]
-        mei_to_hac         = 35,   1,       6,    Bytes,      Concat, &[]
-        zhu_to_hac         = 36,   1,       6,    Bytes,      Concat, &[]
+    pub fn call(env: NativeFnEnv<'_>, idx: u8, v: &[u8]) -> VmrtRes<(Value, i64)> {
+        let cty = Self::try_from_u8(idx)?;
+        if cty.argv_pack_of() != NativeArgvPack::Concat {
+            return itr_err_fmt!(
+                NativeFuncError,
+                "native func {} requires packed argv",
+                cty.name()
+            );
+        }
+        let r = match cty {
+            Self::sha2 => sha2(env, v)?,
+            Self::sha3 => sha3(env, v)?,
+            Self::ripemd160 => ripemd160(env, v)?,
+            Self::keccak256 => keccak256(env, v)?,
+            Self::blake2s256 => blake2s256(env, v)?,
+            Self::blake2b256 => blake2b256(env, v)?,
+            Self::Null
+            | Self::hac_to_mei
+            | Self::hac_to_zhu
+            | Self::u64_to_fold64
+            | Self::fold64_to_u64
+            | Self::mei_to_hac
+            | Self::zhu_to_hac
+            | Self::address_ptr
+            | Self::pack_asset
+            | Self::patches
+            | Self::verify_signature
+            | Self::ascii_parse_flat_kv
+            | Self::ascii_validate_transform
+            | Self::ascii_u128_dec_unit
+            | Self::ascii_hex_lower
+            | Self::ascii_base58_validate_or_echo => {
+                unreachable!("catalog argv_pack_of Concat")
+            }
+        };
+        finish_ntfunc(cty, r)
+    }
 
-        address_ptr        = 51,   1,       4,    U8,         Concat, &[]
-        pack_asset         = 52,   2,       8,    Bytes,      Concat, &[U64, U64]
-        patches            = 53,   1,      24,    Bytes,      Packed, &[]
-
-        sha2               = 101,  1,      32,    Bytes,      Concat, &[]
-        sha3               = 102,  1,      32,    Bytes,      Concat, &[]
-        ripemd160          = 103,  1,      20,    Bytes,      Concat, &[]
-        verify_signature   = 104,  3,      96,    Bool,       Concat, &[]
-        keccak256          = 105,  1,      32,    Bytes,      Concat, &[]
-        blake2s256         = 106,  1,      32,    Bytes,      Concat, &[]
-        blake2b256         = 107,  1,      32,    Bytes,      Concat, &[]
-
-        ascii_parse_flat_kv = 120, 2,      64,    Tuple,      Concat, &[]
-        ascii_validate_transform = 121, 2, 24,    Tuple,      Concat, &[]
-        ascii_u128_dec_unit = 122, 2,      24,    Tuple,      Concat, &[]
-        ascii_hex_lower    = 123, 1,       20,    Tuple,      Concat, &[]
-        ascii_base58_validate_or_echo = 124, 1, 20, Tuple,    Concat, &[]
-    );
+    pub fn call_packed(env: NativeFnEnv<'_>, idx: u8, argv: Value) -> VmrtRes<(Value, i64)> {
+        let cty = Self::try_from_u8(idx)?;
+        if cty.argv_pack_of() != NativeArgvPack::Packed {
+            return itr_err_fmt!(
+                NativeFuncError,
+                "native func {} requires concat argv",
+                cty.name()
+            );
+        }
+        let r = match cty {
+            Self::hac_to_mei => hac_to_mei(env, argv)?,
+            Self::hac_to_zhu => hac_to_zhu(env, argv)?,
+            Self::u64_to_fold64 => u64_to_fold64(env, argv)?,
+            Self::fold64_to_u64 => fold64_to_u64(env, argv)?,
+            Self::mei_to_hac => mei_to_hac(env, argv)?,
+            Self::zhu_to_hac => zhu_to_hac(env, argv)?,
+            Self::address_ptr => address_ptr(env, argv)?,
+            Self::pack_asset => pack_asset(env, argv)?,
+            Self::patches => patches(env, argv)?,
+            Self::verify_signature => verify_signature(env, argv)?,
+            Self::ascii_parse_flat_kv => ascii_parse_flat_kv(env, argv)?,
+            Self::ascii_validate_transform => ascii_validate_transform(env, argv)?,
+            Self::ascii_u128_dec_unit => ascii_u128_dec_unit(env, argv)?,
+            Self::ascii_hex_lower => ascii_hex_lower(env, argv)?,
+            Self::ascii_base58_validate_or_echo => ascii_base58_validate_or_echo(env, argv)?,
+            Self::sha2
+            | Self::sha3
+            | Self::ripemd160
+            | Self::keccak256
+            | Self::blake2s256
+            | Self::blake2b256
+            | Self::Null => unreachable!("catalog argv_pack_of Packed"),
+        };
+        finish_ntfunc(cty, r)
+    }
 }
 
 fn digest_value<D: sha2::Digest>(buf: &[u8]) -> Value {
     Value::bytes(D::digest(buf).to_vec())
 }
 
-fn sha2(_: u64, buf: &[u8]) -> VmrtRes<Value> {
+fn sha2(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
     Ok(digest_value::<Sha256>(buf))
 }
 
-fn sha3(_: u64, buf: &[u8]) -> VmrtRes<Value> {
+fn sha3(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
     Ok(digest_value::<Sha3_256>(buf))
 }
 
-fn keccak256(_: u64, buf: &[u8]) -> VmrtRes<Value> {
+fn keccak256(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
     let mut keccak = Keccak::v256();
     let mut out = [0u8; 32];
     keccak.update(buf);
@@ -134,15 +133,15 @@ fn keccak256(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     Ok(Value::bytes(out.to_vec()))
 }
 
-fn blake2s256(_: u64, buf: &[u8]) -> VmrtRes<Value> {
+fn blake2s256(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
     Ok(digest_value::<Blake2s256>(buf))
 }
 
-fn blake2b256(_: u64, buf: &[u8]) -> VmrtRes<Value> {
+fn blake2b256(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
     Ok(digest_value::<Blake2b<U32>>(buf))
 }
 
-fn ripemd160(_: u64, buf: &[u8]) -> VmrtRes<Value> {
+fn ripemd160(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
     Ok(Value::bytes(Ripemd160::digest(buf).to_vec()))
 }
 
@@ -160,48 +159,49 @@ fn decode_exact<T: Decode>(buf: &[u8], label: &str) -> VmrtRes<T> {
     Ok(value)
 }
 
-fn mei_to_hac(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    let num = buf_to_uint(buf)?.extract_u128()?;
-    if num > u64::MAX as u128 {
-        return itr_err_fmt!(NativeFuncError, "call mei_to_hac amount too large");
-    }
-    Ok(Value::Bytes(Amount::mei(num as u64).encode()))
+fn packed_arg(argv: Value, cty: NativeFunc) -> VmrtRes<Value> {
+    debug_assert_eq!(cty.argv_len_of(), 1);
+    let mut args = func_argv(argv, cty)?;
+    Ok(args.pop().expect("catalog arity 1 is Raw"))
 }
 
-fn hac_to_mei(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    let hacash: Amount = decode_exact(buf, "hac_to_mei")?;
+fn mei_to_hac(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::mei_to_hac;
+    let num = func_u64(&packed_arg(argv, cty)?, cty, "amount")?;
+    Ok(Value::Bytes(Amount::mei(num).encode()))
+}
+
+fn hac_to_mei(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::hac_to_mei;
+    let buf = func_bytes(&packed_arg(argv, cty)?, cty, "amount")?;
+    let hacash: Amount = decode_exact(&buf, cty.name())?;
     let mei = hacash
         .to_mei_u64()
         .map_err(|e| ItrErr::new(NativeFuncError, &e.to_string()))?;
     Ok(Value::U64(mei))
 }
 
-fn hac_to_zhu(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    let hacash: Amount = decode_exact(buf, "hac_to_zhu")?;
+fn hac_to_zhu(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::hac_to_zhu;
+    let buf = func_bytes(&packed_arg(argv, cty)?, cty, "amount")?;
+    let hacash: Amount = decode_exact(&buf, cty.name())?;
     let zhu = hacash
         .to_zhu_u128()
         .map_err(|e| ItrErr::new(NativeFuncError, &e.to_string()))?;
     Ok(Value::U128(zhu))
 }
 
-fn zhu_to_hac(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    let num = buf_to_uint(buf)?.extract_u128()?;
-    if num > u64::MAX as u128 {
-        return itr_err_fmt!(NativeFuncError, "call zhu_to_hac overflow");
-    }
-    Ok(Value::Bytes(Amount::zhu(num as u64).encode()))
+fn zhu_to_hac(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::zhu_to_hac;
+    let num = func_u128(&packed_arg(argv, cty)?, cty, "amount")?;
+    Ok(Value::Bytes(Amount::coin_u128(num, UNIT_ZHU).encode()))
 }
 
-fn pack_asset(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    if buf.len() != 16 {
-        return itr_err_fmt!(
-            NativeFuncError,
-            "call pack_asset expects 16 bytes (u64 + u64), got {}",
-            buf.len()
-        );
-    }
-    let serial = u64::from_be_bytes(buf[0..8].try_into().unwrap());
-    let amount = u64::from_be_bytes(buf[8..16].try_into().unwrap());
+fn pack_asset(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::pack_asset;
+    let args = func_argv(argv, cty)?;
+    let serial = func_u64(&args[0], cty, "serial")?;
+    let amount = func_u64(&args[1], cty, "amount")?;
     let asset = AssetAmt {
         serial: Fold64::from(serial).map_ire(NativeFuncError)?,
         amount: Fold64::from(amount).map_ire(NativeFuncError)?,
@@ -211,26 +211,24 @@ fn pack_asset(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     Ok(Value::Bytes(asset.encode()))
 }
 
-fn u64_to_fold64(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    let num = buf_to_uint(buf)?.extract_u128()?;
-    if num > u64::MAX as u128 {
-        return itr_err_fmt!(NativeFuncError, "call u64_to_fold64 overflow");
-    }
-    let fold = Fold64::from(num as u64).map_ire(NativeFuncError)?;
+fn u64_to_fold64(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::u64_to_fold64;
+    let num = func_u64(&packed_arg(argv, cty)?, cty, "value")?;
+    let fold = Fold64::from(num).map_ire(NativeFuncError)?;
     Ok(Value::Bytes(fold.encode()))
 }
 
-fn fold64_to_u64(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    let fold: Fold64 = decode_exact(buf, "fold64_to_u64")?;
+fn fold64_to_u64(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::fold64_to_u64;
+    let buf = func_bytes(&packed_arg(argv, cty)?, cty, "fold")?;
+    let fold: Fold64 = decode_exact(&buf, cty.name())?;
     Ok(Value::U64(fold.uint()))
 }
 
-fn address_ptr(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    if buf.len() != 1 {
-        return itr_err_fmt!(NativeFuncError, "param error");
-    }
+fn address_ptr(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::address_ptr;
     const DVN: u8 = ADDR_REF_MARKER_BASE;
-    let idx = buf[0];
+    let idx = func_u8(&packed_arg(argv, cty)?, cty, "index")?;
     let max = u8::MAX - DVN;
     if idx > max {
         return itr_err_fmt!(
@@ -243,68 +241,15 @@ fn address_ptr(_: u64, buf: &[u8]) -> VmrtRes<Value> {
     Ok(Value::U8(idx + DVN))
 }
 
-fn verify_signature(_: u64, buf: &[u8]) -> VmrtRes<Value> {
-    let mut r = Reader::new(buf);
-    let hash: Hash = r.read().map_ire(NativeFuncError)?;
-    let addr: field::Address = r.read().map_ire(NativeFuncError)?;
-    let sign: Sign = r.read().map_ire(NativeFuncError)?;
-    if r.used() != buf.len() {
-        return itr_err_fmt!(
-            NativeFuncError,
-            "call verify_signature parse length mismatch: used {}, total {}",
-            r.used(),
-            buf.len()
-        );
-    }
+fn verify_signature(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::verify_signature;
+    let args = func_argv(argv, cty)?;
+    let hash_buf = func_bytes(&args[0], cty, "hash")?;
+    let addr = func_address(&args[1], cty, "address")?;
+    let sign_buf = func_bytes(&args[2], cty, "sign")?;
+    let hash: Hash = decode_exact(&hash_buf, "verify_signature hash")?;
+    let sign: Sign = decode_exact(&sign_buf, "verify_signature sign")?;
     let ok = sys::Account::verify_signature(&hash.0, &sign.publickey, &sign.signature)
         && sys::Account::get_address_by_public_key(sign.publickey.into_array()) == *addr.as_array();
     Ok(Value::Bool(ok))
-}
-
-native_func_env_define! { ctl, NativeCtl, NativeCtlError,
-    defer              = 1,     1,        8,    Nil,        &[]
-    intent_new         = 21,    1,       32,    Handle,     &[]
-    intent_use         = 22,    1,        8,    Nil,        &[]
-    intent_pop         = 23,    0,        8,    Nil,        &[]
-    intent_is_own_handle      = 24,    1,       10,    Bool,       &[]
-    intent_kind        = 25,    0,        8,    Bytes,      &[]
-    intent_kind_is     = 26,    1,        8,    Bool,       &[]
-    intent_destroy     = 27,    0,       10,    Nil,        &[]
-    intent_destroy_if_empty = 28, 0,     10,    Bool,       &[]
-    intent_clear       = 29,    0,       10,    Nil,        &[]
-    intent_len         = 30,    0,       10,    U64,        &[]
-    intent_has         = 31,    1,       10,    Bool,       &[]
-    intent_keys        = 32,    0,       16,    Compo,      &[]
-    intent_keys_page   = 33,    2,       16,    Tuple,      &[]
-    intent_keys_after   = 34,    2,       16,    Tuple,      &[]
-    intent_get         = 35,    1,       10,    Nil,        &[]
-    intent_get_or      = 36,    2,       12,    Nil,        &[]
-    intent_require     = 37,    1,       10,    Nil,        &[]
-    intent_require_eq  = 38,    2,       10,    Nil,        &[]
-    intent_require_absent = 39, 1,       10,    Nil,        &[]
-    intent_require_many = 40,   1,       16,    Compo,      &[]
-    intent_require_map = 41,    1,       16,    Compo,      &[]
-    intent_has_all     = 42,    1,       12,    Bool,       &[]
-    intent_has_any     = 43,    1,       12,    Bool,       &[]
-    intent_put         = 44,    2,       24,    Nil,        &[]
-    intent_put_if_absent = 45,  2,       24,    Bool,       &[]
-    intent_put_if_absent_or_match = 46, 2,  24, Bool,       &[]
-    intent_put_flat_kv   = 47,    1,       32,    Nil,        &[]
-    intent_replace     = 48,    2,       14,    Nil,        &[]
-    intent_replace_if  = 49,    3,       16,    Bool,       &[]
-    intent_rename        = 50,    2,       14,    Nil,        &[]
-    intent_take        = 51,    1,       12,    Nil,        &[]
-    intent_take_or     = 52,    2,       14,    Nil,        &[]
-    intent_take_if     = 53,    2,       14,    Tuple,      &[]
-    intent_take_many   = 54,    1,       16,    Compo,      &[]
-    intent_take_map    = 55,    1,       16,    Compo,      &[]
-    intent_consume     = 56,    1,       14,    Nil,        &[]
-    intent_consume_many = 57,   1,       16,    Compo,      &[]
-    intent_del         = 58,    1,       10,    Nil,        &[]
-    intent_del_if      = 59,    2,       14,    Bool,       &[]
-    intent_del_many    = 60,    1,       12,    U64,        &[]
-    intent_append      = 61,    2,       14,    U64,        &[]
-    intent_inc         = 62,    2,       14,    U64,        &[]
-    intent_add         = 63,    2,       14,    U64,        &[]
-    intent_sub         = 64,    2,       14,    U64,        &[]
 }
