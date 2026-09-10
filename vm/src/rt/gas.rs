@@ -116,6 +116,7 @@ pub struct GasExtra {
     compo_item_edit_div: i64,
     compo_item_copy_div: i64,
     ntfunc_div: i64,
+    spatch_div: i64,
     act_div: i64,
     burn_div: i64,
     rpow_exp_bit_mul: i64,
@@ -170,6 +171,7 @@ impl GasExtra {
             compo_item_read_div: 4,
             compo_item_edit_div: 2,
             compo_item_copy_div: 1,
+            spatch_div: 32,
         }
     }
 
@@ -221,6 +223,11 @@ impl GasExtra {
     #[inline(always)]
     pub fn nt_bytes(&self, len: usize) -> i64 {
         Self::div_op(len, self.ntfunc_div)
+    }
+
+    #[inline(always)]
+    pub fn spatch_bytes(&self, len: usize) -> i64 {
+        Self::div_op(len, self.spatch_div)
     }
 
     #[inline(always)]
@@ -340,3 +347,17 @@ impl GasExtra {
 }
 
 /***************************************/
+
+#[cfg(test)]
+mod gas_tests {
+    use super::*;
+
+    #[test]
+    fn spatch_bytes_uses_32_byte_divisor() {
+        let gas = GasExtra::new(0, &base::VmExecutionParams::default());
+        assert_eq!(gas.spatch_bytes(0), 0);
+        assert_eq!(gas.spatch_bytes(1), 1);
+        assert_eq!(gas.spatch_bytes(32), 1);
+        assert_eq!(gas.spatch_bytes(33), 2);
+    }
+}

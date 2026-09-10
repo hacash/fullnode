@@ -18,7 +18,7 @@ use crate::types::amount_base256 as b256;
 //   UNIT_MEI  = 248  → 1:248 = 1 HAC
 //   UNIT_244  = 244  → 1:244 = 10⁻⁴ HAC
 //   UNIT_ZHU  = 240  → 1:240 = 10⁻⁸ HAC
-//   UNIT_238  = 238  → 1:238 = 10⁻¹⁰ HAC（协议 fee_purity 计价单位）
+//   UNIT_238  = 238  → 1:238 = 10⁻¹⁰ HAC (protocol fee_purity pricing unit)
 //   UNIT_SHUO = 232  → 1:232 = 10⁻¹⁶ HAC
 //   UNIT_AI   = 224  → 1:224 = 10⁻²⁴ HAC
 //   UNIT_MIAO = 216  → 1:216 = 10⁻³² HAC

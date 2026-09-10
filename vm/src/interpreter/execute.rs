@@ -923,13 +923,20 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                         Bytes(b) => b.len(),
                         _ => return itr_err_code!(StoragePatchInvalid),
                     };
-                    if !matches!(&expected, Bytes(_)) {
-                        return itr_err_code!(StoragePatchInvalid);
-                    }
+                    let expected_len = match &expected {
+                        Bytes(b) => b.len(),
+                        _ => return itr_err_code!(StoragePatchInvalid),
+                    };
                     let k = ops.pop()?;
                     let (digest, fee, rebate, final_len) =
                         host.spatch(gst, cap, context_addr, k, expected, patch_set)?;
-                    gas_resource_raw!(32 + gst.nt_bytes(patch_len + final_len));
+                    let work_len = expected_len
+                        .checked_add(patch_len)
+                        .and_then(|len| len.checked_add(final_len))
+                        .ok_or_else(|| {
+                            ItrErr::new(GasError, "storage patch work length overflow")
+                        })?;
+                    gas_resource_raw!(32 + gst.spatch_bytes(work_len));
                     gas_add!(storage, raw, fee);
                     rebate_add!(rebate);
                     ops.push(digest)?;

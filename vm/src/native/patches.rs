@@ -116,6 +116,26 @@ mod tests {
             NativeArgvPack::Concat
         );
         assert_eq!(
+            NativeFunc::argv_pack(NativeFunc::hac_to_zhu as u8).unwrap(),
+            NativeArgvPack::Concat
+        );
+        assert_eq!(
+            NativeFunc::argv_pack(NativeFunc::hac_to_mei as u8).unwrap(),
+            NativeArgvPack::Concat
+        );
+        assert_eq!(
+            NativeFunc::argv_pack(NativeFunc::fold64_to_u64 as u8).unwrap(),
+            NativeArgvPack::Concat
+        );
+        assert_eq!(
+            NativeFunc::argv_pack(NativeFunc::zhu_to_hac as u8).unwrap(),
+            NativeArgvPack::Packed
+        );
+        assert_eq!(
+            NativeFunc::argv_pack(NativeFunc::u64_to_fold64 as u8).unwrap(),
+            NativeArgvPack::Packed
+        );
+        assert_eq!(
             NativeFunc::argv_pack(NativeFunc::patches as u8).unwrap(),
             NativeArgvPack::Packed
         );
@@ -288,7 +308,11 @@ mod tests {
         let n = (u64::MAX as u128) + 1;
         let (bytes, _) =
             NativeFunc::call_packed(env, NativeFunc::zhu_to_hac as u8, Value::U128(n)).unwrap();
-        let (back, _) = NativeFunc::call_packed(env, NativeFunc::hac_to_zhu as u8, bytes).unwrap();
+        let Value::Bytes(buf) = &bytes else {
+            panic!("zhu_to_hac must return Amount bytes");
+        };
+        let (back, _) = NativeFunc::call(env, NativeFunc::hac_to_zhu as u8, buf).unwrap();
         assert_eq!(back, Value::U128(n));
+        assert!(NativeFunc::call_packed(env, NativeFunc::hac_to_zhu as u8, bytes).is_err());
     }
 }

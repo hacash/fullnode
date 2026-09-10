@@ -456,20 +456,19 @@ impl<'a> VMState<'a> {
         if !old.is_active() {
             return itr_err_code!(StorageNotActive);
         }
-        let expected_bytes = match (&old.data, &expected) {
+        let final_bytes = match (&old.data, &expected) {
             (Value::Bytes(old_b), Value::Bytes(exp_b)) => {
                 if old_b.as_slice() != exp_b.as_slice() {
                     return itr_err_code!(StoragePatchExpected);
                 }
-                exp_b.clone()
+                let patch_bytes = match &patch_set {
+                    Value::Bytes(b) => b,
+                    _ => return itr_err_code!(StoragePatchInvalid),
+                };
+                decode_and_apply(old_b, patch_bytes, cap)?
             }
             _ => return itr_err_code!(StoragePatchInvalid),
         };
-        let patch_bytes = match &patch_set {
-            Value::Bytes(b) => b,
-            _ => return itr_err_code!(StoragePatchInvalid),
-        };
-        let final_bytes = decode_and_apply(&expected_bytes, patch_bytes, cap)?;
         let digest = Value::Bytes(Sha256::digest(&final_bytes).to_vec());
         let final_len = final_bytes.len();
         old.data = Value::Bytes(final_bytes);

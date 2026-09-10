@@ -89,7 +89,7 @@ pub fn decode_and_apply(original: &[u8], patch_set: &[u8], cap: &SpaceCap) -> Vm
         cursor = off + (*delete_len as usize);
     }
     out.extend_from_slice(&original[cursor..]);
-    if out.is_empty() || out.len() > cap.value_size {
+    if out.len() > cap.value_size {
         return itr_err_code!(StoragePatchInvalid);
     }
     Ok(out)
@@ -199,9 +199,9 @@ mod tests {
     }
 
     #[test]
-    fn apply_rejects_empty_final() {
+    fn apply_allows_empty_final() {
         let bytes = encode_patch_set(&[(0, 3, b"")]).unwrap();
-        invalid(apply(b"abc", &bytes));
+        assert_eq!(apply(b"abc", &bytes).unwrap(), b"");
     }
 
     #[test]

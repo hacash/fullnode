@@ -5,12 +5,14 @@
 use crate::value::ValueTy;
 
 /// How a NativeFunc's single NTFUNC argv slot is filled.
-/// Concat: compiler `CAT`s params to bytes (eager, ≤ `value_size`); interpreter
-/// uses `extract_call_data`. `extract_call_data` also accepts a one-layer list of
-/// Bytes as deferred CAT (≤ `call_data_size`). Concat list = fragments. Packed
-/// list = argv vector. Runtime disambiguates via `argv_pack`.
-/// Packed: compiler uses NativeCtl packing (0 Nil, 1 Raw, ≥2 Tuple); interpreter
-/// passes the `Value` to `call_packed`.
+/// Criterion is the slot's payload, not arity:
+/// - Concat: callee wants a byte string. Compiler `CAT`s (1-arg is passthrough);
+///   interpreter `extract_call_data` (Nil→`[]`; one-layer list of Bytes is deferred
+///   CAT, ≤ `call_data_size`). Hashes, Amount/fold wire, ascii text.
+/// - Packed: callee wants structured Values (typed uint/address, Tuple, list argv).
+///   Compiler uses 0 Nil / 1 Raw / ≥2 Tuple; interpreter `call_packed`.
+///   `patches` is Packed at argc 1 because the slot is a list, not CAT fragments.
+/// Runtime disambiguates via `argv_pack`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeArgvPack {
     Concat,
@@ -149,14 +151,14 @@ native_func_env_define! { func, NativeFunc, NativeFuncError,
     blake2s256         = 5,    1,       32,    ValueTy::Bytes,     Concat
     blake2b256         = 6,    1,       32,    ValueTy::Bytes,     Concat
 
-    hac_to_mei         = 31,   1,        6,    ValueTy::U64,       Packed
-    hac_to_zhu         = 32,   1,        6,    ValueTy::U128,      Packed
+    hac_to_mei         = 31,   1,        6,    ValueTy::U64,       Concat
+    hac_to_zhu         = 32,   1,        6,    ValueTy::U128,      Concat
 
     mei_to_hac         = 36,   1,        6,    ValueTy::Bytes,     Packed
     zhu_to_hac         = 37,   1,        6,    ValueTy::Bytes,     Packed
     
     u64_to_fold64      = 41,   1,        8,    ValueTy::Bytes,     Packed
-    fold64_to_u64      = 42,   1,        8,    ValueTy::U64,       Packed
+    fold64_to_u64      = 42,   1,        8,    ValueTy::U64,       Concat
     
     address_ptr        = 51,   1,        4,    ValueTy::U8,        Packed
     pack_asset         = 52,   2,        8,    ValueTy::Bytes,     Packed
@@ -167,8 +169,8 @@ native_func_env_define! { func, NativeFunc, NativeFuncError,
     ascii_parse_flat_kv = 101, 8,      64,    ValueTy::Tuple,      Packed
     ascii_validate_transform = 102, 3, 24,    ValueTy::Tuple,      Packed
     ascii_u128_dec_unit = 103, 3,      24,    ValueTy::Tuple,      Packed
-    ascii_hex_lower    = 104, 1,       20,    ValueTy::Tuple,      Packed
-    ascii_base58_validate_or_echo = 105, 1, 20, ValueTy::Tuple,    Packed
+    ascii_hex_lower    = 104, 1,       20,    ValueTy::Tuple,      Concat
+    ascii_base58_validate_or_echo = 105, 1, 20, ValueTy::Tuple,    Concat
 }
 
 native_func_env_define! { ctl, NativeCtl, NativeCtlError,

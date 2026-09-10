@@ -54,11 +54,13 @@ impl NativeFunc {
             Self::keccak256 => keccak256(env, v)?,
             Self::blake2s256 => blake2s256(env, v)?,
             Self::blake2b256 => blake2b256(env, v)?,
+            Self::hac_to_mei => hac_to_mei(env, v)?,
+            Self::hac_to_zhu => hac_to_zhu(env, v)?,
+            Self::fold64_to_u64 => fold64_to_u64(env, v)?,
+            Self::ascii_hex_lower => ascii_hex_lower(env, v)?,
+            Self::ascii_base58_validate_or_echo => ascii_base58_validate_or_echo(env, v)?,
             Self::Null
-            | Self::hac_to_mei
-            | Self::hac_to_zhu
             | Self::u64_to_fold64
-            | Self::fold64_to_u64
             | Self::mei_to_hac
             | Self::zhu_to_hac
             | Self::address_ptr
@@ -67,9 +69,7 @@ impl NativeFunc {
             | Self::verify_signature
             | Self::ascii_parse_flat_kv
             | Self::ascii_validate_transform
-            | Self::ascii_u128_dec_unit
-            | Self::ascii_hex_lower
-            | Self::ascii_base58_validate_or_echo => {
+            | Self::ascii_u128_dec_unit => {
                 unreachable!("catalog argv_pack_of Concat")
             }
         };
@@ -86,10 +86,7 @@ impl NativeFunc {
             );
         }
         let r = match cty {
-            Self::hac_to_mei => hac_to_mei(env, argv)?,
-            Self::hac_to_zhu => hac_to_zhu(env, argv)?,
             Self::u64_to_fold64 => u64_to_fold64(env, argv)?,
-            Self::fold64_to_u64 => fold64_to_u64(env, argv)?,
             Self::mei_to_hac => mei_to_hac(env, argv)?,
             Self::zhu_to_hac => zhu_to_hac(env, argv)?,
             Self::address_ptr => address_ptr(env, argv)?,
@@ -99,14 +96,17 @@ impl NativeFunc {
             Self::ascii_parse_flat_kv => ascii_parse_flat_kv(env, argv)?,
             Self::ascii_validate_transform => ascii_validate_transform(env, argv)?,
             Self::ascii_u128_dec_unit => ascii_u128_dec_unit(env, argv)?,
-            Self::ascii_hex_lower => ascii_hex_lower(env, argv)?,
-            Self::ascii_base58_validate_or_echo => ascii_base58_validate_or_echo(env, argv)?,
             Self::sha2
             | Self::sha3
             | Self::ripemd160
             | Self::keccak256
             | Self::blake2s256
             | Self::blake2b256
+            | Self::hac_to_mei
+            | Self::hac_to_zhu
+            | Self::fold64_to_u64
+            | Self::ascii_hex_lower
+            | Self::ascii_base58_validate_or_echo
             | Self::Null => unreachable!("catalog argv_pack_of Packed"),
         };
         finish_ntfunc(cty, r)
@@ -171,20 +171,16 @@ fn mei_to_hac(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
     Ok(Value::Bytes(Amount::mei(num).encode()))
 }
 
-fn hac_to_mei(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
-    let cty = NativeFunc::hac_to_mei;
-    let buf = func_bytes(&packed_arg(argv, cty)?, cty, "amount")?;
-    let hacash: Amount = decode_exact(&buf, cty.name())?;
+fn hac_to_mei(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
+    let hacash: Amount = decode_exact(buf, "hac_to_mei")?;
     let mei = hacash
         .to_mei_u64()
         .map_err(|e| ItrErr::new(NativeFuncError, &e.to_string()))?;
     Ok(Value::U64(mei))
 }
 
-fn hac_to_zhu(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
-    let cty = NativeFunc::hac_to_zhu;
-    let buf = func_bytes(&packed_arg(argv, cty)?, cty, "amount")?;
-    let hacash: Amount = decode_exact(&buf, cty.name())?;
+fn hac_to_zhu(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
+    let hacash: Amount = decode_exact(buf, "hac_to_zhu")?;
     let zhu = hacash
         .to_zhu_u128()
         .map_err(|e| ItrErr::new(NativeFuncError, &e.to_string()))?;
@@ -218,10 +214,8 @@ fn u64_to_fold64(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
     Ok(Value::Bytes(fold.encode()))
 }
 
-fn fold64_to_u64(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
-    let cty = NativeFunc::fold64_to_u64;
-    let buf = func_bytes(&packed_arg(argv, cty)?, cty, "fold")?;
-    let fold: Fold64 = decode_exact(&buf, cty.name())?;
+fn fold64_to_u64(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
+    let fold: Fold64 = decode_exact(buf, "fold64_to_u64")?;
     Ok(Value::U64(fold.uint()))
 }
 

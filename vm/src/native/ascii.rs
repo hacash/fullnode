@@ -373,15 +373,12 @@ pub(super) fn ascii_u128_dec_unit(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes
     tuple_errno_u128(ASCII_ERR_OK, out)
 }
 
-pub(super) fn ascii_hex_lower(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
-    let cty = NativeFunc::ascii_hex_lower;
-    let args = func_argv(argv, cty)?;
-    let buf = func_bytes(&args[0], cty, "data")?;
+pub(super) fn ascii_hex_lower(_env: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
     if buf.len() % 2 != 0 {
         return tuple_errno_bytes(ASCII_ERR_HEX_ODD, vec![]);
     }
     let mut out = Vec::with_capacity(buf.len());
-    for &ch in &buf {
+    for &ch in buf {
         let lowered = ascii_to_lower(ch);
         if !lowered.is_ascii_hexdigit() {
             return tuple_errno_bytes(ASCII_ERR_INVALID_CHAR, vec![]);
@@ -391,16 +388,13 @@ pub(super) fn ascii_hex_lower(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Val
     tuple_errno_bytes(ASCII_ERR_OK, out)
 }
 
-pub(super) fn ascii_base58_validate_or_echo(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
-    let cty = NativeFunc::ascii_base58_validate_or_echo;
-    let args = func_argv(argv, cty)?;
-    let buf = func_bytes(&args[0], cty, "data")?;
-    for &ch in &buf {
+pub(super) fn ascii_base58_validate_or_echo(_env: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
+    for &ch in buf {
         if !ascii_is_base58(ch) {
             return tuple_errno_bytes(ASCII_ERR_INVALID_CHAR, vec![]);
         }
     }
-    tuple_errno_bytes(ASCII_ERR_OK, buf)
+    tuple_errno_bytes(ASCII_ERR_OK, buf.to_vec())
 }
 
 pub(super) fn ascii_parse_flat_kv(env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
@@ -690,11 +684,11 @@ mod ascii_native_tests {
     fn hex_lower_rejects_odd_length_and_lowers() {
         let cap = cap();
         let err =
-            tuple_items(ascii_hex_lower(env_on(&cap), Value::bytes(b"ABC".to_vec())).unwrap());
+            tuple_items(ascii_hex_lower(env_on(&cap), b"ABC").unwrap());
         assert_eq!(err[0], Value::U16(ASCII_ERR_HEX_ODD));
 
         let ok =
-            tuple_items(ascii_hex_lower(env_on(&cap), Value::bytes(b"AB12ef".to_vec())).unwrap());
+            tuple_items(ascii_hex_lower(env_on(&cap), b"AB12ef").unwrap());
         assert_eq!(ok[0], Value::U16(ASCII_ERR_OK));
         assert_eq!(ok[1], Value::Bytes(b"ab12ef".to_vec()));
     }
@@ -703,14 +697,14 @@ mod ascii_native_tests {
     fn base58_validate_or_echo_rejects_forbidden_chars() {
         let cap = cap();
         let ok = tuple_items(
-            ascii_base58_validate_or_echo(env_on(&cap), Value::bytes(b"123ABCxyz".to_vec()))
+            ascii_base58_validate_or_echo(env_on(&cap), b"123ABCxyz")
                 .unwrap(),
         );
         assert_eq!(ok[0], Value::U16(ASCII_ERR_OK));
         assert_eq!(ok[1], Value::Bytes(b"123ABCxyz".to_vec()));
 
         let err = tuple_items(
-            ascii_base58_validate_or_echo(env_on(&cap), Value::bytes(b"10OIl".to_vec())).unwrap(),
+            ascii_base58_validate_or_echo(env_on(&cap), b"10OIl").unwrap(),
         );
         assert_eq!(err[0], Value::U16(ASCII_ERR_INVALID_CHAR));
     }
