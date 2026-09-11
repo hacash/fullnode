@@ -1097,7 +1097,7 @@ mod token_t {
         use crate::rt::NativeArgvPack;
         use crate::rt::NativeFunc;
 
-        assert_eq!(NativeFunc::pack_asset as u8, 52);
+        assert_eq!(NativeFunc::pack_asset as u8, 82);
         assert_eq!(
             NativeFunc::argv_pack(NativeFunc::pack_asset as u8).unwrap(),
             NativeArgvPack::Packed

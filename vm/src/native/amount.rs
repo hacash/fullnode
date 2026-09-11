@@ -143,14 +143,18 @@ mod tests {
 
     #[test]
     fn catalog_rows_and_pack_are_stable() {
-        assert_eq!(NativeFunc::hac_to_zhu_checked as u8, 33);
-        assert_eq!(NativeFunc::hac_to_unit_checked as u8, 34);
-        assert_eq!(NativeFunc::hac_is_exact_zhu as u8, 35);
-        assert_eq!(NativeFunc::hac_is_exact_unit as u8, 38);
-        assert_eq!(NativeFunc::hac_to_mei_checked as u8, 39);
-        assert_eq!(NativeFunc::hac_to_unit as u8, 40);
-        assert_eq!(NativeFunc::unit_to_hac as u8, 43);
-        assert_eq!(NativeFunc::hac_is_exact_mei as u8, 44);
+        assert_eq!(NativeFunc::hac_to_mei as u8, 51);
+        assert_eq!(NativeFunc::hac_to_mei_checked as u8, 52);
+        assert_eq!(NativeFunc::hac_to_zhu as u8, 53);
+        assert_eq!(NativeFunc::hac_to_zhu_checked as u8, 54);
+        assert_eq!(NativeFunc::hac_to_unit as u8, 55);
+        assert_eq!(NativeFunc::hac_to_unit_checked as u8, 56);
+        assert_eq!(NativeFunc::hac_is_exact_mei as u8, 57);
+        assert_eq!(NativeFunc::hac_is_exact_zhu as u8, 58);
+        assert_eq!(NativeFunc::hac_is_exact_unit as u8, 59);
+        assert_eq!(NativeFunc::mei_to_hac as u8, 60);
+        assert_eq!(NativeFunc::zhu_to_hac as u8, 61);
+        assert_eq!(NativeFunc::unit_to_hac as u8, 62);
         for (cty, pack) in [
             (NativeFunc::hac_to_zhu_checked, NativeArgvPack::Concat),
             (NativeFunc::hac_is_exact_zhu, NativeArgvPack::Concat),
@@ -166,14 +170,14 @@ mod tests {
         }
         // name resolution is what makes the rows callable from ircode source
         for (name, idx) in [
-            ("hac_to_zhu_checked", 33u8),
-            ("hac_to_unit_checked", 34),
-            ("hac_is_exact_zhu", 35),
-            ("hac_is_exact_unit", 38),
-            ("hac_to_mei_checked", 39),
-            ("hac_to_unit", 40),
-            ("unit_to_hac", 43),
-            ("hac_is_exact_mei", 44),
+            ("hac_to_zhu_checked", 54u8),
+            ("hac_to_unit_checked", 56),
+            ("hac_is_exact_zhu", 58),
+            ("hac_is_exact_unit", 59),
+            ("hac_to_mei_checked", 52),
+            ("hac_to_unit", 55),
+            ("unit_to_hac", 62),
+            ("hac_is_exact_mei", 57),
         ] {
             assert_eq!(NativeFunc::from_name(name).unwrap().0, idx);
         }

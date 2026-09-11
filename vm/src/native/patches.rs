@@ -108,9 +108,9 @@ mod tests {
 
     #[test]
     fn argv_pack_and_canonical_idx() {
-        assert_eq!(NativeFunc::address_ptr as u8, 51);
-        assert_eq!(NativeFunc::pack_asset as u8, 52);
-        assert_eq!(NativeFunc::patches as u8, 53);
+        assert_eq!(NativeFunc::address_ptr as u8, 81);
+        assert_eq!(NativeFunc::pack_asset as u8, 82);
+        assert_eq!(NativeFunc::patches as u8, 83);
         assert_eq!(
             NativeFunc::argv_pack(NativeFunc::sha2 as u8).unwrap(),
             NativeArgvPack::Concat
@@ -282,7 +282,7 @@ mod tests {
         let cap = SpaceCap::new(0);
         let env = NativeFnEnv::new(&cap);
         let (hash, gas) = NativeFunc::call(env, NativeFunc::sha2 as u8, b"abc").unwrap();
-        assert_eq!(gas, 32);
+        assert_eq!(gas, NativeFunc::sha2.gas_of());
         assert_eq!(hash.ty(), ValueTy::Bytes);
         assert!(
             NativeFunc::call_packed(env, NativeFunc::sha2 as u8, Value::bytes(b"abc".to_vec()))
