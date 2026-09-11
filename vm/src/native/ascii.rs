@@ -226,7 +226,7 @@ fn parse_quoted_ascii_value(raw: &[u8], start: usize) -> Result<(Vec<u8>, usize)
     Err(ASCII_ERR_FORMAT)
 }
 
-pub(super) fn ascii_validate_transform(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+pub(crate) fn ascii_validate_transform(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
     let cty = NativeFunc::ascii_validate_transform;
     let args = func_argv(argv, cty)?;
     let class_id = func_u8(&args[0], cty, "class")?;
@@ -287,7 +287,7 @@ pub(super) fn ascii_validate_transform(_env: NativeFnEnv<'_>, argv: Value) -> Vm
     tuple_errno_bytes(ASCII_ERR_OK, out)
 }
 
-pub(super) fn ascii_u128_dec_unit(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+pub(crate) fn ascii_u128_dec_unit(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
     let cty = NativeFunc::ascii_u128_dec_unit;
     let args = func_argv(argv, cty)?;
     let unit_mask = func_u8(&args[0], cty, "unit_mask")?;
@@ -373,7 +373,7 @@ pub(super) fn ascii_u128_dec_unit(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes
     tuple_errno_u128(ASCII_ERR_OK, out)
 }
 
-pub(super) fn ascii_hex_lower(_env: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
+pub(crate) fn ascii_hex_lower(_env: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
     if buf.len() % 2 != 0 {
         return tuple_errno_bytes(ASCII_ERR_HEX_ODD, vec![]);
     }
@@ -388,7 +388,7 @@ pub(super) fn ascii_hex_lower(_env: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Valu
     tuple_errno_bytes(ASCII_ERR_OK, out)
 }
 
-pub(super) fn ascii_base58_validate_or_echo(_env: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
+pub(crate) fn ascii_base58_validate_or_echo(_env: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
     for &ch in buf {
         if !ascii_is_base58(ch) {
             return tuple_errno_bytes(ASCII_ERR_INVALID_CHAR, vec![]);
@@ -397,7 +397,7 @@ pub(super) fn ascii_base58_validate_or_echo(_env: NativeFnEnv<'_>, buf: &[u8]) -
     tuple_errno_bytes(ASCII_ERR_OK, buf.to_vec())
 }
 
-pub(super) fn ascii_parse_flat_kv(env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+pub(crate) fn ascii_parse_flat_kv(env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
     let cty = NativeFunc::ascii_parse_flat_kv;
     let args = func_argv(argv, cty)?;
     let open = func_u8(&args[0], cty, "open")?;

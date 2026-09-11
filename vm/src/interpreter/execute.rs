@@ -1,4 +1,4 @@
-/* parse bytecode params */
+﻿/* parse bytecode params */
 #[inline(always)]
 fn finish_ntcall(
     cap: &SpaceCap,
@@ -936,7 +936,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                         .ok_or_else(|| {
                             ItrErr::new(GasError, "storage patch work length overflow")
                         })?;
-                    gas_resource_raw!(32 + gst.spatch_bytes(work_len));
+                    gas_resource_raw!(25 + gst.spatch_bytes(work_len)); // sha2 cost = 25
                     gas_add!(storage, raw, fee);
                     rebate_add!(rebate);
                     ops.push(digest)?;

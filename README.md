@@ -95,7 +95,7 @@ chain_id = 0
 diamond_form = true
 
 [txpool]
-min_fee_purity = 6024
+min_fee_purity = 6024000000
 
 [miner]
 enable = false
@@ -267,7 +267,7 @@ Integration requirements:
 - **Database:** select one of four backends with Cargo features, or implement `base::DiskDB`/`Store` and inject it from a custom composition root.
 - **HTTP API:** implement `base::ApiService` and include its routes in the service list passed to `server::HttpServer::open`.
 - **Chain events:** implement `base::ChainListener` to observe accepted and stable blocks. Listeners are observational and cannot reject or roll back blocks.
-- **Mempool:** use `txpool.maxs` to override per-group capacities. `txpool.min_fee_purity` controls local admission and relay, not block validity.
+- **Mempool:** use `txpool.maxs` to override per-group capacities. `txpool.min_fee_purity` controls local admission and relay, not block validity. All fee purity figures are priced in the chain pricing unit u232 (10⁻¹⁶ HAC per billing byte).
 - **Node role:** use `p2p.listen_port = 0` for an outbound-only node and `server.enable = false` to disable HTTP. Mining, automatic diamond bidding, and VM logs are independently configurable.
 - **SDK:** `sdk/pack.sh` generates Node.js, Web ESM, and inline-page builds for wallets, explorers, and transaction-building tools.
 

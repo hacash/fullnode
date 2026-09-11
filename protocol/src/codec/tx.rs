@@ -427,15 +427,22 @@ impl StdTransaction {
             .ok_or_else(|| sys::Error::fault("Type3 billing size overflow"))
     }
 
+    /// Type3 fee purity in the chain pricing unit (`base::FEE_PRICING_UNIT` = u232):
+    /// `fee / canonical SignW2 billing size`, saturated to `u64::MAX`. Mempool view.
     pub fn type3_fee_purity(&self) -> u64 {
-        let Ok(txsz) = self.canonical_billing_size() else {
-            return 0;
-        };
-        if txsz == 0 {
-            return 0;
+        match self.type3_fee_purity_u128() {
+            Ok(p) => p.min(u64::MAX as u128) as u64,
+            Err(_) => 0,
         }
-        let fee238 = self.fee.to_238_u128().unwrap_or(u128::MAX);
-        (fee238 / txsz as u128).min(u64::MAX as u128) as u64
+    }
+
+    fn type3_fee_purity_u128(&self) -> Ret<u128> {
+        let txsz = self.canonical_billing_size()?;
+        if txsz == 0 {
+            return Ok(0);
+        }
+        let fee = self.fee.to_unit_u128(base::FEE_PRICING_UNIT)?;
+        Ok(fee / txsz as u128)
     }
 }
 
@@ -781,13 +788,28 @@ impl Transaction for StdTransaction {
         if self.ty.uint() == hacash_params::TX_TYPE_3 {
             return self.type3_fee_purity();
         }
-        let txsz = Encode::size(self) as u64;
-        if txsz == 0 {
-            return 0;
-        }
-        let fee238 = self.fee_got().to_238_u128().unwrap_or(u128::MAX);
-        let purity = fee238 / txsz as u128;
-        purity.min(u64::MAX as u128) as u64
+        // Non-type3: `fee_got` (extra9-discounted) over the encoded size, in the
+        // chain pricing unit (u232), saturated to u64.
+        self.fee_purity_in(base::FEE_PRICING_UNIT)
+    }
+
+    fn fee_purity_checked(&self) -> Ret<u64> {
+        let purity = if self.ty.uint() == hacash_params::TX_TYPE_3 {
+            self.type3_fee_purity_u128()?
+        } else {
+            let size = self.billing_size()?;
+            if size == 0 {
+                return Ok(0);
+            }
+            self.fee_got().to_unit_u128(base::FEE_PRICING_UNIT)? / size as u128
+        };
+        u64::try_from(purity).map_err(|_| {
+            sys::Error::fault(format!(
+                "tx fee purity {} overflows u64 (unit {})",
+                purity,
+                base::FEE_PRICING_UNIT
+            ))
+        })
     }
 
     fn billing_size(&self) -> Ret<usize> {
@@ -952,6 +974,42 @@ mod tests {
             StdTransaction::new(hacash_params::TX_TYPE_2, Address::default(), Amount::mei(1));
         tx.actions = w2_actions(u16::MAX as usize);
         assert!(tx.push_action(w2_actions(1).pop().unwrap()).is_err());
+    }
+
+    /// Fee purity is priced in the chain pricing unit (u232): the mempool view
+    /// saturates to `u64::MAX`, the consensus checked view errors past that
+    /// (~1844 HAC/byte), and the nested-floor relation between the 232 and 238
+    /// purity views holds (`p238 × 10⁶ ≤ p232 < (p238+1) × 10⁶`).
+    #[test]
+    fn fee_purity_priced_in_232_saturates_and_tracks_238() {
+        let acc = Account::create_by_secret_key_value([3u8; 32]).unwrap();
+        let main = Address::from(*acc.address());
+
+        // Saturation: fee ≈ u128::MAX/2 over a small billing size exceeds u64.
+        // Mempool still ranks it maximal; consensus protocol-fee pricing errors.
+        let huge = Amount::coin_u128(u128::MAX / 2, base::FEE_PRICING_UNIT);
+        let tx = StdTransaction::new(hacash_params::TX_TYPE_2, main, huge);
+        assert_eq!(tx.fee_purity(), u64::MAX);
+        assert_eq!(tx.fee_purity_in(base::FEE_PRICING_UNIT), u64::MAX);
+        assert!(
+            tx.fee_purity_checked().is_err(),
+            "protocol-fee path must reject purity above u64::MAX, not undercharge"
+        );
+
+        // Moderate fee: exact u232 quotient plus the 238 nested-floor relation.
+        let fee = Amount::coin_u128(123_456_789_000_555, base::FEE_PRICING_UNIT);
+        let tx = StdTransaction::new(hacash_params::TX_TYPE_2, main, fee);
+        let size = tx.billing_size().unwrap() as u128;
+        let p232 = tx.fee_purity_in(field::UNIT_SHUO);
+        let p238 = tx.fee_purity_in(field::UNIT_238);
+        assert_eq!(p232, (123_456_789_000_555 / size) as u64);
+        assert!(p232 < u64::MAX);
+        assert_eq!(tx.fee_purity_checked().unwrap(), p232);
+        assert!(
+            (p238 as u128) * 1_000_000 <= p232 as u128
+                && (p232 as u128) < (p238 as u128 + 1) * 1_000_000,
+            "p232={p232} p238={p238}"
+        );
     }
 
     /// Locked wire / hash / sign-hash vectors for types 1/2/3, captured before

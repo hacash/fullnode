@@ -130,8 +130,8 @@ fields such as `action_index`, `byte_offset`, `expected`, and `actual`.
 |---|---|---|---|
 | 1 | `system.sdk_version` | — | `sdk-version@1`: `schema`, `package_version`, `abi{major,minor}` |
 | 2 | `tx.build` | `spec` (TransactionSpec JSON: `tx_type` 2/3, `main`, `fee`, `timestamp?`, `gas_max?`, `actions[{kind, ...schema fields}]`) | `built-transaction@1`: `schema`, `tx_type`, `timestamp`, `main`, `fee`, `hash`, `hash_with_fee`, `unsigned_body_hash`, `body` (hex) |
-| 3 | `tx.inspect_report` | `body` (hex), `signer_address?`, `describe?` | `review@4` (protocol facts; never a denial) |
-| 4 | `tx.inspect` | `body`, `signer_address?`, `context{current_height, expected_chain_id, consensus_flags?}`, `describe?` | `review@4` with `expired_height`/`wrong_chain` facts bound in |
+| 3 | `tx.inspect_report` | `body` (hex), `signer_address?`, `describe?` | `review@5` (protocol facts; never a denial; `fee_purity`/`fee_purity_unit` priced in u232) |
+| 4 | `tx.inspect` | `body`, `signer_address?`, `context{current_height, expected_chain_id, consensus_flags?}`, `describe?` | `review@5` with `expired_height`/`wrong_chain` facts bound in |
 | 5 | `tx.prepare_signature` | `body`, `signer_address`, `options.review?`, `options.policy?`, `options.origin?`, `options.expires_at?` | `signing-request@1`: `id`, `purpose`, `algorithm`, `signer_address`, `digest`, `body_hash`, `review_binding?`, `policy_decision?`, `origin?`, `expires_at?`, `request_binding` |
 | 6 | `tx.attach_signature` | `body`, `proof`, `review`, `request` | `attach-result@2`: `body`, `complete`, `present_signers`, `valid_signers`, `missing_signers`, `invalid_signers`, `signature_errors` |
 | 7 | `tx.attach_signature_unbound` | `body`, `proof` | `attach-result@2` (no approval-chain checks) |
@@ -146,8 +146,8 @@ fields such as `action_index`, `byte_offset`, `expected`, and `actual`.
 | 16 | `message.prepare_signature` | `params{digest, signer_address, origin?, expires_at?}` | `signing-request@1` with `purpose: "authentication"` |
 | 17 | `message.verify` | `request`, `proof` | `{ok, address?, error?}` |
 | 18 | `policy.evaluate` | `review`, `policy?` | `policy-decision@1`: `policy_id`, `policy_hash`, `review_binding`, `decision` (`allow`/`confirm`/`deny`), `findings`, `policy_binding` |
-| 19 | `system.params` | — | `params@1`: `params_version`, `chain_id`, `ast_tree_depth_max`, `max_type3_signers`, `fee_purity_floor`, `fee_purity_reductions`, `max_tx_size`, `tx_actions_max`, `registered_tx_types`, `diamond_form_flag` |
-| 20 | `tx.estimate_fee` | `body`, `height?` (defaults to the initial floor) | `fee-estimate@1`: `tx_type`, `height`, `fee_purity_floor`, `billing_size`, `minimum_fee?` (type-3 only), `fee`, `fee_purity`, `fee_enough` |
+| 19 | `system.params` | — | `params@2`: `params_version`, `chain_id`, `ast_tree_depth_max`, `max_type3_signers`, `fee_purity_unit`, `fee_purity_floor`, `fee_purity_reductions`, `max_tx_size`, `tx_actions_max`, `registered_tx_types`, `diamond_form_flag` — all purity/floor figures are priced in `fee_purity_unit` (232) |
+| 20 | `tx.estimate_fee` | `body`, `height?` (defaults to the initial floor) | `fee-estimate@2`: `tx_type`, `height`, `fee_purity_unit`, `fee_purity_floor`, `billing_size`, `minimum_fee?` (type-3 only), `fee`, `fee_purity`, `fee_enough` — purity/floor are u232-priced; `minimum_fee` is `floor × billing_size` ceiled to the u238 settlement unit |
 | 21 | `account.verify_signature` | `public_key` (33-byte hex), `digest` (32-byte hex), `signature` (64-byte hex) | `{ok, address?, error?}` (raw primitive; exchange API-signature checks) |
 | 22 | `diamond.lookup` | exactly one of `name` / `serial` | `diamond-lookup@1`: `valid`, `name?`, `serial?`, `error?` |
 | 23 | `vm.decode_call` | `action` (raw wire hex of a `contract_main_call`, e.g. `tx.decode`'s `actions[].raw`) | `vm-call@1`: `kind`, `name`, `scope`, `marks`, `marks_valid`, `codeconf`, `code_type`, `code_type_name`, `codes_len`, `codes_hash`, `codes_preview` |

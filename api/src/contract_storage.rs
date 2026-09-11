@@ -2,16 +2,14 @@
 //! active parameters, remaining budget `B`, capacity `C`, refill `R`, current
 //! periods, next-block discount quota, and the next-block estimated price
 //! interval. Wallets use `periods` for discount quotes and `p_max` (full price)
-//! for guaranteed inclusion; the params hash pins the rule version on chain.
+//! for guaranteed inclusion; the reported `rule_version` pins the rule set.
+//! All `fee_*` figures are in the chain pricing unit, reported as
+//! `fee_purity_unit` (u232 = 10⁻¹⁶ HAC per billing byte). The `_u232` amounts can
+//! exceed the JSON/JS safe-integer range (full-price quote at 16 KiB × 10⁴
+//! periods ≈ 8.2×10¹⁸), so they travel as quoted decimal strings (or `null` when
+//! the discount tier is inactive).
 
 use base::{ApiExecCtx, ApiRequest, ApiResponse, ApiRoute, ApiService};
-
-fn hex_bytes(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut s, b| {
-        s.push_str(&format!("{:02x}", b));
-        s
-    })
-}
 
 fn contract_storage_fee_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
     let vp = match ctx.engine.services().vm_params() {
@@ -45,14 +43,6 @@ fn contract_storage_fee_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespons
         Ok(quote) => quote,
         Err(e) => return base::api_state_read_error(&e),
     };
-    let params_hash = ctx
-        .engine
-        .services()
-        .execution_profile()
-        .ok()
-        .and_then(hacash_params::as_hacash_params)
-        .map(|p| format!("\"{}\"", hex_bytes(&hacash_params::params_hash(p))))
-        .unwrap_or_else(|| "null".to_string());
     let storage = vp.contract_storage_fee;
     let schedule: Vec<String> = storage
         .supplement_schedule
@@ -62,17 +52,16 @@ fn contract_storage_fee_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespons
     ApiResponse::json(format!(
         concat!(
             "{{\"ret\":0,\"enabled\":{},\"rule_version\":{},",
-            "\"params_hash\":{},\"activation_height\":{},\"head_height\":{},\"pending_height\":{},",
+            "\"activation_height\":{},\"head_height\":{},\"pending_height\":{},",
             "\"target_capacity_blocks\":{},\"capacity\":{},\"rate\":{},\"remaining\":{},",
             "\"p_min\":{},\"p_max\":{},\"periods\":{},\"k_max\":{},",
             "\"next_block_quota\":{},\"next_remaining_lo\":{},\"next_remaining_hi\":{},",
             "\"next_periods_lo\":{},\"next_periods_hi\":{},\"schedule\":[{}],",
-            "\"legacy_fixed_periods\":{},\"fee_purity_floor\":{},\"fee_full_u238\":{},",
-            "\"fee_discount_u238\":{}}}"
+            "\"legacy_fixed_periods\":{},\"fee_purity_unit\":{},\"fee_purity_floor\":{},",
+            "\"fee_full_u232\":\"{}\",\"fee_discount_u232\":{}}}"
         ),
         facts.enabled,
         facts.rule_version,
-        params_hash,
         storage.activation_height,
         snapshot.head_height,
         snapshot.head_height + 1,
@@ -91,11 +80,12 @@ fn contract_storage_fee_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespons
         facts.next_periods_hi,
         schedule.join(","),
         vp.contract_store_perm_periods,
+        base::FEE_PRICING_UNIT,
         quote.floor_purity,
-        quote.full_u238,
+        quote.full_u232,
         quote
-            .discount_u238
-            .map(|v| v.to_string())
+            .discount_u232
+            .map(|v| format!("\"{v}\""))
             .unwrap_or_else(|| "null".to_string()),
     ))
 }

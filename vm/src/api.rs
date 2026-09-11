@@ -209,7 +209,7 @@ fn contract_sandbox_call(
         Err(e) => return api_error(&e.to_string()),
     };
     let tx = match tx_creator.create(
-        TxCreateRequest::new(3, caller, Amount::unit238(machine::SANDBOX_TX_FEE), height)
+        TxCreateRequest::new(3, caller, Amount::unit232(machine::SANDBOX_TX_FEE), height)
             .with_addrlist(addrlist)
             .with_gas_max(tx_gas_max),
     ) {

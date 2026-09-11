@@ -119,14 +119,17 @@ pub struct HacashParams {
 
 /// The sole standard-network parameter initialization.
 pub const MAINNET_PARAMS: HacashParams = HacashParams {
-    version: 1,
+    version: 2,
     protocol: ProtocolParams {
         ast_tree_depth_max: 6,
         ast_snapshot_try_gas: 40,
         vm: VmExecutionParams {
             contract_store_perm_periods: 10_000,
             contract_storage_fee: MAINNET_CONTRACT_STORAGE_FEE,
-            initial_fee_purity_floor: 50_000,
+            // Fee purity floor in the chain pricing unit (u232 = 10⁻¹⁶ HAC per
+            // byte): 5×10¹⁰ ≡ the legacy 50,000 u238/byte. Further reductions
+            // go into `fee_purity_reductions` as u232 values.
+            initial_fee_purity_floor: 50_000_000_000,
             fee_purity_reductions: &[],
             gas_budget_lookup: &GAS_BUDGET_LOOKUP_1P07_FROM_138,
             tx_gas_budget_cap_byte: 99,
@@ -214,102 +217,6 @@ pub fn block_reward_number(block_height: u64) -> u8 {
     MAINNET_PARAMS.mint_rules.block_reward_number(block_height)
 }
 
-/// Stable SHA3-256 fingerprint of a complete network parameter profile. Integers
-/// use fixed-width big-endian encodings so the fingerprint is independent of pointer width.
-pub fn params_hash(params: &HacashParams) -> [u8; 32] {
-    use sha3::{Digest, Sha3_256};
-
-    let mut hasher = Sha3_256::new();
-    hasher.update(b"hacash-params/v1\0");
-    hasher.update(params.version.to_be_bytes());
-    hasher.update((params.protocol.ast_tree_depth_max as u64).to_be_bytes());
-    hasher.update(params.protocol.ast_snapshot_try_gas.to_be_bytes());
-    hasher.update(params.protocol.vm.contract_store_perm_periods.to_be_bytes());
-    let csf = params.protocol.vm.contract_storage_fee;
-    hasher.update(b"hacash-csf/v1\0");
-    hasher.update([csf.rule_version]);
-    hasher.update(csf.activation_height.to_be_bytes());
-    hasher.update(csf.target_capacity_blocks.to_be_bytes());
-    hasher.update(csf.curve_steps.to_be_bytes());
-    hasher.update(csf.period_floor.to_be_bytes());
-    hasher.update(csf.max_block_discount_bytes.to_be_bytes());
-    hasher.update((csf.supplement_schedule.len() as u64).to_be_bytes());
-    for &(height, rate) in csf.supplement_schedule {
-        hasher.update(height.to_be_bytes());
-        hasher.update(rate.to_be_bytes());
-    }
-    hasher.update(params.protocol.vm.initial_fee_purity_floor.to_be_bytes());
-    hasher.update((params.protocol.vm.fee_purity_reductions.len() as u64).to_be_bytes());
-    for &(height, floor) in params.protocol.vm.fee_purity_reductions {
-        hasher.update(height.to_be_bytes());
-        hasher.update(floor.to_be_bytes());
-    }
-    hasher.update([
-        params.protocol.vm.tx_gas_budget_cap_byte,
-        params.protocol.vm.compute_limit_byte,
-        params.protocol.vm.resource_limit_byte,
-        params.protocol.vm.storage_limit_byte,
-    ]);
-    hasher.update(params.protocol.diamond_form_flag.to_be_bytes());
-    hasher.update((params.protocol.max_type3_signers as u64).to_be_bytes());
-    hasher.update((params.protocol.tex_diamond_pay_max as u64).to_be_bytes());
-    hasher.update((params.protocol.tex_diamond_get_max_per_tx as u64).to_be_bytes());
-    hasher.update((params.mint.max_block_txs as u64).to_be_bytes());
-    hasher.update((params.mint.max_block_size as u64).to_be_bytes());
-    hasher.update((params.mint.max_tx_size as u64).to_be_bytes());
-    hasher.update(params.mint.difficulty_adjust_blocks.to_be_bytes());
-    hasher.update(params.mint.difficulty_group_blocks.to_be_bytes());
-    hasher.update(params.mint.each_block_target_time.to_be_bytes());
-    hasher.update((params.protocol.tx_actions_max as u64).to_be_bytes());
-    hasher.update([
-        params.protocol.tx_gas_budget_cap_byte,
-        params.protocol.tx_type_1,
-        params.protocol.tx_type_2,
-        params.protocol.tx_type_3,
-    ]);
-    hasher.update(params.protocol.type1_deprecated_after_height.to_be_bytes());
-    hasher.update(params.protocol.fee_size_limit_after_height.to_be_bytes());
-    hasher.update((params.protocol.max_fee_size_after_limit_height as u64).to_be_bytes());
-    for value in params.protocol.gas_budget_lookup {
-        hasher.update(value.to_be_bytes());
-    }
-    hasher.update(params.mint_rules.asset_alive_height.to_be_bytes());
-    hasher.update(params.mint_rules.asset_mainnet_min_serial.to_be_bytes());
-    hasher.update(
-        params
-            .mint_rules
-            .asset_non_mainnet_alive_height
-            .to_be_bytes(),
-    );
-    hasher.update(params.mint_rules.asset_non_mainnet_min_serial.to_be_bytes());
-    let diamond = params.mint_rules.diamond;
-    for value in [
-        diamond.custom_message_after,
-        diamond.burn_90_percent_after,
-        diamond.average_bid_burn_after,
-        diamond.visual_gene_block_hash_after,
-        diamond.visual_gene_bid_fee_after,
-        diamond.minimum_bid_after,
-    ] {
-        hasher.update(value.to_be_bytes());
-    }
-    let inscription = params.mint_rules.inscription;
-    hasher.update(inscription.cooldown_blocks.to_be_bytes());
-    hasher.update((inscription.content_max_bytes as u64).to_be_bytes());
-    hasher.update([inscription.readable_type_max]);
-    for value in [
-        inscription.max_per_diamond,
-        inscription.append_free_max,
-        inscription.append_tier1_max,
-        inscription.append_tier2_max,
-    ] {
-        hasher.update((value as u64).to_be_bytes());
-    }
-    hasher.update(params.mint_rules.block_reward_step_blocks.to_be_bytes());
-    hasher.update(params.mint_rules.block_reward_schedule);
-    hasher.finalize().into()
-}
-
 /// Obtain the standard profile installed by an application composition root.
 /// The caller owns the registry abstraction; this crate owns the concrete type and its downcast.
 pub fn as_hacash_params(
@@ -360,7 +267,10 @@ mod tests {
     fn standard_profile_is_self_consistent() {
         assert_eq!(MAINNET_PARAMS.protocol.ast_tree_depth_max, 6);
         assert_eq!(MAINNET_PARAMS.protocol.diamond_form_flag, 1);
-        assert_eq!(MAINNET_PARAMS.protocol.vm.initial_fee_purity_floor, 50_000);
+        // Fee purity floor is priced in the chain pricing unit (u232):
+        // 5×10¹⁰ ≡ the legacy 50,000 u238/byte.
+        assert_eq!(MAINNET_PARAMS.protocol.vm.initial_fee_purity_floor, 50_000_000_000);
+        assert_eq!(base::FEE_PRICING_UNIT, field::UNIT_SHUO);
         assert_eq!(MAINNET_PARAMS.protocol.vm.tx_gas_budget_cap_byte, 99);
         assert_eq!(MAINNET_PARAMS.protocol.vm.compute_limit_byte, 72);
         assert_eq!(MAINNET_PARAMS.protocol.vm.resource_limit_byte, 56);
@@ -374,21 +284,6 @@ mod tests {
         assert_eq!(MAINNET_PARAMS.protocol.tx_actions_max, 200);
         assert_eq!(MAINNET_PARAMS.protocol.tx_gas_budget_cap_byte, 99);
         assert_eq!(MAINNET_PARAMS.protocol.tx_type_2, 2);
-    }
-
-    /// Published consensus fingerprint after the storage-fee-budget upgrade:
-    /// `ef9f644f5d4e3de53428ce32124d8e4536a8a65786c1b28d02abc0d8f43693a8`
-    /// (v1 profile + §3.1 discount parameters, H0 = 784,000). Any change to the
-    /// storage fee schedule or activation height must move this value (A14).
-    #[test]
-    fn mainnet_params_hash_is_locked() {
-        assert_eq!(
-            params_hash(&MAINNET_PARAMS),
-            [
-                239, 159, 100, 79, 93, 78, 61, 229, 52, 40, 206, 50, 18, 77, 142, 69, 54, 168, 166,
-                87, 134, 193, 178, 141, 2, 171, 192, 216, 244, 54, 147, 168,
-            ]
-        );
     }
 
     /// §3.1 design matrix, frozen as a test: decimal 1 MB capacity, 1000-block
@@ -491,15 +386,4 @@ mod tests {
         );
     }
 
-    /// Every schedule/parameter change must move the consensus params hash.
-    #[test]
-    fn storage_fee_params_are_hash_committed() {
-        let mut altered = MAINNET_PARAMS;
-        let schedule: &'static [(u64, u64)] = Box::leak(vec![(784_000, 1_000), (1_000_000, 2_000)].into_boxed_slice());
-        altered.protocol.vm.contract_storage_fee.supplement_schedule = schedule;
-        assert_ne!(params_hash(&MAINNET_PARAMS), params_hash(&altered));
-        let mut altered2 = MAINNET_PARAMS;
-        altered2.protocol.vm.contract_storage_fee.activation_height = 779_000;
-        assert_ne!(params_hash(&MAINNET_PARAMS), params_hash(&altered2));
-    }
 }

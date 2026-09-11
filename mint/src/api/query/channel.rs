@@ -51,17 +51,20 @@ pub(crate) fn fee_average_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiRespo
     let consumption = req.query_u64("consumption").unwrap_or(0);
     let extra9 = q_bool(&req, "extra9", q_bool(&req, "burn90", false));
     let txty = req.query_u64("tx_type").unwrap_or(2) as u8;
+    // `average_fee_purity` is in the chain pricing unit (u232 per byte). The u64
+    // purity can exceed the JSON/JS safe-integer range (2^53), so it travels as a
+    // quoted decimal string; `purity_unit` declares the sub-unit (232).
     let avgfeep = ctx.engine.average_fee_purity();
-    let mut fields = vec![format!("\"purity\":{}", avgfeep)];
+    let mut fields = vec![
+        format!("\"purity\":\"{avgfeep}\""),
+        format!("\"purity_unit\":{}", base::FEE_PRICING_UNIT),
+    ];
 
     if consumption > 0 {
-        let Some(fee238) = (avgfeep as u128).checked_mul(consumption as u128) else {
+        let Some(fee) = (avgfeep as u128).checked_mul(consumption as u128) else {
             return api_error("fee estimate overflow");
         };
-        if fee238 > u64::MAX as u128 {
-            return api_error("fee estimate overflow");
-        }
-        let mut base = Amount::unit238(fee238 as u64);
+        let mut base = base::settlement_amount(fee);
         if base.is_zero() {
             base = Amount::zhu(1);
         }

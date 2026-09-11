@@ -507,6 +507,7 @@ impl ProtocolParamsProfile {
         obj(vec![
             kv("ast_tree_depth_max", qnum(self.ast_tree_depth_max as u64)),
             kv("max_type3_signers", qnum(self.max_type3_signers as u64)),
+            kv("fee_purity_unit", qnum(self.fee_purity_unit as u64)),
             kv("fee_purity_floor", qnum(self.fee_purity_floor)),
             kv("diamond_form_flag", qnum(self.diamond_form_flag)),
             kv("fee_purity_reductions", arr(flat)),
@@ -560,6 +561,7 @@ impl ChainParams {
             kv("chain_id", qnum(self.chain_id)),
             kv("ast_tree_depth_max", qnum(self.ast_tree_depth_max as u64)),
             kv("max_type3_signers", qnum(self.max_type3_signers as u64)),
+            kv("fee_purity_unit", qnum(self.fee_purity_unit as u64)),
             kv("fee_purity_floor", qnum(self.fee_purity_floor)),
             kv("fee_purity_reductions", arr(flat)),
             kv("max_tx_size", qnum(self.max_tx_size as u64)),
@@ -760,6 +762,7 @@ impl_sdk_json! {
         signature_errors: str_arr,
         chain_ids_allowed: opt_u32_arr,
         valid_height_range: opt_obj HeightRangeDesc,
+        fee_purity_unit: u8,
         fee_purity: opt_u64,
         fee_purity_ok: opt_bool,
         actions: obj_arr ActionDesc,

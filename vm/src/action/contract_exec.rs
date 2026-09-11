@@ -728,10 +728,14 @@ fn calc_contract_protocol_cost_min_with_periods(
         return Ok(Amount::zero());
     }
     // Height-gated floor via the application-selected VM execution params.
-    let fee_purity =
-        ctx.services()
-            .vm_params()?
-            .effective_fee_purity(ctx.env().block.height, ctx.tx().fee_purity()) as u128; // unit-238 per tx byte
+    // Purity and floor are both in the chain pricing unit (u232 per tx byte);
+    // a purity above u64::MAX (~1844 HAC/byte) is rejected, not capped.
+    // The returned HAC amount is ceiled to the gas settlement unit (u238).
+    let fee_purity = ctx
+        .services()
+        .vm_params()?
+        .effective_fee_purity(ctx.env().block.height, ctx.tx().fee_purity_checked()?)
+        as u128;
     let periods = periods as u128;
     if periods == 0 || fee_purity == 0 {
         return errf!(
@@ -755,7 +759,9 @@ fn calc_contract_protocol_cost_min_with_periods(
             periods
         );
     };
-    Ok(Amount::coin_u128(need, field::UNIT_238))
+    // Price in u232 then ceil to the gas settlement unit (u238). Design-note
+    // table values are multiples of 10⁶ u232, so the HAC figure is unchanged.
+    Ok(base::settlement_amount(need))
 }
 
 /// Minimum on-chain `protocol_cost` for `charge_bytes` stored `periods` times.
@@ -927,7 +933,10 @@ mod contract_deploy_exec_tests {
             .unwrap()
             .contract_store_perm_periods;
         let min_fee = contract_protocol_cost_min(&ctx, size, periods).unwrap();
-        let cost = Amount::coin_u128(min_fee.to_238_u128().unwrap() + 1_000, UNIT_238);
+        let cost = Amount::coin_u128(
+            min_fee.to_unit_u128(base::FEE_PRICING_UNIT).unwrap() + 1_000,
+            base::FEE_PRICING_UNIT,
+        );
         act.protocol_cost = cost.clone();
 
         let (_, out) = act.execute(&mut ctx).unwrap();
@@ -935,6 +944,9 @@ mod contract_deploy_exec_tests {
 
         let expect = initial.sub_mode_u128(&cost).unwrap();
         assert_eq!(balance_hac(&mut ctx, &addr), expect);
+        // User-declared protocol_cost may still carry a sub-238 tail (`min + 1000
+        // u232` here); the accumulator books the truncated u238 count. The
+        // consensus minimum itself is 238-aligned via `settlement_amount`.
         assert_eq!(burn_total(&mut ctx), cost.to_238_u128().unwrap());
     }
 
@@ -1002,8 +1014,11 @@ mod contract_deploy_exec_tests {
             .unwrap_or(0)
     }
 
-    fn u238_of(amt: &Amount) -> u128 {
-        amt.to_238_u128().unwrap()
+    /// Equivalent u232 count of a protocol-cost Amount. Settlement is in u238,
+    /// so `unit()` may be ≥ 238; this conversion is exact for 238-aligned values
+    /// (the §3.4 table rows are multiples of 10⁶ u232).
+    fn u232_of(amt: &Amount) -> u128 {
+        amt.to_unit_u128(base::FEE_PRICING_UNIT).unwrap()
     }
 
     /// A07/A04: before activation the deploy fee keeps the legacy fixed-period
@@ -1025,7 +1040,8 @@ mod contract_deploy_exec_tests {
         let size = contract_deploy_charge_bytes(&nonempty_contract());
         let min_full = contract_protocol_cost_min(&ctx, size, 10_000).unwrap();
 
-        let mut below = make_deploy(Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238));
+        let mut below = make_deploy(Amount::coin_u128(u232_of(&min_full) - 1, base::FEE_PRICING_UNIT));
+        // 1 u232 below a 238-aligned minimum is still below it.
         below.contract = nonempty_contract();
         assert!(
             below.execute(&mut ctx).is_err(),
@@ -1058,8 +1074,8 @@ mod contract_deploy_exec_tests {
         let min_full = contract_protocol_cost_min(&ctx, charge_bytes, 10_000).unwrap();
         let min_disc = contract_protocol_cost_min(&ctx, charge_bytes, 10).unwrap();
         assert_eq!(
-            u238_of(&min_disc) * 1000,
-            u238_of(&min_full),
+            u232_of(&min_disc) * 1000,
+            u232_of(&min_full),
             "full budget floor price"
         );
         let mut nonce = 1u32;
@@ -1073,7 +1089,7 @@ mod contract_deploy_exec_tests {
         // a discount-band deploy succeeds on the activation block and books bytes
         deploy_at(
             &mut ctx,
-            Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238),
+            Amount::coin_u128(u232_of(&min_full) - 1, base::FEE_PRICING_UNIT),
             nonempty_contract(),
         )
         .unwrap();
@@ -1082,7 +1098,7 @@ mod contract_deploy_exec_tests {
         assert!(
             deploy_at(
                 &mut ctx,
-                Amount::coin_u128(u238_of(&min_disc) - 1, UNIT_238),
+                Amount::coin_u128(u232_of(&min_disc) - 1, base::FEE_PRICING_UNIT),
                 nonempty_contract(),
             )
             .is_err()
@@ -1115,7 +1131,7 @@ mod contract_deploy_exec_tests {
         let min_disc = contract_protocol_cost_min(&ctx, size, 10).unwrap();
         // full budget ⇒ periods = 10 (floor); the discount minimum is 1000× below
         // the full-price minimum by construction (10 vs 10,000 periods)
-        assert_eq!(u238_of(&min_disc) * 1000, u238_of(&min_full));
+        assert_eq!(u232_of(&min_disc) * 1000, u232_of(&min_full));
 
         let mut nonce = 1u32;
         // discounted deploy pays between the discount and the full minimum
@@ -1128,7 +1144,7 @@ mod contract_deploy_exec_tests {
         };
         deploy_at(
             &mut ctx,
-            Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238),
+            Amount::coin_u128(u232_of(&min_full) - 1, base::FEE_PRICING_UNIT),
             contract.clone(),
         )
         .unwrap();
@@ -1146,7 +1162,7 @@ mod contract_deploy_exec_tests {
         assert!(
             deploy_at(
                 &mut ctx,
-                Amount::coin_u128(u238_of(&min_disc) - 1, UNIT_238),
+                Amount::coin_u128(u232_of(&min_disc) - 1, base::FEE_PRICING_UNIT),
                 contract,
             )
             .is_err()
@@ -1181,7 +1197,7 @@ mod contract_deploy_exec_tests {
         // each discounted deploy needs its own nonce (fresh contract address)
         let mut nonce = 1u32;
         let mut discounted_deploy = |ctx: &mut TestCtx| {
-            let mut act = make_deploy(Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238));
+            let mut act = make_deploy(Amount::coin_u128(u232_of(&min_full) - 1, base::FEE_PRICING_UNIT));
             act.nonce = Uint4::from(nonce);
             nonce += 1;
             act.contract = nonempty_contract();
@@ -1206,37 +1222,32 @@ mod contract_deploy_exec_tests {
         );
     }
 
-    /// §3.4 fixed fee vector: a 10,000-byte deploy at the 50,000 u238/byte floor
+    /// §3.4 fixed fee vector: a 10,000-byte deploy at the 5×10¹⁰ u232/byte floor
     /// prices at the design-note HAC values across the five period rows.
     #[test]
     fn ten_kb_fee_vector_matches_design_notes() {
-        let ctx = deploy_ctx(false); // STUB floor 50,000 u238/byte
+        let ctx = deploy_ctx(false); // STUB floor 5×10¹⁰ u232/byte
         let bytes = 10_000usize;
-        // periods → HAC, per the §3.4 table (1 HAC = 10^10 u238)
+        // periods → HAC, per the §3.4 table. All rows are multiples of 10⁶ u232
+        // so ceil-to-238 leaves the u232 figure unchanged.
         let table: [(u64, u128); 5] = [
-            (10, 5_000_000_000),         // 0.5 HAC
-            (1_000, 500_000_000_000),    // 50 HAC
-            (5_000, 2_500_000_000_000),  // 250 HAC
-            (9_000, 4_500_000_000_000),  // 450 HAC
-            (10_000, 5_000_000_000_000), // 500 HAC
+            (10, 5_000_000_000_000_000),           // 0.5 HAC
+            (1_000, 500_000_000_000_000_000),      // 50 HAC
+            (5_000, 2_500_000_000_000_000_000),    // 250 HAC
+            (9_000, 4_500_000_000_000_000_000),    // 450 HAC
+            (10_000, 5_000_000_000_000_000_000),   // 500 HAC
         ];
-        for (periods, expected_u238) in table {
+        for (periods, expected_u232) in table {
             let min = contract_protocol_cost_min(&ctx, bytes, periods).unwrap();
             assert_eq!(
-                min.to_238_u128().unwrap(),
-                expected_u238,
+                u232_of(&min),
+                expected_u232,
                 "10 KB fee vector at periods {periods}"
             );
         }
         // purity above the floor scales linearly (§3.4 closing note)
-        let disc = contract_protocol_cost_min(&ctx, bytes, 10)
-            .unwrap()
-            .to_238_u128()
-            .unwrap();
-        let full = contract_protocol_cost_min(&ctx, bytes, 10_000)
-            .unwrap()
-            .to_238_u128()
-            .unwrap();
+        let disc = u232_of(&contract_protocol_cost_min(&ctx, bytes, 10).unwrap());
+        let full = u232_of(&contract_protocol_cost_min(&ctx, bytes, 10_000).unwrap());
         assert_eq!(disc * 1000, full);
     }
 
@@ -1259,7 +1270,7 @@ mod contract_deploy_exec_tests {
         let size = contract_deploy_charge_bytes(&nonempty_contract());
         let min_full = contract_protocol_cost_min(&ctx, size, 10_000).unwrap();
         // discount-band fee (below full price) books quota exactly like strict mode
-        let mut disc = make_deploy(Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238));
+        let mut disc = make_deploy(Amount::coin_u128(u232_of(&min_full) - 1, base::FEE_PRICING_UNIT));
         disc.contract = nonempty_contract();
         disc.execute(&mut ctx).unwrap();
         assert_eq!(used_discount_bytes(&ctx), size as u128);
@@ -1274,7 +1285,7 @@ mod contract_deploy_exec_tests {
         );
         // below the discount floor: no price-curve check in fast sync (still booked)
         let min_disc = contract_protocol_cost_min(&ctx, size, 10).unwrap();
-        let mut below = make_deploy(Amount::coin_u128(u238_of(&min_disc) - 1, UNIT_238));
+        let mut below = make_deploy(Amount::coin_u128(u232_of(&min_disc) - 1, base::FEE_PRICING_UNIT));
         below.contract = nonempty_contract();
         below.execute(&mut ctx).unwrap();
         assert_eq!(used_discount_bytes(&ctx), size as u128 * 2);
@@ -1334,7 +1345,7 @@ mod contract_deploy_exec_tests {
         let Some((disc_min, _periods)) = &quote.discount else {
             panic!("update analysis must see an active budget snapshot");
         };
-        let fee = Amount::coin_u128(u238_of(disc_min) + 1, UNIT_238);
+        let fee = Amount::coin_u128(u232_of(disc_min) + 1, base::FEE_PRICING_UNIT);
         let mut update = ContractUpdate::new();
         update.protocol_cost = fee;
         update.address = addr;
@@ -1374,7 +1385,7 @@ mod contract_deploy_exec_tests {
         let nonce = Uint4::from(1);
         let caddr = ContractAddress::calculate(&addr, &nonce);
         let min_full = contract_protocol_cost_min(&ctx, deploy_charge_bytes, 10_000).unwrap();
-        let mut deploy = make_deploy(Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238));
+        let mut deploy = make_deploy(Amount::coin_u128(u232_of(&min_full) - 1, base::FEE_PRICING_UNIT));
         deploy.nonce = nonce;
         deploy.contract = contract;
         deploy.execute(&mut ctx).unwrap();
@@ -1442,7 +1453,7 @@ mod contract_deploy_exec_tests {
         let min_full =
             contract_protocol_cost_min(&ctx, contract_deploy_charge_bytes(&contract), 10_000)
                 .unwrap();
-        let mut deploy = make_deploy(Amount::coin_u128(u238_of(&min_full) - 1, UNIT_238));
+        let mut deploy = make_deploy(Amount::coin_u128(u232_of(&min_full) - 1, base::FEE_PRICING_UNIT));
         deploy.nonce = nonce;
         deploy.contract = contract;
         deploy.execute(&mut ctx).unwrap();
@@ -1459,7 +1470,7 @@ mod contract_deploy_exec_tests {
         let discount = analysis
             .discounted_protocol_cost
             .expect("live snapshot must produce a discount quote");
-        assert!(u238_of(&discount) < u238_of(&analysis.required_protocol_cost));
+        assert!(u232_of(&discount) < u232_of(&analysis.required_protocol_cost));
         assert!(analysis.discounted_periods.is_some());
         // the quoted discount fee must be sufficient to pass the update fee check
         let mut update = ContractUpdate::new();

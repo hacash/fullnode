@@ -1,17 +1,19 @@
 //! `tx.estimate_fee`: offline fee guidance (Unified SDK 2.0, doc 14 §4.7).
 //! The chain's gas model bills type-3 txs `max(declared_fee, floor * billing_size)`
-//! in the 238 sub-unit; type-2 txs carry no purity floor (a non-zero fee within
-//! the size rule suffices). This operation computes the floor at a height, the
-//! tx's billing size, the type-3 minimum fee, and whether the declared fee
-//! clears its type's bar. The SDK never executes or consults a node.
-
-use field::{Amount, UNIT_238};
+//! in the chain pricing unit (u232 = 10⁻¹⁶ HAC per byte), then ceils the HAC
+//! amount to the gas settlement unit (u238); type-2 txs carry no purity floor
+//! (a non-zero fee within the size rule suffices). This operation computes the
+//! floor at a height, the tx's billing size, the type-3 minimum fee, and whether
+//! the declared fee clears its type's bar. The SDK never executes or consults a
+//! node.
 
 use crate::error::{SdkError, SdkErrorCode};
 use crate::json::SdkJsonTo;
 use crate::schema::SCHEMA_FEE_ESTIMATE;
 
-/// `tx.estimate_fee` response (`hacash.sdk/fee-estimate@1`).
+/// `tx.estimate_fee` response (`hacash.sdk/fee-estimate@2`: purity/floor are
+/// priced in the chain pricing unit `fee_purity_unit` = 232; `minimum_fee` is
+/// that product ceiled to the gas settlement unit).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FeeEstimate {
     pub schema: String,
@@ -19,10 +21,12 @@ pub struct FeeEstimate {
     /// The height the floor was evaluated at (`0` when the caller omits it:
     /// the initial floor, the highest one, so a wallet never underbids).
     pub height: u64,
+    /// Sub-unit the purity/floor figures are priced in (232 = 10⁻¹⁶ HAC).
+    pub fee_purity_unit: u8,
     pub fee_purity_floor: u64,
     pub billing_size: usize,
-    /// `floor * billing_size` in the 238 sub-unit, formatted as a fin string;
-    /// `None` for tx types without a purity floor (type-2).
+    /// `floor * billing_size` ceiled to the gas settlement unit (u238), formatted
+    /// as a fin string; `None` for tx types without a purity floor (type-2).
     pub minimum_fee: Option<String>,
     pub fee: String,
     pub fee_purity: u64,
@@ -50,7 +54,7 @@ pub fn estimate_fee(body_hex: &str, height: Option<u64>) -> Result<FeeEstimate, 
                     "fee floor * billing size overflow",
                 )
             })?;
-        Some(Amount::coin_u128(floor_fee, UNIT_238).to_fin_string())
+        Some(base::settlement_amount(floor_fee).to_fin_string())
     } else {
         None
     };
@@ -65,6 +69,7 @@ pub fn estimate_fee(body_hex: &str, height: Option<u64>) -> Result<FeeEstimate, 
         schema: SCHEMA_FEE_ESTIMATE.to_owned(),
         tx_type,
         height,
+        fee_purity_unit: base::FEE_PRICING_UNIT,
         fee_purity_floor: floor,
         billing_size,
         minimum_fee,
@@ -81,6 +86,7 @@ impl SdkJsonTo for FeeEstimate {
             kv("schema", q(&self.schema)),
             kv("tx_type", qnum(self.tx_type as u64)),
             kv("height", qnum(self.height)),
+            kv("fee_purity_unit", qnum(self.fee_purity_unit as u64)),
             kv("fee_purity_floor", qnum(self.fee_purity_floor)),
             kv("billing_size", qnum(self.billing_size as u64)),
             kv(
@@ -91,6 +97,8 @@ impl SdkJsonTo for FeeEstimate {
                     .unwrap_or_else(|| "null".to_owned()),
             ),
             kv("fee", q(&self.fee)),
+            // `qnum` already carries the value as a quoted decimal string (the
+            // SDK boundary convention), so no precision is lost above 2^53.
             kv("fee_purity", qnum(self.fee_purity)),
             kv(
                 "fee_enough",
@@ -150,9 +158,10 @@ mod tests {
         let built = build_transaction(&sample(3)).unwrap();
         let estimate = estimate_fee(&built.body, Some(9)).unwrap();
         assert_eq!(estimate.tx_type, 3);
-        // Mainnet's floor is 50,000 with no height reductions (the 100-floor
-        // schedule in base's registry tests is a fixture, not mainnet).
-        assert_eq!(estimate.fee_purity_floor, 50_000);
+        // Mainnet's floor is 5×10¹⁰ u232/byte with no height reductions (the
+        // 100-floor schedule in base's registry tests is a fixture, not mainnet).
+        assert_eq!(estimate.fee_purity_unit, 232);
+        assert_eq!(estimate.fee_purity_floor, 50_000_000_000);
         let minimum = estimate.minimum_fee.as_deref().unwrap();
         assert!(!minimum.is_empty());
         assert!(!estimate.fee_enough); // 1:244 purity is far below the floor
@@ -161,11 +170,12 @@ mod tests {
     #[test]
     fn a_sufficient_type3_fee_is_reported_enough() {
         let mut spec = sample(3);
-        // The 238-unit fee value must clear floor * billing_size: use a huge fee.
+        // The pricing-unit fee value must clear floor * billing_size: huge fee.
         spec.fee = "1000000:244".to_owned();
         let built = build_transaction(&spec).unwrap();
         let estimate = estimate_fee(&built.body, Some(9)).unwrap();
-        assert_eq!(estimate.fee_purity_floor, 50_000);
+        assert_eq!(estimate.fee_purity_unit, 232);
+        assert_eq!(estimate.fee_purity_floor, 50_000_000_000);
         assert!(estimate.fee_enough);
     }
 

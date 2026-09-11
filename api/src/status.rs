@@ -55,10 +55,11 @@ fn status_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse {
         Err(_) => (false, 0),
     };
     ApiResponse::json(format!(
-        "{{\"height\":{},\"uptime\":{},\"peers\":{},\"vm_fee_purity_floor\":{},\"vm_contract_store_perm_periods\":{},\"vm_contract_storage_enabled\":{},\"vm_contract_storage_periods\":{}}}",
+        "{{\"height\":{},\"uptime\":{},\"peers\":{},\"vm_fee_purity_unit\":{},\"vm_fee_purity_floor\":{},\"vm_contract_store_perm_periods\":{},\"vm_contract_storage_enabled\":{},\"vm_contract_storage_periods\":{}}}",
         height,
         uptime,
         ctx.node.all_peer_prints().len(),
+        base::FEE_PRICING_UNIT,
         fee_purity_floor,
         perm_periods,
         csf_enabled,

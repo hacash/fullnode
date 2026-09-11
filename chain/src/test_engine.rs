@@ -278,7 +278,8 @@ impl Default for TestServices {
         static PARAMS: VmExecutionParams = VmExecutionParams {
             contract_store_perm_periods: 10_000,
             contract_storage_fee: base::ContractStorageFeeParams::disabled(),
-            initial_fee_purity_floor: 100,
+            // 100 u238/byte ≡ 10⁸ u232/byte (legacy test floor, scaled with pricing unit).
+            initial_fee_purity_floor: 100_000_000,
             fee_purity_reductions: &[],
             gas_budget_lookup: &base::GAS_BUDGET_LOOKUP_NONE,
             tx_gas_budget_cap_byte: 0,
@@ -836,7 +837,8 @@ fn budget_test_params() -> VmExecutionParams {
             max_block_discount_bytes: 16_384,
             supplement_schedule: &[(3, 3_000)],
         },
-        initial_fee_purity_floor: 100,
+        // 100 u238/byte ≡ 10⁸ u232/byte (legacy test floor, scaled with pricing unit).
+        initial_fee_purity_floor: 100_000_000,
         fee_purity_reductions: &[],
         gas_budget_lookup: &base::GAS_BUDGET_LOOKUP_NONE,
         tx_gas_budget_cap_byte: 0,

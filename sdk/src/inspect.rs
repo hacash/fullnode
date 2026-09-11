@@ -78,7 +78,14 @@ pub struct Review {
     pub signature_errors: Vec<String>,
     pub chain_ids_allowed: Option<Vec<u32>>,
     pub valid_height_range: Option<HeightRangeDesc>,
+    /// Sub-unit the fee purity figure is priced in (232 = 10⁻¹⁶ HAC per billing
+    /// byte). Explicit in the payload so a client never re-derives it from the
+    /// profile hash or a schema guess.
+    pub fee_purity_unit: u8,
+    /// Fee purity in the chain pricing unit (u232 per billing byte); JSON carries
+    /// it as a decimal string (SDK boundary convention, no 2^53 precision loss).
     pub fee_purity: Option<u64>,
+    /// `fee_purity >= floor_at(ctx.current_height)` — same pricing unit on both sides.
     pub fee_purity_ok: Option<bool>,
     pub actions: Vec<crate::audit::ActionDesc>,
     pub asset_serials: Vec<u64>,
@@ -253,6 +260,7 @@ fn build_review(
             start: range.0,
             end: range.1,
         }),
+        fee_purity_unit: base::FEE_PRICING_UNIT,
         fee_purity,
         fee_purity_ok,
         actions,

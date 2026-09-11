@@ -51,13 +51,14 @@ impl StubServices {
 }
 
 /// Default VM execution params for stub services. No fee-purity schedule
-/// reductions: the initial floor applies at every height. The storage discount
-/// schedule stays disabled by default (legacy fixed-period rule); tests that
-/// exercise it override `TestCtx::vm_params`.
+/// reductions: the initial floor applies at every height. The floor is in the
+/// chain pricing unit (u232): 5×10¹⁰ ≡ the legacy 50,000 u238/byte. The storage
+/// discount schedule stays disabled by default (legacy fixed-period rule); tests
+/// that exercise it override `TestCtx::vm_params`.
 pub(crate) static STUB_VM_PARAMS: VmExecutionParams = VmExecutionParams {
     contract_store_perm_periods: 10_000,
     contract_storage_fee: base::ContractStorageFeeParams::disabled(),
-    initial_fee_purity_floor: 50_000,
+    initial_fee_purity_floor: 50_000_000_000,
     fee_purity_reductions: &[],
     gas_budget_lookup: &base::GAS_BUDGET_LOOKUP_NONE,
     tx_gas_budget_cap_byte: 0,

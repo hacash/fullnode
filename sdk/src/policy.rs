@@ -183,6 +183,7 @@ mod tests {
             signature_errors: vec![],
             chain_ids_allowed: None,
             valid_height_range: None,
+            fee_purity_unit: base::FEE_PRICING_UNIT,
             fee_purity: None,
             fee_purity_ok: None,
             actions: vec![],

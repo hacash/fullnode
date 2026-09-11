@@ -89,8 +89,8 @@ impl TxRejectReason {
                 format!("tx size {} exceeds maximum {} bytes", size, max)
             }
             TxRejectReason::FeeTooLow { got, min } => format!(
-                "The transaction fee purity {} is too low, the node minimum configuration is {}.",
-                got, min
+                "The transaction fee purity {} (unit {}) is too low, the node minimum configuration is {}.",
+                got, crate::FEE_PRICING_UNIT, min
             ),
             TxRejectReason::MempoolForbidden => {
                 "transaction type is forbidden in mempool".to_owned()

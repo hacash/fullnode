@@ -28,7 +28,7 @@ fn patches_insert(v: &Value) -> VmrtRes<Vec<u8>> {
     Ok(bytes)
 }
 
-pub(super) fn patches(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+pub(crate) fn patches(_env: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
     let items = super::argv::func_list(argv, NativeFunc::patches)?;
     let len = items.len();
     if len % 3 != 0 {

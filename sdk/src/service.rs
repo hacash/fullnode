@@ -24,7 +24,11 @@ pub(crate) fn profile() -> &'static CodecProfile {
 
 /// Transport version of the JSON WASM surface (§5). Bumping this means the
 /// envelope/payload semantics changed.
-pub const TRANSPORT_VERSION: u32 = 9;
+pub const TRANSPORT_VERSION: u32 = 10;
+// v10: fee pricing moved to the u232 unit: review/fee-estimate/params expose an
+//      explicit `fee_purity_unit` (schemas review@5, fee-estimate@2, params@2)
+//      and all purity/floor figures are u232-valued (they already travel as
+//      decimal strings per the boundary convention).
 // v9: dropped system.capabilities / system.codec_profile; renamed
 //     amount.parse_protocol -> amount.parse and amount.format_protocol ->
 //     amount.format (operation ids shifted).
@@ -657,6 +661,82 @@ mod tests {
             .map(|(_, v)| v.trim_matches('"'))
             .unwrap();
         assert_eq!(tx_type, "2");
+    }
+
+    /// Review / fee-estimate / params payloads must declare the u232 pricing
+    /// unit explicitly (transport v10); numeric figures travel as decimal
+    /// strings per the SDK boundary convention.
+    #[test]
+    fn pricing_unit_is_declared_in_every_fee_payload() {
+        let main = "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr";
+        let payload = format!(
+            r#"{{"spec":{{"schema":"{}","tx_type":"2","main":"{main}","fee":"0.001","timestamp":"1700000000","actions":[{{"kind":1,"to":"{main}","hacash":"1.5"}}]}}}}"#,
+            crate::schema::SCHEMA_TRANSACTION_SPEC
+        );
+        let built = invoke_ok(OP_TX_BUILD, &payload);
+        let hex_body = field::json_split_object(&built)
+            .expect("build body parses")
+            .into_iter()
+            .find(|(k, _)| *k == "body")
+            .map(|(_, v)| v.trim_matches('"').to_owned())
+            .expect("build returns body");
+
+        let est = invoke_ok(
+            OP_TX_ESTIMATE_FEE,
+            &format!(r#"{{"body":"{hex_body}"}}"#),
+        );
+        assert!(
+            est.contains(r#""schema":"hacash.sdk/fee-estimate@2""#),
+            "fee-estimate schema: {est}"
+        );
+        assert!(
+            est.contains(r#""fee_purity_unit":"232""#),
+            "estimate unit: {est}"
+        );
+        assert!(
+            est.contains(r#""fee_purity_floor":"50000000000""#),
+            "estimate floor (u232): {est}"
+        );
+        assert!(
+            est.contains(r#""fee_purity":""#),
+            "estimate purity must be a quoted decimal string: {est}"
+        );
+
+        let rev = invoke_ok(
+            OP_TX_INSPECT_REPORT,
+            &format!(r#"{{"body":"{hex_body}"}}"#),
+        );
+        assert!(
+            rev.contains(r#""schema":"hacash.sdk/review@5""#),
+            "review schema: {rev}"
+        );
+        assert!(
+            rev.contains(r#""fee_purity_unit":"232""#),
+            "review unit: {rev}"
+        );
+        assert!(
+            rev.contains(r#""fee_purity":""#),
+            "review purity must be a quoted decimal string: {rev}"
+        );
+        // Round-trip: the boundary parser accepts the quoted-decimal form.
+        let review =
+            crate::inspect::Review::from_json_str(&rev).expect("review re-parses");
+        assert_eq!(review.fee_purity_unit, 232);
+        assert!(review.fee_purity.is_some());
+
+        let params = invoke_ok(id_from_name("system.params"), "");
+        assert!(
+            params.contains(r#""fee_purity_unit":"232""#),
+            "params unit: {params}"
+        );
+        assert!(
+            params.contains(r#""fee_purity_floor":"50000000000""#),
+            "params floor (u232): {params}"
+        );
+        assert!(
+            params.contains(r#""schema":"hacash.sdk/params@2""#),
+            "params schema: {params}"
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! `Registry`: binary/json codec, block hasher / vm assigner / action hooks, VM host metadata.
 
 use field::{
-    Decode, Uint1, Uint2, Uint12, json_expect_quoted_decoded, json_expect_unquoted,
+    Amount, Decode, Uint1, Uint2, Uint12, json_expect_quoted_decoded, json_expect_unquoted,
     json_object_entries,
 };
 use std::any::Any;
@@ -16,6 +16,37 @@ use crate::{ActionRef, BlockRef, TxRef};
 use crate::{Context, StateChunkRef, Vm};
 
 pub const HASH_SIZE: usize = 32;
+
+/// Chain fee/gas pricing unit: `fee_purity` (pricing sub-unit per billing byte)
+/// and the fee-purity floor are expressed in this sub-unit — `UNIT_SHUO` = 232
+/// = 10⁻¹⁶ HAC. Protocol settle amounts (gas burn, protocol-cost minima) are
+/// ceiled to [`GAS_SETTLEMENT_UNIT`] before they are written to a balance.
+pub const FEE_PRICING_UNIT: u8 = field::UNIT_SHUO;
+
+/// Unit actually written to HAC balances and `*_238` accumulators: `UNIT_238`
+/// = 238 = 10⁻¹⁰ HAC. Pricing may be finer ([`FEE_PRICING_UNIT`]); every
+/// protocol-produced HAC amount is rounded up to a whole number of this unit
+/// so balances never receive sub-238 dust.
+pub const GAS_SETTLEMENT_UNIT: u8 = field::UNIT_238;
+
+const _: () = assert!(GAS_SETTLEMENT_UNIT >= FEE_PRICING_UNIT);
+
+/// `10^(GAS_SETTLEMENT_UNIT − FEE_PRICING_UNIT)` = 1_000_000: one u238 equals
+/// this many u232 pricing sub-units.
+pub const SETTLEMENT_SCALE: u128 =
+    10u128.pow((GAS_SETTLEMENT_UNIT - FEE_PRICING_UNIT) as u32);
+
+/// Ceil a pricing-unit (u232) count up to a whole number of settlement units
+/// (u238): `ceil(v / SETTLEMENT_SCALE)`.
+pub fn ceil_pricing_to_settlement(v_pricing: u128) -> u128 {
+    v_pricing.div_ceil(SETTLEMENT_SCALE)
+}
+
+/// Protocol-produced HAC amount: `v_pricing` u232, rounded up to an integer
+/// number of [`GAS_SETTLEMENT_UNIT`] (u238).
+pub fn settlement_amount(v_pricing: u128) -> Amount {
+    Amount::coin_u128(ceil_pricing_to_settlement(v_pricing), GAS_SETTLEMENT_UNIT)
+}
 
 pub type BlockHasherFn = fn(u64, &[u8]) -> [u8; HASH_SIZE];
 #[cfg(feature = "execute")]
@@ -625,8 +656,11 @@ pub struct VmExecutionParams {
     pub contract_store_perm_periods: u64,
     /// Limited-capacity discount schedule over the full-price `contract_store_perm_periods`.
     pub contract_storage_fee: ContractStorageFeeParams,
+    /// Minimum fee purity in the chain pricing unit (`FEE_PRICING_UNIT`, u232),
+    /// enforced per billing byte by `GasPrice` settle and the contract protocol fee.
     pub initial_fee_purity_floor: u64,
-    /// Height-gated floor reductions: `(activation_height, next_floor)`.
+    /// Height-gated floor reductions: `(activation_height, next_floor)`, floors in
+    /// the same pricing unit as `initial_fee_purity_floor`.
     pub fee_purity_reductions: &'static [(u64, u64)],
     /// Chain gas-budget vocabulary: bytecode → budget units. Engine pricing
     /// constants stay in the VM; only this table and the four budget bytes
@@ -638,8 +672,9 @@ pub struct VmExecutionParams {
     pub storage_limit_byte: u8,
 }
 
-/// Fee purity floor selected by the consensus schedule at `height` — single computation
-/// shared by `VmExecutionParams::fee_purity_floor_at` and the SDK's height-aware review fact.
+/// Fee purity floor selected by the consensus schedule at `height`, expressed in the
+/// chain pricing unit (`FEE_PRICING_UNIT` = u232) — single computation shared by
+/// `VmExecutionParams::fee_purity_floor_at` and the SDK's height-aware review fact.
 pub fn fee_purity_floor_at(initial: u64, reductions: &[(u64, u64)], height: u64) -> u64 {
     let mut floor = initial;
     for &(activation, next) in reductions {
@@ -660,7 +695,9 @@ impl VmExecutionParams {
         )
     }
 
-    /// Effective fee purity floor at `height`, then `raw.max(floor)`.
+    /// Effective fee purity at `height` in the chain pricing unit (u232): `raw.max(floor)`.
+    /// Shared by mempool admission and consensus protocol-fee pricing; callers that
+    /// then multiply by bytes/periods/gas widen the product to `u128`.
     pub fn effective_fee_purity(&self, height: u64, raw: u64) -> u64 {
         raw.max(self.fee_purity_floor_at(height))
     }
@@ -819,8 +856,9 @@ mod tests {
     const PARAMS: VmExecutionParams = VmExecutionParams {
         contract_store_perm_periods: 10_000,
         contract_storage_fee: ContractStorageFeeParams::disabled(),
-        initial_fee_purity_floor: 100,
-        fee_purity_reductions: &[(10, 80), (20, 50)],
+        // Schedule values are in u232: 100/80/50 u238 ≡ 10⁸/8×10⁷/5×10⁷ u232.
+        initial_fee_purity_floor: 100_000_000,
+        fee_purity_reductions: &[(10, 80_000_000), (20, 50_000_000)],
         gas_budget_lookup: &super::GAS_BUDGET_LOOKUP_NONE,
         tx_gas_budget_cap_byte: 0,
         compute_limit_byte: 0,
@@ -830,16 +868,28 @@ mod tests {
 
     #[test]
     fn fee_purity_schedule_changes_at_activation_height() {
-        assert_eq!(PARAMS.fee_purity_floor_at(9), 100);
-        assert_eq!(PARAMS.fee_purity_floor_at(10), 80);
-        assert_eq!(PARAMS.fee_purity_floor_at(19), 80);
-        assert_eq!(PARAMS.fee_purity_floor_at(20), 50);
+        assert_eq!(PARAMS.fee_purity_floor_at(9), 100_000_000);
+        assert_eq!(PARAMS.fee_purity_floor_at(10), 80_000_000);
+        assert_eq!(PARAMS.fee_purity_floor_at(19), 80_000_000);
+        assert_eq!(PARAMS.fee_purity_floor_at(20), 50_000_000);
     }
 
     #[test]
     fn effective_fee_purity_applies_the_scheduled_floor() {
-        assert_eq!(PARAMS.effective_fee_purity(20, 40), 50);
-        assert_eq!(PARAMS.effective_fee_purity(20, 60), 60);
+        assert_eq!(PARAMS.effective_fee_purity(20, 40), 50_000_000);
+        assert_eq!(PARAMS.effective_fee_purity(20, 60_000_000), 60_000_000);
+    }
+
+    #[test]
+    fn ceil_pricing_to_settlement_rounds_up_to_u238() {
+        assert_eq!(super::SETTLEMENT_SCALE, 1_000_000);
+        assert_eq!(super::ceil_pricing_to_settlement(0), 0);
+        assert_eq!(super::ceil_pricing_to_settlement(1), 1);
+        assert_eq!(super::ceil_pricing_to_settlement(1_000_000), 1);
+        assert_eq!(super::ceil_pricing_to_settlement(1_000_001), 2);
+        let amt = super::settlement_amount(1);
+        assert_eq!(amt.to_unit_u128(field::UNIT_238).unwrap(), 1);
+        assert!(amt.unit() >= field::UNIT_238);
     }
 
     /// The profile-level validator must reject illegal storage fee tables exactly

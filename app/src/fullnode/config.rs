@@ -42,7 +42,10 @@ impl Default for TxPoolConfig {
     fn default() -> Self {
         Self {
             maxs: Vec::new(),
-            min_fee_purity: 1_000_000 / 166,
+            // Fee purity is priced in the chain pricing unit (u232): the legacy
+            // default of `1_000_000 / 166 ≈ 6024` u238/byte scales to
+            // 6024 × 10⁶ = 6_024_000_000 u232/byte (same effective rate).
+            min_fee_purity: 6_024 * 1_000_000,
         }
     }
 }
@@ -187,6 +190,19 @@ fn decode_txpool(sec: &IniSec) -> sys::Ret<TxPoolConfig> {
         cfg.maxs = parsed;
     }
     cfg.min_fee_purity = ini_u64(sec, "min_fee_purity", cfg.min_fee_purity)?;
+    // Old unit-238 configs set this below 10⁶; in u232 that is orders of
+    // magnitude under the consensus floor (5×10¹⁰) and almost certainly a
+    // missed unit conversion. Warn instead of rejecting (the value is local-only).
+    if cfg.min_fee_purity != TxPoolConfig::default().min_fee_purity
+        && cfg.min_fee_purity < 1_000_000
+    {
+        eprintln!(
+            "[config] warning: txpool.min_fee_purity = {} looks like an old unit-238 value; \
+             fee purity is now priced in u232 (×10⁶), the default is {}",
+            cfg.min_fee_purity,
+            TxPoolConfig::default().min_fee_purity
+        );
+    }
     Ok(cfg)
 }
 
@@ -385,7 +401,7 @@ mod tests {
              [p2p]\nlisten_ip = 0.0.0.0\nlisten_port = 3337\nnode_name =\nboot_nodes = 182.92.163.225:3337,54.193.49.59:3337\n\
              [server]\nlisten_ip = 127.0.0.1\nlisten_port = 8082\ndebug_routes = false\n\
              [mint]\nchain_id = 0\ndiamond_form = true\n\
-             [txpool]\nmaxs =\nmin_fee_purity = 6024\n\
+             [txpool]\nmaxs =\nmin_fee_purity = 6024000000\n\
              [miner]\nenable = false\n\
              [diamond_miner]\nenable = false\n\
              [vm]\nlog_enable = false\nlog_open_height = 0\nlog_delete_auth_hash =",
@@ -413,7 +429,7 @@ mod tests {
         assert_eq!(vm.log_delete_auth_hash, ""); // bare empty -> explicit default
         let txpool = decode_txpool(sys::ini_section(&ini, "txpool")).unwrap();
         assert_eq!(txpool.maxs, Vec::<usize>::new()); // bare `maxs =` -> default
-        assert_eq!(txpool.min_fee_purity, 6024);
+        assert_eq!(txpool.min_fee_purity, 6_024_000_000);
     }
 
     #[test]

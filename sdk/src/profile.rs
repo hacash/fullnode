@@ -23,16 +23,19 @@ pub const HACD_WIRE_MAX: usize = field::DIAMOND_LIST_MAX;
 pub struct ProtocolParamsProfile {
     pub ast_tree_depth_max: usize,
     pub max_type3_signers: usize,
+    /// Sub-unit `fee_purity_floor` and the reduction floors are priced in (232).
+    pub fee_purity_unit: u8,
     pub fee_purity_floor: u64,
     pub diamond_form_flag: u64,
-    /// Height-gated floor reductions `(activation_height, next_floor)`; with
-    /// `fee_purity_floor` they form the chain's gas-billing schedule.
+    /// Height-gated floor reductions `(activation_height, next_floor)`, floors in
+    /// `fee_purity_unit`; with `fee_purity_floor` they form the chain's
+    /// gas-billing schedule.
     pub fee_purity_reductions: Vec<(u64, u64)>,
 }
 
 impl ProtocolParamsProfile {
-    /// Effective fee purity floor at `height` — delegated to the single
-    /// `base` schedule implementation, never re-derived here.
+    /// Effective fee purity floor at `height`, in the pricing unit — delegated to
+    /// the single `base` schedule implementation, never re-derived here.
     pub fn fee_purity_floor_at(&self, height: u64) -> u64 {
         base::fee_purity_floor_at(self.fee_purity_floor, &self.fee_purity_reductions, height)
     }
@@ -101,6 +104,7 @@ impl CodecProfile {
             protocol_params: ProtocolParamsProfile {
                 ast_tree_depth_max: params.ast_tree_depth_max,
                 max_type3_signers: params.max_type3_signers,
+                fee_purity_unit: base::FEE_PRICING_UNIT,
                 fee_purity_floor: params.vm.initial_fee_purity_floor,
                 diamond_form_flag: params.diamond_form_flag,
                 fee_purity_reductions: params.vm.fee_purity_reductions.to_vec(),
@@ -176,6 +180,8 @@ pub struct ChainParams {
     pub chain_id: u32,
     pub ast_tree_depth_max: usize,
     pub max_type3_signers: usize,
+    /// Sub-unit `fee_purity_floor` and the reduction floors are priced in (232).
+    pub fee_purity_unit: u8,
     pub fee_purity_floor: u64,
     pub fee_purity_reductions: Vec<(u64, u64)>,
     pub max_tx_size: usize,
@@ -193,6 +199,7 @@ pub fn params(profile: &CodecProfile) -> ChainParams {
         chain_id: MAINNET_CHAIN_ID,
         ast_tree_depth_max: profile.protocol_params.ast_tree_depth_max,
         max_type3_signers: profile.protocol_params.max_type3_signers,
+        fee_purity_unit: profile.protocol_params.fee_purity_unit,
         fee_purity_floor: profile.protocol_params.fee_purity_floor,
         fee_purity_reductions: profile.protocol_params.fee_purity_reductions.clone(),
         max_tx_size: profile.limits.max_tx_size,

@@ -203,7 +203,7 @@ INI rules:
 | `fast_sync` | `false` | Enables the reduced-check synchronization path. Keep false unless the operational trust model explicitly permits it. |
 | `unstable_block` | `4` | Fork/reorganization window. |
 | `recent_blocks` | `true` | Maintain recent-block indexes. |
-| `average_fee_purity` | `true` | Maintain rolling fee-purity samples. |
+| `average_fee_purity` | `true` | Maintain rolling fee-purity samples (u232-priced). |
 | `show_miner_name` | `false` | Print miner details in block logs. |
 
 Persistent storage is split below `data_dir` into `block/`, `state_v1/`, and
@@ -239,7 +239,7 @@ The node creates `node.id` and `stable.nodes` under the data directory.
 | `server.listen_port` | `8082` | HTTP port; `0` disables the HTTP server. |
 | `server.debug_routes` | `false` | Register routes marked debug. Do not expose them on a public listener. |
 | `txpool.maxs` | empty | Comma-separated capacities for consensus-defined transaction groups. Missing entries keep group defaults. |
-| `txpool.min_fee_purity` | `6024` | Local mempool minimum fee purity (`1000000 / 166`, integer division). |
+| `txpool.min_fee_purity` | `6024000000` | Local mempool minimum fee purity in the u232 pricing unit (≡ the legacy 6024 u238/byte rate). |
 | `vm.log_enable` | `false` | Persist VM logs. |
 | `vm.log_open_height` | `0` | First height at which VM logs are persisted. |
 | `vm.log_delete_auth_hash` | empty | Authorization hash used by the VM log deletion API. |

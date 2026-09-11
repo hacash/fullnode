@@ -18,8 +18,8 @@ use crate::types::amount_base256 as b256;
 //   UNIT_MEI  = 248  → 1:248 = 1 HAC
 //   UNIT_244  = 244  → 1:244 = 10⁻⁴ HAC
 //   UNIT_ZHU  = 240  → 1:240 = 10⁻⁸ HAC
-//   UNIT_238  = 238  → 1:238 = 10⁻¹⁰ HAC (protocol fee_purity pricing unit)
-//   UNIT_SHUO = 232  → 1:232 = 10⁻¹⁶ HAC
+//   UNIT_238  = 238  → 1:238 = 10⁻¹⁰ HAC (gas settlement unit + ledger accumulator unit: `*_238` totals)
+//   UNIT_SHUO = 232  → 1:232 = 10⁻¹⁶ HAC (protocol fee_purity / gas pricing unit)
 //   UNIT_AI   = 224  → 1:224 = 10⁻²⁴ HAC
 //   UNIT_MIAO = 216  → 1:216 = 10⁻³² HAC
 pub const UNIT_MEI: u8 = 248;
@@ -114,6 +114,10 @@ impl Amount {
 
     pub fn unit238(v: u64) -> Self {
         Self::coin(v, UNIT_238)
+    }
+
+    pub fn unit232(v: u64) -> Self {
+        Self::coin(v, UNIT_SHUO)
     }
 
     pub fn coin(v: u64, u: u8) -> Self {
@@ -351,9 +355,85 @@ impl Amount {
         self.to_unit_u128(UNIT_238)
     }
 
+    pub fn to_232_u64(&self) -> Ret<u64> {
+        u64::try_from(self.to_unit_u128(UNIT_SHUO)?)
+            .map_err(|_| sys::Error::fault(format!("amount {} overflow unit232 u64", self)))
+    }
+
+    pub fn to_232_u128(&self) -> Ret<u128> {
+        self.to_unit_u128(UNIT_SHUO)
+    }
+
+    /// Whether `to_unit_u128(base_unit)` is lossless for this amount: true when
+    /// the amount carries no precision below `base_unit`. Decoded wire amounts
+    /// are not canonicalized (`10:239` stays as-is), so this is a numeric test,
+    /// not `unit >= base_unit` — `10:239` is exactly 1 zhu and returns true.
+    pub fn is_exact_unit(&self, base_unit: u8) -> Ret<bool> {
+        if self.is_negative() {
+            return errf!("amount {} cannot be negative", self);
+        }
+        if self.is_zero() || self.unit >= base_unit {
+            return Ok(true);
+        }
+        let k = (base_unit - self.unit) as usize;
+        if self.byte.len() <= size_of::<u128>() {
+            let magnitude = tail_to_u128(&self.byte, u128::MAX)?;
+            // magnitude >= 1 and < 10^39, so any 10^k with k > 38 drops digits.
+            if k > 38 {
+                return Ok(false);
+            }
+            return Ok(magnitude % 10u128.pow(k as u32) == 0);
+        }
+        let mut magnitude = self.byte.clone();
+        for _ in 0..k {
+            let (quotient, rem) = b256::divmod_u64_b256(&magnitude, 10);
+            if rem != 0 {
+                return Ok(false);
+            }
+            magnitude = quotient;
+            if magnitude.is_empty() {
+                return Ok(true);
+            }
+        }
+        Ok(true)
+    }
+
+    /// `to_unit_u128`, but refuses to drop precision: an amount carrying a
+    /// non-zero component below `base_unit` errors instead of truncating.
+    pub fn to_unit_u128_exact(&self, base_unit: u8) -> Ret<u128> {
+        if !self.is_exact_unit(base_unit)? {
+            return errf!(
+                "amount {} has precision below unit {}",
+                self.to_fin_string(),
+                base_unit
+            );
+        }
+        self.to_unit_u128(base_unit)
+    }
+
+    /// `to_unit_u128_exact` at a u64 width, matching the `to_*_u64` accessors.
+    pub fn to_unit_u64_exact(&self, base_unit: u8) -> Ret<u64> {
+        u64::try_from(self.to_unit_u128_exact(base_unit)?).map_err(|_| {
+            sys::Error::fault(format!("amount {} overflow unit u64", self))
+        })
+    }
+
+    /// `is_exact_unit` for the 1-zhu scale (UNIT_ZHU = 240 = 10⁻⁸ HAC).
+    pub fn is_exact_zhu(&self) -> Ret<bool> {
+        self.is_exact_unit(UNIT_ZHU)
+    }
+
+    pub fn to_zhu_u128_exact(&self) -> Ret<u128> {
+        self.to_unit_u128_exact(UNIT_ZHU)
+    }
+
+    pub fn to_zhu_u64_exact(&self) -> Ret<u64> {
+        self.to_unit_u64_exact(UNIT_ZHU)
+    }
+
     /// u128 value of the amount scaled to `base_unit`, identical to the BigUint
     /// path (negative values, wide quotients and scaling overflow all error).
-    fn to_unit_u128(&self, base_unit: u8) -> Ret<u128> {
+    pub fn to_unit_u128(&self, base_unit: u8) -> Ret<u128> {
         if self.is_negative() {
             return errf!("amount {} overflow unit u128", self);
         }
@@ -1152,6 +1232,12 @@ mod tests {
                 false,
             ),
             (Box::new(|a| a.to_238_u128()), UNIT_238, true),
+            (
+                Box::new(|a| a.to_232_u64().map(u128::from)),
+                UNIT_SHUO,
+                false,
+            ),
+            (Box::new(|a| a.to_232_u128()), UNIT_SHUO, true),
         ];
         for _ in 0..1500 {
             let a = random_wide_amount(&mut lcg);
@@ -1175,6 +1261,113 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// `is_exact_unit` / `to_unit_u128_exact` against the BigUint oracle: exact
+    /// at `base_unit` iff the magnitude is divisible by 10^(base_unit−unit).
+    #[test]
+    fn exact_unit_matches_oracle_for_wide() {
+        let mut lcg = Lcg(0x2468);
+        for _ in 0..2000 {
+            let a = random_wide_amount(&mut lcg);
+            let base = lcg.pick(256) as u8;
+            let expected = if a.is_negative() {
+                None
+            } else {
+                Some(oracle_magnitude(&a) % BigUint::from(10u8).pow(base as u32) == BigUint::zero())
+            };
+            let got = a.is_exact_unit(base);
+            match (&got, expected) {
+                (Ok(g), Some(e)) => assert_eq!(*g, e, "amount={a:?} base={base}"),
+                (Err(_), None) => {}
+                (Ok(g), None) => panic!("is_exact_unit Ok({g}) but oracle negative: {a:?} @{base}"),
+                (Err(e), Some(_)) => panic!("is_exact_unit Err({e}) but oracle ok: {a:?} @{base}"),
+            }
+            // strict converter: identical to the plain one exactly when exact
+            match got {
+                Ok(true) => assert_eq!(
+                    a.to_unit_u128_exact(base).ok(),
+                    a.to_unit_u128(base).ok(),
+                    "amount={a:?} base={base}"
+                ),
+                Ok(false) | Err(_) => assert!(
+                    a.to_unit_u128_exact(base).is_err(),
+                    "inexact must not convert: {a:?} @{base}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn exact_unit_rejects_sub_zhu_precision() {
+        // already at/above zhu, and a finer unit whose mantissa is exactly 1 zhu
+        let one_zhu = Amount::from("1:240").unwrap();
+        assert!(one_zhu.is_exact_unit(UNIT_ZHU).unwrap());
+        let scaled = Amount::coin_u128(10, UNIT_ZHU - 1); // 10:239 = 1 zhu
+        assert_eq!(scaled.to_zhu_u128().unwrap(), 1);
+        assert!(scaled.is_exact_unit(UNIT_ZHU).unwrap());
+        assert_eq!(scaled.to_zhu_u128_exact().unwrap(), 1);
+        // 1:239 = 10⁻⁹ HAC: truncating to zhu loses it
+        let sub = Amount::coin_u128(1, UNIT_ZHU - 1);
+        assert!(!sub.is_exact_unit(UNIT_ZHU).unwrap());
+        assert_eq!(sub.to_zhu_u128().unwrap(), 0);
+        assert!(sub.to_zhu_u128_exact().is_err());
+        // the paired shortcuts agree with the generic rows
+        assert!(one_zhu.is_exact_zhu().unwrap());
+        assert_eq!(scaled.to_zhu_u64_exact().unwrap(), 1);
+        assert!(!sub.is_exact_zhu().unwrap());
+        assert!(sub.to_zhu_u64_exact().is_err());
+        // the real custody balance shape (unit 238) is sub-zhu by construction
+        let balance = Amount::from("10008568472493552:238").unwrap();
+        assert!(balance.is_exact_unit(UNIT_238).unwrap());
+        assert!(!balance.is_exact_unit(UNIT_ZHU).unwrap());
+        // 1 HAC + 1:239 → the bridge's silent 10⁻⁹ HAC leak
+        let leak = Amount::from("1.000000001").unwrap();
+        assert_eq!(leak.unit(), UNIT_ZHU - 1);
+        assert_eq!(leak.to_zhu_u128().unwrap(), 100_000_000);
+        assert!(leak.to_zhu_u128_exact().is_err());
+        // negative amounts are not "exact", they are unanswerable
+        let neg = Amount::from("-1:240").unwrap();
+        assert!(neg.is_exact_unit(UNIT_ZHU).is_err());
+    }
+
+    #[test]
+    fn exact_unit_covers_wide_mantissa() {
+        // 10^40 (>16 bytes → b256 path) at u232 is exactly 10^24 HAC
+        let wide = Amount::from_unit_byte(UNIT_SHUO, b256::mul_pow10_b256(&[1], 40)).unwrap();
+        assert!(wide.byte().len() > 16);
+        assert!(wide.is_exact_unit(UNIT_ZHU).unwrap());
+        assert_eq!(wide.to_zhu_u128_exact().unwrap(), 10u128.pow(32));
+        // 10^40 + 1 HAC·u232 carries a 10⁻¹⁶ HAC tail: 10⁻⁸ zhu after zhu scaling
+        let mut bytes = b256::mul_pow10_b256(&[1], 40);
+        *bytes.last_mut().unwrap() |= 1;
+        let dirty = Amount::from_unit_byte(UNIT_SHUO, bytes).unwrap();
+        assert!(!dirty.is_exact_unit(UNIT_ZHU).unwrap());
+        assert_eq!(dirty.to_zhu_u128().unwrap(), 10u128.pow(32));
+        assert!(dirty.to_zhu_u128_exact().is_err());
+    }
+
+    /// Store-length invariant of the u232 fee pricing unit: 12-byte amounts cap the
+    /// mantissa at 10 bytes (< 2⁸⁰), so a balance carrying a 1-u232 tail is
+    /// writable up to ≈1.2089×10⁸ HAC. This is the hard floor of the pricing unit:
+    /// any finer pricing unit shrinks the writable per-address maximum and must
+    /// move this boundary test deliberately.
+    #[test]
+    fn store_long_boundary_at_u232_pricing_unit() {
+        // 1.2×10⁸ HAC + exactly 1 u232 → mantissa 1.2×10²⁴+1 < 2⁸⁰ → 10 bytes → stores.
+        let ok = Amount::from("120000000.0000000000000001").unwrap();
+        assert_eq!(ok.unit(), UNIT_SHUO);
+        assert_eq!(ok.to_unit_u128(UNIT_SHUO).unwrap(), 12 * 10u128.pow(23) + 1);
+        assert!(ok.check_store_long().is_ok());
+        // 1.21×10⁸ HAC + 1 u232 → mantissa ≥ 2⁸⁰ → 11 bytes → rejected.
+        let too_big = Amount::from("121000000.0000000000000001").unwrap();
+        assert_eq!(too_big.to_unit_u128(UNIT_SHUO).unwrap(), 121 * 10u128.pow(22) + 1);
+        assert!(too_big.check_store_long().is_err());
+        // exact 2⁸⁰ boundary: 2⁸⁰−1 u232 stores, 2⁸⁰ u232 does not.
+        let edge = Amount::coin_u128(2u128.pow(80) - 1, UNIT_SHUO);
+        assert!(edge.check_store_long().is_ok());
+        let edge_over = Amount::coin_u128(2u128.pow(80), UNIT_SHUO);
+        assert!(edge_over.check_store_long().is_err());
     }
 
     #[test]

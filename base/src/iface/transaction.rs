@@ -83,8 +83,43 @@ pub trait Transaction: Encode + Send + Sync + std::fmt::Debug {
     fn fee_got(&self) -> Amount {
         self.fee().clone()
     }
+    /// Fee purity in the chain pricing unit (`crate::FEE_PRICING_UNIT` = u232),
+    /// saturating to `u64::MAX`. Mempool ordering/admission view only — a whale
+    /// fee still ranks as maximally pure rather than wrapping. Consensus
+    /// protocol-fee pricing must use [`Transaction::fee_purity_checked`].
     fn fee_purity(&self) -> u64 {
         0
+    }
+    /// Fee purity explicitly in `unit` sub-units: `fee_got / billing_size`, saturated
+    /// to `u64::MAX`. Used by [`Transaction::fee_purity`] for non-type-3.
+    fn fee_purity_in(&self, unit: u8) -> u64 {
+        let Ok(size) = self.billing_size() else {
+            return 0;
+        };
+        if size == 0 {
+            return 0;
+        }
+        let fee = self.fee_got().to_unit_u128(unit).unwrap_or(u128::MAX);
+        (fee / size as u128).min(u64::MAX as u128) as u64
+    }
+    /// Unsaturated fee purity in the chain pricing unit (u232 per billing byte).
+    /// Errors instead of saturating when the quotient exceeds `u64::MAX`
+    /// (~1844 HAC/byte): that rate is not reachable with any realistic fee, and
+    /// capping would undercharge the contract protocol fee.
+    fn fee_purity_checked(&self) -> Ret<u64> {
+        let size = self.billing_size()?;
+        if size == 0 {
+            return Ok(0);
+        }
+        let fee = self.fee_got().to_unit_u128(crate::FEE_PRICING_UNIT)?;
+        let purity = fee / size as u128;
+        u64::try_from(purity).map_err(|_| {
+            sys::Error::fault(format!(
+                "tx fee purity {} overflows u64 (unit {})",
+                purity,
+                crate::FEE_PRICING_UNIT
+            ))
+        })
     }
     /// Size used for fee purity / gas price. Type3 uses canonical SignW2 size.
     fn billing_size(&self) -> Ret<usize> {

@@ -49,7 +49,7 @@ Struct: `base::EngineConfig`.
 | `fast_sync` | bool | `false` | If `true`, the node performs a fast initial sync that skips full validation of historical blocks. Set to `false` to fully validate every block since genesis. |
 | `unstable_block` | u64 | `4` | Retention / reorg window: how many recent blocks are kept in memory for replay and reorganization. Blocks older than `tip − unstable_block` are pruned from the in-memory view. |
 | `recent_blocks` | bool | `true` | Whether to retain and serve the recent-blocks view. When `false`, the recent block list is empty and is not served. |
-| `average_fee_purity` | bool | `true` | Whether the engine tracks a running average fee purity on each new head. When false, the average is reported as the local mempool minimum fee purity. |
+| `average_fee_purity` | bool | `true` | Whether the engine tracks a running average fee purity on each new head. When false, the average is reported as the local mempool minimum fee purity. Fee purity is priced in the chain pricing unit u232 (10⁻¹⁶ HAC per billing byte). |
 | `show_miner_name` | bool | `false` | If `true`, block-submission logs include the miner name / detail. |
 
 ---
@@ -116,7 +116,7 @@ Struct: `TxPoolConfig`.
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `maxs` | list of usize | `[]` | Comma-separated per-group transaction-pool capacity caps, e.g. `maxs = 2000, 100`. Applied positionally: the i-th value overrides the i-th tx-pool group's default capacity. An empty list means each group keeps its built-in default. **When `[miner].enable = false`, every group is first clamped to `10` before these overrides are applied**, so a non-mining node cannot grow an unbounded mempool. Capacity, ordering, and replacement decisions affect local retention only; a valid transaction that passes relay admission is still forwarded when it is not retained. |
-| `min_fee_purity` | u64 | `6024` | Local fee-per-byte floor for mempool admission and relay. It does not change block validity. |
+| `min_fee_purity` | u64 | `6024000000` | Local fee-per-byte floor for mempool admission and relay, in the chain pricing unit u232 (10⁻¹⁶ HAC/byte; 6,024,000,000 = the legacy 6024 u238 rate). It does not change block validity. A configured value below 10⁶ is almost certainly an old unit-238 value and triggers a startup warning. |
 
 ---
 
@@ -242,7 +242,7 @@ diamond_form = true
 
 [txpool]
 maxs =
-min_fee_purity = 6024
+min_fee_purity = 6024000000
 
 [miner]
 enable = false

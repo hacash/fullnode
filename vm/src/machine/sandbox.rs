@@ -14,11 +14,13 @@ use crate::value::{CallArgsPack, ContractAddress, Value, ValueTy, classify_call_
 
 use super::VmRequest;
 
-const SANDBOX_TX_FEE_238: u64 = 100_000;
-const SANDBOX_FUND_238: u64 = 10_000_000_000;
+// Sandbox fee/funding amounts are expressed in the chain pricing unit (u232):
+// fee 100_000 u238 ≡ 10¹¹ u232; fund 1 HAC = 10¹⁶ u232.
+const SANDBOX_TX_FEE_232: u64 = 100_000_000_000;
+const SANDBOX_FUND_232: u64 = 10_000_000_000_000_000;
 
-/// Default sandbox tx fee unit238 (for API context construction).
-pub const SANDBOX_TX_FEE: u64 = SANDBOX_TX_FEE_238;
+/// Default sandbox tx fee in the chain pricing unit (u232, for API context construction).
+pub const SANDBOX_TX_FEE: u64 = SANDBOX_TX_FEE_232;
 
 #[derive(Debug, Clone)]
 pub struct SandboxSpec {
@@ -79,7 +81,7 @@ pub fn sandbox_call(ctx: &mut dyn Context, spec: SandboxSpec) -> Ret<SandboxResu
     verify_bytecodes_with_registry(&codes, ctx.services().as_ref())
         .map_err(|e| sys::Error::from(e))?;
     let caller = spec.caller.unwrap_or_else(|| ctx.tx().main());
-    hac_add(ctx, &caller, &Amount::unit238(SANDBOX_FUND_238))?;
+    hac_add(ctx, &caller, &Amount::unit232(SANDBOX_FUND_232))?;
     ctx.gas_initialize(gas_budget)?;
     let (gas_use, ret_box) = with_exec_from(ctx, ExecFrom::Call, |ctx| {
         ctx.vm_call(VmEntry::Raw(Box::new(VmRequest::SandboxMain {

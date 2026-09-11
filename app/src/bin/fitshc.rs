@@ -31,7 +31,7 @@ fn estimate_protocol_cost_auto_with_periods(
     if charge_bytes == 0 {
         return Amount::zero();
     }
-    let mut cur = Amount::unit238(1);
+    let mut cur = Amount::unit232(1);
     let mut best_need: u128 = 0;
     for _ in 0..MAX_ITERS {
         let mut act = ContractDeploy::default();
@@ -48,6 +48,8 @@ fn estimate_protocol_cost_auto_with_periods(
         tx.gas_max = Uint1::from(8);
         tx.fill_sign_account(&acc).unwrap();
 
+        // Purity/floor in the chain pricing unit (u232 per billing byte); the
+        // protocol-cost amount is ceiled to the gas settlement unit (u238).
         let fee_purity = MAINNET_PARAMS
             .protocol
             .vm
@@ -62,7 +64,7 @@ fn estimate_protocol_cost_auto_with_periods(
         if need > best_need {
             best_need = need;
         }
-        let next = Amount::coin_u128(best_need.max(1), UNIT_238);
+        let next = base::settlement_amount(best_need.max(1));
         if next == cur {
             break;
         }
@@ -221,18 +223,23 @@ fn main() {
     });
 
     let mut action = ContractDeploy::default();
-    let protocol_cost_u238 = protocol_cost.to_238_u128().unwrap_or(0);
+    let protocol_cost_u232 = protocol_cost
+        .to_unit_u128(base::FEE_PRICING_UNIT)
+        .unwrap_or(0);
     action.protocol_cost = protocol_cost;
     action.nonce = nonce;
     action.construct_argv = argv;
     action.contract = sto;
 
     let action_body_bytes = action.encode();
+    // `protocol_cost_u232` exceeds the JSON/JS safe-integer range for realistic
+    // deploys, so it travels as a quoted decimal string alongside its unit.
     let deploy_json = json!({
         "action": hex::encode(&action_body_bytes),
         "storage_periods": periods,
         "storage_full_periods": full_periods,
-        "protocol_cost_u238": protocol_cost_u238,
+        "fee_pricing_unit": base::FEE_PRICING_UNIT,
+        "protocol_cost_u232": protocol_cost_u232.to_string(),
         "protocol_cost_basis": if periods >= full_periods {
             "full_price"
         } else {

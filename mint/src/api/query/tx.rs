@@ -147,8 +147,9 @@ pub(crate) fn submit_transaction_handler(ctx: &ApiExecCtx, req: ApiRequest) -> A
     let min_purity = ctx.node.txpool().min_fee_purity();
     if pkg.fee_purity() < min_purity {
         return api_error(&format!(
-            "The transaction fee purity {} is too low, the node minimum configuration is {}.",
+            "The transaction fee purity {} (unit {}) is too low, the node minimum configuration is {}.",
             pkg.fee_purity(),
+            base::FEE_PRICING_UNIT,
             min_purity
         ));
     }

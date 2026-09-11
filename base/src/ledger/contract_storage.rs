@@ -585,7 +585,8 @@ mod tests {
     }
 
     /// Mainnet-shaped profile from §3.1 with H0 = 10_000 so tests can cheaply
-    /// climb over the whole activation period.
+    /// climb over the whole activation period. Fee purity floor in the chain
+    /// pricing unit (u232): 5×10¹⁰ = the legacy 50,000 u238/byte equivalent.
     fn mainnet_like_params() -> VmExecutionParams {
         VmExecutionParams {
             contract_store_perm_periods: 10_000,
@@ -598,7 +599,7 @@ mod tests {
                 max_block_discount_bytes: 16_384,
                 supplement_schedule: &[(10_000, 1_000)],
             },
-            initial_fee_purity_floor: 50_000,
+            initial_fee_purity_floor: 50_000_000_000,
             fee_purity_reductions: &[],
             gas_budget_lookup: &GAS_BUDGET_LOOKUP_NONE,
             tx_gas_budget_cap_byte: 0,
@@ -1085,23 +1086,44 @@ mod tests {
         let height = 10_002;
         let charge = 10_000u64;
         let q = contract_storage_fee_quote(&tip, &vp, height, charge).unwrap();
-        // full price: 50,000 u238/byte × 10,000 bytes × 10,000 periods
-        assert_eq!(q.floor_purity, 50_000);
-        assert_eq!(q.full_u238, 50_000u128 * 10_000 * 10_000);
+        // full price: 5×10¹⁰ u232/byte × 10,000 bytes × 10,000 periods
+        assert_eq!(q.floor_purity, 50_000_000_000);
+        assert_eq!(q.full_u232, 50_000_000_000u128 * 10_000 * 10_000);
         // discount at the head remaining 1000 bytes: step = ceil(1000·999k/1M) = 999
         // → periods = step × P_min = 9,990 (near full, budget nearly drained)
         let p = vp.contract_storage_fee
             .discount_periods(1_000, 1_000_000, 10_000)
             .unwrap();
         assert_eq!(p, 9_990);
-        assert_eq!(q.discount_u238, Some(50_000u128 * 10_000 * p as u128));
+        assert_eq!(
+            q.discount_u232,
+            Some(50_000_000_000u128 * 10_000 * p as u128)
+        );
         // the full-budget activation head quotes the 10-period floor discount
         let q_full = contract_storage_fee_quote(&full_tip, &vp, 10_001, charge).unwrap();
-        assert_eq!(q_full.discount_u238, Some(50_000u128 * 10_000 * 10));
+        assert_eq!(
+            q_full.discount_u232,
+            Some(50_000_000_000u128 * 10_000 * 10)
+        );
         // pre-activation heights quote full price only
         let q_off = contract_storage_fee_quote(&tip, &vp, 9_999, charge).unwrap();
-        assert_eq!(q_off.discount_u238, None);
-        assert_eq!(q_off.full_u238, q.full_u238);
+        assert_eq!(q_off.discount_u232, None);
+        assert_eq!(q_off.full_u232, q.full_u232);
+    }
+
+    #[test]
+    fn quote_ceils_sub_u238_pricing_up_to_one_u238() {
+        let root = root();
+        let mut vp = mainnet_like_params();
+        // 1 u232/byte: 1 byte × 10_000 periods = 10_000 u232 < 1 u238.
+        vp.initial_fee_purity_floor = 1;
+        let full_tip = execute_block_lifecycle(&root, 10_000, &vp, &[]);
+        let q = contract_storage_fee_quote(&full_tip, &vp, 10_001, 1).unwrap();
+        assert_eq!(q.floor_purity, 1);
+        // ceil to 1 u238, expressed back in u232.
+        assert_eq!(q.full_u232, crate::SETTLEMENT_SCALE);
+        // full-budget discount: 1 × 1 × 10 periods = 10 u232 → same 1 u238.
+        assert_eq!(q.discount_u232, Some(crate::SETTLEMENT_SCALE));
     }
 
     #[test]
@@ -1135,15 +1157,18 @@ mod tests {
 }
 
 /// Floor-basis two-tier fee quote for `charge_bytes` at `height` (§8.D). Amounts are
-/// in u238 units priced at the consensus fee-purity floor; any actual transaction
-/// purity above the floor scales both figures linearly (§3.4), so a wallet pays at
-/// least `full_u238` for guaranteed inclusion and at least `discount_u238` when it
-/// accepts discount-classification under quota competition.
+/// the consensus minimum: priced in u232 then ceiled to the gas settlement unit
+/// (u238) and expressed back in u232 (`ceil(v/10⁶)×10⁶`) so they match
+/// `settlement_amount`. Priced at the consensus fee-purity floor; any actual
+/// transaction purity above the floor scales both figures linearly (§3.4), so a
+/// wallet pays at least `full_u232` for guaranteed inclusion and at least
+/// `discount_u232` when it accepts discount-classification under quota competition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContractStorageFeeQuote {
+    /// Floor purity in the pricing unit (u232 per billing byte).
     pub floor_purity: u64,
-    pub full_u238: u128,
-    pub discount_u238: Option<u128>,
+    pub full_u232: u128,
+    pub discount_u232: Option<u128>,
 }
 
 /// State-aware quote over a settled head read. `enabled=false` profiles (and
@@ -1158,21 +1183,25 @@ pub fn contract_storage_fee_quote(
     let floor = u128::from(vp.effective_fee_purity(height, 0));
     let bytes = u128::from(charge_bytes);
     let scale = |periods: u64| -> Ret<u128> {
-        floor
+        let v = floor
             .checked_mul(bytes)
             .and_then(|v| v.checked_mul(u128::from(periods)))
+            .ok_or_else(|| budget_fatal("storage fee quote overflow"))?;
+        // Same ceil-to-238 as the consensus minimum, expressed back in u232.
+        crate::ceil_pricing_to_settlement(v)
+            .checked_mul(crate::SETTLEMENT_SCALE)
             .ok_or_else(|| budget_fatal("storage fee quote overflow"))
     };
-    let full_u238 = scale(facts.max_periods)?;
-    let discount_u238 = if facts.enabled {
+    let full_u232 = scale(facts.max_periods)?;
+    let discount_u232 = if facts.enabled {
         Some(scale(facts.periods)?)
     } else {
         None
     };
     Ok(ContractStorageFeeQuote {
         floor_purity: u64::try_from(floor).unwrap_or(u64::MAX),
-        full_u238,
-        discount_u238,
+        full_u232,
+        discount_u232,
     })
 }
 
@@ -1187,7 +1216,7 @@ mod economic_sim_tests {
     use crate::{CONTRACT_STORAGE_RULE_V1, ContractStorageFeeParams, GAS_BUDGET_LOOKUP_NONE};
 
     /// Mainnet-like model profile (§3.1): C=1,000,000; R=1,000; T=1,000; K=16,384.
-    /// Purity floor 50,000 u238/byte; 1 HAC = 10^10 u238 (§3.4).
+    /// Purity floor 5×10¹⁰ u232/byte; 1 HAC = 10^16 u232 (§3.4).
     fn model() -> (VmExecutionParams, ContractStorageFeeParams) {
         let vp = VmExecutionParams {
             contract_store_perm_periods: 10_000,
@@ -1200,7 +1229,7 @@ mod economic_sim_tests {
                 max_block_discount_bytes: 16_384,
                 supplement_schedule: &[(784_000, 1_000)],
             },
-            initial_fee_purity_floor: 50_000,
+            initial_fee_purity_floor: 50_000_000_000,
             fee_purity_reductions: &[],
             gas_budget_lookup: &GAS_BUDGET_LOOKUP_NONE,
             tx_gas_budget_cap_byte: 0,
@@ -1220,9 +1249,9 @@ mod economic_sim_tests {
         storage.discount_periods(b, 1_000_000, P_MAX).unwrap()
     }
 
-    /// HAC burned (u238) for `charge_bytes` at `periods` on the 50k purity floor.
+    /// Price burned (u232) for `charge_bytes` at `periods` on the 5×10¹⁰ purity floor.
     fn burn(charge: u128, periods: u64) -> u128 {
-        50_000u128 * charge * periods as u128
+        50_000_000_000u128 * charge * periods as u128
     }
 
     /// Simulate the attacker's sustained small-edit drain and measure the economics.

@@ -6,4 +6,3 @@ edition.workspace = true
 [dependencies]
 base = { path = "../base", default-features = false }
 field = { workspace = true, default-features = false }
-sha3 = "0.10"
