@@ -203,9 +203,12 @@ pub fn insert_block(
     // Fix the commit plan before the side body write: `inserting` is held, so
     // the head cannot change and this comparison agrees with the attach below.
     let plan_head = eng.tree.head_fork_choice() < fork_choice;
-    let Some((chunk, parent_state)) = eng
+    // Pin the durable root captured with the parent: fast sync commits root
+    // rolls on the persistence thread while this block executes, and dropping
+    // the old root would free the weak parent chain `parent_state` reads through.
+    let Some((chunk, parent_state, _root_pin)) = eng
         .tree
-        .begin_block_execution(&prev_hash, pkg.block_ref(), fork_choice)
+        .begin_block_execution_pinned(&prev_hash, pkg.block_ref(), fork_choice)
         .map_err(tree_fatal)?
     else {
         return Ok(ApplyResult::Orphan(prev_hash));

@@ -282,9 +282,9 @@ fn replay_side(eng: &ChainEngine, hashes: &[Hash]) -> sys::Ret<()> {
         let Some((_, _, fork_choice)) = crate::apply::resolve_fork_choice(eng, &pkg)? else {
             return errf!("block {:?}: parent is not in the recovered tree", hash);
         };
-        let Some((chunk, _)) =
-            eng.tree
-                .begin_block_execution(&prev_hash, pkg.block_ref(), fork_choice)?
+        let Some((chunk, _parent, _root_pin)) = eng
+            .tree
+            .begin_block_execution_pinned(&prev_hash, pkg.block_ref(), fork_choice)?
         else {
             return errf!("block {:?}: parent is not in the recovered tree", hash);
         };

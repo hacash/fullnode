@@ -377,12 +377,32 @@ impl Tree {
 
     /// Construct a block execution chunk from a parent and its matching state
     /// view captured under one tree lock.
+    ///
+    /// The parent is only weakly linked, so the live apply path must use
+    /// [`Self::begin_block_execution_pinned`]; otherwise a concurrent fast-sync
+    /// root roll frees the chain under the reader.
     pub fn begin_block_execution(
         &self,
         parent_hash: &Hash,
         block: BlockRef,
         fork_choice: ForkChoiceKey,
     ) -> Ret<Option<(StateChunkRef, StateChunkRef)>> {
+        Ok(self
+            .begin_block_execution_pinned(parent_hash, block, fork_choice)?
+            .map(|(chunk, parent, _root_pin)| (chunk, parent)))
+    }
+
+    /// [`Self::begin_block_execution`] plus the durable root captured under the
+    /// same lock. The caller must hold the returned pin across execution and
+    /// attach: fast sync commits root rolls on the persistence thread while
+    /// later blocks still execute, and dropping the old root frees the weak
+    /// parent chain the execution reads through ("state chunk parent expired").
+    pub fn begin_block_execution_pinned(
+        &self,
+        parent_hash: &Hash,
+        block: BlockRef,
+        fork_choice: ForkChoiceKey,
+    ) -> Ret<Option<(StateChunkRef, StateChunkRef, StateChunkRef)>> {
         let inner = self.lock();
         let Some(parent) = inner.find(parent_hash) else {
             return Ok(None);
@@ -404,7 +424,7 @@ impl Tree {
             );
         }
         let chunk = StateChunkRef::block_exec_on(&parent, block, fork_choice)?;
-        Ok(Some((chunk, parent)))
+        Ok(Some((chunk, parent, inner.root.clone())))
     }
 
     /// Branch metadata and state captured under one tree lock.
@@ -1249,6 +1269,40 @@ mod tests {
         assert_eq!(tip.get(b"side").unwrap(), Some(b"value".to_vec()));
         drop(root_pin);
         assert!(tip.parent().is_none());
+    }
+
+    #[test]
+    fn execution_pin_keeps_a_rolled_parent_chain_readable() {
+        let t = tree();
+        attach(&t, hash(0), hash(1), 1, key(10), None, 1);
+        attach(
+            &t,
+            hash(0),
+            hash(9),
+            1,
+            key(5),
+            Some((b"side", b"value")),
+            1,
+        );
+        // A lagging fast-sync execution captures the side parent and the
+        // durable root pin before the canonical root rolls forward.
+        let (_chunk, parent, root_pin) = t
+            .begin_block_execution_pinned(&hash(9), block(2, hash(8), hash(9)), key(6))
+            .unwrap()
+            .unwrap();
+
+        let roll = attach(&t, hash(1), hash(2), 2, key(20), None, 1)
+            .roll
+            .unwrap();
+        t.commit_roll(&roll).unwrap();
+        assert!(!t.contains(&hash(9)));
+
+        // Holding the pin keeps the parent's weak chain alive; reads fall
+        // through to the old root instead of panicking on an expired parent.
+        assert!(parent.parent().is_some(), "root pin must hold the chain");
+        assert!(parent.get(b"missing").unwrap().is_none());
+        drop(root_pin);
+        assert!(parent.parent().is_none());
     }
 
     #[test]
