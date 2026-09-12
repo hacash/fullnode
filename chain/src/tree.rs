@@ -381,6 +381,7 @@ impl Tree {
     /// The parent is only weakly linked, so the live apply path must use
     /// [`Self::begin_block_execution_pinned`]; otherwise a concurrent fast-sync
     /// root roll frees the chain under the reader.
+    #[cfg(test)]
     pub fn begin_block_execution(
         &self,
         parent_hash: &Hash,
