@@ -1,0 +1,17 @@
+[package]
+name = "testkit"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+sys = { workspace = true }
+field = { workspace = true }
+base = { workspace = true }
+protocol = { workspace = true }
+vm = { workspace = true }
+mint = { workspace = true }
+chain = { workspace = true }
+app = { workspace = true }
+x16rs = { workspace = true }
+hex = "0.4"

@@ -139,6 +139,180 @@ fn peer_ip_from_req(req: &ApiRequest) -> Option<String> {
     req.peer_ip.map(|ip| ip.to_string())
 }
 
+fn simulation_error(message: &str) -> ApiResponse {
+    ApiResponse::json(format!(
+        r#"{{"ret":1,"success":false,"err":{},"error":{}}}"#,
+        json_string(message),
+        json_string(message)
+    ))
+}
+
+fn simulation_hex_body(body: &[u8]) -> Ret<Vec<u8>> {
+    // The canonical request body is the wire transaction bytes. For tooling
+    // compatibility also accept a hex body or {"hex":"..."} wrapper.
+    let text = std::str::from_utf8(body).ok().map(str::trim);
+    if let Some(text) = text {
+        if text.is_empty() {
+            return Err(sys::Error::fault("simulation transaction body is empty"));
+        }
+        let hex_text = if text.starts_with('{') {
+            let marker = text
+                .find("\"hex\"")
+                .ok_or_else(|| sys::Error::fault("simulation JSON requires a hex field"))?;
+            let after = &text[marker + 5..];
+            let colon = after
+                .find(':')
+                .ok_or_else(|| sys::Error::fault("simulation JSON hex field is invalid"))?;
+            let value = after[colon + 1..].trim();
+            let value = value
+                .strip_prefix('"')
+                .and_then(|v| v.split_once('"').map(|(v, _)| v))
+                .ok_or_else(|| sys::Error::fault("simulation JSON hex field is invalid"))?;
+            Some(value)
+        } else if text.starts_with("0x") || text.bytes().all(|b| b.is_ascii_hexdigit()) {
+            Some(text)
+        } else {
+            None
+        };
+        if let Some(hex_text) = hex_text {
+            return hex::decode(hex_text.trim_start_matches("0x"))
+                .map_err(|_| sys::Error::fault("simulation transaction hex is invalid"));
+        }
+    }
+    if body.is_empty() {
+        return Err(sys::Error::fault("simulation transaction body is empty"));
+    }
+    Ok(body.to_vec())
+}
+
+fn transaction_simulate(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResponse {
+    let permit = match ctx.sandbox_limiter.acquire(peer_ip_from_req(&req)) {
+        Ok(permit) => permit,
+        Err(reason) => return simulation_error(reason),
+    };
+    let services = ctx.engine.services().clone();
+    let raw = match simulation_hex_body(&req.body) {
+        Ok(raw) => raw,
+        Err(error) => return simulation_error(&error.to_string()),
+    };
+    let tx = match services.decode_transaction_exact(&raw) {
+        Ok(tx) => tx,
+        Err(error) => return simulation_error(&format!("transaction decode failed: {}", error)),
+    };
+    if tx.ty() < 3 {
+        return simulation_error("simulation requires a type3 transaction");
+    }
+    if let Err(error) = tx.verify_signature() {
+        return simulation_error(&format!("transaction signature invalid: {}", error));
+    }
+
+    let mut call = None;
+    for action in tx.actions() {
+        if let Some(maincall) = action
+            .as_any()
+            .downcast_ref::<crate::action::ContractMainCall>()
+        {
+            call = Some(maincall);
+            break;
+        }
+    }
+    let Some(call) = call else {
+        return simulation_error("simulation requires a ContractMainCall action");
+    };
+    let codeconf = match CodeConf::parse(call.codeconf.uint()) {
+        Ok(codeconf) => codeconf,
+        Err(error) => return simulation_error(&error.to_string()),
+    };
+
+    let Some(snapshot) = (match ctx.engine.optimistic_canonical() {
+        Ok(snapshot) => snapshot,
+        Err(error) => return api_state_read_error(&error),
+    }) else {
+        return simulation_error("state changed during transaction simulation");
+    };
+    let start_epoch = snapshot.epoch;
+    let height = snapshot.head_height.saturating_add(1);
+    let caller = tx.main();
+    let mut env = Env::default();
+    env.chain.id = ctx.engine.consensus().chain_id();
+    env.chain.consensus_flags = ctx.engine.consensus().chain_flags(height);
+    env.block = BlockInfo {
+        height,
+        hash: Hash::default(),
+        author: ctx.engine.block_producer().external_exec_author(),
+    };
+    env.tx = TxInfo {
+        ty: tx.ty(),
+        main: caller,
+        addrs: tx.addrs(),
+        fee: tx.fee().clone(),
+    };
+
+    let chunk = snapshot.begin_tx(tx.hash());
+    let mut ctxobj = match services.clone().create_context(env, chunk, tx.clone()) {
+        Ok(ctxobj) => ctxobj,
+        Err(error) => return simulation_error(&format!("simulation context failed: {}", error)),
+    };
+    let (gas_extra, space_cap) = crate::peek_vm_runtime_limits(ctxobj.as_mut(), height);
+    if let Err(error) = crate::contract::convert_and_check(
+        &space_cap,
+        &gas_extra,
+        codeconf.code_type(),
+        call.codes.as_vec(),
+        height,
+        services.as_ref(),
+    ) {
+        return simulation_error(&error.to_string());
+    }
+
+    let params = match services.vm_params() {
+        Ok(params) => params,
+        Err(error) => return simulation_error(&error.to_string()),
+    };
+    let requested_byte = req
+        .query("gas_max")
+        .and_then(|value| value.parse::<u8>().ok())
+        .or_else(|| tx.gas_max_byte())
+        .unwrap_or(params.tx_gas_budget_cap_byte);
+    let gas_byte = requested_byte.min(params.tx_gas_budget_cap_byte);
+    if gas_byte == 0 {
+        return simulation_error("simulation gas_max is zero");
+    }
+    if let Err(error) = ctxobj.gas_initialize(params.decode_gas_budget(gas_byte)) {
+        return simulation_error(&format!("simulation gas initialization failed: {}", error));
+    }
+    if let Some(vm) = ctxobj.vm_peek() {
+        vm.set_deadline(Some(permit.deadline()));
+    }
+    if let Err(reason) = permit.check_deadline() {
+        return simulation_error(reason);
+    }
+    let (gas_use, ret_val) = match crate::main_call(
+        ctxobj.as_mut(),
+        codeconf.code_type(),
+        std::sync::Arc::from(call.codes.to_vec()),
+    ) {
+        Ok(result) => result,
+        Err(error) => return simulation_error(&error.to_string()),
+    };
+    if let Err(reason) = permit.check_deadline() {
+        return simulation_error(reason);
+    }
+    if !ctx.engine.validate_optimistic(start_epoch) {
+        return simulation_error("state changed during transaction simulation");
+    }
+    ApiResponse::json(format!(
+        r#"{{"ret":0,"success":true,"use_gas":{},"gas_used":{},"gas_use":{{"compute":{},"resource":{},"storage":{}}},"ret_val":{},"return_value":{}}}"#,
+        gas_use.total(),
+        gas_use.total(),
+        gas_use.compute,
+        gas_use.resource,
+        gas_use.storage,
+        ret_val.to_debug_json(),
+        ret_val.to_json(),
+    ))
+}
+
 fn contract_sandbox_call(
     ctx: &ApiExecCtx,
     req: ApiRequest,
@@ -409,6 +583,9 @@ impl ApiService for VmApi {
             ApiRoute::get("/query/contract/sandboxcall", move |ctx, req| {
                 contract_sandbox_call(ctx, req, tx_creator.as_ref())
             }),
+            ApiRoute::post("/query/transaction/simulate", transaction_simulate),
+            ApiRoute::post("/query/vm/estimate_gas", transaction_simulate),
+            ApiRoute::post("/query/vm/simulate", transaction_simulate),
             ApiRoute::get("/query/contract/logs", vm_logs_read),
             ApiRoute::get("/operate/contract/logs/delete", move |ctx, req| {
                 vm_logs_delete(ctx, req, &log_delete_auth_hash)
@@ -424,4 +601,27 @@ pub fn api_services(
     log_delete_auth_hash: String,
 ) -> Vec<Arc<dyn ApiService>> {
     vec![Arc::new(VmApi::new(tx_creator, log_delete_auth_hash))]
+}
+
+#[cfg(test)]
+mod simulation_request_tests {
+    use super::simulation_hex_body;
+
+    #[test]
+    fn simulation_accepts_hex_and_json_wrappers() {
+        assert_eq!(
+            simulation_hex_body(b"0xdeadbeef").unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
+        assert_eq!(
+            simulation_hex_body(br#"{"hex":"deadbeef"}"#).unwrap(),
+            vec![0xde, 0xad, 0xbe, 0xef]
+        );
+    }
+
+    #[test]
+    fn simulation_rejects_empty_or_malformed_hex() {
+        assert!(simulation_hex_body(b"").is_err());
+        assert!(simulation_hex_body(br#"{"hex":"not-hex"}"#).is_err());
+    }
 }

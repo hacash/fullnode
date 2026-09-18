@@ -3,6 +3,13 @@ name = "chain"
 version.workspace = true
 edition.workspace = true
 
+[features]
+# Allow a block to share its parent's timestamp second, so a test or side chain
+# can produce many blocks per second (the old fullnodedev build only allowed
+# this under `debug_assertions`). Weakens block timestamp ordering: mainnet
+# builds must not enable it.
+fast-same-second-blocks = []
+
 [dependencies]
 sys = { workspace = true }
 field = { workspace = true }

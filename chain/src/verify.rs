@@ -63,6 +63,18 @@ pub fn verify_block(eng: &ChainEngine, pkg: &BlkPkg, prev: &dyn Block) -> Rerr {
             now
         );
     }
+    // A test/side chain that packs many blocks into one second allows a block to
+    // share its parent's timestamp (`chain/fast-same-second-blocks`); otherwise a
+    // block must be strictly later than its parent.
+    #[cfg(feature = "fast-same-second-blocks")]
+    if blk.timestamp() < prev.timestamp() {
+        return errf!(
+            "block timestamp {} must not precede parent timestamp {}",
+            blk.timestamp(),
+            prev.timestamp()
+        );
+    }
+    #[cfg(not(feature = "fast-same-second-blocks"))]
     if blk.timestamp() <= prev.timestamp() {
         return errf!(
             "block timestamp {} must be later than parent timestamp {}",

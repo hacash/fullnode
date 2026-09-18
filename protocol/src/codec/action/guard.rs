@@ -1,4 +1,5 @@
-//! ChainAllow / HeightScope / BalanceFloor / RequiredSigners guard actions.
+//! ChainAllow / HeightScope / BalanceFloor / RequiredSigners guard actions, plus the
+//! guard-scoped payload carriers (Message / Blob) which impose no constraint.
 
 #[cfg(test)]
 use std::sync::Arc;
@@ -7,6 +8,7 @@ use base::{AddrOrPtr, Transaction};
 use field::{Amount, AssetAmtW1, BlockHeight, ChainIDList, DiamondNumber, ListW2, Satoshi, Uint2};
 use sys::{errf, Rerr, Ret};
 
+use super::blob::{Blob, Message};
 use super::transfer::addr_or_ptr_readable;
 
 base::action_simple! { ChainAllow, 0x0411, 2, GUARD, {
@@ -311,6 +313,13 @@ pub fn guard_facts(tx: &dyn Transaction) -> GuardFacts {
                     }
                 }
             }
+            // `tx_message` / `tx_blob` share the GUARD scope because they are transaction-level
+            // attachments (never CALL actions), but they constrain nothing: the payload is a byte
+            // blob the reviewer displays verbatim, so there is no fact to intersect. Named
+            // explicitly so the catch-all below cannot report a payload carrier as a violation —
+            // otherwise every bridge deposit (which by protocol must carry a `tx_message`) reads
+            // as `protocol_valid: false`, and anything gating on that fact refuses it.
+            Message::KIND | Blob::KIND => {}
             kind if action.scope().is_guard() => {
                 push_guard_note(
                     &mut facts,
@@ -334,7 +343,7 @@ pub fn guard_facts(tx: &dyn Transaction) -> GuardFacts {
 mod tests {
     use super::*;
     use crate::codec::tx::StdTransaction;
-    use field::{Amount, BlockHeight, ChainIDList, DiamondNumber, Satoshi, Uint4};
+    use field::{Amount, BlockHeight, BytesW1, BytesW2, ChainIDList, DiamondNumber, Satoshi, Uint4};
 
     fn main_address() -> field::Address {
         let account = sys::Account::create_by("123456").unwrap();
@@ -383,6 +392,30 @@ mod tests {
         assert_eq!(facts.chains, Some(vec![1]));
         assert_eq!(facts.height_range, Some((100, 200)));
         assert!(facts.action_notes.is_empty(), "{:?}", facts.action_notes);
+    }
+
+    /// Payload carriers are guard-scoped but constrain nothing, so they must stay fact-free:
+    /// a note here sets the action's `protocol_valid` false, which marks every bridge deposit
+    /// (protocol-mandated to carry a `tx_message`) as protocol-invalid to any reviewer.
+    #[test]
+    fn guard_facts_treat_payload_carriers_as_constraint_free() {
+        let mut tx = sample_tx();
+        tx.push_action_in(Arc::new(Message::new(
+            BytesW1::from(b"HBD1 deposit carrier".to_vec()).unwrap(),
+        )));
+        tx.push_action_in(Arc::new(Blob::new(
+            BytesW2::from(vec![0x5a; 64]).unwrap(),
+        )));
+
+        let facts = guard_facts(&tx);
+        assert!(
+            facts.protocol_violations.is_empty(),
+            "{:?}",
+            facts.protocol_violations
+        );
+        assert!(facts.action_notes.is_empty(), "{:?}", facts.action_notes);
+        assert_eq!(facts.chains, None);
+        assert_eq!(facts.height_range, None);
     }
 
     /// ChainAllow intersection and conflicting pairs are the same analysis the

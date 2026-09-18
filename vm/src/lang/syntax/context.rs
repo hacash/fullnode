@@ -113,7 +113,12 @@ impl Syntax {
         value: Box<dyn IRNode>,
         kind: SlotKind,
     ) -> Ret<Box<dyn IRNode>> {
-        let idx = idx.unwrap_or(self.local_alloc);
+        // `var $n = value` (decompiled, no sourcemap) has no second `$n`
+        // token; the name itself is the slot alias and must bind that index
+        // rather than `local_alloc`.
+        let idx = idx
+            .or_else(|| Self::parse_slot_alias(&name))
+            .unwrap_or(self.local_alloc);
         self.bind_slot(name, idx, kind)?;
         Ok(push_single_p1(Bytecode::PUT, idx, value))
     }

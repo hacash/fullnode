@@ -1,17 +1,19 @@
 //! TexCellExecute (kind 22) and TEX cell codecs.
 
-#[cfg(feature = "execute")]
 use field::Hash;
 use field::{
     json_decode_value, json_split_object, Address, AssetAmt, BlockHeight, Decode,
     DiamondNameListMax200, DiamondNumber, Encode, Fold64, FromJSON, ListW1, Sign, Uint4,
 };
-use sys::{errf, Ret};
+use sys::{Account, errf, Ret};
 
 macro_rules! define_tex_cells {
     ($( $variant:ident = $id:literal { $field:ident : $ty:ty } asset=$asset:literal ),+ $(,)?) => {
         #[derive(Debug, Clone)]
-        pub(crate) enum TexCell {
+        /// One TEX settlement or condition cell. This is public so trusted
+        /// wallet/test tooling can assemble a signed `TexCellExecute` without
+        /// relying on wire-format internals.
+        pub enum TexCell {
             $( $variant { $field: $ty } ),+
         }
 
@@ -165,12 +167,26 @@ impl TexCellExecute {
         self.cells.iter().any(|c| c.is_asset_transfer())
     }
 
-    #[cfg(feature = "execute")]
     pub(crate) fn get_sign_stuff(&self) -> Hash {
         let mut stf = Vec::with_capacity(self.addr.size() + self.cells.size());
         self.addr.encode_to(&mut stf);
         self.cells.encode_to(&mut stf);
         Hash::from(sys::calculate_hash(stf))
+    }
+
+    /// Build and sign a TEX bundle. The signature covers exactly `addr` and
+    /// the encoded cells, matching consensus verification; the transaction
+    /// envelope is intentionally not part of this replayable bundle.
+    pub fn create_signed(addr: Address, cells: Vec<TexCell>, account: &Account) -> Ret<Self> {
+        account.check_addr(addr.as_bytes())?;
+        let mut action = Self {
+            kind: field::Uint2::from(Self::KIND),
+            addr,
+            cells: ListW1::from(cells)?,
+            sign: Sign::default(),
+        };
+        action.sign = Sign::create_by(account, &action.get_sign_stuff());
+        Ok(action)
     }
 }
 
@@ -210,6 +226,26 @@ mod tests {
             .unwrap(),
             sign: sample_sign(),
         }
+    }
+
+    #[test]
+    fn create_signed_builds_a_verifiable_replayable_bundle() {
+        let account = sys::Account::create_by_password("tex signed builder").unwrap();
+        let addr = Address::from(*account.address());
+        let action = TexCellExecute::create_signed(
+            addr,
+            vec![TexCell::ZhuPay {
+                haczhu: Fold64::from(1).unwrap(),
+            }],
+            &account,
+        )
+        .unwrap();
+        let digest = action.get_sign_stuff();
+        assert!(sys::Account::verify_signature(
+            &digest.0,
+            &action.sign.publickey,
+            &action.sign.signature,
+        ));
     }
 
     #[test]

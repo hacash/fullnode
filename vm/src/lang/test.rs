@@ -419,7 +419,7 @@ mod token_t {
     #[test]
     fn test_codecall_with_argument_emits_argument_push_before_opcode() {
         use super::lang_to_bytecode;
-        use crate::rt::{Bytecode, verify_bytecodes};
+        use crate::rt::{verify_bytecodes, Bytecode};
 
         let codes = lang_to_bytecode("codecall 1.0x01020304(7)").expect("compile failed");
         let marks = verify_bytecodes(&codes).expect("verify failed");
@@ -655,7 +655,7 @@ mod token_t {
     }
 
     fn collect_user_call_opcodes(codes: &[u8]) -> Vec<u8> {
-        use crate::rt::{Bytecode, verify_bytecodes};
+        use crate::rt::{verify_bytecodes, Bytecode};
 
         verify_bytecodes(codes)
             .unwrap()
@@ -930,9 +930,9 @@ mod token_t {
 
     #[test]
     fn test_simplify_numeric_as_suffix_option_off_uses_as_cast() {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let script = "var x = 100u64";
         let ir = lang_to_irnode(script).expect("Failed to compile");
@@ -956,9 +956,9 @@ mod token_t {
 
     #[test]
     fn test_hide_default_call_argv_keeps_explicit_empty_bytes_for_ntfunc() {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return sha2(\"\")").expect("Failed to compile");
         let mut opt = PrintOption::new("  ", 0);
@@ -978,9 +978,9 @@ mod token_t {
 
     #[test]
     fn test_keccak256_roundtrips_as_single_arg_ntfunc() {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return keccak256(\"abc\")").expect("Failed to compile");
         let decompiled = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
@@ -993,9 +993,9 @@ mod token_t {
 
     #[test]
     fn test_blake2s256_roundtrips_as_single_arg_ntfunc() {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return blake2s256(\"abc\")").expect("Failed to compile");
         let decompiled = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
@@ -1008,9 +1008,9 @@ mod token_t {
 
     #[test]
     fn test_blake2b256_roundtrips_as_single_arg_ntfunc() {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return blake2b256(\"abc\")").expect("Failed to compile");
         let decompiled = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
@@ -1023,9 +1023,9 @@ mod token_t {
 
     #[test]
     fn test_hide_default_call_argv_applies_to_ntenv() {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return context_address()").expect("Failed to compile");
         let plain = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
@@ -1046,9 +1046,9 @@ mod token_t {
 
     #[test]
     fn test_hide_default_call_argv_applies_to_ntreg() {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("intent_pop()\nreturn 0").expect("Failed to compile");
         let plain = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
@@ -1069,9 +1069,9 @@ mod token_t {
 
     #[test]
     fn test_syscall_single_arg_cat_not_split() {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return sha2(\"a\" ++ \"b\")").expect("Failed to compile");
         let mut opt = PrintOption::new("  ", 0);
@@ -1151,9 +1151,9 @@ mod token_t {
 
     #[test]
     fn test_syscall_multi_arg_packed_decompiles_as_two_args() {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return pack_asset(1, 2)").expect("Failed to compile");
 
@@ -1277,10 +1277,10 @@ mod token_t {
 
     #[test]
     fn test_all_print_options_disabled_preserve_ircode_semantics() {
-        use super::Formater;
-        use super::PrintOption;
         use super::lang_to_ircode;
         use super::lang_to_irnode_with_sourcemap;
+        use super::Formater;
+        use super::PrintOption;
 
         let script = r#"
             param { amt }
@@ -1327,9 +1327,9 @@ mod token_t {
 
     #[test]
     fn patches_list_literal_roundtrips_without_flattening_concat_args() {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let ir = lang_to_irnode("return patches([0, 1, 1 as u8])").expect("compile patches");
         let mut opt = PrintOption::new("  ", 0);
@@ -1383,9 +1383,9 @@ mod token_t {
     }
 
     fn print_sigset_call(src: &str) -> String {
+        use super::lang_to_irnode;
         use super::Formater;
         use super::PrintOption;
-        use super::lang_to_irnode;
 
         let ir = lang_to_irnode(src).expect(src);
         let mut opt = PrintOption::new("  ", 0);
@@ -1496,5 +1496,48 @@ mod token_t {
             lang_to_irnode(r#"return sigset_at_least("a", "b", "c")"#).is_err(),
             "three-arg sigset_at_least must fail"
         );
+    }
+
+    #[test]
+    fn first_put_without_sourcemap_prints_single_slot_alias() {
+        use super::format_ircode_to_lang;
+        use super::lang_to_ircode;
+
+        let src = "var a = 1\nreturn a";
+        let ir = lang_to_ircode(src).expect(src);
+        let text = format_ircode_to_lang(&ir, None).expect(src);
+        assert!(
+            !text.contains("$0 $0"),
+            "decompiler must not duplicate the slot alias, got:\n{text}"
+        );
+        assert!(
+            text.contains("var $0 ="),
+            "expected `var $0 = ...`, got:\n{text}"
+        );
+        let reparsed = lang_to_ircode(&text).expect(&text);
+        assert_eq!(ir, reparsed, "decompiled:\n{text}");
+    }
+
+    #[test]
+    fn first_put_with_sourcemap_keeps_name_and_explicit_slot() {
+        use super::format_ircode_to_lang;
+        use super::lang_to_ircode_with_sourcemap;
+
+        let src = "var a = 1\nreturn a";
+        let (ir, smap) = lang_to_ircode_with_sourcemap(src).expect(src);
+        let text = format_ircode_to_lang(&ir, Some(&smap)).expect(src);
+        assert!(
+            text.contains("a $0 ="),
+            "named first-bind must keep the explicit slot, got:\n{text}"
+        );
+    }
+
+    #[test]
+    fn var_slot_alias_name_binds_that_slot() {
+        use super::lang_to_ircode;
+
+        let named = lang_to_ircode("var a $5 = 1\nreturn $5").expect("named");
+        let aliased = lang_to_ircode("var $5 = 1\nreturn $5").expect("aliased");
+        assert_eq!(named, aliased);
     }
 }

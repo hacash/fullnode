@@ -48,7 +48,12 @@ pub mod contract;
 pub mod fitshc;
 // FitSH token stream (shared with `lang`); re-exported at the root for the
 // compiler frontend (`vm::fitshc`) which imports `crate::Token::*`.
-pub use rt::{KwTy, Token};
+// These wire/tooling types are intentionally re-exported instead of exposing
+// `rt` itself: external SDKs and test chains need to construct P2SH and
+// inspect bytecode, while the VM runtime remains an internal module.
+pub use rt::{
+    Bytecode, CodeConf, CodePkg, CodeType, ItrErrCode, KwTy, Token, calc_func_sign,
+};
 // Execution engine: compiled only with `execute`. Codec stays on
 // `action` / `contract` / `rt` (wire types) / `value` (`ContractAddress`).
 #[cfg(feature = "execute")]
@@ -84,9 +89,31 @@ pub(crate) mod value;
 mod wire;
 
 #[cfg(feature = "execute")]
-pub use machine::build_call_codes;
+pub use machine::{
+    SandboxResult, SandboxSpec, build_call_codes, parse_sandbox_params, sandbox_call,
+};
 #[cfg(feature = "execute")]
 pub use machine::peek_vm_runtime_limits;
+/// Execute arbitrary main-entry code through the installed VM and preserve its
+/// return value.  This is intended for trusted in-process tooling and tests;
+/// public HTTP callers should use [`sandbox_call`] instead.
+///
+/// Unlike a `ContractMainCall` action this does not require a zero return
+/// value, so callers can inspect a program result directly.
+#[cfg(feature = "execute")]
+pub fn main_call(
+    ctx: &mut dyn base::Context,
+    code_type: CodeType,
+    codes: std::sync::Arc<[u8]>,
+) -> sys::Ret<(base::GasBuckets, Value)> {
+    let (gas_use, value) = ctx.vm_call(base::VmEntry::Raw(Box::new(
+        machine::VmRequest::SandboxMain { code_type, codes },
+    )))?;
+    let value = value
+        .downcast::<Value>()
+        .map_err(|_| sys::Error::fault("vm main call return type mismatch"))?;
+    Ok((gas_use, *value))
+}
 #[cfg(feature = "execute")]
 pub use setup::register_exec;
 #[cfg(feature = "execute")]

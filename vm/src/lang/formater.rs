@@ -1093,7 +1093,14 @@ impl<'a> Formater<'a> {
                         );
                         let name = self.slot_name_display(node.para);
                         let slot_id_str = format!("${}", node.para);
-                        format!("{} {} {}", prefix, name, slot_id_str)
+                        // Grammar is `var <name> [$slot]? = value`. Without a
+                        // sourcemap the display name is already `$n`; repeating
+                        // the slot alias would print `var $0 $0 = 1`.
+                        if name == slot_id_str {
+                            format!("{} {}", prefix, name)
+                        } else {
+                            format!("{} {} {}", prefix, name, slot_id_str)
+                        }
                     },
                     self.slot_name_display(node.para)
                 );

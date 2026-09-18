@@ -19,6 +19,7 @@ members = [
     "sdk",
     "db",
     "x16rs",
+    "testkit",
 ]
 
 default-members = [
@@ -40,6 +41,7 @@ default-members = [
     "sdk",
     "db",
     "x16rs",
+    "testkit",
 ]
 
 [workspace.package]

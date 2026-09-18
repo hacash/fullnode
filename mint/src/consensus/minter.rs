@@ -162,6 +162,21 @@ impl HacashConsensus {
         mint: MintConf,
         miner: MinerConf,
     ) -> Ret<Self> {
+        Self::with_config_and_genesis(services, mint, miner, crate::genesis::genesis_block())
+    }
+
+    /// Construct the standard consensus machinery with an explicit genesis block.
+    ///
+    /// Side and test chains can keep the standard transaction admission, packing,
+    /// difficulty, and mining behavior while supplying a chain-specific genesis.
+    /// Callers that need extra genesis-state initialization may wrap the returned
+    /// consensus and extend [`base::Consensus::initialize`].
+    pub fn with_config_and_genesis(
+        services: &dyn base::ExecutionServices,
+        mint: MintConf,
+        miner: MinerConf,
+        genesis: BlockRef,
+    ) -> Ret<Self> {
         let diamond_form_flag = protocol::execution_params(services)?.diamond_form_flag;
         // Mint parameters / reward curve come from the registered execution
         // profile (mainnet by default); a side/test chain registers its own
@@ -177,7 +192,7 @@ impl HacashConsensus {
         let diff_cfg = DifficultyConfig::from_mint_params(mint.chain_id, mint_params);
         let max_shadow = diff_cfg.difficulty_group_blocks.saturating_mul(10).max(1) as usize;
         Ok(Self {
-            genesis: crate::genesis::genesis_block(),
+            genesis,
             diamond_form_flag,
             mint_conf: mint,
             mint_params,
