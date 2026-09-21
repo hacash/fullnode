@@ -684,7 +684,7 @@ impl<'a> Formater<'a> {
         let pss = node.as_any().downcast_ref::<IRNodeParamsSingle>()?;
         if !matches!(
             code,
-            CODECALL
+            CODE_CALL
                 | CALL
                 | CALLEXT
                 | CALLEXTVIEW
@@ -701,7 +701,7 @@ impl<'a> Formater<'a> {
         let pre = self.line_prefix();
         let args = self.build_call_args(&*pss.subx, false, None);
         let use_short_syntax = self.opt.call_short_syntax && self.opt.trim_root_block;
-        if code == CODECALL && use_short_syntax {
+        if code == CODE_CALL && use_short_syntax {
             let CallSpec::Splice { lib, selector } = decode_splice_body(&pss.para).ok()? else {
                 return None;
             };
@@ -721,7 +721,7 @@ impl<'a> Formater<'a> {
             return Some(format!("{}{}", pre, body));
         }
         if code == CALL
-            || matches!(code, CODECALL | CALLSELFVIEW | CALLSELFPURE)
+            || matches!(code, CODE_CALL | CALLSELFVIEW | CALLSELFPURE)
             || !use_short_syntax
         {
             let call = decode_user_call_site(code, &pss.para).ok()?;
@@ -1313,7 +1313,7 @@ impl<'a> Formater<'a> {
             PBUF | PBUFL => {
                 buf.push_str(&self.format_data_bytes(node));
             }
-            CODECALL => match decode_splice_body(&node.para) {
+            CODE_CALL => match decode_splice_body(&node.para) {
                 Ok(CallSpec::Splice { lib, selector }) => buf.push_str(&format!(
                     "codecall {}.{}",
                     self.format_lib_chain_ref(lib),

@@ -52,8 +52,11 @@ impl GasTable {
         gst.set(6, &[CLEAR, KEYS, VALUES, TUPLE2LIST, UNPACK]);
         gst.set(8, &[CLONE, MERGE, PACKLIST, PACKMAP, PACKTUPLE]);
         gst.set(10, &[MPUT, GPUT, CALLSELF, CALLSELFVIEW, CALLSELFPURE]);
-        gst.set(12, &[MONCE, MTAKE, CALLUSEVIEW, CALLUSEPURE]);
-        gst.set(16, &[NTENV, NTCTL, NTFUNC, CALLTHIS, CALLSUPER, CODECALL]);
+        // MPATCH is the memory read-modify-write: same tier as MONCE/MTAKE, with the
+        // patch decode + sha2 work metered per byte (see `patch_bytes`).
+        gst.set(12, &[MPATCH, MONCE, MTAKE]);
+        gst.set(12, &[CALLUSEVIEW, CALLUSEPURE]);
+        gst.set(16, &[NTENV, NTCTL, NTFUNC, CALLTHIS, CALLSUPER, CODE_CALL]);
         gst.set(20, &[LOG1, CALLEXTVIEW]);
         gst.set(24, &[LOG2, CALLEXT, CALL]);
         gst.set(28, &[LOG3, ACTENV, SDEL]);
@@ -116,7 +119,8 @@ pub struct GasExtra {
     compo_item_edit_div: i64,
     compo_item_copy_div: i64,
     ntfunc_div: i64,
-    spatch_div: i64,
+    // Patch decode + sha2 work, shared by SPATCH (storage) and MPATCH (memory).
+    patch_div: i64,
     act_div: i64,
     burn_div: i64,
     rpow_exp_bit_mul: i64,
@@ -171,7 +175,7 @@ impl GasExtra {
             compo_item_read_div: 4,
             compo_item_edit_div: 2,
             compo_item_copy_div: 1,
-            spatch_div: 32,
+            patch_div: 32,
         }
     }
 
@@ -225,9 +229,10 @@ impl GasExtra {
         Self::div_op(len, self.ntfunc_div)
     }
 
+    /// Patch decode + apply + sha2 work over `expected + patch_set + final` bytes.
     #[inline(always)]
-    pub fn spatch_bytes(&self, len: usize) -> i64 {
-        Self::div_op(len, self.spatch_div)
+    pub fn patch_bytes(&self, len: usize) -> i64 {
+        Self::div_op(len, self.patch_div)
     }
 
     #[inline(always)]
@@ -353,11 +358,11 @@ mod gas_tests {
     use super::*;
 
     #[test]
-    fn spatch_bytes_uses_32_byte_divisor() {
+    fn patch_bytes_uses_32_byte_divisor() {
         let gas = GasExtra::new(0, &base::VmExecutionParams::default());
-        assert_eq!(gas.spatch_bytes(0), 0);
-        assert_eq!(gas.spatch_bytes(1), 1);
-        assert_eq!(gas.spatch_bytes(32), 1);
-        assert_eq!(gas.spatch_bytes(33), 2);
+        assert_eq!(gas.patch_bytes(0), 0);
+        assert_eq!(gas.patch_bytes(1), 1);
+        assert_eq!(gas.patch_bytes(32), 1);
+        assert_eq!(gas.patch_bytes(33), 2);
     }
 }

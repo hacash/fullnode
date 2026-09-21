@@ -448,7 +448,7 @@ fn vm_code_rejects_invalid_code_type() {
 fn vm_code_ir_fitsh_roundtrip_and_paging() {
     // Serialized IR of `let a = 1\nreturn a + 2` (precomputed; the codec-only
     // SDK build has no fitsh compiler — the decompiler is the offline view).
-    let ircode = hex::decode("7f017c0025eeb08026").unwrap();
+    let ircode = hex::decode("7f017c0025eeb07426").unwrap();
     let out = code(
         &hex::encode(&ircode),
         "1",
@@ -474,7 +474,7 @@ fn vm_code_ir_fitsh_roundtrip_and_paging() {
 
 #[test]
 fn vm_code_ir_tree_format() {
-    let ircode = hex::decode("7f017c0025eeb08026").unwrap();
+    let ircode = hex::decode("7f017c0025eeb07426").unwrap();
     let out = code(&hex::encode(&ircode), "1", Some("tree"), None, None, None).unwrap();
     assert_eq!(out.format, "tree");
     assert!(!out.text.is_empty());
@@ -483,7 +483,7 @@ fn vm_code_ir_tree_format() {
 #[test]
 fn vm_code_accepts_external_sourcemap() {
     let smap_json = r#"{"libs":[{"idx":1,"name":"lib.a","address":null}],"funcs":[],"slots":[],"lets":[],"vars":[],"params":[],"param_prelude_count":null,"consts":[]}"#;
-    let ircode = hex::decode("7f017c0025eeb08026").unwrap();
+    let ircode = hex::decode("7f017c0025eeb07426").unwrap();
     let out = code(
         &hex::encode(&ircode),
         "1",

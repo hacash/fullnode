@@ -2,12 +2,10 @@ use base::{StateLayer, StateRead, numeric_state_key, numeric_state_prefix};
 use field::*;
 use field::{Address, Hash, Uint4};
 
-use sha2::{Digest, Sha256};
-
 use crate::contract::{ContractEdition, ContractSto};
 use crate::rt::{GasExtra, ItrErr, ItrErrCode::*, MapItrStrErr, SpaceCap, VmrtErr, VmrtRes};
 use crate::space::{VolatileKvLimits, validate_scalar_payload_len};
-use crate::state::patch::decode_and_apply;
+use crate::state::patch::apply_patch_checked;
 use crate::state::status::{StatusMap, StatusSto};
 use crate::state::storage::{
     ValueSto, clamp_credit_to_cap, credit_cap_for_blocks, parse_period, period_credit,
@@ -456,20 +454,11 @@ impl<'a> VMState<'a> {
         if !old.is_active() {
             return itr_err_code!(StorageNotActive);
         }
-        let final_bytes = match (&old.data, &expected) {
-            (Value::Bytes(old_b), Value::Bytes(exp_b)) => {
-                if old_b.as_slice() != exp_b.as_slice() {
-                    return itr_err_code!(StoragePatchExpected);
-                }
-                let patch_bytes = match &patch_set {
-                    Value::Bytes(b) => b,
-                    _ => return itr_err_code!(StoragePatchInvalid),
-                };
-                decode_and_apply(old_b, patch_bytes, cap)?
-            }
-            _ => return itr_err_code!(StoragePatchInvalid),
+        let Value::Bytes(old_b) = &old.data else {
+            return itr_err_code!(StoragePatchInvalid);
         };
-        let digest = Value::Bytes(Sha256::digest(&final_bytes).to_vec());
+        let (final_bytes, digest) = apply_patch_checked(old_b, &expected, &patch_set, cap)?;
+        let digest = Value::Bytes(digest);
         let final_len = final_bytes.len();
         old.data = Value::Bytes(final_bytes);
         let (fee, rebate) = self.commit_edit(gst, cap, curhei, &sk, old)?;
@@ -659,6 +648,9 @@ fn state_del<K: Encode>(sta: &mut dyn StateLayer, idx: u8, key: &K) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Independent of `apply_patch_checked`, so the spatch digest assertions below
+    // verify the helper rather than restate it.
+    use sha2::{Digest, Sha256};
 
     /// A `StateLayer` whose reads fail, standing in for a canonical backend
     /// read error at the VM state boundary.

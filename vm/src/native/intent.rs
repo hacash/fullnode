@@ -368,8 +368,8 @@ intent_stack_fn!(call_intent_use_kind, |exec,
                                         intent_state,
                                         intents,
                                         argv| {
-    ctl_require_edit(exec, "intent_use_open")?;
-    let owner = ctl_contract_owner(bindings, "intent_use_open")?;
+    ctl_require_edit(exec, "intent_use_kind")?;
+    let owner = ctl_contract_owner(bindings, "intent_use_kind")?;
     if intent_state.len() >= cap.intent_bind_depth {
         return itr_err_fmt!(
             ItrErrCode::IntentError,
@@ -377,26 +377,26 @@ intent_stack_fn!(call_intent_use_kind, |exec,
             cap.intent_bind_depth
         );
     }
-    let kind = ctl_expect_bytes(&argv, "intent_use_open", "kind")?;
+    let kind = ctl_expect_bytes(&argv, "intent_use_kind", "kind")?;
     let ids = intents.open_ids_by_kind(&owner, &kind)?;
     let id = match ids.len() {
         0 => {
             return itr_err_fmt!(
                 ItrErrCode::IntentError,
-                "intent_use_open found no open intent of this kind"
+                "intent_use_kind found no open intent of this kind"
             )
         }
         1 => ids[0],
         n => {
             return itr_err_fmt!(
                 ItrErrCode::IntentError,
-                "intent_use_open kind addresses {} open intents, expected exactly 1",
+                "intent_use_kind kind addresses {} open intents, expected exactly 1",
                 n
             )
         }
     };
     intent_state.push(Some(id));
-    Ok((Value::Nil, NativeCtl::intent_use_open.gas_of()))
+    Ok((Value::Nil, NativeCtl::intent_use_kind.gas_of()))
 });
 
 // Whether the current frame is bound to an intent. Frame-local probe: it reads the
@@ -793,12 +793,12 @@ intent_std_fn!(
 
 // Page over the intents this contract owns, by ascending id, returning their kinds.
 //
-// Together with `intent_use_open` this closes the case where a frame cannot name the
+// Together with `intent_use_kind` this closes the case where a frame cannot name the
 // kind it needs: it can enumerate what is open and bind the kind it recognizes. The
 // cursor is a position, not a reference — passing back a cursor whose intent is gone
 // simply continues after it — so a page stays well defined while the bucket mutates.
 // Kinds are returned as stored, duplicates included: two entries with the same kind
-// tell the caller that `intent_use_open` on that kind cannot resolve.
+// tell the caller that `intent_use_kind` on that kind cannot resolve.
 //
 // The page is a Compo, which holds at most `compo_length` items, so the requested
 // limit is clamped to that before the scan: the returned container is legal by
@@ -1105,19 +1105,19 @@ mod tests {
 
     #[test]
     fn catalog_rows_pin_new_ctl_ids() {
-        assert_eq!(NativeCtl::intent_use_open as u8, 65);
+        assert_eq!(NativeCtl::intent_use_kind as u8, 65);
         assert_eq!(NativeCtl::intent_bound as u8, 66);
-        assert_eq!(NativeCtl::defer_current as u8, 67);
+        assert_eq!(NativeCtl::defer_current as u8, 2);
         assert_eq!(NativeCtl::intent_open_page as u8, 68);
         assert_eq!(NativeCtl::argv_len(65), Some(1));
         assert_eq!(NativeCtl::argv_len(66), Some(0));
-        assert_eq!(NativeCtl::argv_len(67), Some(0));
+        assert_eq!(NativeCtl::argv_len(2), Some(0));
         assert_eq!(NativeCtl::argv_len(68), Some(2));
-        assert_eq!(NativeCtl::intent_use_open.rty_of(), ValueTy::Nil);
+        assert_eq!(NativeCtl::intent_use_kind.rty_of(), ValueTy::Nil);
         assert_eq!(NativeCtl::intent_bound.rty_of(), ValueTy::Bool);
         assert_eq!(NativeCtl::defer_current.rty_of(), ValueTy::Nil);
         assert_eq!(NativeCtl::intent_open_page.rty_of(), ValueTy::Tuple);
-        assert_eq!(NativeCtl::from_name("defer_current").map(|v| v.0), Some(67));
+        assert_eq!(NativeCtl::from_name("defer_current").map(|v| v.0), Some(2));
         assert!(NativeCtl::has_idx(65) && NativeCtl::has_idx(68));
     }
 

@@ -446,7 +446,7 @@ impl Syntax {
         }
         let op: Bytecode = std_mem_transmute!(node.bytecode());
         match op {
-            RET | END | ERR | ABT | CODECALL => true,
+            RET | END | ERR | ABT | CODE_CALL => true,
             IRBLOCK | IRBLOCKR | IRLIST => node
                 .as_any()
                 .downcast_ref::<IRNodeArray>()

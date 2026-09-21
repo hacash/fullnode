@@ -936,7 +936,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                         .ok_or_else(|| {
                             ItrErr::new(GasError, "storage patch work length overflow")
                         })?;
-                    gas_resource_raw!(25 + gst.spatch_bytes(work_len)); // sha2 cost = 25
+                    gas_resource_raw!(25 + gst.patch_bytes(work_len)); // sha2 cost = 25
                     gas_add!(storage, raw, fee);
                     rebate_add!(rebate);
                     ops.push(digest)?;
@@ -1044,6 +1044,61 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                     gas_resource!(stack_copy, v.dup_size());
                     memory_map.remove(context_addr, &k)?;
                     *ops.peek()? = v;
+                }
+                // MPATCH is SPATCH on the contract memory map instead of persistent storage:
+                // same `expected` compare, same canonical `patch_set`, same sha2(final) result.
+                // Only the fee differs (memory has no rent) and the work is metered; the
+                // storage-domain patch codes are remapped to the Memory family on the way out.
+                MPATCH => {
+                    nsw!();
+                    let patch_set = ops.pop()?.valid(cap)?;
+                    let expected = ops.pop()?.valid(cap)?;
+                    let patch_len = match &patch_set {
+                        Bytes(b) => b.len(),
+                        _ => {
+                            return itr_err_fmt!(
+                                MemoryError,
+                                "memory patch patch_set must be bytes"
+                            )
+                        }
+                    };
+                    let expected_len = match &expected {
+                        Bytes(b) => b.len(),
+                        _ => {
+                            return itr_err_fmt!(
+                                MemoryError,
+                                "memory patch expected must be bytes"
+                            )
+                        }
+                    };
+                    let k = ops.pop()?;
+                    crate::space::validate_volatile_kv_put(&k, &expected, &kv_limits, false, MemoryError)?;
+                    let klen = k.extract_key_bytes_with_error_code(MemoryError)?.len();
+                    let memory_map = machine.memory_map_mut();
+                    let old = memory_map.get(context_addr, &k)?.valid(cap)?;
+                    if matches!(old, Value::Nil) {
+                        return itr_err_fmt!(MemoryError, "memory patch key not found");
+                    }
+                    let Value::Bytes(old) = old else {
+                        return itr_err_fmt!(MemoryError, "memory patch value must be bytes");
+                    };
+                    let (final_bytes, digest) =
+                        crate::state::patch::apply_patch_checked(&old, &expected, &patch_set, cap)
+                            .map_err(memory_patch_err)?;
+                    let patched = Value::Bytes(final_bytes);
+                    crate::space::validate_volatile_kv_put(
+                        &k, &patched, &kv_limits, false, MemoryError,
+                    )?;
+                    let work_len = expected_len
+                        .checked_add(patch_len)
+                        .and_then(|len| len.checked_add(patched.val_size()))
+                        .ok_or_else(|| ItrErr::new(GasError, "memory patch work length overflow"))?;
+                    gas_resource!(stack_write, klen);
+                    gas_resource!(stack_copy, old.len());
+                    gas_resource_raw!(25 + gst.patch_bytes(work_len)); // sha2 cost = 25
+                    gas_resource!(stack_write, patched.val_size());
+                    memory_map.entry_mut(context_addr)?.put(k, patched)?;
+                    ops.push(Value::Bytes(digest))?;
                 }
                 // logic
                 AND => binop_btw(ops, lgc_and)?,
@@ -1167,7 +1222,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 } // assert(..)
                 PRT => debug_print_value(context_addr, current_addr, exec, ops.pop()?),
                 // call
-                CODECALL | CALL | CALLEXT | CALLEXTVIEW | CALLUSEVIEW | CALLUSEPURE | CALLTHIS
+                CODE_CALL | CALL | CALLEXT | CALLEXTVIEW | CALLUSEVIEW | CALLUSEPURE | CALLTHIS
                 | CALLSELF | CALLSUPER | CALLSELFVIEW | CALLSELFPURE => {
                     let plen = instruction.metadata().param as usize;
                     let end = *pc + plen;
@@ -1239,6 +1294,19 @@ fn check_add_gas_use(
     check_limit("resource", next_gas_use.resource, gst.resource_limit)?;
     check_limit("storage", next_gas_use.storage, gst.storage_limit)?;
     Ok((step_total, next_gas_use))
+}
+
+/// `apply_patch_checked` speaks the storage-domain patch codes (SPATCH); MPATCH reuses
+/// it but must fail in its own error family, so remap those codes to `MemoryError`,
+/// keeping the message and defaulting one when the shared path returns none.
+fn memory_patch_err(e: ItrErr) -> ItrErr {
+    let tip = match e.0 {
+        StoragePatchExpected => "memory patch expected mismatch",
+        StoragePatchInvalid => "memory patch_set invalid",
+        _ => return e,
+    };
+    let msg = if e.1.is_empty() { tip.to_string() } else { e.1 };
+    ItrErr(MemoryError, msg)
 }
 
 #[allow(unused)]

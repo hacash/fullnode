@@ -249,7 +249,7 @@ mod token_t {
         let bytecode = lang_to_bytecode(script).expect("Failed to compile memory_once");
         assert!(
             bytecode.contains(&(Bytecode::MONCE as u8)),
-            "Expected MONCE (0x94) in bytecode, got: {:02x?}",
+            "Expected MONCE (0x84) in bytecode, got: {:02x?}",
             bytecode
         );
         let back = irnode_to_lang(lang_to_irnode(script).unwrap()).unwrap();
@@ -269,6 +269,28 @@ mod token_t {
         assert!(
             gst.gas(Bytecode::MONCE as u8) > 1,
             "MONCE must not fall back to the default base gas"
+        );
+    }
+
+    #[test]
+    fn test_memory_patch_compiles_to_mpatch_and_roundtrips() {
+        use super::{irnode_to_lang, lang_to_bytecode, lang_to_irnode};
+        use crate::rt::Bytecode;
+
+        // `patches([...])` is the NTFUNC that builds a canonical patch_set, the same
+        // value SPATCH takes; MPATCH must be reachable through the same call form.
+        let script = "memory_patch('k', 'v', patches([0, 1, 1 as u8]))";
+        let bytecode = lang_to_bytecode(script).expect("Failed to compile memory_patch");
+        assert!(
+            bytecode.contains(&(Bytecode::MPATCH as u8)),
+            "Expected MPATCH (0x86) in bytecode, got: {:02x?}",
+            bytecode
+        );
+        let back = irnode_to_lang(lang_to_irnode(script).unwrap()).unwrap();
+        assert!(
+            back.contains("memory_patch"),
+            "decompiled output lost builtin name: {}",
+            back
         );
     }
 
@@ -428,7 +450,7 @@ mod token_t {
             if *mark == 0 {
                 continue;
             }
-            if codes[idx] == Bytecode::CODECALL as u8 {
+            if codes[idx] == Bytecode::CODE_CALL as u8 {
                 codecall_idx = Some(idx);
                 break;
             }
@@ -668,7 +690,7 @@ mod token_t {
                 let op = codes[idx];
                 let is_call = matches!(
                     op,
-                    x if x == Bytecode::CODECALL as u8
+                    x if x == Bytecode::CODE_CALL as u8
                         || x == Bytecode::CALL as u8
                         || x == Bytecode::CALLEXT as u8
                         || x == Bytecode::CALLEXTVIEW as u8
@@ -1548,7 +1570,7 @@ mod token_t {
         use super::PrintOption;
 
         let accepted = [
-            "intent_use_open(1)\nreturn 0",
+            "intent_use_kind(1)\nreturn 0",
             "intent_bound()\nreturn 0",
             "defer_current()\nreturn 0",
             "intent_open_page(nil, 8)\nreturn 0",
@@ -1564,8 +1586,8 @@ mod token_t {
         }
 
         let rejected = [
-            "intent_use_open()\nreturn 0",
-            "intent_use_open(1, 2)\nreturn 0",
+            "intent_use_kind()\nreturn 0",
+            "intent_use_kind(1, 2)\nreturn 0",
             "intent_bound(1)\nreturn 0",
             "defer_current(nil)\nreturn 0",
             "intent_open_page(nil)\nreturn 0",

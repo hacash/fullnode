@@ -294,6 +294,7 @@ irfn_define! {
     memory_get
     memory_once
     memory_take
+    memory_patch
     status_put
     status_get
 

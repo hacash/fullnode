@@ -368,7 +368,7 @@ fn is_external_stack_boundary(inst: Bytecode) -> bool {
             | NTENV
             | NTCTL
             | NTFUNC
-            | CODECALL
+            | CODE_CALL
             | CALL
             | CALLEXT
             | CALLEXTVIEW

@@ -1,4 +1,7 @@
+use sha2::{Digest, Sha256};
+
 use crate::rt::{ItrErr, ItrErrCode::*, SpaceCap, VmrtRes};
+use crate::value::Value;
 
 const PATCH_COUNT_MIN: u8 = 1;
 const PATCH_COUNT_MAX: u8 = 16;
@@ -95,6 +98,27 @@ pub fn decode_and_apply(original: &[u8], patch_set: &[u8], cap: &SpaceCap) -> Vm
     Ok(out)
 }
 
+/// Compare-current, then decode + apply: the whole patch semantics minus the store.
+/// `expected` must equal `original` byte for byte, `patch_set` must be canonical.
+/// Returns `(patched bytes, sha256(patched))`. SPATCH (storage) and MPATCH (memory)
+/// share this; they differ only in where the original bytes live.
+pub fn apply_patch_checked(
+    original: &[u8],
+    expected: &Value,
+    patch_set: &Value,
+    cap: &SpaceCap,
+) -> VmrtRes<(Vec<u8>, Vec<u8>)> {
+    let (Value::Bytes(expected), Value::Bytes(patch_set)) = (expected, patch_set) else {
+        return itr_err_code!(StoragePatchInvalid);
+    };
+    if original != expected.as_slice() {
+        return itr_err_code!(StoragePatchExpected);
+    }
+    let final_bytes = decode_and_apply(original, patch_set, cap)?;
+    let digest = Sha256::digest(&final_bytes).to_vec();
+    Ok((final_bytes, digest))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,6 +134,50 @@ mod tests {
 
     fn apply_patches(original: &[u8], patches: &[(u16, u16, &[u8])]) -> VmrtRes<Vec<u8>> {
         apply(original, &encode_patch_set(patches)?)
+    }
+
+    fn bytes(b: &[u8]) -> Value {
+        Value::Bytes(b.to_vec())
+    }
+
+    #[test]
+    fn apply_patch_checked_returns_patched_bytes_and_digest() {
+        let cap = cap();
+        // replace the tail of "hello" using original coordinates
+        let patch = encode_patch_set(&[(1, 4, b"ELLO".as_slice())]).unwrap();
+        let (final_bytes, digest) =
+            apply_patch_checked(b"hello", &bytes(b"hello"), &bytes(&patch), &cap).unwrap();
+        assert_eq!(final_bytes, b"hELLO".to_vec());
+        assert_eq!(digest, Sha256::digest(&final_bytes).to_vec());
+    }
+
+    #[test]
+    fn apply_patch_checked_requires_matching_bytes_expected() {
+        let cap = cap();
+        let patch = encode_patch_set(&[(0, 1, b"A".as_slice())]).unwrap();
+        let err = apply_patch_checked(b"hello", &bytes(b"HELLO"), &bytes(&patch), &cap)
+            .unwrap_err();
+        assert_eq!(err.0, ItrErrCode::StoragePatchExpected);
+        // a non-bytes expected cannot match byte content: shape error, not mismatch
+        let err = apply_patch_checked(b"hello", &Value::U64(1), &bytes(&patch), &cap).unwrap_err();
+        assert_eq!(err.0, ItrErrCode::StoragePatchInvalid);
+    }
+
+    #[test]
+    fn apply_patch_checked_rejects_non_bytes_or_malformed_patch_set() {
+        let cap = cap();
+        let good = encode_patch_set(&[(0, 1, b"A".as_slice())]).unwrap();
+        let err = apply_patch_checked(b"hello", &bytes(b"hello"), &Value::U64(1), &cap).unwrap_err();
+        assert_eq!(err.0, ItrErrCode::StoragePatchInvalid);
+        // count 0 is not a canonical patch_set
+        let err = apply_patch_checked(b"hello", &bytes(b"hello"), &bytes(&[0]), &cap).unwrap_err();
+        assert_eq!(err.0, ItrErrCode::StoragePatchInvalid);
+        // offset past the end of the original
+        let oob = encode_patch_set(&[(9, 0, b"A".as_slice())]).unwrap();
+        let err = apply_patch_checked(b"hello", &bytes(b"hello"), &bytes(&oob), &cap).unwrap_err();
+        assert_eq!(err.0, ItrErrCode::StoragePatchInvalid);
+        // and the happy path still works after the rejections
+        assert!(apply_patch_checked(b"hello", &bytes(b"hello"), &bytes(&good), &cap).is_ok());
     }
 
     fn invalid<T: std::fmt::Debug>(r: VmrtRes<T>) {

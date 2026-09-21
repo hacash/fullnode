@@ -4,17 +4,24 @@
 //   left-to-right = stack bottom-to-top = handwritten IR child order (subx, suby, subz, ...).
 //   `+` marks instructions that leave one combined result (often in-place on the bottom slot).
 // See `vm/doc/operand-stack.md` for PACK*, XLG/XOP, PUTX/GETX, and in-place peek ops.
+//
+// range test: row 0 = protocol-family window (opcode == action family byte), row 1 =
+// code-call family, row 7 = locals, row 8 = global/memory + heap halves, row 9 = log +
+// storage halves, row D = reserved for future families. New opcodes land in row D, not
+// in row 0.
 
 #[repr(u8)]
 #[allow(non_camel_case_types)]
 #[derive(Default, PartialEq, Debug, Clone, Copy)]
 pub enum Bytecode {
+    // row 0: protocol-family window. Within it the opcode equals the action KIND's
+    // high (family) byte: 0x00 action, 0x06 view, 0x07 env.
     #[default]
     ACTION = 0x00, // *@  call action
     ____________01 = 0x01,
     ____________02 = 0x02,
     ____________03 = 0x03,
-    ____________04 = 0x04,
+    ____________04 = 0x04, // GUARD action family (protocol kind 0x04)
     ____________05 = 0x05,
     ACTVIEW = 0x06, // *@  call action view (read-only query)
     ACTENV = 0x07,  // *+  call action env
@@ -24,16 +31,18 @@ pub enum Bytecode {
     ____________0b = 0x0b,
     ____________0c = 0x0c,
     ____________0d = 0x0d,
-    CODECALL = 0x0e,    // *,****
-    CALL = 0x0f,        // **,****@
-    CALLEXT = 0x10,     // *,****@
-    CALLEXTVIEW = 0x11, // *,****@
-    ____________12 = 0x12,
-    ____________13 = 0x13,
-    CALLUSEVIEW = 0x14, // *,****@
-    CALLUSEPURE = 0x15, // *,****@
-    ____________16 = 0x16,
-    ____________17 = 0x17,
+    ____________0e = 0x0e,
+    ____________0f = 0x0f,
+
+    // row 1: code-call family (is_call = 0x12..=0x1c)
+    ____________10 = 0x10,
+    ____________11 = 0x11, // reserved: CALC_CALL
+    CODE_CALL = 0x12,    // *,****
+    CALL = 0x13,         // **,****@
+    CALLEXT = 0x14,      // *,****@
+    CALLEXTVIEW = 0x15,  // *,****@
+    CALLUSEVIEW = 0x16,  // *,****@
+    CALLUSEPURE = 0x17,  // *,****@
     CALLTHIS = 0x18,     // ****@
     CALLSELF = 0x19,     // ****@
     CALLSUPER = 0x1a,    // ****@
@@ -42,6 +51,8 @@ pub enum Bytecode {
     ____________1d = 0x1d,
     ____________1e = 0x1e,
     ____________1f = 0x1f,
+
+    // row 2: push immediates
     PU8 = 0x20,    // *+     push u8
     PU16 = 0x21,   // **+    push u16
     PBUF = 0x22,   // *+     push buf
@@ -58,12 +69,14 @@ pub enum Bytecode {
     ____________2d = 0x2d,
     ____________2e = 0x2e,
     ____________2f = 0x2f,
+
+    // row 3: cast 0x30-0x37 / type 0x38-0x3C
     CU8 = 0x30,   // &      cast u8
     CU16 = 0x31,  // &      cast u16
     CU32 = 0x32,  // &      cast u32
     CU64 = 0x33,  // &      cast u64
     CU128 = 0x34, // &      cast u128
-    ____________35 = 0x35,
+    ____________35 = 0x35, // reserved (CastU256)
     CBYTES = 0x36, // &      cast bytes
     CTO = 0x37,    // *&     cast to
     TNIL = 0x38,   // &      is nil push Bool(true)
@@ -74,6 +87,8 @@ pub enum Bytecode {
     ____________3d = 0x3d,
     ____________3e = 0x3e,
     ____________3f = 0x3f,
+
+    // row 4: stack 0x40-0x47 / bytes+buffer 0x48-0x4F
     DUP = 0x40,    // +      copy 0
     DUPN = 0x41,   // *+     copy u8
     POP = 0x42,    // a      pop top
@@ -90,6 +105,8 @@ pub enum Bytecode {
     RIGHT = 0x4d,  // *&     cut right buf *
     LDROP = 0x4e,  // *&     drop buf left *
     RDROP = 0x4f,  // *&     drop buf right *
+
+    // row 5: overflow 0x50-0x51 / compo create+mutate 0x58-0x5F
     SIZE = 0x50,   // &      size (u16)
     CHOOSE = 0x51, // cond,yes,no+ cond?yes:no (stack bottom->top; +movement gas 2)
     ____________52 = 0x52,
@@ -98,38 +115,42 @@ pub enum Bytecode {
     ____________55 = 0x55,
     ____________56 = 0x56,
     ____________57 = 0x57,
-    ____________58 = 0x58,
-    ____________59 = 0x59,
-    ____________5a = 0x5a,
-    ____________5b = 0x5b,
-    ____________5c = 0x5c,
-    ____________5d = 0x5d,
-    ____________5e = 0x5e,
-    ____________5f = 0x5f,
-    NEWLIST = 0x60,    // + new compo list
-    NEWMAP = 0x61,     // + new compo map
-    PACKLIST = 0x62,   // (v...,n)+ items then count on top; not (n,v...)
-    PACKMAP = 0x63,    // (k,v...,n)+ kv pairs then count on top; count is total items
-    INSERT = 0x64,     // t,k,v+  compo insert
-    REMOVE = 0x65,     // t,k+    compo remove
-    CLEAR = 0x66,      // t+      compo clear
-    MERGE = 0x67,      // a,b+    compo merge
-    LENGTH = 0x68,     // t+      compo length
-    HASKEY = 0x69,     // t,k+    compo check has key
-    ITEMGET = 0x6a,    // t,k+    compo iten get
-    KEYS = 0x6b,       // &       compo keys
-    VALUES = 0x6c,     // &       compo values
-    TAKEFIRST = 0x6d,  // t+      compo take first; discard rest
-    TAKELAST = 0x6e,   // t+      compo take last; discard rest
-    APPEND = 0x6f,     // t,v+    append v to list compo t (t on bottom)
-    CLONE = 0x70,      // a++     compo clone
-    UNPACK = 0x71,     // c,i+    pop start idx; peek container; item/4 read + local writes
-    PACKTUPLE = 0x72,  // (v...,n)+ tuple items then count on top
-    TUPLE2LIST = 0x73, // &       tuple to list
-    ____________74 = 0x74,
-    ____________75 = 0x75,
-    ____________76 = 0x76,
-    ____________77 = 0x77,
+    NEWLIST = 0x58,  // + new compo list
+    NEWMAP = 0x59,   // + new compo map
+    PACKLIST = 0x5a, // (v...,n)+ items then count on top; not (n,v...)
+    PACKMAP = 0x5b,  // (k,v...,n)+ kv pairs then count on top; count is total items
+    INSERT = 0x5c,   // t,k,v+  compo insert
+    REMOVE = 0x5d,   // t,k+    compo remove
+    CLEAR = 0x5e,    // t+      compo clear
+    MERGE = 0x5f,    // a,b+    compo merge
+
+    // row 6: compo read / transform
+    LENGTH = 0x60,     // t+      compo length
+    HASKEY = 0x61,     // t,k+    compo check has key
+    ITEMGET = 0x62,    // t,k+    compo iten get
+    KEYS = 0x63,       // &       compo keys
+    VALUES = 0x64,     // &       compo values
+    TAKEFIRST = 0x65,  // t+      compo take first; discard rest
+    TAKELAST = 0x66,   // t+      compo take last; discard rest
+    APPEND = 0x67,     // t,v+    append v to list compo t (t on bottom)
+    CLONE = 0x68,      // a++     compo clone
+    UNPACK = 0x69,     // c,i+    pop start idx; peek container; item/4 read + local writes
+    PACKTUPLE = 0x6a,  // (v...,n)+ tuple items then count on top
+    TUPLE2LIST = 0x6b, // &       tuple to list
+    ____________6c = 0x6c,
+    ____________6d = 0x6d,
+    ____________6e = 0x6e,
+    ____________6f = 0x6f,
+
+    // row 7: locals
+    ____________70 = 0x70,
+    ____________71 = 0x71,
+    ____________72 = 0x72,
+    ____________73 = 0x73,
+    GET0 = 0x74, // +     local get idx 0
+    GET1 = 0x75, // +     local get idx 1
+    GET2 = 0x76, // +     local get idx 2
+    GET3 = 0x77, // +     local get idx 3
     ____________78 = 0x78,
     XLG = 0x79,   // *&    local[idx] op stack_top (rhs only on stack; not GT)
     XOP = 0x7a,   // *a    local[idx] op= stack_top (rhs); +stack_write on result val_size
@@ -138,15 +159,17 @@ pub enum Bytecode {
     GETX = 0x7d,  // idx+  peek idx -> load local[idx] in place
     PUTX = 0x7e,  // idx,val+ dynamic local put (IR: local_x_put(idx, val))
     ALLOC = 0x7f, // *     local allocQ
-    GET0 = 0x80,  // +     local get idx 0
-    GET1 = 0x81,  // +     local get idx 1
-    GET2 = 0x82,  // +     local get idx 2
-    GET3 = 0x83,  // +     local get idx 3
-    LOG1 = 0x84,
-    LOG2 = 0x85,
-    LOG3 = 0x86,
-    LOG4 = 0x87,
-    ____________88 = 0x88,  // reserved (removed HSLICE)
+
+    // row 8: global+memory 0x80-0x87 / heap 0x88-0x8F
+    GPUT = 0x80,   // a,b   global put
+    GGET = 0x81,   // &     global get
+    MPUT = 0x82,   // a,b   memory put
+    MGET = 0x83,   // &     memory get
+    MONCE = 0x84,  // a,b   memory once
+    MTAKE = 0x85,  // &     memory take
+    MPATCH = 0x86, // a,b,c+  key, expected, patch_set → sha2(final)
+    ____________87 = 0x87,
+    ____________88 = 0x88, // reserved (removed HSLICE)
     HREADUL = 0x89,  // **+   heap read ul
     HREADU = 0x8a,   // *+    heap read u
     HWRITEXL = 0x8b, // **a   heap write xl (u16 immediate offset)
@@ -154,31 +177,35 @@ pub enum Bytecode {
     HREAD = 0x8d,    // a,b+  heap read
     HWRITE = 0x8e,   // a,b   heap write (dynamic u32 offset)
     HGROW = 0x8f,    // *     heap grow
-    GPUT = 0x90,     // a,b   global put
-    GGET = 0x91,     // &     global get
-    MPUT = 0x92,     // a,b   memory put
-    MGET = 0x93,     // &     memory get
-    MONCE = 0x94,    // a,b   memory once
-    MTAKE = 0x95,    // &     memory take
-    SPUT = 0x96,     // a,b   status put
-    SGET = 0x97,     // &     status get
-    SSTAT = 0x98, // &      storage info
-    SLOAD = 0x99, // &      storage load
+
+    // row 9: log 0x90-0x93 / status 0x96-0x97 / storage 0x98-0x9F
+    LOG1 = 0x90,
+    LOG2 = 0x91,
+    LOG3 = 0x92,
+    LOG4 = 0x93,
+    ____________94 = 0x94,
+    ____________95 = 0x95,
+    SPUT = 0x96,   // a,b   status put
+    SGET = 0x97,   // &     status get
+    SSTAT = 0x98,  // &      storage info
+    SLOAD = 0x99,  // &      storage load
     SPATCH = 0x9a, // a,b,c+  key, expected, patch_set → sha2(final)
-    SEDIT = 0x9b, // a,b    storage edit
-    SDEL = 0x9c,  // a      storage delete
-    SNEW = 0x9d,  // a,b,c  storage create
-    SRECV = 0x9e, // a,b    storage recover rent
-    SRENT = 0x9f, // a,b    storage time rent
-    AND = 0xa0,   // a,b+   and
-    OR = 0xa1,    // a,b+   or
-    EQ = 0xa2,    // a,b+   equal
-    NEQ = 0xa3,   // a,b+   not equal
-    LT = 0xa4,    // a,b+   less than
-    GT = 0xa5,    // a,b+   great than
-    LE = 0xa6,    // a,b+   less and eq
-    GE = 0xa7,    // a,b+   great and eq
-    NOT = 0xa8,   // a+   not
+    SEDIT = 0x9b,  // a,b    storage edit
+    SDEL = 0x9c,   // a      storage delete
+    SNEW = 0x9d,   // a,b,c  storage create
+    SRECV = 0x9e,  // a,b    storage recover rent
+    SRENT = 0x9f,  // a,b    storage time rent
+
+    // row A: logic+compare 0xA0-0xA8 / bit 0xAB-0xAF
+    AND = 0xa0, // a,b+   and
+    OR = 0xa1,  // a,b+   or
+    EQ = 0xa2,  // a,b+   equal
+    NEQ = 0xa3, // a,b+   not equal
+    LT = 0xa4,  // a,b+   less than
+    GT = 0xa5,  // a,b+   great than
+    LE = 0xa6,  // a,b+   less and eq
+    GE = 0xa7,  // a,b+   great and eq
+    NOT = 0xa8, // a+   not
     ____________a9 = 0xa9,
     ____________aa = 0xaa,
     BSHR = 0xab, // a,b+   shr: >>
@@ -187,43 +214,43 @@ pub enum Bytecode {
     BOR = 0xae,  // a,b+   or:  |
     BAND = 0xaf, // a,b+   and: &
 
-    // arithmetic: scalar/core operations
-    ADD = 0xb0,      // a,b+   +
-    SUB = 0xb1,      // a,b+   -
-    MUL = 0xb2,      // a,b+   *
-    DIV = 0xb3,      // a,b+   floor(a/b)
-    DIVUP = 0xb4,    // a,b+   ceil(a/b)
-    DIVEXACT = 0xb5, // a,b+   exact(a/b)
-    MULDIV = 0xb6,   // a,b,c+ floor((x*y)/z)
-    MULDIVUP = 0xb7, // a,b,c+ ceil((x*y)/z)
-    MULADD = 0xb8,   // a,b,c+ (x*y)+z
-    MULSUB = 0xb9,   // a,b,c+ (x*y)-z
-    MOD = 0xba,      // a,b+   mod
-    ADDMOD = 0xbb,   // a,b,c+ (x+y)%z
-    MULMOD = 0xbc,   // a,b,c+ (x*y)%z
-    POW = 0xbd,      // a,b+   pow
-    SQRT = 0xbe,     // a+     floor isqrt(a)
-    SQRTUP = 0xbf,   // a+     ceil sqrt (min y with y*y >= a)
+    // row B: scalar arithmetic (0xB0-0xBD; 0xBE/0xBF free)
+    ADD = 0xb0,     // a,b+   +
+    SUB = 0xb1,     // a,b+   -
+    MUL = 0xb2,     // a,b+   *
+    DIV = 0xb3,     // a,b+   floor(a/b)
+    MOD = 0xb4,     // a,b+   mod
+    POW = 0xb5,     // a,b+   pow
+    SQRT = 0xb6,    // a+     floor isqrt(a)
+    SQRTUP = 0xb7,  // a+     ceil sqrt (min y with y*y >= a)
+    MAX = 0xb8,     // a,b+   max
+    MIN = 0xb9,     // a,b+   min
+    CLAMP = 0xba,   // a,b,c+ clamp(x, lo, hi)
+    ABSDIFF = 0xbb, // a,b+   abs(x-y)
+    INC = 0xbc,     // *&     += u8
+    DEC = 0xbd,     // *&     -= u8
+    ____________be = 0xbe,
+    ____________bf = 0xbf,
 
-    // arithmetic: scalar/core operations continued
-    MAX = 0xc0,     // a,b+   max
-    MIN = 0xc1,     // a,b+   min
-    CLAMP = 0xc2,   // a,b,c+ clamp(x, lo, hi)
-    ABSDIFF = 0xc3, // a,b+   abs(x-y)
-    INC = 0xc4,     // *&     += u8
-    DEC = 0xc5,     // *&     -= u8
-    ____________c6 = 0xc6,
-    ____________c7 = 0xc7,
+    // row C: multi-operand arithmetic 0xC0-0xC7 / finance 0xCA-0xCF (FIN ids)
+    ADDMOD = 0xc0,   // a,b,c+ (x+y)%z
+    MULMOD = 0xc1,   // a,b,c+ (x*y)%z
+    MULADD = 0xc2,   // a,b,c+ (x*y)+z
+    MULSUB = 0xc3,   // a,b,c+ (x*y)-z
+    DIVUP = 0xc4,    // a,b+   ceil(a/b)
+    DIVEXACT = 0xc5, // a,b+   exact(a/b)
+    MULDIV = 0xc6,   // a,b,c+ floor((x*y)/z)
+    MULDIVUP = 0xc7, // a,b,c+ ceil((x*y)/z)
     ____________c8 = 0xc8,
     ____________c9 = 0xc9,
-    
-    // arithmetic: financial families
     FINPOW3 = 0xca, // *,a,b,c+   fin pow id
     FINP4 = 0xcb,   // *,a,b,c,d+ fin 4-input predicate
     FINP3 = 0xcc,   // *,a,b,c+   fin 3-input predicate
     FIN4 = 0xcd,    // *,a,b,c,d+ fin 4-input calc id
     FIN3 = 0xce,    // *,a,b,c+   fin 3-input calc id
     FIN2 = 0xcf,    // *,a,b+     fin 2-input calc id
+
+    // row D: reserved for future opcode families
     ____________d0 = 0xd0,
     ____________d1 = 0xd1,
     ____________d2 = 0xd2,
@@ -240,6 +267,8 @@ pub enum Bytecode {
     ____________dd = 0xdd,
     ____________de = 0xde,
     ____________df = 0xdf,
+
+    // row E: branch 0xE0-0xE6 / control+return 0xEA-0xEF
     JMPL = 0xe0,  // **    jump long
     JMPS = 0xe1,  // *     jump offset
     JMPSL = 0xe2, // **    jump offset long
@@ -256,6 +285,8 @@ pub enum Bytecode {
     ABT = 0xed,        // abord
     RET = 0xee,        // a     func return (DATA)
     END = 0xef,        // func return nil
+
+    // row F: IR nodes (never in runtime bytecode) / gas+misc 0xFD-0xFF
     IRBYTECODE = 0xf0, // <IR NODE>
     IRLIST = 0xf1,     // <IR NODE>
     IRBLOCK = 0xf2,    // <IR NODE>
@@ -345,7 +376,7 @@ bytecode_metadata_define! {
     NTCTL      : 1, 1, 1,     native_ctl
     NTFUNC     : 1, 1, 1,     native_func
 
-    CODECALL     : 1+4, 1, 0,   code_call
+    CODE_CALL    : 1+4, 1, 0,   code_call
     CALL         :   6, 1, 1,   call
     CALLEXT      : 1+4, 1, 1,   callext
     CALLEXTVIEW  : 1+4, 1, 1,   callextview
@@ -454,6 +485,7 @@ bytecode_metadata_define! {
     MGET       : 0, 1, 1,     memory_get
     MONCE      : 0, 2, 0,     memory_once
     MTAKE      : 0, 1, 1,     memory_take
+    MPATCH     : 0, 3, 1,     memory_patch
     SPUT       : 0, 2, 0,     status_put
     SGET       : 0, 1, 1,     status_get
 
@@ -542,4 +574,177 @@ bytecode_metadata_define! {
     NOP        : 0, 0, 0,     nop
     NT         : 0, 0, 0,     never_touch
 
+}
+
+#[cfg(test)]
+mod bytecode_tests {
+    use super::*;
+
+    /// Addresses are the contract the rest of the VM is written against: families are
+    /// rows (or half-rows) so membership is one range test, and the call family is
+    /// contiguous. Freeze them here so a future edit cannot silently move an opcode.
+    #[test]
+    fn layout_matches_v3_map() {
+        // row 0: protocol-family window, opcode == action family byte
+        assert_eq!(ACTION as u8, 0x00);
+        assert_eq!(ACTVIEW as u8, 0x06);
+        assert_eq!(ACTENV as u8, 0x07);
+        assert_eq!(NTENV as u8, 0x08);
+        assert_eq!(NTCTL as u8, 0x09);
+        assert_eq!(NTFUNC as u8, 0x0a);
+        // row 1: 0x10 free, 0x11 reserved (CALC_CALL), code-call family contiguous 0x12..=0x1C
+        assert_eq!(CODE_CALL as u8, 0x12);
+        assert_eq!(CALL as u8, 0x13);
+        assert_eq!(CALLEXT as u8, 0x14);
+        assert_eq!(CALLEXTVIEW as u8, 0x15);
+        assert_eq!(CALLUSEVIEW as u8, 0x16);
+        assert_eq!(CALLUSEPURE as u8, 0x17);
+        assert_eq!(CALLTHIS as u8, 0x18);
+        assert_eq!(CALLSELF as u8, 0x19);
+        assert_eq!(CALLSUPER as u8, 0x1a);
+        assert_eq!(CALLSELFVIEW as u8, 0x1b);
+        assert_eq!(CALLSELFPURE as u8, 0x1c);
+        // row 5: overflow, then compo create/mutate
+        assert_eq!(SIZE as u8, 0x50);
+        assert_eq!(CHOOSE as u8, 0x51);
+        assert_eq!(NEWLIST as u8, 0x58);
+        assert_eq!(MERGE as u8, 0x5f);
+        // row 6: compo read / transform
+        assert_eq!(LENGTH as u8, 0x60);
+        assert_eq!(TUPLE2LIST as u8, 0x6b);
+        // row 7: locals
+        assert_eq!(GET0 as u8, 0x74);
+        assert_eq!(GET3 as u8, 0x77);
+        assert_eq!(XLG as u8, 0x79);
+        assert_eq!(ALLOC as u8, 0x7f);
+        // row 8: global+memory, then heap
+        assert_eq!(GPUT as u8, 0x80);
+        assert_eq!(GGET as u8, 0x81);
+        assert_eq!(MPUT as u8, 0x82);
+        assert_eq!(MGET as u8, 0x83);
+        assert_eq!(MONCE as u8, 0x84);
+        assert_eq!(MTAKE as u8, 0x85);
+        assert_eq!(MPATCH as u8, 0x86);
+        assert_eq!(HREADUL as u8, 0x89);
+        assert_eq!(HWRITEX as u8, 0x8c);
+        assert_eq!(HGROW as u8, 0x8f);
+        // row 9: log, then status, then storage
+        assert_eq!(LOG1 as u8, 0x90);
+        assert_eq!(LOG4 as u8, 0x93);
+        assert_eq!(SPUT as u8, 0x96);
+        assert_eq!(SGET as u8, 0x97);
+        assert_eq!(SSTAT as u8, 0x98);
+        assert_eq!(SLOAD as u8, 0x99);
+        assert_eq!(SPATCH as u8, 0x9a);
+        assert_eq!(SRENT as u8, 0x9f);
+        // rows B/C: scalar arithmetic 0xB0-0xBD, multi-operand 0xC0-0xC7, finance 0xCA-0xCF
+        assert_eq!(ADD as u8, 0xb0);
+        assert_eq!(SUB as u8, 0xb1);
+        assert_eq!(MUL as u8, 0xb2);
+        assert_eq!(DIV as u8, 0xb3);
+        assert_eq!(MOD as u8, 0xb4);
+        assert_eq!(POW as u8, 0xb5);
+        assert_eq!(SQRT as u8, 0xb6);
+        assert_eq!(SQRTUP as u8, 0xb7);
+        assert_eq!(MAX as u8, 0xb8);
+        assert_eq!(MIN as u8, 0xb9);
+        assert_eq!(CLAMP as u8, 0xba);
+        assert_eq!(ABSDIFF as u8, 0xbb);
+        assert_eq!(INC as u8, 0xbc);
+        assert_eq!(DEC as u8, 0xbd);
+        assert_eq!(ADDMOD as u8, 0xc0);
+        assert_eq!(MULMOD as u8, 0xc1);
+        assert_eq!(MULADD as u8, 0xc2);
+        assert_eq!(MULSUB as u8, 0xc3);
+        assert_eq!(DIVUP as u8, 0xc4);
+        assert_eq!(DIVEXACT as u8, 0xc5);
+        assert_eq!(MULDIV as u8, 0xc6);
+        assert_eq!(MULDIVUP as u8, 0xc7);
+        assert_eq!(FINPOW3 as u8, 0xca);
+        assert_eq!(FIN2 as u8, 0xcf);
+        // row E/F: branch + control/return + IR nodes unchanged
+        assert_eq!(JMPL as u8, 0xe0);
+        assert_eq!(BRSLN as u8, 0xe6);
+        assert_eq!(PRT as u8, 0xea);
+        assert_eq!(END as u8, 0xef);
+        assert_eq!(IRBYTECODE as u8, 0xf0);
+        assert_eq!(IRCONTINUE as u8, 0xf8);
+        assert_eq!(BURN as u8, 0xfd);
+        assert_eq!(NT as u8, 0xff);
+    }
+
+    /// The call family is one range test: `is_user_call_inst` is true exactly on its run.
+    #[test]
+    fn call_family_is_one_contiguous_range() {
+        for op in 0x12u8..=0x1c {
+            let inst = Bytecode::try_from_u8(op).expect("call opcode");
+            assert!(crate::rt::is_user_call_inst(inst), "0x{op:02x} must be a call");
+        }
+        for op in [0x0fu8, 0x10, 0x11, 0x1d, 0x20, 0xe0] {
+            match Bytecode::try_from_u8(op) {
+                Ok(inst) => assert!(
+                    !crate::rt::is_user_call_inst(inst),
+                    "0x{op:02x} must not be a call"
+                ),
+                Err(_) => {}
+            }
+        }
+    }
+
+    /// Reserved and free bytes stay unassigned, and the whole named set round-trips.
+    #[test]
+    fn reserved_slots_are_invalid_and_named_slots_round_trip() {
+        let mut named = 0usize;
+        for op in 0u8..=255 {
+            match Bytecode::try_from_u8(op) {
+                Ok(inst) => {
+                    named += 1;
+                    assert_eq!(inst as u8, op, "0x{op:02x} round-trip");
+                    assert!(inst.metadata().valid, "0x{op:02x} metadata");
+                }
+                Err(e) => assert_eq!(e.0, ItrErrCode::InstInvalid),
+            }
+        }
+        assert_eq!(named, 185, "184 existing opcodes + MPATCH");
+        // row 0 protocol window holes, the reserved 0x10/0x11 pair, 0x87/0x88,
+        // the row B/C holes, and the row D growth row
+        for op in [
+            0x01u8, 0x04, 0x05, 0x10, 0x11, 0x87, 0x88, 0xbe, 0xc8, 0xd0, 0xdf,
+        ] {
+            assert!(
+                Bytecode::try_from_u8(op).is_err(),
+                "0x{op:02x} must stay free/reserved"
+            );
+        }
+        assert_eq!(Bytecode::parse("MPATCH"), Some(MPATCH));
+        assert_eq!(Bytecode::parse("CODE_CALL"), Some(CODE_CALL));
+        assert_eq!(Bytecode::parse("CODECALL"), None);
+    }
+
+    #[test]
+    fn mpatch_metadata_gas_and_irfn() {
+        let meta = MPATCH.metadata();
+        assert!(meta.valid);
+        assert_eq!((meta.param, meta.input, meta.output), (0, 3, 1));
+        assert_eq!(meta.intro, "memory_patch");
+        // same stack shape as SPATCH: key, expected, patch_set -> digest
+        let spatch = SPATCH.metadata();
+        assert_eq!(
+            (meta.param, meta.input, meta.output),
+            (spatch.param, spatch.input, spatch.output)
+        );
+
+        let gst = GasTable::new(0);
+        assert_eq!(gst.gas(MPATCH as u8), 12);
+        assert!(
+            gst.gas(MPATCH as u8) >= gst.gas(MPUT as u8),
+            "MPATCH is a memory write and must not be cheaper than MPUT"
+        );
+
+        let Some((_, bc, pms, args, rs)) = crate::rt::pick_ir_func("memory_patch") else {
+            panic!("memory_patch irfn missing");
+        };
+        assert_eq!(bc, MPATCH);
+        assert_eq!((pms, args, rs), (0, 3, 1));
+    }
 }

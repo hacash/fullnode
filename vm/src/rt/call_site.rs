@@ -336,7 +336,7 @@ pub fn encode_splice_body(lib: u8, selector: FnSign) -> [u8; SPLICE_BODY_WIDTH] 
 
 pub fn decode_user_call_site(inst: Bytecode, s: &[u8]) -> VmrtRes<CallSpec> {
     match inst {
-        Bytecode::CODECALL => decode_splice_body(s),
+        Bytecode::CODE_CALL => decode_splice_body(s),
         Bytecode::CALL => decode_call_body(s),
         Bytecode::CALLEXT => decode_short_indexed_call_body(s, EffectMode::Edit, CallTarget::Ext),
         Bytecode::CALLEXTVIEW => {
@@ -360,7 +360,7 @@ pub fn decode_user_call_site(inst: Bytecode, s: &[u8]) -> VmrtRes<CallSpec> {
 pub fn encode_user_call_site(call: CallSpec) -> (Bytecode, Vec<u8>) {
     match call {
         CallSpec::Splice { lib, selector } => (
-            Bytecode::CODECALL,
+            Bytecode::CODE_CALL,
             encode_splice_body(lib, selector).to_vec(),
         ),
         CallSpec::Invoke {
@@ -431,7 +431,7 @@ pub fn decode_call_body(s: &[u8]) -> VmrtRes<CallSpec> {
 pub const fn is_user_call_inst(inst: Bytecode) -> bool {
     matches!(
         inst,
-        Bytecode::CODECALL
+        Bytecode::CODE_CALL
             | Bytecode::CALL
             | Bytecode::CALLEXT
             | Bytecode::CALLEXTVIEW
