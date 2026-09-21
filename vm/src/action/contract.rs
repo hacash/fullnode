@@ -49,7 +49,12 @@ pub struct ContractUpdateAnalysis {
 
 // ================================ ContractDeploy ================================
 
-#[base::action(kind = 40, tx_min = 3, scope = TOP_ONLY_CAN_WITH_GUARD, audit = "structured", code, ctor = none,
+// Scope is TOP: a deploy combines with other top actions (minting an asset and
+// deploying its contract in one tx is the core case) and repeats at top, which is
+// what a factory batching `[Deploy, Deploy, ...]` needs. Uniqueness was rejected
+// because it forbids exactly that batch; the per-tx action-count cap and each
+// deploy's protocol cost are what bound the batch instead.
+#[base::action(kind = 40, tx_min = 3, scope = TOP, audit = "structured", code, ctor = none,
     description = |this: &ContractDeploy| format!("Deploy smart contract with nonce {}", this.nonce.uint()))]
 #[derive(PartialEq, Eq)]
 pub struct ContractDeploy {
@@ -94,5 +99,36 @@ impl ContractUpdate {
             marks: Fixed2::default(),
             edit: ContractEdit::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod scope_tests {
+    use base::{ActScope, Action};
+
+    use super::{ContractDeploy, ContractUpdate};
+
+    // The protocol topology tests (`protocol::level`) reproduce these two actions with
+    // local stubs, because `protocol` cannot depend on this crate. These assertions are
+    // what keeps that reproduction honest: changing a scope here fails loudly next to
+    // the declaration instead of quietly invalidating the combinations pinned there.
+
+    #[test]
+    fn deploy_is_top_so_a_factory_can_batch_deploys() {
+        assert_eq!(ContractDeploy::KIND, 40);
+        assert_eq!(ContractDeploy::SCOPE, ActScope::TOP);
+        let deploy = ContractDeploy::new();
+        assert_eq!(deploy.scope(), ActScope::TOP);
+        assert_eq!(deploy.min_tx_type(), 3);
+        assert_eq!(deploy.required_flags(), 0);
+    }
+
+    #[test]
+    fn update_stays_a_top_only_guard_companion() {
+        assert_eq!(ContractUpdate::KIND, 41);
+        assert_eq!(ContractUpdate::SCOPE, ActScope::TOP_ONLY_CAN_WITH_GUARD);
+        let update = ContractUpdate::new();
+        assert_eq!(update.scope(), ActScope::TOP_ONLY_CAN_WITH_GUARD);
+        assert_eq!(update.min_tx_type(), 3);
     }
 }

@@ -138,6 +138,16 @@ impl IntentRuntime {
             return itr_err_fmt!(ItrErrCode::IntentError, "intent kind cannot be empty");
         }
         self.check_size_limit(kind.len(), "kind")?;
+        // kind names at most one open intent per owner: two open intents sharing a
+        // kind would leave `intent_use_open` with nothing to resolve, so the second
+        // creation is refused here rather than deferred to the lookup. The name is
+        // freed again by destroying the intent.
+        if !self.open_ids_by_kind(&owner, &kind)?.is_empty() {
+            return itr_err_fmt!(
+                ItrErrCode::IntentError,
+                "intent kind already open for this contract"
+            );
+        }
         if self.total_created >= self.create_limit {
             return itr_err_fmt!(
                 ItrErrCode::IntentError,
@@ -145,6 +155,10 @@ impl IntentRuntime {
                 self.create_limit
             );
         }
+        self.insert_entry(owner, kind)
+    }
+
+    fn insert_entry(&mut self, owner: ContractAddress, kind: Vec<u8>) -> VmrtRes<usize> {
         let next_gen = self.next_intent_id()?;
         self.id_generation = next_gen;
         self.next_id = next_gen;
@@ -158,6 +172,18 @@ impl IntentRuntime {
             },
         );
         Ok(next_gen)
+    }
+
+    /// Test-only: insert an intent past the kind-uniqueness check, so the defensive
+    /// branches that keep duplicate kinds fail-closed stay covered even though
+    /// `create` can no longer produce that state.
+    #[cfg(test)]
+    pub(crate) fn create_ignoring_kind_uniqueness(
+        &mut self,
+        owner: ContractAddress,
+        kind: Vec<u8>,
+    ) -> VmrtRes<usize> {
+        self.insert_entry(owner, kind)
     }
 
     fn intent_not_found(id: usize) -> ItrErr {
@@ -775,6 +801,70 @@ impl IntentRuntime {
             None
         };
         Ok((next, page))
+    }
+
+    /// Ids of every open intent owned by `owner` whose kind equals `kind`, ascending.
+    ///
+    /// This is the lookup behind `intent_use_open`, which binds only when exactly one
+    /// intent answers: zero means there is nothing to address. `create` refuses a
+    /// second open intent of the same kind, so more than one result is unreachable —
+    /// the caller still checks for it, as the net under that rule.
+    pub fn open_ids_by_kind(&self, owner: &ContractAddress, kind: &[u8]) -> VmrtRes<Vec<usize>> {
+        let Some(bucket) = self.buckets.get(owner) else {
+            return Ok(Vec::new());
+        };
+        let mut ids = Vec::new();
+        for (id, entry) in bucket {
+            if entry.kind == kind {
+                ids.push(*id);
+            }
+        }
+        // Bucket iteration order is hash order; sorting restores a deterministic result.
+        ids.sort_unstable();
+        Ok(ids)
+    }
+
+    /// Paged enumeration of `owner`'s open intents by ascending id: the kinds of the
+    /// intents strictly after `after` (or from the first), at most `limit` of them.
+    ///
+    /// Mirrors `keys_after`: a cursor that no longer names an open intent is only a
+    /// position, so a page stays well defined while the bucket is being mutated. Kinds
+    /// are returned as stored, duplicates included, so a caller can tell that a kind
+    /// addresses more than one intent.
+    pub fn open_kind_page(
+        &self,
+        owner: &ContractAddress,
+        after: Option<usize>,
+        limit: usize,
+    ) -> VmrtRes<(Option<usize>, Vec<Vec<u8>>)> {
+        if limit == 0 {
+            return itr_err_fmt!(
+                ItrErrCode::IntentError,
+                "intent open page limit must be positive"
+            );
+        }
+        let Some(bucket) = self.buckets.get(owner) else {
+            return Ok((None, Vec::new()));
+        };
+        let mut ids: Vec<usize> = bucket.keys().copied().collect();
+        ids.sort_unstable();
+        let start = match after {
+            None => 0usize,
+            Some(cursor) => ids.partition_point(|id| *id <= cursor),
+        };
+        let end = start.saturating_add(limit).min(ids.len());
+        let mut kinds = Vec::with_capacity(end.saturating_sub(start));
+        for id in &ids[start..end] {
+            if let Some(entry) = bucket.get(id) {
+                kinds.push(entry.kind.clone());
+            }
+        }
+        let next = if end < ids.len() {
+            Some(ids[end - 1])
+        } else {
+            None
+        };
+        Ok((next, kinds))
     }
 
     fn ensure_unique_batch_keys(&self, keys: &[Value], op: &str) -> VmrtErr {

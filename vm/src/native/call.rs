@@ -29,6 +29,9 @@ pub fn call_ntctl(
 ) -> VmrtRes<(Value, i64)> {
     match NativeCtl::try_from_u8(idx)? {
         NativeCtl::defer => call_defer(exec, bindings, intents, deferred_registry, argv),
+        NativeCtl::defer_current => {
+            call_defer_current(exec, bindings, intent_state, intents, deferred_registry, argv)
+        }
         NativeCtl::intent_new => call_intent_new(exec, bindings, intent_state, intents, argv),
         NativeCtl::intent_use => call_intent_use(exec, cap, bindings, intent_state, intents, argv),
         NativeCtl::intent_pop => call_intent_pop(exec, bindings, intent_state, argv),
@@ -123,6 +126,13 @@ pub fn call_ntctl(
         NativeCtl::intent_inc => call_intent_inc(exec, bindings, intent_state, intents, argv),
         NativeCtl::intent_add => call_intent_add(exec, bindings, intent_state, intents, argv),
         NativeCtl::intent_sub => call_intent_sub(exec, bindings, intent_state, intents, argv),
+        NativeCtl::intent_use_kind => {
+            call_intent_use_kind(exec, cap, bindings, intent_state, intents, argv)
+        }
+        NativeCtl::intent_bound => call_intent_bound(exec, bindings, intent_state, intents, argv),
+        NativeCtl::intent_open_page => {
+            call_intent_open_page(exec, cap, bindings, intent_state, intents, argv)
+        }
         NativeCtl::Null => unreachable!(),
     }
 }

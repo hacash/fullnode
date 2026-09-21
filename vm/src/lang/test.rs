@@ -1540,4 +1540,38 @@ mod token_t {
         let aliased = lang_to_ircode("var $5 = 1\nreturn $5").expect("aliased");
         assert_eq!(named, aliased);
     }
+
+    #[test]
+    fn new_intent_ctl_surface_compiles_and_checks_arity() {
+        use super::lang_to_irnode;
+        use super::Formater;
+        use super::PrintOption;
+
+        let accepted = [
+            "intent_use_open(1)\nreturn 0",
+            "intent_bound()\nreturn 0",
+            "defer_current()\nreturn 0",
+            "intent_open_page(nil, 8)\nreturn 0",
+        ];
+        for src in accepted {
+            let ir = lang_to_irnode(src).expect(src);
+            let text = Formater::new(&PrintOption::new("  ", 0)).print(&ir);
+            let name = src.split('(').next().unwrap();
+            assert!(
+                text.contains(&format!("{name}(")),
+                "decompiled source lost `{name}`, got:\n{text}"
+            );
+        }
+
+        let rejected = [
+            "intent_use_open()\nreturn 0",
+            "intent_use_open(1, 2)\nreturn 0",
+            "intent_bound(1)\nreturn 0",
+            "defer_current(nil)\nreturn 0",
+            "intent_open_page(nil)\nreturn 0",
+        ];
+        for src in rejected {
+            assert!(lang_to_irnode(src).is_err(), "expected arity error for {src}");
+        }
+    }
 }
