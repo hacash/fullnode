@@ -37,6 +37,11 @@ base::action_simple! { BalanceAsset, 0x0602, 3, CALL_ONLY, {
 }, this, {
     description: format!("Syscall: Get asset {} balance for {}", this.serial.uint(), this.addr.to_readable())
 }}
+base::action_simple! { AssetMeta, 0x0603, 3, CALL_ONLY, {
+    serial: Fold64
+}, this, {
+    description: format!("Syscall: Get asset {} metadata", this.serial.uint())
+}}
 base::action_simple! { CheckSignature, 0x0609, 3, CALL_ONLY, {
     addr: Address
 }, this, {

@@ -109,6 +109,7 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
     register_vm_hosts!(reg, view;
         BalanceCoin = (Bytes, 1),
         BalanceAsset = (U64, 2),
+        AssetMeta = (Bytes, 1),
         CheckSignature = (Bool, 1),
         SigsetCount = (U8, 1),
         SigsetAtLeast = (Bool, 2),
@@ -237,6 +238,7 @@ mod tests {
             (TxBlob::KIND, TxBlob::NAME, VmValueType::Bytes, 3),
             (TxBlobSize::KIND, TxBlobSize::NAME, VmValueType::U16, 1),
             (BalanceAsset::KIND, BalanceAsset::NAME, VmValueType::U64, 2),
+            (AssetMeta::KIND, AssetMeta::NAME, VmValueType::Bytes, 1),
             (
                 CheckSignature::KIND,
                 CheckSignature::NAME,

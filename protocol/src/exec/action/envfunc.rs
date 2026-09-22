@@ -5,7 +5,7 @@ use field::{Address, AddressW1, DiamondName, Encode};
 use sys::errf;
 
 use crate::codec::action::{
-    BalanceAsset, BalanceCoin, BlockAuthorAddr, CheckSignature, EnvHeight, HacdInscGet,
+    AssetMeta, BalanceAsset, BalanceCoin, BlockAuthorAddr, CheckSignature, EnvHeight, HacdInscGet,
     HacdInscNum, HacdNameList, HacdOwnerAddrs, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum,
     TxBlobSize, TxMainAddr, TxMessage, TxMessageNum,
 };
@@ -169,6 +169,30 @@ base::impl_action_execute! {
                 .map(|a| a.amount.uint())
                 .unwrap_or(0);
             Ok(amt.to_be_bytes().to_vec())
+        }
+    }
+}
+
+/// Canonical fixed layout (30 bytes): `[decimal u8][supply u64 BE][issuer raw21]`.
+/// Frozen consensus ABI: fields are never reordered/widened/removed; new metadata
+/// fields arrive as new syscalls, so whole-blob equality in deployed contracts
+/// stays valid.
+base::impl_action_execute! {
+    AssetMeta {
+        (self, ctx) {
+            let serial = self.serial.uint();
+            if serial == 0 {
+                return errf!("asset serial cannot be zero");
+            }
+            let meta = match CoreState::wrap(ctx.layer()).asset(&self.serial)? {
+                Some(m) => m,
+                None => return errf!("asset serial {} not found", serial),
+            };
+            let mut res = Vec::with_capacity(30);
+            res.push(meta.decimal.uint() as u8);
+            res.extend_from_slice(&meta.supply.uint().to_be_bytes());
+            res.extend_from_slice(meta.issuer.as_ref());
+            Ok(res)
         }
     }
 }

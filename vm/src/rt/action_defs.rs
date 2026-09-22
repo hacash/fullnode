@@ -50,9 +50,10 @@ vm_defs! {
     (0x04, "tx_message_num", U8, 0),
     (0x05, "tx_blob_num", U8, 0),
     },
-    view[12]: {
+    view[13]: {
     (0x01, "balance_coin", Bytes, 1),
     (0x02, "balance_asset", U64, 2),
+    (0x03, "asset_meta", Bytes, 1),
     (0x09, "check_signature", Bool, 1),
     (0x0A, "sigset_count", U8, 1),
     (0x0B, "sigset_at_least", Bool, 2),

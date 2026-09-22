@@ -2,12 +2,15 @@
 
 dist/
 
+
 *.config.ini
 *.loc/
 
 hacash_*_ubuntu*
 hacash_*.zip
 
+.agents/
+.codex/
 .claude/
 .zcode/
 .zcodeignore
