@@ -6,9 +6,10 @@
 // See `vm/doc/operand-stack.md` for PACK*, XLG/XOP, PUTX/GETX, and in-place peek ops.
 //
 // range test: row 0 = protocol-family window (opcode == action family byte), row 1 =
-// code-call family, row 7 = locals, row 8 = global/memory + heap halves, row 9 = log +
-// storage halves, row D = reserved for future families. New opcodes land in row D, not
-// in row 0.
+// code-call family, row 7 = global/memory 0x70-0x76 + locals 0x79-0x7F, row 8 = locals
+// 0x80-0x83 + heap halves, row 9 = log + storage halves, row D = reserved for future
+// families. New opcodes land in row D, not in row 0. 0x74-0x78, 0x84-0x88 and 0x97-0x98
+// are free because the live network never validated them as opcodes.
 
 #[repr(u8)]
 #[allow(non_camel_case_types)]
@@ -142,15 +143,18 @@ pub enum Bytecode {
     ____________6e = 0x6e,
     ____________6f = 0x6f,
 
-    // row 7: locals
-    ____________70 = 0x70,
-    ____________71 = 0x71,
-    ____________72 = 0x72,
-    ____________73 = 0x73,
-    GET0 = 0x74, // +     local get idx 0
-    GET1 = 0x75, // +     local get idx 1
-    GET2 = 0x76, // +     local get idx 2
-    GET3 = 0x77, // +     local get idx 3
+    // row 7: 0x70-0x76 global/memory, 0x79-0x7F locals. The global/memory head sits here
+    // because mainnet P2SH lock scripts (revealed from height 768358 on) encode GET0..GET3
+    // as 0x80..0x83 and the live network validated them at those bytes; see
+    // `onchain_p2sh_lockboxes_keep_their_deployed_encoding`.
+    GPUT = 0x70,   // a,b   global put
+    GGET = 0x71,   // &     global get
+    MPUT = 0x72,   // a,b   memory put
+    MGET = 0x73,   // &     memory get
+    MONCE = 0x74,  // a,b   memory once
+    MTAKE = 0x75,  // &     memory take
+    MPATCH = 0x76, // a,b,c+  key, expected, patch_set → sha2(final)
+    ____________77 = 0x77,
     ____________78 = 0x78,
     XLG = 0x79,   // *&    local[idx] op stack_top (rhs only on stack; not GT)
     XOP = 0x7a,   // *a    local[idx] op= stack_top (rhs); +stack_write on result val_size
@@ -160,14 +164,16 @@ pub enum Bytecode {
     PUTX = 0x7e,  // idx,val+ dynamic local put (IR: local_x_put(idx, val))
     ALLOC = 0x7f, // *     local allocQ
 
-    // row 8: global+memory 0x80-0x87 / heap 0x88-0x8F
-    GPUT = 0x80,   // a,b   global put
-    GGET = 0x81,   // &     global get
-    MPUT = 0x82,   // a,b   memory put
-    MGET = 0x83,   // &     memory get
-    MONCE = 0x84,  // a,b   memory once
-    MTAKE = 0x85,  // &     memory take
-    MPATCH = 0x86, // a,b,c+  key, expected, patch_set → sha2(final)
+    // row 8: locals 0x80-0x83 / free 0x84-0x87 / heap 0x88-0x8F.
+    // GET0..GET3 keep the byte values the live network used; the memory family moved to
+    // row 7 (0x70-0x76) so the swap costs no deployed bytecode meaning.
+    GET0 = 0x80, // +     local get idx 0
+    GET1 = 0x81, // +     local get idx 1
+    GET2 = 0x82, // +     local get idx 2
+    GET3 = 0x83, // +     local get idx 3
+    ____________84 = 0x84,
+    ____________85 = 0x85,
+    ____________86 = 0x86,
     ____________87 = 0x87,
     ____________88 = 0x88, // reserved (removed HSLICE)
     HREADUL = 0x89,  // **+   heap read ul
@@ -612,19 +618,18 @@ mod bytecode_tests {
         // row 6: compo read / transform
         assert_eq!(LENGTH as u8, 0x60);
         assert_eq!(TUPLE2LIST as u8, 0x6b);
-        // row 7: locals
-        assert_eq!(GET0 as u8, 0x74);
-        assert_eq!(GET3 as u8, 0x77);
+        // row 7: global/memory family 0x70-0x76, then locals
+        assert_eq!(GPUT as u8, 0x70);
+        assert_eq!(MGET as u8, 0x73);
+        assert_eq!(MONCE as u8, 0x74);
+        assert_eq!(MPATCH as u8, 0x76);
         assert_eq!(XLG as u8, 0x79);
         assert_eq!(ALLOC as u8, 0x7f);
-        // row 8: global+memory, then heap
-        assert_eq!(GPUT as u8, 0x80);
-        assert_eq!(GGET as u8, 0x81);
-        assert_eq!(MPUT as u8, 0x82);
-        assert_eq!(MGET as u8, 0x83);
-        assert_eq!(MONCE as u8, 0x84);
-        assert_eq!(MTAKE as u8, 0x85);
-        assert_eq!(MPATCH as u8, 0x86);
+        // row 8: locals 0x80-0x83 (mainnet P2SH encoding), 0x84-0x87 free, then heap
+        assert_eq!(GET0 as u8, 0x80);
+        assert_eq!(GET1 as u8, 0x81);
+        assert_eq!(GET2 as u8, 0x82);
+        assert_eq!(GET3 as u8, 0x83);
         assert_eq!(HREADUL as u8, 0x89);
         assert_eq!(HWRITEX as u8, 0x8c);
         assert_eq!(HGROW as u8, 0x8f);
@@ -706,10 +711,12 @@ mod bytecode_tests {
             }
         }
         assert_eq!(named, 185, "184 existing opcodes + MPATCH");
-        // row 0 protocol window holes, the reserved 0x10/0x11 pair, 0x87/0x88,
+        // row 0 protocol window holes, the reserved 0x10/0x11 pair, the 0x77 hole and
+        // the 0x84-0x88 row-8 run (all never validated as opcodes by the live network),
         // the row B/C holes, and the row D growth row
         for op in [
-            0x01u8, 0x04, 0x05, 0x10, 0x11, 0x87, 0x88, 0xbe, 0xc8, 0xd0, 0xdf,
+            0x01u8, 0x04, 0x05, 0x10, 0x11, 0x77, 0x84, 0x85, 0x86, 0x87, 0x88, 0xbe, 0xc8, 0xd0,
+            0xdf,
         ] {
             assert!(
                 Bytecode::try_from_u8(op).is_err(),
@@ -719,6 +726,67 @@ mod bytecode_tests {
         assert_eq!(Bytecode::parse("MPATCH"), Some(MPATCH));
         assert_eq!(Bytecode::parse("CODE_CALL"), Some(CODE_CALL));
         assert_eq!(Bytecode::parse("CODECALL"), None);
+    }
+
+    /// The nine P2SH lock scripts mainnet actually contains (action kind 46, first
+    /// revealed at height 768358, the whole population through height 784301). They were
+    /// validated by the live network under its own bytecode map, so the current map must
+    /// keep both the meaning and the immediate width of every byte they use: a wrong
+    /// meaning silently runs different code, a wrong width desynchronises the stream.
+    /// Regenerate with `p2sh_scan <block_dir> 765432 <tip>` if this ever needs re-deriving.
+    #[test]
+    fn onchain_p2sh_lockboxes_keep_their_deployed_encoding() {
+        const LOCKBOXES: &[(u64, &str)] = &[
+            (768358, "7f0107027c00070122030bba7c32a7e5001f80221500b11f3f59601a0da2e0c471e460fb03bf156f46f33709a2ebe2001c8022150039e26861b8743434b95a1af10cb7051a429a9ce73709a2eb24ee"),
+            (768450, "7f0107027c00070122030bdb7732a7e5001f80221500b11f3f59601a0da2e0c471e460fb03bf156f46f33709a2ebe2001c80221500165c77a76c6c267624a2cee98252a1c0645540fe3709a2eb24ee"),
+            (768490, "7f0107027c00070122030bdb7732a7e5001f80221500b11f3f59601a0da2e0c471e460fb03bf156f46f33709a2ebe2001c80221500165c77a76c6c267624a2cee98252a1c0645540fe3709a2eb24ee"),
+            (768907, "7f0107027c00070122030bba7c32a7e5001f80221500b11f3f59601a0da2e0c471e460fb03bf156f46f33709a2ebe2001c8022150039e26861b8743434b95a1af10cb7051a429a9ce73709a2eb24ee"),
+            (769079, "7f0107027c00070122030bbcb132a7e5001f80221500b11f3f59601a0da2e0c471e460fb03bf156f46f33709a2ebe2001c8022150039e26861b8743434b95a1af10cb7051a429a9ce73709a2eb24ee"),
+            (769079, "7f0107027c00070122030bbcaf32a7e5001f80221500b11f3f59601a0da2e0c471e460fb03bf156f46f33709a2ebe2001c8022150039e26861b8743434b95a1af10cb7051a429a9ce73709a2eb24ee"),
+            (769202, "7f0107027c00070122030bbdc932a7e5001f80221500b11f3f59601a0da2e0c471e460fb03bf156f46f33709a2ebe2001c8022150039e26861b8743434b95a1af10cb7051a429a9ce73709a2eb24ee"),
+            (769214, "7f0107027c00070122030bbcb032a7e5001f80221500b11f3f59601a0da2e0c471e460fb03bf156f46f33709a2ebe2001c8022150039e26861b8743434b95a1af10cb7051a429a9ce73709a2eb24ee"),
+            (769214, "7f0107027c00070122030bbcae32a7e5001f80221500b11f3f59601a0da2e0c471e460fb03bf156f46f33709a2ebe2001c8022150039e26861b8743434b95a1af10cb7051a429a9ce73709a2eb24ee"),
+        ];
+        // Instruction sequence the live network executed for all nine of them. The
+        // addresses in the two PBUF operands differ per script; the shape does not.
+        const EXPECTED: &[&str] = &[
+            "ALLOC", "ACTENV", "PUT", "ACTENV", "PBUF", "CU32", "GE", "BRSL", "GET0", "PBUF",
+            "CTO", "EQ", "AST", "JMPSL", "GET0", "PBUF", "CTO", "EQ", "AST", "P0", "RET",
+        ];
+
+        for (height, hex_lockbox) in LOCKBOXES {
+            let codes = hex::decode(hex_lockbox).expect("lockbox hex");
+            let mut got = Vec::new();
+            let mut pc = 0usize;
+            while pc < codes.len() {
+                let inst = match Bytecode::try_from_u8(codes[pc]) {
+                    Ok(inst) => inst,
+                    Err(_) => panic!("height {height}: 0x{:02x} is not an opcode", codes[pc]),
+                };
+                got.push(format!("{:?}", inst));
+                pc += 1;
+                pc += match inst {
+                    // PBUF carries its own length byte, so `metadata().param` is not the
+                    // whole story: overrun here is exactly the desync this test guards.
+                    PBUF => 1 + codes[pc] as usize,
+                    PBUFL => 2 + u16::from_be_bytes([codes[pc], codes[pc + 1]]) as usize,
+                    _ => inst.metadata().param as usize,
+                };
+            }
+            assert_eq!(pc, codes.len(), "height {height}: stream does not end on a boundary");
+            assert_eq!(codes.len(), 79, "height {height}: unexpected script length");
+            assert_eq!(
+                got, EXPECTED,
+                "height {height}: on-chain P2SH script no longer decodes to the same instructions"
+            );
+            // Applies the map's stack effects too (GET0 pushes, GPUT pops 2), so a future
+            // renumbering that swaps a push for a consumer fails here before it can fork.
+            crate::rt::verify_bytecodes_with_entry_stack(
+                &codes,
+                crate::rt::VerifyEntryStack::OptionalArgv,
+            )
+            .unwrap_or_else(|e| panic!("height {height}: P2SH lockbox fails verification: {e}"));
+        }
     }
 
     #[test]
