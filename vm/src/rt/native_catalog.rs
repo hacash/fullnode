@@ -243,6 +243,8 @@ native_func_env_define! { func, NativeFunc, NativeFuncError,
     blake2s256          = 5,    1,     32,    Bytes,   Concat
     blake2b256          = 6,    1,     32,    Bytes,   Concat
 
+    verify_signature    = 45,   3,     40,    Bool,    Packed
+
     hac_to_mei          = 51,   1,      6,    U64,     Concat
     hac_to_mei_checked  = 52,   1,      8,    U64,     Concat
     hac_to_zhu          = 53,   1,      6,    U128,    Concat
@@ -263,7 +265,12 @@ native_func_env_define! { func, NativeFunc, NativeFuncError,
     pack_asset          = 82,   2,      8,    Bytes,   Packed
     patches             = 83,   1,     16,    Bytes,   Packed
 
-    verify_signature    = 91,   3,     50,    Bool,    Packed
+    address_version     = 91,   1,      4,    U8,      Packed
+    is_privkey_unknown  = 92,   1,      4,    Bool,    Packed
+    is_privkey_not_unknown = 93, 1,     4,    Bool,    Packed
+    is_privkey          = 94,   1,      4,    Bool,    Packed
+    is_contract         = 95,   1,      4,    Bool,    Packed
+    is_scriptmh         = 96,   1,      4,    Bool,    Packed
 
     ascii_parse_flat_kv = 121, 8,      40,    Tuple,   Packed
     ascii_validate_transform = 122, 3, 24,    Tuple,   Packed

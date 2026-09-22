@@ -282,12 +282,91 @@ impl Value {
                 .cast_to_ty(ty)
                 .map_err(|err| Self::map_boundary_cast_error(ty, actual, err));
         }
+        // Address and 21-byte Bytes share one value domain: implicit both ways at call
+        // boundaries. Address->Bytes is lossless (`scalar_bytes`); Bytes->Address reuses
+        // `cast_addr`'s `address_from_bytes` (length + `is_supported` version check), so a
+        // bytes value that could never come from a real address still fails here with
+        // CallArgvTypeFail instead of becoming an undecodable stored Address.
+        if (ty == ValueTy::Address && actual == ValueTy::Bytes)
+            || (ty == ValueTy::Bytes && actual == ValueTy::Address)
+        {
+            return self
+                .cast_to_ty(ty)
+                .map_err(|err| Self::map_boundary_cast_error(ty, actual, err));
+        }
         Err(Self::fn_boundary_type_fail(ty, actual))
     }
 
     pub fn check_param_type(&self, ty: ValueTy) -> VmrtErr {
         let mut tmp = self.clone();
         tmp.cast_param(ty)
+    }
+}
+
+#[cfg(test)]
+mod cast_param_tests {
+    use super::*;
+    use field::Address;
+
+    fn supported_addr(version: u8, tail: u8) -> Address {
+        let mut raw = [0u8; Address::SIZE];
+        raw[0] = version;
+        raw[Address::SIZE - 1] = tail;
+        Address::from(raw)
+    }
+
+    fn bytes21(a: Address) -> Value {
+        Value::Bytes(a.as_bytes().to_vec())
+    }
+
+    // Boundary implicit conversion: Bytes(21) <-> Address both ways, other shapes fail.
+    #[test]
+    fn bytes21_to_address_implicit_at_boundary() {
+        let a = supported_addr(Address::VERSION_CONTRACT, 9);
+        let mut v = bytes21(a);
+        v.cast_param(ValueTy::Address).unwrap();
+        assert_eq!(v, Value::Address(a));
+
+        // wrong length cannot implicitly convert
+        let mut v = Value::Bytes(vec![0u8; 20]);
+        assert!(v.check_param_type(ValueTy::Address).is_err());
+
+        // unsupported version byte cannot implicitly convert: the value domain of
+        // Address is validated addresses, not arbitrary 21-byte strings
+        let mut raw = [0u8; Address::SIZE];
+        raw[0] = 0x02;
+        raw[20] = 1;
+        let mut v = Value::Bytes(raw.to_vec());
+        let err = v.check_param_type(ValueTy::Address).unwrap_err();
+        assert_eq!(err.0, CallArgvTypeFail);
+    }
+
+    #[test]
+    fn address_to_bytes_implicit_at_boundary() {
+        let a = supported_addr(Address::VERSION_PRIVAKEY, 3);
+        let mut v = Value::Address(a);
+        v.cast_param(ValueTy::Bytes).unwrap();
+        assert_eq!(v, bytes21(a));
+    }
+
+    #[test]
+    fn address_bytes21_content_eq_and_error_paths() {
+        let a = supported_addr(Address::VERSION_SCRIPTMH, 5);
+        assert!(value_content_eq(&Value::Address(a), &bytes21(a)).unwrap());
+        assert!(value_content_eq(&bytes21(a), &Value::Address(a)).unwrap());
+
+        let other = supported_addr(Address::VERSION_SCRIPTMH, 6);
+        assert!(!value_content_eq(&Value::Address(a), &bytes21(other)).unwrap());
+
+        // non-21-byte Bytes stays a cross-type error, not a silent false
+        assert!(value_content_eq(&Value::Bytes(vec![1, 2, 3]), &Value::Address(a)).is_err());
+
+        // content comparison does not version-validate: an invalid-version 21-byte
+        // string still compares by raw bytes
+        let mut raw = [0u8; Address::SIZE];
+        raw[0] = 0x02;
+        raw[20] = 1;
+        assert!(!value_content_eq(&Value::Bytes(raw.to_vec()), &Value::Address(a)).unwrap());
     }
 }
 

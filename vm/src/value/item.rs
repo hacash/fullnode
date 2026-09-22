@@ -56,10 +56,17 @@ pub(crate) fn add_size_saturating(total: usize, add: usize) -> usize {
 }
 
 // VM semantic equality (contract-visible comparison, NOT Rust `==`): uints by value across widths,
-// tuple/compo by content, cross-type errors. Map keys value-normalized; `scalar_bytes` serialization-only.
+// tuple/compo by content, cross-type errors — except Address vs exactly-21-byte Bytes, which share
+// one value domain and compare by raw bytes (no version validation; comparison is pure content).
+// Map keys value-normalized; `scalar_bytes` serialization-only.
 pub(crate) fn value_content_eq(lhs: &Value, rhs: &Value) -> VmrtRes<bool> {
     if lhs.is_uint() && rhs.is_uint() {
         return Ok(lhs.extract_u128()? == rhs.extract_u128()?);
+    }
+    if let (Bytes(l), Address(r)) | (Address(r), Bytes(l)) = (lhs, rhs) {
+        if l.len() == field::Address::SIZE {
+            return Ok(l.as_slice() == r.as_bytes());
+        }
     }
     if lhs.ty() != rhs.ty() {
         return itr_err_fmt!(

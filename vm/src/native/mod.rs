@@ -10,12 +10,17 @@ use crate::rt::ItrErrCode::*;
 use crate::rt::*;
 use crate::value::*;
 
+mod addr;
 mod amount;
 mod argv;
 mod ascii;
 mod call;
 mod intent;
 mod patches;
+pub(crate) use addr::{
+    address_version, is_contract, is_privkey, is_privkey_not_unknown, is_privkey_unknown,
+    is_scriptmh,
+};
 pub(crate) use amount::{
     hac_is_exact_mei, hac_is_exact_unit, hac_is_exact_zhu, hac_to_mei_checked, hac_to_unit,
     hac_to_unit_checked, hac_to_zhu_checked, unit_to_hac,

@@ -1172,6 +1172,34 @@ mod token_t {
     }
 
     #[test]
+    fn address_inspection_natives_compile_as_packed() {
+        use super::lang_to_bytecode;
+        use super::lang_to_irnode;
+        use crate::rt::Bytecode;
+
+        for call in [
+            "address_version(a)",
+            "is_privkey_unknown(a)",
+            "is_privkey_not_unknown(a)",
+            "is_privkey(a)",
+            "is_contract(a)",
+            "is_scriptmh(a)",
+        ] {
+            let script = format!(
+                "var a = emqjNS9PscqdBpMtnC3Jfuc4mvZUPYTPS\nreturn {}",
+                call
+            );
+            lang_to_irnode(&script).unwrap_or_else(|e| panic!("{} must compile: {}", call, e));
+            let codes = lang_to_bytecode(&script).expect("bytecode");
+            assert!(
+                codes.contains(&(Bytecode::NTFUNC as u8)),
+                "{}: must compile to NTFUNC dispatch",
+                call
+            );
+        }
+    }
+
+    #[test]
     fn test_syscall_multi_arg_packed_decompiles_as_two_args() {
         use super::lang_to_irnode;
         use super::Formater;
