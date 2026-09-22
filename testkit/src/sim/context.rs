@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use base::{
-    ActOut, Context, Env, ExecFrom, ExecutionServices, LogEntry, P2sh, StateLayer, TexLedger,
-    Transaction, TransactionSign, Vm,
+    ActOut, ActionDispatcher, Context, Env, ExecFrom, ExecutionServices, LogEntry,
+    P2sh, StateLayer, TexLedger, Transaction, TransactionSign, Vm,
 };
 use field::Address;
 use sys::{Rerr, Ret};
@@ -165,8 +165,23 @@ impl Context for TestContext {
         self.tex = snapshot.tex;
         self.gas = snapshot.gas;
     }
-    fn action_call(&mut self, kind: u16, _body: Vec<u8>) -> Ret<ActOut> {
-        sys::errf!("test context has no host action decoder for action kind {kind}")
+    fn action_call(&mut self, kind: u16, body: Vec<u8>) -> Ret<ActOut> {
+        // Keep in-process VM tests on the same host-action path as the
+        // production execution context.  In particular, ACTVIEW calls such
+        // as hacd_insc_num / hacd_insc_get must be decodable in TestContext.
+        let mut wire = Vec::with_capacity(2 + body.len());
+        wire.extend_from_slice(&kind.to_be_bytes());
+        wire.extend_from_slice(&body);
+        let services = self.services.clone();
+        let (action, used) = services.decode_action(&wire)?;
+        if used != wire.len() {
+            return sys::errf!(
+                "test action parse length mismatch: consumed {} but body length is {}",
+                used,
+                wire.len()
+            );
+        }
+        ActionDispatcher::dispatch_call(self, &action)
     }
     fn vm_take(&mut self) -> Option<Box<dyn Vm>> {
         self.vm.take()

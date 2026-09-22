@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use base::{ExecutionServices, TransactionSign};
 use field::{Address, Amount};
+use hacash_params::{HacashParams, ProtocolParams};
 use sys::Ret;
 
 use super::context::TestContext;
@@ -41,6 +42,28 @@ pub fn standard_services() -> Ret<Arc<dyn ExecutionServices>> {
     Ok(Arc::new(app::standard_registry()?))
 }
 
+// Trusted in-process profilers need to measure code above the production
+// per-call compute/resource/storage ceilings.  Keep every other consensus
+// parameter identical to mainnet, but disable only those three VM dimensions.
+static UNBOUNDED_VM_PROFILE: HacashParams = HacashParams {
+    protocol: ProtocolParams {
+        vm: base::VmExecutionParams {
+            compute_limit_byte: 0,
+            resource_limit_byte: 0,
+            storage_limit_byte: 0,
+            ..hacash_params::MAINNET_PARAMS.protocol.vm
+        },
+        ..hacash_params::MAINNET_PARAMS.protocol
+    },
+    ..hacash_params::MAINNET_PARAMS
+};
+
+pub fn unbounded_vm_services() -> Ret<Arc<dyn ExecutionServices>> {
+    Ok(Arc::new(app::standard_registry_with_params(
+        &UNBOUNDED_VM_PROFILE,
+    )?))
+}
+
 pub fn standard_context(tx: Arc<dyn TransactionSign>) -> Ret<TestContext> {
     Ok(TestContext::new(standard_services()?, tx))
 }
@@ -55,6 +78,25 @@ pub fn make_ctx_from_tx(
     _logs: MemLogs,
 ) -> TestContext {
     let services = standard_services().expect("standard test services");
+    let mut ctx = TestContext::new(services.clone(), Arc::new(tx.clone()));
+    ctx.layer = state;
+    ctx.env.block.height = height;
+    if let Some(vm) = services.assign_vm(height) {
+        ctx.set_vm(vm);
+    }
+    ctx
+}
+
+/// Construct a normal in-memory context whose VM category ceilings are
+/// disabled.  It is for trusted gas/timing profilers only, never consensus or
+/// public sandbox tests.
+pub fn make_ctx_from_tx_unbounded_vm(
+    height: u64,
+    tx: &StubTx,
+    state: FlatMemState,
+    _logs: MemLogs,
+) -> TestContext {
+    let services = unbounded_vm_services().expect("unbounded test services");
     let mut ctx = TestContext::new(services.clone(), Arc::new(tx.clone()));
     ctx.layer = state;
     ctx.env.block.height = height;

@@ -13,5 +13,6 @@ vm = { workspace = true }
 mint = { workspace = true }
 chain = { workspace = true }
 app = { workspace = true }
+hacash-params = { workspace = true }
 x16rs = { workspace = true }
 hex = "0.4"
