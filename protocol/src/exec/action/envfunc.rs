@@ -173,10 +173,10 @@ base::impl_action_execute! {
     }
 }
 
-/// Canonical fixed layout (30 bytes): `[decimal u8][supply u64 BE][issuer raw21]`.
-/// Frozen consensus ABI: fields are never reordered/widened/removed; new metadata
-/// fields arrive as new syscalls, so whole-blob equality in deployed contracts
-/// stays valid.
+// Canonical fixed layout (30 bytes): `[decimal u8][supply u64 BE][issuer raw21]`.
+// Frozen consensus ABI: fields are never reordered/widened/removed; new metadata
+// fields arrive as new syscalls, so whole-blob equality in deployed contracts
+// stays valid.
 base::impl_action_execute! {
     AssetMeta {
         (self, ctx) {
