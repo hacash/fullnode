@@ -97,12 +97,12 @@ mod tests {
 
     #[test]
     fn catalog_rows_are_stable() {
-        assert_eq!(NativeFunc::address_version as u8, 84);
-        assert_eq!(NativeFunc::is_privkey_unknown as u8, 85);
-        assert_eq!(NativeFunc::is_privkey_not_unknown as u8, 86);
-        assert_eq!(NativeFunc::is_privkey as u8, 87);
-        assert_eq!(NativeFunc::is_contract as u8, 88);
-        assert_eq!(NativeFunc::is_scriptmh as u8, 89);
+        assert_eq!(NativeFunc::address_version as u8, 91);
+        assert_eq!(NativeFunc::is_privkey_unknown as u8, 92);
+        assert_eq!(NativeFunc::is_privkey_not_unknown as u8, 93);
+        assert_eq!(NativeFunc::is_privkey as u8, 94);
+        assert_eq!(NativeFunc::is_contract as u8, 95);
+        assert_eq!(NativeFunc::is_scriptmh as u8, 96);
         for cty in [
             NativeFunc::address_version,
             NativeFunc::is_privkey_unknown,
