@@ -1122,6 +1122,94 @@ mod tests {
     }
 
     #[test]
+    fn catalog_marks_widening_arithmetic_ctl_as_dynamic_retval() {
+        // `intent_inc` / `intent_add` / `intent_sub` return a uint whose width is
+        // decided at run time (operand promotion + checked arith), so no single
+        // fixed `ValueTy` fits. `Nil` is the catalog's dynamic/unspecified marker
+        // for ctl rows and must not be read as "returns Value::Nil".
+        assert_eq!(NativeCtl::intent_inc.rty_of(), ValueTy::Nil);
+        assert_eq!(NativeCtl::intent_add.rty_of(), ValueTy::Nil);
+        assert_eq!(NativeCtl::intent_sub.rty_of(), ValueTy::Nil);
+        // fixed-type ctl rows still report their real type, so the dynamic marker
+        // stays distinguishable from a genuine return type.
+        assert_eq!(NativeCtl::intent_len.rty_of(), ValueTy::U64);
+        assert_eq!(NativeCtl::intent_append.rty_of(), ValueTy::U64);
+    }
+
+    #[test]
+    fn inc_on_absent_key_mirrors_the_delta_width() {
+        // `inc(key, d)` on a missing key is specified as `put(key, d)`: the base is
+        // the additive identity at the *delta's* width, so the first write must not
+        // silently widen the counter to some fixed width.
+        let owner = addr(1);
+        let (mut intents, _cap) = runtimes();
+        let id = intents.create(owner, b"counter".to_vec()).unwrap();
+
+        let cases = [
+            (Value::U8(7), Value::U8(7)),
+            (Value::U16(7), Value::U16(7)),
+            (Value::U32(7), Value::U32(7)),
+            (Value::U64(7), Value::U64(7)),
+            (Value::U128(7), Value::U128(7)),
+        ];
+        for (i, (delta, expect)) in cases.into_iter().enumerate() {
+            let key = bytes(format!("k{i}").as_bytes());
+            let got = intents.inc(&owner, id, key.clone(), delta).unwrap();
+            assert_eq!(got.ty(), expect.ty(), "first inc must mirror the delta type");
+            assert_eq!(got, expect);
+            assert_eq!(intents.get(&owner, id, &key).unwrap(), expect);
+        }
+    }
+
+    #[test]
+    fn inc_keeps_the_common_width_rule_and_checked_overflow() {
+        let owner = addr(1);
+        let (mut intents, _cap) = runtimes();
+        let id = intents.create(owner, b"counter".to_vec()).unwrap();
+
+        // the existing value wins when it is wider than the delta
+        let wider = bytes(b"a");
+        intents.put(&owner, id, wider.clone(), Value::U32(5)).unwrap();
+        assert_eq!(
+            intents.inc(&owner, id, wider, Value::U8(3)).unwrap(),
+            Value::U32(8)
+        );
+
+        // the delta wins when it is wider than the existing value
+        let narrow = bytes(b"b");
+        intents.put(&owner, id, narrow.clone(), Value::U8(5)).unwrap();
+        assert_eq!(
+            intents.inc(&owner, id, narrow, Value::U128(3)).unwrap(),
+            Value::U128(8)
+        );
+
+        // an absent key starts at the delta's width, so a second inc of that width
+        // is already able to overflow: U8 max is 255
+        let fresh = bytes(b"c");
+        assert_eq!(
+            intents.inc(&owner, id, fresh.clone(), Value::U8(200)).unwrap(),
+            Value::U8(200)
+        );
+        let err = intents
+            .inc(&owner, id, fresh.clone(), Value::U8(100))
+            .unwrap_err();
+        assert_eq!(err.0, ItrErrCode::IntentError);
+        assert!(err.1.contains("overflow"), "{}", err.1);
+
+        // the same failure is reached through `put` first: `inc` is consistent with
+        // counters created by `put`, rather than only widening on the `inc` path
+        let put_first = bytes(b"d");
+        intents
+            .put(&owner, id, put_first.clone(), Value::U8(200))
+            .unwrap();
+        let err = intents
+            .inc(&owner, id, put_first, Value::U8(100))
+            .unwrap_err();
+        assert_eq!(err.0, ItrErrCode::IntentError);
+        assert!(err.1.contains("overflow"), "{}", err.1);
+    }
+
+    #[test]
     fn create_names_at_most_one_open_intent_per_kind() {
         // kind is a per-owner name for one open intent, so a second creation with the
         // same kind is refused; destroying the intent frees the name again.

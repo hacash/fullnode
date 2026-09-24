@@ -31,6 +31,24 @@ pub struct IntentEntry {
     pub data: MKVMap,
 }
 
+/// How the shared `inc` / `add` arithmetic core treats a key that is not present yet.
+#[derive(Clone, Copy)]
+enum MissingBase {
+    /// The key must already exist; otherwise the call fails with key-not-found.
+    Required,
+    /// Treat the absent key as the additive identity expressed at the **delta's own
+    /// uint width**, so `inc(key, d)` on a missing key is exactly `put(key, d)` —
+    /// same value *and* same uint type.
+    ///
+    /// This keeps the width rule uniform: the result width is
+    /// `max(existing_width, delta_width)` on every path, including the first write,
+    /// so a counter first created by `inc` and one first created by `put` and then
+    /// incremented behave identically. Anchoring the identity at the delta's width
+    /// (rather than at a fixed width such as 64) is what removes the special case:
+    /// promoting a zero of width `w` against a delta of width `w` stays at `w`.
+    ZeroAtDeltaWidth,
+}
+
 #[derive(Clone, Debug, Default)]
 struct IntentBucketMap {
     datas: HashMap<Address, HashMap<usize, IntentEntry>>,
@@ -486,13 +504,28 @@ impl IntentRuntime {
         Ok(())
     }
 
+    /// Zero of the same uint width as `delta`, for [`MissingBase::ZeroAtDeltaWidth`].
+    fn zero_uint_at_delta_width(delta: &Value, delta_err: &str) -> VmrtRes<Value> {
+        let bits = delta
+            .ty()
+            .uint_bits()
+            .ok_or_else(|| ItrErr::new(ItrErrCode::IntentError, delta_err))?;
+        let mut zero = Value::U64(0);
+        zero.cast_to_uint_width(bits)
+            .map_err(|ItrErr(_, msg)| ItrErr::new(ItrErrCode::IntentError, &msg))?;
+        Ok(zero)
+    }
+
+    /// Shared `inc` / `add` core: promote the stored value and `delta` to their
+    /// common uint width, add with overflow checking, then store the result.
+    /// `missing_base` decides what an absent key means; see [`MissingBase`].
     fn add_core(
         &mut self,
         owner: &ContractAddress,
         id: usize,
         key: Value,
         delta: Value,
-        missing_base: Option<Value>,
+        missing_base: MissingBase,
         delta_err: &str,
         target_err: &str,
         overflow_err: &str,
@@ -510,7 +543,12 @@ impl IntentRuntime {
                 }
                 existing
             } else {
-                missing_base.ok_or_else(Self::key_not_found)?
+                match missing_base {
+                    MissingBase::Required => return Err(Self::key_not_found()),
+                    MissingBase::ZeroAtDeltaWidth => {
+                        Self::zero_uint_at_delta_width(&delta, delta_err)?
+                    }
+                }
             }
         };
         let val = Self::uint_add_checked_with_msg(&base, &delta, overflow_err)?;
@@ -556,7 +594,7 @@ impl IntentRuntime {
             id,
             key,
             delta,
-            None,
+            MissingBase::Required,
             "intent add delta must be uint",
             "intent add target must be uint",
             "intent add overflow",
@@ -587,6 +625,12 @@ impl IntentRuntime {
         Ok(val)
     }
 
+    /// Increment `key` by `delta` using checked arithmetic.
+    ///
+    /// On an absent key the counter starts at zero *of the delta's own uint width*,
+    /// so the first `inc` is equivalent to `put(key, delta)` — result type included.
+    /// See [`MissingBase::ZeroAtDeltaWidth`]. Existing counters keep the usual rule:
+    /// the result width is `max(existing_width, delta_width)`.
     pub fn inc(
         &mut self,
         owner: &ContractAddress,
@@ -599,7 +643,7 @@ impl IntentRuntime {
             id,
             key,
             delta,
-            Some(Value::U64(0)),
+            MissingBase::ZeroAtDeltaWidth,
             "intent inc delta must be uint",
             "intent inc target must be uint",
             "intent inc overflow",

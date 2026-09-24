@@ -120,6 +120,17 @@ macro_rules! native_catalog_enum {
                 Ok(Self::try_from_u8(idx)?.gas_of())
             }
 
+            /// Declared return type from the catalog row.
+            ///
+            /// `Nil` means **two different things** depending on the kind:
+            /// - `NativeFunc`: the handler really does return `Value::Nil`, and
+            ///   `finish_ntfunc` enforces the match.
+            /// - `NativeCtl`: `Nil` means *dynamic / unspecified* return type.
+            ///   The handler may return any `ValueTy` (e.g. the intent increment
+            ///   controls widen to the width of the operands involved), so a
+            ///   `Nil` catalog row must **not** be read as "returns `Value::Nil`".
+            ///
+            /// Only a non-`Nil` `rty` means the value has one fixed, known type.
             pub const fn rty_of(&self) -> ValueTy {
                 match self {
                     $( Self::$name => ValueTy::$rty, )+
@@ -173,6 +184,14 @@ macro_rules! native_catalog_enum {
 /// Every row must name Concat or Packed and has a same-named handler in
 /// `vm::native`; dispatch is generated from these rows.
 /// Ctl/env rows keep the 5-field form.
+///
+/// `rty` semantics differ by kind:
+/// - Func rows declare the one type the handler actually returns; the runtime
+///   asserts it in `finish_ntfunc`.
+/// - Ctl rows are metadata only. `rty = Nil` is the marker for a *dynamic /
+///   unspecified* return type (a handler may yield any `ValueTy`), so `Nil`
+///   here does not promise `Value::Nil`. Any non-`Nil` ctl `rty` is a real,
+///   fixed return type.
 macro_rules! native_func_env_define {
     ( func, $EnumName:ident, $ErrCode:ident,
       $( $name:ident = $v:expr, $argv_len:expr, $gas:expr, $rty:ident, $argv_pack:ident )+ ) => {
@@ -327,7 +346,11 @@ native_func_env_define! { ctl, NativeCtl, NativeCtlError,
     intent_del_if      = 59,    2,       8,    Bool
     intent_del_many    = 60,    1,       6,    U64
     intent_append      = 61,    2,       8,    U64
-    intent_inc         = 62,    2,       8,    U64
-    intent_add         = 63,    2,       8,    U64
-    intent_sub         = 64,    2,       8,    U64
+    // Arithmetic mutators widen to the width of the value/delta actually involved
+    // (`U8 + U8 -> U8`, `U8 + U32 -> U32`, `U64 + U128 -> U128`, ...) and use
+    // checked arithmetic, so no single fixed `ValueTy` describes them. `Nil` is
+    // the dynamic-return marker here, not a promise of `Value::Nil`.
+    intent_inc         = 62,    2,       8,    Nil
+    intent_add         = 63,    2,       8,    Nil
+    intent_sub         = 64,    2,       8,    Nil
 }
