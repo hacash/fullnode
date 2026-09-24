@@ -258,10 +258,25 @@ pub fn peek_block_budget_remaining(
     vp: &VmExecutionParams,
     height: u64,
 ) -> Ret<Option<u128>> {
+    Ok(peek_block_contract_storage_snapshot(read, vp, height)?.map(|s| s.remaining_start))
+}
+
+/// Best-effort block snapshot for quoting. Same absence rules as
+/// [`peek_block_budget_remaining`]: inactive heights and a missing `B_start` are
+/// `Ok(None)`. Once `B_start` is present, `D` and the quota bounds are validated
+/// exactly like [`read_block_contract_storage_snapshot`].
+pub fn peek_block_contract_storage_snapshot(
+    read: &dyn StateRead,
+    vp: &VmExecutionParams,
+    height: u64,
+) -> Ret<Option<ContractStorageBlockSnapshot>> {
     if !vp.contract_storage_fee.is_active_at(height) {
         return Ok(None);
     }
-    read_u128_transient(read, BLOCK_BUDGET_START_KEY)
+    if read_u128_transient(read, BLOCK_BUDGET_START_KEY)?.is_none() {
+        return Ok(None);
+    }
+    read_block_contract_storage_snapshot(read, vp, height)
 }
 
 /// Consume `charge_bytes` of block discount quota for one whole transaction (§4.3
@@ -462,7 +477,15 @@ pub fn contract_storage_fee_facts(
     let rate = u128::from(storage.active_rate(height).unwrap_or(0));
     let record = read_contract_storage_budget(read)?;
     let remaining = match record {
-        None => 0,
+        // Same birth rule as block start: a missing record at H0 is the full
+        // budget (B0 = C). After H0 a missing record is a fatal lifecycle error.
+        None if height == storage.activation_height => capacity,
+        None => {
+            return Err(budget_fatal(format!(
+                "budget record missing at height {height} (H0 {})",
+                storage.activation_height
+            )));
+        }
         Some(record) => {
             let applied = record.applied_capacity_bytes.uint();
             if capacity < applied {
@@ -1076,6 +1099,26 @@ mod tests {
     }
 
     #[test]
+    fn facts_at_activation_without_record_start_full() {
+        let root = root();
+        let vp = mainnet_like_params();
+        let facts = contract_storage_fee_facts(&root, &vp, 10_000).unwrap();
+        assert!(facts.enabled);
+        assert_eq!(facts.remaining, 1_000_000);
+        assert_eq!(facts.periods, 10);
+        assert_eq!(facts.next_block_quota, 16_384);
+        let q = contract_storage_fee_quote(&root, &vp, 10_000, 1_000).unwrap();
+        assert_eq!(q.discount_u232, Some(50_000_000_000u128 * 1_000 * 10));
+        let q_over = contract_storage_fee_quote(&root, &vp, 10_000, 20_000).unwrap();
+        assert_eq!(q_over.discount_u232, None);
+        let err = contract_storage_fee_facts(&root, &vp, 10_001).unwrap_err();
+        assert!(
+            err.to_string().contains("budget record missing"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn quote_reports_full_and_discount_tiers() {
         let root = root();
         let vp = mainnet_like_params();
@@ -1084,29 +1127,32 @@ mod tests {
         // near-drained head fabricated on top: B = 1,000 against C = 1,000,000
         let tip = fabricate_record_head(&full_tip, 10_001, 1_000, 1_000_000);
         let height = 10_002;
-        let charge = 10_000u64;
-        let q = contract_storage_fee_quote(&tip, &vp, height, charge).unwrap();
-        // full price: 5×10¹⁰ u232/byte × 10,000 bytes × 10,000 periods
+        let q = contract_storage_fee_quote(&tip, &vp, height, 1_000).unwrap();
+        // full price: 5×10¹⁰ u232/byte × 1,000 bytes × 10,000 periods
         assert_eq!(q.floor_purity, 50_000_000_000);
-        assert_eq!(q.full_u232, 50_000_000_000u128 * 10_000 * 10_000);
+        assert_eq!(q.full_u232, 50_000_000_000u128 * 1_000 * 10_000);
         // discount at the head remaining 1000 bytes: step = ceil(1000·999k/1M) = 999
-        // → periods = step × P_min = 9,990 (near full, budget nearly drained)
+        // → periods = step × P_min = 9,990 (near full, budget nearly drained).
+        // The charge equals K = min(B, K_max), so the discount is still grantable.
         let p = vp.contract_storage_fee
             .discount_periods(1_000, 1_000_000, 10_000)
             .unwrap();
         assert_eq!(p, 9_990);
         assert_eq!(
             q.discount_u232,
-            Some(50_000_000_000u128 * 10_000 * p as u128)
+            Some(50_000_000_000u128 * 1_000 * p as u128)
         );
+        let q_over = contract_storage_fee_quote(&tip, &vp, height, 10_000).unwrap();
+        assert_eq!(q_over.full_u232, 50_000_000_000u128 * 10_000 * 10_000);
+        assert_eq!(q_over.discount_u232, None);
         // the full-budget activation head quotes the 10-period floor discount
-        let q_full = contract_storage_fee_quote(&full_tip, &vp, 10_001, charge).unwrap();
+        let q_full = contract_storage_fee_quote(&full_tip, &vp, 10_001, 10_000).unwrap();
         assert_eq!(
             q_full.discount_u232,
             Some(50_000_000_000u128 * 10_000 * 10)
         );
         // pre-activation heights quote full price only
-        let q_off = contract_storage_fee_quote(&tip, &vp, 9_999, charge).unwrap();
+        let q_off = contract_storage_fee_quote(&tip, &vp, 9_999, 1_000).unwrap();
         assert_eq!(q_off.discount_u232, None);
         assert_eq!(q_off.full_u232, q.full_u232);
     }
@@ -1193,7 +1239,9 @@ pub fn contract_storage_fee_quote(
             .ok_or_else(|| budget_fatal("storage fee quote overflow"))
     };
     let full_u232 = scale(facts.max_periods)?;
-    let discount_u232 = if facts.enabled {
+    // The next block starts at D = 0, so the grantable discount is `next_block_quota`
+    // (`K`). A charge that cannot fit is not a discount quote.
+    let discount_u232 = if facts.enabled && bytes <= facts.next_block_quota {
         Some(scale(facts.periods)?)
     } else {
         None

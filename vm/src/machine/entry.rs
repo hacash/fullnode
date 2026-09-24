@@ -316,6 +316,43 @@ mod entry_semantics_tests {
         );
     }
 
+    /// Folding must keep the runtime operand width. Narrowing `300 - 50` to
+    /// `u8` makes the following shift fail; a `u8` sum that does not fit still widens.
+    #[test]
+    fn regression_literal_arithmetic_keeps_operand_width() {
+        let pairs = [
+            (
+                "return (300 - 50) << 1",
+                "var a = 300\nvar b = 50\nvar s = 1\nreturn (a - b) << s",
+            ),
+            ("return 400 / 3", "var a = 400\nvar b = 3\nreturn a / b"),
+            ("return 300 & 15", "var a = 300\nvar b = 15\nreturn a & b"),
+            ("return 300 - 300", "var a = 300\nvar b = 300\nreturn a - b"),
+        ];
+        for (literal, runtime) in pairs {
+            assert_eq!(
+                run_arithmetic_source(literal).unwrap(),
+                run_arithmetic_source(runtime).unwrap(),
+                "{literal}",
+            );
+        }
+        assert_eq!(
+            run_arithmetic_source("return (300 - 50) << 1").unwrap(),
+            Value::U16(500)
+        );
+        assert_eq!(
+            run_arithmetic_source("return 400 / 3").unwrap(),
+            Value::U16(133)
+        );
+        assert_eq!(
+            run_arithmetic_source("return 255u8 + 1u8").unwrap(),
+            Value::U16(256)
+        );
+        assert!(run_arithmetic_source("var x = 255u8\nreturn x + 1u8")
+            .unwrap_err()
+            .contains("Arithmetic"));
+    }
+
     /// Dev entry semantics: every VM entry executes under `ExecFrom::Call`
     /// (as in dev's `with_exec_from(ctx, Call, ..)`), and the caller's exec_from is restored afterwards.
     #[test]

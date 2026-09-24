@@ -278,9 +278,10 @@ pub fn analyze_contract_update(
 /// Read-only two-tier storage fee quote for one deploy/update payload (§8.D):
 /// `full_price` guarantees inclusion regardless of quota contention; `discount`
 /// is the best-effort price under the budget visible from the caller's layer and
-/// is present only when the mechanism is active and a live budget snapshot is in
-/// scope (block/pending execution). Analysis/tooling outside a block context gets
-/// `discount = None` and must quote `full_price` (or fetch the head budget facts).
+/// is present only when the mechanism is active, a live budget snapshot is in
+/// scope, and `charge_bytes` still fits the remaining block quota `K - D`.
+/// Analysis/tooling outside a block context gets `discount = None` and must quote
+/// `full_price` (or fetch the head budget facts).
 pub fn quote_contract_storage_fee(
     ctx: &mut dyn Context,
     charge_bytes: usize,
@@ -292,16 +293,18 @@ pub fn quote_contract_storage_fee(
     let height = ctx.env().block.height;
     let p_max = vp.contract_store_perm_periods;
     let full_price = calc_contract_protocol_cost_min_with_periods(ctx, charge_bytes, p_max)?;
-    let discount = match base::peek_block_budget_remaining(ctx.layer(), &vp, height)? {
-        Some(remaining) => {
-            let capacity = vp.contract_storage_fee.capacity_at(height)?;
-            let periods = vp
-                .contract_storage_fee
-                .discount_periods(remaining, capacity, p_max)?;
-            let minimum = calc_contract_protocol_cost_min_with_periods(ctx, charge_bytes, periods)?;
+    let discount = match base::peek_block_contract_storage_snapshot(ctx.layer(), &vp, height)? {
+        Some(snapshot) if charge_bytes as u128 <= snapshot.remaining_quota() => {
+            let periods = vp.contract_storage_fee.discount_periods(
+                snapshot.remaining_start,
+                snapshot.capacity,
+                p_max,
+            )?;
+            let minimum =
+                calc_contract_protocol_cost_min_with_periods(ctx, charge_bytes, periods)?;
             Some((minimum, periods))
         }
-        None => None,
+        _ => None,
     };
     Ok(ContractStorageFeeQuote {
         charge_bytes,
@@ -1485,5 +1488,30 @@ mod contract_deploy_exec_tests {
         update.address = caddr.to_addr();
         update.edit = edit;
         update.execute(&mut ctx).unwrap();
+    }
+
+    /// A live snapshot with too little remaining quota must not advertise a
+    /// discount the execution path would reject.
+    #[test]
+    fn quote_omits_discount_when_charge_exceeds_remaining_quota() {
+        let mut ctx = seeded_discount_ctx(false, DISCOUNT_H0 + 1000, 1_000_000, 1_000_000);
+        let snapshot = read_block_contract_storage_snapshot(
+            &ctx.layer,
+            &ctx.vm_params,
+            ctx.env.block.height,
+        )
+        .unwrap()
+        .unwrap();
+        consume_block_contract_storage_discount(&mut ctx.layer, &snapshot, 16_000).unwrap();
+        let too_big = quote_contract_storage_fee(&mut ctx, 1_000).unwrap();
+        assert!(too_big.discount.is_none());
+        assert!(too_big.full_price.is_positive());
+        let fits = quote_contract_storage_fee(&mut ctx, 384).unwrap();
+        let (amount, periods) = fits.discount.expect("384 bytes still fit in K - D");
+        assert_eq!(periods, 10);
+        assert!(amount.is_positive());
+        let mut offline = discount_ctx(false);
+        let q = quote_contract_storage_fee(&mut offline, 100).unwrap();
+        assert!(q.discount.is_none());
     }
 }

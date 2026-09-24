@@ -94,10 +94,20 @@ impl Syntax {
                 let (subx, suby) = Self::align_uint_literal_widths(left, right);
                 return Ok(UintLiteralCombine::Keep(subx, suby));
             };
-            // Unsuffixed constants use the smallest width of the value. A suffix
-            // (`100u64`) anywhere in the constant expression is a floor, and the
-            // folded result widens again when it no longer fits that floor.
+            // Floor is the wider operand width, then any suffix (`100u64`).
+            // The folded value widens past that floor when it no longer fits,
+            // so `255u8 + 1u8` is `u16` while `300 - 50` stays `u16`.
             let mut ty = Self::uint_width_of(value);
+            let left_ty = Self::literal_produced_width(left.as_ref());
+            let right_ty = Self::literal_produced_width(right.as_ref());
+            let operand_ty = if Self::uint_width_rank(right_ty) > Self::uint_width_rank(left_ty) {
+                right_ty
+            } else {
+                left_ty
+            };
+            if Self::uint_width_rank(operand_ty) > Self::uint_width_rank(ty) {
+                ty = operand_ty;
+            }
             if let Some(floor) = Self::literal_suffix_floor(left.as_ref())
                 .into_iter()
                 .chain(Self::literal_suffix_floor(right.as_ref()))

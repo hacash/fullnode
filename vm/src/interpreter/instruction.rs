@@ -1411,9 +1411,41 @@ mod fin_kernel_tests {
             Value::U64(22)
         );
         assert_eq!(
+            u64_mad_checked(
+                &Value::U64(0),
+                &Value::U128(0),
+                &Value::U128(u64::MAX as u128)
+            )
+            .unwrap(),
+            Value::U64(0)
+        );
+        assert_eq!(
+            u64_mad_checked(
+                &Value::U64(0),
+                &Value::U128(u64::MAX as u128),
+                &Value::U128(1)
+            )
+            .unwrap(),
+            Value::U64(u64::MAX)
+        );
+        assert_eq!(
+            u64_mad_checked(&Value::U128(0), &Value::U64(u64::MAX), &Value::U64(2)).unwrap(),
+            Value::U128((u64::MAX as u128) * 2)
+        );
+        assert_eq!(
             u64_mad_checked(&Value::U8(200), &Value::U8(1), &Value::U8(100))
                 .unwrap_err()
                 .0,
+            Arithmetic
+        );
+        assert_eq!(
+            u64_mad_checked(
+                &Value::U64(1),
+                &Value::U128(u64::MAX as u128),
+                &Value::U128(1)
+            )
+            .unwrap_err()
+            .0,
             Arithmetic
         );
         assert_eq!(
@@ -1426,5 +1458,60 @@ mod fin_kernel_tests {
             .0,
             Arithmetic
         );
+        assert_eq!(
+            u64_mad_checked(&Value::U128(u128::MAX), &Value::U128(1), &Value::U128(1))
+                .unwrap_err()
+                .0,
+            Arithmetic
+        );
+    }
+
+    #[test]
+    fn fee_add_bps_ceil_rounds_up_without_wrapping() {
+        let ceil_repay = |amount: u64, bps: u64| -> Option<u64> {
+            let product = amount as u128 * bps as u128;
+            let fee = product / 10_000 + u128::from(product % 10_000 != 0);
+            u64::try_from(amount as u128 + fee).ok()
+        };
+        let samples = [
+            (0, 0),
+            (0, 1),
+            (0, u64::MAX),
+            (1, 0),
+            (1, 1),
+            (1, 5000),
+            (1, 9999),
+            (1, 10_000),
+            (1, u64::MAX),
+            (2, 5000),
+            (3, 5000),
+            (9999, 1),
+            (10_000, 1),
+            (10_000, 30),
+            (u64::MAX, 0),
+            (u64::MAX / 2, 10_000),
+        ];
+        for (amount, bps) in samples {
+            let got = fee_add(amount, bps);
+            let expect = ceil_repay(amount, bps).unwrap();
+            assert_eq!(got, Value::U64(expect), "amount {amount} bps {bps}");
+            let floor = amount as u128 + (amount as u128 * bps as u128) / 10_000;
+            if (amount as u128 * bps as u128) % 10_000 != 0 {
+                assert_ne!(expect as u128, floor, "ceil collapsed to floor");
+            }
+        }
+        for (amount, bps) in [
+            (u64::MAX, 1),
+            (u64::MAX / 2 + 1, 10_000),
+            (10_000, u64::MAX),
+        ] {
+            let cap = SpaceCap::new(0);
+            let env = NativeFnEnv::new(&cap);
+            let argv = Value::pack_call_args(vec![Value::U64(amount), Value::U64(bps)]).unwrap();
+            assert!(
+                NativeFunc::call_packed(env, NativeFunc::fee_add_bps_ceil as u8, argv).is_err(),
+                "amount {amount} bps {bps} must not wrap"
+            );
+        }
     }
 }

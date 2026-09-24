@@ -17,6 +17,14 @@ use vm::action::{ContractDeploy, contract_deploy_charge_bytes};
 use vm::contract::ContractSto;
 use vm::fitshc::compiler::compile;
 
+fn parse_storage_periods(raw: &str, floor: u64, full: u64) -> Option<u64> {
+    let v = raw.parse::<u64>().ok()?;
+    if floor == 0 || v < floor || v > full || v % floor != 0 {
+        return None;
+    }
+    Some(v)
+}
+
 fn estimate_protocol_cost_auto_with_periods(
     txfee: &Amount,
     nonce: Uint4,
@@ -90,30 +98,41 @@ fn main() {
     }
     // Optional `--periods N` (or HACASH_STORAGE_FEE_PERIODS) selects the storage
     // fee basis for the deploy estimate. Defaults to full price (guaranteed entry).
+    // The curve only emits multiples of P_min inside [P_min, P_max]. An explicit
+    // `--periods` wins over the environment variable, including when it equals P_max.
     let full_periods = MAINNET_PARAMS.protocol.vm.contract_store_perm_periods;
+    let period_floor = MAINNET_PARAMS.protocol.vm.contract_storage_fee.period_floor;
     let mut periods = full_periods;
+    let mut periods_explicit = false;
     let mut rest: Vec<String> = Vec::new();
     let mut i = 1usize;
     while i < args.len() {
         if args[i] == "--periods" && i + 1 < args.len() {
-            periods = match args[i + 1].parse::<u64>() {
-                Ok(v) if v > 0 => v,
-                _ => {
-                    println!("Error: --periods expects a positive integer");
+            periods = match parse_storage_periods(&args[i + 1], period_floor, full_periods) {
+                Some(v) => v,
+                None => {
+                    println!(
+                        "Error: --periods expects a multiple of {period_floor} in [{period_floor}, {full_periods}]"
+                    );
                     return;
                 }
             };
+            periods_explicit = true;
             i += 2;
             continue;
         }
         rest.push(args[i].clone());
         i += 1;
     }
-    if periods == full_periods {
+    if !periods_explicit {
         if let Ok(env_p) = env::var("HACASH_STORAGE_FEE_PERIODS") {
-            if let Ok(v) = env_p.parse::<u64>() {
-                if v > 0 {
-                    periods = v;
+            match parse_storage_periods(&env_p, period_floor, full_periods) {
+                Some(v) => periods = v,
+                None => {
+                    println!(
+                        "Error: HACASH_STORAGE_FEE_PERIODS expects a multiple of {period_floor} in [{period_floor}, {full_periods}]"
+                    );
+                    return;
                 }
             }
         }

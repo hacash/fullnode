@@ -228,6 +228,46 @@ mod tests {
         assert_eq!(none, Value::Bytes(Amount::zero().encode()));
     }
 
+    fn zhu_residue(amount: &Amount) -> Amount {
+        let whole = Amount::coin_u128(amount.to_zhu_u128().unwrap(), UNIT_ZHU);
+        amount.sub_mode_u128(&whole).unwrap()
+    }
+
+    fn tail_amount(amount: &Amount) -> Amount {
+        let Value::Bytes(buf) = call_concat(NativeFunc::hac_zhu_tail, &amount.encode()).unwrap()
+        else {
+            panic!("hac_zhu_tail did not return bytes");
+        };
+        let (decoded, used) = Amount::decode(&buf).unwrap();
+        assert_eq!(used, buf.len());
+        decoded
+    }
+
+    #[test]
+    fn hac_zhu_tail_matches_floor_subtraction_across_scales() {
+        let cases = [
+            Amount::zero(),
+            Amount::coin_u128(1, UNIT_ZHU),
+            Amount::coin_u128(10, UNIT_ZHU - 1),
+            Amount::coin_u128(19, UNIT_ZHU - 1),
+            Amount::coin_u128(250, UNIT_ZHU - 2),
+            Amount::coin_u128(10_001, UNIT_ZHU - 4),
+            Amount::coin_u128(12345, UNIT_ZHU - 40),
+            Amount::coin_u128(u128::MAX, 0),
+            Amount::mei(1)
+                .add_mode_u128(&Amount::coin_u128(1, UNIT_ZHU - 1))
+                .unwrap(),
+        ];
+        for amount in cases {
+            assert_eq!(tail_amount(&amount), zhu_residue(&amount), "{amount}");
+        }
+        let negative = Amount::from("-1:239").unwrap();
+        assert!(is_native_err(call_concat(
+            NativeFunc::hac_zhu_tail,
+            &negative.encode()
+        )));
+    }
+
     #[test]
     fn zhu_checked_keeps_exact_amounts_and_rejects_sub_zhu() {
         let one_hac = Amount::mei(1);
