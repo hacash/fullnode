@@ -1139,7 +1139,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 }
                 FIN3 => {
                     let spec = fin_spec!(Bytecode::FIN3);
-                    triop_arithmetic(ops, |x, y, z| fin3_checked(spec, x, y, z))?
+                    triop_fin(ops, spec)?
                 }
                 ABSDIFF => binop_arithmetic(ops, absdiff_checked)?,
                 ADDMOD => triop_arithmetic(ops, addmod_checked)?,

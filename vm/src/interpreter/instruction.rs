@@ -40,6 +40,19 @@ where
     locop_arithmetic3(x, &mut y, &mut z, f)
 }
 
+fn triop_fin(operand_stack: &mut Stack, spec: FinSpec) -> VmrtErr {
+    if spec.kernel != FinKernel::U64Mad {
+        return triop_arithmetic(operand_stack, |x, y, z| fin3_checked(spec, x, y, z));
+    }
+    // This kernel checks against the original base width, not the common width.
+    let z = operand_stack.pop()?.to_uint()?;
+    let y = operand_stack.pop()?.to_uint()?;
+    let x = operand_stack.peek()?;
+    let result = fin3_checked(spec, &x.to_uint()?, &y, &z)?;
+    *x = result;
+    Ok(())
+}
+
 fn locop_arithmetic4<F>(x: &mut Value, y: &mut Value, z: &mut Value, w: &mut Value, f: F) -> VmrtErr
 where
     F: FnOnce(&Value, &Value, &Value, &Value) -> VmrtRes<Value>,
@@ -266,7 +279,7 @@ fn bit_shift_overflow(op: &str, x: &Value, y: &Value) -> ItrErr {
     )
 }
 
-fn bit_shl(x: &Value, y: &Value) -> VmrtRes<Value> {
+pub(crate) fn bit_shl(x: &Value, y: &Value) -> VmrtRes<Value> {
     let res = match (x, y) {
         (U8(l), U8(r)) => <u8>::checked_shl(*l, *r as u32).map(Value::U8),
         (U16(l), U16(r)) => <u16>::checked_shl(*l, *r as u32).map(Value::U16),
@@ -286,7 +299,7 @@ fn bit_shl(x: &Value, y: &Value) -> VmrtRes<Value> {
     res.ok_or_else(|| bit_shift_overflow("left", x, y))
 }
 
-fn bit_shr(x: &Value, y: &Value) -> VmrtRes<Value> {
+pub(crate) fn bit_shr(x: &Value, y: &Value) -> VmrtRes<Value> {
     let res = match (x, y) {
         (U8(l), U8(r)) => <u8>::checked_shr(*l, *r as u32).map(Value::U8),
         (U16(l), U16(r)) => <u16>::checked_shr(*l, *r as u32).map(Value::U16),
@@ -1415,4 +1428,3 @@ mod fin_kernel_tests {
         );
     }
 }
-

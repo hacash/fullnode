@@ -109,8 +109,8 @@ mod tests {
     #[test]
     fn argv_pack_and_canonical_idx() {
         assert_eq!(NativeFunc::address_ptr as u8, 81);
-        assert_eq!(NativeFunc::pack_asset as u8, 82);
-        assert_eq!(NativeFunc::patches as u8, 83);
+        assert_eq!(NativeFunc::patches as u8, 82);
+        assert_eq!(NativeFunc::pack_asset as u8, 83);
         assert_eq!(
             NativeFunc::argv_pack(NativeFunc::sha2 as u8).unwrap(),
             NativeArgvPack::Concat

@@ -1120,20 +1120,21 @@ mod tests {
 
     #[test]
     fn catalog_rows_pin_new_ctl_ids() {
-        assert_eq!(NativeCtl::intent_use_kind as u8, 65);
-        assert_eq!(NativeCtl::intent_bound as u8, 66);
+        assert_eq!(NativeCtl::intent_use_kind as u8, 24);
+        assert_eq!(NativeCtl::intent_bound as u8, 26);
         assert_eq!(NativeCtl::defer_current as u8, 2);
-        assert_eq!(NativeCtl::intent_open_page as u8, 68);
-        assert_eq!(NativeCtl::argv_len(65), Some(1));
-        assert_eq!(NativeCtl::argv_len(66), Some(0));
-        assert_eq!(NativeCtl::argv_len(2), Some(0));
-        assert_eq!(NativeCtl::argv_len(68), Some(2));
+        assert_eq!(NativeCtl::intent_open_page as u8, 40);
+        assert_eq!(NativeCtl::argv_len(NativeCtl::intent_use_kind as u8), Some(1));
+        assert_eq!(NativeCtl::argv_len(NativeCtl::intent_bound as u8), Some(0));
+        assert_eq!(NativeCtl::argv_len(NativeCtl::defer_current as u8), Some(0));
+        assert_eq!(NativeCtl::argv_len(NativeCtl::intent_open_page as u8), Some(2));
         assert_eq!(NativeCtl::intent_use_kind.rty_of(), ValueTy::Nil);
         assert_eq!(NativeCtl::intent_bound.rty_of(), ValueTy::Bool);
         assert_eq!(NativeCtl::defer_current.rty_of(), ValueTy::Nil);
         assert_eq!(NativeCtl::intent_open_page.rty_of(), ValueTy::Tuple);
         assert_eq!(NativeCtl::from_name("defer_current").map(|v| v.0), Some(2));
-        assert!(NativeCtl::has_idx(65) && NativeCtl::has_idx(68));
+        assert!(NativeCtl::has_idx(NativeCtl::intent_use_kind as u8));
+        assert!(NativeCtl::has_idx(NativeCtl::intent_open_page as u8));
     }
 
     #[test]

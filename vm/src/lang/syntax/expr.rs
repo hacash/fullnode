@@ -46,12 +46,30 @@ impl Syntax {
         {
             return Ok(UintLiteralCombine::Keep(left, right));
         }
-        let (Some(a), Some(b)) = (
-            crate::lang::ir_literal_value(left.as_ref())?.and_then(|v| v.extract_u128().ok()),
-            crate::lang::ir_literal_value(right.as_ref())?.and_then(|v| v.extract_u128().ok()),
+        let (Some(left_value), Some(right_value)) = (
+            crate::lang::ir_literal_value(Self::literal_inner(left.as_ref()))?,
+            crate::lang::ir_literal_value(Self::literal_inner(right.as_ref()))?,
         ) else {
             return Ok(UintLiteralCombine::Keep(left, right));
         };
+        let (Ok(a), Ok(b)) = (left_value.extract_u128(), right_value.extract_u128()) else {
+            return Ok(UintLiteralCombine::Keep(left, right));
+        };
+        if matches!(op, OpTy::BSHL | OpTy::BSHR) {
+            let (x, y) = Value::arithmetic_args2(&left_value, &right_value)?;
+            let shifted = match op {
+                OpTy::BSHL => crate::interpreter::bit_shl(&x, &y),
+                _ => crate::interpreter::bit_shr(&x, &y),
+            };
+            return match shifted {
+                Ok(value) => Ok(UintLiteralCombine::Folded(Self::build_cast_node(
+                    push_num(value.extract_u128()?),
+                    value.ty(),
+                ))),
+                // Keep faults at runtime, including in branches that may not execute.
+                Err(_) => Ok(UintLiteralCombine::Keep(left, right)),
+            };
+        }
         let folded = match op {
             OpTy::ADD => a.checked_add(b),
             OpTy::SUB => a.checked_sub(b),
@@ -59,13 +77,6 @@ impl Syntax {
             OpTy::DIV if b != 0 => Some(a / b),
             OpTy::MOD if b != 0 => Some(a % b),
             OpTy::POW => u32::try_from(b).ok().and_then(|e| a.checked_pow(e)),
-            OpTy::BSHL => u32::try_from(b)
-                .ok()
-                .filter(|shift| *shift < 128)
-                .and_then(|shift| a.checked_shl(shift)),
-            OpTy::BSHR => u32::try_from(b)
-                .ok()
-                .map(|shift| if shift >= 128 { 0 } else { a >> shift }),
             OpTy::BAND => Some(a & b),
             OpTy::BXOR => Some(a ^ b),
             OpTy::BOR => Some(a | b),
@@ -73,11 +84,11 @@ impl Syntax {
         };
         if matches!(
             op,
-            OpTy::ADD | OpTy::SUB | OpTy::MUL | OpTy::DIV | OpTy::MOD | OpTy::POW | OpTy::BSHL
-                | OpTy::BSHR | OpTy::BAND | OpTy::BXOR | OpTy::BOR
+            OpTy::ADD | OpTy::SUB | OpTy::MUL | OpTy::DIV | OpTy::MOD | OpTy::POW
+                | OpTy::BAND | OpTy::BXOR | OpTy::BOR
         ) {
             let Some(value) = folded else {
-                if matches!(op, OpTy::ADD | OpTy::MUL | OpTy::POW | OpTy::BSHL) {
+                if matches!(op, OpTy::ADD | OpTy::MUL | OpTy::POW) {
                     return errf!("integer literal expression exceeds u128");
                 }
                 let (subx, suby) = Self::align_uint_literal_widths(left, right);
@@ -95,6 +106,10 @@ impl Syntax {
                 if Self::uint_width_rank(floor) > Self::uint_width_rank(ty) {
                     ty = floor;
                 }
+                return Ok(UintLiteralCombine::Folded(Self::build_cast_node(
+                    push_num(value),
+                    ty,
+                )));
             }
             return Ok(UintLiteralCombine::Folded(Self::emit_uint_literal(value, ty)));
         }
@@ -123,6 +138,7 @@ impl Syntax {
 
     fn is_uint_literal_node(node: &dyn IRNode) -> bool {
         use Bytecode::*;
+        let node = Self::literal_inner(node);
         if let Some(leaf) = node.as_any().downcast_ref::<IRNodeLeaf>() {
             return matches!(leaf.inst, P0 | P1 | P2 | P3);
         }
@@ -167,6 +183,7 @@ impl Syntax {
     /// A bare `70000` is itself a `CU32` of raw bytes, and is not a suffix.
     fn literal_suffix_floor(node: &dyn IRNode) -> Option<ValueTy> {
         use Bytecode::*;
+        let node = Self::literal_inner(node);
         let single = node.as_any().downcast_ref::<IRNodeSingle>()?;
         let ty = match single.inst {
             CU8 => ValueTy::U8,
@@ -190,6 +207,7 @@ impl Syntax {
 
     fn literal_produced_width(node: &dyn IRNode) -> ValueTy {
         use Bytecode::*;
+        let node = Self::literal_inner(node);
         if let Some(floor) = Self::literal_suffix_floor(node) {
             return floor;
         }
@@ -227,6 +245,13 @@ impl Syntax {
         } else {
             Self::build_cast_node(node, ty)
         }
+    }
+
+    fn literal_inner<'a>(mut node: &'a dyn IRNode) -> &'a dyn IRNode {
+        while let Some(wrap) = node.as_any().downcast_ref::<IRNodeWrapOne>() {
+            node = wrap.node.as_ref();
+        }
+        node
     }
 
     fn parse_prefix_expr(&mut self) -> Ret<Box<dyn IRNode>> {

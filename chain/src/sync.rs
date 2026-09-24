@@ -260,7 +260,11 @@ fn process_block(
                     .eng
                     .store
                     .block_store()
-                    .hash_by_height(height)?
+                    .hash_by_height(height)
+                    .map_err(|e| {
+                        sys::Error::abort(format!("strict sync height index read failed: {}", e))
+                            .with_code(base::STATE_READ_FAILED_CODE)
+                    })?
                     == Some(pkg.hash()));
         if known {
             return Ok(None);

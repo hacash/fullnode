@@ -1,4 +1,4 @@
-use field::{Address, AssetAmt, Encode, Fold64, UNIT_ZHU};
+use field::{Address, AssetAmt, Decode, Encode, Fold64, UNIT_ZHU};
 use sha2::{Digest, Sha256};
 
 use crate::rt::{ItrErr, ItrErrCode::NativeFuncError, MapItrErr, NativeFnEnv, NativeFunc, VmrtRes};
@@ -56,7 +56,8 @@ pub(crate) fn buf_address(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
     let b = func_bytes(&a[0], cty, "buf")?;
     let off = func_u64(&a[1], cty, "offset")?;
     let raw: [u8; Address::SIZE] = read(&b, off, Address::SIZE, cty.name())?.try_into().unwrap();
-    Ok(Value::Address(Address::from(raw)))
+    let (address, _) = Address::decode(&raw).map_ire(NativeFuncError)?;
+    Ok(Value::Address(address))
 }
 
 pub(crate) fn asset_meta_fields(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
@@ -65,7 +66,7 @@ pub(crate) fn asset_meta_fields(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Valu
     if raw.len() != 30 {
         return itr_err_fmt!(NativeFuncError, "asset metadata length {} is not 30", raw.len());
     }
-    let issuer = Address::from(<[u8; Address::SIZE]>::try_from(&raw[9..30]).unwrap());
+    let (issuer, _) = Address::decode(&raw[9..30]).map_ire(NativeFuncError)?;
     Ok(Value::Tuple(TupleItem::new(vec![
         Value::U8(raw[0]),
         Value::U64(u64::from_be_bytes(raw[1..9].try_into().unwrap())),
@@ -83,7 +84,7 @@ pub(crate) fn asset_meta_require(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Val
     if raw.len() != 30 {
         return itr_err_fmt!(NativeFuncError, "asset metadata length {} is not 30", raw.len());
     }
-    let actual_issuer = Address::from(<[u8; Address::SIZE]>::try_from(&raw[9..30]).unwrap());
+    let (actual_issuer, _) = Address::decode(&raw[9..30]).map_ire(NativeFuncError)?;
     Ok(Value::Bool(raw[0] == decimal
         && u64::from_be_bytes(raw[1..9].try_into().unwrap()) == supply
         && actual_issuer == issuer))
