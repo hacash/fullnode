@@ -37,7 +37,7 @@ base::action_simple! { BalanceAsset, 0x0602, 3, CALL_ONLY, {
 }, this, {
     description: format!("Syscall: Get asset {} balance for {}", this.serial.uint(), this.addr.to_readable())
 }}
-base::action_simple! { AssetMeta, 0x0603, 3, CALL_ONLY, {
+base::action_simple! { AssetMeta, 0x0604, 3, CALL_ONLY, {
     serial: Fold64
 }, this, {
     description: format!("Syscall: Get asset {} metadata", this.serial.uint())
@@ -85,24 +85,33 @@ base::action_simple! { HacdOwnerAddrs, 0x0614, 3, CALL_ONLY, {
 }, this, {
     description: format!("Syscall: Get HACD owner addresses for {}", this.diamonds.splitstr())
 }}
-base::action_simple! { TxMessage, 0x0615, 3, CALL_ONLY, {
+base::action_simple! { TxMessage, 0x0621, 3, CALL_ONLY, {
     idx: Uint1
 }, this, {
     description: format!("Syscall: Get transaction message {}", this.idx.uint())
 }}
-base::action_simple! { TxBlob, 0x0616, 3, CALL_ONLY, {
+base::action_simple! { TxBlob, 0x0623, 3, CALL_ONLY, {
     idx: Uint1,
     start: Uint2,
     end: Uint2
 }, this, {
     description: format!("Syscall: Get transaction blob {} [{}..{}]", this.idx.uint(), this.start.uint(), this.end.uint())
 }}
-base::action_simple! { TxBlobSize, 0x0617, 3, CALL_ONLY, {
+base::action_simple! { TxBlobSize, 0x0624, 3, CALL_ONLY, {
     idx: Uint1
 }, this, {
     description: format!("Syscall: Get transaction blob {} size", this.idx.uint())
 }}
-
+base::action_simple! { BalanceFungible, 0x0603, 3, CALL_ONLY, {
+    addr: Address,
+    serial: Fold64
+}, this, {
+    description: format!("Syscall: Get fungible asset {} balance for {}", this.serial.uint(), this.addr.to_readable())
+}}
+base::action_simple! { TxMessageSingle, 0x0622, 3, CALL_ONLY, {
+}, this, {
+    description: "Syscall: Get the only transaction message".to_owned()
+}}
 #[cfg(test)]
 mod tests {
     use super::*;

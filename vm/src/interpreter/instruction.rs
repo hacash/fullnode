@@ -914,6 +914,21 @@ fn scaled_addsub_checked(
     cast_uint_result3(x, out, op, x, y, z)
 }
 
+/// `base + index * stride` in 256-bit arithmetic. The product must fit `u128`
+/// and the sum must fit the width of `base`.
+fn u64_mad_checked(x: &Value, y: &Value, z: &Value) -> VmrtRes<Value> {
+    let err = || ItrErr::new(Arithmetic, &check_failed_tip3("u64_mad", x, y, z));
+    let base = x.extract_u128()?;
+    let index = y.extract_u128()?;
+    let stride = z.extract_u128()?;
+    let (hi, lo) = mul_wide_u128(index, stride);
+    if hi != 0 {
+        return Err(err());
+    }
+    let sum = lo.checked_add(base).ok_or_else(err)?;
+    cast_uint_result3(x, sum, "u64_mad", x, y, z)
+}
+
 fn muldiv_den_addsub_checked(
     x: &Value,
     y: &Value,
@@ -1250,6 +1265,7 @@ fn fin3_checked(spec: FinSpec, x: &Value, y: &Value, z: &Value) -> VmrtRes<Value
         FinKernel::MulDivDenSub => {
             muldiv_den_addsub_checked(x, y, z, false, round, spec.name)
         }
+        FinKernel::U64Mad => u64_mad_checked(x, y, z),
         _ => invalid_fin_spec(spec),
     }
 }
@@ -1344,5 +1360,59 @@ fn unary_dec(x: &mut Value, n: u8) -> VmrtErr {
     }
     x.dec(n)
         .map_err(|ItrErr(_, msg)| ItrErr::new(Arithmetic, &msg))
+}
+
+#[cfg(test)]
+mod fin_kernel_tests {
+    use super::*;
+
+    fn fee_add(amount: u64, bps: u64) -> Value {
+        let cap = SpaceCap::new(0);
+        let env = NativeFnEnv::new(&cap);
+        let argv = Value::pack_call_args(vec![Value::U64(amount), Value::U64(bps)]).unwrap();
+        NativeFunc::call_packed(env, NativeFunc::fee_add_bps_ceil as u8, argv)
+            .unwrap()
+            .0
+    }
+
+    #[test]
+    fn fee_add_bps_ceil_matches_scaled_add_ceil() {
+        for (amount, bps) in [(1u64, 0), (1, 1), (10_000, 30), (100, 10_000), (50, 1)] {
+            let scaled = scaled_addsub_checked(
+                &Value::U64(amount),
+                &Value::U64(bps),
+                &Value::U64(10_000),
+                true,
+                FinRoundPolicy::Ceil,
+                "scaled_add_ceil",
+            )
+            .unwrap();
+            assert_eq!(scaled, fee_add(amount, bps));
+        }
+    }
+
+    #[test]
+    fn u64_mad_uses_the_base_width() {
+        assert_eq!(
+            u64_mad_checked(&Value::U64(10), &Value::U64(3), &Value::U64(4)).unwrap(),
+            Value::U64(22)
+        );
+        assert_eq!(
+            u64_mad_checked(&Value::U8(200), &Value::U8(1), &Value::U8(100))
+                .unwrap_err()
+                .0,
+            Arithmetic
+        );
+        assert_eq!(
+            u64_mad_checked(
+                &Value::U64(1),
+                &Value::U128(1 << 100),
+                &Value::U128(1 << 100)
+            )
+            .unwrap_err()
+            .0,
+            Arithmetic
+        );
+    }
 }
 

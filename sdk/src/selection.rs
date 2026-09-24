@@ -123,12 +123,12 @@ mod tests {
         call_only.sort_unstable();
         // Today the CALL_ONLY entries are exactly the VM env/view syscalls
         // (0x06xx / 0x07xx kind space), including the tx message/blob reads
-        // (0x0615/0x0616/0x0617) and counts (0x0704/0x0705).
+        // (0x0621/0x0622/0x0623/0x0624) and counts (0x0704/0x0705).
         assert_eq!(
             call_only,
             vec![
-                0x0601, 0x0602, 0x0603, 0x0609, 0x060A, 0x060B, 0x0611, 0x0612, 0x0613, 0x0614,
-                0x0615, 0x0616, 0x0617, 0x0701, 0x0702, 0x0703, 0x0704, 0x0705
+                0x0601, 0x0602, 0x0603, 0x0604, 0x0609, 0x060A, 0x060B, 0x0611, 0x0612, 0x0613,
+                0x0614, 0x0621, 0x0622, 0x0623, 0x0624, 0x0701, 0x0702, 0x0703, 0x0704, 0x0705
             ]
         );
 
@@ -165,6 +165,7 @@ mod tests {
                 "asset_meta",
                 "balance_asset",
                 "balance_coin",
+                "balance_fungible",
                 "block_author_addr",
                 "block_height",
                 "check_signature",
@@ -180,6 +181,7 @@ mod tests {
                 "tx_main_addr",
                 "tx_message",
                 "tx_message_num",
+                "tx_message_single",
             ]
         );
     }

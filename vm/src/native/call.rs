@@ -33,6 +33,9 @@ pub fn call_ntctl(
             call_defer_current(exec, bindings, intent_state, intents, deferred_registry, argv)
         }
         NativeCtl::intent_new => call_intent_new(exec, bindings, intent_state, intents, argv),
+        NativeCtl::intent_new_flat_kv => {
+            call_intent_new_flat_kv(exec, bindings, intent_state, intents, argv)
+        }
         NativeCtl::intent_use => call_intent_use(exec, cap, bindings, intent_state, intents, argv),
         NativeCtl::intent_pop => call_intent_pop(exec, bindings, intent_state, argv),
         NativeCtl::intent_is_own_handle => {

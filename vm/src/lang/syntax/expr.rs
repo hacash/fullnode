@@ -1,5 +1,10 @@
 use super::*;
 
+enum UintLiteralCombine {
+    Folded(Box<dyn IRNode>),
+    Keep(Box<dyn IRNode>, Box<dyn IRNode>),
+}
+
 impl Syntax {
     pub(super) fn parse_expr_bp(&mut self, min_prec: u8) -> Ret<Box<dyn IRNode>> {
         let mut left = self.parse_prefix_expr()?;
@@ -17,14 +22,211 @@ impl Syntax {
             let right = self.parse_expr_bp(op.next_min_prec())?;
             left.checkretval()?;
             right.checkretval()?;
-            left = Box::new(IRNodeDouble {
-                hrtv: true,
-                inst: op.bytecode(),
-                subx: left,
-                suby: right,
-            });
+            match Self::combine_uint_literals(op, left, right)? {
+                UintLiteralCombine::Folded(node) => left = node,
+                UintLiteralCombine::Keep(subx, suby) => {
+                    left = Box::new(IRNodeDouble {
+                        hrtv: true,
+                        inst: op.bytecode(),
+                        subx,
+                        suby,
+                    });
+                }
+            }
         }
         Ok(left)
+    }
+
+    fn combine_uint_literals(
+        op: OpTy,
+        left: Box<dyn IRNode>,
+        right: Box<dyn IRNode>,
+    ) -> Ret<UintLiteralCombine> {
+        if !Self::is_uint_literal_node(left.as_ref()) || !Self::is_uint_literal_node(right.as_ref())
+        {
+            return Ok(UintLiteralCombine::Keep(left, right));
+        }
+        let (Some(a), Some(b)) = (
+            crate::lang::ir_literal_value(left.as_ref())?.and_then(|v| v.extract_u128().ok()),
+            crate::lang::ir_literal_value(right.as_ref())?.and_then(|v| v.extract_u128().ok()),
+        ) else {
+            return Ok(UintLiteralCombine::Keep(left, right));
+        };
+        let folded = match op {
+            OpTy::ADD => a.checked_add(b),
+            OpTy::SUB => a.checked_sub(b),
+            OpTy::MUL => a.checked_mul(b),
+            OpTy::DIV if b != 0 => Some(a / b),
+            OpTy::MOD if b != 0 => Some(a % b),
+            OpTy::POW => u32::try_from(b).ok().and_then(|e| a.checked_pow(e)),
+            OpTy::BSHL => u32::try_from(b)
+                .ok()
+                .filter(|shift| *shift < 128)
+                .and_then(|shift| a.checked_shl(shift)),
+            OpTy::BSHR => u32::try_from(b)
+                .ok()
+                .map(|shift| if shift >= 128 { 0 } else { a >> shift }),
+            OpTy::BAND => Some(a & b),
+            OpTy::BXOR => Some(a ^ b),
+            OpTy::BOR => Some(a | b),
+            _ => None,
+        };
+        if matches!(
+            op,
+            OpTy::ADD | OpTy::SUB | OpTy::MUL | OpTy::DIV | OpTy::MOD | OpTy::POW | OpTy::BSHL
+                | OpTy::BSHR | OpTy::BAND | OpTy::BXOR | OpTy::BOR
+        ) {
+            let Some(value) = folded else {
+                if matches!(op, OpTy::ADD | OpTy::MUL | OpTy::POW | OpTy::BSHL) {
+                    return errf!("integer literal expression exceeds u128");
+                }
+                let (subx, suby) = Self::align_uint_literal_widths(left, right);
+                return Ok(UintLiteralCombine::Keep(subx, suby));
+            };
+            // Unsuffixed constants use the smallest width of the value. A suffix
+            // (`100u64`) anywhere in the constant expression is a floor, and the
+            // folded result widens again when it no longer fits that floor.
+            let mut ty = Self::uint_width_of(value);
+            if let Some(floor) = Self::literal_suffix_floor(left.as_ref())
+                .into_iter()
+                .chain(Self::literal_suffix_floor(right.as_ref()))
+                .max_by_key(|ty| Self::uint_width_rank(*ty))
+            {
+                if Self::uint_width_rank(floor) > Self::uint_width_rank(ty) {
+                    ty = floor;
+                }
+            }
+            return Ok(UintLiteralCombine::Folded(Self::emit_uint_literal(value, ty)));
+        }
+        let (subx, suby) = Self::align_uint_literal_widths(left, right);
+        Ok(UintLiteralCombine::Keep(subx, suby))
+    }
+
+    fn align_uint_literal_widths(
+        left: Box<dyn IRNode>,
+        right: Box<dyn IRNode>,
+    ) -> (Box<dyn IRNode>, Box<dyn IRNode>) {
+        let mut ty = Self::literal_produced_width(left.as_ref());
+        let right_ty = Self::literal_produced_width(right.as_ref());
+        if Self::uint_width_rank(right_ty) > Self::uint_width_rank(ty) {
+            ty = right_ty;
+        }
+        (
+            Self::cast_literal_up(left, ty),
+            Self::cast_literal_up(right, ty),
+        )
+    }
+
+    fn emit_uint_literal(value: u128, ty: ValueTy) -> Box<dyn IRNode> {
+        Self::cast_literal_up(push_num(value), ty)
+    }
+
+    fn is_uint_literal_node(node: &dyn IRNode) -> bool {
+        use Bytecode::*;
+        if let Some(leaf) = node.as_any().downcast_ref::<IRNodeLeaf>() {
+            return matches!(leaf.inst, P0 | P1 | P2 | P3);
+        }
+        if let Some(p) = node.as_any().downcast_ref::<IRNodeParam1>() {
+            return p.inst == PU8;
+        }
+        if let Some(p) = node.as_any().downcast_ref::<IRNodeParam2>() {
+            return p.inst == PU16;
+        }
+        if let Some(single) = node.as_any().downcast_ref::<IRNodeSingle>() {
+            return matches!(single.inst, CU8 | CU16 | CU32 | CU64 | CU128);
+        }
+        false
+    }
+
+    fn uint_width_of(n: u128) -> ValueTy {
+        if n <= u8::MAX as u128 {
+            ValueTy::U8
+        } else if n <= u16::MAX as u128 {
+            ValueTy::U16
+        } else if n <= u32::MAX as u128 {
+            ValueTy::U32
+        } else if n <= u64::MAX as u128 {
+            ValueTy::U64
+        } else {
+            ValueTy::U128
+        }
+    }
+
+    fn uint_width_rank(ty: ValueTy) -> u8 {
+        match ty {
+            ValueTy::U8 => 1,
+            ValueTy::U16 => 2,
+            ValueTy::U32 => 3,
+            ValueTy::U64 => 4,
+            ValueTy::U128 => 5,
+            _ => 0,
+        }
+    }
+
+    /// `100u64` is a cast wrapped around the number's own encoding.
+    /// A bare `70000` is itself a `CU32` of raw bytes, and is not a suffix.
+    fn literal_suffix_floor(node: &dyn IRNode) -> Option<ValueTy> {
+        use Bytecode::*;
+        let single = node.as_any().downcast_ref::<IRNodeSingle>()?;
+        let ty = match single.inst {
+            CU8 => ValueTy::U8,
+            CU16 => ValueTy::U16,
+            CU32 => ValueTy::U32,
+            CU64 => ValueTy::U64,
+            CU128 => ValueTy::U128,
+            _ => return None,
+        };
+        let child = single.subx.as_ref();
+        let natural_wide = child
+            .as_any()
+            .downcast_ref::<IRNodeParams>()
+            .is_some_and(|params| params.inst == PBUF);
+        if natural_wide {
+            None
+        } else {
+            Some(ty)
+        }
+    }
+
+    fn literal_produced_width(node: &dyn IRNode) -> ValueTy {
+        use Bytecode::*;
+        if let Some(floor) = Self::literal_suffix_floor(node) {
+            return floor;
+        }
+        if let Some(leaf) = node.as_any().downcast_ref::<IRNodeLeaf>() {
+            if matches!(leaf.inst, P0 | P1 | P2 | P3) {
+                return ValueTy::U8;
+            }
+        }
+        if let Some(p) = node.as_any().downcast_ref::<IRNodeParam1>() {
+            if p.inst == PU8 {
+                return ValueTy::U8;
+            }
+        }
+        if let Some(p) = node.as_any().downcast_ref::<IRNodeParam2>() {
+            if p.inst == PU16 {
+                return ValueTy::U16;
+            }
+        }
+        if let Some(single) = node.as_any().downcast_ref::<IRNodeSingle>() {
+            return match single.inst {
+                CU32 => ValueTy::U32,
+                CU64 => ValueTy::U64,
+                CU128 => ValueTy::U128,
+                _ => ValueTy::U8,
+            };
+        }
+        ValueTy::U8
+    }
+
+    fn cast_literal_up(node: Box<dyn IRNode>, ty: ValueTy) -> Box<dyn IRNode> {
+        if Self::uint_width_rank(Self::literal_produced_width(node.as_ref()))
+            >= Self::uint_width_rank(ty)
+        {
+            node
+        } else {
+            Self::build_cast_node(node, ty)
+        }
     }
 
     fn parse_prefix_expr(&mut self) -> Ret<Box<dyn IRNode>> {

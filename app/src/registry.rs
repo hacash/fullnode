@@ -286,8 +286,8 @@ mod tests {
             vec![
                 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 16, 17, 18, 19, 22, 25, 26, 32, 33, 34,
                 35, 36, 40, 41, 44, 46, 0x0401, 0x0402, 0x0411, 0x0412, 0x0413, 0x0414, 0x0601,
-                0x0602, 0x0603, 0x0609, 0x060A, 0x060B, 0x0611, 0x0612, 0x0613, 0x0614, 0x0615, 0x0616,
-                0x0617, 0x0701, 0x0702, 0x0703, 0x0704, 0x0705,
+                0x0602, 0x0603, 0x0604, 0x0609, 0x060A, 0x060B, 0x0611, 0x0612, 0x0613, 0x0614, 0x0621,
+                0x0622, 0x0623, 0x0624, 0x0701, 0x0702, 0x0703, 0x0704, 0x0705,
             ]
         );
         assert_eq!(registry.wire_codecs.tx_types(), vec![0, 1, 2, 3]);
@@ -398,7 +398,8 @@ mod tests {
                 (0x0414, "required_signers"),
                 (0x0601, "balance_coin"),
                 (0x0602, "balance_asset"),
-                (0x0603, "asset_meta"),
+                (0x0603, "balance_fungible"),
+                (0x0604, "asset_meta"),
                 (0x0609, "check_signature"),
                 (0x060A, "sigset_count"),
                 (0x060B, "sigset_at_least"),
@@ -406,9 +407,10 @@ mod tests {
                 (0x0612, "hacd_insc_get"),
                 (0x0613, "hacd_name_list"),
                 (0x0614, "hacd_owner_addrs"),
-                (0x0615, "tx_message"),
-                (0x0616, "tx_blob"),
-                (0x0617, "tx_blob_size"),
+                (0x0621, "tx_message"),
+                (0x0622, "tx_message_single"),
+                (0x0623, "tx_blob"),
+                (0x0624, "tx_blob_size"),
                 (0x0701, "block_height"),
                 (0x0702, "tx_main_addr"),
                 (0x0703, "block_author_addr"),

@@ -5,14 +5,15 @@ use field::{Address, AddressW1, DiamondName, Encode};
 use sys::errf;
 
 use crate::codec::action::{
-    AssetMeta, BalanceAsset, BalanceCoin, BlockAuthorAddr, CheckSignature, EnvHeight, HacdInscGet,
-    HacdInscNum, HacdNameList, HacdOwnerAddrs, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum,
-    TxBlobSize, TxMainAddr, TxMessage, TxMessageNum,
+    AssetMeta, BalanceAsset, BalanceCoin, BalanceFungible, BlockAuthorAddr,
+    CheckSignature, EnvHeight, HacdInscGet, HacdInscNum, HacdNameList,
+    HacdOwnerAddrs, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum, TxBlobSize,
+    TxMainAddr, TxMessage, TxMessageNum, TxMessageSingle,
 };
 
-/// Temporary upgrade gate for the tx message/blob read syscalls (0x0615/0x0616/
-/// 0x0617/0x0704/0x0705), which take effect at height 784_000. Hand-written on
-/// purpose — remove the const, this helper and the five call sites together with
+/// Temporary upgrade gate for the tx message/blob read syscalls (0x0621/0x0622/
+/// 0x0623/0x0624/0x0704/0x0705), which take effect at height 784_000.
+/// Hand-written on purpose — remove the const, this helper and the six call sites together with
 /// the syscalls in the next release.
 const TX_MSG_BLOB_ENABLE_HEIGHT: u64 = 784_000;
 
@@ -40,6 +41,23 @@ base::impl_action_execute! {
                 }
             }
             errf!("transaction message index {} out of range", self.idx.uint())
+        }
+    }
+}
+
+base::impl_action_execute! {
+    TxMessageSingle {
+        (self, ctx) {
+            tx_message_blob_gate(ctx)?;
+            let mut messages = ctx.tx().actions().iter()
+                .filter_map(|a| a.as_any().downcast_ref::<crate::codec::action::Message>());
+            let Some(message) = messages.next() else {
+                return errf!("transaction must contain exactly one message");
+            };
+            if messages.next().is_some() {
+                return errf!("transaction must contain exactly one message");
+            }
+            Ok(message.data.as_ref().to_vec())
         }
     }
 }
@@ -169,6 +187,35 @@ base::impl_action_execute! {
                 .map(|a| a.amount.uint())
                 .unwrap_or(0);
             Ok(amt.to_be_bytes().to_vec())
+        }
+    }
+}
+
+base::impl_action_execute! {
+    BalanceFungible {
+        (self, ctx) {
+            let serial = self.serial.uint();
+            if serial == 0 || (4..=10).contains(&serial) {
+                return errf!(
+                    "fungible serial {} is not hac, sat, hacd, or an asset above 10",
+                    serial
+                );
+            }
+            let balances = CoreState::wrap(ctx.layer())
+                .balance(&self.addr)?
+                .unwrap_or_default();
+            let amount = match serial {
+                // 1 = HAC as exact zhu. Sub-zhu residue or a value above u64 aborts. Zero is 0.
+                1 => balances.hacash.to_zhu_u64_exact()?,
+                2 => balances.satoshi.uint(),
+                // 3 = HACD count. The same number is not an asset through this ABI.
+                3 => balances.diamond.uint(),
+                _ => balances.assets.as_list().iter()
+                    .find(|a| a.serial.uint() == serial)
+                    .map(|a| a.amount.uint())
+                    .unwrap_or(0),
+            };
+            Ok(amount.to_be_bytes().to_vec())
         }
     }
 }

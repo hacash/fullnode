@@ -15,18 +15,22 @@ mod amount;
 mod argv;
 mod ascii;
 mod call;
+mod hacd;
 mod intent;
+mod extensions;
 mod patches;
 pub(crate) use addr::{
-    address_version, is_contract, is_privkey, is_privkey_not_unknown, is_privkey_unknown,
-    is_scriptmh,
+    check_addr_set, address_version, is_contract, is_privkey, is_privkey_not_unknown,
+    is_privkey_unknown, is_scriptmh,
 };
 pub(crate) use amount::{
     hac_is_exact_mei, hac_is_exact_unit, hac_is_exact_zhu, hac_to_mei_checked, hac_to_unit,
-    hac_to_unit_checked, hac_to_zhu_checked, unit_to_hac,
+    hac_to_unit_checked, hac_to_zhu_checked, hac_zhu_tail, unit_to_hac,
 };
 use argv::*;
 pub(crate) use ascii::*;
+pub(crate) use extensions::*;
+pub(crate) use hacd::*;
 #[allow(unused_imports)] // interpreter NTFUNC Packed branch (wired by parent)
 pub use call::call_ntfunc_packed;
 pub use call::{call_ntctl, call_ntenv, call_ntfunc};

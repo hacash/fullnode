@@ -14,9 +14,10 @@ pub use ast::{
 };
 pub use blob::{Blob, Message};
 pub use envfunc::{
-    AssetMeta, BalanceAsset, BalanceCoin, BlockAuthorAddr, CheckSignature, EnvHeight, HacdInscGet,
-    HacdInscNum, HacdNameList, HacdOwnerAddrs, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum,
-    TxBlobSize, TxMainAddr, TxMessage, TxMessageNum,
+    AssetMeta, BalanceAsset, BalanceCoin, BalanceFungible, BlockAuthorAddr,
+    CheckSignature, EnvHeight, HacdInscGet, HacdInscNum, HacdNameList,
+    HacdOwnerAddrs, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum, TxBlobSize,
+    TxMainAddr, TxMessage, TxMessageNum, TxMessageSingle,
 };
 pub use guard::{
     guard_facts, height_in_range, BalanceFloor, ChainAllow, GuardFacts, HeightScope,

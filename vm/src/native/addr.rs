@@ -57,6 +57,40 @@ version_predicate! {
     "`is_scriptmh(addr | bytes21) -> Bool`: version byte is SCRIPTMH (5)."
 }
 
+const ADDR_SET_CAP: u64 = 200;
+
+/// Raw `21 * n` signer table. `true` only when `min <= n <= max`, every address is a
+/// non-system private key, and the set has no duplicates. A failed check is `false`.
+pub(crate) fn check_addr_set(_: super::NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
+    let cty = NativeFunc::check_addr_set;
+    let args = super::func_argv(argv, cty)?;
+    let raw = super::func_bytes(&args[0], cty, "raw")?;
+    let min = super::func_u64(&args[1], cty, "min")?;
+    let max = super::func_u64(&args[2], cty, "max")?;
+    Ok(Value::Bool(addr_set_ok_bytes(&raw, min, max)))
+}
+
+fn addr_set_ok_bytes(raw: &[u8], min: u64, max: u64) -> bool {
+    if min > max || max > ADDR_SET_CAP || raw.len() % field::Address::SIZE != 0 {
+        return false;
+    }
+    let n = (raw.len() / field::Address::SIZE) as u64;
+    if n < min || n > max {
+        return false;
+    }
+    let mut seen: Vec<field::Address> = Vec::with_capacity(n as usize);
+    for chunk in raw.chunks(field::Address::SIZE) {
+        let mut bytes = [0u8; field::Address::SIZE];
+        bytes.copy_from_slice(chunk);
+        let addr = field::Address::from(bytes);
+        if !addr.is_privkey() || addr.is_privkey_unknown() || seen.contains(&addr) {
+            return false;
+        }
+        seen.push(addr);
+    }
+    true
+}
+
 fn packed_single(argv: Value, cty: NativeFunc) -> VmrtRes<Value> {
     debug_assert_eq!(cty.argv_len_of(), 1);
     let mut args = super::func_argv(argv, cty)?;
@@ -93,6 +127,50 @@ mod tests {
     /// Same value as bytes: call boundary implicit conversion must land here identically.
     fn bytes21_value(v: field::Address) -> Value {
         Value::Bytes(v.as_bytes().to_vec())
+    }
+
+    #[test]
+    fn addr_set_ok_accepts_a_unique_privkey_table() {
+        let a = {
+            let mut raw = [0u8; 21];
+            raw[1] = 1;
+            raw[20] = 2;
+            field::Address::from(raw)
+        };
+        let b = {
+            let mut raw = [0u8; 21];
+            raw[1] = 3;
+            raw[20] = 4;
+            field::Address::from(raw)
+        };
+        let mut raw = Vec::new();
+        raw.extend_from_slice(a.as_bytes());
+        raw.extend_from_slice(b.as_bytes());
+        assert_eq!(
+            call(
+                NativeFunc::check_addr_set,
+                vec![Value::bytes(raw.clone()), Value::U64(1), Value::U64(2)]
+            )
+            .unwrap(),
+            Value::Bool(true)
+        );
+        raw.extend_from_slice(a.as_bytes());
+        assert_eq!(
+            call(
+                NativeFunc::check_addr_set,
+                vec![Value::bytes(raw), Value::U64(1), Value::U64(3)]
+            )
+            .unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            call(
+                NativeFunc::check_addr_set,
+                vec![Value::bytes(vec![]), Value::U64(1), Value::U64(201)]
+            )
+            .unwrap(),
+            Value::Bool(false)
+        );
     }
 
     #[test]

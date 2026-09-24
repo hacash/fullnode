@@ -110,6 +110,35 @@ pub(crate) fn hac_is_exact_zhu(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value>
     Ok(Value::Bool(exact_unit(&hacash, UNIT_ZHU)?))
 }
 
+/// Sub-zhu residue of `hacash`, canonical Amount bytes. Exact zhu (including
+/// zero) yields a zero amount. The whole-zhu part is not included.
+pub(crate) fn hac_zhu_tail(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
+    let amount: Amount = decode_exact(buf, "hac_zhu_tail")?;
+    if amount.is_negative() {
+        return itr_err_fmt!(NativeFuncError, "hac_zhu_tail amount cannot be negative");
+    }
+    let exact = exact_unit(&amount, UNIT_ZHU)?;
+    if amount.is_zero() || exact || amount.unit() >= UNIT_ZHU {
+        return Ok(Value::Bytes(Amount::zero().encode()));
+    }
+    let bytes = amount.byte();
+    if bytes.len() > 16 {
+        return itr_err_fmt!(NativeFuncError, "hac_zhu_tail magnitude exceeds u128");
+    }
+    let mut padded = [0u8; 16];
+    padded[16 - bytes.len()..].copy_from_slice(bytes);
+    let mag = u128::from_be_bytes(padded);
+    let k = (UNIT_ZHU - amount.unit()) as u32;
+    // 10^39 does not fit u128, and a stored magnitude is at most 12 bytes,
+    // so a finer scale than that is entirely below 1 zhu.
+    let rem = if k >= 39 {
+        mag
+    } else {
+        mag % 10u128.pow(k)
+    };
+    Ok(Value::Bytes(Amount::coin_u128(rem, amount.unit()).encode()))
+}
+
 /// `hac_is_exact_mei(hacash)` — the unit-248 shortcut (whole HAC), the
 /// predicate twin of `hac_to_mei_checked`: true when the amount carries no
 /// part below 1 HAC, i.e. when the u64 count is lossless.
@@ -155,6 +184,7 @@ mod tests {
         assert_eq!(NativeFunc::mei_to_hac as u8, 60);
         assert_eq!(NativeFunc::zhu_to_hac as u8, 61);
         assert_eq!(NativeFunc::unit_to_hac as u8, 62);
+        assert_eq!(NativeFunc::hac_zhu_tail as u8, 63);
         for (cty, pack) in [
             (NativeFunc::hac_to_zhu_checked, NativeArgvPack::Concat),
             (NativeFunc::hac_is_exact_zhu, NativeArgvPack::Concat),
@@ -164,6 +194,7 @@ mod tests {
             (NativeFunc::hac_to_unit, NativeArgvPack::Packed),
             (NativeFunc::unit_to_hac, NativeArgvPack::Packed),
             (NativeFunc::hac_is_exact_mei, NativeArgvPack::Concat),
+            (NativeFunc::hac_zhu_tail, NativeArgvPack::Concat),
         ] {
             assert_eq!(cty.argv_pack_of(), pack, "{}", cty.name());
             assert_eq!(NativeFunc::argv_pack(cty as u8).unwrap(), pack);
@@ -178,9 +209,23 @@ mod tests {
             ("hac_to_unit", 55),
             ("unit_to_hac", 62),
             ("hac_is_exact_mei", 57),
+            ("hac_zhu_tail", 63),
         ] {
             assert_eq!(NativeFunc::from_name(name).unwrap().0, idx);
         }
+    }
+
+    #[test]
+    fn hac_zhu_tail_drops_whole_zhu_and_keeps_the_residue() {
+        let dust = Amount::coin_u128(1, UNIT_ZHU - 1);
+        let whole = Amount::coin_u128(10, UNIT_ZHU);
+        let mixed = whole.add_mode_u128(&dust).unwrap();
+        let tail = call_concat(NativeFunc::hac_zhu_tail, &mixed.encode()).unwrap();
+        assert_eq!(tail, Value::Bytes(dust.encode()));
+        let again = call_concat(NativeFunc::hac_zhu_tail, &dust.encode()).unwrap();
+        assert_eq!(again, Value::Bytes(dust.encode()));
+        let none = call_concat(NativeFunc::hac_zhu_tail, &whole.encode()).unwrap();
+        assert_eq!(none, Value::Bytes(Amount::zero().encode()));
     }
 
     #[test]

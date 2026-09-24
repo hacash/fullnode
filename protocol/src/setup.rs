@@ -109,6 +109,7 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
     register_vm_hosts!(reg, view;
         BalanceCoin = (Bytes, 1),
         BalanceAsset = (U64, 2),
+        BalanceFungible = (U64, 2),
         AssetMeta = (Bytes, 1),
         CheckSignature = (Bool, 1),
         SigsetCount = (U8, 1),
@@ -118,6 +119,7 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
         HacdNameList = (Bytes, 3),
         HacdOwnerAddrs = (Bytes, 1),
         TxMessage = (Bytes, 1),
+        TxMessageSingle = (Bytes, 0),
         TxBlob = (Bytes, 3),
         TxBlobSize = (U16, 1),
     )?;
@@ -234,7 +236,19 @@ mod tests {
         }
         for (kind, name, ret, argc) in [
             (BalanceCoin::KIND, BalanceCoin::NAME, VmValueType::Bytes, 1),
+            (
+                BalanceFungible::KIND,
+                BalanceFungible::NAME,
+                VmValueType::U64,
+                2,
+            ),
             (TxMessage::KIND, TxMessage::NAME, VmValueType::Bytes, 1),
+            (
+                TxMessageSingle::KIND,
+                TxMessageSingle::NAME,
+                VmValueType::Bytes,
+                0,
+            ),
             (TxBlob::KIND, TxBlob::NAME, VmValueType::Bytes, 3),
             (TxBlobSize::KIND, TxBlobSize::NAME, VmValueType::U16, 1),
             (BalanceAsset::KIND, BalanceAsset::NAME, VmValueType::U64, 2),
@@ -296,7 +310,9 @@ mod tests {
             HacdInscGet::KIND,
             HacdNameList::KIND,
             HacdOwnerAddrs::KIND,
+            BalanceFungible::KIND,
             TxMessage::KIND,
+            TxMessageSingle::KIND,
             TxBlob::KIND,
             TxBlobSize::KIND,
         ] {

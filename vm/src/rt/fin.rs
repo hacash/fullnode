@@ -33,6 +33,7 @@ pub enum FinKernel {
     CrossGte,
     CrossEq,
     RPow,
+    U64Mad,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -125,6 +126,9 @@ const FIN_SPECS: &[FinSpec] = &[
     fin_spec!(Bytecode::FIN3, 15, "scaled_add_ceil", FinKernel::ScaledAdd, FinRoundPolicy::Ceil),
     fin_spec!(Bytecode::FIN3, 16, "scaled_sub_floor", FinKernel::ScaledSub, FinRoundPolicy::Floor),
     fin_spec!(Bytecode::FIN3, 17, "scaled_sub_ceil", FinKernel::ScaledSub, FinRoundPolicy::Ceil),
+    // base + index * stride, computed wide. The result width is the base (first
+    // argument): pass a u64 base when the sum must occupy a full u64.
+    fin_spec!(Bytecode::FIN3, 22, "u64_mad", FinKernel::U64Mad),
     fin_spec!(
         Bytecode::FIN3,
         18,

@@ -335,6 +335,21 @@ intent_std_fn!(call_intent_new, |exec,
     Ok((Value::handle(IntentId(id)), NativeCtl::intent_new.gas_of()))
 });
 
+intent_std_fn!(call_intent_new_flat_kv, |exec,
+                                        bindings,
+                                        _intent_state,
+                                        intents,
+                                        argv| {
+    ctl_require_edit(exec, "intent_new_flat_kv")?;
+    let mut args = ctl_expect_tuple(argv, "intent_new_flat_kv", 2)?.into_iter();
+    let kind = ctl_expect_bytes(&args.next().unwrap(), "intent_new_flat_kv", "kind")?;
+    let pairs = ctl_expect_kv_list(args.next().unwrap(), "intent_new_flat_kv")?;
+    let owner = ctl_contract_owner(bindings, "intent_new_flat_kv")?;
+    let id = intents.create(owner, kind)?;
+    intents.put_many(&owner, id, pairs)?;
+    Ok((Value::handle(IntentId(id)), NativeCtl::intent_new_flat_kv.gas_of()))
+});
+
 intent_stack_fn!(call_intent_use, |exec,
                                    cap,
                                    _bindings,
@@ -1694,4 +1709,5 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.0, ItrErrCode::IntentError);
     }
+
 }

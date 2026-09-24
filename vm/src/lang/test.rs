@@ -773,6 +773,42 @@ mod token_t {
         }
     }
 
+    #[test]
+    fn literal_product_width_follows_result_or_suffix_floor() {
+        use super::{lang_to_bytecode, lang_to_irnode};
+        use crate::rt::Bytecode;
+
+        let narrow = lang_to_bytecode("return 20 * 100").unwrap();
+        assert!(narrow.contains(&(Bytecode::PU16 as u8)));
+        assert!(!narrow.contains(&(Bytecode::MUL as u8)));
+        assert!(!narrow.contains(&(Bytecode::CU64 as u8)));
+
+        let added = lang_to_bytecode("return 20 * 100 + 1").unwrap();
+        assert!(added.contains(&(Bytecode::PU16 as u8)));
+        assert!(!added.contains(&(Bytecode::MUL as u8)));
+        assert!(!added.contains(&(Bytecode::ADD as u8)));
+
+        let chained = lang_to_bytecode("return 20 * 100 * 100").unwrap();
+        assert!(chained.contains(&(Bytecode::CU32 as u8)));
+        assert!(!chained.contains(&(Bytecode::MUL as u8)));
+
+        let wide = lang_to_bytecode("return 20 * 100u64").unwrap();
+        assert!(wide.contains(&(Bytecode::CU64 as u8)));
+        assert!(!wide.contains(&(Bytecode::MUL as u8)));
+
+        let wide_added = lang_to_bytecode("return 20 * 100u64 + 1").unwrap();
+        assert!(wide_added.contains(&(Bytecode::CU64 as u8)));
+        assert!(!wide_added.contains(&(Bytecode::ADD as u8)));
+        assert!(!wide_added.contains(&(Bytecode::MUL as u8)));
+
+        let small = lang_to_bytecode("return 3 * 4").unwrap();
+        assert!(!small.contains(&(Bytecode::MUL as u8)));
+        assert!(!small.contains(&(Bytecode::CU16 as u8)));
+        assert!(!small.contains(&(Bytecode::CU64 as u8)));
+
+        assert!(lang_to_irnode("170141183460469231731687303715884105728 * 2").is_err());
+    }
+
     // ==================== Overflow Check Tests ====================
 
     #[test]
