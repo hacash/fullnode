@@ -310,6 +310,11 @@ impl ContractSto {
             );
         }
 
+        // v0 inheritance is fixed at deployment; retain the edit fields on the wire.
+        if edit.inherit_add.length() > 0 || edit.inherit_replace_at.length() > 0 {
+            return itr_err_fmt!(InheritError, "contract inherit cannot be changed after deployment");
+        }
+
         let edit_empty = edit.inherit_add.length() == 0
             && edit.inherit_replace_at.length() == 0
             && edit.library_add.length() == 0

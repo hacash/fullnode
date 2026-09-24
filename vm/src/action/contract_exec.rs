@@ -220,7 +220,7 @@ pub fn analyze_contract_store(
     check_contract_self_reference(root_addr, root_contract)?;
     let mut vmsta = VMState::wrap(ctx.layer());
     check_link_contracts_exist(&mut vmsta, root_addr, root_contract)?;
-    check_inherits_direct_parents_flat(&mut vmsta, root_addr, root_contract)?;
+    check_static_inherit_parents(&mut vmsta, root_addr, root_contract)?;
     let has_construct =
         detect_effective_abst_presence(&mut vmsta, root_addr, root_contract, AbstCall::Construct)?;
     check_static_call_targets(&mut vmsta, root_addr, root_contract, gst)?;
@@ -370,11 +370,12 @@ fn check_link_contracts_exist(
     Ok(())
 }
 
-fn check_inherits_direct_parents_flat(
+fn check_static_inherit_parents(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
     root_contract: &ContractSto,
 ) -> Rerr {
+    // Keep v0 parent code immutable; future dynamic inheritance needs a new format version.
     for p in root_contract.inherit.as_list() {
         let sto = load_contract_for_check(vmsta, root_addr, root_contract, p, "inherit")?;
         if sto.inherit.length() > 0 {
@@ -382,6 +383,12 @@ fn check_inherits_direct_parents_flat(
                 "inherit parent {} cannot have parent inherit",
                 p.to_readable()
             );
+        }
+        if sto.library.length() > 0 {
+            return errf!("inherit parent {} cannot link libraries", p.to_readable());
+        }
+        if sto.have_abst_call(AbstCall::Change) || sto.have_abst_call(AbstCall::Append) {
+            return errf!("inherit parent {} must be update-locked", p.to_readable());
         }
     }
     Ok(())
