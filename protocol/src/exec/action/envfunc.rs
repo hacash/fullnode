@@ -11,28 +11,9 @@ use crate::codec::action::{
     TxMainAddr, TxMessage, TxMessageNum, TxMessageSingle,
 };
 
-/// Temporary upgrade gate for the tx message/blob read syscalls (0x0621/0x0622/
-/// 0x0623/0x0624/0x0704/0x0705), which take effect at height 784_000.
-/// Hand-written on purpose — remove the const, this helper and the six call sites together with
-/// the syscalls in the next release.
-const TX_MSG_BLOB_ENABLE_HEIGHT: u64 = 784_000;
-
-fn tx_message_blob_gate(ctx: &dyn base::Context) -> sys::Rerr {
-    // Mainnet activates at height 784_000. Non-mainnet (hacash-testnet chain_id=1)
-    // enables immediately so deposit hooks can ViewMessage on a local chain.
-    if ctx.env().chain.id.is_mainnet() && ctx.env().block.height < TX_MSG_BLOB_ENABLE_HEIGHT {
-        return errf!(
-            "tx message/blob syscall not enabled until height {}",
-            TX_MSG_BLOB_ENABLE_HEIGHT
-        );
-    }
-    Ok(())
-}
-
 base::impl_action_execute! {
     TxMessage {
         (self, ctx) {
-            tx_message_blob_gate(ctx)?;
             let mut n = 0u8;
             for action in ctx.tx().actions() {
                 if let Some(msg) = action.as_any().downcast_ref::<crate::codec::action::Message>() {
@@ -48,7 +29,6 @@ base::impl_action_execute! {
 base::impl_action_execute! {
     TxMessageSingle {
         (self, ctx) {
-            tx_message_blob_gate(ctx)?;
             let mut messages = ctx.tx().actions().iter()
                 .filter_map(|a| a.as_any().downcast_ref::<crate::codec::action::Message>());
             let Some(message) = messages.next() else {
@@ -65,7 +45,6 @@ base::impl_action_execute! {
 base::impl_action_execute! {
     TxBlob {
         (self, ctx) {
-            tx_message_blob_gate(ctx)?;
             let mut n = 0u8;
             for action in ctx.tx().actions() {
                 if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::Blob>() {
@@ -88,7 +67,6 @@ base::impl_action_execute! {
 
 base::impl_action_execute! {
     TxMessageNum { (self, ctx) {
-        tx_message_blob_gate(ctx)?;
         let n = ctx.tx().actions().iter().filter(|a| a.as_any().is::<crate::codec::action::Message>()).count();
         if n > u8::MAX as usize { return errf!("message count exceeds u8"); }
         Ok(vec![n as u8])
@@ -96,7 +74,6 @@ base::impl_action_execute! {
 }
 base::impl_action_execute! {
     TxBlobNum { (self, ctx) {
-        tx_message_blob_gate(ctx)?;
         let n = ctx.tx().actions().iter().filter(|a| a.as_any().is::<crate::codec::action::Blob>()).count();
         if n > u8::MAX as usize { return errf!("blob count exceeds u8"); }
         Ok(vec![n as u8])
@@ -104,7 +81,6 @@ base::impl_action_execute! {
 }
 base::impl_action_execute! {
     TxBlobSize { (self, ctx) {
-        tx_message_blob_gate(ctx)?;
         let mut n = 0u8;
         for action in ctx.tx().actions() {
             if let Some(blob) = action.as_any().downcast_ref::<crate::codec::action::Blob>() {

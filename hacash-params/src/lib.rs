@@ -5,15 +5,16 @@ use base::{ContractStorageFeeParams, MintParams, VmExecutionParams};
 
 /// Mainnet contract storage discount parameters (§3.1 of the storage fee budget
 /// design): decimal 1 MB capacity refilled at 1,000 bytes/block over a 1000-block
-/// target period, activation `H0` pending governance freeze.
+/// target period. Always on from genesis; a missing budget record is the unused
+/// full bucket (`B = C`).
 pub const MAINNET_CONTRACT_STORAGE_FEE: ContractStorageFeeParams = ContractStorageFeeParams {
     rule_version: base::CONTRACT_STORAGE_RULE_V1,
-    activation_height: 784_000,
+    activation_height: 0,
     target_capacity_blocks: 1_000,
     curve_steps: 1_000,
     period_floor: 10,
     max_block_discount_bytes: 16 * 1024,
-    supplement_schedule: &[(784_000, 1_000)],
+    supplement_schedule: &[(0, 1_000)],
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -293,7 +294,7 @@ mod tests {
         let csf = MAINNET_CONTRACT_STORAGE_FEE;
         let p_max = MAINNET_PARAMS.protocol.vm.contract_store_perm_periods;
         assert_eq!(csf.rule_version, base::CONTRACT_STORAGE_RULE_V1);
-        assert_eq!(csf.activation_height, 784_000);
+        assert_eq!(csf.activation_height, 0);
         assert_eq!(csf.activation_height % 1000, 0);
         assert_eq!(csf.target_capacity_blocks, 1_000);
         assert_eq!(csf.curve_steps, 1_000);
@@ -349,23 +350,22 @@ mod tests {
         let base_pmax = MAINNET_PARAMS.protocol.vm.contract_store_perm_periods;
         let mk = |supplement_schedule: &'static [(u64, u64)]| ContractStorageFeeParams {
             supplement_schedule,
-            activation_height: 784_000,
             ..MAINNET_CONTRACT_STORAGE_FEE
         };
         // valid expansion: R 1000 → 2000 (ΔR is a 1000-multiple, C = T×R = 2 MB)
-        mk(&[(784_000, 1_000), (1_000_000, 2_000)])
+        mk(&[(0, 1_000), (1_000_000, 2_000)])
             .validate(base_pmax)
             .expect("governance expansion must validate");
         // rate decrease (would raise future prices) rejected
-        assert!(mk(&[(784_000, 1_000), (1_000_000, 500)]).validate(base_pmax).is_err());
+        assert!(mk(&[(0, 1_000), (1_000_000, 500)]).validate(base_pmax).is_err());
         // height not a multiple of T rejected
-        assert!(mk(&[(784_000, 1_000), (1_000_500, 2_000)]).validate(base_pmax).is_err());
+        assert!(mk(&[(0, 1_000), (1_000_500, 2_000)]).validate(base_pmax).is_err());
         // non-increasing heights rejected
-        assert!(mk(&[(784_000, 1_000), (784_000, 2_000)]).validate(base_pmax).is_err());
+        assert!(mk(&[(0, 1_000), (0, 2_000)]).validate(base_pmax).is_err());
         // schedule must start at H0
         assert!(mk(&[(781_000, 1_000)]).validate(base_pmax).is_err());
         // fine-grained delta (governance must review separately) rejected
-        assert!(mk(&[(784_000, 1_000), (1_000_000, 1_500)]).validate(base_pmax).is_err());
+        assert!(mk(&[(0, 1_000), (1_000_000, 1_500)]).validate(base_pmax).is_err());
         // K_max must stay strictly above every rate
         assert!(
             ContractStorageFeeParams {

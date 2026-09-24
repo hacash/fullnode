@@ -40,7 +40,7 @@ pub struct ContractUpdateAnalysis {
     pub required_protocol_cost: Amount,
     /// Best-effort discount minimum under the current head/block budget: fees in
     /// `[discounted_protocol_cost, required_protocol_cost)` are discount-classified
-    /// and consume quota. `None` pre-activation or when no budget snapshot is in
+    /// and consume quota. `None` when disabled or when no budget snapshot is in
     /// scope (offline analysis) — pay `required_protocol_cost` then.
     pub discounted_protocol_cost: Option<Amount>,
     /// The discount period basis behind `discounted_protocol_cost`.

@@ -397,7 +397,8 @@ pub const CONTRACT_STORAGE_RULE_V1: u8 = 1;
 pub struct ContractStorageFeeParams {
     /// Curve/rule version identifier; only `CONTRACT_STORAGE_RULE_V1` exists.
     pub rule_version: u8,
-    /// `H0`: first height where the discount rules apply (a multiple of `T`).
+    /// `H0`: first `supplement_schedule` height (a multiple of `T`; `0` is genesis).
+    /// Not an on/off gate — an empty schedule disables the mechanism.
     pub activation_height: u64,
     /// `T`: target fill period in blocks (v1: 1000).
     pub target_capacity_blocks: u64,
@@ -433,14 +434,16 @@ impl ContractStorageFeeParams {
         self.supplement_schedule.is_empty()
     }
 
-    /// Whether the discount rules apply at `height`.
-    pub fn is_active_at(&self, height: u64) -> bool {
-        !self.is_disabled() && height >= self.activation_height
+    /// Whether the discount rules apply. Height is unused: an enabled schedule
+    /// is active from genesis; empty schedule is disabled.
+    pub fn is_active_at(&self, _height: u64) -> bool {
+        !self.is_disabled()
     }
 
-    /// Active `(activation_height, R)` schedule entry at `height`, `None` before `H0`.
+    /// Active `(height, R)` schedule entry at `height`. Enabled profiles use the
+    /// latest entry at or before `height`, or the first entry when none qualify.
     pub fn active_entry(&self, height: u64) -> Option<(u64, u64)> {
-        if !self.is_active_at(height) {
+        if self.is_disabled() {
             return None;
         }
         self.supplement_schedule
@@ -448,6 +451,7 @@ impl ContractStorageFeeParams {
             .filter(|(h, _)| *h <= height)
             .last()
             .copied()
+            .or_else(|| self.supplement_schedule.first().copied())
     }
 
     /// Active per-block supplement rate `R` at `height`.
@@ -557,10 +561,9 @@ impl ContractStorageFeeParams {
         if self.target_capacity_blocks == 0 {
             return sys::errf!("contract storage target_capacity_blocks must be positive");
         }
-        if self.activation_height == 0 || self.activation_height % self.target_capacity_blocks != 0
-        {
+        if self.activation_height % self.target_capacity_blocks != 0 {
             return sys::errf!(
-                "contract storage activation height {} must be a positive multiple of T {}",
+                "contract storage activation height {} must be a multiple of T {}",
                 self.activation_height,
                 self.target_capacity_blocks
             );

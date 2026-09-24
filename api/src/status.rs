@@ -28,10 +28,10 @@ fn status_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse {
             )
         })
         .unwrap_or((0, 0));
-    // Contract storage discount, state-aware: the full price `p_max` and, once the
-    // mechanism is active, the discount periods applying to the next block's
-    // deploy/update fees. Quoting wallets use `/query/contract/storage_fee` for the
-    // full fact set (B, C, R, quota, schedule, params hash).
+    // Contract storage discount, state-aware: the full price `p_max` and, when
+    // enabled, the discount periods applying to the next block's deploy/update
+    // fees. Quoting wallets use `/query/contract/storage_fee` for the full fact
+    // set (B, C, R, quota, schedule).
     let (csf_enabled, csf_periods) = match ctx.engine.services().vm_params() {
         Ok(vp) => {
             let vp = *vp;

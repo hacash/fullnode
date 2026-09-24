@@ -63,9 +63,10 @@ fn contract_deploy_execute(this: &ContractDeploy, ctx: &mut dyn Context) -> Rerr
         return errf!("contract content cannot be empty");
     }
     let charge_bytes = contract_deploy_charge_bytes(&this.contract);
-    // Spend the protocol fee through the unified storage fee boundary: legacy fixed
-    // periods before activation, two-phase full/discount classification after (§4.3);
-    // fast-sync skips the checks but books quota identically (state convergence).
+    // Spend the protocol fee through the unified storage fee boundary: two-phase
+    // full/discount classification when enabled, legacy fixed periods when disabled
+    // (§4.3); fast-sync skips the checks but books quota identically (state
+    // convergence).
     enforce_contract_storage_fee(ctx, charge_bytes, &this.protocol_cost)?;
     if !fast_sync || this.protocol_cost.is_positive() {
         // strict deducts after the fee check; fast-sync replay still deducts the
@@ -636,9 +637,9 @@ fn check_static_call_targets(
 /// Unified two-phase contract storage fee boundary for deploy and update (§8.B1).
 ///
 /// Strict mode:
-/// * Pre-activation (or disabled profiles): legacy fixed-period full-price check,
+/// * Disabled profiles: legacy fixed-period full-price check,
 ///   `protocol_cost >= required_cost` semantics preserved (A07).
-/// * From `H0`: `protocol_cost >= F_full` pays full price and consumes no discount
+/// * Enabled: `protocol_cost >= F_full` pays full price and consumes no discount
 ///   quota; `F_discount <= protocol_cost < F_full` is an all-or-nothing discount
 ///   transaction that consumes `charge_bytes` from the block quota
 ///   `min(B_start, K_max)`; anything below `F_discount` is rejected — the user pays
@@ -960,10 +961,9 @@ mod contract_deploy_exec_tests {
         assert_eq!(burn_total(&mut ctx), cost.to_238_u128().unwrap());
     }
 
-    // ======================= storage fee budget discount (post-H0) =======================
+    // ======================= storage fee budget discount =======================
 
-    /// Storage discount schedule used by the deploy classification tests. H0 is far
-    /// above any other test height so the stub stays legacy for existing cases.
+    /// Storage discount schedule used by the deploy classification tests.
     const DISCOUNT_H0: u64 = 900_000;
 
     fn discount_profile() -> base::VmExecutionParams {
@@ -1031,16 +1031,13 @@ mod contract_deploy_exec_tests {
         amt.to_unit_u128(base::FEE_PRICING_UNIT).unwrap()
     }
 
-    /// A07/A04: before activation the deploy fee keeps the legacy fixed-period
-    /// `>=` check; at H0 the missing budget record initializes the budget full
-    /// (B0 = C), so the activation block itself already prices the floor
-    /// discount: discount-band deploys succeed and book quota.
+    /// Disabled profiles keep the legacy fixed-period `>=` check and never
+    /// touch quota. An enabled profile with a missing budget record opens at
+    /// `B0 = C`, so the floor discount is available immediately.
     #[test]
-    fn deploy_before_and_at_activation_stays_full_price() {
-        // pre-activation: legacy full price, `protocol_cost >= required`
+    fn deploy_disabled_is_full_price_and_enabled_missing_record_opens_full() {
+        // disabled: legacy full price, `protocol_cost >= required`
         let mut ctx = deploy_ctx(false);
-        ctx.vm_params = discount_profile();
-        ctx.env.block.height = DISCOUNT_H0 - 1;
         let addr = ctx.env.tx.main;
         prefund(
             &mut ctx,
@@ -1065,9 +1062,7 @@ mod contract_deploy_exec_tests {
             .unwrap_or_else(|e| panic!("legacy full-price deploy failed: {e}"));
         assert_eq!(used_discount_bytes(&ctx), 0, "legacy rule has no quota");
 
-        // at H0 with the record missing, init derives B_start = C (B0 = C): the
-        // budget opens full, so the discount is available at the floor price on
-        // the activation block itself
+        // enabled with the record missing: init derives B_start = C (B0 = C)
         let mut ctx = discount_ctx(false);
         ctx.env.block.height = DISCOUNT_H0;
         {
@@ -1096,7 +1091,7 @@ mod contract_deploy_exec_tests {
             act.contract = body;
             act.execute(ctx)
         };
-        // a discount-band deploy succeeds on the activation block and books bytes
+        // a discount-band deploy succeeds and books bytes
         deploy_at(
             &mut ctx,
             Amount::coin_u128(u232_of(&min_full) - 1, base::FEE_PRICING_UNIT),

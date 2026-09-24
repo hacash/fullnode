@@ -824,18 +824,18 @@ impl base::TransactionExecute for BudgetUseTx {
     }
 }
 
-/// Mainnet-shaped storage discount profile with a compact H0 for fast tests.
+/// Mainnet-shaped storage discount profile with a compact T for fast tests.
 fn budget_test_params() -> VmExecutionParams {
     VmExecutionParams {
         contract_store_perm_periods: 10_000,
         contract_storage_fee: base::ContractStorageFeeParams {
             rule_version: base::CONTRACT_STORAGE_RULE_V1,
-            activation_height: 3,
+            activation_height: 0,
             target_capacity_blocks: 3,
             curve_steps: 1_000,
             period_floor: 10,
             max_block_discount_bytes: 16_384,
-            supplement_schedule: &[(3, 3_000)],
+            supplement_schedule: &[(0, 3_000)],
         },
         // 100 u238/byte ≡ 10⁸ u232/byte (legacy test floor, scaled with pricing unit).
         initial_fee_purity_floor: 100_000_000,
@@ -882,14 +882,13 @@ fn insert_next(eng: &ChainEngine) -> u64 {
 fn budget_activates_and_fills_over_idle_blocks() {
     let eng = open_budget_engine();
     assert_eq!(head_remaining_budget(&eng), None);
-    // pre-activation: heights 1 and 2 use legacy rules, no budget state
+    // first block births B = C = 9000; idle blocks stay at the cap
     assert_eq!(insert_next(&eng), 1);
+    assert_eq!(head_remaining_budget(&eng), Some(9_000));
     assert_eq!(insert_next(&eng), 2);
-    assert_eq!(head_remaining_budget(&eng), None);
-    // H0 = 3: missing record interpreted as B = C = 9000 (B0 = C)
+    assert_eq!(head_remaining_budget(&eng), Some(9_000));
     assert_eq!(insert_next(&eng), 3);
     assert_eq!(head_remaining_budget(&eng), Some(9_000));
-    // idle blocks stay at the cap: 4/5/6 all read 9000
     assert_eq!(insert_next(&eng), 4);
     assert_eq!(head_remaining_budget(&eng), Some(9_000));
     assert_eq!(insert_next(&eng), 5);
