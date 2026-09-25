@@ -21,6 +21,7 @@ pub use consensus::genesis;
 pub use consensus::minter;
 
 pub use consensus::block_check;
+pub use consensus::initialize::GENESIS_INIT_TOTAL_238;
 pub use consensus::{
     ConsensusApi, DIAMOND_FORM_STATE_KEY, DiamondBidding, HacashConsensus, LOW_BID_CACHE_FULL_ERR,
     LOW_BID_PENDING_ERR, MinerConf, MintConf, block_hasher,

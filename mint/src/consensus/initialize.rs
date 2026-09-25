@@ -2,6 +2,14 @@ use base::{CoreState, StateLayer};
 use field::{Address, Amount, Balance};
 use sys::Rerr;
 
+/// Total HAC seeded by [`initialize`], expressed in 238 units (10^-10 HAC).
+/// Must mirror the `Balance::hac` amounts below: unit 244 = 10^-4 HAC, so
+/// mantissa M at unit 244 is M x 10^6 in 238 units. This one-time genesis
+/// allocation is NOT counted by the `/query/supply` issuance formula, so a
+/// full-ledger audit will find exactly this much extra "held" HAC.
+pub const GENESIS_INIT_TOTAL_238: u128 =
+    12u128 * 1_000_000 + 1u128 * 1_000_000 + 1u128 * 1_000_000 + 549u128 * 1_000_000 + 527u128 * 1_000_000;
+
 pub fn initialize(layer: &mut dyn StateLayer, diamond_form: bool) -> Rerr {
     let addr1 = Address::from_readable("12vi7DEZjh6KrK5PVmmqSgvuJPCsZMmpfi").unwrap();
     let addr2 = Address::from_readable("1LsQLqkd8FQDh3R7ZhxC5fndNf92WfhM19").unwrap();
