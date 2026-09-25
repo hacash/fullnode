@@ -123,6 +123,9 @@ impl Syntax {
             }
             return Ok(UintLiteralCombine::Folded(Self::emit_uint_literal(value, ty)));
         }
+        if matches!(op, OpTy::CAT) {
+            return Ok(UintLiteralCombine::Keep(left, right));
+        }
         let (subx, suby) = Self::align_uint_literal_widths(left, right);
         Ok(UintLiteralCombine::Keep(subx, suby))
     }
