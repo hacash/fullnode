@@ -30,6 +30,18 @@ impl Syntax {
         res
     }
 
+    pub(super) fn with_ternary_true_branch<R>(
+        &mut self,
+        enabled: bool,
+        f: impl FnOnce(&mut Self) -> Ret<R>,
+    ) -> Ret<R> {
+        let prev = self.mode.ternary_true_branch;
+        self.mode.ternary_true_branch = enabled;
+        let res = f(self);
+        self.mode.ternary_true_branch = prev;
+        res
+    }
+
     pub(super) fn with_loop_scope<R>(&mut self, f: impl FnOnce(&mut Self) -> Ret<R>) -> Ret<R> {
         self.mode.loop_depth += 1;
         let res = f(self);
@@ -275,64 +287,66 @@ impl Syntax {
         mode: SequenceMode,
         err_msg: &'static str,
     ) -> Ret<Vec<Box<dyn IRNode>>> {
-        self.with_expect_retval(Self::sequence_expect_retval(mode), |s| {
-            let mut items = Vec::new();
-            let mut terminated = false;
-            loop {
-                // Optional soft separators: comma and normalized semicolon.
-                // They only terminate/separate expressions/statements, and carry no count semantics.
-                s.cursor.skip_soft_separators();
-                match close {
-                    SequenceClose::TopLevel => {
-                        if s.cursor.at_end() {
-                            break;
+        self.with_ternary_true_branch(false, |s| {
+            s.with_expect_retval(Self::sequence_expect_retval(mode), |s| {
+                let mut items = Vec::new();
+                let mut terminated = false;
+                loop {
+                    // Optional soft separators: comma and normalized semicolon.
+                    // They only terminate/separate expressions/statements, and carry no count semantics.
+                    s.cursor.skip_soft_separators();
+                    match close {
+                        SequenceClose::TopLevel => {
+                            if s.cursor.at_end() {
+                                break;
+                            }
                         }
+                        SequenceClose::Partition(part) => match s.cursor.peek() {
+                            Some(Token::Partition(got)) if *got == part => {
+                                s.cursor.next()?;
+                                break;
+                            }
+                            Some(Token::Partition(got)) if matches!(got, '}' | ')' | ']') => {
+                                return errf!("{}", err_msg);
+                            }
+                            Some(_) => {}
+                            None => return errf!("{}", err_msg),
+                        },
                     }
-                    SequenceClose::Partition(part) => match s.cursor.peek() {
-                        Some(Token::Partition(got)) if *got == part => {
-                            s.cursor.next()?;
-                            break;
-                        }
-                        Some(Token::Partition(got)) if matches!(got, '}' | ')' | ']') => {
-                            return errf!("{}", err_msg);
-                        }
-                        Some(_) => {}
-                        None => return errf!("{}", err_msg),
-                    },
-                }
-                match mode {
-                    SequenceMode::Values => {
-                        let Some(item) = s.parse_item()? else {
-                            return errf!("{}", err_msg);
-                        };
-                        item.checkretval()?;
-                        items.push(item);
-                    }
-                    SequenceMode::Statements { .. } => {
-                        if s.try_skip_redundant_terminal_end(terminated) {
-                            continue;
-                        }
-                        if terminated {
-                            return errf!("unreachable code after terminal statement");
-                        }
-                        let Some(item) = s.parse_item()? else {
-                            return errf!("{}", err_msg);
-                        };
-                        terminated = Self::is_strong_terminator(&*item);
-                        if item.as_any().downcast_ref::<IRNodeEmpty>().is_none() {
+                    match mode {
+                        SequenceMode::Values => {
+                            let Some(item) = s.parse_item()? else {
+                                return errf!("{}", err_msg);
+                            };
+                            item.checkretval()?;
                             items.push(item);
                         }
+                        SequenceMode::Statements { .. } => {
+                            if s.try_skip_redundant_terminal_end(terminated) {
+                                continue;
+                            }
+                            if terminated {
+                                return errf!("unreachable code after terminal statement");
+                            }
+                            let Some(item) = s.parse_item()? else {
+                                return errf!("{}", err_msg);
+                            };
+                            terminated = Self::is_strong_terminator(&*item);
+                            if item.as_any().downcast_ref::<IRNodeEmpty>().is_none() {
+                                items.push(item);
+                            }
+                        }
                     }
                 }
-            }
-            if let SequenceMode::Statements { keep_retval: true } = mode {
-                match items.last() {
-                    Some(last) if last.hasretval() => {}
-                    Some(_) => return errf!("block expression must return a value"),
-                    None => return errf!("block expression cannot be empty"),
+                if let SequenceMode::Statements { keep_retval: true } = mode {
+                    match items.last() {
+                        Some(last) if last.hasretval() => {}
+                        Some(_) => return errf!("block expression must return a value"),
+                        None => return errf!("block expression cannot be empty"),
+                    }
                 }
-            }
-            Ok(items)
+                Ok(items)
+            })
         })
     }
 
@@ -377,33 +391,35 @@ impl Syntax {
         err_msg: &'static str,
     ) -> Ret<Vec<(Box<dyn IRNode>, Box<dyn IRNode>)>> {
         self.cursor.expect_partition(open, err_msg)?;
-        self.with_expect_retval(true, |s| {
-            let mut pairs = Vec::new();
-            loop {
-                s.cursor.skip_soft_separators();
-                match s.cursor.peek() {
-                    Some(Token::Partition(got)) if *got == close => {
-                        s.cursor.next()?;
-                        break;
+        self.with_ternary_true_branch(false, |s| {
+            s.with_expect_retval(true, |s| {
+                let mut pairs = Vec::new();
+                loop {
+                    s.cursor.skip_soft_separators();
+                    match s.cursor.peek() {
+                        Some(Token::Partition(got)) if *got == close => {
+                            s.cursor.next()?;
+                            break;
+                        }
+                        Some(Token::Partition(got)) if matches!(got, '}' | ')' | ']') => {
+                            return errf!("{}", err_msg);
+                        }
+                        Some(_) => {}
+                        None => return errf!("{}", err_msg),
                     }
-                    Some(Token::Partition(got)) if matches!(got, '}' | ')' | ']') => {
+                    let Some(key) = s.parse_item()? else {
                         return errf!("{}", err_msg);
-                    }
-                    Some(_) => {}
-                    None => return errf!("{}", err_msg),
+                    };
+                    key.checkretval()?;
+                    s.cursor.expect_keyword(KwTy::Colon, err_msg)?;
+                    let Some(value) = s.parse_item()? else {
+                        return errf!("{}", err_msg);
+                    };
+                    value.checkretval()?;
+                    pairs.push((key, value));
                 }
-                let Some(key) = s.parse_item()? else {
-                    return errf!("{}", err_msg);
-                };
-                key.checkretval()?;
-                s.cursor.expect_keyword(KwTy::Colon, err_msg)?;
-                let Some(value) = s.parse_item()? else {
-                    return errf!("{}", err_msg);
-                };
-                value.checkretval()?;
-                pairs.push((key, value));
-            }
-            Ok(pairs)
+                Ok(pairs)
+            })
         })
     }
 

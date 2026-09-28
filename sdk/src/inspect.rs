@@ -1,4 +1,4 @@
-//! Transaction inspection: decode → protocol facts → Review (Unified SDK 2.0, doc 14 §5/§6.1).
+//! Transaction inspection: decode → protocol facts → Review (Hacash SDK, doc 14 §5/§6.1).
 //! The SDK never executes or consults a node; the chain context is caller input, and guard/topology findings are facts, never denials.
 
 use base::{BinaryCodecs, Transaction, TransactionSign};

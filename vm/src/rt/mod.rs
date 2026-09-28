@@ -77,7 +77,10 @@ pub use call_site::{
     is_user_call_inst,
 };
 include!("action_defs.rs");
-include!("parse.rs");
+include!("asm_lex.rs");
+include!("asm_decode.rs");
+include!("asm_pretty.rs");
+include!("asm.rs");
 include!("sourcemap.rs");
 #[cfg(feature = "execute")]
 mod verify;

@@ -52,7 +52,7 @@ fi
 "$SCRIPT_DIR/build.sh" no-modules
 node "$SCRIPT_DIR/pack.js"
 mkdir -p "$DIST_DIR/page"
-mv "$DIST_DIR/hacashsdk_bg.js" "$DIST_DIR/page/"
+mv "$DIST_DIR/hacash_sdk.js" "$DIST_DIR/page/"
 if [ -f "$DIST_DIR/hacashsdk.d.ts" ]; then
     mv "$DIST_DIR/hacashsdk.d.ts" "$DIST_DIR/page/"
 fi
@@ -111,7 +111,7 @@ if [ "$RELEASE" -eq 1 ]; then
             "$DIST_DIR/js/hacashsdk.mjs" \
             "$DIST_DIR/nodejs/hacashsdk.js" \
             "$DIST_DIR/web/hacashsdk.js" \
-            "$DIST_DIR/page/hacashsdk_bg.js"
+            "$DIST_DIR/page/hacash_sdk.js"
         do
             if minify_js "$f"; then
                 echo "[pack]   $(basename "$f"): $(wc -c < "$f" | tr -d ' ') bytes"

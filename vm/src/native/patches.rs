@@ -108,6 +108,15 @@ mod tests {
 
     #[test]
     fn argv_pack_and_canonical_idx() {
+        assert_eq!(NativeFunc::sha2_prefix_u32 as u8, 32);
+        assert_eq!(NativeFunc::sha2_prefix_u32.rty_of(), ValueTy::U32);
+        assert_eq!(
+            NativeFunc::argv_pack(NativeFunc::sha2_prefix_u32 as u8).unwrap(),
+            NativeArgvPack::Concat
+        );
+        assert_eq!(NativeFunc::sha2_prefix_u64 as u8, 33);
+        assert_eq!(NativeFunc::sha2_prefix_u160 as u8, 34);
+        assert_eq!(NativeFunc::sha2_prefix_u160.rty_of(), ValueTy::Bytes);
         assert_eq!(NativeFunc::address_ptr as u8, 81);
         assert_eq!(NativeFunc::patches as u8, 82);
         assert_eq!(NativeFunc::pack_asset as u8, 83);
@@ -299,6 +308,37 @@ mod tests {
                 .is_err()
         );
         assert!(NativeFunc::call(env, NativeFunc::pack_asset as u8, &[0; 16]).is_err());
+    }
+
+    #[test]
+    fn sha2_prefix_u32_returns_digest_head() {
+        let cap = SpaceCap::new(0);
+        let env = NativeFnEnv::new(&cap);
+        let (prefix, gas) =
+            NativeFunc::call(env, NativeFunc::sha2_prefix_u32 as u8, b"abc").unwrap();
+        assert_eq!(gas, NativeFunc::sha2_prefix_u32.gas_of());
+        assert_eq!(prefix, Value::U32(0xba78_16bf));
+        let mixed = list(vec![
+            Value::bytes(b"HBX1".to_vec()),
+            Value::U8(1),
+            Value::U32(7),
+        ]);
+        let raw = mixed.extract_call_data(&cap).unwrap();
+        let via_list =
+            NativeFunc::call(env, NativeFunc::sha2_prefix_u32 as u8, &raw).unwrap().0;
+        let mut flat = b"HBX1".to_vec();
+        flat.push(1);
+        flat.extend_from_slice(&7u32.to_be_bytes());
+        let via_flat =
+            NativeFunc::call(env, NativeFunc::sha2_prefix_u32 as u8, &flat).unwrap().0;
+        assert_eq!(via_list, via_flat);
+        assert!(matches!(via_list, Value::U32(_)));
+        assert!(NativeFunc::call_packed(
+            env,
+            NativeFunc::sha2_prefix_u32 as u8,
+            Value::bytes(b"abc".to_vec())
+        )
+        .is_err());
     }
 
     #[test]

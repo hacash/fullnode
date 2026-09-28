@@ -251,23 +251,18 @@ impl Syntax {
     fn parse_bytecode_stmt(&mut self) -> Ret<Box<dyn IRNode>> {
         self.cursor
             .expect_partition('{', "bytecode format invalid")?;
-        let mut codes = Vec::new();
+        let mut parts = Vec::new();
         loop {
             match self.cursor.next()? {
                 Token::Partition('}') => break,
-                Token::Identifier(id) => {
-                    let Some(code) = Bytecode::parse(&id) else {
-                        return errf!("bytecode {} not found", id);
-                    };
-                    codes.push(code as u8);
-                }
-                Token::Bytes(bytes) => codes.extend(bytes),
-                Token::Integer(n) if n <= u8::MAX as u128 => codes.push(n as u8),
+                Token::Identifier(id) => parts.push(id),
+                Token::Bytes(bytes) => parts.push(format!("0x{}", hex::encode(bytes))),
+                Token::Integer(n) if n <= u8::MAX as u128 => parts.push(n.to_string()),
                 _ => return errf!("bytecode format invalid"),
             }
         }
-        // Surface `bytecode { ... }` must produce a runtime-safe fragment (no IR-only opcodes,
-        // absolute jumps, or misaligned params); `IRNodeBytecodes::new` is the construction gate.
+        let text = parts.join(" ");
+        let codes = crate::rt::assemble_bytecode_raw(&text)?;
         let node = IRNodeBytecodes::new(codes).map_err(|e| e.to_string())?;
         Ok(Box::new(node))
     }

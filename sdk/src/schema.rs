@@ -1,4 +1,4 @@
-//! Frozen schema ids and the unified result envelope (Unified SDK 2.0, doc 14).
+//! Frozen schema ids and the unified result envelope (Hacash SDK, doc 14).
 //! Schema ids are the public data contract, additive-only — changing an existing id's semantics requires a new schema major.
 
 /// Stable schema ids (frozen at ABI major 2).

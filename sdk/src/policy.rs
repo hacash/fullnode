@@ -1,4 +1,4 @@
-//! Generic application policy (Unified SDK 2.0, doc 14 §4.8): `evaluate` turns
+//! Generic application policy (Hacash SDK, doc 14 §4.8): `evaluate` turns
 //! a Review + caller Policy into a PolicyDecision, never mutating protocol facts.
 
 use crate::error::SdkError;

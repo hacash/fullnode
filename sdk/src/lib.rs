@@ -1,4 +1,4 @@
-//! Unified SDK 2.0 (doc 14). Raw WASM transport `sdk_invoke_json`/`sdk_transport_version`; the
+//! Hacash SDK (doc 14). Raw WASM transport `sdk_invoke_json`/`sdk_transport_version`; the
 //! boundary is JSON strings via the hand-written engine (serde_json test-oracle only). Private keys never cross the boundary.
 
 #![cfg_attr(all(target_arch = "wasm32", not(test)), no_main)]

@@ -1,4 +1,4 @@
-//! Action descriptors and review bindings (Unified SDK 2.0, doc 14 §5/§6).
+//! Action descriptors and review bindings (Hacash SDK, doc 14 §5/§6).
 //! Auditability classes are schema-declared at each action's definition site, so the SDK never keeps a separate grading table.
 
 use base::{Action, BinaryCodecs};
@@ -127,7 +127,7 @@ fn payload_desc(asset: &base::TransferAsset) -> PayloadDesc {
     }
 }
 
-/// Per-action describe knobs (Unified SDK 2.0 §6.5). Each switch independently
+/// Per-action describe knobs (Hacash SDK §6.5). Each switch independently
 /// controls one output facet so callers can trim payload and decompile load:
 /// `description` is the schema-declared one-line text, `json` the canonical
 /// field-level JSON (can be large for contract deploy/update), `code` the VM

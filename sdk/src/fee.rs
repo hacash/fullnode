@@ -1,4 +1,4 @@
-//! `tx.estimate_fee`: offline fee guidance (Unified SDK 2.0, doc 14 §4.7).
+//! `tx.estimate_fee`: offline fee guidance (Hacash SDK, doc 14 §4.7).
 //! The chain's gas model bills type-3 txs `max(declared_fee, floor * billing_size)`
 //! in the chain pricing unit (u232 = 10⁻¹⁶ HAC per byte), then ceils the HAC
 //! amount to the gas settlement unit (u238); type-2 txs carry no purity floor

@@ -1,4 +1,4 @@
-//! Account services (Unified SDK 2.0, doc 14 §5). Private keys never enter the
+//! Account services (Hacash SDK, doc 14 §5). Private keys never enter the
 //! SDK: addresses derive from public keys only; password→key derivation lives in the vault.
 
 use field::Address;

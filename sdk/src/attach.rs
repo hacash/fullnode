@@ -1,4 +1,4 @@
-//! Signing state machine (Unified SDK 2.0, doc 14 §4.5/§4.9): the SDK computes sign hashes and
+//! Signing state machine (Hacash SDK, doc 14 §4.5/§4.9): the SDK computes sign hashes and
 //! consumes `SignatureProof`s; private keys never cross the boundary. It verifies only the bindings it issued and attaches via `insert_attached_sign`; chain-rule outcomes are reported, never judged.
 
 use field::{Address, Sign};

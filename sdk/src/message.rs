@@ -1,4 +1,4 @@
-//! Message signing requests (Unified SDK 2.0, doc 14 §5, audit decision).
+//! Message signing requests (Hacash SDK, doc 14 §5, audit decision).
 //! Frozen convention: the 32-byte digest is signed as-is (no domain prefix); the SDK only prepares and verifies.
 
 use field::Address;

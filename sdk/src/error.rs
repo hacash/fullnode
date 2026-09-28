@@ -1,4 +1,4 @@
-//! Structured SDK errors (Unified SDK 2.0, doc 14 §7). Codes are stable
+//! Structured SDK errors (Hacash SDK, doc 14 §7). Codes are stable
 //! additive-only strings; business logic classifies by `code`, never by text.
 
 /// Declares the error-code surface in one place (enum, `as_str()`, `ERROR_CODES`),

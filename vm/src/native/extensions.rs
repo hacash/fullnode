@@ -4,11 +4,9 @@ use sha2::{Digest, Sha256};
 use crate::rt::{ItrErr, ItrErrCode::NativeFuncError, MapItrErr, NativeFnEnv, NativeFunc, VmrtRes};
 use crate::value::{TupleItem, Value};
 
-use super::{func_argv, func_bytes, func_list, func_u64};
+use super::{func_argv, func_bytes, func_u64};
 
 const SCAN_COUNT_MAX: u64 = 64;
-const CAT_PARTS_MAX: usize = 16;
-const CAT_BYTES_MAX: usize = 4096;
 
 fn args(argv: Value, cty: NativeFunc) -> VmrtRes<Vec<Value>> {
     func_argv(argv, cty)
@@ -113,6 +111,11 @@ pub(crate) fn pack_fungible_amount(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<V
     Ok(Value::bytes(packed))
 }
 
+pub(crate) fn sha2_prefix_u32(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
+    let digest = Sha256::digest(buf);
+    Ok(Value::U32(u32::from_be_bytes(digest[..4].try_into().unwrap())))
+}
+
 pub(crate) fn sha2_prefix_u64(_: NativeFnEnv<'_>, buf: &[u8]) -> VmrtRes<Value> {
     let digest = Sha256::digest(buf);
     Ok(Value::U64(u64::from_be_bytes(digest[..8].try_into().unwrap())))
@@ -193,32 +196,4 @@ pub(crate) fn buf_scan_u32(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
         None => (0, false),
     };
     Ok(Value::Tuple(TupleItem::new(vec![Value::U64(offset), Value::Bool(ok)])?))
-}
-
-/// SHA-256 prefix of a list of byte strings, concatenated in order.
-/// Only `Bytes` parts are accepted. Part count and total length are capped.
-pub(crate) fn sha2_prefix_u64_cat(_: NativeFnEnv<'_>, argv: Value) -> VmrtRes<Value> {
-    let cty = NativeFunc::sha2_prefix_u64_cat;
-    let parts = func_list(argv, cty)?;
-    if parts.len() > CAT_PARTS_MAX {
-        return itr_err_fmt!(
-            NativeFuncError,
-            "sha2_prefix_u64_cat part count {} exceeds {CAT_PARTS_MAX}",
-            parts.len()
-        );
-    }
-    let mut buf = Vec::new();
-    for part in &parts {
-        let bytes = func_bytes(part, cty, "part")?;
-        let next = buf.len().saturating_add(bytes.len());
-        if next > CAT_BYTES_MAX {
-            return itr_err_fmt!(
-                NativeFuncError,
-                "sha2_prefix_u64_cat length {next} exceeds {CAT_BYTES_MAX}"
-            );
-        }
-        buf.extend_from_slice(&bytes);
-    }
-    let digest = Sha256::digest(&buf);
-    Ok(Value::U64(u64::from_be_bytes(digest[..8].try_into().unwrap())))
 }

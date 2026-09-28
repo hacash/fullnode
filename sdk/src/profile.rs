@@ -1,4 +1,4 @@
-//! Codec profile, capabilities and SDK version (Unified SDK 2.0, doc 14 §4.1/§4.7/§6.2).
+//! Codec profile, capabilities and SDK version (Hacash SDK, doc 14 §4.1/§4.7/§6.2).
 //! `profile_hash` pins the codec identity: any protocol or registry change rotates it, invalidating outstanding review bindings.
 
 use crate::json::SdkJsonTo;

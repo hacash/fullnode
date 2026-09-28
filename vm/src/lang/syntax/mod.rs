@@ -32,6 +32,9 @@ struct SlotStateV2 {
 struct ParserModeV2 {
     expect_retval: bool,
     loop_depth: usize,
+    // While parsing the true branch of `cond ? yes : no`, `identifier :`
+    // is the ternary colon — not a `Lib:foo` view call.
+    ternary_true_branch: bool,
 }
 
 #[derive(Default)]

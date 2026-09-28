@@ -351,6 +351,15 @@ impl Bytecode {
         }
     }
 
+    pub fn parse_intro(s: &str) -> Option<Self> {
+        match s {
+            $(
+            stringify!($s) => Some($inst),
+            )+
+            _ => None
+        }
+    }
+
     pub fn try_from_u8(v: u8) -> VmrtRes<Self> {
         match v {
             $(
@@ -420,8 +429,8 @@ bytecode_metadata_define! {
     TIS        : 1, 1, 1,     type_is
     TID        : 0, 1, 1,     type_id
 
-    DUP        : 0, 0, 1,     dump
-    DUPN       : 1, 0, 255,   dump_n
+    DUP        : 0, 0, 1,     dup
+    DUPN       : 1, 0, 255,   dup_n
     POP        : 0, 255, 0,   pop
     POPN       : 1, 255, 0,   pop_n
     ROLL0      : 0, 0, 1,     roll_0
@@ -726,6 +735,11 @@ mod bytecode_tests {
         assert_eq!(Bytecode::parse("MPATCH"), Some(MPATCH));
         assert_eq!(Bytecode::parse("CODE_CALL"), Some(CODE_CALL));
         assert_eq!(Bytecode::parse("CODECALL"), None);
+        assert_eq!(Bytecode::parse_intro("dup"), Some(DUP));
+        assert_eq!(Bytecode::parse_intro("dump"), None);
+        assert_eq!(Bytecode::parse("DUP"), Some(DUP));
+        assert_eq!(Bytecode::parse("dup"), None);
+        assert_eq!(Bytecode::parse_intro("push_buf"), Some(PBUF));
     }
 
     /// The nine P2SH lock scripts mainnet actually contains (action kind 46, first

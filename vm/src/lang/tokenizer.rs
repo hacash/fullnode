@@ -314,7 +314,7 @@ impl Tokenizer<'_> {
             match c {
                 '0'..='9' => self.parse_number(max, c)?,
                 'A'..='Z' | 'a'..='z' | '$' | '_' => self.parse_identifier(max, c)?,
-                '{' | '}' | '(' | ')' | '[' | ']' => self.tokens.push(Partition(c)),
+                '{' | '}' | '(' | ')' | '[' | ']' | '?' => self.tokens.push(Partition(c)),
                 // Comma is a soft separator token.
                 // Semicolon is normalized to comma at lexical stage.
                 ',' | ';' => self.tokens.push(Partition(',')),

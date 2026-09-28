@@ -1221,10 +1221,7 @@ mod token_t {
             "is_contract(a)",
             "is_scriptmh(a)",
         ] {
-            let script = format!(
-                "var a = emqjNS9PscqdBpMtnC3Jfuc4mvZUPYTPS\nreturn {}",
-                call
-            );
+            let script = format!("var a = emqjNS9PscqdBpMtnC3Jfuc4mvZUPYTPS\nreturn {}", call);
             lang_to_irnode(&script).unwrap_or_else(|e| panic!("{} must compile: {}", call, e));
             let codes = lang_to_bytecode(&script).expect("bytecode");
             assert!(
@@ -1657,7 +1654,145 @@ mod token_t {
             "intent_open_page(nil)\nreturn 0",
         ];
         for src in rejected {
-            assert!(lang_to_irnode(src).is_err(), "expected arity error for {src}");
+            assert!(
+                lang_to_irnode(src).is_err(),
+                "expected arity error for {src}"
+            );
         }
+    }
+}
+
+#[cfg(test)]
+mod ternary_t {
+    use crate::rt::Token;
+    use crate::IRNode;
+
+    fn assert_ternary_matches_choose(ternary: &str, choose: &str) {
+        use super::{lang_to_bytecode, lang_to_irnode};
+        let ir_t = lang_to_irnode(ternary).unwrap_or_else(|e| panic!("{ternary}: {e}"));
+        let ir_c = lang_to_irnode(choose).unwrap_or_else(|e| panic!("{choose}: {e}"));
+        assert_eq!(
+            ir_t.serialize(),
+            ir_c.serialize(),
+            "serialize mismatch:\n  {ternary}\n  {choose}"
+        );
+        let bc_t = lang_to_bytecode(ternary).unwrap_or_else(|e| panic!("bc {ternary}: {e}"));
+        let bc_c = lang_to_bytecode(choose).unwrap_or_else(|e| panic!("bc {choose}: {e}"));
+        assert_eq!(bc_t, bc_c, "bytecode mismatch:\n  {ternary}\n  {choose}");
+    }
+
+    #[test]
+    fn ternary_compiles() {
+        use super::lang_to_irnode;
+        lang_to_irnode("return true ? 1 : 2").expect("true ? 1 : 2");
+    }
+
+    #[test]
+    fn ternary_matches_choose_ir_and_bytecode() {
+        assert_ternary_matches_choose("return true ? 1 : 2", "return choose(true, 1, 2)");
+    }
+
+    #[test]
+    fn ternary_precedence_lower_than_add() {
+        use super::{lang_to_bytecode, lang_to_irnode};
+        assert_ternary_matches_choose("return 1 + 2 ? 3 : 4", "return choose(1 + 2, 3, 4)");
+        let add_choose = lang_to_irnode("return 1 + choose(2, 3, 4)").unwrap();
+        let ternary = lang_to_irnode("return 1 + 2 ? 3 : 4").unwrap();
+        assert_ne!(add_choose.serialize(), ternary.serialize());
+        assert_ne!(
+            lang_to_bytecode("return 1 + choose(2, 3, 4)").unwrap(),
+            lang_to_bytecode("return 1 + 2 ? 3 : 4").unwrap()
+        );
+    }
+
+    #[test]
+    fn ternary_right_associative() {
+        assert_ternary_matches_choose(
+            "return false ? 1 : true ? 2 : 3",
+            "return choose(false, 1, choose(true, 2, 3))",
+        );
+    }
+
+    #[test]
+    fn ternary_true_branch_identifier_not_colon_call() {
+        lang_to_irnode_ok("var a = 1\nvar b = 2\nreturn true ? a : b");
+        assert_ternary_matches_choose(
+            "var a = 1\nvar b = 2\nreturn true ? a : b",
+            "var a = 1\nvar b = 2\nreturn choose(true, a, b)",
+        );
+    }
+
+    fn lang_to_irnode_ok(src: &str) {
+        super::lang_to_irnode(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+    }
+
+    #[test]
+    fn tokenizer_accepts_question_mark() {
+        let tokens = super::Tokenizer::new(b"true ? 1 : 2")
+            .parse()
+            .expect("tokenize ?");
+        assert!(
+            tokens.iter().any(|t| matches!(t, Token::Partition('?'))),
+            "expected '?' partition token, got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn ternary_missing_colon_is_error() {
+        let err = super::lang_to_irnode("return 1 ? 2")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("missing ':'"),
+            "expected missing-colon error, got {err}"
+        );
+    }
+
+    #[test]
+    fn ternary_decompile_prints_question_colon() {
+        use super::{irnode_to_lang, lang_to_irnode};
+        let ir = lang_to_irnode("return choose(true, 1, 2)").unwrap();
+        let text = irnode_to_lang(ir).unwrap();
+        assert!(text.contains('?'), "decompiled should use ternary: {text}");
+        assert!(
+            !text.contains("choose("),
+            "decompiled should not keep choose(): {text}"
+        );
+    }
+
+    #[test]
+    fn ternary_operand_wrapping_roundtrips() {
+        use super::{ircode_to_lang, lang_to_ircode};
+        for src in [
+            "return (true ? 1 : 2) + 3",
+            "return 1 + 2 ? 3 : 4",
+            "return true ? 1 + 2 : 3",
+            "return true ? 1 : 2 + 3",
+            "return false ? 1 : true ? 2 : 3",
+            "return (false ? 1 : true) ? 2 : 3",
+            "return !(true ? true : false)",
+            "return true ? false ? 1 : 2 : 3",
+        ] {
+            let expect = lang_to_ircode(src).expect(src);
+            let text = ircode_to_lang(&expect).expect(src);
+            let reparsed = lang_to_ircode(&text)
+                .unwrap_or_else(|e| panic!("{src}\n---- decompiled ----\n{text}\n{e}"));
+            assert_eq!(expect, reparsed, "src={src}\ndecompiled={text}");
+        }
+    }
+
+    #[test]
+    fn ternary_true_branch_nested() {
+        assert_ternary_matches_choose(
+            "return true ? false ? 1 : 2 : 3",
+            "return choose(true, choose(false, 1, 2), 3)",
+        );
+    }
+
+    #[test]
+    fn ternary_and_choose_both_compile() {
+        lang_to_irnode_ok("return true ? choose(false, 1, 2) : 3");
+        lang_to_irnode_ok("return choose(true, 1, false ? 2 : 3)");
     }
 }

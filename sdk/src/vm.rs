@@ -1,5 +1,5 @@
 //! `vm.decode_call`: structured view of a `contract_main_call` action
-//! (Unified SDK 2.0, doc 14 §6.3). The wire carries `marks` (reserved, must be
+//! (Hacash SDK, doc 14 §6.3). The wire carries `marks` (reserved, must be
 //! zero), `codeconf` (2-bit code type + 6 reserved bits) and the bytecode
 //! (`codes`). Code-type masks are `vm::action::CODECONF_*` (authority:
 //! `CodeType::TYPE_MASK` / `CodeConf::RESERVED_MASK`).
@@ -203,13 +203,18 @@ pub fn code(
     let (format_name, full_text) = match (type_id, format) {
         (0, None | Some("assembly")) => (
             "assembly".to_owned(),
-            vm::lang::disassemble_bytecode(&codes, true)
+            vm::lang::asm::disassemble_bytecode_asm(&codes)
+                .map_err(|e| SdkError::new(SdkErrorCode::ParseFailed, e.to_string()))?,
+        ),
+        (0, Some("raw")) => (
+            "raw".to_owned(),
+            vm::lang::asm::disassemble_bytecode_raw(&codes)
                 .map_err(|e| SdkError::new(SdkErrorCode::ParseFailed, e.to_string()))?,
         ),
         (0, Some(other)) => {
             return Err(SdkError::new(
                 SdkErrorCode::ParseFailed,
-                format!("format {other} is not valid for bytecode; expected assembly"),
+                format!("format {other} is not valid for bytecode; expected assembly or raw"),
             ));
         }
         (1, None | Some("fitsh")) => (
@@ -222,10 +227,22 @@ pub fn code(
             vm::lang::ir_tree_text(&codes)
                 .map_err(|e| SdkError::new(SdkErrorCode::ParseFailed, e.to_string()))?,
         ),
+        (1, Some("raw")) => (
+            "raw".to_owned(),
+            vm::lang::asm::disassemble_ircode_raw(&codes)
+                .map_err(|e| SdkError::new(SdkErrorCode::ParseFailed, e.to_string()))?,
+        ),
+        (1, Some("assembly")) => (
+            "assembly".to_owned(),
+            vm::lang::asm::disassemble_ircode_asm(&codes)
+                .map_err(|e| SdkError::new(SdkErrorCode::ParseFailed, e.to_string()))?,
+        ),
         (1, Some(other)) => {
             return Err(SdkError::new(
                 SdkErrorCode::ParseFailed,
-                format!("format {other} is not valid for ir_node; expected fitsh or tree"),
+                format!(
+                    "format {other} is not valid for ir_node; expected fitsh, tree, raw, or assembly"
+                ),
             ));
         }
         _ => unreachable!("code type validated above"),
@@ -479,6 +496,23 @@ fn vm_code_ir_tree_format() {
     let ircode = hex::decode("7f017c0025eeb08026").unwrap();
     let out = code(&hex::encode(&ircode), "1", Some("tree"), None, None, None).unwrap();
     assert_eq!(out.format, "tree");
+    assert!(!out.text.is_empty());
+}
+
+#[test]
+fn vm_code_ir_assembly_format() {
+    // Wallet maincall display can request Form 2 ircode assembly instead of fitsh.
+    let ircode = hex::decode("7f017c0025eeb08026").unwrap();
+    let out = code(
+        &hex::encode(&ircode),
+        "1",
+        Some("assembly"),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(out.format, "assembly");
     assert!(!out.text.is_empty());
 }
 

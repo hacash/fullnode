@@ -6,7 +6,6 @@ use super::ir::*;
 use super::rt::Token::*;
 use super::rt::*;
 use super::*;
-// use super::rt::TokenType::*;
 
 include! {"print_option.rs"}
 include! {"decompilation_helper.rs"}
@@ -25,6 +24,16 @@ include! {"tokenizer.rs"}
 include! {"formater.rs"}
 #[cfg(all(test, feature = "execute"))]
 include! {"test.rs"}
+
+pub mod asm;
+pub use asm::{
+    assemble_bytecode, assemble_bytecode_as, assemble_ircode, assemble_ircode_as, decode_bytecode,
+    disassemble_bytecode_asm, disassemble_bytecode_raw, disassemble_ircode_asm,
+    disassemble_ircode_raw, format_bytecode, format_ircode, AsmFormat, DecodedInst,
+};
+
+#[cfg(test)]
+mod asm_accept;
 
 #[cfg(feature = "execute")]
 fn try_consume_display_lib_prelude(tokens: &[Token], start: usize) -> Option<usize> {
@@ -184,16 +193,6 @@ pub fn irnode_to_lang(block: IRNodeArray) -> Ret<String> {
 }
 
 pub use crate::rt::SourceMap;
-
-/// Bytecode disassembly to assembly text (the `BytecodePrint` view used by IR
-/// node printing and the SDK `vm.code` operation). Codec-safe.
-pub fn disassemble_bytecode(codes: &[u8], desc: bool) -> Ret<String> {
-    use crate::rt::BytecodePrint;
-    codes
-        .to_vec()
-        .bytecode_print(desc)
-        .map_err(|e| sys::Error::normal(e.to_string()))
-}
 
 /// Decompile serialized IR to fitsh text. `map` supplies source names (libs,
 /// functions, slots, consts) for maximum readability; `None` degrades to

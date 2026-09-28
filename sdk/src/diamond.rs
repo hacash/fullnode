@@ -1,4 +1,4 @@
-//! `diamond.lookup`: offline diamond identity checks (Unified SDK 2.0, doc 14 §4.7).
+//! `diamond.lookup`: offline diamond identity checks (Hacash SDK, doc 14 §4.7).
 //! The name→serial mapping lives in chain state (mining order), so this operation
 //! validates what IS derivable offline: name charset/format and serial range.
 //! Deposit/withdrawal flows use it to reject malformed user input before a query.

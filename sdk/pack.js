@@ -31,4 +31,4 @@ ${base64ToBuffer}
 const __Hacash_WASM_SDK_Stuff = "${wasmBase64}";
 `;
 
-fs.writeFileSync(path.join(distDir, "hacashsdk_bg.js"), output);
+fs.writeFileSync(path.join(distDir, "hacash_sdk.js"), output);

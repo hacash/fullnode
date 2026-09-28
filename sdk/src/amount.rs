@@ -1,4 +1,4 @@
-//! Protocol amount conversion (Unified SDK 2.0, doc 14 §4.7). Parse/format are
+//! Protocol amount conversion (Hacash SDK, doc 14 §4.7). Parse/format are
 //! thin wrappers over `field::Amount`, so any form it accepts (incl. comma grouping) is accepted here.
 
 use field::Amount;

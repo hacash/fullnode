@@ -34,7 +34,32 @@ impl Syntax {
                 }
             }
         }
+        if min_prec == 0 && self.cursor.eat_partition('?') {
+            left.checkretval()?;
+            let yes = self.with_ternary_true_branch(true, |s| s.parse_expr_bp(0))?;
+            yes.checkretval()?;
+            if !self.cursor.eat_keyword(KwTy::Colon) {
+                return errf!("ternary expression missing ':' after '?'");
+            }
+            let no = self.parse_expr_bp(0)?;
+            no.checkretval()?;
+            left = Self::build_choose_node(left, yes, no);
+        }
         Ok(left)
+    }
+
+    fn build_choose_node(
+        cond: Box<dyn IRNode>,
+        yes: Box<dyn IRNode>,
+        no: Box<dyn IRNode>,
+    ) -> Box<dyn IRNode> {
+        Box::new(IRNodeTriple {
+            hrtv: true,
+            inst: Bytecode::CHOOSE,
+            subx: cond,
+            suby: yes,
+            subz: no,
+        })
     }
 
     fn combine_uint_literals(
@@ -84,8 +109,15 @@ impl Syntax {
         };
         if matches!(
             op,
-            OpTy::ADD | OpTy::SUB | OpTy::MUL | OpTy::DIV | OpTy::MOD | OpTy::POW
-                | OpTy::BAND | OpTy::BXOR | OpTy::BOR
+            OpTy::ADD
+                | OpTy::SUB
+                | OpTy::MUL
+                | OpTy::DIV
+                | OpTy::MOD
+                | OpTy::POW
+                | OpTy::BAND
+                | OpTy::BXOR
+                | OpTy::BOR
         ) {
             let Some(value) = folded else {
                 if matches!(op, OpTy::ADD | OpTy::MUL | OpTy::POW) {
@@ -121,7 +153,9 @@ impl Syntax {
                     ty,
                 )));
             }
-            return Ok(UintLiteralCombine::Folded(Self::emit_uint_literal(value, ty)));
+            return Ok(UintLiteralCombine::Folded(Self::emit_uint_literal(
+                value, ty,
+            )));
         }
         if matches!(op, OpTy::CAT) {
             return Ok(UintLiteralCombine::Keep(left, right));
@@ -373,6 +407,9 @@ impl Syntax {
         match self.cursor.peek() {
             Some(Token::Partition('(')) => self.parse_free_call(id),
             Some(Token::Keyword(sep @ (KwTy::Dot | KwTy::Colon | KwTy::DColon))) => {
+                if *sep == KwTy::Colon && self.mode.ternary_true_branch {
+                    return self.link_symbol(&id);
+                }
                 let sep = *sep;
                 self.cursor.next()?;
                 self.parse_identifier_receiver_call(id, sep)
@@ -392,7 +429,9 @@ impl Syntax {
     }
 
     fn parse_group_expr(&mut self) -> Ret<Box<dyn IRNode>> {
-        let expr = self.with_expect_retval(true, |s| s.parse_required_item())?;
+        let expr = self.with_ternary_true_branch(false, |s| {
+            s.with_expect_retval(true, |s| s.parse_required_item())
+        })?;
         expr.checkretval()?;
         self.cursor
             .expect_partition(')', "(..) expression format invalid")?;
