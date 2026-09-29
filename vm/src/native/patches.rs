@@ -117,9 +117,9 @@ mod tests {
         assert_eq!(NativeFunc::sha2_prefix_u64 as u8, 33);
         assert_eq!(NativeFunc::sha2_prefix_u160 as u8, 34);
         assert_eq!(NativeFunc::sha2_prefix_u160.rty_of(), ValueTy::Bytes);
-        assert_eq!(NativeFunc::address_ptr as u8, 81);
-        assert_eq!(NativeFunc::patches as u8, 82);
-        assert_eq!(NativeFunc::pack_asset as u8, 83);
+        assert_eq!(NativeFunc::address_ptr as u8, 73);
+        assert_eq!(NativeFunc::patches as u8, 74);
+        assert_eq!(NativeFunc::pack_asset as u8, 75);
         assert_eq!(
             NativeFunc::argv_pack(NativeFunc::sha2 as u8).unwrap(),
             NativeArgvPack::Concat

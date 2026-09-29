@@ -1,13 +1,13 @@
 use base58check::ToBase58Check;
 #[cfg(not(feature = "secp-static-context"))]
 use libsecp256k1::curve::{ECMultContext, ECMultGenContext};
-use libsecp256k1::{Message, PublicKey, SecretKey, Signature, util};
+use libsecp256k1::{util, Message, PublicKey, RecoveryId, SecretKey, Signature};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 #[cfg(not(feature = "secp-static-context"))]
 use std::sync::OnceLock;
 
-use crate::{Rerr, Ret, errf};
+use crate::{errf, Rerr, Ret};
 
 const ADDRESS_SIZE: usize = 21;
 const PRIVATE_SIZE: usize = 32;
@@ -44,6 +44,24 @@ fn verify_impl(msg: &Message, signature: &Signature, pubkey: &PublicKey) -> bool
 #[cfg(not(feature = "secp-static-context"))]
 fn verify_impl(msg: &Message, signature: &Signature, pubkey: &PublicKey) -> bool {
     libsecp256k1::verify_with_context(msg, signature, pubkey, ecmult_ctx())
+}
+
+#[cfg(feature = "secp-static-context")]
+fn recover_impl(
+    msg: &Message,
+    signature: &Signature,
+    recovery_id: &RecoveryId,
+) -> Result<PublicKey, libsecp256k1::Error> {
+    libsecp256k1::recover(msg, signature, recovery_id)
+}
+
+#[cfg(not(feature = "secp-static-context"))]
+fn recover_impl(
+    msg: &Message,
+    signature: &Signature,
+    recovery_id: &RecoveryId,
+) -> Result<PublicKey, libsecp256k1::Error> {
+    libsecp256k1::recover_with_context(msg, signature, recovery_id, ecmult_ctx())
 }
 
 #[cfg(not(feature = "secp-static-context"))]
@@ -171,8 +189,8 @@ impl Account {
 
     pub fn do_sign(&self, msg: &[u8; 32]) -> [u8; 64] {
         let msg = Message::parse(msg);
-        let (s, _r) = sign_impl(&msg, &self.secret_key);
-        s.serialize()
+        let (signature, _recovery_id) = sign_impl(&msg, &self.secret_key);
+        signature.serialize()
     }
 
     pub fn verify_signature(msg: &[u8; 32], publickey: &[u8; 33], signature: &[u8; 64]) -> bool {
@@ -182,6 +200,29 @@ impl Account {
             }
         }
         false
+    }
+
+    /// Recover a canonical uncompressed public key from a 32-byte digest and
+    /// a low-S, compact secp256k1 signature.
+    pub fn recover_public_key(
+        msg: &[u8; 32],
+        signature: &[u8; 64],
+        recovery_id: u8,
+    ) -> Option<[u8; 65]> {
+        const HALF_ORDER: [u8; 32] = [
+            0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+            0xff, 0xff, 0x5d, 0x57, 0x6e, 0x73, 0x57, 0xa4, 0x50, 0x1d, 0xdf, 0xe9, 0x2f, 0x46,
+            0x68, 0x1b, 0x20, 0xa0,
+        ];
+        let r = &signature[..32];
+        let s = &signature[32..];
+        if r.iter().all(|b| *b == 0) || s.iter().all(|b| *b == 0) || s > HALF_ORDER.as_slice() {
+            return None;
+        }
+        let signature = Signature::parse_standard(signature).ok()?;
+        let recovery_id = RecoveryId::parse(recovery_id).ok()?;
+        let pubkey = recover_impl(&Message::parse(msg), &signature, &recovery_id).ok()?;
+        Some(pubkey.serialize())
     }
 }
 

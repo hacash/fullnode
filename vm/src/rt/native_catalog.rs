@@ -57,8 +57,8 @@ macro_rules! native_func_dispatch_packed_match {
 /// How a NativeFunc's single NTFUNC argv slot is filled.
 /// Criterion is the slot's payload, not arity:
 /// - Concat: callee wants a byte string. Compiler `CAT`s (1-arg is passthrough);
-///   interpreter `extract_call_data` (Nil→`[]`; one-layer list of Bytes is deferred
-///   CAT, ≤ `call_data_size`). Hashes, Amount/fold wire, ascii text.
+///   interpreter `extract_call_data` (Nil→`[]`; one-layer list is deferred CAT via
+///   `extract_bytes`, ≤ `call_data_size`). Hashes, Amount/fold wire, ascii text.
 /// - Packed: callee wants structured Values (typed uint/address, Tuple, list argv).
 ///   Compiler uses 0 Nil / 1 Raw / ≥2 Tuple; interpreter `call_packed`.
 ///   `patches` is Packed at argc 1 because the slot is a list, not CAT fragments.
@@ -234,10 +234,11 @@ macro_rules! native_func_env_define {
                         cty.name()
                     );
                 }
+                let dynamic_gas = crate::native::ntfunc_dynamic_gas(cty, &argv);
                 let r = native_func_dispatch_packed_match!(
                     cty, env, argv; $( $name = $argv_pack )+
                 );
-                crate::native::finish_ntfunc(cty, r)
+                crate::native::finish_ntfunc_with_extra(cty, r, dynamic_gas)
             }
         }
     };
@@ -262,18 +263,16 @@ native_func_env_define! { func, NativeFunc, NativeFuncError,
     blake2s256          = 5,    1,     32,    Bytes,   Concat
     blake2b256          = 6,    1,     32,    Bytes,   Concat
 
-
-    sha2_prefix_u64     = 33, 1,      25,    U64,     Concat
-    sha2_prefix_u160    = 34, 1,      25,    Bytes,   Concat
-    sha2_prefix_u64_cat = 35, 1,      25,    U64,     Packed
+    sha2_prefix_u32     = 32,   1,     25,    U32,     Concat
+    sha2_prefix_u64     = 33,   1,     25,    U64,     Concat
+    sha2_prefix_u160    = 34,   1,     25,    Bytes,   Concat
 
     verify_signature    = 40,   3,     40,    Bool,    Packed
-    asset_meta_fields   = 41,   1,      8,    Tuple,   Packed
-    asset_meta_require  = 42,   4,     10,    Bool,    Packed
-    check_addr_set      = 43,   3,     16,    Bool,    Packed
-    check_hacd_wire     = 44,   2,     10,    Bool,    Packed
-    fee_add_bps_ceil    = 45,   2,      8,    U64,     Packed
-    
+    p256_verify         = 41,   3,     40,    Bool,    Packed
+    secp256k1_recover   = 42,   3,     40,    Bytes,   Packed
+    merkle_root         = 43,   5,     16,    Bytes,   Packed
+    merkle_multi_root   = 44,   4,     16,    Bytes,   Packed
+
     hac_to_mei          = 51,   1,      6,    U64,     Concat
     hac_to_mei_checked  = 52,   1,      8,    U64,     Concat
     hac_to_zhu          = 53,   1,      6,    U128,    Concat
@@ -290,11 +289,14 @@ native_func_env_define! { func, NativeFunc, NativeFuncError,
 
     u64_to_fold64       = 71,   1,      6,    Bytes,   Packed
     fold64_to_u64       = 72,   1,      6,    U64,     Concat
-
-    address_ptr         = 81,   1,      4,    U8,      Packed
-    patches             = 82,   1,     16,    Bytes,   Packed
-    pack_asset          = 83,   2,      8,    Bytes,   Packed
-    pack_fungible_amount = 84,  2,     12,    Bytes,   Packed
+    address_ptr         = 73,   1,      4,    U8,      Packed
+    patches             = 74,   1,     16,    Bytes,   Packed
+    pack_asset          = 75,   2,      8,    Bytes,   Packed
+    pack_fungible_amount = 76,  2,     12,    Bytes,   Packed
+    asset_meta_fields   = 77,   1,      8,    Tuple,   Packed
+    asset_meta_require  = 78,   4,     10,    Bool,    Packed
+    check_addr_set      = 79,   3,     16,    Bool,    Packed
+    check_hacd_wire     = 80,   2,     10,    Bool,    Packed
 
     address_version     = 91,   1,      4,    U8,      Packed
     is_privkey_unknown  = 92,   1,      4,    Bool,    Packed
@@ -308,6 +310,9 @@ native_func_env_define! { func, NativeFunc, NativeFuncError,
     buf_u64             = 103, 2,       8,    U64,     Packed
     buf_address         = 104, 2,       8,    Address, Packed
     buf_scan_u32        = 105, 5,      12,    Tuple,   Packed
+
+    fee_add_bps_ceil    = 111,   2,     8,    U64,     Packed
+    bitmap_find         = 112,   5,     4,    Tuple,   Packed
 
     ascii_parse_flat_kv = 121, 8,      40,    Tuple,   Packed
     ascii_validate_transform = 122, 3, 24,    Tuple,   Packed

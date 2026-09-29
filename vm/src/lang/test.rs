@@ -1050,6 +1050,24 @@ mod token_t {
     }
 
     #[test]
+    fn crypto_native_calls_compile_with_catalog_arity() {
+        use super::lang_to_irnode;
+
+        assert!(lang_to_irnode("return merkle_root(0, 0, \"leaf\", \"\", 0)").is_ok());
+        assert!(lang_to_irnode("return secp256k1_recover(\"digest\", \"signature\", 0)").is_ok());
+        assert!(lang_to_irnode("return merkle_root(0, 0, \"leaf\", \"\")").is_err());
+        assert!(lang_to_irnode("return secp256k1_recover(\"digest\", \"signature\")").is_err());
+        assert!(
+            lang_to_irnode("return merkle_multi_root(0, \"leaves\", \"proof\", \"flags\")").is_ok()
+        );
+        assert!(
+            lang_to_irnode("return p256_verify(\"digest\", \"signature\", \"public_key\")").is_ok()
+        );
+        assert!(lang_to_irnode("return bitmap_find(\"bitmap\", 0, 8, 1, false)").is_ok());
+        assert!(lang_to_irnode("return bitmap_find(\"bitmap\", 0, 8, 1)").is_err());
+    }
+
+    #[test]
     fn test_blake2s256_roundtrips_as_single_arg_ntfunc() {
         use super::lang_to_irnode;
         use super::Formater;
@@ -1155,7 +1173,7 @@ mod token_t {
         use crate::rt::NativeArgvPack;
         use crate::rt::NativeFunc;
 
-        assert_eq!(NativeFunc::pack_asset as u8, 83);
+        assert_eq!(NativeFunc::pack_asset as u8, 75);
         assert_eq!(
             NativeFunc::argv_pack(NativeFunc::pack_asset as u8).unwrap(),
             NativeArgvPack::Packed

@@ -291,6 +291,35 @@ mod entry_semantics_tests {
     }
 
     #[test]
+    fn crypto_natives_execute_through_the_real_vm_entry() {
+        let merkle_root = run_arithmetic_source("return merkle_root(0, 0, sha2(\"\"), \"\", 0)")
+            .expect("merkle_root must execute through VM");
+        assert!(matches!(merkle_root, Value::Bytes(ref bytes) if bytes.len() == 32));
+
+        let multi_root = run_arithmetic_source(
+            "return merkle_multi_root(0, sha2(\"\"), \"\", \"\")",
+        )
+        .expect("merkle_multi_root must execute through VM");
+        assert_eq!(multi_root, merkle_root);
+
+        let bitmap = run_arithmetic_source("return bitmap_find(\"\", 0, 0, 0, false)")
+            .expect("bitmap_find must execute through VM");
+        assert!(matches!(bitmap, Value::Tuple(_)));
+
+        let p256 = run_arithmetic_source(
+            "return p256_verify(sha2(\"\"), sha2(\"\") ++ sha2(\"\"), sha2(\"\") ++ sha2(\"\"))",
+        )
+        .expect("p256_verify must execute through VM");
+        assert_eq!(p256, Value::Bool(false));
+
+        let secp_error = run_arithmetic_source(
+            "return secp256k1_recover(sha2(\"\"), sha2(\"\") ++ sha2(\"\"), 0)",
+        )
+        .expect_err("invalid secp256k1 signature must be rejected by VM");
+        assert!(secp_error.to_string().contains("secp256k1_recover"));
+    }
+
+    #[test]
     fn regression_literal_shifts_match_runtime_width_and_errors() {
         for bits in [8u32, 16, 32, 64, 128] {
             let max = u128::MAX >> (128 - bits);
