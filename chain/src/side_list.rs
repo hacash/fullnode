@@ -127,6 +127,11 @@ fn append_hashes(path: &Path, hashes: &[Hash]) -> std::io::Result<()> {
 fn compact(path: &Path, keep_ctx: &SideKeepCtx) {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Nothing to compact: the file is created lazily on the first
+            // append. Normal, not an error.
+            return;
+        }
         Err(e) => {
             eprintln!(
                 "[Engine] side hash list unreadable during compaction: {}",

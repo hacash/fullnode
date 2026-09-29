@@ -192,6 +192,11 @@ fn replay_side_branches(eng: &ChainEngine) -> sys::Rerr {
     };
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // No side hash list yet: normal on a fresh node or after the file
+            // was cleared. There is nothing to replay; not an error.
+            return Ok(());
+        }
         Err(e) => {
             eprintln!(
                 "[Engine] side hash list unreadable ({}); skip side replay",
