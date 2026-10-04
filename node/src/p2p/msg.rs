@@ -6,7 +6,7 @@
 // ===================================================================
 
 /// TCP handshake magic (big-endian on wire).
-pub const P2P_MAGIC: u32 = 2480137569;
+pub const P2P_MAGIC: u32 = 2480713596;
 
 /// Max frame body bytes.
 /// Large enough for 10k-block sync batches (~31.6 MiB).
