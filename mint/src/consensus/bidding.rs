@@ -12,6 +12,7 @@ use field::{Address, Amount, Hash};
 use sys::{Rerr, Ret, curtimes, errf};
 
 use crate::action::diamond::HacdMint;
+use crate::action::util::pickout_diamond_mint_action;
 use crate::difficulty::{hash_bigger_than, scaled_compact_hash};
 use crate::minter::block_reward_number;
 
@@ -311,6 +312,20 @@ impl DiamondBiddingInner {
         Ok(Amount::zero())
     }
 
+    fn reserved_bid(&self, dianum: u32, addr: &Address) -> Amount {
+        self.books
+            .get(&dianum)
+            .and_then(|book| {
+                book.uniq_top
+                    .iter()
+                    .filter(|record| record.usable && record.addr == *addr)
+                    .map(|record| &record.fee)
+                    .max()
+                    .cloned()
+            })
+            .unwrap_or_else(Amount::zero)
+    }
+
     fn mark_block_arrival(&mut self, hei: u64, hash: Hash) {
         if hei % 5 != 4 {
             return;
@@ -514,6 +529,36 @@ impl DiamondBidding {
             .highest(curhei, dianum, sta, fblkt)
     }
 
+    /// Reserve the highest pending bid for the next HACD while admitting an
+    /// ordinary transaction. A mint transaction is exempt because it settles
+    /// the bid it reserved.
+    pub fn check_tx_reserved_bid(&self, state: &dyn StateRead, tx: &dyn base::Transaction) -> Rerr {
+        if pickout_diamond_mint_action(tx).is_some() {
+            return Ok(());
+        }
+        let state = CoreStateRead::wrap(state);
+        let next_diamond = state
+            .latest_diamond()?
+            .unwrap_or_default()
+            .number
+            .uint()
+            .saturating_add(1);
+        let remaining = state.balance(&tx.main())?.unwrap_or_default().hacash;
+        let reserved = self
+            .inner
+            .lock()
+            .unwrap()
+            .reserved_bid(next_diamond, &tx.main());
+        if remaining < reserved {
+            return errf!(
+                "transaction would reduce balance below pending HACD bid: remaining {} < reserved {}",
+                remaining,
+                reserved
+            );
+        }
+        Ok(())
+    }
+
     pub fn mark_block_arrival(&self, hei: u64, hash: Hash) {
         self.inner.lock().unwrap().mark_block_arrival(hei, hash);
     }
@@ -694,9 +739,9 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use base::{BlkPkg, Block, PkgOrigin, PkgSource, TxRef};
-    use field::{Amount, Encode, Hash};
+    use field::{Address, Amount, Encode, Hash};
 
-    use super::{DiamondBidding, LowBidGroup};
+    use super::{BiddingBook, BiddingRecord, DiamondBidding, DiamondBiddingInner, LowBidGroup};
 
     #[derive(Debug)]
     struct TestBlock {
@@ -757,6 +802,37 @@ mod tests {
             }),
             PkgSource::new(PkgOrigin::Broadcast),
         )
+    }
+
+    #[test]
+    fn reserved_bid_uses_highest_usable_fee_for_address() {
+        let address = Address::default();
+        let mut bidding = DiamondBiddingInner::new(4);
+        bidding.books.insert(
+            42,
+            BiddingBook {
+                uniq_top: vec![
+                    BiddingRecord {
+                        usable: true,
+                        tarhei: 0,
+                        time: 0,
+                        txhx: Hash::default(),
+                        addr: address,
+                        fee: Amount::mei(35),
+                    },
+                    BiddingRecord {
+                        usable: false,
+                        tarhei: 0,
+                        time: 0,
+                        txhx: Hash::default(),
+                        addr: address,
+                        fee: Amount::mei(50),
+                    },
+                ],
+            },
+        );
+
+        assert_eq!(bidding.reserved_bid(42, &address), Amount::mei(35));
     }
 
     #[test]
