@@ -5,8 +5,20 @@ use sys::{Ret, normalf};
 
 use crate::codec::{Decode, Encode};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Fixed<const N: usize>(pub [u8; N]);
+
+// Debug mirrors the hex Display so logs and errors formatted with `{:?}`
+// stay human-readable instead of dumping the raw byte array.
+impl<const N: usize> fmt::Debug for Fixed<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Fixed<{}>(0x)", N)?;
+        for b in &self.0 {
+            write!(f, "{:02x}", b)?;
+        }
+        Ok(())
+    }
+}
 
 impl<const N: usize> Default for Fixed<N> {
     fn default() -> Self {

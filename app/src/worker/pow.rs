@@ -50,6 +50,13 @@ pub struct PoWorkConf {
     pub notice_wait: u64,
     pub debug: bool,
     pub use_opencl: bool,
+    /// Target block interval in milliseconds (testsleep builds only). Two
+    /// deliberate pauses of `block_interval_ms / 2` per block keep the
+    /// historical 2×2.5s ≈ 5s default; `-sleep 1` halves both pauses for
+    /// ~1s blocks. Sourced from the `-sleep`/`-sleep-ms` CLI args, the
+    /// `block_interval_sec` ini key, or `HACASH_BLOCK_INTERVAL_MS`.
+    #[cfg_attr(not(feature = "testsleep"), allow(dead_code))]
+    pub block_interval_ms: u64,
     #[cfg_attr(not(feature = "ocl"), allow(dead_code))]
     pub workgroups: u32,
     #[cfg_attr(not(feature = "ocl"), allow(dead_code))]
@@ -72,6 +79,16 @@ impl PoWorkConf {
         // Prefer [default] debug=bool; fall back to legacy [gpu] debug=1.
         let debug =
             sys::ini_must_bool(sec, "debug", false) || sys::ini_must_u64(gpu, "debug", 0) == 1;
+        let block_interval_ms = std::env::var("HACASH_BLOCK_INTERVAL_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .or_else(|| {
+                let s = sys::ini_must_u64(sec, "block_interval_sec", 0);
+                (s > 0).then_some(s * 1_000)
+            })
+            .unwrap_or(5_000)
+            .clamp(100, 60_000);
         Ok(Self {
             rpcaddr: super::plain_http_host(&sys::ini_must(sec, "connect", "127.0.0.1:8082"))?,
             threads: sys::ini_must_u64(sec, "supervene", 2).max(1) as usize,
@@ -80,6 +97,7 @@ impl PoWorkConf {
             notice_wait: sys::ini_must_u64(sec, "notice_wait", 45).clamp(1, 300),
             debug,
             use_opencl: sys::ini_must_bool(gpu, "use_opencl", false),
+            block_interval_ms,
             workgroups: sys::ini_must_u64(gpu, "work_groups", 1024) as u32,
             localsize: sys::ini_must_u64(gpu, "local_size", 256) as u32,
             unitsize: sys::ini_must_u64(gpu, "unit_size", 128) as u32,
@@ -143,7 +161,8 @@ pub fn run_with_stop(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) -> Re
     );
     #[cfg(feature = "testsleep")]
     println!(
-        "[poworker] testsleep: 2.5s pause at each CPU chunk / mining round / height (~5s per block, testnet CPU throttle)"
+        "[poworker] testsleep: 1 thread, stop at first hash <= target, block interval {}ms",
+        conf.block_interval_ms
     );
     let backends = build_miner_backends(&conf);
     spawn_miner_notice(conf.clone(), stop_flag.clone());
@@ -167,7 +186,7 @@ pub fn run_with_stop(conf: PoWorkConf, stop_flag: Option<Arc<AtomicBool>>) -> Re
         );
         mine_height(&conf, &backends, work, &stop_flag)?;
         #[cfg(feature = "testsleep")]
-        thread::sleep(Duration::from_millis(2_500));
+        thread::sleep(Duration::from_millis(conf.block_interval_ms / 2));
     }
 }
 
@@ -339,9 +358,14 @@ fn mine_height(
     let mut cpu_chunk = conf.nonce_chunk.max(1);
     #[cfg(feature = "testsleep")]
     {
-        // Keep each round short so the 500ms pause actually drops CPU duty cycle.
+        // Miss cap only. Testnet difficulty is met by the first nonce; scanning
+        // the whole chunk on every supervene thread is what pegs CPU between sleeps.
         cpu_chunk = cpu_chunk.min(4_096);
     }
+    // testsleep is testnet-only. Official builds keep one chunk per configured thread.
+    #[cfg(feature = "testsleep")]
+    let worker_count = 1;
+    #[cfg(not(feature = "testsleep"))]
     let worker_count = backends.len().max(1);
     loop {
         if should_stop(stop_flag) {
@@ -380,8 +404,9 @@ fn mine_height(
             round_scanned = round_scanned.saturating_add(space);
             let item = work.clone();
             let backend = backend.clone();
+            let chunk_pause_ms = conf.block_interval_ms / 2;
             handles.push(thread::spawn(move || {
-                mine_chunk(item, start, space, backend)
+                mine_chunk(item, start, space, backend, chunk_pause_ms)
             }));
         }
         next_start = next_start.saturating_add(offset);
@@ -402,7 +427,7 @@ fn mine_height(
         #[cfg(feature = "testsleep")]
         {
             let _ = (round_started, round_scanned);
-            thread::sleep(Duration::from_millis(2_500));
+            thread::sleep(Duration::from_millis((conf.block_interval_ms / 2).max(1)));
         }
         // CPU adaptive batch size (align with diaworker / fullnodedev).
         // testsleep keeps a small fixed chunk; growing it would peg CPU again.
@@ -422,6 +447,7 @@ fn mine_chunk(
     nonce_start: u32,
     nonce_space: u32,
     backend: MinerBackend,
+    chunk_pause_ms: u64,
 ) -> MiningResult {
     let mut intro = work.block_intro.clone();
     intro.set_mrklroot(calculate_mrkl_prelude_update(
@@ -430,25 +456,48 @@ fn mine_chunk(
     ));
     let intro_bytes = intro.encode_intro();
     let started = Instant::now();
+    #[cfg(not(feature = "testsleep"))]
+    let _ = chunk_pause_ms;
 
-    let (best_nonce, best_hash) = match backend {
-        MinerBackend::Cpu => mine_chunk_cpu(work.height, intro_bytes, nonce_start, nonce_space),
+    let (best_nonce, best_hash, scanned) = match backend {
+        MinerBackend::Cpu => {
+            #[cfg(feature = "testsleep")]
+            {
+                mine_chunk_cpu_testsleep(
+                    work.height,
+                    intro_bytes,
+                    nonce_start,
+                    nonce_space,
+                    &work.target_hash,
+                    chunk_pause_ms,
+                )
+            }
+            #[cfg(not(feature = "testsleep"))]
+            {
+                let (nonce, hash) =
+                    mine_chunk_cpu(work.height, intro_bytes, nonce_start, nonce_space);
+                (nonce, hash, nonce_space)
+            }
+        }
         #[cfg(feature = "ocl")]
         MinerBackend::Opencl {
             resource,
             workgroups,
             localsize,
             unitsize,
-        } => mine_chunk_opencl(
-            &resource,
-            work.height,
-            intro_bytes,
-            nonce_start,
-            nonce_space,
-            workgroups,
-            localsize,
-            unitsize,
-        ),
+        } => {
+            let (nonce, hash) = mine_chunk_opencl(
+                &resource,
+                work.height,
+                intro_bytes,
+                nonce_start,
+                nonce_space,
+                workgroups,
+                localsize,
+                unitsize,
+            );
+            (nonce, hash, nonce_space)
+        }
     };
 
     MiningResult {
@@ -456,19 +505,19 @@ fn mine_chunk(
         block_nonce: best_nonce,
         coinbase_nonce: work.coinbase_nonce,
         hash: best_hash,
-        scanned: nonce_space,
+        scanned,
         elapsed: started.elapsed(),
     }
 }
 
+/// Official hash loop. `testsleep` builds do not call this from the CPU miner.
+#[cfg_attr(all(feature = "testsleep", not(feature = "ocl")), allow(dead_code))]
 fn mine_chunk_cpu(
     height: u64,
     mut intro_bytes: Vec<u8>,
     nonce_start: u32,
     nonce_space: u32,
 ) -> (u32, Hash) {
-    #[cfg(feature = "testsleep")]
-    thread::sleep(Duration::from_millis(2_500));
     let mut best_nonce = nonce_start;
     let mut best_hash = Hash::from([255u8; HASH_WIDTH]);
     let end = nonce_start.saturating_add(nonce_space);
@@ -481,6 +530,37 @@ fn mine_chunk_cpu(
         }
     }
     (best_nonce, best_hash)
+}
+
+/// Testnet only: sleep, then stop at the first nonce that meets target.
+/// Official builds do not compile this.
+#[cfg(feature = "testsleep")]
+fn mine_chunk_cpu_testsleep(
+    height: u64,
+    mut intro_bytes: Vec<u8>,
+    nonce_start: u32,
+    nonce_space: u32,
+    target: &Hash,
+    pause_ms: u64,
+) -> (u32, Hash, u32) {
+    thread::sleep(Duration::from_millis(pause_ms.max(1)));
+    let mut best_nonce = nonce_start;
+    let mut best_hash = Hash::from([255u8; HASH_WIDTH]);
+    let mut scanned = 0u32;
+    let end = nonce_start.saturating_add(nonce_space);
+    for nonce in nonce_start..end {
+        intro_bytes[79..83].copy_from_slice(&nonce.to_be_bytes());
+        let hash = Hash::from(x16rs::block_hash(height, &intro_bytes));
+        scanned = scanned.saturating_add(1);
+        if hash.as_ref() < best_hash.as_ref() {
+            best_hash = hash;
+            best_nonce = nonce;
+        }
+        if best_hash.as_ref() <= target.as_ref() {
+            return (best_nonce, best_hash, scanned);
+        }
+    }
+    (best_nonce, best_hash, scanned)
 }
 
 #[cfg(feature = "ocl")]

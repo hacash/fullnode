@@ -146,7 +146,7 @@ impl P2PNode {
         };
         let txs = blk.block().transaction_count().saturating_sub(1);
         let mshow = may_show_miner_detail(self.engine.config().show_miner_name, blk);
-        print!(
+        let insert_log = format!(
             "block {} ...{}...{} txs{:2} insert at {} {}",
             blk.height(),
             to_hex(hxstrt),
@@ -157,11 +157,11 @@ impl P2PNode {
         );
         let result = match self.engine.discover_block(blk.clone()) {
             Ok(r) => {
-                println!("ok.");
+                println!("{}ok.", insert_log);
                 r
             }
             Err(e) => {
-                println!("Error: {}", e);
+                println!("{}Error: {}", insert_log, e);
                 return Err(e);
             }
         };

@@ -33,5 +33,6 @@ db-rusty-leveldb = ["db/db-rusty-leveldb"]
 db-leveldb-sys = ["db/db-leveldb-sys"]
 db-rocksdb = ["db/db-rocksdb"]
 ocl = ["mint/ocl"]
-# Testnet CPU throttle: 500ms pause after each mining round. Off by default.
+# Testnet CPU throttle: one thread, stop at the first hash that meets target,
+# 2.5s pause (~5s/block). Off by default so mainnet still scans full chunks.
 testsleep = []
