@@ -91,4 +91,60 @@ contract Check4Prefix {
         crate::fitshc::compile(src).expect("sha2_prefix_u32 list should compile");
     }
 
+    /// The motivating case: abstract (and function) bodies may end without a
+    /// hand-written `end`; the compiler appends the terminator implicitly.
+    #[test]
+    fn abstract_body_without_trailing_end_compiles() {
+        let src = r#"
+pragma fitsh 1.0.0
+contract PermitProbe {
+    function _check() {
+        print(1)
+    }
+    abstract PermitHACD(to: address, count: u32, names: bytes) {
+        self._check()
+    }
+}
+"#;
+        crate::fitshc::compile(src).expect("body without trailing end should compile");
+    }
+
+    /// Every "fall-off-end" shape the HVM terminal check (`CodeNotWithEnd`)
+    /// rejected before must now compile via the auto-appended `end`.
+    #[test]
+    fn auto_end_covers_all_statement_shapes() {
+        // (body, expect_ok) — none of the bodies carry a trailing `end`.
+        let cases: Vec<(&str, bool)> = vec![
+            ("self._check()", true),
+            ("", true),
+            ("var z = 1", true),
+            ("1 + 2", true),
+            ("print(1)", true),
+            ("log(1, 2)", true),
+            ("assert(x > 0)", true),
+            ("abort", true),
+            ("throw 1", true),
+            ("return x", true),
+            ("bind y = x + 1", true),
+            ("if x > 0 { return 1 }", true),
+            ("while x > 0 { x = x - 1 }", true),
+            ("{ return x }", true),
+            ("bytecode { NOP }", true),
+            // Pre-existing compile_if limitation, unrelated to auto-end: when
+            // the else branch terminates unconditionally, its dead JMPSL jump
+            // (skipping the then branch) targets one past the code end and the
+            // jump verifier rejects it.
+            ("if x > 0 { return 1 } else { return 2 }", false),
+        ];
+        for (i, (body, expect_ok)) in cases.iter().enumerate() {
+            let src = format!(
+                "pragma fitsh 1.0.0\ncontract AutoEndProbe{i} {{\n    function f(x: u32) -> u32 {{\n        {body}\n    }}\n}}\n"
+            );
+            match crate::fitshc::compile(&src) {
+                Ok(_) => assert!(*expect_ok, "case {i} ({body}) should not have compiled"),
+                Err(e) => assert!(!*expect_ok, "case {i} ({body}) failed to compile: {e}"),
+            }
+        }
+    }
+
 }

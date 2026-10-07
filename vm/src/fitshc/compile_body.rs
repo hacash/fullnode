@@ -48,6 +48,92 @@ mod compile_body_tests {
             .unwrap();
         let _ = compile_body(body_tokens, vec![], &[], &[], true).unwrap();
     }
+
+    fn compile_bytes(src: &[u8]) -> Vec<u8> {
+        let tokens = Tokenizer::new(src).parse().unwrap();
+        match compile_body(tokens, vec![], &[], &[], false).unwrap() {
+            (_, CompiledCode::Bytecode(bts), _) => bts,
+            _ => unreachable!(),
+        }
+    }
+
+    /// A body relying on the auto-appended `end` and the same body with the
+    /// terminator hand-written must compile to identical bytecode — the
+    /// appended token is absorbed whenever a terminal statement is present.
+    #[test]
+    fn auto_end_byte_identical_with_hand_written_terminal() {
+        let pairs: Vec<(&[u8], &[u8])> = vec![
+            (b"return 1", b"return 1 end"),
+            (b"self._check()", b"self._check() end"),
+            (b"end", b"end end"),
+            (b"end", b"end end end"),
+            (b"abort", b"abort end"),
+            (b"throw 1", b"throw 1 end"),
+            (b"print(1)", b"print(1) end"),
+            (b"var z = 1", b"var z = 1 end"),
+        ];
+        for (auto_body, manual_body) in pairs {
+            assert_eq!(
+                compile_bytes(auto_body),
+                compile_bytes(manual_body),
+                "auto-appended end vs hand-written: {:?} vs {:?}",
+                String::from_utf8_lossy(auto_body),
+                String::from_utf8_lossy(manual_body),
+            );
+        }
+    }
+
+    /// Decompile → recompile must be a stable fixed point for bodies whose
+    /// trailing `end` was auto-appended: the decompiler prints it as an
+    /// explicit `end` statement, which reparses to the identical IR node.
+    #[test]
+    fn decompile_recompile_roundtrip_converges_with_auto_end() {
+        use crate::lang::format_ircode_to_lang;
+        let args = vec![("x".to_string(), ValueTy::U32)];
+        let bodies: Vec<&[u8]> = vec![
+            b"self._check()",
+            b"self._check() end",
+            b"return x",
+            b"return x end",
+            b"var z = x + 1",
+            b"while x > 0 { x = x - 1 }",
+            b"if x > 0 { return 1 }",
+            b"",
+            b"end",
+        ];
+        for body in bodies {
+            let label = String::from_utf8_lossy(body).to_string();
+            let tokens = Tokenizer::new(body).parse().unwrap();
+            let (irnodes, _, mut smap) =
+                compile_body(tokens, args.clone(), &[], &[], true)
+                    .unwrap_or_else(|e| panic!("body {:?} failed to compile: {}", label, e));
+            let mut ircodes = drop_irblock_wrap(irnodes.serialize())
+                .unwrap_or_else(|e| panic!("body {:?} failed to serialize: {}", label, e));
+            let mut converged = false;
+            for _ in 0..3 {
+                let text = format_ircode_to_lang(&ircodes, Some(&smap))
+                    .unwrap_or_else(|e| panic!("body {:?} failed to decompile: {}", label, e));
+                // Decompiled text is self-contained (it carries a `param { .. }`
+                // prelude line), so recompilation must not re-inject args.
+                let tokens = Tokenizer::new(text.as_bytes()).parse().unwrap();
+                let (irnodes, _, next_smap) = compile_body(tokens, vec![], &[], &[], true)
+                    .unwrap_or_else(|e| panic!("body {:?} recompile failed: {}", label, e));
+                let next = drop_irblock_wrap(irnodes.serialize())
+                    .unwrap_or_else(|e| panic!("body {:?} failed to serialize: {}", label, e));
+                if next == ircodes {
+                    converged = true;
+                    break;
+                }
+                ircodes = next;
+                smap = next_smap;
+            }
+            assert!(
+                converged,
+                "decompile/recompile did not converge for body {:?}",
+                label
+            );
+        }
+    }
 }
 
 /// Compile function/abstract body tokens to IR or bytecode
@@ -58,6 +144,14 @@ pub fn compile_body(
     consts: &[(String, Box<dyn IRNode>)],
     is_ircode: bool,
 ) -> Ret<(IRNodeArray, CompiledCode, SourceMap)> {
+    // Function/abstract bodies may omit the trailing terminator HVM requires
+    // (rt::ensure_terminal_instruction): append a virtual `end` statement. The
+    // parser's redundant-terminal-end skipping absorbs it whenever the body
+    // already ends with `return`/`abort`/`throw`/`end`/`codecall` (or an
+    // if/else whose branches all terminate), so hand-written terminators are
+    // never duplicated and emitted code stays byte-identical.
+    let mut body_tokens = body_tokens;
+    body_tokens.push(Token::Keyword(KwTy::End));
     let has_manual_param_block = body_tokens
         .iter()
         .any(|tk| matches!(tk, Token::Keyword(KwTy::Param)));
