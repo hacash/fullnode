@@ -56,8 +56,8 @@ fn execute_asset_create(
         }
         let tl = amd.ticket.length();
         let nl = amd.name.length();
-        if tl < 1 || tl > 8 {
-            return errf!("ticket length must be 1 ~ 8");
+        if tl < 1 || tl > 10 {
+            return errf!("ticket length must be 1 ~ 10");
         }
         if nl < 1 || nl > 32 {
             return errf!("name length must be 1 ~ 32");
