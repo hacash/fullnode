@@ -374,12 +374,51 @@ fn check_link_contracts_exist(
     Ok(())
 }
 
+fn linked_parent_composition_error(
+    members: &[ContractAddress],
+    parent_libraries: &[Vec<ContractAddress>],
+    parent_hooks: &[Vec<u8>],
+) -> Option<String> {
+    let has_parent_library = parent_libraries.iter().any(|libs| !libs.is_empty());
+    for (parent_index, libs) in parent_libraries.iter().enumerate() {
+        for lib in libs {
+            if !members.contains(lib) {
+                return Some(format!(
+                    "inherit parent at index {} links library {}, which is not an instance inherit member",
+                    parent_index,
+                    lib.to_readable()
+                ));
+            }
+        }
+    }
+    if !has_parent_library {
+        return None;
+    }
+
+    let mut hook_owner = std::collections::HashMap::new();
+    for (parent_index, hooks) in parent_hooks.iter().enumerate() {
+        for hook in hooks {
+            if let Some(previous) = hook_owner.insert(*hook, parent_index) {
+                if previous != parent_index {
+                    return Some(format!(
+                        "hook {} is declared by inherit parents at indexes {} and {}",
+                        hook, previous, parent_index
+                    ));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn check_static_inherit_parents(
     vmsta: &mut VMState,
     root_addr: &ContractAddress,
     root_contract: &ContractSto,
 ) -> Rerr {
     // Keep v0 parent code immutable; future dynamic inheritance needs a new format version.
+    let mut parent_libraries = Vec::with_capacity(root_contract.inherit.length());
+    let mut parent_hooks = Vec::with_capacity(root_contract.inherit.length());
     for p in root_contract.inherit.as_list() {
         let sto = load_contract_for_check(vmsta, root_addr, root_contract, p, "inherit")?;
         if sto.inherit.length() > 0 {
@@ -388,14 +427,57 @@ fn check_static_inherit_parents(
                 p.to_readable()
             );
         }
-        if sto.library.length() > 0 {
-            return errf!("inherit parent {} cannot link libraries", p.to_readable());
-        }
         if sto.have_abst_call(AbstCall::Change) || sto.have_abst_call(AbstCall::Append) {
             return errf!("inherit parent {} must be update-locked", p.to_readable());
         }
+        parent_libraries.push(sto.library.as_list().to_vec());
+        parent_hooks.push(sto.abstcalls.as_list().iter().map(|hook| hook.sign[0]).collect());
+    }
+    if let Some(reason) = linked_parent_composition_error(
+        root_contract.inherit.as_list(),
+        &parent_libraries,
+        &parent_hooks,
+    ) {
+        return errf!("invalid linked inherit composition: {}", reason);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod linked_parent_composition_tests {
+    use super::linked_parent_composition_error;
+    use crate::value::ContractAddress;
+    use field::Address;
+
+    fn contract_address(id: u8) -> ContractAddress {
+        let mut raw = [0; Address::SIZE];
+        raw[0] = Address::VERSION_CONTRACT;
+        raw[1] = id;
+        ContractAddress::must(raw)
+    }
+
+    #[test]
+    fn linked_parent_library_must_be_an_instance_member() {
+        let members = [contract_address(1), contract_address(2)];
+        let parents = [vec![contract_address(3)], vec![]];
+        assert!(linked_parent_composition_error(&members, &parents, &[vec![], vec![]])
+            .unwrap()
+            .contains("not an instance inherit member"));
+    }
+
+    #[test]
+    fn duplicate_hooks_are_rejected_only_for_linked_compositions() {
+        let members = [contract_address(1), contract_address(2)];
+        let hooks = [vec![7], vec![7]];
+        assert!(linked_parent_composition_error(&members, &[vec![], vec![]], &hooks).is_none());
+        assert!(linked_parent_composition_error(
+            &members,
+            &[vec![contract_address(1)], vec![]],
+            &hooks
+        )
+        .unwrap()
+        .contains("declared by inherit parents"));
+    }
 }
 
 #[derive(Clone, Copy)]
