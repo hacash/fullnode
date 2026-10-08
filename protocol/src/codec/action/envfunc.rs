@@ -2,7 +2,8 @@
 //! `Context::action_call` with kid = `[0x07|0x06, idx]` where idx = KIND % 256.
 
 use field::{
-    Address, AddressW1, DiamondName, DiamondNameListMax200, DiamondNumber, Fold64, Uint1, Uint2,
+    Address, AddressW1, AssetAmtW1, DiamondName, DiamondNameListMax200, DiamondNumber,
+    Fold64, Uint1, Uint2,
 };
 
 base::action_simple! { EnvHeight, 0x0701, 3, CALL_ONLY, {
@@ -108,6 +109,18 @@ base::action_simple! { BalanceFungible, 0x0603, 3, CALL_ONLY, {
 }, this, {
     description: format!("Syscall: Get fungible asset {} balance for {}", this.serial.uint(), this.addr.to_readable())
 }}
+// Batch check of the PoolCoreV2 intent slot-1 expected-final-balance table:
+// wire `table` = AssetAmtW1 (u8 count + fold64(serial) ++ fold64(expected) pairs),
+// the same typed list the balance ledger itself uses — schema-rendered entries,
+// decode-time fold bounds, zero expected allowed. Caller builds the prefixed wire
+// form (the house convention, cf. the bridge's sigset_at_least AddressW1).
+// Returns whether every entry matches its expected fungible balance.
+base::action_simple! { BalanceTableCheck, 0x0605, 2, CALL_ONLY, {
+    addr: Address,
+    table: AssetAmtW1
+}, this, {
+    description: format!("Syscall: Check {} fungible balance table ({} entries)", this.addr.to_readable(), this.table.length())
+}}
 base::action_simple! { TxMessageSingle, 0x0622, 3, CALL_ONLY, {
 }, this, {
     description: "Syscall: Get the only transaction message".to_owned()
@@ -117,7 +130,7 @@ mod tests {
     use super::*;
     use crate::codec::test_reg::TestRegistry;
     use base::{ActScope, Action, ActionName, BinaryCodecs};
-    use field::{Decode, Encode};
+    use field::{AssetAmt, Decode, Encode};
 
     fn privkey_addr(n: u8) -> Address {
         let mut bytes = [0u8; Address::SIZE];
@@ -255,5 +268,66 @@ mod tests {
         assert_eq!(decoded.keys.length(), 201);
         let at_least201 = SigsetAtLeast::new(n201, Uint1::from(1));
         assert!(SigsetAtLeast::decode(&at_least201.encode()).is_ok());
+    }
+
+    fn table(entries: &[(u64, u64)]) -> AssetAmtW1 {
+        AssetAmtW1::from(
+            entries
+                .iter()
+                .map(|(serial, expected)| AssetAmt {
+                    serial: Fold64::from(*serial).unwrap(),
+                    amount: Fold64::from(*expected).unwrap(),
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn balance_table_check_names_kind_scope_and_wire() {
+        assert_eq!(BalanceTableCheck::KIND, 0x0605);
+        assert_eq!(BalanceTableCheck::NAME, "balance_table_check");
+        assert_eq!(BalanceTableCheck::SCOPE, ActScope::CALL_ONLY);
+
+        let action =
+            BalanceTableCheck::new(privkey_addr(1), table(&[(1, 100), (11, 7)]));
+        let wire = action.encode();
+        // kind(u16) + addr(21) + count(u8) + per-entry fold64(serial)+fold64(amount).
+        let entries_bytes: usize = [(1u64, 100u64), (11, 7)]
+            .iter()
+            .map(|(s, v)| Fold64::from(*s).unwrap().size() + Fold64::from(*v).unwrap().size())
+            .sum();
+        assert_eq!(wire.len(), 2 + 21 + 1 + entries_bytes);
+        assert_eq!(action.size(), wire.len());
+        let (decoded, used) = BalanceTableCheck::decode(&wire).unwrap();
+        assert_eq!(used, wire.len());
+        assert_eq!(decoded.encode(), wire);
+        assert_eq!(decoded.table.length(), 2);
+        assert_eq!(decoded.table.as_list()[0].amount.uint(), 100);
+
+        let empty = BalanceTableCheck::new(privkey_addr(1), table(&[]));
+        assert_eq!(empty.size(), 2 + 21 + 1);
+
+        // Same table -> identical wire (deterministic gas); a bigger table is
+        // charged strictly more (linear in entries).
+        let again = BalanceTableCheck::new(privkey_addr(1), table(&[(1, 100), (11, 7)]));
+        assert_eq!(again.encode(), wire);
+        let bigger = BalanceTableCheck::new(
+            privkey_addr(1),
+            table(&[(1, 100), (11, 7), (12, 9)]),
+        );
+        assert!(bigger.size() > action.size());
+
+        // The u8 count prefix bounds the table; serial 0 fails at wire decode
+        // (AssetAmt::checked), not at typed construction.
+        let zero_serial = BalanceTableCheck::new(
+            privkey_addr(1),
+            AssetAmtW1::from(vec![AssetAmt {
+                serial: Fold64::from(0).unwrap(),
+                amount: Fold64::from(1).unwrap(),
+            }])
+            .unwrap(),
+        );
+        assert!(BalanceTableCheck::decode(&zero_serial.encode()).is_err());
     }
 }

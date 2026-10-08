@@ -1,15 +1,42 @@
 //! VM syscall action execute bodies.
 
 use base::CoreState;
-use field::{Address, AddressW1, DiamondName, Encode};
+use field::{Address, AddressW1, Balance, DiamondName, Encode};
 use sys::errf;
 
 use crate::codec::action::{
-    AssetMeta, BalanceAsset, BalanceCoin, BalanceFungible, BlockAuthorAddr,
+    AssetMeta, BalanceAsset, BalanceCoin, BalanceFungible, BalanceTableCheck, BlockAuthorAddr,
     CheckSignature, EnvHeight, HacdInscGet, HacdInscNum, HacdNameList,
     HacdOwnerAddrs, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum, TxBlobSize,
     TxMainAddr, TxMessage, TxMessageNum, TxMessageSingle,
 };
+
+/// Fungible serial semantics shared by `balance_fungible` and
+/// `balance_table_check`: 0 and 4..=10 are hard errors, 1 = HAC in exact zhu,
+/// 2 = satoshi, 3 = diamond count, anything above 10 is an asset lookup. (The
+/// fold64 range bound needs no check here: the AssetAmtW1 wire decode rejects
+/// beyond-fold serials before the executor sees them, matching what a
+/// per-entry `balance_fungible` call could express.)
+fn fungible_balance_of(balances: &Balance, serial: u64) -> sys::Ret<u64> {
+    match serial {
+        0 | 4..=10 => errf!(
+            "fungible serial {} is not hac, sat, hacd, or an asset above 10",
+            serial
+        ),
+        // 1 = HAC as exact zhu. Sub-zhu residue or a value above u64 aborts. Zero is 0.
+        1 => balances.hacash.to_zhu_u64_exact(),
+        2 => Ok(balances.satoshi.uint()),
+        // 3 = HACD count. The same number is not an asset through this ABI.
+        3 => Ok(balances.diamond.uint()),
+        _ => Ok(balances
+            .assets
+            .as_list()
+            .iter()
+            .find(|a| a.serial.uint() == serial)
+            .map(|a| a.amount.uint())
+            .unwrap_or(0)),
+    }
+}
 
 base::impl_action_execute! {
     TxMessage {
@@ -180,18 +207,25 @@ base::impl_action_execute! {
             let balances = CoreState::wrap(ctx.layer())
                 .balance(&self.addr)?
                 .unwrap_or_default();
-            let amount = match serial {
-                // 1 = HAC as exact zhu. Sub-zhu residue or a value above u64 aborts. Zero is 0.
-                1 => balances.hacash.to_zhu_u64_exact()?,
-                2 => balances.satoshi.uint(),
-                // 3 = HACD count. The same number is not an asset through this ABI.
-                3 => balances.diamond.uint(),
-                _ => balances.assets.as_list().iter()
-                    .find(|a| a.serial.uint() == serial)
-                    .map(|a| a.amount.uint())
-                    .unwrap_or(0),
-            };
-            Ok(amount.to_be_bytes().to_vec())
+            Ok(fungible_balance_of(&balances, serial)?.to_be_bytes().to_vec())
+        }
+    }
+}
+
+base::impl_action_execute! {
+    BalanceTableCheck {
+        (self, ctx) {
+            let balances = CoreState::wrap(ctx.layer())
+                .balance(&self.addr)?
+                .unwrap_or_default();
+            for entry in self.table.as_list() {
+                let serial = entry.serial.uint();
+                let expected = entry.amount.uint();
+                if fungible_balance_of(&balances, serial)? != expected {
+                    return Ok(vec![0]);
+                }
+            }
+            Ok(vec![1])
         }
     }
 }
@@ -395,7 +429,10 @@ mod tests {
         ExecFrom, ExecutionServices, JsonCodecs, LogEntry, P2sh, StateLayer, StateRead, TexLedger,
         Transaction, TxRef, Vm, VmExecutionParams, VmHostActionDef, VmHostCallKind,
     };
-    use field::{Amount, Encode, Uint1};
+    use field::{
+        Amount, AssetAmt, AssetAmtW1, Balance, DiamondNumber, DiamondNumberAuto, Encode,
+        Fold64, SatoshiAuto, Uint1, Uint8, UNIT_ZHU,
+    };
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
     use sys::{Rerr, Ret};
@@ -715,5 +752,154 @@ mod tests {
 
         let (_, ret) = run_at_least(n200, 1, &[]).unwrap();
         assert_eq!(ret, vec![0]);
+    }
+
+    fn seeded_ctx(addr: &Address, hac_zhu: u64, sat: u64, diamonds: u64, assets: Vec<(u64, u64)>) -> SigsetCtx {
+        let mut ctx = SigsetCtx::new([]);
+        let balance = Balance {
+            hacash: Amount::coin_u128(hac_zhu as u128, UNIT_ZHU),
+            satoshi: SatoshiAuto::from_satoshi(&Uint8::from(sat)).unwrap(),
+            diamond: DiamondNumberAuto::from_diamond(&DiamondNumber::from(diamonds as u32)),
+            assets: AssetAmtW1::from(
+                assets
+                    .into_iter()
+                    .map(|(serial, amount)| AssetAmt {
+                        serial: Fold64::from(serial).unwrap(),
+                        amount: Fold64::from(amount).unwrap(),
+                    })
+                    .collect(),
+            )
+            .unwrap(),
+        };
+        CoreState::wrap(ctx.layer()).balance_set(addr, &balance);
+        ctx
+    }
+
+    fn table(entries: &[(u64, u64)]) -> AssetAmtW1 {
+        AssetAmtW1::from(
+            entries
+                .iter()
+                .map(|(serial, expected)| AssetAmt {
+                    serial: Fold64::from(*serial).unwrap(),
+                    amount: Fold64::from(*expected).unwrap(),
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap()
+    }
+
+    fn run_table_check(
+        ctx: &mut SigsetCtx,
+        addr: Address,
+        entries: &[(u64, u64)],
+    ) -> sys::Ret<ActOut> {
+        ActionExecute::execute(
+            &BalanceTableCheck::new(addr, table(entries)),
+            ctx,
+        )
+    }
+
+    #[test]
+    fn balance_table_check_matches_entry_by_entry() {
+        let addr = privkey_addr(7);
+        let mut ctx = seeded_ctx(&addr, 100, 500, 3, vec![(11, 7), (12, 0)]);
+
+        // Empty table matches trivially (vacuous truth).
+        let (_, ret) = run_table_check(&mut ctx, addr, &[]).unwrap();
+        assert_eq!(ret, vec![1]);
+
+        // Every covered fungible class at once: hac / sat / hacd / asset / zero-balance asset.
+        let all = [
+            (1u64, 100u64),
+            (2, 500),
+            (3, 3),
+            (11, 7),
+            (12, 0),
+            (13, 0),
+        ];
+        let (_, ret) = run_table_check(&mut ctx, addr, &all).unwrap();
+        assert_eq!(ret, vec![1]);
+
+        // One wrong expectation anywhere -> false.
+        let mut mismatched = all;
+        mismatched[3] = (11, 8);
+        let (_, ret) = run_table_check(&mut ctx, addr, &mismatched).unwrap();
+        assert_eq!(ret, vec![0]);
+
+        // The zero entry of an absent serial must equal literal 0, not a mismatch.
+        let (_, ret) = run_table_check(&mut ctx, addr, &[(99, 0)]).unwrap();
+        assert_eq!(ret, vec![1]);
+    }
+
+    #[test]
+    fn balance_table_check_errors_are_hard_not_false() {
+        let addr = privkey_addr(7);
+        let mut ctx = seeded_ctx(&addr, 100, 500, 3, vec![]);
+
+        // Reserved serials stay hard errors, exactly like balance_fungible.
+        for serial in [0u64, 4, 5, 6, 7, 8, 9, 10] {
+            assert!(run_table_check(&mut ctx, addr, &[(serial, 0)]).is_err());
+        }
+
+        // Beyond the fold64 range is unrepresentable on the wire (AssetAmt decode
+        // rejects it at construction), matching the per-entry form's limits.
+        assert!(Fold64::from(Fold64::MAX + 1).is_err());
+        assert!(Fold64::from(u64::MAX).is_err());
+        assert!(run_table_check(&mut ctx, addr, &[(Fold64::MAX, 0)]).is_ok());
+
+        // The u8 count prefix bounds the table at 255 entries at construction time.
+        let oversized: Vec<(u64, u64)> = (0..256).map(|i| (20 + i, 0)).collect();
+        assert!(AssetAmtW1::from(
+            oversized
+                .iter()
+                .map(|(s, v)| AssetAmt {
+                    serial: Fold64::from(*s).unwrap(),
+                    amount: Fold64::from(*v).unwrap()
+                })
+                .collect::<Vec<_>>()
+        )
+        .is_err());
+
+        // A wide table (40 entries) is legal wire and executes.
+        let wide: Vec<(u64, u64)> = (0..40).map(|i| (20 + i, 0)).collect();
+        let (gas, ret) = run_table_check(&mut ctx, addr, &wide).unwrap();
+        assert_eq!(ret, vec![1]);
+        assert_eq!(gas, Encode::size(&BalanceTableCheck::new(addr, table(&wide))) as u32);
+    }
+
+    #[test]
+    fn balance_table_check_gas_is_encoded_size_and_deterministic() {
+        let addr = privkey_addr(7);
+        let mut ctx = seeded_ctx(&addr, 100, 500, 3, vec![]);
+        let entries = [(1u64, 100u64), (2, 500), (11, 7)];
+        let (gas_a, _) = run_table_check(&mut ctx, addr, &entries).unwrap();
+        let (gas_b, _) = run_table_check(&mut ctx, addr, &entries).unwrap();
+        assert_eq!(gas_a, gas_b);
+        let expected = 2
+            + Address::SIZE
+            + 1
+            + entries
+                .iter()
+                .map(|(s, v)| Fold64::from(*s).unwrap().size() + Fold64::from(*v).unwrap().size())
+                .sum::<usize>();
+        assert_eq!(gas_a as usize, expected);
+
+        let mut bigger = entries.to_vec();
+        bigger.push((12, 0));
+        let (gas_big, _) = run_table_check(&mut ctx, addr, &bigger).unwrap();
+        assert!(gas_big > gas_a);
+    }
+
+    #[test]
+    fn balance_table_check_hac_sub_zhu_balance_is_an_error_not_false() {
+        let addr = privkey_addr(7);
+        let mut ctx = SigsetCtx::new([]);
+        let dusty = Balance {
+            hacash: Amount::from("1.000000001").unwrap(), // sub-zhu residue
+            ..Default::default()
+        };
+        CoreState::wrap(ctx.layer()).balance_set(&addr, &dusty);
+        // Same hard-error semantics as balance_fungible serial 1.
+        assert!(run_table_check(&mut ctx, addr, &[(1, 0)]).is_err());
     }
 }

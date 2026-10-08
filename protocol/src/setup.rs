@@ -110,6 +110,7 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
         BalanceCoin = (Bytes, 1),
         BalanceAsset = (U64, 2),
         BalanceFungible = (U64, 2),
+        BalanceTableCheck = (Bool, 2),
         AssetMeta = (Bytes, 1),
         CheckSignature = (Bool, 1),
         SigsetCount = (U8, 1),
@@ -242,6 +243,12 @@ mod tests {
                 VmValueType::U64,
                 2,
             ),
+            (
+                BalanceTableCheck::KIND,
+                BalanceTableCheck::NAME,
+                VmValueType::Bool,
+                2,
+            ),
             (TxMessage::KIND, TxMessage::NAME, VmValueType::Bytes, 1),
             (
                 TxMessageSingle::KIND,
@@ -311,6 +318,7 @@ mod tests {
             HacdNameList::KIND,
             HacdOwnerAddrs::KIND,
             BalanceFungible::KIND,
+            BalanceTableCheck::KIND,
             TxMessage::KIND,
             TxMessageSingle::KIND,
             TxBlob::KIND,
@@ -356,6 +364,7 @@ mod tests {
         assert_eq!(name(VmHostCallKind::Env, 3), Some("block_author_addr"));
         assert_eq!(name(VmHostCallKind::View, 1), Some("balance_coin"));
         assert_eq!(name(VmHostCallKind::View, 2), Some("balance_asset"));
+        assert_eq!(name(VmHostCallKind::View, 3), Some("balance_fungible"));
         assert_eq!(name(VmHostCallKind::View, 9), Some("check_signature"));
         assert_eq!(name(VmHostCallKind::View, 10), Some("sigset_count"));
         assert_eq!(name(VmHostCallKind::View, 11), Some("sigset_at_least"));
@@ -363,5 +372,6 @@ mod tests {
         assert_eq!(name(VmHostCallKind::View, 18), Some("hacd_insc_get"));
         assert_eq!(name(VmHostCallKind::View, 19), Some("hacd_name_list"));
         assert_eq!(name(VmHostCallKind::View, 20), Some("hacd_owner_addrs"));
+        assert_eq!(name(VmHostCallKind::View, 0x05), Some("balance_table_check"));
     }
 }

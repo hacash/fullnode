@@ -49,6 +49,7 @@ pub const ACTION_CODECS: &[ActionCodecBinding] = &[
     base::action_codec_binding!(BalanceAsset),
     base::action_codec_binding!(BalanceFungible),
     base::action_codec_binding!(AssetMeta),
+    base::action_codec_binding!(BalanceTableCheck),
     base::action_codec_binding!(CheckSignature),
     base::action_codec_binding!(SigsetCount),
     base::action_codec_binding!(SigsetAtLeast),

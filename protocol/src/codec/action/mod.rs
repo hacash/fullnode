@@ -14,7 +14,7 @@ pub use ast::{
 };
 pub use blob::{Blob, Message};
 pub use envfunc::{
-    AssetMeta, BalanceAsset, BalanceCoin, BalanceFungible, BlockAuthorAddr,
+    AssetMeta, BalanceAsset, BalanceCoin, BalanceFungible, BalanceTableCheck, BlockAuthorAddr,
     CheckSignature, EnvHeight, HacdInscGet, HacdInscNum, HacdNameList,
     HacdOwnerAddrs, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum, TxBlobSize,
     TxMainAddr, TxMessage, TxMessageNum, TxMessageSingle,
