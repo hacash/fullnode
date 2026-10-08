@@ -218,14 +218,20 @@ base::impl_action_execute! {
             let balances = CoreState::wrap(ctx.layer())
                 .balance(&self.addr)?
                 .unwrap_or_default();
+            // Verdict is deferred: the loop never short-circuits, so every entry's
+            // serial passes through fungible_balance_of's validation even when an
+            // earlier entry already mismatches — a hard error anywhere in the table
+            // must win over a `false` produced elsewhere. `false` means "every
+            // serial is legal, at least one balance differs".
+            let mut mismatch = false;
             for entry in self.table.as_list() {
                 let serial = entry.serial.uint();
                 let expected = entry.amount.uint();
                 if fungible_balance_of(&balances, serial)? != expected {
-                    return Ok(vec![0]);
+                    mismatch = true;
                 }
             }
-            Ok(vec![1])
+            Ok(vec![if mismatch { 0 } else { 1 }])
         }
     }
 }
@@ -901,5 +907,23 @@ mod tests {
         CoreState::wrap(ctx.layer()).balance_set(&addr, &dusty);
         // Same hard-error semantics as balance_fungible serial 1.
         assert!(run_table_check(&mut ctx, addr, &[(1, 0)]).is_err());
+    }
+
+    #[test]
+    fn balance_table_check_validation_is_not_short_circuited_by_a_mismatch() {
+        let addr = privkey_addr(7);
+        let mut ctx = seeded_ctx(&addr, 100, 500, 3, vec![(11, 7)]);
+
+        // Mismatch first, reserved serial after: the deferred verdict must let
+        // the later entry's hard error win — not answer the earlier `false`.
+        assert!(run_table_check(&mut ctx, addr, &[(1, 999), (4, 0)]).is_err());
+        // Same in the other order (the natural error path).
+        assert!(run_table_check(&mut ctx, addr, &[(4, 0), (1, 999)]).is_err());
+        // Serial 0 survives wire decode only via typed construction, but the
+        // executor must reject it at any position all the same.
+        assert!(run_table_check(&mut ctx, addr, &[(2, 500), (0, 0)]).is_err());
+        // With every serial legal, a mismatch anywhere still answers false.
+        let (_, ret) = run_table_check(&mut ctx, addr, &[(1, 999), (2, 500), (11, 7)]).unwrap();
+        assert_eq!(ret, vec![0]);
     }
 }
