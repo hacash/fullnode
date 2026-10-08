@@ -273,6 +273,33 @@ mod token_t {
     }
 
     #[test]
+    fn test_memory_init_compiles_to_ntctl_and_roundtrips() {
+        use super::{irnode_to_lang, lang_to_bytecode, lang_to_irnode};
+        use crate::rt::{Bytecode, NativeCtl};
+
+        let script = "if memory_init(0) {\n    defer(nil)\n}\nreturn 0";
+        let bytecode = lang_to_bytecode(script).expect("Failed to compile memory_init");
+        let idx = NativeCtl::memory_init as u8;
+        assert!(
+            bytecode
+                .windows(2)
+                .any(|w| w == [Bytecode::NTCTL as u8, idx]),
+            "Expected NTCTL memory_init ({idx}) in bytecode, got: {bytecode:02x?}"
+        );
+        assert!(
+            !bytecode.contains(&(Bytecode::MONCE as u8)),
+            "memory_init must not reuse MONCE"
+        );
+        let back = irnode_to_lang(lang_to_irnode(script).unwrap()).unwrap();
+        assert!(
+            back.contains("memory_init("),
+            "decompiled output lost memory_init: {back}"
+        );
+        assert!(lang_to_irnode("memory_init()\nreturn 0").is_err());
+        assert!(lang_to_irnode("memory_init(0, true)\nreturn 0").is_err());
+    }
+
+    #[test]
     fn test_memory_patch_compiles_to_mpatch_and_roundtrips() {
         use super::{irnode_to_lang, lang_to_bytecode, lang_to_irnode};
         use crate::rt::Bytecode;

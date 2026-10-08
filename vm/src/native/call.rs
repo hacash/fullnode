@@ -1,11 +1,14 @@
 use crate::frame::IntentScopeState;
 use crate::machine::{DeferredRegistry, IntentRuntime};
 use crate::rt::{
-    EffectMode, ExecCtx, FrameBindings, ItrErr, ItrErrCode, NativeFnEnv, SpaceCap, VmrtRes,
+    EffectMode, ExecCtx, FrameBindings, GasExtra, ItrErr, ItrErrCode, NativeFnEnv, SpaceCap,
+    VmrtRes,
 };
+use crate::space::CtcKVMap;
 use crate::value::Value;
 
 use super::intent::*;
+use super::memory::call_memory_init;
 use super::{NativeCtl, NativeEnv, NativeFunc};
 
 pub fn call_ntfunc(env: NativeFnEnv<'_>, idx: u8, argv: &[u8]) -> VmrtRes<(Value, i64)> {
@@ -19,19 +22,26 @@ pub fn call_ntfunc_packed(env: NativeFnEnv<'_>, idx: u8, argv: Value) -> VmrtRes
 pub fn call_ntctl(
     exec: ExecCtx,
     cap: &SpaceCap,
+    gst: &GasExtra,
     bindings: &mut FrameBindings,
     intent_state: &mut IntentScopeState,
-    _context_addr: &field::Address,
+    context_addr: &field::Address,
     intents: &mut IntentRuntime,
     deferred_registry: &mut DeferredRegistry,
+    memory: &mut CtcKVMap,
     idx: u8,
     argv: Value,
 ) -> VmrtRes<(Value, i64)> {
     match NativeCtl::try_from_u8(idx)? {
         NativeCtl::defer => call_defer(exec, bindings, intents, deferred_registry, argv),
-        NativeCtl::defer_current => {
-            call_defer_current(exec, bindings, intent_state, intents, deferred_registry, argv)
-        }
+        NativeCtl::defer_current => call_defer_current(
+            exec,
+            bindings,
+            intent_state,
+            intents,
+            deferred_registry,
+            argv,
+        ),
         NativeCtl::intent_new => call_intent_new(exec, bindings, intent_state, intents, argv),
         NativeCtl::intent_new_flat_kv => {
             call_intent_new_flat_kv(exec, bindings, intent_state, intents, argv)
@@ -136,6 +146,7 @@ pub fn call_ntctl(
         NativeCtl::intent_open_page => {
             call_intent_open_page(exec, cap, bindings, intent_state, intents, argv)
         }
+        NativeCtl::memory_init => call_memory_init(exec, cap, gst, context_addr, memory, argv),
         NativeCtl::Null => unreachable!(),
     }
 }

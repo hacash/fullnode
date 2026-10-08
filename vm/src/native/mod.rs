@@ -19,6 +19,7 @@ mod crypto;
 mod extensions;
 mod hacd;
 mod intent;
+mod memory;
 mod patches;
 pub(crate) use addr::{
     address_version, check_addr_set, is_contract, is_privkey, is_privkey_not_unknown,

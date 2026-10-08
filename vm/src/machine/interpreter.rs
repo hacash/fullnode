@@ -148,11 +148,13 @@ impl VmMachine for NativeVm {
         crate::native::call_ntctl(
             exec,
             cap,
+            &self.runtime.warm.gas_extra,
             bindings,
             intent_state,
             context_addr,
             &mut self.runtime.volatile.intents,
             &mut self.runtime.volatile.deferred_registry,
+            &mut self.runtime.volatile.memory_map,
             idx,
             argv,
         )

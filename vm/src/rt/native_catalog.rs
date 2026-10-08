@@ -373,4 +373,7 @@ native_func_env_define! { ctl, NativeCtl, NativeCtlError,
     intent_inc         = 66,    2,       8,    Nil
     intent_add         = 67,    2,       8,    Nil
     intent_sub         = 68,    2,       8,    Nil
+
+    // 69-80 remain free for further intent ops. Memory policy ops start at 81.
+    memory_init        = 81,    1,       8,    Bool
 }

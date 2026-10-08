@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use base::{Context, ExecFrom, GasBuckets, IntentScope, with_exec_from};
+use base::{with_exec_from, Context, ExecFrom, GasBuckets, IntentScope};
 use sys::Ret;
 
 use crate::frame::CallFrame;
@@ -257,7 +257,7 @@ impl NativeVm {
 #[cfg(test)]
 mod entry_semantics_tests {
     use super::*;
-    use crate::machine::test_ctx::{STUB_VM_PARAMS, TestCtx};
+    use crate::machine::test_ctx::{TestCtx, STUB_VM_PARAMS};
     use crate::rt::{ItrErr, ItrErrCode};
     use base::ExecFrom;
 
@@ -296,10 +296,9 @@ mod entry_semantics_tests {
             .expect("merkle_root must execute through VM");
         assert!(matches!(merkle_root, Value::Bytes(ref bytes) if bytes.len() == 32));
 
-        let multi_root = run_arithmetic_source(
-            "return merkle_multi_root(0, sha2(\"\"), \"\", \"\")",
-        )
-        .expect("merkle_multi_root must execute through VM");
+        let multi_root =
+            run_arithmetic_source("return merkle_multi_root(0, sha2(\"\"), \"\", \"\")")
+                .expect("merkle_multi_root must execute through VM");
         assert_eq!(multi_root, merkle_root);
 
         let bitmap = run_arithmetic_source("return bitmap_find(\"\", 0, 0, 0, false)")
@@ -496,5 +495,190 @@ mod entry_semantics_tests {
         assert!(err.is_fault(), "{err}");
         assert!(!err.is_revert(), "{err}");
         assert!(err.contains("boom"), "{err}");
+    }
+
+    #[test]
+    fn memory_init_executes_in_edit_only_and_prices_the_new_key() {
+        use std::sync::Arc;
+
+        use crate::frame::IntentScopeState;
+        use crate::interpreter::execute_code_in_frame;
+        use crate::rt::{
+            Bytecode, CallExit, EffectMode, ExecCtx, FrameBindings, GasExtra, GasTable, ItrErrCode,
+            NativeCtl,
+        };
+        use crate::value::Value;
+        use field::Address;
+
+        let mut raw = [0u8; 21];
+        raw[0] = Address::VERSION_CONTRACT;
+        raw[20] = 7;
+        let who = Address::from(raw);
+
+        fn run(
+            vm: &mut NativeVm,
+            ctx: &mut TestCtx,
+            who: Address,
+            effect: EffectMode,
+            source: &str,
+        ) -> Result<(CallExit, Value, i64), ItrErr> {
+            let codes = crate::lang::lang_to_bytecode(source).expect(source);
+            let cap = vm.runtime.warm.space_cap.clone();
+            let mut ops = vm.runtime.stack_allocat();
+            ops.reset(cap.stack_slot);
+            let mut locals = vm.runtime.stack_allocat();
+            locals.reset(cap.local_slot);
+            let mut heap = vm.runtime.heap_allocat();
+            heap.reset(cap.heap_segment);
+            let mut bindings = FrameBindings::root(who, Arc::from([]));
+            let mut intent = IntentScopeState::default();
+            let mut pc = 0usize;
+            let before = ctx.gas;
+            let exit = execute_code_in_frame(
+                &mut pc,
+                &codes,
+                ExecCtx::new(EntryKind::Main, effect, 1),
+                &mut ops,
+                &mut locals,
+                &mut heap,
+                &mut bindings,
+                &mut intent,
+                &who,
+                &who,
+                vm,
+                ctx,
+            );
+            let spent = before - ctx.gas;
+            let top = ops.pop().unwrap_or(Value::Nil);
+            vm.runtime.stack_reclaim(ops);
+            vm.runtime.stack_reclaim(locals);
+            vm.runtime.heap_reclaim(heap);
+            exit.map(|e| (e, top, spent))
+        }
+
+        let mut vm = NativeVm::new(1, STUB_VM_PARAMS);
+        let mut ctx = TestCtx::new();
+        let g = GasExtra::new(0, &STUB_VM_PARAMS);
+
+        let (exit, v, insert_spent) = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            EffectMode::Edit,
+            "return memory_init(0)",
+        )
+        .unwrap();
+        assert!(matches!(exit, CallExit::Return));
+        assert_eq!(v, Value::Bool(true));
+
+        let (exit, v, hit_spent) = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            EffectMode::Edit,
+            "return memory_init(0)",
+        )
+        .unwrap();
+        assert!(matches!(exit, CallExit::Return));
+        assert_eq!(v, Value::Bool(false));
+        assert_eq!(
+            insert_spent - hit_spent,
+            g.memory_key_cost + g.stack_write(Value::Bool(true).val_size())
+        );
+
+        let codes = crate::lang::lang_to_bytecode("return memory_init(0)").unwrap();
+        let table = GasTable::new(1);
+        let mut compute = 0i64;
+        let mut i = 0usize;
+        while i < codes.len() {
+            let op = codes[i];
+            let meta = Bytecode::try_from_u8(op).unwrap().metadata();
+            compute += table.gas(op);
+            i += 1 + meta.param as usize;
+        }
+        let klen = Value::U8(0)
+            .extract_key_bytes_with_error_code(ItrErrCode::MemoryError)
+            .unwrap()
+            .len();
+        let hit_resource = NativeCtl::memory_init.gas_of()
+            + g.stack_write(klen)
+            + g.nt_bytes(Value::Bool(false).val_size());
+        assert_eq!(hit_spent, compute + hit_resource);
+
+        let (_, got, _) = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            EffectMode::Edit,
+            "return memory_get(0)",
+        )
+        .unwrap();
+        assert_eq!(got, Value::Bool(true));
+
+        let (_, v, _) = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            EffectMode::Edit,
+            "memory_put(2, false)\nreturn memory_init(2)",
+        )
+        .unwrap();
+        assert_eq!(v, Value::Bool(false));
+        let (_, got, _) = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            EffectMode::Edit,
+            "return memory_get(2)",
+        )
+        .unwrap();
+        assert_eq!(got, Value::Bool(false));
+
+        let (_, v, _) = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            EffectMode::Edit,
+            "memory_put(0, nil)\nreturn memory_init(0)",
+        )
+        .unwrap();
+        assert_eq!(v, Value::Bool(true));
+
+        let err = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            EffectMode::Pure,
+            "return memory_init(9)",
+        )
+        .unwrap_err();
+        assert_eq!(err.0, ItrErrCode::InstDisabled);
+        let err = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            EffectMode::View,
+            "return memory_init(8)",
+        )
+        .unwrap_err();
+        assert_eq!(err.0, ItrErrCode::InstDisabled);
+        let (_, got, _) = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            EffectMode::View,
+            "return memory_get(9)",
+        )
+        .unwrap();
+        assert!(got.is_nil());
+        let (_, got, _) = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            EffectMode::View,
+            "return memory_get(8)",
+        )
+        .unwrap();
+        assert!(got.is_nil());
     }
 }
