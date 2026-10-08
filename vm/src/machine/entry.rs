@@ -681,4 +681,84 @@ mod entry_semantics_tests {
         .unwrap();
         assert!(got.is_nil());
     }
+
+    #[test]
+    fn require_passes_on_true_and_aborts_with_the_user_code_on_false() {
+        // Same lightweight harness as the memory_init test: a Main frame over
+        // lang_to_bytecode output — no deployed contract needed. Pure mode also
+        // pins that `require` performs no host effects.
+        use std::sync::Arc;
+
+        use crate::frame::IntentScopeState;
+        use crate::interpreter::execute_code_in_frame;
+        use crate::rt::{CallExit, EffectMode, ExecCtx, FrameBindings};
+        use crate::value::Value;
+        use field::Address;
+
+        let mut raw = [0u8; 21];
+        raw[0] = Address::VERSION_CONTRACT;
+        raw[20] = 9;
+        let who = Address::from(raw);
+
+        fn run(
+            vm: &mut NativeVm,
+            ctx: &mut TestCtx,
+            who: Address,
+            source: &str,
+        ) -> Result<(CallExit, Value, i64), ItrErr> {
+            let codes = crate::lang::lang_to_bytecode(source).expect(source);
+            let cap = vm.runtime.warm.space_cap.clone();
+            let mut ops = vm.runtime.stack_allocat();
+            ops.reset(cap.stack_slot);
+            let mut locals = vm.runtime.stack_allocat();
+            locals.reset(cap.local_slot);
+            let mut heap = vm.runtime.heap_allocat();
+            heap.reset(cap.heap_segment);
+            let mut bindings = FrameBindings::root(who, Arc::from([]));
+            let mut intent = IntentScopeState::default();
+            let mut pc = 0usize;
+            let before = ctx.gas;
+            let exit = execute_code_in_frame(
+                &mut pc,
+                &codes,
+                ExecCtx::new(EntryKind::Main, EffectMode::Pure, 1),
+                &mut ops,
+                &mut locals,
+                &mut heap,
+                &mut bindings,
+                &mut intent,
+                &who,
+                &who,
+                vm,
+                ctx,
+            );
+            let spent = before - ctx.gas;
+            let top = ops.pop().unwrap_or(Value::Nil);
+            vm.runtime.stack_reclaim(ops);
+            vm.runtime.stack_reclaim(locals);
+            vm.runtime.heap_reclaim(heap);
+            exit.map(|e| (e, top, spent))
+        }
+
+        let mut vm = NativeVm::new(1, STUB_VM_PARAMS);
+        let mut ctx = TestCtx::new();
+
+        // True condition: the statement is a no-op and execution continues.
+        let (exit, _, spent) =
+            run(&mut vm, &mut ctx, who, "require 1 == 1 1234\nreturn 7").unwrap();
+        assert!(matches!(exit, CallExit::Return));
+        assert!(spent > 0);
+
+        // False condition: hard user abort carrying the compile-time code —
+        // not the assert/151 channel and not a revert of the condition value.
+        let err = run(&mut vm, &mut ctx, who, "require 1 == 2 1234").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::UserAbort, "{err}");
+        assert!(err.1.contains("require code 1234"), "{err}");
+
+        // Pure compute: identical runs spend identical gas (no native resources).
+        let mut ctx2 = TestCtx::new();
+        let (_, _, spent2) =
+            run(&mut vm, &mut ctx2, who, "require 1 == 1 1234\nreturn 7").unwrap();
+        assert_eq!(spent, spent2);
+    }
 }

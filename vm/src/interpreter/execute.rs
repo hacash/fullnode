@@ -154,7 +154,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
     bindings: &mut FrameBindings,
     intent_state: &mut crate::frame::IntentScopeState,
     context_addr: &field::Address,
-    current_addr: &field::Address,
+    _current_addr: &field::Address,
     // shared VM machine; accessed only for the duration of individual
     // instructions so ACTION can synchronously recurse into NativeVm.
     machine: &mut M,
@@ -1220,7 +1220,12 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                         return Ok(Step::Exit(Abort));
                     }
                 } // assert(..)
-                PRT => debug_print_value(context_addr, current_addr, exec, ops.pop()?),
+                REQUIRE => {
+                    let code = pu16!();
+                    if !ops.pop()?.extract_bool()? {
+                        return itr_err_fmt!(UserAbort, "require code {}", code);
+                    }
+                } // require <cond> <code>
                 // call
                 CODE_CALL | CALL | CALLEXT | CALLEXTVIEW | CALLUSEVIEW | CALLUSEPURE | CALLTHIS
                 | CALLSELF | CALLSUPER | CALLSELFVIEW | CALLSELFPURE => {
@@ -1319,17 +1324,5 @@ fn debug_print_stack(ops: &Stack, lcs: &Stack, pc: &usize, inst: Bytecode) {
         &lcs.print_stack(),
         *pc,
         inst
-    );
-}
-
-#[allow(unused)]
-fn debug_print_value(_ctx: &field::Address, _cur: &field::Address, _exec: ExecCtx, _val: Value) {
-    debug_println!(
-        "{}-{} {} {:?} => {:?}",
-        _ctx.to_readable().chars().take(7).collect::<String>(),
-        _cur.to_readable().chars().take(7).collect::<String>(),
-        _exec.call_depth,
-        _exec,
-        _val
     );
 }

@@ -117,6 +117,11 @@ pub enum ItrErrCode {
     // space stays stable; no current path produces it.
     CodecOnlyUnsupported = 163,
 
+    // `require <cond> <code>`: the compile-time u16 user code travels in the message
+    // ("require code N"), never as this enum's numeric value — the 1..=999 band stays
+    // VM-reserved and user codes are floored at 1000 at compile time.
+    UserAbort = 164,
+
     #[default]
     NeverError = 255,
 }

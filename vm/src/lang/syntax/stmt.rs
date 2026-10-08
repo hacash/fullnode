@@ -38,9 +38,9 @@ impl Syntax {
                 self.cursor.next()?;
                 self.parse_log_stmt()?
             }
-            Some(Token::Keyword(KwTy::Print)) => {
+            Some(Token::Keyword(KwTy::Require)) => {
                 self.cursor.next()?;
-                self.parse_single_value_stmt(Bytecode::PRT, "print arguments must be expressions with return values; do not use bind/var declarations directly")?
+                self.parse_require_stmt()?
             }
             Some(Token::Keyword(KwTy::Assert)) => {
                 self.cursor.next()?;
@@ -246,6 +246,37 @@ impl Syntax {
             return errf!("{}", err_msg);
         }
         Ok(push_single_noret(inst, expr))
+    }
+
+    /// `require <cond> <code>` — statement form of assert with a compile-time
+    /// u16 error code. False condition aborts the transaction with
+    /// `UserAbort(164): require code N`; codes below 1000 are rejected at
+    /// compile time so user codes can never be confused with VM reserved ones.
+    fn parse_require_stmt(&mut self) -> Ret<Box<dyn IRNode>> {
+        let cond = self.parse_required_item()?;
+        if !cond.hasretval() {
+            return errf!("require condition must be an expression with a return value");
+        }
+        let Token::Integer(n) = self.cursor.next()? else {
+            return errf!(
+                "require requires a plain compile-time integer error code after the condition"
+            );
+        };
+        if n > u16::MAX as u128 {
+            return errf!("require code {} exceeds the u16 range", n);
+        }
+        if n < 1000 {
+            return errf!(
+                "require code {} is below the user code floor 1000 (lower codes are VM-reserved)",
+                n
+            );
+        }
+        Ok(Box::new(IRNodeParam2Single {
+            hrtv: false,
+            inst: Bytecode::REQUIRE,
+            para: (n as u16).to_be_bytes(),
+            subx: cond,
+        }))
     }
 
     fn parse_bytecode_stmt(&mut self) -> Ret<Box<dyn IRNode>> {

@@ -95,7 +95,10 @@ mod tests {
         assert_eq!(NativeCtl::memory_init as u8, 81);
         assert_eq!(NativeCtl::argv_len(NativeCtl::memory_init as u8), Some(1));
         assert_eq!(NativeCtl::memory_init.rty_of(), crate::value::ValueTy::Bool);
-        assert_eq!(NativeCtl::memory_init.gas_of(), 12);
+        // Catalog base price: the hit path pays exactly this; the insert path is
+        // surcharged at runtime with stack_write(bool) + memory_key_cost (see
+        // call_memory_init), so the row itself stays in the check-op band.
+        assert_eq!(NativeCtl::memory_init.gas_of(), 8);
         assert_eq!(NativeCtl::from_name("memory_init").map(|v| v.0), Some(81));
         assert!(!NativeCtl::has_idx(82));
     }

@@ -777,7 +777,7 @@ impl<'a> Formater<'a> {
                         _ => unreachable!(),
                     });
                 }
-                CU8 | CU16 | CU32 | CU64 | CU128 | CBYTES | RET | ERR | AST | PRT => {
+                CU8 | CU16 | CU32 | CU64 | CU128 | CBYTES | RET | ERR | AST => {
                     let literal = self.literal_from_node(&*s.subx);
                     let substr = match &literal {
                         Some(lit) => lit.text.clone(),
@@ -842,7 +842,7 @@ impl<'a> Formater<'a> {
                             }
                         }
                         CBYTES => format!("{}{} as bytes", pre, operand),
-                        RET | ERR | AST | PRT => {
+                        RET | ERR | AST => {
                             let meta = s.inst.metadata();
                             format!("{}{} {}", pre, meta.intro, substr)
                         }
@@ -1202,6 +1202,16 @@ impl<'a> Formater<'a> {
 
     fn print_param2_single(&self, node: &IRNodeParam2Single) -> String {
         let pre = self.opt.indent.repeat(self.opt.tab);
+        if node.inst == Bytecode::REQUIRE {
+            // `require <cond> <code>` — statement form, round-trips into the parser.
+            let substr = self.print_inline(&*node.subx);
+            return format!(
+                "{}require {} {}",
+                pre,
+                substr,
+                u16::from_be_bytes(node.para)
+            );
+        }
         let meta = node.inst.metadata();
         let substr = self.print_sub(&*node.subx);
         format!(
@@ -1257,7 +1267,7 @@ impl<'a> Formater<'a> {
             NEWLIST => buf.push_str("[]"),
             IRBREAK => buf.push_str("break"),
             IRCONTINUE => buf.push_str("continue"),
-            ABT | END | RET | ERR | AST | PRT => buf.push_str(meta.intro),
+            ABT | END | RET | ERR | AST => buf.push_str(meta.intro),
             _ => {
                 buf.push_str(meta.intro);
                 buf.push_str("()");

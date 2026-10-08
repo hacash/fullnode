@@ -300,6 +300,40 @@ mod token_t {
     }
 
     #[test]
+    fn test_require_compiles_codes_rejects_bad_codes_and_roundtrips() {
+        use super::{irnode_to_lang, lang_to_bytecode, lang_to_irnode};
+        use crate::rt::Bytecode;
+
+        let script = "require 1 > 0 1234\nreturn 1";
+        let bytecode = lang_to_bytecode(script).expect("Failed to compile require");
+        assert!(
+            bytecode
+                .windows(3)
+                .any(|w| w == [Bytecode::REQUIRE as u8, 0x04, 0xd2]),
+            "Expected REQUIRE 0x04d2 (user code 1234) in bytecode, got: {bytecode:02x?}"
+        );
+
+        // The code is a plain integer literal, floored at the user band (1000)
+        // and capped at u16::MAX — lower codes stay VM-reserved.
+        assert!(lang_to_irnode("require 1 > 0 999\nreturn 1").is_err());
+        assert!(lang_to_irnode("require 1 > 0 65536\nreturn 1").is_err());
+        assert!(lang_to_irnode("require 1 > 0\nreturn 1").is_err());
+        assert!(lang_to_irnode("require 1 > 0 x\nreturn 1").is_err());
+        let e = lang_to_irnode("require 1 > 0 999\nreturn 1").unwrap_err().to_string();
+        assert!(e.contains("1000"), "floor tip should name the user band: {e}");
+
+        // Decompile emits the keyword statement again and reparses to the
+        // identical instruction stream.
+        let back = irnode_to_lang(lang_to_irnode(script).unwrap()).unwrap();
+        assert!(
+            back.contains("require") && back.contains("1234"),
+            "decompiled output lost the require statement: {back}"
+        );
+        let rebyte = lang_to_bytecode(&back).unwrap();
+        assert_eq!(rebyte, bytecode, "require must survive a decompile roundtrip");
+    }
+
+    #[test]
     fn test_memory_patch_compiles_to_mpatch_and_roundtrips() {
         use super::{irnode_to_lang, lang_to_bytecode, lang_to_irnode};
         use crate::rt::Bytecode;
@@ -1413,11 +1447,11 @@ mod token_t {
         let script = r#"
             param { amt }
             lib C = 1
-            print 1 as u64
+            require 1 as u64 1001
             ext(1).0xabcdef01()
-            print [1, 2]
-            if true { print 3 } else { print 4 }
-            while false { print 5 }
+            require [1, 2] 1002
+            if true { require 3 1003 } else { require 4 1004 }
+            while false { require 5 1005 }
             codecall C.probe
         "#;
 
