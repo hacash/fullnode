@@ -754,6 +754,21 @@ impl TxPolicy for HacashConsensus {
         block_check::check_tx(&self.bidding, view, tx)
     }
 
+    fn check_tx_after_execute(
+        &self,
+        state: &dyn base::StateRead,
+        tx: &dyn base::Transaction,
+    ) -> Rerr {
+        self.bidding.check_tx_reserved_bid(state, tx)
+    }
+
+    fn revalidate_main_address_after_admission(&self, tx: &TxPkg) -> bool {
+        tx.tx()
+            .actions()
+            .iter()
+            .any(|action| action.as_any().is::<HacdMint>())
+    }
+
     fn failed_revalidation_can_remove(&self, tx: &dyn Transaction) -> bool {
         tx.ty() < 3
     }

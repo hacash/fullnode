@@ -180,6 +180,19 @@ pub trait TxPolicy: Send + Sync {
         Ok(())
     }
 
+    /// Mempool-only validation after a transaction has executed against a
+    /// disposable state snapshot. Implementations may inspect resulting
+    /// balances here without affecting consensus execution.
+    fn check_tx_after_execute(&self, _state: &dyn StateRead, _tx: &dyn Transaction) -> Rerr {
+        Ok(())
+    }
+
+    /// Whether admitting this transaction can make already-pooled transactions
+    /// from its main address invalid under local mempool policy.
+    fn revalidate_main_address_after_admission(&self, _tx: &TxPkg) -> bool {
+        false
+    }
+
     /// Whether a failed pool revalidation conclusively makes this transaction
     /// removable. `false` keeps it and stops before judging dependent entries.
     fn failed_revalidation_can_remove(&self, _tx: &dyn Transaction) -> bool {
