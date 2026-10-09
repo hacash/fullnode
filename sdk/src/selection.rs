@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(
             call_only,
             vec![
-                0x0601, 0x0602, 0x0603, 0x0604, 0x0609, 0x060A, 0x060B, 0x0611, 0x0612, 0x0613,
+                0x0601, 0x0602, 0x0603, 0x0604, 0x0605, 0x0606, 0x0609, 0x060A, 0x060B, 0x0611, 0x0612, 0x0613,
                 0x0614, 0x0621, 0x0622, 0x0623, 0x0624, 0x0701, 0x0702, 0x0703, 0x0704, 0x0705
             ]
         );
@@ -166,6 +166,8 @@ mod tests {
                 "balance_asset",
                 "balance_coin",
                 "balance_fungible",
+                "balance_fungible_batch",
+                "balance_table_check",
                 "block_author_addr",
                 "block_height",
                 "check_signature",

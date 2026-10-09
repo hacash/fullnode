@@ -104,7 +104,7 @@ impl Value {
             Nil => Ok(false),
             Bytes(b) => Ok(has_non_zero_byte(b)),
             Address(a) => Ok(has_non_zero_byte(a.as_bytes())),
-            _ => itr_err_fmt!(CastFail, "cannot cast {:?} to bool", self),
+            _ => itr_err_fmt!(CastFail, "cannot cast {:?} to bool", self.ty()),
         }
     }
 
@@ -220,4 +220,3 @@ impl Value {
         }
     }
 }
-

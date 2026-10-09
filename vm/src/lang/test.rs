@@ -300,37 +300,96 @@ mod token_t {
     }
 
     #[test]
-    fn test_require_compiles_codes_rejects_bad_codes_and_roundtrips() {
+    fn test_require_compiles_values_and_roundtrips() {
         use super::{irnode_to_lang, lang_to_bytecode, lang_to_irnode};
         use crate::rt::Bytecode;
 
-        let script = "require 1 > 0 1234\nreturn 1";
+        let script = "require \"denied\", 1 > 0\nreturn 1";
         let bytecode = lang_to_bytecode(script).expect("Failed to compile require");
         assert!(
-            bytecode
-                .windows(3)
-                .any(|w| w == [Bytecode::REQUIRE as u8, 0x04, 0xd2]),
-            "Expected REQUIRE 0x04d2 (user code 1234) in bytecode, got: {bytecode:02x?}"
+            bytecode.contains(&(Bytecode::REQ as u8)),
+            "Expected REQ in bytecode, got: {bytecode:02x?}"
         );
+        assert_eq!(Bytecode::REQ.metadata().param, 0);
+        assert_eq!(Bytecode::REQ.metadata().input, 2);
 
-        // The code is a plain integer literal, floored at the user band (1000)
-        // and capped at u16::MAX — lower codes stay VM-reserved.
-        assert!(lang_to_irnode("require 1 > 0 999\nreturn 1").is_err());
-        assert!(lang_to_irnode("require 1 > 0 65536\nreturn 1").is_err());
-        assert!(lang_to_irnode("require 1 > 0\nreturn 1").is_err());
-        assert!(lang_to_irnode("require 1 > 0 x\nreturn 1").is_err());
-        let e = lang_to_irnode("require 1 > 0 999\nreturn 1").unwrap_err().to_string();
-        assert!(e.contains("1000"), "floor tip should name the user band: {e}");
+        for source in [
+            "require 0, true",
+            "require 65536, true",
+            "require \"denied\", true",
+        ] {
+            lang_to_irnode(source).expect(source);
+        }
+        for source in ["require 1", "require 1 true", "require 1,"] {
+            assert!(lang_to_irnode(source).is_err(), "{source}");
+        }
 
-        // Decompile emits the keyword statement again and reparses to the
-        // identical instruction stream.
+        // Decompile emits the same source order and reparses identically.
         let back = irnode_to_lang(lang_to_irnode(script).unwrap()).unwrap();
         assert!(
-            back.contains("require") && back.contains("1234"),
+            back.contains("require \"denied\", 1 > 0"),
             "decompiled output lost the require statement: {back}"
         );
         let rebyte = lang_to_bytecode(&back).unwrap();
-        assert_eq!(rebyte, bytecode, "require must survive a decompile roundtrip");
+        assert_eq!(
+            rebyte, bytecode,
+            "require must survive a decompile roundtrip"
+        );
+    }
+
+    fn assert_require_serialized_ir_roundtrip(source: &str) {
+        use super::{format_ircode_to_lang, lang_to_bytecode, lang_to_ircode};
+
+        let expected = lang_to_bytecode(source).expect(source);
+        let ir = lang_to_ircode(source).expect(source);
+        let printed = format_ircode_to_lang(&ir, None).expect(source);
+        assert!(printed.contains("require "), "{source}\n=>\n{printed}");
+        let actual = lang_to_bytecode(&printed)
+            .unwrap_or_else(|e| panic!("{source}\n=>\n{printed}\nfailed: {e}"));
+        assert_eq!(actual, expected, "{source}\n=>\n{printed}");
+    }
+
+    #[test]
+    fn require_serialized_ir_preserves_postfix_operand_boundaries() {
+        for source in [
+            "require 1001, [true][0]\nreturn 7",
+            "require [1001][0], true\nreturn 7",
+            "require 1001u64, [true][0]\nreturn 7",
+            "require 1001, 0x01[0]\nreturn 7",
+            "require [1001, 2000][0], [true, false][0]\nreturn 7",
+        ] {
+            assert_require_serialized_ir_roundtrip(source);
+        }
+    }
+
+    #[test]
+    fn require_local_error_and_grouped_condition_need_comma_boundary() {
+        let source = "var err = 1001\nvar value = 1\nrequire err, (value > 0)\nreturn 7";
+        assert_require_serialized_ir_roundtrip(source);
+        assert!(super::lang_to_irnode("var err = 1001\nrequire err (true)").is_err());
+    }
+
+    #[test]
+    fn require_serialized_ir_preserves_nested_condition_expressions() {
+        for source in [
+            "require 1001, true ? [true][0] : false\nreturn 7",
+            "require true ? 1001 : 1002, [true][0]\nreturn 7",
+            "require 1 + 2, if true { true } else { false }\nreturn 7",
+            "require block_height(), true\nreturn 7",
+            "require 1001, true\nreturn 7",
+        ] {
+            assert_require_serialized_ir_roundtrip(source);
+        }
+    }
+
+    #[test]
+    fn require_simple_operands_decompile_without_grouping() {
+        use super::{format_ircode_to_lang, lang_to_ircode};
+
+        let ir = lang_to_ircode("require 1001, true\nreturn 7").unwrap();
+        let printed = format_ircode_to_lang(&ir, None).unwrap();
+        assert!(printed.contains("require 1001, true"), "{printed}");
+        assert!(!printed.contains("require (1001)"), "{printed}");
     }
 
     #[test]
@@ -1447,11 +1506,11 @@ mod token_t {
         let script = r#"
             param { amt }
             lib C = 1
-            require 1 as u64 1001
+            require 1001, 1 as u64
             ext(1).0xabcdef01()
-            require [1, 2] 1002
-            if true { require 3 1003 } else { require 4 1004 }
-            while false { require 5 1005 }
+            require "denied", true
+            if true { require 1003, true } else { require 1004, true }
+            while false { require 1005, true }
             codecall C.probe
         "#;
 

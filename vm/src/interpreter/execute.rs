@@ -1213,19 +1213,24 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 // exit
                 RET => return Ok(Step::Exit(Return)), // func return <DATA>
                 END => return Ok(Step::Exit(Finish)), // func end
-                ERR => return Ok(Step::Exit(Throw)),  // throw <ERROR>
+                ERR => {
+                    validate_error_scalar(ops.peek()?, cap.value_size)?;
+                    return Ok(Step::Exit(Throw));
+                } // throw <ERROR>
                 ABT => return Ok(Step::Exit(Abort)),  // panic
                 AST => {
                     if !ops.pop()?.extract_bool()? {
                         return Ok(Step::Exit(Abort));
                     }
                 } // assert(..)
-                REQUIRE => {
-                    let code = pu16!();
-                    if !ops.pop()?.extract_bool()? {
-                        return itr_err_fmt!(UserAbort, "require code {}", code);
+                REQ => {
+                    let condition = ops.pop()?.extract_bool()?;
+                    let error_value = ops.pop()?;
+                    validate_error_scalar(&error_value, cap.value_size)?;
+                    if !condition {
+                        return itr_err_fmt!(UserAbort, "require failed: {}", error_value);
                     }
-                } // require <cond> <code>
+                } // require <errorValue>, <condition>
                 // call
                 CODE_CALL | CALL | CALLEXT | CALLEXTVIEW | CALLUSEVIEW | CALLUSEPURE | CALLTHIS
                 | CALLSELF | CALLSUPER | CALLSELFVIEW | CALLSELFPURE => {

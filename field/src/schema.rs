@@ -334,6 +334,9 @@ impl FieldWireShape for AssetAmt {
 impl WireElementName for AssetAmt {
     const NAME: &'static str = "AssetAmt";
 }
+impl WireElementName for Fold64 {
+    const NAME: &'static str = "Fold64";
+}
 impl WireElementName for Uint4 {
     const NAME: &'static str = "Uint4";
 }

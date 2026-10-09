@@ -878,6 +878,14 @@ impl<'a> Formater<'a> {
             }
         }
         if let Some(d) = node.as_any().downcast_ref::<IRNodeDouble>() {
+            if d.inst == REQ {
+                return Some(format!(
+                    "{}require {}, {}",
+                    self.line_prefix(),
+                    self.print_inline(&*d.subx),
+                    self.print_inline(&*d.suby)
+                ));
+            }
             if d.inst == ITEMGET {
                 // `ITEMGET` is an expression: print the receiver inline (`print_sub()` would inject
                 // newlines and break parsing), and keep receiver precedence (`(a + b)[0]` not `a + b[0]`).
@@ -1202,16 +1210,6 @@ impl<'a> Formater<'a> {
 
     fn print_param2_single(&self, node: &IRNodeParam2Single) -> String {
         let pre = self.opt.indent.repeat(self.opt.tab);
-        if node.inst == Bytecode::REQUIRE {
-            // `require <cond> <code>` — statement form, round-trips into the parser.
-            let substr = self.print_inline(&*node.subx);
-            return format!(
-                "{}require {} {}",
-                pre,
-                substr,
-                u16::from_be_bytes(node.para)
-            );
-        }
         let meta = node.inst.metadata();
         let substr = self.print_sub(&*node.subx);
         format!(

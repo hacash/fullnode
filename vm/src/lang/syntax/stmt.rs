@@ -248,34 +248,24 @@ impl Syntax {
         Ok(push_single_noret(inst, expr))
     }
 
-    /// `require <cond> <code>` — statement form of assert with a compile-time
-    /// u16 error code. False condition aborts the transaction with
-    /// `UserAbort(164): require code N`; codes below 1000 are rejected at
-    /// compile time so user codes can never be confused with VM reserved ones.
+    /// `require <errorValue>, <condition>` evaluates both values in source order.
+    /// The VM requires a bounded non-Nil scalar error value on either branch.
     fn parse_require_stmt(&mut self) -> Ret<Box<dyn IRNode>> {
+        let error_value = self.parse_required_item()?;
+        if !error_value.hasretval() {
+            return errf!("require error value must be an expression with a return value");
+        }
+        self.cursor
+            .expect_partition(',', "require needs ',' between error value and condition")?;
         let cond = self.parse_required_item()?;
         if !cond.hasretval() {
             return errf!("require condition must be an expression with a return value");
         }
-        let Token::Integer(n) = self.cursor.next()? else {
-            return errf!(
-                "require requires a plain compile-time integer error code after the condition"
-            );
-        };
-        if n > u16::MAX as u128 {
-            return errf!("require code {} exceeds the u16 range", n);
-        }
-        if n < 1000 {
-            return errf!(
-                "require code {} is below the user code floor 1000 (lower codes are VM-reserved)",
-                n
-            );
-        }
-        Ok(Box::new(IRNodeParam2Single {
+        Ok(Box::new(IRNodeDouble {
             hrtv: false,
-            inst: Bytecode::REQUIRE,
-            para: (n as u16).to_be_bytes(),
-            subx: cond,
+            inst: Bytecode::REQ,
+            subx: error_value,
+            suby: cond,
         }))
     }
 

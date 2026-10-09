@@ -103,6 +103,9 @@ pub enum ItrErrCode {
 
     MemoryKeyExists = 131,
 
+    // `require <errorValue>, <condition>`: a bounded non-Nil scalar is formatted
+    // into the message; this enum value identifies the fatal error class.
+    UserAbort = 150,
     ThrowAbort = 151,    // user code call
     DeferredError = 152, // defer callback error
     IntentError = 153,
@@ -117,10 +120,6 @@ pub enum ItrErrCode {
     // space stays stable; no current path produces it.
     CodecOnlyUnsupported = 163,
 
-    // `require <cond> <code>`: the compile-time u16 user code travels in the message
-    // ("require code N"), never as this enum's numeric value — the 1..=999 band stays
-    // VM-reserved and user codes are floored at 1000 at compile time.
-    UserAbort = 164,
 
     #[default]
     NeverError = 255,

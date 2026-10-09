@@ -45,6 +45,13 @@ pub fn validate_scalar_payload_len(val: &Value, value_max_bytes: usize, ec: ItrE
     validate_scalar_payload_against_max(val, value_max_bytes, ec)
 }
 
+/// An error payload is a non-Nil field-serializable scalar. Bound its payload
+/// like memory/storage values before rendering it into an error string.
+pub fn validate_error_scalar(val: &Value, value_max_bytes: usize) -> VmrtErr {
+    val.check_non_nil_scalar(ItrErrCode::CastBeValueFail)?;
+    validate_scalar_payload_len(val, value_max_bytes, ItrErrCode::OutOfValueSize)
+}
+
 /// Non-nil scalar whose encoded length is within `value_max_bytes`.
 pub fn validate_volatile_scalar_put(
     val: &Value,

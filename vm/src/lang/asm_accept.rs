@@ -437,6 +437,14 @@ fn keyword_collision_mnemonics_are_instructions() {
 }
 
 #[test]
+fn req_roundtrips_in_raw_and_asm_forms() {
+    let bytes = [P0 as u8, PTRUE as u8, REQ as u8, END as u8];
+    roundtrip_bytecode(&bytes);
+    assert!(disassemble_bytecode_raw(&bytes).unwrap().contains("REQ"));
+    assert!(disassemble_bytecode_asm(&bytes).unwrap().contains("require"));
+}
+
+#[test]
 fn ircode_prefix_put_differs_from_bytecode_postfix() {
     let ir = vec![PUT as u8, 0, P1 as u8];
     roundtrip_ircode(&ir);

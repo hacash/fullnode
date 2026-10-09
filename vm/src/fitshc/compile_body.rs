@@ -69,7 +69,7 @@ mod compile_body_tests {
             (b"end", b"end end end"),
             (b"abort", b"abort end"),
             (b"throw 1", b"throw 1 end"),
-            (b"require 1 1001", b"require 1 1001 end"),
+            (b"require 1001, true", b"require 1001, true end"),
             (b"var z = 1", b"var z = 1 end"),
         ];
         for (auto_body, manual_body) in pairs {

@@ -683,7 +683,7 @@ mod entry_semantics_tests {
     }
 
     #[test]
-    fn require_passes_on_true_and_aborts_with_the_user_code_on_false() {
+    fn require_evaluates_error_first_and_rejects_non_scalar_error_values() {
         // Same lightweight harness as the memory_init test: a Main frame over
         // lang_to_bytecode output — no deployed contract needed. Pure mode also
         // pins that `require` performs no host effects.
@@ -691,7 +691,7 @@ mod entry_semantics_tests {
 
         use crate::frame::IntentScopeState;
         use crate::interpreter::execute_code_in_frame;
-        use crate::rt::{CallExit, EffectMode, ExecCtx, FrameBindings};
+        use crate::rt::{Bytecode, CallExit, EffectMode, ExecCtx, FrameBindings, GasTable};
         use crate::value::Value;
         use field::Address;
 
@@ -744,21 +744,76 @@ mod entry_semantics_tests {
         let mut ctx = TestCtx::new();
 
         // True condition: the statement is a no-op and execution continues.
-        let (exit, _, spent) =
-            run(&mut vm, &mut ctx, who, "require 1 == 1 1234\nreturn 7").unwrap();
+        let (exit, _, spent) = run(
+            &mut vm,
+            &mut ctx,
+            who,
+            "require \"denied\", 1 == 1\nreturn 7",
+        )
+        .unwrap();
         assert!(matches!(exit, CallExit::Return));
         assert!(spent > 0);
 
-        // False condition: hard user abort carrying the compile-time code —
-        // not the assert/151 channel and not a revert of the condition value.
-        let err = run(&mut vm, &mut ctx, who, "require 1 == 2 1234").unwrap_err();
+        // False condition: fatal user abort carrying a serializable scalar.
+        let err = run(&mut vm, &mut ctx, who, "require \"denied\", 1 == 2").unwrap_err();
         assert_eq!(err.0, ItrErrCode::UserAbort, "{err}");
-        assert!(err.1.contains("require code 1234"), "{err}");
+        assert!(err.1.contains("denied"), "{err}");
+        let external: sys::Error = err.into();
+        assert!(external.is_fault(), "{external}");
+        for source in ["require 0, false", "require true, false"] {
+            let err = run(&mut vm, &mut ctx, who, source).unwrap_err();
+            assert_eq!(err.0, ItrErrCode::UserAbort, "{source}: {err}");
+            assert!(err.1.starts_with("require failed: "), "{source}: {err}");
+        }
+
+        for source in [
+            "require [1, 2], false",
+            "require [1, 2], true",
+            "require nil, false",
+            "require nil, true",
+            "throw [1, 2]",
+            "throw nil",
+        ] {
+            let err = run(&mut vm, &mut ctx, who, source).unwrap_err();
+            assert_eq!(err.0, ItrErrCode::CastBeValueFail, "{source}: {err}");
+        }
+        let (exit, value, _) = run(&mut vm, &mut ctx, who, "throw 0").unwrap();
+        assert!(matches!(exit, CallExit::Throw));
+        assert_eq!(value, Value::U8(0));
+
+        // The error expression is evaluated even when the condition is true.
+        let err = run(&mut vm, &mut ctx, who, "require (1 / 0), true").unwrap_err();
+        assert_ne!(err.0, ItrErrCode::UserAbort, "{err}");
+
+        let table = GasTable::new(1);
+        let mut gas_ctx = TestCtx::new();
+        let (_, _, baseline) = run(&mut vm, &mut gas_ctx, who, "return 7").unwrap();
+        let (_, _, with_req) = run(&mut vm, &mut gas_ctx, who, "require 0, true\nreturn 7").unwrap();
+        assert_eq!(
+            with_req - baseline,
+            table.gas(Bytecode::P0 as u8)
+                + table.gas(Bytecode::PTRUE as u8)
+                + table.gas(Bytecode::REQ as u8),
+        );
+        let before_failure = gas_ctx.gas;
+        let err = run(&mut vm, &mut gas_ctx, who, "require 0, false").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::UserAbort);
+        assert_eq!(
+            before_failure - gas_ctx.gas,
+            table.gas(Bytecode::P0 as u8)
+                + table.gas(Bytecode::PFALSE as u8)
+                + table.gas(Bytecode::REQ as u8),
+        );
 
         // Pure compute: identical runs spend identical gas (no native resources).
         let mut ctx2 = TestCtx::new();
-        let (_, _, spent2) =
-            run(&mut vm, &mut ctx2, who, "require 1 == 1 1234\nreturn 7").unwrap();
+        let (_, _, spent2) = run(
+            &mut vm,
+            &mut ctx2,
+            who,
+            "require \"denied\", 1 == 1\nreturn 7",
+        )
+        .unwrap();
         assert_eq!(spent, spent2);
     }
 }

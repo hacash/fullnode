@@ -110,6 +110,7 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
         BalanceCoin = (Bytes, 1),
         BalanceAsset = (U64, 2),
         BalanceFungible = (U64, 2),
+        BalanceFungibleBatch = (Bytes, 2),
         BalanceTableCheck = (Bool, 2),
         AssetMeta = (Bytes, 1),
         CheckSignature = (Bool, 1),
@@ -244,6 +245,12 @@ mod tests {
                 2,
             ),
             (
+                BalanceFungibleBatch::KIND,
+                BalanceFungibleBatch::NAME,
+                VmValueType::Bytes,
+                2,
+            ),
+            (
                 BalanceTableCheck::KIND,
                 BalanceTableCheck::NAME,
                 VmValueType::Bool,
@@ -318,6 +325,7 @@ mod tests {
             HacdNameList::KIND,
             HacdOwnerAddrs::KIND,
             BalanceFungible::KIND,
+            BalanceFungibleBatch::KIND,
             BalanceTableCheck::KIND,
             TxMessage::KIND,
             TxMessageSingle::KIND,

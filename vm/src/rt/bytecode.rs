@@ -285,9 +285,9 @@ pub enum Bytecode {
     ____________e7 = 0xe7,
     ____________e8 = 0xe8,
     ____________e9 = 0xe9,
-    REQUIRE = 0xea,    // c,**  require <cond> <code>: abort with the u16 user code when cond is false
+    REQ = 0xea,        // e,c   require: error value must be a bounded non-Nil scalar
     AST = 0xeb,        // c     assert throw
-    ERR = 0xec,        // a     throw (ERR)
+    ERR = 0xec,        // a     throw a bounded non-Nil scalar
     ABT = 0xed,        // abord
     RET = 0xee,        // a     func return (DATA)
     END = 0xef,        // func return nil
@@ -573,7 +573,7 @@ bytecode_metadata_define! {
     AST        : 0, 1, 0,     assert
     ERR        : 0, 1, 0,     throw
     ABT        : 0, 0, 0,     abort
-    REQUIRE    : 2, 1, 0,     require
+    REQ        : 0, 2, 0,     require
 
     IRBYTECODE : 2, 255, 0,   ir_bytecode
     IRLIST     : 2, 255, 1,   ir_list
@@ -679,7 +679,7 @@ mod bytecode_tests {
         // row E/F: branch + control/return + IR nodes unchanged
         assert_eq!(JMPL as u8, 0xe0);
         assert_eq!(BRSLN as u8, 0xe6);
-        assert_eq!(REQUIRE as u8, 0xea);
+        assert_eq!(REQ as u8, 0xea);
         assert_eq!(END as u8, 0xef);
         assert_eq!(IRBYTECODE as u8, 0xf0);
         assert_eq!(IRCONTINUE as u8, 0xf8);
@@ -795,6 +795,7 @@ mod bytecode_tests {
             );
             // Applies the map's stack effects too (GET0 pushes, GPUT pops 2), so a future
             // renumbering that swaps a push for a consumer fails here before it can fork.
+            #[cfg(feature = "execute")]
             crate::rt::verify_bytecodes_with_entry_stack(
                 &codes,
                 crate::rt::VerifyEntryStack::OptionalArgv,

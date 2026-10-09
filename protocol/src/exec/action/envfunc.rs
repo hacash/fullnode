@@ -5,7 +5,7 @@ use field::{Address, AddressW1, Balance, DiamondName, Encode};
 use sys::errf;
 
 use crate::codec::action::{
-    AssetMeta, BalanceAsset, BalanceCoin, BalanceFungible, BalanceTableCheck, BlockAuthorAddr,
+    AssetMeta, BalanceAsset, BalanceCoin, BalanceFungible, BalanceFungibleBatch, BalanceTableCheck, BlockAuthorAddr,
     CheckSignature, EnvHeight, HacdInscGet, HacdInscNum, HacdNameList,
     HacdOwnerAddrs, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum, TxBlobSize,
     TxMainAddr, TxMessage, TxMessageNum, TxMessageSingle,
@@ -208,6 +208,37 @@ base::impl_action_execute! {
                 .balance(&self.addr)?
                 .unwrap_or_default();
             Ok(fungible_balance_of(&balances, serial)?.to_be_bytes().to_vec())
+        }
+    }
+}
+
+base::impl_action_execute! {
+    BalanceFungibleBatch {
+        (self, ctx) {
+            const MAX_BATCH: usize = 32;
+            let serials = self.serials.as_list();
+            if serials.len() > MAX_BATCH {
+                return errf!("fungible balance batch cannot exceed {} entries", MAX_BATCH);
+            }
+            // Keep the single-value syscall's hard-error semantics for every
+            // serial, even when a later item is invalid.
+            for serial in serials {
+                if matches!(serial.uint(), 0 | 4..=10) {
+                    return errf!(
+                        "fungible serial {} is not hac, sat, hacd, or an asset above 10",
+                        serial.uint()
+                    );
+                }
+            }
+            let balances = CoreState::wrap(ctx.layer())
+                .balance(&self.addr)?
+                .unwrap_or_default();
+            let mut out = Vec::with_capacity(1 + serials.len() * 8);
+            out.push(serials.len() as u8);
+            for serial in serials {
+                out.extend_from_slice(&fungible_balance_of(&balances, serial.uint())?.to_be_bytes());
+            }
+            Ok(out)
         }
     }
 }

@@ -99,7 +99,7 @@ contract Check4Prefix {
 pragma fitsh 1.0.0
 contract PermitProbe {
     function _check() {
-        require 1 1001
+        require 1001, true
     }
     abstract PermitHACD(to: address, count: u32, names: bytes) {
         self._check()
@@ -119,7 +119,7 @@ contract PermitProbe {
             ("", true),
             ("var z = 1", true),
             ("1 + 2", true),
-            ("require 1 1001", true),
+            ("require 1001, true", true),
             ("log(1, 2)", true),
             ("assert(x > 0)", true),
             ("abort", true),
