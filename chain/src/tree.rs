@@ -257,7 +257,9 @@ impl Tree {
             height > scheduled_height.saturating_add(unstable_window)
         };
         let roll = if is_head && over_window {
-            let step = if linear { unstable_window } else { 1 };
+            // Boot replay uses linear mode even when live fast sync is disabled.
+            // A zero live window means immediate durability, not a zero replay step.
+            let step = if linear { unstable_window.max(1) } else { 1 };
             Some(inner.plan_roll_from(&chunk, scheduled_height + step)?)
         } else {
             None
@@ -878,6 +880,26 @@ mod tests {
             .unwrap()
             .unwrap();
         tree.attach_linear(&parent_hash, chunk, window).unwrap()
+    }
+
+    #[test]
+    fn zero_window_linear_replay_advances_and_preserves_roll_order() {
+        let t = tree();
+        let first = attach_linear(&t, hash(0), hash(1), 1, key(1), 0);
+        let one = first.roll.expect("zero window must schedule block one");
+        assert_eq!(height_of(&one.new_root), 1);
+        assert_eq!(one.chain.len(), 1);
+        // Replay may execute ahead of persistence: schedule the next root
+        // before committing the first, then persist both in their real order.
+        let second = attach_linear(&t, hash(1), hash(2), 2, key(2), 0);
+        let two = second.roll.expect("zero window must schedule block two");
+        assert_eq!(height_of(&two.new_root), 2);
+        assert_eq!(two.chain.len(), 1);
+        assert!(t.commit_roll(&two).is_err(), "out-of-order persistence must reject");
+        t.commit_roll(&one).unwrap();
+        assert_eq!(t.root_height(), 1);
+        t.commit_roll(&two).unwrap();
+        assert_eq!(t.root_height(), 2);
     }
 
     #[test]
