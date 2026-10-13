@@ -5,6 +5,7 @@
 
 pub mod compile_body;
 pub mod compiler;
+mod macro_expand;
 pub mod parse_deploy;
 pub mod parse_func;
 pub mod parse_top;

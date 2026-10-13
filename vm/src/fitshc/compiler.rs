@@ -46,6 +46,157 @@ pub fn compile(code: &str) -> Ret<FitshCompileOutput> {
 
 #[cfg(test)]
 mod compiler_tests {
+    fn function_code(src: &str, name: &str) -> Vec<u8> {
+        let (contract, _, _, _) = crate::fitshc::compile(src).unwrap();
+        let sto = contract.into_sto();
+        let func = sto
+            .userfuncs
+            .iter()
+            .find(|f| f.sign.0 == crate::rt::calc_func_sign(name))
+            .expect("compiled function");
+        func.code_stuff.data.to_vec()
+    }
+
+    #[test]
+    fn statement_macro_is_hygienic_and_byte_identical() {
+        let handwritten = r#"
+pragma fitsh 1.0.0
+contract MacroProbe {
+    function external probe(a: u64, b: u64) -> u64 {
+        var c = a + 1
+        var balances = c + b
+        var out = balances
+        var c2 = a + 1
+        var balances2 = c2 + b
+        var out2 = balances2
+        return out + out2
+    }
+}
+"#;
+        let expanded = r#"
+pragma fitsh 1.0.0
+contract MacroProbe {
+    define liquidity($a, $b, $out) {
+        var c = $a + 1
+        var balances = c + $b
+        var $out = balances
+    }
+    function external probe(a: u64, b: u64) -> u64 {
+        macro liquidity(a, b, out)
+        macro liquidity(a, b, out2)
+        return out + out2
+    }
+}
+"#;
+        assert_eq!(
+            function_code(handwritten, "probe"),
+            function_code(expanded, "probe")
+        );
+    }
+
+    #[test]
+    fn statement_macro_private_name_avoids_caller_identifier_collision() {
+        let handwritten = r#"
+pragma fitsh 1.0.0
+contract MacroProbe {
+    function external probe(a: u64, b: u64) -> u64 {
+        var c__macro_0 = a
+        var c = a + 1
+        var balances = c + b
+        var out = balances
+        return c__macro_0 + out
+    }
+}
+"#;
+        let expanded = r#"
+pragma fitsh 1.0.0
+contract MacroProbe {
+    define liquidity($a, $b, $out) {
+        var c = $a + 1
+        var balances = c + $b
+        var $out = balances
+    }
+    function external probe(a: u64, b: u64) -> u64 {
+        var c__macro_0 = a
+        macro liquidity(a, b, out)
+        return c__macro_0 + out
+    }
+}
+"#;
+        assert_eq!(
+            function_code(handwritten, "probe"),
+            function_code(expanded, "probe")
+        );
+    }
+
+    #[test]
+    fn statement_macro_bind_name_avoids_parameter_and_const_collisions() {
+        let handwritten = r#"
+pragma fitsh 1.0.0
+contract MacroProbe {
+    const scratch__macro_0 = 99
+    function external probe(scratch__macro_0_1: u64) -> u64 {
+        var result = 7
+        return result
+    }
+}
+"#;
+        let expanded = r#"
+pragma fitsh 1.0.0
+contract MacroProbe {
+    const scratch__macro_0 = 99
+    define read($out) {
+        bind scratch = 7
+        bind value = scratch
+        var $out = value
+    }
+    function external probe(scratch__macro_0_1: u64) -> u64 {
+        macro read(result)
+        return result
+    }
+}
+"#;
+        assert_eq!(
+            function_code(handwritten, "probe"),
+            function_code(expanded, "probe")
+        );
+    }
+
+    #[test]
+    fn statement_macro_rejects_expression_arguments() {
+        let src = r#"
+pragma fitsh 1.0.0
+contract MacroProbe {
+    define identity($x) { var y = $x }
+    function external probe(a: u64) { macro identity(a + 1) }
+}
+"#;
+        let error = match crate::fitshc::compile(src) {
+            Ok(_) => panic!("expected macro argument error"),
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            error.contains("arguments must be variable names"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn statement_macro_recursion_is_bounded() {
+        let src = r#"
+pragma fitsh 1.0.0
+contract MacroProbe {
+    define recurse() { macro recurse() }
+    function external probe() { macro recurse() }
+}
+"#;
+        let error = match crate::fitshc::compile(src) {
+            Ok(_) => panic!("expected recursion limit error"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("expansion limit exceeded"), "{error}");
+    }
+
     #[test]
     fn ternary_external_function_compiles() {
         let src = r#"
@@ -146,5 +297,4 @@ contract PermitProbe {
             }
         }
     }
-
 }

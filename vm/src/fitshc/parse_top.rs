@@ -1,9 +1,9 @@
-use super::compile_body::{CompiledCode, compile_body};
+use super::compile_body::{CompiledCode, compile_body_with_macros};
 use super::parse_deploy::parse_deploy;
 use super::parse_func::{
     parse_func_body_tokens, parse_func_sig, parse_function, parse_optional_code_modifier,
 };
-use super::state::{FITSH_CURRENT_VERSION, FitshVersion, ParseState};
+use super::state::{FITSH_CURRENT_VERSION, FitshVersion, MacroDef, ParseState};
 use crate::contract::Abst;
 use crate::rt::Token::*;
 use crate::rt::{AbstCall, KwTy, calc_func_sign};
@@ -130,6 +130,9 @@ fn parse_optional_const_type(state: &mut ParseState) -> Ret<Option<ValueTy>> {
 
 fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
     state.skip_soft_separators();
+    if matches!(state.current(), Some(Identifier(word)) if word == "define") {
+        return parse_macro_definition(state);
+    }
     match state.current() {
         Some(Keyword(KwTy::Const)) => {
             // Parse top-level const: const NAME = VALUE
@@ -242,12 +245,13 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
             }
 
             // compile abstract body using shared compile function
-            let (_irnodes, compiled, source_map) = compile_body(
+            let (_irnodes, compiled, source_map) = compile_body_with_macros(
                 body_tokens,
                 args.clone(),
                 &state.libs,
                 &state.consts,
                 is_ircode,
+                &state.macros,
             )?;
 
             let abst = match compiled {
@@ -276,6 +280,64 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
         None => return errf!("unexpected EOF while parsing contract body"),
     }
     Ok(())
+}
+
+fn parse_macro_definition(state: &mut ParseState) -> Ret<()> {
+    state.advance(); // define
+    let Some(Identifier(name)) = state.current() else {
+        return errf!("expected macro name after 'define'");
+    };
+    let name = name.clone();
+    state.advance();
+    state.eat_partition('(')?;
+    let mut params = Vec::new();
+    loop {
+        state.skip_soft_separators();
+        if matches!(state.current(), Some(Partition(')'))) {
+            state.advance();
+            break;
+        }
+        let Some(Identifier(param)) = state.current() else {
+            return errf!("expected $-prefixed macro parameter");
+        };
+        if !param.starts_with('$') || param.len() < 2 {
+            return errf!("macro parameter '{}' must start with '$'", param);
+        }
+        if params.contains(param) {
+            return errf!("duplicate macro parameter '{}'", param);
+        }
+        params.push(param.clone());
+        state.advance();
+        if matches!(state.current(), Some(Partition(','))) {
+            state.advance();
+        } else if !matches!(state.current(), Some(Partition(')'))) {
+            return errf!("expected ',' or ')' in macro parameter list");
+        }
+    }
+    state.eat_partition('{')?;
+    let mut body = Vec::new();
+    let mut depth = 1usize;
+    while state.idx < state.max {
+        let token = &state.tokens[state.idx];
+        match token {
+            Partition('{') => depth += 1,
+            Partition('}') => {
+                depth -= 1;
+                if depth == 0 {
+                    state.advance();
+                    if state.macros.iter().any(|m| m.name == name) {
+                        return errf!("duplicate macro '{}'", name);
+                    }
+                    state.macros.push(MacroDef { name, params, body });
+                    return Ok(());
+                }
+            }
+            _ => {}
+        }
+        body.push(token.clone());
+        state.advance();
+    }
+    errf!("bracket mismatch in macro definition")
 }
 
 fn parse_addr_list(state: &mut ParseState) -> Ret<Vec<(String, field::Address)>> {

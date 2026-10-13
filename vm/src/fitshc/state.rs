@@ -20,12 +20,20 @@ pub struct ParseState {
     pub source_maps: Vec<(String, SourceMap)>,
     /// Top-level constants injected into each compiled body.
     pub consts: Vec<(String, Box<dyn IRNode>)>,
+    pub macros: Vec<MacroDef>,
     pub warnings: Vec<String>,
     pub version: Option<FitshVersion>,
     pub userfunc_signs: HashSet<[u8; 4]>,
     pub abst_signs: HashSet<u8>,
     pub library_addrs: HashSet<Address>,
     pub inherit_addrs: HashSet<Address>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MacroDef {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: Vec<Token>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +74,7 @@ impl ParseState {
             deploy: None,
             source_maps: Vec::new(),
             consts: Vec::new(),
+            macros: Vec::new(),
             warnings: Vec::new(),
             version: None,
             userfunc_signs: HashSet::new(),

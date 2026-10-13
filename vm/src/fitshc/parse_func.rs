@@ -1,12 +1,12 @@
-use super::compile_body::{CompiledCode, compile_body};
+use super::compile_body::{compile_body_with_macros, CompiledCode};
 use super::state::ParseState;
-use crate::Token::*;
 use crate::contract::Func;
 use crate::rt::SourceMap;
 use crate::rt::{KwTy, Token};
 use crate::value::ValueTy;
+use crate::Token::*;
 use sys::*;
-use sys::{Ret, errf};
+use sys::{errf, Ret};
 
 fn parse_type(state: &mut ParseState) -> Ret<Option<ValueTy>> {
     if state.idx >= state.max {
@@ -97,6 +97,59 @@ pub(super) fn parse_optional_code_modifier(state: &mut ParseState, context: &str
     }
 }
 
+fn asm_token_text(token: &Token) -> Ret<String> {
+    Ok(match token {
+        Token::Identifier(s) => s.clone(),
+        Token::Integer(n) => n.to_string(),
+        Token::Bytes(bytes) => format!("0x{}", hex::encode(bytes)),
+        Token::Keyword(k) => {
+            let name = format!("{:?}", k);
+            let mut out = String::new();
+            for (i, c) in name.chars().enumerate() {
+                if c.is_ascii_uppercase() && i > 0 {
+                    out.push('_');
+                }
+                out.push(c.to_ascii_lowercase());
+            }
+            out
+        }
+        Token::Operator(op) => op.symbol().to_string(),
+        Token::Partition(c) => c.to_string(),
+        other => return errf!("invalid token in raw bytecode function: {:?}", other),
+    })
+}
+
+fn raw_bytecode_function(body: &[Token]) -> Ret<Vec<u8>> {
+    if body.is_empty() {
+        return errf!("raw bytecode function body cannot be empty");
+    }
+
+    // Function bodies have already passed through the FitSH tokenizer. Rebuild
+    // a token-preserving assembly stream; the assembler then selects raw bytes
+    // or readable mnemonics using its existing format detection.
+    let mut asm = String::new();
+    let mut previous: Option<&Token> = None;
+    for token in body {
+        let text = asm_token_text(token)?;
+        let attach = matches!(
+            token,
+            Token::Partition(',' | ':' | ')' | ']') | Token::Keyword(KwTy::Dot)
+        ) || matches!(
+            previous,
+            Some(Token::Keyword(KwTy::Dot) | Token::Partition('(' | '['))
+        );
+        if !asm.is_empty() && !attach {
+            asm.push(' ');
+        }
+        asm.push_str(&text);
+        previous = Some(token);
+    }
+
+    let codes = crate::rt::assemble_bytecode(&asm)?;
+    crate::rt::verify_bytecodes(&codes).map_err(|e| e.to_string())?;
+    Ok(codes)
+}
+
 pub fn parse_function(state: &mut ParseState, consume_kw: bool) -> Ret<(Func, SourceMap, String)> {
     // function external/ircode Name(...) -> Ret { ... }
     if consume_kw {
@@ -109,6 +162,7 @@ pub fn parse_function(state: &mut ParseState, consume_kw: bool) -> Ret<(Func, So
     } else {
         false
     };
+    let is_raw_bytecode = matches!(state.current(), Some(Keyword(KwTy::ByteCode)));
     let is_ircode = parse_optional_code_modifier(state, "function")?;
     if matches!(state.current(), Some(Keyword(KwTy::External))) {
         return errf!("function modifier 'external' must appear before code modifier");
@@ -127,12 +181,28 @@ pub fn parse_function(state: &mut ParseState, consume_kw: bool) -> Ret<(Func, So
     func = func.types(ret_ty, arg_types);
 
     // Compile body using shared compile function
-    let (irnodes, compiled, source_map) =
-        compile_body(body_tokens, args, &state.libs, &state.consts, is_ircode)?;
+    // A function-level `bytecode` modifier makes the body a complete assembly
+    // stream, so no FitSH parameter prelude or local-slot allocation is added.
+    let source_map = if is_raw_bytecode {
+        let codes = raw_bytecode_function(&body_tokens)?;
+        func = func.bytecode(codes)?;
+        SourceMap::default()
+    } else {
+        let (irnodes, compiled, source_map) =
+            compile_body_with_macros(
+                body_tokens,
+                args,
+                &state.libs,
+                &state.consts,
+                is_ircode,
+                &state.macros,
+            )?;
 
-    func = match compiled {
-        CompiledCode::IrCode(_) => func.irnode(irnodes)?,
-        CompiledCode::Bytecode(bts) => func.bytecode(bts)?,
+        func = match compiled {
+            CompiledCode::IrCode(_) => func.irnode(irnodes)?,
+            CompiledCode::Bytecode(bts) => func.bytecode(bts)?,
+        };
+        source_map
     };
 
     Ok((func, source_map, name))
@@ -282,5 +352,55 @@ mod parse_func_tests {
             Err(err) => err,
         };
         assert!(err.contains("unknown return type"), "{}", err);
+    }
+
+    fn assemble_body(src: &str) -> Ret<Vec<u8>> {
+        let tokens = Tokenizer::new(src.as_bytes()).parse()?;
+        raw_bytecode_function(&tokens)
+    }
+
+    fn compiled_bytecode(src: &str) -> Ret<Vec<u8>> {
+        let (func, _, _) = parse_sig(src)?;
+        let sto = crate::contract::Contract::new().func(func).into_sto();
+        Ok(sto.userfuncs[0].code_stuff.data.to_vec())
+    }
+
+    #[test]
+    fn raw_bytecode_function_accepts_machine_bytes_and_mnemonics() {
+        let machine = assemble_body("0x1200e85fde5d").unwrap();
+        let raw_mnemonic = assemble_body("CODE_CALL 0 0xe85fde5d").unwrap();
+        let readable_mnemonic = assemble_body("code_call 0, 0xe85fde5d").unwrap();
+        let expected = vec![0x12, 0x00, 0xe8, 0x5f, 0xde, 0x5d];
+
+        assert_eq!(machine, expected);
+        assert_eq!(raw_mnemonic, expected);
+        assert_eq!(readable_mnemonic, expected);
+    }
+
+    #[test]
+    fn bytecode_function_parses_direct_assembly_body() {
+        let expected = vec![0x12, 0x00, 0xe8, 0x5f, 0xde, 0x5d];
+        assert_eq!(
+            compiled_bytecode("function bytecode open() { CODE_CALL 0 0xe85fde5d }").unwrap(),
+            expected
+        );
+        assert_eq!(
+            compiled_bytecode("function bytecode open() { 0x1200e85fde5d }").unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn ircode_modifier_still_emits_ir_node_code() {
+        let (func, _, _) =
+            parse_sig("function ircode probe(value: u64) -> u64 { return value }").unwrap();
+        let sto = crate::contract::Contract::new().func(func).into_sto();
+        let code_stuff = &sto.userfuncs[0].code_stuff;
+
+        assert!(matches!(
+            code_stuff.parse_conf().unwrap().code_type(),
+            crate::rt::CodeType::IRNode
+        ));
+        assert!(!code_stuff.data.is_empty());
     }
 }

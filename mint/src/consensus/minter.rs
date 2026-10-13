@@ -357,19 +357,25 @@ impl HacashConsensus {
             return sys::errf!("miner not enabled");
         }
         let latest_height = engine.latest_height();
+        // A template is reusable only for a height above the head AND with a
+        // timestamp that still satisfies the "later than parent" rule. On fast
+        // (test) chains a template minted in the same second as its parent
+        // would otherwise be submitted and rejected forever.
+        let template_reusable = |pending: &std::collections::VecDeque<MinerBlockStuff>| {
+            pending.front().is_some_and(|stuff| {
+                stuff.block.height() > latest_height
+                    && stuff.block.timestamp() > engine.latest_block().timestamp()
+            })
+        };
         let need_create = {
             let pending = self.miner_pending.lock().unwrap();
-            pending
-                .front()
-                .map_or(true, |stuff| stuff.block.height() <= latest_height)
+            !template_reusable(&pending)
         };
         if need_create {
             let _guard = self.miner_packing.lock().unwrap();
             let still_need_create = {
                 let pending = self.miner_pending.lock().unwrap();
-                pending
-                    .front()
-                    .map_or(true, |stuff| stuff.block.height() <= latest_height)
+                !template_reusable(&pending)
             };
             if still_need_create {
                 self.create_pending_block(engine, txpool)?;

@@ -3,6 +3,8 @@ use crate::ir::{IRNodeArray, convert_ir_to_runtime_bytecode, drop_irblock_wrap};
 use crate::lang::Syntax;
 use crate::rt::{KwTy, SourceMap, Token, verify_bytecodes};
 use crate::value::ValueTy;
+use super::macro_expand::expand_macros;
+use super::state::MacroDef;
 use dyn_clone::clone_box;
 use field::Address;
 use sys::Ret;
@@ -144,13 +146,29 @@ pub fn compile_body(
     consts: &[(String, Box<dyn IRNode>)],
     is_ircode: bool,
 ) -> Ret<(IRNodeArray, CompiledCode, SourceMap)> {
+    compile_body_with_macros(body_tokens, args, libs, consts, is_ircode, &[])
+}
+
+pub(super) fn compile_body_with_macros(
+    body_tokens: Vec<Token>,
+    args: Vec<(String, ValueTy)>,
+    libs: &[(String, Address)],
+    consts: &[(String, Box<dyn IRNode>)],
+    is_ircode: bool,
+    macros: &[MacroDef],
+) -> Ret<(IRNodeArray, CompiledCode, SourceMap)> {
     // Function/abstract bodies may omit the trailing terminator HVM requires
     // (rt::ensure_terminal_instruction): append a virtual `end` statement. The
     // parser's redundant-terminal-end skipping absorbs it whenever the body
     // already ends with `return`/`abort`/`throw`/`end`/`codecall` (or an
     // if/else whose branches all terminate), so hand-written terminators are
     // never duplicated and emitted code stays byte-identical.
-    let mut body_tokens = body_tokens;
+    // Macro-private names must also avoid symbols injected outside the body:
+    // unused parameters, library aliases, and contract constants.
+    let mut reserved_names: Vec<String> = args.iter().map(|(name, _)| name.clone()).collect();
+    reserved_names.extend(libs.iter().map(|(name, _)| name.clone()));
+    reserved_names.extend(consts.iter().map(|(name, _)| name.clone()));
+    let mut body_tokens = expand_macros(body_tokens, macros, &reserved_names)?;
     body_tokens.push(Token::Keyword(KwTy::End));
     let has_manual_param_block = body_tokens
         .iter()
