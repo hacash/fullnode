@@ -4,11 +4,11 @@
 use crate::json::SdkJsonTo;
 use crate::schema::{DOMAIN_CODEC_PROFILE, SCHEMA_CODEC_PROFILE};
 
-pub const SDK_VERSION: &str = "0.2.1";
+pub const SDK_VERSION: &str = "0.2.3";
 pub const ABI_MAJOR: u32 = 2;
 /// v2.5: the codec profile reports and hashes transaction-type membership;
 /// the wallet surface admits only current Type-2/3 envelopes.
-pub const ABI_MINOR: u32 = 5;
+pub const ABI_MINOR: u32 = 7;
 /// Fullnode source commit this SDK's protocol/codec behavior corresponds to.
 /// Injected from git by `build.rs`, never hand-maintained.
 pub const FULLNODE_COMMIT: &str = env!("SDK_FULLNODE_COMMIT");

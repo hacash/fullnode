@@ -64,6 +64,88 @@ impl Default for SourceMap {
 }
 
 impl SourceMap {
+    /// Keep only function labels for security-sensitive review output. Slot names,
+    /// declaration classes, parameters, library aliases, and constants can all
+    /// change the apparent structure or values of ordinary decompilation.
+    pub fn review_labels(&self) -> (Self, Vec<String>, Vec<String>) {
+        let mut safe = SourceMap::default();
+        let mut warnings = Vec::new();
+        let mut labels = Vec::new();
+        collect_validated_funcs_slots(self, &mut safe, &mut labels, &mut warnings);
+        if !self.const_name_to_val.is_empty() { warnings.push("constant labels ignored in review mode; numeric literals are preserved".to_owned()); }
+        if !self.libs.is_empty() { warnings.push("library aliases ignored in review mode; ext(index) is preserved".to_owned()); }
+        if !self.params.is_empty() || self.param_prelude_count.is_some() { warnings.push("parameter annotations ignored in review mode".to_owned()); }
+        if !self.lets.is_empty() || !self.vars.is_empty() { warnings.push("declaration annotations ignored in review mode".to_owned()); }
+        (safe, labels, warnings)
+    }
+
+    /// Validated labels for the named (non-review) decompilation of UNTRUSTED
+    /// input: function labels and slot names that pass the `review_labels`
+    /// checks, plus library aliases. Alias names must be legal identifiers and
+    /// their addresses are dropped — a dapp must not imprint address bindings
+    /// the transaction's own address table does not carry. Parameter names are
+    /// carried too (same identifier validation; the formatter cross-checks the
+    /// count against the IR's canonical prelude shape, so a hostile count only
+    /// degrades to the raw prelude) — without them the `param { ... }` binding
+    /// line is lost and body references to accepted slot names would not
+    /// parse. Declaration classes and constants stay excluded: they can change
+    /// the apparent structure or values of ordinary decompilation.
+    pub fn display_labels(&self) -> (Self, Vec<String>, Vec<String>) {
+        let mut safe = SourceMap::default();
+        let mut warnings = Vec::new();
+        let mut labels = Vec::new();
+        collect_validated_funcs_slots(self, &mut safe, &mut labels, &mut warnings);
+        for (idx, info) in self.lib_entries() {
+            if review_identifier(&info.name) {
+                let _ = safe.register_lib(idx, info.name.clone(), None);
+                // Compilable form (`lib AMM = 1`), matching the prelude the
+                // named decompile emits.
+                labels.push(format!("lib {} = {}", info.name, idx));
+            } else {
+                warnings.push(format!("library alias for ext({}) ignored: invalid identifier", idx));
+            }
+        }
+        // Param names must be pairwise distinct, identifier-legal, and agree
+        // with `param_prelude_count`. They also override the accepted slot
+        // labels for the covered slots: the `param { ... }` line is the
+        // binding the emitted body must reference, so slot and param names
+        // may not disagree. A later slot reusing a param name would print a
+        // second declaration of an already-bound name — drop it instead.
+        if !self.params.is_empty() || self.param_prelude_count.is_some() {
+            let names = &self.params;
+            let distinct = names.iter().collect::<HashSet<_>>().len() == names.len();
+            let count_ok = self.param_prelude_count.is_some_and(|c| c as usize == names.len());
+            if count_ok && distinct && names.iter().all(|n| review_identifier(n)) {
+                safe.params = names.clone();
+                safe.param_prelude_count = self.param_prelude_count;
+                for (i, name) in names.iter().enumerate() {
+                    safe.slots.insert(i as u8, name.clone());
+                }
+                let collisions: Vec<u8> = safe
+                    .slots
+                    .iter()
+                    .filter_map(|(&slot, name)| {
+                        (slot >= names.len() as u8 && names.iter().any(|n| n == name))
+                            .then_some(slot)
+                    })
+                    .collect();
+                for slot in collisions {
+                    if let Some(name) = safe.slots.remove(&slot) {
+                        warnings.push(format!(
+                            "slot ${} label ignored: collides with parameter name {}",
+                            slot, name
+                        ));
+                    }
+                }
+            } else {
+                warnings.push(
+                    "parameter annotations ignored: invalid, duplicated, or count-mismatched names"
+                        .to_owned(),
+                );
+            }
+        }
+        (safe, labels, warnings)
+    }
     pub fn register_lib(&mut self, idx: u8, name: String, address: Option<Address>) -> Rerr {
         if self.libs.contains_key(&idx) {
             return errf!("lib index {} already in source map", idx);
@@ -161,121 +243,137 @@ impl SourceMap {
     }
 
     /// Serialize to the SDK boundary JSON format (hand-written builder).
+    ///
+    /// Empty sections are omitted entirely (`{}` when the map is empty):
+    /// a typical maincall map carries far more `lets:[]`/`vars:[]`/`params:[]`/
+    /// `consts:[]`/`param_prelude_count:null` padding than payload. This is
+    /// wire-compatible — `from_json` (the only machine consumer; the wallet
+    /// passes the object through opaquely) treats missing keys as absent.
     pub fn to_json(&self) -> Ret<String> {
-        let mut out = String::with_capacity(512);
-        out.push('{');
+        let mut sections: Vec<String> = Vec::with_capacity(8);
 
-        out.push_str("\"libs\":[");
-        let mut libs: Vec<(u8, &LibInfo)> = self
-            .libs
-            .iter()
-            .map(|(&idx, info)| (idx, info))
-            .collect();
-        libs.sort_by_key(|(idx, _)| *idx);
-        for (i, (idx, info)) in libs.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
+        if !self.libs.is_empty() {
+            let mut libs: Vec<(u8, &LibInfo)> = self
+                .libs
+                .iter()
+                .map(|(&idx, info)| (idx, info))
+                .collect();
+            libs.sort_by_key(|(idx, _)| *idx);
+            let mut buf = String::from("\"libs\":[");
+            for (i, (idx, info)) in libs.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                buf.push_str(&format!(
+                    "{{\"idx\":{},\"name\":{},\"address\":",
+                    idx,
+                    field::json_escape(&info.name)
+                ));
+                match &info.address {
+                    Some(addr) => buf.push_str(&field::json_escape(&addr.to_readable())),
+                    None => buf.push_str("null"),
+                }
+                buf.push('}');
             }
-            out.push_str(&format!(
-                "{{\"idx\":{},\"name\":{},\"address\":",
-                idx,
-                field::json_escape(&info.name)
-            ));
-            match &info.address {
-                Some(addr) => out.push_str(&field::json_escape(&addr.to_readable())),
-                None => out.push_str("null"),
-            }
-            out.push('}');
+            buf.push(']');
+            sections.push(buf);
         }
-        out.push_str("],");
 
-        out.push_str("\"funcs\":[");
-        let mut funcs: Vec<([u8; 4], &String)> =
-            self.funcs.iter().map(|(sig, name)| (*sig, name)).collect();
-        funcs.sort_by(|a, b| a.0.cmp(&b.0));
-        for (i, (sig, name)) in funcs.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
+        if !self.funcs.is_empty() {
+            let mut funcs: Vec<([u8; 4], &String)> =
+                self.funcs.iter().map(|(sig, name)| (*sig, name)).collect();
+            funcs.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut buf = String::from("\"funcs\":[");
+            for (i, (sig, name)) in funcs.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                buf.push_str(&format!(
+                    "{{\"sig\":\"{}\",\"name\":{}}}",
+                    hex::encode(sig),
+                    field::json_escape(name)
+                ));
             }
-            out.push_str(&format!(
-                "{{\"sig\":\"{}\",\"name\":{}}}",
-                hex::encode(sig),
-                field::json_escape(name)
-            ));
+            buf.push(']');
+            sections.push(buf);
         }
-        out.push_str("],");
 
         // Slots travel as an index-addressed array ('' = unnamed gap).
-        out.push_str("\"slots\":[");
-        let max_slot = self.slots.keys().max().copied().unwrap_or(0);
         if !self.slots.is_empty() {
+            let max_slot = self.slots.keys().max().copied().unwrap_or(0);
+            let mut buf = String::from("\"slots\":[");
             for i in 0..=max_slot {
                 if i > 0 {
-                    out.push(',');
+                    buf.push(',');
                 }
                 match self.slots.get(&i) {
-                    Some(name) => out.push_str(&field::json_escape(name)),
-                    None => out.push_str("\"\""),
+                    Some(name) => buf.push_str(&field::json_escape(name)),
+                    None => buf.push_str("\"\""),
                 }
             }
+            buf.push(']');
+            sections.push(buf);
         }
-        out.push_str("],");
 
         let mut lets: Vec<u8> = self.lets.iter().copied().collect();
         lets.sort_unstable();
+        if !lets.is_empty() {
+            let joined = lets
+                .iter()
+                .map(|slot| slot.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            sections.push(format!("\"lets\":[{}]", joined));
+        }
+
         let mut vars: Vec<u8> = self.vars.iter().copied().collect();
         vars.sort_unstable();
-        out.push_str("\"lets\":[");
-        for (i, slot) in lets.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            out.push_str(&slot.to_string());
-        }
-        out.push_str("],");
-
-        out.push_str("\"vars\":[");
-        for (i, slot) in vars.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            out.push_str(&slot.to_string());
-        }
-        out.push_str("],");
-
-        out.push_str("\"params\":[");
-        for (i, name) in self.params.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            out.push_str(&field::json_escape(name));
-        }
-        out.push_str("],");
-
-        match self.param_prelude_count {
-            Some(n) => out.push_str(&format!("\"param_prelude_count\":{},", n)),
-            None => out.push_str("\"param_prelude_count\":null,"),
+        if !vars.is_empty() {
+            let joined = vars
+                .iter()
+                .map(|slot| slot.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            sections.push(format!("\"vars\":[{}]", joined));
         }
 
-        out.push_str("\"consts\":[");
-        let mut consts: Vec<(&String, &String)> = self
-            .const_name_to_val
-            .iter()
-            .map(|(name, value)| (name, value))
-            .collect();
-        consts.sort_by(|a, b| a.0.cmp(b.0));
-        for (i, (name, value)) in consts.iter().enumerate() {
-            if i > 0 {
-                out.push(',');
-            }
-            out.push_str(&format!(
-                "{{\"name\":{},\"value\":{}}}",
-                field::json_escape(name),
-                field::json_escape(value)
-            ));
+        if !self.params.is_empty() {
+            let joined = self
+                .params
+                .iter()
+                .map(|name| field::json_escape(name))
+                .collect::<Vec<_>>()
+                .join(",");
+            sections.push(format!("\"params\":[{}]", joined));
         }
-        out.push_str("]}");
-        Ok(out)
+
+        if let Some(n) = self.param_prelude_count {
+            sections.push(format!("\"param_prelude_count\":{}", n));
+        }
+
+        if !self.const_name_to_val.is_empty() {
+            let mut consts: Vec<(&String, &String)> = self
+                .const_name_to_val
+                .iter()
+                .map(|(name, value)| (name, value))
+                .collect();
+            consts.sort_by(|a, b| a.0.cmp(b.0));
+            let mut buf = String::from("\"consts\":[");
+            for (i, (name, value)) in consts.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                buf.push_str(&format!(
+                    "{{\"name\":{},\"value\":{}}}",
+                    field::json_escape(name),
+                    field::json_escape(value)
+                ));
+            }
+            buf.push(']');
+            sections.push(buf);
+        }
+
+        Ok(format!("{{{}}}", sections.join(",")))
     }
 
     /// Parse the SDK boundary JSON format (hand-written `field::json_*` engine).
@@ -434,6 +532,49 @@ impl SourceMap {
     }
 }
 
+/// Shared validation for function and slot labels (used by both the review
+/// and the named-display channels): a function label must be a legal
+/// identifier whose own signature hashes back to the selector it labels, a
+/// slot label must be a legal identifier and distinct from every other
+/// accepted slot label (a duplicate would emit a second declaration of an
+/// already-bound name).
+fn collect_validated_funcs_slots(
+    map: &SourceMap,
+    safe: &mut SourceMap,
+    labels: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    for (sig, name) in &map.funcs {
+        if !review_identifier(name) {
+            warnings.push(format!("function label for {} ignored: invalid identifier", hex::encode(sig)));
+        } else if crate::rt::calc_func_sign(name) != *sig {
+            warnings.push(format!("function label for {} ignored: name does not hash to this selector", hex::encode(sig)));
+        } else {
+            safe.funcs.insert(*sig, name.clone());
+            labels.push(format!("selector 0x{} = {}", hex::encode(sig), name));
+        }
+    }
+    let mut seen_slot_names: HashSet<String> = HashSet::new();
+    for (slot, name) in &map.slots {
+        if !review_identifier(name) {
+            warnings.push(format!("slot ${} label ignored: invalid identifier", slot));
+        } else if !seen_slot_names.insert(name.clone()) {
+            warnings.push(format!("slot ${} label ignored: duplicates an earlier slot name", slot));
+        } else {
+            safe.slots.insert(*slot, name.clone());
+            labels.push(format!("slot ${} = {}", slot, name));
+        }
+    }
+}
+
+fn review_identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else { return false; };
+    value.len() <= 64
+        && (first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
 fn json_field_err<'a>(field: &'a str) -> impl Fn(sys::Error) -> sys::Error + 'a {
     move |_| sys::Error::normal(format!("source map {field} invalid"))
 }
@@ -520,7 +661,96 @@ mod sourcemap_tests {
     fn empty_map_roundtrips() {
         let map = SourceMap::default();
         let json = map.to_json().unwrap();
+        assert_eq!(json, "{}", "empty map must serialize without padding");
         let parsed = SourceMap::from_json(&json).unwrap();
         assert_eq!(parsed.to_json().unwrap(), json);
+    }
+
+    #[test]
+    fn to_json_omits_empty_sections() {
+        // Typical maincall shape: one lib, one func, one slot, no
+        // lets/vars/params/prelude/consts — the omitted padding used to
+        // dominate the payload.
+        let mut map = SourceMap::default();
+        map.register_lib(1, "AMM".to_string(), None).unwrap();
+        map.register_func([0xaa, 0xbb, 0xcc, 0xdd], "swap".to_string())
+            .unwrap();
+        map.register_slot(0, "out".to_string()).unwrap();
+        let json = map.to_json().unwrap();
+        // register_slot defaults the slot to `let`, so lets travels with it.
+        assert_eq!(
+            json,
+            "{\"libs\":[{\"idx\":1,\"name\":\"AMM\",\"address\":null}],\
+             \"funcs\":[{\"sig\":\"aabbccdd\",\"name\":\"swap\"}],\
+             \"slots\":[\"out\"],\"lets\":[0]}"
+        );
+        for absent in ["vars", "params", "param_prelude_count", "consts"] {
+            assert!(!json.contains(absent), "{absent} must be omitted: {json}");
+        }
+        // Roundtrip through the compact form loses nothing.
+        let parsed = SourceMap::from_json(&json).unwrap();
+        assert_eq!(parsed.to_json().unwrap(), json);
+        assert_eq!(parsed.lib(1).unwrap().name, "AMM");
+        assert_eq!(parsed.slot(0).unwrap(), "out");
+    }
+
+    #[test]
+    fn from_json_accepts_legacy_full_shape() {
+        // Pre-optimization producers always emitted every section, including
+        // the empty ones; those payloads must keep parsing identically.
+        let legacy = r#"{"libs":[],"funcs":[],"slots":[],"lets":[],"vars":[],"params":[],"param_prelude_count":null,"consts":[]}"#;
+        let parsed = SourceMap::from_json(legacy).unwrap();
+        assert_eq!(parsed.to_json().unwrap(), "{}");
+
+        let legacy_partial = r#"{"libs":[{"idx":1,"name":"AMM","address":null}],"funcs":[],"slots":["out"],"lets":[],"vars":[0],"params":[],"param_prelude_count":null,"consts":[]}"#;
+        let parsed = SourceMap::from_json(legacy_partial).unwrap();
+        assert_eq!(parsed.slot(0).unwrap(), "out");
+        assert!(parsed.slot_is_var(0));
+        assert_eq!(
+            parsed.to_json().unwrap(),
+            "{\"libs\":[{\"idx\":1,\"name\":\"AMM\",\"address\":null}],\"slots\":[\"out\"],\"vars\":[0]}"
+        );
+    }
+
+    #[test]
+    fn from_json_rejects_hostile_payloads() {
+        // Unknown field.
+        assert!(SourceMap::from_json(r#"{"evil":1}"#).is_err());
+        // Truncated / garbage.
+        assert!(SourceMap::from_json("{").is_err());
+        assert!(SourceMap::from_json("").is_err());
+        assert!(SourceMap::from_json("null").is_err());
+        // Deep nesting is rejected by the shared JSON engine depth cap, not by
+        // recursion.
+        let deep = format!("{}{}", "[[".repeat(200), "]]".repeat(200));
+        assert!(SourceMap::from_json(&format!("{{\"slots\":{}}}", deep)).is_err());
+        // Duplicate lib index inside one array is a hard error (no silent override).
+        assert!(SourceMap::from_json(
+            r#"{"libs":[{"idx":1,"name":"a","address":null},{"idx":1,"name":"b","address":null}]}"#
+        )
+        .is_err());
+        // Bad selector width / non-hex.
+        assert!(SourceMap::from_json(r#"{"funcs":[{"sig":"zz","name":"f"}]}"#).is_err());
+        assert!(SourceMap::from_json(r#"{"funcs":[{"sig":"aabbccddee","name":"f"}]}"#).is_err());
+        // Slot index beyond u8.
+        assert!(SourceMap::from_json(
+            &format!("{{\"slots\":[{}]}}", vec!["\"x\""; 300].join(","))
+        )
+        .is_err());
+        // lets item not a number / out of range.
+        assert!(SourceMap::from_json(r#"{"lets":[300]}"#).is_err());
+        assert!(SourceMap::from_json(r#"{"lets":["a"]}"#).is_err());
+        // param_prelude_count out of range.
+        assert!(SourceMap::from_json(r#"{"param_prelude_count":256}"#).is_err());
+    }
+
+    #[test]
+    fn from_json_uppercase_selector_sig_normalizes() {
+        // Wire consumers may send uppercase hex sigs; hex::decode accepts both
+        // and to_json always re-emits lowercase, so the canonical form is stable.
+        let parsed = SourceMap::from_json(r#"{"funcs":[{"sig":"AABBCCDD","name":"f"}]}"#).unwrap();
+        let json = parsed.to_json().unwrap();
+        assert!(json.contains("\"sig\":\"aabbccdd\""), "{json}");
+        assert_eq!(parsed.func(&[0xaa, 0xbb, 0xcc, 0xdd]).unwrap(), "f");
     }
 }

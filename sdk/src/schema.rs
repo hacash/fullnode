@@ -5,14 +5,16 @@
 pub const SCHEMA_ERROR: &str = "hacash.sdk/error@1";
 pub const SCHEMA_SDK_VERSION: &str = "hacash.sdk/sdk-version@1";
 pub const SCHEMA_CODEC_PROFILE: &str = "hacash.sdk/codec-profile@2";
+/// v6: adds decoded `gas_budget`, fee-purity-based `gas_max_charge` estimate,
+/// the estimate height, billing size, and fee-purity floor used.
 /// v4: adds `guard_violations` / `schedule_violations` / signer valid+invalid
 /// and `signature_errors`; `protocol_valid` is the conjunction of empty fact buckets (never a gate).
 /// v5: adds `fee_purity_unit` (232 = 10⁻¹⁶ HAC per billing byte); the purity and
 /// floor figures are re-priced in u232 (values travel as decimal strings per the
 /// SDK boundary convention).
-pub const SCHEMA_REVIEW: &str = "hacash.sdk/review@5";
+pub const SCHEMA_REVIEW: &str = "hacash.sdk/review@7";
 /// v2: adds `description` / `json` / `code` facets (DescribeOptions).
-pub const SCHEMA_ACTION_DESC: &str = "hacash.sdk/action-desc@2";
+pub const SCHEMA_ACTION_DESC: &str = "hacash.sdk/action-desc@3";
 pub const SCHEMA_TRANSFER_DESC: &str = "hacash.sdk/transfer-desc@1";
 pub const SCHEMA_TRANSACTION_SPEC: &str = "hacash.sdk/transaction-spec@2";
 pub const SCHEMA_TRANSACTION_JSON: &str = "hacash.sdk/transaction-json@1";
@@ -32,7 +34,7 @@ pub const SCHEMA_CHAIN_PARAMS: &str = "hacash.sdk/params@2";
 pub const SCHEMA_FEE_ESTIMATE: &str = "hacash.sdk/fee-estimate@2";
 pub const SCHEMA_DIAMOND_LOOKUP: &str = "hacash.sdk/diamond-lookup@1";
 pub const SCHEMA_VM_CALL: &str = "hacash.sdk/vm-call@1";
-pub const SCHEMA_VM_CODE: &str = "hacash.sdk/vm-code@1";
+pub const SCHEMA_VM_CODE: &str = "hacash.sdk/vm-code@2";
 
 /// Hash domain prefixes (frozen at ABI major 2). All SDK bindings are
 /// sha3-256 over an explicit domain prefix, never over undecorated JSON.

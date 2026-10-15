@@ -12,17 +12,17 @@ include! {"decompilation_helper.rs"}
 include! {"ir_payload.rs"}
 include! {"ir_literal.rs"}
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 pub mod syntax;
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 pub use syntax::Syntax;
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 include! {"const_literal.rs"}
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 include! {"tokenizer.rs"}
 include! {"formater.rs"}
-#[cfg(all(test, feature = "execute"))]
+#[cfg(all(test, feature = "syntax"))]
 include! {"test.rs"}
 
 pub mod asm;
@@ -35,7 +35,7 @@ pub use asm::{
 #[cfg(test)]
 mod asm_accept;
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 fn try_consume_display_lib_prelude(tokens: &[Token], start: usize) -> Option<usize> {
     let mut idx = start;
     if !matches!(tokens.get(idx), Some(Token::Keyword(KwTy::Lib))) {
@@ -70,7 +70,7 @@ fn try_consume_display_lib_prelude(tokens: &[Token], start: usize) -> Option<usi
     Some(idx)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 fn try_consume_display_const_prelude(tokens: &[Token], start: usize) -> Option<usize> {
     let mut idx = start;
     if !matches!(tokens.get(idx), Some(Token::Keyword(KwTy::Const))) {
@@ -94,7 +94,7 @@ fn try_consume_display_const_prelude(tokens: &[Token], start: usize) -> Option<u
     Some(idx + 1)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 fn skip_display_prelude(tokens: &[Token]) -> usize {
     let mut idx = 0usize;
     loop {
@@ -111,7 +111,7 @@ fn skip_display_prelude(tokens: &[Token]) -> usize {
     idx
 }
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 fn strip_display_root_block(tokens: &mut Vec<Token>) {
     let body_start = skip_display_prelude(tokens);
     if tokens.len() < body_start + 2 {
@@ -150,7 +150,7 @@ fn strip_display_root_block(tokens: &mut Vec<Token>) {
     *tokens = stripped;
 }
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 pub fn lang_to_irnode_with_sourcemap(langscript: &str) -> Ret<(IRNodeArray, SourceMap)> {
     let tkr = Tokenizer::new(langscript.as_bytes());
     let mut tks = tkr.parse()?;
@@ -161,19 +161,19 @@ pub fn lang_to_irnode_with_sourcemap(langscript: &str) -> Ret<(IRNodeArray, Sour
     syx.parse()
 }
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 pub fn lang_to_irnode(langscript: &str) -> Ret<IRNodeArray> {
     let (block, _) = lang_to_irnode_with_sourcemap(langscript)?;
     Ok(block)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 pub fn lang_to_ircode(langscript: &str) -> Ret<Vec<u8>> {
     let ir = lang_to_irnode(langscript)?;
     drop_irblock_wrap(ir.serialize())
 }
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 pub fn lang_to_ircode_with_sourcemap(langscript: &str) -> Ret<(Vec<u8>, SourceMap)> {
     let (ir, smap) = lang_to_irnode_with_sourcemap(langscript)?;
     Ok((drop_irblock_wrap(ir.serialize())?, smap))
@@ -203,6 +203,11 @@ pub fn format_ircode_to_lang(ircode: &[u8], map: Option<&SourceMap>) -> Ret<Stri
     let mut opt = PrintOption::new("  ", 0);
     if let Some(map) = map {
         opt.map = Some(map);
+        // Named display mode: resolve lib aliases inline (`AMM.swap` instead of
+        // `ext(1).swap`) and emit the `lib Name = idx: address` prelude so the
+        // alias→index binding sits auditable right above the code.
+        opt.resolve_lib_alias = true;
+        opt.emit_lib_prelude = true;
     }
     opt.trim_root_block = true;
     opt.trim_head_alloc = true;
@@ -214,6 +219,19 @@ pub fn format_ircode_to_lang(ircode: &[u8], map: Option<&SourceMap>) -> Ret<Stri
     opt.flatten_syscall_cat = true;
     opt.recover_literals = true;
     opt.simplify_numeric_as_suffix = true;
+    Ok(Formater::new(&opt).print(&block))
+}
+
+/// Security-oriented FitSH view for transaction review. It preserves the
+/// serialized operation structure and numeric literals; callers may provide
+/// labels separately, but they are intentionally not allowed to rewrite text.
+pub fn format_ircode_to_review(ircode: &[u8]) -> Ret<String> {
+    let mut seek = 0;
+    let block = parse_ir_block(ircode, &mut seek)?;
+    if seek != ircode.len() {
+        return errf!("ir_node has trailing bytes after parsed block");
+    }
+    let opt = PrintOption::new("  ", 0);
     Ok(Formater::new(&opt).print(&block))
 }
 
@@ -229,7 +247,7 @@ pub fn ircode_to_lang(ircode: &Vec<u8>) -> Ret<String> {
     irnode_to_lang(block)
 }
 
-#[cfg(feature = "execute")]
+#[cfg(feature = "syntax")]
 pub fn lang_to_bytecode(langscript: &str) -> Ret<Vec<u8>> {
     let ir = lang_to_irnode(langscript)?;
     let codes = ir.codegen()?;

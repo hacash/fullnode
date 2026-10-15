@@ -110,3 +110,55 @@ impl Value {
         Ok(Value::bytes(v).valid(cap)?)
     }
 }
+
+
+fn bit_shift_overflow(op: &str, x: &Value, y: &Value) -> ItrErr {
+    ItrErr::new(
+        Arithmetic,
+        &format!("bit {} shift overflow between {:?} and {:?}", op, x, y),
+    )
+}
+
+/// Checked left shift on matched-width uint values. Lives in the codec-side
+/// `value` module (not `interpreter`) because the fitsh front-end folds
+/// constant shifts at parse time — the `syntax` feature must not depend on
+/// the execution engine.
+pub(crate) fn bit_shl(x: &Value, y: &Value) -> VmrtRes<Value> {
+    let res = match (x, y) {
+        (U8(l), U8(r)) => <u8>::checked_shl(*l, *r as u32).map(Value::U8),
+        (U16(l), U16(r)) => <u16>::checked_shl(*l, *r as u32).map(Value::U16),
+        (U32(l), U32(r)) => <u32>::checked_shl(*l, *r as u32).map(Value::U32),
+        (U64(l), U64(r)) => {
+            let s = u32::try_from(*r).map_err(|_| bit_shift_overflow("left", x, y))?;
+            <u64>::checked_shl(*l, s).map(Value::U64)
+        }
+        (U128(l), U128(r)) => {
+            if *r > u32::MAX as u128 {
+                return Err(bit_shift_overflow("left", x, y));
+            }
+            <u128>::checked_shl(*l, *r as u32).map(Value::U128)
+        }
+        (_, _) => return itr_err_fmt!(Arithmetic, "cannot do bit ops between {:?} and {:?}", x, y),
+    };
+    res.ok_or_else(|| bit_shift_overflow("left", x, y))
+}
+
+pub(crate) fn bit_shr(x: &Value, y: &Value) -> VmrtRes<Value> {
+    let res = match (x, y) {
+        (U8(l), U8(r)) => <u8>::checked_shr(*l, *r as u32).map(Value::U8),
+        (U16(l), U16(r)) => <u16>::checked_shr(*l, *r as u32).map(Value::U16),
+        (U32(l), U32(r)) => <u32>::checked_shr(*l, *r as u32).map(Value::U32),
+        (U64(l), U64(r)) => {
+            let s = u32::try_from(*r).map_err(|_| bit_shift_overflow("right", x, y))?;
+            <u64>::checked_shr(*l, s).map(Value::U64)
+        }
+        (U128(l), U128(r)) => {
+            if *r > u32::MAX as u128 {
+                return Err(bit_shift_overflow("right", x, y));
+            }
+            <u128>::checked_shr(*l, *r as u32).map(Value::U128)
+        }
+        (_, _) => return itr_err_fmt!(Arithmetic, "cannot do bit ops between {:?} and {:?}", x, y),
+    };
+    res.ok_or_else(|| bit_shift_overflow("right", x, y))
+}

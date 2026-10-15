@@ -212,7 +212,7 @@ pub struct ActionDesc {
     pub blob: bool,
 }
 
-/// VM code metadata of a code-carrying action (schema `hacash.sdk/action-desc@2`
+/// VM code metadata of a code-carrying action (schema `hacash.sdk/action-desc@3`
 /// `code` field). `codeconf` low bits are the code type (0 = bytecode,
 /// 1 = ir_node); `codes_preview` is the first up-to-64 bytes hex (identity
 /// without echoing a large payload).
@@ -274,7 +274,7 @@ pub fn describe_action(
 ) -> ActionDesc {
     let kind = action.kind();
     let mut notes = Vec::new();
-    let children = collect_children(action, depth, options, &mut notes);
+    let children = collect_children(action, path, depth, options, &mut notes);
     let name = crate::selection::action_schema(kind).map(|schema| schema.name);
     let (auditability, grade_note) = classify_auditability(name.unwrap_or(""));
     if let Some(note) = grade_note {
@@ -286,22 +286,33 @@ pub fn describe_action(
         to: addr_or_ptr_desc(intent.to.as_ref()),
         payload: payload_desc(&intent.asset),
     });
-    let description = if options.with_description {
-        Some(action.description())
-    } else {
-        None
-    };
-    let json = if options.with_json {
-        Some(action.to_json())
-    } else {
-        None
-    };
     let code = if options.with_code {
         crate::selection::action_schema(kind)
             .map(|schema| schema.has_code)
             .unwrap_or(false)
             .then(|| action_code_desc(action))
             .flatten()
+    } else {
+        None
+    };
+    let description = if options.with_description {
+        let text = match (name, code.as_ref()) {
+            (Some("contract_main_call"), Some(code)) => format!(
+                "Run main code ({}, {} bytes)",
+                code.code_type_name, code.codes_len
+            ),
+            (Some("p2sh_script_prove"), Some(code)) => format!(
+                "Prove P2SH script ({}, {} bytes)",
+                code.code_type_name, code.codes_len
+            ),
+            _ => action.description(),
+        };
+        Some(text)
+    } else {
+        None
+    };
+    let json = if options.with_json {
+        Some(action.to_json())
     } else {
         None
     };
@@ -344,6 +355,7 @@ pub fn describe_single(
 /// schema-declared `branching` action without a walker is an audit note (fail-closed), never a decode failure.
 fn collect_children(
     action: &dyn Action,
+    parent_path: &str,
     depth: usize,
     options: &DescribeOptions,
     notes: &mut Vec<String>,
@@ -368,11 +380,12 @@ fn collect_children(
             let mut list = Vec::new();
             for (branch_idx, branch) in nested.branches.iter().enumerate() {
                 for (idx, child) in branch.iter().enumerate() {
-                    let path = if multi {
+                    let local_path = if multi {
                         format!("{branch_idx}/{idx}")
                     } else {
                         idx.to_string()
                     };
+                    let path = format!("{parent_path}/{local_path}");
                     list.push(describe_action(*child, idx, &path, next_depth, options));
                 }
             }
@@ -498,6 +511,17 @@ mod tests {
         assert!(classify_auditability("brand_new_kind").0 == Auditability::Opaque);
     }
 
+    #[test]
+    fn maincall_description_names_code_type_and_length() {
+        let action = vm::action::ContractMainCall::from_bytecode(vec![0x01, 0x02, 0x03])
+            .expect("maincall code");
+        let desc = describe_action(&action, 0, "0", 0, &DescribeOptions::default());
+        assert_eq!(
+            desc.description.as_deref(),
+            Some("Run main code (bytecode, 3 bytes)")
+        );
+    }
+
     /// The AST control-flow walkers must stay complete over the registered branching actions
     /// (`ast_select`/`ast_if`); a missing walker is a fail-closed note, not a silent child drop.
     #[test]
@@ -512,7 +536,7 @@ mod tests {
         let desc = describe_action(select.as_ref(), 0, "0", 0, &DescribeOptions::default());
         let children = desc.children.expect("ast_select collects children");
         assert_eq!(children.len(), 1);
-        assert_eq!(children[0].path, "0");
+        assert_eq!(children[0].path, "0/0");
         assert_eq!(children[0].name.as_deref(), Some("transfer_hac_to"));
 
         let ast_if = AstIf::create_by(
@@ -524,8 +548,8 @@ mod tests {
         let desc = describe_action(ast_if.as_ref(), 0, "0", 0, &DescribeOptions::default());
         let children = desc.children.expect("ast_if collects children");
         assert_eq!(children.len(), 3);
-        assert_eq!(children[0].path, "0/0");
-        assert_eq!(children[2].path, "2/0");
+        assert_eq!(children[0].path, "0/0/0");
+        assert_eq!(children[2].path, "0/2/0");
     }
 
     /// `ActScope::AST` is shared by non-control-flow actions; the fail-closed
@@ -560,13 +584,11 @@ fn maincall_body() -> String {
         timestamp: Some(1_755_223_764),
         gas_max: None,
         addrlist: None,
-        actions: vec![
-            crate::build::ActionSpec::new(format!(
-                r#"{{"kind":44,"marks":"0x000000","codeconf":0,"codes":"0x{}"}}"#,
-                hex::encode(&codes)
-            ))
-            .expect("test action spec"),
-        ],
+        actions: vec![crate::build::ActionSpec::new(format!(
+            r#"{{"kind":44,"marks":"0x000000","codeconf":0,"codes":"0x{}"}}"#,
+            hex::encode(&codes)
+        ))
+        .expect("test action spec")],
     })
     .unwrap();
     let decoded =
@@ -582,7 +604,7 @@ fn describe_single_carries_description_json_and_code() {
     assert!(!desc.scope.is_empty());
     // description: schema-declared one-liner.
     let text = desc.description.as_deref().unwrap();
-    assert!(text.contains("Run main codes"), "description: {text}");
+    assert!(text.contains("Run main code"), "description: {text}");
     // json: canonical field-level view.
     let json = desc.json.as_deref().unwrap();
     assert!(

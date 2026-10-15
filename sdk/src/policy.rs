@@ -159,6 +159,11 @@ mod tests {
             main: String::new(),
             fee: String::new(),
             gas_max: None,
+            gas_budget: None,
+            gas_max_charge: None,
+            gas_estimate_height: None,
+            fee_purity_floor: None,
+            billing_size: None,
             tx_hash: String::new(),
             hash_with_fee: String::new(),
             unsigned_body_hash: String::new(),
@@ -187,6 +192,7 @@ mod tests {
             fee_purity: None,
             fee_purity_ok: None,
             actions: vec![],
+            address_table: vec![],
             asset_serials: vec![],
         }
     }

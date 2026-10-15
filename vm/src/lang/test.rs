@@ -561,31 +561,23 @@ mod token_t {
     #[test]
     fn test_codecall_with_argument_emits_argument_push_before_opcode() {
         use super::lang_to_bytecode;
-        use crate::rt::{verify_bytecodes, Bytecode};
+        use crate::rt::Bytecode;
 
         let codes = lang_to_bytecode("codecall 1.0x01020304(7)").expect("compile failed");
-        let marks = verify_bytecodes(&codes).expect("verify failed");
-        let mut codecall_idx = None;
-        for (idx, mark) in marks.iter().enumerate() {
-            if *mark == 0 {
-                continue;
-            }
-            if codes[idx] == Bytecode::CODE_CALL as u8 {
-                codecall_idx = Some(idx);
-                break;
-            }
-        }
-        let idx = codecall_idx.expect("must contain CODECALL opcode");
-        assert!(idx > 0, "CODECALL must not be the first instruction");
-        let prev_inst_idx = marks
+        let insts = crate::rt::decode_bytecode(&codes).expect("decode failed");
+        let idx = insts
             .iter()
-            .enumerate()
-            .take(idx)
-            .filter_map(|(i, m)| (*m != 0).then_some(i))
+            .find(|inst| inst.op == Bytecode::CODE_CALL)
+            .expect("must contain CODECALL opcode")
+            .offset;
+        assert!(idx > 0, "CODECALL must not be the first instruction");
+        let prev = insts
+            .iter()
+            .filter(|inst| inst.offset < idx)
             .last()
             .expect("CODECALL must have a previous instruction");
         assert_ne!(
-            codes[prev_inst_idx],
+            codes[prev.offset],
             Bytecode::PNIL as u8,
             "codecall(expr) must not fallback to implicit nil argument"
         );
@@ -797,19 +789,17 @@ mod token_t {
     }
 
     fn collect_user_call_opcodes(codes: &[u8]) -> Vec<u8> {
-        use crate::rt::{verify_bytecodes, Bytecode};
+        use crate::rt::Bytecode;
 
-        verify_bytecodes(codes)
+        // Instruction boundaries via the codec-side decoder; the point here is
+        // the opcode stream, not the execute-side verifier verdict.
+        crate::rt::decode_bytecode(codes)
             .unwrap()
             .into_iter()
-            .enumerate()
-            .filter_map(|(idx, mark)| {
-                if mark == 0 {
-                    return None;
-                }
-                let op = codes[idx];
-                let is_call = matches!(
-                    op,
+            .map(|inst| inst.op as u8)
+            .filter(|op| {
+                matches!(
+                    *op,
                     x if x == Bytecode::CODE_CALL as u8
                         || x == Bytecode::CALL as u8
                         || x == Bytecode::CALLEXT as u8
@@ -821,8 +811,7 @@ mod token_t {
                         || x == Bytecode::CALLSUPER as u8
                         || x == Bytecode::CALLSELFVIEW as u8
                         || x == Bytecode::CALLSELFPURE as u8
-                );
-                is_call.then_some(op)
+                )
             })
             .collect()
     }
@@ -1523,6 +1512,7 @@ mod token_t {
                 opt.map = Some(&smap);
             }
             opt.emit_lib_prelude = false;
+            opt.resolve_lib_alias = false;
             opt.trim_root_block = false;
             opt.trim_head_alloc = false;
             opt.trim_param_unpack = false;
@@ -1740,17 +1730,22 @@ mod token_t {
     }
 
     #[test]
-    fn first_put_with_sourcemap_keeps_name_and_explicit_slot() {
+    fn first_put_with_sourcemap_prints_name_only() {
         use super::format_ircode_to_lang;
+        use super::lang_to_ircode;
         use super::lang_to_ircode_with_sourcemap;
 
         let src = "var a = 1\nreturn a";
         let (ir, smap) = lang_to_ircode_with_sourcemap(src).expect(src);
         let text = format_ircode_to_lang(&ir, Some(&smap)).expect(src);
+        // Named display shows the source name once (`var a = 1`), not
+        // `var a $0 = 1` — the slot index belongs to the review view.
         assert!(
-            text.contains("a $0 ="),
-            "named first-bind must keep the explicit slot, got:\n{text}"
+            text.contains("let a =") && !text.contains("a $0"),
+            "named first-bind must print the name without the slot, got:\n{text}"
         );
+        let reparsed = lang_to_ircode(&text).expect(&text);
+        assert_eq!(ir, reparsed, "decompiled:\n{text}");
     }
 
     #[test]
@@ -1933,4 +1928,687 @@ mod ternary_t {
         lang_to_irnode_ok("return true ? choose(false, 1, 2) : 3");
         lang_to_irnode_ok("return choose(true, 1, false ? 2 : 3)");
     }
+}
+
+/// T1/T5 codec matrix: canonical-form roundtrips for every statement class
+/// (§4 of the task doc), golden snapshots for both display channels, the
+/// named-channel degradation matrix, and hostile-input safety.
+#[cfg(test)]
+mod codec_matrix_t {
+    use super::format_ircode_to_lang;
+    use super::format_ircode_to_review;
+    use super::lang_to_ircode;
+    use super::lang_to_ircode_with_sourcemap;
+    use super::SourceMap;
+
+    /// One statement-class case: source, and the sourcemap flavor the named
+    /// channel should roundtrip through.
+    struct Case {
+        src: &'static str,
+    }
+
+    fn cases() -> Vec<Case> {
+        vec![
+            Case { src: "var a = 1\nlet b = a\na = b\nreturn a" },
+            Case { src: "var l = [1, 2]\nvar x = l[0]\nreturn x" },
+            Case { src: "memory_put(1, 2)\nmemory_once(3, 4)\nend" },
+            Case { src: "var m = map {\"k\": 1}\nreturn m[\"k\"]" },
+            Case { src: "return tuple(1, 2)" },
+            Case {
+                src: "var a = 0\nif true { a = 1 } else { a = 2 }\nvar b = if a > 0 { 1 } else { 2 }\nreturn b",
+            },
+            Case {
+                src: "var i = 0\nwhile i < 10 {\n  i = i + 1\n  if i == 5 { break }\n}\nreturn i",
+            },
+            Case { src: "var h = keccak256(0x1234)\nreturn h" },
+            Case { src: "log(1, 2)\nlog(1, 2, 3)\nend" },
+            Case {
+                src: "lib Pool = 1\nvar a = Pool.swap(1u64, 2u64)\nvar b = Pool:peek(0x)\ncalluseview Pool::watch(0x)\nvar c = Pool::pure_calc(1)\ncodecall Pool.probe\nend",
+            },
+            Case {
+                src: "this.tick()\nself.refresh()\nsuper.derive()\nvar d = self:look()\nvar e = self::compute(1)\ncall edit upper.bump(1)\nend",
+            },
+            Case {
+                // B2: statement-position self:view/pure now use the short
+                // receiver forms (previously always generic even in stmt
+                // position); expression position stays generic.
+                src: "self:audit()\nself::compute(1)\nvar r = self:probe()\nend",
+            },
+            Case {
+                src: "var a = 1u8\nvar b = 2u16\nvar c = 3u32\nvar d = 4u64\nvar e = 5u128\nreturn d",
+            },
+            Case { src: "var a = 0xdeadbeef as bytes\nreturn a" },
+            Case {
+                src: "var addr = 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9\nreturn addr",
+            },
+            Case { src: "param { amt }\nreturn amt" },
+            Case { src: "const MAX = 100\nreturn MAX" },
+            Case { src: "return !true is not nil" },
+            Case { src: "var t = true ? 1 : 2\nreturn t" },
+            Case {
+                src: "var s = \"hello\"\nvar n = s + \" world\"\nrequire 1, true\nassert n != \"\"\nend",
+            },
+            Case { src: "var big = 123456789012345678901234567890u128\nreturn big" },
+            // Nested NOT: prints `! !x` — a fused `!!x` is one unknown symbol
+            // token to the lexer and fails to reparse.
+            Case { src: "assert ! !(1 == 2)\nend" },
+            Case { src: "require 1, ! !true\nend" },
+            // Multi-param maincall: the ≥2-param prelude (ALLOC(n)+UNPACK)
+            // exercises the keep-alloc/no-rewrite degradation without a map.
+            Case { src: "param { a, b }\nrequire a > b, 1\nend" },
+            Case { src: "param { a, b }\na = a + b\nrequire a > 0, 1\nend" },
+            Case {
+                src: "param { a, b, c }\nvar x = a + b + c\nrequire x > a, 1\nend",
+            },
+        ]
+    }
+
+    /// fitsh → IR → fitsh(named, no map) → IR → fitsh(named) → IR …
+    /// Serialized ircode must be byte-identical from round 1 through round 3.
+    #[test]
+    fn named_no_map_multi_round_roundtrip_matrix() {
+        for Case { src } in cases() {
+            let ir0 = lang_to_ircode(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+            let mut ir = ir0.clone();
+            for round in 1..=3 {
+                let text = format_ircode_to_lang(&ir, None)
+                    .unwrap_or_else(|e| panic!("round {round} {src}: {e}"));
+                let next = lang_to_ircode(&text)
+                    .unwrap_or_else(|e| panic!("round {round} {src}\n---- text ----\n{text}\n{e}"));
+                assert_eq!(ir, next, "round {round} src={src}\ntext={text}");
+                ir = next;
+            }
+            assert_eq!(ir, ir0, "final must equal round 1, src={src}");
+        }
+    }
+
+    /// fitsh → (IR, sourcemap) → fitsh(named, with map) → IR …
+    #[test]
+    fn named_with_sourcemap_multi_round_roundtrip_matrix() {
+        for Case { src } in cases() {
+            let (ir0, smap) =
+                lang_to_ircode_with_sourcemap(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+            let mut ir = ir0.clone();
+            for round in 1..=3 {
+                let text = format_ircode_to_lang(&ir, Some(&smap))
+                    .unwrap_or_else(|e| panic!("round {round} {src}: {e}"));
+                let next = lang_to_ircode(&text)
+                    .unwrap_or_else(|e| panic!("round {round} {src}\n---- text ----\n{text}\n{e}"));
+                assert_eq!(ir, next, "round {round} src={src}\ntext={text}");
+                ir = next;
+            }
+            assert_eq!(ir, ir0, "final must equal round 1, src={src}");
+        }
+    }
+
+    /// review 通道:零修饰文本也必须可重编译且产物一致(多轮)。
+    #[test]
+    fn review_multi_round_roundtrip_matrix() {
+        for Case { src } in cases() {
+            let ir0 = lang_to_ircode(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+            let mut ir = ir0.clone();
+            for round in 1..=3 {
+                let text = format_ircode_to_review(&ir)
+                    .unwrap_or_else(|e| panic!("round {round} {src}: {e}"));
+                let next = lang_to_ircode(&text)
+                    .unwrap_or_else(|e| panic!("round {round} {src}\n---- review ----\n{text}\n{e}"));
+                assert_eq!(ir, next, "round {round} src={src}\nreview={text}");
+                ir = next;
+            }
+            assert_eq!(ir, ir0, "final must equal round 1, src={src}");
+        }
+    }
+
+    /// Per-case ircode sha256 + length (run with --nocapture; feeds the
+    /// canonical-form table in the deliverable doc).
+    #[test]
+    fn dump_ircode_hashes_for_form_table() {
+        for Case { src } in cases() {
+            let ir = lang_to_ircode(src).expect(src);
+            let h = sys::calculate_hash(&ir);
+            println!("CASE {:?} len={} sha256={}", src, ir.len(), hex::encode(h));
+        }
+    }
+
+    /// Dump both channels for every case (run with --nocapture to regenerate
+    /// goldens; frozen snapshots live in `golden_*` tests below).
+    #[test]
+    fn dump_channels_for_goldens() {
+        for Case { src } in cases() {
+            let (ir, smap) = lang_to_ircode_with_sourcemap(src).expect(src);
+            let named = format_ircode_to_lang(&ir, Some(&smap)).expect(src);
+            let review = format_ircode_to_review(&ir).expect(src);
+            println!("==== SRC ====\n{src}\n---- NAMED ----\n{named}\n---- REVIEW ----\n{review}\n");
+        }
+    }
+
+    /// Frozen canonical-form snapshots (T1/T5): named and review texts for
+    /// every statement class. Any change here is a user-visible output change
+    /// and must be justified in the commit message (golden + reason).
+    #[test]
+    fn golden_canonical_texts_per_statement_class() {
+        let goldens: Vec<(&str, &str, &str)> = vec![
+            (
+                r##"var a = 1
+let b = a
+a = b
+return a"##,
+                r##"var a = 1
+let b = a
+a = b
+return a"##,
+                r##"{
+  local_alloc(2)
+  var $0 = 1
+  var $1 = $0
+  $0 = $1
+  return $0
+}"##,
+            ),
+            (
+                r##"var l = [1, 2]
+var x = l[0]
+return x"##,
+                r##"let l = [1, 2]
+let x = l[0]
+return x"##,
+                r##"{
+  local_alloc(2)
+  var $0 = list { 1, 2 }
+  var $1 = $0[0]
+  return $1
+}"##,
+            ),
+            (
+                r##"memory_put(1, 2)
+memory_once(3, 4)
+end"##,
+                r##"memory_put(1, 2)
+memory_once(3, 4)
+end"##,
+                r##"{
+  memory_put(1, 2)
+  memory_once(3, 4)
+  end
+}"##,
+            ),
+            (
+                r##"var m = map {"k": 1}
+return m["k"]"##,
+                r##"let m = map {"k": 1}
+return m["k"]"##,
+                r##"{
+  local_alloc(1)
+  var $0 = map {0x6b: 1}
+  return $0[0x6b]
+}"##,
+            ),
+            (
+                r##"return tuple(1, 2)"##,
+                r##"return tuple(1, 2)"##,
+                r##"{
+  return tuple(1, 2)
+}"##,
+            ),
+            (
+                r##"var a = 0
+if true { a = 1 } else { a = 2 }
+var b = if a > 0 { 1 } else { 2 }
+return b"##,
+                r##"var a = 0
+if true {
+  a = 1
+} else {
+  a = 2
+}
+let b = if a > 0 { 1 } else { 2 }
+return b"##,
+                r##"{
+  local_alloc(2)
+  var $0 = 0
+  if true {
+    $0 = 1
+  } else {
+    $0 = 2
+  }
+  var $1 = if $0 > 0 { 1 } else { 2 }
+  return $1
+}"##,
+            ),
+            (
+                r##"var i = 0
+while i < 10 {
+  i = i + 1
+  if i == 5 { break }
+}
+return i"##,
+                r##"var i = 0
+while i < 10 {
+  i = i + 1
+  if i == 5 {
+    break
+  }
+}
+return i"##,
+                r##"{
+  local_alloc(1)
+  var $0 = 0
+  while $0 < 10 {
+    $0 = $0 + 1
+    if $0 == 5 {
+      break
+    }
+  }
+  return $0
+}"##,
+            ),
+            (
+                r##"var h = keccak256(0x1234)
+return h"##,
+                r##"let h = keccak256(0x1234)
+return h"##,
+                r##"{
+  local_alloc(1)
+  var $0 = keccak256(0x1234)
+  return $0
+}"##,
+            ),
+            (
+                r##"log(1, 2)
+log(1, 2, 3)
+end"##,
+                r##"log(1, 2)
+log(1, 2, 3)
+end"##,
+                r##"{
+  log(1, 2)
+  log(1, 2, 3)
+  end
+}"##,
+            ),
+            (
+                r##"lib Pool = 1
+var a = Pool.swap(1u64, 2u64)
+var b = Pool:peek(0x)
+calluseview Pool::watch(0x)
+var c = Pool::pure_calc(1)
+codecall Pool.probe
+end"##,
+                r##"lib Pool = 1
+let a = Pool.swap(1u64, 2u64)
+let b = call view Pool.peek("")
+calluseview Pool::watch("")
+let c = call pure use(1).pure_calc(1)
+codecall Pool.probe"##,
+                r##"{
+  local_alloc(3)
+  var $0 = call edit ext(1).0x25226e33(tuple(1 as u64, 2 as u64))
+  var $1 = call view ext(1).0x753c6148("")
+  call view use(1).0xc9bc69ee("")
+  var $2 = call pure use(1).0xcaa25ad3(1)
+  codecall ext(1).0x62ee883e(nil)
+}"##,
+            ),
+            (
+                r##"this.tick()
+self.refresh()
+super.derive()
+var d = self:look()
+var e = self::compute(1)
+call edit upper.bump(1)
+end"##,
+                r##"this.tick()
+self.refresh()
+super.derive()
+let d = call view self.look()
+let e = call pure self.compute(1)
+call edit upper.bump(1)
+end"##,
+                r##"{
+  local_alloc(2)
+  call edit this.0x2336bfac(nil)
+  call edit self.0x41b41302(nil)
+  call edit super.0x08998fb9(nil)
+  var $0 = call view self.0x3fdfbb27(nil)
+  var $1 = call pure self.0xfb63f4ef(1)
+  call edit upper.0x2451dca7(1)
+  end
+}"##,
+            ),
+            (
+                r##"self:audit()
+self::compute(1)
+var r = self:probe()
+end"##,
+                r##"self:audit()
+self::compute(1)
+let r = call view self.probe()
+end"##,
+                r##"{
+  local_alloc(1)
+  call view self.0x209d0424(nil)
+  call pure self.0xfb63f4ef(1)
+  var $0 = call view self.0x62ee883e(nil)
+  end
+}"##,
+            ),
+            (
+                r##"var a = 1u8
+var b = 2u16
+var c = 3u32
+var d = 4u64
+var e = 5u128
+return d"##,
+                r##"let a = 1u8
+let b = 2u16
+let c = 3u32
+let d = 4u64
+let e = 5u128
+return d"##,
+                r##"{
+  local_alloc(5)
+  var $0 = 1 as u8
+  var $1 = 2 as u16
+  var $2 = 3 as u32
+  var $3 = 4 as u64
+  var $4 = 5 as u128
+  return $3
+}"##,
+            ),
+            (
+                r##"var a = 0xdeadbeef as bytes
+return a"##,
+                r##"let a = 0xdeadbeef as bytes
+return a"##,
+                r##"{
+  local_alloc(1)
+  var $0 = 0xdeadbeef as bytes
+  return $0
+}"##,
+            ),
+            (
+                r##"var addr = 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9
+return addr"##,
+                r##"let addr = 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9
+return addr"##,
+                r##"{
+  local_alloc(1)
+  var $0 = 0x00e63c33a796b3032ce6b856f68fccf06608d9ed18 as address
+  return $0
+}"##,
+            ),
+            (
+                r##"param { amt }
+return amt"##,
+                r##"param { amt }
+return amt"##,
+                r##"{
+  local_alloc(1)
+  var $0 = roll_0()
+  return $0
+}"##,
+            ),
+            (
+                r##"const MAX = 100
+return MAX"##,
+                r##"const MAX = 100
+return MAX"##,
+                r##"{
+  return 100
+}"##,
+            ),
+            (
+                r##"return !true is not nil"##,
+                r##"return !true is not nil"##,
+                r##"{
+  return !true is not nil
+}"##,
+            ),
+            (
+                r##"var t = true ? 1 : 2
+return t"##,
+                r##"let t = true ? 1 : 2
+return t"##,
+                r##"{
+  local_alloc(1)
+  var $0 = true ? 1 : 2
+  return $0
+}"##,
+            ),
+            (
+                r##"var s = "hello"
+var n = s + " world"
+require 1, true
+assert n != ""
+end"##,
+                r##"let s = "hello"
+let n = s + " world"
+require 1, true
+assert n != ""
+end"##,
+                r##"{
+  local_alloc(2)
+  var $0 = 0x68656c6c6f
+  var $1 = $0 + 0x20776f726c64
+  require 1, true
+  assert $1 != ""
+  end
+}"##,
+            ),
+            (
+                r##"var big = 123456789012345678901234567890u128
+return big"##,
+                r##"let big = 123456789012345678901234567890
+return big"##,
+                r##"{
+  local_alloc(1)
+  var $0 = 0x018ee90ff6c373e0ee4e3f0ad2 as u128
+  return $0
+}"##,
+            ),
+        ];
+        for (src, want_named, want_review) in goldens {
+            let (ir, smap) = lang_to_ircode_with_sourcemap(src)
+                .unwrap_or_else(|e| panic!("{src}: {e}"));
+            let named = format_ircode_to_lang(&ir, Some(&smap))
+                .unwrap_or_else(|e| panic!("{src}: {e}"));
+            assert_eq!(named, want_named, "named golden for:\n{src}");
+            let review = format_ircode_to_review(&ir)
+                .unwrap_or_else(|e| panic!("{src}: {e}"));
+            assert_eq!(review, want_review, "review golden for:\n{src}");
+        }
+    }
+
+    /// Named-channel degradation matrix (§4 sourcemap 不完整降级):
+    /// full / no funcs / no slots / no libs / empty `{}` / no map / hostile.
+    /// Every level must recompile to the same ircode and show the documented
+    /// fallback shape.
+    #[test]
+    fn named_degradation_matrix() {
+        use super::lang_to_ircode;
+        let src = "lib AMM = 1\nvar out = AMM.swap(1u64, 2u64)\nassert out >= 1u64\nend";
+        let (ir, full) = lang_to_ircode_with_sourcemap(src).expect(src);
+        let full_json = full.to_json().unwrap();
+
+        // 1. full map: alias + names + prelude.
+        let t = format_ircode_to_lang(&ir, Some(&full)).unwrap();
+        assert!(t.contains("lib AMM = 1") && t.contains("AMM.swap("), "{t}");
+        assert!(t.contains("out") && !t.contains("$0"), "{t}");
+
+        // 2-4. section-wise removal via wire JSON (from_json tolerates the gaps).
+        let selector_hex = hex::encode(crate::rt::calc_func_sign("swap"));
+        for (remove, marker, absent) in [
+            ("funcs", format!("0x{selector_hex}").as_str(), "AMM.swap("),
+            ("slots", "$0", "out"),
+            ("libs", "ext(1)", "lib AMM"),
+        ] {
+            let partial = strip_json_section(&full_json, remove);
+            let map = SourceMap::from_json(&partial)
+                .unwrap_or_else(|e| panic!("strip {remove}: {e} ({partial})"));
+            let t = format_ircode_to_lang(&ir, Some(&map)).unwrap();
+            assert!(t.contains(marker), "after stripping {remove}, expected {marker} in:\n{t}");
+            assert!(!t.contains(absent), "after stripping {remove}, {absent} must be gone:\n{t}");
+            let re = lang_to_ircode(&t).unwrap_or_else(|e| panic!("{remove}: {e}\n{t}"));
+            assert_eq!(re, ir, "strip {remove} must not change recompiled bytes");
+        }
+
+        // 5. empty object map.
+        let empty = SourceMap::from_json("{}").unwrap();
+        let t = format_ircode_to_lang(&ir, Some(&empty)).unwrap();
+        assert!(t.contains("ext(1)") && t.contains("$0") && t.contains("var "), "{t}");
+        assert_eq!(lang_to_ircode(&t).unwrap(), ir);
+
+        // 6. no map at all.
+        let t = format_ircode_to_lang(&ir, None).unwrap();
+        assert!(t.contains("ext(1)") && t.contains("$0"), "{t}");
+        assert_eq!(lang_to_ircode(&t).unwrap(), ir);
+
+        // 7. hostile map: display_labels drops invalid identifiers and
+        // wrong-signature names, keeps honest ones, and warns.
+        let hostile_json = format!(
+            r#"{{"libs":[{{"idx":1,"name":"bad alias!","address":null}}],"funcs":[{{"sig":"{selector_hex}","name":"swap"}},{{"sig":"deadbeef","name":"lie"}}],"slots":["out\nassert false //"]}}"#
+        );
+        let hostile = SourceMap::from_json(&hostile_json).unwrap();
+        let (safe, labels, warnings) = hostile.display_labels();
+        assert!(labels.iter().any(|l| l.contains("swap")), "{labels:?}");
+        assert!(!labels.iter().any(|l| l.contains("lie") || l.contains("lib ")), "{labels:?}");
+        assert!(warnings.iter().any(|w| w.contains("library alias")) && warnings.iter().any(|w| w.contains("slot $0")), "{warnings:?}");
+        let t = format_ircode_to_lang(&ir, Some(&safe)).unwrap();
+        assert!(t.contains("ext(1)") && !t.contains("bad alias"), "{t}");
+        assert!(!t.contains("assert false") && !t.contains("lie"), "{t}");
+        assert!(t.contains("swap"), "{t}");
+        assert_eq!(lang_to_ircode(&t).unwrap(), ir, "hostile-map decompile must stay recompilable");
+    }
+
+    /// Remove one top-level array section from a flat sourcemap JSON object
+    /// (test-only wire surgery; from_json accepts the result).
+    fn strip_json_section(json: &str, section: &str) -> String {
+        let key = format!("\"{section}\":");
+        let start = json.find(&key).expect(section);
+        let mut depth = 0i32;
+        let bytes = json.as_bytes();
+        let mut i = start + key.len();
+        // arrays only: '[' ... matching ']'
+        assert_eq!(bytes[i] as char, '[');
+        while i < bytes.len() {
+            match bytes[i] as char {
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        i += 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        let mut out = String::new();
+        out.push_str(&json[..start]);
+        // drop a following comma if present, else a preceding one
+        let rest = &json[i..];
+        if rest.starts_with(',') {
+            out.push_str(&rest[1..]);
+        } else if out.ends_with(',') {
+            out.pop();
+            out.push_str(rest);
+        } else {
+            out.push_str(rest);
+        }
+        out
+    }
+
+    /// 汇编双向:fitsh 源 → ircode → asm 文本 → 汇编接受器 → 字节不变。
+    #[test]
+    fn asm_bidirectional_from_statement_matrix() {
+        use super::asm::{assemble_ircode, disassemble_ircode_asm, disassemble_ircode_raw};
+        use super::lang_to_bytecode;
+        use super::asm::{assemble_bytecode, disassemble_bytecode_asm};
+        for Case { src } in cases() {
+            let ir = lang_to_ircode(src).expect(src);
+            let asm = disassemble_ircode_asm(&ir).expect(src);
+            assert_eq!(assemble_ircode(&asm).expect(src), ir, "ircode asm roundtrip\n{asm}");
+            let raw = disassemble_ircode_raw(&ir).expect(src);
+            assert_eq!(assemble_ircode(&raw).expect(src), ir, "ircode raw roundtrip\n{raw}");
+        }
+        // Bytecode side for the end-terminated programs.
+        for src in [
+            "memory_put(1, 2)\nend",
+            "log(1, 2)\nend",
+            "var a = 1\nreturn a",
+        ] {
+            let codes = lang_to_bytecode(src).expect(src);
+            let asm = disassemble_bytecode_asm(&codes).expect(src);
+            assert_eq!(assemble_bytecode(&asm).expect(src), codes, "bytecode asm roundtrip\n{asm}");
+        }
+    }
+
+    /// T2: truncated / garbage ircode must fail through `Ret`, never panic,
+    /// on every decompile entry.
+    #[test]
+    fn decompile_entries_survive_truncated_and_garbage_ircode() {
+        use super::ir_tree_text;
+        use super::asm::disassemble_ircode_asm;
+        let ir = lang_to_ircode(cases()[5].src).expect("compile");
+        for cut in 0..ir.len() {
+            let bad = &ir[..cut];
+            let _ = format_ircode_to_lang(bad, None);
+            let _ = format_ircode_to_review(bad);
+            let _ = ir_tree_text(bad);
+            let _ = disassemble_ircode_asm(bad);
+        }
+        let mut garbage = ir.clone();
+        garbage.extend_from_slice(&[0xc7, 0xff, 0xff]);
+        assert!(format_ircode_to_review(&garbage).is_err());
+        assert!(disassemble_ircode_asm(&garbage).is_err());
+        // Empty input is a legal empty program, not a panic.
+        assert!(format_ircode_to_lang(&[], None).is_ok());
+        assert!(format_ircode_to_review(&[]).is_ok());
+    }
+
+    /// T2: nesting beyond the parser depth cap is a hard Err (IRNodeOverDepth),
+    /// and depth just under the cap still roundtrips.
+    #[test]
+    fn decompile_rejects_over_deep_ircode() {
+        use crate::rt::Bytecode;
+        fn nest(depth: usize) -> Vec<u8> {
+            if depth == 0 {
+                return vec![Bytecode::P1 as u8];
+            }
+            let mut v = vec![Bytecode::IRLIST as u8, 0, 1];
+            v.extend(nest(depth - 1));
+            v
+        }
+        let deep = nest(40);
+        assert!(format_ircode_to_lang(&deep, None).is_err());
+        assert!(format_ircode_to_review(&deep).is_err());
+        let ok = nest(30);
+        assert!(format_ircode_to_lang(&ok, None).is_ok(), "depth 30 must parse");
+    }
+
+    /// T3 quantification: compact to_json vs the legacy always-full shape for
+    /// a maincall-typical map (numbers feed the size report).
+    #[test]
+    fn sourcemap_compact_json_beats_legacy_full_shape() {
+        let mut map = SourceMap::default();
+        map.register_lib(1, "AMM".to_string(), Some(
+            field::Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap(),
+        )).unwrap();
+        map.register_func(crate::rt::calc_func_sign("swap"), "swap".to_string()).unwrap();
+        map.register_slot(0, "out".to_string()).unwrap();
+        map.mark_slot_mutated(0);
+        let compact = map.to_json().unwrap();
+        let legacy = format!(
+            "{{\"libs\":[{{\"idx\":1,\"name\":\"AMM\",\"address\":\"1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9\"}}],\"funcs\":[{{\"sig\":\"{}\",\"name\":\"swap\"}}],\"slots\":[\"out\"],\"lets\":[],\"vars\":[0],\"params\":[],\"param_prelude_count\":null,\"consts\":[]}}",
+            hex::encode(crate::rt::calc_func_sign("swap"))
+        );
+        println!("compact={}\nlegacy ={legacy}", compact.len());
+        assert!(compact.len() < legacy.len());
+        // Both shapes parse to the same map.
+        let a = SourceMap::from_json(&compact).unwrap();
+        let b = SourceMap::from_json(&legacy).unwrap();
+        assert_eq!(a.to_json().unwrap(), b.to_json().unwrap());
+    }
+
 }

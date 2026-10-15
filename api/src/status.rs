@@ -8,6 +8,8 @@ use base::{ApiExecCtx, ApiRequest, ApiResponse, ApiRoute, ApiService};
 
 fn status_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse {
     let height = ctx.engine.latest_height();
+    let chain_id = ctx.engine.consensus().chain_id().get();
+    let block_target_seconds = ctx.engine.consensus().mint_params().each_block_target_time;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -55,8 +57,10 @@ fn status_handler(ctx: &ApiExecCtx, _req: ApiRequest) -> ApiResponse {
         Err(_) => (false, 0),
     };
     ApiResponse::json(format!(
-        "{{\"height\":{},\"uptime\":{},\"peers\":{},\"vm_fee_purity_unit\":{},\"vm_fee_purity_floor\":{},\"vm_contract_store_perm_periods\":{},\"vm_contract_storage_enabled\":{},\"vm_contract_storage_periods\":{}}}",
+        "{{\"height\":{},\"chain_id\":{},\"block_target_seconds\":{},\"uptime\":{},\"peers\":{},\"vm_fee_purity_unit\":{},\"vm_fee_purity_floor\":{},\"vm_contract_store_perm_periods\":{},\"vm_contract_storage_enabled\":{},\"vm_contract_storage_periods\":{}}}",
         height,
+        chain_id,
+        block_target_seconds,
         uptime,
         ctx.node.all_peer_prints().len(),
         base::FEE_PRICING_UNIT,

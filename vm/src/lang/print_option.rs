@@ -3,6 +3,15 @@ use std::collections::HashSet as PrintHashSet;
 use std::rc::Rc;
 
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PrintContext {
+    /// Statement position: the node is (part of) a statement line.
+    Stmt,
+    /// Expression position (call args, initializers, operands): block
+    /// wrappers must survive and call short-syntax does not apply.
+    Expr,
+}
+
 #[derive(Clone)]
 pub struct PrintOption<'a> {
     pub indent: &'a str,
@@ -11,6 +20,12 @@ pub struct PrintOption<'a> {
     /// When enabled, emits source-map-derived `lib ...` declarations as a prelude. Top-level
     /// printing only — inline printing must disable it to avoid injecting file-level declarations.
     pub emit_lib_prelude: bool,
+    /// When enabled, `resolve_lib_name` maps lib indices to sourcemap alias
+    /// names (`AMM.swap` instead of `ext(1).swap`). Orthogonal to
+    /// `emit_lib_prelude` (prelude output): a caller may resolve aliases
+    /// without printing the binding lines, or print them without resolving.
+    /// Callers that want the historical combined behavior set both.
+    pub resolve_lib_alias: bool,
     pub trim_root_block: bool,
     pub trim_head_alloc: bool,
     pub trim_param_unpack: bool,
@@ -22,6 +37,10 @@ pub struct PrintOption<'a> {
     pub flatten_array_list: bool,
     pub flatten_syscall_cat: bool,
     pub recover_literals: bool,
+    /// Explicit statement/expression position. Replaces the old implicit
+    /// inference (`trim_root_block` flipping in inline contexts) that decided
+    /// call short-syntax; block-trim behavior keeps its own flag below.
+    pub context: PrintContext,
     pub inline_mode: bool,
     /// When enabled, prints numeric literals with type suffix (e.g., `100u64`)
     /// instead of using `as` keyword (e.g., `100 as u64`).
@@ -32,6 +51,15 @@ pub struct PrintOption<'a> {
     pending_consts: Rc<RefCell<Vec<String>>>,
     print_error: Rc<RefCell<Option<String>>>,
     print_depth: Rc<RefCell<usize>>,
+    // Slots whose sourcemap names must NOT be printed: bound by a raw
+    // `unpack(...)` prelude that was not rewritten to `param { ... }`, so no
+    // printed line declares the name — referencing it would not reparse.
+    slot_names_suppressed: Rc<RefCell<PrintHashSet<u8>>>,
+    // One-shot ticket: `trim_root_block` may trim exactly ONE tab-0 IRBLOCK
+    // per root print session — the actual file-level root. Without it, root
+    // statements printed at tab 0 (named channel) would let nested bodies
+    // (e.g. a while body block) satisfy the same predicate and lose braces.
+    root_trim_pending: Rc<RefCell<bool>>,
 }
 
 impl<'a> PrintOption<'a> {
@@ -41,6 +69,7 @@ impl<'a> PrintOption<'a> {
             tab,
             map: None,
             emit_lib_prelude: false,
+            resolve_lib_alias: false,
             trim_root_block: false,
             trim_head_alloc: false,
             trim_param_unpack: false,
@@ -50,6 +79,7 @@ impl<'a> PrintOption<'a> {
             flatten_array_list: false,
             flatten_syscall_cat: false,
             recover_literals: false,
+            context: PrintContext::Stmt,
             inline_mode: false,
             simplify_numeric_as_suffix: false,
             allocated: Rc::new(RefCell::new(PrintHashSet::new())),
@@ -57,6 +87,8 @@ impl<'a> PrintOption<'a> {
             pending_consts: Rc::new(RefCell::new(Vec::new())),
             print_error: Rc::new(RefCell::new(None)),
             print_depth: Rc::new(RefCell::new(0)),
+            root_trim_pending: Rc::new(RefCell::new(false)),
+            slot_names_suppressed: Rc::new(RefCell::new(PrintHashSet::new())),
         }
     }
 
@@ -67,6 +99,8 @@ impl<'a> PrintOption<'a> {
         next.pending_consts = Rc::new(RefCell::new(Vec::new()));
         next.print_error = Rc::new(RefCell::new(None));
         next.print_depth = Rc::new(RefCell::new(0));
+        next.root_trim_pending = Rc::new(RefCell::new(false));
+        next.slot_names_suppressed = Rc::new(RefCell::new(PrintHashSet::new()));
         next
     }
 
@@ -74,7 +108,25 @@ impl<'a> PrintOption<'a> {
         self.allocated.borrow_mut().clear();
         self.printed_consts.borrow_mut().clear();
         self.pending_consts.borrow_mut().clear();
+        self.slot_names_suppressed.borrow_mut().clear();
         self.print_error.borrow_mut().take();
+    }
+
+    /// Arm the one-shot root-trim ticket for a fresh root print session.
+    pub fn arm_root_trim_ticket(&self) {
+        *self.root_trim_pending.borrow_mut() = true;
+    }
+
+    /// Consume the root-trim ticket if armed; only the first eligible block
+    /// (the actual file-level root) gets it.
+    pub fn take_root_trim_ticket(&self) -> bool {
+        let mut pending = self.root_trim_pending.borrow_mut();
+        if *pending {
+            *pending = false;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn begin_print_session(&self) -> bool {
@@ -108,6 +160,17 @@ impl<'a> PrintOption<'a> {
 
     pub fn mark_slot_put(&self, slot: u8) -> bool {
         self.allocated.borrow_mut().insert(slot)
+    }
+
+    /// Suppress the sourcemap display name of `slot` (falls back to `$n`).
+    /// Shared through child printers via the `Rc`, so a prelude decision made
+    /// before the body prints stays in force for the whole block.
+    pub fn suppress_slot_name(&self, slot: u8) {
+        self.slot_names_suppressed.borrow_mut().insert(slot);
+    }
+
+    pub fn is_slot_name_suppressed(&self, slot: u8) -> bool {
+        self.slot_names_suppressed.borrow().contains(&slot)
     }
 
     pub fn clear_slot_put(&self, slot: u8) {

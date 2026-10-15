@@ -47,6 +47,12 @@ impl<'a> Formater<'a> {
     }
 
     fn slot_name_display(&self, slot: u8) -> String {
+        // Suppressed slots are prelude-bound without a `param { ... }` line:
+        // their map name is never declared in the output, so it must not be
+        // referenced either (`$n` slot syntax needs no declaration).
+        if self.opt.is_slot_name_suppressed(slot) {
+            return format!("${}", slot);
+        }
         if let Some(map) = self.opt.map {
             let param_count = map.param_names().map(|v| v.len()).unwrap_or(0);
             if slot as usize >= param_count || self.opt.trim_param_unpack {
@@ -69,7 +75,7 @@ impl<'a> Formater<'a> {
     }
 
     fn resolve_lib_name(&self, idx: u8) -> Option<String> {
-        if !self.opt.emit_lib_prelude {
+        if !self.opt.resolve_lib_alias {
             return None;
         }
         let map = self.opt.map?;
@@ -110,66 +116,6 @@ impl<'a> Formater<'a> {
                 .unwrap_or_else(|| format!("ext({})", idx)),
             CallTarget::Use(idx) => format!("use({})", idx),
         }
-    }
-
-    fn format_special_call_target(
-        &self,
-        code: Bytecode,
-        pss: &IRNodeParamsSingle,
-        args: &str,
-    ) -> Option<String> {
-        use Bytecode::*;
-        let sig = match code {
-            CALLEXT | CALLEXTVIEW | CALLUSEVIEW | CALLUSEPURE => {
-                if pss.para.len() < 5 {
-                    return None;
-                }
-                self.format_func_sig(&pss.para[1..])
-            }
-            CALLTHIS | CALLSELF | CALLSUPER | CALLSELFVIEW | CALLSELFPURE => {
-                if pss.para.len() != 4 {
-                    return None;
-                }
-                self.format_func_sig(&pss.para)
-            }
-            _ => return None,
-        };
-        Some(match code {
-            CALLTHIS => format!("this.{}({})", sig, args),
-            CALLSELF => format!("self.{}({})", sig, args),
-            CALLSUPER => format!("super.{}({})", sig, args),
-            CALLSELFVIEW => format!("self:{}({})", sig, args),
-            CALLSELFPURE => format!("self::{}({})", sig, args),
-            CALLEXT => format!(
-                "{}.{}({})",
-                self.resolve_lib_name(pss.para[0])
-                    .unwrap_or_else(|| format!("ext({})", pss.para[0])),
-                sig,
-                args
-            ),
-            CALLEXTVIEW => format!(
-                "{}:{}({})",
-                self.resolve_lib_name(pss.para[0])
-                    .unwrap_or_else(|| format!("ext({})", pss.para[0])),
-                sig,
-                args
-            ),
-            CALLUSEVIEW => format!(
-                "calluseview {}::{}({})",
-                self.resolve_lib_name(pss.para[0])
-                    .unwrap_or_else(|| pss.para[0].to_string()),
-                sig,
-                args
-            ),
-            CALLUSEPURE => format!(
-                "{}::{}({})",
-                self.resolve_lib_name(pss.para[0])
-                    .unwrap_or_else(|| format!("ext({})", pss.para[0])),
-                sig,
-                args
-            ),
-            _ => return None,
-        })
     }
 
     fn line_prefix(&self) -> String {
@@ -548,17 +494,16 @@ impl<'a> Formater<'a> {
                 return Some(format!("{}tuple({})", prefix, elements.join(", ")));
             }
             if let Some(pairs) = self.extract_map_elements(arr.inst, &arr.subs) {
-                let mut buf = format!("{}map {{", prefix);
-                if !pairs.is_empty() {
-                    buf.push('\n');
-                    let child = self.child();
-                    for (k, v) in pairs {
-                        buf.push_str(&format!("{}{}: {},\n", child.line_prefix(), k, v));
-                    }
-                    buf.push_str(&self.opt.indent.repeat(self.opt.tab));
-                }
-                buf.push('}');
-                return Some(buf);
+                let inner = pairs
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Some(maybe!(
+                    inner.is_empty(),
+                    format!("{}map {{}}", prefix),
+                    format!("{}map {{{}}}", prefix, inner)
+                ));
             }
             if let Some(last) = arr.subs.last() {
                 let code: Bytecode = std_mem_transmute!(last.bytecode());
@@ -576,7 +521,13 @@ impl<'a> Formater<'a> {
             let (body_start_idx, param_line) = helper.prepare_root_block(arr);
             let has_body = param_line.is_some() || body_start_idx < arr.subs.len();
             if has_body {
-                buf.push('\n');
+                // Top-level fitsh has no wrapper braces: the irblock is a
+                // serialization artifact, so root statements print at indent 0
+                // and no separator newline is added under the `lib ...` prelude.
+                let item = self.with_tab(0);
+                if !buf.is_empty() {
+                    buf.push('\n');
+                }
                 if let Some(line) = param_line {
                     buf.push_str(&line);
                     buf.push('\n');
@@ -602,7 +553,7 @@ impl<'a> Formater<'a> {
                     }
                 }
                 for a in &arr.subs[body_start_idx..] {
-                    buf.push_str(&self.child().print(&**a));
+                    buf.push_str(&item.print(&**a));
                     buf.push('\n');
                 }
                 if buf.ends_with('\n') {
@@ -679,6 +630,112 @@ impl<'a> Formater<'a> {
         ))
     }
 
+    /// Unified user-call rendering. Every user-call opcode decodes to one
+    /// `CallSpec` here (single decode point — the opcode layer, not the text
+    /// layer, owns the generic-vs-short-opcode distinction); `short` then
+    /// picks the source-level sugar family when the (target, effect) combo
+    /// has one, else the universal `call {effect} {target}.{sig}` form.
+    fn render_call_spec(&self, call: CallSpec, args: &str, short: bool) -> String {
+        match call {
+            CallSpec::Splice { lib, selector } => {
+                // Splice sugar `codecall Target.f` parses with an implicit-nil
+                // argv, so an empty (trimmed) arg list drops the parentheses.
+                let target = self
+                    .resolve_lib_name(lib)
+                    .unwrap_or_else(|| format!("ext({})", lib));
+                maybe!(
+                    args.is_empty(),
+                    format!("codecall {}.{}", target, self.format_func_sig(&selector)),
+                    format!(
+                        "codecall {}.{}({})",
+                        target,
+                        self.format_func_sig(&selector),
+                        args
+                    )
+                )
+            }
+            CallSpec::Invoke {
+                target,
+                effect,
+                selector,
+            } => {
+                // `Name.f(args)` parses as an expression in any context
+                // (identifier receiver, see call.rs), so the alias sugar is
+                // context-independent; only alias resolution gates it.
+                if let (CallTarget::Ext(idx), EffectMode::Edit) = (target, effect) {
+                    if let Some(name) = self.resolve_lib_name(idx) {
+                        return format!("{}.{}({})", name, self.format_func_sig(&selector), args);
+                    }
+                }
+                if short {
+                    if let Some(body) =
+                        self.render_invoke_short(target, effect, &selector, args)
+                    {
+                        return body;
+                    }
+                }
+                format!(
+                    "call {} {}.{}({})",
+                    self.format_call_effect(effect),
+                    self.format_call_target_ref(target),
+                    self.format_func_sig(&selector),
+                    args
+                )
+            }
+        }
+    }
+
+    /// Source-level sugar for the (target, effect) combos that have one in
+    /// statement position. Fallbacks stay reparseable: `ext(N).f` = ext edit,
+    /// `ext(N):f` = ext view, `ext(N)::f` = use pure, bare `N::` in the
+    /// `calluseview` keyword form (a `use(N)::` receiver is not grammar).
+    /// Combos without sugar (upper, this/super view+pure, ext pure, use edit)
+    /// only ever ride the generic CALL opcode and return None.
+    fn render_invoke_short(
+        &self,
+        target: CallTarget,
+        effect: EffectMode,
+        selector: &FnSign,
+        args: &str,
+    ) -> Option<String> {
+        let sig = self.format_func_sig(selector);
+        Some(match (target, effect) {
+            (CallTarget::Ext(idx), EffectMode::Edit) => format!(
+                "{}.{}({})",
+                self.resolve_lib_name(idx)
+                    .unwrap_or_else(|| format!("ext({})", idx)),
+                sig,
+                args
+            ),
+            (CallTarget::Ext(idx), EffectMode::View) => format!(
+                "{}:{}({})",
+                self.resolve_lib_name(idx)
+                    .unwrap_or_else(|| format!("ext({})", idx)),
+                sig,
+                args
+            ),
+            (CallTarget::Use(idx), EffectMode::View) => format!(
+                "calluseview {}::{}({})",
+                self.resolve_lib_name(idx).unwrap_or_else(|| idx.to_string()),
+                sig,
+                args
+            ),
+            (CallTarget::Use(idx), EffectMode::Pure) => format!(
+                "{}::{}({})",
+                self.resolve_lib_name(idx)
+                    .unwrap_or_else(|| format!("ext({})", idx)),
+                sig,
+                args
+            ),
+            (CallTarget::This, EffectMode::Edit) => format!("this.{}({})", sig, args),
+            (CallTarget::Self_, EffectMode::Edit) => format!("self.{}({})", sig, args),
+            (CallTarget::Super, EffectMode::Edit) => format!("super.{}({})", sig, args),
+            (CallTarget::Self_, EffectMode::View) => format!("self:{}({})", sig, args),
+            (CallTarget::Self_, EffectMode::Pure) => format!("self::{}({})", sig, args),
+            _ => return None,
+        })
+    }
+
     fn format_call_instruction(&self, node: &dyn IRNode, code: Bytecode) -> Option<String> {
         use Bytecode::*;
         let pss = node.as_any().downcast_ref::<IRNodeParamsSingle>()?;
@@ -700,53 +757,10 @@ impl<'a> Formater<'a> {
         }
         let pre = self.line_prefix();
         let args = self.build_call_args(&*pss.subx, false, None);
-        let use_short_syntax = self.opt.call_short_syntax && self.opt.trim_root_block;
-        if code == CODE_CALL && use_short_syntax {
-            let CallSpec::Splice { lib, selector } = decode_splice_body(&pss.para).ok()? else {
-                return None;
-            };
-            let target = self
-                .resolve_lib_name(lib)
-                .unwrap_or_else(|| format!("ext({})", lib));
-            let body = maybe!(
-                args.is_empty(),
-                format!("codecall {}.{}", target, self.format_func_sig(&selector)),
-                format!(
-                    "codecall {}.{}({})",
-                    target,
-                    self.format_func_sig(&selector),
-                    args
-                )
-            );
-            return Some(format!("{}{}", pre, body));
-        }
-        if code == CALL
-            || matches!(code, CODE_CALL | CALLSELFVIEW | CALLSELFPURE)
-            || !use_short_syntax
-        {
-            let call = decode_user_call_site(code, &pss.para).ok()?;
-            let body = match call {
-                CallSpec::Invoke {
-                    target,
-                    effect,
-                    selector,
-                } => format!(
-                    "call {} {}.{}({})",
-                    self.format_call_effect(effect),
-                    self.format_call_target_ref(target),
-                    self.format_func_sig(&selector),
-                    args
-                ),
-                CallSpec::Splice { lib, selector } => format!(
-                    "codecall ext({}).{}({})",
-                    lib,
-                    self.format_func_sig(&selector),
-                    args
-                ),
-            };
-            return Some(format!("{}{}", pre, body));
-        }
-        let body = self.format_special_call_target(code, pss, &args)?;
+        let call = decode_user_call_site(code, &pss.para).ok()?;
+        let short =
+            self.opt.call_short_syntax && self.opt.context == PrintContext::Stmt;
+        let body = self.render_call_spec(call, &args, short);
         Some(format!("{}{}", pre, body))
     }
 
@@ -780,7 +794,7 @@ impl<'a> Formater<'a> {
                 CU8 | CU16 | CU32 | CU64 | CU128 | CBYTES | RET | ERR | AST => {
                     let literal = self.literal_from_node(&*s.subx);
                     let substr = match &literal {
-                        Some(lit) => lit.text.clone(),
+                        Some(lit) => self.const_substituted_text(&lit.text),
                         None => self.print_inline(&*s.subx),
                     };
                     let operand = maybe!(
@@ -868,7 +882,11 @@ impl<'a> Formater<'a> {
                         }
                     }
 
-                    return Some(format!("{}! {}", pre, substr));
+                    // A `!` directly followed by the operand's leading `!`
+                    // (nested NOT) would fuse into an unknown `!!` symbol in
+                    // the tokenizer's greedy symbol run; keep one space there.
+                    let sep = if substr.starts_with('!') { " " } else { "" };
+                    return Some(format!("{}!{}{}", pre, sep, substr));
                 }
                 _ => {
                     let meta = s.inst.metadata();
@@ -970,6 +988,22 @@ impl<'a> Formater<'a> {
             text: ir.text,
             ty: ir.ty,
         })
+    }
+
+    /// Literal text with the sourcemap const name substituted when one is
+    /// bound to that exact value. Shared by the inline path and the
+    /// RET/ERR/AST statement arm so a const renders uniformly (`return MAX`,
+    /// not `return 100` next to `let y = MAX`).
+    fn const_substituted_text(&self, text: &str) -> String {
+        if let Some(map) = self.opt.map {
+            if let Some(name) = map.get_const_name(text) {
+                if !self.opt.is_const_printed(name) {
+                    self.opt.add_pending_const(name.clone());
+                }
+                return name.clone();
+            }
+        }
+        text.to_owned()
     }
 
     fn resolve_type_check_name(&self, ty: u8) -> Option<&'static str> {
@@ -1129,15 +1163,10 @@ impl<'a> Formater<'a> {
                             )
                         );
                         let name = self.slot_name_display(node.para);
-                        let slot_id_str = format!("${}", node.para);
-                        // Grammar is `var <name> [$slot]? = value`. Without a
-                        // sourcemap the display name is already `$n`; repeating
-                        // the slot alias would print `var $0 $0 = 1`.
-                        if name == slot_id_str {
-                            format!("{} {}", prefix, name)
-                        } else {
-                            format!("{} {} {}", prefix, name, slot_id_str)
-                        }
+                        // Named display prints the source name only
+                        // (`var out = ...`); the bare `$n` fallback appears
+                        // just when no sourcemap name exists for the slot.
+                        format!("{} {}", prefix, name)
                     },
                     self.slot_name_display(node.para)
                 );
@@ -1445,6 +1474,12 @@ impl<'a> Formater<'a> {
     }
 
     /// Main entry for descriptive printing.
+    ///
+    /// Session invariant: `print_inner` is infallible (returns `String`), so
+    /// `end_print_session` always runs — no `?` early-exit can leave the
+    /// session depth dangling. The only panics here guard
+    /// `IRNodeTopStackValue`, which is codegen-only, cannot be serialized and
+    /// therefore can never reach a byte-driven decompile entry.
     pub fn print(&self, node: &dyn IRNode) -> String {
         if node
             .as_any()
@@ -1456,6 +1491,9 @@ impl<'a> Formater<'a> {
         let is_root_session = self.opt.begin_print_session();
         if is_root_session {
             self.opt.reset_runtime_state();
+            // Exactly one tab-0 IRBLOCK per root session may be trimmed: the
+            // file-level root itself (see `take_root_trim_ticket`).
+            self.opt.arm_root_trim_ticket();
         }
 
         // Emit file-level `lib ...` declarations once, at the top-level.
@@ -1620,21 +1658,14 @@ impl<'a> Formater<'a> {
         }
 
         if let Some(literal) = self.literal_from_node(node) {
-            if let Some(map) = self.opt.map {
-                if let Some(name) = map.get_const_name(&literal.text) {
-                    if !self.opt.is_const_printed(name) {
-                        self.opt.add_pending_const(name.clone());
-                    }
-                    return name.clone();
-                }
-            }
-            return literal.text;
+            return self.const_substituted_text(&literal.text);
         }
         // Inline contexts must not apply root-block trimming or emit lib prelude.
         // Otherwise, an `IRBLOCK` printed with `tab == 0` may lose its `{}` wrapper,
         // which can break parsing/semantics when used as an expression (e.g. call args).
         let mut opt = self.opt.with_tab(0);
         opt.trim_root_block = false;
+        opt.context = PrintContext::Expr;
         opt.inline_mode = true;
         let inline = Self { opt };
         // IMPORTANT: inline printing must never emit file-level prelude or const
@@ -1650,7 +1681,16 @@ impl<'a> Formater<'a> {
             if t.starts_with('{') && t.ends_with('}') && t.len() >= 2 {
                 return t.to_owned();
             }
-            return t.replace('\n', " ");
+            // Fold to one line, trimming per-line indentation so `if c {\n  1\n}`
+            // renders as `if c { 1 }` instead of `if c {   1 }`. Line trimming is
+            // safe: string literals escape newlines, so a physical line never
+            // ends inside a literal.
+            return t
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
         }
         substr
     }

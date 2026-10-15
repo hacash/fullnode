@@ -99,7 +99,7 @@ surface** — only the operation table below grows.
 
 | Layer | Export | Signature | Description |
 |---|---|---|---|
-| WASM | `sdk_transport_version()` | `() -> number` | Transport version of the JSON envelope semantics (currently `9`). |
+| WASM | `sdk_transport_version()` | `() -> number` | Transport version of the JSON envelope semantics (currently `11`). |
 | WASM | `sdk_invoke_json(operation_id, payload)` | `(number, Uint8Array) -> string` | UTF-8 JSON request → JSON envelope string. `operation_id` is an `OP_*` constant (table below). |
 | JS (node) | `create_hacash_sdk({ target: "auto"\|"node"\|"web", wasm? })` | `() -> Promise<{ sdk_invoke_json, sdk_transport_version }>` | Loads the matching backend: node auto-imports `../nodejs/`, web fetches `../web/` (optionally `{ wasm }` for a custom URL/Response). |
 | JS (web) | `default __wbg_init(module_or_path?)`, `initSync(module)` | — | wasm-bindgen boilerplate for embedding; normal users go through `create_hacash_sdk`. |
@@ -124,20 +124,20 @@ order, `1` = `unknown_operation`, `0` = unknown code). `detail` is a JSON
 string field (empty when absent); when present its contents carry structured
 fields such as `action_index`, `byte_offset`, `expected`, and `actual`.
 
-### 3. Operations (`OP_*` registry, transport version 9)
+### 3. Operations (`OP_*` registry, transport version 11)
 
 | ID | Operation | Request fields | Response schema |
 |---|---|---|---|
 | 1 | `system.sdk_version` | — | `sdk-version@1`: `schema`, `package_version`, `abi{major,minor}` |
 | 2 | `tx.build` | `spec` (TransactionSpec JSON: `tx_type` 2/3, `main`, `fee`, `timestamp?`, `gas_max?`, `actions[{kind, ...schema fields}]`) | `built-transaction@1`: `schema`, `tx_type`, `timestamp`, `main`, `fee`, `hash`, `hash_with_fee`, `unsigned_body_hash`, `body` (hex) |
-| 3 | `tx.inspect_report` | `body` (hex), `signer_address?`, `describe?` | `review@5` (protocol facts; never a denial; `fee_purity`/`fee_purity_unit` priced in u232) |
-| 4 | `tx.inspect` | `body`, `signer_address?`, `context{current_height, expected_chain_id, consensus_flags?}`, `describe?` | `review@5` with `expired_height`/`wrong_chain` facts bound in |
+| 3 | `tx.inspect_report` | `body` (hex), `signer_address?`, `describe?` | `review@7` (protocol facts; includes decoded gas budget, fee-based maximum HAC charge, estimate height, billing size, purity floor, and actual VM address table) |
+| 4 | `tx.inspect` | `body`, `signer_address?`, `context{current_height, expected_chain_id, consensus_flags?}`, `describe?` | `review@7` with `expired_height`/`wrong_chain` facts bound in |
 | 5 | `tx.prepare_signature` | `body`, `signer_address`, `options.review?`, `options.policy?`, `options.origin?`, `options.expires_at?` | `signing-request@1`: `id`, `purpose`, `algorithm`, `signer_address`, `digest`, `body_hash`, `review_binding?`, `policy_decision?`, `origin?`, `expires_at?`, `request_binding` |
 | 6 | `tx.attach_signature` | `body`, `proof`, `review`, `request` | `attach-result@2`: `body`, `complete`, `present_signers`, `valid_signers`, `missing_signers`, `invalid_signers`, `signature_errors` |
 | 7 | `tx.attach_signature_unbound` | `body`, `proof` | `attach-result@2` (no approval-chain checks) |
 | 8 | `tx.verify` | `body` | `verify-result@1`: `ok`, `errors` |
 | 9 | `tx.signature_report` | `body` | `signature-report@1`: `required`, `present`, `valid`, `missing`, `invalid` |
-| 10 | `tx.decode` | `body`, `describe?` | `transaction-json@1`: `tx_type`, `timestamp`, `main`, `fee`, `gas_max`, `tx_hash`, `hash_with_fee`, `unsigned_body_hash`, `actions[]` (`action-desc@2`), `signatures[{public_key, signature}]` |
+| 10 | `tx.decode` | `body`, `describe?` | `transaction-json@1`: `tx_type`, `timestamp`, `main`, `fee`, `gas_max`, `tx_hash`, `hash_with_fee`, `unsigned_body_hash`, `actions[]` (`action-desc@3`), `signatures[{public_key, signature}]` |
 | 11 | `tx.encode` | `transaction` (a `tx.decode` output), `review?` | `built-transaction@1`; rebuilt `unsigned_body_hash` must match (else `transaction_json_mismatch`) |
 | 12 | `account.verify_address` | `address` | `{ok, error?, address?}` (canonical readable form) |
 | 13 | `account.address_from_public_key` | `public_key` (33-byte compressed hex) | `{address, version}` |
@@ -151,8 +151,8 @@ fields such as `action_index`, `byte_offset`, `expected`, and `actual`.
 | 21 | `account.verify_signature` | `public_key` (33-byte hex), `digest` (32-byte hex), `signature` (64-byte hex) | `{ok, address?, error?}` (raw primitive; exchange API-signature checks) |
 | 22 | `diamond.lookup` | exactly one of `name` / `serial` | `diamond-lookup@1`: `valid`, `name?`, `serial?`, `error?` |
 | 23 | `vm.decode_call` | `action` (raw wire hex of a `contract_main_call`, e.g. `tx.decode`'s `actions[].raw`) | `vm-call@1`: `kind`, `name`, `scope`, `marks`, `marks_valid`, `codeconf`, `code_type`, `code_type_name`, `codes_len`, `codes_hash`, `codes_preview` |
-| 24 | `action.describe` | `action` (raw wire hex of any action), `describe?` | `action-desc@2`: single-action description with independently switchable `description` / `json` / `code` facets |
-| 25 | `vm.code` | `codes` (hex), `code_type` (0=bytecode, 1=ir_node), `format?` (`assembly`/`raw` for bytecode; `fitsh`/`tree`/`assembly`/`raw` for ir), `sourcemap?`, `limit?` (default 8000), `offset?` | `vm-code@1`: `code_type`, `code_type_name`, `codes_len`, `codes_hash`, `format`, `lines`, `text`, `truncated`, `limit`, `offset` |
+| 24 | `action.describe` | `action` (raw wire hex of any action), `describe?` | `action-desc@3`: single-action description with independently switchable `description` / `json` / `code` facets |
+| 25 | `vm.code` | `codes` (hex), `code_type` (0=bytecode, 1=ir_node), `format?` (`assembly`/`raw` for bytecode; `fitsh`/`fitsh_review`/`tree`/`assembly`/`raw` for ir), `sourcemap?`, `limit?` (default 8000 bytes), `offset?` | `vm-code@2`: `code_type`, `code_type_name`, `codes_len`, `codes_hash`, `format`, `lines`, `text`, `truncated`, `limit`, `offset`, `total_bytes`, `next_offset?`, `sourcemap_status`, `warnings`, `sourcemap_labels` |
 
 Optional fields are exactly as written (`?`); unknown or duplicated request
 fields are rejected with `unknown_field`/`parse_failed`. The shared signing
@@ -164,16 +164,21 @@ digest) → tx.attach_signature → tx.verify`.
 all facets on by default. `description` is the schema-declared one-line text,
 `json` the canonical field-level JSON (large for contract deploy/update), and
 `code` the VM code metadata of code-carrying actions (`contract_main_call`,
-`p2sh`); turning facets off trims the review payload. `action-desc@2` adds
+`p2sh`); turning facets off trims the review payload. `action-desc@3` adds
 these facets to every action entry (`description?`/`json?`/`code?`, the latter
 with `codeconf`/`code_type`/`code_type_name`/`codes_len`/`codes_hash`/
 `codes_preview`).
 
 **Code display** (`vm.decode_call` + `vm.code`): short maincall code can render
-inline from `action-desc@2`'s `code` metadata + `codes_preview`; long code
-opens a viewer that calls `vm.code` with `format`/`limit`/`offset` paging and
-an optional external `sourcemap` (lib/function/slot/const names) for maximum
-readability. Bytecode disassembles to Form 2 readable assembly (`assembly`)
+inline from `action-desc@3`'s `code` metadata + `codes_preview`; long code
+opens a viewer that calls `vm.code` with `format`/`limit`/`offset` paging
+(`limit`/`offset`/`next_offset` are byte counts snapped outward to UTF-8 char
+boundaries — a window is never cut mid-character and yields at least one whole
+character while any remain, except an explicit `limit: 0`, which is an empty
+page).
+Transaction review uses `fitsh_review`: it preserves numeric literals,
+selectors, and slots while returning validated function/slot labels as separate
+annotations. Bytecode disassembles to Form 2 readable assembly (`assembly`)
 or a dense opcode stream (`raw`); IR decompiles to fitsh source, a structural
 `tree` view, or the same Form 2 / raw assembly. All decompilation is offline
 and codec-only — no VM execution, no node.

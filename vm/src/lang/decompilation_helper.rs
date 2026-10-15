@@ -1,4 +1,4 @@
-use super::ir::{IRNodeArray, IRNodeDouble, IRNodeLeaf, IRNodeParam1Single};
+use super::ir::{IRNodeArray, IRNodeDouble, IRNodeLeaf, IRNodeParam1, IRNodeParam1Single};
 use super::rt::Bytecode;
 
 /// Encapsulates PrintOption-driven tweaks applied during decompilation.
@@ -19,7 +19,14 @@ impl<'a> DecompilationHelper<'a> {
 
     pub fn should_trim_root_block(&self, arr: &IRNodeArray) -> bool {
         use Bytecode::*;
-        self.opt.trim_root_block && self.opt.tab == 0 && arr.inst == IRBLOCK
+        // `tab == 0` alone is not "root": root statements also print at tab 0
+        // (named channel), so a while/if body block would satisfy the same
+        // predicate and lose its braces. The one-shot ticket admits exactly
+        // one eligible block per root print session — the file-level root.
+        self.opt.trim_root_block
+            && self.opt.tab == 0
+            && arr.inst == IRBLOCK
+            && self.opt.take_root_trim_ticket()
     }
 
     pub fn prepare_root_block(&self, arr: &IRNodeArray) -> (usize, Option<String>) {
@@ -62,6 +69,22 @@ impl<'a> DecompilationHelper<'a> {
                     }
                 }
                 return (param_idx + 1, Some(line));
+            }
+            // No `param { ... }` rewrite for a canonical multi-param prelude
+            // (`ALLOC(n)` + `UNPACK(ROLL0, P0)`): the alloc carries the slot
+            // count, so trimming it would leave an orphan `unpack(...)` that
+            // recompiles to different IR, and the unpack declares no names,
+            // so the body must degrade to `$n`. Keep both prelude nodes and
+            // suppress the covered slot names — the review channel's proven
+            // byte-identical shape. (`n` counts every local slot: without a
+            // sourcemap the true param count is not recoverable from the IR.)
+            if let Some(ai) = alloc_index {
+                if let Some(count) = Self::canonical_unpack_prelude_slots(arr, ai) {
+                    for slot in 0..count {
+                        self.opt.suppress_slot_name(slot);
+                    }
+                    return (ai, None);
+                }
             }
         }
 
@@ -107,6 +130,33 @@ impl<'a> DecompilationHelper<'a> {
                 }),
             _ => false,
         }
+    }
+
+    /// Slots covered by a canonical multi-param prelude whose `param { ... }`
+    /// rewrite did not happen: `ALLOC(n)` immediately followed by
+    /// `UNPACK(ROLL0, P0)`. `n` is the block's total slot count. None for any
+    /// other shape — the single-param `PUT(slot 0, ROLL0)` form rebinds itself
+    /// as `var $n = roll_0()` and needs no special handling.
+    fn canonical_unpack_prelude_slots(arr: &IRNodeArray, alloc_index: usize) -> Option<u8> {
+        use Bytecode::*;
+        let alloc = arr.subs.get(alloc_index)?;
+        if alloc.bytecode() != ALLOC as u8 {
+            return None;
+        }
+        let count = alloc
+            .as_any()
+            .downcast_ref::<IRNodeParam1>()?
+            .para;
+        let unpack = arr.subs.get(alloc_index + 1)?;
+        unpack
+            .as_any()
+            .downcast_ref::<IRNodeDouble>()
+            .is_some_and(|double| {
+                double.inst == UNPACK
+                    && Self::matches_leaf(&*double.subx, ROLL0)
+                    && Self::matches_leaf(&*double.suby, P0)
+            })
+            .then_some(count)
     }
 
     /// Infer parameter names for a compiler-generated param prelude.

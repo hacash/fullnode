@@ -83,8 +83,8 @@ impl Syntax {
         if matches!(op, OpTy::BSHL | OpTy::BSHR) {
             let (x, y) = Value::arithmetic_args2(&left_value, &right_value)?;
             let shifted = match op {
-                OpTy::BSHL => crate::interpreter::bit_shl(&x, &y),
-                _ => crate::interpreter::bit_shr(&x, &y),
+                OpTy::BSHL => crate::value::bit_shl(&x, &y),
+                _ => crate::value::bit_shr(&x, &y),
             };
             return match shifted {
                 Ok(value) => Ok(UintLiteralCombine::Folded(Self::build_cast_node(
@@ -301,6 +301,34 @@ impl Syntax {
         node
     }
 
+    /// Cast instruction the `as <ty>` arm would build for `target_ty`
+    /// (None for types without a literal cast instruction).
+    fn target_cast_inst(target_ty: ValueTy) -> Option<Bytecode> {
+        use Bytecode::*;
+        Some(match target_ty {
+            ValueTy::U8 => CU8,
+            ValueTy::U16 => CU16,
+            ValueTy::U32 => CU32,
+            ValueTy::U64 => CU64,
+            ValueTy::U128 => CU128,
+            ValueTy::Bytes => CBYTES,
+            _ => return None,
+        })
+    }
+
+    /// Cast instruction of a literal-shaped node (behind any parens), if it is one.
+    fn literal_cast_inst(node: &dyn IRNode) -> Option<Bytecode> {
+        use Bytecode::*;
+        let inner = Self::literal_inner(node);
+        inner
+            .as_any()
+            .downcast_ref::<IRNodeSingle>()
+            .and_then(|single| match single.inst {
+                CU8 | CU16 | CU32 | CU64 | CU128 | CBYTES => Some(single.inst),
+                _ => None,
+            })
+    }
+
     fn parse_prefix_expr(&mut self) -> Ret<Box<dyn IRNode>> {
         let token = self.cursor.next()?;
         match token {
@@ -425,6 +453,12 @@ impl Syntax {
             return Ok(num_node);
         };
         Self::check_uint_literal_overflow(n, ty)?;
+        // `push_num` already wraps range-wide literals in their natural cast
+        // (`1e29u128` → CU128(PBUF)); the suffix must not stack a second one,
+        // or the decompiled text and the source would compile to different IR.
+        if Self::literal_cast_inst(num_node.as_ref()) == Some(inst) {
+            return Ok(num_node);
+        }
         Ok(push_single(inst, num_node))
     }
 
@@ -549,9 +583,18 @@ impl Syntax {
                     return errf!("<as> expression format invalid");
                 };
                 Self::check_literal_as_cast(left.as_ref(), target_ty)?;
-                let same_ty =
-                    crate::lang::ir_literal_ty(left.as_ref()).is_some_and(|ty| ty == target_ty);
-                if !same_ty {
+                // The explicit cast node must survive even when the literal's
+                // natural width already matches the target: `1 as u8` and
+                // `1u8` are the same program and must serialize identically,
+                // and the decompiled `N as u8` text must recompile to the
+                // same IR. Only an existing cast to the SAME target collapses
+                // (`(Nu8) as u8`), so casts never nest. Types without a cast
+                // instruction (address, bool) always take the CTO path.
+                let already_cast_to_target = match Self::target_cast_inst(target_ty) {
+                    Some(want) => Self::literal_cast_inst(left.as_ref()) == Some(want),
+                    None => false,
+                };
+                if !already_cast_to_target {
                     let node = std::mem::replace(left, push_empty());
                     *left = Self::build_cast_node(node, target_ty);
                 }

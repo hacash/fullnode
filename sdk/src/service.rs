@@ -8,13 +8,13 @@ use crate::error::{SdkError, SdkErrorCode};
 use crate::json::{SdkJsonFrom, SdkJsonTo};
 use crate::jsonparse;
 use crate::profile::{
-    CodecProfile, OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY, OP_ACCOUNT_VERIFY_ADDRESS,
-    OP_ACCOUNT_VERIFY_SIGNATURE, OP_ACTION_DESCRIBE, OP_AMOUNT_FORMAT, OP_AMOUNT_PARSE,
-    OP_DIAMOND_LOOKUP, OP_MESSAGE_PREPARE_SIGNATURE, OP_MESSAGE_VERIFY, OP_POLICY_EVALUATE,
-    OP_SYSTEM_PARAMS, OP_SYSTEM_SDK_VERSION, OP_TX_ATTACH_SIGNATURE,
+    CodecProfile, RequestField, OPERATIONS, OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY,
+    OP_ACCOUNT_VERIFY_ADDRESS, OP_ACCOUNT_VERIFY_SIGNATURE, OP_ACTION_DESCRIBE, OP_AMOUNT_FORMAT,
+    OP_AMOUNT_PARSE, OP_DIAMOND_LOOKUP, OP_MESSAGE_PREPARE_SIGNATURE, OP_MESSAGE_VERIFY,
+    OP_POLICY_EVALUATE, OP_SYSTEM_PARAMS, OP_SYSTEM_SDK_VERSION, OP_TX_ATTACH_SIGNATURE,
     OP_TX_ATTACH_SIGNATURE_UNBOUND, OP_TX_BUILD, OP_TX_DECODE, OP_TX_ENCODE, OP_TX_ESTIMATE_FEE,
     OP_TX_INSPECT, OP_TX_INSPECT_REPORT, OP_TX_PREPARE_SIGNATURE, OP_TX_SIGNATURE_REPORT,
-    OP_TX_VERIFY, OP_VM_CODE, OP_VM_DECODE_CALL, OPERATIONS, RequestField,
+    OP_TX_VERIFY, OP_VM_CODE, OP_VM_DECODE_CALL,
 };
 
 pub(crate) fn profile() -> &'static CodecProfile {
@@ -24,7 +24,9 @@ pub(crate) fn profile() -> &'static CodecProfile {
 
 /// Transport version of the JSON WASM surface (§5). Bumping this means the
 /// envelope/payload semantics changed.
-pub const TRANSPORT_VERSION: u32 = 10;
+pub const TRANSPORT_VERSION: u32 = 11;
+// v11: tx.inspect adds decoded gas budget, a max-charge estimate, billing size,
+//      and the fee-purity floor used for that estimate.
 // v10: fee pricing moved to the u232 unit: review/fee-estimate/params expose an
 //      explicit `fee_purity_unit` (schemas review@5, fee-estimate@2, params@2)
 //      and all purity/floor figures are u232-valued (they already travel as
@@ -670,7 +672,7 @@ mod tests {
     fn pricing_unit_is_declared_in_every_fee_payload() {
         let main = "1LRi6Wn38JtUppbFv2uWyAwtctcDLtFDFr";
         let payload = format!(
-            r#"{{"spec":{{"schema":"{}","tx_type":"2","main":"{main}","fee":"0.001","timestamp":"1700000000","actions":[{{"kind":1,"to":"{main}","hacash":"1.5"}}]}}}}"#,
+            r#"{{"spec":{{"schema":"{}","tx_type":"3","main":"{main}","fee":"0.001","timestamp":"1700000000","gas_max":"10","actions":[{{"kind":1,"to":"{main}","hacash":"1.5"}}]}}}}"#,
             crate::schema::SCHEMA_TRANSACTION_SPEC
         );
         let built = invoke_ok(OP_TX_BUILD, &payload);
@@ -681,10 +683,7 @@ mod tests {
             .map(|(_, v)| v.trim_matches('"').to_owned())
             .expect("build returns body");
 
-        let est = invoke_ok(
-            OP_TX_ESTIMATE_FEE,
-            &format!(r#"{{"body":"{hex_body}"}}"#),
-        );
+        let est = invoke_ok(OP_TX_ESTIMATE_FEE, &format!(r#"{{"body":"{hex_body}"}}"#));
         assert!(
             est.contains(r#""schema":"hacash.sdk/fee-estimate@2""#),
             "fee-estimate schema: {est}"
@@ -702,12 +701,9 @@ mod tests {
             "estimate purity must be a quoted decimal string: {est}"
         );
 
-        let rev = invoke_ok(
-            OP_TX_INSPECT_REPORT,
-            &format!(r#"{{"body":"{hex_body}"}}"#),
-        );
+        let rev = invoke_ok(OP_TX_INSPECT_REPORT, &format!(r#"{{"body":"{hex_body}"}}"#));
         assert!(
-            rev.contains(r#""schema":"hacash.sdk/review@5""#),
+            rev.contains(r#""schema":"hacash.sdk/review@7""#),
             "review schema: {rev}"
         );
         assert!(
@@ -718,11 +714,21 @@ mod tests {
             rev.contains(r#""fee_purity":""#),
             "review purity must be a quoted decimal string: {rev}"
         );
+        assert!(
+            !rev.contains(r#""gas_budget":null""#) && rev.contains(r#""gas_max_charge":""#),
+            "review includes decoded gas budget and HAC charge estimate: {rev}"
+        );
+        assert!(rev.contains(r#""fee_purity_floor":""#));
+        assert!(rev.contains(r#""billing_size":""#));
+        assert!(rev.contains(r#""gas_estimate_height":"0""#));
         // Round-trip: the boundary parser accepts the quoted-decimal form.
-        let review =
-            crate::inspect::Review::from_json_str(&rev).expect("review re-parses");
+        let review = crate::inspect::Review::from_json_str(&rev).expect("review re-parses");
         assert_eq!(review.fee_purity_unit, 232);
         assert!(review.fee_purity.is_some());
+        assert!(review.gas_budget.unwrap_or(0) > 0);
+        assert!(review.gas_max_charge.is_some());
+        assert!(review.fee_purity_floor.is_some());
+        assert!(review.billing_size.unwrap_or(0) > 0);
 
         let params = invoke_ok(id_from_name("system.params"), "");
         assert!(

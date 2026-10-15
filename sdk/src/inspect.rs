@@ -38,6 +38,16 @@ pub struct Review {
     pub main: String,
     pub fee: String,
     pub gas_max: Option<u8>,
+    /// Decoded maximum gas budget from the protocol's gas_max lookup table.
+    pub gas_budget: Option<u32>,
+    /// Estimated maximum HAC gas charge at the transaction's fee purity and
+    /// inspection height. Actual charge depends on executed gas and refunds.
+    pub gas_max_charge: Option<String>,
+    pub gas_estimate_height: Option<u64>,
+    /// Protocol fee-purity floor used by the gas estimate, in u232 per byte.
+    pub fee_purity_floor: Option<u64>,
+    /// Transaction billing size used to derive fee purity, in bytes.
+    pub billing_size: Option<u64>,
     pub tx_hash: String,
     pub hash_with_fee: String,
     pub unsigned_body_hash: String,
@@ -88,6 +98,8 @@ pub struct Review {
     /// `fee_purity >= floor_at(ctx.current_height)` — same pricing unit on both sides.
     pub fee_purity_ok: Option<bool>,
     pub actions: Vec<crate::audit::ActionDesc>,
+    /// Transaction's actual external address table, indexed by VM `ext(idx)`.
+    pub address_table: Vec<String>,
     pub asset_serials: Vec<u64>,
 }
 
@@ -224,6 +236,9 @@ fn build_review(
                 .protocol_params
                 .fee_purity_floor_at(ctx.current_height)
     });
+    let gas_estimate_height = context.map(|ctx| ctx.current_height).unwrap_or(0);
+    let (gas_budget, gas_max_charge, fee_purity_floor, billing_size) =
+        estimate_gas_max(tx.as_ref(), profile, gas_estimate_height);
 
     let mut review = Review {
         schema: SCHEMA_REVIEW.to_owned(),
@@ -233,6 +248,11 @@ fn build_review(
         main: tx.main().to_readable(),
         fee: tx.fee().to_fin_string(),
         gas_max: tx.gas_max_byte(),
+        gas_budget,
+        gas_max_charge,
+        gas_estimate_height: tx.gas_max_byte().map(|_| gas_estimate_height),
+        fee_purity_floor,
+        billing_size,
         tx_hash: hex::encode(tx.hash().0),
         hash_with_fee: hex::encode(tx.hash_with_fee().0),
         unsigned_body_hash: unsigned_body_hash.clone(),
@@ -264,6 +284,7 @@ fn build_review(
         fee_purity,
         fee_purity_ok,
         actions,
+        address_table: tx.addrs().iter().map(|address| address.to_readable()).collect(),
         asset_serials,
     };
 
@@ -271,6 +292,68 @@ fn build_review(
     // recomputation in prepare/attach/encode verifies it.
     review.review_binding = review_binding_of(&review, &unsigned_body_hash, tx.as_ref(), profile);
     Ok(review)
+}
+
+fn estimate_gas_max(
+    tx: &dyn Transaction,
+    profile: &CodecProfile,
+    height: u64,
+) -> (Option<u32>, Option<String>, Option<u64>, Option<u64>) {
+    let Some(gas_max_byte) = tx.gas_max_byte() else {
+        return (None, None, None, None);
+    };
+    let params = &hacash_params::MAINNET_PARAMS.protocol;
+    let budget = params.decode_gas_budget(gas_max_byte.min(params.tx_gas_budget_cap_byte));
+    let floor = profile.protocol_params.fee_purity_floor_at(height);
+    if budget <= 0 {
+        return (
+            Some(0),
+            Some(base::settlement_amount(0).to_fin_string()),
+            Some(floor),
+            tx.billing_size().ok().map(|size| size as u64),
+        );
+    }
+    let Ok(billing_size) = tx.billing_size() else {
+        return (Some(budget as u32), None, Some(floor), None);
+    };
+    let billing_size = billing_size as u128;
+    if billing_size == 0 {
+        return (Some(budget as u32), None, Some(floor), Some(0));
+    }
+    let Ok(raw_fee) = tx.fee().to_unit_u128(base::FEE_PRICING_UNIT) else {
+        return (
+            Some(budget as u32),
+            None,
+            Some(floor),
+            Some(billing_size as u64),
+        );
+    };
+    let Some(floor_fee) = (floor as u128).checked_mul(billing_size) else {
+        return (
+            Some(budget as u32),
+            None,
+            Some(floor),
+            Some(billing_size as u64),
+        );
+    };
+    let purity_fee = raw_fee.max(floor_fee);
+    let Some(numerator) = (budget as u128).checked_mul(purity_fee) else {
+        return (
+            Some(budget as u32),
+            None,
+            Some(floor),
+            Some(billing_size as u64),
+        );
+    };
+    // Match protocol gas settlement: ceil(gas * purity_fee / billing_size),
+    // then round up to the balance settlement unit (u238).
+    let pricing_fee = numerator.div_ceil(billing_size);
+    (
+        Some(budget as u32),
+        Some(base::settlement_amount(pricing_fee).to_fin_string()),
+        Some(floor),
+        Some(billing_size as u64),
+    )
 }
 
 /// Canonical review binding — the single computation shared by build/prepare/attach/encode:

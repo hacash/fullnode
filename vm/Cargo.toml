@@ -17,7 +17,13 @@ execute = [
     "dep:blake2",
     "dep:tiny-keccak",
     "dep:p256",
+    "syntax",
 ]
+# FitSH source-level compilation front-end: tokenizer, `Syntax` parser,
+# const literals, IR serialize/codegen and the `lang_to_*` builders. Depends
+# only on codec-side types (+ `sys` hashing for `calc_func_sign`), so a
+# codec-only consumer (SDK wasm) may opt in without the execution engine.
+syntax = []
 [dependencies]
 sys = { workspace = true }
 field = { workspace = true }

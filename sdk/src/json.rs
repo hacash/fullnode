@@ -738,6 +738,11 @@ impl_sdk_json! {
         main: str,
         fee: str,
         gas_max: opt_u8,
+        gas_budget: opt_u32,
+        gas_max_charge: opt_str,
+        gas_estimate_height: opt_u64,
+        fee_purity_floor: opt_u64,
+        billing_size: opt_u64,
         tx_hash: str,
         hash_with_fee: str,
         unsigned_body_hash: str,
@@ -766,6 +771,7 @@ impl_sdk_json! {
         fee_purity: opt_u64,
         fee_purity_ok: opt_bool,
         actions: obj_arr ActionDesc,
+        address_table: str_arr,
         asset_serials: u64_arr,
     } both
 }
@@ -948,10 +954,9 @@ mod tests {
         let decoded = InspectContext::from_json_str(&ctx.to_json_string()).unwrap();
         assert_eq!(decoded, ctx);
         // Numeric fields travel as decimal strings on the boundary.
-        assert!(
-            ctx.to_json_string()
-                .contains("\"current_height\":\"123456\"")
-        );
+        assert!(ctx
+            .to_json_string()
+            .contains("\"current_height\":\"123456\""));
 
         let built = crate::build::BuiltTransaction {
             schema: "s".to_owned(),
@@ -1037,12 +1042,10 @@ mod tests {
         // Missing required field is rejected.
         assert!(InspectContext::from_json_str("{}").is_err());
         // Duplicated keys are rejected.
-        assert!(
-            InspectContext::from_json_str(
-                r#"{"current_height":"1","current_height":"2","expected_chain_id":"0"}"#
-            )
-            .is_err()
-        );
+        assert!(InspectContext::from_json_str(
+            r#"{"current_height":"1","current_height":"2","expected_chain_id":"0"}"#
+        )
+        .is_err());
     }
 
     #[test]

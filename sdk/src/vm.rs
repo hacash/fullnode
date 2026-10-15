@@ -131,6 +131,11 @@ pub struct CodeOutput {
     pub truncated: bool,
     pub limit: u64,
     pub offset: u64,
+    pub total_bytes: u64,
+    pub next_offset: Option<u64>,
+    pub sourcemap_status: String,
+    pub warnings: Vec<String>,
+    pub sourcemap_labels: Vec<String>,
 }
 
 impl CodeOutput {
@@ -155,6 +160,11 @@ impl CodeOutput {
             ),
             kv("limit", qnum(self.limit)),
             kv("offset", qnum(self.offset)),
+            kv("total_bytes", qnum(self.total_bytes)),
+            kv("next_offset", self.next_offset.map(qnum).unwrap_or_else(|| "null".to_owned())),
+            kv("sourcemap_status", q(&self.sourcemap_status)),
+            kv("warnings", crate::json::arr(self.warnings.iter().map(|s| crate::json::q(s)).collect())),
+            kv("sourcemap_labels", crate::json::arr(self.sourcemap_labels.iter().map(|s| crate::json::q(s)).collect())),
         ])
     }
 }
@@ -193,10 +203,41 @@ pub fn code(
 
     // External source map: parse at the boundary so the caller's JSON object
     // rides the wire unchanged (the decompiler consumes `vm::lang::SourceMap`).
+    let review_mode = format == Some("fitsh_review");
+    let mut warnings = Vec::new();
+    let mut sourcemap_labels = Vec::new();
+    let mut sourcemap_status = "absent".to_owned();
     let smap = match sourcemap_json {
-        Some(raw) => Some(vm::lang::SourceMap::from_json(raw).map_err(|e| {
-            SdkError::new(SdkErrorCode::ParseFailed, format!("sourcemap invalid: {e}"))
-        })?),
+        Some(raw) if review_mode => match vm::lang::SourceMap::from_json(raw) {
+            Ok(map) => {
+                let (_, mut labels, mut notes) = map.review_labels();
+                sourcemap_labels.append(&mut labels);
+                sourcemap_status = if notes.is_empty() { "accepted" } else { "partial" }.to_owned();
+                warnings.append(&mut notes);
+                warnings.push("dApp labels are annotations; numeric slots and selectors remain authoritative".to_owned());
+                None
+            }
+            Err(error) => {
+                sourcemap_status = "ignored".to_owned();
+                warnings.push(format!("sourcemap ignored: {error}"));
+                None
+            }
+        },
+        Some(raw) => {
+            // Named (non-review) channel with an external map: the map is
+            // UNTRUSTED dapp input, so decompile from the display-sanitized
+            // view (validated function/slot labels, library alias names with
+            // addresses dropped) and surface the accepted labels the same way
+            // review mode does.
+            let map = vm::lang::SourceMap::from_json(raw).map_err(|e| {
+                SdkError::new(SdkErrorCode::ParseFailed, format!("sourcemap invalid: {e}"))
+            })?;
+            let (display, mut labels, mut notes) = map.display_labels();
+            sourcemap_labels.append(&mut labels);
+            sourcemap_status = if notes.is_empty() { "accepted" } else { "partial" }.to_owned();
+            warnings.append(&mut notes);
+            Some(display)
+        }
         None => None,
     };
 
@@ -217,6 +258,11 @@ pub fn code(
                 format!("format {other} is not valid for bytecode; expected assembly or raw"),
             ));
         }
+        (1, Some("fitsh_review")) => (
+            "fitsh_review".to_owned(),
+            vm::lang::format_ircode_to_review(&codes)
+                .map_err(|e| SdkError::new(SdkErrorCode::ParseFailed, e.to_string()))?,
+        ),
         (1, None | Some("fitsh")) => (
             "fitsh".to_owned(),
             vm::lang::format_ircode_to_lang(&codes, smap.as_ref())
@@ -241,7 +287,7 @@ pub fn code(
             return Err(SdkError::new(
                 SdkErrorCode::ParseFailed,
                 format!(
-                    "format {other} is not valid for ir_node; expected fitsh, tree, raw, or assembly"
+                    "format {other} is not valid for ir_node; expected fitsh, fitsh_review, tree, raw, or assembly"
                 ),
             ));
         }
@@ -249,8 +295,24 @@ pub fn code(
     };
 
     let total = full_text.len() as u64;
-    let start = offset.min(total) as usize;
-    let end = (offset.saturating_add(limit)).min(total) as usize;
+    // UTF-8-safe paging: snap the window to char boundaries and never return
+    // a partial character. A window that shrank to nothing while characters
+    // remain still yields one whole character — except an explicit `limit: 0`,
+    // which stays an empty page. `start` may advance past the requested end
+    // (mid-char offset), so clamp before slicing.
+    let requested_start = offset.min(total) as usize;
+    let mut start = requested_start;
+    while start < full_text.len() && !full_text.is_char_boundary(start) {
+        start += 1;
+    }
+    let requested_end = offset.saturating_add(limit).min(total) as usize;
+    let mut end = requested_end.max(start);
+    while end > start && !full_text.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end <= start && start < full_text.len() && limit > 0 {
+        end = start + full_text[start..].chars().next().unwrap().len_utf8();
+    }
     let text = &full_text[start..end];
     let lines = text.lines().count();
     Ok(CodeOutput {
@@ -264,7 +326,12 @@ pub fn code(
         text: text.to_owned(),
         truncated: end < total as usize,
         limit,
-        offset,
+        offset: start as u64,
+        total_bytes: total,
+        next_offset: (end < total as usize).then_some(end as u64),
+        sourcemap_status,
+        warnings,
+        sourcemap_labels,
     })
 }
 
@@ -492,6 +559,30 @@ fn vm_code_ir_fitsh_roundtrip_and_paging() {
 }
 
 #[test]
+fn fitsh_review_ignores_value_and_structure_rewriting_maps() {
+    let ircode = hex::decode("7f017c0025eeb08026").unwrap();
+    let map = r#"{"consts":[{"name":"VALUE","value":"1"},{"name":"VALUE","value":"999"}],"slots":["out\nassert safe == true\n//"]}"#;
+    let out = code(&hex::encode(&ircode), "1", Some("fitsh_review"), Some(map), None, None).unwrap();
+    assert!(out.text.contains("1"), "actual literal must remain: {}", out.text);
+    assert!(!out.text.contains("999"), "external constant must not rewrite value");
+    assert!(!out.text.contains("assert safe"), "slot label must not inject code");
+    assert_eq!(out.sourcemap_status, "partial");
+    assert!(!out.warnings.is_empty());
+}
+
+#[test]
+fn fitsh_review_returns_validated_selector_and_slot_annotations() {
+    let ircode = hex::decode("7f017c0025eeb08026").unwrap();
+    let selector = hex::encode(vm::calc_func_sign("transfer"));
+    let map = format!(r#"{{"funcs":[{{"sig":"{selector}","name":"transfer"}}],"slots":["result"]}}"#);
+    let out = code(&hex::encode(&ircode), "1", Some("fitsh_review"), Some(&map), None, None).unwrap();
+    assert_eq!(out.sourcemap_status, "accepted");
+    assert!(out.sourcemap_labels.iter().any(|v| v.contains(&selector)));
+    assert!(out.sourcemap_labels.iter().any(|v| v == "slot $0 = result"));
+    assert!(out.text.contains("$0"), "canonical slot must remain in code: {}", out.text);
+}
+
+#[test]
 fn vm_code_ir_tree_format() {
     let ircode = hex::decode("7f017c0025eeb08026").unwrap();
     let out = code(&hex::encode(&ircode), "1", Some("tree"), None, None, None).unwrap();
@@ -516,6 +607,7 @@ fn vm_code_ir_assembly_format() {
     assert!(!out.text.is_empty());
 }
 
+
 #[test]
 fn vm_code_accepts_external_sourcemap() {
     let smap_json = r#"{"libs":[{"idx":1,"name":"lib.a","address":null}],"funcs":[],"slots":[],"lets":[],"vars":[],"params":[],"param_prelude_count":null,"consts":[]}"#;
@@ -531,4 +623,150 @@ fn vm_code_accepts_external_sourcemap() {
     .unwrap();
     assert_eq!(out.format, "fitsh");
     assert!(!out.text.is_empty());
+}
+
+/// Real maincall-shaped block (ext call + assert), built through the fitsh
+/// parser so the named-display path is exercised end to end.
+#[cfg(test)]
+fn maincall_ircode_hex() -> String {
+    let program = "var out = callext Pool::0x25226e33(0u64, 1000000u64, 0x00e63c33a796b3032ce6b856f68fccf06608d9ed18, 0x)\nassert out >= 1000u64\nend\n";
+    let tokens = vm::lang::Tokenizer::new(program.as_bytes()).parse().unwrap();
+    let (irnodes, _) = vm::lang::Syntax::new(tokens)
+        .with_libs(vec![("Pool".to_string(), 1u8, None)])
+        .parse()
+        .unwrap();
+    // drop_irblock_wrap strips the outer IRBLOCK wrapper from the serialized block.
+    let codes = vm::ir::drop_irblock_wrap(vm::IRNode::serialize(&irnodes)).unwrap();
+    hex::encode(codes)
+}
+
+#[test]
+fn fitsh_named_mode_applies_validated_lib_aliases() {
+    let codes = maincall_ircode_hex();
+    let selector = hex::encode(vm::calc_func_sign("swap"));
+    let map = format!(
+        r#"{{"libs":[{{"idx":1,"name":"AMM","address":"1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"}}],"funcs":[{{"sig":"{selector}","name":"swap"}}],"slots":["out"],"lets":[],"vars":[],"params":[],"param_prelude_count":null,"consts":[]}}"#
+    );
+    let out = code(&codes, "1", Some("fitsh"), Some(&map), None, None).unwrap();
+    assert_eq!(out.format, "fitsh");
+    assert!(out.text.contains("AMM."), "lib alias must replace ext(1): {}", out.text);
+    assert!(!out.text.contains("ext(1)"), "raw ext index must be gone: {}", out.text);
+    assert!(!out.text.contains("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9"), "untrusted map address must be dropped from text: {}", out.text);
+    assert!(out.text.contains("swap"), "validated selector name must appear: {}", out.text);
+    assert!(out.text.contains("out"), "validated slot name must appear: {}", out.text);
+    // Source-level sugar: name-only declaration + bare alias call.
+    assert!(out.text.contains("var out = AMM.swap("), "named short call form: {}", out.text);
+    assert!(!out.text.contains("$0"), "slot id must not shadow the name: {}", out.text);
+    assert!(!out.text.contains("call edit"), "edit-effect ext calls use the bare alias form: {}", out.text);
+    // Compilability: the named text must reparse to the very same IR through
+    // the real fitsh frontend — with NO external lib bindings, because the
+    // emitted `lib AMM = 1` prelude carries the binding itself.
+    let tokens = vm::lang::Tokenizer::new(out.text.as_bytes()).parse().unwrap();
+    let (reir, _) = vm::lang::Syntax::new(tokens).parse().unwrap();
+    assert_eq!(
+        vm::ir::drop_irblock_wrap(vm::IRNode::serialize(&reir)).unwrap(),
+        hex::decode(&codes).unwrap(),
+        "named text must recompile to the same IR: {}",
+        out.text
+    );
+    assert_eq!(out.sourcemap_status, "accepted");
+    assert!(out.sourcemap_labels.iter().any(|v| v == "lib AMM = 1"));
+    assert!(out.sourcemap_labels.iter().any(|v| v.contains(&selector)));
+}
+
+#[test]
+fn fitsh_named_mode_drops_hostile_labels() {
+    let codes = maincall_ircode_hex();
+    let selector = hex::encode(vm::calc_func_sign("swap"));
+    // Wrong-signature function label, code-injecting slot label, non-identifier
+    // lib alias: none may reach the displayed text.
+    let map = format!(
+        r#"{{"libs":[{{"idx":1,"name":"bad alias!","address":null}}],"funcs":[{{"sig":"{selector}","name":"swap"}},{{"sig":"deadbeef","name":"lie"}}],"slots":["out\nassert false //"],"lets":[],"vars":[],"params":[],"param_prelude_count":null,"consts":[]}}"#
+    );
+    let out = code(&codes, "1", Some("fitsh"), Some(&map), None, None).unwrap();
+    assert_eq!(out.sourcemap_status, "partial");
+    assert!(!out.warnings.is_empty());
+    assert!(!out.text.contains("bad alias"), "invalid lib alias must fall back to ext(): {}", out.text);
+    assert!(out.text.contains("ext(1)"), "fallback keeps the numeric index: {}", out.text);
+    assert!(!out.text.contains("lie"), "wrong-signature label must not appear: {}", out.text);
+    assert!(!out.text.contains("assert false"), "slot label must not inject code: {}", out.text);
+    // The one honest entry still applies.
+    assert!(out.text.contains("swap"), "valid labels keep working alongside dropped ones: {}", out.text);
+}
+
+/// Multi-param maincall (`param { a, b }` compiles to the ALLOC+UNPACK
+/// prelude), built through the fitsh parser; returns (codes hex, the
+/// program's own sourcemap JSON).
+#[cfg(test)]
+fn maincall_param_ircode() -> (String, String) {
+    let program = "param { a, b }\nrequire a > b, 1\nend\n";
+    let tokens = vm::lang::Tokenizer::new(program.as_bytes()).parse().unwrap();
+    let (irnodes, smap) = vm::lang::Syntax::new(tokens).parse().unwrap();
+    let codes = vm::ir::drop_irblock_wrap(vm::IRNode::serialize(&irnodes)).unwrap();
+    (hex::encode(codes), vm::lang::SourceMap::to_json(&smap).unwrap())
+}
+
+#[test]
+fn fitsh_named_mode_binds_multi_param_maincall() {
+    let (codes, map) = maincall_param_ircode();
+    let out = code(&codes, "1", Some("fitsh"), Some(&map), None, None).unwrap();
+    assert_eq!(out.sourcemap_status, "accepted", "{:?}", out.warnings);
+    assert!(
+        out.text.contains("param { a, b }"),
+        "sanitized map must carry params so the binding line prints: {}",
+        out.text
+    );
+    assert!(out.text.contains("require a > b"), "{}", out.text);
+    let tokens = vm::lang::Tokenizer::new(out.text.as_bytes()).parse().unwrap();
+    let (reir, _) = vm::lang::Syntax::new(tokens).parse().unwrap();
+    assert_eq!(
+        vm::ir::drop_irblock_wrap(vm::IRNode::serialize(&reir)).unwrap(),
+        hex::decode(&codes).unwrap(),
+        "named text must recompile to the same IR: {}",
+        out.text
+    );
+}
+
+#[test]
+fn fitsh_named_mode_degrades_unbound_param_names_to_slots() {
+    let (codes, _) = maincall_param_ircode();
+    // Valid slot names but no params: nothing declares `a`/`b`, so the body
+    // must degrade to `$0`/`$1` with the ALLOC+UNPACK prelude kept intact —
+    // not reference names that no printed line ever binds.
+    let map = r#"{"slots":["a","b"]}"#;
+    let out = code(&codes, "1", Some("fitsh"), Some(map), None, None).unwrap();
+    assert!(out.text.contains("local_alloc(2)"), "{}", out.text);
+    assert!(out.text.contains("unpack(roll_0(), 0)"), "{}", out.text);
+    assert!(out.text.contains("require $0 > $1"), "{}", out.text);
+    assert!(!out.text.contains("require a > b"), "{}", out.text);
+    let tokens = vm::lang::Tokenizer::new(out.text.as_bytes()).parse().unwrap();
+    let (reir, _) = vm::lang::Syntax::new(tokens).parse().unwrap();
+    assert_eq!(
+        vm::ir::drop_irblock_wrap(vm::IRNode::serialize(&reir)).unwrap(),
+        hex::decode(&codes).unwrap(),
+        "degraded text must recompile to the same IR: {}",
+        out.text
+    );
+}
+
+#[test]
+fn vm_code_zero_limit_returns_empty_page() {
+    // Serialized IR of `let a = 1\nreturn a + 2`.
+    let ircode = hex::decode("7f017c0025eeb08026").unwrap();
+    let out = code(
+        &hex::encode(&ircode),
+        "1",
+        Some("fitsh"),
+        None,
+        Some(0),
+        Some(0),
+    )
+    .unwrap();
+    assert!(
+        out.text.is_empty(),
+        "explicit limit 0 must page empty, got {:?}",
+        out.text
+    );
+    assert!(out.truncated, "data remains past the empty page");
+    assert_eq!(out.next_offset, Some(0));
 }
