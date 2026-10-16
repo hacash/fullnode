@@ -1,12 +1,31 @@
 //! Asset creation action (kind 16, moved from mint; execution body gated by the `execute` feature).
 
+use field::descfmt::user_text;
 use field::{Amount, AssetSmelt};
 
 base::action_simple! { AssetCreate, 16, 2, TOP_UNIQUE, {
     metadata: AssetSmelt,
     protocol_cost: Amount
 }, this, {
-    description: format!("Register asset <{}>", this.metadata.ticket.to_readable_or_hex())
+    description: {
+        let meta = &this.metadata;
+        let mut desc = format!(
+            "Register Asset #{} {} (name {}, supply {} atoms, {} decimals, issuer {})",
+            meta.serial.uint(),
+            user_text(meta.ticket.as_ref()),
+            user_text(meta.name.as_ref()),
+            meta.supply.uint(),
+            meta.decimal.uint(),
+            meta.issuer.to_readable()
+        );
+        if this.protocol_cost.is_positive() {
+            desc.push_str(&format!(
+                "; pay {} HAC protocol fee",
+                this.protocol_cost.to_hac_string()
+            ));
+        }
+        desc
+    }
 }}
 
 #[cfg(test)]

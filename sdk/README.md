@@ -137,7 +137,7 @@ fields such as `action_index`, `byte_offset`, `expected`, and `actual`.
 | 7 | `tx.attach_signature_unbound` | `body`, `proof` | `attach-result@2` (no approval-chain checks) |
 | 8 | `tx.verify` | `body` | `verify-result@1`: `ok`, `errors` |
 | 9 | `tx.signature_report` | `body` | `signature-report@1`: `required`, `present`, `valid`, `missing`, `invalid` |
-| 10 | `tx.decode` | `body`, `describe?` | `transaction-json@1`: `tx_type`, `timestamp`, `main`, `fee`, `gas_max`, `tx_hash`, `hash_with_fee`, `unsigned_body_hash`, `actions[]` (`action-desc@3`), `signatures[{public_key, signature}]` |
+| 10 | `tx.decode` | `body`, `describe?` | `transaction-json@2`: `tx_type`, `timestamp`, primary `main`, optional wire-preserving `addrlist` (address string for Single, array for List), `fee`, `gas_max`, `tx_hash`, `hash_with_fee`, `unsigned_body_hash`, `actions[]` (`action-desc@3`), `signatures[{public_key, signature}]` |
 | 11 | `tx.encode` | `transaction` (a `tx.decode` output), `review?` | `built-transaction@1`; rebuilt `unsigned_body_hash` must match (else `transaction_json_mismatch`) |
 | 12 | `account.verify_address` | `address` | `{ok, error?, address?}` (canonical readable form) |
 | 13 | `account.address_from_public_key` | `public_key` (33-byte compressed hex) | `{address, version}` |
@@ -153,6 +153,8 @@ fields such as `action_index`, `byte_offset`, `expected`, and `actual`.
 | 23 | `vm.decode_call` | `action` (raw wire hex of a `contract_main_call`, e.g. `tx.decode`'s `actions[].raw`) | `vm-call@1`: `kind`, `name`, `scope`, `marks`, `marks_valid`, `codeconf`, `code_type`, `code_type_name`, `codes_len`, `codes_hash`, `codes_preview` |
 | 24 | `action.describe` | `action` (raw wire hex of any action), `describe?` | `action-desc@3`: single-action description with independently switchable `description` / `json` / `code` facets |
 | 25 | `vm.code` | `codes` (hex), `code_type` (0=bytecode, 1=ir_node), `format?` (`assembly`/`raw` for bytecode; `fitsh`/`fitsh_review`/`tree`/`assembly`/`raw` for ir), `sourcemap?`, `limit?` (default 8000 bytes), `offset?` | `vm-code@2`: `code_type`, `code_type_name`, `codes_len`, `codes_hash`, `format`, `lines`, `text`, `truncated`, `limit`, `offset`, `total_bytes`, `next_offset?`, `sourcemap_status`, `warnings`, `sourcemap_labels` |
+
+`transaction-json@2` is an output schema change: `tx.decode` now emits optional `addrlist` so `Single(address)` and `List([address, ...])` survive an exact `tx.decode` → `tx.encode` round trip. The decoder accepts the field as absent when parsing a manually constructed v2 object and rebuilds it as the legacy `Single(main)` form. The schema id is bumped because older strict `transaction-json@1` parsers reject v2 output; consumers should gate on `schema` and preserve `addrlist` unchanged. `main` remains the primary/fee-payer address and equals the first list item; the address table is not a signer list.
 
 Optional fields are exactly as written (`?`); unknown or duplicated request
 fields are rejected with `unknown_field`/`parse_failed`. The shared signing

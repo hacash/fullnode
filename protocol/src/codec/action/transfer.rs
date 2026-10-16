@@ -2,14 +2,12 @@
 
 use base::AddrOrPtr;
 use field::{Amount, AssetAmt, DiamondName, DiamondNameListMax200, Satoshi};
+use field::descfmt::addr_or_ptr_text;
 use sys::Ret;
 
 /// Readable rendering of a wire destination / source (address or pointer).
 pub(super) fn addr_or_ptr_readable(ptr: &AddrOrPtr) -> String {
-    match ptr {
-        AddrOrPtr::Addr(addr) => addr.to_readable(),
-        AddrOrPtr::Ptr(index) => format!("<address pointer {}>", index),
-    }
+    addr_or_ptr_text(ptr)
 }
 
 base::action_simple! { TransferHacTo, 1, 1, CALL, {
@@ -17,7 +15,7 @@ base::action_simple! { TransferHacTo, 1, 1, CALL, {
     hacash: Amount
 }, this, {
     transfer: (to = to, payload = Hac(hacash)),
-    description: format!("Transfer {} HAC to {}", this.hacash.to_unit_string("HAC"), addr_or_ptr_readable(&this.to))
+    description: format!("Transfer {} HAC from the transaction main address to {}", this.hacash.to_hac_string(), addr_or_ptr_readable(&this.to))
 }}
 
 base::action_simple! { TransferHacFrom, 13, 1, CALL, {
@@ -26,7 +24,7 @@ base::action_simple! { TransferHacFrom, 13, 1, CALL, {
 }, this, {
     req_sign: vec![this.from.clone()],
     transfer: (from = from, payload = Hac(hacash)),
-    description: format!("Transfer {} HAC from {}", this.hacash.to_unit_string("HAC"), addr_or_ptr_readable(&this.from))
+    description: format!("Transfer {} HAC from {} to the transaction main address", this.hacash.to_hac_string(), addr_or_ptr_readable(&this.from))
 }}
 
 base::action_simple! { TransferHacFromTo, 14, 1, CALL, {
@@ -36,7 +34,7 @@ base::action_simple! { TransferHacFromTo, 14, 1, CALL, {
 }, this, {
     req_sign: vec![this.from.clone()],
     transfer: (to = to, from = from, payload = Hac(hacash)),
-    description: format!("Transfer {} HAC from {} to {}", this.hacash.to_unit_string("HAC"), addr_or_ptr_readable(&this.from), addr_or_ptr_readable(&this.to))
+    description: format!("Transfer {} HAC from {} to {}", this.hacash.to_hac_string(), addr_or_ptr_readable(&this.from), addr_or_ptr_readable(&this.to))
 }}
 
 base::action_simple! { TransferSatTo, 10, 2, CALL, {
@@ -44,7 +42,7 @@ base::action_simple! { TransferSatTo, 10, 2, CALL, {
     satoshi: Satoshi
 }, this, {
     transfer: (to = to, payload = Sat(satoshi)),
-    description: format!("Transfer {} SAT to {}", this.satoshi.uint(), addr_or_ptr_readable(&this.to))
+    description: format!("Transfer {} SAT from the transaction main address to {}", this.satoshi.uint(), addr_or_ptr_readable(&this.to))
 }}
 
 base::action_simple! { TransferSatFrom, 11, 2, CALL, {
@@ -53,7 +51,7 @@ base::action_simple! { TransferSatFrom, 11, 2, CALL, {
 }, this, {
     req_sign: vec![this.from.clone()],
     transfer: (from = from, payload = Sat(satoshi)),
-    description: format!("Transfer {} SAT from {}", this.satoshi.uint(), addr_or_ptr_readable(&this.from))
+    description: format!("Transfer {} SAT from {} to the transaction main address", this.satoshi.uint(), addr_or_ptr_readable(&this.from))
 }}
 
 base::action_simple! { TransferSatFromTo, 12, 2, CALL, {
@@ -72,7 +70,7 @@ base::action_simple! { TransferAssetTo, 17, 2, CALL, {
 }, this, {
     extra9: true,
     transfer: (to = to, payload = Asset(asset)),
-    description: format!("Transfer {{{}:{}}} to {}", this.asset.serial.uint(), this.asset.amount.uint(), addr_or_ptr_readable(&this.to))
+    description: format!("Transfer {} atoms of Asset #{} from the transaction main address to {}", this.asset.amount.uint(), this.asset.serial.uint(), addr_or_ptr_readable(&this.to))
 }}
 
 base::action_simple! { TransferAssetFrom, 18, 2, CALL, {
@@ -82,7 +80,7 @@ base::action_simple! { TransferAssetFrom, 18, 2, CALL, {
     extra9: true,
     req_sign: vec![this.from.clone()],
     transfer: (from = from, payload = Asset(asset)),
-    description: format!("Transfer {{{}:{}}} from {}", this.asset.serial.uint(), this.asset.amount.uint(), addr_or_ptr_readable(&this.from))
+    description: format!("Transfer {} atoms of Asset #{} from {} to the transaction main address", this.asset.amount.uint(), this.asset.serial.uint(), addr_or_ptr_readable(&this.from))
 }}
 
 base::action_simple! { TransferAssetFromTo, 19, 2, CALL, {
@@ -93,7 +91,7 @@ base::action_simple! { TransferAssetFromTo, 19, 2, CALL, {
     extra9: true,
     req_sign: vec![this.from.clone()],
     transfer: (to = to, from = from, payload = Asset(asset)),
-    description: format!("Transfer {{{}:{}}} from {} to {}", this.asset.serial.uint(), this.asset.amount.uint(), addr_or_ptr_readable(&this.from), addr_or_ptr_readable(&this.to))
+    description: format!("Transfer {} atoms of Asset #{} from {} to {}", this.asset.amount.uint(), this.asset.serial.uint(), addr_or_ptr_readable(&this.from), addr_or_ptr_readable(&this.to))
 }}
 
 base::action_simple! { TransferHacdSingleTo, 5, 2, CALL, {
@@ -102,7 +100,7 @@ base::action_simple! { TransferHacdSingleTo, 5, 2, CALL, {
 }, this, {
     validate: "Self::validate_codec",
     transfer: (to = to, payload = Hacd(1, diamond)),
-    description: format!("Transfer 1 HACD ({}) to {}", this.diamond.to_readable(), addr_or_ptr_readable(&this.to))
+    description: format!("Transfer 1 HACD ({}) from the transaction main address to {}", this.diamond.to_readable(), addr_or_ptr_readable(&this.to))
 }}
 
 base::action_simple! { TransferHacdFromTo, 6, 2, CALL, {
@@ -122,7 +120,7 @@ base::action_simple! { TransferHacdTo, 7, 2, CALL, {
 }, this, {
     validate: "Self::validate_codec",
     transfer: (to = to, payload = Hacd(diamonds.length(), diamonds)),
-    description: format!("Transfer {} HACD ({}) to {}", this.diamonds.length(), this.diamonds.splitstr(), addr_or_ptr_readable(&this.to))
+    description: format!("Transfer {} HACD ({}) from the transaction main address to {}", this.diamonds.length(), this.diamonds.splitstr(), addr_or_ptr_readable(&this.to))
 }}
 
 base::action_simple! { TransferHacdFrom, 8, 2, CALL, {
@@ -132,7 +130,7 @@ base::action_simple! { TransferHacdFrom, 8, 2, CALL, {
     validate: "Self::validate_codec",
     req_sign: vec![this.from.clone()],
     transfer: (from = from, payload = Hacd(diamonds.length(), diamonds)),
-    description: format!("Transfer {} HACD ({}) from {}", this.diamonds.length(), this.diamonds.splitstr(), addr_or_ptr_readable(&this.from))
+    description: format!("Transfer {} HACD ({}) from {} to the transaction main address", this.diamonds.length(), this.diamonds.splitstr(), addr_or_ptr_readable(&this.from))
 }}
 
 impl TransferHacdSingleTo {

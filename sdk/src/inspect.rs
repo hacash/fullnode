@@ -2,7 +2,7 @@
 //! The SDK never executes or consults a node; the chain context is caller input, and guard/topology findings are facts, never denials.
 
 use base::{BinaryCodecs, Transaction, TransactionSign};
-use field::Address;
+use field::{AddrOrList, Address};
 
 use crate::audit::{self, Auditability};
 use crate::codec::standard_codecs;
@@ -462,6 +462,9 @@ pub struct TransactionJson {
     pub tx_type: u8,
     pub timestamp: u64,
     pub main: String,
+    /// Optional for callers constructing legacy-shaped values; decoded values
+    /// always preserve the wire Single/List form.
+    pub addrlist: Option<AddrOrList>,
     pub fee: String,
     pub gas_max: Option<u8>,
     pub tx_hash: String,
@@ -500,6 +503,7 @@ pub fn decode_transaction_json(
         tx_type: tx.ty(),
         timestamp: tx.timestamp().value(),
         main: tx.main().to_readable(),
+        addrlist: tx.addrlist(),
         fee: tx.fee().to_fin_string(),
         gas_max: tx.gas_max_byte(),
         tx_hash: hex::encode(tx.hash().0),
@@ -577,9 +581,19 @@ pub fn encode_transaction_json(
 
     // Build via the protocol's standard-tx constructor (signatures inserted
     // mechanically), then re-decode for the round-trip invariant.
+    let mut request = base::TxCreateRequest::new(transaction.tx_type, main, fee, transaction.timestamp)
+        .with_gas_max(transaction.gas_max.unwrap_or(0));
+    if let Some(addrlist) = transaction.addrlist.clone() {
+        if addrlist.to_list().first() != Some(&main) {
+            return Err(SdkError::new(
+                SdkErrorCode::ParseFailed,
+                "transaction json main must equal addrlist primary address",
+            ));
+        }
+        request = request.with_addrlist(addrlist);
+    }
     let encoded = protocol::tx_std::encode_standard_tx(
-        base::TxCreateRequest::new(transaction.tx_type, main, fee, transaction.timestamp)
-            .with_gas_max(transaction.gas_max.unwrap_or(0)),
+        request,
         &actions,
         &signs,
     )

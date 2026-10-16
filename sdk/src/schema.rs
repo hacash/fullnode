@@ -17,7 +17,8 @@ pub const SCHEMA_REVIEW: &str = "hacash.sdk/review@7";
 pub const SCHEMA_ACTION_DESC: &str = "hacash.sdk/action-desc@3";
 pub const SCHEMA_TRANSFER_DESC: &str = "hacash.sdk/transfer-desc@1";
 pub const SCHEMA_TRANSACTION_SPEC: &str = "hacash.sdk/transaction-spec@2";
-pub const SCHEMA_TRANSACTION_JSON: &str = "hacash.sdk/transaction-json@1";
+/// v2: preserves wire Single/List address-table shape in optional `addrlist`.
+pub const SCHEMA_TRANSACTION_JSON: &str = "hacash.sdk/transaction-json@2";
 pub const SCHEMA_BUILT_TRANSACTION: &str = "hacash.sdk/built-transaction@1";
 pub const SCHEMA_SIGNING_REQUEST: &str = "hacash.sdk/signing-request@1";
 pub const SCHEMA_SIGNATURE_PROOF: &str = "hacash.sdk/signature-proof@1";

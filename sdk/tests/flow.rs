@@ -739,6 +739,75 @@ fn tx_encode_round_trips_and_rejects_tampered_input() {
 }
 
 #[test]
+fn transaction_json_preserves_addrlist_shape_and_signer_scope() {
+    use field::AddrOrList;
+
+    let primary = sys::Account::create_by("123456").unwrap();
+    let to_only = sys::Account::create_by("to-only").unwrap();
+    let from = sys::Account::create_by("from-pointer").unwrap();
+    let addresses = vec![
+        field::Address::from_readable(primary.readable()).unwrap(),
+        field::Address::from_readable(to_only.readable()).unwrap(),
+        field::Address::from_readable(from.readable()).unwrap(),
+    ];
+    let action = ActionSpec::new(r#"{"kind":14,"from":2,"to":1,"hacash":"1:248"}"#)
+        .unwrap();
+    let built = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: primary.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        addrlist: Some(AddrOrList::from_list(addresses.clone()).unwrap()),
+        actions: vec![action],
+    })
+    .unwrap();
+    let review = inspect_report(&built.body, None, &profile(), &sdk::DescribeOptions::default())
+        .unwrap();
+    assert_eq!(review.main, primary.readable());
+    assert_eq!(review.address_table, vec![primary.readable(), to_only.readable(), from.readable()]);
+    assert!(review.required_signers.contains(&primary.readable().to_owned()));
+    assert!(review.required_signers.contains(&from.readable().to_owned()));
+    assert!(!review.required_signers.contains(&to_only.readable().to_owned()));
+
+    let decoded = sdk::inspect::decode_transaction_json(&built.body, &sdk::DescribeOptions::default())
+        .unwrap();
+    assert!(matches!(decoded.addrlist, Some(AddrOrList::List(_))));
+    assert_eq!(decoded.addrlist.as_ref().unwrap().to_list(), addresses);
+    let rebuilt = sdk::inspect::encode_transaction_json(&decoded, None, &profile()).unwrap();
+    assert_eq!(rebuilt.body, built.body);
+
+    let action_json = format!(
+        r#"{{"kind":1,"to":"{}","hacash":"1:248"}}"#,
+        to_only.readable()
+    );
+    let single = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: primary.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        addrlist: None,
+        actions: vec![ActionSpec::new(action_json.clone()).unwrap()],
+    })
+    .unwrap();
+    let list_one = build_transaction(&TransactionSpec {
+        schema: None,
+        tx_type: 2,
+        main: primary.readable().to_owned(),
+        fee: "1:244".to_owned(),
+        timestamp: Some(1_755_223_764),
+        gas_max: None,
+        addrlist: Some(AddrOrList::from_list(vec![addresses[0]]).unwrap()),
+        actions: vec![ActionSpec::new(action_json).unwrap()],
+    })
+    .unwrap();
+    assert_ne!(single.unsigned_body_hash, list_one.unsigned_body_hash);
+}
+
+#[test]
 fn prepare_and_attach_reject_tampered_review() {
     let account = sys::Account::create_by("123456").unwrap();
     let profile = profile();

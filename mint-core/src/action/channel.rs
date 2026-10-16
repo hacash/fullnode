@@ -9,7 +9,14 @@ base::action_simple! { ChannelOpen, 2, 2, TOP, {
     right_bill: AddrHac
 }, this, {
     req_sign: {vec![AddrOrPtr::Addr(this.left_bill.address), AddrOrPtr::Addr(this.right_bill.address)]},
-    description: format!("Open channel {} for {} and {}", this.channel_id, this.left_bill.address.to_readable(), this.right_bill.address.to_readable())
+    description: format!(
+        "Open channel {}: {} locks {} HAC, {} locks {} HAC",
+        this.channel_id,
+        this.left_bill.address.to_readable(),
+        this.left_bill.amount.to_hac_string(),
+        this.right_bill.address.to_readable(),
+        this.right_bill.amount.to_hac_string()
+    )
 }}
 
 base::action_simple! { ChannelClose, 3, 2, TOP, {

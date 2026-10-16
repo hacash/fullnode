@@ -4,10 +4,26 @@
 use field::{BytesW2, Fixed3, Uint1, Uint2};
 use sys::Ret;
 
+use crate::action::CODECONF_TYPE_MASK;
 use crate::rt::{CodeConf, CodeType};
 
 #[base::action(kind = 44, tx_min = 3, scope = AST, audit = "opaque", code, ctor = none,
-    description = |this: &ContractMainCall| format!("Run main codes with conf {}", this.codeconf.uint()))]
+    description = |this: &ContractMainCall| {
+        let type_name = match this.codeconf.uint() & CODECONF_TYPE_MASK {
+            0 => "bytecode",
+            1 => "ir_node",
+            _ => "invalid",
+        };
+        let mut desc = format!(
+            "Run main code ({}, {} bytes)",
+            type_name,
+            this.codes.as_ref().len()
+        );
+        if !this.marks.is_zero() {
+            desc.push_str(&format!("; marks 0x{}", hex::encode(this.marks.as_bytes())));
+        }
+        desc
+    })]
 #[derive(PartialEq, Eq)]
 pub struct ContractMainCall {
     pub marks: Fixed3,

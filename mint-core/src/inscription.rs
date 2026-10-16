@@ -1,5 +1,17 @@
+use field::descfmt::user_text;
 use field::{Amount, BytesW1, DiamondName, DiamondNameListMax200, Encode, Uint1, WireAmount};
 use sys::{Rerr, errf};
+
+/// Shared protocol-fee segment: the fee is only mentioned when it is actually
+/// charged — a zero cost imposes no burn, so rendering it would claim a
+/// payment that does not happen.
+fn protocol_fee_segment(protocol_cost: &Amount) -> String {
+    if protocol_cost.is_positive() {
+        format!("; pay {} HAC protocol fee", protocol_cost.to_hac_string())
+    } else {
+        String::new()
+    }
+}
 
 fn consensus_rules() -> &'static hacash_params::InscriptionRules {
     &hacash_params::MAINNET_PARAMS.mint_rules.inscription
@@ -12,11 +24,14 @@ base::action_simple! { HacdInscPush, 32, 2, TOP, {
     engraved_content: BytesW1
 }, this, {
     extra9: true,
-    description: {
-        let mut desc = format!("Inscript {} HACD ({}) with \"{}\"", this.diamonds.length(), this.diamonds.splitstr(), this.engraved_content.to_readable_or_hex());
-        if this.protocol_cost.is_positive() { desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string())); }
-        desc
-    }
+    description: format!(
+        "Append inscription type {} {} to {} HACD ({}){}",
+        this.engraved_type.uint(),
+        user_text(this.engraved_content.as_ref()),
+        this.diamonds.length(),
+        this.diamonds.splitstr(),
+        protocol_fee_segment(&this.protocol_cost)
+    )
 }}
 
 base::action_simple! { HacdInscClean, 33, 2, TOP, {
@@ -24,7 +39,12 @@ base::action_simple! { HacdInscClean, 33, 2, TOP, {
     protocol_cost: Amount
 }, this, {
     extra9: true,
-    description: format!("Clean inscript {} HACD ({}) cost {} HAC fee", this.diamonds.length(), this.diamonds.splitstr(), this.protocol_cost.to_fin_string())
+    description: format!(
+        "Remove all inscriptions from {} HACD ({}){}",
+        this.diamonds.length(),
+        this.diamonds.splitstr(),
+        protocol_fee_segment(&this.protocol_cost)
+    )
 }}
 
 base::action_simple! { HacdInscEdit, 34, 2, CALL, {
@@ -35,11 +55,14 @@ base::action_simple! { HacdInscEdit, 34, 2, CALL, {
     engraved_content: BytesW1
 }, this, {
     extra9: true,
-    description: {
-        let mut desc = format!("Edit inscription #{} of HACD {} to \"{}\"", this.index.uint(), this.diamond.to_readable(), this.engraved_content.to_readable_or_hex());
-        if this.protocol_cost.is_positive() { desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string())); }
-        desc
-    }
+    description: format!(
+        "Replace inscription at index {} (0-based) of HACD {} with type {} {}{}",
+        this.index.uint(),
+        this.diamond.to_readable(),
+        this.engraved_type.uint(),
+        user_text(this.engraved_content.as_ref()),
+        protocol_fee_segment(&this.protocol_cost)
+    )
 }}
 
 base::action_simple! { HacdInscMove, 35, 2, AST, {
@@ -49,11 +72,13 @@ base::action_simple! { HacdInscMove, 35, 2, AST, {
     protocol_cost: Amount
 }, this, {
     extra9: true,
-    description: {
-        let mut desc = format!("Move inscription #{} from HACD {} to HACD {}", this.index.uint(), this.from_diamond.to_readable(), this.to_diamond.to_readable());
-        if this.protocol_cost.is_positive() { desc.push_str(&format!(" cost {} HAC fee", this.protocol_cost.to_fin_string())); }
-        desc
-    }
+    description: format!(
+        "Move inscription at index {} (0-based) from HACD {} to HACD {}{}",
+        this.index.uint(),
+        this.from_diamond.to_readable(),
+        this.to_diamond.to_readable(),
+        protocol_fee_segment(&this.protocol_cost)
+    )
 }}
 
 base::action_simple! { HacdInscDrop, 36, 2, TOP, {
@@ -62,7 +87,12 @@ base::action_simple! { HacdInscDrop, 36, 2, TOP, {
     protocol_cost: Amount
 }, this, {
     extra9: true,
-    description: format!("Drop inscription #{} from HACD {} cost {} HAC fee", this.index.uint(), this.diamond.to_readable(), this.protocol_cost.to_fin_string())
+    description: format!(
+        "Delete inscription at index {} (0-based) from HACD {}{}",
+        this.index.uint(),
+        this.diamond.to_readable(),
+        protocol_fee_segment(&this.protocol_cost)
+    )
 }}
 
 pub fn check_protocol_cost(pfee: &Amount) -> Rerr {

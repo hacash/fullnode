@@ -749,6 +749,10 @@ impl Transaction for StdTransaction {
         self.addrlist.to_list()
     }
 
+    fn addrlist(&self) -> Option<AddrOrList> {
+        Some(self.addrlist.clone())
+    }
+
     fn fee(&self) -> &Amount {
         &self.fee
     }

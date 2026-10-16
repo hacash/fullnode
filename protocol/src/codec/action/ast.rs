@@ -52,7 +52,7 @@ pub struct ActionListW1 {
     nested = (1, actions),
     req_sign = |this: &AstSelect| this.collect_req_sign(),
     description = |this: &AstSelect| format!(
-        "Execute select {} to {} in {} actions",
+        "Execute between {} and {} of {} listed actions in order; reverted actions are skipped",
         this.exe_min.uint(),
         this.exe_max.uint(),
         this.actions.length()
@@ -75,7 +75,12 @@ pub struct AstSelect {
     wire = manual,
     nested = (2, cond, br_if, br_else),
     req_sign = |this: &AstIf| this.collect_req_sign(),
-    description = |_this: &AstIf| "Asset if-else execute".to_owned(),
+    description = |this: &AstIf| format!(
+        "If condition select executes {}..{} of {} actions, execute if-branch select {}..{} of {} actions; otherwise execute else-branch select {}..{} of {} actions",
+        this.cond.exe_min.uint(), this.cond.exe_max.uint(), this.cond.actions.length(),
+        this.br_if.exe_min.uint(), this.br_if.exe_max.uint(), this.br_if.actions.length(),
+        this.br_else.exe_min.uint(), this.br_else.exe_max.uint(), this.br_else.actions.length(),
+    ),
     ctor = none,
 )]
 #[derive(Debug, Clone)]
@@ -442,6 +447,25 @@ mod tests {
         let decoded = decode_ast_if_json(&reg, &json).unwrap();
         assert_eq!(decoded.encode(), ast.encode());
         assert_eq!(decoded.to_json(), json);
+    }
+
+    #[test]
+    fn ast_if_description_tracks_each_select_range_and_count() {
+        let cond = AstSelect::create_by(1, 1, vec![]).unwrap();
+        let yes = AstSelect::create_by(0, 2, vec![]).unwrap();
+        let no = AstSelect::create_by(1, 1, vec![]).unwrap();
+        let first = AstIf::create_by(cond.clone(), yes.clone(), no.clone());
+        let changed = AstIf::create_by(
+            AstSelect::create_by(0, 1, vec![]).unwrap(),
+            yes,
+            no,
+        );
+        let first_desc = (&first as &dyn Action).description();
+        let changed_desc = (&changed as &dyn Action).description();
+        assert!(first_desc.contains("condition select executes 1..1 of 0 actions"));
+        assert!(first_desc.contains("if-branch select 0..2 of 0 actions"));
+        assert!(first_desc.contains("else-branch select 1..1 of 0 actions"));
+        assert_ne!(first_desc, changed_desc);
     }
 
     #[test]

@@ -113,11 +113,18 @@ impl Decode for HacdMintData {
     wire = manual,
     ctor = none,
     extra9 = |this: &HacdMint| this.d.number.uint() > consensus_rules().burn_90_percent_after,
-    description = |this: &HacdMint| format!(
-        "Mint diamond <{}> number {}",
-        this.d.diamond.to_readable(),
-        this.d.number.uint()
-    ),
+    description = |this: &HacdMint| {
+        let mut desc = format!(
+            "Mint HACD {} number {} to {}",
+            this.d.diamond.to_readable(),
+            this.d.number.uint(),
+            this.d.address.to_readable()
+        );
+        if custom_message_present(this.d.number) {
+            desc.push_str(&format!(" with custom message hash {}", field::descfmt::hex_preview(this.d.custom_message.as_bytes(), 32)));
+        }
+        desc
+    },
 )]
 #[derive(Debug, Clone)]
 pub struct HacdMint {

@@ -21,5 +21,10 @@ wasm-bindgen = "=0.2.100"
 
 # Tests only: the fitsh parser (Syntax/Tokenizer) lives behind vm's `syntax`
 # feature, which the shipped wasm build keeps off to stay small.
+# serde_json is likewise test-only: the description fixture/report runner
+# (`tests/action_descriptions.rs`) parses its frozen JSON with it; the runtime
+# JSON engine stays the hand-written one in `field`.
 [dev-dependencies]
 vm = { path = "../vm", features = ["syntax"] }
+serde = { workspace = true }
+serde_json = { workspace = true }

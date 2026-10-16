@@ -17,13 +17,92 @@ macro_rules! define_tex_cells {
             $( $variant { $field: $ty } ),+
         }
 
-        impl TexCell {
-            fn is_asset_transfer(&self) -> bool {
-                match self {
-                    $(Self::$variant { .. } => $asset),+
-                }
+impl TexCell {
+    fn is_asset_transfer(&self) -> bool {
+        match self {
+            $(Self::$variant { .. } => $asset),+
+        }
+    }
+}
+
+/// Per-cell one-line behavior rendering for the `TexCellExecute` description.
+/// Pay/get cells move value between the executing address and the TEX escrow;
+/// condition cells only compare and never move anything. `zhu` amounts render
+/// as exact HAC decimals; everything else keeps its integer wire unit.
+impl TexCell {
+    pub(crate) fn describe(&self) -> String {
+        let hac = |zhu: &Fold64| field::Amount::zhu(zhu.uint()).to_hac_string();
+        match self {
+            Self::ZhuPay { haczhu } => format!("pay {} HAC into TEX escrow", hac(haczhu)),
+            Self::ZhuGet { haczhu } => format!("get {} HAC from TEX escrow", hac(haczhu)),
+            Self::SatPay { satnum } => format!("pay {} SAT into TEX escrow", satnum.uint()),
+            Self::SatGet { satnum } => format!("get {} SAT from TEX escrow", satnum.uint()),
+            Self::DiaPay { diamonds } => {
+                format!("pay HACD ({}) into TEX escrow", diamonds.splitstr())
+            }
+            Self::DiaGet { dianum } => format!("get {} HACD from TEX escrow", dianum.uint()),
+            Self::AssetPay { asset } => format!(
+                "pay {} atoms of Asset #{} into TEX escrow",
+                asset.amount.uint(),
+                asset.serial.uint()
+            ),
+            Self::AssetGet { asset } => format!(
+                "get {} atoms of Asset #{} from TEX escrow",
+                asset.amount.uint(),
+                asset.serial.uint()
+            ),
+            Self::CondZhuAtMost { haczhu } => {
+                format!("require HAC balance at most {} HAC", hac(haczhu))
+            }
+            Self::CondZhuAtLeast { haczhu } => {
+                format!("require HAC balance at least {} HAC", hac(haczhu))
+            }
+            Self::CondZhuEq { haczhu } => format!("require HAC balance equal to {} HAC", hac(haczhu)),
+            Self::CondSatAtMost { satoshi } => {
+                format!("require SAT balance at most {}", satoshi.uint())
+            }
+            Self::CondSatAtLeast { satoshi } => {
+                format!("require SAT balance at least {}", satoshi.uint())
+            }
+            Self::CondSatEq { satoshi } => {
+                format!("require SAT balance equal to {}", satoshi.uint())
+            }
+            Self::CondDiaAtMost { diamond } => {
+                format!("require HACD count at most {}", diamond.uint())
+            }
+            Self::CondDiaAtLeast { diamond } => {
+                format!("require HACD count at least {}", diamond.uint())
+            }
+            Self::CondDiaEq { diamond } => {
+                format!("require HACD count equal to {}", diamond.uint())
+            }
+            Self::CondAssetAtMost { asset } => format!(
+                "require Asset #{} balance at most {} atoms",
+                asset.serial.uint(),
+                asset.amount.uint()
+            ),
+            Self::CondAssetAtLeast { asset } => format!(
+                "require Asset #{} balance at least {} atoms",
+                asset.serial.uint(),
+                asset.amount.uint()
+            ),
+            Self::CondAssetEq { asset } => format!(
+                "require Asset #{} balance equal to {} atoms",
+                asset.serial.uint(),
+                asset.amount.uint()
+            ),
+            Self::CondHeightAtMost { height } => {
+                format!("require block height at most {}", height.uint())
+            }
+            Self::CondHeightAtLeast { height } => {
+                format!("require block height at least {}", height.uint())
+            }
+            Self::CondChainIdEq { chainid } => {
+                format!("require chain ID equal to {}", chainid.uint())
             }
         }
+    }
+}
 
         impl Encode for TexCell {
             fn size(&self) -> usize {
@@ -159,7 +238,11 @@ base::action_simple! { TexCellExecute, 22, 3, TOP, {
 }, this, {
     extra9: this.has_asset_transfer_cell(),
     ctor: none,
-    description: format!("Execute {} tex cells by {}", this.cells.len(), this.addr.to_readable())
+    description: format!(
+        "Execute TEX cells signed by {}: {}",
+        this.addr.to_readable(),
+        this.cells.as_list().iter().map(|c| c.describe()).collect::<Vec<_>>().join("; ")
+    )
 }}
 
 impl TexCellExecute {

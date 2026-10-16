@@ -206,6 +206,21 @@ fn jopt_obj<T: SdkJsonFrom>(pairs: &[(&str, &str)], name: &str) -> sys::Ret<Opti
     }
 }
 
+fn jopt_addr_or_list(
+    pairs: &[(&str, &str)],
+    name: &str,
+) -> sys::Ret<Option<field::AddrOrList>> {
+    match jfind(pairs, name) {
+        Some(raw) => {
+            let mut value = field::AddrOrList::default();
+            field::FromJSON::from_json(&mut value, raw)
+                .map_err(|error| sys::Error::fault(format!("json field {name} is invalid: {error}")))?;
+            Ok(Some(value))
+        }
+        None => Ok(None),
+    }
+}
+
 fn jarr_obj<T: SdkJsonFrom>(pairs: &[(&str, &str)], name: &str) -> sys::Ret<Vec<T>> {
     let raw = jneed(pairs, name)?;
     let items = field::json_split_array(raw)
@@ -337,6 +352,12 @@ macro_rules! sdk_json_kv {
                 .map(|v| <$t as SdkJsonTo>::to_json_string(v)),
         )
     };
+    ($self:ident, $field:ident, opt_addr_or_list) => {
+        kv_opt(
+            stringify!($field),
+            $self.$field.as_ref().map(field::ToJSON::to_json),
+        )
+    };
     ($self:ident, $field:ident, obj_arr $t:ty) => {
         kv(
             stringify!($field),
@@ -432,6 +453,9 @@ macro_rules! sdk_json_expr {
     };
     ($pairs:ident, $field:ident, opt_obj $t:ty) => {
         jopt_obj::<$t>(&$pairs, stringify!($field))?
+    };
+    ($pairs:ident, $field:ident, opt_addr_or_list) => {
+        jopt_addr_or_list(&$pairs, stringify!($field))?
     };
     ($pairs:ident, $field:ident, obj_arr $t:ty) => {
         jarr_obj::<$t>(&$pairs, stringify!($field))?
@@ -786,6 +810,7 @@ impl_sdk_json! {
         tx_type: u8,
         timestamp: u64,
         main: str,
+        addrlist: opt_addr_or_list,
         fee: str,
         gas_max: opt_u8,
         tx_hash: str,
@@ -903,6 +928,30 @@ impl_sdk_json! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transaction_json_round_trips_wire_addrlist_form() {
+        let first = field::Address::from_readable("1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9").unwrap();
+        let second = field::Address::from_readable("bJASBXHo5SbNWJWbfACqZVNmi2j2hhCpe").unwrap();
+        let value = TransactionJson {
+            schema: crate::schema::SCHEMA_TRANSACTION_JSON.to_owned(),
+            tx_type: 2,
+            timestamp: 1,
+            main: first.to_readable(),
+            addrlist: Some(field::AddrOrList::from_list(vec![first, second]).unwrap()),
+            fee: "1:244".to_owned(),
+            gas_max: None,
+            tx_hash: "hash".to_owned(),
+            hash_with_fee: "fee-hash".to_owned(),
+            unsigned_body_hash: "body-hash".to_owned(),
+            actions: Vec::new(),
+            signatures: Vec::new(),
+        };
+        let json = value.to_json_string();
+        assert!(json.contains("\"addrlist\":[\"1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9\",\"bJASBXHo5SbNWJWbfACqZVNmi2j2hhCpe\"]"));
+        let decoded = TransactionJson::from_json_str(&json).unwrap();
+        assert_eq!(decoded.addrlist, value.addrlist);
+    }
 
     #[test]
     fn payload_desc_json_round_trips() {

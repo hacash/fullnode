@@ -114,7 +114,27 @@ impl P2shEntryPayload {
 // ================================ P2SHScriptProve ================================
 
 #[base::action(kind = 46, tx_min = 3, scope = TOP, audit = "structured", code, ctor = none,
-    description = |_: &P2SHScriptProve| "Prove P2SH unlock script".to_owned())]
+    description = |this: &P2SHScriptProve| {
+        let type_name = match this.codeconf.uint() & crate::action::CODECONF_TYPE_MASK {
+            0 => "bytecode",
+            1 => "ir_node",
+            _ => "invalid",
+        };
+        let libraries = this.adrlibs.as_list().iter().map(|addr| addr.to_readable()).collect::<Vec<_>>().join(", ");
+        let mut desc = format!(
+            "Prove P2SH script ({}, {} bytes): {} libraries [{}], {} merkle proof steps, witness {} bytes",
+            type_name,
+            this.lockbox.as_ref().len(),
+            this.adrlibs.length(),
+            if libraries.is_empty() { "none" } else { &libraries },
+            this.merkels.length(),
+            this.argvkey.as_ref().len()
+        );
+        if !this.marks.is_zero() {
+            desc.push_str(&format!("; marks 0x{}", hex::encode(this.marks.as_bytes())));
+        }
+        desc
+    })]
 #[derive(PartialEq, Eq)]
 pub struct P2SHScriptProve {
     // calc hash: script + calibs

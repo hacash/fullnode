@@ -76,6 +76,10 @@ pub trait Transaction: Encode + Send + Sync + std::fmt::Debug {
     fn addrs(&self) -> Vec<Address> {
         vec![self.main()]
     }
+    /// Preserve the wire Single/List address encoding when available.
+    fn addrlist(&self) -> Option<field::AddrOrList> {
+        None
+    }
     fn fee(&self) -> &Amount;
     fn fee_pay(&self) -> Amount {
         self.fee().clone()

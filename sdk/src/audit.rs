@@ -195,7 +195,7 @@ pub struct ActionDesc {
     pub auditability: String,
     pub audit_notes: Vec<String>,
     /// Schema-declared one-line description (`base::Action::description`),
-    /// e.g. "Run main codes with conf 0". Omitted when `with_description=false`.
+    /// e.g. "Run main code (bytecode, 3 bytes)". Omitted when `with_description=false`.
     pub description: Option<String>,
     /// Canonical field-level JSON (registry `to_json` view), e.g. the full
     /// contract structure for deploy/update. Omitted when `with_json=false`.
@@ -295,19 +295,12 @@ pub fn describe_action(
     } else {
         None
     };
+    // The schema-declared description is the single wording source: the SDK
+    // never rewrites it per kind, and toggling `code`/`json` cannot change the
+    // text (maincall/P2SH code type and length live in the action's own
+    // definition since spec action-description@1).
     let description = if options.with_description {
-        let text = match (name, code.as_ref()) {
-            (Some("contract_main_call"), Some(code)) => format!(
-                "Run main code ({}, {} bytes)",
-                code.code_type_name, code.codes_len
-            ),
-            (Some("p2sh_script_prove"), Some(code)) => format!(
-                "Prove P2SH script ({}, {} bytes)",
-                code.code_type_name, code.codes_len
-            ),
-            _ => action.description(),
-        };
-        Some(text)
+        Some(action.description())
     } else {
         None
     };
@@ -621,6 +614,7 @@ fn describe_single_carries_description_json_and_code() {
 #[test]
 fn describe_options_independently_trim_facets() {
     let raw = maincall_body();
+    let full = describe_single(&raw, &DescribeOptions::default()).unwrap();
     let bare = describe_single(
         &raw,
         &DescribeOptions {
@@ -645,6 +639,20 @@ fn describe_options_independently_trim_facets() {
     .unwrap();
     assert!(code_only.code.is_some());
     assert!(code_only.json.is_none());
+
+    // Toggling `code`/`json` off must not change the description text: the
+    // wording is owned by the action definition, not the facet combination.
+    let no_code = describe_single(
+        &raw,
+        &DescribeOptions {
+            with_description: true,
+            with_json: false,
+            with_code: false,
+        },
+    )
+    .unwrap();
+    assert!(no_code.code.is_none());
+    assert_eq!(no_code.description, full.description);
 }
 
 #[test]

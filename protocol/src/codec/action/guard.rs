@@ -11,11 +11,51 @@ use sys::{errf, Rerr, Ret};
 use super::blob::{Blob, Message};
 use super::transfer::addr_or_ptr_readable;
 
+/// One-line floor description. Zero components impose no check at execution
+/// (`validate_balance_floor_struct` skips them), so they are omitted here too
+/// rather than rendered as meaningless "at least 0" claims. Asset entries keep
+/// their full serial/atom values in wire order.
+fn balance_floor_description(
+    addr: &AddrOrPtr,
+    hacash: &Amount,
+    satoshi: u64,
+    diamond: u32,
+    assets: &AssetAmtW1,
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !hacash.is_zero() {
+        parts.push(format!("{} HAC", hacash.to_hac_string()));
+    }
+    if satoshi > 0 {
+        parts.push(format!("{satoshi} SAT"));
+    }
+    if diamond > 0 {
+        parts.push(format!("{diamond} HACD"));
+    }
+    for asset in assets.as_list() {
+        parts.push(format!(
+            "{} atoms of Asset #{}",
+            asset.amount.uint(),
+            asset.serial.uint()
+        ));
+    }
+    let joined = if parts.is_empty() {
+        "nothing (empty floor)".to_owned()
+    } else {
+        parts.join(", ")
+    };
+    format!(
+        "Require balance of {} to be at least {}",
+        addr_or_ptr_readable(addr),
+        joined
+    )
+}
+
 base::action_simple! { ChainAllow, 0x0411, 2, GUARD, {
     chains: ChainIDList
 }, this, {
     ctor: manual,
-    description: format!("Valid chain ID list {}", this.chains.as_list().iter().map(|id| id.to_string()).collect::<Vec<_>>().join(","))
+    description: format!("Allow transaction on chains {}", this.chains.as_list().iter().map(|id| id.to_string()).collect::<Vec<_>>().join(", "))
 }}
 
 base::action_simple! { HeightScope, 0x0412, 2, GUARD, {
@@ -23,7 +63,11 @@ base::action_simple! { HeightScope, 0x0412, 2, GUARD, {
     end: BlockHeight
 }, this, {
     ctor: manual,
-    description: format!("Limit height range ({}, {})", this.start.uint(), if this.end.uint() == 0 { "Unlimited".to_owned() } else { this.end.uint().to_string() })
+    description: if this.end.uint() == 0 {
+        format!("Limit valid heights to {} or later", this.start.uint())
+    } else {
+        format!("Limit valid heights to {} through {}", this.start.uint(), this.end.uint())
+    }
 }}
 
 base::action_simple! { BalanceFloor, 0x0413, 2, GUARD, {
@@ -34,7 +78,7 @@ base::action_simple! { BalanceFloor, 0x0413, 2, GUARD, {
     assets: AssetAmtW1
 }, this, {
     ctor: manual,
-    description: format!("Balance floor for {} (hac={}, sat={}, dia={}, assets={})", addr_or_ptr_readable(&this.addr), this.hacash, this.satoshi.uint(), this.diamond.uint(), this.assets.length())
+    description: balance_floor_description(&this.addr, &this.hacash, this.satoshi.uint(), this.diamond.uint(), &this.assets)
 }}
 
 impl ChainAllow {
@@ -77,7 +121,7 @@ base::action_simple! { RequiredSigners, 0x0414, 2, TOP_GUARD_UNIQUE, {
     validate: "Self::validate_codec",
     req_sign: this.signers.0.clone(),
     ctor: none,
-    description: format!("Require extra signers ({})", this.signers.length())
+    description: format!("Require extra signatures from {}", this.signers.as_list().iter().map(addr_or_ptr_readable).collect::<Vec<_>>().join(", "))
 }}
 
 impl RequiredSigners {

@@ -55,7 +55,34 @@ pub struct ContractUpdateAnalysis {
 // because it forbids exactly that batch; the per-tx action-count cap and each
 // deploy's protocol cost are what bound the batch instead.
 #[base::action(kind = 40, tx_min = 3, scope = TOP, audit = "structured", code, ctor = none,
-    description = |this: &ContractDeploy| format!("Deploy smart contract with nonce {}", this.nonce.uint()))]
+    description = |this: &ContractDeploy| {
+        let c = &this.contract;
+        let fns = c.abstcalls.length() + c.userfuncs.length() + c.calcfuncs.length();
+        let addresses = |list: &crate::contract::ContractAddrListW1| {
+            let values = list.as_list().iter().map(|addr| addr.to_readable()).collect::<Vec<_>>();
+            if values.is_empty() { "none".to_owned() } else { values.join(", ") }
+        };
+        let selectors = c.abstcalls.as_list().iter().map(|f| format!("abst:0x{}", hex::encode(f.sign.as_bytes())))
+            .chain(c.userfuncs.as_list().iter().map(|f| format!("user:0x{}", hex::encode(f.sign.as_bytes()))))
+            .chain(c.calcfuncs.as_list().iter().map(|f| format!("calc:0x{}", hex::encode(f.sign.as_bytes()))))
+            .collect::<Vec<_>>();
+        let mut desc = format!(
+            "Deploy smart contract: nonce {}, {} functions [{}], libraries [{}], inherits [{}], construct input {} bytes",
+            this.nonce.uint(),
+            fns,
+            if selectors.is_empty() { "none".to_owned() } else { selectors.join(", ") },
+            addresses(&c.library),
+            addresses(&c.inherit),
+            this.construct_argv.as_ref().len()
+        );
+        if !this.marks.is_zero() {
+            desc.push_str(&format!("; marks 0x{}", hex::encode(this.marks.as_bytes())));
+        }
+        if this.protocol_cost.is_positive() {
+            desc.push_str(&format!("; pay {} HAC protocol fee", this.protocol_cost.to_hac_string()));
+        }
+        desc
+    })]
 #[derive(PartialEq, Eq)]
 pub struct ContractDeploy {
     pub protocol_cost: Amount,
@@ -81,7 +108,40 @@ impl ContractDeploy {
 // ================================ ContractUpdate ================================
 
 #[base::action(kind = 41, tx_min = 3, scope = TOP_ONLY_CAN_WITH_GUARD, audit = "structured", code, ctor = none,
-    description = |this: &ContractUpdate| format!("Update smart contract {}", this.address.to_readable()))]
+    description = |this: &ContractUpdate| {
+        let e = &this.edit;
+        let selectors = e.abstcalls.as_list().iter().map(|f| format!("abst:0x{}", hex::encode(f.sign.as_bytes())))
+            .chain(e.userfuncs.as_list().iter().map(|f| format!("user:0x{}", hex::encode(f.sign.as_bytes()))))
+            .chain(e.calcfuncs.as_list().iter().map(|f| format!("calc:0x{}", hex::encode(f.sign.as_bytes()))))
+            .collect::<Vec<_>>();
+        let replacements = |list: &crate::contract::ContractAddrReplaceAtList| {
+            let entries = list.as_list();
+            if entries.is_empty() { "none".to_owned() }
+            else { entries.iter().map(|r| format!("{}->{}", r.idx.uint(), r.addr.to_readable())).collect::<Vec<_>>().join(", ") }
+        };
+        let added = |list: &crate::contract::ContractAddrListW1| {
+            let entries = list.as_list();
+            if entries.is_empty() { "none".to_owned() }
+            else { entries.iter().map(|addr| addr.to_readable()).collect::<Vec<_>>().join(", ") }
+        };
+        let mut desc = format!(
+            "Update smart contract at {}: revision {}, add libraries [{}], replace library entries [{}], add inherits [{}], replace inherit entries [{}], function selectors [{}]",
+            this.address.to_readable(),
+            e.new_revision.uint(),
+            added(&e.library_add),
+            replacements(&e.library_replace_at),
+            added(&e.inherit_add),
+            replacements(&e.inherit_replace_at),
+            if selectors.is_empty() { "none".to_owned() } else { selectors.join(", ") }
+        );
+        if !this.marks.is_zero() {
+            desc.push_str(&format!("; marks 0x{}", hex::encode(this.marks.as_bytes())));
+        }
+        if this.protocol_cost.is_positive() {
+            desc.push_str(&format!("; pay {} HAC protocol fee", this.protocol_cost.to_hac_string()));
+        }
+        desc
+    })]
 #[derive(PartialEq, Eq)]
 pub struct ContractUpdate {
     pub protocol_cost: Amount,
