@@ -890,4 +890,25 @@ mod entry_semantics_tests {
         verified(source);
         assert_eq!(run_arithmetic_source(source).unwrap(), Value::U8(4));
     }
+
+    /// Else returns, so the skip-then `JMPSL` is omitted. `break` sits in the
+    /// then branch; a `then_br_start` that still counts that jump lands on the
+    /// loop-back `JMPSL` and the loop exits via `return 9` instead of `3`.
+    #[test]
+    fn loop_if_break_in_then_when_else_returns() {
+        let source = r#"
+            var n = 0
+            while n < 10 {
+                n = n + 1
+                if n < 4 {
+                    if n > 2 { break } else { }
+                } else {
+                    return 9
+                }
+            }
+            return n
+        "#;
+        verified(source);
+        assert_eq!(run_arithmetic_source(source).unwrap(), Value::U8(3));
+    }
 }
