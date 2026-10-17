@@ -13,7 +13,7 @@ use crate::schema::SCHEMA_VM_CALL;
 
 pub use vm::action::{CODECONF_RESERVED_MASK, CODECONF_TYPE_MASK};
 
-fn code_type_name(raw: u8) -> (&'static str, u8) {
+fn code_type_name(raw: u8) -> Result<(&'static str, u8), SdkError> {
     crate::audit::code_type_name(raw)
 }
 
@@ -80,7 +80,7 @@ pub fn decode_call(action_hex: &str) -> Result<VmCall, SdkError> {
     }
 
     let codeconf_raw = codeconf.uint();
-    let (type_name, type_id) = code_type_name(codeconf_raw);
+    let (type_name, type_id) = code_type_name(codeconf_raw)?;
     let codes_bytes = codes.as_vec();
     let codes_hash = hex::encode(sys::calculate_hash(codes_bytes));
     let preview_len = codes_bytes.len().min(64);
@@ -112,7 +112,7 @@ fn parse_wire(error: sys::Error, field: &str) -> SdkError {
 // ================================ vm.code ================================
 
 /// `vm.code`: decompile a code body into human-readable text. Two code types
-/// (bytecode → annotated assembly; ir_node → fitsh source or structural tree)
+/// (bytecode → annotated assembly; irnode → fitsh source or structural tree)
 /// and independent output controls (`format`, `limit`/`offset` paging,
 /// optional external `sourcemap` for maximum readability). Offline and
 /// codec-only — no VM execution, no node.
@@ -191,13 +191,7 @@ pub fn code(
         .trim()
         .parse()
         .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "code_type must be 0 or 1"))?;
-    let (type_name, type_id) = crate::audit::code_type_name(code_type);
-    if type_id == 2 {
-        return Err(SdkError::new(
-            SdkErrorCode::ParseFailed,
-            format!("unsupported code_type {code_type}; expected 0 (bytecode) or 1 (ir_node)"),
-        ));
-    }
+    let (type_name, type_id) = crate::audit::code_type_name(code_type)?;
     let limit = limit.unwrap_or(VM_CODE_DEFAULT_LIMIT);
     let offset = offset.unwrap_or(0);
 
@@ -287,7 +281,7 @@ pub fn code(
             return Err(SdkError::new(
                 SdkErrorCode::ParseFailed,
                 format!(
-                    "format {other} is not valid for ir_node; expected fitsh, fitsh_review, tree, raw, or assembly"
+                    "format {other} is not valid for irnode; expected fitsh, fitsh_review, tree, raw, or assembly"
                 ),
             ));
         }
@@ -460,7 +454,7 @@ mod tests {
         assert!(!decoded.marks_valid);
         assert_eq!(decoded.codeconf, 1);
         assert_eq!(decoded.code_type, 1);
-        assert_eq!(decoded.code_type_name, "ir_node");
+        assert_eq!(decoded.code_type_name, "irnode");
         assert_eq!(decoded.codes_len, codes.len());
         assert_eq!(decoded.codes_preview, hex::encode(&codes));
         assert_eq!(decoded.codes_hash, hex::encode(sys::calculate_hash(&codes)));
@@ -525,7 +519,7 @@ fn vm_code_bytecode_rejects_non_assembly_format() {
 #[test]
 fn vm_code_rejects_invalid_code_type() {
     let error = code("00", "7", None, None, None, None).unwrap_err();
-    assert!(error.message.contains("unsupported code_type"));
+    assert!(error.message.contains("invalid codeconf"));
 }
 
 #[test]
@@ -544,7 +538,7 @@ fn vm_code_ir_fitsh_roundtrip_and_paging() {
         Some(0),
     )
     .unwrap();
-    assert_eq!(out.code_type_name, "ir_node");
+    assert_eq!(out.code_type_name, "irnode");
     assert_eq!(out.format, "fitsh");
     assert!(
         out.text.len() <= 16,

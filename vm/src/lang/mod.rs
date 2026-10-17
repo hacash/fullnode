@@ -229,7 +229,7 @@ pub fn format_ircode_to_review(ircode: &[u8]) -> Ret<String> {
     let mut seek = 0;
     let block = parse_ir_block(ircode, &mut seek)?;
     if seek != ircode.len() {
-        return errf!("ir_node has trailing bytes after parsed block");
+        return errf!("irnode has trailing bytes after parsed block");
     }
     let opt = PrintOption::new("  ", 0);
     Ok(Formater::new(&opt).print(&block))

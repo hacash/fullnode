@@ -213,9 +213,9 @@ pub struct ActionDesc {
 }
 
 /// VM code metadata of a code-carrying action (schema `hacash.sdk/action-desc@3`
-/// `code` field). `codeconf` low bits are the code type (0 = bytecode,
-/// 1 = ir_node); `codes_preview` is the first up-to-64 bytes hex (identity
-/// without echoing a large payload).
+/// `code` field). `codeconf` is a full code configuration (0 = bytecode,
+/// 1 = irnode); reserved bits must be zero. `codes_preview` is the first
+/// up-to-64 bytes hex (identity without echoing a large payload).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActionCodeDesc {
     pub codeconf: u8,
@@ -226,20 +226,41 @@ pub struct ActionCodeDesc {
     pub codes_preview: String,
 }
 
-/// `code_type` names for the `codeconf` low bits (mirror of `vm::rt::CodeType`;
-/// mask is `vm::action::CODECONF_TYPE_MASK`, re-exported at `crate::vm`).
-pub fn code_type_name(raw: u8) -> (&'static str, u8) {
-    match raw & crate::vm::CODECONF_TYPE_MASK {
-        0 => ("bytecode", 0),
-        1 => ("ir_node", 1),
-        _ => ("invalid", 2),
-    }
+/// `code_type` names for a full `codeconf` byte. `CodeConf::parse` is the only
+/// type check: reserved bits and unknown types are errors, never masked.
+pub fn code_type_name(raw: u8) -> Result<(&'static str, u8), SdkError> {
+    let conf = vm::CodeConf::parse(raw).map_err(|e| {
+        SdkError::new(
+            SdkErrorCode::ParseFailed,
+            format!("invalid codeconf {raw}: {e}"),
+        )
+    })?;
+    Ok(match conf.code_type() {
+        vm::CodeType::Bytecode => ("bytecode", 0),
+        vm::CodeType::IRNode => ("irnode", 1),
+    })
 }
 
 /// Build the code metadata of a decoded action, or `None` when the action
 /// carries no single code payload (multi-code contract deploy/update expose
 /// their structure through the canonical `json` view instead).
-fn action_code_desc(action: &dyn Action) -> Option<ActionCodeDesc> {
+fn action_codeconf(action: &dyn Action) -> Option<u8> {
+    if let Some(call) = action
+        .as_any()
+        .downcast_ref::<vm::action::ContractMainCall>()
+    {
+        Some(call.codeconf.uint())
+    } else if let Some(p2sh) = action
+        .as_any()
+        .downcast_ref::<vm::action::P2SHScriptProve>()
+    {
+        Some(p2sh.codeconf.uint())
+    } else {
+        None
+    }
+}
+
+fn action_code_desc(action: &dyn Action) -> Result<Option<ActionCodeDesc>, SdkError> {
     let (codeconf, codes): (u8, Vec<u8>) = if let Some(call) = action
         .as_any()
         .downcast_ref::<vm::action::ContractMainCall>(
@@ -251,18 +272,18 @@ fn action_code_desc(action: &dyn Action) -> Option<ActionCodeDesc> {
     {
         (p2sh.codeconf.uint(), p2sh.lockbox.as_vec().clone())
     } else {
-        return None;
+        return Ok(None);
     };
-    let (type_name, type_id) = code_type_name(codeconf);
+    let (type_name, type_id) = code_type_name(codeconf)?;
     let preview_len = codes.len().min(64);
-    Some(ActionCodeDesc {
+    Ok(Some(ActionCodeDesc {
         codeconf,
         code_type: type_id,
         code_type_name: type_name.to_owned(),
         codes_len: codes.len(),
         codes_hash: hex::encode(sys::calculate_hash(&codes)),
         codes_preview: hex::encode(&codes[..preview_len]),
-    })
+    }))
 }
 
 pub fn describe_action(
@@ -271,10 +292,13 @@ pub fn describe_action(
     path: &str,
     depth: usize,
     options: &DescribeOptions,
-) -> ActionDesc {
+) -> Result<ActionDesc, SdkError> {
+    if let Some(raw) = action_codeconf(action) {
+        code_type_name(raw)?;
+    }
     let kind = action.kind();
     let mut notes = Vec::new();
-    let children = collect_children(action, path, depth, options, &mut notes);
+    let children = collect_children(action, path, depth, options, &mut notes)?;
     let name = crate::selection::action_schema(kind).map(|schema| schema.name);
     let (auditability, grade_note) = classify_auditability(name.unwrap_or(""));
     if let Some(note) = grade_note {
@@ -287,11 +311,14 @@ pub fn describe_action(
         payload: payload_desc(&intent.asset),
     });
     let code = if options.with_code {
-        crate::selection::action_schema(kind)
+        let carries_code = crate::selection::action_schema(kind)
             .map(|schema| schema.has_code)
-            .unwrap_or(false)
-            .then(|| action_code_desc(action))
-            .flatten()
+            .unwrap_or(false);
+        if carries_code {
+            action_code_desc(action)?
+        } else {
+            None
+        }
     } else {
         None
     };
@@ -309,7 +336,7 @@ pub fn describe_action(
     } else {
         None
     };
-    ActionDesc {
+    Ok(ActionDesc {
         schema: SCHEMA_ACTION_DESC.to_owned(),
         index,
         path: path.to_owned(),
@@ -328,7 +355,7 @@ pub fn describe_action(
         blob: crate::selection::action_schema(kind)
             .map(|schema| schema.blob)
             .unwrap_or(false),
-    }
+    })
 }
 
 /// `action.describe`: describe a single raw action wire independently of any
@@ -341,7 +368,7 @@ pub fn describe_single(
     let wire = crate::inspect::decode_body_hex(action_hex)?;
     let codecs = crate::codec::standard_codecs().map_err(SdkError::from)?;
     let action = codecs.decode_action_exact(&wire).map_err(SdkError::from)?;
-    Ok(describe_action(action.as_ref(), 0, "0", 0, options))
+    describe_action(action.as_ref(), 0, "0", 0, options)
 }
 
 /// Collect nested control-flow children via `Action::nested_actions`; depth overflow or a
@@ -352,14 +379,14 @@ fn collect_children(
     depth: usize,
     options: &DescribeOptions,
     notes: &mut Vec<String>,
-) -> Option<Vec<ActionDesc>> {
+) -> Result<Option<Vec<ActionDesc>>, SdkError> {
     match action.nested_actions() {
         Some(nested) => {
             let next_depth = match depth.checked_add(nested.depth_inc) {
                 Some(d) => d,
                 None => {
                     notes.push("ast tree depth overflow".to_owned());
-                    return None;
+                    return Ok(None);
                 }
             };
             if next_depth > AST_DEPTH_MAX {
@@ -367,7 +394,7 @@ fn collect_children(
                     "nested AST depth exceeds protocol maximum {}",
                     AST_DEPTH_MAX
                 ));
-                return None;
+                return Ok(None);
             }
             let multi = nested.branches.len() > 1;
             let mut list = Vec::new();
@@ -379,10 +406,10 @@ fn collect_children(
                         idx.to_string()
                     };
                     let path = format!("{parent_path}/{local_path}");
-                    list.push(describe_action(*child, idx, &path, next_depth, options));
+                    list.push(describe_action(*child, idx, &path, next_depth, options)?);
                 }
             }
-            Some(list)
+            Ok(Some(list))
         }
         None => {
             if crate::selection::action_schema(action.kind()).map(|s| s.audit_class)
@@ -393,7 +420,7 @@ fn collect_children(
                     action.kind()
                 ));
             }
-            None
+            Ok(None)
         }
     }
 }
@@ -508,11 +535,22 @@ mod tests {
     fn maincall_description_names_code_type_and_length() {
         let action = vm::action::ContractMainCall::from_bytecode(vec![0x01, 0x02, 0x03])
             .expect("maincall code");
-        let desc = describe_action(&action, 0, "0", 0, &DescribeOptions::default());
+        let desc = describe_action(&action, 0, "0", 0, &DescribeOptions::default()).unwrap();
         assert_eq!(
             desc.description.as_deref(),
             Some("Run main code (bytecode, 3 bytes)")
         );
+    }
+
+    #[test]
+    fn invalid_codeconf_is_not_masked_and_describe_fails() {
+        let mut action = vm::action::ContractMainCall::new();
+        action.codeconf = field::Uint1::from(4);
+        assert_eq!(action.description(), "Run main code (invalid codeconf 4, 0 bytes)");
+        let err = describe_action(&action, 0, "0", 0, &DescribeOptions::default()).unwrap_err();
+        assert!(err.to_string().contains("invalid codeconf 4"), "{err}");
+        assert!(code_type_name(1).unwrap().0 == "irnode");
+        assert!(code_type_name(2).is_err());
     }
 
     /// The AST control-flow walkers must stay complete over the registered branching actions
@@ -526,7 +564,7 @@ mod tests {
         ));
         let select = AstSelect::create_by(1, 1, vec![transfer.clone()]).unwrap();
         let select: base::ActionRef = std::sync::Arc::new(select);
-        let desc = describe_action(select.as_ref(), 0, "0", 0, &DescribeOptions::default());
+        let desc = describe_action(select.as_ref(), 0, "0", 0, &DescribeOptions::default()).unwrap();
         let children = desc.children.expect("ast_select collects children");
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].path, "0/0");
@@ -538,7 +576,7 @@ mod tests {
             AstSelect::create_by(1, 1, vec![transfer.clone()]).unwrap(),
         );
         let ast_if: base::ActionRef = std::sync::Arc::new(ast_if);
-        let desc = describe_action(ast_if.as_ref(), 0, "0", 0, &DescribeOptions::default());
+        let desc = describe_action(ast_if.as_ref(), 0, "0", 0, &DescribeOptions::default()).unwrap();
         let children = desc.children.expect("ast_if collects children");
         assert_eq!(children.len(), 3);
         assert_eq!(children[0].path, "0/0/0");
@@ -550,7 +588,7 @@ mod tests {
     #[test]
     fn non_branching_ast_scope_actions_have_no_missing_walker_note() {
         let maincall: base::ActionRef = std::sync::Arc::new(vm::action::ContractMainCall::new());
-        let desc = describe_action(maincall.as_ref(), 0, "0", 0, &DescribeOptions::default());
+        let desc = describe_action(maincall.as_ref(), 0, "0", 0, &DescribeOptions::default()).unwrap();
         assert!(desc.children.is_none());
         assert!(
             desc.audit_notes

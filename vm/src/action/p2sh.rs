@@ -115,10 +115,10 @@ impl P2shEntryPayload {
 
 #[base::action(kind = 46, tx_min = 3, scope = TOP, audit = "structured", code, ctor = none,
     description = |this: &P2SHScriptProve| {
-        let type_name = match this.codeconf.uint() & crate::action::CODECONF_TYPE_MASK {
-            0 => "bytecode",
-            1 => "ir_node",
-            _ => "invalid",
+        let raw = this.codeconf.uint();
+        let type_name = match crate::action::codeconf_type_name(raw) {
+            Ok(name) => name.to_owned(),
+            Err(_) => format!("invalid codeconf {raw}"),
         };
         let libraries = this.adrlibs.as_list().iter().map(|addr| addr.to_readable()).collect::<Vec<_>>().join(", ");
         let mut desc = format!(

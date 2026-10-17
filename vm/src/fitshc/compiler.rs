@@ -281,11 +281,7 @@ contract PermitProbe {
             ("while x > 0 { x = x - 1 }", true),
             ("{ return x }", true),
             ("bytecode { NOP }", true),
-            // Pre-existing compile_if limitation, unrelated to auto-end: when
-            // the else branch terminates unconditionally, its dead JMPSL jump
-            // (skipping the then branch) targets one past the code end and the
-            // jump verifier rejects it.
-            ("if x > 0 { return 1 } else { return 2 }", false),
+            ("if x > 0 { return 1 } else { return 2 }", true),
         ];
         for (i, (body, expect_ok)) in cases.iter().enumerate() {
             let src = format!(
@@ -295,6 +291,16 @@ contract PermitProbe {
                 Ok(_) => assert!(*expect_ok, "case {i} ({body}) should not have compiled"),
                 Err(e) => assert!(!*expect_ok, "case {i} ({body}) failed to compile: {e}"),
             }
+        }
+    }
+
+    #[test]
+    fn both_return_if_compiles_as_bytecode_and_irnode() {
+        for modifier in ["", "ircode"] {
+            let src = format!(
+                "pragma fitsh 1.0.0\ncontract ExitProbe {{\n    function {modifier} f(x: u32) -> u32 {{\n        if x > 0 {{ return 1 }} else {{ return 2 }}\n    }}\n}}\n"
+            );
+            crate::fitshc::compile(&src).unwrap_or_else(|e| panic!("{modifier}: {e}"));
         }
     }
 }

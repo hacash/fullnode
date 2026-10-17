@@ -177,7 +177,7 @@ fn build_review(
     let mut auditability = Auditability::Full;
     for (index, action) in tx.actions().iter().enumerate() {
         let mut desc =
-            audit::describe_action(action.as_ref(), index, &index.to_string(), 0, options);
+            audit::describe_action(action.as_ref(), index, &index.to_string(), 0, options)?;
         // Guard notes are protocol violations (`guard_facts`); the per-action
         // `protocol_valid` fact reflects them.
         if let Some((_, note)) = guard_facts
@@ -488,7 +488,7 @@ pub fn decode_transaction_json(
             &index.to_string(),
             0,
             options,
-        ));
+        )?);
     }
     let signatures = tx
         .signs()

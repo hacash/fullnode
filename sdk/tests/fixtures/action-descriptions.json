@@ -546,15 +546,15 @@
       "wallet_mode": "verbatim + code enrichment"
     },
     {
-      "fixture_id": "contract_main_call.ir_node",
+      "fixture_id": "contract_main_call.irnode",
       "kind": 44,
       "name": "contract_main_call",
       "scope": "ast",
       "sdk_profile": true,
       "json": "{\"kind\":44,\"marks\":\"0x000000\",\"codeconf\":1,\"codes\":\"0x010203\"}",
       "raw": "002c000000010003010203",
-      "fullnode_description": "Run main code (ir_node, 3 bytes)",
-      "sdk_description": "Run main code (ir_node, 3 bytes)",
+      "fullnode_description": "Run main code (irnode, 3 bytes)",
+      "sdk_description": "Run main code (irnode, 3 bytes)",
       "wallet_mode": "verbatim + code enrichment"
     },
     {

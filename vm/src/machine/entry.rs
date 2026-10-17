@@ -816,4 +816,78 @@ mod entry_semantics_tests {
         .unwrap();
         assert_eq!(spent, spent2);
     }
+
+    fn verified(source: &str) -> Vec<u8> {
+        let codes = crate::lang::lang_to_bytecode(source).unwrap_or_else(|e| panic!("{source}: {e}"));
+        crate::rt::verify_bytecodes(&codes).unwrap_or_else(|e| panic!("{source}\nverify: {e}"));
+        codes
+    }
+
+    fn jmp_count(codes: &[u8]) -> usize {
+        let mut i = 0;
+        let mut n = 0;
+        while i < codes.len() {
+            let inst = crate::rt::Bytecode::try_from_u8(codes[i]).unwrap();
+            if inst == crate::rt::Bytecode::JMPSL {
+                n += 1;
+            }
+            let mut step = 1 + inst.metadata().param as usize;
+            if inst == crate::rt::Bytecode::PBUF {
+                step += codes[i + 1] as usize;
+            } else if inst == crate::rt::Bytecode::PBUFL {
+                let len = u16::from_be_bytes([codes[i + 1], codes[i + 2]]) as usize;
+                step += len;
+            }
+            i += step;
+        }
+        n
+    }
+
+    #[test]
+    fn else_exit_drops_dead_jump_and_keeps_both_results() {
+        let both_true = "if true { return 1 } else { return 2 }";
+        let both_false = "if false { return 1 } else { return 2 }";
+        assert_eq!(jmp_count(&verified(both_true)), 0);
+        assert_eq!(run_arithmetic_source(both_true).unwrap(), Value::U8(1));
+        assert_eq!(run_arithmetic_source(both_false).unwrap(), Value::U8(2));
+
+        let else_only = "if true { } else { return 7 }\nreturn 5";
+        assert_eq!(jmp_count(&verified(else_only)), 0);
+        assert_eq!(run_arithmetic_source(else_only).unwrap(), Value::U8(5));
+
+        let then_only = "if false { return 4 } else { }\nreturn 6";
+        assert_eq!(jmp_count(&verified(then_only)), 1);
+        assert_eq!(run_arithmetic_source(then_only).unwrap(), Value::U8(6));
+
+        let nested = "if false { return 1 } else { if true { return 2 } else { return 3 } }";
+        assert_eq!(jmp_count(&verified(nested)), 0);
+        assert_eq!(run_arithmetic_source(nested).unwrap(), Value::U8(2));
+
+        let codecall = "lib C = 1\nif true { return 1 } else { codecall C.probe }";
+        assert_eq!(jmp_count(&verified(codecall)), 0);
+        assert_eq!(run_arithmetic_source(codecall).unwrap(), Value::U8(1));
+    }
+
+    #[test]
+    fn loop_if_relocates_break_continue_when_else_returns() {
+        let source = r#"
+            var s = 0
+            var i = 0
+            while i < 10 {
+                i = i + 1
+                if i < 4 {
+                    if i > 1 {
+                        if i < 3 { continue } else { s = s + i }
+                    } else {
+                        s = s + i
+                    }
+                } else {
+                    return s
+                }
+            }
+            return 99
+        "#;
+        verified(source);
+        assert_eq!(run_arithmetic_source(source).unwrap(), Value::U8(4));
+    }
 }

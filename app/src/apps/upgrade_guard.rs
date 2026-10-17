@@ -73,7 +73,7 @@ mod enabled {
     const POLL_SECS: u64 = 2 * 60 * 60;
     const RELEASES_LATEST: &str = "https://api.github.com/repos/hacash/fullnode/releases/latest";
     const UPGRADE_NOTICE: &str =
-        "\t软件版本过低，请升级：https://github.com/hacash/fullnode/releases\t";
+        "Software version is too low. Please upgrade: https://github.com/hacash/fullnode/releases";
     const STALE_SECS: u64 = 35 * 60;
 
     fn install(
@@ -135,12 +135,17 @@ mod enabled {
             ) {
                 return None;
             }
-            println!("{UPGRADE_NOTICE}");
+            print_upgrade_notice();
             Some(ApiResponse::json(format!(
                 "{{\"ret\":1,\"err\":{}}}",
                 field::json_escape(UPGRADE_NOTICE)
             )))
         })
+    }
+
+    fn print_upgrade_notice() {
+        let rule = "-".repeat(UPGRADE_NOTICE.len());
+        print!("\n\n{rule}\n{UPGRADE_NOTICE}\n{rule}\n\n");
     }
 
     fn submit_is_limited(is_mainnet: bool, version_low: bool, arrived: u64, now: u64) -> bool {

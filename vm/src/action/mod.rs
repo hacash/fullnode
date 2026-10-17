@@ -28,3 +28,13 @@ pub use p2sh_tool::{P2shLeaf, P2shLeafSpec, P2shMerkleTree, P2shTool, P2shTreeCa
 pub const CODECONF_TYPE_MASK: u8 = crate::rt::CodeType::TYPE_MASK;
 /// `codeconf` reserved bits (must be zero). Authority: `crate::rt::CodeConf::RESERVED_MASK`.
 pub const CODECONF_RESERVED_MASK: u8 = crate::rt::CodeConf::RESERVED_MASK;
+
+/// Public code-type name for a full `codeconf` byte. Reserved bits and unknown
+/// type bits fail via `CodeConf::parse`; callers that need a hard error use this
+/// before formatting an infallible description.
+pub fn codeconf_type_name(raw: u8) -> crate::rt::VmrtRes<&'static str> {
+    Ok(match crate::rt::CodeConf::parse(raw)?.code_type() {
+        crate::rt::CodeType::Bytecode => "bytecode",
+        crate::rt::CodeType::IRNode => "irnode",
+    })
+}

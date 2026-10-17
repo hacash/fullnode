@@ -4,15 +4,14 @@
 use field::{BytesW2, Fixed3, Uint1, Uint2};
 use sys::Ret;
 
-use crate::action::CODECONF_TYPE_MASK;
 use crate::rt::{CodeConf, CodeType};
 
 #[base::action(kind = 44, tx_min = 3, scope = AST, audit = "opaque", code, ctor = none,
     description = |this: &ContractMainCall| {
-        let type_name = match this.codeconf.uint() & CODECONF_TYPE_MASK {
-            0 => "bytecode",
-            1 => "ir_node",
-            _ => "invalid",
+        let raw = this.codeconf.uint();
+        let type_name = match crate::action::codeconf_type_name(raw) {
+            Ok(name) => name.to_owned(),
+            Err(_) => format!("invalid codeconf {raw}"),
         };
         let mut desc = format!(
             "Run main code ({}, {} bytes)",

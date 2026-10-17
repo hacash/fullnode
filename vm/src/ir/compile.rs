@@ -220,7 +220,6 @@ fn lower_stmt_if_in_loop(
     outer_patch: &mut LoopPatch,
 ) -> VmrtErr {
     const JIL: usize = JMP_INST_LEN;
-    const MAXL: usize = BLOCK_CODES_MAX_LEN;
 
     let mut cond = Vec::new();
     tri.subx.codegen_into(&mut cond)?;
@@ -241,25 +240,10 @@ fn lower_stmt_if_in_loop(
         else_br.push(POP as u8);
     }
 
-    let then_l = then_br.len();
-    let else_l = else_br.len() + JIL;
-    if then_l > MAXL || else_l > MAXL {
-        return itr_err_fmt!(CompileError, "compiled IR code is too long");
-    }
-    debug_assert!(then_l as i32 <= i16::MAX as i32);
-    debug_assert!(else_l as i32 <= i16::MAX as i32);
-
-    // Layout: cond | BRSL +else_l | else_br | JMPSL +then_l | then_br
+    let else_exits = definitely_exits(tri.subz.as_ref());
     let else_br_start = body.len() + cond.len() + JIL;
-    let then_br_start = else_br_start + else_br.len() + JIL;
-
-    body.extend_from_slice(&cond);
-    body.push(BRSL as u8);
-    body.extend_from_slice(&(else_l as i16).to_be_bytes());
-    body.extend_from_slice(&else_br);
-    body.push(JMPSL as u8);
-    body.extend_from_slice(&(then_l as i16).to_be_bytes());
-    body.extend_from_slice(&then_br);
+    let skip_len = emit_if_branches(body, &cond, &else_br, &then_br, else_exits)?;
+    let then_br_start = else_br_start + else_br.len() + skip_len;
 
     // Shift sub-patches to the global body coordinate and fold into outer.
     else_patch.shift(else_br_start);
@@ -269,6 +253,60 @@ fn lower_stmt_if_in_loop(
     outer_patch.continues.extend(else_patch.continues);
     outer_patch.continues.extend(then_patch.continues);
     Ok(())
+}
+
+
+fn definitely_exits(node: &dyn IRNode) -> bool {
+    use Bytecode::*;
+    if let Some(wrap) = node.as_any().downcast_ref::<IRNodeWrapOne>() {
+        return definitely_exits(&*wrap.node);
+    }
+    // CODE_CALL splices the frame (`prepare_splice` replaces codes and resets pc),
+    // so the caller's following bytes do not run. Ordinary calls do resume.
+    let op: Bytecode = std_mem_transmute!(node.bytecode());
+    match op {
+        RET | END | ERR | ABT | CODE_CALL => true,
+        IRBLOCK | IRBLOCKR | IRLIST => node
+            .as_any()
+            .downcast_ref::<IRNodeArray>()
+            .and_then(|arr| arr.subs.last())
+            .is_some_and(|last| definitely_exits(&**last)),
+        IRIF | IRIFR => node.as_any().downcast_ref::<IRNodeTriple>().is_some_and(|ifn| {
+            definitely_exits(&*ifn.suby) && definitely_exits(&*ifn.subz)
+        }),
+        _ => false,
+    }
+}
+
+/// `cond | BRSL +else_span | else | [JMPSL +then_len if else can fall through] | then`.
+/// The returned skip length is 0 when the jump is omitted.
+fn emit_if_branches(
+    out: &mut Vec<u8>,
+    cond: &[u8],
+    else_br: &[u8],
+    then_br: &[u8],
+    else_exits: bool,
+) -> VmrtRes<usize> {
+    const JIL: usize = JMP_INST_LEN;
+    const MAXL: usize = BLOCK_CODES_MAX_LEN;
+    let skip_len = if else_exits { 0 } else { JIL };
+    let then_l = then_br.len();
+    let else_l = else_br.len() + skip_len;
+    if then_l > MAXL || else_l > MAXL {
+        return itr_err_fmt!(CompileError, "compiled IR code is too long");
+    }
+    debug_assert!(then_l as i32 <= i16::MAX as i32);
+    debug_assert!(else_l as i32 <= i16::MAX as i32);
+    out.extend_from_slice(cond);
+    out.push(BRSL as u8);
+    out.extend_from_slice(&(else_l as i16).to_be_bytes());
+    out.extend_from_slice(else_br);
+    if skip_len != 0 {
+        out.push(JMPSL as u8);
+        out.extend_from_slice(&(then_l as i16).to_be_bytes());
+    }
+    out.extend_from_slice(then_br);
+    Ok(skip_len)
 }
 
 
@@ -331,7 +369,6 @@ fn compile_triple(btcd: Bytecode, x: IRNRef, y: IRNRef, z: IRNRef) -> VmrtRes<Op
 
 fn compile_if(btcd: Bytecode, x: IRNRef, y: IRNRef, z: IRNRef) -> VmrtRes<Vec<u8>> {
     const JIL: usize = JMP_INST_LEN;
-    const MAXL: usize = BLOCK_CODES_MAX_LEN;
     let mut cond = Vec::new();
     x.codegen_into(&mut cond)?;
     let mut if_br = Vec::new();
@@ -352,36 +389,21 @@ fn compile_if(btcd: Bytecode, x: IRNRef, y: IRNRef, z: IRNRef) -> VmrtRes<Vec<u8
     if !is_expr && z.hasretval() && !is_stmt_block(z) {
         el_br.push(POP as u8); // pop inst
     }
-    let if_l = if_br.len();
-    let el_l = el_br.len() + JIL;
-    // check code len: each branch must fit a signed-16 offset.
-    if if_l > MAXL || el_l > MAXL {
-        return itr_err_fmt!(CompileError, "compiled IR code is too long")
-    }
+    let else_exits = definitely_exits(z.as_ref());
+    let skip_len = if else_exits { 0 } else { JIL };
     // Total emitted IR must fit the per-function code window for safe u16/i16 indexing;
     // surface CompileError here rather than a generic CodeTooLong from the runtime verifier.
     let total_len = cond
         .len()
         .checked_add(JIL) // BRSL
         .and_then(|n| n.checked_add(el_br.len()))
-        .and_then(|n| n.checked_add(JIL)) // JMPSL
+        .and_then(|n| n.checked_add(skip_len))
         .and_then(|n| n.checked_add(if_br.len()));
     match total_len {
         Some(n) if n <= u16::MAX as usize => {}
         _ => return itr_err_fmt!(CompileError, "compiled IR code is too long"),
     }
-    // Both forward jumps fit a signed-16 immediate (guaranteed by MAXL); keep a debug assert visible.
-    debug_assert!(if_l as i32 <= i16::MAX as i32);
-    debug_assert!(el_l as i32 <= i16::MAX as i32);
-    let mut codes = Vec::with_capacity(
-        cond.len() + 1 + 2 + el_br.len() + 1 + 2 + if_br.len()
-    );
-    codes.extend_from_slice(&cond);
-    codes.push(BRSL as u8);
-    codes.extend_from_slice(&(el_l as i16).to_be_bytes());
-    codes.extend_from_slice(&el_br);
-    codes.push(JMPSL as u8);
-    codes.extend_from_slice(&(if_l as i16).to_be_bytes());
-    codes.extend_from_slice(&if_br);
+    let mut codes = Vec::new();
+    emit_if_branches(&mut codes, &cond, &el_br, &if_br, else_exits)?;
     Ok(codes)
 }

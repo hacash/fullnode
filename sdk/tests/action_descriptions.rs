@@ -195,7 +195,7 @@ fn cases() -> Vec<Case> {
             format!(r#"{{"kind":41,"protocol_cost":"1:244","address":"{A}","marks":"0x0000","edit":{{"new_revision":4,"inherit_add":[],"inherit_replace_at":[{{"idx":1,"addr":"dLVr1xSixCKt2a6KC6tbjNS6yMSCF68tA"}}],"library_add":[],"library_replace_at":[{{"idx":0,"addr":"dLVr1xSixCKt2a6KC6tbjNS6yMSCF68tA"}}],"abstcalls":[],"userfuncs":[],"calcfuncs":[]}}}}"#),
         ),
         case("contract_main_call.bytecode", r#"{"kind":44,"marks":"0x000000","codeconf":0,"codes":"0x25ef"}"#.to_owned()),
-        case("contract_main_call.ir_node", r#"{"kind":44,"marks":"0x000000","codeconf":1,"codes":"0x010203"}"#.to_owned()),
+        case("contract_main_call.irnode", r#"{"kind":44,"marks":"0x000000","codeconf":1,"codes":"0x010203"}"#.to_owned()),
         case("p2sh_script_prove.standard", r#"{"kind":46,"argvkey":"0xaabb","adrlibs":[],"codeconf":0,"lockbox":"0x25ef","merkels":[],"marks":"0x0000"}"#.to_owned()),
         case("p2sh_script_prove.library", r#"{"kind":46,"argvkey":"0xaabb","adrlibs":["dLVr1xSixCKt2a6KC6tbjNS6yMSCF68tA"],"codeconf":0,"lockbox":"0x25ef","merkels":[],"marks":"0x0000"}"#.to_owned()),
         // ---- CALL_ONLY syscalls (22 kinds; Fullnode-only review) ----
