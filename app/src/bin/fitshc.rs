@@ -222,10 +222,7 @@ fn main() {
     let fee_str = rest.get(1).map(|s| s.as_str()).unwrap_or("1:248");
     let txfee = Amount::from(fee_str).unwrap_or(Amount::default());
 
-    let nonce_val = rest
-        .get(2)
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(1);
+    let nonce_val = rest.get(2).and_then(|s| s.parse::<u32>().ok()).unwrap_or(1);
     let nonce = d_nonce.unwrap_or(Uint4::from(nonce_val));
 
     let argv = d_argv.unwrap_or_default();

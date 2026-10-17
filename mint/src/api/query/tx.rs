@@ -177,6 +177,9 @@ pub(crate) fn submit_block_handler(ctx: &ApiExecCtx, req: ApiRequest) -> ApiResp
         Ok(v) => v,
         Err(_) => return api_error("block parse failed"),
     };
+    if let Some(resp) = ctx.reject_block_submit() {
+        return resp;
+    }
     if let Err(e) = ctx.node.submit_block(&pkg, true) {
         return api_error(&format!("submit block failed: {}", e));
     }

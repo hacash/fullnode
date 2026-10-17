@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use base::{ChainId, Node, PkgOrigin, PkgSource, Transaction, TransactionBuild, TxPkg, TxPool};
@@ -7,11 +7,49 @@ use field::{Address, Amount, AmtCpr, Encode};
 use mint::MinerConf;
 use mint::action_diamond::HacdMint;
 use protocol::tx_std::StdTransaction;
-use sys::Waiter;
+use sys::{Rerr, Waiter};
+
+use crate::fullnode::{Fullnode, NodeApp};
 
 const TX_POOL_GROUP_DIAMOND_MINT: base::TxGroupId = base::TxGroupId::new(1);
 
-pub(super) fn start(
+pub(super) fn register(node: &mut Fullnode) -> Rerr {
+    node.add_app(Box::new(DiamondBider {
+        conf: node.miner_config().clone(),
+        chain_id: node.chain_id(),
+        worker: None,
+    }))
+}
+
+struct DiamondBider {
+    conf: MinerConf,
+    chain_id: ChainId,
+    worker: Option<JoinHandle<()>>,
+}
+
+impl NodeApp for DiamondBider {
+    fn name(&self) -> &'static str {
+        "diamond_bider"
+    }
+
+    fn attach(&mut self, host: &mut crate::fullnode::AppHost) -> Rerr {
+        self.worker = start(self.conf.clone(), host.node(), self.chain_id, host.waiter());
+        Ok(())
+    }
+
+    fn join(&mut self) -> Rerr {
+        if self
+            .worker
+            .take()
+            .is_some_and(|worker| worker.join().is_err())
+        {
+            return sys::errf!("diamond auto-bid worker panicked");
+        }
+        Ok(())
+    }
+}
+
+fn start(
     conf: MinerConf,
     node: Arc<dyn Node>,
     chain_id: ChainId,

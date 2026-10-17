@@ -64,6 +64,26 @@ impl ApiResponse {
     }
 }
 
+/// One block-submit admission check. `Some` denies the broadcast; `None` lets the
+/// next registered gate run.
+pub type BlockSubmitGate = Arc<dyn Fn(&ApiExecCtx) -> Option<ApiResponse> + Send + Sync>;
+
+/// Gates run in registration order. The first denial is the HTTP response.
+#[derive(Clone, Default)]
+pub struct BlockSubmitGates {
+    gates: Vec<BlockSubmitGate>,
+}
+
+impl BlockSubmitGates {
+    pub fn push(&mut self, gate: BlockSubmitGate) {
+        self.gates.push(gate);
+    }
+
+    fn snapshot(&self) -> Vec<BlockSubmitGate> {
+        self.gates.clone()
+    }
+}
+
 #[derive(Clone)]
 pub struct ApiExecCtx {
     pub engine: Arc<dyn Engine>,
@@ -72,6 +92,20 @@ pub struct ApiExecCtx {
     /// §13.2 shared concurrency + wall-clock limiter for VM sandbox calls.
     /// Sandbox routes acquire a permit before running; non-sandbox routes ignore it.
     pub sandbox_limiter: SandboxLimiter,
+    pub block_submit_gates: BlockSubmitGates,
+}
+
+impl ApiExecCtx {
+    /// Ask each registered gate, in order. The first denial is returned.
+    pub fn reject_block_submit(&self) -> Option<ApiResponse> {
+        let gates = self.block_submit_gates.snapshot();
+        for gate in gates {
+            if let Some(resp) = gate(self) {
+                return Some(resp);
+            }
+        }
+        None
+    }
 }
 
 pub type ApiHandler = Arc<dyn Fn(&ApiExecCtx, ApiRequest) -> ApiResponse + Send + Sync>;

@@ -77,6 +77,9 @@ pub(crate) fn miner_success_handler(
         Ok(pkg) => pkg,
         Err(e) => return api_error(&e.to_string()),
     };
+    if let Some(resp) = ctx.reject_block_submit() {
+        return resp;
+    }
     if let Err(e) = ctx.node.submit_block(&pkg, false) {
         return api_error(&format!("submit block failed: {}", e));
     }

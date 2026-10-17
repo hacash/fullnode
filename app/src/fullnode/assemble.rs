@@ -56,7 +56,8 @@ where
         waiter,
         miner_config: config.miner,
         chain_id: config.mint.chain_id,
-        diamond_bider: None,
+        apps: Vec::new(),
+        apps_sealed: false,
     })
 }
 

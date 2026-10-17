@@ -1,7 +1,9 @@
 //! Process-level Hacash applications. [`fullnode`] owns the standard node
 //! process; [`worker`] contains the independent mining clients.
 
+mod apps;
 pub mod fullnode;
+mod launch;
 pub mod registry;
 pub mod version;
 pub mod worker;

@@ -86,7 +86,11 @@ fn snapshot_live(src: &Path) -> PathBuf {
         let _ = std::fs::remove_dir_all(&dst);
         match copy_dir_recursive(src, &dst) {
             Ok(()) => {
-                eprintln!("[audit] snapshot copy ok (attempt {}): {}", attempt, dst.display());
+                eprintln!(
+                    "[audit] snapshot copy ok (attempt {}): {}",
+                    attempt,
+                    dst.display()
+                );
                 return dst;
             }
             Err(e) => eprintln!("[audit] snapshot copy attempt {} failed: {}", attempt, e),
@@ -226,7 +230,11 @@ fn run_audit(dir: &str, dump_path: Option<String>, top_n: usize) -> sys::Ret<()>
                             if hac == 0 {
                                 zero_hac_addresses += 1;
                             }
-                            balances.push(BalanceRow { addr, hac238: hac, balance: bal });
+                            balances.push(BalanceRow {
+                                addr,
+                                hac238: hac,
+                                balance: bal,
+                            });
                         }
                         Err(_) => balance_decode_errors += 1,
                     },
@@ -246,7 +254,9 @@ fn run_audit(dir: &str, dump_path: Option<String>, top_n: usize) -> sys::Ret<()>
                             .hacash
                             .to_238_u128()
                             .unwrap_or(0)
-                            .saturating_add(sto.right_bill.balance.hacash.to_238_u128().unwrap_or(0));
+                            .saturating_add(
+                                sto.right_bill.balance.hacash.to_238_u128().unwrap_or(0),
+                            );
                         *channel_deposit_by_status.entry(st).or_insert(0) += dep;
                     }
                     Err(_) => channel_decode_errors += 1,
@@ -256,8 +266,7 @@ fn run_audit(dir: &str, dump_path: Option<String>, top_n: usize) -> sys::Ret<()>
                 *prefix_count.entry(first as u32).or_insert(0) += 1;
             }
         }
-    })
-    ?;
+    })?;
 
     text_keys.sort();
     text_keys.dedup();
@@ -341,7 +350,10 @@ fn run_audit(dir: &str, dump_path: Option<String>, top_n: usize) -> sys::Ret<()>
     println!("--- held side ---");
     println!("addresses with balance entry : {}", balances.len());
     println!("  zero-HAC entries           : {}", zero_hac_addresses);
-    println!("SUM(address balances)        = {} HAC", fmt_hac(sum_balances));
+    println!(
+        "SUM(address balances)        = {} HAC",
+        fmt_hac(sum_balances)
+    );
     println!("channels total               : {}", channels);
     for (st, n) in &channel_by_status {
         println!(
@@ -351,7 +363,10 @@ fn run_audit(dir: &str, dump_path: Option<String>, top_n: usize) -> sys::Ret<()>
             fmt_hac(channel_deposit_by_status.get(st).copied().unwrap_or(0))
         );
     }
-    println!("SUM(open channel deposits)   = {} HAC", fmt_hac(deposit_open));
+    println!(
+        "SUM(open channel deposits)   = {} HAC",
+        fmt_hac(deposit_open)
+    );
     if deposit_challenging != 0 {
         println!(
             "SUM(challenging channel dep) = {} HAC",

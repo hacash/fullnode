@@ -1,14 +1,18 @@
-//! Standard full-node process assembly and lifecycle. Direct concrete assembly (no
-//! builder): construction (`Fullnode::open`) vs process ownership (`Fullnode::run`).
+//! Standard full-node process assembly and lifecycle. Construction is
+//! [`Fullnode::open`]; process entry points live in [`crate::launch`] and register
+//! apps before [`Fullnode::run`].
 
 mod assemble;
-mod bider;
 /// INI config parsing (public for side/test-chain nodes that assemble a
 /// custom consensus from `config.mint` / `config.miner`).
 pub mod config;
+mod host;
 mod indexer;
 mod miner_notice;
 mod storage;
+
+pub use crate::launch::{run, run_with, run_with_scaner};
+pub use host::{AppHost, NodeApp};
 
 use std::path::Path;
 use std::sync::Arc;
@@ -29,41 +33,8 @@ pub struct Fullnode {
     waiter: Waiter,
     miner_config: mint::MinerConf,
     chain_id: ChainId,
-    diamond_bider: Option<std::thread::JoinHandle<()>>,
-}
-
-/// Run the standard node without an external indexer.
-pub fn run() -> Rerr {
-    Fullnode::open(&config_path_from_args(), None)?.run()
-}
-
-/// Run with an external block indexer, using the normal command-line config
-/// path. Indexer-specific sections remain owned and parsed by the indexer.
-pub fn run_with_scaner(scaner: Arc<dyn Scaner>) -> Rerr {
-    Fullnode::open(&config_path_from_args(), Some(scaner))?.run()
-}
-
-/// Run a node assembled with an injected registry and consensus
-/// (`consensus` must also implement `mint::ConsensusApi` for the miner
-/// HTTP surface). Used by side/test-chain nodes that register their own
-/// parameter profile and consensus implementation.
-pub fn run_with<C>(
-    scaner: Option<Arc<dyn Scaner>>,
-    registry: Arc<dyn base::ExecutionServices>,
-    consensus: Arc<C>,
-) -> Rerr
-where
-    C: base::ConsensusRuntime + mint::ConsensusApi + 'static,
-{
-    Fullnode::open_with(&config_path_from_args(), scaner, registry, consensus)?.run()
-}
-
-/// Default config path for the standard full-node command.
-fn config_path_from_args() -> std::path::PathBuf {
-    std::env::args()
-        .nth(1)
-        .map(Into::into)
-        .unwrap_or_else(|| "hacash.config.ini".into())
+    apps: Vec<Box<dyn NodeApp>>,
+    apps_sealed: bool,
 }
 
 impl Fullnode {
@@ -85,6 +56,23 @@ impl Fullnode {
         C: base::ConsensusRuntime + mint::ConsensusApi + 'static,
     {
         assemble::open_with(path, scaner, registry, consensus)
+    }
+
+    pub(crate) fn chain_id(&self) -> ChainId {
+        self.chain_id
+    }
+
+    pub(crate) fn miner_config(&self) -> &mint::MinerConf {
+        &self.miner_config
+    }
+
+    /// Append a process app. Registration closes when [`Self::run`] starts.
+    pub fn add_app(&mut self, app: Box<dyn NodeApp>) -> Rerr {
+        if self.apps_sealed {
+            return sys::errf!("add_app after node start");
+        }
+        self.apps.push(app);
+        Ok(())
     }
 
     /// Start services in dependency order and own the complete shutdown path.
@@ -116,6 +104,7 @@ impl Fullnode {
 
     fn start(&mut self, handle: &tokio::runtime::Handle) -> Rerr {
         let _runtime = handle.enter();
+        self.apps_sealed = true;
         // Consensus hooks must be ready before local workers can submit work.
         self.node.start(self.waiter.clone())?;
 
@@ -125,12 +114,7 @@ impl Fullnode {
             indexer.start(self.waiter.clone())?;
         }
 
-        self.diamond_bider = bider::start(
-            self.miner_config.clone(),
-            self.node.clone(),
-            self.chain_id,
-            self.waiter.clone(),
-        );
+        self.attach_apps()?;
         self.node
             .clone()
             .start_p2p_on(handle, self.waiter.clone())?;
@@ -138,18 +122,35 @@ impl Fullnode {
         Ok(())
     }
 
+    fn attach_apps(&mut self) -> Rerr {
+        let engine = Arc::clone(&self.engine);
+        let node: Arc<dyn Node> = self.node.clone();
+        let waiter = self.waiter.clone();
+        let chain_id = self.chain_id;
+        let Fullnode { apps, server, .. } = self;
+        let mut host = AppHost::new(engine.as_ref(), node, server, chain_id, waiter);
+        for app in apps.iter_mut() {
+            app.attach(&mut host)?;
+        }
+        Ok(())
+    }
+
     fn stop(&mut self) -> Rerr {
         self.waiter.trigger();
         self.node.begin_shutdown();
-        let bider_panicked = self
-            .diamond_bider
-            .take()
-            .is_some_and(|bider| bider.join().is_err());
-        self.engine.shutdown()?;
-        if bider_panicked {
-            return sys::errf!("diamond auto-bid worker panicked");
+        let mut worker_err = None;
+        for app in &mut self.apps {
+            if let Err(e) = app.join() {
+                if worker_err.is_none() {
+                    worker_err = Some(e);
+                }
+            }
         }
-        Ok(())
+        self.engine.shutdown()?;
+        match worker_err {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 }
 

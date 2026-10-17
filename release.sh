@@ -5,19 +5,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-APP_FEATURES=(--no-default-features --features db-leveldb-sys)
 BINARIES=(fullnode poworker diaworker fitshc)
 
 echo "[release] building native binaries with db-leveldb-sys"
 for binary in "${BINARIES[@]}"; do
-    cargo build --release -p app --bin "$binary" "${APP_FEATURES[@]}"
+    features=(--no-default-features --features db-leveldb-sys)
+    if [[ "$binary" == "fullnode" ]]; then
+        features=(--no-default-features --features db-leveldb-sys,upgrade-guard)
+    fi
+    cargo build --release -p app --bin "$binary" "${features[@]}"
     cp "target/release/$binary" "hacash_${binary}_ubuntu"
     echo "[release] published hacash_${binary}_ubuntu"
 done
 
 echo "[release] building static musl fullnode with db-sled"
 cargo build --release -p app --bin fullnode \
-    --no-default-features --features db-sled \
+    --no-default-features --features db-sled,upgrade-guard \
     --target x86_64-unknown-linux-musl
 cp target/x86_64-unknown-linux-musl/release/fullnode hacash_fullnode_ubuntu_16.04
 echo "[release] published hacash_fullnode_ubuntu_16.04"

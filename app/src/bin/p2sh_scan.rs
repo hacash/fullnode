@@ -126,7 +126,11 @@ impl Recv {
             }
             TransferAsset::Asset(a) => {
                 self.asset_events += 1;
-                format!("ASSET serial={} amount={}", a.serial.uint(), a.amount.uint())
+                format!(
+                    "ASSET serial={} amount={}",
+                    a.serial.uint(),
+                    a.amount.uint()
+                )
             }
         };
         if self.detail.len() < 16 {
@@ -138,7 +142,11 @@ impl Recv {
     fn summary(&self) -> String {
         let mut parts = Vec::new();
         if !self.hac_fin.is_empty() {
-            parts.push(format!("HAC x{} [{}]", self.hac_fin.len(), self.hac_fin.join(" | ")));
+            parts.push(format!(
+                "HAC x{} [{}]",
+                self.hac_fin.len(),
+                self.hac_fin.join(" | ")
+            ));
         }
         if self.sat_total > 0 {
             parts.push(format!("SAT total {}", self.sat_total));
@@ -288,18 +296,14 @@ fn main() {
                     lockbox.len(),
                     lockbox.to_hex(),
                 ));
-                let addr: Result<Address, String> =
-                    match vm::CodeConf::parse(p.codeconf.uint()) {
-                        Ok(conf) => vm::action::P2SHScriptProve::calc_scriptmh_from_lockbox(
-                            &p.adrlibs,
-                            conf,
-                            &p.lockbox,
-                            &p.merkels,
-                        )
-                        .map(|calc| calc.address)
-                        .map_err(|e| e.to_string()),
-                        Err(e) => Err(e.to_string()),
-                    };
+                let addr: Result<Address, String> = match vm::CodeConf::parse(p.codeconf.uint()) {
+                    Ok(conf) => vm::action::P2SHScriptProve::calc_scriptmh_from_lockbox(
+                        &p.adrlibs, conf, &p.lockbox, &p.merkels,
+                    )
+                    .map(|calc| calc.address)
+                    .map_err(|e| e.to_string()),
+                    Err(e) => Err(e.to_string()),
+                };
                 match addr {
                     Ok(a) => {
                         let e = revealed.entry(a).or_insert((height, 0));
@@ -325,7 +329,10 @@ fn main() {
 
     eprintln!("[scan] scanned {} blocks [{}..={}]", scanned, start, end);
     let total: usize = per_height.iter().map(|r| r.3).sum();
-    eprintln!("[scan] p2sh actions = {}  (derive failures: {})", total, reveal_errors);
+    eprintln!(
+        "[scan] p2sh actions = {}  (derive failures: {})",
+        total, reveal_errors
+    );
     for (h, ts, hash, n) in per_height.iter().take(20) {
         eprintln!("[scan]   h={} ts={} n={} {}", h, ts, n, hash);
     }
@@ -379,7 +386,14 @@ fn main() {
         orphan.len()
     );
     for (a, r) in orphan.iter() {
-        println!("ORPHAN\t{}\tfirst_h={}\tlast_h={}\tevents={}\t{}", a.to_readable(), r.first_h, r.last_h, r.events, r.summary());
+        println!(
+            "ORPHAN\t{}\tfirst_h={}\tlast_h={}\tevents={}\t{}",
+            a.to_readable(),
+            r.first_h,
+            r.last_h,
+            r.events,
+            r.summary()
+        );
         for d in r.detail.iter() {
             println!("ORPHAN_DETAIL\t{}\t{}", a.to_readable(), d);
         }
@@ -406,7 +420,9 @@ fn main() {
         let (h, n) = revealed[a];
         println!(
             "PAIR\t{}\tfunded_first_h=NEVER\tfunded_events=0\trevealed=true\treveal_first_h={}\treveal_count={}",
-            a.to_readable(), h, n
+            a.to_readable(),
+            h,
+            n
         );
     }
 
@@ -420,7 +436,12 @@ fn main() {
     );
     for a in revealed_only {
         let (h, n) = revealed[a];
-        println!("REVEAL_ONLY\t{}\tfirst_h={}\tcount={}", a.to_readable(), h, n);
+        println!(
+            "REVEAL_ONLY\t{}\tfirst_h={}\tcount={}",
+            a.to_readable(),
+            h,
+            n
+        );
     }
 
     if let Some(path) = out_path {

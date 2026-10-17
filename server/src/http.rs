@@ -12,7 +12,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use base::{
     ApiExecCtx, ApiHandler, ApiHandlerAsync, ApiHandlerKind, ApiMethod, ApiRequest, ApiResponse,
-    ApiRoute, ApiService, Node, Server, ServerConfig,
+    ApiRoute, ApiService, BlockSubmitGate, BlockSubmitGates, Node, Server, ServerConfig,
 };
 use sys::{Rerr, Waiter};
 
@@ -21,6 +21,7 @@ pub struct HttpServer {
     services: Vec<Arc<dyn ApiService>>,
     config: ServerConfig,
     launch_time: u64,
+    block_submit_gates: BlockSubmitGates,
 }
 
 impl HttpServer {
@@ -35,7 +36,14 @@ impl HttpServer {
             services,
             config,
             launch_time,
+            block_submit_gates: BlockSubmitGates::default(),
         }
+    }
+
+    /// Append a block-submit gate. Gates already registered run first.
+    /// Must be called before [`Self::start_on`]: the route context copies this list.
+    pub fn add_block_submit_gate(&mut self, gate: BlockSubmitGate) {
+        self.block_submit_gates.push(gate);
     }
 
     pub fn service_names(&self) -> Vec<&str> {
@@ -58,6 +66,7 @@ impl HttpServer {
             // §13.2: default sandbox limiter.  Override by constructing the
             // ApiExecCtx directly if a deployment needs different caps.
             sandbox_limiter: base::SandboxLimiter::default(),
+            block_submit_gates: self.block_submit_gates.clone(),
         }
     }
 }
