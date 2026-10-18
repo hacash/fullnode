@@ -22,7 +22,16 @@ pub trait Context {
     // after each call; implementations must retain that state exactly.
     fn exec_from(&self) -> ExecFrom;
     fn exec_from_set(&mut self, from: ExecFrom);
+    /// Admission gating: reject-only, never feeds state, so fast sync may
+    /// answer `Ok` without verifying.
     fn check_sign(&mut self, adr: &Address) -> Rerr;
+    /// Consensus-visible query whose result feeds state computation (the
+    /// `CheckSignature`/`Sigset*` actions). Must return the same answer in
+    /// every execution mode: a mode-dependent value would write different
+    /// state for one block under strict execution vs fast-sync replay.
+    fn check_sign_data(&mut self, adr: &Address) -> Rerr {
+        self.check_sign(adr)
+    }
 
     // Address, state, and execution-log access.
     fn addr(&self, ptr: &AddrOrPtr) -> Ret<Address> {

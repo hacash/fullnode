@@ -90,10 +90,11 @@ impl ContextInst {
         }
     }
 
+    /// Real signature verification with per-tx caching. Mode-independent by
+    /// construction: both `check_sign` and `check_sign_data` resolve here, so
+    /// admission gating and consensus-visible queries can never disagree in
+    /// strict mode.
     fn check_sign_cached(&mut self, adr: &Address) -> Rerr {
-        if self.env.chain.fast_sync {
-            return Ok(());
-        }
         if let Some(cached) = self.check_sign_cache.get(adr) {
             return cached.clone();
         }
@@ -131,7 +132,18 @@ impl Context for ContextInst {
     fn exec_from_set(&mut self, from: ExecFrom) {
         self.exec_from = from;
     }
+    /// Admission gating: fast sync trusts the synced chain (PoW), so the
+    /// check is skipped. The early return stays before the cache so the
+    /// mode-dependent `Ok` can never be observed by `check_sign_data`.
     fn check_sign(&mut self, adr: &Address) -> Rerr {
+        if self.env.chain.fast_sync {
+            return Ok(());
+        }
+        self.check_sign_cached(adr)
+    }
+    /// Consensus-visible query: real verification in every mode, or fast-sync
+    /// replay of a strict-executed block would write different state.
+    fn check_sign_data(&mut self, adr: &Address) -> Rerr {
         self.check_sign_cached(adr)
     }
 
@@ -282,5 +294,140 @@ impl Context for ContextInst {
         }
         self.psh.insert(addr, p2sh);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base::{
+        BinaryCodecs, BlockHasherFn, BlockRef, DiskDB, JsonCodecs, TransactionSign,
+        VmExecutionParams, VmHostActionDef, VmHostCallKind,
+    };
+    use field::Amount;
+
+    struct NoDisk;
+
+    impl DiskDB for NoDisk {
+        fn read(&self, _key: &[u8]) -> sys::Ret<Option<Vec<u8>>> {
+            Ok(None)
+        }
+        fn save(&self, _key: &[u8], _val: &[u8]) {}
+        fn remove(&self, _key: &[u8]) {}
+        fn try_write(&self, _memkv: &dyn base::MemDB) -> Rerr {
+            Ok(())
+        }
+    }
+
+    fn stub_hasher(_height: u64, _stuff: &[u8]) -> [u8; base::HASH_SIZE] {
+        [0u8; base::HASH_SIZE]
+    }
+
+    struct StubServices;
+
+    impl BinaryCodecs for StubServices {
+        fn decode_action(&self, _buf: &[u8]) -> Ret<(base::ActionRef, usize)> {
+            errf!("stub: decode_action")
+        }
+        fn decode_transaction(&self, _buf: &[u8]) -> Ret<(TxRef, usize)> {
+            errf!("stub: decode_transaction")
+        }
+        fn decode_block(&self, _buf: &[u8]) -> Ret<(BlockRef, usize)> {
+            errf!("stub: decode_block")
+        }
+        fn peek_block_size(&self, _buf: &[u8]) -> Ret<usize> {
+            errf!("stub: peek_block_size")
+        }
+        fn block_hash(&self, _height: u64, _stuff: &[u8]) -> [u8; base::HASH_SIZE] {
+            [0u8; base::HASH_SIZE]
+        }
+        fn block_hasher_fn(&self) -> BlockHasherFn {
+            stub_hasher
+        }
+    }
+
+    impl JsonCodecs for StubServices {
+        fn decode_action_json(&self, _json: &str) -> Ret<base::ActionRef> {
+            errf!("stub: decode_action_json")
+        }
+    }
+
+    impl base::ExecutionServices for StubServices {
+        fn assign_vm(&self, _height: u64) -> Option<Box<dyn Vm>> {
+            None
+        }
+        fn vm_host_def(&self, _kind: VmHostCallKind, _id: u8) -> Option<&VmHostActionDef> {
+            None
+        }
+        fn vm_params(&self) -> Ret<&VmExecutionParams> {
+            errf!("stub: vm_params")
+        }
+        fn execution_profile(&self) -> Ret<&'static dyn base::ExecutionProfile> {
+            errf!("stub: execution_profile")
+        }
+        fn create_context(
+            self: Arc<Self>,
+            _env: Env,
+            _chunk: base::StateChunkRef,
+            _tx: TxRef,
+        ) -> Ret<Box<dyn Context>> {
+            errf!("stub: create_context")
+        }
+    }
+
+    fn signed_tx() -> (crate::codec::tx::StdTransaction, Address, Address) {
+        let acc_main = sys::Account::create_by_secret_key_value([7u8; 32]).unwrap();
+        let acc_other = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let main = Address::from(*acc_main.address());
+        let other = Address::from(*acc_other.address());
+        let mut tx = crate::codec::tx::StdTransaction::new(
+            hacash_params::TX_TYPE_2,
+            main,
+            Amount::mei(1),
+        );
+        tx.fill_sign_account(&acc_main).unwrap();
+        (tx, main, other)
+    }
+
+    fn build_ctx(fast_sync: bool) -> (Box<ContextInst>, Address, Address) {
+        let (tx, main, other) = signed_tx();
+        let mut env = Env::default();
+        env.chain.fast_sync = fast_sync;
+        env.block.height = 1;
+        let block = base::StateChunkRef::block_draft_on_disk(Arc::new(NoDisk), 1);
+        let chunk = block.spawn_tx_child(tx.hash()).unwrap();
+        let ctx = ContextInst::new(env, Arc::new(StubServices), chunk, Arc::new(tx)).unwrap();
+        (Box::new(ctx), main, other)
+    }
+
+    /// HVM-0001 regression: the consensus-visible query must verify for real
+    /// in every mode, while admission gating keeps its fast-sync bypass.
+    #[test]
+    fn check_sign_data_is_mode_independent_but_check_sign_is_not() {
+        let (mut fast, main, other) = build_ctx(true);
+
+        // Fast sync: admission answers Ok for the non-signer without verifying.
+        assert!(fast.check_sign(&other).is_ok());
+        // The data path still sees the truth: `other` did not sign this tx.
+        assert!(fast.check_sign_data(&other).is_err());
+        // And a real signature verifies through the data path too.
+        assert!(fast.check_sign_data(&main).is_ok());
+
+        // Strict: both paths agree with real verification.
+        let (mut strict, main, other) = build_ctx(false);
+        assert!(strict.check_sign(&other).is_err());
+        assert!(strict.check_sign_data(&other).is_err());
+        assert!(strict.check_sign_data(&main).is_ok());
+    }
+
+    /// The fast-sync admission bypass must not poison the shared cache that
+    /// the data path reads through.
+    #[test]
+    fn fast_sync_admission_bypass_does_not_poison_the_data_cache() {
+        let (mut fast, main, other) = build_ctx(true);
+        assert!(fast.check_sign(&other).is_ok()); // bypass first
+        assert!(fast.check_sign_data(&other).is_err()); // still the real answer
+        assert!(fast.check_sign_data(&main).is_ok());
+        assert!(fast.check_sign(&other).is_ok()); // bypass unaffected by cache
     }
 }

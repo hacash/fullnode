@@ -294,7 +294,7 @@ base::impl_action_execute! {
 base::impl_action_execute! {
     CheckSignature {
         (self, ctx) {
-            let ok = match ctx.check_sign(&self.addr) {
+            let ok = match ctx.check_sign_data(&self.addr) {
                 Ok(()) => 1u8,
                 Err(_) => 0u8,
             };
@@ -333,7 +333,7 @@ fn sigset_signed_count(ctx: &mut dyn base::Context, keys: &AddressW1) -> sys::Re
     sigset_validate_keys(keys)?;
     let mut count = 0u8;
     for addr in keys.as_list() {
-        if ctx.check_sign(addr).is_ok() {
+        if ctx.check_sign_data(addr).is_ok() {
             count += 1;
         }
     }
@@ -358,7 +358,7 @@ base::impl_action_execute! {
             }
             let mut count = 0u8;
             for addr in self.keys.as_list() {
-                if ctx.check_sign(addr).is_ok() {
+                if ctx.check_sign_data(addr).is_ok() {
                     count += 1;
                 }
             }
@@ -605,6 +605,9 @@ mod tests {
         exec_from: ExecFrom,
         tex: TexLedger,
         signed: HashSet<Address>,
+        /// When set, `check_sign_data` answers from this set so tests can
+        /// distinguish the consensus-visible path from admission `check_sign`.
+        data_verified: Option<HashSet<Address>>,
     }
 
     impl SigsetCtx {
@@ -616,6 +619,17 @@ mod tests {
                 exec_from: ExecFrom::Call,
                 tex: TexLedger::default(),
                 signed: signed.into_iter().collect(),
+                data_verified: None,
+            }
+        }
+
+        fn with_data_verified(
+            signed: &[Address],
+            data_verified: impl IntoIterator<Item = Address>,
+        ) -> Self {
+            Self {
+                data_verified: Some(data_verified.into_iter().collect()),
+                ..Self::new(signed.iter().copied())
             }
         }
     }
@@ -641,6 +655,13 @@ mod tests {
                 Ok(())
             } else {
                 errf!("unsigned")
+            }
+        }
+        fn check_sign_data(&mut self, adr: &Address) -> Rerr {
+            match &self.data_verified {
+                Some(verified) if verified.contains(adr) => Ok(()),
+                Some(_) => errf!("unsigned"),
+                None => Context::check_sign(self, adr),
             }
         }
         fn layer(&mut self) -> &mut dyn StateLayer {
@@ -761,6 +782,31 @@ mod tests {
         assert_eq!(ret, vec![1]);
         let (_, ret) = run_at_least(trio, 3, &signed).unwrap();
         assert_eq!(ret, vec![0]);
+    }
+
+    /// The three signature syscalls are consensus-visible: they must resolve
+    /// through `check_sign_data` (mode-independent), never the admission
+    /// `check_sign`. Here admission would say "a and b signed" while real
+    /// verification only confirms `a`; the results must follow the latter.
+    #[test]
+    fn sig_queries_use_the_data_path_not_admission() {
+        let a = privkey_addr(1);
+        let b = privkey_addr(2);
+
+        let mut ctx = SigsetCtx::with_data_verified(&[a, b], [a]);
+        let (_, ret) = ActionExecute::execute(&CheckSignature::new(a), &mut ctx).unwrap();
+        assert_eq!(ret, vec![1]);
+        let (_, ret) = ActionExecute::execute(&CheckSignature::new(b), &mut ctx).unwrap();
+        assert_eq!(ret, vec![0]);
+
+        let pair = keys(vec![a, b]);
+        let (_, ret) =
+            ActionExecute::execute(&SigsetCount::new(pair.clone()), &mut ctx).unwrap();
+        assert_eq!(ret, vec![1], "count must follow real verification, not admission");
+        let (_, ret) =
+            ActionExecute::execute(&SigsetAtLeast::new(pair, Uint1::from(2u8)), &mut ctx)
+                .unwrap();
+        assert_eq!(ret, vec![0], "threshold must follow real verification, not admission");
     }
 
     #[test]
