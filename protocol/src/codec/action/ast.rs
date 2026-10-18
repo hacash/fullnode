@@ -1,5 +1,6 @@
 //! AstSelect / AstIf compositional actions.
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use base::{Action, ActionRef, AddrOrPtr, BinaryCodecs, CodecRegistry};
@@ -7,6 +8,50 @@ use field::{
     json_decode_value, json_object_fields, json_split_array, Encode, Reader, Uint1, Uint2,
 };
 use sys::Ret;
+
+/// Hard cap on AST action nesting. One wire level costs only 5 bytes
+/// (kind + exe_min + exe_max + count), so without a cap a ~19 KB payload drives
+/// the decode recursion into a stack overflow before any size check runs.
+/// 64 (not the wire-safe 128) keeps the wire cap aligned with what the JSON
+/// route can actually represent: the field engine caps bracket nesting at 128
+/// and one AST level costs two brackets, so JSON-built ASTs top out at ~64
+/// levels anyway — both encodings accept the same nesting set.
+const AST_MAX_DEPTH: usize = 64;
+
+// The decode recursion crosses the registry's fixed-signature codec dispatch
+// (`reg.decode_action` / `reg.decode_action_json`), so depth cannot be threaded
+// through parameters; it is tracked per decoding thread instead. The Drop guard
+// keeps the count balanced on every error return.
+thread_local! {
+    static AST_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
+}
+
+struct AstDepthGuard;
+
+impl AstDepthGuard {
+    fn enter() -> Ret<Self> {
+        let entered = AST_DECODE_DEPTH.with(|d| {
+            let v = d.get();
+            if v < AST_MAX_DEPTH {
+                d.set(v + 1);
+                true
+            } else {
+                false
+            }
+        });
+        if entered {
+            Ok(AstDepthGuard)
+        } else {
+            sys::normalf!("AST action nesting exceeds {} levels", AST_MAX_DEPTH)
+        }
+    }
+}
+
+impl Drop for AstDepthGuard {
+    fn drop(&mut self) {
+        AST_DECODE_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+    }
+}
 
 impl field::ToJSON for ActionListW1 {
     fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
@@ -173,6 +218,7 @@ fn decode_ast_child(reg: &dyn CodecRegistry, json: &str) -> Ret<ActionRef> {
 }
 
 fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect> {
+    let _depth = AstDepthGuard::enter()?;
     let mut kind = None;
     let mut exe_min = None;
     let mut exe_max = None;
@@ -216,6 +262,7 @@ fn decode_ast_select_value(reg: &dyn CodecRegistry, json: &str) -> Ret<AstSelect
 }
 
 fn decode_ast_select(reg: &dyn BinaryCodecs, buf: &[u8]) -> Ret<(AstSelect, usize)> {
+    let _depth = AstDepthGuard::enter()?;
     let mut r = Reader::new(buf);
     let kind: Uint2 = r.read()?;
     if kind.uint() != AstSelect::KIND {
@@ -254,6 +301,7 @@ base::action_codec_entries! { AstSelect {
 
 base::action_codec_entries! { AstIf {
     wire = (reg, buf) {
+        let _depth = AstDepthGuard::enter()?;
         let mut r = Reader::new(buf);
         let kind: Uint2 = r.read()?;
         if kind.uint() != AstIf::KIND {
@@ -277,6 +325,7 @@ base::action_codec_entries! { AstIf {
         ))
     },
     json = (reg, json) {
+        let _depth = AstDepthGuard::enter()?;
         let mut declared = None;
         let mut cond = None;
         let mut br_if = None;
@@ -542,5 +591,56 @@ mod tests {
         assert!(decode_ast_select(&reg, &wrong).is_err());
         assert!(create_ast_select(&reg, &wrong).is_err());
         assert!(TransferHacTo::decode(&wire).is_err());
+    }
+
+    #[test]
+    fn ast_wire_nesting_hard_capped_at_max_depth() {
+        let reg = TestRegistry::protocol().unwrap();
+        // Each level is 5 bytes (kind + exe_min + exe_max + count=1); the
+        // innermost level is an empty select.
+        fn nested_wire(depth: usize) -> Vec<u8> {
+            let mut buf = vec![0, AstSelect::KIND as u8, 0, 0, 0];
+            for _ in 1..depth {
+                let mut outer = vec![0, AstSelect::KIND as u8, 1, 1, 1];
+                outer.extend_from_slice(&buf);
+                buf = outer;
+            }
+            buf
+        }
+
+        let at_cap = nested_wire(AST_MAX_DEPTH);
+        let (decoded, used) = create_ast_select(&reg, &at_cap).unwrap();
+        assert_eq!(used, at_cap.len());
+        assert_eq!(decoded.encode(), at_cap);
+
+        let over_cap = nested_wire(AST_MAX_DEPTH + 1);
+        assert!(create_ast_select(&reg, &over_cap).is_err());
+        // The registry dispatch path (the P2P decode route) is capped too.
+        assert!(reg.decode_action(&over_cap).is_err());
+
+        // A rejected decode must not leak depth into later decodes.
+        assert!(create_ast_select(&reg, &nested_wire(2)).is_ok());
+        assert!(reg.decode_action(&nested_wire(2)).is_ok());
+    }
+
+    #[test]
+    fn ast_json_nesting_is_bounded() {
+        let reg = TestRegistry::protocol().unwrap();
+        fn nested_json(depth: usize) -> String {
+            let mut json = r#"{"kind":25,"exe_min":0,"exe_max":0,"actions":[]}"#.to_owned();
+            for _ in 1..depth {
+                json = format!(r#"{{"kind":25,"exe_min":1,"exe_max":1,"actions":[{json}]}}"#);
+            }
+            json
+        }
+
+        // The field JSON engine caps bracket nesting at 128 and one AST level costs
+        // two brackets, so JSON-built ASTs top out right around AST_MAX_DEPTH (64
+        // levels); the guards on the JSON decoders are a backstop, not the primary
+        // bound. Depth 60 round-trips; past the engine cap input is rejected outright.
+        assert!(decode_ast_select_json(&reg, &nested_json(60)).is_ok());
+        assert!(decode_ast_select_json(&reg, &nested_json(200)).is_err());
+        // A rejected decode must not leak depth into later decodes.
+        assert!(decode_ast_select_json(&reg, &nested_json(3)).is_ok());
     }
 }
