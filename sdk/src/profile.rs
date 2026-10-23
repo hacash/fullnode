@@ -4,11 +4,11 @@
 use crate::json::SdkJsonTo;
 use crate::schema::{DOMAIN_CODEC_PROFILE, SCHEMA_CODEC_PROFILE};
 
-pub const SDK_VERSION: &str = "0.2.3";
+pub const SDK_VERSION: &str = "0.2.4";
 pub const ABI_MAJOR: u32 = 2;
 /// v2.5: the codec profile reports and hashes transaction-type membership;
 /// the wallet surface admits only current Type-2/3 envelopes.
-pub const ABI_MINOR: u32 = 7;
+pub const ABI_MINOR: u32 = 8;
 /// Fullnode source commit this SDK's protocol/codec behavior corresponds to.
 /// Injected from git by `build.rs`, never hand-maintained.
 pub const FULLNODE_COMMIT: &str = env!("SDK_FULLNODE_COMMIT");
@@ -328,4 +328,9 @@ define_operations! {
     (OP_VM_DECODE_CALL, "vm.decode_call", [string("action")]),
     (OP_ACTION_DESCRIBE, "action.describe", [string("action"), optional_json("describe")]),
     (OP_VM_CODE, "vm.code", [string("codes"), string("code_type"), optional_string("format"), optional_json("sourcemap"), opt_u64("limit"), opt_u64("offset")]),
+    (OP_TEX_BUILD, "tex.build", [json("authorization")]),
+    (OP_TEX_INSPECT, "tex.inspect", [json("authorization")]),
+    (OP_TEX_PREPARE_SIGNATURE, "tex.prepare_signature", [json("authorization"), string("signer_address"), optional_string("origin"), opt_u64("expires_at")]),
+    (OP_TEX_ATTACH_SIGNATURE, "tex.attach_signature", [json("authorization"), json("proof"), json("request")]),
+    (OP_TEX_VERIFY, "tex.verify", [string("action")]),
 }

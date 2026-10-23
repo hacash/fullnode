@@ -24,6 +24,7 @@ pub mod profile;
 pub mod schema;
 pub mod service;
 pub mod vm;
+pub mod tex;
 
 pub use account::{address_from_public_key, verify_address, verify_signature};
 pub use amount::{format, parse};

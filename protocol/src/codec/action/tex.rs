@@ -257,6 +257,11 @@ impl TexCellExecute {
         Hash::from(sys::calculate_hash(stf))
     }
 
+    /// Final TEX authorization signing digest, shared with external signing tools.
+    pub fn sign_hash(&self) -> Hash {
+        self.get_sign_stuff()
+    }
+
     /// Build and sign a TEX bundle. The signature covers exactly `addr` and
     /// the encoded cells, matching consensus verification; the transaction
     /// envelope is intentionally not part of this replayable bundle.

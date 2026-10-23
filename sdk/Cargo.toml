@@ -2,7 +2,7 @@
 name = "sdk"
 # Mirrors `profile::SDK_VERSION` (the ABI-facing package version the
 # sdk_version response reports); keep the two in lockstep.
-version = "0.2.3"
+version = "0.2.4"
 edition.workspace = true
 
 [lib]

@@ -8,6 +8,8 @@ use crate::ConsensusApi;
 
 mod console;
 mod miner;
+#[doc(hidden)]
+pub mod preflight;
 mod query;
 mod transaction;
 mod transfer;
@@ -18,6 +20,7 @@ use miner::{
     diamondminer_init_handler, diamondminer_success_handler, miner_pending_handler,
     miner_success_handler,
 };
+use preflight::transaction_preflight_handler;
 use query::{
     asset_query_handler, balance_handler, block_datas_handler, block_intro_handler,
     block_pool_stats_handler, block_recents_handler, block_views_handler, channel_handler,
@@ -113,6 +116,10 @@ impl ApiService for MintApi {
             ApiRoute::get("/query/block/pools", block_pool_stats_handler),
             ApiRoute::get("/query/block/recents", block_recents_handler),
             ApiRoute::get("/query/transaction", transaction_query_handler),
+            ApiRoute::post(
+                "/query/transaction/preflight",
+                transaction_preflight_handler,
+            ),
             ApiRoute::post("/create/transaction", transaction_build_handler),
             ApiRoute::post("/submit/transaction", submit_transaction_handler),
             ApiRoute::post("/submit/block", submit_block_handler),

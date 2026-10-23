@@ -11,7 +11,8 @@ use crate::profile::{
     CodecProfile, RequestField, OPERATIONS, OP_ACCOUNT_ADDRESS_FROM_PUBLIC_KEY,
     OP_ACCOUNT_VERIFY_ADDRESS, OP_ACCOUNT_VERIFY_SIGNATURE, OP_ACTION_DESCRIBE, OP_AMOUNT_FORMAT,
     OP_AMOUNT_PARSE, OP_DIAMOND_LOOKUP, OP_MESSAGE_PREPARE_SIGNATURE, OP_MESSAGE_VERIFY,
-    OP_POLICY_EVALUATE, OP_SYSTEM_PARAMS, OP_SYSTEM_SDK_VERSION, OP_TX_ATTACH_SIGNATURE,
+    OP_POLICY_EVALUATE, OP_SYSTEM_PARAMS, OP_SYSTEM_SDK_VERSION, OP_TEX_ATTACH_SIGNATURE,
+    OP_TEX_BUILD, OP_TEX_INSPECT, OP_TEX_PREPARE_SIGNATURE, OP_TEX_VERIFY, OP_TX_ATTACH_SIGNATURE,
     OP_TX_ATTACH_SIGNATURE_UNBOUND, OP_TX_BUILD, OP_TX_DECODE, OP_TX_ENCODE, OP_TX_ESTIMATE_FEE,
     OP_TX_INSPECT, OP_TX_INSPECT_REPORT, OP_TX_PREPARE_SIGNATURE, OP_TX_SIGNATURE_REPORT,
     OP_TX_VERIFY, OP_VM_CODE, OP_VM_DECODE_CALL,
@@ -506,6 +507,43 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
             )?
             .to_json_string())
         }
+        OP_TEX_BUILD => {
+            let v = parse_request_json(operation_id, payload)?;
+            let auth =
+                crate::tex::decode_authorization_json(req_field(&v, "authorization")?.json()?)?;
+            crate::tex::build(&auth)
+        }
+        OP_TEX_INSPECT => {
+            let v = parse_request_json(operation_id, payload)?;
+            let auth =
+                crate::tex::decode_authorization_json(req_field(&v, "authorization")?.json()?)?;
+            Ok(crate::tex::inspect(&auth)?.to_json_string())
+        }
+        OP_TEX_PREPARE_SIGNATURE => {
+            let v = parse_request_json(operation_id, payload)?;
+            let auth =
+                crate::tex::decode_authorization_json(req_field(&v, "authorization")?.json()?)?;
+            crate::tex::prepare_signature(
+                &auth,
+                req_field(&v, "signer_address")?.str()?,
+                req_field(&v, "origin")?.opt_str()?,
+                req_field(&v, "expires_at")?.opt_u64()?,
+            )
+        }
+        OP_TEX_ATTACH_SIGNATURE => {
+            let v = parse_request_json(operation_id, payload)?;
+            let auth =
+                crate::tex::decode_authorization_json(req_field(&v, "authorization")?.json()?)?;
+            let proof =
+                crate::attach::SignatureProof::from_json_str(req_field(&v, "proof")?.json()?)?;
+            let request =
+                crate::attach::SigningRequest::from_json_str(req_field(&v, "request")?.json()?)?;
+            crate::tex::attach_signature(&auth, &proof, &request)
+        }
+        OP_TEX_VERIFY => {
+            let v = parse_request_json(operation_id, payload)?;
+            crate::tex::verify_action(req_field(&v, "action")?.str()?)
+        }
         _ => Err(SdkError::new(
             SdkErrorCode::UnknownOperation,
             format!("unknown operation id {}", operation_id),
@@ -515,6 +553,7 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use field::{Encode, ToJSON};
 
     fn invoke_ok(op: u16, payload: &str) -> String {
         invoke_ok_bytes(op, payload.as_bytes())
@@ -607,6 +646,95 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn tex_operations_are_appended_and_return_structured_review() {
+        assert_eq!(crate::profile::OP_TEX_BUILD, 26);
+        assert_eq!(crate::profile::OP_TEX_INSPECT, 27);
+        assert_eq!(crate::profile::OP_TEX_PREPARE_SIGNATURE, 28);
+        assert_eq!(crate::profile::OP_TEX_ATTACH_SIGNATURE, 29);
+        assert_eq!(crate::profile::OP_TEX_VERIFY, 30);
+        let address = field::Address::default().to_readable();
+        let auth = format!(
+            r#"{{"schema":"hacash.tex/authorization@1","address":"{address}","cells":[{{"cellid":1,"haczhu":123}},{{"cellid":25,"chainid":0}},{{"cellid":23,"height":"1099511627775"}}]}}"#
+        );
+        let inspect_request = format!("{{\"authorization\":{auth}}}");
+        let result = invoke_json(crate::profile::OP_TEX_INSPECT, inspect_request.as_bytes());
+        assert!(
+            result.contains("\"operator\":\"eq\",\"value\":\"0\""),
+            "{result}"
+        );
+        assert!(
+            result.contains("\"operator\":\"at_most\",\"value\":\"1099511627775\""),
+            "{result}"
+        );
+        assert!(result.contains("\"payments\":[{"), "{result}");
+        let prepare_request =
+            format!("{{\"authorization\":{auth},\"signer_address\":\"{address}\"}}");
+        let prepared = invoke_json(
+            crate::profile::OP_TEX_PREPARE_SIGNATURE,
+            prepare_request.as_bytes(),
+        );
+        assert!(
+            prepared.contains("\"purpose\":\"tex_authorization\""),
+            "{prepared}"
+        );
+        let missing_guard = auth.replace(",{\"cellid\":25,\"chainid\":0}", "");
+        assert_ne!(missing_guard, auth);
+        let missing_inspect = invoke_json(
+            crate::profile::OP_TEX_INSPECT,
+            format!("{{\"authorization\":{missing_guard}}}").as_bytes(),
+        );
+        assert!(
+            missing_inspect.contains("\"chain_id_condition\":[]"),
+            "{missing_inspect}"
+        );
+        let prepare_request =
+            format!("{{\"authorization\":{missing_guard},\"signer_address\":\"{address}\"}}");
+        let accepted = invoke_json(
+            crate::profile::OP_TEX_PREPARE_SIGNATURE,
+            prepare_request.as_bytes(),
+        );
+        assert!(
+            accepted.contains("\"purpose\":\"tex_authorization\""),
+            "{accepted}"
+        );
+        let account = sys::Account::create_by_password("sdk tex service fixture").unwrap();
+        let address = field::Address::from(*account.address());
+        let cells = vec![
+            protocol::action_std::TexCell::ZhuPay {
+                haczhu: field::Fold64::from(7).unwrap(),
+            },
+            protocol::action_std::TexCell::CondChainIdEq {
+                chainid: field::Uint4::from(0),
+            },
+        ];
+        let canonical_cells = cells
+            .iter()
+            .map(field::ToJSON::to_json)
+            .collect::<Vec<_>>()
+            .join(",");
+        let authorization = format!(
+            r#"{{"schema":"hacash.tex/authorization@1","address":{},"cells":[{}]}}"#,
+            address.to_json(),
+            canonical_cells
+        );
+        let built = invoke_ok(
+            OP_TEX_BUILD,
+            &format!("{{\"authorization\":{authorization}}}"),
+        );
+        assert!(
+            built.contains("\"schema\":\"hacash.tex/bundle@1\""),
+            "{built}"
+        );
+        let action =
+            protocol::action_std::TexCellExecute::create_signed(address, cells, &account).unwrap();
+        let verify = invoke_ok(
+            OP_TEX_VERIFY,
+            &format!("{{\"action\":\"0x{}\"}}", hex::encode(action.encode())),
+        );
+        assert!(verify.contains("\"ok\":true"), "{verify}");
     }
 
     /// Operation names are the public interface: unique, non-empty, and
