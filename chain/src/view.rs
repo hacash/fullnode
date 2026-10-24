@@ -188,9 +188,13 @@ impl Engine for ChainEngine {
         let mut ctx = self
             .registry
             .clone()
-            .create_context(env, chunk, tx.clone())?;
+            .create_context(env, chunk.clone(), tx.clone())?;
         let result = tx.execute(ctx.as_mut());
         drop(ctx);
+        let result = match result {
+            Ok(()) => self.tx_policy().check_tx_after_execute(&chunk, tx.as_ref()),
+            err => err,
+        };
         match result {
             // A core state read failure surfaced during execution is
             // engine-fatal: record it at the single engine boundary (§4.1).

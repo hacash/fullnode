@@ -329,6 +329,14 @@ impl P2PNode {
         // 5. insert into txpool
         let g = self.engine.tx_policy().tx_pool_group(tx);
         let outcome = self.txpool.insert(g, tx.clone())?;
+        if outcome == TxPoolInsertOutcome::Stored
+            && self
+                .engine
+                .tx_policy()
+                .revalidate_main_address_after_admission(tx)
+        {
+            self.revalidate_main_address_pool(tx.tx().main(), tx.hash())?;
+        }
         // 6. The original node relays only after a successful pool insertion.
         Ok(admission_after_pool_insert(
             tx.hash(),
@@ -336,6 +344,32 @@ impl P2PNode {
             only_pool,
             outcome,
         ))
+    }
+
+    /// A newly admitted policy transaction can reserve funds from its main
+    /// address. Re-run existing pool entries from that address so an older
+    /// outgoing transaction cannot bypass the newer reservation merely because
+    /// it arrived first.
+    fn revalidate_main_address_pool(&self, main: field::Address, except: field::Hash) -> Rerr {
+        for group in self.txpool.group_ids() {
+            let candidates = self.txpool.take(group, usize::MAX);
+            let mut rejected = Vec::new();
+            for candidate in candidates {
+                if candidate.hash() == except || candidate.tx().main() != main {
+                    continue;
+                }
+                if let Err(e) = self.engine.try_execute_tx(candidate.tx_ref()) {
+                    if e.is_abort() {
+                        return Err(e);
+                    }
+                    rejected.push(candidate.hash());
+                }
+            }
+            if !rejected.is_empty() {
+                self.txpool.remove(group, &rejected)?;
+            }
+        }
+        Ok(())
     }
 
     /// Poll consensus-owned deferred candidates one batch at a time: an `Abort`
