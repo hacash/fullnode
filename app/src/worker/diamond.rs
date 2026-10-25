@@ -225,6 +225,7 @@ fn worker_loop(
                     number,
                     &prev_hash,
                     &conf.reward_address,
+                    &custom_message,
                     custom_nonce,
                     nonce_start,
                     nonce_space,
@@ -318,6 +319,7 @@ fn do_diamond_group_mining(
     number: u32,
     prev_hash: &Hash,
     reward_address: &Address,
+    custom_message: &Hash,
     custom_nonce: &[u8],
     nonce_start: u64,
     nonce_space: u64,
@@ -365,7 +367,7 @@ fn do_diamond_group_mining(
         act.d.prev_hash = *prev_hash;
         act.d.nonce = Fixed8::from(best_nonce_bytes);
         act.d.address = *reward_address;
-        act.d.custom_message = random_hash();
+        act.d.custom_message = *custom_message;
         best.success = Some(act);
     }
     best
