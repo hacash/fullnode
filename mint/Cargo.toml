@@ -15,10 +15,9 @@ mint-core = { workspace = true, features = ["execute"] }
 num-bigint = "0.4"
 num-traits = "0.2"
 hex = "0.4"
-ocl = { version = "0.19.7", optional = true }
 
 [features]
-ocl = ["dep:ocl"]
+ocl = ["x16rs/ocl"]
 
 [dev-dependencies]
 # Test oracle only (serde_json::Value assertions on the hand-written JSON

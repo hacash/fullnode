@@ -5,7 +5,6 @@ pub(crate) mod action;
 pub mod api;
 pub(crate) mod consensus;
 pub mod diamond_mining;
-pub mod opencl;
 mod wire;
 
 // ---- public nested path aliases ----

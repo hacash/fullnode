@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use base::{BlockBuild, TransactionBuild, TransactionSign};
 use field::Hash;
-use mint::diamond_mining::HASH_WIDTH;
+use x16rs::opencl::HASH_WIDTH;
 use mint::difficulty::{hash_to_rates, rates_to_show};
 use mint::minter::block_reward_number;
 use mint::tx_coinbase::CoinbaseTx;
@@ -16,9 +16,9 @@ use sys::{Ret, ToHex};
 use super::json::JsonObj;
 
 #[cfg(feature = "ocl")]
-use mint::opencl::common;
+use x16rs::opencl::common;
 #[cfg(feature = "ocl")]
-use mint::opencl::pow;
+use x16rs::opencl::pow;
 
 #[cfg_attr(feature = "testsleep", allow(dead_code))]
 const MINING_INTERVAL: f64 = 3.0;
@@ -523,7 +523,7 @@ fn mine_chunk_cpu(
     let end = nonce_start.saturating_add(nonce_space);
     for nonce in nonce_start..end {
         intro_bytes[79..83].copy_from_slice(&nonce.to_be_bytes());
-        let hash = Hash::from(x16rs::block_hash(height, &intro_bytes));
+        let hash = Hash::from(x16rs::mining::block_hash(height, &intro_bytes));
         if hash.as_ref() < best_hash.as_ref() {
             best_hash = hash;
             best_nonce = nonce;
@@ -550,7 +550,7 @@ fn mine_chunk_cpu_testsleep(
     let end = nonce_start.saturating_add(nonce_space);
     for nonce in nonce_start..end {
         intro_bytes[79..83].copy_from_slice(&nonce.to_be_bytes());
-        let hash = Hash::from(x16rs::block_hash(height, &intro_bytes));
+        let hash = Hash::from(x16rs::mining::block_hash(height, &intro_bytes));
         scanned = scanned.saturating_add(1);
         if hash.as_ref() < best_hash.as_ref() {
             best_hash = hash;

@@ -1,49 +1,49 @@
 use ocl::{Buffer, EventList, Kernel};
 
-use field::{Address, DiamondName, DiamondNumber, Fixed8, Hash};
-
-use crate::action::diamond::HacdMint;
-use crate::diamond_mining::{
-    DiamondMiningResult, HASH_WIDTH, check_diamond_success, diamond_more_power,
+use super::HASH_WIDTH;
+use super::common::{OpenCLResources, enqueue_kernel_checked};
+use crate::{
+    calculate_hash, check_diamond_difficulty, check_diamond_hash_result, diamond_hash,
+    diamond_more_power, mine_diamond_hash_repeat,
 };
 
-use super::common::{OpenCLResources, enqueue_kernel_checked};
+/// Hash-level result of one diamond kernel run: the strongest candidate
+/// ("more power" comparison) among all work groups, plus `name` when it meets
+/// the target difficulty. Building the mint action from this stays with the
+/// caller (policy/domain layer).
+pub struct DiamondKernelResult {
+    pub nonce: u64,
+    pub first_hash: [u8; HASH_WIDTH],
+    pub result_hash: [u8; HASH_WIDTH],
+    pub diamond_string: [u8; 16],
+    pub name: Option<[u8; 6]>,
+}
 
+/// Launch one diamond mining pass on the GPU. `custom_nonce` is the already
+/// resolved custom message slice (the caller applies the params rule for when
+/// custom messages are allowed).
+#[allow(clippy::too_many_arguments)]
 pub fn do_diamond_group_mining_opencl(
     opencl: &OpenCLResources,
     number: u32,
-    prevblockhash: &Hash,
-    reward_address: &Address,
-    custom_message: &Hash,
+    prevblockhash: &[u8; HASH_WIDTH],
+    reward_address: &[u8; 21],
+    custom_nonce: &[u8],
     nonce_start: u64,
-    nonce_space: u64,
     num_work_groups: u32,
     local_work_size: u32,
     unit_size: u32,
-) -> DiamondMiningResult {
-    let empty = [0u8; 0];
-    let custom_nonce = if number
-        > hacash_params::MAINNET_PARAMS
-            .mint_rules
-            .diamond
-            .custom_message_after
-    {
-        custom_message.as_ref()
-    } else {
-        &empty
-    };
-    let mut best = DiamondMiningResult {
-        number,
-        nonce_start,
-        nonce_space,
+) -> DiamondKernelResult {
+    let mut best = DiamondKernelResult {
         nonce: 0,
+        first_hash: [0u8; HASH_WIDTH],
+        result_hash: [0u8; HASH_WIDTH],
         diamond_string: [b'W'; 16],
-        success: None,
-        elapsed_secs: 0.0,
+        name: None,
     };
 
     let global_work_size = num_work_groups.saturating_mul(local_work_size);
-    let repeat = x16rs::mine_diamond_hash_repeat(number) as u32;
+    let repeat = mine_diamond_hash_repeat(number) as u32;
     let stuff = [
         prevblockhash.as_ref(),
         [0u8; 8].as_slice(),
@@ -101,11 +101,12 @@ pub fn do_diamond_group_mining_opencl(
         .expect("can't read diamond best nonces");
 
     for i in 0..num_work_groups as usize {
-        let mut hash = [0u8; HASH_WIDTH];
-        hash.copy_from_slice(&hashes[i * HASH_WIDTH..(i + 1) * HASH_WIDTH]);
-        let diamond_string = x16rs::diamond_hash(&hash);
-        let nonce_bytes = nonces[i].to_be_bytes();
-        let first_hash = x16rs::calculate_hash(
+        let mut result_hash = [0u8; HASH_WIDTH];
+        result_hash.copy_from_slice(&hashes[i * HASH_WIDTH..(i + 1) * HASH_WIDTH]);
+        let diamond_string = diamond_hash(&result_hash);
+        let nonce = nonces[i];
+        let nonce_bytes = nonce.to_be_bytes();
+        let first_hash = calculate_hash(
             [
                 prevblockhash.as_ref(),
                 nonce_bytes.as_slice(),
@@ -115,23 +116,24 @@ pub fn do_diamond_group_mining_opencl(
             .concat(),
         );
 
-        if let Some(diamond_name) = check_diamond_success(number, first_hash, hash, diamond_string)
+        if let Some(diamond_name) =
+            check_diamond_hash_result(diamond_string)
+                .filter(|_| check_diamond_difficulty(number, &first_hash, &result_hash))
         {
-            let mut act =
-                HacdMint::with(DiamondName::from(diamond_name), DiamondNumber::from(number));
-            act.d.prev_hash = *prevblockhash;
-            act.d.nonce = Fixed8::from(nonce_bytes);
-            act.d.address = *reward_address;
-            act.d.custom_message = *custom_message;
-            best.diamond_string = diamond_string;
-            best.nonce = nonces[i];
-            best.success = Some(act);
-            return best;
+            return DiamondKernelResult {
+                nonce,
+                first_hash,
+                result_hash,
+                diamond_string,
+                name: Some(diamond_name),
+            };
         }
 
         if diamond_more_power(&diamond_string, &best.diamond_string) {
+            best.nonce = nonce;
+            best.first_hash = first_hash;
+            best.result_hash = result_hash;
             best.diamond_string = diamond_string;
-            best.nonce = nonces[i];
         }
     }
 

@@ -18,7 +18,7 @@ chain = { workspace = true }
 node = { workspace = true }
 server = { workspace = true }
 api = { workspace = true }
-x16rs = { workspace = true }
+x16rs = { workspace = true, features = ["c-hash"] }
 ctrlc = "3"
 reqwest = { version = "0.11", default-features = false, features = ["blocking"] }
 getrandom = "0.3"

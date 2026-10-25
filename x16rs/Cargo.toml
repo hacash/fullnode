@@ -5,7 +5,23 @@ edition.workspace = true
 
 [dependencies]
 sys = { workspace = true }
-sha2 = "0.10"
+# "asm" enables the SHA-NI backend on x86_64 (ignored on other targets);
+# sphlib's C sha512 is software-only, so this is a like-for-like fair win.
+sha2 = { version = "0.10", features = ["asm"] }
 sha3 = "0.10"
 ripemd = "0.1"
-x16rs-sys = "=0.1.2"
+# C implementation, kept only behind `c-hash` for cross-verification tests and
+# benchmarks against the pure Rust port in `src/pure/`. The C build is the
+# hard gate that blocks wasm32 (no libc headers), so it must stay optional.
+x16rs-sys = { version = "=0.1.2", optional = true }
+# GPU (OpenCL) host code; the kernels live in `opencl/*.cl` next to this
+# crate. Native mining only — never enabled for wasm builds.
+ocl = { version = "0.19.7", optional = true }
+
+[features]
+default = []
+# Expose the original C implementation (`x16rs_hash_c`) alongside the pure
+# Rust one, and enable the C-vs-Rust cross verification tests.
+c-hash = ["dep:x16rs-sys"]
+# OpenCL mining host (`x16rs::opencl`).
+ocl = ["dep:ocl"]

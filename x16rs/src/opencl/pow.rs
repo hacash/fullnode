@@ -15,7 +15,7 @@ pub fn do_group_block_mining_opencl(
     let mut most_nonce = 0u32;
     let mut most_hash = [255u8; HASH_WIDTH];
     let global_work_size = num_work_groups.saturating_mul(local_work_size);
-    let repeat = x16rs::block_hash_repeat(height) as u32;
+    let repeat = crate::block_hash_repeat(height) as u32;
 
     let buffer_block_intro = Buffer::<u8>::builder()
         .queue(opencl.queue.clone())

@@ -16,9 +16,7 @@ use sys::Ret;
 use super::json::JsonObj;
 
 #[cfg(feature = "ocl")]
-use mint::opencl::common;
-#[cfg(feature = "ocl")]
-use mint::opencl::dia;
+use x16rs::opencl::common;
 
 const MINING_INTERVAL: f64 = 3.0;
 
@@ -208,6 +206,18 @@ fn worker_loop(
         let mut nonce_start = 0u64;
         let mut nonce_space = backend_nonce_space(&backend).max(1);
 
+        let empty = [0u8; 0];
+        let custom_nonce: &[u8] = if number
+            > hacash_params::MAINNET_PARAMS
+                .mint_rules
+                .diamond
+                .custom_message_after
+        {
+            custom_message.as_ref()
+        } else {
+            &empty
+        };
+
         loop {
             let started = Instant::now();
             let mut result = match &backend {
@@ -215,7 +225,7 @@ fn worker_loop(
                     number,
                     &prev_hash,
                     &conf.reward_address,
-                    &custom_message,
+                    custom_nonce,
                     nonce_start,
                     nonce_space,
                 ),
@@ -225,18 +235,38 @@ fn worker_loop(
                     workgroups,
                     localsize,
                     unitsize,
-                } => dia::do_diamond_group_mining_opencl(
-                    resource,
-                    number,
-                    &prev_hash,
-                    &conf.reward_address,
-                    &custom_message,
-                    nonce_start,
-                    nonce_space,
-                    *workgroups,
-                    *localsize,
-                    *unitsize,
-                ),
+                } => {
+                    let candidate = x16rs::opencl::dia::do_diamond_group_mining_opencl(
+                        resource,
+                        number,
+                        &prev_hash.into_array(),
+                        conf.reward_address.as_array(),
+                        custom_nonce,
+                        nonce_start,
+                        *workgroups,
+                        *localsize,
+                        *unitsize,
+                    );
+                    DiamondMiningResult {
+                        number,
+                        nonce_start,
+                        nonce_space,
+                        nonce: candidate.nonce,
+                        diamond_string: candidate.diamond_string,
+                        success: candidate.name.map(|diamond_name| {
+                            let mut act = HacdMint::with(
+                                DiamondName::from(diamond_name),
+                                DiamondNumber::from(number),
+                            );
+                            act.d.prev_hash = prev_hash;
+                            act.d.nonce = Fixed8::from(candidate.nonce.to_be_bytes());
+                            act.d.address = conf.reward_address;
+                            act.d.custom_message = custom_message;
+                            act
+                        }),
+                        elapsed_secs: 0.0,
+                    }
+                }
             };
             result.elapsed_secs = started.elapsed().as_secs_f64();
             if tx.send(result).is_err() {
@@ -288,21 +318,10 @@ fn do_diamond_group_mining(
     number: u32,
     prev_hash: &Hash,
     reward_address: &Address,
-    custom_message: &Hash,
+    custom_nonce: &[u8],
     nonce_start: u64,
     nonce_space: u64,
 ) -> DiamondMiningResult {
-    let empty = [0u8; 0];
-    let custom_nonce = if number
-        > hacash_params::MAINNET_PARAMS
-            .mint_rules
-            .diamond
-            .custom_message_after
-    {
-        custom_message.as_ref()
-    } else {
-        &empty
-    };
     let mut best = DiamondMiningResult {
         number,
         nonce_start,
@@ -320,7 +339,7 @@ fn do_diamond_group_mining(
     for nonce in nonce_start..nonce_end {
         let nonce_bytes = nonce.to_be_bytes();
         let prev_hash_array = prev_hash.into_array();
-        let (first_hash, result_hash, diamond_string) = x16rs::mine_diamond(
+        let (first_hash, result_hash, diamond_string) = x16rs::mining::mine_diamond(
             number,
             &prev_hash_array,
             &nonce_bytes,
@@ -346,7 +365,7 @@ fn do_diamond_group_mining(
         act.d.prev_hash = *prev_hash;
         act.d.nonce = Fixed8::from(best_nonce_bytes);
         act.d.address = *reward_address;
-        act.d.custom_message = *custom_message;
+        act.d.custom_message = random_hash();
         best.success = Some(act);
     }
     best

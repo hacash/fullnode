@@ -23,18 +23,6 @@ pub fn check_diamond_success(
     x16rs::check_diamond_difficulty(number, &first_hash, &result_hash).then_some(diamond_name)
 }
 
-pub fn diamond_more_power(dst: &[u8], src: &[u8]) -> bool {
-    for i in 0..16 {
-        let (l, r) = (dst[i], src[i]);
-        if l == b'0' && r != b'0' {
-            return true;
-        }
-        if l != b'0' && r == b'0' {
-            return false;
-        }
-        if l != b'0' && r != b'0' {
-            return false;
-        }
-    }
-    false
-}
+// The canonical implementation now lives in x16rs (single home of all
+// x16rs algorithm implementations: C, Rust, OpenCL).
+pub use x16rs::diamond_more_power;
