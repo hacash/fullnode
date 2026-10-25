@@ -76,6 +76,11 @@ pub(crate) mod machine;
 #[cfg(feature = "execute")]
 #[allow(dead_code)] // Native opcode catalog includes compiler-visible operations.
 pub(crate) mod native;
+/// Calc func channel: RV64IMC container, verifier and interpreter.
+/// Pure-compute kernels isolated from
+/// contract state; only the hash builtins behind `ecall` are reachable.
+#[cfg(feature = "execute")]
+pub mod calc;
 #[cfg(feature = "execute")]
 mod setup;
 #[cfg(feature = "execute")]

@@ -33,6 +33,27 @@ pub(crate) trait VmMachine {
 
     fn settle_resource_gas<H: VmHost + ?Sized>(&mut self, host: &mut H, gas: i64) -> VmrtErr;
     fn settle_compute_gas<H: VmHost + ?Sized>(&mut self, host: &mut H, gas: i64) -> VmrtErr;
+    /// Execute a calc kernel of the running contract's `calcfuncs[idx]`.
+    /// Returns the output and the gas consumed (charged by the caller on
+    /// both success and abort). `cycle_budget` is derived from remaining
+    /// compute gas by the caller. Machines without calc support reject:
+    /// contracts can only reach this through the height-gated deployment
+    /// window in `contract::mod`, so the default keeps other machine
+    /// implementations unaffected.
+    fn call_calc<H: VmHost + base::Context + ?Sized>(
+        &mut self,
+        _host: &mut H,
+        _bindings: &FrameBindings,
+        idx: u8,
+        _input: &[u8],
+        _cycle_budget: u64,
+    ) -> VmrtRes<crate::calc::CalcExec> {
+        itr_err_fmt!(
+            crate::rt::ItrErrCode::CallNotExist,
+            "calc func not supported by this machine (idx {})",
+            idx
+        )
+    }
     fn call_ntctl(
         &mut self,
         exec: crate::rt::ExecCtx,
@@ -133,6 +154,25 @@ impl VmMachine for NativeVm {
 
     fn settle_compute_gas<H: VmHost + ?Sized>(&mut self, host: &mut H, gas: i64) -> VmrtErr {
         self.runtime.settle_compute_gas(host, gas)
+    }
+
+    fn call_calc<H: VmHost + base::Context + ?Sized>(
+        &mut self,
+        host: &mut H,
+        bindings: &FrameBindings,
+        idx: u8,
+        input: &[u8],
+        cycle_budget: u64,
+    ) -> VmrtRes<crate::calc::CalcExec> {
+        use crate::rt::ItrErrCode::*;
+        let Some(addr) = bindings.code_contract.clone() else {
+            return itr_err_fmt!(CallNotExist, "calc call requires a contract context");
+        };
+        let cobj = self.runtime.resolve_contract(host, &addr)?;
+        let Some(calc) = cobj.calcfns.get(idx as usize) else {
+            return itr_err_fmt!(CallNotExist, "calcfunc idx {} not found", idx);
+        };
+        Ok(calc.run(input, cycle_budget))
     }
 
     fn call_ntctl(

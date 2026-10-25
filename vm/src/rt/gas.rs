@@ -56,7 +56,7 @@ impl GasTable {
         // patch decode + sha2 work metered per byte (see `patch_bytes`).
         gst.set(12, &[MPATCH, MONCE, MTAKE]);
         gst.set(12, &[CALLUSEVIEW, CALLUSEPURE]);
-        gst.set(16, &[NTENV, NTCTL, NTFUNC, CALLTHIS, CALLSUPER, CODE_CALL]);
+        gst.set(16, &[NTENV, NTCTL, NTFUNC, CALLTHIS, CALLSUPER, CODE_CALL, CALC_CALL]);
         gst.set(20, &[LOG1, CALLEXTVIEW]);
         gst.set(24, &[LOG2, CALLEXT, CALL]);
         gst.set(28, &[LOG3, ACTENV, SDEL]);

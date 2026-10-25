@@ -37,7 +37,7 @@ pub enum Bytecode {
 
     // row 1: code-call family (is_call = 0x12..=0x1c)
     ____________10 = 0x10,
-    ____________11 = 0x11, // reserved: CALC_CALL
+    CALC_CALL = 0x11,   // *,*+   call pure calc kernel (idx)
     CODE_CALL = 0x12,    // *,****
     CALL = 0x13,         // **,****@
     CALLEXT = 0x14,      // *,****@
@@ -391,6 +391,7 @@ bytecode_metadata_define! {
     NTCTL      : 1, 1, 1,     native_ctl
     NTFUNC     : 1, 1, 1,     native_func
 
+    CALC_CALL    : 1, 1, 1,     calc_call
     CODE_CALL    : 1+4, 1, 0,   code_call
     CALL         :   6, 1, 1,   call
     CALLEXT      : 1+4, 1, 1,   callext
@@ -607,7 +608,8 @@ mod bytecode_tests {
         assert_eq!(NTENV as u8, 0x08);
         assert_eq!(NTCTL as u8, 0x09);
         assert_eq!(NTFUNC as u8, 0x0a);
-        // row 1: 0x10 free, 0x11 reserved (CALC_CALL), code-call family contiguous 0x12..=0x1C
+        // row 1: 0x10 free, 0x11 = CALC_CALL, code-call family contiguous 0x12..=0x1C
+        assert_eq!(CALC_CALL as u8, 0x11);
         assert_eq!(CODE_CALL as u8, 0x12);
         assert_eq!(CALL as u8, 0x13);
         assert_eq!(CALLEXT as u8, 0x14);
@@ -694,7 +696,7 @@ mod bytecode_tests {
             let inst = Bytecode::try_from_u8(op).expect("call opcode");
             assert!(crate::rt::is_user_call_inst(inst), "0x{op:02x} must be a call");
         }
-        for op in [0x0fu8, 0x10, 0x11, 0x1d, 0x20, 0xe0] {
+        for op in [0x0fu8, 0x10, 0x1d, 0x20, 0xe0] {
             match Bytecode::try_from_u8(op) {
                 Ok(inst) => assert!(
                     !crate::rt::is_user_call_inst(inst),
@@ -719,12 +721,12 @@ mod bytecode_tests {
                 Err(e) => assert_eq!(e.0, ItrErrCode::InstInvalid),
             }
         }
-        assert_eq!(named, 185, "184 existing opcodes + MPATCH");
-        // row 0 protocol window holes, the reserved 0x10/0x11 pair, the 0x77 hole and
+        assert_eq!(named, 186, "184 existing opcodes + MPATCH + CALC_CALL");
+        // row 0 protocol window holes, the reserved 0x10 slot, the 0x77 hole and
         // the 0x84-0x88 row-8 run (all never validated as opcodes by the live network),
-        // the row B/C holes, and the row D growth row
+        // the row B/C holes, and the row D growth row. 0x11 is CALC_CALL.
         for op in [
-            0x01u8, 0x04, 0x05, 0x10, 0x11, 0x77, 0x84, 0x85, 0x86, 0x87, 0x88, 0xbe, 0xc8, 0xd0,
+            0x01u8, 0x04, 0x05, 0x10, 0x77, 0x84, 0x85, 0x86, 0x87, 0x88, 0xbe, 0xc8, 0xd0,
             0xdf,
         ] {
             assert!(

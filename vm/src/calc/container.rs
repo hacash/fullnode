@@ -1,0 +1,216 @@
+//! Calc container v1 binary layout: fixed 32-byte big-endian
+//! header + code + rodata + initialized data.
+//!
+//! Memory image carried by the container:
+//! - `code`: RV64IMC instruction stream — decoded and priced by the
+//!   verifier, executable, read-only at runtime.
+//! - `rodata`: constant data (lookup tables etc.), kept adjacent to code so
+//!   position-relative addressing (`auipc`) stays valid. Readable, but
+//!   non-executable (jump targets must stay inside `code`) and read-only.
+//! - `init`: initialized writable data, loaded at the 16-byte-aligned
+//!   `data_base`.
+
+use crate::rt::{ItrErr, ItrErrCode};
+
+pub const CALC_MAGIC: [u8; 4] = *b"HCF1";
+pub const CALC_VERSION: u8 = 1;
+/// ISA profile 1: RV64IMC (integer base + M + compressed; no A/F/CSR).
+pub const CALC_ISA_RV64IMC: u8 = 1;
+/// ABI 1: bytes -> bytes (single input byte string, single output byte string).
+pub const CALC_ABI_BYTES_TO_BYTES: u8 = 1;
+
+pub const CALC_MEM_KIB_MIN: u16 = 4;
+pub const CALC_MEM_KIB_MAX: u16 = 64;
+pub const CALC_IO_MAX: u16 = 4096;
+pub const HEADER_LEN: usize = 32;
+
+/// Runtime memory map derived deterministically from the header:
+/// code | rodata | data | free | input | output | stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalcLayout {
+    pub mem_len: u64,
+    /// Executable region `[0, code_len)`; the only valid jump-target area.
+    pub code_len: u64,
+    /// Read-only constant region `[rodata_base, rodata_base + rodata_len)`.
+    pub rodata_base: u64,
+    pub rodata_len: u64,
+    /// Initialized data base (16-byte aligned past code+rodata). Stores
+    /// below this address trap (code and rodata are both read-only).
+    pub data_base: u64,
+    pub init_len: u64,
+    /// Input region base (16-byte aligned).
+    pub input_base: u64,
+    pub input_max: u64,
+    /// Output region base (16-byte aligned).
+    pub output_base: u64,
+    pub output_max: u64,
+    /// Initial stack pointer (top of the reserved stack, 16-byte aligned).
+    pub stack_top: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalcContainer {
+    pub isa_profile: u8,
+    pub abi: u8,
+    pub fncnf: u8,
+    pub mem_kib: u16,
+    pub entry: u32,
+    pub code: Vec<u8>,
+    pub rodata: Vec<u8>,
+    pub init: Vec<u8>,
+    pub input_max: u16,
+    pub output_max: u16,
+}
+
+/// fncnf extension bits valid for v1: bit0 must be set, bit1
+/// marks C-extension presence; all others reserved-zero.
+const FNCNF_KNOWN: u8 = 0b0000_0011;
+const FNCNF_ENABLED: u8 = 0b0000_0001;
+const FNCNF_HAS_C: u8 = 0b0000_0010;
+
+impl CalcContainer {
+    pub fn fncnf_has_c(&self) -> bool {
+        self.fncnf & FNCNF_HAS_C != 0
+    }
+
+    /// Deterministic memory layout; must be identical in verifier, loader
+    /// and pack tool.
+    pub fn layout(&self) -> CalcLayout {
+        // Saturating math keeps `layout` total; the decode-side io-overlap
+        // check rejects anything that does not fit.
+        let mem_len = self.mem_kib as u64 * 1024;
+        // rodata sits at a 16-byte boundary past the code stream, mirroring
+        // the pack tool's link script (`. = ALIGN(16)` before `.rodata`) so
+        // position-relative constant addressing stays valid.
+        let rodata_base = (self.code.len() as u64 + 15) & !15;
+        let data_base = (rodata_base + self.rodata.len() as u64 + 15) & !15;
+        let stack_top = mem_len & !15;
+        let output_base = stack_top
+            .saturating_sub(crate::calc::CALC_STACK_SIZE)
+            .saturating_sub(self.output_max as u64)
+            & !15;
+        let input_base = output_base.saturating_sub(self.input_max as u64) & !15;
+        CalcLayout {
+            mem_len,
+            code_len: self.code.len() as u64,
+            rodata_base,
+            rodata_len: self.rodata.len() as u64,
+            data_base,
+            init_len: self.init.len() as u64,
+            input_base,
+            input_max: self.input_max as u64,
+            output_base,
+            output_max: self.output_max as u64,
+            stack_top,
+        }
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(
+            HEADER_LEN + self.code.len() + self.rodata.len() + self.init.len(),
+        );
+        out.extend_from_slice(&CALC_MAGIC);
+        out.push(CALC_VERSION);
+        out.push(self.isa_profile);
+        out.push(self.abi);
+        out.push(self.fncnf);
+        out.extend_from_slice(&self.mem_kib.to_be_bytes());
+        out.extend_from_slice(&self.entry.to_be_bytes());
+        out.extend_from_slice(&(self.code.len() as u32).to_be_bytes());
+        out.extend_from_slice(&(self.init.len() as u32).to_be_bytes());
+        out.extend_from_slice(&self.input_max.to_be_bytes());
+        out.extend_from_slice(&self.output_max.to_be_bytes());
+        out.extend_from_slice(&(self.rodata.len() as u16).to_be_bytes());
+        out.extend_from_slice(&0u32.to_be_bytes()); // crc filled below
+        out.extend_from_slice(&self.code);
+        out.extend_from_slice(&self.rodata);
+        out.extend_from_slice(&self.init);
+        let crc = crc32(&out[HEADER_LEN..]);
+        out[28..32].copy_from_slice(&crc.to_be_bytes());
+        out
+    }
+
+    pub fn decode(bytes: &[u8]) -> Result<(Self, usize), ItrErr> {
+        let err = |t: &str| ItrErr::new(ItrErrCode::ContractError, t);
+        if bytes.len() < HEADER_LEN {
+            return Err(err("calc container too short"));
+        }
+        if bytes[0..4] != CALC_MAGIC {
+            return Err(err("calc container magic mismatch"));
+        }
+        if bytes[4] != CALC_VERSION {
+            return Err(err("calc container version mismatch"));
+        }
+        if bytes[5] != CALC_ISA_RV64IMC {
+            return Err(err("calc container isa profile unsupported"));
+        }
+        if bytes[6] != CALC_ABI_BYTES_TO_BYTES {
+            return Err(err("calc container abi unsupported"));
+        }
+        let fncnf = bytes[7];
+        if fncnf & !FNCNF_KNOWN != 0 || fncnf & FNCNF_ENABLED == 0 || fncnf & FNCNF_HAS_C == 0 {
+            return Err(err("calc container fncnf invalid"));
+        }
+        let mem_kib = u16::from_be_bytes([bytes[8], bytes[9]]);
+        if !(CALC_MEM_KIB_MIN..=CALC_MEM_KIB_MAX).contains(&mem_kib) {
+            return Err(err("calc container mem_kib out of range"));
+        }
+        let entry = u32::from_be_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
+        let code_len = u32::from_be_bytes([bytes[14], bytes[15], bytes[16], bytes[17]]) as usize;
+        let init_len = u32::from_be_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]) as usize;
+        let input_max = u16::from_be_bytes([bytes[22], bytes[23]]);
+        let output_max = u16::from_be_bytes([bytes[24], bytes[25]]);
+        let rodata_len = u16::from_be_bytes([bytes[26], bytes[27]]) as usize;
+        let crc = u32::from_be_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]);
+        let total = HEADER_LEN + code_len + rodata_len + init_len;
+        if bytes.len() < total {
+            return Err(err("calc container truncated payload"));
+        }
+        let payload = &bytes[HEADER_LEN..total];
+        if crc32(payload) != crc {
+            return Err(err("calc container crc mismatch"));
+        }
+        if code_len == 0 || code_len % 2 != 0 {
+            return Err(err("calc container code_len invalid"));
+        }
+        if output_max == 0 || output_max > CALC_IO_MAX || input_max > CALC_IO_MAX {
+            return Err(err("calc container io size invalid"));
+        }
+        let c = CalcContainer {
+            isa_profile: bytes[5],
+            abi: bytes[6],
+            fncnf,
+            mem_kib,
+            entry,
+            code: payload[..code_len].to_vec(),
+            rodata: payload[code_len..code_len + rodata_len].to_vec(),
+            init: payload[code_len + rodata_len..].to_vec(),
+            input_max,
+            output_max,
+        };
+        // Layout sanity: everything must fit without overlap.
+        let lay = c.layout();
+        if lay.input_base < lay.data_base + lay.init_len {
+            return Err(err("calc container memory overflows (io overlaps data)"));
+        }
+        if entry as u64 >= lay.code_len {
+            return Err(err("calc container entry outside code"));
+        }
+        Ok((c, total))
+    }
+}
+
+/// CRC-32 (IEEE 802.3, reflected) — integrity only, not a security hash.
+pub fn crc32(data: &[u8]) -> u32 {
+    // Small table-free implementation (bitwise, consensus-safe and
+    // architecture-independent).
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}

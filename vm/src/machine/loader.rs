@@ -66,7 +66,7 @@ impl Runtime {
         Ok(cobj)
     }
 
-    fn resolve_contract<H: VmHost + ?Sized>(
+    pub(crate) fn resolve_contract<H: VmHost + ?Sized>(
         &mut self,
         host: &mut H,
         addr: &ContractAddress,

@@ -110,6 +110,11 @@ pub enum ItrErrCode {
     DeferredError = 152, // defer callback error
     IntentError = 153,
     ExecutionDeadline = 154,
+    // Calc func channel: deterministic kernel trap (bad memory access,
+    // unknown ecall kind, misaligned access, output overflow, ...). The
+    // HVM maps it to a revert of the calling frame, charging gas consumed
+    // up to the abort point.
+    CalcTrap = 155,
 
     // Canonical state backend read / persisted state decode failures: must stay fatal across
     // the `ItrErr -> sys::Error` boundary (`Error::abort` with state-layer codes), never downgraded.
@@ -140,7 +145,7 @@ impl From<ItrErr> for Error {
         let ItrErr(code, msg) = e;
         let text = format!("{:?}({}): {}", code, code as u8, msg);
         match code {
-            ActCallRevert => Error::revert(text),
+            ActCallRevert | CalcTrap => Error::revert(text),
             StateReadFailed => Error::abort(text).with_code(base::STATE_READ_FAILED_CODE),
             StateDecodeFailed => Error::abort(text).with_code(base::STATE_DECODE_FAILED_CODE),
             _ => Error::fault(text),

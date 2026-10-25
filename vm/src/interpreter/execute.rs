@@ -554,6 +554,47 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                     };
                     finish_ntcall(cap, gst, &mut step_gas_use, ops, r, g)?;
                 }
+                // pure calc kernel call (synchronous, no frame switch)
+                CALC_CALL => {
+                    let idx = pu8!();
+                    let input = ops.pop()?.valid(cap)?;
+                    let raw = match &input {
+                        Bytes(b) => b.clone(),
+                        _ => {
+                            return itr_err_fmt!(
+                                ItrErrCode::CalcTrap,
+                                "calc call input must be bytes"
+                            )
+                        }
+                    };
+                    // cycle budget from remaining compute (limit<=0: tests,
+                    // bounded fallback keeps loops finite)
+                    let cur = machine.gas_use();
+                    let remaining = if gst.compute_limit > 0 {
+                        (gst.compute_limit - cur.compute).max(0) as u64
+                    } else {
+                        10_000_000
+                    };
+                    let budget = remaining.saturating_mul(crate::calc::CYCLES_PER_COMPUTE);
+                    let exec = machine.call_calc(host, bindings, idx, &raw, budget)?;
+                    let cycles =
+                        crate::calc::ceil_div(exec.cycles_used, crate::calc::CYCLES_PER_COMPUTE)
+                            as i64;
+                    step_gas_use.compute += cycles;
+                    step_gas_use.resource += exec.resource;
+                    match exec.result {
+                        Ok(out) => {
+                            let v = Value::Bytes(out).valid(cap)?;
+                            ops.push(v)?;
+                        }
+                        Err(crate::calc::CalcAbort2::Trap) => {
+                            return itr_err_fmt!(ItrErrCode::CalcTrap, "calc kernel trap")
+                        }
+                        Err(crate::calc::CalcAbort2::OutOfGas) => {
+                            return itr_err_fmt!(ItrErrCode::OutOfGas, "calc cycle budget exhausted")
+                        }
+                    }
+                }
                 // native env (VM context read, forbidden in Pure mode)
                 NTENV => {
                     let nt_idx = pu8!();

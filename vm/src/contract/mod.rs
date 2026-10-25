@@ -26,6 +26,14 @@ pub type ContractUserFuncList = ListW2<ContractUserFunc>;
 pub type ContractCalcFuncList = ListW2<ContractCalcFunc>;
 pub type ContractAddrReplaceAtList = ListW1<ContractAddrReplaceAt>;
 
+/// Calc func channel activation window: a contract may carry `calcfuncs`
+/// only when deployed or upgraded strictly below this height. The live
+/// network is far past it, so the channel is inert there and deployment /
+/// upgrade behave exactly as before this module existed. Test chains start
+/// at height 0 and get the full window. Raise (or remove) this gate to ship
+/// the feature for real.
+pub const CALCFUNC_ENABLE_BEFORE_HEIGHT: u64 = 790_000;
+
 #[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
 pub struct ContractMeta {
     pub vrsn: Fixed1,
@@ -132,6 +140,8 @@ pub struct ContractObj {
     pub sto: ContractSto,
     pub abstfns: HashMap<AbstCall, Arc<FnObj>>,
     pub userfns: HashMap<FnSign, Arc<FnObj>>,
+    /// Verified calc kernels, indexed by their `calcfuncs` list position.
+    pub calcfns: Vec<Arc<crate::calc::CalcFnObj>>,
     pub edition: ContractEdition,
 }
 
@@ -258,6 +268,25 @@ fn merge_abst_funcs(dst: &mut ContractAbstCallList, src: &ContractAbstCallList) 
     Ok(edit)
 }
 
+fn merge_calc_funcs(dst: &mut ContractCalcFuncList, src: &ContractCalcFuncList) -> VmrtRes<bool> {
+    let mut replaced = false;
+    for func in src.as_list() {
+        let mut hit = false;
+        for item in dst.as_mut() {
+            if item.sign == func.sign {
+                *item = func.clone();
+                hit = true;
+                replaced = true;
+                break;
+            }
+        }
+        if !hit {
+            dst.push(func.clone()).map_ire(ContractUpgradeErr)?;
+        }
+    }
+    Ok(replaced)
+}
+
 fn merge_user_funcs(dst: &mut ContractUserFuncList, src: &ContractUserFuncList) -> VmrtRes<bool> {
     let mut edit = false;
     for func in src.as_list() {
@@ -325,11 +354,26 @@ impl ContractSto {
         if edit_empty {
             return itr_err_fmt!(ContractError, "contract edit is empty");
         }
+        let mut did_change = false;
+
         if edit.calcfuncs.length() > 0 {
-            return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
+            if height >= CALCFUNC_ENABLE_BEFORE_HEIGHT {
+                return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
+            }
+            let mut seen = HashSet::new();
+            for f in edit.calcfuncs.as_list() {
+                let key = f.sign.into_array();
+                if !seen.insert(key) {
+                    return itr_err_fmt!(
+                        ContractUpgradeErr,
+                        "calcfunc sign already exists in edit"
+                    );
+                }
+            }
+            merge_calc_funcs(&mut self.calcfuncs, &edit.calcfuncs)?;
+            did_change = true;
         }
 
-        let mut did_change = false;
         let inh_len = self.inherit.length();
         let lib_len = self.library.length();
 
@@ -464,8 +508,34 @@ impl ContractSto {
         if self.morextend.uint() != 0 {
             return itr_err_fmt!(ContractError, "morextend reserved, must be zero");
         }
-        if self.calcfuncs.length() != 0 {
-            return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
+        if self.calcfuncs.length() > 0 {
+            if height >= CALCFUNC_ENABLE_BEFORE_HEIGHT {
+                return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
+            }
+            // mark is the ABI form (1 = bytes->bytes) and every payload must
+            // decode + verify as a calc container
+            let mut seen = HashSet::new();
+            for f in self.calcfuncs.as_list() {
+                let key = f.sign.into_array();
+                if !seen.insert(key) {
+                    return itr_err_fmt!(ContractError, "calcfunc sign already exists");
+                }
+            }
+            for f in self.calcfuncs.as_list() {
+                if f.mark[0] != 1 {
+                    return itr_err_fmt!(ContractError, "calcfunc mark (abi) must be 1");
+                }
+                let (c, _used) =
+                    crate::calc::container::CalcContainer::decode(&f.code_stuff.data).map_err(
+                        |e| ItrErr::new(ContractError, &format!("calcfunc container: {}", e.1)),
+                    )?;
+                if c.fncnf != f.fncnf[0] {
+                    return itr_err_fmt!(ContractError, "calcfunc fncnf mismatch with container");
+                }
+                crate::calc::verify::verify_container(&c).map_err(|e| {
+                    ItrErr::new(ContractError, &format!("calcfunc verify: {}", e.1))
+                })?;
+            }
         }
         if field::Encode::size(self) > cap.contract_size {
             return itr_err_fmt!(
@@ -541,10 +611,17 @@ impl ContractSto {
             userfns.insert(a.sign.into_array(), Arc::new(code));
         }
 
+        let mut calcfns = Vec::with_capacity(self.calcfuncs.length());
+        for f in self.calcfuncs.as_mut() {
+            let (c, _used) = crate::calc::container::CalcContainer::decode(&f.code_stuff.data)?;
+            calcfns.push(Arc::new(crate::calc::CalcFnObj::build(c)?));
+        }
+
         Ok(ContractObj {
             sto: self,
             abstfns,
             userfns,
+            calcfns,
             edition,
         })
     }
