@@ -26,13 +26,20 @@ pub type ContractUserFuncList = ListW2<ContractUserFunc>;
 pub type ContractCalcFuncList = ListW2<ContractCalcFunc>;
 pub type ContractAddrReplaceAtList = ListW1<ContractAddrReplaceAt>;
 
-/// Calc func channel activation window: a contract may carry `calcfuncs`
-/// only when deployed or upgraded strictly below this height. The live
-/// network is far past it, so the channel is inert there and deployment /
-/// upgrade behave exactly as before this module existed. Test chains start
-/// at height 0 and get the full window. Raise (or remove) this gate to ship
-/// the feature for real.
-pub const CALCFUNC_ENABLE_BEFORE_HEIGHT: u64 = 790_000;
+/// Calc func channel activation window: the channel is disabled in the
+/// half-open height window `[CALCFUNC_DISABLE_FROM_HEIGHT,
+/// CALCFUNC_DISABLE_UNTIL_HEIGHT)`. Test chains (height < 790,000) keep the
+/// pre-launch window; the live network is currently inside the disabled
+/// window, so deployment / upgrade keep rejecting calcfuncs. The channel
+/// re-enables at 820,000; change these bounds only as part of a coordinated
+/// consensus upgrade.
+pub const CALCFUNC_DISABLE_FROM_HEIGHT: u64 = 790_000;
+pub const CALCFUNC_DISABLE_UNTIL_HEIGHT: u64 = 820_000;
+
+/// Whether calcfunc deployment / upgrade is allowed at `height`.
+pub const fn calcfunc_enabled_at(height: u64) -> bool {
+    height < CALCFUNC_DISABLE_FROM_HEIGHT || height >= CALCFUNC_DISABLE_UNTIL_HEIGHT
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
 pub struct ContractMeta {
@@ -59,6 +66,15 @@ pub struct ContractUserFunc {
     pub code_stuff: CodeStuff,
 }
 
+/// A calc (RV64IMC) kernel attached to a contract.
+///
+/// The encoded container in `code_stuff.data` is the source of truth: its
+/// header carries the ABI and feature flags and is what the verifier checks.
+/// The remaining fields are wire-compat mirrors/reserved values that must
+/// agree with it:
+/// * `mark` mirrors the ABI and must be `1` (bytes -> bytes);
+/// * `fncnf` must equal the container header's `fncnf` byte;
+/// * `code_stuff.conf` is reserved for calc kernels and must be zero.
 #[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
 pub struct ContractCalcFunc {
     pub sign: Fixed4,
@@ -182,14 +198,25 @@ impl ContractUserFunc {
     }
 }
 
-impl ContractCalcFunc {
-    #[allow(dead_code)]
-    fn check(&self, _height: u64) -> VmrtErr {
-        if !self.mark.is_zero() || !self.fncnf.is_zero() {
-            return itr_err_fmt!(ContractError, "contract ContractCalcFunc format invalid");
-        }
-        Ok(())
+/// Verify the wire-compat mirrors on a calc func against its decoded
+/// container. This is the single source of truth for the ABI / reserved-conf
+/// / fncnf rules, shared by deploy-time `check_content` and load-time
+/// `into_obj`.
+#[cfg(feature = "execute")]
+fn validate_calc_func(
+    f: &ContractCalcFunc,
+    c: &crate::calc::container::CalcContainer,
+) -> VmrtErr {
+    if f.mark[0] != 1 {
+        return itr_err_fmt!(ContractError, "calcfunc mark (abi) must be 1");
     }
+    if f.code_stuff.conf.uint() != 0 {
+        return itr_err_fmt!(ContractError, "calcfunc code conf reserved, must be zero");
+    }
+    if c.fncnf != f.fncnf[0] {
+        return itr_err_fmt!(ContractError, "calcfunc fncnf mismatch with container");
+    }
+    Ok(())
 }
 
 #[cfg(feature = "execute")]
@@ -357,7 +384,7 @@ impl ContractSto {
         let mut did_change = false;
 
         if edit.calcfuncs.length() > 0 {
-            if height >= CALCFUNC_ENABLE_BEFORE_HEIGHT {
+            if !calcfunc_enabled_at(height) {
                 return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
             }
             let mut seen = HashSet::new();
@@ -483,7 +510,11 @@ impl ContractSto {
         }
 
         self.metas.revision = Uint2::from(next_rev);
-        self.check(height, cap, gas, registry)?;
+        // Validate content only: the calcfunc activation gate applies to
+        // newly supplied calcfuncs above, not to kernels the contract already
+        // carries. Otherwise an unrelated edit would freeze a contract that
+        // deployed its calcfuncs while the channel was enabled.
+        self.check_content(height, cap, gas, registry)?;
         Ok(did_change)
     }
 
@@ -502,15 +533,55 @@ impl ContractSto {
         gas: &GasExtra,
         registry: &dyn base::ExecutionServices,
     ) -> VmrtErr {
+        // Deploy / explicit-upgrade entry: a state carrying calcfuncs cannot
+        // be deployed while the channel is disabled.
+        if self.calcfuncs.length() > 0 && !calcfunc_enabled_at(height) {
+            return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
+        }
+        self.check_content(height, cap, gas, registry)
+    }
+
+    /// Validation of contract content, excluding the calcfunc activation
+    /// gate. Shared by deploy (`check`) and upgrade (`apply_edit`) so a state
+    /// loaded or upgraded outside the deploy path keeps the same invariants
+    /// without being frozen by the channel window.
+    #[cfg(feature = "execute")]
+    fn check_content(
+        &self,
+        height: u64,
+        cap: &SpaceCap,
+        gas: &GasExtra,
+        registry: &dyn base::ExecutionServices,
+    ) -> VmrtErr {
         use ItrErrCode::*;
 
         self.metas.check(height)?;
         if self.morextend.uint() != 0 {
             return itr_err_fmt!(ContractError, "morextend reserved, must be zero");
         }
+        if field::Encode::size(self) > cap.contract_size {
+            return itr_err_fmt!(
+                ContractError,
+                "contract size overflow, max {}",
+                cap.contract_size
+            );
+        }
         if self.calcfuncs.length() > 0 {
-            if height >= CALCFUNC_ENABLE_BEFORE_HEIGHT {
-                return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
+            // Cheap bounds before any per-kernel CRC/decode/verify work. A
+            // `CALC_CALL` index is a single byte, so more than 256 kernels can
+            // never be addressed; a container larger than `function_size`
+            // cannot unroll to a valid kernel either.
+            if self.calcfuncs.length() > 256 {
+                return itr_err_fmt!(ContractError, "calcfunc number overflow, max 256");
+            }
+            for f in self.calcfuncs.as_list() {
+                if f.code_stuff.data.len() > cap.function_size {
+                    return itr_err_fmt!(
+                        ContractError,
+                        "calcfunc size overflow, max {}",
+                        cap.function_size
+                    );
+                }
             }
             // mark is the ABI form (1 = bytes->bytes) and every payload must
             // decode + verify as a calc container
@@ -522,27 +593,21 @@ impl ContractSto {
                 }
             }
             for f in self.calcfuncs.as_list() {
-                if f.mark[0] != 1 {
-                    return itr_err_fmt!(ContractError, "calcfunc mark (abi) must be 1");
-                }
                 let (c, _used) =
                     crate::calc::container::CalcContainer::decode(&f.code_stuff.data).map_err(
                         |e| ItrErr::new(ContractError, &format!("calcfunc container: {}", e.1)),
                     )?;
-                if c.fncnf != f.fncnf[0] {
-                    return itr_err_fmt!(ContractError, "calcfunc fncnf mismatch with container");
+                validate_calc_func(f, &c)?;
+                // A kernel whose declared IO exceeds the HVM call-value cap can
+                // never be invoked or return its result; reject it at deploy /
+                // upgrade time instead of accepting a permanently unusable fn.
+                if c.input_max as usize > cap.value_size || c.output_max as usize > cap.value_size {
+                    return itr_err_fmt!(ContractError, "calcfunc io exceeds HVM value_size");
                 }
                 crate::calc::verify::verify_container(&c).map_err(|e| {
                     ItrErr::new(ContractError, &format!("calcfunc verify: {}", e.1))
                 })?;
             }
-        }
-        if field::Encode::size(self) > cap.contract_size {
-            return itr_err_fmt!(
-                ContractError,
-                "contract size overflow, max {}",
-                cap.contract_size
-            );
         }
         if self.inherit.length() > cap.inherit {
             return itr_err_fmt!(InheritError, "inherit number overflow");
@@ -594,7 +659,7 @@ impl ContractSto {
     }
 
     #[cfg(feature = "execute")]
-    pub fn into_obj(mut self) -> VmrtRes<ContractObj> {
+    pub fn into_obj(mut self, cap: &SpaceCap) -> VmrtRes<ContractObj> {
         let edition = self.calc_edition();
         let mut abstfns = HashMap::with_capacity(self.abstcalls.length());
         for a in self.abstcalls.as_mut() {
@@ -613,7 +678,21 @@ impl ContractSto {
 
         let mut calcfns = Vec::with_capacity(self.calcfuncs.length());
         for f in self.calcfuncs.as_mut() {
+            // Mirror the deploy path checks in `check_content`: a state loaded
+            // outside the deploy path must not bypass the per-kernel byte cap,
+            // the ABI / reserved-conf / fncnf agreement, or the HVM IO cap.
+            if f.code_stuff.data.len() > cap.function_size {
+                return itr_err_fmt!(
+                    ContractError,
+                    "calcfunc size overflow, max {}",
+                    cap.function_size
+                );
+            }
             let (c, _used) = crate::calc::container::CalcContainer::decode(&f.code_stuff.data)?;
+            validate_calc_func(f, &c)?;
+            if c.input_max as usize > cap.value_size || c.output_max as usize > cap.value_size {
+                return itr_err_fmt!(ContractError, "calcfunc io exceeds HVM value_size");
+            }
             calcfns.push(Arc::new(crate::calc::CalcFnObj::build(c)?));
         }
 
@@ -624,5 +703,230 @@ impl ContractSto {
             calcfns,
             edition,
         })
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod calc_io_load_tests {
+    use super::*;
+    use crate::machine::test_ctx::{StubServices, STUB_VM_PARAMS};
+    use field::{BytesW2, Fixed1, Fixed4, Uint1};
+
+    /// `addi a0, x0, 0 ; jalr x0, x1, 0` - a verifier-clean kernel body.
+    const KERNEL_CODE: [u8; 8] = [0x13, 0x05, 0, 0, 0x67, 0x80, 0, 0];
+
+    fn calcfunc(input_max: u16, output_max: u16, mark: u8, fncnf: u8) -> ContractCalcFunc {
+        let c = crate::calc::pack_container(
+            64,
+            0,
+            input_max,
+            output_max,
+            KERNEL_CODE.to_vec(),
+            vec![],
+            vec![],
+        )
+        .expect("test container must pack");
+        ContractCalcFunc {
+            sign: Fixed4::from([1, 2, 3, 4]),
+            mark: Fixed1::from([mark]),
+            fncnf: Fixed1::from([fncnf]),
+            code_stuff: CodeStuff {
+                conf: Uint1::from(0),
+                data: BytesW2::from(c.encode().unwrap()).unwrap(),
+            },
+        }
+    }
+
+    fn check_at_100(sto: &ContractSto) -> VmrtErr {
+        let cap = SpaceCap::new(0);
+        let gas = GasExtra::new(0, &STUB_VM_PARAMS);
+        let svc = StubServices::new(STUB_VM_PARAMS);
+        sto.check(100, &cap, &gas, &svc)
+    }
+
+    #[test]
+    fn output_max_exceeds_hvm_value_size_is_rejected() {
+        let mut sto = ContractSto::default();
+        // 4096 fits the calc container wire limit (CALC_IO_MAX) but exceeds
+        // the HVM value cap (SpaceCap::value_size == 1280).
+        sto.calcfuncs.push(calcfunc(16, 4096, 1, 0b11)).unwrap();
+        let e = check_at_100(&sto).unwrap_err();
+        assert!(
+            e.1.contains("io exceeds HVM value_size"),
+            "unexpected error: {:?}",
+            e
+        );
+    }
+
+    #[test]
+    fn io_within_hvm_value_size_is_accepted() {
+        let mut sto = ContractSto::default();
+        sto.calcfuncs.push(calcfunc(16, 16, 1, 0b11)).unwrap();
+        check_at_100(&sto).expect("io within value_size must pass check");
+    }
+
+    #[test]
+    fn load_path_rejects_bad_mark() {
+        let cap = SpaceCap::new(0);
+        let mut sto = ContractSto::default();
+        sto.calcfuncs.push(calcfunc(16, 16, 0, 0b11)).unwrap();
+        assert!(check_at_100(&sto).is_err(), "check must reject mark 0");
+        // Before the loader-side re-check this was accepted by `into_obj`.
+        let e = sto
+            .into_obj(&cap)
+            .err()
+            .expect("into_obj must reject mark 0");
+        assert!(e.1.contains("mark (abi) must be 1"), "unexpected: {:?}", e);
+    }
+
+    #[test]
+    fn load_path_rejects_fncnf_mismatch() {
+        let cap = SpaceCap::new(0);
+        let mut sto = ContractSto::default();
+        // Container fncnf is 0b11 (pack_container), the contract field lies.
+        sto.calcfuncs.push(calcfunc(16, 16, 1, 0b10)).unwrap();
+        let e = sto
+            .into_obj(&cap)
+            .err()
+            .expect("into_obj must reject fncnf mismatch");
+        assert!(
+            e.1.contains("fncnf mismatch with container"),
+            "unexpected: {:?}",
+            e
+        );
+    }
+
+    #[test]
+    fn load_path_rejects_output_max_over_hvm_value_size() {
+        let cap = SpaceCap::new(0);
+        let mut sto = ContractSto::default();
+        // Valid in the calc wire format but unusable under the HVM value cap.
+        sto.calcfuncs.push(calcfunc(16, 4096, 1, 0b11)).unwrap();
+        let e = sto
+            .into_obj(&cap)
+            .err()
+            .expect("into_obj must reject io overflow");
+        assert!(
+            e.1.contains("io exceeds HVM value_size"),
+            "unexpected: {:?}",
+            e
+        );
+    }
+
+    #[test]
+    fn reserved_conf_must_be_zero_for_check_and_load() {
+        let cap = SpaceCap::new(0);
+        let mut sto = ContractSto::default();
+        let mut f = calcfunc(16, 16, 1, 0b11);
+        f.code_stuff.conf = Uint1::from(1);
+        sto.calcfuncs.push(f).unwrap();
+
+        let e = check_at_100(&sto).unwrap_err();
+        assert!(
+            e.1.contains("code conf reserved, must be zero"),
+            "unexpected: {:?}",
+            e
+        );
+
+        let e = sto
+            .into_obj(&cap)
+            .err()
+            .expect("into_obj must reject conf=1");
+        assert!(
+            e.1.contains("code conf reserved, must be zero"),
+            "unexpected: {:?}",
+            e
+        );
+    }
+
+    #[test]
+    fn calcfunc_count_over_u8_idx_limit_is_rejected_before_decode() {
+        let mut sto = ContractSto::default();
+        for i in 0..257u32 {
+            let mut f = calcfunc(16, 16, 1, 0b11);
+            f.sign = Fixed4::from(i.to_le_bytes());
+            // Corrupt payload: this would fail decode if the count check ran
+            // after the decode/verify loop.
+            f.code_stuff.data = BytesW2::from(Vec::new()).unwrap();
+            sto.calcfuncs.push(f).unwrap();
+        }
+        let e = check_at_100(&sto).unwrap_err();
+        assert!(
+            e.1.contains("calcfunc number overflow, max 256"),
+            "unexpected: {:?}",
+            e
+        );
+    }
+
+    #[test]
+    fn calcfunc_payload_over_function_size_is_rejected_before_decode() {
+        let cap = SpaceCap::new(0);
+        let mut sto = ContractSto::default();
+        let mut f = calcfunc(16, 16, 1, 0b11);
+        // Junk larger than the per-kernel cap: rejected before decode/verify.
+        f.code_stuff.data = BytesW2::from(vec![0u8; cap.function_size + 1]).unwrap();
+        sto.calcfuncs.push(f).unwrap();
+
+        let gas = GasExtra::new(0, &STUB_VM_PARAMS);
+        let svc = StubServices::new(STUB_VM_PARAMS);
+        let e = sto.check(100, &cap, &gas, &svc).unwrap_err();
+        assert!(
+            e.1.contains("calcfunc size overflow"),
+            "unexpected: {:?}",
+            e
+        );
+    }
+
+    #[test]
+    fn upgrade_with_existing_calcfuncs_survives_the_gate_window() {
+        let cap = SpaceCap::new(0);
+        let gas = GasExtra::new(0, &STUB_VM_PARAMS);
+        let svc = StubServices::new(STUB_VM_PARAMS);
+        let height = CALCFUNC_DISABLE_FROM_HEIGHT;
+
+        let mut sto = ContractSto::default();
+        sto.calcfuncs.push(calcfunc(16, 16, 1, 0b11)).unwrap();
+
+        // Deploy-style validation remains gated inside the freeze window.
+        let e = sto
+            .check(height, &cap, &gas, &svc)
+            .expect_err("deploy-style check must stay gated");
+        assert!(e.1.contains("calcfunc not enabled yet"), "unexpected: {:?}", e);
+
+        // An unrelated library edit must not freeze an existing contract.
+        let addr = ContractAddress::calculate(
+            &field::Address::from([0u8; field::Address::SIZE]),
+            &Uint4::from(1),
+        );
+        let edit = ContractEdit {
+            new_revision: Uint2::from(1),
+            inherit_add: Default::default(),
+            inherit_replace_at: Default::default(),
+            library_add: ContractAddrListW1::from(vec![addr]).unwrap(),
+            library_replace_at: Default::default(),
+            abstcalls: Default::default(),
+            userfuncs: Default::default(),
+            calcfuncs: Default::default(),
+        };
+        let _changed = sto
+            .apply_edit(&edit, height, &cap, &gas, &svc)
+            .expect("library-only upgrade must pass during the freeze window");
+        assert_eq!(sto.library.length(), 1);
+        assert_eq!(sto.metas.revision.uint(), 1);
+    }
+}
+
+#[cfg(test)]
+mod calc_gate_window_tests {
+    use super::{
+        calcfunc_enabled_at, CALCFUNC_DISABLE_FROM_HEIGHT, CALCFUNC_DISABLE_UNTIL_HEIGHT,
+    };
+
+    #[test]
+    fn gate_is_disabled_only_in_the_configured_window() {
+        assert!(calcfunc_enabled_at(CALCFUNC_DISABLE_FROM_HEIGHT - 1));
+        assert!(!calcfunc_enabled_at(CALCFUNC_DISABLE_FROM_HEIGHT));
+        assert!(!calcfunc_enabled_at(CALCFUNC_DISABLE_UNTIL_HEIGHT - 1));
+        assert!(calcfunc_enabled_at(CALCFUNC_DISABLE_UNTIL_HEIGHT));
     }
 }

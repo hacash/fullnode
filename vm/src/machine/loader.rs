@@ -55,7 +55,7 @@ impl Runtime {
         state_ed: &ContractEdition,
         csto: ContractSto,
     ) -> VmrtRes<Arc<ContractObj>> {
-        let cobj = Arc::new(csto.into_obj()?);
+        let cobj = Arc::new(csto.into_obj(&self.warm.space_cap)?);
         if cobj.edition != *state_ed {
             return itr_err_fmt!(
                 ContractError,

@@ -18,6 +18,11 @@ pub(crate) trait VmMachine {
     fn gas_extra(&self) -> GasExtra;
     fn space_cap(&self) -> SpaceCap;
     fn check_deadline(&self) -> VmrtErr;
+    /// Wall-clock deadline for long-running pure calls (None on consensus
+    /// machines). Used to abort calc kernels mid-run.
+    fn deadline(&self) -> Option<Instant> {
+        None
+    }
 
     fn gas_use(&self) -> GasBuckets;
     fn commit_gas_use(&mut self, gas: GasBuckets);
@@ -35,8 +40,8 @@ pub(crate) trait VmMachine {
     fn settle_compute_gas<H: VmHost + ?Sized>(&mut self, host: &mut H, gas: i64) -> VmrtErr;
     /// Execute a calc kernel of the running contract's `calcfuncs[idx]`.
     /// Returns the output and the gas consumed (charged by the caller on
-    /// both success and abort). `cycle_budget` is derived from remaining
-    /// compute gas by the caller. Machines without calc support reject:
+    /// both success and abort). `limits` is derived from the current gas
+    /// state by the caller. Machines without calc support reject:
     /// contracts can only reach this through the height-gated deployment
     /// window in `contract::mod`, so the default keeps other machine
     /// implementations unaffected.
@@ -46,7 +51,7 @@ pub(crate) trait VmMachine {
         _bindings: &FrameBindings,
         idx: u8,
         _input: &[u8],
-        _cycle_budget: u64,
+        _limits: crate::calc::CalcRunLimits,
     ) -> VmrtRes<crate::calc::CalcExec> {
         itr_err_fmt!(
             crate::rt::ItrErrCode::CallNotExist,
@@ -93,6 +98,10 @@ impl VmMachine for NativeVm {
 
     fn space_cap(&self) -> SpaceCap {
         self.runtime.warm.space_cap.clone()
+    }
+
+    fn deadline(&self) -> Option<Instant> {
+        self.deadline
     }
 
     fn check_deadline(&self) -> VmrtErr {
@@ -162,7 +171,7 @@ impl VmMachine for NativeVm {
         bindings: &FrameBindings,
         idx: u8,
         input: &[u8],
-        cycle_budget: u64,
+        limits: crate::calc::CalcRunLimits,
     ) -> VmrtRes<crate::calc::CalcExec> {
         use crate::rt::ItrErrCode::*;
         let Some(addr) = bindings.code_contract.clone() else {
@@ -172,7 +181,7 @@ impl VmMachine for NativeVm {
         let Some(calc) = cobj.calcfns.get(idx as usize) else {
             return itr_err_fmt!(CallNotExist, "calcfunc idx {} not found", idx);
         };
-        Ok(calc.run(input, cycle_budget))
+        Ok(calc.run(input, limits))
     }
 
     fn call_ntctl(

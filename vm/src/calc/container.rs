@@ -10,7 +10,7 @@
 //! - `init`: initialized writable data, loaded at the 16-byte-aligned
 //!   `data_base`.
 
-use crate::rt::{ItrErr, ItrErrCode};
+use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
 
 pub const CALC_MAGIC: [u8; 4] = *b"HCF1";
 pub const CALC_VERSION: u8 = 1;
@@ -73,6 +73,36 @@ impl CalcContainer {
         self.fncnf & FNCNF_HAS_C != 0
     }
 
+    /// Header invariants shared by the wire decoder, the packer and the
+    /// deploy-time verifier. `verify_container` calls this so a directly
+    /// constructed container cannot bypass the header checks that `decode`
+    /// performs on wire input.
+    pub(crate) fn validate_header(&self) -> VmrtRes<()> {
+        let err = |t: &str| ItrErr::new(ItrErrCode::ContractError, t);
+        if self.isa_profile != CALC_ISA_RV64IMC {
+            return Err(err("calc container isa profile unsupported"));
+        }
+        if self.abi != CALC_ABI_BYTES_TO_BYTES {
+            return Err(err("calc container abi unsupported"));
+        }
+        if self.fncnf & !FNCNF_KNOWN != 0
+            || self.fncnf & FNCNF_ENABLED == 0
+            || self.fncnf & FNCNF_HAS_C == 0
+        {
+            return Err(err("calc container fncnf invalid"));
+        }
+        if !(CALC_MEM_KIB_MIN..=CALC_MEM_KIB_MAX).contains(&self.mem_kib) {
+            return Err(err("calc container mem_kib out of range"));
+        }
+        if self.output_max == 0 || self.output_max > CALC_IO_MAX || self.input_max > CALC_IO_MAX {
+            return Err(err("calc container io size invalid"));
+        }
+        if self.code.is_empty() || self.code.len() % 2 != 0 {
+            return Err(err("calc container code_len invalid"));
+        }
+        Ok(())
+    }
+
     /// Deterministic memory layout; must be identical in verifier, loader
     /// and pack tool.
     pub fn layout(&self) -> CalcLayout {
@@ -105,10 +135,20 @@ impl CalcContainer {
         }
     }
 
-    pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(
-            HEADER_LEN + self.code.len() + self.rodata.len() + self.init.len(),
-        );
+    pub fn encode(&self) -> VmrtRes<Vec<u8>> {
+        let err = |t: &str| ItrErr::new(ItrErrCode::ContractError, t);
+        let code_len = u32::try_from(self.code.len())
+            .map_err(|_| err("calc container code length exceeds u32"))?;
+        let init_len = u32::try_from(self.init.len())
+            .map_err(|_| err("calc container init length exceeds u32"))?;
+        let rodata_len = u16::try_from(self.rodata.len())
+            .map_err(|_| err("calc container rodata length exceeds u16"))?;
+        let capacity = HEADER_LEN
+            .checked_add(self.code.len())
+            .and_then(|n| n.checked_add(self.rodata.len()))
+            .and_then(|n| n.checked_add(self.init.len()))
+            .ok_or_else(|| err("calc container length overflow"))?;
+        let mut out = Vec::with_capacity(capacity);
         out.extend_from_slice(&CALC_MAGIC);
         out.push(CALC_VERSION);
         out.push(self.isa_profile);
@@ -116,18 +156,18 @@ impl CalcContainer {
         out.push(self.fncnf);
         out.extend_from_slice(&self.mem_kib.to_be_bytes());
         out.extend_from_slice(&self.entry.to_be_bytes());
-        out.extend_from_slice(&(self.code.len() as u32).to_be_bytes());
-        out.extend_from_slice(&(self.init.len() as u32).to_be_bytes());
+        out.extend_from_slice(&code_len.to_be_bytes());
+        out.extend_from_slice(&init_len.to_be_bytes());
         out.extend_from_slice(&self.input_max.to_be_bytes());
         out.extend_from_slice(&self.output_max.to_be_bytes());
-        out.extend_from_slice(&(self.rodata.len() as u16).to_be_bytes());
+        out.extend_from_slice(&rodata_len.to_be_bytes());
         out.extend_from_slice(&0u32.to_be_bytes()); // crc filled below
         out.extend_from_slice(&self.code);
         out.extend_from_slice(&self.rodata);
         out.extend_from_slice(&self.init);
         let crc = crc32(&out[HEADER_LEN..]);
         out[28..32].copy_from_slice(&crc.to_be_bytes());
-        out
+        Ok(out)
     }
 
     pub fn decode(bytes: &[u8]) -> Result<(Self, usize), ItrErr> {
@@ -162,9 +202,16 @@ impl CalcContainer {
         let output_max = u16::from_be_bytes([bytes[24], bytes[25]]);
         let rodata_len = u16::from_be_bytes([bytes[26], bytes[27]]) as usize;
         let crc = u32::from_be_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]);
-        let total = HEADER_LEN + code_len + rodata_len + init_len;
+        let total = HEADER_LEN
+            .checked_add(code_len)
+            .and_then(|t| t.checked_add(rodata_len))
+            .and_then(|t| t.checked_add(init_len))
+            .ok_or_else(|| err("calc container length overflow"))?;
         if bytes.len() < total {
             return Err(err("calc container truncated payload"));
+        }
+        if bytes.len() != total {
+            return Err(err("calc container trailing bytes"));
         }
         let payload = &bytes[HEADER_LEN..total];
         if crc32(payload) != crc {

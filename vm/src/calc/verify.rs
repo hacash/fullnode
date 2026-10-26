@@ -28,17 +28,25 @@ pub struct Block {
 /// `addrs[i]`; branch/JAL targets are rewritten to instruction indices.
 #[derive(Debug, Clone)]
 pub struct CalcModule {
-    pub layout: crate::calc::container::CalcLayout,
-    pub insts: Vec<Inst>,
+    pub(crate) layout: crate::calc::container::CalcLayout,
+    pub(crate) insts: Vec<Inst>,
     /// Byte address of each instruction (strictly increasing).
-    pub addrs: Vec<u32>,
+    pub(crate) addrs: Vec<u32>,
     /// Basic blocks in address order.
-    pub blocks: Vec<Block>,
+    pub(crate) blocks: Vec<Block>,
     /// Block index containing each instruction.
-    pub block_of_inst: Vec<u32>,
+    pub(crate) block_of_inst: Vec<u32>,
+    /// Cycle cost from instruction `i` to the end of its containing block.
+    /// Charged at block entry; for the first instruction of a block this
+    /// equals the block's static cost, while a dynamic `jalr` into the middle
+    /// of a block pays only for the remaining instructions.
+    pub(crate) suffix_cycles: Vec<u64>,
     /// Instruction index of the entry point.
-    pub entry: u32,
-    pub fncnf: u8,
+    pub(crate) entry: u32,
+    /// Retained for ABI/extension checks; consensus currently reads the
+    /// container header directly.
+    #[allow(dead_code)]
+    pub(crate) fncnf: u8,
 }
 
 impl CalcModule {
@@ -53,6 +61,9 @@ impl CalcModule {
 }
 
 pub fn verify_container(c: &CalcContainer) -> VmrtRes<CalcModule> {
+    // Header checks must run here too: a directly constructed container did
+    // not pass through `decode`.
+    c.validate_header()?;
     let layout = c.layout();
     // Re-check layout fit even for directly constructed containers (decode
     // already enforces this; the verifier must not trust its caller).
@@ -193,12 +204,23 @@ pub fn verify_container(c: &CalcContainer) -> VmrtRes<CalcModule> {
             start = i;
         }
     }
+    // Per-instruction suffix cost within its block, used when a dynamic edge
+    // enters a block at an instruction other than its leader.
+    let mut suffix_cycles = vec![0u64; insts.len()];
+    for blk in &blocks {
+        let mut acc = 0u64;
+        for i in (blk.start as usize..blk.end as usize).rev() {
+            acc += decode::inst_cycles(&insts[i]);
+            suffix_cycles[i] = acc;
+        }
+    }
     Ok(CalcModule {
         layout,
         insts,
         addrs,
         blocks,
         block_of_inst,
+        suffix_cycles,
         entry: entry_idx as u32,
         fncnf: c.fncnf,
     })

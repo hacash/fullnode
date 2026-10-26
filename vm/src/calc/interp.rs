@@ -19,6 +19,8 @@ pub enum CalcAbort {
     Trap(String),
     /// Cycle budget exhausted at the point of the last block/ecall charge.
     OutOfGas,
+    /// Host wall-clock deadline elapsed (never set on the consensus path).
+    Deadline,
 }
 
 impl CalcAbort {
@@ -37,20 +39,23 @@ pub struct CalcRun {
 
 /// Run a verified module. `input.len()` must be within the container's
 /// `input_max` (enforced by `Trap` otherwise); `cycle_budget` is the whole
-/// allowance — the caller derives it from remaining compute gas.
-pub fn run(
+/// allowance; the caller derives it from remaining compute gas. `deadline`
+/// is `None` on the consensus path.
+pub(crate) fn run(
     module: &CalcModule,
     container: &CalcContainer,
     input: &[u8],
     cycle_budget: u64,
+    deadline: Option<std::time::Instant>,
 ) -> Result<CalcRun, (CalcAbort, u64)> {
-    run_inner(module, container, input, cycle_budget, None)
+    run_inner(module, container, input, cycle_budget, None, deadline)
 }
 
 /// Test/debug entry: additionally snapshots registers and memory at the stop
 /// point. Not used by consensus paths.
 #[allow(clippy::type_complexity)]
-pub fn run_with_state(
+#[allow(dead_code)]
+pub(crate) fn run_with_state(
     module: &CalcModule,
     container: &CalcContainer,
     input: &[u8],
@@ -59,7 +64,14 @@ pub fn run_with_state(
     let mut regs = [0u64; 32];
     let mut mem: Vec<u8> = Vec::new();
     let mut trace: Vec<u64> = Vec::new();
-    let r = run_inner(module, container, input, cycle_budget, Some((&mut regs, &mut mem, &mut trace)));
+    let r = run_inner(
+        module,
+        container,
+        input,
+        cycle_budget,
+        Some((&mut regs, &mut mem, &mut trace)),
+        None,
+    );
     (r, regs, mem, trace)
 }
 
@@ -69,6 +81,7 @@ fn run_inner(
     input: &[u8],
     cycle_budget: u64,
     mut state_out: Option<(&mut [u64; 32], &mut Vec<u8>, &mut Vec<u64>)>,
+    deadline: Option<std::time::Instant>,
 ) -> Result<CalcRun, (CalcAbort, u64)> {
     let lay = &module.layout;
     let mut mem: Vec<u8> = vec![0u8; lay.mem_len as usize];
@@ -181,11 +194,21 @@ fn run_inner(
     }
 
     'blocks: loop {
+        if let Some(deadline) = deadline {
+            if std::time::Instant::now() >= deadline {
+                snap!();
+                return Err((CalcAbort::Deadline, used(cycles)));
+            }
+        }
         let blk = &blocks[module.block_of_inst[idx] as usize];
-        if cycles < blk.cycles {
+        // Charge the remaining static cost of this block from the entry
+        // instruction. A dynamic `jalr` into the middle of a block must not
+        // pay for instructions that were skipped.
+        let cost = module.suffix_cycles[idx];
+        if cycles < cost {
             out_of_gas!();
         }
-        cycles -= blk.cycles;
+        cycles -= cost;
         let end = blk.end as usize;
         while idx < end {
             let inst = insts[idx];

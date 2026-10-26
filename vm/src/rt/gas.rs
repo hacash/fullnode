@@ -103,6 +103,9 @@ pub struct GasExtra {
     pub status_write_key_byte_mul: i64,
     pub status_write_value_byte_mul: i64,
     pub container_cmp_header: usize,
+    /// Per-CALC_CALL cycle cap (0 means no cap). Defaults to 1M in `new`;
+    /// `Default` leaves it 0 so test/standalone constructions stay unbounded.
+    pub calc_max_cycles_per_call: u64,
     stack_move_item: i64,
     // Dynamic, resource-based gas parameters.
     stack_copy_div: i64,
@@ -152,6 +155,7 @@ impl GasExtra {
             status_write_value_byte_mul: 32,
             // other
             container_cmp_header: 12,
+            calc_max_cycles_per_call: 1_000_000,
             // Dynamic divisors (byte/N, item/N)
             stack_copy_div: 32,
             stack_write_div: 28,
@@ -356,6 +360,12 @@ impl GasExtra {
 #[cfg(test)]
 mod gas_tests {
     use super::*;
+
+    #[test]
+    fn calc_max_cycles_per_call_defaults_to_one_million() {
+        let gas = GasExtra::new(0, &base::VmExecutionParams::default());
+        assert_eq!(gas.calc_max_cycles_per_call, 1_000_000);
+    }
 
     #[test]
     fn patch_bytes_uses_32_byte_divisor() {

@@ -568,15 +568,30 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                         }
                     };
                     // cycle budget from remaining compute (limit<=0: tests,
-                    // bounded fallback keeps loops finite)
+                    // bounded fallback keeps loops finite), then apply the
+                    // per-call cap when configured.
                     let cur = machine.gas_use();
                     let remaining = if gst.compute_limit > 0 {
                         (gst.compute_limit - cur.compute).max(0) as u64
                     } else {
                         10_000_000
                     };
-                    let budget = remaining.saturating_mul(crate::calc::CYCLES_PER_COMPUTE);
-                    let exec = machine.call_calc(host, bindings, idx, &raw, budget)?;
+                    let mut cycles = remaining.saturating_mul(crate::calc::CYCLES_PER_COMPUTE);
+                    if gst.calc_max_cycles_per_call > 0 {
+                        cycles = cycles.min(gst.calc_max_cycles_per_call);
+                    }
+                    let resource = if gst.resource_limit > 0 {
+                        (gst.resource_limit - cur.resource).max(0)
+                    } else {
+                        i64::MAX
+                    };
+                    let limits = crate::calc::CalcRunLimits {
+                        cycles,
+                        resource,
+                        value_size: cap.value_size,
+                        deadline: machine.deadline(),
+                    };
+                    let exec = machine.call_calc(host, bindings, idx, &raw, limits)?;
                     let cycles =
                         crate::calc::ceil_div(exec.cycles_used, crate::calc::CYCLES_PER_COMPUTE)
                             as i64;
@@ -592,6 +607,24 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                         }
                         Err(crate::calc::CalcAbort2::OutOfGas) => {
                             return itr_err_fmt!(ItrErrCode::OutOfGas, "calc cycle budget exhausted")
+                        }
+                        Err(crate::calc::CalcAbort2::Deadline) => {
+                            return itr_err_fmt!(
+                                ItrErrCode::ExecutionDeadline,
+                                "calc execution deadline exceeded"
+                            )
+                        }
+                        Err(crate::calc::CalcAbort2::OutOfResource) => {
+                            return itr_err_fmt!(
+                                ItrErrCode::OutOfGas,
+                                "calc resource budget exhausted"
+                            )
+                        }
+                        Err(crate::calc::CalcAbort2::ValueTooLarge) => {
+                            return itr_err_fmt!(
+                                ItrErrCode::OutOfValueSize,
+                                "calc value size exceeds cap"
+                            )
                         }
                     }
                 }

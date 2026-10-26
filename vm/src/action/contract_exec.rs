@@ -445,7 +445,7 @@ fn check_static_inherit_parents(
 
 #[cfg(test)]
 mod linked_parent_composition_tests {
-    use super::linked_parent_composition_error;
+    use super::{linked_parent_composition_error, scan_calc_call_indices};
     use crate::value::ContractAddress;
     use field::Address;
 
@@ -477,6 +477,30 @@ mod linked_parent_composition_tests {
         )
         .unwrap()
         .contains("declared by inherit parents"));
+    }
+
+    #[test]
+    fn scan_calc_call_index_must_be_in_range() {
+        // PNBUF ; CALC_CALL idx 99 ; END
+        assert!(scan_calc_call_indices(&[0x29, 0x11, 99, 0xef], 1).is_err());
+    }
+
+    #[test]
+    fn scan_calc_call_index_in_range_is_accepted() {
+        // PNBUF ; CALC_CALL idx 0 ; END
+        assert!(scan_calc_call_indices(&[0x29, 0x11, 0, 0xef], 1).is_ok());
+    }
+
+    #[test]
+    fn scan_calc_call_index_zero_requires_a_calc_func() {
+        // PNBUF ; CALC_CALL idx 0 ; END
+        assert!(scan_calc_call_indices(&[0x29, 0x11, 0, 0xef], 0).is_err());
+    }
+
+    #[test]
+    fn scan_calc_call_lookalike_inside_pbuf_payload_is_skipped() {
+        // PBUF len 2 (payload 0x11 0x99) ; END
+        assert!(scan_calc_call_indices(&[0x22, 0x02, 0x11, 0x99, 0xef], 0).is_ok());
     }
 }
 
@@ -566,6 +590,57 @@ fn scan_call_sites(
                     return errf!("PBUFL overflow at {}", i - 1);
                 }
                 i += l;
+            }
+            _ => {}
+        }
+        i += pms;
+    }
+    Ok(())
+}
+
+/// Statically validate every `CALC_CALL` index against the contract's calc-func table.
+///
+/// Walks the HVM bytecode exactly like [`scan_call_sites`], including skipping PBUF/PBUFL
+/// payloads so data bytes are not decoded as instructions.
+fn scan_calc_call_indices(codes: &[u8], calc_len: usize) -> Rerr {
+    let mut i = 0usize;
+    while i < codes.len() {
+        let inst = crate::rt::Bytecode::try_from_u8(codes[i]).map_err(sys::Error::from)?;
+        let meta = inst.metadata();
+        if !meta.valid {
+            return errf!("invalid bytecode {}", codes[i]);
+        }
+        i += 1;
+        let pms = meta.param as usize;
+        if i + pms > codes.len() {
+            return errf!("instruction param overflow at {}", i - 1);
+        }
+        let params = &codes[i..i + pms];
+        match inst {
+            crate::rt::Bytecode::PBUF => {
+                let l = params[0] as usize;
+                if i + pms + l > codes.len() {
+                    return errf!("PBUF overflow at {}", i - 1);
+                }
+                i += l;
+            }
+            crate::rt::Bytecode::PBUFL => {
+                let l = u16::from_be_bytes([params[0], params[1]]) as usize;
+                if i + pms + l > codes.len() {
+                    return errf!("PBUFL overflow at {}", i - 1);
+                }
+                i += l;
+            }
+            crate::rt::Bytecode::CALC_CALL => {
+                let idx = params[0] as usize;
+                if idx >= calc_len {
+                    return errf!(
+                        "CALC_CALL index {} out of range (calc funcs: {}) at {}",
+                        idx,
+                        calc_len,
+                        i - 1
+                    );
+                }
             }
             _ => {}
         }
@@ -698,6 +773,7 @@ fn check_static_call_targets(
                 .map_err(|e| e.to_string())?,
         };
         let tag = format!("userfn 0x{}", hex::encode(f.sign.into_array()));
+        scan_calc_call_indices(&codes, root_contract.calcfuncs.length())?;
         check_one(tag, &codes, vmsta)?;
     }
 
@@ -710,6 +786,7 @@ fn check_static_call_targets(
                 .map_err(|e| e.to_string())?,
         };
         let tag = format!("abstcall {}", f.sign[0]);
+        scan_calc_call_indices(&codes, root_contract.calcfuncs.length())?;
         check_one(tag, &codes, vmsta)?;
     }
 
