@@ -52,13 +52,15 @@ pub struct CalcModule {
     pub(crate) suffix_cycles: Vec<u64>,
     /// Instruction index of the entry point.
     pub(crate) entry: u32,
-    /// Retained for ABI/extension checks; consensus currently reads the
-    /// container header directly.
-    #[allow(dead_code)]
-    pub(crate) fncnf: u8,
 }
 
 impl CalcModule {
+    /// Test-oracle view of the deterministic memory layout.
+    #[doc(hidden)]
+    pub fn layout_snapshot(&self) -> crate::calc::container::CalcLayout {
+        self.layout
+    }
+
     /// Resolve a runtime jump target (byte address) to an instruction index;
     /// only exact instruction boundaries are accepted.
     pub fn inst_at_addr(&self, addr: u64) -> Option<u32> {
@@ -82,15 +84,14 @@ pub fn verify_container(c: &CalcContainer) -> VmrtRes<CalcModule> {
     // Pass 1: linear scan decode + boundary map. Every byte of the code
     // section must decode to a whitelisted instruction — including bytes
     // that will never execute (padding, cold paths).
-    let isa_b = c.isa_profile == crate::calc::container::CALC_ISA_RV64IMCB;
-    let code = &c.code;
+        let code = &c.code;
     let mut insts: Vec<Inst> = Vec::new();
     let mut addrs: Vec<u32> = Vec::new();
     let mut boundaries: Vec<bool> = vec![false; code.len() + 1];
     let mut off = 0usize;
     while off < code.len() {
         boundaries[off] = true;
-        let (inst, len) = decode::decode_at(code, off, isa_b)?;
+        let (inst, len) = decode::decode_at(code, off)?;
         addrs.push(off as u32);
         insts.push(inst);
         off += len as usize;
@@ -175,6 +176,5 @@ pub fn verify_container(c: &CalcContainer) -> VmrtRes<CalcModule> {
         block_of_inst,
         suffix_cycles,
         entry: entry_idx as u32,
-        fncnf: c.fncnf,
     })
 }

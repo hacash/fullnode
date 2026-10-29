@@ -5,8 +5,7 @@
 use std::time::{Duration, Instant};
 
 use vm::calc::container::{
-    CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_ISA_RV64IMC, CALC_ISA_RV64IMCB, CALC_MAGIC,
-    CALC_VERSION, HEADER_LEN,
+    CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_MAGIC, CALC_VERSION, HEADER_LEN,
 };
 use vm::calc::verify::verify_container;
 use vm::calc::{pack_container, CalcAbort2, CalcFnObj, CalcRunLimits};
@@ -20,9 +19,7 @@ fn ret_code() -> Vec<u8> {
 /// A directly constructed, otherwise valid container (bypasses `decode`).
 fn valid_container() -> CalcContainer {
     CalcContainer {
-        isa_profile: CALC_ISA_RV64IMC,
         abi: CALC_ABI_BYTES_TO_BYTES,
-        fncnf: 0b11,
         mem_kib: 4,
         entry: 0,
         code: ret_code(),
@@ -34,7 +31,7 @@ fn valid_container() -> CalcContainer {
 }
 
 fn packed() -> CalcContainer {
-    pack_container(CALC_ISA_RV64IMC, 4, 0, 16, 16, ret_code(), vec![], vec![]).unwrap()
+    pack_container(4, 0, 16, 16, ret_code(), vec![], vec![]).unwrap()
 }
 
 // ---------------------------------------------------------------- fix 3 ---
@@ -58,9 +55,7 @@ fn decode_rejects_huge_declared_lengths_without_panicking() {
     let mut bytes = vec![0u8; HEADER_LEN];
     bytes[0..4].copy_from_slice(&CALC_MAGIC);
     bytes[4] = CALC_VERSION;
-    bytes[5] = CALC_ISA_RV64IMC;
     bytes[6] = CALC_ABI_BYTES_TO_BYTES;
-    bytes[7] = 0b11;
     bytes[8..10].copy_from_slice(&4u16.to_be_bytes()); // mem_kib
     bytes[14..18].copy_from_slice(&u32::MAX.to_be_bytes()); // code_len
     bytes[18..22].copy_from_slice(&u32::MAX.to_be_bytes()); // init_len
@@ -87,9 +82,7 @@ fn encode_accepts_rodata_above_u16_and_pack_rejects_on_layout() {
     let mut c = valid_container();
     c.rodata = vec![0u8; 65_536];
     assert!(c.encode().is_ok());
-    assert!(pack_container(
-        CALC_ISA_RV64IMC,
-        4,
+    assert!(pack_container(4,
         0,
         16,
         16,
@@ -113,39 +106,25 @@ fn encode_round_trips_valid_container() {
 
 #[test]
 fn pack_container_rejects_mem_kib_above_max() {
-    assert!(pack_container(CALC_ISA_RV64IMC, 128, 0, 16, 16, ret_code(), vec![], vec![]).is_err());
+    assert!(pack_container(128, 0, 16, 16, ret_code(), vec![], vec![]).is_err());
 }
 
 #[test]
 fn pack_container_rejects_input_max_above_io_max() {
-    assert!(pack_container(CALC_ISA_RV64IMC, 64, 0, 5000, 16, ret_code(), vec![], vec![]).is_err());
+    assert!(pack_container(64, 0, 5000, 16, ret_code(), vec![], vec![]).is_err());
 }
 
 #[test]
 fn pack_container_accepts_valid_layout() {
-    assert!(pack_container(CALC_ISA_RV64IMC, 4, 0, 16, 16, ret_code(), vec![], vec![]).is_ok());
+    assert!(pack_container(4, 0, 16, 16, ret_code(), vec![], vec![]).is_ok());
 }
 
 // ---------------------------------------------------------------- fix 6 ---
 
 #[test]
-fn verify_rejects_bad_isa_profile() {
-    let mut c = valid_container();
-    c.isa_profile = 99;
-    assert!(verify_container(&c).is_err());
-}
-
-#[test]
 fn verify_rejects_bad_abi() {
     let mut c = valid_container();
     c.abi = 99;
-    assert!(verify_container(&c).is_err());
-}
-
-#[test]
-fn verify_rejects_bad_fncnf() {
-    let mut c = valid_container();
-    c.fncnf = 0;
     assert!(verify_container(&c).is_err());
 }
 
@@ -182,7 +161,7 @@ fn mid_block_jalr_is_not_overcharged() {
         [0x67, 0x80, 0x00, 0x00],
     ]
     .concat();
-    let c = pack_container(CALC_ISA_RV64IMC, 4, 0, 16, 16, code, vec![], vec![]).unwrap();
+    let c = pack_container(4, 0, 16, 16, code, vec![], vec![]).unwrap();
     let obj = CalcFnObj::build(c).unwrap();
     // The backward `jalr` re-enters the first block at index 1, skipping
     // `addi x5,x0,0`; only the remaining suffix (3 cycles) is charged. The
@@ -312,10 +291,8 @@ fn zbb_kernel() -> Vec<u8> {
 }
 
 #[test]
-fn zbb_profile2_kernel_executes() {
-    let c = pack_container(
-        CALC_ISA_RV64IMCB,
-        4,
+fn zbb_kernel_executes() {
+    let c = pack_container(4,
         0,
         16,
         32,
@@ -359,29 +336,12 @@ fn zbb_profile2_kernel_executes() {
 }
 
 #[test]
-fn zbb_instructions_rejected_under_profile1() {
-    let err = pack_container(
-        CALC_ISA_RV64IMC,
-        4,
-        0,
-        16,
-        32,
-        zbb_kernel(),
-        vec![],
-        vec![],
-    );
-    assert!(err.is_err(), "profile 1 must reject Zbb encodings");
-    // Coexistence: profile 1 containers (without Zbb bytes) stay valid.
-    assert!(packed().isa_profile == CALC_ISA_RV64IMC);
-}
-
-#[test]
 fn unreachable_padding_is_accepted() {
     // `addi a0,x0,0 ; jalr x0,x1,0` then a dead c.nop: rustc/LLVM pads
     // between functions, so unreachable-but-decodable bytes must verify.
     let mut code = ret_code();
     code.extend_from_slice(&[0x01, 0x00]); // c.nop
-    let r = pack_container(CALC_ISA_RV64IMC, 4, 0, 16, 16, code, vec![], vec![]);
+    let r = pack_container(4, 0, 16, 16, code, vec![], vec![]);
     assert!(r.is_ok());
 }
 
@@ -390,7 +350,7 @@ fn fence_decodes_and_executes_as_nop() {
     // fence iorw, iorw (0x0ff0000f) before the return.
     let mut code = vec![0x0f, 0x00, 0xf0, 0x0f];
     code.extend_from_slice(&ret_code());
-    let c = pack_container(CALC_ISA_RV64IMC, 4, 0, 16, 16, code, vec![], vec![]).unwrap();
+    let c = pack_container(4, 0, 16, 16, code, vec![], vec![]).unwrap();
     let obj = CalcFnObj::build(c).unwrap();
     let exec = obj.run(
         &[],

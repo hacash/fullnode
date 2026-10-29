@@ -105,6 +105,9 @@ pub struct GasExtra {
     pub container_cmp_header: usize,
     /// Per-CALC_CALL cycle cap (0 means no cap). Defaults to 1M in `new`;
     /// `Default` leaves it 0 so test/standalone constructions stay unbounded.
+    /// CONSENSUS CONSTANT: the 1M default is hardcoded (NOT read from
+    /// `VmExecutionParams`) — changing it changes gas results for chains
+    /// whose compute bucket exceeds 250k compute, i.e. a hard fork.
     pub calc_max_cycles_per_call: u64,
     stack_move_item: i64,
     // Dynamic, resource-based gas parameters.

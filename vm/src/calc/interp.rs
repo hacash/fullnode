@@ -43,7 +43,8 @@ pub struct CalcRun {
 /// `input_max` (enforced by `Trap` otherwise); `cycle_budget` is the whole
 /// allowance; the caller derives it from remaining compute gas. `deadline`
 /// is `None` on the consensus path.
-pub(crate) fn run(
+#[doc(hidden)]
+pub fn run(
     module: &CalcModule,
     container: &CalcContainer,
     input: &[u8],
@@ -57,7 +58,8 @@ pub(crate) fn run(
 /// point. Not used by consensus paths.
 #[allow(clippy::type_complexity)]
 #[allow(dead_code)]
-pub(crate) fn run_with_state(
+#[doc(hidden)]
+pub fn run_with_state(
     module: &CalcModule,
     container: &CalcContainer,
     input: &[u8],

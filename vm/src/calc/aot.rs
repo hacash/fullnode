@@ -36,7 +36,7 @@
 //! it. `cargo test -p vm --features calc-aot` runs the differential suite
 //! at the bottom of this file.
 
-use crate::calc::decode::{BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp};
+use crate::calc::decode::{BitImmOp, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp, UnAluOp};
 use crate::calc::container::CalcContainer;
 use crate::calc::verify::CalcModule;
 use crate::calc::CALC_RETURN_SENTINEL;
@@ -251,6 +251,42 @@ impl Code {
         self.sib(0, 4, 4);
         self.imm32((8 * rv as i64) as i32);
     }
+    /// 32-bit load of the low word of an RV64 register, zero-extended:
+    /// `mov ehd, [r12 + 8*rv]`.
+    fn ld_reg32_zext(&mut self, hdst: u8, rv: u8) {
+        self.rex(false, hdst >= 8, false, true);
+        self.op(0x8B);
+        self.modrm(2, hdst, 4);
+        self.sib(0, 4, 4);
+        self.imm32((8 * rv as i64) as i32);
+    }
+    /// `not h` (0xF7 /2).
+    fn not_r64(&mut self, h: u8) {
+        self.rex(true, false, false, h >= 8);
+        self.op(0xF7);
+        self.modrm(3, 2, h);
+    }
+    /// Rotate by cl: ext 0 = rol, 1 = ror (0xD3 /ext; count masked &63 for
+    /// 64-bit and &31 for 32-bit, matching the RISC-V semantics).
+    fn rot_cl(&mut self, ext: u8, h: u8, w: bool) {
+        self.rex(w, false, false, h >= 8);
+        self.op(0xD3);
+        self.modrm(3, ext, h);
+    }
+    /// `cmov hdst, hsrc` (0F 40+cc). NOTE: unlike MOV, the CMOVcc
+    /// DESTINATION lives in the reg field and the source in r/m.
+    fn cmov_rr(&mut self, cc: u8, hdst: u8, hsrc: u8) {
+        self.rex(true, hdst >= 8, false, hsrc >= 8);
+        self.op2(0x0F, 0x40 + cc);
+        self.modrm(3, hdst, hsrc);
+    }
+    /// BT family: 0F A3 (bt), 0F AB (bts), 0F B3 (btr), 0F BB (btc) on
+    /// `hdst` with the count in cl.
+    fn bt_group(&mut self, opcode2: u8, hdst: u8) {
+        self.rex(true, false, false, hdst >= 8);
+        self.op2(0x0F, opcode2);
+        self.modrm(3, RCX, hdst);
+    }
     /// `imul hdst, qword [r12 + 8*rv]` (0F AF).
     fn imul_rm(&mut self, hdst: u8, rv: u8) {
         self.rex(true, hdst >= 8, false, true);
@@ -369,7 +405,7 @@ pub fn alu_helper_op(op: u64, a: u64, b: u64) -> u64 {
                 sext32_((a as u32 as i32).wrapping_rem(b as u32 as i32) as u64)
             }
         }
-        _ => {
+        7 => {
             // Remuw
             if (b as u32) == 0 {
                 sext32_(a)
@@ -377,7 +413,69 @@ pub fn alu_helper_op(op: u64, a: u64, b: u64) -> u64 {
                 sext32_((a as u32 % b as u32) as u64)
             }
         }
+        // Zbc carryless multiplies (software loop mirroring interp::clmul128;
+        // 16 cycles charged either way — see decode::CLMUL_CYCLES).
+        8 => clmul128_(a, b) as u64,        // clmul
+        9 => (clmul128_(a, b) >> 64) as u64, // clmulh
+        10 => (clmul128_(a, b) >> 63) as u64, // clmulr
+        // Zbb unary ops (b ignored) — same helper entry as div/rem so the
+        // generated code needs no extra long-lived register.
+        _ => unalu_helper_op(op - 16, a),
     }
+}
+
+#[inline(always)]
+fn clmul128_(a: u64, b: u64) -> u128 {
+    let mut p: u128 = 0;
+    for i in 0..64 {
+        if (b >> i) & 1 == 1 {
+            p ^= (a as u128) << i;
+        }
+    }
+    p
+}
+
+/// Zbb unary ops routed through the host (op order matches `UnAluOp`).
+pub fn unalu_helper_op(op: u64, a: u64) -> u64 {
+    use crate::calc::decode::UnAluOp;
+    let kind = match op {
+        0 => UnAluOp::Clz,
+        1 => UnAluOp::Ctz,
+        2 => UnAluOp::Cpop,
+        3 => UnAluOp::Sextb,
+        4 => UnAluOp::Sexth,
+        5 => UnAluOp::Zexth,
+        6 => UnAluOp::Orcb,
+        7 => UnAluOp::Rev8,
+        8 => UnAluOp::Clzw,
+        9 => UnAluOp::Ctzw,
+        _ => UnAluOp::Cpopw,
+    };
+    match kind {
+        UnAluOp::Clz => a.leading_zeros() as u64,
+        UnAluOp::Ctz => a.trailing_zeros() as u64,
+        UnAluOp::Cpop => a.count_ones() as u64,
+        UnAluOp::Sextb => a as i8 as i64 as u64,
+        UnAluOp::Sexth => a as i16 as i64 as u64,
+        UnAluOp::Zexth => a & 0xFFFF,
+        UnAluOp::Orcb => {
+            let mut v = 0u64;
+            for i in 0..8 {
+                if (a >> (i * 8)) & 0xFF != 0 {
+                    v |= 0xFFu64 << (i * 8);
+                }
+            }
+            v
+        }
+        UnAluOp::Rev8 => a.swap_bytes(),
+        UnAluOp::Clzw => (a as u32).leading_zeros() as u64,
+        UnAluOp::Ctzw => (a as u32).trailing_zeros() as u64,
+        UnAluOp::Cpopw => (a as u32).count_ones() as u64,
+    }
+}
+
+extern "C" fn unalu_helper_entry(op: u64, a: u64) -> u64 {
+    unalu_helper_op(op, a)
 }
 
 extern "C" fn alu_helper(op: u64, a: u64, b: u64) -> u64 {
@@ -409,7 +507,10 @@ pub struct AotFunc {
     map: (*mut u8, usize),
     /// Translated code length in bytes.
     len: usize,
-    ctx: Box<ResolveCtx>,
+    /// Resolver tables. The `state` cell is pointed at a stack local for
+    /// the duration of each call only; `RefCell` gives the interior
+    /// mutability that lets executions run through `&self`.
+    ctx: std::cell::RefCell<Box<ResolveCtx>>,
 }
 
 impl AotFunc {
@@ -476,7 +577,7 @@ impl AotFunc {
     /// charge lives in `CalcFnObj::run`, outside this layer. Deadlines are
     /// a host concern and are ignored (benchmark/differential use only).
     pub fn run(
-        &mut self,
+        &self,
         module: &CalcModule,
         container: &CalcContainer,
         input: &[u8],
@@ -490,7 +591,7 @@ impl AotFunc {
     /// `run` plus final register and memory snapshots — the differential
     /// counterpart of `interp::run_with_state`.
     pub fn run_with_state(
-        &mut self,
+        &self,
         module: &CalcModule,
         container: &CalcContainer,
         input: &[u8],
@@ -500,7 +601,7 @@ impl AotFunc {
     }
 
     fn run_inner(
-        &mut self,
+        &self,
         module: &CalcModule,
         container: &CalcContainer,
         input: &[u8],
@@ -538,9 +639,9 @@ impl AotFunc {
             out_len: 0,
             aborted: 0,
         };
-        // Share the state cell with the resolver context.
+        // Share the state cell with the resolver context for this call.
         let state_ptr = &state as *const AotState as *mut AotState;
-        (*self.ctx).state = state_ptr;
+        self.ctx.borrow_mut().state = state_ptr;
         let f: extern "C" fn(*mut u8, *mut u64, *mut AotState) = unsafe {
             std::mem::transmute::<*const u8, extern "C" fn(*mut u8, *mut u64, *mut AotState)>(
                 self.map.0 as *const u8,
@@ -854,8 +955,8 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                             ShiftKind::Sll => 4u8,
                             ShiftKind::Srl => 5u8,
                             ShiftKind::Sra => 7u8,
-                            // Zbb rori (profile 2) — not implemented.
-                            ShiftKind::Ror => return None,
+                            // rori / roriw (x86 ror by imm8)
+                            ShiftKind::Ror => 1u8,
                         };
                         if word {
                             c.shift_imm(ext, RAX, shamt & 31, false);
@@ -1005,13 +1106,182 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                                 c.modrm(3, 2, RBP); // call rbp
                                 c.st_reg(rd, RAX);
                             }
-                            // Zbb/Zbc (ISA profile 2) — not implemented.
-                            _ => return None,
+                            // ---- Zbb / Zbc (single unified ISA) ----
+                            RegAluOp::Adduw => {
+                                c.ld_reg32_zext(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.alu_rr(0x01, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Sh1add | RegAluOp::Sh2add | RegAluOp::Sh3add => {
+                                let n = match op {
+                                    RegAluOp::Sh1add => 1u8,
+                                    RegAluOp::Sh2add => 2,
+                                    _ => 3,
+                                };
+                                c.ld_reg(RAX, rs1);
+                                c.shift_imm(4, RAX, n, true);
+                                c.ld_reg(RCX, rs2);
+                                c.alu_rr(0x01, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Sh1adduw | RegAluOp::Sh2adduw | RegAluOp::Sh3adduw => {
+                                let n = match op {
+                                    RegAluOp::Sh1adduw => 1u8,
+                                    RegAluOp::Sh2adduw => 2,
+                                    _ => 3,
+                                };
+                                c.ld_reg32_zext(RAX, rs1);
+                                c.shift_imm(4, RAX, n, true);
+                                c.ld_reg(RCX, rs2);
+                                c.alu_rr(0x01, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Andn | RegAluOp::Orn | RegAluOp::Xnor => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                match op {
+                                    RegAluOp::Andn => {
+                                        c.not_r64(RCX);
+                                        c.alu_rr(0x21, RAX, RCX);
+                                    }
+                                    RegAluOp::Orn => {
+                                        c.not_r64(RCX);
+                                        c.alu_rr(0x09, RAX, RCX);
+                                    }
+                                    _ => {
+                                        c.alu_rr(0x31, RAX, RCX);
+                                        c.not_r64(RAX);
+                                    }
+                                }
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Rol | RegAluOp::Ror | RegAluOp::Rolw | RegAluOp::Rorw => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                match op {
+                                    RegAluOp::Rol => c.rot_cl(0, RAX, true),
+                                    RegAluOp::Ror => c.rot_cl(1, RAX, true),
+                                    RegAluOp::Rolw => {
+                                        c.rot_cl(0, RAX, false);
+                                        c.sext_eax();
+                                    }
+                                    _ => {
+                                        c.rot_cl(1, RAX, false);
+                                        c.sext_eax();
+                                    }
+                                }
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Min | RegAluOp::Minu | RegAluOp::Max | RegAluOp::Maxu => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.cmp_rr(RAX, RCX);
+                                let cc = match op {
+                                    RegAluOp::Min => 0xF,  // cmovg: a>b -> take b
+                                    RegAluOp::Max => 0xC,  // cmovl: a<b -> take b
+                                    RegAluOp::Minu => 0x7, // cmova
+                                    _ => 0x2,              // cmovb
+                                };
+                                c.cmov_rr(cc, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Bset | RegAluOp::Bclr | RegAluOp::Binv | RegAluOp::Bext => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                match op {
+                                    RegAluOp::Bset => {
+                                        c.bt_group(0xAB, RAX);
+                                    }
+                                    RegAluOp::Bclr => {
+                                        c.bt_group(0xB3, RAX);
+                                    }
+                                    RegAluOp::Binv => {
+                                        c.bt_group(0xBB, RAX);
+                                    }
+                                    RegAluOp::Bext => {
+                                        c.bt_group(0xA3, RAX);
+                                        c.setcc_rax(2); // setc (CF = tested bit)
+                                    }
+                                    _ => unreachable!("bset family"),
+                                }
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Clmul | RegAluOp::Clmulh | RegAluOp::Clmulr => {
+                                let opid: u64 = match op {
+                                    RegAluOp::Clmul => 8,
+                                    RegAluOp::Clmulh => 9,
+                                    _ => 10,
+                                };
+                                c.movabs(RDI, opid);
+                                c.ld_reg(RSI, rs1);
+                                c.ld_reg(RDX, rs2);
+                                c.op(0xFF);
+                                c.modrm(3, 2, RBP); // call rbp
+                                c.st_reg(rd, RAX);
+                            }
                         }
                     }
                 }
-                // Unary/single-bit Zbb ops (profile 2) — not implemented.
-                Inst::UnAlu { .. } | Inst::BitImm { .. } | Inst::Slliuw { .. } => return None,
+                // Zbb unary ops — routed through the shared ALU host helper
+                // (opids 16..26; the Rust bodies lower to native bsr/bsf/
+                // bswap/popcnt on hosts that have them).
+                Inst::UnAlu { op, rd, rs1 } => {
+                    if rd != 0 {
+                        let opid: u64 = 16 + match op {
+                            UnAluOp::Clz => 0,
+                            UnAluOp::Ctz => 1,
+                            UnAluOp::Cpop => 2,
+                            UnAluOp::Sextb => 3,
+                            UnAluOp::Sexth => 4,
+                            UnAluOp::Zexth => 5,
+                            UnAluOp::Orcb => 6,
+                            UnAluOp::Rev8 => 7,
+                            UnAluOp::Clzw => 8,
+                            UnAluOp::Ctzw => 9,
+                            UnAluOp::Cpopw => 10,
+                        };
+                        c.movabs(RDI, opid);
+                        c.ld_reg(RSI, rs1);
+                        c.op(0xFF);
+                        c.modrm(3, 2, RBP); // call rbp
+                        c.st_reg(rd, RAX);
+                    }
+                }
+                // Zbb single-bit immediate ops.
+                Inst::BitImm { op, rd, rs1, shamt } => {
+                    if rd != 0 {
+                        let sh = shamt & 63;
+                        c.ld_reg(RAX, rs1);
+                        match op {
+                            BitImmOp::Set => {
+                                c.movabs(RCX, 1u64 << sh);
+                                c.alu_rr(0x09 /*or*/, RAX, RCX);
+                            }
+                            BitImmOp::Clr => {
+                                c.movabs(RCX, !(1u64 << sh));
+                                c.alu_rr(0x21 /*and*/, RAX, RCX);
+                            }
+                            BitImmOp::Inv => {
+                                c.movabs(RCX, 1u64 << sh);
+                                c.alu_rr(0x31 /*xor*/, RAX, RCX);
+                            }
+                            BitImmOp::Ext => {
+                                c.shift_imm(5 /*shr*/, RAX, sh, true);
+                                c.alu_imm(4 /*and*/, RAX, 1);
+                            }
+                        }
+                        c.st_reg(rd, RAX);
+                    }
+                }
+                // slli.uw: zero-extend rs1's low 32 bits, shift left.
+                Inst::Slliuw { rd, rs1, shamt } => {
+                    if rd != 0 {
+                        c.ld_reg32_zext(RAX, rs1);
+                        c.shift_imm(4 /*shl*/, RAX, shamt & 63, true);
+                        c.st_reg(rd, RAX);
+                    }
+                }
                 // Single-hart pure-compute machine: no-op, matches interp.
                 Inst::Fence => {}
                 // Hash builtins are interpreter-only; kernels meant for AOT
@@ -1155,7 +1425,7 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
         (p as *mut u8, sz)
     };
     ctx.code = map.0 as *const u8;
-    Some(AotFunc { map, len: c.b.len(), ctx })
+    Some(AotFunc { map, len: c.b.len(), ctx: std::cell::RefCell::new(ctx) })
 }
 
 /// Emit a load `mov rax, [rbx + rax]` in the right width/sign form.
@@ -1215,9 +1485,7 @@ fn emit_load(c: &mut Code, form: MemForm) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::calc::container::{
-        CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_ISA_RV64IMC, CALC_ISA_RV64IMCB,
-    };
+    use crate::calc::container::{CalcContainer, CALC_ABI_BYTES_TO_BYTES};
     use crate::calc::interp::{self, CalcAbort};
     use crate::calc::verify::verify_container;
 
@@ -1391,9 +1659,7 @@ mod tests {
 
     fn container_for(code: Vec<u8>) -> CalcContainer {
         CalcContainer {
-            isa_profile: CALC_ISA_RV64IMC,
             abi: CALC_ABI_BYTES_TO_BYTES,
-            fncnf: 0b11,
             mem_kib: 4,
             entry: 0,
             code,
@@ -1521,21 +1787,211 @@ mod tests {
         assert!(aot_compile(&module).is_none(), "ecall must fall back to the interpreter");
     }
 
+    /// The whole Zbb/Zbc subset through both engines (the ISA is unified,
+    /// so the AOT must cover every bit-manipulation form the decoder
+    /// accepts): unary ops, single-bit immediate and register forms, shifts
+    /// (rol/ror/rori incl. W), address-adds, min/max, and the clmul family.
     #[test]
-    fn zbb_container_falls_back() {
+    fn zbb_zbc_full_subset_parity() {
         let mut a = Asm::new();
-        a.i(0, 10, 0, 0x13, 0); // addi a0, x0, 0
-        let clz = (0b0110000 << 25) | (4 << 15) | (0b001 << 12) | (3 << 7) | 0b0010011;
-        a.raw(clz); // clz t2, tp
+        // sources: t0 = 0xFFFFFFFF8000000D, t1 = 0xDEADB000, t2 = 3
+        a.u(5, 0x37, 0x80000); // t0 low setup
+        a.i(0, 5, 5, 0x13, 13); // t0 = 0xFFFFFFFF8000000D
+        a.u(6, 0x37, 0xDEADB); // t1 = 0x00000000DEADB000
+        li(&mut a, 7, 3); // t2 = 3
+        // ---- unary via OP-IMM (selector in rs2)
+        a.r(0b0110000, 1, 20, 5, 0, 0x13); // clz t0
+        a.r(0b0110000, 1, 21, 5, 1, 0x13); // ctz t0
+        a.r(0b0110000, 1, 22, 5, 2, 0x13); // cpop t0
+        a.r(0b0110000, 1, 23, 5, 4, 0x13); // sext.b t0
+        a.r(0b0110000, 1, 24, 5, 5, 0x13); // sext.h t0
+        a.r(0b0010100, 5, 25, 5, 0b00111, 0x13); // orc.b t0
+        a.r(0b0110101, 5, 26, 5, 0b11000, 0x13); // rev8 t0
+        a.r(0b0000100, 4, 27, 5, 0, 0x33); // zext.h t0
+        // ---- W unary via OP-32
+        a.r(0b0110000, 1, 8, 5, 0, 0x1B); // clzw
+        a.r(0b0110000, 1, 9, 5, 1, 0x1B); // ctzw
+        a.r(0b0110000, 1, 10, 5, 2, 0x1B); // cpopw
+        // ---- single-bit immediates
+        a.sh(0b001010, 1, 11, 5, 7, 0x13); // bseti
+        a.sh(0b010010, 2, 12, 5, 7, 0x13); // bclri (f3=010)
+        a.sh(0b011010, 3, 13, 5, 7, 0x13); // binvi (f3=011)
+        a.sh(0b010010, 5, 14, 5, 61, 0x13); // bexti
+        // ---- slli.uw and rori / roriw
+        a.sh(0b000010, 1, 15, 5, 4, 0x1B); // slli.uw
+        a.sh(0b011000, 5, 16, 5, 9, 0x13); // rori
+        // ---- register-form bit ops + rotates
+        a.r(0b0100000, 4, 17, 5, 6, 0x33); // xnor
+        a.r(0b0100000, 6, 18, 5, 6, 0x33); // orn
+        a.r(0b0100000, 7, 19, 5, 6, 0x33); // andn
+        a.r(0b0110000, 1, 20, 5, 6, 0x33); // rol
+        a.r(0b0110000, 5, 21, 5, 6, 0x33); // ror
+        a.r(0b0110000, 1, 22, 5, 6, 0x3B); // rolw
+        a.r(0b0110000, 5, 23, 5, 6, 0x3B); // rorw
+        // ---- address adds + min/max
+        a.r(0b0000100, 0, 24, 5, 6, 0x3B); // add.uw
+        a.r(0b0010000, 2, 25, 5, 6, 0x33); // sh1add
+        a.r(0b0010000, 4, 26, 5, 6, 0x33); // sh2add
+        a.r(0b0010000, 6, 27, 5, 6, 0x33); // sh3add
+        a.r(0b0010000, 2, 8, 5, 6, 0x3B); // sh1add.uw
+        a.r(0b0010000, 4, 9, 5, 6, 0x3B); // sh2add.uw
+        a.r(0b0010000, 6, 10, 5, 6, 0x3B); // sh3add.uw
+        a.r(0b0000101, 4, 11, 5, 6, 0x33); // min
+        a.r(0b0000101, 5, 12, 5, 6, 0x33); // minu
+        a.r(0b0000101, 6, 13, 5, 6, 0x33); // max
+        a.r(0b0000101, 7, 14, 5, 6, 0x33); // maxu
+        a.r(0b0010100, 1, 15, 5, 6, 0x33); // bset
+        a.r(0b0100100, 1, 16, 5, 6, 0x33); // bclr (f3=001)
+        a.r(0b0110100, 1, 17, 5, 6, 0x33); // binv
+        a.r(0b0100100, 5, 18, 5, 6, 0x33); // bext
+        // ---- clmul family (host helper path)
+        a.r(0b0000101, 1, 19, 5, 6, 0x33); // clmul
+        a.r(0b0000101, 3, 20, 5, 6, 0x33); // clmulh
+        a.r(0b0000101, 2, 21, 5, 6, 0x33); // clmulr
+        li(&mut a, 10, 0); // a0 = 0: empty output at the sentinel return
         a.ret();
-        let mut c = container_for(a.finish());
-        c.isa_profile = CALC_ISA_RV64IMCB;
-        let module = verify_container(&c).expect("profile-2 verifies");
-        assert!(aot_compile(&module).is_none(), "Zbb must fall back to the interpreter");
-        let mut c1 = c.clone();
-        c1.isa_profile = CALC_ISA_RV64IMC;
-        assert!(verify_container(&c1).is_err(), "profile 1 must reject Zbb");
+        let code = a.finish();
+        let (_, ok) = diff("zbb_zbc_full", &code, &[], 1_000_000);
+        assert!(ok, "zbb/zbc program must return cleanly");
     }
+
+    /// Mounted-engine equivalence through the full HVM gas path: the same
+    /// `CalcFnObj` run with and without the AOT mount must produce the
+    /// identical `CalcExec` (result, cycles, resource) on success, OOG and
+    /// trap cases — the mountability guarantee in one test.
+    #[test]
+    fn mounted_object_gas_path_equivalence() {
+        use crate::calc::{CalcFnObj, CalcRunLimits};
+        // loop kernel for OOG/trap coverage + a clean echo kernel
+        let mut a = Asm::new();
+        li(&mut a, 6, 40);
+        li(&mut a, 5, 0);
+        let lp = a.i(0, 5, 5, 0x13, 1);
+        a.b(1, 5, 6, lp);
+        li(&mut a, 10, 0);
+        a.ret();
+        let loop_code = a.finish();
+        let mut a = Asm::new();
+        li(&mut a, 10, 0);
+        a.ret();
+        let echo_code = a.finish();
+        for (name, code) in [("loop", &loop_code), ("echo", &echo_code)] {
+            let plain = CalcFnObj::build(container_for(code.clone())).unwrap();
+            let mounted = CalcFnObj::build_with_aot(container_for(code.clone())).unwrap();
+            assert!(mounted.aot_mounted(), "{name}: AOT must mount");
+            for budget in [0u64, 4, 64, 300, 10_000] {
+                let limits = CalcRunLimits {
+                    cycles: budget,
+                    resource: i64::MAX,
+                    value_size: usize::MAX,
+                    deadline: None,
+                };
+                let e1 = plain.run(&[], limits);
+                let e2 = mounted.run(&[], limits);
+                assert_eq!(e1.cycles_used, e2.cycles_used, "{name}@{budget}: cycles");
+                assert_eq!(e1.resource, e2.resource, "{name}@{budget}: resource");
+                assert_eq!(
+                    e1.result.is_ok(),
+                    e2.result.is_ok(),
+                    "{name}@{budget}: outcome class"
+                );
+                if let (Ok(o1), Ok(o2)) = (&e1.result, &e2.result) {
+                    assert_eq!(o1, o2, "{name}@{budget}: output");
+                }
+            }
+        }
+    }
+
+    /// Micro differentials: one Zbb instruction at a time against fresh
+    /// sources, so a divergence pins the exact emission (a full-program
+    /// run only shows the downstream register mismatch).
+    #[test]
+    fn zbb_micro_parity() {
+        let cases: &[(&str, fn(&mut Asm))] = &[
+            ("bset", |a: &mut Asm| {
+                a.r(0b0010100, 1, 28, 5, 6, 0x33);
+            }),
+            ("bclr", |a: &mut Asm| {
+                a.r(0b0100100, 1, 28, 5, 6, 0x33);
+            }),
+            ("binv", |a: &mut Asm| {
+                a.r(0b0110100, 1, 28, 5, 6, 0x33);
+            }),
+            ("bext", |a: &mut Asm| {
+                a.r(0b0100100, 5, 28, 5, 6, 0x33);
+            }),
+            ("min", |a: &mut Asm| {
+                a.r(0b0000101, 4, 28, 5, 6, 0x33);
+            }),
+            ("minu", |a: &mut Asm| {
+                a.r(0b0000101, 5, 28, 5, 6, 0x33);
+            }),
+            ("max", |a: &mut Asm| {
+                a.r(0b0000101, 6, 28, 5, 6, 0x33);
+            }),
+            ("maxu", |a: &mut Asm| {
+                a.r(0b0000101, 7, 28, 5, 6, 0x33);
+            }),
+            ("rol", |a: &mut Asm| {
+                a.r(0b0110000, 1, 28, 5, 6, 0x33);
+            }),
+            ("ror", |a: &mut Asm| {
+                a.r(0b0110000, 5, 28, 5, 6, 0x33);
+            }),
+            ("andn", |a: &mut Asm| {
+                a.r(0b0100000, 7, 28, 5, 6, 0x33);
+            }),
+            ("xnor", |a: &mut Asm| {
+                a.r(0b0100000, 4, 28, 5, 6, 0x33);
+            }),
+            ("sh1add", |a: &mut Asm| {
+                a.r(0b0010000, 2, 28, 5, 6, 0x33);
+            }),
+            ("clmul", |a: &mut Asm| {
+                a.r(0b0000101, 1, 28, 5, 6, 0x33);
+            }),
+        ];
+        for (name, emit) in cases {
+            let mut a = Asm::new();
+            a.u(5, 0x37, 0x80000);
+            a.i(0, 5, 5, 0x13, 13); // t0 = 0xFFFFFFFF8000000D
+            a.u(6, 0x37, 0xDEADB); // t1 = 0x00000000DEADB000
+            emit(&mut a);
+            li(&mut a, 10, 0);
+            a.ret();
+            let code = a.finish();
+            let (_, ok) = diff(&format!("micro_{name}"), &code, &[], 100_000);
+            assert!(ok, "micro_{name} must return cleanly");
+        }
+    }
+
+    /// The unalu host helper must mirror the interpreter's unary semantics
+    /// on representative values (0, 1, all-ones, mixed bytes).
+    #[test]
+    fn unalu_helper_matches_reference() {
+        let vals = [
+            0u64,
+            1,
+            u64::MAX,
+            0x00FF_00FF_00FF_00FF,
+            0x8000_0000_0000_0000,
+            0x0000_0000_DEAD_BEEF,
+            0xFFFF_0000_0000_0001,
+        ];
+        for v in vals {
+            assert_eq!(unalu_helper_op(0, v), v.leading_zeros() as u64, "clz {v:#x}");
+            assert_eq!(unalu_helper_op(1, v), v.trailing_zeros() as u64, "ctz {v:#x}");
+            assert_eq!(unalu_helper_op(2, v), v.count_ones() as u64, "cpop {v:#x}");
+            assert_eq!(unalu_helper_op(3, v), v as i8 as i64 as u64, "sextb {v:#x}");
+            assert_eq!(unalu_helper_op(4, v), v as i16 as i64 as u64, "sexth {v:#x}");
+            assert_eq!(unalu_helper_op(5, v), v & 0xFFFF, "zexth {v:#x}");
+            assert_eq!(unalu_helper_op(7, v), v.swap_bytes(), "rev8 {v:#x}");
+            assert_eq!(unalu_helper_op(8, v), (v as u32).leading_zeros() as u64, "clzw {v:#x}");
+            assert_eq!(unalu_helper_op(9, v), (v as u32).trailing_zeros() as u64, "ctzw {v:#x}");
+            assert_eq!(unalu_helper_op(10, v), (v as u32).count_ones() as u64, "cpopw {v:#x}");
+        }
+    }
+
 
     /// One program touching every profile-1 instruction class: both engines
     /// must agree on the full stop-state. Stores/loads anchor at `sp` with
@@ -1937,13 +2393,14 @@ mod tests {
         let _ = idx_hint;
         for k in 0..n {
             *seed = xs(*seed);
-            let mut class = (*seed % 14) as u32;
+            let mut class = (*seed % 17) as u32;
             if tame {
                 // tame set: ALU/shift/branch-forward/safe-memory only
                 class = match class {
                     0 | 1 | 2 | 3 | 4 | 5 | 6 => class,
                     7 | 8 => class, // safe anchors below
                     9 => 9,         // forward-only targets below
+                    14 => 14,       // zbb reg-form ops are tame
                     _ => 5,         // regalu
                 };
             }
@@ -2075,6 +2532,63 @@ mod tests {
                 }
                 12 => {
                     a.raw(0x0FF0_000F); // fence
+                }
+                // Zbb/Zbc register forms (single unified ISA): the ratified
+                // (funct7, funct3, opcode) tuples from the decoder tables.
+                14 => {
+                    let table: [(u32, u32, u32); 25] = [
+                        (0b0100000, 0b100, 0x33), // xnor
+                        (0b0100000, 0b110, 0x33), // orn
+                        (0b0100000, 0b111, 0x33), // andn
+                        (0b0110000, 0b001, 0x33), // rol
+                        (0b0110000, 0b101, 0x33), // ror
+                        (0b0000101, 0b001, 0x33), // clmul
+                        (0b0000101, 0b010, 0x33), // clmulr
+                        (0b0000101, 0b011, 0x33), // clmulh
+                        (0b0000101, 0b100, 0x33), // min
+                        (0b0000101, 0b101, 0x33), // minu
+                        (0b0000101, 0b110, 0x33), // max
+                        (0b0000101, 0b111, 0x33), // maxu
+                        (0b0010000, 0b010, 0x33), // sh1add
+                        (0b0010000, 0b100, 0x33), // sh2add
+                        (0b0010000, 0b110, 0x33), // sh3add
+                        (0b0100100, 0b001, 0x33), // bclr
+                        (0b0100100, 0b101, 0x33), // bext
+                        (0b0010100, 0b001, 0x33), // bset
+                        (0b0110100, 0b001, 0x33), // binv
+                        (0b0000100, 0b000, 0x3B), // add.uw
+                        (0b0010000, 0b010, 0x3B), // sh1add.uw
+                        (0b0110000, 0b001, 0x3B), // rolw
+                        (0b0110000, 0b101, 0x3B), // rorw
+                        (0b0110000, 1, 0x13),     // clz/ctz/cpop/sext selectors
+                        (0b0110101, 0b101, 0x13), // rev8 space
+                    ];
+                    *seed = xs(*seed);
+                    let (f7, f3, op) = table[(*seed % 25) as usize];
+                    let rs2 = if op == 0x13 && f7 == 0b0110000 {
+                        // clz/ctz/cpop/sext.b/sext.h selectors (3 reserved)
+                        [0u8, 1, 2, 4, 5][(*seed % 5) as usize]
+                    } else if op == 0x13 && f7 == 0b0110101 {
+                        0b11000
+                    } else {
+                        rr(seed)
+                    };
+                    a.r(f7, f3, rd_of(seed), rr(seed), rs2, op);
+                }
+                // Zbb immediate forms: rori / bseti / bclri / binvi / bexti / slli.uw
+                15 => {
+                    *seed = xs(*seed);
+                    let (f6, f3, op) = match *seed % 6 {
+                        0 => (0b011000u32, 0b101u32, 0x13u32), // rori
+                        1 => (0b001010, 0b001, 0x13),          // bseti
+                        2 => (0b010010, 0b010, 0x13),          // bclri
+                        3 => (0b011010, 0b011, 0x13),          // binvi
+                        4 => (0b010010, 0b101, 0x13),          // bexti
+                        _ => (0b000010, 0b001, 0x1B),          // slli.uw
+                    };
+                    *seed = xs(*seed);
+                    let shamt = (*seed % 64) as u8;
+                    a.sh(f6, f3, rd_of(seed), rr(seed), shamt, op);
                 }
                 _ => {
                     *seed = xs(*seed);

@@ -2,7 +2,7 @@
 //! encodings decode.
 //!
 //! Decodes one instruction at `off` in the code stream into an executable
-//! `Inst`. The `isa_b` flag (container `isa_profile == 2`) additionally
+//! `Inst`.
 //! enables the ratified Zbb/Zbc bit-manipulation set. Branch/JAL immediates
 //! stay byte-relative here; the verifier (`verify.rs`) resolves them to
 //! absolute in-container targets. Encoding reference: RISC-V unprivileged
@@ -216,8 +216,9 @@ fn sext(v: u32, sign_bit: u32) -> i64 {
 }
 
 /// Decode the instruction at `off`. Returns the instruction and its encoded
-/// length in bytes (2 or 4). `isa_b` enables the Zbb/Zbc subset.
-pub fn decode_at(code: &[u8], off: usize, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
+/// length in bytes (2 or 4). The instruction set is the single
+/// RV64IMC+Zbb+Zbc profile (no versioning: the channel predates activation).
+pub fn decode_at(code: &[u8], off: usize) -> Result<(Inst, u32), ItrErr> {
     if off + 2 > code.len() {
         return Err(bad("calc decode: truncated instruction"));
     }
@@ -229,11 +230,11 @@ pub fn decode_at(code: &[u8], off: usize, isa_b: bool) -> Result<(Inst, u32), It
             return Err(bad("calc decode: truncated 32-bit instruction"));
         }
         let w = u32::from_le_bytes([code[off], code[off + 1], code[off + 2], code[off + 3]]);
-        decode_32(w, isa_b)
+        decode_32(w)
     }
 }
 
-fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
+fn decode_32(w: u32) -> Result<(Inst, u32), ItrErr> {
     let opcode = w & 0x7f;
     let rd = bits(w, 11, 7) as u8;
     let funct3 = bits(w, 14, 12);
@@ -313,19 +314,19 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
                     shamt: bits(w, 25, 20) as u8,
                     word: false,
                 },
-                0b001010 if isa_b => Inst::BitImm {
+                0b001010 => Inst::BitImm {
                     op: BitImmOp::Set,
                     rd,
                     rs1,
                     shamt: bits(w, 25, 20) as u8,
                 },
-                0b010010 if isa_b => Inst::BitImm {
+                0b010010 => Inst::BitImm {
                     op: BitImmOp::Clr,
                     rd,
                     rs1,
                     shamt: bits(w, 25, 20) as u8,
                 },
-                0b011010 if isa_b => Inst::BitImm {
+                0b011010 => Inst::BitImm {
                     op: BitImmOp::Inv,
                     rd,
                     rs1,
@@ -333,7 +334,7 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
                 },
                 // clz/ctz/cpop/sext.b/sext.h: funct7 == 0110000, selector in
                 // the rs2 field.
-                0b011000 if isa_b && bits(w, 25, 25) == 0 => {
+                0b011000 if bits(w, 25, 25) == 0 => {
                     let op = match rs2 {
                         0 => UnAluOp::Clz,
                         1 => UnAluOp::Ctz,
@@ -361,7 +362,7 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
                     shamt: bits(w, 25, 20) as u8,
                     word: false,
                 },
-                0b011000 if isa_b => Inst::ShiftImm {
+                0b011000 => Inst::ShiftImm {
                     kind: ShiftKind::Ror,
                     rd,
                     rs1,
@@ -369,18 +370,18 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
                     word: false,
                 },
                 // bexti: funct6 == 010010, 6-bit shamt
-                0b010010 if isa_b => Inst::BitImm {
+                0b010010 => Inst::BitImm {
                     op: BitImmOp::Ext,
                     rd,
                     rs1,
                     shamt: bits(w, 25, 20) as u8,
                 },
                 // orc.b: funct7 == 0010100, rs2 == 00111
-                0b001010 if isa_b && bits(w, 25, 25) == 0 && rs2 == 0b00111 => {
+                0b001010 if bits(w, 25, 25) == 0 && rs2 == 0b00111 => {
                     Inst::UnAlu { op: UnAluOp::Orcb, rd, rs1 }
                 }
                 // rev8 (RV64): funct7 == 0110101, rs2 == 11000
-                0b011010 if isa_b && bits(w, 25, 25) == 1 && rs2 == 0b11000 => {
+                0b011010 if bits(w, 25, 25) == 1 && rs2 == 0b11000 => {
                     Inst::UnAlu { op: UnAluOp::Rev8, rd, rs1 }
                 }
                 _ => return Err(bad("calc decode: srli/srai/rori funct6")),
@@ -398,9 +399,9 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
                     word: true,
                 },
                 // slli.uw: funct6 == 000010, 6-bit shamt
-                0b000010 if isa_b => Inst::Slliuw { rd, rs1, shamt: bits(w, 25, 20) as u8 },
+                0b000010 => Inst::Slliuw { rd, rs1, shamt: bits(w, 25, 20) as u8 },
                 // clzw/ctzw/cpopw: funct7 == 0110000
-                0b011000 if isa_b && bits(w, 25, 25) == 0 => {
+                0b011000 if bits(w, 25, 25) == 0 => {
                     let op = match rs2 {
                         0 => UnAluOp::Clzw,
                         1 => UnAluOp::Ctzw,
@@ -419,7 +420,7 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
                     Inst::ShiftImm { kind: ShiftKind::Sra, rd, rs1, shamt: bits(w, 24, 20) as u8, word: true }
                 }
                 // roriw: 5-bit shamt
-                0b0110000 if isa_b => Inst::ShiftImm {
+                0b0110000 => Inst::ShiftImm {
                     kind: ShiftKind::Ror,
                     rd,
                     rs1,
@@ -432,7 +433,7 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
         },
         0b0110011 => {
             // Base + M table first; the Zbb/Zbc table is only reachable
-            // under isa_b.
+            // (always enabled).
             if let Some(op) = match (funct7, funct3) {
                 (0b0000000, 0) => Some(RegAluOp::Add),
                 (0b0000000, 1) => Some(RegAluOp::Sll),
@@ -455,7 +456,7 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
                 _ => None,
             } {
                 Inst::RegAlu { op, rd, rs1, rs2 }
-            } else if isa_b {
+            } else {
                 match (funct7, funct3) {
                     (0b0100000, 0b100) => Inst::RegAlu { op: RegAluOp::Xnor, rd, rs1, rs2 },
                     (0b0100000, 0b110) => Inst::RegAlu { op: RegAluOp::Orn, rd, rs1, rs2 },
@@ -480,8 +481,6 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
                     (0b0000100, 0b100) if rs2 == 0 => Inst::UnAlu { op: UnAluOp::Zexth, rd, rs1 },
                     _ => return Err(bad("calc decode: op funct7/funct3")),
                 }
-            } else {
-                return Err(bad("calc decode: op funct7/funct3"));
             }
         }
         0b0111011 => {
@@ -514,7 +513,7 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
                     other => other,
                 };
                 Inst::RegAlu { op, rd, rs1, rs2 }
-            } else if isa_b {
+            } else {
                 match (funct7, funct3) {
                     (0b0000100, 0b000) => Inst::RegAlu { op: RegAluOp::Adduw, rd, rs1, rs2 },
                     (0b0010000, 0b010) => Inst::RegAlu { op: RegAluOp::Sh1adduw, rd, rs1, rs2 },
@@ -524,8 +523,6 @@ fn decode_32(w: u32, isa_b: bool) -> Result<(Inst, u32), ItrErr> {
                     (0b0110000, 0b101) => Inst::RegAlu { op: RegAluOp::Rorw, rd, rs1, rs2 },
                     _ => return Err(bad("calc decode: op-32 funct7/funct3")),
                 }
-            } else {
-                return Err(bad("calc decode: op-32 funct7/funct3"));
             }
         }
         0b0001111 => {
@@ -844,7 +841,7 @@ mod zbb_tests {
     }
 
     fn dec(w: u32) -> Inst {
-        decode_32(w, true).unwrap().0
+        decode_32(w).unwrap().0
     }
 
     #[test]
@@ -876,8 +873,6 @@ mod zbb_tests {
                 Inst::RegAlu { op: want, rd: 3, rs1: 4, rs2: 5 },
                 "f7={f7:07b} f3={f3:03b}"
             );
-            // Profile 1 must reject the same word.
-            assert!(decode_32(r_word(f7, f3, 3, 4, 5, op), false).is_err());
         }
         // OP-32 W forms.
         for (f7, f3, want) in [
@@ -901,7 +896,7 @@ mod zbb_tests {
         let w = r_word(0b0000100, 0b100, 3, 4, 0, 0b0110011);
         assert_eq!(dec(w), Inst::UnAlu { op: UnAluOp::Zexth, rd: 3, rs1: 4 });
         let w_bad = r_word(0b0000100, 0b100, 3, 4, 1, 0b0110011);
-        assert!(decode_32(w_bad, true).is_err());
+        assert!(decode_32(w_bad).is_err());
     }
 
     #[test]
@@ -964,15 +959,15 @@ mod zbb_tests {
     fn fence_decodes_but_fence_i_rejected() {
         assert_eq!(dec(0x0FF0_000F), Inst::Fence);
         // fence.i: funct3 = 1 (Zifencei) stays outside the whitelist.
-        assert!(decode_32(0x0000_100F, true).is_err());
-        assert!(decode_32(0x0000_100F, false).is_err());
+        assert!(decode_32(0x0000_100F).is_err());
+        assert!(decode_32(0x0000_100F).is_err());
     }
 
     #[test]
     fn reserved_zbb_selectors_rejected() {
         // clz table with rs2 = 3 (reserved).
-        assert!(decode_32(r_word(0b0110000, 0b001, 3, 4, 3, 0b0010011), true).is_err());
+        assert!(decode_32(r_word(0b0110000, 0b001, 3, 4, 3, 0b0010011)).is_err());
         // clz table with funct7 bit 25 set (reserved).
-        assert!(decode_32(r_word(0b0110001, 0b001, 3, 4, 0, 0b0010011), true).is_err());
+        assert!(decode_32(r_word(0b0110001, 0b001, 3, 4, 0, 0b0010011)).is_err());
     }
 }

@@ -20,16 +20,6 @@ use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
 
 pub const CALC_MAGIC: [u8; 4] = *b"HCF1";
 pub const CALC_VERSION: u8 = 1;
-/// ISA profile 1: RV64IMC (integer base + M + compressed; no A/F/CSR).
-pub const CALC_ISA_RV64IMC: u8 = 1;
-/// ISA profile 2: RV64IMC + Zbb + Zbc (bit-manipulation, ratified 2021).
-///
-/// Coexistence policy (mirrors CKB RFC 0032 "only add, never retire"):
-/// a profile stays acceptable forever once shipped; new profiles are
-/// introduced under a fresh number and gated by their own activation window.
-pub const CALC_ISA_RV64IMCB: u8 = 2;
-/// All ISA profile values accepted by this build.
-pub const CALC_ISA_KNOWN: [u8; 2] = [CALC_ISA_RV64IMC, CALC_ISA_RV64IMCB];
 /// ABI 1: bytes -> bytes (single input byte string, single output byte string).
 pub const CALC_ABI_BYTES_TO_BYTES: u8 = 1;
 
@@ -64,9 +54,7 @@ pub struct CalcLayout {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalcContainer {
-    pub isa_profile: u8,
     pub abi: u8,
-    pub fncnf: u8,
     pub mem_kib: u16,
     pub entry: u32,
     pub code: Vec<u8>,
@@ -76,34 +64,15 @@ pub struct CalcContainer {
     pub output_max: u16,
 }
 
-/// fncnf extension bits valid for v1: bit0 must be set, bit1
-/// marks C-extension presence; all others reserved-zero.
-const FNCNF_KNOWN: u8 = 0b0000_0011;
-const FNCNF_ENABLED: u8 = 0b0000_0001;
-const FNCNF_HAS_C: u8 = 0b0000_0010;
-
 impl CalcContainer {
-    pub fn fncnf_has_c(&self) -> bool {
-        self.fncnf & FNCNF_HAS_C != 0
-    }
-
     /// Header invariants shared by the wire decoder, the packer and the
     /// deploy-time verifier. `verify_container` calls this so a directly
     /// constructed container cannot bypass the header checks that `decode`
     /// performs on wire input.
     pub(crate) fn validate_header(&self) -> VmrtRes<()> {
         let err = |t: &str| ItrErr::new(ItrErrCode::ContractError, t);
-        if !CALC_ISA_KNOWN.contains(&self.isa_profile) {
-            return Err(err("calc container isa profile unsupported"));
-        }
         if self.abi != CALC_ABI_BYTES_TO_BYTES {
             return Err(err("calc container abi unsupported"));
-        }
-        if self.fncnf & !FNCNF_KNOWN != 0
-            || self.fncnf & FNCNF_ENABLED == 0
-            || self.fncnf & FNCNF_HAS_C == 0
-        {
-            return Err(err("calc container fncnf invalid"));
         }
         if !(CALC_MEM_KIB_MIN..=CALC_MEM_KIB_MAX).contains(&self.mem_kib) {
             return Err(err("calc container mem_kib out of range"));
@@ -165,9 +134,9 @@ impl CalcContainer {
         let mut out = Vec::with_capacity(capacity);
         out.extend_from_slice(&CALC_MAGIC);
         out.push(CALC_VERSION);
-        out.push(self.isa_profile);
+        out.push(0); // reserved (former isa-profile byte; single ISA now)
         out.push(self.abi);
-        out.push(self.fncnf);
+        out.push(0); // reserved (former fncnf byte)
         out.extend_from_slice(&self.mem_kib.to_be_bytes());
         out.extend_from_slice(&self.entry.to_be_bytes());
         out.extend_from_slice(&code_len.to_be_bytes());
@@ -193,16 +162,14 @@ impl CalcContainer {
         if bytes[4] != CALC_VERSION {
             return Err(err("calc container version mismatch"));
         }
-        let isa_profile = bytes[5];
-        if !CALC_ISA_KNOWN.contains(&isa_profile) {
-            return Err(err("calc container isa profile unsupported"));
+        if bytes[5] != 0 {
+            return Err(err("calc container reserved header byte 5 must be zero"));
         }
         if bytes[6] != CALC_ABI_BYTES_TO_BYTES {
             return Err(err("calc container abi unsupported"));
         }
-        let fncnf = bytes[7];
-        if fncnf & !FNCNF_KNOWN != 0 || fncnf & FNCNF_ENABLED == 0 || fncnf & FNCNF_HAS_C == 0 {
-            return Err(err("calc container fncnf invalid"));
+        if bytes[7] != 0 {
+            return Err(err("calc container reserved header byte 7 must be zero"));
         }
         let mem_kib = u16::from_be_bytes([bytes[8], bytes[9]]);
         if !(CALC_MEM_KIB_MIN..=CALC_MEM_KIB_MAX).contains(&mem_kib) {
@@ -236,9 +203,7 @@ impl CalcContainer {
             return Err(err("calc container io size invalid"));
         }
         let c = CalcContainer {
-            isa_profile,
             abi: bytes[6],
-            fncnf,
             mem_kib,
             entry,
             code: payload[..code_len].to_vec(),

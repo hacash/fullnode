@@ -21,11 +21,24 @@ pub mod verify;
 #[cfg(feature = "calc-aot")]
 pub mod aot;
 
+// Tests live in the git-ignored `calc.loc/` sibling directory (business-local
+// scaffolding, not part of the committed feature); `#[path]` keeps them
+// compiled and runnable from this tree.
+#[cfg(test)]
+#[path = "../calc.loc/tests.rs"]
+mod loc_tests;
+
 use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
 
-/// Exchange rate: 1 compute = N cycles. Provisional 4; to be re-measured
-/// and locked (e.g. 32 for the AOT-era equivalence point) before activation.
-pub const CYCLES_PER_COMPUTE: u64 = 4;
+/// Exchange rate: 1 compute = N cycles. CONSENSUS CONSTANT: changing this
+/// value changes gas results and is a hard fork — do not touch after
+/// activation. Calibration (measured 2026-10-29, hacd-bench.loc): HVM work
+/// costs ~45-70 ns per compute; AOT-executed calc cycles cost ~0.8 ns each,
+/// so strict wall-time parity would sit at N ≈ 55-90. N = 32 is the
+/// deliberate conservative end (~1.7-2.8x premium for calc vs HVM per unit
+/// of host time), and keeps the batch use case inside the mainnet compute
+/// bucket with ~52% headroom (200 scores = 8,686 compute).
+pub const CYCLES_PER_COMPUTE: u64 = 32;
 
 /// Resource charged per declared KiB of calc memory (input bytes, output
 /// bytes and declared memory are the only resource charges on the calc path).
@@ -170,17 +183,70 @@ pub struct CalcRunLimits {
 }
 
 /// A verified calc function attached to a contract (built once at load).
-#[derive(Debug, Clone)]
 pub struct CalcFnObj {
     container: container::CalcContainer,
     module: verify::CalcModule,
+    /// Node-local mountable AOT engine (`calc-aot` feature only). `None`
+    /// keeps the pure interpreter; when mounted, `run` executes the same
+    /// container through translated native code with bit-identical outputs,
+    /// cycles and abort classes (pinned by the `aot` differential suite),
+    /// so gas and state results are unchanged. This is a HOST performance
+    /// choice exactly like the contract cache — never a consensus switch.
+    #[cfg(feature = "calc-aot")]
+    aot: Option<aot::AotFunc>,
+}
+
+impl Clone for CalcFnObj {
+    fn clone(&self) -> Self {
+        // Clones drop the AOT image: the RX mapping embeds absolute
+        // pointers to its own tables and must not be duplicated. A clone
+        // executes on the interpreter, which the differential suite pins
+        // to identical results — same semantics, host detail only.
+        Self {
+            container: self.container.clone(),
+            module: self.module.clone(),
+            #[cfg(feature = "calc-aot")]
+            aot: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for CalcFnObj {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CalcFnObj")
+            .field("container", &self.container)
+            .field("module", &"<verified>")
+            .finish()
+    }
 }
 
 impl CalcFnObj {
     /// Verify a container and build the executable object (deploy + load).
+    /// The consensus default: pure interpreter, no AOT.
     pub fn build(c: container::CalcContainer) -> VmrtRes<Self> {
         let module = verify::verify_container(&c)?;
-        Ok(Self { container: c, module })
+        Ok(Self {
+            container: c,
+            module,
+            #[cfg(feature = "calc-aot")]
+            aot: None,
+        })
+    }
+
+    /// `build` plus a best-effort AOT translation (host performance only).
+    /// Containers the backend declines (currently `ecall`-bearing ones)
+    /// simply stay on the interpreter — the mount degrades gracefully.
+    #[cfg(feature = "calc-aot")]
+    pub fn build_with_aot(c: container::CalcContainer) -> VmrtRes<Self> {
+        let module = verify::verify_container(&c)?;
+        let aot = aot::aot_compile(&module);
+        Ok(Self { container: c, module, aot })
+    }
+
+    /// Whether an AOT image is mounted on this object.
+    #[cfg(feature = "calc-aot")]
+    pub fn aot_mounted(&self) -> bool {
+        self.aot.is_some()
     }
 
     /// Run with the HVM gas rules; never touches host state.
@@ -219,6 +285,38 @@ impl CalcFnObj {
                 result: Err(CalcAbort2::OutOfGas),
                 cycles_used: limits.cycles,
                 resource: in_res + mem_res,
+            };
+        }
+        // Mounted AOT engine (host performance only): identical outputs,
+        // cycle totals and abort classes to the interpreter — the resource
+        // accounting below is shared, so gas results cannot differ.
+        #[cfg(feature = "calc-aot")]
+        if let Some(aot) = self.aot.as_ref() {
+            // `AotOutcome.cycles_used` carries the exact interpreter
+            // accounting on every stop path (the differential suite pins
+            // this, including OOG's exclude-the-failing-charge rule).
+            let (out, _regs, _mem) = aot.run_with_state(
+                &self.module,
+                &self.container,
+                input,
+                limits.cycles - setup,
+            );
+            let cycles_used = setup + out.cycles_used;
+            let result = match out.abort {
+                None => Ok(out.output.unwrap_or_default()),
+                Some(aot::AotAbort::OutOfGas) => Err(CalcAbort2::OutOfGas),
+                // Dynamic jump misses are traps, exactly like the
+                // interpreter's "jalr to invalid target".
+                Some(aot::AotAbort::BadTarget | aot::AotAbort::Trap) => Err(CalcAbort2::Trap),
+            };
+            let out_res = match &result {
+                Ok(o) => ceil_div(o.len() as u64, 16) as i64,
+                Err(_) => 0,
+            };
+            return CalcExec {
+                result,
+                cycles_used,
+                resource: in_res + out_res + mem_res,
             };
         }
         let exec = interp::run(
@@ -265,7 +363,6 @@ pub(crate) fn ceil_div(a: u64, b: u64) -> u64 {
 /// before `.rodata` — keep them in sync), `init` optional initialized
 /// writable data.
 pub fn pack_container(
-    isa_profile: u8,
     mem_kib: u16,
     entry: u32,
     input_max: u16,
@@ -275,9 +372,7 @@ pub fn pack_container(
     init: Vec<u8>,
 ) -> VmrtRes<container::CalcContainer> {
     let c = container::CalcContainer {
-        isa_profile,
         abi: container::CALC_ABI_BYTES_TO_BYTES,
-        fncnf: 0b11,
         mem_kib,
         entry,
         code,
