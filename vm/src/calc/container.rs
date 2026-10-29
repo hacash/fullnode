@@ -2,13 +2,19 @@
 //! header + code + rodata + initialized data.
 //!
 //! Memory image carried by the container:
-//! - `code`: RV64IMC instruction stream — decoded and priced by the
+//! - `code`: RV64IMC(+Zbb/Zbc) instruction stream — decoded and priced by the
 //!   verifier, executable, read-only at runtime.
 //! - `rodata`: constant data (lookup tables etc.), kept adjacent to code so
 //!   position-relative addressing (`auipc`) stays valid. Readable, but
 //!   non-executable (jump targets must stay inside `code`) and read-only.
 //! - `init`: initialized writable data, loaded at the 16-byte-aligned
 //!   `data_base`.
+//!
+//! There is deliberately no checksum field: the container bytes are already
+//! committed by consensus once deployed (EVM/CKB-VM carry no container
+//! checksums either), and a CRC would only add deploy-time cost without
+//! authenticity. The two trailing header bytes are reserved-must-be-zero for
+//! future minor fields.
 
 use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
 
@@ -16,6 +22,14 @@ pub const CALC_MAGIC: [u8; 4] = *b"HCF1";
 pub const CALC_VERSION: u8 = 1;
 /// ISA profile 1: RV64IMC (integer base + M + compressed; no A/F/CSR).
 pub const CALC_ISA_RV64IMC: u8 = 1;
+/// ISA profile 2: RV64IMC + Zbb + Zbc (bit-manipulation, ratified 2021).
+///
+/// Coexistence policy (mirrors CKB RFC 0032 "only add, never retire"):
+/// a profile stays acceptable forever once shipped; new profiles are
+/// introduced under a fresh number and gated by their own activation window.
+pub const CALC_ISA_RV64IMCB: u8 = 2;
+/// All ISA profile values accepted by this build.
+pub const CALC_ISA_KNOWN: [u8; 2] = [CALC_ISA_RV64IMC, CALC_ISA_RV64IMCB];
 /// ABI 1: bytes -> bytes (single input byte string, single output byte string).
 pub const CALC_ABI_BYTES_TO_BYTES: u8 = 1;
 
@@ -79,7 +93,7 @@ impl CalcContainer {
     /// performs on wire input.
     pub(crate) fn validate_header(&self) -> VmrtRes<()> {
         let err = |t: &str| ItrErr::new(ItrErrCode::ContractError, t);
-        if self.isa_profile != CALC_ISA_RV64IMC {
+        if !CALC_ISA_KNOWN.contains(&self.isa_profile) {
             return Err(err("calc container isa profile unsupported"));
         }
         if self.abi != CALC_ABI_BYTES_TO_BYTES {
@@ -141,8 +155,8 @@ impl CalcContainer {
             .map_err(|_| err("calc container code length exceeds u32"))?;
         let init_len = u32::try_from(self.init.len())
             .map_err(|_| err("calc container init length exceeds u32"))?;
-        let rodata_len = u16::try_from(self.rodata.len())
-            .map_err(|_| err("calc container rodata length exceeds u16"))?;
+        let rodata_len = u32::try_from(self.rodata.len())
+            .map_err(|_| err("calc container rodata length exceeds u32"))?;
         let capacity = HEADER_LEN
             .checked_add(self.code.len())
             .and_then(|n| n.checked_add(self.rodata.len()))
@@ -161,12 +175,10 @@ impl CalcContainer {
         out.extend_from_slice(&self.input_max.to_be_bytes());
         out.extend_from_slice(&self.output_max.to_be_bytes());
         out.extend_from_slice(&rodata_len.to_be_bytes());
-        out.extend_from_slice(&0u32.to_be_bytes()); // crc filled below
+        out.extend_from_slice(&0u16.to_be_bytes()); // reserved, must stay zero
         out.extend_from_slice(&self.code);
         out.extend_from_slice(&self.rodata);
         out.extend_from_slice(&self.init);
-        let crc = crc32(&out[HEADER_LEN..]);
-        out[28..32].copy_from_slice(&crc.to_be_bytes());
         Ok(out)
     }
 
@@ -181,7 +193,8 @@ impl CalcContainer {
         if bytes[4] != CALC_VERSION {
             return Err(err("calc container version mismatch"));
         }
-        if bytes[5] != CALC_ISA_RV64IMC {
+        let isa_profile = bytes[5];
+        if !CALC_ISA_KNOWN.contains(&isa_profile) {
             return Err(err("calc container isa profile unsupported"));
         }
         if bytes[6] != CALC_ABI_BYTES_TO_BYTES {
@@ -200,8 +213,10 @@ impl CalcContainer {
         let init_len = u32::from_be_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]) as usize;
         let input_max = u16::from_be_bytes([bytes[22], bytes[23]]);
         let output_max = u16::from_be_bytes([bytes[24], bytes[25]]);
-        let rodata_len = u16::from_be_bytes([bytes[26], bytes[27]]) as usize;
-        let crc = u32::from_be_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]);
+        let rodata_len = u32::from_be_bytes([bytes[26], bytes[27], bytes[28], bytes[29]]) as usize;
+        if bytes[30] != 0 || bytes[31] != 0 {
+            return Err(err("calc container reserved header bytes must be zero"));
+        }
         let total = HEADER_LEN
             .checked_add(code_len)
             .and_then(|t| t.checked_add(rodata_len))
@@ -214,9 +229,6 @@ impl CalcContainer {
             return Err(err("calc container trailing bytes"));
         }
         let payload = &bytes[HEADER_LEN..total];
-        if crc32(payload) != crc {
-            return Err(err("calc container crc mismatch"));
-        }
         if code_len == 0 || code_len % 2 != 0 {
             return Err(err("calc container code_len invalid"));
         }
@@ -224,7 +236,7 @@ impl CalcContainer {
             return Err(err("calc container io size invalid"));
         }
         let c = CalcContainer {
-            isa_profile: bytes[5],
+            isa_profile,
             abi: bytes[6],
             fncnf,
             mem_kib,
@@ -245,19 +257,4 @@ impl CalcContainer {
         }
         Ok((c, total))
     }
-}
-
-/// CRC-32 (IEEE 802.3, reflected) — integrity only, not a security hash.
-pub fn crc32(data: &[u8]) -> u32 {
-    // Small table-free implementation (bitwise, consensus-safe and
-    // architecture-independent).
-    let mut crc: u32 = 0xFFFF_FFFF;
-    for &b in data {
-        crc ^= b as u32;
-        for _ in 0..8 {
-            let mask = (crc & 1).wrapping_neg();
-            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
-        }
-    }
-    !crc
 }

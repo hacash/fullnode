@@ -1,4 +1,4 @@
-//! Pre-decoded RV64IMC interpreter.
+//! Pre-decoded RV64IMC(+Zbb/Zbc) interpreter.
 //!
 //! Executes a verified [`CalcModule`] over a freshly zeroed flat memory.
 //! Cycles are charged in full at basic-block entry (plus hash cost at each
@@ -7,7 +7,9 @@
 //! across runs and builds.
 
 use crate::calc::container::CalcContainer;
-use crate::calc::decode::{BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp};
+use crate::calc::decode::{
+    BitImmOp, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp, UnAluOp,
+};
 use crate::calc::verify::CalcModule;
 use crate::calc::{run_hash, HashKind, CALC_RETURN_SENTINEL};
 
@@ -185,12 +187,7 @@ fn run_inner(
                 StoreOp::Sw => b[..4].copy_from_slice(&(val as u32).to_le_bytes()),
                 StoreOp::Sd => b.copy_from_slice(&val.to_le_bytes()),
             }
-            let _ = size;
         }};
-    }
-    // W-suffix helper: sign-extend the low 32 bits.
-    fn sext32(v: u64) -> u64 {
-        (v as u32 as i32) as i64 as u64
     }
 
     'blocks: loop {
@@ -295,7 +292,7 @@ fn run_inner(
                             ImmAluOp::Xori => a ^ imm as u64,
                             ImmAluOp::Ori => a | imm as u64,
                             ImmAluOp::Andi => a & imm as u64,
-                            ImmAluOp::Addiw => sext32(a.wrapping_add(imm as u64)),
+                            ImmAluOp::Addiw => sext32_(a.wrapping_add(imm as u64)),
                         };
                         r[rd as usize] = v;
                     }
@@ -306,15 +303,17 @@ fn run_inner(
                         let v = if word {
                             let s = shamt & 31;
                             match kind {
-                                ShiftKind::Sll => sext32(a << s),
-                                ShiftKind::Srl => sext32(((a as u32) >> s) as u64),
-                                ShiftKind::Sra => sext32(((a as i32) >> s) as u64),
+                                ShiftKind::Sll => sext32_(a << s),
+                                ShiftKind::Srl => sext32_(((a as u32) >> s) as u64),
+                                ShiftKind::Sra => sext32_(((a as i32) >> s) as u64),
+                                ShiftKind::Ror => sext32_((a as u32).rotate_right(s as u32) as u64),
                             }
                         } else {
                             match kind {
                                 ShiftKind::Sll => a << shamt,
                                 ShiftKind::Srl => a >> shamt,
                                 ShiftKind::Sra => ((a as i64) >> shamt) as u64,
+                                ShiftKind::Ror => a.rotate_right(shamt as u32),
                             }
                         };
                         r[rd as usize] = v;
@@ -328,6 +327,55 @@ fn run_inner(
                         r[rd as usize] = v;
                     }
                 }
+                Inst::UnAlu { op, rd, rs1 } => {
+                    if rd != 0 {
+                        let a = r[rs1 as usize];
+                        let v = match op {
+                            UnAluOp::Clz => a.leading_zeros() as u64,
+                            UnAluOp::Ctz => a.trailing_zeros() as u64,
+                            UnAluOp::Cpop => a.count_ones() as u64,
+                            UnAluOp::Sextb => a as i8 as i64 as u64,
+                            UnAluOp::Sexth => a as i16 as i64 as u64,
+                            UnAluOp::Zexth => a & 0xFFFF,
+                            UnAluOp::Orcb => {
+                                let mut v = 0u64;
+                                for i in 0..8 {
+                                    if (a >> (i * 8)) & 0xFF != 0 {
+                                        v |= 0xFFu64 << (i * 8);
+                                    }
+                                }
+                                v
+                            }
+                            UnAluOp::Rev8 => a.swap_bytes(),
+                            UnAluOp::Clzw => (a as u32).leading_zeros() as u64,
+                            UnAluOp::Ctzw => (a as u32).trailing_zeros() as u64,
+                            UnAluOp::Cpopw => (a as u32).count_ones() as u64,
+                        };
+                        r[rd as usize] = v;
+                    }
+                }
+                Inst::BitImm { op, rd, rs1, shamt } => {
+                    if rd != 0 {
+                        let a = r[rs1 as usize];
+                        let mask = 1u64 << (shamt & 63);
+                        let v = match op {
+                            BitImmOp::Set => a | mask,
+                            BitImmOp::Clr => a & !mask,
+                            BitImmOp::Inv => a ^ mask,
+                            BitImmOp::Ext => (a >> (shamt & 63)) & 1,
+                        };
+                        r[rd as usize] = v;
+                    }
+                }
+                Inst::Slliuw { rd, rs1, shamt } => {
+                    if rd != 0 {
+                        let a = r[rs1 as usize] as u32 as u64;
+                        r[rd as usize] = a << (shamt & 63);
+                    }
+                }
+                // FENCE: ordering is meaningless on this single-hart,
+                // in-memory machine — execute as a no-op.
+                Inst::Fence => {}
                 Inst::Ecall => {
                     let kind = match HashKind::from_a7(r[17]) {
                         Some(k) => k,
@@ -356,9 +404,12 @@ fn run_inner(
                     if dst < lay.data_base {
                         trap!("calc ecall: digest into read-only region");
                     }
-                    let mut digest = vec![0u8; dlen as usize];
-                    run_hash(kind, &mem[src as usize..src_end as usize], &mut digest);
-                    mem[dst as usize..dst_end as usize].copy_from_slice(&digest);
+                    // Digest lengths are 20/32; a stack buffer avoids a heap
+                    // allocation per ecall.
+                    let mut buf = [0u8; 32];
+                    let digest = &mut buf[..dlen as usize];
+                    run_hash(kind, &mem[src as usize..src_end as usize], digest);
+                    mem[dst as usize..dst_end as usize].copy_from_slice(digest);
                     r[10] = 0;
                 }
             }
@@ -472,7 +523,46 @@ fn reg_alu(op: RegAluOp, a: u64, b: u64) -> u64 {
                 sext32_(((a as u32) % (b as u32)) as u64)
             }
         }
+        // ---- Zbb / Zbc ----
+        RegAluOp::Adduw => (a as u32 as u64).wrapping_add(b),
+        RegAluOp::Sh1add => (a << 1).wrapping_add(b),
+        RegAluOp::Sh2add => (a << 2).wrapping_add(b),
+        RegAluOp::Sh3add => (a << 3).wrapping_add(b),
+        RegAluOp::Sh1adduw => ((a as u32 as u64) << 1).wrapping_add(b),
+        RegAluOp::Sh2adduw => ((a as u32 as u64) << 2).wrapping_add(b),
+        RegAluOp::Sh3adduw => ((a as u32 as u64) << 3).wrapping_add(b),
+        RegAluOp::Andn => a & !b,
+        RegAluOp::Orn => a | !b,
+        RegAluOp::Xnor => !(a ^ b),
+        RegAluOp::Rol => a.rotate_left((b & 63) as u32),
+        RegAluOp::Ror => a.rotate_right((b & 63) as u32),
+        RegAluOp::Rolw => sext32_((a as u32).rotate_left((b & 31) as u32) as u64),
+        RegAluOp::Rorw => sext32_((a as u32).rotate_right((b & 31) as u32) as u64),
+        RegAluOp::Min => (a as i64).min(b as i64) as u64,
+        RegAluOp::Minu => a.min(b),
+        RegAluOp::Max => (a as i64).max(b as i64) as u64,
+        RegAluOp::Maxu => a.max(b),
+        RegAluOp::Bset => a | (1u64 << (b & 63)),
+        RegAluOp::Bclr => a & !(1u64 << (b & 63)),
+        RegAluOp::Binv => a ^ (1u64 << (b & 63)),
+        RegAluOp::Bext => (a >> (b & 63)) & 1,
+        RegAluOp::Clmul => clmul128(a, b) as u64,
+        RegAluOp::Clmulh => (clmul128(a, b) >> 64) as u64,
+        RegAluOp::Clmulr => (clmul128(a, b) >> 63) as u64,
     }
+}
+
+/// Carryless multiply: full 127-bit product. clmul/clmulh/clmulr select the
+/// low 64 bits, the high 64 bits, and bits [63..127) respectively.
+#[inline(always)]
+fn clmul128(a: u64, b: u64) -> u128 {
+    let mut p: u128 = 0;
+    for i in 0..64 {
+        if (b >> i) & 1 == 1 {
+            p ^= (a as u128) << i;
+        }
+    }
+    p
 }
 
 #[inline(always)]
@@ -489,5 +579,74 @@ impl CalcModule {
             .copied()
             .unwrap_or_else(|| self.layout.code_len as u32);
         next - self.addrs[idx]
+    }
+}
+
+#[cfg(test)]
+mod zbb_semantics_tests {
+    use super::*;
+
+    #[test]
+    fn rotate_ops_match_rust_reference() {
+        let a = 0x1000_0000_0000_0008u64;
+        assert_eq!(reg_alu_test(RegAluOp::Rol, a, 4), a.rotate_left(4));
+        assert_eq!(reg_alu_test(RegAluOp::Ror, a, 4), a.rotate_right(4));
+        assert_eq!(reg_alu_test(RegAluOp::Rol, a, 0), a);
+        assert_eq!(reg_alu_test(RegAluOp::Ror, a, 64), a); // 64 & 63 == 0
+        let w = 0xFFFF_FFF0_8000_0001u64;
+        assert_eq!(
+            reg_alu_test(RegAluOp::Rolw, w, 4),
+            ((w as u32).rotate_left(4)) as u32 as i32 as i64 as u64
+        );
+        assert_eq!(
+            reg_alu_test(RegAluOp::Rorw, w, 37),
+            ((w as u32).rotate_right(37 & 31)) as u32 as i32 as i64 as u64
+        );
+    }
+
+    #[test]
+    fn logic_and_minmax_ops() {
+        let a = 0xF0F0_AAAA_0000_1234u64;
+        let b = 0x0FF0_5555_FFFF_DCBAu64;
+        assert_eq!(reg_alu_test(RegAluOp::Andn, a, b), a & !b);
+        assert_eq!(reg_alu_test(RegAluOp::Orn, a, b), a | !b);
+        assert_eq!(reg_alu_test(RegAluOp::Xnor, a, b), !(a ^ b));
+        assert_eq!(reg_alu_test(RegAluOp::Min, u64::MAX, 1), u64::MAX); // -1 < 1
+        assert_eq!(reg_alu_test(RegAluOp::Minu, u64::MAX, 1), 1);
+        assert_eq!(reg_alu_test(RegAluOp::Max, u64::MAX, 1), 1);
+        assert_eq!(reg_alu_test(RegAluOp::Maxu, u64::MAX, 1), u64::MAX);
+        assert_eq!(reg_alu_test(RegAluOp::Adduw, 0xFFFF_0000_0000_0005, 3), 8);
+        assert_eq!(reg_alu_test(RegAluOp::Sh1add, 3, 5), 11);
+        assert_eq!(reg_alu_test(RegAluOp::Sh3adduw, 0xFFFF_FFFF, 1), 34_359_738_361);
+    }
+
+    #[test]
+    fn single_bit_ops() {
+        let a = 0x8000_0000_0000_0000u64;
+        assert_eq!(reg_alu_test(RegAluOp::Bset, 0, 63), 1u64 << 63);
+        assert_eq!(reg_alu_test(RegAluOp::Bclr, a, 63), 0);
+        assert_eq!(reg_alu_test(RegAluOp::Binv, a, 63), 0);
+        assert_eq!(reg_alu_test(RegAluOp::Bext, a, 63), 1);
+        assert_eq!(reg_alu_test(RegAluOp::Bext, a, 0), 0);
+        // Shift amounts mask to 63.
+        assert_eq!(reg_alu_test(RegAluOp::Bset, 0, 64), 1); // 64 & 63 == 0
+    }
+
+    #[test]
+    fn clmul_family_matches_reference() {
+        // clmul(0b1011, 0b1101) = 0b1111111: (x^3+x+1)(x^3+x^2+1) over GF(2).
+        assert_eq!(reg_alu_test(RegAluOp::Clmul, 0b1011, 0b1101), 0b1111111);
+        let (a, b) = (0xDEAD_BEEF_CAFE_F00Du64, 0x1234_5678_9ABC_DEF0u64);
+        let p = clmul128(a, b);
+        assert_eq!(reg_alu_test(RegAluOp::Clmul, a, b), p as u64);
+        assert_eq!(reg_alu_test(RegAluOp::Clmulh, a, b), (p >> 64) as u64);
+        assert_eq!(reg_alu_test(RegAluOp::Clmulr, a, b), (p >> 63) as u64);
+        // Low bit sanity: clmul(x, 1) == x; the product of x and 1 fits in
+        // 64 bits, so the high half is 0 while clmulr keeps bit 63.
+        assert_eq!(reg_alu_test(RegAluOp::Clmul, a, 1), a);
+        assert_eq!(reg_alu_test(RegAluOp::Clmulh, a, 1), 0);
+        assert_eq!(reg_alu_test(RegAluOp::Clmulr, a, 1), a >> 63);
+        // Commutativity of the carryless product.
+        assert_eq!(clmul128(a, b), clmul128(b, a));
     }
 }

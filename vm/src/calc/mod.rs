@@ -1,10 +1,15 @@
-//! HVM calc func: RV64IMC pure-compute kernels.
+//! HVM calc func: RV64IMC(+Zbb/Zbc) pure-compute kernels.
 //!
 //! Container (`container.rs`) + whitelist decoder (`decode.rs`) + deploy-time
 //! verifier with basic-block pricing (`verify.rs`) + pre-decoded interpreter
 //! (`interp.rs`). The whole pipeline is deterministic and free of host
 //! access: a calc kernel can only see its own flat memory and the hash
 //! builtins behind `ecall`.
+//!
+//! ISA profiles coexist permanently (CKB RFC 0032 style — only add, never
+//! retire): profile 1 is plain RV64IMC, profile 2 adds the ratified Zbb/Zbc
+//! bit-manipulation set that rustc emits automatically with
+//! `-C target-feature=+zbb,+zbc`.
 
 pub mod container;
 pub mod decode;
@@ -20,6 +25,16 @@ pub const CYCLES_PER_COMPUTE: u64 = 4;
 /// Resource charged per declared KiB of calc memory (input bytes, output
 /// bytes and declared memory are the only resource charges on the calc path).
 pub const CALC_MEM_RESOURCE_PER_KIB: i64 = 8;
+
+/// Per-call fixed cycle charge, deducted before the first instruction runs.
+/// Every invocation costs the host a layout computation, a fresh memory
+/// allocation and a full zeroing of the declared memory; without this charge
+/// an instant-return kernel could burn that host work for free (resource gas
+/// alone does not cover it).
+pub const CALC_SETUP_BASE_CYCLES: u64 = 64;
+
+/// Additional setup cycles per declared KiB of calc memory (zeroing cost).
+pub const CALC_SETUP_PER_KIB_CYCLES: u64 = 16;
 
 /// Fixed interpreter stack reservation (bytes), carved out of the declared
 /// memory, 16-byte aligned top.
@@ -61,16 +76,30 @@ impl HashKind {
         }
     }
     /// Cycles: fixed overhead + per-64-byte block cost.
+    ///
+    /// Calibrated against portable (non-accelerated) RustCrypto throughput on
+    /// consensus-class hardware, so a node without SHA-NI never burns native
+    /// cycles far beyond what was charged: roughly 1.5-2 cycles/byte for the
+    /// SHA family and RIPEMD-160 (~10-15 native cycles/byte portable) and
+    /// ~1 cycle/byte for BLAKE2 (~5-8 native cycles/byte portable). RIPEMD-160
+    /// is priced at/above SHA-256, matching its real relative cost. Builtins
+    /// stay an order of magnitude cheaper than computing a hash in-kernel
+    /// with RV64IMC instructions (~700-1300 cycles per SHA-256 block), so the
+    /// incentive to use them is preserved. Values are provisional until the
+    /// CYCLES_PER_COMPUTE calibration pass before activation.
     pub fn cycles(self, len: u64) -> u64 {
+        // Saturating: `u64::MAX` bytes must not panic (runtime lengths are
+        // bounded by the 64 KiB memory, but the pricing helper stays total).
         let blocks = len.div_ceil(64);
-        match self {
-            HashKind::Sha2 => 30 + 12 * blocks,
-            HashKind::Sha3 => 30 + 20 * blocks,
-            HashKind::Ripemd160 => 20 + 10 * blocks,
-            HashKind::Keccak256 => 30 + 20 * blocks,
-            HashKind::Blake2s256 => 30 + 8 * blocks,
-            HashKind::Blake2b256 => 30 + 8 * blocks,
-        }
+        let per_block = match self {
+            HashKind::Sha2 => 96,
+            HashKind::Sha3 => 128,
+            HashKind::Ripemd160 => 128,
+            HashKind::Keccak256 => 128,
+            HashKind::Blake2s256 => 64,
+            HashKind::Blake2b256 => 64,
+        };
+        64u64.saturating_add(blocks.saturating_mul(per_block))
     }
 }
 
@@ -78,8 +107,8 @@ impl HashKind {
 /// into `out` (must be exactly `digest_len` bytes).
 pub fn run_hash(kind: HashKind, input: &[u8], out: &mut [u8]) {
     use blake2::digest::consts::U32;
-use sha3::Digest as _;
-use tiny_keccak::Hasher as _;
+    use sha3::Digest as _;
+    use tiny_keccak::Hasher as _;
     let dlen = kind.digest_len() as usize;
     debug_assert_eq!(out.len(), dlen);
     match kind {
@@ -176,11 +205,22 @@ impl CalcFnObj {
                 resource: 0,
             };
         }
+        // The per-call setup charge (memory allocation + zeroing + image
+        // copies) is deducted up front and always kept, even on traps.
+        let setup =
+            CALC_SETUP_BASE_CYCLES + (lay.mem_len / 1024) * CALC_SETUP_PER_KIB_CYCLES;
+        if limits.cycles < setup {
+            return CalcExec {
+                result: Err(CalcAbort2::OutOfGas),
+                cycles_used: limits.cycles,
+                resource: in_res + mem_res,
+            };
+        }
         let exec = interp::run(
             &self.module,
             &self.container,
             input,
-            limits.cycles,
+            limits.cycles - setup,
             limits.deadline,
         );
         match exec {
@@ -188,7 +228,7 @@ impl CalcFnObj {
                 let out_res = ceil_div(r.output.len() as u64, 16) as i64;
                 CalcExec {
                     result: Ok(r.output),
-                    cycles_used: r.cycles_used,
+                    cycles_used: setup + r.cycles_used,
                     resource: in_res + out_res + mem_res,
                 }
             }
@@ -198,7 +238,7 @@ impl CalcFnObj {
                     interp::CalcAbort::OutOfGas => CalcAbort2::OutOfGas,
                     interp::CalcAbort::Deadline => CalcAbort2::Deadline,
                 }),
-                cycles_used: used,
+                cycles_used: setup + used,
                 resource: in_res + mem_res,
             },
         }
@@ -213,11 +253,14 @@ pub(crate) fn ceil_div(a: u64, b: u64) -> u64 {
 
 
 /// Build a calc container from a linked bare-metal image produced by the
-/// Rust cross-build pack step. `code` is the executable image
-/// (.text), `rodata` the constant image placed at the next 16-byte boundary
-/// (the fixture link scripts use `. = ALIGN(16)` before `.rodata` — keep
-/// them in sync), `init` optional initialized writable data.
+/// Rust cross-build pack step. `isa_profile` selects the instruction
+/// whitelist (`CALC_ISA_RV64IMC` or `CALC_ISA_RV64IMCB` for Zbb/Zbc); `code`
+/// is the executable image (.text), `rodata` the constant image placed at
+/// the next 16-byte boundary (the fixture link scripts use `. = ALIGN(16)`
+/// before `.rodata` — keep them in sync), `init` optional initialized
+/// writable data.
 pub fn pack_container(
+    isa_profile: u8,
     mem_kib: u16,
     entry: u32,
     input_max: u16,
@@ -227,7 +270,7 @@ pub fn pack_container(
     init: Vec<u8>,
 ) -> VmrtRes<container::CalcContainer> {
     let c = container::CalcContainer {
-        isa_profile: container::CALC_ISA_RV64IMC,
+        isa_profile,
         abi: container::CALC_ABI_BYTES_TO_BYTES,
         fncnf: 0b11,
         mem_kib,
@@ -279,8 +322,16 @@ mod tests {
             let cycles = kind.cycles(u64::MAX);
             assert!(cycles > 0);
         }
-        // Exact block rounding: 2^64 / 64 = 2^58 blocks.
-        assert_eq!(HashKind::Sha2.cycles(u64::MAX), 30 + 12 * (1u64 << 58));
+        // u64::MAX bytes: pricing must saturate, not wrap or panic.
+        for kind in [HashKind::Sha2, HashKind::Sha3, HashKind::Ripemd160] {
+            assert_eq!(kind.cycles(u64::MAX), u64::MAX);
+        }
+        // Exact block rounding on a non-saturating length: 2^40 bytes.
+        assert_eq!(HashKind::Sha2.cycles(1 << 40), 64 + 96 * (1u64 << 34));
+        // RIPEMD-160 must never be cheaper than SHA-256 (real relative cost).
+        for blocks in [0u64, 1, 100, 1 << 40] {
+            assert!(HashKind::Ripemd160.cycles(blocks * 64) >= HashKind::Sha2.cycles(blocks * 64));
+        }
     }
 
     #[test]

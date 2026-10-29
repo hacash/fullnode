@@ -1,9 +1,18 @@
 //! Deploy-time verifier + pre-decode + basic-block cycle pricing.
 //!
 //! `verify_container` is run once at deployment (and re-run idempotently on
-//! load); it rejects anything outside the RV64IMC whitelist, off-boundary
-//! jump targets, unreachable code and malformed headers, and produces the
-//! executable [`CalcModule`] used by the interpreter.
+//! load); it rejects anything outside the whitelisted RV64IMC(+Zbb/Zbc)
+//! encodings, off-boundary jump targets and malformed headers, and produces
+//! the executable [`CalcModule`] used by the interpreter.
+//!
+//! There is deliberately no reachability requirement (CKB-VM likewise
+//! executes whatever decodes): LLVM/rustc output routinely contains code
+//! only reachable through rodata jump tables (dense `match`), inter-function
+//! alignment padding and function-pointer-only targets, and runtime safety
+//! never depends on reachability — every dynamic jump target is
+//! boundary-checked by `inst_at_addr` and every memory access is
+//! bounds-checked in the interpreter. Unreachable bytes still have to pass
+//! the whitelist decode; they are simply never executed and never charged.
 
 use crate::calc::container::CalcContainer;
 use crate::calc::decode::{self, Inst};
@@ -70,7 +79,10 @@ pub fn verify_container(c: &CalcContainer) -> VmrtRes<CalcModule> {
     if layout.input_base < layout.data_base + layout.init_len {
         return Err(err("calc verify: io regions overlap code/data"));
     }
-    // Pass 1: linear scan decode + boundary map.
+    // Pass 1: linear scan decode + boundary map. Every byte of the code
+    // section must decode to a whitelisted instruction — including bytes
+    // that will never execute (padding, cold paths).
+    let isa_b = c.isa_profile == crate::calc::container::CALC_ISA_RV64IMCB;
     let code = &c.code;
     let mut insts: Vec<Inst> = Vec::new();
     let mut addrs: Vec<u32> = Vec::new();
@@ -78,7 +90,7 @@ pub fn verify_container(c: &CalcContainer) -> VmrtRes<CalcModule> {
     let mut off = 0usize;
     while off < code.len() {
         boundaries[off] = true;
-        let (inst, len) = decode::decode_at(code, off)?;
+        let (inst, len) = decode::decode_at(code, off, isa_b)?;
         addrs.push(off as u32);
         insts.push(inst);
         off += len as usize;
@@ -112,63 +124,7 @@ pub fn verify_container(c: &CalcContainer) -> VmrtRes<CalcModule> {
         Ok(i) => addr_idx[i].1 as usize,
         Err(_) => return Err(err("calc verify: entry not on instruction boundary")),
     };
-    // Pass 2c: resolve the compiler direct-call idiom
-    // `auipc rd, hi ; jalr _, rd, lo` into a static edge. All rustc/clang
-    // PC-relative calls lower to exactly this adjacent pair, so kernels
-    // remain reachable; genuinely dead code is still rejected.
-    let mut call_edges: Vec<Option<usize>> = vec![None; insts.len()];
-    for i in 0..insts.len().saturating_sub(1) {
-        if let (Inst::Auipc { rd, val }, Inst::Jalr { rs1, imm, .. }) = (insts[i], insts[i + 1]) {
-            if rs1 == rd {
-                let target = (addrs[i] as i64)
-                    .checked_add(val)
-                    .and_then(|t| t.checked_add(imm));
-                let idx = match target {
-                    Some(t) => resolve(t)? as usize,
-                    None => return Err(err("calc verify: call target overflow")),
-                };
-                call_edges[i + 1] = Some(idx);
-            }
-        }
-    }
-    // Pass 3: reachability from entry (DFS over static successors). jalr
-    // jumps dynamically, but its fallthrough is a call-return site and thus
-    // reachable.
-    let mut reach = vec![false; insts.len()];
-    let mut work = vec![entry_idx];
-    reach[entry_idx] = true;
-    while let Some(i) = work.pop() {
-        let next = i + 1;
-        // Fallthrough after a plain jump (jal/jalr with rd = x0) is dead;
-        // calls (rd != x0) return to the next instruction, so it stays live.
-        // Dynamic jalr targets are unconstrained and checked at runtime.
-        let succs: [Option<usize>; 2] = match insts[i] {
-            Inst::Jal { rd: 0, target } => [Some(target as usize), None],
-            Inst::Jal { target, .. } => [Some(target as usize), Some(next)],
-            Inst::Branch { target, .. } => [Some(target as usize), Some(next)],
-            Inst::Jalr { rd: 0, .. } => [None, None],
-            Inst::Jalr { .. } => [Some(next), None],
-            _ => [Some(next), None],
-        };
-        let push = |s: usize, reach: &mut Vec<bool>, work: &mut Vec<usize>| {
-            if !reach[s] {
-                reach[s] = true;
-                work.push(s);
-            }
-        };
-        for s in succs.into_iter().flatten() {
-            if s < insts.len() {
-                push(s, &mut reach, &mut work);
-            }
-        }
-        if let Some(callee) = call_edges[i] {
-            push(callee, &mut reach, &mut work);
-        }
-    }
-    if reach.iter().any(|r| !r) {
-        return Err(err("calc verify: unreachable instructions in code section"));
-    }
-    // Pass 4: split into basic blocks. Leaders: entry, branch/jal targets,
+    // Pass 3: split into basic blocks. Leaders: entry, branch/jal targets,
     // and any instruction following a branch/jal/jalr.
     let mut leader = vec![false; insts.len()];
     leader[entry_idx] = true;
@@ -179,9 +135,6 @@ pub fn verify_container(c: &CalcContainer) -> VmrtRes<CalcModule> {
                 leader[*target as usize] = true;
             }
             _ => {}
-        }
-        if let Some(callee) = call_edges[i] {
-            leader[callee] = true;
         }
         if is_term && i + 1 < insts.len() {
             leader[i + 1] = true;

@@ -717,6 +717,7 @@ mod calc_io_load_tests {
 
     fn calcfunc(input_max: u16, output_max: u16, mark: u8, fncnf: u8) -> ContractCalcFunc {
         let c = crate::calc::pack_container(
+            crate::calc::container::CALC_ISA_RV64IMC,
             64,
             0,
             input_max,
