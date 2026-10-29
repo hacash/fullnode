@@ -24,7 +24,13 @@ execute = [
 # only on codec-side types (+ `sys` hashing for `calc_func_sign`), so a
 # codec-only consumer (SDK wasm) may opt in without the execution engine.
 syntax = []
+# AOT translation backend (`calc::aot`) — benchmark/differential-testing
+# infrastructure only, never part of consensus builds. Disabled by default so
+# plain builds (and wasm SDK targets, which have no mmap) never compile it.
+# Run its suite with: cargo test -p vm --features calc-aot
+calc-aot = ["dep:libc"]
 [dependencies]
+libc = { version = "0.2", optional = true }
 sys = { workspace = true }
 field = { workspace = true }
 base = { path = "../base", default-features = false }

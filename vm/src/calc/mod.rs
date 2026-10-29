@@ -15,6 +15,11 @@ pub mod container;
 pub mod decode;
 pub mod interp;
 pub mod verify;
+// AOT (x86-64) translation backend: benchmark/differential-testing
+// infrastructure, not a consensus execution path. Feature-gated because it
+// needs mmap; see `aot.rs` for the rationale.
+#[cfg(feature = "calc-aot")]
+pub mod aot;
 
 use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
 

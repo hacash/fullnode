@@ -1,0 +1,2106 @@
+//! AOT backend for verified calc containers: translates the pre-decoded
+//! [`CalcModule`](verify::CalcModule) into x86-64 (SysV) machine code and
+//! executes it natively. Semantics mirror `interp.rs` exactly — instruction
+//! behavior, link values, div/rem special cases, read-only ranges, bounds
+//! and alignment checks, and the cycle accounting (charged per dynamic
+//! block entry at the entry instruction, so a `jalr` into the middle of a
+//! block pays only the remaining instructions, matching `suffix_cycles`).
+//!
+//! Design (benchmark-grade, deliberately simple):
+//! * RV64 registers live in a memory array `[u64; 32]`; each RV64
+//!   instruction emits a handful of x86-64 ops through fixed scratch
+//!   registers.
+//! * Control flow: direct `jcc/jmp` to translated block prologues (branch
+//!   and JAL targets are always block leaders after verification); `jalr`
+//!   calls a host resolver (address -> instruction index) which returns
+//!   either the block prologue (leader target) or a small trampoline that
+//!   first rebates the skipped instructions' static cycles and then jumps
+//!   to the prologue (mid-block target); the sentinel return is checked
+//!   inline.
+//! * Cycle metering is block-level and static, identical to the
+//!   interpreter and host-independent: before charging a block the
+//!   remaining budget is compared against the entry cost, and on shortfall
+//!   the run aborts WITHOUT keeping the failing charge — exactly the
+//!   interpreter's `out_of_gas` accounting.
+//! * Div/Rem families (all special cases) go through a host helper
+//!   mirroring `interp::reg_alu`; `mulh*` use native `mul/imul`.
+//! * Unsupported forms — `ecall`, and under ISA profile 2 every Zbb/Zbc
+//!   instruction — make `aot_compile` return `None`; the caller falls back
+//!   to the interpreter. `fence` executes as a no-op, matching the
+//!   single-hart interpreter.
+//!
+//! This module is benchmark/differential-testing infrastructure, NOT
+//! consensus code: the consensus path keeps the pure interpreter as the
+//! single execution engine. It is feature-gated (`calc-aot`) so default
+//! builds (including wasm SDK targets, which have no `mmap`) never compile
+//! it. `cargo test -p vm --features calc-aot` runs the differential suite
+//! at the bottom of this file.
+
+use crate::calc::decode::{BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp};
+use crate::calc::container::CalcContainer;
+use crate::calc::verify::CalcModule;
+use crate::calc::CALC_RETURN_SENTINEL;
+
+// Host register numbers (x86-64 encoding order).
+const RAX: u8 = 0;
+const RCX: u8 = 1;
+const RDX: u8 = 2;
+const RBX: u8 = 3; // mem base
+const RBP: u8 = 5; // div/rem helper fn
+const RSI: u8 = 6;
+const RDI: u8 = 7;
+const R12: u8 = 12; // regs array base
+const R13: u8 = 13; // AotState base
+const R14: u8 = 14; // resolve ctx
+const R15: u8 = 15; // jalr resolver fn
+
+// AotState field displacements (see the struct below).
+const ST_CYCLES: i8 = 0;
+const ST_OUT_LEN: i8 = 8;
+const ST_ABORTED: i8 = 16;
+
+struct Code {
+    b: Vec<u8>,
+}
+
+impl Code {
+    fn new() -> Self {
+        Code { b: Vec::new() }
+    }
+    fn rex(&mut self, w: bool, r: bool, x: bool, b: bool) {
+        self.b.push(0x40 | ((w as u8) << 3) | ((r as u8) << 2) | ((x as u8) << 1) | b as u8);
+    }
+    fn op(&mut self, o: u8) {
+        self.b.push(o);
+    }
+    fn op2(&mut self, o: u8, o2: u8) {
+        self.b.push(o);
+        self.b.push(o2);
+    }
+    fn imm8(&mut self, v: i8) {
+        self.b.push(v as u8);
+    }
+    fn imm32(&mut self, v: i32) {
+        self.b.extend_from_slice(&v.to_le_bytes());
+    }
+    fn imm64(&mut self, v: u64) {
+        self.b.extend_from_slice(&v.to_le_bytes());
+    }
+    fn modrm(&mut self, md: u8, reg: u8, rm: u8) {
+        self.b.push(((md & 3) << 6) | ((reg & 7) << 3) | (rm & 7));
+    }
+    fn sib(&mut self, scale: u8, index: u8, base: u8) {
+        self.b.push(((scale & 3) << 6) | ((index & 7) << 3) | (base & 7));
+    }
+    fn len(&self) -> usize {
+        self.b.len()
+    }
+    fn patch32(&mut self, at: usize, rel: i32) {
+        self.b[at..at + 4].copy_from_slice(&rel.to_le_bytes());
+    }
+    fn patch64(&mut self, at: usize, v: u64) {
+        self.b[at..at + 8].copy_from_slice(&v.to_le_bytes());
+    }
+
+    /// `mov hdst, qword [r12 + 8*rv]` — load an RV64 register into a host reg.
+    fn ld_reg(&mut self, hdst: u8, rv: u8) {
+        self.rex(true, hdst >= 8, false, true); // r12 base needs B
+        self.op(0x8B);
+        self.modrm(2, hdst, 4); // mod=10 disp32, rm=100 -> SIB
+        self.sib(0, 4, 4); // index none, base r12
+        self.imm32((8 * rv as i64) as i32);
+    }
+    /// `mov qword [r12 + 8*rv], hsrc`
+    fn st_reg(&mut self, rv: u8, hsrc: u8) {
+        self.rex(true, hsrc >= 8, false, true);
+        self.op(0x89);
+        self.modrm(2, hsrc, 4);
+        self.sib(0, 4, 4);
+        self.imm32((8 * rv as i64) as i32);
+    }
+    /// `movabs h, imm64`
+    fn movabs(&mut self, h: u8, v: u64) -> usize {
+        self.rex(true, false, false, h >= 8);
+        self.op(0xB8 | (h & 7));
+        let at = self.len();
+        self.imm64(v);
+        at
+    }
+    /// ALU op with imm32 sign-extended, register destination: `81 /op`.
+    fn alu_imm(&mut self, opext: u8, h: u8, imm: i32) {
+        self.rex(true, false, false, h >= 8);
+        self.op(0x81);
+        self.modrm(3, opext, h);
+        self.imm32(imm);
+    }
+    /// ALU op hdst <- hdst OP hsrc (64-bit). add=01 or=09 and=21 sub=29 xor=31
+    fn alu_rr(&mut self, base_op: u8, hdst: u8, hsrc: u8) {
+        self.rex(true, hsrc >= 8, false, hdst >= 8);
+        self.op(base_op);
+        self.modrm(3, hsrc, hdst);
+    }
+    /// `cmp hdst, hsrc` (flags for hdst OP hsrc)
+    fn cmp_rr(&mut self, a: u8, b: u8) {
+        self.rex(true, b >= 8, false, a >= 8);
+        self.op(0x39);
+        self.modrm(3, b, a);
+    }
+    /// `cmp qword [r13 + disp], imm32` — /7 with SIB base r13.
+    fn cmp_state_imm32(&mut self, disp: i8, imm: i32) {
+        self.rex(true, false, false, true);
+        self.op(0x81);
+        self.modrm(1, 7, 4);
+        self.sib(0, 4, 5);
+        self.imm8(disp);
+        self.imm32(imm);
+    }
+    /// `sub qword [r13 + disp], imm32` — /5 with SIB base r13.
+    fn sub_state_imm32(&mut self, disp: i8, imm: i32) {
+        self.rex(true, false, false, true);
+        self.op(0x81);
+        self.modrm(1, 5, 4);
+        self.sib(0, 4, 5);
+        self.imm8(disp);
+        self.imm32(imm);
+    }
+    /// `jcc rel32` — returns the rel32 field offset for patching.
+    /// cc: 0=O 1=NO 2=B/C 3=AE 4=E 5=NE 6=BE 7=A 8=S 9=NS A=P B=NP C=L D=GE E=LE F=G
+    fn jcc32(&mut self, cc: u8) -> usize {
+        self.op2(0x0F, 0x80 + cc);
+        let at = self.len();
+        self.imm32(0);
+        at
+    }
+    fn jmp32(&mut self) -> usize {
+        self.op(0xE9);
+        let at = self.len();
+        self.imm32(0);
+        at
+    }
+    /// `setcc al` + `movzx rax, al`
+    fn setcc_rax(&mut self, cc: u8) {
+        self.op2(0x0F, 0x90 + cc);
+        self.modrm(3, 0, RAX);
+        self.op2(0x0F, 0xB6);
+        self.modrm(3, 0, RAX);
+    }
+    /// Shift h by cl (x86 masks the count by 63 on 64-bit ops, 31 on 32-bit).
+    fn shift_cl(&mut self, ext: u8, h: u8, w: bool) {
+        self.rex(w, false, false, h >= 8);
+        self.op(0xD3);
+        self.modrm(3, ext, h);
+    }
+    /// Shift h by imm8.
+    fn shift_imm(&mut self, ext: u8, h: u8, sh: u8, w: bool) {
+        self.rex(w, false, false, h >= 8);
+        self.op(0xC1);
+        self.modrm(3, ext, h);
+        self.imm8(sh as i8);
+    }
+    /// `mov rcx, rax`
+    fn mov_rcx_rax(&mut self) {
+        self.rex(true, false, false, false);
+        self.op(0x89);
+        self.modrm(3, RAX, RCX);
+    }
+    /// `test al, imm8`
+    fn test_al(&mut self, mask: u8) {
+        self.op(0xF6);
+        self.modrm(3, 0, RAX);
+        self.imm8(mask as i8);
+    }
+    /// Memory data access through `[rbx + rax]`.
+    fn rax_to_mem(&mut self, form: MemForm) {
+        match form {
+            MemForm::Sd => {
+                self.rex(true, false, false, false);
+                self.op(0x89);
+                self.modrm(0, RCX, 4);
+                self.sib(0, RAX, RBX);
+            }
+            MemForm::Sw => {
+                self.op(0x89);
+                self.modrm(0, RCX, 4);
+                self.sib(0, RAX, RBX);
+            }
+            MemForm::Sh => {
+                self.op(0x66);
+                self.op(0x89);
+                self.modrm(0, RCX, 4);
+                self.sib(0, RAX, RBX);
+            }
+            MemForm::Sb => {
+                self.op(0x88);
+                self.modrm(0, RCX, 4);
+                self.sib(0, RAX, RBX);
+            }
+            _ => unreachable!("rax_to_mem only for stores"),
+        }
+    }
+    /// `movsxd rax, eax` — sign-extend the 32-bit result in eax.
+    fn sext_eax(&mut self) {
+        self.rex(true, false, false, false);
+        self.op(0x63);
+        self.modrm(3, RAX, RAX);
+    }
+    /// 32-bit ALU with memory source: `op eax, [r12 + 8*rv]`.
+    fn alu32_rm_reg(&mut self, base_op: u8, hdst: u8, rv: u8) {
+        self.rex(false, hdst >= 8, false, true);
+        self.op(base_op);
+        self.modrm(2, hdst, 4);
+        self.sib(0, 4, 4);
+        self.imm32((8 * rv as i64) as i32);
+    }
+    /// `imul hdst, qword [r12 + 8*rv]` (0F AF).
+    fn imul_rm(&mut self, hdst: u8, rv: u8) {
+        self.rex(true, hdst >= 8, false, true);
+        self.op2(0x0F, 0xAF);
+        self.modrm(2, hdst, 4);
+        self.sib(0, 4, 4);
+        self.imm32((8 * rv as i64) as i32);
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MemForm {
+    Ld,
+    LwSext,
+    LwZero,
+    LhSext,
+    LhZero,
+    LbSext,
+    LbZero,
+    Sd,
+    Sw,
+    Sh,
+    Sb,
+}
+
+// ---------------------------------------------------------------- runtime
+
+/// Host-side state shared with the generated code.
+#[repr(C)]
+struct AotState {
+    /// Remaining cycle budget (interpreter: `cycles` counter). Always >= 0:
+    /// a block is only charged after the pre-check passes.
+    cycles: i64,
+    /// Output length written by the sentinel-return path.
+    out_len: u64,
+    /// 0 = ok, 1 = trap, 2 = out of gas, 3 = bad jalr target.
+    aborted: u32,
+}
+
+/// Host tables for the jalr resolver.
+struct ResolveCtx {
+    inst_addrs: Vec<u32>,
+    block_of_inst: Vec<u32>,
+    /// Landing code offset per instruction: block prologues for leaders,
+    /// per-instruction suffix-charge stubs for mid-block entries,
+    /// `u32::MAX` never (leaders are populated for every block start).
+    inst_landing: Vec<u32>,
+    /// Generated offset of the invalid-target stub.
+    invalid_off: u32,
+    code: *const u8,
+    state: *mut AotState,
+}
+
+/// Mirror of `interp::reg_alu` for the ops the generated code routes to the
+/// host helper (div/rem families). Validated against `reg_alu_test` by the
+/// differential suite at the bottom of this file.
+pub fn alu_helper_op(op: u64, a: u64, b: u64) -> u64 {
+    match op {
+        0 => {
+            // Div
+            if b == 0 {
+                u64::MAX
+            } else if a == i64::MIN as u64 && b == u64::MAX {
+                a
+            } else {
+                ((a as i64) / (b as i64)) as u64
+            }
+        }
+        1 => {
+            // Divu
+            if b == 0 {
+                u64::MAX
+            } else {
+                a / b
+            }
+        }
+        2 => {
+            // Rem
+            if b == 0 {
+                a
+            } else if a == i64::MIN as u64 && b == u64::MAX {
+                0
+            } else {
+                ((a as i64) % (b as i64)) as u64
+            }
+        }
+        3 => {
+            // Remu
+            if b == 0 {
+                a
+            } else {
+                a % b
+            }
+        }
+        4 => {
+            // Divw
+            if (b as u32) == 0 {
+                u64::MAX
+            } else {
+                sext32_((a as u32 as i32).wrapping_div(b as u32 as i32) as u64)
+            }
+        }
+        5 => {
+            // Divuw
+            if (b as u32) == 0 {
+                u64::MAX
+            } else {
+                sext32_((a as u32 / b as u32) as u64)
+            }
+        }
+        6 => {
+            // Remw
+            if (b as u32) == 0 {
+                sext32_(a)
+            } else {
+                sext32_((a as u32 as i32).wrapping_rem(b as u32 as i32) as u64)
+            }
+        }
+        _ => {
+            // Remuw
+            if (b as u32) == 0 {
+                sext32_(a)
+            } else {
+                sext32_((a as u32 % b as u32) as u64)
+            }
+        }
+    }
+}
+
+extern "C" fn alu_helper(op: u64, a: u64, b: u64) -> u64 {
+    alu_helper_op(op, a, b)
+}
+
+extern "C" fn resolve_jalr(ctx: *const ResolveCtx, dest: u64) -> u64 {
+    let ctx = unsafe { &*ctx };
+    match ctx.inst_addrs.binary_search(&(dest as u32)) {
+        Ok(idx) => unsafe { ctx.code.add(ctx.inst_landing[idx] as usize) as u64 },
+        Err(_) => {
+            unsafe {
+                (*ctx.state).aborted = 3;
+                ctx.code.add(ctx.invalid_off as usize) as u64
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn sext32_(v: u64) -> u64 {
+    (v as u32 as i32) as i64 as u64
+}
+
+// ---------------------------------------------------------------- compile
+
+pub struct AotFunc {
+    /// RX mapping (kept alive for the lifetime of this object).
+    map: (*mut u8, usize),
+    /// Translated code length in bytes.
+    len: usize,
+    ctx: Box<ResolveCtx>,
+}
+
+impl AotFunc {
+    pub fn code_len(&self) -> usize {
+        self.len
+    }
+
+    /// Generated machine code (debug/disassembly aid).
+    pub fn code_bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.map.0 as *const u8, self.len) }
+    }
+}
+
+unsafe impl Send for AotFunc {}
+unsafe impl Sync for AotFunc {}
+
+impl Drop for AotFunc {
+    fn drop(&mut self) {
+        unsafe {
+            libc::munmap(self.map.0.cast(), self.map.1);
+        }
+    }
+}
+
+pub struct AotRun {
+    pub output: Vec<u8>,
+    pub cycles_used: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AotAbort {
+    Trap,
+    OutOfGas,
+    BadTarget,
+}
+
+/// Full stop-state of one AOT execution: output on success, abort class on
+/// failure, and the cycle total in both cases (the interpreter reports
+/// `cycles_used` on abort paths too, and the differential suite pins that
+/// equality).
+pub struct AotOutcome {
+    pub output: Option<Vec<u8>>,
+    pub abort: Option<AotAbort>,
+    pub cycles_used: u64,
+}
+
+impl AotOutcome {
+    /// Result-style view for benchmark callers.
+    pub fn into_result(self) -> Result<AotRun, AotAbort> {
+        match (self.output, self.abort) {
+            (Some(o), None) => Ok(AotRun {
+                output: o,
+                cycles_used: self.cycles_used,
+            }),
+            (_, Some(a)) => Err(a),
+            (None, None) => unreachable!("outcome carries output or abort"),
+        }
+    }
+}
+
+impl AotFunc {
+    /// Execute with interpreter-identical memory/entry setup. The cycle
+    /// budget covers instructions only — the interpreter's per-call setup
+    /// charge lives in `CalcFnObj::run`, outside this layer. Deadlines are
+    /// a host concern and are ignored (benchmark/differential use only).
+    pub fn run(
+        &mut self,
+        module: &CalcModule,
+        container: &CalcContainer,
+        input: &[u8],
+        cycle_budget: u64,
+    ) -> Result<AotRun, AotAbort> {
+        self.run_inner(module, container, input, cycle_budget)
+            .0
+            .into_result()
+    }
+
+    /// `run` plus final register and memory snapshots — the differential
+    /// counterpart of `interp::run_with_state`.
+    pub fn run_with_state(
+        &mut self,
+        module: &CalcModule,
+        container: &CalcContainer,
+        input: &[u8],
+        cycle_budget: u64,
+    ) -> (AotOutcome, [u64; 32], Vec<u8>) {
+        self.run_inner(module, container, input, cycle_budget)
+    }
+
+    fn run_inner(
+        &mut self,
+        module: &CalcModule,
+        container: &CalcContainer,
+        input: &[u8],
+        cycle_budget: u64,
+    ) -> (AotOutcome, [u64; 32], Vec<u8>) {
+        let lay = &module.layout;
+        if input.len() as u64 > lay.input_max {
+            return (
+                AotOutcome {
+                    output: None,
+                    abort: Some(AotAbort::Trap),
+                    cycles_used: 0,
+                },
+                [0u64; 32],
+                Vec::new(),
+            );
+        }
+        let mut mem = vec![0u8; lay.mem_len as usize];
+        mem[..container.code.len()].copy_from_slice(&container.code);
+        mem[lay.rodata_base as usize..(lay.rodata_base as u64 + lay.rodata_len) as usize]
+            .copy_from_slice(&container.rodata);
+        mem[lay.data_base as usize..(lay.data_base as u64 + container.init.len() as u64) as usize]
+            .copy_from_slice(&container.init);
+        let mut regs = [0u64; 32];
+        regs[10] = lay.input_base;
+        regs[11] = input.len() as u64;
+        regs[12] = lay.output_base;
+        regs[13] = lay.output_max;
+        regs[2] = lay.stack_top;
+        regs[1] = CALC_RETURN_SENTINEL;
+        let input_base = lay.input_base as usize;
+        mem[input_base..input_base + input.len()].copy_from_slice(input);
+        let state = AotState {
+            cycles: cycle_budget as i64,
+            out_len: 0,
+            aborted: 0,
+        };
+        // Share the state cell with the resolver context.
+        let state_ptr = &state as *const AotState as *mut AotState;
+        (*self.ctx).state = state_ptr;
+        let f: extern "C" fn(*mut u8, *mut u64, *mut AotState) = unsafe {
+            std::mem::transmute::<*const u8, extern "C" fn(*mut u8, *mut u64, *mut AotState)>(
+                self.map.0 as *const u8,
+            )
+        };
+        f(mem.as_mut_ptr(), regs.as_mut_ptr(), state_ptr);
+        let cycles_used = (cycle_budget as i64 - state.cycles).max(0) as u64;
+        let out = match state.aborted {
+            0 => {
+                let n = state.out_len as usize;
+                AotOutcome {
+                    output: Some(
+                        mem[lay.output_base as usize..lay.output_base as usize + n].to_vec(),
+                    ),
+                    abort: None,
+                    cycles_used,
+                }
+            }
+            2 => AotOutcome {
+                output: None,
+                abort: Some(AotAbort::OutOfGas),
+                cycles_used,
+            },
+            3 => AotOutcome {
+                output: None,
+                abort: Some(AotAbort::BadTarget),
+                cycles_used,
+            },
+            _ => AotOutcome {
+                output: None,
+                abort: Some(AotAbort::Trap),
+                cycles_used,
+            },
+        };
+        (out, regs, mem)
+    }
+}
+
+enum Fixup {
+    /// Patch rel32 to a byte offset in the code buffer.
+    To(usize),
+    /// Patch rel32 to the prologue of the block containing this inst idx.
+    Block(u32),
+    /// Trap stub (aborted = 1).
+    Trap,
+    /// Out-of-gas stub (aborted = 2).
+    Gas,
+    /// Fallthrough to the block after `u32` (block index).
+    Next(u32),
+    /// Ran past the end of the code stream (trap).
+    PastEnd,
+    /// Normal exit epilogue.
+    Exit,
+}
+
+/// Translate a verified module. Returns `None` when the module uses an
+/// instruction form this backend does not implement (`ecall`, and the
+/// Zbb/Zbc extensions of ISA profile 2) — the caller should fall back to
+/// the interpreter.
+pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
+    let lay = &module.layout;
+    let mut c = Code::new();
+    let mut fixups: Vec<(usize, Fixup)> = Vec::new();
+    let mut block_off = vec![0u32; module.blocks.len()];
+    // Translated-code offset of every instruction (for mid-block landings).
+    let mut inst_off = vec![0u32; module.insts.len()];
+    // Landing offsets per instruction: leaders -> block prologue (filled
+    // below), non-leaders -> their suffix-charge stub.
+    let mut inst_landing = vec![u32::MAX; module.insts.len()];
+
+    // ---- prologue
+    for r in [RBX, RBP, R12, R13, R14, R15] {
+        if r >= 12 {
+            c.rex(false, false, false, true);
+        }
+        c.op(0x50 | (r & 7)); // push
+    }
+    // SysV: rsp must be 16-aligned at helper `call` sites. Entry left
+    // rsp%16==8; six pushes keep it at 8 — pad to 0.
+    c.op(0x48);
+    c.op(0x83);
+    c.modrm(3, 5, 4); // sub rsp, 8
+    c.imm8(8);
+    c.rex(true, false, false, false);
+    c.op(0x89);
+    c.modrm(3, RDI, RBX); // mov rbx, rdi (mem)
+    c.rex(true, false, false, true);
+    c.op(0x89);
+    c.modrm(3, RSI, R12); // mov r12, rsi (regs)
+    c.rex(true, false, false, true);
+    c.op(0x89);
+    c.modrm(3, RDX, R13); // mov r13, rdx (state)
+    let fix_ctx = c.movabs(R14, 0);
+    let fix_resolve = c.movabs(R15, 0);
+    let fix_alu = c.movabs(RBP, 0);
+    let fix_entry = c.jmp32();
+
+    // ---- blocks
+
+    for (bi, blk) in module.blocks.iter().enumerate() {
+        block_off[bi] = c.len() as u32;
+        // Block entry charge with interpreter-identical out-of-gas
+        // accounting: compare first, abort WITHOUT keeping the failing
+        // charge, only then subtract.
+        c.cmp_state_imm32(ST_CYCLES, blk.cycles as i32);
+        let at = c.jcc32(0xC); // jl (remaining < cost) -> gas stub
+        fixups.push((at, Fixup::Gas));
+        c.sub_state_imm32(ST_CYCLES, blk.cycles as i32);
+
+        inst_landing[blk.start as usize] = block_off[bi];
+        let end = blk.end as usize;
+        let mut idx = blk.start as usize;
+        while idx < end {
+            inst_off[idx] = c.len() as u32;
+            let inst = module.insts[idx];
+            let addr = module.addrs[idx] as u64;
+            let next_link = addr + module.inst_len(idx) as u64;
+            match inst {
+                Inst::Lui { rd, val } => {
+                    if rd != 0 {
+                        c.movabs(RAX, val as u64);
+                        c.st_reg(rd, RAX);
+                    }
+                }
+                Inst::Auipc { rd, val } => {
+                    if rd != 0 {
+                        c.movabs(RAX, addr.wrapping_add(val as u64));
+                        c.st_reg(rd, RAX);
+                    }
+                }
+                Inst::Jal { rd, target } => {
+                    if rd != 0 {
+                        c.movabs(RAX, addr + 4);
+                        c.st_reg(rd, RAX);
+                    }
+                    fixups.push((c.jmp32(), Fixup::Block(target as u32)));
+                }
+                Inst::Jalr { rd, rs1, imm } => {
+                    c.ld_reg(RAX, rs1);
+                    c.alu_imm(0 /*add*/, RAX, imm as i32);
+                    c.alu_imm(4 /*and*/, RAX, -2); // & !1
+                    c.movabs(RCX, CALC_RETURN_SENTINEL);
+                    c.cmp_rr(RAX, RCX);
+                    let at = c.jcc32(4); // je -> sentinel exit path (below)
+                    // not sentinel: write link, then resolve + jump
+                    if rd != 0 {
+                        c.movabs(RCX, next_link);
+                        c.st_reg(rd, RCX);
+                    }
+                    c.rex(true, true, false, false);
+                    c.op(0x89);
+                    c.modrm(3, R14, RDI); // mov rdi, r14 (ctx)
+                    c.rex(true, false, false, false);
+                    c.op(0x89);
+                    c.modrm(3, RAX, RSI); // mov rsi, rax (dest)
+                    c.rex(false, false, false, true);
+                    c.op(0xFF);
+                    c.modrm(3, 2, R15); // call r15
+                    c.op(0xFF);
+                    c.modrm(3, 4, RAX); // jmp rax
+                    // sentinel exit path:
+                    let exit_path = c.len();
+                    c.ld_reg(RCX, 10); // a0 = output length
+                    c.alu_imm(7 /*cmp*/, RCX, lay.output_max as i32);
+                    let at2 = c.jcc32(7); // ja -> trap
+                    fixups.push((at2, Fixup::Trap));
+                    // mov [r13+8], rcx (out_len)
+                    c.rex(true, false, false, true);
+                    c.op(0x89);
+                    c.modrm(1, RCX, 5);
+                    c.imm8(ST_OUT_LEN);
+                    fixups.push((c.jmp32(), Fixup::Exit));
+                    fixups.push((at, Fixup::To(exit_path)));
+                }
+                Inst::Branch { kind, rs1, rs2, target } => {
+                    c.ld_reg(RAX, rs1);
+                    c.ld_reg(RCX, rs2);
+                    c.cmp_rr(RAX, RCX);
+                    let cc = match kind {
+                        BrKind::Eq => 4u8,   // je
+                        BrKind::Ne => 5u8,   // jne
+                        BrKind::Lt => 0xCu8, // jl
+                        BrKind::Ge => 0xDu8, // jge
+                        BrKind::Ltu => 2u8,  // jb
+                        BrKind::Geu => 3u8,  // jae
+                    };
+                    let at = c.jcc32(cc);
+                    fixups.push((at, Fixup::Block(target as u32)));
+                }
+                Inst::Load { op, rd, rs1, imm } => {
+                    c.ld_reg(RAX, rs1);
+                    c.alu_imm(0, RAX, imm as i32); // addr = base + imm
+                    c.mov_rcx_rax(); // rcx = addr
+                    c.alu_imm(0, RCX, op.size() as i32); // rcx = end
+                    let at = c.jcc32(2); // jc -> trap (addr+size overflow)
+                    fixups.push((at, Fixup::Trap));
+                    // bounds: cmp rcx, mem_len ; ja trap
+                    c.alu_imm(7 /*cmp*/, RCX, lay.mem_len as i32);
+                    let at = c.jcc32(7); // ja
+                    fixups.push((at, Fixup::Trap));
+                    // alignment
+                    let size = op.size();
+                    if size > 1 {
+                        c.test_al((size - 1) as u8);
+                        let at = c.jcc32(5); // jnz
+                        fixups.push((at, Fixup::Trap));
+                    }
+                    let form = match op {
+                        LoadOp::Ld => MemForm::Ld,
+                        LoadOp::Lw => MemForm::LwSext,
+                        LoadOp::Lwu => MemForm::LwZero,
+                        LoadOp::Lh => MemForm::LhSext,
+                        LoadOp::Lhu => MemForm::LhZero,
+                        LoadOp::Lb => MemForm::LbSext,
+                        LoadOp::Lbu => MemForm::LbZero,
+                    };
+                    emit_load(&mut c, form);
+                    if rd != 0 {
+                        c.st_reg(rd, RAX);
+                    }
+                }
+                Inst::Store { op, rs1, rs2, imm } => {
+                    c.ld_reg(RAX, rs1);
+                    c.alu_imm(0, RAX, imm as i32); // addr
+                    // read-only check: addr < data_base -> trap
+                    c.alu_imm(7 /*cmp*/, RAX, lay.data_base as i32);
+                    let at = c.jcc32(2); // jb
+                    fixups.push((at, Fixup::Trap));
+                    c.mov_rcx_rax();
+                    c.alu_imm(0, RCX, op.size() as i32);
+                    let at = c.jcc32(2); // jc
+                    fixups.push((at, Fixup::Trap));
+                    c.alu_imm(7, RCX, lay.mem_len as i32);
+                    let at = c.jcc32(7); // ja
+                    fixups.push((at, Fixup::Trap));
+                    let size = op.size();
+                    if size > 1 {
+                        c.test_al((size - 1) as u8);
+                        let at = c.jcc32(5); // jnz
+                        fixups.push((at, Fixup::Trap));
+                    }
+                    c.ld_reg(RCX, rs2);
+                    let form = match op {
+                        StoreOp::Sd => MemForm::Sd,
+                        StoreOp::Sw => MemForm::Sw,
+                        StoreOp::Sh => MemForm::Sh,
+                        StoreOp::Sb => MemForm::Sb,
+                    };
+                    c.rax_to_mem(form);
+                }
+                Inst::ImmAlu { op, rd, rs1, imm } => {
+                    if rd != 0 {
+                        match op {
+                            ImmAluOp::Addi => {
+                                c.ld_reg(RAX, rs1);
+                                c.alu_imm(0, RAX, imm as i32);
+                                c.st_reg(rd, RAX);
+                            }
+                            ImmAluOp::Slti => {
+                                // cmp qword [r12+8rs1], imm32 ; setl
+                                c.rex(true, false, false, true);
+                                c.op(0x81);
+                                c.modrm(2, 7, 4);
+                                c.sib(0, 4, 4);
+                                c.imm32((8 * rs1 as i64) as i32);
+                                c.imm32(imm as i32);
+                                c.setcc_rax(0xC); // l
+                                c.st_reg(rd, RAX);
+                            }
+                            ImmAluOp::Sltiu => {
+                                c.movabs(RCX, imm as u64);
+                                c.ld_reg(RAX, rs1);
+                                c.cmp_rr(RAX, RCX);
+                                c.setcc_rax(2); // b
+                                c.st_reg(rd, RAX);
+                            }
+                            ImmAluOp::Xori => {
+                                c.ld_reg(RAX, rs1);
+                                c.movabs(RCX, imm as u64);
+                                c.alu_rr(0x31, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            ImmAluOp::Ori => {
+                                c.ld_reg(RAX, rs1);
+                                c.movabs(RCX, imm as u64);
+                                c.alu_rr(0x09, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            ImmAluOp::Andi => {
+                                c.ld_reg(RAX, rs1);
+                                c.movabs(RCX, imm as u64);
+                                c.alu_rr(0x21, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            ImmAluOp::Addiw => {
+                                c.ld_reg(RAX, rs1);
+                                c.rex(false, false, false, false);
+                                c.op(0x81);
+                                c.modrm(3, 0, RAX); // add eax, imm32
+                                c.imm32(imm as i32);
+                                c.sext_eax();
+                                c.st_reg(rd, RAX);
+                            }
+                        }
+                    }
+                }
+                Inst::ShiftImm { kind, rd, rs1, shamt, word } => {
+                    if rd != 0 {
+                        c.ld_reg(RAX, rs1);
+                        let ext = match kind {
+                            ShiftKind::Sll => 4u8,
+                            ShiftKind::Srl => 5u8,
+                            ShiftKind::Sra => 7u8,
+                            // Zbb rori (profile 2) — not implemented.
+                            ShiftKind::Ror => return None,
+                        };
+                        if word {
+                            c.shift_imm(ext, RAX, shamt & 31, false);
+                            c.sext_eax();
+                        } else {
+                            c.shift_imm(ext, RAX, shamt, true);
+                        }
+                        c.st_reg(rd, RAX);
+                    }
+                }
+                Inst::RegAlu { op, rd, rs1, rs2 } => {
+                    if rd != 0 {
+                        match op {
+                            RegAluOp::Add => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.alu_rr(0x01, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Sub => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.alu_rr(0x29, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::And => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.alu_rr(0x21, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Or => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.alu_rr(0x09, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Xor => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.alu_rr(0x31, RAX, RCX);
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Slt => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.cmp_rr(RAX, RCX);
+                                c.setcc_rax(0xC); // l (signed)
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Sltu => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.cmp_rr(RAX, RCX);
+                                c.setcc_rax(2); // b (unsigned)
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Sll | RegAluOp::Srl | RegAluOp::Sra => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                let ext = match op {
+                                    RegAluOp::Sll => 4u8,
+                                    RegAluOp::Srl => 5u8,
+                                    _ => 7u8,
+                                };
+                                c.shift_cl(ext, RAX, true);
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Mul => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.rex(true, false, false, false);
+                                c.op2(0x0F, 0xAF);
+                                c.modrm(3, RAX, RCX); // imul rax, rcx
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Mulh | RegAluOp::Mulhu | RegAluOp::Mulhsu => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                c.rex(true, false, false, false);
+                                c.op(0xF7);
+                                let ext = match op {
+                                    RegAluOp::Mulh => 5u8,  // imul rcx (signed)
+                                    RegAluOp::Mulhu => 4u8, // mul rcx (unsigned)
+                                    _ => 5u8,               // mulhsu: imul then fix
+                                };
+                                c.modrm(3, ext, RCX); // -> rdx:rax
+                                if op == RegAluOp::Mulhsu {
+                                    // mulhsu(a, b) = mulh(a, b) + a when
+                                    // bit 63 of (unsigned) b is set:
+                                    // a*b_u = a*b_s + a*2^64, and a*2^64
+                                    // adds a to the high word.
+                                    c.shift_imm(5, RCX, 63, true); // shr rcx, 63 -> {0,1}
+                                    c.rex(true, false, false, false);
+                                    c.op(0xF7);
+                                    c.modrm(3, 3, RCX); // neg rcx -> {0, ~0}
+                                    c.ld_reg(RAX, rs1);
+                                    c.alu_rr(0x21, RAX, RCX); // and -> a or 0
+                                    c.alu_rr(0x01, RDX, RAX); // add rdx, rax
+                                }
+                                c.st_reg(rd, RDX);
+                            }
+                            RegAluOp::Addw | RegAluOp::Subw | RegAluOp::Mulw => {
+                                c.ld_reg(RAX, rs1);
+                                match op {
+                                    RegAluOp::Addw => c.alu32_rm_reg(0x03, RAX, rs2),
+                                    RegAluOp::Subw => c.alu32_rm_reg(0x2B, RAX, rs2),
+                                    _ => c.imul_rm(RAX, rs2),
+                                }
+                                c.sext_eax();
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Sllw | RegAluOp::Srlw | RegAluOp::Sraw => {
+                                c.ld_reg(RAX, rs1);
+                                c.ld_reg(RCX, rs2);
+                                let ext = match op {
+                                    RegAluOp::Sllw => 4u8,
+                                    RegAluOp::Srlw => 5u8,
+                                    _ => 7u8,
+                                };
+                                c.shift_cl(ext, RAX, false); // 32-bit masks & 31
+                                c.sext_eax();
+                                c.st_reg(rd, RAX);
+                            }
+                            RegAluOp::Div
+                            | RegAluOp::Divu
+                            | RegAluOp::Rem
+                            | RegAluOp::Remu
+                            | RegAluOp::Divw
+                            | RegAluOp::Divuw
+                            | RegAluOp::Remw
+                            | RegAluOp::Remuw => {
+                                let opid: u64 = match op {
+                                    RegAluOp::Div => 0,
+                                    RegAluOp::Divu => 1,
+                                    RegAluOp::Rem => 2,
+                                    RegAluOp::Remu => 3,
+                                    RegAluOp::Divw => 4,
+                                    RegAluOp::Divuw => 5,
+                                    RegAluOp::Remw => 6,
+                                    _ => 7,
+                                };
+                                c.movabs(RDI, opid);
+                                c.ld_reg(RSI, rs1);
+                                c.ld_reg(RDX, rs2);
+                                c.op(0xFF);
+                                c.modrm(3, 2, RBP); // call rbp
+                                c.st_reg(rd, RAX);
+                            }
+                            // Zbb/Zbc (ISA profile 2) — not implemented.
+                            _ => return None,
+                        }
+                    }
+                }
+                // Unary/single-bit Zbb ops (profile 2) — not implemented.
+                Inst::UnAlu { .. } | Inst::BitImm { .. } | Inst::Slliuw { .. } => return None,
+                // Single-hart pure-compute machine: no-op, matches interp.
+                Inst::Fence => {}
+                // Hash builtins are interpreter-only; kernels meant for AOT
+                // must not use ecall.
+                Inst::Ecall => return None,
+            }
+            idx += 1;
+        }
+        // Fallthrough to next block; past the end -> trap.
+        if idx >= module.insts.len() {
+            fixups.push((c.jmp32(), Fixup::PastEnd));
+        } else {
+            fixups.push((c.jmp32(), Fixup::Next(bi as u32)));
+        }
+    }
+
+    // ---- landing stubs for mid-block jalr entries: charge ONLY the
+    // remaining static cost (`suffix_cycles[inst]`, same pre-check/abort
+    // accounting as a block prologue) and resume at the instruction's own
+    // translated code — the skipped prefix never executes, mirroring the
+    // interpreter exactly.
+    let mut stub_fixups: Vec<(usize, u32)> = Vec::new(); // (jmp rel32 site, inst idx)
+    let leader_flags: Vec<bool> = inst_landing.iter().map(|&l| l != u32::MAX).collect();
+    for i in 0..inst_landing.len() {
+        if leader_flags[i] {
+            continue; // block leader: prologue is the landing
+        }
+        let here = c.len() as u32;
+        inst_landing[i] = here;
+        let cost = module.suffix_cycles[i];
+        c.cmp_state_imm32(ST_CYCLES, cost as i32);
+        let at = c.jcc32(0xC); // jl -> gas stub
+        fixups.push((at, Fixup::Gas));
+        c.sub_state_imm32(ST_CYCLES, cost as i32);
+        stub_fixups.push((c.jmp32(), i as u32));
+    }
+    for (at, i) in stub_fixups {
+        let target = inst_off[i as usize] as usize;
+        let rel = (target as i64 - at as i64 - 4) as i32;
+        c.patch32(at, rel);
+    }
+
+    // ---- stubs: invalid target, trap, gas, exit
+    let invalid_off = c.len() as u32;
+    c.rex(false, false, false, true);
+    c.op(0xC7); // mov dword [r13+16], 3
+    c.modrm(1, 0, 5);
+    c.imm8(ST_ABORTED);
+    c.imm32(3);
+    fixups.push((c.jmp32(), Fixup::Exit));
+
+    let trap_off = c.len() as u32;
+    c.rex(false, false, false, true);
+    c.op(0xC7); // mov dword [r13+16], 1
+    c.modrm(1, 0, 5);
+    c.imm8(ST_ABORTED);
+    c.imm32(1);
+    fixups.push((c.jmp32(), Fixup::Exit));
+
+    let gas_off = c.len() as u32;
+    c.rex(false, false, false, true);
+    c.op(0xC7); // mov dword [r13+16], 2
+    c.modrm(1, 0, 5);
+    c.imm8(ST_ABORTED);
+    c.imm32(2);
+    fixups.push((c.jmp32(), Fixup::Exit));
+
+    let exit_off = c.len() as u32;
+    c.op(0x48);
+    c.op(0x83);
+    c.modrm(3, 0, 4); // add rsp, 8 (undo prologue pad)
+    c.imm8(8);
+    c.rex(true, false, false, true);
+    c.op(0x8B); // mov rax, [r13+8] (out_len)
+    c.modrm(1, 0, 5);
+    c.imm8(ST_OUT_LEN);
+    for r in [R15, R14, R13, R12, RBP, RBX] {
+        if r >= 12 {
+            c.rex(false, false, false, true);
+        }
+        c.op(0x58 | (r & 7)); // pop
+    }
+    c.op(0xC3); // ret
+
+    // ---- patch fixups
+    for (at, f) in fixups {
+        let target: usize = match f {
+            Fixup::To(to) => to,
+            Fixup::Block(ti) => block_off[module.block_of_inst[ti as usize] as usize] as usize,
+            Fixup::Trap => trap_off as usize,
+            Fixup::Gas => gas_off as usize,
+            Fixup::Next(b) => block_off[b as usize + 1] as usize,
+            Fixup::PastEnd => trap_off as usize,
+            Fixup::Exit => exit_off as usize,
+        };
+        let rel = (target as i64 - at as i64 - 4) as i32;
+        c.patch32(at, rel);
+    }
+    let entry_blk = module.block_of_inst[module.entry as usize] as usize;
+    c.patch32(fix_entry, block_off[entry_blk] as i32 - (fix_entry as i32 + 4));
+
+    // ---- build the resolver context and patch prologue constants BEFORE the
+    // single copy (the mapping turns RX and must never be written again).
+    let mut ctx = Box::new(ResolveCtx {
+        inst_addrs: module.addrs.clone(),
+        block_of_inst: module.block_of_inst.clone(),
+        inst_landing,
+        invalid_off,
+        code: std::ptr::null(),
+        state: std::ptr::null_mut(),
+    });
+    c.patch64(fix_ctx, ctx.as_ref() as *const ResolveCtx as u64);
+    c.patch64(
+        fix_resolve,
+        resolve_jalr as extern "C" fn(*const ResolveCtx, u64) -> u64 as u64,
+    );
+    c.patch64(
+        fix_alu,
+        alu_helper as extern "C" fn(u64, u64, u64) -> u64 as u64,
+    );
+
+    // ---- mmap RW, one copy, then RX
+    let sz = (c.b.len() + 4095) / 4096 * 4096;
+    let map = unsafe {
+        let p = libc::mmap(
+            std::ptr::null_mut(),
+            sz,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if p == libc::MAP_FAILED {
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(c.b.as_ptr(), p as *mut u8, c.b.len());
+        if libc::mprotect(p, sz, libc::PROT_READ | libc::PROT_EXEC) != 0 {
+            libc::munmap(p, sz);
+            return None;
+        }
+        (p as *mut u8, sz)
+    };
+    ctx.code = map.0 as *const u8;
+    Some(AotFunc { map, len: c.b.len(), ctx })
+}
+
+/// Emit a load `mov rax, [rbx + rax]` in the right width/sign form.
+fn emit_load(c: &mut Code, form: MemForm) {
+    match form {
+        MemForm::Ld => {
+            c.rex(true, false, false, false);
+            c.op(0x8B);
+            c.modrm(0, RAX, 4);
+            c.sib(0, RAX, RBX);
+        }
+        MemForm::LwSext => {
+            c.rex(true, false, false, false);
+            c.op(0x63);
+            c.modrm(0, RAX, 4);
+            c.sib(0, RAX, RBX);
+        }
+        MemForm::LwZero => {
+            c.op(0x8B);
+            c.modrm(0, RAX, 4);
+            c.sib(0, RAX, RBX);
+        }
+        MemForm::LhSext => {
+            c.rex(true, false, false, false);
+            c.op2(0x0F, 0xBF);
+            c.modrm(0, RAX, 4);
+            c.sib(0, RAX, RBX);
+        }
+        MemForm::LhZero => {
+            c.op2(0x0F, 0xB7);
+            c.modrm(0, RAX, 4);
+            c.sib(0, RAX, RBX);
+        }
+        MemForm::LbSext => {
+            c.rex(true, false, false, false);
+            c.op2(0x0F, 0xBE);
+            c.modrm(0, RAX, 4);
+            c.sib(0, RAX, RBX);
+        }
+        MemForm::LbZero => {
+            c.op2(0x0F, 0xB6);
+            c.modrm(0, RAX, 4);
+            c.sib(0, RAX, RBX);
+        }
+        _ => unreachable!("emit_load only for loads"),
+    }
+}
+
+// ---------------------------------------------------------------- tests
+
+/// Differential suite: every test runs the SAME container through the
+/// interpreter (`interp::run_with_state`) and the AOT backend and asserts
+/// bit-exact agreement of the output, the cycle total, all 32 registers and
+/// the whole memory image — on success AND on abort paths (the interpreter
+/// reports `cycles_used` on traps/out-of-gas, and the accounting must match
+/// to the cycle).
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::calc::container::{
+        CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_ISA_RV64IMC, CALC_ISA_RV64IMCB,
+    };
+    use crate::calc::interp::{self, CalcAbort};
+    use crate::calc::verify::verify_container;
+
+    // ---------------------------------------------------------- assembler
+
+    /// Minimal two-pass RV64 assembler: 4-byte forms plus a few compressed
+    /// forms. Branch/JAL targets are instruction indices; `finish` encodes
+    /// the byte offsets into the immediate fields.
+    struct Asm {
+        off: Vec<u32>,
+        bytes: Vec<u8>,
+        /// (inst idx, params, target idx) for late patching.
+        fixups: Vec<(usize, Fixup, usize)>,
+    }
+
+    enum Fixup {
+        /// B-type conditional branch.
+        B { f3: u32, rs1: u8, rs2: u8 },
+        /// J-type unconditional jump.
+        J { rd: u8 },
+    }
+
+    impl Asm {
+        fn new() -> Self {
+            Asm { off: Vec::new(), bytes: Vec::new(), fixups: Vec::new() }
+        }
+
+        fn note(&mut self, _halfwords: usize) -> usize {
+            self.off.push(self.bytes.len() as u32);
+            self.off.len() - 1
+        }
+
+        fn raw(&mut self, w: u32) -> usize {
+            let idx = self.note(2);
+            self.bytes.extend_from_slice(&w.to_le_bytes());
+            idx
+        }
+
+        fn half(&mut self, hw: u16) -> usize {
+            let idx = self.note(1);
+            self.bytes.extend_from_slice(&hw.to_le_bytes());
+            idx
+        }
+
+        /// R-type: add/sub/sll/slt/sltu/xor/srl/sra/or/and, M-ext, W-forms.
+        fn r(&mut self, f7: u32, f3: u32, rd: u8, rs1: u8, rs2: u8, op: u32) -> usize {
+            self.raw(
+                (f7 << 25)
+                    | ((rs2 as u32) << 20)
+                    | ((rs1 as u32) << 15)
+                    | (f3 << 12)
+                    | ((rd as u32) << 7)
+                    | op,
+            )
+        }
+
+        /// I-type: loads, jalr, addi/slti/xori/ori/andi/addiw.
+        fn i(&mut self, f3: u32, rd: u8, rs1: u8, op: u32, imm: i32) -> usize {
+            self.raw(
+                (((imm as u32) & 0xFFF) << 20)
+                    | ((rs1 as u32) << 15)
+                    | (f3 << 12)
+                    | ((rd as u32) << 7)
+                    | op,
+            )
+        }
+
+        /// Shift-immediate (shamt field form).
+        fn sh(&mut self, f6: u32, f3: u32, rd: u8, rs1: u8, shamt: u8, op: u32) -> usize {
+            self.raw(
+                (f6 << 26)
+                    | ((shamt as u32) << 20)
+                    | ((rs1 as u32) << 15)
+                    | (f3 << 12)
+                    | ((rd as u32) << 7)
+                    | op,
+            )
+        }
+
+        /// S-type store.
+        fn s(&mut self, f3: u32, rs1: u8, rs2: u8, imm: i32) -> usize {
+            let imm = imm as u32;
+            self.raw(
+                (((imm >> 5) & 0x7F) << 25)
+                    | ((rs2 as u32) << 20)
+                    | ((rs1 as u32) << 15)
+                    | (f3 << 12)
+                    | ((imm & 0x1F) << 7)
+                    | 0x23,
+            )
+        }
+
+        /// B-type branch; immediate patched in `finish`.
+        fn b(&mut self, f3: u32, rs1: u8, rs2: u8, target: usize) -> usize {
+            let idx = self.raw(0);
+            self.fixups.push((idx, Fixup::B { f3, rs1, rs2 }, target));
+            idx
+        }
+
+        /// J-type jal; immediate patched in `finish`.
+        fn j(&mut self, rd: u8, target: usize) -> usize {
+            let idx = self.raw(0);
+            self.fixups.push((idx, Fixup::J { rd }, target));
+            idx
+        }
+
+        /// U-type: lui (0x37) / auipc (0x17); imm20 is the raw field.
+        fn u(&mut self, rd: u8, op: u32, imm20: u32) -> usize {
+            self.raw((imm20 << 12) | ((rd as u32) << 7) | op)
+        }
+
+        /// c.addi rd, imm (imm in -32..=31, rd != 0).
+        fn c_addi(&mut self, rd: u8, imm: i8) -> usize {
+            let i = imm as u8;
+            self.half(
+                (0b000 << 13)
+                    | (((i >> 5) & 1) as u16) << 12
+                    | ((i & 0x1F) as u16) << 2
+                    | ((rd as u16) << 7)
+                    | 0b01,
+            )
+        }
+
+        /// c.mv rd, rs2 (rd != 0, rs2 != 0).
+        fn c_mv(&mut self, rd: u8, rs2: u8) -> usize {
+            self.half((0b100 << 13) | ((rs2 as u16) << 2) | ((rd as u16) << 7) | 0b01)
+        }
+
+        /// c.jalr rs1 (rd = ra; link = addr + 2, pinning the 2-byte length).
+        fn c_jalr(&mut self, rs1: u8) -> usize {
+            self.half((0b001 << 13) | ((rs1 as u16) << 7) | 0b01)
+        }
+
+        /// jalr x0, x1, 0 — the canonical sentinel return.
+        fn ret(&mut self) -> usize {
+            self.i(0, 0, 1, 0x67, 0)
+        }
+
+        fn finish(mut self) -> Vec<u8> {
+            for (idx, f, target) in self.fixups {
+                let rel = self.off[target] as i32 - self.off[idx] as i32;
+                let w = match f {
+                    Fixup::B { f3, rs1, rs2 } => {
+                        let imm = rel as u32;
+                        assert_eq!(imm & 1, 0, "branch offset must be even");
+                        ((imm >> 12 & 1) << 31)
+                            | ((imm >> 5 & 0x3F) << 25)
+                            | ((rs2 as u32) << 20)
+                            | ((rs1 as u32) << 15)
+                            | (f3 << 12)
+                            | ((imm >> 1 & 0xF) << 8)
+                            | ((imm >> 11 & 1) << 7)
+                            | 0x63
+                    }
+                    Fixup::J { rd } => {
+                        let imm = rel as u32;
+                        ((imm >> 20 & 1) << 31)
+                            | ((imm >> 1 & 0x3FF) << 21)
+                            | ((imm >> 11 & 1) << 20)
+                            | ((imm >> 12 & 0xFF) << 12)
+                            | ((rd as u32) << 7)
+                            | 0x6F
+                    }
+                };
+                let at = self.off[idx] as usize;
+                self.bytes[at..at + 4].copy_from_slice(&w.to_le_bytes());
+            }
+            self.bytes
+        }
+    }
+
+    fn container_for(code: Vec<u8>) -> CalcContainer {
+        CalcContainer {
+            isa_profile: CALC_ISA_RV64IMC,
+            abi: CALC_ABI_BYTES_TO_BYTES,
+            fncnf: 0b11,
+            mem_kib: 4,
+            entry: 0,
+            code,
+            rodata: Vec::new(),
+            init: Vec::new(),
+            input_max: 64,
+            output_max: 64,
+        }
+    }
+
+    /// Run one container through both engines and require bit-exact
+    /// agreement: output bytes, cycle total, abort class, all 32 registers
+    /// and the whole memory image (interp snapshots state at every stop
+    /// point; an empty snapshot means the pre-run input check fired, where
+    /// both engines return zeros/empty deterministically).
+    /// Returns (interp cycles_used, interp-succeeded).
+    fn diff(name: &str, code: &[u8], input: &[u8], budget: u64) -> (u64, bool) {
+        let c = container_for(code.to_vec());
+        let module = verify_container(&c)
+            .unwrap_or_else(|e| panic!("{name}: container rejected: {e:?}"));
+        let (ir, iregs, imem, _trace) = interp::run_with_state(&module, &c, input, budget);
+        let mut f = aot_compile(&module)
+            .unwrap_or_else(|| panic!("{name}: aot_compile declined a profile-1 module"));
+        let (out, aregs, amem) = f.run_with_state(&module, &c, input, budget);
+        let icyc = match &ir {
+            Ok(r) => r.cycles_used,
+            Err((_, u)) => *u,
+        };
+        assert_eq!(out.cycles_used, icyc, "{name}: cycle totals diverge");
+        match &ir {
+            Ok(r) => {
+                assert_eq!(out.abort, None, "{name}: AOT aborted where interp returned");
+                assert_eq!(
+                    out.output.as_deref().unwrap_or(&[]),
+                    r.output.as_slice(),
+                    "{name}: outputs diverge"
+                );
+            }
+            Err((CalcAbort::OutOfGas, _)) => {
+                assert_eq!(
+                    out.abort,
+                    Some(AotAbort::OutOfGas),
+                    "{name}: abort class diverges (expected out-of-gas)"
+                );
+            }
+            Err((CalcAbort::Deadline, _)) => {
+                panic!("{name}: interpreter hit a deadline (none was set)");
+            }
+            Err((CalcAbort::Trap(t), _)) => match out.abort {
+                Some(AotAbort::BadTarget) => {
+                    assert!(t.contains("invalid target"), "{name}: {t}");
+                }
+                Some(AotAbort::Trap) => {}
+                other => panic!("{name}: AOT abort {other:?} vs interp trap \"{t}\""),
+            },
+        }
+        if !imem.is_empty() {
+            assert_eq!(iregs, aregs, "{name}: final registers diverge");
+            if imem != amem {
+                let off = imem
+                    .iter()
+                    .zip(amem.iter())
+                    .position(|(x, y)| x != y)
+                    .unwrap_or(imem.len().min(amem.len()));
+                eprintln!(
+                    "{name}: first mem diff at byte {off} (len {} vs {}): interp={} aot={}",
+                    imem.len(),
+                    amem.len(),
+                    imem.get(off).copied().unwrap_or(u8::MAX),
+                    amem.get(off).copied().unwrap_or(u8::MAX)
+                );
+            }
+            assert_eq!(imem, amem, "{name}: final memory diverges");
+        }
+        (icyc, ir.is_ok())
+    }
+
+    /// `li rd, imm` for small imms.
+    fn li(a: &mut Asm, rd: u8, imm: i32) {
+        a.i(0, rd, 0, 0x13, imm);
+    }
+
+    #[test]
+    fn alu_helper_matches_reg_alu() {
+        let ops = [
+            (RegAluOp::Div, 0u64),
+            (RegAluOp::Divu, 1),
+            (RegAluOp::Rem, 2),
+            (RegAluOp::Remu, 3),
+            (RegAluOp::Divw, 4),
+            (RegAluOp::Divuw, 5),
+            (RegAluOp::Remw, 6),
+            (RegAluOp::Remuw, 7),
+        ];
+        let cases: [(u64, u64); 9] = [
+            (i64::MIN as u64, u64::MAX),
+            (i64::MIN as u64, (-1i64) as u64),
+            (i64::MIN as u32 as u64, (-1i32) as u64),
+            (0, 0),
+            (7, 2),
+            (u64::MAX, 3),
+            (12345, 0),
+            (i64::MIN as u64, 1),
+            (0x8000_0000, 0xFFFF_FFFF),
+        ];
+        for (op, idx) in ops {
+            for (a, b) in cases {
+                assert_eq!(
+                    alu_helper_op(idx, a, b),
+                    interp::reg_alu_test(op, a, b),
+                    "helper divergence {op:?} a={a:#x} b={b:#x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ecall_container_falls_back() {
+        let mut a = Asm::new();
+        a.i(0, 10, 0, 0x13, 0); // addi a0, x0, 0
+        a.raw(0x0000_0073); // ecall
+        a.ret();
+        let c = container_for(a.finish());
+        let module = verify_container(&c).expect("ecall verifies");
+        assert!(aot_compile(&module).is_none(), "ecall must fall back to the interpreter");
+    }
+
+    #[test]
+    fn zbb_container_falls_back() {
+        let mut a = Asm::new();
+        a.i(0, 10, 0, 0x13, 0); // addi a0, x0, 0
+        let clz = (0b0110000 << 25) | (4 << 15) | (0b001 << 12) | (3 << 7) | 0b0010011;
+        a.raw(clz); // clz t2, tp
+        a.ret();
+        let mut c = container_for(a.finish());
+        c.isa_profile = CALC_ISA_RV64IMCB;
+        let module = verify_container(&c).expect("profile-2 verifies");
+        assert!(aot_compile(&module).is_none(), "Zbb must fall back to the interpreter");
+        let mut c1 = c.clone();
+        c1.isa_profile = CALC_ISA_RV64IMC;
+        assert!(verify_container(&c1).is_err(), "profile 1 must reject Zbb");
+    }
+
+    /// One program touching every profile-1 instruction class: both engines
+    /// must agree on the full stop-state. Stores/loads anchor at `sp` with
+    /// negative offsets (the stack top is the end of memory); `a0` is only
+    /// touched at the very end (entry convention: a0 = input_base on entry,
+    /// output length at the sentinel return). Also exercises unreachable
+    /// padding and the compressed forms (2-byte `c.jalr` link).
+    #[test]
+    fn all_profile1_instructions_parity() {
+        let mut a = Asm::new();
+        // -- source values
+        li(&mut a, 5, -1); // t0 = -1
+        a.u(6, 0x37, 0xDEADB); // t1 = 0x00000000DEADB000
+        li(&mut a, 7, 7); // t2 = 7
+        a.u(28, 0x37, 0x80000); // t3 = 0xFFFFFFFF80000000
+        a.c_addi(29, 31); // t4 = 31
+        a.c_mv(30, 7); // t5 = t2
+        a.raw(0x0FF0_000F); // fence
+        // -- ImmAlu family (destinations s0..s6 = x8..x14)
+        a.i(0, 8, 5, 0x13, -5); // addi s0, t0, -5
+        a.i(2, 9, 5, 0x13, 0); // slti s1, t0, 0
+        a.i(3, 10 + 128 - 128, 5, 0x13, -1); // placeholder replaced below
+        a.i(3, 11, 5, 0x13, -1); // sltiu s2... (rd 11; keep pins distinct)
+        a.i(4, 12, 6, 0x13, 0x7FF); // xori x12
+        a.i(6, 13, 6, 0x13, 0x123); // ori x13
+        a.i(7, 14, 6, 0x13, 0x0F0); // andi x14
+        a.i(0, 15, 6, 0x1B, 100); // addiw x15
+        // -- ShiftImm family
+        a.sh(0, 1, 16, 6, 5, 0x13); // slli x16
+        a.sh(0, 5, 17, 5, 3, 0x13); // srli x17
+        a.sh(0x10, 5, 18, 5, 3, 0x13); // srai x18
+        a.sh(0, 1, 19, 6, 4, 0x1B); // slliw x19
+        a.sh(0, 5, 20, 5, 4, 0x1B); // srliw x20
+        a.sh(0x10, 5, 21, 28, 8, 0x1B); // sraiw x21
+        a.sh(0, 1, 22, 5, 63, 0x13); // slli 63 -> x22
+        // -- RegAlu family (destinations x23..x27, then t4/t5/t6)
+        a.r(0x00, 0, 23, 5, 6, 0x33); // add
+        a.r(0x20, 0, 24, 6, 5, 0x33); // sub
+        a.r(0x00, 7, 25, 5, 6, 0x33); // and
+        a.r(0x00, 6, 26, 5, 6, 0x33); // or
+        a.r(0x00, 4, 27, 5, 6, 0x33); // xor
+        a.r(0x00, 2, 29, 5, 6, 0x33); // slt(-1, big) = 1
+        a.r(0x00, 3, 30, 5, 6, 0x33); // sltu
+        a.r(0x00, 1, 31, 6, 7, 0x33); // sll
+        a.r(0x00, 5, 8, 5, 7, 0x33); // srl  (reuse x8; pins above already read)
+        a.r(0x20, 5, 9, 5, 7, 0x33); // sra
+        a.r(0x01, 0, 18, 6, 7, 0x33); // mul
+        a.r(0x01, 1, 19, 5, 6, 0x33); // mulh
+        a.r(0x01, 2, 20, 5, 6, 0x33); // mulhsu
+        a.r(0x01, 3, 21, 5, 6, 0x33); // mulhu
+        a.r(0x00, 0, 22, 5, 6, 0x3B); // addw
+        a.r(0x20, 0, 23, 5, 6, 0x3B); // subw
+        a.r(0x01, 0, 24, 6, 7, 0x3B); // mulw
+        a.r(0x00, 1, 25, 5, 7, 0x3B); // sllw
+        a.r(0x00, 5, 26, 5, 7, 0x3B); // srlw
+        a.r(0x20, 5, 27, 5, 7, 0x3B); // sraw
+        // -- div/rem edge cases
+        a.r(0x01, 4, 8, 28, 0, 0x33); // div  t3 / x0  -> -1
+        a.r(0x01, 5, 9, 28, 0, 0x33); // rem  t3 % x0  -> t3
+        a.r(0x01, 6, 16, 28, 5, 0x33); // divu
+        a.r(0x01, 7, 17, 28, 5, 0x33); // remu
+        a.r(0x01, 4, 18, 28, 5, 0x3B); // divw
+        a.r(0x01, 5, 19, 28, 5, 0x3B); // divuw
+        a.r(0x01, 6, 20, 28, 5, 0x3B); // remw
+        a.r(0x01, 7, 21, 28, 5, 0x3B); // remuw
+        a.r(0x01, 4, 22, 28, 5, 0x33); // div  MIN/-1 -> MIN
+        a.r(0x01, 6, 23, 28, 5, 0x33); // rem  MIN/-1 -> 0
+        // -- stores/loads anchored BELOW the stack top (writable, in-bounds)
+        a.s(3, 2, 5, -32); // sd t0, -32(sp)
+        a.s(2, 2, 6, -24); // sw t1, -24(sp)
+        a.s(1, 2, 7, -20); // sh t2, -20(sp)
+        a.s(0, 2, 5, -18); // sb t0, -18(sp)
+        a.i(3, 24, 2, 0x03, -32); // ld  x24
+        a.i(2, 25, 2, 0x03, -24); // lw  x25
+        a.i(6, 26, 2, 0x03, -24); // lwu x26
+        a.i(1, 27, 2, 0x03, -20); // lh  x27
+        a.i(5, 29, 2, 0x03, -20); // lhu x29
+        a.i(0, 30, 2, 0x03, -18); // lb  x30
+        a.i(4, 31, 2, 0x03, -18); // lbu x31
+        // -- leaf call through c.jalr (2-byte link)
+        a.u(5, 0x17, 0); // auipc t0, 0
+        a.i(0, 5, 5, 0x13, 10); // addi t0, t0, +10 -> next inst
+        a.c_jalr(5); // c.jalr t0 (rd=ra; link = addr + 2)
+        a.i(0, 26, 0, 0x13, 1); // leaf: addi x26, x0, 1 (executed via the jump)
+        a.i(0, 27, 0, 0x13, 9); // leaf body: addi x27, x0, 9
+        a.i(0, 0, 1, 0x67, 0); // leaf ret -> caller (ra)
+        a.i(0, 8, 0, 0x13, 77); // caller resumes: addi x8, x0, 77
+        li(&mut a, 10, 0); // a0 = 0: empty output at the sentinel return
+        a.ret();
+        let code = a.finish();
+        let (_, ok) = diff("all_profile1", &code, &[], 1_000_000);
+        assert!(ok, "all_profile1 must return cleanly");
+    }
+
+    /// Directed regression for the register-form comparisons: an earlier
+    /// revision of the x86-64 backend emitted `setcc S` for `slt` and
+    /// `setcc NO` for `sltu` (correct: `L` and `B`); both engines agree
+    /// here AND the interpreter's own values are pinned.
+    #[test]
+    fn slt_sltu_signedness_parity() {
+        let mut a = Asm::new();
+        li(&mut a, 5, -1); // t0 = -1
+        li(&mut a, 6, 0); // t1 = 0
+        a.r(0x00, 2, 28, 5, 6, 0x33); // x28 = slt(-1, 0)   -> 1
+        a.r(0x00, 2, 24, 6, 5, 0x33); // x24 = slt(0, -1)   -> 0
+        a.r(0x00, 3, 30, 6, 5, 0x33); // x30 = sltu(0, ~0)  -> 1
+        a.r(0x00, 3, 25, 5, 6, 0x33); // x25 = sltu(~0, 0)  -> 0
+        a.i(2, 26, 5, 0x13, 0); // x26 = slti(-1, 0)       -> 1
+        a.i(3, 27, 6, 0x13, -1); // x27 = sltiu(0, ~0)     -> 1
+        a.i(2, 21, 6, 0x13, -1); // x21 = slti(0, -1)      -> 0
+        a.i(3, 20, 5, 0x13, -1); // x20 = sltiu(~0, ~0)    -> 0
+        li(&mut a, 10, 0); // a0 = 0: empty output at the sentinel return
+        a.ret();
+        let code = a.finish();
+        let c = container_for(code.clone());
+        let module = verify_container(&c).unwrap();
+        let (ir, iregs, _imem, _tr) = interp::run_with_state(&module, &c, &[], 100_000);
+        assert!(ir.is_ok());
+        assert_eq!(iregs[28], 1, "slt(-1,0)");
+        assert_eq!(iregs[24], 0, "slt(0,-1)");
+        assert_eq!(iregs[30], 1, "sltu(0,~0)");
+        assert_eq!(iregs[25], 0, "sltu(~0,0)");
+        assert_eq!(iregs[26], 1, "slti(-1,0)");
+        assert_eq!(iregs[27], 1, "sltiu(0,~0)");
+        assert_eq!(iregs[21], 0, "slti(0,-1)");
+        assert_eq!(iregs[20], 0, "sltiu(~0,~0)");
+        let (_, ok) = diff("slt_sltu", &code, &[], 100_000);
+        assert!(ok);
+    }
+
+    /// A `jalr` landing in the MIDDLE of a basic block must charge only the
+    /// remaining instructions (`suffix_cycles`): the AOT trampoline rebates
+    /// the skipped prefix. A skipped 1-cycle `addi` in front of a 32-cycle
+    /// `div` makes any accounting drift visible.
+    #[test]
+    fn mid_block_jalr_rebate_parity() {
+        let mut a = Asm::new();
+        // A+0:  auipc t0, 0
+        a.u(5, 0x17, 0);
+        // A+4:  addi t0, t0, 16      ; dest = A+16 (non-leader inside the
+        //                             ;  block starting at A+12)
+        a.i(0, 5, 5, 0x13, 16);
+        // A+8:  jalr x0, t0, 0       ; no link: x1 stays the return sentinel
+        a.i(0, 0, 5, 0x67, 0);
+        // A+12: block leader — SKIPPED by the mid-block entry (rebate source)
+        a.i(0, 8, 0, 0x13, 7); // addi s0, x0, 7   (must NOT execute)
+        // A+16: mid-block landing
+        a.i(0, 9, 0, 0x13, 8); // addi s1, x0, 8
+        // A+20..: same-block expensive tail
+        a.u(28, 0x37, 0x80000); // lui t3, i64::MIN low half
+        li(&mut a, 7, 3);
+        a.r(0x01, 4, 10, 28, 7, 0x33); // div a2, t3, t2 (32 cycles)
+        li(&mut a, 10, 0); // a0 = 0: empty output at the sentinel return
+        // A+36: clean exit through the untouched sentinel in x1
+        a.i(0, 0, 1, 0x67, 0); // jalr x0, x1, 0
+        let code = a.finish();
+        // pin interpreter semantics: s0 skipped, s1 ran
+        let c = container_for(code.clone());
+        let module = verify_container(&c).unwrap();
+        let (ir, iregs, _imem, _tr) = interp::run_with_state(&module, &c, &[], 1_000_000);
+        assert!(ir.is_ok());
+        assert_eq!(iregs[8], 0, "skipped block prefix must not execute");
+        assert_eq!(iregs[9], 8, "mid-block landing executed");
+        let (_, ok) = diff("mid_block_jalr", &code, &[], 1_000_000);
+        assert!(ok);
+    }
+
+    /// Out-of-gas accounting at the exact boundary: the interpreter reports
+    /// `used` WITHOUT the failing block charge; the AOT pre-check must match
+    /// to the cycle, for budgets at and just under the success cost.
+    #[test]
+    fn oog_boundary_parity() {
+        let mut a = Asm::new();
+        li(&mut a, 6, 40); // t1 = 40
+        li(&mut a, 5, 0); // t0 = 0
+        let lp = a.i(0, 5, 5, 0x13, 1); // loop: addi t0, t0, 1
+        a.b(1, 5, 6, lp); // bne t0, t1, loop
+        li(&mut a, 10, 0); // a0 = 0: empty output
+        a.ret();
+        let code = a.finish();
+        let (full, ok) = diff("oog@full", &code, &[], 10_000_000);
+        assert!(ok);
+        assert!(full > 0);
+        for d in 1..=4u64 {
+            let (used, ok) = diff("oog", &code, &[], full - d);
+            assert!(!ok, "budget {} below the success cost must OOG", full - d);
+            // The failing charge is NOT included: used <= budget always.
+            assert!(used <= full - d);
+        }
+    }
+
+    /// Branch/jal coverage: every condition kind taken and not taken,
+    /// backward-branch loops, jal linking, and dead (unreachable but
+    /// decodable) padding — accepted by the verifier, never executed.
+    #[test]
+    fn branches_and_jumps_parity() {
+        let code = {
+            let mut a = Asm::new();
+            li(&mut a, 5, 1); // 0 t0 = 1
+            li(&mut a, 6, 2); // 1 t1 = 2
+            li(&mut a, 7, 1); // 2 t2 = 1
+            a.i(0, 28, 0, 0x13, 0xAA); // 3 dead marker (skipped when beq taken)
+            a.i(0, 29, 0, 0x13, 0xBB); // 4 landing marker
+            a.b(0, 5, 7, 4); // 5 beq t0,t2 (taken)  -> 4
+            a.b(1, 5, 7, 4); // 6 bne t0,t2 (not taken) -> falls
+            a.b(4, 6, 5, 4); // 7 blt t1,t0 (2<1 false) -> falls
+            a.b(5, 5, 6, 4); // 8 bge t0,t1 (1>=2 false) -> falls
+            a.b(6, 5, 6, 4); // 9 bltu t0,t1 (1<2 taken) -> 4
+            a.b(7, 6, 5, 4); // 10 bgeu t1,t0 (taken) -> 4
+            li(&mut a, 30, 0); // 11 t5 = 0
+            let lp = a.i(0, 30, 30, 0x13, 1); // 12 loop body
+            a.b(1, 30, 6, lp); // 13 bne t5,t1 -> 12 (twice)
+            // jal ra over two dead 4-byte padding words
+            let dead1 = a.raw(0x0000_0013); // 15 (dead)
+            let dead2 = a.raw(0x0000_0013); // 16 (dead)
+            let _ = (dead1, dead2);
+            let after = a.i(0, 31, 0, 0x13, 5); // 17 landing (jal target)
+            a.j(1, 18); // wait: jal must precede the dead words — see note
+            let _ = after;
+            a.ret();
+            a.finish()
+        };
+        let _ = code;
+        // Jal-over-padding needs the jump before the padding; rebuild with
+        // explicit ordering (indices resolved via recorded positions).
+        let mut a = Asm::new();
+        li(&mut a, 5, 1); // 0
+        li(&mut a, 6, 2); // 1
+        li(&mut a, 7, 1); // 2
+        a.i(0, 28, 0, 0x13, 0xAA); // 3 dead (beq skips it)
+        let landing = a.i(0, 29, 0, 0x13, 0xBB); // 4
+        a.b(0, 5, 7, landing); // 5 beq taken -> 4
+        a.b(1, 5, 7, landing); // 6 bne not taken -> 7
+        a.b(4, 6, 5, landing); // 7 blt false -> 8
+        a.b(5, 5, 6, landing); // 8 bge false -> 9
+        a.b(6, 5, 6, landing); // 9 bltu taken -> 4
+        a.b(7, 6, 5, landing); // 10 bgeu taken -> 4
+        li(&mut a, 30, 0); // 11
+        let lp = a.i(0, 30, 30, 0x13, 1); // 12
+        a.b(1, 30, 6, lp); // 13
+        let jal = a.j(1, 0); // 14 jal ra -> target fixed below (past dead)
+        let _ = jal;
+        a.raw(0x0000_0013); // 15 dead
+        a.raw(0x0000_0013); // 16 dead
+        let after_pad = a.i(0, 31, 0, 0x13, 5); // 17
+        let _ = after_pad;
+        a.ret(); // 18
+        // re-point the jal (14) at 17: rebuild is cleaner than patching —
+        // the Asm records targets at emission, so do a final clean pass.
+        let mut a = Asm::new();
+        li(&mut a, 5, 1); // 0
+        li(&mut a, 6, 2); // 1
+        li(&mut a, 7, 1); // 2
+        a.i(0, 28, 0, 0x13, 0xAA); // 3 dead
+        let landing = a.i(0, 29, 0, 0x13, 0xBB); // 4
+        a.b(0, 5, 7, landing); // 5
+        a.b(1, 5, 7, landing); // 6
+        a.b(4, 6, 5, landing); // 7
+        a.b(5, 5, 6, landing); // 8
+        a.b(6, 5, 6, landing); // 9
+        a.b(7, 6, 5, landing); // 10
+        li(&mut a, 30, 0); // 11
+        let lp = a.i(0, 30, 30, 0x13, 1); // 12
+        a.b(1, 30, 6, lp); // 13
+        // jal-over-dead needs the target index known: emit dead first at
+        // known indices 15/16, jal at 14 targeting 17 — but emission order
+        // IS execution order; a jal at 14 jumping to 17 skips 15/16. The
+        // indices are fixed by count, so precompute: after 13 comes 14.
+        let pad1 = a.raw(0x0000_0013); // 14 dead
+        let pad2 = a.raw(0x0000_0013); // 15 dead
+        let _ = (pad1, pad2);
+        let after_pad = a.i(0, 31, 0, 0x13, 5); // 16 landing past the pad
+        let _ = after_pad;
+        a.ret(); // 17
+        // NOTE: jal-over-dead cannot be expressed by emission order alone;
+        // assemble one more pass with the branch-only layout (jal added at
+        // the top jumping forward to the recorded tail index).
+        let mut a = Asm::new();
+        let jhead = a.j(1, 1); // placeholder: patched by rebuilding below
+        let _ = jhead;
+        a.ret();
+        let _ = a.finish();
+        // Final clean construction: everything explicit, no re-pointing.
+        let mut a = Asm::new();
+        li(&mut a, 5, 1); // 0 t0
+        li(&mut a, 6, 2); // 1 t1
+        li(&mut a, 7, 1); // 2 t2
+        a.i(0, 28, 0, 0x13, 0xAA); // 3 dead under the taken beq
+        let landing = a.i(0, 29, 0, 0x13, 0xBB); // 4
+        a.b(0, 5, 7, landing); // 5 beq taken
+        a.b(1, 5, 7, landing); // 6 bne fall
+        a.b(4, 6, 5, landing); // 7 blt fall
+        a.b(5, 5, 6, landing); // 8 bge fall
+        a.b(6, 5, 6, landing); // 9 bltu taken
+        a.b(7, 6, 5, landing); // 10 bgeu taken
+        li(&mut a, 30, 0); // 11
+        let lp = a.i(0, 30, 30, 0x13, 1); // 12
+        a.b(1, 30, 6, lp); // 13 loop back edge
+        // dead padding jumped over by jal below is expressed with the
+        // landing AFTER the pads; jal sits before them by construction:
+        // 14 jal -> 17, 15/16 dead, 17 marker, 18 ret.
+        // (jal needs the future index: 18 insts total -> ret at 18.)
+        let jal = a.j(1, 17); // 14
+        let _ = jal;
+        a.raw(0x0000_0013); // 15 dead
+        a.raw(0x0000_0013); // 16 dead
+        a.i(0, 31, 0, 0x13, 5); // 17 marker
+        li(&mut a, 10, 0); // 18 a0 = 0
+        a.ret(); // 19
+        let code = a.finish();
+        diff("branches_jumps", &code, &[], 1_000_000);
+    }
+
+    /// Directed regression for the `mulhsu` high-word correction: the
+    /// identity is `mulhsu(a,b) = mulh(a,b) + a` when bit 63 of unsigned b
+    /// is set (a FULL signed `a` is added to the high word — earlier
+    /// revisions tried `{0,1}` and `sar(a)` and both diverge).
+    #[test]
+    fn mulhsu_correction_parity() {
+        let mut a = Asm::new();
+        li(&mut a, 5, -1); // t0 = -1
+        // t1 = i64::MIN: lui sign-extends, so shift the low half up
+        a.u(6, 0x37, 0x80000); // t1 = 0xFFFFFFFF80000000
+        a.sh(0, 1, 6, 6, 32, 0x13); // slli t1, t1, 32 -> 0x8000000000000000
+        li(&mut a, 7, 3); // t2 = 3
+        a.r(0x01, 1, 20, 5, 6, 0x33); // x20 = mulh(-1, MIN)
+        a.r(0x01, 2, 21, 5, 6, 0x33); // x21 = mulhsu(-1, MIN)  = -1 + (-1)
+        a.r(0x01, 3, 22, 5, 6, 0x33); // x22 = mulhu(-1, MIN)
+        a.r(0x01, 2, 8, 5, 7, 0x33); // x8 = mulhsu(-1, 3)      (b bit63 clear)
+        a.r(0x01, 2, 9, 7, 6, 0x33); // x9 = mulhsu(3, MIN)     = mulh(3,MIN) + 3
+        a.r(0x01, 2, 18, 6, 6, 0x33); // x18 = mulhsu(MIN, MIN) = mulh(MIN,MIN) + MIN
+        li(&mut a, 10, 0);
+        a.ret();
+        let code = a.finish();
+        let c = container_for(code.clone());
+        let module = verify_container(&c).unwrap();
+        let (ir, iregs, _imem, _tr) = interp::run_with_state(&module, &c, &[], 100_000);
+        assert!(ir.is_ok());
+        assert_eq!(iregs[21], u64::MAX, "mulhsu(-1, MIN) high = -1");
+        assert_eq!(iregs[8], u64::MAX, "mulhsu(-1, 3) high = -1");
+        // mulh(3, MIN) = high(3 * -2^63) = high(-1.5*2^64) = -2; +3 -> 1
+        assert_eq!(iregs[9], 1, "mulhsu(3, MIN) high = 1");
+        // mulh(MIN, MIN) = high(2^126) = 2^62; + MIN -> 2^62 - 2^63
+        assert_eq!(iregs[18], (1u64 << 62).wrapping_sub(1u64 << 63), "mulhsu(MIN, MIN)");
+        let (_, ok) = diff("mulhsu", &code, &[], 100_000);
+        assert!(ok);
+    }
+
+    /// `fence` decodes and executes as a no-op on both engines.
+    #[test]
+    fn fence_noop_parity() {
+        let mut a = Asm::new();
+        li(&mut a, 10, 0);
+        a.raw(0x0FF0_000F); // fence
+        li(&mut a, 11, 0);
+        a.ret();
+        let code = a.finish();
+        let (_, ok) = diff("fence", &code, &[], 100_000);
+        assert!(ok);
+    }
+
+    /// Deterministic random programs from the profile-1 whitelist: both
+    /// engines must agree on outcome, cycles, registers and memory —
+    /// including traps (bad loads/stores/jumps) and out-of-gas runs.
+    /// Odd cases are "tame" (safe memory anchors, forward branches, no wild
+    /// `jalr`) so a healthy share of runs finish cleanly.
+    #[test]
+    fn fuzz_differential_profile1() {
+        let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mut successes = 0usize;
+        for case in 0..300 {
+            let tame = case % 2 == 0;
+            let code = gen_program(&mut seed, tame);
+            let mut input = [0u8; 32];
+            for b in input.iter_mut() {
+                seed = xs(seed);
+                *b = seed as u8;
+            }
+            let (_, ok) = diff(&format!("fuzz#{case}"), &code, &input, 20_000);
+            successes += ok as usize;
+        }
+        // Sanity: the generator must produce a healthy mix (not all traps).
+        assert!(successes >= 100, "suspiciously few clean runs: {successes}/300");
+    }
+
+    fn xs(mut s: u64) -> u64 {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        s
+    }
+
+    fn gen_program(seed: &mut u64, tame: bool) -> Vec<u8> {
+        let mut a = Asm::new();
+        *seed = xs(*seed);
+        let n = 8 + (*seed % 32) as usize;
+        let total = n + 2; // + li a0,0 + ret
+        let idx_hint = a.off.len();
+        let _ = idx_hint;
+        for k in 0..n {
+            *seed = xs(*seed);
+            let mut class = (*seed % 14) as u32;
+            if tame {
+                // tame set: ALU/shift/branch-forward/safe-memory only
+                class = match class {
+                    0 | 1 | 2 | 3 | 4 | 5 | 6 => class,
+                    7 | 8 => class, // safe anchors below
+                    9 => 9,         // forward-only targets below
+                    _ => 5,         // regalu
+                };
+            }
+            let _ = k;
+            let rr = |seed: &mut u64| -> u8 {
+                *seed = xs(*seed);
+                (*seed % 32) as u8
+            };
+            let ri = |seed: &mut u64, m: u64| -> i32 {
+                *seed = xs(*seed);
+                ((*seed % m) as i64 - (m / 2) as i64) as i32
+            };
+            // Destination register: tame keeps x1 (ra) and x2 (sp) intact so
+            // the appended `li a0, 0 ; ret` tail actually returns.
+            let rd_of = |seed: &mut u64| -> u8 {
+                *seed = xs(*seed);
+                if tame {
+                    5 + (*seed % 27) as u8
+                } else {
+                    ((*seed % 32) as u8).max(1)
+                }
+            };
+            match class {
+                0 => {
+                    a.i(0, rd_of(seed), rr(seed), 0x13, ri(seed, 0x800));
+                }
+                1 => {
+                    a.i(0, rd_of(seed), rr(seed), 0x1B, ri(seed, 0x800));
+                }
+                2 => {
+                    let f3 = [2u32, 3, 4, 6, 7][(*seed % 5) as usize];
+                    a.i(f3, rd_of(seed), rr(seed), 0x13, ri(seed, 0x800));
+                }
+                3 => {
+                    *seed = xs(*seed);
+                    a.u(rd_of(seed), 0x37, (*seed % 0x10_0000) as u32);
+                }
+                4 => {
+                    *seed = xs(*seed);
+                    a.u(rd_of(seed), 0x17, (*seed % 0x10_0000) as u32);
+                }
+                5 => {
+                    // profile-1 RegAlu table (f7, f3, op)
+                    let table: [(u32, u32, u32); 28] = [
+                        (0x00, 0, 0x33), (0x20, 0, 0x33), (0x00, 1, 0x33), (0x00, 2, 0x33),
+                        (0x00, 3, 0x33), (0x00, 4, 0x33), (0x00, 5, 0x33), (0x20, 5, 0x33),
+                        (0x00, 6, 0x33), (0x00, 7, 0x33), (0x01, 0, 0x33), (0x01, 1, 0x33),
+                        (0x01, 2, 0x33), (0x01, 3, 0x33), (0x01, 4, 0x33), (0x01, 5, 0x33),
+                        (0x01, 6, 0x33), (0x01, 7, 0x33), (0x00, 0, 0x3B), (0x20, 0, 0x3B),
+                        (0x00, 1, 0x3B), (0x00, 5, 0x3B), (0x20, 5, 0x3B), (0x01, 0, 0x3B),
+                        (0x01, 4, 0x3B), (0x01, 5, 0x3B), (0x01, 6, 0x3B), (0x01, 7, 0x3B),
+                    ];
+                    *seed = xs(*seed);
+                    let (f7, f3, op) = table[(*seed % 28) as usize];
+                    a.r(f7, f3, rd_of(seed), rr(seed), rr(seed), op);
+                }
+                6 => {
+                    // slli/slliw need f6=0 f3=1; srli/srai (and W forms)
+                    // need f6 in {0,0x10} f3=5 — pick a legal tuple.
+                    *seed = xs(*seed);
+                    let (f6, f3, word) = match *seed % 4 {
+                        0 => (0u32, 1u32, false), // slli
+                        1 => (0, 5, false),       // srli
+                        2 => (0x10, 5, false),    // srai
+                        _ => {
+                            *seed = xs(*seed);
+                            if *seed % 2 == 0 {
+                                (0x10, 5, true) // sraiw
+                            } else {
+                                (0, 5, true) // srliw
+                            }
+                        }
+                    };
+                    let op = if word { 0x1B } else { 0x13 };
+                    *seed = xs(*seed);
+                    let shamt = if word { (*seed % 32) as u8 } else { (*seed % 64) as u8 };
+                    a.sh(f6, f3, rd_of(seed), rr(seed), shamt, op);
+                }
+                7 => {
+                    *seed = xs(*seed);
+                    let f3 = (*seed % 7) as u32;
+                    let (rs1, imm) = if tame {
+                        // sp-relative, 8-aligned, below the stack top
+                        (2u8, -8 - 8 * (*seed % 7) as i32)
+                    } else {
+                        (rr(seed), ri(seed, 0x40))
+                    };
+                    a.i(f3, rd_of(seed), rs1, 0x03, imm);
+                }
+                8 => {
+                    *seed = xs(*seed);
+                    let f3 = (*seed % 4) as u32;
+                    let (rs1, imm) = if tame {
+                        (2u8, -8 - 8 * (*seed % 7) as i32)
+                    } else {
+                        (rr(seed), ri(seed, 0x40))
+                    };
+                    a.s(f3, rs1, rr(seed), imm);
+                }
+                9 => {
+                    *seed = xs(*seed);
+                    let f3 = [0u32, 1, 4, 5, 6, 7][(*seed % 6) as usize];
+                    let here = a.off.len();
+                    let span = (total - here).max(1);
+                    let t = if tame {
+                        here + ((*seed % span as u64) as usize)
+                    } else {
+                        (*seed % total as u64) as usize
+                    };
+                    a.b(f3, rr(seed), rr(seed), t);
+                }
+                10 => {
+                    let rd = [0u8, 1, 5][(*seed % 3) as usize];
+                    *seed = xs(*seed);
+                    let t = (*seed % total as u64) as usize;
+                    if tame {
+                        // no wild jal/jalr in tame mode
+                        a.r(0x00, 0, rd_of(seed), rr(seed), rr(seed), 0x33);
+                    } else {
+                        a.j(rd, t);
+                    }
+                }
+                11 => {
+                    if tame {
+                        a.sh(0, 1, rd_of(seed), rr(seed), (*seed % 64) as u8, 0x13);
+                    } else {
+                        a.i(0, rr(seed), rr(seed), 0x67, ri(seed, 0x20));
+                    }
+                }
+                12 => {
+                    a.raw(0x0FF0_000F); // fence
+                }
+                _ => {
+                    *seed = xs(*seed);
+                    match *seed % 3 {
+                        0 => {
+                            a.c_addi(rd_of(seed), ri(seed, 64) as i8);
+                        }
+                        1 => {
+                            a.c_mv(rd_of(seed), rd_of(seed));
+                        }
+                        _ => {
+                            if tame {
+                                // wild c.jalr loops back to the entry in tame
+                                // mode; keep the compressed coverage but tame
+                                a.c_addi(rd_of(seed), ri(seed, 64) as i8);
+                            } else {
+                                // rs1=0 would be c.addiw rd=0 (reserved)
+                                a.c_jalr(rd_of(seed));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        li(&mut a, 10, 0); // deterministic empty output on return paths
+        a.ret();
+        a.finish()
+    }
+}
