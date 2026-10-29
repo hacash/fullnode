@@ -6,10 +6,11 @@
 //! access: a calc kernel can only see its own flat memory and the hash
 //! builtins behind `ecall`.
 //!
-//! ISA profiles coexist permanently (CKB RFC 0032 style — only add, never
-//! retire): profile 1 is plain RV64IMC, profile 2 adds the ratified Zbb/Zbc
-//! bit-manipulation set that rustc emits automatically with
-//! `-C target-feature=+zbb,+zbc`.
+//! The ISA is a single unified profile: RV64IMC plus the ratified
+//! Zbb/Zba/Zbs bit-manipulation set and Zbc carryless multiplies — what
+//! rustc emits with `-C target-feature=+zbb,+zba,+zbs,+zbc`. There is no
+//! profile versioning: the channel predates activation, so the whitelist
+//! is fixed in one shot.
 
 pub mod container;
 pub mod decode;
@@ -356,12 +357,11 @@ pub(crate) fn ceil_div(a: u64, b: u64) -> u64 {
 
 
 /// Build a calc container from a linked bare-metal image produced by the
-/// Rust cross-build pack step. `isa_profile` selects the instruction
-/// whitelist (`CALC_ISA_RV64IMC` or `CALC_ISA_RV64IMCB` for Zbb/Zbc); `code`
-/// is the executable image (.text), `rodata` the constant image placed at
-/// the next 16-byte boundary (the fixture link scripts use `. = ALIGN(16)`
-/// before `.rodata` — keep them in sync), `init` optional initialized
-/// writable data.
+/// Rust cross-build pack step. `code` is the executable image (.text),
+/// `rodata` the constant image placed at the next 16-byte boundary (the
+/// fixture link scripts use `. = ALIGN(16)` before `.rodata` — keep them
+/// in sync), `init` optional initialized writable data. The instruction
+/// whitelist is the single unified RV64IMC+Zbb/Zba/Zbs+Zbc profile.
 pub fn pack_container(
     mem_kib: u16,
     entry: u32,

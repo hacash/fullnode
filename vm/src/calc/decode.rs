@@ -2,8 +2,8 @@
 //! encodings decode.
 //!
 //! Decodes one instruction at `off` in the code stream into an executable
-//! `Inst`.
-//! enables the ratified Zbb/Zbc bit-manipulation set. Branch/JAL immediates
+//! `Inst`. The whitelist includes the ratified Zbb/Zba/Zbs/Zbc
+//! bit-manipulation set. Branch/JAL immediates
 //! stay byte-relative here; the verifier (`verify.rs`) resolves them to
 //! absolute in-container targets. Encoding reference: RISC-V unprivileged
 //! spec Volume I (I, M, C chapters) and the Bitmanip 1.0.0 release

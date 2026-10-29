@@ -24,10 +24,9 @@
 //!   interpreter's `out_of_gas` accounting.
 //! * Div/Rem families (all special cases) go through a host helper
 //!   mirroring `interp::reg_alu`; `mulh*` use native `mul/imul`.
-//! * Unsupported forms — `ecall`, and under ISA profile 2 every Zbb/Zbc
-//!   instruction — make `aot_compile` return `None`; the caller falls back
-//!   to the interpreter. `fence` executes as a no-op, matching the
-//!   single-hart interpreter.
+//! * Unsupported forms — `ecall`-bearing containers — make `aot_compile`
+//!   return `None`; the caller falls back to the interpreter. `fence`
+//!   executes as a no-op, matching the single-hart interpreter.
 //!
 //! This module is benchmark/differential-testing infrastructure, NOT
 //! consensus code: the consensus path keeps the pure interpreter as the
@@ -484,6 +483,16 @@ extern "C" fn alu_helper(op: u64, a: u64, b: u64) -> u64 {
 
 extern "C" fn resolve_jalr(ctx: *const ResolveCtx, dest: u64) -> u64 {
     let ctx = unsafe { &*ctx };
+    // Mirror `CalcModule::inst_at_addr`: targets above u32::MAX are never
+    // valid. Without this the `dest as u32` truncation below would alias
+    // 2^32 + <addr> onto <addr> and silently diverge from the interpreter
+    // (audit B2, pinned by the tests.loc probe and the isa suite).
+    if dest > u32::MAX as u64 {
+        unsafe {
+            (*ctx.state).aborted = 3;
+            return ctx.code.add(ctx.invalid_off as usize) as u64;
+        }
+    }
     match ctx.inst_addrs.binary_search(&(dest as u32)) {
         Ok(idx) => unsafe { ctx.code.add(ctx.inst_landing[idx] as usize) as u64 },
         Err(_) => {
@@ -698,9 +707,8 @@ enum Fixup {
 }
 
 /// Translate a verified module. Returns `None` when the module uses an
-/// instruction form this backend does not implement (`ecall`, and the
-/// Zbb/Zbc extensions of ISA profile 2) — the caller should fall back to
-/// the interpreter.
+/// instruction form this backend does not implement (`ecall`) — the
+/// caller should fall back to the interpreter.
 pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
     let lay = &module.layout;
     let mut c = Code::new();
@@ -1609,14 +1617,202 @@ mod tests {
             )
         }
 
-        /// c.mv rd, rs2 (rd != 0, rs2 != 0).
+        /// c.mv rd, rs2 (rd != 0, rs2 != 0). Quadrant 2 (op=10): funct3
+        /// 100, bit12 0, rs2 in bits[6:2]. (An earlier revision emitted
+        /// op=01, which decodes as the quadrant-1 misc-alu group — fake
+        /// coverage found by the audit's llvm-mc encoding verification.)
         fn c_mv(&mut self, rd: u8, rs2: u8) -> usize {
-            self.half((0b100 << 13) | ((rs2 as u16) << 2) | ((rd as u16) << 7) | 0b01)
+            self.half((0b100 << 13) | ((rs2 as u16) << 2) | ((rd as u16) << 7) | 0b10)
         }
 
-        /// c.jalr rs1 (rd = ra; link = addr + 2, pinning the 2-byte length).
+        /// c.jalr rs1 (rd = ra; link = addr + 2). Quadrant 2 (op=10):
+        /// funct3 100, bit12 1, rs2 field 0. (Earlier revision emitted
+        /// quadrant 1 funct3 001 — actually c.addiw.)
         fn c_jalr(&mut self, rs1: u8) -> usize {
-            self.half((0b001 << 13) | ((rs1 as u16) << 7) | 0b01)
+            self.half((0b100 << 13) | (1 << 12) | ((rs1 as u16) << 7) | 0b10)
+        }
+
+        // ---- additional compressed emitters for the fuzz generator
+        // (packing cross-checked against llvm-mc 18; same tables as
+        // tests/calc_isa_gen.rs) ----
+
+        /// c.li rd, imm.
+        fn c_li(&mut self, rd: u8, imm: i8) -> usize {
+            let i = imm as u8;
+            self.half(
+                (0b010 << 13)
+                    | (((i >> 5) & 1) as u16) << 12
+                    | ((i & 0x1F) as u16) << 2
+                    | ((rd as u16) << 7)
+                    | 0b01,
+            )
+        }
+        /// c.andi rd', imm (rd' = x8..x15).
+        fn c_andi(&mut self, rd: u8, imm: i8) -> usize {
+            let i = imm as u8;
+            self.half(
+                (0b100 << 13)
+                    | (((i >> 5) & 1) as u16) << 12
+                    | (0b10 << 10)
+                    | ((i & 0x1F) as u16) << 2
+                    | (((rd as u16 - 8) & 7) << 7)
+                    | 0b01,
+            )
+        }
+        /// c.slli (kind=0, full rd) / c.srli (1) / c.srai (2) (x8..x15).
+        fn c_shift(&mut self, kind: u8, rd: u8, shamt: u8) -> usize {
+            let b5 = (shamt >> 5) & 1;
+            let lo5 = (shamt & 0x1F) as u16;
+            match kind {
+                0 => self.half(
+                    (0b000 << 13)
+                        | ((b5 as u16) << 12)
+                        | lo5 << 2
+                        | ((rd as u16) << 7)
+                        | 0b10,
+                ),
+                1 | 2 => self.half(
+                    (0b100 << 13)
+                        | ((b5 as u16) << 12)
+                        | (((kind - 1) as u16) << 10)
+                        | lo5 << 2
+                        | (((rd as u16 - 8) & 7) << 7)
+                        | 0b01,
+                ),
+                _ => unreachable!(),
+            }
+        }
+        /// c.sub/xor/or/and/subw/addw rd', rs2' (x8..x15).
+        fn c_arith(&mut self, op: u8, rd: u8, rs2: u8) -> usize {
+            let (b12, sel): (u16, u16) = match op {
+                0 => (0, 0b00), // sub
+                1 => (0, 0b01), // xor
+                2 => (0, 0b10), // or
+                3 => (0, 0b11), // and
+                4 => (1, 0b00), // subw
+                _ => (1, 0b01), // addw
+            };
+            self.half(
+                (0b100 << 13)
+                    | (b12 << 12)
+                    | (0b11 << 10)
+                    | (sel << 5)
+                    | (((rs2 as u16 - 8) & 7) << 2)
+                    | (((rd as u16 - 8) & 7) << 7)
+                    | 0b01,
+            )
+        }
+        /// c.lw (ld=false) / c.ld (true) rd', imm(rs1') — x8..x15.
+        fn c_load(&mut self, ld: bool, rd: u8, rs1: u8, imm: u16) -> usize {
+            let v = imm as u32;
+            if ld {
+                let u53 = (v >> 3) & 0b111;
+                let u76 = (v >> 6) & 0b11;
+                self.half(
+                    (0b011 << 13)
+                        | ((u53 as u16) << 10)
+                        | ((u76 as u16) << 5)
+                        | (((rs1 as u16 - 8) & 7) << 7)
+                        | (((rd as u16 - 8) & 7) << 2)
+                        | 0b00,
+                )
+            } else {
+                let u53 = (v >> 3) & 0b111;
+                let u2 = (v >> 2) & 1;
+                let u6 = (v >> 6) & 1;
+                self.half(
+                    (0b010 << 13)
+                        | ((u53 as u16) << 10)
+                        | ((u6 as u16) << 5)
+                        | (u2 as u16) << 6
+                        | (((rs1 as u16 - 8) & 7) << 7)
+                        | (((rd as u16 - 8) & 7) << 2)
+                        | 0b00,
+                )
+            }
+        }
+        /// c.sw (sd=false) / c.sd (true) rs2', imm(rs1').
+        fn c_store(&mut self, sd: bool, rs1: u8, rs2: u8, imm: u16) -> usize {
+            let v = imm as u32;
+            if sd {
+                let u53 = (v >> 3) & 0b111;
+                let u86 = (v >> 6) & 0b111;
+                self.half(
+                    (0b111 << 13)
+                        | ((u53 as u16) << 10)
+                        | ((u86 as u16) << 5)
+                        | (((rs1 as u16 - 8) & 7) << 7)
+                        | (((rs2 as u16 - 8) & 7) << 2)
+                        | 0b00,
+                )
+            } else {
+                let u53 = (v >> 3) & 0b111;
+                let u2 = (v >> 2) & 1;
+                let u6 = (v >> 6) & 1;
+                self.half(
+                    (0b110 << 13)
+                        | ((u53 as u16) << 10)
+                        | ((u6 as u16) << 5)
+                        | (u2 as u16) << 6
+                        | (((rs1 as u16 - 8) & 7) << 7)
+                        | (((rs2 as u16 - 8) & 7) << 2)
+                        | 0b00,
+                )
+            }
+        }
+        /// c.ldsp / c.lwsp rd, imm.
+        fn c_loadsp(&mut self, ld: bool, rd: u8, imm: u16) -> usize {
+            let v = imm as u32;
+            if ld {
+                let u5 = (v >> 5) & 1;
+                let u43 = (v >> 3) & 0b11;
+                let u86 = (v >> 6) & 0b111;
+                self.half(
+                    (0b011 << 13)
+                        | ((u5 as u16) << 12)
+                        | ((u43 as u16) << 5)
+                        | (u86 as u16) << 2
+                        | ((rd as u16) << 7)
+                        | 0b10,
+                )
+            } else {
+                let u5 = (v >> 5) & 1;
+                let u42 = (v >> 2) & 0b111;
+                let u76 = (v >> 6) & 0b11;
+                self.half(
+                    (0b010 << 13)
+                        | ((u5 as u16) << 12)
+                        | ((u42 as u16) << 4)
+                        | (u76 as u16) << 2
+                        | ((rd as u16) << 7)
+                        | 0b10,
+                )
+            }
+        }
+        /// c.sdsp / c.swsp rs2, imm.
+        fn c_storesp(&mut self, sd: bool, rs2: u8, imm: u16) -> usize {
+            let v = imm as u32;
+            if sd {
+                let u53 = (v >> 3) & 0b111;
+                let u86 = (v >> 6) & 0b111;
+                self.half(
+                    (0b111 << 13)
+                        | ((u53 as u16) << 10)
+                        | (u86 as u16) << 7
+                        | ((rs2 as u16) << 2)
+                        | 0b10,
+                )
+            } else {
+                let u52 = (v >> 2) & 0b1111;
+                let u76 = (v >> 6) & 0b11;
+                self.half(
+                    (0b110 << 13)
+                        | ((u52 as u16) << 9)
+                        | (u76 as u16) << 7
+                        | ((rs2 as u16) << 2)
+                        | 0b10,
+                )
+            }
         }
 
         /// jalr x0, x1, 0 — the canonical sentinel return.
@@ -1682,7 +1878,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("{name}: container rejected: {e:?}"));
         let (ir, iregs, imem, _trace) = interp::run_with_state(&module, &c, input, budget);
         let mut f = aot_compile(&module)
-            .unwrap_or_else(|| panic!("{name}: aot_compile declined a profile-1 module"));
+            .unwrap_or_else(|| panic!("{name}: aot_compile declined a supported module"));
         let (out, aregs, amem) = f.run_with_state(&module, &c, input, budget);
         let icyc = match &ir {
             Ok(r) => r.cycles_used,
@@ -1993,7 +2189,7 @@ mod tests {
     }
 
 
-    /// One program touching every profile-1 instruction class: both engines
+    /// One program touching every base instruction class: both engines
     /// must agree on the full stop-state. Stores/loads anchor at `sp` with
     /// negative offsets (the stack top is the end of memory); `a0` is only
     /// touched at the very end (entry convention: a0 = input_base on entry,
@@ -2071,14 +2267,21 @@ mod tests {
         a.i(5, 29, 2, 0x03, -20); // lhu x29
         a.i(0, 30, 2, 0x03, -18); // lb  x30
         a.i(4, 31, 2, 0x03, -18); // lbu x31
-        // -- leaf call through c.jalr (2-byte link)
-        a.u(5, 0x17, 0); // auipc t0, 0
-        a.i(0, 5, 5, 0x13, 10); // addi t0, t0, +10 -> next inst
-        a.c_jalr(5); // c.jalr t0 (rd=ra; link = addr + 2)
-        a.i(0, 26, 0, 0x13, 1); // leaf: addi x26, x0, 1 (executed via the jump)
-        a.i(0, 27, 0, 0x13, 9); // leaf body: addi x27, x0, 9
-        a.i(0, 0, 1, 0x67, 0); // leaf ret -> caller (ra)
-        a.i(0, 8, 0, 0x13, 77); // caller resumes: addi x8, x0, 77
+        // -- leaf call through c.jalr (2-byte link). Layout (byte offsets
+        // from the auipc at A): auipc[0] addi t0,+20[4] c.jalr[8](2B, ra
+        // = A+10) resume x26=1[A+10] c.nop[A+14] j ->A+28[A+16] leaf
+        // x27=9[A+20] leaf-ret jalr ra[A+24] after x8=77[A+28].
+        let _au = a.u(5, 0x17, 0); // A: auipc t0, 0
+        a.i(0, 5, 5, 0x13, 20); // t0 = A + 20 (leaf entry)
+        let _cj = a.c_jalr(5); // ra = A + 10 (2-byte link)
+        let _resume = a.i(0, 26, 0, 0x13, 1); // A+10: resume marker
+        let pad = a.half(0x0001); // A+14: c.nop padding
+        a.j(0, pad + 4); // A+16: skip the leaf after resume -> [A+28]
+        a.i(0, 27, 0, 0x13, 9); // A+20: leaf body (jump target)
+        a.i(0, 0, 1, 0x67, 0); // A+24: leaf ret -> ra (A+10)
+        a.i(0, 8, 0, 0x13, 77); // A+28: after-leaf marker
+        // c.jalr clobbered ra: rebuild the sentinel (== -16, one addi)
+        a.i(0, 1, 0, 0x13, -16);
         li(&mut a, 10, 0); // a0 = 0: empty output at the sentinel return
         a.ret();
         let code = a.finish();
@@ -2353,16 +2556,20 @@ mod tests {
         assert!(ok);
     }
 
-    /// Deterministic random programs from the profile-1 whitelist: both
-    /// engines must agree on outcome, cycles, registers and memory —
-    /// including traps (bad loads/stores/jumps) and out-of-gas runs.
-    /// Odd cases are "tame" (safe memory anchors, forward branches, no wild
-    /// `jalr`) so a healthy share of runs finish cleanly.
+    /// Deterministic random programs from the unified RV64IMC+Zbb+Zbc
+    /// whitelist: both engines must agree on outcome, cycles, registers and
+    /// memory — including traps (bad loads/stores/jumps) and out-of-gas
+    /// runs. Odd cases are "tame" (safe memory anchors, forward branches,
+    /// no wild `jalr`) so a healthy share of runs finish cleanly. The
+    /// generator mixes compressed forms throughout (llvm-mc-verified
+    /// packing, sharing the emitter audit), with jump and memory density
+    /// seeded deterministically. 2000 seeds, fixed base seed for
+    /// reproducibility.
     #[test]
-    fn fuzz_differential_profile1() {
+    fn fuzz_differential_unified() {
         let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut successes = 0usize;
-        for case in 0..300 {
+        for case in 0..2000 {
             let tame = case % 2 == 0;
             let code = gen_program(&mut seed, tame);
             let mut input = [0u8; 32];
@@ -2374,7 +2581,10 @@ mod tests {
             successes += ok as usize;
         }
         // Sanity: the generator must produce a healthy mix (not all traps).
-        assert!(successes >= 100, "suspiciously few clean runs: {successes}/300");
+        assert!(
+            successes >= 700,
+            "suspiciously few clean runs: {successes}/2000"
+        );
     }
 
     fn xs(mut s: u64) -> u64 {
@@ -2389,11 +2599,16 @@ mod tests {
         *seed = xs(*seed);
         let n = 8 + (*seed % 32) as usize;
         let total = n + 2; // + li a0,0 + ret
+        // tame mode anchors x8 at sp-512 for the compressed memory forms
+        // (x8..x15 register file), keeping c.load/c.store in bounds.
+        if tame {
+            a.i(0, 8, 2, 0x13, -512);
+        }
         let idx_hint = a.off.len();
         let _ = idx_hint;
         for k in 0..n {
             *seed = xs(*seed);
-            let mut class = (*seed % 17) as u32;
+            let mut class = (*seed % 19) as u32;
             if tame {
                 // tame set: ALU/shift/branch-forward/safe-memory only
                 class = match class {
@@ -2401,6 +2616,8 @@ mod tests {
                     7 | 8 => class, // safe anchors below
                     9 => 9,         // forward-only targets below
                     14 => 14,       // zbb reg-form ops are tame
+                    15 => 15,       // zbb immediate forms are tame
+                    16 | 17 => class, // compressed mem/arith (anchored)
                     _ => 5,         // regalu
                 };
             }
@@ -2443,7 +2660,7 @@ mod tests {
                     a.u(rd_of(seed), 0x17, (*seed % 0x10_0000) as u32);
                 }
                 5 => {
-                    // profile-1 RegAlu table (f7, f3, op)
+                    // base RegAlu table (f7, f3, op)
                     let table: [(u32, u32, u32); 28] = [
                         (0x00, 0, 0x33), (0x20, 0, 0x33), (0x00, 1, 0x33), (0x00, 2, 0x33),
                         (0x00, 3, 0x33), (0x00, 4, 0x33), (0x00, 5, 0x33), (0x20, 5, 0x33),
@@ -2589,6 +2806,60 @@ mod tests {
                     *seed = xs(*seed);
                     let shamt = (*seed % 64) as u8;
                     a.sh(f6, f3, rd_of(seed), rr(seed), shamt, op);
+                }
+                // Compressed memory forms (x8..x15; tame anchors x8=sp-512).
+                16 => {
+                    *seed = xs(*seed);
+                    let ld = *seed % 2 == 0;
+                    if tame {
+                        let off = 8 * (*seed % 16) as u16; // 0..120, aligned
+                        if ld {
+                            a.c_load(*seed % 2 == 0, 9 + (*seed % 7) as u8, 8, off);
+                        } else {
+                            a.c_store(*seed % 2 == 0, 8, 9 + (*seed % 7) as u8, off);
+                        }
+                    } else {
+                        // wild: random regs/offsets (frequent traps are fine)
+                        let r = 8 + (*seed % 8) as u8;
+                        let off = 8 * (*seed % 64) as u16;
+                        *seed = xs(*seed);
+                        if ld {
+                            a.c_loadsp(*seed % 2 == 0, rd_of(seed).max(8), off);
+                        } else {
+                            a.c_storesp(*seed % 2 == 0, rd_of(seed).max(8), off);
+                        }
+                    }
+                }
+                // Compressed arithmetic/immediate forms.
+                17 => {
+                    *seed = xs(*seed);
+                    match *seed % 5 {
+                        0 => {
+                            *seed = xs(*seed);
+                            a.c_li(rd_of(seed), (*seed % 64) as i8);
+                        }
+                        1 => {
+                            *seed = xs(*seed);
+                            // rd' in x9..x15 (keep the x8 anchor intact)
+                            a.c_andi(9 + (*seed % 7) as u8, ((*seed % 64) as i64 - 32) as i8);
+                        }
+                        2 => {
+                            *seed = xs(*seed);
+                            a.c_shift((*seed % 3) as u8, 9 + (*seed % 7) as u8, (*seed % 64) as u8);
+                        }
+                        3 => {
+                            *seed = xs(*seed);
+                            a.c_arith(
+                                (*seed % 6) as u8,
+                                9 + (*seed % 7) as u8,
+                                9 + ((*seed >> 3) % 7) as u8,
+                            );
+                        }
+                        _ => {
+                            *seed = xs(*seed);
+                            a.c_addi(rd_of(seed), (*seed % 64) as i8);
+                        }
+                    }
                 }
                 _ => {
                     *seed = xs(*seed);
