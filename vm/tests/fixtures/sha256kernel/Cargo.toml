@@ -1,0 +1,18 @@
+[package]
+name = "sha256kernel"
+version = "0.1.0"
+edition = "2021"
+
+# Bare fixture (not a workspace member): produces the calc container for the
+# sha256 benchmark kernel. See build.sh.
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[features]
+oracle = []
+
+[workspace]

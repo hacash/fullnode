@@ -1,0 +1,42 @@
+pragma fitsh 1.0.0
+
+// ============================================================================
+// HVM 侧对照合约（三路径对比的 fitsh 路径）：
+//   1. ascii_parse_flat_kv native 解析 `{k=v,...}`（open='{' kv_sep='='
+//      pair_sep=',' close='}'，key_class=6 LOWER，value_class=1 ALNUM，
+//      flags=0 —— 与 vm/src/native/ascii.rs 的 flags=0 文法一致）
+//   2. 从键 `start` 起指针游走：值即下一键，`end` 值也拼接后终止
+//   3. sha2 native 对拼接串取摘要
+// 与 calc 侧 sha256kernel 的 dict-walk 模式逐字节同语义：
+//   解析失败/游走断链/超过 64 步 → 空输出（内核返回 0 长度）。
+// 使用方：testkit/tests/dict_digest_three_paths.rs
+// ============================================================================
+
+contract DictDigest {
+
+    function external dict_digest(doc: bytes) -> bytes {
+        var t = ascii_parse_flat_kv(123, 61, 44, 125, 6, 1, 0, doc)
+        if t[0] != 0 {
+            return ""
+        }
+        var m = t[1]
+        var key = "start"
+        var acc = ""
+        var steps = 0
+        var done = false
+        while steps < 64 && (! done) {
+            steps = steps + 1
+            var val = m[key]
+            acc = acc ++ val
+            if val == "end" {
+                done = true
+            } else {
+                key = val
+            }
+        }
+        if (! done) {
+            return ""
+        }
+        return sha2(acc)
+    }
+}

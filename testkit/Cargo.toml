@@ -16,3 +16,9 @@ app = { workspace = true }
 hacash-params = { workspace = true }
 x16rs = { workspace = true }
 hex = "0.4"
+
+[features]
+# Passes the mountable AOT (x86-64) backend through to the `vm` crate for the
+# three-path comparison test (dict_digest_three_paths). Run with:
+#   cargo test -p testkit --features calc-aot
+calc-aot = ["vm/calc-aot"]
