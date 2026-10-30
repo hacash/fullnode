@@ -1,0 +1,18 @@
+[package]
+name = "calckernel"
+version = "0.1.0"
+edition = "2021"
+
+# Bare project (not a workspace member): built only for the riscv64imac
+# none-elf target to produce calc containers. See build.sh.
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = true
+codegen-units = 1
+
+[workspace]
+
+[features]
+oracle = []

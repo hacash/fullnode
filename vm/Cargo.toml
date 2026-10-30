@@ -29,6 +29,19 @@ syntax = []
 # plain builds (and wasm SDK targets, which have no mmap) never compile it.
 # Run its suite with: cargo test -p vm --features calc-aot
 calc-aot = ["dep:libc"]
+[dev-dependencies]
+# Differential-testing oracles for the calc interpreter (never runtime deps).
+# ckb-vm: full-program differential engine (memory ops, MULH family, and all
+#   compressed forms execute here; see tests/calc_differential.rs).
+ckb-vm = "=0.24.13"
+# softcore-rv64: instruction-level golden oracle, automated Rust translation of
+#   the official Sail RISC-V executable spec. Instruction-subset only: MULH/
+#   MULHU/MULHSU panic on a prelude 128-bit bug, LOAD/STORE are todo!(), and
+#   its public decoder never emits C_* asts (we hand-build them from our own
+#   decoder for execute-side pinning). Version is hard-pinned: the oracle
+#   itself is part of the pinning-test fixture set.
+softcore-rv64 = "=0.6.0"
+
 [dependencies]
 libc = { version = "0.2", optional = true }
 sys = { workspace = true }
