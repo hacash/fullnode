@@ -2,7 +2,7 @@
 //! header + code + rodata + initialized data.
 //!
 //! Memory image carried by the container:
-//! - `code`: RV64IMC(+Zbb/Zbc) instruction stream — decoded and priced by the
+//! - `code`: RV64IMC(+Zbb/Zba/Zbs/Zbc) instruction stream — decoded and priced
 //!   verifier, executable, read-only at runtime.
 //! - `rodata`: constant data (lookup tables etc.), kept adjacent to code so
 //!   position-relative addressing (`auipc`) stays valid. Readable, but
@@ -29,7 +29,7 @@ pub const CALC_IO_MAX: u16 = 4096;
 pub const HEADER_LEN: usize = 32;
 
 /// Runtime memory map derived deterministically from the header:
-/// code | rodata | data | free | input | output | stack.
+/// code | rodata | data | free | input | output | guard | stack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CalcLayout {
     pub mem_len: u64,
@@ -48,6 +48,11 @@ pub struct CalcLayout {
     /// Output region base (16-byte aligned).
     pub output_base: u64,
     pub output_max: u64,
+    /// Stack-overflow guard band `[guard_base, stack_bottom)`: stores that
+    /// intersect it trap (see `CALC_STACK_GUARD`).
+    pub guard_base: u64,
+    /// Bottom of the stack region (16-byte aligned).
+    pub stack_bottom: u64,
     /// Initial stack pointer (top of the reserved stack, 16-byte aligned).
     pub stack_top: u64,
 }
@@ -98,10 +103,9 @@ impl CalcContainer {
         let rodata_base = (self.code.len() as u64 + 15) & !15;
         let data_base = (rodata_base + self.rodata.len() as u64 + 15) & !15;
         let stack_top = mem_len & !15;
-        let output_base = stack_top
-            .saturating_sub(crate::calc::CALC_STACK_SIZE)
-            .saturating_sub(self.output_max as u64)
-            & !15;
+        let stack_bottom = stack_top.saturating_sub(crate::calc::CALC_STACK_SIZE);
+        let guard_base = stack_bottom.saturating_sub(crate::calc::CALC_STACK_GUARD);
+        let output_base = guard_base.saturating_sub(self.output_max as u64) & !15;
         let input_base = output_base.saturating_sub(self.input_max as u64) & !15;
         CalcLayout {
             mem_len,
@@ -114,6 +118,8 @@ impl CalcContainer {
             input_max: self.input_max as u64,
             output_base,
             output_max: self.output_max as u64,
+            guard_base,
+            stack_bottom,
             stack_top,
         }
     }

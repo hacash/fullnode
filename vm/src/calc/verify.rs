@@ -1,7 +1,7 @@
 //! Deploy-time verifier + pre-decode + basic-block cycle pricing.
 //!
 //! `verify_container` is run once at deployment (and re-run idempotently on
-//! load); it rejects anything outside the whitelisted RV64IMC(+Zbb/Zbc)
+//! load); it rejects anything outside the whitelisted RV64IMC(+Zbb/Zba/Zbs/Zbc)
 //! encodings, off-boundary jump targets and malformed headers, and produces
 //! the executable [`CalcModule`] used by the interpreter.
 //!

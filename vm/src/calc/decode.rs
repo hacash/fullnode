@@ -1,4 +1,4 @@
-//! RV64IMC(+Zbb/Zbc) whitelist instruction decoder: only whitelisted
+//! RV64IMC(+Zbb/Zba/Zbs/Zbc) whitelist instruction decoder: only whitelisted
 //! encodings decode.
 //!
 //! Decodes one instruction at `off` in the code stream into an executable
@@ -7,7 +7,7 @@
 //! stay byte-relative here; the verifier (`verify.rs`) resolves them to
 //! absolute in-container targets. Encoding reference: RISC-V unprivileged
 //! spec Volume I (I, M, C chapters) and the Bitmanip 1.0.0 release
-//! (Zbb/Zbc), cross-checked against clang 18 encodings in `decode` unit
+//! (Zbb/Zba/Zbs/Zbc), cross-checked against llvm-mc 18 encodings in `decode` unit
 //! tests and against qemu/ckb-vm in the differential suite.
 
 use crate::rt::{ItrErr, ItrErrCode};
@@ -141,7 +141,7 @@ pub enum RegAluOp {
     Divuw,
     Remw,
     Remuw,
-    // ---- Zbb / Zbc (isa_profile 2 only) ----
+    // ---- Zbb / Zba / Zbs / Zbc bitmanip (43 forms) ----
     Adduw,
     Sh1add,
     Sh2add,
@@ -391,7 +391,11 @@ fn decode_32(w: u32) -> Result<(Inst, u32), ItrErr> {
         0b0011011 => match funct3 {
             0 => Inst::ImmAlu { op: ImmAluOp::Addiw, rd, rs1, imm: i_imm },
             1 => match bits(w, 31, 26) {
-                0b000000 => Inst::ShiftImm {
+                // slliw: shamt is the 5-bit field (24:20); bit 25 belongs
+                // to imm[11:5], which the spec requires to be zero —
+                // SLLIW with imm[11:5] != 0 is RESERVED on RV64, so the
+                // 6-bit-shamt view is rejected when bit 25 is set.
+                0b000000 if bits(w, 25, 25) == 0 => Inst::ShiftImm {
                     kind: ShiftKind::Sll,
                     rd,
                     rs1,
@@ -432,7 +436,7 @@ fn decode_32(w: u32) -> Result<(Inst, u32), ItrErr> {
             _ => return Err(bad("calc decode: op-imm-32 funct3")),
         },
         0b0110011 => {
-            // Base + M table first; the Zbb/Zbc table is only reachable
+            // Base + M table first; the bitmanip table is only reachable
             // (always enabled).
             if let Some(op) = match (funct7, funct3) {
                 (0b0000000, 0) => Some(RegAluOp::Add),
@@ -477,8 +481,6 @@ fn decode_32(w: u32) -> Result<(Inst, u32), ItrErr> {
                     (0b0100100, 0b101) => Inst::RegAlu { op: RegAluOp::Bext, rd, rs1, rs2 },
                     (0b0010100, 0b001) => Inst::RegAlu { op: RegAluOp::Bset, rd, rs1, rs2 },
                     (0b0110100, 0b001) => Inst::RegAlu { op: RegAluOp::Binv, rd, rs1, rs2 },
-                    // zext.h: funct7 == 0000100, rs2 must be 0 (reserved otherwise)
-                    (0b0000100, 0b100) if rs2 == 0 => Inst::UnAlu { op: UnAluOp::Zexth, rd, rs1 },
                     _ => return Err(bad("calc decode: op funct7/funct3")),
                 }
             }
@@ -516,6 +518,22 @@ fn decode_32(w: u32) -> Result<(Inst, u32), ItrErr> {
             } else {
                 match (funct7, funct3) {
                     (0b0000100, 0b000) => Inst::RegAlu { op: RegAluOp::Adduw, rd, rs1, rs2 },
+                    // zext.h (RV64): funct7 == 0000100, funct3 == 100, rs2
+                    // must be 0 (reserved otherwise). On RV64 zext.h lives
+                    // in OP-32, NOT OP: OP is the RV32I base register slot
+                    // where every instruction operates on full 64-bit
+                    // operands; a 16-bit zero-extension cannot be expressed
+                    // there (OP has no width convention). OP-32 is the
+                    // "32-bit world" slot — operands read as 32-bit values
+                    // and results sign-extend from bit 31 — and zext.h's
+                    // result (bits 15:0, always non-negative as a 32-bit
+                    // value) is invariant under that sign-extension. The
+                    // bitmanip spec therefore encodes RV64 zext.h as
+                    // 0111011 and reserves the RV32 form (0110011, used
+                    // only on RV32, which has no OP-32 slot) as illegal on
+                    // RV64. llvm-mc/spike/ckb-vm agree; cross-checked
+                    // against llvm-mc 18 (`zext.h x28, x5` => 0x0802CE3B).
+                    (0b0000100, 0b100) if rs2 == 0 => Inst::UnAlu { op: UnAluOp::Zexth, rd, rs1 },
                     (0b0010000, 0b010) => Inst::RegAlu { op: RegAluOp::Sh1adduw, rd, rs1, rs2 },
                     (0b0010000, 0b100) => Inst::RegAlu { op: RegAluOp::Sh2adduw, rd, rs1, rs2 },
                     (0b0010000, 0b110) => Inst::RegAlu { op: RegAluOp::Sh3adduw, rd, rs1, rs2 },
@@ -892,11 +910,29 @@ mod zbb_tests {
     }
 
     #[test]
-    fn zexth_requires_zero_rs2() {
-        let w = r_word(0b0000100, 0b100, 3, 4, 0, 0b0110011);
+    fn zexth_lives_in_op32_on_rv64() {
+        // RV64 form (OP-32): the only legal encoding (llvm-mc-verified).
+        let w = r_word(0b0000100, 0b100, 3, 4, 0, 0b0111011);
         assert_eq!(dec(w), Inst::UnAlu { op: UnAluOp::Zexth, rd: 3, rs1: 4 });
-        let w_bad = r_word(0b0000100, 0b100, 3, 4, 1, 0b0110011);
+        // rs2 != 0 stays reserved.
+        let w_bad = r_word(0b0000100, 0b100, 3, 4, 1, 0b0111011);
         assert!(decode_32(w_bad).is_err());
+        // The RV32-only OP form is illegal on RV64.
+        let w_rv32 = r_word(0b0000100, 0b100, 3, 4, 0, 0b0110011);
+        assert!(decode_32(w_rv32).is_err());
+    }
+
+    #[test]
+    fn slliw_imm_high_bits_must_be_zero() {
+        // legal: slliw x28, x5, 8 (funct7 = 0, 5-bit shamt)
+        let legal = sh_word(0b000000, 0b001, 28, 5, 8, 0b0011011);
+        assert!(matches!(
+            dec(legal),
+            Inst::ShiftImm { word: true, shamt: 8, .. }
+        ));
+        // bit 25 set (imm[11:5] != 0): reserved on RV64 -> rejected.
+        let reserved = legal | (1 << 25);
+        assert!(decode_32(reserved).is_err());
     }
 
     #[test]

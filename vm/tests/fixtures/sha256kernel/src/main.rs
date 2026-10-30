@@ -67,10 +67,25 @@ const MAX_ACC: usize = 512;
 fn dict_walk_digest(doc: &[u8]) -> Option<[u32; 8]> {
     let lower = |c: u8| c.is_ascii_lowercase();
     let alnum = |c: u8| c.is_ascii_alphanumeric();
-    let mut ks = [0u16; MAX_PAIRS];
-    let mut kl = [0u16; MAX_PAIRS];
-    let mut vs = [0u16; MAX_PAIRS];
-    let mut vl = [0u16; MAX_PAIRS];
+    // Parse/walk tables live in static storage (.bss), not the stack: the
+    // container's fixed 2KiB stack cannot hold 1KiB of tables plus the
+    // sha256 frame — this kernel silently overflowed the stack before the
+    // guard band existed. Container memory is zeroed before every run, so
+    // moving the tables changes addressing, not semantics.
+    static mut KS: [u16; MAX_PAIRS] = [0; MAX_PAIRS];
+    static mut KL: [u16; MAX_PAIRS] = [0; MAX_PAIRS];
+    static mut VS: [u16; MAX_PAIRS] = [0; MAX_PAIRS];
+    static mut VL: [u16; MAX_PAIRS] = [0; MAX_PAIRS];
+    static mut ACC: [u8; MAX_ACC] = [0; MAX_ACC];
+    let (mut ks, mut kl, mut vs, mut vl, mut acc) = unsafe {
+        (
+            &mut *core::ptr::addr_of_mut!(KS),
+            &mut *core::ptr::addr_of_mut!(KL),
+            &mut *core::ptr::addr_of_mut!(VS),
+            &mut *core::ptr::addr_of_mut!(VL),
+            &mut *core::ptr::addr_of_mut!(ACC),
+        )
+    };
     let mut n = 0usize;
     let mut i = 0usize;
     if doc.first() != Some(&b'{') {
@@ -128,7 +143,6 @@ fn dict_walk_digest(doc: &[u8]) -> Option<[u32; 8]> {
         return None;
     }
     // walk
-    let mut acc = [0u8; MAX_ACC];
     let mut an = 0usize;
     let mut key: &[u8] = b"start";
     let mut steps = 0usize;
@@ -246,6 +260,10 @@ pub static mut KINPUT: [u8; 64] = [
     0x0d, 0x0e, 0x0f, 0x10,
 ];
 
+// Oracle-build stack only (the container runtime provides sp at the top
+// of declared memory). Keeping it out of the container build leaves .bss
+// to the dict tables below.
+#[cfg(feature = "oracle")]
 #[used]
 #[no_mangle]
 pub static mut KSTACK: [u64; 1024] = [0u64; 1024];

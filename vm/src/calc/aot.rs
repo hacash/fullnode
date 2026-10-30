@@ -533,6 +533,13 @@ impl AotFunc {
     }
 }
 
+// SINGLE-THREAD EXECUTION CONTRACT (documented decision): `run`/`
+// `run_with_state` temporarily point `ctx.state` at a stack local of the
+// calling thread. Two concurrent executions through the same `AotFunc`
+// would race that pointer (UB). The mount layer executes calc kernels
+// synchronously on the state-machine thread, which is the only supported
+// concurrency model; the Send/Sync impls exist so the owning `CalcFnObj`
+// can move between threads, not so `run` can be called in parallel.
 unsafe impl Send for AotFunc {}
 unsafe impl Sync for AotFunc {}
 
@@ -585,6 +592,9 @@ impl AotFunc {
     /// budget covers instructions only — the interpreter's per-call setup
     /// charge lives in `CalcFnObj::run`, outside this layer. Deadlines are
     /// a host concern and are ignored (benchmark/differential use only).
+    ///
+    /// NOT concurrency-safe: see the Send/Sync note above — one execution
+    /// at a time per `AotFunc`.
     pub fn run(
         &self,
         module: &CalcModule,
@@ -885,6 +895,17 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                     c.alu_imm(7, RCX, lay.mem_len as i32);
                     let at = c.jcc32(7); // ja
                     fixups.push((at, Fixup::Trap));
+                    // Stack-overflow guard (mirrors interp): trap iff
+                    // addr < stack_bottom && end > guard_base. RAX holds
+                    // addr, RCX holds end.
+                    c.alu_imm(7 /*cmp*/, RAX, lay.stack_bottom as i32);
+                    let sg1 = c.jcc32(3); // jae -> skip (addr >= bottom)
+                    c.alu_imm(7 /*cmp*/, RCX, lay.guard_base as i32);
+                    let sg2 = c.jcc32(6); // jbe -> skip (end <= guard)
+                    fixups.push((c.jmp32(), Fixup::Trap));
+                    let sg_skip = c.len();
+                    fixups.push((sg1, Fixup::To(sg_skip)));
+                    fixups.push((sg2, Fixup::To(sg_skip)));
                     let size = op.size();
                     if size > 1 {
                         c.test_al((size - 1) as u8);
@@ -1983,7 +2004,7 @@ mod tests {
         assert!(aot_compile(&module).is_none(), "ecall must fall back to the interpreter");
     }
 
-    /// The whole Zbb/Zbc subset through both engines (the ISA is unified,
+    /// The whole Zbb/Zba/Zbs/Zbc subset through both engines (the ISA is
     /// so the AOT must cover every bit-manipulation form the decoder
     /// accepts): unary ops, single-bit immediate and register forms, shifts
     /// (rol/ror/rori incl. W), address-adds, min/max, and the clmul family.
@@ -2003,7 +2024,7 @@ mod tests {
         a.r(0b0110000, 1, 24, 5, 5, 0x13); // sext.h t0
         a.r(0b0010100, 5, 25, 5, 0b00111, 0x13); // orc.b t0
         a.r(0b0110101, 5, 26, 5, 0b11000, 0x13); // rev8 t0
-        a.r(0b0000100, 4, 27, 5, 0, 0x33); // zext.h t0
+        a.r(0b0000100, 4, 27, 5, 0, 0x3B); // zext.h t0 (RV64 OP-32 slot)
         // ---- W unary via OP-32
         a.r(0b0110000, 1, 8, 5, 0, 0x1B); // clzw
         a.r(0b0110000, 1, 9, 5, 1, 0x1B); // ctzw
@@ -2750,7 +2771,7 @@ mod tests {
                 12 => {
                     a.raw(0x0FF0_000F); // fence
                 }
-                // Zbb/Zbc register forms (single unified ISA): the ratified
+                // Bitmanip register forms (single unified ISA): the ratified
                 // (funct7, funct3, opcode) tuples from the decoder tables.
                 14 => {
                     let table: [(u32, u32, u32); 25] = [
@@ -2820,7 +2841,6 @@ mod tests {
                         }
                     } else {
                         // wild: random regs/offsets (frequent traps are fine)
-                        let r = 8 + (*seed % 8) as u8;
                         let off = 8 * (*seed % 64) as u16;
                         *seed = xs(*seed);
                         if ld {

@@ -1,4 +1,4 @@
-//! HVM calc func: RV64IMC(+Zbb/Zbc) pure-compute kernels.
+//! HVM calc func: RV64IMC(+Zbb/Zba/Zbs/Zbc) pure-compute kernels.
 //!
 //! Container (`container.rs`) + whitelist decoder (`decode.rs`) + deploy-time
 //! verifier with basic-block pricing (`verify.rs`) + pre-decoded interpreter
@@ -7,7 +7,9 @@
 //! builtins behind `ecall`.
 //!
 //! The ISA is a single unified profile: RV64IMC plus the ratified
-//! Zbb/Zba/Zbs bit-manipulation set and Zbc carryless multiplies — what
+//! bitmanip-1.0.0 subset — Zbb (24 forms: logic-with-negate, counts,
+//! min/max, rotates, sext/orc/rev8), Zba (8 address-gen), Zbs (8
+//! single-bit), Zbc (3 carryless) — what
 //! rustc emits with `-C target-feature=+zbb,+zba,+zbs,+zbc`. There is no
 //! profile versioning: the channel predates activation, so the whitelist
 //! is fixed in one shot.
@@ -22,12 +24,8 @@ pub mod verify;
 #[cfg(feature = "calc-aot")]
 pub mod aot;
 
-// Tests live in the git-ignored `calc.loc/` sibling directory (business-local
-// scaffolding, not part of the committed feature); `#[path]` keeps them
-// compiled and runnable from this tree.
 #[cfg(test)]
-#[path = "../calc.loc/tests.rs"]
-mod loc_tests;
+mod isa_tests;
 
 use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
 
@@ -58,6 +56,19 @@ pub const CALC_SETUP_PER_KIB_CYCLES: u64 = 16;
 /// Fixed interpreter stack reservation (bytes), carved out of the declared
 /// memory, 16-byte aligned top.
 pub const CALC_STACK_SIZE: u64 = 2 * 1024;
+
+/// Stack-overflow guard band (bytes) between the output region and the
+/// stack. Stores that intersect it trap: a kernel pushing past the stack
+/// bottom used to silently corrupt the output region below (stack grows
+/// down and output sits directly beneath the stack); the guard turns that
+/// into a deterministic fault at the first offending frame push. 256 bytes
+/// covers a full compiler frame, so single-frame overflow is always
+/// caught; an intentional store that jumps the whole band still lands in
+/// the output region — at that point it is indistinguishable from a
+/// legitimate output write, which is exactly why the band exists rather
+/// than a full lower bound. Loads are unaffected. CONSENSUS CONSTANT
+/// (layout + trap semantics).
+pub const CALC_STACK_GUARD: u64 = 256;
 
 /// Initial `ra` value: `jalr`/`ret` targeting this sentinel is the canonical
 /// return from the entry function (never a valid code address).

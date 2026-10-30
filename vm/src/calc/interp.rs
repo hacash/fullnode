@@ -1,4 +1,4 @@
-//! Pre-decoded RV64IMC(+Zbb/Zbc) interpreter.
+//! Pre-decoded RV64IMC(+Zbb/Zba/Zbs/Zbc) interpreter.
 //!
 //! Executes a verified [`CalcModule`] over a freshly zeroed flat memory.
 //! Cycles are charged in full at basic-block entry (plus hash cost at each
@@ -177,6 +177,13 @@ fn run_inner(
             }
             if addr < lay.data_base {
                 trap!("calc store into read-only region (code/rodata)");
+            }
+            // Stack-overflow guard: a store intersecting the band between
+            // the output region and the stack traps (stack grows down into
+            // it). Stores fully inside the output region (end <= guard_base)
+            // and stores at or above the stack bottom pass.
+            if addr < lay.stack_bottom && end > lay.guard_base {
+                trap!("calc store into the stack-overflow guard band");
             }
             if addr % size != 0 {
                 trap!("calc misaligned store");
@@ -379,6 +386,15 @@ fn run_inner(
                 // in-memory machine — execute as a no-op.
                 Inst::Fence => {}
                 Inst::Ecall => {
+                    // CHARGE-BEFORE-BOUNDS (documented decision): the hash
+                    // cost is charged before the src/dst bounds checks, so
+                    // the abort CLASS of an out-of-bounds ecall depends on
+                    // the remaining budget — a large budget pays the charge
+                    // and then traps; a budget below the hash cost aborts
+                    // OutOfGas WITHOUT the charge. Both outcomes are pure
+                    // functions of (module, input, budget); callers cannot
+                    // probe memory through the class difference because
+                    // the bounds check traps before any byte is read.
                     let kind = match HashKind::from_a7(r[17]) {
                         Some(k) => k,
                         None => trap!("calc ecall: unknown builtin"),
@@ -405,6 +421,9 @@ fn run_inner(
                     }
                     if dst < lay.data_base {
                         trap!("calc ecall: digest into read-only region");
+                    }
+                    if dst < lay.stack_bottom && dst_end > lay.guard_base {
+                        trap!("calc ecall: digest into the stack-overflow guard band");
                     }
                     // Digest lengths are 20/32; a stack buffer avoids a heap
                     // allocation per ecall.

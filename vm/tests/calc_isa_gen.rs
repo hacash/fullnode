@@ -1140,7 +1140,7 @@ fn unary_cases() -> Vec<Case> {
             ("sexth", 0b0110000, 1, OPI, 5),
             ("orcb", 0b0010100, 5, OPI, 0b00111),
             ("rev8", 0b0110101, 5, OPI, 0b11000),
-            ("zexth", 0b0000100, 4, OP, 0),
+            ("zexth", 0b0000100, 4, OP32, 0), // RV64: OP-32 slot
             ("clzw", 0b0110000, 1, OPI32, 0),
             ("ctzw", 0b0110000, 1, OPI32, 1),
             ("cpopw", 0b0110000, 1, OPI32, 2),
