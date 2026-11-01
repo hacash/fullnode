@@ -36,5 +36,6 @@ pub fn codeconf_type_name(raw: u8) -> crate::rt::VmrtRes<&'static str> {
     Ok(match crate::rt::CodeConf::parse(raw)?.code_type() {
         crate::rt::CodeType::Bytecode => "bytecode",
         crate::rt::CodeType::IRNode => "irnode",
+        crate::rt::CodeType::RV64IM => "rv64im",
     })
 }

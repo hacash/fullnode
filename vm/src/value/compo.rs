@@ -256,7 +256,7 @@ impl Display for CompoItem {
 
 impl Debug for CompoItem {
     fn fmt(&self, f: &mut Formatter) -> Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self.render())
     }
 }
 
@@ -290,7 +290,7 @@ macro_rules! take_items_from_ops {
 }
 
 impl CompoItem {
-    pub fn to_string(&self) -> String {
+    pub fn render(&self) -> String {
         self.compo.borrow().to_string()
     }
 

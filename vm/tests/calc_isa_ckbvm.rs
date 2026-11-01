@@ -16,8 +16,11 @@
 #[path = "calc_isa_gen.rs"]
 mod isa_gen;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use ckb_vm::machine::DefaultMachineBuilder;
-use ckb_vm::registers::{A0, A1, A2, A3, RA, SP};
+use ckb_vm::registers::{A0, A1, A2, A3, SP};
 use ckb_vm::{
     CoreMachine, DefaultCoreMachine, Error as CkbError, FlatMemory, Memory, Syscalls, ISA_B,
     ISA_IMC,
@@ -25,12 +28,25 @@ use ckb_vm::{
 use isa_gen::{all_cases, Outcome};
 use vm::calc::container::CalcContainer;
 use vm::calc::interp;
-use vm::calc::verify::verify_container;
+fn verify_container(
+    c: &CalcContainer,
+) -> Result<vm::calc::verify::CalcModule, String> {
+    vm::calc::verify::verify_container_with(c, &vm::calc::CalcConfig::all_enabled())
+        .map_err(|e| format!("{e:?}"))
+}
 
 type Core = DefaultCoreMachine<u64, FlatMemory<u64>>;
 
-/// Hash-ecall shim mirroring the calc builtin contract (same registers).
-struct HashEcall;
+/// Hash + HALT ecall shim mirroring the calc builtin contract.
+struct HashEcall {
+    halted: Arc<AtomicBool>,
+}
+
+impl HashEcall {
+    fn new() -> Self {
+        Self { halted: Arc::new(AtomicBool::new(false)) }
+    }
+}
 
 impl Syscalls<Core> for HashEcall {
     fn initialize(&mut self, _m: &mut Core) -> Result<(), ckb_vm::Error> {
@@ -38,6 +54,10 @@ impl Syscalls<Core> for HashEcall {
     }
     fn ecall(&mut self, m: &mut Core) -> Result<bool, ckb_vm::Error> {
         let a7 = m.registers()[17];
+        if a7 == vm::calc::ECALL_HALT {
+            self.halted.store(true, Ordering::SeqCst);
+            return Ok(true);
+        }
         if let Some(kind) = vm::calc::HashKind::from_a7(a7) {
             let src = m.registers()[10];
             let len = m.registers()[11];
@@ -71,13 +91,15 @@ fn run_ckbvm(
         u64::MAX,
         lay.mem_len as usize,
     );
+    let sys = HashEcall::new();
+    let halted = sys.halted.clone();
     let mut machine = DefaultMachineBuilder::new(core)
         .instruction_cycle_func(Box::new(|_: u64| -> u64 { 1 }))
-        .syscall(Box::new(HashEcall))
+        .syscall(Box::new(sys))
         .build();
     {
         let m = machine.memory_mut();
-        m.store_bytes(0, &c.code).unwrap();
+        m.store_bytes(vm::calc::CALC_CODE_BASE, &c.code).unwrap();
         m.store_bytes(lay.rodata_base, &c.rodata).unwrap();
         m.store_bytes(lay.data_base, &c.init).unwrap();
         m.store_bytes(lay.input_base, input).unwrap();
@@ -87,13 +109,11 @@ fn run_ckbvm(
     machine.set_register(A2, lay.output_base);
     machine.set_register(A3, lay.output_max);
     machine.set_register(SP, lay.stack_top);
-    machine.set_register(RA, vm::calc::CALC_RETURN_SENTINEL);
     machine.update_pc(c.entry as u64);
     machine.commit_pc();
     let mut decoder = ckb_vm::decoder::build_decoder::<u64>(machine.isa(), machine.version());
-    let sentinel = vm::calc::CALC_RETURN_SENTINEL;
     loop {
-        if *machine.pc() == sentinel {
+        if halted.load(Ordering::SeqCst) {
             let mut regs = [0u64; 32];
             for i in 0..32 {
                 regs[i] = machine.registers()[i];
@@ -170,7 +190,7 @@ fn ckbvm_endianness_probe() {
     let container = case.container();
     let module = verify_container(&container).unwrap();
     let (_cregs, cmem) = run_ckbvm(&container, &module, &[]).unwrap();
-    let got = isa_gen::record_words(&cmem);
+    let got = isa_gen::record_words(&cmem, module.layout_snapshot().stack_top);
     for (k, e) in got.iter().zip(case.expect.iter()).enumerate() {
         assert_eq!(*e.0, *e.1, "mem/stores record slot {}", k + 1);
     }

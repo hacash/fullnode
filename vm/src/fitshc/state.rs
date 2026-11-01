@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::parse_deploy::DeployInfo;
 use crate::IRNode;
@@ -24,6 +24,8 @@ pub struct ParseState {
     pub warnings: Vec<String>,
     pub version: Option<FitshVersion>,
     pub userfunc_signs: HashSet<[u8; 4]>,
+    /// Container or ELF bytes supplied by `compile_with_rv64im`.
+    pub external_rv64im: HashMap<String, Vec<u8>>,
     pub abst_signs: HashSet<u8>,
     pub library_addrs: HashSet<Address>,
     pub inherit_addrs: HashSet<Address>,
@@ -78,6 +80,7 @@ impl ParseState {
             warnings: Vec::new(),
             version: None,
             userfunc_signs: HashSet::new(),
+            external_rv64im: HashMap::new(),
             abst_signs: HashSet::new(),
             library_addrs: HashSet::new(),
             inherit_addrs: HashSet::new(),

@@ -1,14 +1,9 @@
-//! RV64IMC(+Zbb/Zba/Zbs/Zbc) whitelist instruction decoder: only whitelisted
-//! encodings decode.
-//!
-//! Decodes one instruction at `off` in the code stream into an executable
-//! `Inst`. The whitelist includes the ratified Zbb/Zba/Zbs/Zbc
-//! bit-manipulation set. Branch/JAL immediates
-//! stay byte-relative here; the verifier (`verify.rs`) resolves them to
-//! absolute in-container targets. Encoding reference: RISC-V unprivileged
-//! spec Volume I (I, M, C chapters) and the Bitmanip 1.0.0 release
-//! (Zbb/Zba/Zbs/Zbc), cross-checked against llvm-mc 18 encodings in `decode` unit
-//! tests and against qemu/ckb-vm in the differential suite.
+//! RV64IM(+C)(+Zba/Zbb/Zbs/Zbc) whitelist decoder. The profile byte is two
+//! orthogonal bits: bit 0 bitmanip, bit 1 RVC. Branch/JAL immediates stay
+//! byte-relative here; the verifier resolves them to absolute guest PCs.
+//! Encoding reference: RISC-V unprivileged spec Volume I (I, M, C) and
+//! Bitmanip 1.0.0. The compressed decoder is the pre-activation RV64IMC
+//! implementation.
 
 use crate::rt::{ItrErr, ItrErrCode};
 
@@ -201,6 +196,9 @@ pub enum Inst {
     /// machine, so it executes as a no-op.
     Fence,
     Ecall,
+    /// `ebreak` (`0x00100073`) or canonical `unimp` (`0xC0001073`).
+    /// Costs one ALU cycle, then traps. Does not fall through.
+    Trap,
 }
 
 #[inline]
@@ -216,9 +214,41 @@ fn sext(v: u32, sign_bit: u32) -> i64 {
 }
 
 /// Decode the instruction at `off`. Returns the instruction and its encoded
-/// length in bytes (2 or 4). The instruction set is the single
-/// RV64IMC+Zbb+Zbc profile (no versioning: the channel predates activation).
-pub fn decode_at(code: &[u8], off: usize) -> Result<(Inst, u32), ItrErr> {
+/// length in bytes (2 when the profile has RVC and the encoding is
+/// compressed, otherwise 4).
+pub fn decode_at(code: &[u8], off: usize, profile: u8) -> Result<(Inst, u32), ItrErr> {
+    if !crate::calc::container::profile_known(profile) {
+        return Err(bad("calc decode: unknown isa profile"));
+    }
+    let (inst, len) = if crate::calc::container::profile_has_compressed(profile) {
+        decode_profile_c(code, off)?
+    } else {
+        decode_profile_noc(code, off)?
+    };
+    if !crate::calc::container::profile_has_bitmanip(profile) && inst_is_bitmanip(&inst) {
+        return Err(bad("calc decode: bitmanip instruction not in this profile"));
+    }
+    Ok((inst, len))
+}
+
+fn decode_profile_noc(code: &[u8], off: usize) -> Result<(Inst, u32), ItrErr> {
+    if off % 4 != 0 {
+        return Err(bad("calc decode: instruction not 4-byte aligned"));
+    }
+    if off + 4 > code.len() {
+        return Err(bad("calc decode: truncated instruction"));
+    }
+    let w = u32::from_le_bytes([code[off], code[off + 1], code[off + 2], code[off + 3]]);
+    if w & 0b11 != 0b11 {
+        return Err(bad("calc decode: compressed instruction not allowed"));
+    }
+    decode_32(w)
+}
+
+fn decode_profile_c(code: &[u8], off: usize) -> Result<(Inst, u32), ItrErr> {
+    if off % 2 != 0 {
+        return Err(bad("calc decode: instruction not 2-byte aligned"));
+    }
     if off + 2 > code.len() {
         return Err(bad("calc decode: truncated instruction"));
     }
@@ -231,6 +261,43 @@ pub fn decode_at(code: &[u8], off: usize) -> Result<(Inst, u32), ItrErr> {
         }
         let w = u32::from_le_bytes([code[off], code[off + 1], code[off + 2], code[off + 3]]);
         decode_32(w)
+    }
+}
+
+/// True when `inst` is a Zba/Zbb/Zbs/Zbc form (profile 1 only).
+pub fn inst_is_bitmanip(inst: &Inst) -> bool {
+    match inst {
+        Inst::UnAlu { .. } | Inst::BitImm { .. } | Inst::Slliuw { .. } => true,
+        Inst::ShiftImm { kind: ShiftKind::Ror, .. } => true,
+        Inst::RegAlu { op, .. } => matches!(
+            op,
+            RegAluOp::Adduw
+                | RegAluOp::Sh1add
+                | RegAluOp::Sh2add
+                | RegAluOp::Sh3add
+                | RegAluOp::Sh1adduw
+                | RegAluOp::Sh2adduw
+                | RegAluOp::Sh3adduw
+                | RegAluOp::Andn
+                | RegAluOp::Orn
+                | RegAluOp::Xnor
+                | RegAluOp::Rol
+                | RegAluOp::Ror
+                | RegAluOp::Rolw
+                | RegAluOp::Rorw
+                | RegAluOp::Min
+                | RegAluOp::Minu
+                | RegAluOp::Max
+                | RegAluOp::Maxu
+                | RegAluOp::Bset
+                | RegAluOp::Bclr
+                | RegAluOp::Binv
+                | RegAluOp::Bext
+                | RegAluOp::Clmul
+                | RegAluOp::Clmulh
+                | RegAluOp::Clmulr
+        ),
+        _ => false,
     }
 }
 
@@ -553,14 +620,13 @@ fn decode_32(w: u32) -> Result<(Inst, u32), ItrErr> {
             }
             Inst::Fence
         }
-        0b1110011 => {
-            if w == 0x0000_0073 {
-                Inst::Ecall
-            } else {
-                return Err(bad("calc decode: system instruction not allowed"));
-            }
-        }
-        _ => return Err(bad("calc decode: opcode not in RV64IMC whitelist")),
+        0b1110011 => match w {
+            0x0000_0073 => Inst::Ecall,
+            // ebreak, and the canonical unimp (csrrw x0, cycle, x0).
+            0x0010_0073 | 0xC000_1073 => Inst::Trap,
+            _ => return Err(bad("calc decode: system instruction not allowed")),
+        },
+        _ => return Err(bad("calc decode: opcode not in RV64IM whitelist")),
     };
     Ok((inst, 4))
 }
@@ -753,8 +819,9 @@ fn decode_rvc(h: u32) -> Result<(Inst, u32), ItrErr> {
                     if bits(h, 12, 12) == 0 {
                         if rs2 == 0 {
                             if rd == 0 {
-                                // C.EBREAK
-                                return Err(bad("calc decode: c.ebreak not allowed"));
+                                // C.JR with rs1=0 is reserved (this is not
+                                // C.EBREAK; that has bit 12 set).
+                                return Err(bad("calc decode: c.jr rs1=0 reserved"));
                             }
                             // C.JR
                             Inst::Jalr { rd: 0, rs1: rd, imm: 0 }
@@ -764,7 +831,11 @@ fn decode_rvc(h: u32) -> Result<(Inst, u32), ItrErr> {
                         }
                     } else if rs2 == 0 {
                         if rd == 0 {
-                            return Err(bad("calc decode: c.jalr rd/rs1 reserved"));
+                            // C.EBREAK: v1 keeps it outside the whitelist
+                            // (see SPEC §2). Classify it here, where the
+                            // actual 0x9002 encoding lands; the previous
+                            // branch belongs to reserved C.JR (rs1=0).
+                            return Err(bad("calc decode: c.ebreak not allowed"));
                         }
                         // C.JALR
                         Inst::Jalr { rd: 1, rs1: rd, imm: 0 }
@@ -793,15 +864,51 @@ fn decode_rvc(h: u32) -> Result<(Inst, u32), ItrErr> {
     Ok((inst, 2))
 }
 
+/// Per-profile static cycle weights. Values are currently identical across
+/// profiles; the table is versioned so a later repricing can land per
+/// profile without restructuring call sites.
+#[derive(Debug, Clone, Copy)]
+pub struct ProfileWeights {
+    pub alu: u64,
+    pub load_store: u64,
+    pub mul: u64,
+    pub div: u64,
+    pub clmul: u64,
+    pub ecall_base: u64,
+}
+
+/// Weight table for profile 0 (RV64IM + Zicclsm).
+pub const WEIGHTS_PROFILE0: ProfileWeights = ProfileWeights {
+    alu: 1,
+    load_store: 2,
+    mul: 3,
+    div: 32,
+    clmul: 16,
+    ecall_base: 0,
+};
+
+/// Weight table for profile 1 (profile 0 + bitmanip). Identical values
+/// until a dedicated repricing.
+pub const WEIGHTS_PROFILE1: ProfileWeights = WEIGHTS_PROFILE0;
+
 /// Cycles charged for the carryless-multiply family. Every other whitelisted
 /// B instruction is a single ALU pass (1 cycle, matching the CKB-VM table);
 /// clmul is a 64-iteration carryless loop in software, so it is priced by
 /// actual host work. CKB charges 1 for it — treated here as their pricing
 /// pitfall, not a rule to copy.
-pub const CLMUL_CYCLES: u64 = 16;
+pub const CLMUL_CYCLES: u64 = WEIGHTS_PROFILE1.clmul;
 
-/// Static cycle cost; ecall is priced at runtime by hash kind.
-pub fn inst_cycles(inst: &Inst) -> u64 {
+pub fn weights_for_profile(profile: u8) -> &'static ProfileWeights {
+    match profile {
+        crate::calc::CALC_PROFILE_RV64IM => &WEIGHTS_PROFILE0,
+        _ => &WEIGHTS_PROFILE1,
+    }
+}
+
+/// Static cycle cost; ecall is priced at runtime by hash kind (plus
+/// `ecall_base`). `profile` selects the weight table.
+pub fn inst_cycles(inst: &Inst, profile: u8) -> u64 {
+    let w = weights_for_profile(profile);
     match inst {
         Inst::Lui { .. }
         | Inst::Auipc { .. }
@@ -816,7 +923,7 @@ pub fn inst_cycles(inst: &Inst) -> u64 {
                 | RegAluOp::Mulh
                 | RegAluOp::Mulhsu
                 | RegAluOp::Mulhu
-                | RegAluOp::Mulw => 3,
+                | RegAluOp::Mulw => w.mul,
                 RegAluOp::Div
                 | RegAluOp::Divu
                 | RegAluOp::Rem
@@ -824,16 +931,17 @@ pub fn inst_cycles(inst: &Inst) -> u64 {
                 | RegAluOp::Divw
                 | RegAluOp::Divuw
                 | RegAluOp::Remw
-                | RegAluOp::Remuw => 32,
-                RegAluOp::Clmul | RegAluOp::Clmulh | RegAluOp::Clmulr => CLMUL_CYCLES,
-                _ => 1,
+                | RegAluOp::Remuw => w.div,
+                RegAluOp::Clmul | RegAluOp::Clmulh | RegAluOp::Clmulr => w.clmul,
+                _ => w.alu,
             },
-            _ => 1,
+            _ => w.alu,
         },
-        // Unary/single-bit Zbb ops: one ALU pass each.
-        Inst::UnAlu { .. } | Inst::BitImm { .. } | Inst::Slliuw { .. } | Inst::Fence => 1,
-        Inst::Load { .. } | Inst::Store { .. } => 2,
-        Inst::Ecall => 0,
+        Inst::UnAlu { .. } | Inst::BitImm { .. } | Inst::Slliuw { .. } | Inst::Fence | Inst::Trap => {
+            w.alu
+        }
+        Inst::Load { .. } | Inst::Store { .. } => w.load_store,
+        Inst::Ecall => w.ecall_base,
     }
 }
 
@@ -996,7 +1104,6 @@ mod zbb_tests {
         assert_eq!(dec(0x0FF0_000F), Inst::Fence);
         // fence.i: funct3 = 1 (Zifencei) stays outside the whitelist.
         assert!(decode_32(0x0000_100F).is_err());
-        assert!(decode_32(0x0000_100F).is_err());
     }
 
     #[test]
@@ -1005,5 +1112,31 @@ mod zbb_tests {
         assert!(decode_32(r_word(0b0110000, 0b001, 3, 4, 3, 0b0010011)).is_err());
         // clz table with funct7 bit 25 set (reserved).
         assert!(decode_32(r_word(0b0110001, 0b001, 3, 4, 0, 0b0010011)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod rvc_trap_tests {
+    use super::*;
+    use crate::calc::{CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IMC};
+
+    #[test]
+    fn rvc_unimp_and_ebreak_remain_rejected() {
+        // Policy pin: the v1 RVC whitelist deliberately excludes both trap
+        // encodings. This test only fixes their error classification; it
+        // must not change acceptance.
+        let e = decode_at(&[0x00, 0x00], 0, CALC_PROFILE_RV64IMC).unwrap_err();
+        assert!(e.to_string().contains("c.addi4spn reserved imm 0"), "{e}");
+        let e = decode_at(&[0x02, 0x90], 0, CALC_PROFILE_RV64IMC).unwrap_err();
+        assert!(e.to_string().contains("c.ebreak not allowed"), "{e}");
+        // 0x8002 is C.JR with rs1=0, a different reserved encoding.
+        let e = decode_at(&[0x02, 0x80], 0, CALC_PROFILE_RV64IMC).unwrap_err();
+        assert!(e.to_string().contains("c.jr rs1=0 reserved"), "{e}");
+    }
+
+    #[test]
+    fn rvc_trap_encodings_stay_rejected_without_c() {
+        assert!(decode_at(&[0x00, 0x00, 0x00, 0x00], 0, CALC_PROFILE_RV64IM).is_err());
+        assert!(decode_at(&[0x02, 0x90, 0x02, 0x90], 0, CALC_PROFILE_RV64IM).is_err());
     }
 }

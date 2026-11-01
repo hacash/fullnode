@@ -1,26 +1,30 @@
-//! HVM calc func: RV64IMC(+Zbb/Zba/Zbs/Zbc) pure-compute kernels.
+//! HVM calc func: RV64IM(+Zicclsm) pure-compute kernels, zk-ready.
 //!
 //! Container (`container.rs`) + whitelist decoder (`decode.rs`) + deploy-time
 //! verifier with basic-block pricing (`verify.rs`) + pre-decoded interpreter
 //! (`interp.rs`). The whole pipeline is deterministic and free of host
-//! access: a calc kernel can only see its own flat memory and the hash
-//! builtins behind `ecall`.
+//! access: a calc kernel can only see its own flat memory and the ecall
+//! table (HALT + hash builtins). Interpreter and AOT must be bit-identical.
 //!
-//! The ISA is a single unified profile: RV64IMC plus the ratified
-//! bitmanip-1.0.0 subset — Zbb (24 forms: logic-with-negate, counts,
-//! min/max, rotates, sext/orc/rev8), Zba (8 address-gen), Zbs (8
-//! single-bit), Zbc (3 carryless) — what
-//! rustc emits with `-C target-feature=+zbb,+zba,+zbs,+zbc`. There is no
-//! profile versioning: the channel predates activation, so the whitelist
-//! is fixed in one shot.
+//! Header byte 5 is two orthogonal bits:
+//! - bit 0: Zba/Zbb/Zbs/Zbc
+//! - bit 1: RVC compressed encodings
+//! Profiles 0 and 1 (bit 1 clear) match the zkVM rule of no C. The
+//! deployer picks the combination; a zk proof uses a container that
+//! leaves bit 1 clear.
+//!
+//! See `SPEC.md` for the normative wire format, memory map, ecall ABI,
+//! gas, image ID and receipt.
 
+pub mod config;
 pub mod container;
 pub mod decode;
 pub mod interp;
 pub mod verify;
-// AOT (x86-64) translation backend: benchmark/differential-testing
-// infrastructure, not a consensus execution path. Feature-gated because it
-// needs mmap; see `aot.rs` for the rationale.
+
+pub use config::{CalcConfig, CalcHostConfig, CALC_CONFIG_FORK_HEIGHTS, CALC_CONFIG_V1};
+// x86-64 AOT. Official builds turn `calc-aot` on and `CalcFnObj::run` executes
+// it in lockstep with the interpreter. See `aot.rs`.
 #[cfg(feature = "calc-aot")]
 pub mod aot;
 
@@ -29,14 +33,29 @@ mod isa_tests;
 
 use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
 
+pub use container::{
+    profile_has_bitmanip, profile_has_compressed, profile_known, CALC_ABI_BYTES_TO_BYTES,
+    CALC_PROFILE_BITMANIP, CALC_PROFILE_COMPRESSED, CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IM_B,
+    CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B, CODE_BASE as CALC_CODE_BASE,
+    IMAGE_ID_DOMAIN as CALC_IMAGE_ID_DOMAIN,
+};
+
 /// Exchange rate: 1 compute = N cycles. CONSENSUS CONSTANT: changing this
 /// value changes gas results and is a hard fork — do not touch after
-/// activation. Calibration (measured 2026-10-29, hacd-bench.loc): HVM work
-/// costs ~45-70 ns per compute; AOT-executed calc cycles cost ~0.8 ns each,
-/// so strict wall-time parity would sit at N ≈ 55-90. N = 32 is the
-/// deliberate conservative end (~1.7-2.8x premium for calc vs HVM per unit
-/// of host time), and keeps the batch use case inside the mainnet compute
-/// bucket with ~52% headroom (200 scores = 8,686 compute).
+/// activation.
+///
+/// Calibration (2026-10-29, `hacd-bench.loc`): HVM work costs ~50.7 ns per
+/// compute; the consensus calc interpreter costs ~6.0 ns per cycle and the
+/// optional x86-64 AOT ~0.62 ns per cycle. One compute therefore buys
+/// ~192 ns of interpreter work or ~20 ns of AOT work. The strict
+/// work-per-compute parity points are N ≈ 8.5 (interpreter) and N ≈ 82
+/// (AOT): N = 32 is deliberately between them — on the consensus
+/// interpreter calc is ~3.8x cheaper per unit of guest work than HVM,
+/// while on an AOT host it is ~2.5x more expensive. The batch use case
+/// stays inside the mainnet compute bucket with ~52% headroom (200 scores
+/// = 8,686 compute). This is a policy compromise, not a parity target:
+/// decide which engine the chain prices against before activation, then
+/// freeze N.
 pub const CYCLES_PER_COMPUTE: u64 = 32;
 
 /// Resource charged per declared KiB of calc memory (input bytes, output
@@ -53,29 +72,26 @@ pub const CALC_SETUP_BASE_CYCLES: u64 = 64;
 /// Additional setup cycles per declared KiB of calc memory (zeroing cost).
 pub const CALC_SETUP_PER_KIB_CYCLES: u64 = 16;
 
-/// Fixed interpreter stack reservation (bytes), carved out of the declared
-/// memory, 16-byte aligned top.
+/// Minimum stack that must remain above the guard after `.bss` is placed.
+/// The stack itself is the rest of the gap up to the output region, not a
+/// fixed 2 KiB window. CONSENSUS CONSTANT (layout fit check).
 pub const CALC_STACK_SIZE: u64 = 2 * 1024;
 
-/// Stack-overflow guard band (bytes) between the output region and the
-/// stack. Stores that intersect it trap: a kernel pushing past the stack
-/// bottom used to silently corrupt the output region below (stack grows
-/// down and output sits directly beneath the stack); the guard turns that
-/// into a deterministic fault at the first offending frame push. 256 bytes
-/// covers a full compiler frame, so single-frame overflow is always
-/// caught; an intentional store that jumps the whole band still lands in
-/// the output region — at that point it is indistinguishable from a
-/// legitimate output write, which is exactly why the band exists rather
-/// than a full lower bound. Loads are unaffected. CONSENSUS CONSTANT
-/// (layout + trap semantics).
+/// Stack-overflow guard band (bytes) between `.bss` and the downward-growing
+/// stack. Stores that intersect it trap. 256 bytes covers a full compiler
+/// frame, so a single-frame overflow is caught before it lands in `.bss`.
+/// Loads are unaffected. CONSENSUS CONSTANT (layout + trap semantics).
 pub const CALC_STACK_GUARD: u64 = 256;
 
-/// Initial `ra` value: `jalr`/`ret` targeting this sentinel is the canonical
-/// return from the entry function (never a valid code address).
-pub const CALC_RETURN_SENTINEL: u64 = 0xFFFF_FFFF_FFFF_FFF0;
+/// ecall a7 = HALT. a0 = exit code (0 = success), a1 = output length.
+pub const ECALL_HALT: u64 = 0;
+/// Reserved HINT / private-input a7 range. L1 nodes cannot agree on hint
+/// content, so these numbers trap until a later activation.
+pub const ECALL_HINT_MIN: u64 = 16;
+pub const ECALL_HINT_MAX: u64 = 31;
 
 /// Hash builtin numbers behind `ecall` (a7), aligned with the native hash
-/// catalog (`rt/native_catalog.rs`).
+/// catalog (`rt/native_catalog.rs`). HALT is 0; 1..=6 are hashes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashKind {
     Sha2 = 1,
@@ -114,7 +130,7 @@ impl HashKind {
     /// ~1 cycle/byte for BLAKE2 (~5-8 native cycles/byte portable). RIPEMD-160
     /// is priced at/above SHA-256, matching its real relative cost. Builtins
     /// stay an order of magnitude cheaper than computing a hash in-kernel
-    /// with RV64IMC instructions (~700-1300 cycles per SHA-256 block), so the
+    /// with RV64IM instructions (~700-1300 cycles per SHA-256 block), so the
     /// incentive to use them is preserved. Values are provisional until the
     /// CYCLES_PER_COMPUTE calibration pass before activation.
     pub fn cycles(self, len: u64) -> u64 {
@@ -157,9 +173,30 @@ pub fn run_hash(kind: HashKind, input: &[u8], out: &mut [u8]) {
     }
 }
 
+/// Canonical call receipt: the future proof statement. Deterministic and
+/// identical between interpreter and AOT.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CalcReceipt {
+    pub image_id: [u8; 32],
+    pub input_hash: [u8; 32],
+    /// SHA-256 of the output bytes; SHA-256 of empty on any abort.
+    pub output_hash: [u8; 32],
+    /// 0 on success or architectural abort; guest-reported nonzero halt
+    /// code otherwise.
+    pub exit_code: u64,
+    /// `None` on a successful halt (exit_code = 0). Guest nonzero halt is
+    /// classified as [`CalcAbort2::Trap`].
+    pub abort: Option<CalcAbort2>,
+    pub cycles_used: u64,
+}
+
 /// Result of one calc invocation through the HVM call layer, carrying the
 /// gas actually consumed so the caller can charge it on both the success
 /// and the abort path (failures charge up to the stop point).
+///
+/// The SHA-256 proof statement is **not** computed here: hashing input and
+/// output on every consensus call would be uncharged host work. Callers
+/// that need a receipt use [`CalcFnObj::receipt`].
 #[derive(Debug, Clone)]
 pub struct CalcExec {
     /// Output bytes on success; abort classification otherwise.
@@ -168,6 +205,9 @@ pub struct CalcExec {
     pub cycles_used: u64,
     /// Resource charge: ceil(in/16) + ceil(out/16) + 8 per declared KiB.
     pub resource: i64,
+    /// 0 on success or architectural abort; guest HALT nonzero `a0`
+    /// otherwise (mapped to [`CalcAbort2::Trap`] in `result`).
+    pub exit_code: u64,
 }
 
 /// Abort classification mirroring `interp::CalcAbort` without the message
@@ -182,6 +222,9 @@ pub enum CalcAbort2 {
     OutOfResource,
     /// The declared/actual value size exceeds the host `SpaceCap`.
     ValueTooLarge,
+    /// Interpreter and AOT disagreed on gas or the result. Fatal for the
+    /// transaction; not a guest-visible abort.
+    EngineMismatch,
 }
 
 /// Per-call execution limits. `resource < 0` means the resource budget is
@@ -198,12 +241,13 @@ pub struct CalcRunLimits {
 pub struct CalcFnObj {
     container: container::CalcContainer,
     module: verify::CalcModule,
-    /// Node-local mountable AOT engine (`calc-aot` feature only). `None`
-    /// keeps the pure interpreter; when mounted, `run` executes the same
-    /// container through translated native code with bit-identical outputs,
-    /// cycles and abort classes (pinned by the `aot` differential suite),
-    /// so gas and state results are unchanged. This is a HOST performance
-    /// choice exactly like the contract cache — never a consensus switch.
+    /// `Some` when hashed at build (`compute_image_id_on_load`). `None`
+    /// means [`Self::image_id`] hashes the container on demand.
+    image_id: Option<[u8; 32]>,
+    /// Mounted x86-64 image. `None` means this object runs on the interpreter
+    /// only (feature off, host turned AOT off, or this value was cloned —
+    /// the RX mapping cannot be duplicated). The consensus call path holds
+    /// an `Arc`, so the image stays mounted there.
     #[cfg(feature = "calc-aot")]
     aot: Option<aot::AotFunc>,
 }
@@ -217,6 +261,7 @@ impl Clone for CalcFnObj {
         Self {
             container: self.container.clone(),
             module: self.module.clone(),
+            image_id: self.image_id,
             #[cfg(feature = "calc-aot")]
             aot: None,
         }
@@ -225,8 +270,10 @@ impl Clone for CalcFnObj {
 
 impl std::fmt::Debug for CalcFnObj {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let image_id = self.image_id();
         f.debug_struct("CalcFnObj")
             .field("container", &self.container)
+            .field("image_id", &image_id)
             .field("module", &"<verified>")
             .finish()
     }
@@ -234,25 +281,71 @@ impl std::fmt::Debug for CalcFnObj {
 
 impl CalcFnObj {
     /// Verify a container and build the executable object (deploy + load).
-    /// The consensus default: pure interpreter, no AOT.
+    /// Uses [`CALC_CONFIG_V1`]. Host knobs stay off; pass [`CalcHostConfig`]
+    /// to [`Self::build_with_host`] to mount AOT or hash the image id.
     pub fn build(c: container::CalcContainer) -> VmrtRes<Self> {
-        let module = verify::verify_container(&c)?;
+        Self::build_with_config(c, CALC_CONFIG_V1)
+    }
+
+    /// [`build`] under [`CALC_CONFIG_V1`] with host-only knobs applied.
+    pub fn build_with_host(c: container::CalcContainer, host: config::CalcHostConfig) -> VmrtRes<Self> {
+        let cfg = CalcConfig {
+            aot_mount: host.aot_mount,
+            compute_image_id_on_load: host.compute_image_id_on_load,
+            ..CALC_CONFIG_V1
+        };
+        Self::build_with_config(c, cfg)
+    }
+
+    /// [`build`] with an explicit feature set. AOT mounts only when
+    /// `cfg.aot_mount` is set and the `calc-aot` feature is compiled in.
+    pub fn build_with_config(c: container::CalcContainer, cfg: CalcConfig) -> VmrtRes<Self> {
+        let module = verify::verify_container_with(&c, &cfg)?;
+        let image_id = if cfg.compute_image_id_on_load {
+            Some(c.image_id())
+        } else {
+            None
+        };
+        #[cfg(feature = "calc-aot")]
+        let aot = if cfg.aot_mount {
+            Some(aot::aot_compile(&module).ok_or_else(|| {
+                ItrErr::new(ItrErrCode::ContractError, "calc aot compile failed")
+            })?)
+        } else {
+            None
+        };
         Ok(Self {
             container: c,
             module,
+            image_id,
             #[cfg(feature = "calc-aot")]
-            aot: None,
+            aot,
         })
     }
 
-    /// `build` plus a best-effort AOT translation (host performance only).
-    /// Containers the backend declines (currently `ecall`-bearing ones)
-    /// simply stay on the interpreter — the mount degrades gracefully.
+    /// Declared usable memory in KiB (resource/setup charge input).
+    pub(crate) fn mem_kib(&self) -> u16 {
+        self.container.mem_kib
+    }
+
+    pub(crate) fn output_max(&self) -> u16 {
+        self.container.output_max
+    }
+
+    /// Canonical image ID of the attached container. Computed at build when
+    /// the config asked for it, otherwise hashed on demand. Same bytes.
+    pub fn image_id(&self) -> [u8; 32] {
+        match self.image_id {
+            Some(id) => id,
+            None => self.container.image_id(),
+        }
+    }
+
+    /// [`build_with_host`] with AOT mounting requested. A compile failure
+    /// fails the build; the lockstep check must not silently disappear.
     #[cfg(feature = "calc-aot")]
     pub fn build_with_aot(c: container::CalcContainer) -> VmrtRes<Self> {
-        let module = verify::verify_container(&c)?;
-        let aot = aot::aot_compile(&module);
-        Ok(Self { container: c, module, aot })
+        Self::build_with_host(c, CalcHostConfig::new().with_aot_mount(true))
     }
 
     /// Whether an AOT image is mounted on this object.
@@ -261,103 +354,218 @@ impl CalcFnObj {
         self.aot.is_some()
     }
 
+    /// Derived proof statement for a completed [`CalcExec`]. SHA-256 of
+    /// input/output is charged to the caller that asks, not to consensus
+    /// execution.
+    pub fn receipt(&self, input: &[u8], exec: &CalcExec) -> CalcReceipt {
+        let abort = match &exec.result {
+            Ok(_) => None,
+            Err(a) => Some(*a),
+        };
+        let output: &[u8] = match &exec.result {
+            Ok(o) => o,
+            Err(_) => &[],
+        };
+        CalcReceipt {
+            image_id: self.image_id(),
+            input_hash: sha256_bytes(input),
+            output_hash: if abort.is_none() {
+                sha256_bytes(output)
+            } else {
+                sha256_bytes(&[])
+            },
+            exit_code: exec.exit_code,
+            abort,
+            cycles_used: exec.cycles_used,
+        }
+    }
+
     /// Run with the HVM gas rules; never touches host state.
     pub fn run(&self, input: &[u8], limits: CalcRunLimits) -> CalcExec {
         let lay = self.container.layout();
         let in_res = ceil_div(input.len() as u64, 16) as i64;
-        let mem_res = (lay.mem_len / 1024) as i64 * crate::calc::CALC_MEM_RESOURCE_PER_KIB;
+        // Resource/setup charges use declared usable memory (mem_kib), not
+        // the unmapped [0, CODE_BASE) page.
+        let mem_res = (lay.usable_len / 1024) as i64 * crate::calc::CALC_MEM_RESOURCE_PER_KIB;
+        let finish = |result: Result<Vec<u8>, CalcAbort2>,
+                      cycles_used: u64,
+                      resource: i64,
+                      exit_code: u64| CalcExec {
+            result,
+            cycles_used,
+            resource,
+            exit_code,
+        };
         // Pre-flight checks charge base gas only: they run before any cycle.
         if input.len() as u64 > lay.input_max {
-            return CalcExec {
-                result: Err(CalcAbort2::Trap),
-                cycles_used: 0,
-                resource: 0,
-            };
+            return finish(Err(CalcAbort2::Trap), 0, 0, 0);
         }
-        if input.len() > limits.value_size || lay.output_max > limits.value_size as u64 {
-            return CalcExec {
-                result: Err(CalcAbort2::ValueTooLarge),
-                cycles_used: 0,
-                resource: 0,
-            };
+        if lay.output_max > limits.value_size as u64 {
+            return finish(Err(CalcAbort2::ValueTooLarge), 0, 0, 0);
         }
         if limits.resource >= 0 && in_res.saturating_add(mem_res) > limits.resource {
-            return CalcExec {
-                result: Err(CalcAbort2::OutOfResource),
-                cycles_used: 0,
-                resource: 0,
-            };
+            return finish(Err(CalcAbort2::OutOfResource), 0, 0, 0);
         }
         // The per-call setup charge (memory allocation + zeroing + image
         // copies) is deducted up front and always kept, even on traps.
         let setup =
-            CALC_SETUP_BASE_CYCLES + (lay.mem_len / 1024) * CALC_SETUP_PER_KIB_CYCLES;
+            CALC_SETUP_BASE_CYCLES + (lay.usable_len / 1024) * CALC_SETUP_PER_KIB_CYCLES;
         if limits.cycles < setup {
-            return CalcExec {
-                result: Err(CalcAbort2::OutOfGas),
-                cycles_used: limits.cycles,
-                resource: in_res + mem_res,
-            };
+            // Terminal OutOfGas: report the attempted setup charge only, not
+            // the whole remaining budget. A tx reaching this abort cannot be
+            // included, so nothing beyond setup is burned; if ceil(setup/32)
+            // then exceeds the compute bucket, settle fails with the same
+            // ItrErrCode::OutOfGas — the failure class never changes.
+            return finish(
+                Err(CalcAbort2::OutOfGas),
+                setup,
+                in_res + mem_res,
+                0,
+            );
         }
-        // Mounted AOT engine (host performance only): identical outputs,
-        // cycle totals and abort classes to the interpreter — the resource
-        // accounting below is shared, so gas results cannot differ.
+        // Early lockstep insurance. Official x86-64 binaries compile
+        // `calc-aot` and mount an image, so every call runs the interpreter
+        // and AOT on two threads and keeps the result only when gas
+        // (`cycles_used`) and the outcome (output bytes, abort class, halt
+        // code) match. A mismatch is `EngineMismatch`: the caller rejects
+        // the transaction and it does not enter a block. Builds without the
+        // feature, or with the image unmounted, take the interpreter alone.
+        // A host deadline is not part of this check — AOT does not observe
+        // it — so a deadline stays on the interpreter. Once production has
+        // stayed quiet, the interpreter side of this pair is removed and
+        // AOT is the only engine.
         #[cfg(feature = "calc-aot")]
-        if let Some(aot) = self.aot.as_ref() {
-            // `AotOutcome.cycles_used` carries the exact interpreter
-            // accounting on every stop path (the differential suite pins
-            // this, including OOG's exclude-the-failing-charge rule).
-            let (out, _regs, _mem) = aot.run_with_state(
+        if limits.deadline.is_none() {
+            if let Some(aot) = self.aot.as_ref() {
+                let budget = limits.cycles - setup;
+                let (left, right) = std::thread::scope(|scope| {
+                    let i = scope.spawn(|| {
+                        engine_from_interp(setup, interp::run(
+                            &self.module,
+                            &self.container,
+                            input,
+                            budget,
+                            None,
+                        ))
+                    });
+                    let a = scope.spawn(|| {
+                        let (out, _regs, _mem) = aot.run_with_state(
+                            &self.module,
+                            &self.container,
+                            input,
+                            budget,
+                        );
+                        engine_from_aot(setup, out)
+                    });
+                    (i.join(), a.join())
+                });
+                let (Ok(interp_out), Ok(aot_out)) = (left, right) else {
+                    return finish(Err(CalcAbort2::EngineMismatch), 0, 0, 0);
+                };
+                if interp_out != aot_out {
+                    return finish(Err(CalcAbort2::EngineMismatch), 0, 0, 0);
+                }
+                return finish_with_output(
+                    interp_out.result,
+                    interp_out.cycles_used,
+                    interp_out.exit_code,
+                    limits,
+                    in_res,
+                    mem_res,
+                );
+            }
+        }
+        let out = engine_from_interp(
+            setup,
+            interp::run(
                 &self.module,
                 &self.container,
                 input,
                 limits.cycles - setup,
-            );
-            let cycles_used = setup + out.cycles_used;
-            let result = match out.abort {
-                None => Ok(out.output.unwrap_or_default()),
-                Some(aot::AotAbort::OutOfGas) => Err(CalcAbort2::OutOfGas),
-                // Dynamic jump misses are traps, exactly like the
-                // interpreter's "jalr to invalid target".
-                Some(aot::AotAbort::BadTarget | aot::AotAbort::Trap) => Err(CalcAbort2::Trap),
-            };
-            let out_res = match &result {
-                Ok(o) => ceil_div(o.len() as u64, 16) as i64,
-                Err(_) => 0,
-            };
-            return CalcExec {
-                result,
-                cycles_used,
-                resource: in_res + out_res + mem_res,
-            };
-        }
-        let exec = interp::run(
-            &self.module,
-            &self.container,
-            input,
-            limits.cycles - setup,
-            limits.deadline,
+                limits.deadline,
+            ),
         );
-        match exec {
-            Ok(r) => {
-                let out_res = ceil_div(r.output.len() as u64, 16) as i64;
-                CalcExec {
-                    result: Ok(r.output),
-                    cycles_used: setup + r.cycles_used,
-                    resource: in_res + out_res + mem_res,
-                }
-            }
-            Err((abort, used)) => CalcExec {
-                result: Err(match abort {
-                    interp::CalcAbort::Trap(_) => CalcAbort2::Trap,
-                    interp::CalcAbort::OutOfGas => CalcAbort2::OutOfGas,
-                    interp::CalcAbort::Deadline => CalcAbort2::Deadline,
-                }),
-                cycles_used: setup + used,
-                resource: in_res + mem_res,
-            },
+        finish_with_output(out.result, out.cycles_used, out.exit_code, limits, in_res, mem_res)
+    }
+}
+
+/// One engine's gas and outcome, compared by the lockstep check.
+#[derive(Clone, PartialEq, Eq)]
+struct EngineOut {
+    result: Result<Vec<u8>, CalcAbort2>,
+    cycles_used: u64,
+    exit_code: u64,
+}
+
+fn engine_from_interp(
+    setup: u64,
+    exec: Result<interp::CalcRun, (interp::CalcAbort, u64)>,
+) -> EngineOut {
+    match exec {
+        Ok(r) => EngineOut {
+            result: Ok(r.output),
+            cycles_used: setup + r.cycles_used,
+            exit_code: 0,
+        },
+        Err((abort, used)) => {
+            let (cls, exit_code) = match abort {
+                interp::CalcAbort::Trap(_) => (CalcAbort2::Trap, 0),
+                interp::CalcAbort::GuestExit(code) => (CalcAbort2::Trap, code),
+                interp::CalcAbort::OutOfGas => (CalcAbort2::OutOfGas, 0),
+                interp::CalcAbort::Deadline => (CalcAbort2::Deadline, 0),
+            };
+            EngineOut { result: Err(cls), cycles_used: setup + used, exit_code }
         }
     }
+}
+
+#[cfg(feature = "calc-aot")]
+fn engine_from_aot(setup: u64, out: aot::AotOutcome) -> EngineOut {
+    let cycles_used = setup + out.cycles_used;
+    let (result, exit_code) = match out.abort {
+        None => (Ok(out.output.unwrap_or_default()), 0),
+        Some(aot::AotAbort::OutOfGas) => (Err(CalcAbort2::OutOfGas), 0),
+        Some(aot::AotAbort::GuestExit) => (Err(CalcAbort2::Trap), out.exit_code),
+        Some(aot::AotAbort::BadTarget | aot::AotAbort::Trap) => (Err(CalcAbort2::Trap), 0),
+    };
+    EngineOut { result, cycles_used, exit_code }
+}
+
+fn finish_with_output(
+    result: Result<Vec<u8>, CalcAbort2>,
+    cycles_used: u64,
+    exit_code: u64,
+    limits: CalcRunLimits,
+    in_res: i64,
+    mem_res: i64,
+) -> CalcExec {
+    let out_res = match &result {
+        Ok(o) => ceil_div(o.len() as u64, 16) as i64,
+        Err(_) => 0,
+    };
+    let finish = |result: Result<Vec<u8>, CalcAbort2>, resource: i64| CalcExec {
+        result,
+        cycles_used,
+        resource,
+        exit_code,
+    };
+    if result.is_ok()
+        && limits.resource >= 0
+        && in_res.saturating_add(out_res).saturating_add(mem_res) > limits.resource
+    {
+        return CalcExec {
+            result: Err(CalcAbort2::OutOfResource),
+            cycles_used,
+            resource: in_res + mem_res,
+            exit_code: 0,
+        };
+    }
+    let resource = if result.is_ok() {
+        in_res + out_res + mem_res
+    } else {
+        in_res + mem_res
+    };
+    finish(result, resource)
 }
 
 /// ceil(a / b) for non-negative a and positive b.
@@ -367,12 +575,16 @@ pub(crate) fn ceil_div(a: u64, b: u64) -> u64 {
 }
 
 
+/// SHA-256 of `data` (receipt / image-id helper).
+pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(data).into()
+}
+
 /// Build a calc container from a linked bare-metal image produced by the
-/// Rust cross-build pack step. `code` is the executable image (.text),
-/// `rodata` the constant image placed at the next 16-byte boundary (the
-/// fixture link scripts use `. = ALIGN(16)` before `.rodata` — keep them
-/// in sync), `init` optional initialized writable data. The instruction
-/// whitelist is the single unified RV64IMC+Zbb/Zba/Zbs+Zbc profile.
+/// Rust cross-build pack step. Profile 0 (RV64IM + Zicclsm). `entry` is
+/// the absolute guest PC (typically [`CODE_BASE`] for a kernel whose
+/// `calc_entry` is linked at the image start).
 pub fn pack_container(
     mem_kib: u16,
     entry: u32,
@@ -382,13 +594,63 @@ pub fn pack_container(
     rodata: Vec<u8>,
     init: Vec<u8>,
 ) -> VmrtRes<container::CalcContainer> {
+    pack_container_with_profile(
+        container::CALC_PROFILE_RV64IM,
+        mem_kib,
+        entry,
+        input_max,
+        output_max,
+        code,
+        rodata,
+        init,
+    )
+}
+
+/// [`pack_container`] with an explicit ISA profile.
+pub fn pack_container_with_profile(
+    profile: u8,
+    mem_kib: u16,
+    entry: u32,
+    input_max: u16,
+    output_max: u16,
+    code: Vec<u8>,
+    rodata: Vec<u8>,
+    init: Vec<u8>,
+) -> VmrtRes<container::CalcContainer> {
+    pack_container_with_config(
+        profile,
+        mem_kib,
+        entry,
+        input_max,
+        output_max,
+        code,
+        rodata,
+        init,
+        &CALC_CONFIG_V1,
+    )
+}
+
+/// [`pack_container_with_profile`] verified under `cfg`.
+pub fn pack_container_with_config(
+    profile: u8,
+    mem_kib: u16,
+    entry: u32,
+    input_max: u16,
+    output_max: u16,
+    code: Vec<u8>,
+    rodata: Vec<u8>,
+    init: Vec<u8>,
+    cfg: &CalcConfig,
+) -> VmrtRes<container::CalcContainer> {
     let c = container::CalcContainer {
+        profile,
         abi: container::CALC_ABI_BYTES_TO_BYTES,
         mem_kib,
         entry,
         code,
         rodata,
         init,
+        bss_len: 0,
         input_max,
         output_max,
     };
@@ -403,20 +665,370 @@ pub fn pack_container(
             "calc pack: container round-trip did not consume all bytes",
         ));
     }
-    verify::verify_container(&decoded)?;
+    verify::verify_container_with(&decoded, cfg)?;
     Ok(decoded)
 }
 
-/// FitSH `calc fn` backend hook (phase 2): lower fitsh IR to a RV64IMC
-/// image. The signature is fixed now so the wire/loader side cannot drift;
-/// the implementation lands with the phase-2 backend.
-pub fn lower_ir_to_rv64imc(_nodes: &[Box<dyn crate::ir::IRNode>]) -> VmrtRes<Vec<u8>> {
-    Err(ItrErr::new(ItrErrCode::ContractError, "fitsh calc backend lands in phase 2"))
+/// [`pack_container_with_config`] plus a `.bss` fit check. `bss_len` is the
+/// zero-filled span from `data_base + init_len` through the end of `.bss`
+/// (alignment hole included).
+pub fn pack_container_with_bss(
+    profile: u8,
+    mem_kib: u16,
+    entry: u32,
+    input_max: u16,
+    output_max: u16,
+    code: Vec<u8>,
+    rodata: Vec<u8>,
+    init: Vec<u8>,
+    bss_len: u64,
+    cfg: &CalcConfig,
+) -> VmrtRes<container::CalcContainer> {
+    if bss_len > u16::MAX as u64 {
+        return Err(ItrErr::new(
+            ItrErrCode::ContractError,
+            "calc container bss_len exceeds u16",
+        ));
+    }
+    let lay = container::compute_layout(
+        code.len() as u64,
+        rodata.len() as u64,
+        init.len() as u64,
+        0,
+        input_max as u64,
+        output_max as u64,
+        mem_kib as u64 * 1024,
+    );
+    lay.check_bss_fit(bss_len)?;
+    let mut packed = pack_container_with_config(
+        profile, mem_kib, entry, input_max, output_max, code, rodata, init, cfg,
+    )?;
+    packed.bss_len = bss_len as u16;
+    // Re-verify with the bss field in the wire image so the stored bytes
+    // and the executable layout are the same object.
+    let bytes = packed.encode()?;
+    let (decoded, used) = container::CalcContainer::decode(&bytes)?;
+    if used != bytes.len() {
+        return Err(ItrErr::new(
+            ItrErrCode::ContractError,
+            "calc pack: container round-trip did not consume all bytes",
+        ));
+    }
+    verify::verify_container_with(&decoded, cfg)?;
+    Ok(decoded)
+}
+
+/// Pack an ELF64 little-endian RISC-V (`e_machine` 243) image into a calc
+/// container. Entry is the `calc_entry` symbol when present, otherwise
+/// `e_entry`. Profile 0.
+pub fn pack_elf(
+    elf: &[u8],
+    mem_kib: u16,
+    input_max: u16,
+    output_max: u16,
+) -> VmrtRes<container::CalcContainer> {
+    pack_elf_with_config(
+        elf,
+        container::CALC_PROFILE_RV64IM,
+        mem_kib,
+        input_max,
+        output_max,
+        &CALC_CONFIG_V1,
+    )
+}
+
+/// [`pack_elf`] under an explicit profile and [`CalcConfig`].
+pub fn pack_elf_with_config(
+    elf: &[u8],
+    profile: u8,
+    mem_kib: u16,
+    input_max: u16,
+    output_max: u16,
+    cfg: &CalcConfig,
+) -> VmrtRes<container::CalcContainer> {
+    let parsed = parse_elf64_riscv(elf, mem_kib as u64 * 1024)?;
+    pack_container_with_bss(
+        profile,
+        mem_kib,
+        parsed.entry,
+        input_max,
+        output_max,
+        parsed.code,
+        parsed.rodata,
+        parsed.init,
+        parsed.bss_len,
+        cfg,
+    )
+}
+
+struct ParsedElf {
+    entry: u32,
+    code: Vec<u8>,
+    rodata: Vec<u8>,
+    init: Vec<u8>,
+    bss_len: u64,
+}
+
+struct ElfSec {
+    name: String,
+    typ: u32,
+    flags: u64,
+    addr: u64,
+    offset: u64,
+    size: u64,
+    link: u32,
+    entsize: u64,
+}
+
+fn elf_err(t: &str) -> ItrErr {
+    ItrErr::new(ItrErrCode::ContractError, t)
+}
+
+fn ru16(b: &[u8], o: usize) -> VmrtRes<u16> {
+    let s = b.get(o..o + 2).ok_or_else(|| elf_err("calc elf: truncated"))?;
+    Ok(u16::from_le_bytes([s[0], s[1]]))
+}
+fn ru32(b: &[u8], o: usize) -> VmrtRes<u32> {
+    let s = b.get(o..o + 4).ok_or_else(|| elf_err("calc elf: truncated"))?;
+    Ok(u32::from_le_bytes([s[0], s[1], s[2], s[3]]))
+}
+fn ru64(b: &[u8], o: usize) -> VmrtRes<u64> {
+    let s = b.get(o..o + 8).ok_or_else(|| elf_err("calc elf: truncated"))?;
+    Ok(u64::from_le_bytes([
+        s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+    ]))
+}
+
+fn cstr_at(buf: &[u8], off: u64) -> VmrtRes<String> {
+    let off = usize::try_from(off).map_err(|_| elf_err("calc elf: name offset"))?;
+    if off >= buf.len() {
+        return Err(elf_err("calc elf: name offset"));
+    }
+    let end = buf[off..]
+        .iter()
+        .position(|&c| c == 0)
+        .ok_or_else(|| elf_err("calc elf: unterminated name"))?;
+    let bytes = &buf[off..off + end];
+    Ok(std::str::from_utf8(bytes)
+        .map_err(|_| elf_err("calc elf: name is not utf-8"))?
+        .to_string())
+}
+
+fn sec_bytes<'a>(elf: &'a [u8], sec: &ElfSec) -> VmrtRes<&'a [u8]> {
+    let off = usize::try_from(sec.offset).map_err(|_| elf_err("calc elf: section offset"))?;
+    let len = usize::try_from(sec.size).map_err(|_| elf_err("calc elf: section size"))?;
+    elf.get(off..off + len).ok_or_else(|| elf_err("calc elf: section out of file"))
+}
+
+fn parse_elf64_riscv(elf: &[u8], usable_len: u64) -> VmrtRes<ParsedElf> {
+    if elf.len() < 64 || elf.get(..4) != Some(b"\x7fELF") {
+        return Err(elf_err("calc elf: bad magic"));
+    }
+    if elf[4] != 2 {
+        return Err(elf_err("calc elf: not ELF64"));
+    }
+    if elf[5] != 1 {
+        return Err(elf_err("calc elf: not little-endian"));
+    }
+    let e_machine = ru16(elf, 18)?;
+    if e_machine != 243 {
+        return Err(elf_err("calc elf: e_machine is not EM_RISCV"));
+    }
+    let e_entry = ru64(elf, 24)?;
+    let e_shoff = ru64(elf, 40)?;
+    let e_shentsize = ru16(elf, 58)? as u64;
+    let e_shnum = ru16(elf, 60)? as usize;
+    let e_shstrndx = ru16(elf, 62)? as usize;
+    if e_shoff == 0 || e_shnum == 0 || e_shentsize < 64 {
+        return Err(elf_err("calc elf: missing section headers"));
+    }
+    if e_shstrndx >= e_shnum {
+        return Err(elf_err("calc elf: bad shstrndx"));
+    }
+    let mut sections = Vec::with_capacity(e_shnum);
+    for i in 0..e_shnum {
+        let base = e_shoff
+            .checked_add((i as u64).checked_mul(e_shentsize).ok_or_else(|| elf_err("calc elf: shoff"))?)
+            .ok_or_else(|| elf_err("calc elf: shoff"))?;
+        let base = usize::try_from(base).map_err(|_| elf_err("calc elf: shoff"))?;
+        let hdr = elf.get(base..base + 64).ok_or_else(|| elf_err("calc elf: truncated section header"))?;
+        sections.push(ElfSec {
+            name: String::new(),
+            typ: ru32(hdr, 4)?,
+            flags: ru64(hdr, 8)?,
+            addr: ru64(hdr, 16)?,
+            offset: ru64(hdr, 24)?,
+            size: ru64(hdr, 32)?,
+            link: ru32(hdr, 40)?,
+            entsize: ru64(hdr, 56)?,
+        });
+    }
+    let shstr = sec_bytes(elf, &sections[e_shstrndx])?.to_vec();
+    for (i, sec) in sections.iter_mut().enumerate() {
+        let base = e_shoff
+            .checked_add((i as u64).checked_mul(e_shentsize).ok_or_else(|| elf_err("calc elf: shoff"))?)
+            .ok_or_else(|| elf_err("calc elf: shoff"))?;
+        let base = usize::try_from(base).map_err(|_| elf_err("calc elf: shoff"))?;
+        let name_off = ru32(elf, base)?;
+        sec.name = cstr_at(&shstr, name_off as u64)?;
+    }
+    const SHT_RELA: u32 = 4;
+    const SHT_REL: u32 = 9;
+    const SHF_ALLOC: u64 = 2;
+    for sec in &sections {
+        if sec.typ == SHT_REL || sec.typ == SHT_RELA {
+            return Err(elf_err("calc elf: relocation section not allowed"));
+        }
+        if sec.size == 0 || sec.flags & SHF_ALLOC == 0 {
+            continue;
+        }
+        let known = matches!(
+            sec.name.as_str(),
+            ".text" | ".rodata" | ".data" | ".sdata" | ".bss" | ".sbss"
+        );
+        if !known {
+            return Err(elf_err("calc elf: unknown allocated section"));
+        }
+    }
+    let find = |name: &str| sections.iter().find(|s| s.name == name);
+
+    let text = find(".text").ok_or_else(|| elf_err("calc elf: missing .text"))?;
+    if text.typ != 1 {
+        return Err(elf_err("calc elf: .text is not PROGBITS"));
+    }
+    if text.addr != container::CODE_BASE {
+        return Err(elf_err("calc elf: .text does not start at CODE_BASE"));
+    }
+    let code = sec_bytes(elf, text)?.to_vec();
+
+    let rodata = match find(".rodata") {
+        Some(sec) if sec.size > 0 => {
+            let rodata_base = (container::CODE_BASE + code.len() as u64 + 15) & !15;
+            if sec.addr != rodata_base {
+                return Err(elf_err("calc elf: .rodata does not start at rodata_base"));
+            }
+            sec_bytes(elf, sec)?.to_vec()
+        }
+        _ => Vec::new(),
+    };
+    let rodata_base = (container::CODE_BASE + code.len() as u64 + 15) & !15;
+    let data_base = (rodata_base + rodata.len() as u64 + 15) & !15;
+
+    let mut data_secs: Vec<&ElfSec> = sections
+        .iter()
+        .filter(|s| (s.name == ".data" || s.name == ".sdata") && s.size > 0)
+        .collect();
+    data_secs.sort_by_key(|s| s.addr);
+    let init = if data_secs.is_empty() {
+        Vec::new()
+    } else {
+        if data_secs[0].addr != data_base {
+            return Err(elf_err("calc elf: .data does not start at data_base"));
+        }
+        let end = data_secs
+            .iter()
+            .try_fold(data_base, |hi, s| {
+                s.addr.checked_add(s.size).map(|e| hi.max(e))
+            })
+            .ok_or_else(|| elf_err("calc elf: data section overflow"))?;
+        let span = end
+            .checked_sub(data_base)
+            .ok_or_else(|| elf_err("calc elf: data span underflow"))?;
+        if span > usable_len {
+            return Err(elf_err("calc elf: data image exceeds declared memory"));
+        }
+        let mut init = vec![0u8; span as usize];
+        for s in data_secs {
+            if s.addr < data_base {
+                return Err(elf_err("calc elf: data section before data_base"));
+            }
+            let at = (s.addr - data_base) as usize;
+            let bytes = sec_bytes(elf, s)?;
+            let end_at = at
+                .checked_add(bytes.len())
+                .ok_or_else(|| elf_err("calc elf: data section overflow"))?;
+            if end_at > init.len() {
+                return Err(elf_err("calc elf: data section exceeds init image"));
+            }
+            init[at..end_at].copy_from_slice(bytes);
+        }
+        init
+    };
+
+    let init_end = data_base + init.len() as u64;
+    let mut bss_end = init_end;
+    for s in sections.iter().filter(|s| s.name == ".bss" || s.name == ".sbss") {
+        if s.size == 0 {
+            continue;
+        }
+        let end = s.addr.checked_add(s.size).ok_or_else(|| elf_err("calc elf: bss overflow"))?;
+        if s.addr < data_base {
+            return Err(elf_err("calc elf: bss before data_base"));
+        }
+        if end > bss_end {
+            bss_end = end;
+        }
+    }
+    let bss_len = bss_end - init_end;
+
+    let mut entry = u32::try_from(e_entry).map_err(|_| elf_err("calc elf: e_entry exceeds u32"))?;
+    if let Some(symtab) = find(".symtab") {
+        let str_idx = symtab.link as usize;
+        let strtab = sections.get(str_idx).ok_or_else(|| elf_err("calc elf: bad strtab"))?;
+        let strbytes = sec_bytes(elf, strtab)?;
+        let syms = sec_bytes(elf, symtab)?;
+        let entsize = if symtab.entsize == 0 { 24 } else { symtab.entsize as usize };
+        if entsize >= 24 {
+            let mut off = 0;
+            while off + entsize <= syms.len() {
+                let name_off = ru32(syms, off)?;
+                let value = ru64(syms, off + 8)?;
+                if let Ok(name) = cstr_at(strbytes, name_off as u64) {
+                    if name == "calc_entry" {
+                        entry = u32::try_from(value)
+                            .map_err(|_| elf_err("calc elf: calc_entry exceeds u32"))?;
+                        break;
+                    }
+                }
+                off += entsize;
+            }
+        }
+    }
+
+    Ok(ParsedElf { entry, code, rodata, init, bss_len })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "calc-aot")]
+    #[test]
+    fn dual_run_halt_agrees() {
+        let c = pack_container(
+            8,
+            container::CODE_BASE as u32,
+            64,
+            64,
+            halt_text(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let obj = CalcFnObj::build_with_host(c, CalcHostConfig::new()).unwrap();
+        assert!(obj.aot_mounted());
+        let exec = obj.run(
+            &[],
+            CalcRunLimits {
+                cycles: 10_000,
+                resource: i64::MAX,
+                value_size: usize::MAX,
+                deadline: None,
+            },
+        );
+        assert!(exec.result.is_ok(), "{exec:?}");
+        assert!(exec.cycles_used > 0);
+    }
 
     #[test]
     fn hash_cycles_max_len_does_not_overflow() {
@@ -452,5 +1064,178 @@ mod tests {
         assert_eq!(ceil_div(0, 16), 0);
         assert_eq!(ceil_div(16, 16), 1);
         assert_eq!(ceil_div(17, 16), 2);
+    }
+
+    fn halt_text() -> Vec<u8> {
+        let mut c = Vec::new();
+        for w in [0x0000_0513u32, 0x0000_0593, 0x0000_0893, 0x0000_0073] {
+            c.extend_from_slice(&w.to_le_bytes());
+        }
+        c
+    }
+
+    /// Minimal ELF64 LE RISC-V: `.text` at `CODE_BASE`, optional `.bss`,
+    /// `calc_entry` in `.symtab` when `symbol` is set.
+    fn synth_elf(bss_addr: u64, bss_size: u64, symbol: bool) -> Vec<u8> {
+        let text = halt_text();
+        let shstr = b"\0.text\0.bss\0.symtab\0.strtab\0.shstrtab\0";
+        let strtab = if symbol { b"\0calc_entry\0".to_vec() } else { b"\0other\0".to_vec() };
+        let mut sym = vec![0u8; 24];
+        sym.extend_from_slice(&1u32.to_le_bytes());
+        sym.extend_from_slice(&[0x12, 0]); // st_info, st_other
+        sym.extend_from_slice(&1u16.to_le_bytes()); // shndx .text
+        sym.extend_from_slice(&container::CODE_BASE.to_le_bytes());
+        sym.extend_from_slice(&0u64.to_le_bytes());
+
+        let mut body = vec![0u8; 64];
+        let text_off = body.len() as u64;
+        body.extend_from_slice(&text);
+        let str_off = body.len() as u64;
+        body.extend_from_slice(&strtab);
+        let sym_off = body.len() as u64;
+        body.extend_from_slice(&sym);
+        let shstr_off = body.len() as u64;
+        body.extend_from_slice(shstr);
+        let shoff = body.len() as u64;
+
+        let mut sh = |name: u32, typ: u32, flags: u64, addr: u64, off: u64, size: u64, link: u32, entsize: u64| {
+            let mut h = Vec::new();
+            h.extend_from_slice(&name.to_le_bytes());
+            h.extend_from_slice(&typ.to_le_bytes());
+            h.extend_from_slice(&flags.to_le_bytes());
+            h.extend_from_slice(&addr.to_le_bytes());
+            h.extend_from_slice(&off.to_le_bytes());
+            h.extend_from_slice(&size.to_le_bytes());
+            h.extend_from_slice(&link.to_le_bytes());
+            h.extend_from_slice(&0u32.to_le_bytes());
+            h.extend_from_slice(&4u64.to_le_bytes());
+            h.extend_from_slice(&entsize.to_le_bytes());
+            body.extend_from_slice(&h);
+        };
+        sh(0, 0, 0, 0, 0, 0, 0, 0);
+        sh(1, 1, 6, container::CODE_BASE, text_off, text.len() as u64, 0, 0);
+        sh(7, 8, 3, bss_addr, 0, bss_size, 0, 0);
+        sh(12, 2, 0, 0, sym_off, sym.len() as u64, 4, 24);
+        sh(20, 3, 0, 0, str_off, strtab.len() as u64, 0, 0);
+        sh(28, 3, 0, 0, shstr_off, shstr.len() as u64, 0, 0);
+
+        body[0..4].copy_from_slice(b"\x7fELF");
+        body[4] = 2;
+        body[5] = 1;
+        body[6] = 1;
+        body[16..18].copy_from_slice(&2u16.to_le_bytes());
+        body[18..20].copy_from_slice(&243u16.to_le_bytes());
+        body[20..24].copy_from_slice(&1u32.to_le_bytes());
+        let entry = if symbol { 0 } else { container::CODE_BASE };
+        body[24..32].copy_from_slice(&entry.to_le_bytes());
+        body[40..48].copy_from_slice(&shoff.to_le_bytes());
+        body[52..54].copy_from_slice(&64u16.to_le_bytes());
+        body[58..60].copy_from_slice(&64u16.to_le_bytes());
+        body[60..62].copy_from_slice(&6u16.to_le_bytes());
+        body[62..64].copy_from_slice(&5u16.to_le_bytes());
+        body
+    }
+
+    #[test]
+    fn check_bss_fit_rejects_overlap_and_reports_free_span() {
+        let c = pack_container(
+            4,
+            container::CODE_BASE as u32,
+            64,
+            64,
+            halt_text(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let lay = c.layout();
+        let free = lay.free_rw_bytes();
+        assert_eq!(
+            free,
+            lay.stack_top - lay.data_base - lay.init_len - crate::calc::CALC_STACK_GUARD
+                - crate::calc::CALC_STACK_SIZE
+        );
+        assert!(free > 0);
+        assert!(lay.check_bss_fit(free).is_ok());
+        let err = lay.check_bss_fit(free + 1).unwrap_err();
+        assert!(err.to_string().contains("io overlaps bss"), "{err}");
+    }
+
+    fn with_extra_section(mut elf: Vec<u8>, typ: u32, flags: u64, size: u64) -> Vec<u8> {
+        let shnum = u16::from_le_bytes(elf[60..62].try_into().unwrap());
+        let mut hdr = vec![0u8; 64];
+        hdr[4..8].copy_from_slice(&typ.to_le_bytes());
+        hdr[8..16].copy_from_slice(&flags.to_le_bytes());
+        hdr[32..40].copy_from_slice(&size.to_le_bytes());
+        elf.extend_from_slice(&hdr);
+        elf[60..62].copy_from_slice(&(shnum + 1).to_le_bytes());
+        elf
+    }
+
+    #[test]
+    fn layout_stack_uses_remaining_memory_not_fixed_2kib() {
+        let c = pack_container(
+            8,
+            container::CODE_BASE as u32,
+            64,
+            64,
+            halt_text(),
+            vec![],
+            vec![],
+        )
+        .unwrap();
+        let lay = c.layout();
+        assert_eq!(lay.stack_top, lay.output_base);
+        assert_eq!(lay.guard_base + crate::calc::CALC_STACK_GUARD, lay.stack_bottom);
+        assert!(
+            lay.stack_top - lay.stack_bottom > crate::calc::CALC_STACK_SIZE,
+            "stack window {} must exceed the 2KiB minimum",
+            lay.stack_top - lay.stack_bottom
+        );
+        assert_eq!(lay.input_base + lay.input_max, lay.mem_len);
+    }
+
+    #[test]
+    fn pack_elf_rejects_rela_and_unknown_alloc_sections() {
+        let data_base = {
+            let code_len = halt_text().len() as u64;
+            let ro = (container::CODE_BASE + code_len + 15) & !15;
+            (ro + 15) & !15
+        };
+        let base = synth_elf(data_base, 16, true);
+        let rela = with_extra_section(base.clone(), 4, 0, 24);
+        let err = pack_elf(&rela, 4, 64, 64).unwrap_err();
+        assert!(
+            err.to_string().contains("relocation section not allowed"),
+            "{err}"
+        );
+        let rel = with_extra_section(base.clone(), 9, 0, 16);
+        let err = pack_elf(&rel, 4, 64, 64).unwrap_err();
+        assert!(
+            err.to_string().contains("relocation section not allowed"),
+            "{err}"
+        );
+        let unknown = with_extra_section(base, 1, 2, 8);
+        let err = pack_elf(&unknown, 4, 64, 64).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown allocated section"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn pack_elf_uses_calc_entry_and_rejects_bss_overlap() {
+        let data_base = {
+            let code_len = halt_text().len() as u64;
+            let ro = (container::CODE_BASE + code_len + 15) & !15;
+            (ro + 15) & !15
+        };
+        let ok = pack_elf(&synth_elf(data_base, 16, true), 4, 64, 64).unwrap();
+        assert_eq!(ok.entry, container::CODE_BASE as u32);
+        assert_eq!(ok.code, halt_text());
+        let err = pack_elf(&synth_elf(data_base, 0x800, true), 4, 64, 64).unwrap_err();
+        assert!(err.to_string().contains("io overlaps bss"), "{err}");
+        let from_ehdr = pack_elf(&synth_elf(data_base, 16, false), 4, 64, 64).unwrap();
+        assert_eq!(from_ehdr.entry, container::CODE_BASE as u32);
     }
 }

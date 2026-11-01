@@ -10,7 +10,7 @@ edition.workspace = true
 # bodies. Codec files (`action`/`contract`/`rt` wire types/`value`), the IR
 # node model (`ir`) and the fitsh decompiler (`lang`) stay on without it.
 # Off under SDK/wasm via default-features = false.
-default = ["execute"]
+default = ["execute", "calc-aot"]
 execute = [
     "base/execute",
     "dep:sha2",
@@ -24,22 +24,38 @@ execute = [
 # only on codec-side types (+ `sys` hashing for `calc_func_sign`), so a
 # codec-only consumer (SDK wasm) may opt in without the execution engine.
 syntax = []
-# AOT translation backend (`calc::aot`) — benchmark/differential-testing
-# infrastructure only, never part of consensus builds. Disabled by default so
-# plain builds (and wasm SDK targets, which have no mmap) never compile it.
-# Run its suite with: cargo test -p vm --features calc-aot
+# AOT translation backend (`calc::aot`). On by default for official x86-64
+# nodes: each calc call runs the interpreter and AOT on two threads and
+# rejects the transaction if gas or the result disagree. This is the early
+# lockstep check; once that check has stayed quiet, the interpreter is
+# retired and AOT is the only engine. Other platforms turn the feature off
+# (`--no-default-features --features execute`) and run the interpreter
+# alone. Enabling it off x86-64 is a compile_error. The wasm SDK already
+# depends on vm with default-features = false.
+# Suite: cargo test -p vm --features calc-aot
 calc-aot = ["dep:libc"]
+# Test-only calc configs: `all_enabled`, `with_*`, and `testkit` (memory cap
+# above the v1 64 KiB, hard-capped at 16 MiB). Absent from production builds.
+# Integration tests pick it up from the dev-dependency below.
+# Arch-test: cargo test -p vm --features calc-testkit --test calc_archtest
+calc-testkit = []
+
+[[test]]
+name = "calc_archtest"
+required-features = ["calc-testkit"]
 [dev-dependencies]
+# Enables `calc-testkit` for this package's own tests (integration tests do
+# not see `cfg(test)` on the library). Not a normal dependency.
+vm = { path = ".", features = ["calc-testkit"] }
 # Differential-testing oracles for the calc interpreter (never runtime deps).
-# ckb-vm: full-program differential engine (memory ops, MULH family, and all
-#   compressed forms execute here; see tests/calc_differential.rs).
+# ckb-vm: full-program differential engine (memory ops, MULH family; see
+#   tests/calc_differential.rs).
 ckb-vm = "=0.24.13"
 # softcore-rv64: instruction-level golden oracle, automated Rust translation of
 #   the official Sail RISC-V executable spec. Instruction-subset only: MULH/
-#   MULHU/MULHSU panic on a prelude 128-bit bug, LOAD/STORE are todo!(), and
-#   its public decoder never emits C_* asts (we hand-build them from our own
-#   decoder for execute-side pinning). Version is hard-pinned: the oracle
-#   itself is part of the pinning-test fixture set.
+#   MULHU/MULHSU panic on a prelude 128-bit bug, LOAD/STORE are todo!().
+#   Version is hard-pinned: the oracle itself is part of the pinning-test
+#   fixture set.
 softcore-rv64 = "=0.6.0"
 
 [dependencies]

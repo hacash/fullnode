@@ -2,6 +2,7 @@ use super::compile_body::{CompiledCode, compile_body_with_macros};
 use super::parse_deploy::parse_deploy;
 use super::parse_func::{
     parse_func_body_tokens, parse_func_sig, parse_function, parse_optional_code_modifier,
+    parse_rv64im_function,
 };
 use super::state::{FITSH_CURRENT_VERSION, FitshVersion, MacroDef, ParseState};
 use crate::contract::Abst;
@@ -267,18 +268,37 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
                 .push((format!("abstract::{}", name), source_map));
         }
         Some(Keyword(KwTy::Function)) => {
-            // consume 'function' inside parse_function
-            let (func, smap, name) = parse_function(state, true)?;
-            let sign = calc_func_sign(&name);
-            if !state.userfunc_signs.insert(sign) {
-                return errf!("duplicate function '{}' signature", name);
+            let next_is_rv64im = matches!(
+                state.tokens.get(state.idx + 1),
+                Some(Identifier(word)) if word == "rv64im"
+            );
+            if next_is_rv64im {
+                state.advance();
+                take_rv64im_func(state)?;
+            } else {
+                let (func, smap, name) = parse_function(state, true)?;
+                let sign = calc_func_sign(&name);
+                if !state.userfunc_signs.insert(sign) {
+                    return errf!("duplicate function '{}' signature", name);
+                }
+                state.contract = state.contract.clone().func(func);
+                state.source_maps.push((name, smap));
             }
-            state.contract = state.contract.clone().func(func);
-            state.source_maps.push((name, smap));
         }
         Some(token) => return errf!("unexpected token in contract body: {:?}", token),
         None => return errf!("unexpected EOF while parsing contract body"),
     }
+    Ok(())
+}
+
+fn take_rv64im_func(state: &mut ParseState) -> Ret<()> {
+    state.advance();
+    let (func, name) = parse_rv64im_function(state)?;
+    let sign = calc_func_sign(&name);
+    if !state.userfunc_signs.insert(sign) {
+        return errf!("duplicate rv64im function '{}' signature", name);
+    }
+    state.contract = state.contract.clone().func(func);
     Ok(())
 }
 

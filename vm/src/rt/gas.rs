@@ -56,7 +56,7 @@ impl GasTable {
         // patch decode + sha2 work metered per byte (see `patch_bytes`).
         gst.set(12, &[MPATCH, MONCE, MTAKE]);
         gst.set(12, &[CALLUSEVIEW, CALLUSEPURE]);
-        gst.set(16, &[NTENV, NTCTL, NTFUNC, CALLTHIS, CALLSUPER, CODE_CALL, CALC_CALL]);
+        gst.set(16, &[NTENV, NTCTL, NTFUNC, CALLTHIS, CALLSUPER, CODE_CALL]);
         gst.set(20, &[LOG1, CALLEXTVIEW]);
         gst.set(24, &[LOG2, CALLEXT, CALL]);
         gst.set(28, &[LOG3, ACTENV, SDEL]);
@@ -103,12 +103,6 @@ pub struct GasExtra {
     pub status_write_key_byte_mul: i64,
     pub status_write_value_byte_mul: i64,
     pub container_cmp_header: usize,
-    /// Per-CALC_CALL cycle cap (0 means no cap). Defaults to 1M in `new`;
-    /// `Default` leaves it 0 so test/standalone constructions stay unbounded.
-    /// CONSENSUS CONSTANT: the 1M default is hardcoded (NOT read from
-    /// `VmExecutionParams`) — changing it changes gas results for chains
-    /// whose compute bucket exceeds 250k compute, i.e. a hard fork.
-    pub calc_max_cycles_per_call: u64,
     stack_move_item: i64,
     // Dynamic, resource-based gas parameters.
     stack_copy_div: i64,
@@ -158,7 +152,6 @@ impl GasExtra {
             status_write_value_byte_mul: 32,
             // other
             container_cmp_header: 12,
-            calc_max_cycles_per_call: 1_000_000,
             // Dynamic divisors (byte/N, item/N)
             stack_copy_div: 32,
             stack_write_div: 28,
@@ -363,12 +356,6 @@ impl GasExtra {
 #[cfg(test)]
 mod gas_tests {
     use super::*;
-
-    #[test]
-    fn calc_max_cycles_per_call_defaults_to_one_million() {
-        let gas = GasExtra::new(0, &base::VmExecutionParams::default());
-        assert_eq!(gas.calc_max_cycles_per_call, 1_000_000);
-    }
 
     #[test]
     fn patch_bytes_uses_32_byte_divisor() {

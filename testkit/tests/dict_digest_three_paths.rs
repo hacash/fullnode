@@ -37,7 +37,10 @@ use field::{Address, Amount, Uint4, UNIT_238};
 use testkit::sim::context::TestContext;
 use testkit::sim::tx::StubTxBuilder;
 use vm::action::{ContractDeploy, contract_deploy_charge_bytes, contract_protocol_cost_min};
-use vm::calc::{CYCLES_PER_COMPUTE, CalcFnObj, CalcRunLimits, HashKind, pack_container, run_hash};
+use vm::calc::{
+    CYCLES_PER_COMPUTE, CalcFnObj, CalcRunLimits, HashKind, pack_container_with_bss, run_hash,
+    CALC_CONFIG_V1, CALC_PROFILE_RV64IM,
+};
 use vm::fitshc::compiler;
 use vm::contract::ContractSto;
 use vm::{CodeType, ContractAddress, Value, build_call_codes, main_call};
@@ -176,35 +179,46 @@ fn limits() -> CalcRunLimits {
     }
 }
 
-fn kernel_fn() -> CalcFnObj {
+fn kernel_cfg(aot: bool) -> vm::calc::CalcConfig {
+    vm::calc::CALC_CONFIG_V1
+        .with_hash_builtins(true)
+        .with_rodata_readonly(true)
+        .with_stack_guard(true)
+        .with_aot_mount(aot)
+}
+
+fn kernel_container() -> vm::calc::container::CalcContainer {
     let read = |n: &str| std::fs::read(format!("{KERNEL_DIR}/{n}")).expect("fixture image");
-    let container = pack_container(
+    let bss_len = u16::from_str_radix(
+        std::fs::read_to_string(format!("{KERNEL_DIR}/bss_len.txt"))
+            .expect("bss_len.txt")
+            .trim()
+            .trim_start_matches("0x"),
+        16,
+    )
+    .expect("bss_len") as u64;
+    pack_container_with_bss(
+        CALC_PROFILE_RV64IM,
         8,
-        0,
+        vm::calc::CALC_CODE_BASE as u32,
         256,
         32,
         read("image_code.bin"),
         read("image_rodata.bin"),
         read("image_init.bin"),
+        bss_len,
+        &CALC_CONFIG_V1,
     )
-    .expect("kernel container packs");
-    CalcFnObj::build(container).expect("kernel container verifies")
+    .expect("kernel container packs")
+}
+
+fn kernel_fn() -> CalcFnObj {
+    CalcFnObj::build_with_config(kernel_container(), kernel_cfg(false)).expect("kernel container verifies")
 }
 
 #[cfg(feature = "calc-aot")]
 fn kernel_fn_aot() -> CalcFnObj {
-    let read = |n: &str| std::fs::read(format!("{KERNEL_DIR}/{n}")).expect("fixture image");
-    let container = pack_container(
-        8,
-        0,
-        256,
-        32,
-        read("image_code.bin"),
-        read("image_rodata.bin"),
-        read("image_init.bin"),
-    )
-    .expect("kernel container packs");
-    CalcFnObj::build_with_aot(container).expect("AOT image compiles")
+    CalcFnObj::build_with_config(kernel_container(), kernel_cfg(true)).expect("AOT image compiles")
 }
 
 fn deploy_dict_digest() -> TestContext {

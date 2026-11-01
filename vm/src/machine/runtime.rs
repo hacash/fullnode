@@ -11,7 +11,17 @@ use crate::rt::{ItrErr, ItrErrCode, VmrtErr};
 use crate::space::{CtcKVMap, GKVMap, Heap, Stack};
 use crate::value::ContractAddress;
 
-const UPGRADE_HEIGHTS: &[u64] = &[];
+const UPGRADE_HEIGHTS: &[u64] = &[
+    crate::contract::CALCFUNC_DISABLE_FROM_HEIGHT,
+    crate::contract::CALCFUNC_DISABLE_UNTIL_HEIGHT,
+];
+
+fn upgrade_heights() -> impl Iterator<Item = u64> {
+    UPGRADE_HEIGHTS
+        .iter()
+        .copied()
+        .chain(crate::calc::CALC_CONFIG_FORK_HEIGHTS.iter().copied())
+}
 
 #[derive(Default)]
 pub struct WarmState {
@@ -51,6 +61,8 @@ pub struct Runtime {
     /// Number of active VM entry frames (gas-independent); guards synchronous
     /// contract-to-contract transfer callbacks from exhausting the native call stack.
     reentry_depth: usize,
+    /// Host-only calc knobs (AOT mount). Not a consensus input.
+    calc_host: crate::calc::CalcHostConfig,
     vm_params: base::VmExecutionParams,
     pub warm: WarmState,
     pub volatile: VolatileState,
@@ -64,6 +76,7 @@ impl Runtime {
             cfg_height: height,
             next_upgrade: Self::next_upgrade_after(height),
             reentry_depth: 0,
+            calc_host: crate::calc::CalcHostConfig::new(),
             vm_params: params,
             warm: WarmState {
                 space_cap: cap.clone(),
@@ -124,6 +137,7 @@ impl Runtime {
     }
 
     fn reset_gascap(&mut self, height: u64) {
+        self.warm.contracts.clear();
         let cap = SpaceCap::new(height);
         self.cfg_height = height;
         self.next_upgrade = Self::next_upgrade_after(height);
@@ -228,6 +242,15 @@ impl Runtime {
         self.charge_and_commit_gas(host, gas, 0, 0)
     }
 
+    pub fn settle_calc_gas<H: VmHost + ?Sized>(
+        &mut self,
+        host: &mut H,
+        compute: i64,
+        resource: i64,
+    ) -> VmrtErr {
+        self.charge_and_commit_gas(host, compute, resource, 0)
+    }
+
     fn preview_bucket_add(
         &self,
         cur: i64,
@@ -272,12 +295,21 @@ impl Runtime {
         self.warm.heap_pool.push(heap);
     }
 
+    pub fn calc_host_config(&self) -> crate::calc::CalcHostConfig {
+        self.calc_host
+    }
+
+    pub fn set_calc_host_config(&mut self, host: crate::calc::CalcHostConfig) {
+        self.calc_host = host;
+    }
+
     fn next_upgrade_after(height: u64) -> u64 {
-        for &h in UPGRADE_HEIGHTS {
-            if h > height {
-                return h;
+        let mut next = u64::MAX;
+        for h in upgrade_heights() {
+            if h > height && h < next {
+                next = h;
             }
         }
-        u64::MAX
+        next
     }
 }

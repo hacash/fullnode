@@ -2,9 +2,9 @@
 //! [`CalcModule`](verify::CalcModule) into x86-64 (SysV) machine code and
 //! executes it natively. Semantics mirror `interp.rs` exactly — instruction
 //! behavior, link values, div/rem special cases, read-only ranges, bounds
-//! and alignment checks, and the cycle accounting (charged per dynamic
-//! block entry at the entry instruction, so a `jalr` into the middle of a
-//! block pays only the remaining instructions, matching `suffix_cycles`).
+//! checks, and the cycle accounting (charged per dynamic block entry at the
+//! entry instruction, so a `jalr` into the middle of a block pays only the
+//! remaining instructions, matching `suffix_cycles`).
 //!
 //! Design (benchmark-grade, deliberately simple):
 //! * RV64 registers live in a memory array `[u64; 32]`; each RV64
@@ -14,9 +14,9 @@
 //!   and JAL targets are always block leaders after verification); `jalr`
 //!   calls a host resolver (address -> instruction index) which returns
 //!   either the block prologue (leader target) or a small trampoline that
-//!   first rebates the skipped instructions' static cycles and then jumps
-//!   to the prologue (mid-block target); the sentinel return is checked
-//!   inline.
+//!   first charges only the remaining suffix cycles and then jumps to the
+//!   target instruction (mid-block target); a miss lands on the invalid-
+//!   target trap stub.
 //! * Cycle metering is block-level and static, identical to the
 //!   interpreter and host-independent: before charging a block the
 //!   remaining budget is compared against the entry cost, and on shortfall
@@ -24,21 +24,29 @@
 //!   interpreter's `out_of_gas` accounting.
 //! * Div/Rem families (all special cases) go through a host helper
 //!   mirroring `interp::reg_alu`; `mulh*` use native `mul/imul`.
-//! * Unsupported forms — `ecall`-bearing containers — make `aot_compile`
-//!   return `None`; the caller falls back to the interpreter. `fence`
+//! * `ecall` (HALT, hash builtins, HINT trap) is implemented via a host
+//!   helper that mirrors `interp.rs`. `fence`
 //!   executes as a no-op, matching the single-hart interpreter.
 //!
-//! This module is benchmark/differential-testing infrastructure, NOT
-//! consensus code: the consensus path keeps the pure interpreter as the
-//! single execution engine. It is feature-gated (`calc-aot`) so default
-//! builds (including wasm SDK targets, which have no `mmap`) never compile
-//! it. `cargo test -p vm --features calc-aot` runs the differential suite
-//! at the bottom of this file.
+//! Early launch insurance: this backend is not the sole engine yet. Official x86-64
+//! nodes (feature `calc-aot`, on by default) run this translation beside
+//! the interpreter on two threads and reject the transaction when gas or
+//! the result disagree (`CalcEngineMismatch`). Nodes built without the
+//! feature run the interpreter only. After the lockstep check has stayed
+//! quiet in production, the interpreter is retired and this backend
+//! becomes the only execution engine. `cargo test -p vm --features calc-aot`
+//! runs the differential suite at the bottom of this file.
+
+// The generated code is x86-64 SysV only. Enabling the feature on another
+// host architecture would compile this module and then SIGILL at run time;
+// fail the build instead.
+#[cfg(not(target_arch = "x86_64"))]
+compile_error!("calc-aot generates x86-64 code and is only supported on x86_64 hosts");
 
 use crate::calc::decode::{BitImmOp, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp, UnAluOp};
-use crate::calc::container::CalcContainer;
+use crate::calc::container::{CalcContainer, CalcLayout, CODE_BASE};
 use crate::calc::verify::CalcModule;
-use crate::calc::CALC_RETURN_SENTINEL;
+use crate::calc::{run_hash, HashKind, ECALL_HALT, ECALL_HINT_MAX, ECALL_HINT_MIN};
 
 // Host register numbers (x86-64 encoding order).
 const RAX: u8 = 0;
@@ -202,12 +210,6 @@ impl Code {
         self.op(0x89);
         self.modrm(3, RAX, RCX);
     }
-    /// `test al, imm8`
-    fn test_al(&mut self, mask: u8) {
-        self.op(0xF6);
-        self.modrm(3, 0, RAX);
-        self.imm8(mask as i8);
-    }
     /// Memory data access through `[rbx + rax]`.
     fn rax_to_mem(&mut self, form: MemForm) {
         match form {
@@ -319,16 +321,18 @@ struct AotState {
     /// Remaining cycle budget (interpreter: `cycles` counter). Always >= 0:
     /// a block is only charged after the pre-check passes.
     cycles: i64,
-    /// Output length written by the sentinel-return path.
+    /// Output length written by the HALT ecall path.
     out_len: u64,
-    /// 0 = ok, 1 = trap, 2 = out of gas, 3 = bad jalr target.
+    /// 0 = ok, 1 = trap, 2 = out of gas, 3 = bad jalr target, 4 = guest exit.
     aborted: u32,
+    _pad: u32,
+    /// Guest HALT exit code (a0). Meaningful when aborted == 0 or 4.
+    exit_code: u64,
 }
 
-/// Host tables for the jalr resolver.
+/// Host tables for the jalr resolver and ecall helper.
 struct ResolveCtx {
     inst_addrs: Vec<u32>,
-    block_of_inst: Vec<u32>,
     /// Landing code offset per instruction: block prologues for leaders,
     /// per-instruction suffix-charge stubs for mid-block entries,
     /// `u32::MAX` never (leaders are populated for every block start).
@@ -336,7 +340,10 @@ struct ResolveCtx {
     /// Generated offset of the invalid-target stub.
     invalid_off: u32,
     code: *const u8,
-    state: *mut AotState,
+    layout: CalcLayout,
+    hash_builtins: bool,
+    rodata_readonly: bool,
+    stack_guard: bool,
 }
 
 /// Mirror of `interp::reg_alu` for the ops the generated code routes to the
@@ -473,34 +480,126 @@ pub fn unalu_helper_op(op: u64, a: u64) -> u64 {
     }
 }
 
-extern "C" fn unalu_helper_entry(op: u64, a: u64) -> u64 {
-    unalu_helper_op(op, a)
-}
-
 extern "C" fn alu_helper(op: u64, a: u64, b: u64) -> u64 {
     alu_helper_op(op, a, b)
 }
 
+/// Host ecall: HALT, hash builtins, HINT trap. Returns 0 = continue,
+/// 1 = stop (aborted / halt already recorded on `state`).
+/// `state` is the per-call `AotState` held in `R13` at the call site.
+extern "C" fn aot_ecall(
+    ctx: *const ResolveCtx,
+    regs: *mut u64,
+    mem: *mut u8,
+    state: *mut AotState,
+) -> u64 {
+    let ctx = unsafe { &*ctx };
+    let r = unsafe { std::slice::from_raw_parts_mut(regs, 32) };
+    let lay = ctx.layout;
+    let state = unsafe { &mut *state };
+    let a7 = r[17];
+    if a7 == ECALL_HALT {
+        let exit_code = r[10];
+        let n = r[11];
+        if n > lay.output_max {
+            state.aborted = 1;
+            return 1;
+        }
+        if exit_code != 0 {
+            state.aborted = 4;
+            state.exit_code = exit_code;
+            return 1;
+        }
+        state.out_len = n;
+        state.exit_code = 0;
+        state.aborted = 0;
+        return 1;
+    }
+    if (ECALL_HINT_MIN..=ECALL_HINT_MAX).contains(&a7) {
+        state.aborted = 1;
+        return 1;
+    }
+    if !ctx.hash_builtins && HashKind::from_a7(a7).is_some() {
+        state.aborted = 1;
+        return 1;
+    }
+    let kind = match HashKind::from_a7(a7) {
+        Some(k) => k,
+        None => {
+            state.aborted = 1;
+            return 1;
+        }
+    };
+    let cost = kind.cycles(r[11]);
+    if (state.cycles as u64) < cost {
+        state.aborted = 2;
+        return 1;
+    }
+    state.cycles -= cost as i64;
+    let src = r[10];
+    let len = r[11];
+    let dst = r[12];
+    let dlen = kind.digest_len();
+    let src_end = match src.checked_add(len) {
+        Some(e) => e,
+        None => {
+            state.aborted = 1;
+            return 1;
+        }
+    };
+    let dst_end = match dst.checked_add(dlen) {
+        Some(e) => e,
+        None => {
+            state.aborted = 1;
+            return 1;
+        }
+    };
+    if src < CODE_BASE || dst < CODE_BASE {
+        state.aborted = 1;
+        return 1;
+    }
+    if src_end > lay.mem_len || dst_end > lay.mem_len {
+        state.aborted = 1;
+        return 1;
+    }
+    let digest_floor = if ctx.rodata_readonly {
+        lay.data_base
+    } else {
+        lay.rodata_base
+    };
+    if dst < digest_floor {
+        state.aborted = 1;
+        return 1;
+    }
+    if ctx.stack_guard && dst < lay.stack_bottom && dst_end > lay.guard_base {
+        state.aborted = 1;
+        return 1;
+    }
+    let mem = unsafe { std::slice::from_raw_parts_mut(mem, lay.mem_len as usize) };
+    let mut buf = [0u8; 32];
+    let digest = &mut buf[..dlen as usize];
+    run_hash(kind, &mem[src as usize..src_end as usize], digest);
+    mem[dst as usize..dst_end as usize].copy_from_slice(digest);
+    r[10] = 0;
+    0
+}
+
 extern "C" fn resolve_jalr(ctx: *const ResolveCtx, dest: u64) -> u64 {
     let ctx = unsafe { &*ctx };
+    // A miss returns the invalid-target stub. That stub writes
+    // `aborted = 3` through R13 (the per-call `AotState`) and jumps to Exit,
+    // so this helper stays a pure address lookup.
+    let invalid = unsafe { ctx.code.add(ctx.invalid_off as usize) as u64 };
     // Mirror `CalcModule::inst_at_addr`: targets above u32::MAX are never
     // valid. Without this the `dest as u32` truncation below would alias
     // 2^32 + <addr> onto <addr> and silently diverge from the interpreter
     // (audit B2, pinned by the tests.loc probe and the isa suite).
     if dest > u32::MAX as u64 {
-        unsafe {
-            (*ctx.state).aborted = 3;
-            return ctx.code.add(ctx.invalid_off as usize) as u64;
-        }
+        return invalid;
     }
     match ctx.inst_addrs.binary_search(&(dest as u32)) {
         Ok(idx) => unsafe { ctx.code.add(ctx.inst_landing[idx] as usize) as u64 },
-        Err(_) => {
-            unsafe {
-                (*ctx.state).aborted = 3;
-                ctx.code.add(ctx.invalid_off as usize) as u64
-            }
-        }
+        Err(_) => invalid,
     }
 }
 
@@ -516,10 +615,9 @@ pub struct AotFunc {
     map: (*mut u8, usize),
     /// Translated code length in bytes.
     len: usize,
-    /// Resolver tables. The `state` cell is pointed at a stack local for
-    /// the duration of each call only; `RefCell` gives the interior
-    /// mutability that lets executions run through `&self`.
-    ctx: std::cell::RefCell<Box<ResolveCtx>>,
+    /// Resolver tables. Immutable after `aot_compile` returns; each run
+    /// passes its own `AotState` in R13.
+    ctx: Box<ResolveCtx>,
 }
 
 impl AotFunc {
@@ -533,18 +631,21 @@ impl AotFunc {
     }
 }
 
-// SINGLE-THREAD EXECUTION CONTRACT (documented decision): `run`/`
-// `run_with_state` temporarily point `ctx.state` at a stack local of the
-// calling thread. Two concurrent executions through the same `AotFunc`
-// would race that pointer (UB). The mount layer executes calc kernels
-// synchronously on the state-machine thread, which is the only supported
-// concurrency model; the Send/Sync impls exist so the owning `CalcFnObj`
-// can move between threads, not so `run` can be called in parallel.
+// `AotFunc` and `ResolveCtx` are immutable after compilation. Generated code
+// keeps the per-call `AotState` in R13 and passes that pointer into
+// `aot_ecall`; a jalr miss lands on the invalid-target stub, which records
+// the abort through the same R13. Nothing in the compiled image or the
+// resolver tables is written during `run`, so concurrent execution on one
+// `AotFunc` is safe. The raw pointers (`map`, `ResolveCtx::code`) are why
+// these impls are `unsafe`: they alias the RX mapping owned by `AotFunc`.
 unsafe impl Send for AotFunc {}
 unsafe impl Sync for AotFunc {}
 
 impl Drop for AotFunc {
     fn drop(&mut self) {
+        // `ctx` owns the resolver tables whose address is patched into the
+        // RX image; it must stay alive until the mapping is released.
+        let _ = self.ctx.code;
         unsafe {
             libc::munmap(self.map.0.cast(), self.map.1);
         }
@@ -561,6 +662,7 @@ pub enum AotAbort {
     Trap,
     OutOfGas,
     BadTarget,
+    GuestExit,
 }
 
 /// Full stop-state of one AOT execution: output on success, abort class on
@@ -571,6 +673,7 @@ pub struct AotOutcome {
     pub output: Option<Vec<u8>>,
     pub abort: Option<AotAbort>,
     pub cycles_used: u64,
+    pub exit_code: u64,
 }
 
 impl AotOutcome {
@@ -590,11 +693,10 @@ impl AotOutcome {
 impl AotFunc {
     /// Execute with interpreter-identical memory/entry setup. The cycle
     /// budget covers instructions only — the interpreter's per-call setup
-    /// charge lives in `CalcFnObj::run`, outside this layer. Deadlines are
-    /// a host concern and are ignored (benchmark/differential use only).
+    /// charge lives in `CalcFnObj::run`, outside this layer. This image does
+    /// not poll a host deadline; `CalcFnObj::run` keeps the interpreter when
+    /// a deadline is set.
     ///
-    /// NOT concurrency-safe: see the Send/Sync note above — one execution
-    /// at a time per `AotFunc`.
     pub fn run(
         &self,
         module: &CalcModule,
@@ -633,16 +735,18 @@ impl AotFunc {
                     output: None,
                     abort: Some(AotAbort::Trap),
                     cycles_used: 0,
+                    exit_code: 0,
                 },
                 [0u64; 32],
                 Vec::new(),
             );
         }
         let mut mem = vec![0u8; lay.mem_len as usize];
-        mem[..container.code.len()].copy_from_slice(&container.code);
-        mem[lay.rodata_base as usize..(lay.rodata_base as u64 + lay.rodata_len) as usize]
+        let code_off = CODE_BASE as usize;
+        mem[code_off..code_off + container.code.len()].copy_from_slice(&container.code);
+        mem[lay.rodata_base as usize..(lay.rodata_base + lay.rodata_len) as usize]
             .copy_from_slice(&container.rodata);
-        mem[lay.data_base as usize..(lay.data_base as u64 + container.init.len() as u64) as usize]
+        mem[lay.data_base as usize..(lay.data_base + container.init.len() as u64) as usize]
             .copy_from_slice(&container.init);
         let mut regs = [0u64; 32];
         regs[10] = lay.input_base;
@@ -650,17 +754,19 @@ impl AotFunc {
         regs[12] = lay.output_base;
         regs[13] = lay.output_max;
         regs[2] = lay.stack_top;
-        regs[1] = CALC_RETURN_SENTINEL;
         let input_base = lay.input_base as usize;
         mem[input_base..input_base + input.len()].copy_from_slice(input);
-        let state = AotState {
+        // `u64::MAX as i64` is -1, and the block prologue's `jl` treats that
+        // as "budget already exhausted". Clamp before the signed counter.
+        let cycle_budget = cycle_budget.min(i64::MAX as u64);
+        let mut state = AotState {
             cycles: cycle_budget as i64,
             out_len: 0,
             aborted: 0,
+            _pad: 0,
+            exit_code: 0,
         };
-        // Share the state cell with the resolver context for this call.
-        let state_ptr = &state as *const AotState as *mut AotState;
-        self.ctx.borrow_mut().state = state_ptr;
+        let state_ptr = std::ptr::addr_of_mut!(state);
         let f: extern "C" fn(*mut u8, *mut u64, *mut AotState) = unsafe {
             std::mem::transmute::<*const u8, extern "C" fn(*mut u8, *mut u64, *mut AotState)>(
                 self.map.0 as *const u8,
@@ -677,22 +783,32 @@ impl AotFunc {
                     ),
                     abort: None,
                     cycles_used,
+                    exit_code: 0,
                 }
             }
             2 => AotOutcome {
                 output: None,
                 abort: Some(AotAbort::OutOfGas),
                 cycles_used,
+                exit_code: 0,
             },
             3 => AotOutcome {
                 output: None,
                 abort: Some(AotAbort::BadTarget),
                 cycles_used,
+                exit_code: 0,
+            },
+            4 => AotOutcome {
+                output: None,
+                abort: Some(AotAbort::GuestExit),
+                cycles_used,
+                exit_code: state.exit_code,
             },
             _ => AotOutcome {
                 output: None,
                 abort: Some(AotAbort::Trap),
                 cycles_used,
+                exit_code: 0,
             },
         };
         (out, regs, mem)
@@ -716,9 +832,7 @@ enum Fixup {
     Exit,
 }
 
-/// Translate a verified module. Returns `None` when the module uses an
-/// instruction form this backend does not implement (`ecall`) — the
-/// caller should fall back to the interpreter.
+/// Translate a verified module. Returns `None` only if mmap fails.
 pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
     let lay = &module.layout;
     let mut c = Code::new();
@@ -764,9 +878,11 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
         // Block entry charge with interpreter-identical out-of-gas
         // accounting: compare first, abort WITHOUT keeping the failing
         // charge, only then subtract.
+        debug_assert!(blk.cycles <= i32::MAX as u64);
         c.cmp_state_imm32(ST_CYCLES, blk.cycles as i32);
         let at = c.jcc32(0xC); // jl (remaining < cost) -> gas stub
         fixups.push((at, Fixup::Gas));
+        debug_assert!(blk.cycles <= i32::MAX as u64);
         c.sub_state_imm32(ST_CYCLES, blk.cycles as i32);
 
         inst_landing[blk.start as usize] = block_off[bi];
@@ -792,7 +908,7 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                 }
                 Inst::Jal { rd, target } => {
                     if rd != 0 {
-                        c.movabs(RAX, addr + 4);
+                        c.movabs(RAX, next_link);
                         c.st_reg(rd, RAX);
                     }
                     fixups.push((c.jmp32(), Fixup::Block(target as u32)));
@@ -801,10 +917,6 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                     c.ld_reg(RAX, rs1);
                     c.alu_imm(0 /*add*/, RAX, imm as i32);
                     c.alu_imm(4 /*and*/, RAX, -2); // & !1
-                    c.movabs(RCX, CALC_RETURN_SENTINEL);
-                    c.cmp_rr(RAX, RCX);
-                    let at = c.jcc32(4); // je -> sentinel exit path (below)
-                    // not sentinel: write link, then resolve + jump
                     if rd != 0 {
                         c.movabs(RCX, next_link);
                         c.st_reg(rd, RCX);
@@ -820,19 +932,6 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                     c.modrm(3, 2, R15); // call r15
                     c.op(0xFF);
                     c.modrm(3, 4, RAX); // jmp rax
-                    // sentinel exit path:
-                    let exit_path = c.len();
-                    c.ld_reg(RCX, 10); // a0 = output length
-                    c.alu_imm(7 /*cmp*/, RCX, lay.output_max as i32);
-                    let at2 = c.jcc32(7); // ja -> trap
-                    fixups.push((at2, Fixup::Trap));
-                    // mov [r13+8], rcx (out_len)
-                    c.rex(true, false, false, true);
-                    c.op(0x89);
-                    c.modrm(1, RCX, 5);
-                    c.imm8(ST_OUT_LEN);
-                    fixups.push((c.jmp32(), Fixup::Exit));
-                    fixups.push((at, Fixup::To(exit_path)));
                 }
                 Inst::Branch { kind, rs1, rs2, target } => {
                     c.ld_reg(RAX, rs1);
@@ -856,17 +955,15 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                     c.alu_imm(0, RCX, op.size() as i32); // rcx = end
                     let at = c.jcc32(2); // jc -> trap (addr+size overflow)
                     fixups.push((at, Fixup::Trap));
+                    // unmapped: cmp rax, CODE_BASE ; jb trap
+                    c.alu_imm(7 /*cmp*/, RAX, CODE_BASE as i32);
+                    let at = c.jcc32(2); // jb
+                    fixups.push((at, Fixup::Trap));
                     // bounds: cmp rcx, mem_len ; ja trap
+                    debug_assert!(lay.mem_len <= i32::MAX as u64);
                     c.alu_imm(7 /*cmp*/, RCX, lay.mem_len as i32);
                     let at = c.jcc32(7); // ja
                     fixups.push((at, Fixup::Trap));
-                    // alignment
-                    let size = op.size();
-                    if size > 1 {
-                        c.test_al((size - 1) as u8);
-                        let at = c.jcc32(5); // jnz
-                        fixups.push((at, Fixup::Trap));
-                    }
                     let form = match op {
                         LoadOp::Ld => MemForm::Ld,
                         LoadOp::Lw => MemForm::LwSext,
@@ -884,33 +981,42 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                 Inst::Store { op, rs1, rs2, imm } => {
                     c.ld_reg(RAX, rs1);
                     c.alu_imm(0, RAX, imm as i32); // addr
-                    // read-only check: addr < data_base -> trap
-                    c.alu_imm(7 /*cmp*/, RAX, lay.data_base as i32);
+                    // unmapped: addr < CODE_BASE -> trap
+                    c.alu_imm(7 /*cmp*/, RAX, CODE_BASE as i32);
+                    let at = c.jcc32(2); // jb
+                    fixups.push((at, Fixup::Trap));
+                    // Code and the pad below rodata_base always trap. Rodata
+                    // and the alignment hole trap only when rodata is read-only.
+                    let write_floor = if module.rodata_readonly {
+                        lay.data_base
+                    } else {
+                        lay.rodata_base
+                    };
+                    debug_assert!(write_floor <= i32::MAX as u64);
+                    c.alu_imm(7 /*cmp*/, RAX, write_floor as i32);
                     let at = c.jcc32(2); // jb
                     fixups.push((at, Fixup::Trap));
                     c.mov_rcx_rax();
                     c.alu_imm(0, RCX, op.size() as i32);
                     let at = c.jcc32(2); // jc
                     fixups.push((at, Fixup::Trap));
+                    debug_assert!(lay.mem_len <= i32::MAX as u64);
                     c.alu_imm(7, RCX, lay.mem_len as i32);
                     let at = c.jcc32(7); // ja
                     fixups.push((at, Fixup::Trap));
-                    // Stack-overflow guard (mirrors interp): trap iff
-                    // addr < stack_bottom && end > guard_base. RAX holds
-                    // addr, RCX holds end.
-                    c.alu_imm(7 /*cmp*/, RAX, lay.stack_bottom as i32);
-                    let sg1 = c.jcc32(3); // jae -> skip (addr >= bottom)
-                    c.alu_imm(7 /*cmp*/, RCX, lay.guard_base as i32);
-                    let sg2 = c.jcc32(6); // jbe -> skip (end <= guard)
-                    fixups.push((c.jmp32(), Fixup::Trap));
-                    let sg_skip = c.len();
-                    fixups.push((sg1, Fixup::To(sg_skip)));
-                    fixups.push((sg2, Fixup::To(sg_skip)));
-                    let size = op.size();
-                    if size > 1 {
-                        c.test_al((size - 1) as u8);
-                        let at = c.jcc32(5); // jnz
-                        fixups.push((at, Fixup::Trap));
+                    // Stack-overflow guard (mirrors interp). Skipped when the
+                    // band is ordinary RW. RAX holds addr, RCX holds end.
+                    if module.stack_guard {
+                        debug_assert!(lay.stack_bottom <= i32::MAX as u64);
+                        c.alu_imm(7 /*cmp*/, RAX, lay.stack_bottom as i32);
+                        let sg1 = c.jcc32(3); // jae -> skip (addr >= bottom)
+                        debug_assert!(lay.guard_base <= i32::MAX as u64);
+                        c.alu_imm(7 /*cmp*/, RCX, lay.guard_base as i32);
+                        let sg2 = c.jcc32(6); // jbe -> skip (end <= guard)
+                        fixups.push((c.jmp32(), Fixup::Trap));
+                        let sg_skip = c.len();
+                        fixups.push((sg1, Fixup::To(sg_skip)));
+                        fixups.push((sg2, Fixup::To(sg_skip)));
                     }
                     c.ld_reg(RCX, rs2);
                     let form = match op {
@@ -1313,9 +1419,36 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                 }
                 // Single-hart pure-compute machine: no-op, matches interp.
                 Inst::Fence => {}
-                // Hash builtins are interpreter-only; kernels meant for AOT
-                // must not use ecall.
-                Inst::Ecall => return None,
+                Inst::Trap => {
+                    fixups.push((c.jmp32(), Fixup::Trap));
+                }
+                Inst::Ecall => {
+                    // rdi = ctx, rsi = regs, rdx = mem, rcx = state (r13); call aot_ecall.
+                    c.rex(true, true, false, false);
+                    c.op(0x89);
+                    c.modrm(3, R14, RDI); // mov rdi, r14
+                    c.rex(true, true, false, false);
+                    c.op(0x89);
+                    c.modrm(3, R12, RSI); // mov rsi, r12
+                    c.rex(true, false, false, false);
+                    c.op(0x89);
+                    c.modrm(3, RBX, RDX); // mov rdx, rbx
+                    c.rex(true, true, false, false);
+                    c.op(0x89);
+                    c.modrm(3, R13, RCX); // mov rcx, r13
+                    c.movabs(
+                        RAX,
+                        aot_ecall as extern "C" fn(*const ResolveCtx, *mut u64, *mut u8, *mut AotState) -> u64
+                            as u64,
+                    );
+                    c.op(0xFF);
+                    c.modrm(3, 2, RAX); // call rax
+                    c.rex(true, false, false, false);
+                    c.op(0x85);
+                    c.modrm(3, RAX, RAX); // test rax, rax
+                    let at = c.jcc32(5); // jnz -> Exit
+                    fixups.push((at, Fixup::Exit));
+                }
             }
             idx += 1;
         }
@@ -1341,9 +1474,11 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
         let here = c.len() as u32;
         inst_landing[i] = here;
         let cost = module.suffix_cycles[i];
+        debug_assert!(cost <= i32::MAX as u64);
         c.cmp_state_imm32(ST_CYCLES, cost as i32);
         let at = c.jcc32(0xC); // jl -> gas stub
         fixups.push((at, Fixup::Gas));
+        debug_assert!(cost <= i32::MAX as u64);
         c.sub_state_imm32(ST_CYCLES, cost as i32);
         stub_fixups.push((c.jmp32(), i as u32));
     }
@@ -1416,11 +1551,13 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
     // single copy (the mapping turns RX and must never be written again).
     let mut ctx = Box::new(ResolveCtx {
         inst_addrs: module.addrs.clone(),
-        block_of_inst: module.block_of_inst.clone(),
         inst_landing,
         invalid_off,
         code: std::ptr::null(),
-        state: std::ptr::null_mut(),
+        layout: *lay,
+        hash_builtins: module.hash_builtins,
+        rodata_readonly: module.rodata_readonly,
+        stack_guard: module.stack_guard,
     });
     c.patch64(fix_ctx, ctx.as_ref() as *const ResolveCtx as u64);
     c.patch64(
@@ -1454,7 +1591,7 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
         (p as *mut u8, sz)
     };
     ctx.code = map.0 as *const u8;
-    Some(AotFunc { map, len: c.b.len(), ctx: std::cell::RefCell::new(ctx) })
+    Some(AotFunc { map, len: c.b.len(), ctx })
 }
 
 /// Emit a load `mov rax, [rbx + rax]` in the right width/sign form.
@@ -1516,13 +1653,15 @@ mod tests {
     use super::*;
     use crate::calc::container::{CalcContainer, CALC_ABI_BYTES_TO_BYTES};
     use crate::calc::interp::{self, CalcAbort};
-    use crate::calc::verify::verify_container;
+    fn verify_container(c: &CalcContainer) -> crate::rt::VmrtRes<crate::calc::verify::CalcModule> {
+        crate::calc::verify::verify_container_with(c, &crate::calc::CalcConfig::all_enabled())
+    }
 
     // ---------------------------------------------------------- assembler
 
-    /// Minimal two-pass RV64 assembler: 4-byte forms plus a few compressed
-    /// forms. Branch/JAL targets are instruction indices; `finish` encodes
-    /// the byte offsets into the immediate fields.
+    /// Minimal two-pass RV64 assembler: 4-byte forms only. Branch/JAL
+    /// targets are instruction indices; `finish` encodes the byte offsets
+    /// into the immediate fields.
     struct Asm {
         off: Vec<u32>,
         bytes: Vec<u8>,
@@ -1550,12 +1689,6 @@ mod tests {
         fn raw(&mut self, w: u32) -> usize {
             let idx = self.note(2);
             self.bytes.extend_from_slice(&w.to_le_bytes());
-            idx
-        }
-
-        fn half(&mut self, hw: u16) -> usize {
-            let idx = self.note(1);
-            self.bytes.extend_from_slice(&hw.to_le_bytes());
             idx
         }
 
@@ -1626,219 +1759,12 @@ mod tests {
             self.raw((imm20 << 12) | ((rd as u32) << 7) | op)
         }
 
-        /// c.addi rd, imm (imm in -32..=31, rd != 0).
-        fn c_addi(&mut self, rd: u8, imm: i8) -> usize {
-            let i = imm as u8;
-            self.half(
-                (0b000 << 13)
-                    | (((i >> 5) & 1) as u16) << 12
-                    | ((i & 0x1F) as u16) << 2
-                    | ((rd as u16) << 7)
-                    | 0b01,
-            )
-        }
-
-        /// c.mv rd, rs2 (rd != 0, rs2 != 0). Quadrant 2 (op=10): funct3
-        /// 100, bit12 0, rs2 in bits[6:2]. (An earlier revision emitted
-        /// op=01, which decodes as the quadrant-1 misc-alu group — fake
-        /// coverage found by the audit's llvm-mc encoding verification.)
-        fn c_mv(&mut self, rd: u8, rs2: u8) -> usize {
-            self.half((0b100 << 13) | ((rs2 as u16) << 2) | ((rd as u16) << 7) | 0b10)
-        }
-
-        /// c.jalr rs1 (rd = ra; link = addr + 2). Quadrant 2 (op=10):
-        /// funct3 100, bit12 1, rs2 field 0. (Earlier revision emitted
-        /// quadrant 1 funct3 001 — actually c.addiw.)
-        fn c_jalr(&mut self, rs1: u8) -> usize {
-            self.half((0b100 << 13) | (1 << 12) | ((rs1 as u16) << 7) | 0b10)
-        }
-
-        // ---- additional compressed emitters for the fuzz generator
-        // (packing cross-checked against llvm-mc 18; same tables as
-        // tests/calc_isa_gen.rs) ----
-
-        /// c.li rd, imm.
-        fn c_li(&mut self, rd: u8, imm: i8) -> usize {
-            let i = imm as u8;
-            self.half(
-                (0b010 << 13)
-                    | (((i >> 5) & 1) as u16) << 12
-                    | ((i & 0x1F) as u16) << 2
-                    | ((rd as u16) << 7)
-                    | 0b01,
-            )
-        }
-        /// c.andi rd', imm (rd' = x8..x15).
-        fn c_andi(&mut self, rd: u8, imm: i8) -> usize {
-            let i = imm as u8;
-            self.half(
-                (0b100 << 13)
-                    | (((i >> 5) & 1) as u16) << 12
-                    | (0b10 << 10)
-                    | ((i & 0x1F) as u16) << 2
-                    | (((rd as u16 - 8) & 7) << 7)
-                    | 0b01,
-            )
-        }
-        /// c.slli (kind=0, full rd) / c.srli (1) / c.srai (2) (x8..x15).
-        fn c_shift(&mut self, kind: u8, rd: u8, shamt: u8) -> usize {
-            let b5 = (shamt >> 5) & 1;
-            let lo5 = (shamt & 0x1F) as u16;
-            match kind {
-                0 => self.half(
-                    (0b000 << 13)
-                        | ((b5 as u16) << 12)
-                        | lo5 << 2
-                        | ((rd as u16) << 7)
-                        | 0b10,
-                ),
-                1 | 2 => self.half(
-                    (0b100 << 13)
-                        | ((b5 as u16) << 12)
-                        | (((kind - 1) as u16) << 10)
-                        | lo5 << 2
-                        | (((rd as u16 - 8) & 7) << 7)
-                        | 0b01,
-                ),
-                _ => unreachable!(),
-            }
-        }
-        /// c.sub/xor/or/and/subw/addw rd', rs2' (x8..x15).
-        fn c_arith(&mut self, op: u8, rd: u8, rs2: u8) -> usize {
-            let (b12, sel): (u16, u16) = match op {
-                0 => (0, 0b00), // sub
-                1 => (0, 0b01), // xor
-                2 => (0, 0b10), // or
-                3 => (0, 0b11), // and
-                4 => (1, 0b00), // subw
-                _ => (1, 0b01), // addw
-            };
-            self.half(
-                (0b100 << 13)
-                    | (b12 << 12)
-                    | (0b11 << 10)
-                    | (sel << 5)
-                    | (((rs2 as u16 - 8) & 7) << 2)
-                    | (((rd as u16 - 8) & 7) << 7)
-                    | 0b01,
-            )
-        }
-        /// c.lw (ld=false) / c.ld (true) rd', imm(rs1') — x8..x15.
-        fn c_load(&mut self, ld: bool, rd: u8, rs1: u8, imm: u16) -> usize {
-            let v = imm as u32;
-            if ld {
-                let u53 = (v >> 3) & 0b111;
-                let u76 = (v >> 6) & 0b11;
-                self.half(
-                    (0b011 << 13)
-                        | ((u53 as u16) << 10)
-                        | ((u76 as u16) << 5)
-                        | (((rs1 as u16 - 8) & 7) << 7)
-                        | (((rd as u16 - 8) & 7) << 2)
-                        | 0b00,
-                )
-            } else {
-                let u53 = (v >> 3) & 0b111;
-                let u2 = (v >> 2) & 1;
-                let u6 = (v >> 6) & 1;
-                self.half(
-                    (0b010 << 13)
-                        | ((u53 as u16) << 10)
-                        | ((u6 as u16) << 5)
-                        | (u2 as u16) << 6
-                        | (((rs1 as u16 - 8) & 7) << 7)
-                        | (((rd as u16 - 8) & 7) << 2)
-                        | 0b00,
-                )
-            }
-        }
-        /// c.sw (sd=false) / c.sd (true) rs2', imm(rs1').
-        fn c_store(&mut self, sd: bool, rs1: u8, rs2: u8, imm: u16) -> usize {
-            let v = imm as u32;
-            if sd {
-                let u53 = (v >> 3) & 0b111;
-                let u86 = (v >> 6) & 0b111;
-                self.half(
-                    (0b111 << 13)
-                        | ((u53 as u16) << 10)
-                        | ((u86 as u16) << 5)
-                        | (((rs1 as u16 - 8) & 7) << 7)
-                        | (((rs2 as u16 - 8) & 7) << 2)
-                        | 0b00,
-                )
-            } else {
-                let u53 = (v >> 3) & 0b111;
-                let u2 = (v >> 2) & 1;
-                let u6 = (v >> 6) & 1;
-                self.half(
-                    (0b110 << 13)
-                        | ((u53 as u16) << 10)
-                        | ((u6 as u16) << 5)
-                        | (u2 as u16) << 6
-                        | (((rs1 as u16 - 8) & 7) << 7)
-                        | (((rs2 as u16 - 8) & 7) << 2)
-                        | 0b00,
-                )
-            }
-        }
-        /// c.ldsp / c.lwsp rd, imm.
-        fn c_loadsp(&mut self, ld: bool, rd: u8, imm: u16) -> usize {
-            let v = imm as u32;
-            if ld {
-                let u5 = (v >> 5) & 1;
-                let u43 = (v >> 3) & 0b11;
-                let u86 = (v >> 6) & 0b111;
-                self.half(
-                    (0b011 << 13)
-                        | ((u5 as u16) << 12)
-                        | ((u43 as u16) << 5)
-                        | (u86 as u16) << 2
-                        | ((rd as u16) << 7)
-                        | 0b10,
-                )
-            } else {
-                let u5 = (v >> 5) & 1;
-                let u42 = (v >> 2) & 0b111;
-                let u76 = (v >> 6) & 0b11;
-                self.half(
-                    (0b010 << 13)
-                        | ((u5 as u16) << 12)
-                        | ((u42 as u16) << 4)
-                        | (u76 as u16) << 2
-                        | ((rd as u16) << 7)
-                        | 0b10,
-                )
-            }
-        }
-        /// c.sdsp / c.swsp rs2, imm.
-        fn c_storesp(&mut self, sd: bool, rs2: u8, imm: u16) -> usize {
-            let v = imm as u32;
-            if sd {
-                let u53 = (v >> 3) & 0b111;
-                let u86 = (v >> 6) & 0b111;
-                self.half(
-                    (0b111 << 13)
-                        | ((u53 as u16) << 10)
-                        | (u86 as u16) << 7
-                        | ((rs2 as u16) << 2)
-                        | 0b10,
-                )
-            } else {
-                let u52 = (v >> 2) & 0b1111;
-                let u76 = (v >> 6) & 0b11;
-                self.half(
-                    (0b110 << 13)
-                        | ((u52 as u16) << 9)
-                        | (u76 as u16) << 7
-                        | ((rs2 as u16) << 2)
-                        | 0b10,
-                )
-            }
-        }
-
-        /// jalr x0, x1, 0 — the canonical sentinel return.
+        /// HALT ecall with exit 0 and empty output.
         fn ret(&mut self) -> usize {
-            self.i(0, 0, 1, 0x67, 0)
+            self.i(0, 10, 0, 0x13, 0);
+            self.i(0, 11, 0, 0x13, 0);
+            self.i(0, 17, 0, 0x13, 0);
+            self.raw(0x0000_0073)
         }
 
         fn finish(mut self) -> Vec<u8> {
@@ -1876,12 +1802,14 @@ mod tests {
 
     fn container_for(code: Vec<u8>) -> CalcContainer {
         CalcContainer {
+            profile: crate::calc::CALC_PROFILE_RV64IM_B,
             abi: CALC_ABI_BYTES_TO_BYTES,
             mem_kib: 4,
-            entry: 0,
+            entry: CODE_BASE as u32,
             code,
             rodata: Vec::new(),
             init: Vec::new(),
+            bss_len: 0,
             input_max: 64,
             output_max: 64,
         }
@@ -1898,7 +1826,7 @@ mod tests {
         let module = verify_container(&c)
             .unwrap_or_else(|e| panic!("{name}: container rejected: {e:?}"));
         let (ir, iregs, imem, _trace) = interp::run_with_state(&module, &c, input, budget);
-        let mut f = aot_compile(&module)
+        let f = aot_compile(&module)
             .unwrap_or_else(|| panic!("{name}: aot_compile declined a supported module"));
         let (out, aregs, amem) = f.run_with_state(&module, &c, input, budget);
         let icyc = match &ir {
@@ -1932,6 +1860,14 @@ mod tests {
                 Some(AotAbort::Trap) => {}
                 other => panic!("{name}: AOT abort {other:?} vs interp trap \"{t}\""),
             },
+            Err((CalcAbort::GuestExit(code), _)) => {
+                assert_eq!(
+                    out.abort,
+                    Some(AotAbort::GuestExit),
+                    "{name}: abort class diverges (expected guest exit)"
+                );
+                assert_eq!(out.exit_code, *code, "{name}: guest exit code diverges");
+            }
         }
         if !imem.is_empty() {
             assert_eq!(iregs, aregs, "{name}: final registers diverge");
@@ -1994,14 +1930,50 @@ mod tests {
     }
 
     #[test]
-    fn ecall_container_falls_back() {
+    fn ecall_halt_compiles() {
         let mut a = Asm::new();
         a.i(0, 10, 0, 0x13, 0); // addi a0, x0, 0
-        a.raw(0x0000_0073); // ecall
-        a.ret();
+        a.i(0, 11, 0, 0x13, 0); // addi a1, x0, 0
+        a.i(0, 17, 0, 0x13, 0); // addi a7, x0, 0
+        a.raw(0x0000_0073); // ecall HALT
         let c = container_for(a.finish());
         let module = verify_container(&c).expect("ecall verifies");
-        assert!(aot_compile(&module).is_none(), "ecall must fall back to the interpreter");
+        assert!(aot_compile(&module).is_some(), "HALT ecall must AOT-compile");
+        let (_, ok) = diff("ecall_halt", &c.code, &[], 100_000);
+        assert!(ok);
+    }
+
+    /// `len == 0` does not exempt `src < CODE_BASE`. A hash ecall with
+    /// `a0 = 0`, `a1 = 0`, and `a2` left at the ABI output base traps in
+    /// both engines with the same cycle total (hash cost is charged first).
+    #[test]
+    fn hash_ecall_zero_len_below_code_base_traps() {
+        let mut a = Asm::new();
+        a.i(0, 10, 0, 0x13, 0); // addi a0, x0, 0  (src)
+        a.i(0, 11, 0, 0x13, 0); // addi a1, x0, 0  (len)
+        a.i(0, 17, 0, 0x13, 1); // addi a7, x0, 1  (sha2)
+        a.raw(0x0000_0073);
+        let code = a.finish();
+        let c = container_for(code.clone());
+        let module = verify_container(&c).expect("hash ecall verifies");
+        assert!(module.hash_builtins);
+        let (cyc, ok) = diff("zero_len_unmapped_src", &code, &[], 100_000);
+        assert!(!ok, "unmapped src must trap");
+        assert!(cyc > 0, "hash cost is charged before the bounds trap");
+    }
+
+    /// `a1 = u64::MAX` saturates the SHA-256 cycle price. Both engines must
+    /// abort `OutOfGas` on that charge (a truncated `i64` cost used to skip
+    /// the check and trap on the address instead).
+    #[test]
+    fn hash_ecall_huge_len_oog_parity() {
+        let mut a = Asm::new();
+        a.i(0, 11, 0, 0x13, -1); // addi a1, x0, -1
+        a.i(0, 17, 0, 0x13, 1); // addi a7, x0, 1 (SHA-256)
+        a.raw(0x0000_0073);
+        let (cyc, ok) = diff("hash_huge_len_oog", &a.finish(), &[], 100_000);
+        assert!(!ok, "huge hash length must exhaust the cycle budget");
+        assert!(cyc < 100_000, "failing hash charge is not kept");
     }
 
     /// The whole Zbb/Zba/Zbs/Zbc subset through both engines (the ISA is
@@ -2093,8 +2065,13 @@ mod tests {
         a.ret();
         let echo_code = a.finish();
         for (name, code) in [("loop", &loop_code), ("echo", &echo_code)] {
-            let plain = CalcFnObj::build(container_for(code.clone())).unwrap();
-            let mounted = CalcFnObj::build_with_aot(container_for(code.clone())).unwrap();
+            let enabled = crate::calc::CalcConfig::all_enabled();
+            let plain = CalcFnObj::build_with_config(
+                container_for(code.clone()),
+                crate::calc::CalcConfig { aot_mount: false, ..enabled },
+            )
+            .unwrap();
+            let mounted = CalcFnObj::build_with_config(container_for(code.clone()), enabled).unwrap();
             assert!(mounted.aot_mounted(), "{name}: AOT must mount");
             for budget in [0u64, 4, 64, 300, 10_000] {
                 let limits = CalcRunLimits {
@@ -2107,6 +2084,12 @@ mod tests {
                 let e2 = mounted.run(&[], limits);
                 assert_eq!(e1.cycles_used, e2.cycles_used, "{name}@{budget}: cycles");
                 assert_eq!(e1.resource, e2.resource, "{name}@{budget}: resource");
+                assert_eq!(e1.exit_code, e2.exit_code, "{name}@{budget}: exit_code");
+                assert_eq!(
+                    plain.receipt(&[], &e1),
+                    mounted.receipt(&[], &e2),
+                    "{name}@{budget}: receipt"
+                );
                 assert_eq!(
                     e1.result.is_ok(),
                     e2.result.is_ok(),
@@ -2214,8 +2197,7 @@ mod tests {
     /// must agree on the full stop-state. Stores/loads anchor at `sp` with
     /// negative offsets (the stack top is the end of memory); `a0` is only
     /// touched at the very end (entry convention: a0 = input_base on entry,
-    /// output length at the sentinel return). Also exercises unreachable
-    /// padding and the compressed forms (2-byte `c.jalr` link).
+    /// output length at HALT). Also exercises unreachable padding.
     #[test]
     fn all_profile1_instructions_parity() {
         let mut a = Asm::new();
@@ -2224,8 +2206,8 @@ mod tests {
         a.u(6, 0x37, 0xDEADB); // t1 = 0x00000000DEADB000
         li(&mut a, 7, 7); // t2 = 7
         a.u(28, 0x37, 0x80000); // t3 = 0xFFFFFFFF80000000
-        a.c_addi(29, 31); // t4 = 31
-        a.c_mv(30, 7); // t5 = t2
+        a.i(0, 29, 0, 0x13, 31); // t4 = 31
+        a.i(0, 30, 7, 0x13, 0); // t5 = t2
         a.raw(0x0FF0_000F); // fence
         // -- ImmAlu family (destinations s0..s6 = x8..x14)
         a.i(0, 8, 5, 0x13, -5); // addi s0, t0, -5
@@ -2288,22 +2270,19 @@ mod tests {
         a.i(5, 29, 2, 0x03, -20); // lhu x29
         a.i(0, 30, 2, 0x03, -18); // lb  x30
         a.i(4, 31, 2, 0x03, -18); // lbu x31
-        // -- leaf call through c.jalr (2-byte link). Layout (byte offsets
-        // from the auipc at A): auipc[0] addi t0,+20[4] c.jalr[8](2B, ra
-        // = A+10) resume x26=1[A+10] c.nop[A+14] j ->A+28[A+16] leaf
-        // x27=9[A+20] leaf-ret jalr ra[A+24] after x8=77[A+28].
-        let _au = a.u(5, 0x17, 0); // A: auipc t0, 0
-        a.i(0, 5, 5, 0x13, 20); // t0 = A + 20 (leaf entry)
-        let _cj = a.c_jalr(5); // ra = A + 10 (2-byte link)
-        let _resume = a.i(0, 26, 0, 0x13, 1); // A+10: resume marker
-        let pad = a.half(0x0001); // A+14: c.nop padding
-        a.j(0, pad + 4); // A+16: skip the leaf after resume -> [A+28]
-        a.i(0, 27, 0, 0x13, 9); // A+20: leaf body (jump target)
-        a.i(0, 0, 1, 0x67, 0); // A+24: leaf ret -> ra (A+10)
-        a.i(0, 8, 0, 0x13, 77); // A+28: after-leaf marker
-        // c.jalr clobbered ra: rebuild the sentinel (== -16, one addi)
-        a.i(0, 1, 0, 0x13, -16);
-        li(&mut a, 10, 0); // a0 = 0: empty output at the sentinel return
+        // 32-bit leaf call: jal ra, leaf; resume; j after; leaf; ret; after.
+        let _jal = a.j(1, 0); // patched below to leaf
+        let resume = a.i(0, 26, 0, 0x13, 1);
+        let _skip = a.j(0, 0); // patched to after
+        let leaf = a.i(0, 27, 0, 0x13, 9);
+        a.i(0, 0, 1, 0x67, 0); // jalr x0, ra
+        let after = a.i(0, 8, 0, 0x13, 77);
+        // retarget the two JAL fixups: first j -> leaf, second j -> after.
+        // Asm stores fixups in order; rewrite the recorded targets.
+        let nfix = a.fixups.len();
+        a.fixups[nfix - 2].2 = leaf;
+        a.fixups[nfix - 1].2 = after;
+        let _ = (resume, after);
         a.ret();
         let code = a.finish();
         let (_, ok) = diff("all_profile1", &code, &[], 1_000_000);
@@ -2358,7 +2337,7 @@ mod tests {
         // A+4:  addi t0, t0, 16      ; dest = A+16 (non-leader inside the
         //                             ;  block starting at A+12)
         a.i(0, 5, 5, 0x13, 16);
-        // A+8:  jalr x0, t0, 0       ; no link: x1 stays the return sentinel
+        // A+8:  jalr x0, t0, 0       ; no link: x1 stays 0
         a.i(0, 0, 5, 0x67, 0);
         // A+12: block leader — SKIPPED by the mid-block entry (rebate source)
         a.i(0, 8, 0, 0x13, 7); // addi s0, x0, 7   (must NOT execute)
@@ -2368,9 +2347,8 @@ mod tests {
         a.u(28, 0x37, 0x80000); // lui t3, i64::MIN low half
         li(&mut a, 7, 3);
         a.r(0x01, 4, 10, 28, 7, 0x33); // div a2, t3, t2 (32 cycles)
-        li(&mut a, 10, 0); // a0 = 0: empty output at the sentinel return
-        // A+36: clean exit through the untouched sentinel in x1
-        a.i(0, 0, 1, 0x67, 0); // jalr x0, x1, 0
+        // clean HALT (a0=0, a1=0, a7=0); jalr-to-ra is no longer a return
+        a.ret();
         let code = a.finish();
         // pin interpreter semantics: s0 skipped, s1 ran
         let c = container_for(code.clone());
@@ -2577,15 +2555,13 @@ mod tests {
         assert!(ok);
     }
 
-    /// Deterministic random programs from the unified RV64IMC+Zbb+Zbc
+    /// Deterministic random programs from the unified RV64IM+Zba/Zbb/Zbs/Zbc
     /// whitelist: both engines must agree on outcome, cycles, registers and
     /// memory — including traps (bad loads/stores/jumps) and out-of-gas
     /// runs. Odd cases are "tame" (safe memory anchors, forward branches,
     /// no wild `jalr`) so a healthy share of runs finish cleanly. The
-    /// generator mixes compressed forms throughout (llvm-mc-verified
-    /// packing, sharing the emitter audit), with jump and memory density
-    /// seeded deterministically. 2000 seeds, fixed base seed for
-    /// reproducibility.
+    /// packing is 32-bit-only (C excluded). Jump and memory density are seeded
+    /// deterministically. 2000 seeds, fixed base seed for reproducibility.
     #[test]
     fn fuzz_differential_unified() {
         let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
@@ -2620,8 +2596,7 @@ mod tests {
         *seed = xs(*seed);
         let n = 8 + (*seed % 32) as usize;
         let total = n + 2; // + li a0,0 + ret
-        // tame mode anchors x8 at sp-512 for the compressed memory forms
-        // (x8..x15 register file), keeping c.load/c.store in bounds.
+        // tame mode anchors x8 at sp-512 for safe memory ops.
         if tame {
             a.i(0, 8, 2, 0x13, -512);
         }
@@ -2638,7 +2613,6 @@ mod tests {
                     9 => 9,         // forward-only targets below
                     14 => 14,       // zbb reg-form ops are tame
                     15 => 15,       // zbb immediate forms are tame
-                    16 | 17 => class, // compressed mem/arith (anchored)
                     _ => 5,         // regalu
                 };
             }
@@ -2828,79 +2802,8 @@ mod tests {
                     let shamt = (*seed % 64) as u8;
                     a.sh(f6, f3, rd_of(seed), rr(seed), shamt, op);
                 }
-                // Compressed memory forms (x8..x15; tame anchors x8=sp-512).
-                16 => {
-                    *seed = xs(*seed);
-                    let ld = *seed % 2 == 0;
-                    if tame {
-                        let off = 8 * (*seed % 16) as u16; // 0..120, aligned
-                        if ld {
-                            a.c_load(*seed % 2 == 0, 9 + (*seed % 7) as u8, 8, off);
-                        } else {
-                            a.c_store(*seed % 2 == 0, 8, 9 + (*seed % 7) as u8, off);
-                        }
-                    } else {
-                        // wild: random regs/offsets (frequent traps are fine)
-                        let off = 8 * (*seed % 64) as u16;
-                        *seed = xs(*seed);
-                        if ld {
-                            a.c_loadsp(*seed % 2 == 0, rd_of(seed).max(8), off);
-                        } else {
-                            a.c_storesp(*seed % 2 == 0, rd_of(seed).max(8), off);
-                        }
-                    }
-                }
-                // Compressed arithmetic/immediate forms.
-                17 => {
-                    *seed = xs(*seed);
-                    match *seed % 5 {
-                        0 => {
-                            *seed = xs(*seed);
-                            a.c_li(rd_of(seed), (*seed % 64) as i8);
-                        }
-                        1 => {
-                            *seed = xs(*seed);
-                            // rd' in x9..x15 (keep the x8 anchor intact)
-                            a.c_andi(9 + (*seed % 7) as u8, ((*seed % 64) as i64 - 32) as i8);
-                        }
-                        2 => {
-                            *seed = xs(*seed);
-                            a.c_shift((*seed % 3) as u8, 9 + (*seed % 7) as u8, (*seed % 64) as u8);
-                        }
-                        3 => {
-                            *seed = xs(*seed);
-                            a.c_arith(
-                                (*seed % 6) as u8,
-                                9 + (*seed % 7) as u8,
-                                9 + ((*seed >> 3) % 7) as u8,
-                            );
-                        }
-                        _ => {
-                            *seed = xs(*seed);
-                            a.c_addi(rd_of(seed), (*seed % 64) as i8);
-                        }
-                    }
-                }
                 _ => {
-                    *seed = xs(*seed);
-                    match *seed % 3 {
-                        0 => {
-                            a.c_addi(rd_of(seed), ri(seed, 64) as i8);
-                        }
-                        1 => {
-                            a.c_mv(rd_of(seed), rd_of(seed));
-                        }
-                        _ => {
-                            if tame {
-                                // wild c.jalr loops back to the entry in tame
-                                // mode; keep the compressed coverage but tame
-                                a.c_addi(rd_of(seed), ri(seed, 64) as i8);
-                            } else {
-                                // rs1=0 would be c.addiw rd=0 (reserved)
-                                a.c_jalr(rd_of(seed));
-                            }
-                        }
-                    }
+                    a.r(0x00, 0, rd_of(seed), rr(seed), rr(seed), 0x33);
                 }
             }
         }

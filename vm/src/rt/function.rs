@@ -28,6 +28,8 @@ pub struct FnObj {
     pub ctype: CodeType,
     pub codes: ByteView,
     compiled: Arc<std::sync::OnceLock<ByteView>>,
+    #[cfg(feature = "execute")]
+    rv64im: Option<Arc<crate::calc::CalcFnObj>>,
 }
 
 impl FnObj {
@@ -44,6 +46,31 @@ impl FnObj {
             ctype,
             codes: ByteView::from_vec(pkg.data),
             compiled: Arc::new(std::sync::OnceLock::new()),
+            #[cfg(feature = "execute")]
+            rv64im: None,
+        })
+    }
+
+    /// Attach an already-verified calc kernel. The caller decoded the
+    /// container once; this path does not decode or apply an admission cap.
+    #[cfg(feature = "execute")]
+    pub fn create_with_rv64im(
+        fncnf: u8,
+        pkg: CodePkg,
+        agvty: Option<FuncArgvTypes>,
+        rv64im: Arc<crate::calc::CalcFnObj>,
+    ) -> VmrtRes<Self> {
+        let ctype = pkg.code_type()?;
+        if ctype != CodeType::RV64IM {
+            return itr_err_code!(ItrErrCode::CodeTypeError);
+        }
+        Ok(Self {
+            confs: fncnf,
+            agvty,
+            ctype,
+            codes: ByteView::from_vec(pkg.data),
+            compiled: Arc::new(std::sync::OnceLock::new()),
+            rv64im: Some(rv64im),
         })
     }
 
@@ -59,14 +86,26 @@ impl FnObj {
             ctype,
             codes: codes.into(),
             compiled: Arc::new(std::sync::OnceLock::new()),
+            #[cfg(feature = "execute")]
+            rv64im: None,
         }
+    }
+
+    #[cfg(feature = "execute")]
+    pub fn rv64im_fn(&self) -> Option<&Arc<crate::calc::CalcFnObj>> {
+        self.rv64im.as_ref()
+    }
+
+    pub const fn is_rv64im(&self) -> bool {
+        matches!(self.ctype, CodeType::RV64IM)
     }
 
     #[cfg(feature = "execute")]
     pub fn exec_bytecodes(&self, _height: u64, gas_extra: &GasExtra) -> VmrtRes<ByteView> {
         use CodeType::*;
-        Ok(match self.ctype {
-            Bytecode => self.codes.clone(),
+        match self.ctype {
+            RV64IM => itr_err_code!(ItrErrCode::CodeTypeError),
+            Bytecode => Ok(self.codes.clone()),
             IRNode => {
                 if let Some(cached) = self.compiled.get() {
                     return Ok(cached.clone());
@@ -76,9 +115,9 @@ impl FnObj {
                     gas_extra,
                 )?);
                 let _ = self.compiled.set(compiled.clone());
-                compiled
+                Ok(compiled)
             }
-        })
+        }
     }
 
     pub fn into_array(self) -> Vec<u8> {

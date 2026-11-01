@@ -1,4 +1,4 @@
-//! Opcode-behavior pinning matrix (防漂移矩阵) for the calc RV64IMC interpreter.
+//! Opcode-behavior pinning matrix (防漂移矩阵) for the calc RV64IM interpreter.
 //!
 //! Every case carries hard-coded expected values that were cross-validated, at
 //! authoring time, against THREE independent engines:
@@ -18,12 +18,11 @@
 //! softcore coverage limits (measured empirically against 0.6.0, see
 //! `doc/calcfunc-rv64im-research.md` §oracle):
 //!   - MULH/MULHU/MULHSU panic at runtime (prelude BitVector 128-bit bug),
-//!   - LOAD/STORE/AMO are `todo!()` (no memory subsystem),
-//!   - its public decoder never emits C_* asts; we hand-build them from the
-//!     same logical fields the case was written with (execute-side pinning).
+//!   - LOAD/STORE/AMO are `todo!()` (no memory subsystem).
 //! Those cases run ours vs ckb-vm only.
 
 #[cfg(feature = "execute")]
+#[allow(dead_code)]
 mod pin {
     use softcore_rv64::config;
     use softcore_rv64::prelude::{bv, BitVector};
@@ -37,6 +36,7 @@ mod pin {
     const MEM_KIB: u16 = 8;
     const INPUT_MAX: u16 = 512;
     const OUTPUT_MAX: u16 = 512;
+    const CB: u64 = vm::calc::CALC_CODE_BASE;
 
     fn align16(x: u64) -> u64 {
         (x + 15) & !15
@@ -59,11 +59,8 @@ mod pin {
     enum WordSpec {
         /// One 32-bit word.
         W(u32),
-        /// One 16-bit compressed halfword.
-        C(u16),
     }
     const W: fn(u32) -> WordSpec = WordSpec::W;
-    const C: fn(u16) -> WordSpec = WordSpec::C;
 
     /// What softcore should execute for this case (the first under-test
     /// instruction only).
@@ -71,31 +68,6 @@ mod pin {
         /// Map the first word through OUR decoder, then translate the decoded
         /// `Inst` into a softcore ast.
         Word,
-        /// Hand-built compressed form; payloads are the logical fields the
-        /// case was written with.
-        CAddi(u8, i64),
-        CLi(u8, i64),
-        CLui(u8, i64),
-        CMv(u8, u8),
-        CAdd(u8, u8),
-        CSub(u8, u8),
-        CAnd(u8, u8),
-        COr(u8, u8),
-        CXor(u8, u8),
-        CSubw(u8, u8),
-        CAddw(u8, u8),
-        CSlli(u8, u8),
-        CSrli(u8, u8),
-        CSrai(u8, u8),
-        CAndi(u8, i64),
-        CAddiw(u8, i64),
-        CAddi16sp(i64),
-        CAddi4spn(u8, i64),
-        CJr(u8),
-        CJalr(u8),
-        CJ(i64),
-        CBeqz(u8, i64),
-        CBnez(u8, i64),
     }
 
     struct Case {
@@ -122,10 +94,8 @@ mod pin {
         /// Hard-coded memory bytes, offsets relative to `data_base`.
         expect_mem: Vec<(u64, u8)>,
         /// softcore register comparison override: (register, hard-coded
-        /// value). Replaces the default ours-vs-softcore comparison for cases
-        /// where the full program overwrites the register the single
-        /// instruction wrote (e.g. the c.jalr link lands in x1 which the
-        /// epilogue reloads).
+        /// value). Replaces the default ours-vs-softcore comparison when the
+        /// full program overwrites the register the single instruction wrote.
         sc_reg_pin: Option<(u8, u64)>,
     }
 
@@ -161,15 +131,6 @@ mod pin {
         }
         fn no_sc(self) -> Case {
             Case { sc: None, ..self }
-        }
-        fn keeps_a0(self) -> Case {
-            Case { a0_test: true, ..self }
-        }
-        fn sc_pin(self, r: u8, v: u64) -> Case {
-            Case { sc_reg_pin: Some((r, v)), ..self }
-        }
-        fn sc_c(self, k: ScAst) -> Case {
-            Case { sc: Some(k), ..self }
         }
         fn expect(mut self, r: u8, v: u64) -> Case {
             self.expect_regs.push((r, v));
@@ -277,208 +238,12 @@ mod pin {
         0x00008067 // jalr x0, 0(ra)
     }
 
-    // RVC encoders. Any field mistake shows up as a pin/oracle failure, so
-    // these are validated by construction as well.
-    fn c_addi(rd: u8, imm: i64) -> u16 {
-        (0b000u16 << 13) | ((((imm >> 5) & 1) as u16) << 12) | ((rd as u16) << 7)
-            | (((imm & 0x1F) as u16) << 2) | 0b01
-    }
-    fn c_li(rd: u8, imm: i64) -> u16 {
-        (0b010u16 << 13) | ((((imm >> 5) & 1) as u16) << 12) | ((rd as u16) << 7)
-            | (((imm & 0x1F) as u16) << 2) | 0b01
-    }
-    fn c_lui(rd: u8, imm6: i64) -> u16 {
-        (0b011u16 << 13) | ((((imm6 >> 5) & 1) as u16) << 12) | ((rd as u16) << 7)
-            | (((imm6 & 0x1F) as u16) << 2) | 0b01
-    }
-    fn c_mv(rd: u8, rs2: u8) -> u16 {
-        (0b100u16 << 13) | ((rd as u16) << 7) | ((rs2 as u16) << 2) | 0b10
-    }
-    fn c_add(rd: u8, rs2: u8) -> u16 {
-        (0b100u16 << 13) | (1 << 12) | ((rd as u16) << 7) | ((rs2 as u16) << 2) | 0b10
-    }
-    fn c_alu(f2: u16, rd: u8, rs2: u8) -> u16 {
-        // c.sub/c.xor/c.or/c.and: 100 0 11 rs1' f2 rs2' 01
-        (0b100u16 << 13) | (0b11 << 10) | (((rd - 8) as u16) << 7) | (f2 << 5)
-            | (((rs2 - 8) as u16) << 2) | 0b01
-    }
-    fn c_sub(rd: u8, rs2: u8) -> u16 {
-        c_alu(0b00, rd, rs2)
-    }
-    fn c_xor(rd: u8, rs2: u8) -> u16 {
-        c_alu(0b01, rd, rs2)
-    }
-    fn c_or(rd: u8, rs2: u8) -> u16 {
-        c_alu(0b10, rd, rs2)
-    }
-    fn c_and(rd: u8, rs2: u8) -> u16 {
-        c_alu(0b11, rd, rs2)
-    }
-    fn c_subw(rd: u8, rs2: u8) -> u16 {
-        // 100 1 11 rs1' 00 rs2' 01
-        (0b100u16 << 13) | (1 << 12) | (0b11 << 10) | (((rd - 8) as u16) << 7)
-            | (((rs2 - 8) as u16) << 2) | 0b01
-    }
-    fn c_addw(rd: u8, rs2: u8) -> u16 {
-        // 100 1 11 rs1' 01 rs2' 01
-        (0b100u16 << 13) | (1 << 12) | (0b11 << 10) | (((rd - 8) as u16) << 7)
-            | (1 << 5) | (((rs2 - 8) as u16) << 2) | 0b01
-    }
-    fn c_shift(f2: u16, rd: u8, shamt: u8) -> u16 {
-        // c.srli/c.srai: 100 0 00|01 rs1' shamt 01 (shamt[5] in bit 12 on RV64)
-        (0b100u16 << 13) | (((shamt >> 5) as u16 & 1) << 12) | (f2 << 10)
-            | (((rd - 8) as u16) << 7) | (((shamt & 0x1F) as u16) << 2) | 0b01
-    }
-    fn c_srli(rd: u8, shamt: u8) -> u16 {
-        c_shift(0b00, rd, shamt)
-    }
-    fn c_srai(rd: u8, shamt: u8) -> u16 {
-        c_shift(0b01, rd, shamt)
-    }
-    fn c_slli(rd: u8, shamt: u8) -> u16 {
-        // quadrant 2: 000 . shamt[5] rd shamt[4:0] . 10
-        (0b000u16 << 13) | (((shamt >> 5) as u16 & 1) << 12) | ((rd as u16) << 7)
-            | (((shamt & 0x1F) as u16) << 2) | 0b10
-    }
-    fn c_andi(rd: u8, imm: i64) -> u16 {
-        // 100 0 10 rs1' imm[5] imm[4:0] 01
-        (0b100u16 << 13) | (0b10 << 10) | (((rd - 8) as u16) << 7)
-            | ((((imm >> 5) & 1) as u16) << 12) | (((imm & 0x1F) as u16) << 2) | 0b01
-    }
-    fn c_addiw(rd: u8, imm: i64) -> u16 {
-        (0b001u16 << 13) | ((((imm >> 5) & 1) as u16) << 12) | ((rd as u16) << 7)
-            | (((imm & 0x1F) as u16) << 2) | 0b01
-    }
-    fn c_addi16sp(imm: i64) -> u16 {
-        // 011 . nzimm[9] . 00010 . nzimm[4] nzimm[6] nzimm[8:7] nzimm[5] . 01
-        let f = ((imm / 16) as u64) & 0x3F; // nzimm[9:4]
-        (0b011u16 << 13) | 0b01 | (2 << 7)
-            | ((((f >> 5) & 1) as u16) << 12)
-            | (((f & 1) as u16) << 6)
-            | ((((f >> 2) & 1) as u16) << 5)
-            | ((((f >> 4) & 1) as u16) << 4)
-            | ((((f >> 3) & 1) as u16) << 3)
-            | ((((f >> 1) & 1) as u16) << 2)
-    }
-    fn c_addi4spn(rd: u8, imm: i64) -> u16 {
-        // 000 . nzuimm[5:4] nzuimm[9:6] nzuimm[2] nzuimm[3] rd' . 00, where
-        // nzuimm field bit i is immediate bit i+2 (f = imm >> 2).
-        let f = ((imm / 4) as u64) & 0xFF;
-        (0b000u16 << 13)
-            | ((((f >> 2) & 0b11) as u16) << 11) // imm[5:4]
-            | ((((f >> 4) & 0xF) as u16) << 7)   // imm[9:6]
-            | (((f & 1) as u16) << 6)            // imm[2]
-            | ((((f >> 1) & 1) as u16) << 5)     // imm[3]
-            | (((rd - 8) as u16) << 2)
-    }
-    fn c_j(off: i64) -> u16 {
-        // 101 . imm[11] imm[4] imm[9:8] imm[10] imm[6] imm[7] imm[3:1] imm[5] . 01
-        let o = off as u64;
-        (0b101u16 << 13) | 0b01
-            | ((((o >> 11) & 1) as u16) << 12)
-            | ((((o >> 4) & 1) as u16) << 11)
-            | ((((o >> 8) & 0b11) as u16) << 9)
-            | ((((o >> 10) & 1) as u16) << 8)
-            | ((((o >> 6) & 1) as u16) << 7)
-            | ((((o >> 7) & 1) as u16) << 6)
-            | ((((o >> 1) & 0b111) as u16) << 3)
-            | ((((o >> 5) & 1) as u16) << 2)
-    }
-    fn c_jr(rs1: u8) -> u16 {
-        (0b100u16 << 13) | ((rs1 as u16) << 7) | 0b10
-    }
-    fn c_jalr(rs1: u8) -> u16 {
-        (0b100u16 << 13) | (1 << 12) | ((rs1 as u16) << 7) | 0b10
-    }
-    fn c_bez(f3: u16, rs1: u8, off: i64) -> u16 {
-        // 110/111 . imm[8] imm[4:3] rs1' imm[7:6] imm[2:1] imm[5] . 01
-        let o = off as u64;
-        (f3 << 13) | 0b01
-            | ((((o >> 8) & 1) as u16) << 12)
-            | ((((o >> 3) & 0b11) as u16) << 10)
-            | (((rs1 - 8) as u16) << 7)
-            | ((((o >> 6) & 0b11) as u16) << 5)
-            | ((((o >> 1) & 0b11) as u16) << 3)
-            | ((((o >> 5) & 1) as u16) << 2)
-    }
-    fn c_beqz(rs1: u8, off: i64) -> u16 {
-        c_bez(0b110, rs1, off)
-    }
-    fn c_bnez(rs1: u8, off: i64) -> u16 {
-        c_bez(0b111, rs1, off)
-    }
-    fn c_lwsp(rd: u8, off: i64) -> u16 {
-        // 010 . offset[5] rd offset[4:2] offset[7:6] . 10
-        let o = off as u64;
-        (0b010u16 << 13) | 0b10
-            | ((((o >> 5) & 1) as u16) << 12)
-            | ((rd as u16) << 7)
-            | ((((o >> 2) & 0b111) as u16) << 4)
-            | ((((o >> 6) & 0b11) as u16) << 2)
-    }
-    fn c_swsp(rs2: u8, off: i64) -> u16 {
-        // 110 . offset[5:2] offset[7:6] rs2 . 10
-        let o = off as u64;
-        (0b110u16 << 13) | 0b10
-            | ((((o >> 2) & 0xF) as u16) << 9)
-            | ((((o >> 6) & 0b11) as u16) << 7)
-            | ((rs2 as u16) << 2)
-    }
-    fn c_ldsp(rd: u8, off: i64) -> u16 {
-        // 011 . offset[5] rd offset[4:3] offset[8:6] . 10
-        let o = off as u64;
-        (0b011u16 << 13) | 0b10
-            | ((((o >> 5) & 1) as u16) << 12)
-            | ((rd as u16) << 7)
-            | ((((o >> 3) & 0b11) as u16) << 5)
-            | ((((o >> 6) & 0b111) as u16) << 2)
-    }
-    fn c_sdsp(rs2: u8, off: i64) -> u16 {
-        // 111 . offset[5:3] offset[8:6] rs2 . 10
-        let o = off as u64;
-        (0b111u16 << 13) | 0b10
-            | ((((o >> 3) & 0b111) as u16) << 10)
-            | ((((o >> 6) & 0b111) as u16) << 7)
-            | ((rs2 as u16) << 2)
-    }
-    fn c_ls(f3: u16, rd: u8, rs1: u8, off: i64) -> u16 {
-        // CL/CS formats are QUADRANT 0: c.lw/c.sw: 010|110 . imm[5:3] rs1'
-        // imm[2] rd' . 00; c.ld/c.sd: 011|111 . imm[5:3] rs1' imm[7:6] rd' . 00
-        let o = off as u64;
-        (f3 << 13) | 0b00
-            | ((((o >> 3) & 0b111) as u16) << 10)
-            | (((rs1 - 8) as u16) << 7)
-            | (if f3 & 1 == 0 {
-                // lw/sw family: imm[2] at bit 6
-                ((((o >> 2) & 1) as u16) << 6)
-            } else {
-                // ld/sd family: imm[7:6] at bits 6:5
-                ((((o >> 6) & 0b11) as u16) << 5)
-            })
-            | (((rd - 8) as u16) << 2)
-    }
-    fn c_lw(rd: u8, rs1: u8, off: i64) -> u16 {
-        c_ls(0b010, rd, rs1, off)
-    }
-    fn c_sw(rd: u8, rs1: u8, off: i64) -> u16 {
-        c_ls(0b110, rd, rs1, off)
-    }
-    fn c_ld(rd: u8, rs1: u8, off: i64) -> u16 {
-        c_ls(0b011, rd, rs1, off)
-    }
-    fn c_sd(rd: u8, rs1: u8, off: i64) -> u16 {
-        c_ls(0b111, rd, rs1, off)
-    }
-
     // ------------------------------------------------------------------
     // softcore adapter
     // ------------------------------------------------------------------
 
     fn sreg(n: u8) -> raw::regidx {
         raw::regidx::Regidx(BitVector::new(n as u64))
-    }
-    fn screg(n: u8) -> raw::cregidx {
-        raw::cregidx::Cregidx(BitVector::new((n - 8) as u64))
     }
     fn smul(high: bool, s1: bool, s2: bool) -> raw::mul_op {
         raw::mul_op { high, signed_rs1: s1, signed_rs2: s2 }
@@ -490,9 +255,11 @@ mod pin {
         Some(match inst {
             // Zbb/Zbc ops are outside this instruction-level pinning set
             // (covered by the differential suite); map them to None.
-            Inst::UnAlu { .. } | Inst::BitImm { .. } | Inst::Slliuw { .. } | Inst::Fence => {
-                return None
-            }
+            Inst::UnAlu { .. }
+            | Inst::BitImm { .. }
+            | Inst::Slliuw { .. }
+            | Inst::Fence
+            | Inst::Trap => return None,
             Inst::Lui { rd, val } => {
                 ast::UTYPE((bv::<20>(((val >> 12) as u64) & 0xFFFFF), sreg(*rd), raw::uop::LUI))
             }
@@ -615,41 +382,6 @@ mod pin {
         })
     }
 
-    fn c_ast_to_softcore(k: &ScAst) -> ast {
-        match k {
-            ScAst::CAddi(rd, imm) => ast::C_ADDI((bv::<6>(*imm as u64), sreg(*rd))),
-            ScAst::CLi(rd, imm) => ast::C_LI((bv::<6>(*imm as u64), sreg(*rd))),
-            ScAst::CLui(rd, imm6) => ast::C_LUI((bv::<6>(*imm6 as u64), sreg(*rd))),
-            ScAst::CMv(rd, rs2) => ast::C_MV((sreg(*rd), sreg(*rs2))),
-            ScAst::CAdd(rd, rs2) => ast::C_ADD((sreg(*rd), sreg(*rs2))),
-            ScAst::CSub(rd, rs2) => ast::C_SUB((screg(*rd), screg(*rs2))),
-            ScAst::CAnd(rd, rs2) => ast::C_AND((screg(*rd), screg(*rs2))),
-            ScAst::COr(rd, rs2) => ast::C_OR((screg(*rd), screg(*rs2))),
-            ScAst::CXor(rd, rs2) => ast::C_XOR((screg(*rd), screg(*rs2))),
-            ScAst::CSubw(rd, rs2) => ast::C_SUBW((screg(*rd), screg(*rs2))),
-            ScAst::CAddw(rd, rs2) => ast::C_ADDW((screg(*rd), screg(*rs2))),
-            ScAst::CSlli(rd, sh) => ast::C_SLLI((bv::<6>(*sh as u64), sreg(*rd))),
-            ScAst::CSrli(rd, sh) => ast::C_SRLI((bv::<6>(*sh as u64), screg(*rd))),
-            ScAst::CSrai(rd, sh) => ast::C_SRAI((bv::<6>(*sh as u64), screg(*rd))),
-            ScAst::CAndi(rd, imm) => ast::C_ANDI((bv::<6>(*imm as u64), screg(*rd))),
-            ScAst::CAddiw(rd, imm) => ast::C_ADDIW((bv::<6>(*imm as u64), sreg(*rd))),
-            ScAst::CAddi16sp(imm) => ast::C_ADDI16SP(bv::<6>(((imm / 16) as u64) & 0x3F)),
-            ScAst::CAddi4spn(rd, imm) => {
-                ast::C_ADDI4SPN((screg(*rd), bv::<8>(((imm / 4) as u64) & 0xFF)))
-            }
-            ScAst::CJr(rs1) => ast::C_JR(sreg(*rs1)),
-            ScAst::CJalr(rs1) => ast::C_JALR(sreg(*rs1)),
-            ScAst::CJ(off) => ast::C_J(bv::<11>((off / 2) as u64)),
-            ScAst::CBeqz(rs1, off) => {
-                ast::C_BEQZ((bv::<8>(((off / 2) as u64) & 0xFF), screg(*rs1)))
-            }
-            ScAst::CBnez(rs1, off) => {
-                ast::C_BNEZ((bv::<8>(((off / 2) as u64) & 0xFF), screg(*rs1)))
-            }
-            ScAst::Word => unreachable!("Word is handled by inst_to_ast"),
-        }
-    }
-
     /// Which register a softcore-executed form writes (for the oracle
     /// comparison); `None` = control-flow only (or writes x0).
     fn sc_written(k: &ScAst, inst: Option<&Inst>) -> Option<u8> {
@@ -657,9 +389,11 @@ mod pin {
             ScAst::Word => match inst? {
                 // Zbb/Zbc forms never reach the softcore oracle (mapped to
                 // None above); treat any unexpected hit as unwritten.
-                Inst::UnAlu { .. } | Inst::BitImm { .. } | Inst::Slliuw { .. } | Inst::Fence => {
-                    return None
-                }
+                Inst::UnAlu { .. }
+                | Inst::BitImm { .. }
+                | Inst::Slliuw { .. }
+                | Inst::Fence
+                | Inst::Trap => return None,
                 Inst::Lui { rd, .. }
                 | Inst::Auipc { rd, .. }
                 | Inst::Jal { rd, .. }
@@ -670,26 +404,6 @@ mod pin {
                 | Inst::RegAlu { rd, .. } => Some(*rd),
                 Inst::Branch { .. } | Inst::Store { .. } | Inst::Ecall => None,
             },
-            ScAst::CAddi(rd, _)
-            | ScAst::CLi(rd, _)
-            | ScAst::CLui(rd, _)
-            | ScAst::CMv(rd, _)
-            | ScAst::CAdd(rd, _)
-            | ScAst::CSub(rd, _)
-            | ScAst::CAnd(rd, _)
-            | ScAst::COr(rd, _)
-            | ScAst::CXor(rd, _)
-            | ScAst::CSubw(rd, _)
-            | ScAst::CAddw(rd, _)
-            | ScAst::CSlli(rd, _)
-            | ScAst::CSrli(rd, _)
-            | ScAst::CSrai(rd, _)
-            | ScAst::CAndi(rd, _)
-            | ScAst::CAddiw(rd, _)
-            | ScAst::CAddi4spn(rd, _) => Some(*rd),
-            ScAst::CAddi16sp(_) => Some(2),
-            ScAst::CJalr(_) => Some(1),
-            ScAst::CJr(_) | ScAst::CJ(_) | ScAst::CBeqz(..) | ScAst::CBnez(..) => None,
         }
     }
 
@@ -737,23 +451,19 @@ mod pin {
         for spec in words {
             match *spec {
                 WordSpec::W(v) => bytes.extend_from_slice(&v.to_le_bytes()),
-                WordSpec::C(h) => bytes.extend_from_slice(&(h).to_le_bytes()),
             }
         }
         if !a0_test {
-            // sentinel-return validates a0 as the output length
             for w in enc_li(10, 0) {
                 bytes.extend_from_slice(&w.to_le_bytes());
             }
         }
-        // Cases whose flow clobbers x1 (jal/c.jalr links) must still return:
-        // snapshot x1 into x30 (unpinned scratch), reload the sentinel, ret.
-        // The c.jalr case pins x30 to observe the written link value.
+        // HALT ecall (exit 0, empty output). Snapshot ra into x30 so jal
+        // link tests can still observe it after halt clobbers a0/a1/a7.
         bytes.extend_from_slice(&enc_i(0x13, 0, 30, 1, 0).to_le_bytes()); // addi x30, x1, 0
-        for w in enc_li(1, vm::calc::CALC_RETURN_SENTINEL) {
-            bytes.extend_from_slice(&w.to_le_bytes());
-        }
-        bytes.extend_from_slice(&ret().to_le_bytes());
+        bytes.extend_from_slice(&enc_i(0x13, 0, 11, 0, 0).to_le_bytes()); // addi a1, x0, 0
+        bytes.extend_from_slice(&enc_i(0x13, 0, 17, 0, 0).to_le_bytes()); // addi a7, x0, 0
+        bytes.extend_from_slice(&0x0000_0073u32.to_le_bytes()); // ecall HALT
         bytes
     }
 
@@ -774,19 +484,21 @@ mod pin {
                 })
                 .collect();
             let bytes = assemble(&eff, &case.words, case.a0_test);
-            let ndb = align16(bytes.len() as u64);
+            let ndb = align16(CB + bytes.len() as u64);
             if ndb == db {
                 break (bytes, db);
             }
             db = ndb;
         };
         let container = CalcContainer {
+            profile: vm::calc::CALC_PROFILE_RV64IM,
             abi: 1,
             mem_kib: MEM_KIB,
-            entry: 0,
+            entry: CB as u32,
             code: bytes,
             rodata: vec![],
             init: case.init_mem.clone(),
+            bss_len: 0,
             input_max: INPUT_MAX,
             output_max: OUTPUT_MAX,
         };
@@ -821,15 +533,30 @@ mod pin {
     }
 
     fn run_ckb(b: &Built) -> ([u64; 32], Vec<u8>) {
-        use ckb_vm::{CoreMachine, DefaultCoreMachine, DefaultMachineBuilder, FlatMemory, Memory};
+        use ckb_vm::{CoreMachine, DefaultCoreMachine, DefaultMachineBuilder, FlatMemory, Memory, Syscalls};
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
         type Ck = DefaultCoreMachine<u64, FlatMemory<u64>>;
+        struct HaltEcall { halted: Arc<AtomicBool> }
+        impl Syscalls<Ck> for HaltEcall {
+            fn initialize(&mut self, _m: &mut Ck) -> Result<(), ckb_vm::Error> { Ok(()) }
+            fn ecall(&mut self, m: &mut Ck) -> Result<bool, ckb_vm::Error> {
+                if m.registers()[17] == vm::calc::ECALL_HALT {
+                    self.halted.store(true, Ordering::SeqCst);
+                    return Ok(true);
+                }
+                Ok(false)
+            }
+        }
         let lay = verify_container(&b.container).expect("verify").layout_snapshot();
         let core =
             Ck::new_with_memory(ckb_vm::ISA_IMC, ckb_vm::machine::VERSION2, u64::MAX, lay.mem_len as usize);
-        let mut machine = DefaultMachineBuilder::new(core).build();
+        let sys = HaltEcall { halted: Arc::new(AtomicBool::new(false)) };
+        let halted = sys.halted.clone();
+        let mut machine = DefaultMachineBuilder::new(core).syscall(Box::new(sys)).build();
         {
             let m = machine.memory_mut();
-            m.store_bytes(0, &b.container.code).unwrap();
+            m.store_bytes(CB, &b.container.code).unwrap();
             m.store_bytes(lay.rodata_base, &b.container.rodata).unwrap();
             m.store_bytes(lay.data_base, &b.container.init).unwrap();
         }
@@ -838,14 +565,12 @@ mod pin {
         machine.set_register(12, lay.output_base);
         machine.set_register(13, lay.output_max);
         machine.set_register(2, lay.stack_top);
-        machine.set_register(1, vm::calc::CALC_RETURN_SENTINEL);
-        machine.update_pc(0);
+        machine.update_pc(CB);
         machine.commit_pc();
         let mut decoder = ckb_vm::decoder::build_decoder::<u64>(machine.isa(), machine.version());
-        let sentinel = vm::calc::CALC_RETURN_SENTINEL;
         let mut steps = 0u64;
         loop {
-            if *machine.pc() == sentinel {
+            if halted.load(Ordering::SeqCst) {
                 break;
             }
             steps += 1;
@@ -894,48 +619,29 @@ mod pin {
         // next pc against the static expectation.
         if let Some(sc) = &case.sc {
             let bytes = &b.container.code;
-            let decoded = decode_at(bytes, b.test_pc as usize).expect(case.name);
+            let decoded = decode_at(bytes, b.test_pc as usize, vm::calc::CALC_PROFILE_RV64IM).expect(case.name);
+            let pc = CB + b.test_pc;
             let (a, next) = match sc {
                 ScAst::Word => {
+                    // decode_at returns PC-relative immediates; inst_to_ast
+                    // subtracts `pc` for jal/branch, so pass the code-relative
+                    // test_pc (usually 0 for the first under-test word).
                     let a = inst_to_ast(&decoded.0, b.test_pc)
                         .expect("case must call no_sc() for instructions softcore cannot execute");
                     let next = match decoded.0 {
-                        Inst::Jal { target, .. } => Some(target as u64),
+                        Inst::Jal { target, .. } => Some(pc.wrapping_add(target as u64)),
                         // Branch: taken/not-taken is data-dependent and
                         // softcore runs the real condition; only the register
                         // pins are compared for branch cases.
                         Inst::Branch { .. } => None,
                         Inst::Jalr { .. } => None, // dynamic target
-                        _ => Some(b.test_pc + decoded.1 as u64),
+                        _ => Some(pc + decoded.1 as u64),
                     };
                     (a, next)
                 }
-                k => {
-                    let next = match k {
-                        ScAst::CJr(_) | ScAst::CJalr(_) => {
-                            // dynamic: the register value from the prologue
-                            let rs1 = match k {
-                                ScAst::CJr(r) | ScAst::CJalr(r) => *r,
-                                _ => unreachable!(),
-                            };
-                            b.init
-                                .iter()
-                                .find(|(r, _)| *r == rs1)
-                                .map(|(_, v)| *v)
-                        }
-                        ScAst::CJ(off) => Some((b.test_pc as i64 + off) as u64),
-                        // CBeqz/CBnez: data-dependent, like BTYPE
-                        ScAst::CBeqz(..) | ScAst::CBnez(..) => None,
-                        _ => Some(b.test_pc + 2),
-                    };
-                    (c_ast_to_softcore(&k), next)
-                }
             };
-            let ilen = match sc {
-                ScAst::Word => decoded.1 as u64,
-                _ => 2,
-            };
-            let (regs_s, next_pc) = softcore_exec(a, &b.init, b.test_pc, ilen);
+            let ilen = decoded.1 as u64;
+            let (regs_s, next_pc) = softcore_exec(a, &b.init, pc, ilen);
             if let Some((r, v)) = case.sc_reg_pin {
                 assert_eq!(
                     regs_s[r as usize], v,
@@ -1035,9 +741,9 @@ mod pin {
         let cases = vec![
             Case::new("lui sign-extend").code(&[W(enc_u(0x37, 8, 0xDEAD0))]).expect(8, 0xFFFF_FFFF_DEAD_0000),
             Case::new("lui positive").code(&[W(enc_u(0x37, 8, 0x12345))]).expect(8, 0x1_2345_000),
-            // one 4-byte prologue word (li x9) puts the auipc at pc=4
-            Case::new("auipc pc+1<<12").reg(9, 1).code(&[W(enc_u(0x17, 8, 1))]).expect(8, 4 + 0x1000),
-            Case::new("auipc negative imm").reg(9, 1).code(&[W(enc_u(0x17, 8, 0xFFFFF))]).expect(8, (4i64 - 4096) as u64),
+            // one 4-byte prologue word (li x9) puts the auipc at CODE_BASE+4
+            Case::new("auipc pc+1<<12").reg(9, 1).code(&[W(enc_u(0x17, 8, 1))]).expect(8, CB + 4 + 0x1000),
+            Case::new("auipc negative imm").reg(9, 1).code(&[W(enc_u(0x17, 8, 0xFFFFF))]).expect(8, (CB as i64 + 4 - 4096) as u64),
         ];
         for c in cases {
             check_case(c);
@@ -1144,7 +850,7 @@ mod pin {
             // jal x5, +8: skips the addi, links x5 = pc+4
             Case::new("jal +8 links rd")
                 .code(&[W(enc_jal(5, 8)), W(enc_i(0x13, 0, 9, 0, 99))])
-                .expects(&[(5, 4), (9, 0)]),
+                .expects(&[(5, CB + 4), (9, 0)]),
             // jal x0 must NOT write a link register: observed through a copy
             // of x1 taken BEFORE the epilogue reload masks it.
             Case::new("jal x0 no link")
@@ -1153,23 +859,23 @@ mod pin {
                     W(enc_i(0x13, 0, 5, 1, 0)),  // addi x5, x1, 0 (copy ra)
                     W(enc_jal(0, 4)),            // -> epilogue at 12
                 ])
-                .expect(5, vm::calc::CALC_RETURN_SENTINEL),
-            // jalr x6, x5, 0 with x5=8: dynamic target (the addi x9 at 8)
+                .expect(5, 0),
+            // jalr x6, x5, 0: x5 is the absolute address of the addi (after
+            // the 8-byte lui+addi prologue that materializes CODE_BASE+12).
             Case::new("jalr dynamic target")
-                .reg(5, 8)
+                .reg(5, CB + 12)
                 .code(&[W(enc_jalr(6, 5, 0)), W(enc_i(0x13, 0, 9, 0, 99))])
-                .expects(&[(6, 8), (9, 99)]),
-            // jalr clears bit 0 of (rs1+imm): 13 -> 12 (epilogue start)
+                .expects(&[(6, CB + 12), (9, 99)]),
+            // jalr clears bit 0: prologue is 8 bytes (lui+addi for CB+17),
+            // jalr at +8, addi at +12, nop at +16. (CB+17)&!1 = CB+16 (nop).
             Case::new("jalr clears bit0")
-                .reg(5, 13)
+                .reg(5, CB + 17)
                 .code(&[
                     W(enc_jalr(6, 5, 0)),
                     W(enc_i(0x13, 0, 9, 0, 99)),
                     W(enc_i(0x13, 0, 0, 0, 0)), // nop
                 ])
-                // the addi x9 at 8 is SKIPPED (13&!1 = 12 lands on the nop);
-                // an uncleared bit0 would trap on the misaligned pc 13
-                .expects(&[(6, 8), (9, 0)]),
+                .expects(&[(6, CB + 12), (9, 0)]),
         ];
         for c in cases {
             check_case(c);
@@ -1222,144 +928,5 @@ mod pin {
             check_case(c);
         }
     }
-
-    // ---- compressed register forms --------------------------------------
-
-    #[test]
-    fn pin_compressed_reg_ops() {
-        let cases = vec![
-            Case::new("c.addi +5").keeps_a0().sc_c(ScAst::CAddi(10, 5)).reg(10, 5)
-                .code(&[C(c_addi(10, 5))]).expect(10, 10),
-            Case::new("c.addi -1 wrap").sc_c(ScAst::CAddi(14, -1)).reg(14, 0)
-                .code(&[C(c_addi(14, -1))]).expect(14, u64::MAX),
-            Case::new("c.li -1").sc_c(ScAst::CLi(11, -1)).code(&[C(c_li(11, -1))]).expect(11, u64::MAX),
-            Case::new("c.li 31").sc_c(ScAst::CLi(11, 31)).code(&[C(c_li(11, 31))]).expect(11, 31),
-            Case::new("c.mv").sc_c(ScAst::CMv(12, 10)).reg(10, 77)
-                .code(&[C(c_mv(12, 10))]).expect(12, 77),
-            Case::new("c.add").sc_c(ScAst::CAdd(12, 10)).regs(&[(12, 5), (10, 6)])
-                .code(&[C(c_add(12, 10))]).expect(12, 11),
-            Case::new("c.sub").sc_c(ScAst::CSub(9, 10)).regs(&[(9, 10), (10, 3)])
-                .code(&[C(c_sub(9, 10))]).expect(9, 7),
-            Case::new("c.and").sc_c(ScAst::CAnd(9, 10)).regs(&[(9, 0xF0), (10, 0x3C)])
-                .code(&[C(c_and(9, 10))]).expect(9, 0x30),
-            Case::new("c.or").sc_c(ScAst::COr(9, 10)).regs(&[(9, 0xF0), (10, 0x0F)])
-                .code(&[C(c_or(9, 10))]).expect(9, 0xFF),
-            Case::new("c.xor").sc_c(ScAst::CXor(9, 10)).regs(&[(9, 0xFF), (10, 0x0F)])
-                .code(&[C(c_xor(9, 10))]).expect(9, 0xF0),
-            Case::new("c.slli").sc_c(ScAst::CSlli(9, 4)).reg(9, 0x10)
-                .code(&[C(c_slli(9, 4))]).expect(9, 0x100),
-            Case::new("c.srli").sc_c(ScAst::CSrli(9, 2)).reg(9, MIN)
-                .code(&[C(c_srli(9, 2))]).expect(9, 0x2000_0000_0000_0000),
-            Case::new("c.srai 63").sc_c(ScAst::CSrai(9, 63)).reg(9, MIN)
-                .code(&[C(c_srai(9, 63))]).expect(9, u64::MAX),
-            Case::new("c.andi -8").sc_c(ScAst::CAndi(9, -8)).reg(9, 0xFF)
-                .code(&[C(c_andi(9, -8))]).expect(9, 0xF8),
-            Case::new("c.lui -1<<12").sc_c(ScAst::CLui(12, -1))
-                .code(&[C(c_lui(12, -1))]).expect(12, 0xFFFF_FFFF_FFFF_F000),
-            Case::new("c.addiw wrap").keeps_a0().sc_c(ScAst::CAddiw(10, 1)).reg(10, u64::MAX)
-                .code(&[C(c_addiw(10, 1))]).expect(10, 0),
-            Case::new("c.addi16sp -64").sc_c(ScAst::CAddi16sp(-64)).reg(2, 0x1000)
-                .code(&[C(c_addi16sp(-64))]).expect(2, 0xFC0),
-            Case::new("c.addi4spn +32").sc_c(ScAst::CAddi4spn(13, 32)).reg(2, 0x1000)
-                .code(&[C(c_addi4spn(13, 32))]).expect(13, 0x1020),
-            // softcore RTYPEW::SUBW panics (sub_vec 64-bit assert on 32-bit
-            // operands) — ckb only
-            Case::new("c.subw").no_sc().regs(&[(9, 5), (10, 7)])
-                .code(&[C(c_subw(9, 10))]).expect(9, (-2i64) as u64),
-            Case::new("c.addw ovf").sc_c(ScAst::CAddw(9, 10)).regs(&[(9, 0x7FFF_FFFF), (10, 1)])
-                .code(&[C(c_addw(9, 10))]).expect(9, 0xFFFF_FFFF_8000_0000),
-        ];
-        for c in cases {
-            check_case(c);
-        }
-    }
-
-    #[test]
-    fn pin_compressed_flow() {
-        let cases = vec![
-            // addi x9, x0, 99 ; c.beqz x8, +6 -> taken skips to ret? no:
-            // shape is [addi x9 (4B), branch/c.j (2B), ret] with the jump
-            // landing on ret at +2 from itself.
-            Case::new("c.j +2")
-                .sc_c(ScAst::CJ(2))
-                .code(&[W(enc_i(0x13, 0, 9, 0, 99)), C(c_j(2))])
-                .expect(9, 99),
-            // c.jr x5 (x5=16) jumping to the epilogue (a0 li at 16, after
-            // prologue [li x5, li x8] + words [addi x9 (8-12), c.beqz x8,+4
-            // (12-14) -> 16, c.jr x5 (14-16)]). x8=1 keeps the beqz
-            // not-taken so the c.jr actually executes and the epilogue is
-            // reachable on both static paths.
-            Case::new("c.jr to epilogue")
-                .sc_c(ScAst::CJr(5))
-                .regs(&[(5, 16), (8, 1)])
-                .code(&[
-                    W(enc_i(0x13, 0, 9, 0, 99)),
-                    C(c_beqz(8, 4)),
-                    C(c_jr(5)),
-                ])
-                .expect(9, 99),
-            // c.jalr x5 (rs1=x5=16) links ra=x1=pc+2=16. The epilogue copies
-            // x1 into x30 before reloading it, so the link value is pinned on
-            // x30; softcore compares x1 directly (sc_reg_pin).
-            Case::new("c.jalr links ra")
-                .sc_c(ScAst::CJalr(5))
-                .sc_pin(1, 10)
-                .regs(&[(5, 16), (8, 1)])
-                .code(&[
-                    W(enc_i(0x13, 0, 9, 0, 99)),
-                    C(c_beqz(8, 4)),
-                    C(c_jalr(5)),
-                ])
-                .expects(&[(9, 99), (30, 16)]),
-            Case::new("c.beqz taken")
-                .sc_c(ScAst::CBeqz(8, 6))
-                .reg(8, 0)
-                .code(&[C(c_beqz(8, 6)), W(enc_i(0x13, 0, 9, 0, 99))])
-                .expect(9, 0),
-            Case::new("c.beqz not-taken")
-                .sc_c(ScAst::CBeqz(8, 6))
-                .reg(8, 1)
-                .code(&[C(c_beqz(8, 6)), W(enc_i(0x13, 0, 9, 0, 99))])
-                .expect(9, 99),
-            Case::new("c.bnez taken")
-                .sc_c(ScAst::CBnez(8, 6))
-                .reg(8, 7)
-                .code(&[C(c_bnez(8, 6)), W(enc_i(0x13, 0, 9, 0, 99))])
-                .expect(9, 0),
-        ];
-        for c in cases {
-            check_case(c);
-        }
-    }
-
-    /// Compressed memory forms: softcore todo!() — ckb only.
-    #[test]
-    fn pin_compressed_mem() {
-        let cases = vec![
-            Case::new("c.lwsp +8").no_sc().mem(64).with_db(2)
-                .code(&[C(c_lwsp(8, 8))]).expect(8, 0xFFFF_FFFF_8B8A_8988),
-            Case::new("c.ldsp +16").no_sc().mem(64).with_db(2)
-                .code(&[C(c_ldsp(8, 16))]).expect(8, 0x9796_9594_9392_9190),
-            Case::new("c.swsp +12").no_sc().mem(64).with_db(2).reg(10, 0xAABB_CCDD)
-                .code(&[C(c_swsp(10, 12))])
-                .mem_at(12, 0xDD).mem_at(13, 0xCC).mem_at(14, 0xBB).mem_at(15, 0xAA),
-            Case::new("c.sdsp +24").no_sc().mem(64).with_db(2).reg(10, 0xAABB_CCDD_EEFF_0011)
-                .code(&[C(c_sdsp(10, 24))])
-                .mem_at(24, 0x11).mem_at(25, 0x00).mem_at(26, 0xFF).mem_at(27, 0xEE)
-                .mem_at(28, 0xDD).mem_at(29, 0xCC).mem_at(30, 0xBB).mem_at(31, 0xAA),
-            Case::new("c.lw 0(x10)").no_sc().mem(64).with_db(10)
-                .code(&[C(c_lw(9, 10, 0))]).expect(9, 0xFFFF_FFFF_8382_8180),
-            Case::new("c.ld 8(x10)").no_sc().mem(64).with_db(10)
-                .code(&[C(c_ld(9, 10, 8))]).expect(9, 0x8F8E_8D8C_8B8A_8988),
-            Case::new("c.sw 8(x10)").no_sc().mem(64).with_db(10).reg(9, 0x1234)
-                .code(&[C(c_sw(9, 10, 8))])
-                .mem_at(8, 0x34).mem_at(9, 0x12).mem_at(10, 0x00).mem_at(11, 0x00).mem_at(12, 0x8C),
-            Case::new("c.sd 8(x10)").no_sc().mem(64).with_db(10).reg(9, 0x1234)
-                .code(&[C(c_sd(9, 10, 8))])
-                .mem_at(8, 0x34).mem_at(9, 0x12).mem_at(10, 0x00).mem_at(16, 0x90),
-        ];
-        for c in cases {
-            check_case(c);
-        }
-    }
 }
+

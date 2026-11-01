@@ -13,12 +13,32 @@
 #[cfg(feature = "oracle")]
 use core::arch::global_asm;
 
+/// HALT ecall: a7=0, a0=exit, a1=output length. Spin afterwards so LLVM
+/// does not place canonical `unimp` on the fallthrough (`unimp` decodes
+/// as a one-cycle Trap).
+#[inline(never)]
+fn halt(exit: u64, out_len: u64) -> ! {
+    loop {
+        unsafe {
+            core::arch::asm!(
+                "ecall",
+                in("a0") exit,
+                in("a1") out_len,
+                in("a7") 0u64,
+            );
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn calc_entry(input_ptr: *const u8, input_len: u64, out_ptr: *mut u8, _out_cap: u64) -> u64 {
     let input = unsafe { core::slice::from_raw_parts(input_ptr, input_len as usize) };
     let mut out = unsafe { core::slice::from_raw_parts_mut(out_ptr, 32) };
     mix256(input, &mut out);
-    32 // container ABI: a0 = output length on return
+    #[cfg(not(feature = "oracle"))]
+    halt(0, 32);
+    #[cfg(feature = "oracle")]
+    { 32 }
 }
 
 #[cfg(feature = "oracle")]
@@ -107,5 +127,5 @@ fn mix256(input: &[u8], out: &mut [u8]) {
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
+    unsafe { core::arch::asm!("ebreak", options(noreturn)) }
 }

@@ -94,6 +94,36 @@ impl Func {
         self.func.pmdf = FuncArgvTypes::from_types(ret, params).unwrap();
         self
     }
+
+    pub fn rv64im_container(self, c: &crate::calc::container::CalcContainer) -> Ret<Self> {
+        let bytes = c.encode().map_err(|e| e.to_string())?;
+        self.rv64im_container_bytes(bytes)
+    }
+
+    pub fn rv64im_container_bytes(mut self, bytes: Vec<u8>) -> Ret<Self> {
+        let (c, used) =
+            crate::calc::container::CalcContainer::decode(&bytes).map_err(|e| e.to_string())?;
+        if used != bytes.len() {
+            return errf!("calc container trailing bytes");
+        }
+        let cap = crate::rt::SpaceCap::new(0);
+        if c.input_max as usize > cap.call_data_size {
+            return errf!("calcfunc input_max exceeds HVM call_data_size");
+        }
+        if c.output_max as usize > cap.value_size {
+            return errf!("calcfunc output_max exceeds HVM value_size");
+        }
+        crate::calc::verify::verify_container(&c).map_err(|e| e.to_string())?;
+        self.func.code_stuff.conf = Uint1::from(CodeConf::from_type(CodeType::RV64IM).raw());
+        self.func.code_stuff.data = BytesW2::from(bytes)?;
+        Ok(self)
+    }
+
+    pub fn rv64im_elf(self, elf: &[u8], mem_kib: u16, input_max: u16, output_max: u16) -> Ret<Self> {
+        let c = crate::calc::pack_elf(elf, mem_kib, input_max, output_max)
+            .map_err(|e| e.to_string())?;
+        self.rv64im_container(&c)
+    }
 }
 
 /// Contract tree being assembled by the FitSH compiler frontend.

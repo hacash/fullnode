@@ -8,7 +8,7 @@ use crate::Token::*;
 use sys::*;
 use sys::{errf, Ret};
 
-fn parse_type(state: &mut ParseState) -> Ret<Option<ValueTy>> {
+pub(super) fn parse_type(state: &mut ParseState) -> Ret<Option<ValueTy>> {
     if state.idx >= state.max {
         return Ok(None);
     }
@@ -148,6 +148,137 @@ fn raw_bytecode_function(body: &[Token]) -> Ret<Vec<u8>> {
     let codes = crate::rt::assemble_bytecode(&asm)?;
     crate::rt::verify_bytecodes(&codes).map_err(|e| e.to_string())?;
     Ok(codes)
+}
+
+fn parse_rv64im_param_type(state: &mut ParseState, name: &str) -> Ret<ValueTy> {
+    match parse_type(state)? {
+        Some(ValueTy::Bytes) => Ok(ValueTy::Bytes),
+        _ => errf!(
+            "rv64im function '{}' parameter type must be bytes",
+            name
+        ),
+    }
+}
+
+pub(super) fn parse_rv64im_function(state: &mut ParseState) -> Ret<(Func, String)> {
+    let Some(Identifier(name)) = state.current() else {
+        return errf!("expected rv64im function name");
+    };
+    let name = name.clone();
+    state.advance();
+
+    let mut param_types = Vec::new();
+    if matches!(state.current(), Some(Partition('('))) {
+        state.advance();
+        loop {
+            while matches!(state.current(), Some(Partition(','))) {
+                state.advance();
+            }
+            if matches!(state.current(), Some(Partition(')'))) {
+                state.advance();
+                break;
+            }
+            if state.idx >= state.max {
+                return errf!("args list not closed (missing ')')");
+            }
+            let Some(Identifier(_)) = state.current() else {
+                return errf!("expected arg name");
+            };
+            state.advance();
+            if param_types.len() >= crate::MAX_FUNC_PARAM_LEN {
+                return errf!(
+                    "rv64im function '{}' takes at most {} parameters",
+                    name,
+                    crate::MAX_FUNC_PARAM_LEN
+                );
+            }
+            if matches!(
+                state.current(),
+                Some(Keyword(KwTy::Colon)) | Some(Partition(':'))
+            ) {
+                state.advance();
+            } else {
+                return errf!("expected ':' after arg name");
+            }
+            param_types.push(parse_rv64im_param_type(state, &name)?);
+            if matches!(state.current(), Some(Partition(','))) {
+                state.advance();
+            }
+        }
+    }
+    match param_types.as_slice() {
+        [] | [ValueTy::Bytes] => {}
+        _ => {
+            return errf!(
+                "rv64im function '{}' params must be empty or one bytes",
+                name
+            );
+        }
+    }
+
+    if matches!(state.current(), Some(Keyword(KwTy::Arrow))) {
+        state.advance();
+        let mut wrapped = false;
+        if matches!(state.current(), Some(Partition('('))) {
+            state.advance();
+            wrapped = true;
+        }
+        let ty = parse_type(state)?;
+        if ty != Some(ValueTy::Bytes) {
+            return errf!("rv64im function '{}' return type must be bytes", name);
+        }
+        if wrapped {
+            state.eat_partition(')')?;
+        }
+    }
+
+    let raw_bytes = if matches!(state.current(), Some(Keyword(KwTy::Assign))) {
+        state.advance();
+        match state.current().cloned() {
+            Some(Bytes(bytes)) => {
+                state.advance();
+                bytes
+            }
+            Some(Identifier(const_name)) => {
+                state.advance();
+                let Some((_, node)) = state.consts.iter().find(|(n, _)| n == &const_name) else {
+                    return errf!("unknown const '{}'", const_name);
+                };
+                match crate::lang::ir_literal_value(node.as_ref())? {
+                    Some(crate::value::Value::Bytes(bytes)) => bytes,
+                    _ => return errf!("const '{}' is not bytes", const_name),
+                }
+            }
+            other => {
+                return errf!(
+                    "rv64im function '{}' requires bytes literal or const, got {:?}",
+                    name,
+                    other
+                );
+            }
+        }
+    } else {
+        state.external_rv64im.get(&name).cloned().ok_or_else(|| {
+            format!(
+                "rv64im function '{}' requires '= 0x...' container bytes or an external_rv64im entry",
+                name
+            )
+        })?
+    };
+
+    let mut func = Func::new(&name)?;
+    func = func.types(Some(ValueTy::Bytes), param_types);
+    func = if raw_bytes.starts_with(b"\x7fELF") {
+        func.rv64im_elf(
+            &raw_bytes,
+            crate::calc::container::CALC_MEM_KIB_MAX,
+            1024,
+            1024,
+        )?
+    } else {
+        func.rv64im_container_bytes(raw_bytes)?
+    };
+    Ok((func, name))
 }
 
 pub fn parse_function(state: &mut ParseState, consume_kw: bool) -> Ret<(Func, SourceMap, String)> {

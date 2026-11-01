@@ -1,6 +1,6 @@
 //! Real-kernel integration test for the calc interpreter.
 //!
-//! Runs the prebuilt rustc→RV64IMC kernel fixture (loop + table lookup +
+//! Runs the prebuilt rustc→RV64IM kernel fixture (loop + table lookup +
 //! multiply/divide mixing — a hash-style mixing workload) through the
 //! container verifier and interpreter, and compares the digest against the
 //! value cross-validated under qemu-riscv64-user and ckb-vm 0.24.13 in the
@@ -30,12 +30,14 @@ fn calckernel_fixture_digest_matches_oracles() {
     .expect("entry hex");
 
     let container = CalcContainer {
+        profile: vm::calc::CALC_PROFILE_RV64IM,
         abi: 1,
         mem_kib: 16,
         entry,
         code,
         rodata,
         init,
+        bss_len: 0,
         input_max: 64,
         output_max: 64,
     };

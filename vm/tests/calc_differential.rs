@@ -1,4 +1,4 @@
-//! Differential test: random RV64IMC programs run through the calc
+//! Differential test: random RV64IM programs run through the calc
 //! interpreter AND ckb-vm 0.24.13 (the production-proven oracle), both set
 //! up with the exact same container memory layout, entry registers and
 //! hash-ecall behavior. Any divergence in output, trap classification or
@@ -18,7 +18,12 @@ mod diff {
     use vm::calc::container::CalcContainer;
     use vm::calc::decode::decode_at;
     use vm::calc::interp::run;
-    use vm::calc::verify::verify_container;
+    fn verify_container(
+        c: &CalcContainer,
+    ) -> Result<vm::calc::verify::CalcModule, String> {
+        vm::calc::verify::verify_container_with(c, &vm::calc::CalcConfig::all_enabled())
+            .map_err(|e| format!("{e:?}"))
+    }
 
     // ---------------- deterministic PRNG (no rand crate) ----------------
     struct Rng(u64);
@@ -73,13 +78,12 @@ mod diff {
 
     // ---------------- program generation ----------------
     const MEM_KIB: u16 = 16;
-    // x18 (= 0x1000) region layout. Random body stores stay inside
+    // x18 (= 0x2000) region layout, above CODE_BASE so it never aliases
+    // the code image. Random body stores stay inside
     // [RND_OFF, RND_OFF + RND_LEN); every other slot is outside that range
     // so generated code can never corrupt the loop counter or the dump.
-    const RND_OFF: u64 = 0x000; // random load/store window (relative to x18)
-    const RND_LEN: u64 = 0x400; // 1 KiB
+    const RND_LEN: u64 = 0x400; // 1 KiB random load/store window at x18+0
     const COUNTER_OFF: u64 = 0x500; // loop counter slot (8 bytes, outside window)
-    const DUMP_OFF: u64 = 0x600; // register dump area (30*8 = 240 bytes)
     const EHASH_IN_OFF: u64 = 0x808; // ecall input (aligned, outside window)
     const EHASH_OUT_OFF: u64 = 0x880; // ecall digest output
 
@@ -96,7 +100,7 @@ mod diff {
         // absolute target region and set x18 from a0? a0 = input_base...
         // Instead: set x18 = 0x1000 (a fixed mid-memory address, far from
         // code/rodata and from the io/stack top regions) via lui+addi.
-        w.push(enc_u(0x37, 18, 0x1)); // lui x18, 1  -> x18 = 0x1000
+        w.push(enc_u(0x37, 18, 0x2)); // lui x18, 2  -> x18 = 0x2000 (above CODE_BASE)
         w.push(enc_r(0x33, 0, 0, 19, 12, 0)); // x19 = a2 (output base)
         // init counter
         let iterations = 1 + (rng.below(40) as u32);
@@ -108,9 +112,8 @@ mod diff {
             0u64, 1, 2, 0xFF, 0x7FFF_FFFF_FFFF_FFFF, 0x8000_0000_0000_0000,
             0xFFFF_FFFF_FFFF_FFFF, 0x9E37_79B9_7F4A_7C15, 0xDEAD_BEEF, 63, 64, 31, 32,
         ];
-        // Destination registers: x1 (ra) and x2 (sp) must stay intact for
-        // the harness (return address / stack), x18 is the scratch base and
-        // x19 the output base. Sources may use anything else.
+        // Destination registers: x2 (sp) must stay intact, x18 is the scratch
+        // base and x19 the output base. Sources may use anything else.
         let dst_pool: Vec<u8> = (3..=31).filter(|r| !matches!(r, 18 | 19)).collect();
         let src_pool: Vec<u8> = (1..=31).filter(|r| !matches!(r, 18 | 19)).collect();
         // valid RV64M W-forms on opcode 0x3B: (funct7, funct3)
@@ -143,9 +146,9 @@ mod diff {
             let rs1 = src_pool[rng.below(src_pool.len() as u64) as usize];
             let rs2 = src_pool[rng.below(src_pool.len() as u64) as usize];
             match rng.below(10) {
-                0 => w.push(enc_r(0x33, 0, (rng.below(8)) as u32, rd, rs1, rs2)),
-                1 => w.push(enc_r(0x33, 0x20, (if rng.below(2) == 0 { 0 } else { 5 }), rd, rs1, rs2)),
-                2 => w.push(enc_r(0x33, 1, (rng.below(8)) as u32, rd, rs1, rs2)), // M ext
+                0 => w.push(enc_r(0x33, 0, rng.below(8) as u32, rd, rs1, rs2)),
+                1 => w.push(enc_r(0x33, 0x20, if rng.below(2) == 0 { 0 } else { 5 }, rd, rs1, rs2)),
+                2 => w.push(enc_r(0x33, 1, rng.below(8) as u32, rd, rs1, rs2)), // M ext
                 3 => {
                     let (f7, f3) = W_OPS[rng.below(W_OPS.len() as u64) as usize];
                     w.push(enc_r(0x3B, f7, f3, rd, rs1, rs2));
@@ -221,8 +224,10 @@ mod diff {
             w.push(enc_s(3, 19, reg, (8 * dumped) as i32));
             dumped += 1;
         }
-        w.push(enc_i(0x13, 0, 10, 0, (dumped * 8) as i32)); // a0 = dump len
-        w.push(0x0000_8067); // ret (jalr x0, 0(x1))
+        w.push(enc_i(0x13, 0, 11, 0, (dumped * 8) as i32)); // a1 = dump len
+        w.push(enc_i(0x13, 0, 10, 0, 0)); // a0 = exit 0
+        w.push(enc_i(0x13, 0, 17, 0, 0)); // a7 = HALT
+        w.push(0x0000_0073); // ecall
 
         // assemble to bytes and patch the bne offset
         let mut code = Vec::with_capacity(w.len() * 4);
@@ -243,13 +248,29 @@ mod diff {
     }
 
     // ---------------- ckb-vm oracle ----------------
-    struct HashEcall;
+    struct HashEcall {
+        halted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        out_len: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    }
+    impl HashEcall {
+        fn new() -> Self {
+            Self {
+                halted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                out_len: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            }
+        }
+    }
     impl Syscalls<Core> for HashEcall {
         fn initialize(&mut self, _m: &mut Core) -> Result<(), ckb_vm::Error> {
             Ok(())
         }
         fn ecall(&mut self, m: &mut Core) -> Result<bool, ckb_vm::Error> {
             let a7 = m.registers()[17];
+            if a7 == vm::calc::ECALL_HALT {
+                self.halted.store(true, std::sync::atomic::Ordering::SeqCst);
+                self.out_len.store(m.registers()[11], std::sync::atomic::Ordering::SeqCst);
+                return Ok(true);
+            }
             if let Some(kind) = vm::calc::HashKind::from_a7(a7) {
                 let src = m.registers()[10];
                 let len = m.registers()[11];
@@ -279,14 +300,17 @@ mod diff {
             u64::MAX,
             lay.mem_len as usize,
         );
+        let sys = HashEcall::new();
+        let halted = sys.halted.clone();
+        let out_len = sys.out_len.clone();
         let mut machine = DefaultMachineBuilder::new(core)
             .instruction_cycle_func(Box::new(|_: u64| -> u64 { 1 }))
-            .syscall(Box::new(HashEcall))
+            .syscall(Box::new(sys))
             .build();
         {
             use ckb_vm::Memory as _;
             let m = machine.memory_mut();
-            m.store_bytes(0, &c.code).unwrap();
+            m.store_bytes(vm::calc::CALC_CODE_BASE, &c.code).unwrap();
             m.store_bytes(lay.rodata_base, &c.rodata).unwrap();
             m.store_bytes(lay.data_base, &c.init).unwrap();
             m.store_bytes(lay.input_base, input).unwrap();
@@ -296,14 +320,12 @@ mod diff {
         machine.set_register(12, lay.output_base);
         machine.set_register(13, lay.output_max);
         machine.set_register(2, lay.stack_top);
-        machine.set_register(1, vm::calc::CALC_RETURN_SENTINEL);
         machine.update_pc(c.entry as u64);
         machine.commit_pc();
         let mut decoder = ckb_vm::decoder::build_decoder::<u64>(machine.isa(), machine.version());
-        let sentinel = vm::calc::CALC_RETURN_SENTINEL;
         loop {
-            if *machine.pc() == sentinel {
-                let n = machine.registers()[10];
+            if halted.load(std::sync::atomic::Ordering::SeqCst) {
+                let n = out_len.load(std::sync::atomic::Ordering::SeqCst);
                 if n > lay.output_max {
                     return Err("output overflow".into());
                 }
@@ -322,12 +344,14 @@ mod diff {
     fn diff_one(rng: &mut Rng, idx: u64) -> Result<(), String> {
         let prog = gen_program(rng, idx);
         let container = CalcContainer {
+            profile: vm::calc::CALC_PROFILE_RV64IM,
             abi: 1,
             mem_kib: MEM_KIB,
-            entry: 0,
+            entry: vm::calc::CALC_CODE_BASE as u32,
             code: prog.code.clone(),
             rodata: vec![],
             init: vec![],
+            bss_len: 0,
             input_max: 512,
             output_max: 512,
         };
@@ -422,7 +446,7 @@ mod diff {
             // verify that the directed ops themselves agree — here we just
             // run the body as a one-iteration program.
             let mut w: Vec<u32> = vec![
-                enc_u(0x37, 18, 0x1), // x18 = 0x1000 (scratch)
+                enc_u(0x37, 18, 0x2), // x18 = 0x2000 (scratch above CODE_BASE)
                 enc_r(0x33, 0, 0, 19, 12, 0), // x19 = a2 (output base)
             ];
             w.extend_from_slice(body);
@@ -430,19 +454,23 @@ mod diff {
             for reg in 5u8..=10u8 {
                 w.push(enc_s(3, 19, reg, (8 * (reg as u64 - 5)) as i32));
             }
-            w.push(enc_i(0x13, 0, 10, 0, 48));
-            w.push(0x0000_8067);
+            w.push(enc_i(0x13, 0, 11, 0, 48)); // a1 = dump len
+            w.push(enc_i(0x13, 0, 10, 0, 0)); // a0 = exit 0
+            w.push(enc_i(0x13, 0, 17, 0, 0)); // a7 = HALT
+            w.push(0x0000_0073);
             let code: Vec<u8> = w.iter().flat_map(|i| i.to_le_bytes()).collect();
             if std::env::var("CALC_DBG").is_ok() {
                 eprintln!("case {ci} words: {:?}", w.iter().map(|x| format!("{x:08x}")).collect::<Vec<_>>());
             }
             let container = CalcContainer {
+                profile: vm::calc::CALC_PROFILE_RV64IM,
                 abi: 1,
                 mem_kib: MEM_KIB,
-                entry: 0,
+                entry: vm::calc::CALC_CODE_BASE as u32,
                 code,
                 rodata: vec![],
                 init: vec![],
+                bss_len: 0,
                 input_max: 4096,
                 output_max: 4096,
             };
@@ -479,7 +507,7 @@ mod diff {
             let prog = gen_program(&mut rng, 0);
             let mut off = 0;
             while off < prog.code.len() {
-                let (_, len) = decode_at(&prog.code, off).expect("whitelisted");
+                let (_, len) = decode_at(&prog.code, off, vm::calc::CALC_PROFILE_RV64IM).expect("whitelisted");
                 off += len as usize;
             }
         }

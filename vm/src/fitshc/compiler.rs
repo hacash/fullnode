@@ -14,10 +14,16 @@ pub type FitshCompileOutput = (
     String,
 );
 
-pub fn compile_with_warnings(code: &str) -> Ret<(FitshCompileOutput, Vec<String>)> {
+pub fn compile_with_rv64im_and_warnings(
+    code: &str,
+    external_rv64im: &[(&str, Vec<u8>)],
+) -> Ret<(FitshCompileOutput, Vec<String>)> {
     let tkr = Tokenizer::new(code.as_bytes());
     let tokens = tkr.parse().map_err(|e| e.to_string())?;
     let mut state = ParseState::new(tokens);
+    for (name, bytes) in external_rv64im {
+        state.external_rv64im.insert((*name).to_string(), bytes.clone());
+    }
 
     parse_top_level(&mut state)?;
     if state.idx != state.max {
@@ -37,6 +43,18 @@ pub fn compile_with_warnings(code: &str) -> Ret<(FitshCompileOutput, Vec<String>
         ),
         warnings,
     ))
+}
+
+pub fn compile_with_warnings(code: &str) -> Ret<(FitshCompileOutput, Vec<String>)> {
+    compile_with_rv64im_and_warnings(code, &[])
+}
+
+pub fn compile_with_rv64im(
+    code: &str,
+    external_rv64im: &[(&str, Vec<u8>)],
+) -> Ret<FitshCompileOutput> {
+    let (output, _) = compile_with_rv64im_and_warnings(code, external_rv64im)?;
+    Ok(output)
 }
 
 pub fn compile(code: &str) -> Ret<FitshCompileOutput> {
@@ -303,4 +321,338 @@ contract PermitProbe {
             crate::fitshc::compile(&src).unwrap_or_else(|e| panic!("{modifier}: {e}"));
         }
     }
+
+    fn echo8_container_bytes() -> Vec<u8> {
+        use crate::calc::container::{CalcContainer, CALC_ABI_BYTES_TO_BYTES};
+        let addi = |rd: u8, imm: i32| -> [u8; 4] {
+            (0x13u32 | ((rd as u32) << 7) | (((imm as u32) & 0xFFF) << 20)).to_le_bytes()
+        };
+        let mut code = vec![0x83, 0x42, 0x05, 0x00, 0x23, 0x30, 0x56, 0x00];
+        code.extend_from_slice(&addi(10, 0));
+        code.extend_from_slice(&addi(11, 8));
+        code.extend_from_slice(&addi(17, 0));
+        code.extend_from_slice(&0x0000_0073u32.to_le_bytes());
+        CalcContainer {
+            profile: crate::calc::CALC_PROFILE_RV64IM,
+            abi: CALC_ABI_BYTES_TO_BYTES,
+            mem_kib: 8,
+            entry: crate::calc::CALC_CODE_BASE as u32,
+            code,
+            rodata: vec![],
+            init: vec![],
+            bss_len: 0,
+            input_max: 128,
+            output_max: 128,
+        }
+        .encode()
+        .unwrap()
+    }
+
+    fn halt_text() -> Vec<u8> {
+        let mut c = Vec::new();
+        for w in [0x0000_0513u32, 0x0000_0593, 0x0000_0893, 0x0000_0073] {
+            c.extend_from_slice(&w.to_le_bytes());
+        }
+        c
+    }
+
+    /// Minimal ELF64 LE RISC-V with `calc_entry` at `CODE_BASE`.
+    fn synth_elf() -> Vec<u8> {
+        let text = halt_text();
+        let code_len = text.len() as u64;
+        let data_base = {
+            let ro = (crate::calc::container::CODE_BASE + code_len + 15) & !15;
+            (ro + 15) & !15
+        };
+        let shstr = b"\0.text\0.bss\0.symtab\0.strtab\0.shstrtab\0";
+        let strtab = b"\0calc_entry\0";
+        let mut sym = vec![0u8; 24];
+        sym.extend_from_slice(&1u32.to_le_bytes());
+        sym.extend_from_slice(&[0x12, 0]);
+        sym.extend_from_slice(&1u16.to_le_bytes());
+        sym.extend_from_slice(&crate::calc::container::CODE_BASE.to_le_bytes());
+        sym.extend_from_slice(&0u64.to_le_bytes());
+
+        let mut body = vec![0u8; 64];
+        let text_off = body.len() as u64;
+        body.extend_from_slice(&text);
+        let str_off = body.len() as u64;
+        body.extend_from_slice(strtab);
+        let sym_off = body.len() as u64;
+        body.extend_from_slice(&sym);
+        let shstr_off = body.len() as u64;
+        body.extend_from_slice(shstr);
+        let shoff = body.len() as u64;
+
+        let mut sh = |name: u32, typ: u32, flags: u64, addr: u64, off: u64, size: u64, link: u32, entsize: u64| {
+            let mut h = Vec::new();
+            h.extend_from_slice(&name.to_le_bytes());
+            h.extend_from_slice(&typ.to_le_bytes());
+            h.extend_from_slice(&flags.to_le_bytes());
+            h.extend_from_slice(&addr.to_le_bytes());
+            h.extend_from_slice(&off.to_le_bytes());
+            h.extend_from_slice(&size.to_le_bytes());
+            h.extend_from_slice(&link.to_le_bytes());
+            h.extend_from_slice(&0u32.to_le_bytes());
+            h.extend_from_slice(&4u64.to_le_bytes());
+            h.extend_from_slice(&entsize.to_le_bytes());
+            body.extend_from_slice(&h);
+        };
+        sh(0, 0, 0, 0, 0, 0, 0, 0);
+        sh(1, 1, 6, crate::calc::container::CODE_BASE, text_off, text.len() as u64, 0, 0);
+        sh(7, 8, 3, data_base, 0, 16, 0, 0);
+        sh(12, 2, 0, 0, sym_off, sym.len() as u64, 4, 24);
+        sh(20, 3, 0, 0, str_off, strtab.len() as u64, 0, 0);
+        sh(28, 3, 0, 0, shstr_off, shstr.len() as u64, 0, 0);
+
+        body[0..4].copy_from_slice(b"\x7fELF");
+        body[4] = 2;
+        body[5] = 1;
+        body[6] = 1;
+        body[16..18].copy_from_slice(&2u16.to_le_bytes());
+        body[18..20].copy_from_slice(&243u16.to_le_bytes());
+        body[20..24].copy_from_slice(&1u32.to_le_bytes());
+        body[24..32].copy_from_slice(&0u64.to_le_bytes());
+        body[40..48].copy_from_slice(&shoff.to_le_bytes());
+        body[52..54].copy_from_slice(&64u16.to_le_bytes());
+        body[58..60].copy_from_slice(&64u16.to_le_bytes());
+        body[60..62].copy_from_slice(&6u16.to_le_bytes());
+        body[62..64].copy_from_slice(&5u16.to_le_bytes());
+        body
+    }
+
+    fn user_code(sto: &crate::contract::ContractSto, name: &str) -> Vec<u8> {
+        sto.userfuncs
+            .iter()
+            .find(|f| f.sign.0 == crate::rt::calc_func_sign(name))
+            .unwrap_or_else(|| panic!("missing {name}"))
+            .code_stuff
+            .data
+            .to_vec()
+    }
+
+    fn has_callselfpure(code: &[u8]) -> bool {
+        let mut needle = vec![crate::rt::Bytecode::CALLSELFPURE as u8];
+        needle.extend_from_slice(&crate::rt::calc_func_sign("echo8"));
+        code.windows(needle.len()).any(|w| w == needle.as_slice())
+    }
+
+    fn roundtrip_lang(src: &str) {
+        let ir = crate::lang::lang_to_irnode(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+        let back = crate::lang::irnode_to_lang(ir).unwrap_or_else(|e| panic!("decompile {src}: {e}"));
+        let ir2 = crate::lang::lang_to_irnode(&back).unwrap_or_else(|e| panic!("recompile {back}: {e}"));
+        let back2 = crate::lang::irnode_to_lang(ir2).unwrap_or_else(|e| panic!("decompile again: {e}"));
+        assert_eq!(back, back2, "src={src}");
+        assert!(
+            back.contains("self::echo8") || back.contains("call pure self.echo8") || back.contains("call pure self.0x"),
+            "decompiled: {back}"
+        );
+    }
+
+    #[test]
+    fn pure_calc_calls_compile_to_callselfpure_and_roundtrip() {
+        let blob = format!("0x{}", hex::encode(echo8_container_bytes()));
+        let src = format!(
+            r#"
+pragma fitsh 1.0.0
+contract Echo {{
+    const IMG = {blob}
+    function rv64im echo8(data: bytes) -> bytes = IMG
+    function external direct(x: bytes) -> bytes {{ return self::echo8(x) }}
+    function external joined(a: bytes, b: bytes) -> bytes {{ return self::echo8(a ++ b) }}
+    function external generic(x: bytes) -> bytes {{ return call pure self.echo8(x) }}
+}}
+"#
+        );
+        let (contract, _, _, _) = crate::fitshc::compile(&src).expect("pure calc calls");
+        let sto = contract.into_sto();
+        assert_eq!(sto.calcfuncs.length(), 0);
+        let echo = sto
+            .userfuncs
+            .iter()
+            .find(|f| f.sign.0 == crate::rt::calc_func_sign("echo8"))
+            .expect("echo8 userfunc");
+        assert_eq!(echo.code_stuff.conf.uint(), crate::rt::CodeType::RV64IM as u8);
+        let (c, _) = crate::calc::container::CalcContainer::decode(&echo.code_stuff.data)
+            .expect("echo8 container");
+        assert_eq!(c.abi, crate::calc::CALC_ABI_BYTES_TO_BYTES);
+        let direct = user_code(&sto, "direct");
+        assert!(has_callselfpure(&direct), "missing CALLSELFPURE: {direct:?}");
+        assert_eq!(direct, user_code(&sto, "generic"));
+        let joined = user_code(&sto, "joined");
+        assert!(has_callselfpure(&joined), "missing CALLSELFPURE: {joined:?}");
+        assert!(joined.windows(1).any(|w| w == [crate::rt::Bytecode::CAT as u8]));
+        roundtrip_lang("return self::echo8(0x01)");
+        roundtrip_lang("return self::echo8(0x01 ++ 0x02)");
+        roundtrip_lang("return call pure self.echo8(0x01)");
+
+        let bare = format!(
+            r#"
+pragma fitsh 1.0.0
+contract Echo {{
+    function rv64im echo8(data: bytes) -> bytes = {blob}
+    function external bare(x: bytes) -> bytes {{ return echo8(x) }}
+}}
+"#
+        );
+        let err = match crate::fitshc::compile(&bare) {
+            Ok(_) => panic!("bare calc name must be rejected"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("unknown function 'echo8'"), "err={err}");
+    }
+
+    #[test]
+    fn compile_with_rv64im_injects_container_and_elf() {
+        let src = r#"
+pragma fitsh 1.0.0
+contract Ext {
+    function rv64im echo8(data: bytes) -> bytes
+    function rv64im haltkern()
+    function external probe(x: bytes) -> bytes { return self::echo8(x) }
+}
+"#;
+        let (contract, _, _, _) = crate::fitshc::compile_with_rv64im(
+            src,
+            &[
+                ("echo8", echo8_container_bytes()),
+                ("haltkern", synth_elf()),
+            ],
+        )
+        .expect("external calcs");
+        let sto = contract.into_sto();
+        assert_eq!(sto.calcfuncs.length(), 0);
+        let echo = sto
+            .userfuncs
+            .iter()
+            .find(|f| f.sign.0 == crate::rt::calc_func_sign("echo8"))
+            .expect("echo8");
+        let halt = sto
+            .userfuncs
+            .iter()
+            .find(|f| f.sign.0 == crate::rt::calc_func_sign("haltkern"))
+            .expect("haltkern");
+        assert_eq!(echo.code_stuff.conf.uint(), crate::rt::CodeType::RV64IM as u8);
+        assert_eq!(halt.code_stuff.conf.uint(), crate::rt::CodeType::RV64IM as u8);
+        let (c, used) = crate::calc::container::CalcContainer::decode(&halt.code_stuff.data)
+            .expect("elf packed");
+        assert_eq!(used, halt.code_stuff.data.len());
+        assert_eq!(c.entry, crate::calc::CALC_CODE_BASE as u32);
+        assert_eq!(c.code, halt_text());
+        assert_eq!(c.mem_kib, crate::calc::container::CALC_MEM_KIB_MAX);
+        assert_eq!((c.input_max, c.output_max), (1024, 1024));
+    }
+
+    #[test]
+    fn function_rv64im_compiles_container() {
+        let blob = format!("0x{}", hex::encode(echo8_container_bytes()));
+        let item = format!("function rv64im echo8(data: bytes) -> bytes = {blob}");
+        let src = format!("pragma fitsh 1.0.0\ncontract Echo {{\n    {item}\n}}\n");
+        let (contract, _, _, _) =
+            crate::fitshc::compile(&src).unwrap_or_else(|e| panic!("{item}: {e}"));
+        let sto = contract.into_sto();
+        let echo = sto
+            .userfuncs
+            .iter()
+            .find(|f| f.sign.0 == crate::rt::calc_func_sign("echo8"))
+            .expect("echo8");
+        assert_eq!(echo.code_stuff.conf.uint(), crate::rt::CodeType::RV64IM as u8);
+        assert_eq!(echo.code_stuff.conf.uint(), 2);
+        assert_eq!(echo.code_stuff.data.to_vec(), echo8_container_bytes());
+        for rejected in [
+            format!("rv64im echo8(data: bytes) -> bytes = {blob}"),
+            format!("function calc echo8(data: bytes) -> bytes = {blob}"),
+            format!("calc echo8(data: bytes) -> bytes = {blob}"),
+        ] {
+            let src = format!("pragma fitsh 1.0.0\ncontract Echo {{\n    {rejected}\n}}\n");
+            assert!(
+                crate::fitshc::compile(&src).is_err(),
+                "accepted shorthand: {rejected}"
+            );
+        }
+    }
+
+    #[test]
+    fn calc_declaration_rejects_bad_signatures_and_payloads() {
+        let blob = format!("0x{}", hex::encode(echo8_container_bytes()));
+        let cases = [
+            (
+                format!(
+                    "pragma fitsh 1.0.0\ncontract D {{\n    function rv64im echo8(data: bytes) -> bytes = {blob}\n    function rv64im echo8(data: bytes) -> bytes = {blob}\n}}\n"
+                ),
+                "duplicate rv64im function",
+            ),
+            (
+                format!(
+                    "pragma fitsh 1.0.0\ncontract D {{\n    function rv64im echo8(data: bytes) -> bytes = {blob}\n    function echo8() {{}}\n}}\n"
+                ),
+                    "duplicate function",
+            ),
+            (
+                format!(
+                    "pragma fitsh 1.0.0\ncontract D {{\n    function echo8() {{}}\n    function rv64im echo8(data: bytes) -> bytes = {blob}\n}}\n"
+                ),
+                "duplicate rv64im function",
+            ),
+            (
+                format!(
+                    "pragma fitsh 1.0.0\ncontract D {{\n    function rv64im bad(n: map) -> bytes = {blob}\n}}\n"
+                ),
+                "parameter type must be bytes",
+            ),
+            (
+                format!(
+                    "pragma fitsh 1.0.0\ncontract D {{\n    function rv64im bad(n: tuple) -> bytes = {blob}\n}}\n"
+                ),
+                "parameter type must be bytes",
+            ),
+            (
+                format!(
+                    "pragma fitsh 1.0.0\ncontract D {{\n    function rv64im ok(a: bytes, b: bytes) -> bytes = {blob}\n}}\n"
+                ),
+                "params must be empty or one bytes",
+            ),
+            (
+                format!(
+                    "pragma fitsh 1.0.0\ncontract D {{\n    function rv64im chunks(chunks: list) -> bytes = {blob}\n}}\n"
+                ),
+                "parameter type must be bytes",
+            ),
+            (
+                format!(
+                    "pragma fitsh 1.0.0\ncontract D {{\n    function rv64im wide(n: u64, a: bytes) -> bytes = {blob}\n}}\n"
+                ),
+                "parameter type must be bytes",
+            ),
+            (
+                format!(
+                    "pragma fitsh 1.0.0\ncontract D {{\n    function rv64im bad(n: bytes) -> u64 = {blob}\n}}\n"
+                ),
+                "return type must be bytes",
+            ),
+            (
+                "pragma fitsh 1.0.0\ncontract D {\n    function rv64im bad(n: bytes) -> bytes = 0xff\n}\n"
+                    .to_string(),
+                "calc container",
+            ),
+            (
+                "pragma fitsh 1.0.0\ncontract D {\n    function rv64im Echo(n: bytes) -> bytes = 0xff\n}\n"
+                    .to_string(),
+                "cannot start with uppercase",
+            ),
+            (
+                "pragma fitsh 1.0.0\ncontract D {\n    function rv64im missing(n: bytes) -> bytes\n}\n"
+                    .to_string(),
+                "external_rv64im",
+            ),
+        ];
+        for (src, needle) in cases {
+            let err = match crate::fitshc::compile(&src) {
+                Ok(_) => panic!("expected error containing {needle}: {src}"),
+                Err(err) => err.to_string(),
+            };
+            assert!(err.contains(needle), "err={err} needle={needle} src={src}");
+        }
+    }
+
 }

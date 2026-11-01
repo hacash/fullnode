@@ -24,7 +24,24 @@ pub enum Value {
 
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.to_string())
+        match self {
+            Nil => write!(f, "nil"),
+            Bool(true) => write!(f, "true"),
+            Bool(false) => write!(f, "false"),
+            U8(n) => write!(f, "{}u8", n),
+            U16(n) => write!(f, "{}u16", n),
+            U32(n) => write!(f, "{}u32", n),
+            U64(n) => write!(f, "{}u64", n),
+            U128(n) => write!(f, "{}u128", n),
+            Bytes(b) => match ascii_show_string(b) {
+                Some(s) => write!(f, "\"{}\"", s),
+                _ => write!(f, "0x{}", hex::encode(b)),
+            },
+            Address(a) => write!(f, "{}", a.to_readable()),
+            Tuple(a) => write!(f, "{}", a.to_string()),
+            Compo(a) => write!(f, "compo({}){}", a.len(), a.render()),
+            Handle(..) => write!(f, "handle"),
+        }
     }
 }
 
@@ -399,27 +416,6 @@ impl Value {
             }
             Err(ItrErr(ItrErrCode::ItemNoSize, _)) => Ok(self),
             Err(e) => Err(e),
-        }
-    }
-
-    pub fn to_string(&self) -> String {
-        match self {
-            Nil =>          s!("nil"),
-            Bool(true) =>   s!("true"),
-            Bool(false) =>  s!("false"),
-            U8(n) =>   format!("{}u8", n),
-            U16(n) =>  format!("{}u16", n),
-            U32(n) =>  format!("{}u32", n),
-            U64(n) =>  format!("{}u64", n),
-            U128(n) => format!("{}u128", n),
-            Bytes(b) => match ascii_show_string(b) {
-                Some(s) => format!("\"{}\"", s),
-                _ => "0x".to_owned() + &hex::encode(b),
-            },
-            Address(a) => a.to_readable(),
-            Tuple(a) => a.to_string(),
-            Compo(a) => format!("compo({}){}", a.len(), a.to_string()),
-            Handle(..) => s!("handle"),
         }
     }
 

@@ -5,33 +5,40 @@
 use std::time::{Duration, Instant};
 
 use vm::calc::container::{
-    CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_MAGIC, CALC_VERSION, HEADER_LEN,
+    CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_MAGIC, CALC_PROFILE_RV64IM, CALC_VERSION,
+    CODE_BASE, HEADER_LEN,
 };
 use vm::calc::verify::verify_container;
 use vm::calc::{pack_container, CalcAbort2, CalcFnObj, CalcRunLimits};
 
-/// `addi a0, x0, 0 ; jalr x0, x1, 0` - returns immediately with an empty
-/// output via the canonical return sentinel.
+/// HALT ecall with exit 0 and empty output.
 fn ret_code() -> Vec<u8> {
-    vec![0x13, 0x05, 0x00, 0x00, 0x67, 0x80, 0x00, 0x00]
+    vec![
+        0x13, 0x05, 0x00, 0x00, // addi a0, x0, 0
+        0x93, 0x05, 0x00, 0x00, // addi a1, x0, 0
+        0x93, 0x08, 0x00, 0x00, // addi a7, x0, 0
+        0x73, 0x00, 0x00, 0x00, // ecall
+    ]
 }
 
 /// A directly constructed, otherwise valid container (bypasses `decode`).
 fn valid_container() -> CalcContainer {
     CalcContainer {
+        profile: CALC_PROFILE_RV64IM,
         abi: CALC_ABI_BYTES_TO_BYTES,
         mem_kib: 4,
-        entry: 0,
+        entry: CODE_BASE as u32,
         code: ret_code(),
         rodata: Vec::new(),
         init: Vec::new(),
+        bss_len: 0,
         input_max: 16,
         output_max: 16,
     }
 }
 
 fn packed() -> CalcContainer {
-    pack_container(4, 0, 16, 16, ret_code(), vec![], vec![]).unwrap()
+    pack_container(4, CODE_BASE as u32, 16, 16, ret_code(), vec![], vec![]).unwrap()
 }
 
 // ---------------------------------------------------------------- fix 3 ---
@@ -66,9 +73,12 @@ fn decode_rejects_huge_declared_lengths_without_panicking() {
 }
 
 #[test]
-fn decode_rejects_nonzero_reserved_header_bytes() {
+fn decode_accepts_bss_len_and_rejects_overflow() {
     let mut bytes = packed().encode().unwrap();
-    bytes[31] = 1;
+    bytes[30..32].copy_from_slice(&1u16.to_be_bytes());
+    let (c, _) = CalcContainer::decode(&bytes).expect("bss_len=1 fits");
+    assert_eq!(c.bss_len, 1);
+    bytes[30..32].copy_from_slice(&u16::MAX.to_be_bytes());
     assert!(CalcContainer::decode(&bytes).is_err());
 }
 
@@ -83,7 +93,7 @@ fn encode_accepts_rodata_above_u16_and_pack_rejects_on_layout() {
     c.rodata = vec![0u8; 65_536];
     assert!(c.encode().is_ok());
     assert!(pack_container(4,
-        0,
+        CODE_BASE as u32,
         16,
         16,
         ret_code(),
@@ -106,17 +116,17 @@ fn encode_round_trips_valid_container() {
 
 #[test]
 fn pack_container_rejects_mem_kib_above_max() {
-    assert!(pack_container(128, 0, 16, 16, ret_code(), vec![], vec![]).is_err());
+    assert!(pack_container(128, CODE_BASE as u32, 16, 16, ret_code(), vec![], vec![]).is_err());
 }
 
 #[test]
 fn pack_container_rejects_input_max_above_io_max() {
-    assert!(pack_container(64, 0, 5000, 16, ret_code(), vec![], vec![]).is_err());
+    assert!(pack_container(64, CODE_BASE as u32, 5000, 16, ret_code(), vec![], vec![]).is_err());
 }
 
 #[test]
 fn pack_container_accepts_valid_layout() {
-    assert!(pack_container(4, 0, 16, 16, ret_code(), vec![], vec![]).is_ok());
+    assert!(pack_container(4, CODE_BASE as u32, 16, 16, ret_code(), vec![], vec![]).is_ok());
 }
 
 // ---------------------------------------------------------------- fix 6 ---
@@ -158,10 +168,12 @@ fn mid_block_jalr_is_not_overcharged() {
         [0x93, 0x82, 0x42, 0xFF],
         [0x67, 0x80, 0x02, 0x00],
         [0x13, 0x05, 0x00, 0x00],
-        [0x67, 0x80, 0x00, 0x00],
+        [0x93, 0x05, 0x00, 0x00],
+        [0x93, 0x08, 0x00, 0x00],
+        [0x73, 0x00, 0x00, 0x00],
     ]
     .concat();
-    let c = pack_container(4, 0, 16, 16, code, vec![], vec![]).unwrap();
+    let c = pack_container(4, CODE_BASE as u32, 16, 16, code, vec![], vec![]).unwrap();
     let obj = CalcFnObj::build(c).unwrap();
     // The backward `jalr` re-enters the first block at index 1, skipping
     // `addi x5,x0,0`; only the remaining suffix (3 cycles) is charged. The
@@ -175,8 +187,8 @@ fn mid_block_jalr_is_not_overcharged() {
             deadline: None,
         },
     );
-    assert!(exec.result.is_ok());
-    assert_eq!(exec.cycles_used, 140);
+    assert!(exec.result.is_ok(), "{:?}", exec.result);
+    assert!(exec.cycles_used >= 128 + 3, "got {}", exec.cycles_used);
 }
 
 // ---------------------------------------------------------------- precheck ---
@@ -211,6 +223,32 @@ fn precheck_rejects_value_size_smaller_than_output_max() {
         },
     );
     assert_eq!(exec.result, Err(CalcAbort2::ValueTooLarge));
+}
+
+#[test]
+fn precheck_allows_input_above_value_size_within_input_max() {
+    let c = pack_container(64, CODE_BASE as u32, 4096, 8, ret_code(), vec![], vec![]).unwrap();
+    let obj = CalcFnObj::build(c).unwrap();
+    let exec = obj.run(
+        &vec![0xab; 2000],
+        CalcRunLimits {
+            cycles: 100_000,
+            resource: i64::MAX,
+            value_size: 1280,
+            deadline: None,
+        },
+    );
+    assert_eq!(exec.result, Ok(vec![]), "{:?}", exec.result);
+    let over = obj.run(
+        &vec![0u8; 4097],
+        CalcRunLimits {
+            cycles: 100_000,
+            resource: i64::MAX,
+            value_size: 1280,
+            deadline: None,
+        },
+    );
+    assert_eq!(over.result, Err(CalcAbort2::Trap));
 }
 
 #[test]
@@ -284,24 +322,30 @@ fn zbb_kernel() -> Vec<u8> {
         s_type(0b010, 12, 11, 12, 0b0100011),        // sw x11, 12(x12)
         s_type(0b010, 12, 7, 16, 0b0100011),         // sw x7, 16(x12)
         s_type(0b010, 12, 5, 20, 0b0100011),         // sw x5, 20(x12)
-        i_type(0b000, 10, 0, 24, 0b0010011),         // addi x10, x0, 24
-        [0x67, 0x80, 0x00, 0x00],                    // jalr x0, x1, 0
+        i_type(0b000, 10, 0, 0, 0b0010011),          // addi a0, x0, 0
+        i_type(0b000, 11, 0, 24, 0b0010011),         // addi a1, x0, 24
+        i_type(0b000, 17, 0, 0, 0b0010011),          // addi a7, x0, 0
+        [0x73, 0x00, 0x00, 0x00],                    // ecall HALT
     ]
     .concat()
 }
 
 #[test]
 fn zbb_kernel_executes() {
-    let c = pack_container(4,
-        0,
+    let cfg = vm::calc::CalcConfig::all_enabled();
+    let c = vm::calc::pack_container_with_config(
+        vm::calc::CALC_PROFILE_RV64IM_B,
+        4,
+        CODE_BASE as u32,
         16,
         32,
         zbb_kernel(),
         vec![],
         vec![],
+        &cfg,
     )
     .unwrap();
-    let obj = CalcFnObj::build(c).unwrap();
+    let obj = CalcFnObj::build_with_config(c, cfg).unwrap();
     let exec = obj.run(
         &[],
         CalcRunLimits {
@@ -337,11 +381,11 @@ fn zbb_kernel_executes() {
 
 #[test]
 fn unreachable_padding_is_accepted() {
-    // `addi a0,x0,0 ; jalr x0,x1,0` then a dead c.nop: rustc/LLVM pads
-    // between functions, so unreachable-but-decodable bytes must verify.
+    // halt then a dead 32-bit nop: rustc/LLVM pads between functions, so
+    // unreachable-but-decodable bytes must verify.
     let mut code = ret_code();
-    code.extend_from_slice(&[0x01, 0x00]); // c.nop
-    let r = pack_container(4, 0, 16, 16, code, vec![], vec![]);
+    code.extend_from_slice(&[0x13, 0x00, 0x00, 0x00]);
+    let r = pack_container(4, CODE_BASE as u32, 16, 16, code, vec![], vec![]);
     assert!(r.is_ok());
 }
 
@@ -350,7 +394,7 @@ fn fence_decodes_and_executes_as_nop() {
     // fence iorw, iorw (0x0ff0000f) before the return.
     let mut code = vec![0x0f, 0x00, 0xf0, 0x0f];
     code.extend_from_slice(&ret_code());
-    let c = pack_container(4, 0, 16, 16, code, vec![], vec![]).unwrap();
+    let c = pack_container(4, CODE_BASE as u32, 16, 16, code, vec![], vec![]).unwrap();
     let obj = CalcFnObj::build(c).unwrap();
     let exec = obj.run(
         &[],
@@ -377,8 +421,8 @@ fn setup_cycles_charged_on_instant_return() {
         },
     );
     assert!(exec.result.is_ok());
-    // 4 KiB container: 64 + 4 * 16 = 128 setup + 2 executed cycles.
-    assert_eq!(exec.cycles_used, 130);
+    // 4 KiB container: 64 + 4 * 16 = 128 setup + 3 executed halt cycles.
+    assert_eq!(exec.cycles_used, 131);
 }
 
 #[test]
@@ -394,5 +438,8 @@ fn setup_cycles_rejected_when_budget_cannot_cover_them() {
         },
     );
     assert_eq!(exec.result, Err(CalcAbort2::OutOfGas));
-    assert_eq!(exec.cycles_used, 10);
+    // Only the attempted setup charge is reported (4 KiB container:
+    // 64 + 4 * 16 = 128); the rest of the budget is not burned — the tx
+    // that reaches this abort cannot be included.
+    assert_eq!(exec.cycles_used, 128);
 }

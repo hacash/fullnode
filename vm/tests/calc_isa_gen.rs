@@ -1,4 +1,4 @@
-//! Shared ISA-level test-case generator for the calc VM (RV64IMC+Zbb+Zbc).
+//! Shared ISA-level test-case generator for the calc VM (RV64IM+Zba/Zbb/Zbs/Zbc, no C).
 //!
 //! Emits one self-contained program per instruction form: a prologue that
 //! materializes eight boundary constants into x5..x12, the instruction(s)
@@ -14,10 +14,7 @@
 //! - `vm/tests.loc/calc_isa_ckbvm.rs` (business-local): the same cases
 //!   against ckb-vm 0.24.13 (whole machine) and softcore-rv64.
 //!
-//! Encodings: 32-bit forms per the spec tables; compressed forms
-//! cross-checked against llvm-mc 18 (`llvm-mc -arch=riscv64
-//! -mattr=+c,+m,+zbb,+zbc`; the system clang's integrated assembler
-//! mis-resolves branch labels, llvm-mc is the authority). Branch/jal
+//! Encodings: 32-bit forms per the spec tables. Branch/jal
 //! immediates are patched by the generator - no hand-computed offsets.
 //!
 //! Register conventions: x5..x12 boundary constants, x27 = sp (record
@@ -26,14 +23,16 @@
 
 #![allow(dead_code)]
 
-use vm::calc::container::{CalcContainer, CALC_ABI_BYTES_TO_BYTES};
+use vm::calc::container::{
+    CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_PROFILE_RV64IM_B, CODE_BASE,
+};
 
 pub const MEM_KIB: u16 = 16;
 pub const INPUT_MAX: u16 = 512;
 pub const OUTPUT_MAX: u16 = 512;
 
 pub fn mem_len() -> u64 {
-    MEM_KIB as u64 * 1024
+    CODE_BASE + MEM_KIB as u64 * 1024
 }
 
 /// Eight boundary constants prologue-loaded into x5..x12.
@@ -57,12 +56,10 @@ pub const PATTERN: [u8; 16] = [
 
 pub struct Asm {
     pub bytes: Vec<u8>,
-    /// Byte address of every instruction (2 or 4 bytes each).
+    /// Byte address of every 4-byte instruction.
     pub word_addr: Vec<u32>,
     b_fixups: Vec<(usize, u32, u8, u8, usize)>, // idx, f3, rs1, rs2, target
     j_fixups: Vec<(usize, u8, usize)>,          // idx, rd, target
-    cj_fixups: Vec<(usize, usize)>,             // idx, target
-    cb_fixups: Vec<(usize, bool, u8, usize)>,   // idx, ne, rs1', target
 }
 
 impl Asm {
@@ -72,8 +69,6 @@ impl Asm {
             word_addr: Vec::new(),
             b_fixups: Vec::new(),
             j_fixups: Vec::new(),
-            cj_fixups: Vec::new(),
-            cb_fixups: Vec::new(),
         }
     }
 
@@ -81,13 +76,6 @@ impl Asm {
         let idx = self.word_addr.len();
         self.word_addr.push(self.bytes.len() as u32);
         self.bytes.extend_from_slice(&w.to_le_bytes());
-        idx
-    }
-
-    pub fn half(&mut self, h: u16) -> usize {
-        let idx = self.word_addr.len();
-        self.word_addr.push(self.bytes.len() as u32);
-        self.bytes.extend_from_slice(&h.to_le_bytes());
         idx
     }
 
@@ -177,307 +165,6 @@ impl Asm {
         self.raw(0x0000_0073)
     }
 
-    // ---------------- compressed emitters (llvm-mc-verified packing) -----
-
-    pub fn c_addi(&mut self, rd: u8, imm: i8) -> usize {
-        let i = imm as u8;
-        self.half(
-            (0b000 << 13)
-                | (((i >> 5) & 1) as u16) << 12
-                | ((i & 0x1F) as u16) << 2
-                | ((rd as u16) << 7)
-                | 0b01,
-        )
-    }
-
-    /// c.addiw rd, imm (RV64; rd != 0).
-    pub fn c_addiw(&mut self, rd: u8, imm: i8) -> usize {
-        let i = imm as u8;
-        self.half(
-            (0b001 << 13)
-                | (((i >> 5) & 1) as u16) << 12
-                | ((i & 0x1F) as u16) << 2
-                | ((rd as u16) << 7)
-                | 0b01,
-        )
-    }
-
-    pub fn c_li(&mut self, rd: u8, imm: i8) -> usize {
-        let i = imm as u8;
-        self.half(
-            (0b010 << 13)
-                | (((i >> 5) & 1) as u16) << 12
-                | ((i & 0x1F) as u16) << 2
-                | ((rd as u16) << 7)
-                | 0b01,
-        )
-    }
-
-    /// c.lui rd, imm (imm in -32..=-1 or 1..=31).
-    pub fn c_lui(&mut self, rd: u8, imm: i8) -> usize {
-        let i = imm as u8;
-        self.half(
-            (0b011 << 13)
-                | (((i >> 5) & 1) as u16) << 12
-                | ((i & 0x1F) as u16) << 2
-                | ((rd as u16) << 7)
-                | 0b01,
-        )
-    }
-
-    /// c.addi16sp imm (multiple of 16 in -512..=496, != 0).
-    pub fn c_addi16sp(&mut self, imm: i16) -> usize {
-        let v = (imm as i64) as u64; // 10-bit two's complement view
-        assert_eq!(v & 0xF, 0, "c.addi16sp imm must be a 16 multiple");
-        let b12 = (v >> 9) & 1;
-        let b6 = (v >> 4) & 1;
-        let b5 = (v >> 6) & 1;
-        let b43 = (v >> 7) & 0b11;
-        let b2 = (v >> 5) & 1;
-        self.half(
-            (0b011 << 13)
-                | ((b12 as u16) << 12)
-                | ((b6 as u16) << 6)
-                | ((b5 as u16) << 5)
-                | ((b43 as u16) << 3)
-                | (b2 as u16) << 2
-                | (2 << 7)
-                | 0b01,
-        )
-    }
-
-    /// c.addi4spn rd', imm (uimm multiple of 4 in 4..=1020).
-    pub fn c_addi4spn(&mut self, rd: u8, imm: u16) -> usize {
-        let v = imm as u32;
-        assert_eq!(v & 3, 0);
-        let u54 = (v >> 4) & 0b11;
-        let u96 = (v >> 6) & 0b1111;
-        let u3 = (v >> 3) & 1;
-        let u2 = (v >> 2) & 1;
-        self.half(
-            (0b000 << 13)
-                | ((u54 as u16) << 11)
-                | ((u96 as u16) << 7)
-                | ((u3 as u16) << 5)
-                | (u2 as u16) << 6
-                | (((rd as u16 - 8) & 7) << 2)
-                | 0b00,
-        )
-    }
-
-    /// c.lw (ld=false, uimm mult of 4 in 0..=124) / c.ld (mult of 8 in
-    /// 0..=504) rd', imm(rs1'), registers x8..x15.
-    pub fn c_load(&mut self, ld: bool, rd: u8, rs1: u8, imm: u16) -> usize {
-        let v = imm as u32;
-        if ld {
-            let u53 = (v >> 3) & 0b111;
-            let u76 = (v >> 6) & 0b11;
-            self.half(
-                (0b011 << 13)
-                    | ((u53 as u16) << 10)
-                    | ((u76 as u16) << 5)
-                    | (((rs1 as u16 - 8) & 7) << 7)
-                    | (((rd as u16 - 8) & 7) << 2)
-                    | 0b00,
-            )
-        } else {
-            let u53 = (v >> 3) & 0b111;
-            let u2 = (v >> 2) & 1;
-            let u6 = (v >> 6) & 1;
-            self.half(
-                (0b010 << 13)
-                    | ((u53 as u16) << 10)
-                    | ((u6 as u16) << 5)
-                    | (u2 as u16) << 6
-                    | (((rs1 as u16 - 8) & 7) << 7)
-                    | (((rd as u16 - 8) & 7) << 2)
-                    | 0b00,
-            )
-        }
-    }
-
-    /// c.sw / c.sd rs2', imm(rs1').
-    pub fn c_store(&mut self, sd: bool, rs1: u8, rs2: u8, imm: u16) -> usize {
-        let v = imm as u32;
-        if sd {
-            let u53 = (v >> 3) & 0b111;
-            let u86 = (v >> 6) & 0b111;
-            self.half(
-                (0b111 << 13)
-                    | ((u53 as u16) << 10)
-                    | ((u86 as u16) << 5)
-                    | (((rs1 as u16 - 8) & 7) << 7)
-                    | (((rs2 as u16 - 8) & 7) << 2)
-                    | 0b00,
-            )
-        } else {
-            let u53 = (v >> 3) & 0b111;
-            let u2 = (v >> 2) & 1;
-            let u6 = (v >> 6) & 1;
-            self.half(
-                (0b110 << 13)
-                    | ((u53 as u16) << 10)
-                    | ((u6 as u16) << 5)
-                    | (u2 as u16) << 6
-                    | (((rs1 as u16 - 8) & 7) << 7)
-                    | (((rs2 as u16 - 8) & 7) << 2)
-                    | 0b00,
-            )
-        }
-    }
-
-    /// c.slli (kind=0, full rd) / c.srli (1) / c.srai (2) (x8..x15 for
-    /// the latter two); 6-bit shamt.
-    pub fn c_shift(&mut self, kind: u8, rd: u8, shamt: u8) -> usize {
-        let b5 = (shamt >> 5) & 1;
-        let lo5 = (shamt & 0x1F) as u16;
-        match kind {
-            0 => self.half(
-                (0b000 << 13)
-                    | ((b5 as u16) << 12)
-                    | lo5 << 2
-                    | ((rd as u16) << 7)
-                    | 0b10,
-            ),
-            1 | 2 => self.half(
-                (0b100 << 13)
-                    | ((b5 as u16) << 12)
-                    | (((kind - 1) as u16) << 10)
-                    | lo5 << 2
-                    | (((rd as u16 - 8) & 7) << 7)
-                    | 0b01,
-            ),
-            _ => unreachable!(),
-        }
-    }
-
-    pub fn c_andi(&mut self, rd: u8, imm: i8) -> usize {
-        let i = imm as u8;
-        self.half(
-            (0b100 << 13)
-                | (((i >> 5) & 1) as u16) << 12
-                | (0b10 << 10)
-                | ((i & 0x1F) as u16) << 2
-                | (((rd as u16 - 8) & 7) << 7)
-                | 0b01,
-        )
-    }
-
-    /// c.sub/c.xor/c.or/c.and/c.subw/c.addw rd', rs2' (x8..x15).
-    pub fn c_arith(&mut self, op: &str, rd: u8, rs2: u8) -> usize {
-        let (b12, sel): (u16, u16) = match op {
-            "sub" => (0, 0b00),
-            "xor" => (0, 0b01),
-            "or" => (0, 0b10),
-            "and" => (0, 0b11),
-            "subw" => (1, 0b00),
-            "addw" => (1, 0b01),
-            _ => unreachable!(),
-        };
-        self.half(
-            (0b100 << 13)
-                | (b12 << 12)
-                | (0b11 << 10) // misc-alu group selector
-                | (sel << 5)
-                | (((rs2 as u16 - 8) & 7) << 2)
-                | (((rd as u16 - 8) & 7) << 7)
-                | 0b01,
-        )
-    }
-
-    /// c.j target (instruction index).
-    pub fn c_j(&mut self, target: usize) -> usize {
-        let idx = self.half(0);
-        self.cj_fixups.push((idx, target));
-        idx
-    }
-
-    /// c.beqz (ne=false) / c.bnez (ne=true) rs1' (x8..x15), target.
-    pub fn c_bz(&mut self, ne: bool, rs1: u8, target: usize) -> usize {
-        let idx = self.half(0);
-        self.cb_fixups.push((idx, ne, rs1, target));
-        idx
-    }
-
-    /// c.lwsp / c.ldsp rd, imm (sp-relative).
-    pub fn c_loadsp(&mut self, ld: bool, rd: u8, imm: u16) -> usize {
-        let v = imm as u32;
-        if ld {
-            let u5 = (v >> 5) & 1;
-            let u43 = (v >> 3) & 0b11;
-            let u86 = (v >> 6) & 0b111;
-            self.half(
-                (0b011 << 13)
-                    | ((u5 as u16) << 12)
-                    | ((u43 as u16) << 5)
-                    | (u86 as u16) << 2
-                    | ((rd as u16) << 7)
-                    | 0b10,
-            )
-        } else {
-            // c.lwsp: uimm[4:2] <- inst[6:4], uimm[7:6] <- inst[3:2]
-            let u5 = (v >> 5) & 1;
-            let u42 = (v >> 2) & 0b111;
-            let u76 = (v >> 6) & 0b11;
-            self.half(
-                (0b010 << 13)
-                    | ((u5 as u16) << 12)
-                    | ((u42 as u16) << 4)
-                    | (u76 as u16) << 2
-                    | ((rd as u16) << 7)
-                    | 0b10,
-            )
-        }
-    }
-
-    /// c.swsp / c.sdsp rs2, imm.
-    pub fn c_storesp(&mut self, sd: bool, rs2: u8, imm: u16) -> usize {
-        let v = imm as u32;
-        if sd {
-            let u53 = (v >> 3) & 0b111;
-            let u86 = (v >> 6) & 0b111;
-            self.half(
-                (0b111 << 13)
-                    | ((u53 as u16) << 10)
-                    | (u86 as u16) << 7
-                    | ((rs2 as u16) << 2)
-                    | 0b10,
-            )
-        } else {
-            let u52 = (v >> 2) & 0b1111;
-            let u76 = (v >> 6) & 0b11;
-            self.half(
-                (0b110 << 13)
-                    | ((u52 as u16) << 9)
-                    | (u76 as u16) << 7
-                    | ((rs2 as u16) << 2)
-                    | 0b10,
-            )
-        }
-    }
-
-    pub fn c_mv(&mut self, rd: u8, rs2: u8) -> usize {
-        self.half((0b100 << 13) | ((rs2 as u16) << 2) | ((rd as u16) << 7) | 0b10)
-    }
-
-    pub fn c_jr(&mut self, rs1: u8) -> usize {
-        self.half((0b100 << 13) | ((rs1 as u16) << 7) | 0b10)
-    }
-
-    /// c.jalr rs1 (rs1 != 0): rd = x1, link = addr + 2. Quadrant 2,
-    /// funct3 100, bit12 = 1, rs2 field = 0.
-    pub fn c_jalr(&mut self, rs1: u8) -> usize {
-        self.half((0b100 << 13) | (1 << 12) | ((rs1 as u16) << 7) | 0b10)
-    }
-
-    pub fn c_add(&mut self, rd: u8, rs2: u8) -> usize {
-        self.half((0b100 << 13) | (1 << 12) | ((rs2 as u16) << 2) | ((rd as u16) << 7) | 0b10)
-    }
-
-    pub fn c_nop(&mut self) -> usize {
-        self.half(0x0001)
-    }
-
     // ---------------- compound helpers ----------------
 
     /// Load an arbitrary u64 into `rd` (scratch `tmp`, tmp != rd).
@@ -507,10 +194,12 @@ impl Asm {
         self.r(0, 0, rd, rd, tmp, 0x33); // add rd, rd, tmp
     }
 
-    /// `li a0, 0 ; jalr x0, x1, 0` - canonical empty-output return.
+    /// HALT ecall with exit 0 and empty output.
     pub fn ret(&mut self) {
         self.i(0, 10, 0, 0x13, 0);
-        self.i(0, 0, 1, 0x67, 0);
+        self.i(0, 11, 0, 0x13, 0);
+        self.i(0, 17, 0, 0x13, 0);
+        self.ecall();
     }
 
     /// Record one register word at slot k (1-based): `sd reg, -8k(x27)`.
@@ -558,39 +247,6 @@ impl Asm {
                 | 0x6F;
             let at = self.word_addr[idx] as usize;
             self.bytes[at..at + 4].copy_from_slice(&w.to_le_bytes());
-        }
-
-        for (idx, target) in std::mem::take(&mut self.cj_fixups) {
-            let rel = (self.word_addr[target] as i64 - self.word_addr[idx] as i64) as i32;
-            let imm = rel as u32;
-            assert_eq!(imm & 1, 0);
-            let h: u16 = (0b101 << 13)
-                | (((imm >> 11 & 1) as u16) << 12)
-                | (((imm >> 4 & 1) as u16) << 11)
-                | (((imm >> 8 & 0b11) as u16) << 9)
-                | (((imm >> 10 & 1) as u16) << 8)
-                | (((imm >> 6 & 1) as u16) << 7)
-                | (((imm >> 7 & 1) as u16) << 6)
-                | (((imm >> 1 & 0b111) as u16) << 3)
-                | (((imm >> 5 & 1) as u16) << 2)
-                | 0b01;
-            let at = self.word_addr[idx] as usize;
-            self.bytes[at..at + 2].copy_from_slice(&h.to_le_bytes());
-        }
-        for (idx, ne, rs1, target) in std::mem::take(&mut self.cb_fixups) {
-            let rel = (self.word_addr[target] as i64 - self.word_addr[idx] as i64) as i32;
-            let imm = rel as u32;
-            assert_eq!(imm & 1, 0);
-            let h: u16 = ((if ne { 0b111 } else { 0b110 }) << 13)
-                | (((imm >> 8 & 1) as u16) << 12)
-                | (((imm >> 3 & 0b11) as u16) << 10)
-                | (((imm >> 6 & 0b11) as u16) << 5)
-                | (((imm >> 1 & 0b11) as u16) << 3)
-                | (((imm >> 5 & 1) as u16) << 2)
-                | (((rs1 as u16 - 8) & 7) << 7)
-                | 0b01;
-            let at = self.word_addr[idx] as usize;
-            self.bytes[at..at + 2].copy_from_slice(&h.to_le_bytes());
         }
         self.bytes
     }
@@ -774,8 +430,9 @@ pub struct Case {
     pub outcome: Outcome,
     /// Exact interpreter cycle total when known (None = don't check).
     pub cycles: Option<u64>,
-    /// Container uses ecall: the AOT must DECLINE it (fallback contract).
-    pub aot_declines: bool,
+        /// Legacy: AOT now implements ecall. Kept so existing case
+        /// constructors compile; always false.
+        pub aot_declines: bool,
     /// The case may leave x2 (sp) modified at the stop point.
     pub sp_free: bool,
     /// The case may leave x1 (ra) modified at the stop point.
@@ -814,21 +471,23 @@ impl Case {
 
 pub fn container_for(code: Vec<u8>) -> CalcContainer {
     CalcContainer {
+        profile: CALC_PROFILE_RV64IM_B,
         abi: CALC_ABI_BYTES_TO_BYTES,
         mem_kib: MEM_KIB,
-        entry: 0,
+        entry: CODE_BASE as u32,
         code,
         rodata: Vec::new(),
         init: Vec::new(),
+        bss_len: 0,
         input_max: INPUT_MAX,
         output_max: OUTPUT_MAX,
     }
 }
 
 /// Read the recorded words from a final memory image (slots 1..=n,
-/// i.e. [sp-8], [sp-16], ... in that order).
-pub fn record_words(mem: &[u8]) -> Vec<u64> {
-    let top = mem.len();
+/// i.e. [sp-8], [sp-16], ... in that order). `stack_top` is the entry `sp`.
+pub fn record_words(mem: &[u8], stack_top: u64) -> Vec<u64> {
+    let top = stack_top as usize;
     let mut out = Vec::new();
     let mut k = 1usize;
     while top >= 8 * k && out.len() < 4096 {
@@ -1354,7 +1013,7 @@ fn branch_jump_cases() -> Vec<Case> {
     // jalr with odd computed target (bit 0 masked) landing mid-stream.
     {
         let mut a = Asm::new();
-        let p = a.prologue();
+        let _p = a.prologue();
         a.u(30, 0x17, 0); // [P]   x30 = pc0
         a.i(0, 30, 30, 0x13, 12 + 1); // [P+1] x30 = pc0 + 13 (odd)
         a.i(0, 0, 30, 0x67, 0); // [P+2] jalr x0, x30, 0 -> pc0 + 12
@@ -1369,7 +1028,7 @@ fn branch_jump_cases() -> Vec<Case> {
     // the sentinel return survives): link - auipc = 12.
     {
         let mut a = Asm::new();
-        let p = a.prologue();
+        let _p = a.prologue();
         a.u(30, 0x17, 0); // [P]   x30 = pc0
         a.i(0, 30, 30, 0x13, 24); // [P+1] target = pc0 + 24
         a.i(0, 29, 30, 0x67, 0); // [P+2] jalr x29, x30, 0 ; link = pc0 + 12
@@ -1382,267 +1041,6 @@ fn branch_jump_cases() -> Vec<Case> {
         a.record(28, 1);
         a.ret();
         out.push(Case::ok("jump/jalr-link", a.finish(), vec![12]));
-    }
-    out
-}
-
-fn compressed_cases() -> Vec<Case> {
-    let mut out = Vec::new();
-    // c.addi / c.addiw / c.li / c.lui over boundary immediates.
-    {
-        let mut a = Asm::new();
-        a.prologue();
-        let mut expect = Vec::new();
-        let mut k = 0;
-        for imm in [-32i8, -1, 0, 1, 31] {
-            a.li64(28, VALS[7], 29);
-            a.c_addi(28, imm);
-            k += 1;
-            a.record(28, k);
-            expect.push(VALS[7].wrapping_add(imm as i64 as u64));
-            a.li64(28, VALS[7], 29);
-            a.c_addiw(28, imm);
-            k += 1;
-            a.record(28, k);
-            expect.push(sext32(VALS[7].wrapping_add(imm as i64 as u64)));
-            a.c_li(28, imm);
-            k += 1;
-            a.record(28, k);
-            expect.push(imm as i64 as u64);
-        }
-        for imm in [1i8, 31, -1, -32] {
-            a.c_lui(28, imm);
-            k += 1;
-            a.record(28, k);
-            expect.push(((imm as i64) << 12) as u64);
-        }
-        a.ret();
-        out.push(Case::ok("c/addi-li-lui", a.finish(), expect));
-    }
-    // c.addi16sp boundaries (sp recorded, then restored).
-    {
-        let mut a = Asm::new();
-        a.prologue();
-        let mut expect = Vec::new();
-        let mut k = 0;
-        for imm in [-512i16, -496, -64, 48, 496] {
-            a.c_addi16sp(imm);
-            k += 1;
-            a.record(2, k);
-            expect.push(mem_len().wrapping_add(imm as i64 as u64));
-            a.i(0, 2, 2, 0x13, -imm as i32); // restore
-        }
-        a.ret();
-        out.push(Case::ok("c/addi16sp", a.finish(), expect));
-    }
-    // c.addi4spn + c.ld/c.lw/c.sd/c.sw on x8..x15.
-    {
-        let mut a = Asm::new();
-        a.prologue();
-        a.i(0, 8, 2, 0x13, -1024); // x8 = sp - 1024 (data base)
-        let mut expect = Vec::new();
-        let mut k = 0;
-        for imm in [4u16, 1020] {
-            a.c_addi4spn(9, imm);
-            k += 1;
-            a.record(9, k);
-            expect.push(mem_len() + imm as u64);
-            a.i(0, 9, 0, 0x13, 0);
-        }
-        a.li64(31, 0x0123_4567_89AB_CDEF, 29);
-        a.s(3, 8, 31, 0);
-        a.c_load(true, 10, 8, 0); // c.ld x10, 0(x8)
-        k += 1;
-        a.record(10, k);
-        expect.push(0x0123_4567_89AB_CDEF);
-        a.c_load(false, 10, 8, 0); // c.lw x10, 0(x8) (sign-extends)
-        k += 1;
-        a.record(10, k);
-        expect.push(0x89AB_CDEFu32 as i32 as i64 as u64);
-        a.c_load(false, 10, 8, 4); // c.lw x10, 4(x8)
-        k += 1;
-        a.record(10, k);
-        expect.push(0x0123_4567u64);
-        // compressed forms address x8..x15 only -> stage values in x14
-        a.li64(14, 0xFFFF_FFFF_8888_7777, 29);
-        a.c_store(true, 8, 14, 8); // c.sd x14, 8(x8)
-        a.i(3, 28, 8, 0x03, 8);
-        k += 1;
-        a.record(28, k);
-        expect.push(0xFFFF_FFFF_8888_7777);
-        a.li64(14, 0xAABB_CCDD, 29);
-        a.c_store(false, 8, 14, 16); // c.sw x14, 16(x8)
-        a.i(3, 28, 8, 0x03, 16);
-        k += 1;
-        a.record(28, k);
-        expect.push(0xAABB_CCDD);
-        a.ret();
-        out.push(Case::ok("c/mem", a.finish(), expect));
-    }
-    // c.slli/c.srli/c.srai/c.andi + c.sub/xor/or/and/subw/addw + mv/add/nop.
-    {
-        let mut a = Asm::new();
-        a.prologue();
-        let mut expect = Vec::new();
-        let mut k = 0;
-        for sh in [1u8, 31, 63] {
-            a.li64(9, VALS[7], 29);
-            a.c_shift(0, 9, sh); // c.slli x9
-            k += 1;
-            a.record(9, k);
-            expect.push(VALS[7].wrapping_shl(sh as u32));
-        }
-        a.li64(9, VALS[7], 29);
-        for sh in [1u8, 63] {
-            a.li64(9, VALS[7], 29);
-            a.c_shift(1, 9, sh); // c.srli
-            k += 1;
-            a.record(9, k);
-            expect.push(VALS[7].wrapping_shr(sh as u32));
-            a.li64(9, VALS[7], 29);
-            a.c_shift(2, 9, sh); // c.srai
-            k += 1;
-            a.record(9, k);
-            expect.push(((VALS[7] as i64).wrapping_shr(sh as u32)) as u64);
-        }
-        for imm in [-32i8, -1, 31] {
-            a.li64(9, VALS[7], 29);
-            a.c_andi(9, imm);
-            k += 1;
-            a.record(9, k);
-            expect.push(VALS[7] & (imm as i64 as u64));
-        }
-        a.li64(9, VALS[3], 29); // MIN
-        a.li64(10, VALS[2], 29); // -1
-        for (op, e) in [
-            ("sub", VALS[3].wrapping_sub(VALS[2])),
-            ("xor", VALS[3] ^ VALS[2]),
-            ("or", VALS[3] | VALS[2]),
-            ("and", VALS[3] & VALS[2]),
-            ("subw", sext32(VALS[3].wrapping_sub(VALS[2]))),
-            ("addw", sext32(VALS[3].wrapping_add(VALS[2]))),
-        ] {
-            a.li64(9, VALS[3], 29); // reload: each op clobbers rd'
-            a.li64(10, VALS[2], 29);
-            a.c_arith(op, 9, 10);
-            k += 1;
-            a.record(9, k);
-            expect.push(e);
-        }
-        a.li64(10, 0x77, 29);
-        a.c_mv(9, 10);
-        k += 1;
-        a.record(9, k);
-        expect.push(0x77);
-        a.li64(10, 0x33, 29);
-        a.c_add(9, 10);
-        k += 1;
-        a.record(9, k);
-        expect.push(0x77 + 0x33);
-        a.c_nop();
-        a.ret();
-        out.push(Case::ok("c/arith", a.finish(), expect));
-    }
-    // c.lwsp/c.ldsp/c.swsp/c.sdsp with sp temporarily moved down.
-    {
-        let mut a = Asm::new();
-        a.prologue();
-        let mut expect = Vec::new();
-        let mut k = 0;
-        a.i(0, 30, 2, 0x13, -64);
-        a.li64(31, 0xCAFE_F00D_DEAD_BEEF, 29);
-        a.s(3, 30, 31, 0); // data at [sp-64]
-        a.i(0, 2, 2, 0x13, -64); // sp -= 64
-        a.c_loadsp(true, 28, 0); // c.ldsp x28, 0(sp)
-        k += 1;
-        a.record(28, k);
-        expect.push(0xCAFE_F00D_DEAD_BEEF);
-        a.c_loadsp(false, 28, 4); // c.lwsp x28, 4(sp) (sign-extends)
-        k += 1;
-        a.record(28, k);
-        expect.push(0xCAFE_F00Du32 as i32 as i64 as u64);
-        a.li64(31, 0x1234_5678_9ABC_DEF0, 29);
-        a.c_storesp(true, 31, 8); // c.sdsp x31, 8(sp)
-        a.c_loadsp(true, 28, 8);
-        k += 1;
-        a.record(28, k);
-        expect.push(0x1234_5678_9ABC_DEF0);
-        a.li64(31, 0x5566_7788, 29);
-        a.c_storesp(false, 31, 16); // c.swsp x31, 16(sp)
-        a.c_loadsp(false, 28, 16);
-        k += 1;
-        a.record(28, k);
-        expect.push(0x5566_7788u64);
-        a.i(0, 2, 2, 0x13, 64); // restore sp
-        a.ret();
-        out.push(Case::ok("c/sp-mem", a.finish(), expect));
-    }
-    // c.j / c.beqz / c.bnez / c.jr / c.jalr.
-    {
-        let mut a = Asm::new();
-        let p = a.prologue();
-        let mut expect = Vec::new();
-        let mut k = 0;
-        // c.j forward over a marker: [P]=c.j, [P+1]=li 0x42 (skipped),
-        // [P+2]=li 0x43.
-        let _ = a.c_j(p + 2);
-        let _ = a.i(0, 28, 0, 0x13, 0x42);
-        let _ = a.i(0, 28, 0, 0x13, 0x43);
-        k += 1;
-        a.record(28, k);
-        expect.push(0x43);
-        // c.beqz taken: [P+3]=li x9,0 ; [P+4]=c.beqz -> [P+6];
-        // [P+5]=li 0x11 skipped ; [P+6]=li 0x10.
-        a.i(0, 9, 0, 0x13, 0);
-        let _ = a.c_bz(false, 9, p + 6);
-        let _ = a.i(0, 28, 0, 0x13, 0x11);
-        let _ = a.i(0, 28, 0, 0x13, 0x10);
-        k += 1;
-        a.record(28, k);
-        expect.push(0x10);
-        // c.bnez backward loop: x9 counts 3 -> 0 (the reload stays
-        // OUTSIDE the loop head).
-        a.i(0, 9, 0, 0x13, 3);
-        let head = a.i(0, 9, 9, 0x13, -1);
-        let _ = a.c_bz(true, 9, head);
-        k += 1;
-        a.record(9, k);
-        expect.push(0);
-        // c.jalr: [P+8]=auipc x30, [P+9]=addi +10, [P+10]=c.jalr x30
-        // (2 bytes at pc8+8; link = pc8 + 10; target = pc8 + 10 = the
-        // 0x55 marker instruction boundary).
-        let pc8 = a.u(30, 0x17, 0); // [P+8]
-        let _ = pc8;
-        a.i(0, 30, 30, 0x13, 10); // target = pc8 + 10 -> [P+11]
-        let _ = a.c_jalr(30); // [P+10] (2 bytes)
-        let _ = a.i(0, 28, 0, 0x13, 0x55); // [P+11] landing (+10)
-        let _ = a.i(0, 31, 0, 0x13, 0x66); // [P+12]
-        // x28 = link - pc8 = 10 (x30 currently pc8+10; restore to pc8)
-        a.i(0, 30, 30, 0x13, -10);
-        a.r(0b0100000, 0, 28, 1, 30, OP);
-        k += 1;
-        a.record(31, k); // landing marker
-        expect.push(0x66);
-        k += 1;
-        a.record(28, k); // link delta = 10
-        expect.push(10);
-        // c.jalr clobbered x1: restore the sentinel before returning
-        a.li64(1, vm::calc::CALC_RETURN_SENTINEL, 29);
-        a.ret();
-        out.push(Case::ok("c/jumps", a.finish(), expect));
-    }
-    // c.jr via register: jump to a marker, no link.
-    {
-        let mut a = Asm::new();
-        let p = a.prologue();
-        let pc0 = a.u(30, 0x17, 0); // [P]
-        let _ = pc0;
-        a.i(0, 30, 30, 0x13, 10); // target = pc0 + 10 -> [P+3] (c.jr is 2B)
-        let _ = a.c_jr(30); // [P+2] c.jr x30
-        a.i(0, 28, 0, 0x13, 0xEE); // [P+3] landing
-        a.record(28, 1);
-        a.ret();
-        out.push(Case::ok("c/jr", a.finish(), vec![0xEE]));
     }
     out
 }
@@ -1697,23 +1095,13 @@ fn trap_cases() -> Vec<Case> {
         a.ret();
         t("trap/store-wrap", a.finish());
     }
-    // misaligned loads
-    for (name, f3) in [("lh", 1u32), ("lw", 2), ("ld", 3)] {
-        let mut a = Asm::new();
-        a.prologue();
-        a.i(0, 30, 2, 0x13, -1024);
-        a.i(f3, 28, 30, 0x03, 1);
-        a.ret();
-        t(&format!("trap/misaligned-load-{name}"), a.finish());
-    }
-    // misaligned store
+    // unmapped load (addr 0)
     {
         let mut a = Asm::new();
         a.prologue();
-        a.i(0, 30, 2, 0x13, -1024);
-        a.s(3, 30, 5, 4);
+        a.i(3, 28, 0, 0x03, 0);
         a.ret();
-        t("trap/misaligned-store", a.finish());
+        t("trap/load-unmapped", a.finish());
     }
     // jalr to a mid-instruction offset
     {
@@ -1762,21 +1150,15 @@ fn trap_cases() -> Vec<Case> {
         a.ret();
         t("trap/ecall-dst-readonly", a.finish());
     }
-    // output length exceeds output_max at the sentinel return (no epilogue
-    // `li a0, 0` — a0 carries the oversized length to the return).
+    // output length exceeds output_max at HALT (a1 carries the length).
     {
         let mut a = Asm::new();
         a.prologue();
-        a.li64(10, OUTPUT_MAX as u64 + 1, 29);
-        a.i(0, 0, 1, 0x67, 0); // jalr x0, x1, 0
+        a.i(0, 10, 0, 0x13, 0);
+        a.li64(11, OUTPUT_MAX as u64 + 1, 29);
+        a.i(0, 17, 0, 0x13, 0);
+        a.ecall();
         t("trap/output-overflow", a.finish());
-    }
-    // ecall-bearing trap cases: the AOT declines ecall containers.
-    if let Some(c) = out.iter_mut().find(|c| c.name == "trap/ecall-unknown") {
-        c.aot_declines = true;
-    }
-    if let Some(c) = out.iter_mut().find(|c| c.name == "trap/ecall-dst-readonly") {
-        c.aot_declines = true;
     }
     out
 }
@@ -1831,22 +1213,19 @@ fn ecall_cases() -> Vec<Case> {
             a.record(10, n); // a0 == 0 after a successful ecall
             expect.push(0);
             a.ret();
-            let mut c = Case::ok(&format!("ecall/{name}"), a.finish(), expect);
-            c.aot_declines = true;
-            c
+            Case::ok(&format!("ecall/{name}"), a.finish(), expect)
         })
         .collect()
 }
 
 fn cycles_cases() -> Vec<Case> {
     let mut out = Vec::new();
-    // single block: addi + jalr = 2 cycles
+    // single block: 3 addi + ecall = 3 cycles
     {
         let mut a = Asm::new();
-        a.i(0, 10, 0, 0x13, 0);
-        a.i(0, 0, 1, 0x67, 0);
+        a.ret();
         let mut c = Case::ok("cyc/minimal", a.finish(), vec![]);
-        c.cycles = Some(2);
+        c.cycles = Some(3);
         out.push(c);
     }
     // cost table: ld(2) + addi(1) + div(32) + mul(3) + clmul(16) + jalr(1)
@@ -1859,10 +1238,10 @@ fn cycles_cases() -> Vec<Case> {
         a.r(0b0000001, 4, 28, 5, 6, OP); // div
         a.r(0b0000001, 0, 28, 5, 6, OP); // mul
         a.r(0b0000101, 1, 28, 5, 6, OP); // clmul
-        a.i(0, 10, 0, 0x13, 0);
-        a.i(0, 0, 1, 0x67, 0);
+        a.ret();
         let mut c = Case::ok("cyc/cost-table", a.finish(), vec![]);
-        c.cycles = Some(1 + 1 + 2 + 1 + 32 + 3 + 16 + 1 + 1);
+        // 2*addi + ld + addi + div + mul + clmul + 3*addi + ecall
+        c.cycles = Some(1 + 1 + 2 + 1 + 32 + 3 + 16 + 1 + 1 + 1);
         out.push(c);
     }
     // branch splits blocks: [addi,beq](2) + [li,jalr](2) = 4 (taken)
@@ -1872,10 +1251,10 @@ fn cycles_cases() -> Vec<Case> {
         let _ = i0;
         a.b(0, 5, 0, 3); // [1] beq x5, x0 -> [3]
         a.i(0, 28, 0, 0x13, 0x99); // [2] skipped
-        a.i(0, 10, 0, 0x13, 0); // [3]
-        a.i(0, 0, 1, 0x67, 0); // [4]
+        a.ret(); // [3..] halt
         let mut c = Case::ok("cyc/branch-split", a.finish(), vec![]);
-        c.cycles = Some(4);
+        // [addi,beq](2) + halt block (3)
+        c.cycles = Some(5);
         out.push(c);
     }
     // hash pricing: ecall sha2 over 32 bytes = block[setup..] + 64 + 96
@@ -1889,13 +1268,11 @@ fn cycles_cases() -> Vec<Case> {
         a.i(0, 12, 30, 0x13, -128); // 1 (dst inside writable stack area)
         a.i(0, 17, 0, 0x13, 1); // 1
         a.ecall(); // 64 + 96*1
-        a.i(0, 10, 0, 0x13, 0); // 1
-        a.i(0, 0, 1, 0x67, 0); // 1
+        a.ret();
         let mut c = Case::ok("cyc/ecall-sha2", a.finish(), vec![]);
-        // block = addi(1)+addi(1)+addi(1)+addi(1)+addi(1)+ecall(0 static)
-        //         +addi(1)+jalr(1) = 7 ; ecall runtime = 64+96
-        c.cycles = Some(7 + 64 + 96);
-        c.aot_declines = true;
+        // setup addis (5) + hash ecall(0 static) + halt (3 addi + ecall)
+        // ecall is a terminator so two blocks; total static 8 + hash 160
+        c.cycles = Some(8 + 64 + 96);
         out.push(c);
     }
     // infinite 1-cycle loop truncated by the budget
@@ -1942,7 +1319,6 @@ pub fn all_cases() -> Vec<Case> {
     out.extend(unary_cases());
     out.extend(load_store_cases());
     out.extend(branch_jump_cases());
-    out.extend(compressed_cases());
     out.push(fence_case());
     out.extend(trap_cases());
     out.extend(ecall_cases());
@@ -1963,8 +1339,9 @@ pub fn rodata_trap_parts() -> (Vec<u8>, Vec<u8>, u64) {
     // (x2 - 2048) which is inside... no — rodata must be targeted. The
     // caller pads code to 16N and REWRITES the addi immediate at the
     // fixed offset 4 (second instruction) to align16(code_len).
-    let i0 = a.i(0, 30, 0, 0x13, 0); // addi x30, x0, IMM (patched)
-    let _ = i0;
+    a.u(30, 0x37, 1); // lui x30, 1 -> CODE_BASE
+    let i1 = a.i(0, 30, 30, 0x13, 0); // addi x30, x30, IMM (patched)
+    let _ = i1;
     let s0 = a.s(3, 30, 5, 0); // sd x5, 0(x30)
     let _ = s0;
     a.ret();

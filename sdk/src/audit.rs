@@ -238,6 +238,7 @@ pub fn code_type_name(raw: u8) -> Result<(&'static str, u8), SdkError> {
     Ok(match conf.code_type() {
         vm::CodeType::Bytecode => ("bytecode", 0),
         vm::CodeType::IRNode => ("irnode", 1),
+        vm::CodeType::RV64IM => ("rv64im", 2),
     })
 }
 
@@ -550,7 +551,8 @@ mod tests {
         let err = describe_action(&action, 0, "0", 0, &DescribeOptions::default()).unwrap_err();
         assert!(err.to_string().contains("invalid codeconf 4"), "{err}");
         assert!(code_type_name(1).unwrap().0 == "irnode");
-        assert!(code_type_name(2).is_err());
+        assert!(code_type_name(2).unwrap().0 == "rv64im");
+        assert!(code_type_name(3).is_err());
     }
 
     /// The AST control-flow walkers must stay complete over the registered branching actions

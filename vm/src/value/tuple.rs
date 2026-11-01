@@ -134,7 +134,7 @@ impl TupleItem {
     }
 
     pub fn to_string(&self) -> String {
-        let items: Vec<_> = self.items.iter().map(Value::to_string).collect();
+        let items: Vec<_> = self.items.iter().map(ToString::to_string).collect();
         format!("tuple({})[{}]", self.items.len(), items.join(","))
     }
 

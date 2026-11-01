@@ -328,7 +328,7 @@ mod cast_param_tests {
         assert_eq!(v, Value::Address(a));
 
         // wrong length cannot implicitly convert
-        let mut v = Value::Bytes(vec![0u8; 20]);
+        let v = Value::Bytes(vec![0u8; 20]);
         assert!(v.check_param_type(ValueTy::Address).is_err());
 
         // unsupported version byte cannot implicitly convert: the value domain of
@@ -336,7 +336,7 @@ mod cast_param_tests {
         let mut raw = [0u8; Address::SIZE];
         raw[0] = 0x02;
         raw[20] = 1;
-        let mut v = Value::Bytes(raw.to_vec());
+        let v = Value::Bytes(raw.to_vec());
         let err = v.check_param_type(ValueTy::Address).unwrap_err();
         assert_eq!(err.0, CallArgvTypeFail);
     }

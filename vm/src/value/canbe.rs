@@ -190,15 +190,7 @@ impl Value {
                 let Ok(list) = c.list_ref() else {
                     return itr_err_code!(ec);
                 };
-                let mut out = Vec::new();
-                for item in list.iter() {
-                    let chunk = item.extract_bytes_with_error_code(ec)?;
-                    if out.len() + chunk.len() > cap.call_data_size {
-                        return itr_err_code!(OutOfValueSize);
-                    }
-                    out.extend_from_slice(&chunk);
-                }
-                Ok(out)
+                concat_call_chunks(list.iter(), cap, ec)
             }
             _ => {
                 let bytes = self.extract_bytes_with_error_code(ec)?;
@@ -207,6 +199,19 @@ impl Value {
                 }
                 Ok(bytes)
             }
+        }
+    }
+
+    /// RV64IM call input. Top-level `Tuple` concatenates each element with the
+    /// same one-layer CAT `extract_bytes` rules as list chunks (scalars only;
+    /// element `Nil` / nested `Compo` / `Handle` / `Map` / `Tuple` →
+    /// `CastBeCallDataFail`; running length ≤ `cap.call_data_size`).
+    /// `Nil`, `Compo(List)`, and scalars delegate to [`Self::extract_call_data`].
+    /// [`Self::extract_call_data`] still rejects `Tuple`.
+    pub fn extract_rv64im_call_data(&self, cap: &SpaceCap) -> VmrtRes<Vec<u8>> {
+        match self {
+            Tuple(tuple) => concat_call_chunks(tuple.as_slice().iter(), cap, CastBeCallDataFail),
+            _ => self.extract_call_data(cap),
         }
     }
 
@@ -271,6 +276,22 @@ impl Value {
             _ => Ok(()),
         }
     }
+}
+
+fn concat_call_chunks<'a>(
+    items: impl IntoIterator<Item = &'a Value>,
+    cap: &SpaceCap,
+    ec: ItrErrCode,
+) -> VmrtRes<Vec<u8>> {
+    let mut out = Vec::new();
+    for item in items {
+        let chunk = item.extract_bytes_with_error_code(ec)?;
+        if out.len() + chunk.len() > cap.call_data_size {
+            return itr_err_code!(OutOfValueSize);
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -400,4 +421,55 @@ fn extract_call_data_call_data_size_cap() {
         Value::bytes(vec![4u8; 769]),
     ]);
     assert_eq!(over.extract_call_data(&cap).unwrap_err().0, OutOfValueSize);
+}
+
+#[cfg(test)]
+#[test]
+fn extract_rv64im_call_data_tuple_concat_and_list_matches() {
+    let cap = SpaceCap::new(0);
+    let a = b"aa".to_vec();
+    let b = b"bbb".to_vec();
+    let tuple = Value::Tuple(
+        TupleItem::new(vec![Value::bytes(a.clone()), Value::U8(7), Value::bytes(b.clone())])
+            .unwrap(),
+    );
+    let mut want = a;
+    want.extend_from_slice(&Value::U8(7).extract_bytes().unwrap());
+    want.extend_from_slice(&b);
+    assert_eq!(tuple.extract_rv64im_call_data(&cap).unwrap(), want);
+    assert_eq!(
+        tuple.extract_call_data(&cap).unwrap_err().0,
+        CastBeCallDataFail
+    );
+
+    let list = extract_call_data_list(vec![Value::bytes(b"xy".to_vec()), Value::U8(3)]);
+    assert_eq!(
+        list.extract_rv64im_call_data(&cap).unwrap(),
+        list.extract_call_data(&cap).unwrap()
+    );
+    assert_eq!(
+        Value::Nil.extract_rv64im_call_data(&cap).unwrap(),
+        Vec::<u8>::new()
+    );
+
+    let over = Value::Tuple(
+        TupleItem::new(vec![
+            Value::bytes(vec![1u8; 1280]),
+            Value::bytes(vec![2u8; 1280]),
+            Value::bytes(vec![3u8; 1280]),
+            Value::bytes(vec![4u8; 769]),
+        ])
+        .unwrap(),
+    );
+    assert_eq!(
+        over.extract_rv64im_call_data(&cap).unwrap_err().0,
+        OutOfValueSize
+    );
+    assert_eq!(
+        Value::Tuple(TupleItem::new(vec![Value::Nil]).unwrap())
+            .extract_rv64im_call_data(&cap)
+            .unwrap_err()
+            .0,
+        CastBeCallDataFail
+    );
 }

@@ -4,8 +4,41 @@ fn kernel_dict_walk_smoke() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sha256kernel");
     let code = std::fs::read(format!("{dir}/image_code.bin")).unwrap();
     let rodata = std::fs::read(format!("{dir}/image_rodata.bin")).unwrap();
-    let container = vm::calc::pack_container(8, 0, 256, 32, code, rodata, vec![]).unwrap();
-    let f = CalcFnObj::build(container).unwrap();
+    let init = std::fs::read(format!("{dir}/image_init.bin")).unwrap();
+    let entry: u32 = u32::from_str_radix(
+        std::fs::read_to_string(format!("{dir}/entry.txt"))
+            .expect("entry.txt")
+            .trim()
+            .trim_start_matches("0x"),
+        16,
+    )
+    .unwrap_or(vm::calc::CALC_CODE_BASE as u32);
+    let bss_len = u16::from_str_radix(
+        std::fs::read_to_string(format!("{dir}/bss_len.txt"))
+            .unwrap()
+            .trim()
+            .trim_start_matches("0x"),
+        16,
+    )
+    .unwrap() as u64;
+    let container = vm::calc::pack_container_with_bss(
+        vm::calc::CALC_PROFILE_RV64IM,
+        8,
+        entry,
+        256,
+        32,
+        code,
+        rodata,
+        init,
+        bss_len,
+        &vm::calc::CALC_CONFIG_V1,
+    )
+    .unwrap();
+    let cfg = vm::calc::CALC_CONFIG_V1
+        .with_hash_builtins(true)
+        .with_rodata_readonly(true)
+        .with_stack_guard(true);
+    let f = CalcFnObj::build_with_config(container, cfg).unwrap();
     let limits = CalcRunLimits { cycles: 2_000_000, resource: i64::MAX, value_size: usize::MAX, deadline: None };
     // raw mode: sha256("abc")
     let e = f.run(b"abc", limits);

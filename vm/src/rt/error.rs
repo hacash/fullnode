@@ -111,10 +111,14 @@ pub enum ItrErrCode {
     IntentError = 153,
     ExecutionDeadline = 154,
     // Calc func channel: deterministic kernel trap (bad memory access,
-    // unknown ecall kind, misaligned access, output overflow, ...). The
-    // HVM maps it to a revert of the calling frame, charging gas consumed
-    // up to the abort point.
+    // unknown ecall kind, output overflow, guest nonzero HALT, ...).
+    // Mapped to a fault, same class as HVM assert/abort/require, so
+    // AstSelect does not catch it. Gas consumed up to the abort is kept.
     CalcTrap = 155,
+    // Official x86-64 nodes run the interpreter and AOT together. Disagreeing
+    // gas or results are a fatal fault: the transaction is rejected and does
+    // not enter a block. Builds without `calc-aot` never produce this code.
+    CalcEngineMismatch = 156,
 
     // Canonical state backend read / persisted state decode failures: must stay fatal across
     // the `ItrErr -> sys::Error` boundary (`Error::abort` with state-layer codes), never downgraded.
@@ -145,7 +149,7 @@ impl From<ItrErr> for Error {
         let ItrErr(code, msg) = e;
         let text = format!("{:?}({}): {}", code, code as u8, msg);
         match code {
-            ActCallRevert | CalcTrap => Error::revert(text),
+            ActCallRevert => Error::revert(text),
             StateReadFailed => Error::abort(text).with_code(base::STATE_READ_FAILED_CODE),
             StateDecodeFailed => Error::abort(text).with_code(base::STATE_DECODE_FAILED_CODE),
             _ => Error::fault(text),
@@ -273,6 +277,21 @@ mod tests {
         assert!(!err.is_abort(), "validation error must stay non-fatal");
         assert!(err.is_fault());
         assert_eq!(err.code(), None);
+    }
+
+    #[test]
+    fn calc_trap_is_fault() {
+        let err: Error = ItrErr::new(ItrErrCode::CalcTrap, "calc kernel trap").into();
+        assert!(err.is_fault());
+        assert!(!err.is_revert());
+        assert!(!err.is_abort());
+    }
+
+    #[test]
+    fn calc_engine_mismatch_is_fault() {
+        let err: Error = ItrErr::new(ItrErrCode::CalcEngineMismatch, "calc AOT/interpreter mismatch").into();
+        assert!(err.is_fault());
+        assert!(!err.is_revert());
     }
 
     #[test]

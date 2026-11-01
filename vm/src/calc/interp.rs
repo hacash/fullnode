@@ -1,4 +1,5 @@
-//! Pre-decoded RV64IMC(+Zbb/Zba/Zbs/Zbc) interpreter.
+//! Pre-decoded RV64IM(+Zicclsm, optionally +C and/or Zba/Zbb/Zbs/Zbc)
+//! interpreter.
 //!
 //! Executes a verified [`CalcModule`] over a freshly zeroed flat memory.
 //! Cycles are charged in full at basic-block entry (plus hash cost at each
@@ -11,14 +12,18 @@ use crate::calc::decode::{
     BitImmOp, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp, UnAluOp,
 };
 use crate::calc::verify::CalcModule;
-use crate::calc::{run_hash, HashKind, CALC_RETURN_SENTINEL};
+use crate::calc::container::CODE_BASE;
+use crate::calc::{run_hash, HashKind, ECALL_HALT, ECALL_HINT_MAX, ECALL_HINT_MIN};
 
 /// Why a calc run stopped before returning normally.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CalcAbort {
     /// Deterministic kernel fault (bad memory access, unknown ecall kind,
-    /// misaligned access, write to code, output length overflow, ...).
+    /// write to code, output length overflow, unmapped access, ...).
     Trap(String),
+    /// Guest HALT with nonzero a0. Trap-class for the HVM caller; the
+    /// receipt carries the exit code. Cycles consumed are still charged.
+    GuestExit(u64),
     /// Cycle budget exhausted at the point of the last block/ecall charge.
     OutOfGas,
     /// Host wall-clock deadline elapsed (never set on the consensus path).
@@ -89,10 +94,11 @@ fn run_inner(
 ) -> Result<CalcRun, (CalcAbort, u64)> {
     let lay = &module.layout;
     let mut mem: Vec<u8> = vec![0u8; lay.mem_len as usize];
-    mem[..container.code.len()].copy_from_slice(&container.code);
-    mem[lay.rodata_base as usize..(lay.rodata_base as u64 + lay.rodata_len) as usize]
+    let code_off = CODE_BASE as usize;
+    mem[code_off..code_off + container.code.len()].copy_from_slice(&container.code);
+    mem[lay.rodata_base as usize..(lay.rodata_base + lay.rodata_len) as usize]
         .copy_from_slice(&container.rodata);
-    mem[lay.data_base as usize..(lay.data_base as u64 + lay.init_len) as usize]
+    mem[lay.data_base as usize..(lay.data_base + lay.init_len) as usize]
         .copy_from_slice(&container.init);
     if input.len() as u64 > lay.input_max {
         return Err((CalcAbort::trap("calc input exceeds declared input_max"), 0));
@@ -100,13 +106,15 @@ fn run_inner(
     let input_base = lay.input_base as usize;
     mem[input_base..input_base + input.len()].copy_from_slice(input);
 
+    // ABI 1 entry registers: all zero except sp, a0/a1 (input), a2/a3
+    // (output region). ra is 0; returning via jalr to ra is an invalid
+    // target. Halt is ecall a7=0.
     let mut r = [0u64; 32];
     r[10] = lay.input_base;
     r[11] = input.len() as u64;
     r[12] = lay.output_base;
     r[13] = lay.output_max;
     r[2] = lay.stack_top;
-    r[1] = CALC_RETURN_SENTINEL;
 
     let insts = &module.insts;
     let addrs = &module.addrs;
@@ -145,11 +153,11 @@ fn run_inner(
                 Some(e) => e,
                 None => trap!("calc load address overflow"),
             };
+            if addr < CODE_BASE {
+                trap!("calc load of unmapped address");
+            }
             if end > lay.mem_len {
                 trap!("calc load out of memory bounds");
-            }
-            if addr % size != 0 {
-                trap!("calc misaligned load");
             }
             let b = &mem[addr as usize..end as usize];
             match op {
@@ -172,21 +180,28 @@ fn run_inner(
                 Some(e) => e,
                 None => trap!("calc store address overflow"),
             };
+            if addr < CODE_BASE {
+                trap!("calc store of unmapped address");
+            }
             if end > lay.mem_len {
                 trap!("calc store out of memory bounds");
             }
-            if addr < lay.data_base {
+            // Code and the pad below rodata_base stay non-writable. Rodata
+            // and the alignment hole are read-only only when the config says so.
+            let write_floor = if module.rodata_readonly {
+                lay.data_base
+            } else {
+                lay.rodata_base
+            };
+            if addr < write_floor {
                 trap!("calc store into read-only region (code/rodata)");
             }
             // Stack-overflow guard: a store intersecting the band between
-            // the output region and the stack traps (stack grows down into
-            // it). Stores fully inside the output region (end <= guard_base)
-            // and stores at or above the stack bottom pass.
-            if addr < lay.stack_bottom && end > lay.guard_base {
+            // .bss and the stack traps (stack grows down into it). Stores
+            // fully below the guard and stores at or above the stack bottom
+            // pass. Skipped when the guard is not enabled.
+            if module.stack_guard && addr < lay.stack_bottom && end > lay.guard_base {
                 trap!("calc store into the stack-overflow guard band");
-            }
-            if addr % size != 0 {
-                trap!("calc misaligned store");
             }
             let val: u64 = $val;
             let b = &mut mem[addr as usize..end as usize];
@@ -234,27 +249,14 @@ fn run_inner(
                 }
                 Inst::Jal { rd, target } => {
                     if rd != 0 {
-                        r[rd as usize] = addrs[idx] as u64 + 4;
+                        r[rd as usize] = addrs[idx] as u64 + module.inst_len(idx) as u64;
                     }
                     idx = target as usize;
                     continue 'blocks;
                 }
                 Inst::Jalr { rd, rs1, imm } => {
                     let dest = r[rs1 as usize].wrapping_add(imm as u64) & !1u64;
-                    let ret_addr = module.inst_len(idx) as u64 + addrs[idx] as u64;
-                    if dest == CALC_RETURN_SENTINEL {
-                        let n = r[10];
-                        if n > lay.output_max {
-                            return Err((
-                                CalcAbort::trap("calc output length exceeds output_max"),
-                                used(cycles),
-                            ));
-                        }
-                        let out =
-                            mem[lay.output_base as usize..(lay.output_base + n) as usize].to_vec();
-                        snap!();
-                        return Ok(CalcRun { output: out, cycles_used: used(cycles) });
-                    }
+                    let ret_addr = addrs[idx] as u64 + module.inst_len(idx) as u64;
                     if rd != 0 {
                         r[rd as usize] = ret_addr;
                     }
@@ -385,7 +387,31 @@ fn run_inner(
                 // FENCE: ordering is meaningless on this single-hart,
                 // in-memory machine — execute as a no-op.
                 Inst::Fence => {}
+                Inst::Trap => trap!("calc trap instruction"),
                 Inst::Ecall => {
+                    let a7 = r[17];
+                    if a7 == ECALL_HALT {
+                        let exit_code = r[10];
+                        let n = r[11];
+                        if n > lay.output_max {
+                            trap!("calc output length exceeds output_max");
+                        }
+                        if exit_code != 0 {
+                            snap!();
+                            return Err((CalcAbort::GuestExit(exit_code), used(cycles)));
+                        }
+                        let out =
+                            mem[lay.output_base as usize..(lay.output_base + n) as usize].to_vec();
+                        snap!();
+                        return Ok(CalcRun { output: out, cycles_used: used(cycles) });
+                    }
+                    if (ECALL_HINT_MIN..=ECALL_HINT_MAX).contains(&a7) {
+                        trap!("calc ecall: hint/private-input not available on L1");
+                    }
+                    // Disabled hash builtins trap before any hash charge.
+                    if !module.hash_builtins && HashKind::from_a7(a7).is_some() {
+                        trap!("calc ecall: builtin not enabled");
+                    }
                     // CHARGE-BEFORE-BOUNDS (documented decision): the hash
                     // cost is charged before the src/dst bounds checks, so
                     // the abort CLASS of an out-of-bounds ecall depends on
@@ -395,7 +421,7 @@ fn run_inner(
                     // functions of (module, input, budget); callers cannot
                     // probe memory through the class difference because
                     // the bounds check traps before any byte is read.
-                    let kind = match HashKind::from_a7(r[17]) {
+                    let kind = match HashKind::from_a7(a7) {
                         Some(k) => k,
                         None => trap!("calc ecall: unknown builtin"),
                     };
@@ -416,13 +442,21 @@ fn run_inner(
                         Some(e) => e,
                         None => trap!("calc ecall: output address overflow"),
                     };
+                    if src < CODE_BASE || dst < CODE_BASE {
+                        trap!("calc ecall: unmapped address");
+                    }
                     if src_end > lay.mem_len || dst_end > lay.mem_len {
                         trap!("calc ecall: out of memory bounds");
                     }
-                    if dst < lay.data_base {
+                    let digest_floor = if module.rodata_readonly {
+                        lay.data_base
+                    } else {
+                        lay.rodata_base
+                    };
+                    if dst < digest_floor {
                         trap!("calc ecall: digest into read-only region");
                     }
-                    if dst < lay.stack_bottom && dst_end > lay.guard_base {
+                    if module.stack_guard && dst < lay.stack_bottom && dst_end > lay.guard_base {
                         trap!("calc ecall: digest into the stack-overflow guard band");
                     }
                     // Digest lengths are 20/32; a stack buffer avoids a heap
@@ -438,7 +472,7 @@ fn run_inner(
         }
         // Fell through to the next block (normal path): charge it at entry.
         // Running off the very end of the code stream without control flow
-        // is a trap — returning must go through the sentinel.
+        // is a trap — returning must go through HALT ecall.
         if idx >= insts.len() {
             trap!("calc execution ran past the end of code");
         }
@@ -594,12 +628,11 @@ fn sext32_(v: u64) -> u64 {
 impl CalcModule {
     /// Encoded byte length of instruction `idx` (2 or 4).
     pub fn inst_len(&self, idx: usize) -> u32 {
-        let next = self
-            .addrs
-            .get(idx + 1)
-            .copied()
-            .unwrap_or_else(|| self.layout.code_len as u32);
-        next - self.addrs[idx]
+        let here = self.addrs[idx];
+        let next = self.addrs.get(idx + 1).copied().unwrap_or(
+            (CODE_BASE as u32).wrapping_add(self.layout.code_len as u32),
+        );
+        next - here
     }
 }
 

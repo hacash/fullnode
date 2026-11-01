@@ -1,23 +1,29 @@
 #[repr(u8)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum CodeType {
     #[default]
     Bytecode = 0,
     IRNode = 1,
+    RV64IM = 2,
 }
 
 enum_try_from_u8_by_variant!(
     CodeType,
     ItrErrCode::CodeTypeError,
     "code type {} not found",
-    [Bytecode, IRNode]
+    [Bytecode, IRNode, RV64IM]
 );
 
 impl CodeType {
-    pub const TYPE_MASK: u8 = 0b0000_0011;
+    /// 3-bit code type selector (supports up to 8 bytecode/VM engines: 0..=7).
+    pub const TYPE_MASK: u8 = 0b0000_0111;
 
     pub fn parse(n: u8) -> VmrtRes<Self> {
         Self::try_from_u8(n & Self::TYPE_MASK)
+    }
+
+    pub const fn is_hvm(self) -> bool {
+        matches!(self, Self::Bytecode | Self::IRNode)
     }
 }
 
@@ -26,7 +32,7 @@ impl CodeType {
 pub struct CodeConf(u8);
 
 impl CodeConf {
-    pub const RESERVED_MASK: u8 = 0b1111_1100;
+    pub const RESERVED_MASK: u8 = 0b1111_1000;
 
     pub fn parse(raw: u8) -> VmrtRes<Self> {
         if raw & Self::RESERVED_MASK != 0 {

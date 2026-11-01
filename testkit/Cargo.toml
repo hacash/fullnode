@@ -17,6 +17,11 @@ hacash-params = { workspace = true }
 x16rs = { workspace = true }
 hex = "0.4"
 
+[dev-dependencies]
+# Tests construct non-v1 calc configs (`with_*`). Not a normal dependency,
+# so `cargo build -p testkit` does not enable it.
+vm = { workspace = true, features = ["calc-testkit"] }
+
 [features]
 # Passes the mountable AOT (x86-64) backend through to the `vm` crate for the
 # three-path comparison test (dict_digest_three_paths). Run with:

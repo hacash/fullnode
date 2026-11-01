@@ -190,7 +190,7 @@ pub fn code(
     let code_type: u8 = code_type_str
         .trim()
         .parse()
-        .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "code_type must be 0 or 1"))?;
+        .map_err(|_| SdkError::new(SdkErrorCode::ParseFailed, "code_type must be 0, 1, or 2"))?;
     let (type_name, type_id) = crate::audit::code_type_name(code_type)?;
     let limit = limit.unwrap_or(VM_CODE_DEFAULT_LIMIT);
     let offset = offset.unwrap_or(0);
@@ -283,6 +283,13 @@ pub fn code(
                 format!(
                     "format {other} is not valid for irnode; expected fitsh, fitsh_review, tree, raw, or assembly"
                 ),
+            ));
+        }
+        (2, None | Some("raw")) => ("raw".to_owned(), format!("0x{}", hex::encode(&codes))),
+        (2, Some(other)) => {
+            return Err(SdkError::new(
+                SdkErrorCode::ParseFailed,
+                format!("format {other} is not valid for rv64im; expected raw"),
             ));
         }
         _ => unreachable!("code type validated above"),
@@ -462,8 +469,8 @@ mod tests {
         // `CodeConf::RESERVED_MASK` (batch 2 cross-assert kept as a numeric lock).
         assert_eq!(CODECONF_TYPE_MASK, vm::action::CODECONF_TYPE_MASK);
         assert_eq!(CODECONF_RESERVED_MASK, vm::action::CODECONF_RESERVED_MASK);
-        assert_eq!(CODECONF_TYPE_MASK, 0b0000_0011);
-        assert_eq!(CODECONF_RESERVED_MASK, 0b1111_1100);
+        assert_eq!(CODECONF_TYPE_MASK, 0b0000_0111);
+        assert_eq!(CODECONF_RESERVED_MASK, 0b1111_1000);
     }
 
     #[test]

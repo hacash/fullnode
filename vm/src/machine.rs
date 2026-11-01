@@ -21,6 +21,10 @@ mod sandbox;
 mod service;
 #[cfg(test)]
 pub(crate) mod test_ctx;
+#[cfg(test)]
+pub(crate) mod bench_calc_research;
+#[cfg(test)]
+mod calc_gas_tests;
 mod transfer;
 
 pub use deferred::DeferredRegistry;

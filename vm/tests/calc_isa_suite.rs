@@ -1,5 +1,5 @@
 //! ISA-level semantics suite for the calc VM, in riscv-tests rv64ui/um/uc
-//! style: every whitelisted RV64IMC+Zbb+Zbc instruction form runs through
+//! style: every whitelisted RV64IM+Zba/Zbb/Zbs/Zbc instruction form runs through
 //! the interpreter and is checked against HOST-side Rust reference
 //! semantics (independent of the interpreter implementation). Under
 //! `--features calc-aot` the same programs additionally run through the
@@ -15,7 +15,12 @@ mod isa_gen;
 use isa_gen::{all_cases, record_words, rodata_trap_parts, Case, Outcome};
 use vm::calc::container::CalcContainer;
 use vm::calc::interp::{self, CalcAbort};
-use vm::calc::verify::verify_container;
+fn verify_container(
+    c: &CalcContainer,
+) -> Result<vm::calc::verify::CalcModule, String> {
+    vm::calc::verify::verify_container_with(c, &vm::calc::CalcConfig::all_enabled())
+        .map_err(|e| format!("{e:?}"))
+}
 
 const BIG: u64 = 10_000_000;
 
@@ -32,21 +37,17 @@ fn run_interp(case: &Case, container: &CalcContainer, budget: u64) {
         Outcome::Ok => {
             assert!(r.is_ok(), "{}: expected clean return, got {r:?}", case.name);
             assert_eq!(mem.len(), isa_gen::mem_len() as usize, "{}: state snapshot", case.name);
-            let got: Vec<u64> = record_words(&mem)
+            let sp = module.layout_snapshot().stack_top;
+            let got: Vec<u64> = record_words(&mem, sp)
                 .into_iter()
                 .take(case.expect.len())
                 .collect();
             for (k, (g, e)) in got.iter().zip(case.expect.iter()).enumerate() {
                 assert_eq!(g, e, "{}: record slot {} mismatch", case.name, k + 1);
             }
-            assert_eq!(regs[2], isa_gen::mem_len(), "{}: sp must be preserved", case.name);
+            assert_eq!(regs[2], sp, "{}: sp must be preserved", case.name);
             if !case.ra_free {
-                assert_eq!(
-                    regs[1],
-                    vm::calc::CALC_RETURN_SENTINEL,
-                    "{}: ra must be preserved",
-                    case.name
-                );
+                assert_eq!(regs[1], 0, "{}: ra starts at 0 and must be preserved", case.name);
             }
         }
         Outcome::Trap => {
@@ -80,12 +81,11 @@ fn run_aot_parity(case: &Case, container: &CalcContainer, budget: u64) {
     use vm::calc::aot::{self, AotAbort};
     let module = verify_container(container).unwrap();
     if case.aot_declines {
-        assert!(
-            aot::aot_compile(&module).is_none(),
-            "{}: AOT must decline ecall containers",
-            case.name
-        );
-        return;
+        // AOT now implements HALT and hash ecalls; keep the hook so a
+        // future decline path can still be pinned.
+        if aot::aot_compile(&module).is_none() {
+            return;
+        }
     }
     let f = aot::aot_compile(&module)
         .unwrap_or_else(|| panic!("{}: AOT declined a supported case", case.name));
@@ -122,6 +122,15 @@ fn run_aot_parity(case: &Case, container: &CalcContainer, budget: u64) {
                 out.abort
             );
         }
+        Err((CalcAbort::GuestExit(code), _)) => {
+            assert_eq!(
+                out.abort,
+                Some(AotAbort::GuestExit),
+                "{}: AOT abort class (expected GuestExit)",
+                case.name
+            );
+            assert_eq!(out.exit_code, *code, "{}: guest exit code", case.name);
+        }
         Err((CalcAbort::Deadline, _)) => unreachable!("no deadline set"),
     }
     if !imem.is_empty() {
@@ -156,17 +165,21 @@ fn store_into_rodata_traps() {
     let (mut code, rodata, _) = rodata_trap_parts();
     // rodata_base = align16(code_len); rebuild the first instruction
     // (addi x30, x0, imm) with that address as the immediate.
-    let rodata_base = (code.len() as u64 + 15) & !15;
-    assert!(rodata_base <= 2047, "patch immediate must fit i12");
-    let word0 = 0x13u32 | (30 << 7) | ((rodata_base as u32) << 20);
-    code[0..4].copy_from_slice(&word0.to_le_bytes());
+    let rodata_base = (vm::calc::CALC_CODE_BASE + code.len() as u64 + 15) & !15;
+    let rel = rodata_base - vm::calc::CALC_CODE_BASE;
+    assert!(rel <= 2047, "patch immediate must fit i12");
+    // second instruction: addi x30, x30, rel (x30 already holds CODE_BASE)
+    let word1 = 0x13u32 | (30 << 7) | (30 << 15) | ((rel as u32) << 20);
+    code[4..8].copy_from_slice(&word1.to_le_bytes());
     let container = CalcContainer {
+        profile: vm::calc::CALC_PROFILE_RV64IM_B,
         abi: vm::calc::container::CALC_ABI_BYTES_TO_BYTES,
         mem_kib: isa_gen::MEM_KIB,
-        entry: 0,
+        entry: vm::calc::CALC_CODE_BASE as u32,
         code,
         rodata,
         init: Vec::new(),
+        bss_len: 0,
         input_max: isa_gen::INPUT_MAX,
         output_max: isa_gen::OUTPUT_MAX,
     };
@@ -180,14 +193,15 @@ fn store_into_rodata_traps() {
 /// cycle below it. The failing charge is excluded on shortfall.
 #[test]
 fn oog_boundary_cycles() {
-    // minimal program: exactly 2 cycles.
-    let code = vec![0x13, 0x05, 0x00, 0x00, 0x67, 0x80, 0x00, 0x00];
-    let container = isa_gen::container_for(code);
+    // minimal program: halt sequence, exactly 3 cycles.
+    let mut a = isa_gen::Asm::new();
+    a.ret();
+    let container = isa_gen::container_for(a.finish());
     let module = verify_container(&container).unwrap();
-    let (r, _, _, _) = interp::run_with_state(&module, &container, &[], 2);
+    let (r, _, _, _) = interp::run_with_state(&module, &container, &[], 3);
     assert!(r.is_ok(), "exact budget must succeed: {r:?}");
-    assert_eq!(r.unwrap().cycles_used, 2);
-    // one cycle short: the single 2-cycle block charge is excluded -> 0 used
+    assert_eq!(r.unwrap().cycles_used, 3);
+    // one cycle short: the single 3-cycle block charge is excluded -> 0 used
     let (r2, _, _, _) = interp::run_with_state(&module, &container, &[], 1);
     assert!(matches!(r2, Err((CalcAbort::OutOfGas, _))), "{r2:?}");
     assert_eq!(r2.unwrap_err().1, 0, "failing charge excluded");
@@ -197,7 +211,7 @@ fn oog_boundary_cycles() {
     #[cfg(feature = "calc-aot")]
     {
         let f = vm::calc::aot::aot_compile(&module).unwrap();
-        for (budget, ok) in [(2u64, true), (1, false), (0, false)] {
+        for (budget, ok) in [(3u64, true), (1, false), (0, false)] {
             let (out, _, _) = f.run_with_state(&module, &container, &[], budget);
             assert_eq!(
                 out.abort.is_none(),
@@ -207,7 +221,7 @@ fn oog_boundary_cycles() {
             );
             assert_eq!(
                 out.cycles_used,
-                if ok { 2 } else { 0 },
+                if ok { 3 } else { 0 },
                 "AOT cycles at budget {budget}"
             );
         }
@@ -236,7 +250,7 @@ fn oog_boundary_cycles() {
         assert_eq!(out.abort, Some(vm::calc::aot::AotAbort::OutOfGas));
         assert_eq!(out.cycles_used, 0);
     }
-    // multi-block partial progress: [addi,beq](2) + [li,jalr](2); at
+    // multi-block partial progress: [addi,beq](2) + halt(3); at
     // budget 3 the first block is charged, the second cannot be -> OOG
     // with exactly 2 cycles kept.
     let bs = all_cases()
@@ -257,9 +271,8 @@ fn oog_boundary_cycles() {
     }
 }
 
-/// Decode strictness: reserved compressed encodings and malformed tails
-/// must be rejected by the verifier (whole-code decode). Halfword values
-/// cross-checked against the spec tables / llvm-mc.
+/// Decode strictness: C encodings (excluded from both profiles) and
+/// malformed tails must be rejected by the verifier (whole-code decode).
 #[test]
 fn decode_strictness_reserved_forms() {
     let err = |halfwords: &[u16]| {
@@ -270,34 +283,21 @@ fn decode_strictness_reserved_forms() {
         let c = isa_gen::container_for(code);
         verify_container(&c).is_err()
     };
-    // c.addi4spn with imm == 0 (reserved).
+    // Compressed encodings are rejected on both profiles (code_len must
+    // be a multiple of 4, so a lone halfword never verifies).
     assert!(err(&[0x0000]));
-    // c.addi16sp imm == 0 (reserved): funct3 011, rd = x2, payload zero.
-    assert!(err(&[0x6101]));
-    // c.lui imm == 0, rd != x2 (reserved).
-    assert!(err(&[0x6281]));
-    // c.addiw rd == 0 (reserved in RV64).
-    assert!(err(&[0x2001]));
-    // c.ebreak: funct3 100, bit12 1, rs2 0, rd 0 (not whitelisted).
-    assert!(err(&[0x9002]));
-    // c.jr with rs1 == x0 (reserved): funct3 100, bit12 0, rs2 0, rd 0.
-    assert!(err(&[0x8002]));
-    // quadrant-0 c.fld (funct3 001) / c.fsd (funct3 101).
+    assert!(err(&[0x0001])); // former c.nop
+    assert!(err(&[0x9002])); // former c.ebreak
     assert!(err(&[0x2000]));
-    assert!(err(&[0xA000]));
-    // quadrant-2 c.fldsp (funct3 001, op 10) / c.fsdsp (funct3 101).
-    assert!(err(&[0x2002]));
-    assert!(err(&[0xA002]));
-    // legal tail reference: these MUST verify.
-    assert!(!err(&[0x0001])); // c.nop
-    assert!(!err(&[0x6141])); // c.addi16sp 16
-    // trailing truncated 32-bit instruction (last 2 bytes look like the
-    // start of a 4-byte word with low bits 11).
-    assert!(err(&[0x0281, 0x8000]));
-    // trailing single byte can never happen (code_len is even), but a
-    // lone half 0x0281 = addi with rd... 0x0281: imm=2 rd=0? decodes as
-    // addi x0, x0, 2 (legal HINT) - must NOT error:
-    assert!(!err(&[0x0281]));
+    // 32-bit nop MUST verify (two identical words -> 8 bytes).
+    let nop = 0x00000013u32.to_le_bytes();
+    let mut code = Vec::new();
+    code.extend_from_slice(&nop);
+    code.extend_from_slice(&nop);
+    let c = isa_gen::container_for(code);
+    assert!(verify_container(&c).is_ok());
+    // truncated 32-bit instruction (6 bytes) is rejected.
+    assert!(err(&[0x0013, 0x0000, 0x0013]));
 }
 
 /// Input echo kernel: bytes->bytes ABI end to end through CalcFnObj
@@ -320,10 +320,16 @@ fn input_echo_end_to_end() {
     a.s(0, 31, 29, 0); // sb x29, 0(x31)
     a.i(0, 28, 28, 0x13, 1); // addi i, i, 1
     a.b(6, 28, 6, head); // bltu i, len, head
-    a.i(0, 10, 6, 0x13, 0); // a0 = len
-    a.i(0, 0, 1, 0x67, 0); // ret
+    a.i(0, 10, 0, 0x13, 0); // a0 = exit 0
+    a.i(0, 11, 6, 0x13, 0); // a1 = len
+    a.i(0, 17, 0, 0x13, 0); // a7 = HALT
+    a.ecall();
     let container = isa_gen::container_for(a.finish());
-    let obj = vm::calc::CalcFnObj::build(container).unwrap();
+    let obj = vm::calc::CalcFnObj::build_with_config(
+        container,
+        vm::calc::CalcConfig::all_enabled(),
+    )
+    .unwrap();
     let limits = vm::calc::CalcRunLimits {
         cycles: 1_000_000,
         resource: i64::MAX,

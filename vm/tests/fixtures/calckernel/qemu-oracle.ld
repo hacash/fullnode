@@ -6,8 +6,9 @@ SECTIONS
   . = 0x10000;
   .text : { *(.oracle_start) *(.text.calc_entry) *(.text .text.*) }
   . = ALIGN(0x1000);
-  .rodata : { *(.rodata .rodata.*) }
+  .rodata : { *(.rodata .rodata.*) *(.srodata .srodata.*) *(.rodata.cst*) }
   . = ALIGN(0x1000);
-  .data : { *(.data .data.*) }
-  .bss : { *(.bss .bss.*) }
+  . = ALIGN(16);
+  .data ALIGN(16) : { *(.data .data.*) *(.sdata .sdata.*) }
+  .bss ALIGN(16) : { *(.sbss .sbss.*) *(.bss .bss.*) *(COMMON) }
 }

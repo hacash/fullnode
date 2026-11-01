@@ -1,4 +1,4 @@
-//! The sha256 kernel fixture (`tests/fixtures/sha256kernel`, RV64IMC
+//! The sha256 kernel fixture (`tests/fixtures/sha256kernel`, RV64IM)
 //! no_std, built by `build.sh` with the riscv64 toolchain; the image bins
 //! are committed so tests do not need the toolchain).
 //!
@@ -16,7 +16,17 @@
 
 use vm::calc::container::CalcContainer;
 use vm::calc::verify::verify_container;
-use vm::calc::{pack_container, CalcFnObj, CalcRunLimits, HashKind};
+use vm::calc::{
+    pack_container_with_bss, CalcConfig, CalcFnObj, CalcRunLimits, HashKind, CALC_CONFIG_V1,
+};
+
+fn kernel_cfg(aot: bool) -> CalcConfig {
+    CALC_CONFIG_V1
+        .with_hash_builtins(true)
+        .with_rodata_readonly(true)
+        .with_stack_guard(true)
+        .with_aot_mount(aot)
+}
 
 fn fixture(name: &str) -> Vec<u8> {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sha256kernel");
@@ -24,17 +34,38 @@ fn fixture(name: &str) -> Vec<u8> {
 }
 
 fn kernel() -> (CalcFnObj, CalcContainer) {
-    let container = pack_container(
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/sha256kernel");
+    let entry: u32 = u32::from_str_radix(
+        std::fs::read_to_string(format!("{dir}/entry.txt"))
+            .expect("fixture entry.txt")
+            .trim()
+            .trim_start_matches("0x"),
+        16,
+    )
+    .expect("entry hex");
+    let bss_len = u16::from_str_radix(
+        std::fs::read_to_string(format!("{dir}/bss_len.txt"))
+            .expect("fixture bss_len.txt")
+            .trim()
+            .trim_start_matches("0x"),
+        16,
+    )
+    .expect("bss_len hex") as u64;
+    let container = pack_container_with_bss(
+        vm::calc::CALC_PROFILE_RV64IM,
         8, // KiB
-        0, // entry (entry.txt)
+        entry,
         256,
         32,
         fixture("image_code.bin"),
         fixture("image_rodata.bin"),
         fixture("image_init.bin"),
+        bss_len,
+        &CALC_CONFIG_V1,
     )
     .expect("kernel container packs");
-    let obj = CalcFnObj::build(container.clone()).expect("kernel container verifies");
+    let obj = CalcFnObj::build_with_config(container.clone(), kernel_cfg(false))
+        .expect("kernel container verifies");
     (obj, container)
 }
 
@@ -120,7 +151,7 @@ fn kernel_dict_walk_error_paths() {
 #[test]
 fn kernel_aot_parity() {
     let (plain, container) = kernel();
-    let mounted = CalcFnObj::build_with_aot(container).expect("AOT image compiles");
+    let mounted = CalcFnObj::build_with_config(container, kernel_cfg(true)).expect("AOT image compiles");
     let mut docs: Vec<&[u8]> = vec![b"", b"abc", b"hacash"];
     for (doc, _) in WALKS {
         docs.push(doc);

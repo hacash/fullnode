@@ -341,7 +341,6 @@ impl<'a> Formater<'a> {
         system_call: bool,
         expected_system_args: Option<usize>,
     ) -> Vec<String> {
-        use Bytecode::*;
         if system_call {
             if let Some(expect) = expected_system_args {
                 if expect == 0 {
@@ -359,31 +358,16 @@ impl<'a> Formater<'a> {
             }
             return vec![self.print_inline(node)];
         }
-        let mut args = Vec::new();
-        let mut current: &dyn IRNode = node;
-        loop {
-            // `IRLIST` covers both packed argv lists and real list/map literals; flattening it in
-            // concat-argv mode would break argument boundaries (the arg may be a list literal).
-            if self.opt.flatten_call_list && !system_call {
-                if let Some(list) = current.as_any().downcast_ref::<IRNodeArray>() {
-                    if let Some(elements) = self.extract_packed_call_elements(list.inst, &list.subs)
-                    {
-                        args.extend(elements);
-                        return args;
-                    }
+        // User calls pass one packed value. A `++` expression is that value, not an
+        // argv split; packed tuples still flatten through `flatten_call_list`.
+        if self.opt.flatten_call_list {
+            if let Some(list) = node.as_any().downcast_ref::<IRNodeArray>() {
+                if let Some(elements) = self.extract_packed_call_elements(list.inst, &list.subs) {
+                    return elements;
                 }
             }
-            if let Some(double) = current.as_any().downcast_ref::<IRNodeDouble>() {
-                if double.inst == CAT {
-                    args.push(self.print_inline(&*double.subx));
-                    current = &*double.suby;
-                    continue;
-                }
-            }
-            args.push(self.print_inline(current));
-            break;
         }
-        args
+        vec![self.print_inline(node)]
     }
 
     fn trim_default_call_args(&self, args: &mut Vec<String>, node: &dyn IRNode) {

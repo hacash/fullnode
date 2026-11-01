@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-// sha256 calc kernel: the full compression function in pure RV64IMC
+// sha256 calc kernel: the full compression function in pure RV64IM
 // instructions (no ecall) — the "custom hash" workload shape that the HVM
 // bytecode channel cannot afford under resource metering.
 //
@@ -31,6 +31,22 @@ fn wr(x: u32, n: u32) -> u32 {
     x.rotate_right(n)
 }
 
+/// HALT ecall: a7=0, a0=exit, a1=output length. Spin afterwards so LLVM
+/// does not emit `unimp` (which the verifier rejects) after a noreturn asm.
+#[inline(never)]
+fn halt(exit: u64, out_len: u64) -> ! {
+    loop {
+        unsafe {
+            core::arch::asm!(
+                "ecall",
+                in("a0") exit,
+                in("a1") out_len,
+                in("a7") 0u64,
+            );
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn calc_entry(input_ptr: *const u8, input_len: u64, out_ptr: *mut u8, _out_cap: u64) -> u64 {
     let msg = unsafe { core::slice::from_raw_parts(input_ptr, input_len as usize) };
@@ -41,7 +57,12 @@ pub extern "C" fn calc_entry(input_ptr: *const u8, input_len: u64, out_ptr: *mut
     let digest = if msg.first() == Some(&b'{') {
         match dict_walk_digest(msg) {
             Some(d) => d,
-            None => return 0,
+            None => {
+                #[cfg(not(feature = "oracle"))]
+                halt(0, 0);
+                #[cfg(feature = "oracle")]
+                return 0;
+            }
         }
     } else {
         sha256(msg)
@@ -51,7 +72,10 @@ pub extern "C" fn calc_entry(input_ptr: *const u8, input_len: u64, out_ptr: *mut
         out[i * 4..i * 4 + 4].copy_from_slice(&digest[i].to_be_bytes());
         i += 1;
     }
-    32
+    #[cfg(not(feature = "oracle"))]
+    halt(0, 32);
+    #[cfg(feature = "oracle")]
+    { 32 }
 }
 
 const MAX_PAIRS: usize = 64;
@@ -67,11 +91,10 @@ const MAX_ACC: usize = 512;
 fn dict_walk_digest(doc: &[u8]) -> Option<[u32; 8]> {
     let lower = |c: u8| c.is_ascii_lowercase();
     let alnum = |c: u8| c.is_ascii_alphanumeric();
-    // Parse/walk tables live in static storage (.bss), not the stack: the
-    // container's fixed 2KiB stack cannot hold 1KiB of tables plus the
-    // sha256 frame — this kernel silently overflowed the stack before the
-    // guard band existed. Container memory is zeroed before every run, so
-    // moving the tables changes addressing, not semantics.
+    // Parse/walk tables live in static storage (.bss). The committed image's
+    // `.bss` is 0x400 bytes (`bss_len.txt`); packers must pass that length
+    // or the guard band sitting above `.bss` traps the first table store.
+    // Container memory is zeroed before every run.
     static mut KS: [u16; MAX_PAIRS] = [0; MAX_PAIRS];
     static mut KL: [u16; MAX_PAIRS] = [0; MAX_PAIRS];
     static mut VS: [u16; MAX_PAIRS] = [0; MAX_PAIRS];
@@ -292,5 +315,5 @@ core::arch::global_asm!(
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
-    loop {}
+    unsafe { core::arch::asm!("ebreak", options(noreturn)) }
 }

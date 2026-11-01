@@ -55,7 +55,11 @@ impl Runtime {
         state_ed: &ContractEdition,
         csto: ContractSto,
     ) -> VmrtRes<Arc<ContractObj>> {
-        let cobj = Arc::new(csto.into_obj(&self.warm.space_cap)?);
+        let cobj = Arc::new(csto.into_obj_with(
+            &self.warm.space_cap,
+            self.cfg_height(),
+            self.calc_host_config(),
+        )?);
         if cobj.edition != *state_ed {
             return itr_err_fmt!(
                 ContractError,
@@ -109,7 +113,7 @@ impl Runtime {
         self.resolve_contract(host, addr)
     }
 
-    fn resolve_user_on_owner<H: VmHost + ?Sized>(
+    fn resolve_callee_on_owner<H: VmHost + ?Sized>(
         &mut self,
         host: &mut H,
         owner: &ContractAddress,
@@ -181,7 +185,7 @@ impl Runtime {
         let entries = self.resolve_lookup_candidates(host, &anchor, call)?;
         let mut found = None;
         for owner in entries {
-            if let Some(hit) = self.resolve_user_on_owner(host, &owner, call.selector())? {
+            if let Some(hit) = self.resolve_callee_on_owner(host, &owner, call.selector())? {
                 found = Some(hit);
                 break;
             }
@@ -209,6 +213,15 @@ impl Runtime {
                 "contract {}{} func sign {}",
                 vis.to_readable(),
                 impl_in,
+                hex::encode(call.selector())
+            );
+        }
+        if hit.fnobj.is_rv64im()
+            && !matches!(*call, CallSpec::Invoke { effect: EffectMode::Pure, .. })
+        {
+            return itr_err_fmt!(
+                CallInvalid,
+                "rv64im function 0x{} requires pure call",
                 hex::encode(call.selector())
             );
         }
