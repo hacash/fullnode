@@ -7,10 +7,10 @@ use base::{
     VmValueType,
 };
 use std::sync::Arc;
-#[cfg(test)]
-use sys::errf;
 use sys::Rerr;
 use sys::Ret;
+#[cfg(test)]
+use sys::errf;
 fn create_context(
     env: Env,
     registry: Arc<dyn ExecutionServices>,
@@ -120,6 +120,10 @@ fn register_vm_host_defs(reg: &mut dyn ExecRegistry) -> Rerr {
         HacdInscGet = (Bytes, 2),
         HacdNameList = (Bytes, 3),
         HacdOwnerAddrs = (Bytes, 1),
+        HacdSmelt = (Bytes, 1),
+        HacdNumberBatch = (Bytes, 1),
+        HacdVisualGeneBatch = (Bytes, 1),
+        HacdLifeGeneBatch = (Bytes, 1),
         TxMessage = (Bytes, 1),
         TxMessageSingle = (Bytes, 0),
         TxBlob = (Bytes, 3),
@@ -294,6 +298,25 @@ mod tests {
                 VmValueType::Bytes,
                 1,
             ),
+            (HacdSmelt::KIND, HacdSmelt::NAME, VmValueType::Bytes, 1),
+            (
+                HacdNumberBatch::KIND,
+                HacdNumberBatch::NAME,
+                VmValueType::Bytes,
+                1,
+            ),
+            (
+                HacdVisualGeneBatch::KIND,
+                HacdVisualGeneBatch::NAME,
+                VmValueType::Bytes,
+                1,
+            ),
+            (
+                HacdLifeGeneBatch::KIND,
+                HacdLifeGeneBatch::NAME,
+                VmValueType::Bytes,
+                1,
+            ),
         ] {
             let def = reg.host(VmHostCallKind::View, kind as u8).unwrap();
             assert_eq!(def.name, name);
@@ -324,6 +347,10 @@ mod tests {
             HacdInscGet::KIND,
             HacdNameList::KIND,
             HacdOwnerAddrs::KIND,
+            HacdSmelt::KIND,
+            HacdNumberBatch::KIND,
+            HacdVisualGeneBatch::KIND,
+            HacdLifeGeneBatch::KIND,
             BalanceFungible::KIND,
             BalanceFungibleBatch::KIND,
             BalanceTableCheck::KIND,
@@ -380,6 +407,16 @@ mod tests {
         assert_eq!(name(VmHostCallKind::View, 18), Some("hacd_insc_get"));
         assert_eq!(name(VmHostCallKind::View, 19), Some("hacd_name_list"));
         assert_eq!(name(VmHostCallKind::View, 20), Some("hacd_owner_addrs"));
-        assert_eq!(name(VmHostCallKind::View, 0x05), Some("balance_table_check"));
+        assert_eq!(name(VmHostCallKind::View, 21), Some("hacd_smelt"));
+        assert_eq!(name(VmHostCallKind::View, 22), Some("hacd_number_batch"));
+        assert_eq!(
+            name(VmHostCallKind::View, 23),
+            Some("hacd_visual_gene_batch")
+        );
+        assert_eq!(name(VmHostCallKind::View, 24), Some("hacd_life_gene_batch"));
+        assert_eq!(
+            name(VmHostCallKind::View, 0x05),
+            Some("balance_table_check")
+        );
     }
 }

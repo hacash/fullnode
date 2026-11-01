@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use sys::{Rerr, Ret, errf, normalf};
 
 use crate::codec::{Decode, Encode};
-use crate::types::fixed::{Fixed6, Fixed10};
+use crate::types::fixed::{Fixed6, Fixed10, Hash};
 use crate::types::fold64::Fold64;
 use crate::types::list::{ListW1, ListW2};
 use crate::types::uint::Uint3;
@@ -17,6 +17,38 @@ pub type DiamondNumber = Uint3;
 pub struct DiamondNumberAuto(Fold64);
 pub type DiamondVisualGene = Fixed10;
 pub type DiamondLifeGene = Fixed10;
+
+/// Visual gene derived from a diamond name and its 32-byte life gene.
+///
+/// This is the mint formula (`calculate_diamond_visual_gene`): hex nibbles of
+/// the name and of `life_gene[20..31]`, then byte 0 is replaced by
+/// `life_gene[31]`. Invalid name bytes panic; callers pass a checked
+/// `DiamondName`.
+pub fn diamond_visual_gene(name: &DiamondName, life_gene: &Hash) -> DiamondVisualGene {
+    const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
+    const ALPHABET: &[u8; 16] = b"WTYUIAHXVMEKBSZN";
+    let mut genehexstr = [b'0'; 20];
+    let searchgx = |x: u8| {
+        for (i, a) in ALPHABET.iter().enumerate() {
+            if *a == x {
+                return HEX_CHARS[i];
+            }
+        }
+        panic!("not supply diamond char");
+    };
+    for i in 0..DiamondName::SIZE {
+        genehexstr[i + 2] = searchgx(name.as_ref()[i]);
+    }
+    let mut idx = 8;
+    for i in 20..31 {
+        let k = (life_gene.as_ref()[i] as usize) % 16;
+        genehexstr[idx] = HEX_CHARS[k];
+        idx += 1;
+    }
+    let mut genehex = hex::decode(genehexstr).expect("visual gene hex");
+    genehex[0] = life_gene.as_ref()[31];
+    DiamondVisualGene::from(genehex.try_into().expect("visual gene is 10 bytes"))
+}
 
 /// Semantic cap of `DiamondNameListMax200` (u8-counted wire form, so a semantic rule).
 /// Single source — this module's checks and the SDK's codec profile both read it.
@@ -373,6 +405,18 @@ define_diamond_name_list!(DiamondNameListMax60000, ListW2, 60_000);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visual_gene_matches_the_mint_nibble_formula() {
+        let name = DiamondName::from(*b"WTYUIA");
+        let mut life = [0u8; 32];
+        life[31] = 0xAB;
+        let gene = diamond_visual_gene(&name, &Hash::from(life));
+        assert_eq!(
+            gene.as_ref(),
+            &[0xAB, 0x01, 0x23, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        );
+    }
 
     #[test]
     fn diamond_list_rejects_duplicates() {

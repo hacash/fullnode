@@ -50,7 +50,7 @@ vm_defs! {
     (0x04, "tx_message_num", U8, 0),
     (0x05, "tx_blob_num", U8, 0),
     },
-    view[17]: {
+    view[21]: {
     (0x01, "balance_coin", Bytes, 1),
     (0x02, "balance_asset", U64, 2),
     (0x03, "balance_fungible", U64, 2),
@@ -64,6 +64,10 @@ vm_defs! {
     (0x12, "hacd_insc_get", Bytes, 2),
     (0x13, "hacd_name_list", Bytes, 3),
     (0x14, "hacd_owner_addrs", Bytes, 1),
+    (0x15, "hacd_smelt", Bytes, 1),
+    (0x16, "hacd_number_batch", Bytes, 1),
+    (0x17, "hacd_visual_gene_batch", Bytes, 1),
+    (0x18, "hacd_life_gene_batch", Bytes, 1),
     (0x21, "tx_message", Bytes, 1),
     (0x22, "tx_message_single", Bytes, 0),
     (0x23, "tx_blob", Bytes, 3),

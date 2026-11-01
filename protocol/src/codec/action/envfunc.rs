@@ -2,8 +2,8 @@
 //! `Context::action_call` with kid = `[0x07|0x06, idx]` where idx = KIND % 256.
 
 use field::{
-    Address, AddressW1, AssetAmtW1, DiamondName, DiamondNameListMax200, DiamondNumber,
-    Fold64, ListW1, Uint1, Uint2,
+    Address, AddressW1, AssetAmtW1, DiamondName, DiamondNameListMax200, DiamondNumber, Fold64,
+    ListW1, Uint1, Uint2,
 };
 
 base::action_simple! { EnvHeight, 0x0701, 3, CALL_ONLY, {
@@ -144,6 +144,52 @@ base::action_simple! { HacdOwnerAddrs, 0x0614, 3, CALL_ONLY, {
 }, this, {
     description: format!("Syscall: query owner addresses of HACD ({})", this.diamonds.splitstr())
 }}
+
+// Frozen smelt ABI. Each action takes `DiamondNameListMax200` (same name-list
+// field as `hacd_owner_addrs`; decode rejects duplicates, bad characters, and
+// more than 200). Results are positional, with no count prefix:
+//   hacd_smelt:            number u64 BE || visual_gene 10 || life_gene 32
+//   hacd_number_batch:     number u64 BE
+//   hacd_visual_gene_batch: visual_gene 10
+//   hacd_life_gene_batch:  life_gene 32
+// No second length cap here. A return bigger than the VM value limit fails
+// at the value boundary, so raising that limit does not require an action change.
+base::action_simple! { HacdSmelt, 0x0615, 3, CALL_ONLY, {
+    diamonds: DiamondNameListMax200
+}, this, {
+    description: format!(
+        "Syscall: query smelt of HACD ({}); each entry is number u64 BE, visual gene 10, life gene 32",
+        this.diamonds.splitstr()
+    )
+}}
+
+base::action_simple! { HacdNumberBatch, 0x0616, 3, CALL_ONLY, {
+    diamonds: DiamondNameListMax200
+}, this, {
+    description: format!(
+        "Syscall: query diamond numbers of HACD ({}) as u64 big-endian, input order",
+        this.diamonds.splitstr()
+    )
+}}
+
+base::action_simple! { HacdVisualGeneBatch, 0x0617, 3, CALL_ONLY, {
+    diamonds: DiamondNameListMax200
+}, this, {
+    description: format!(
+        "Syscall: query visual genes of HACD ({}), 10 bytes each, input order",
+        this.diamonds.splitstr()
+    )
+}}
+
+base::action_simple! { HacdLifeGeneBatch, 0x0618, 3, CALL_ONLY, {
+    diamonds: DiamondNameListMax200
+}, this, {
+    description: format!(
+        "Syscall: query life genes of HACD ({}), 32 bytes each, input order",
+        this.diamonds.splitstr()
+    )
+}}
+
 base::action_simple! { TxMessage, 0x0621, 3, CALL_ONLY, {
     idx: Uint1
 }, this, {
@@ -168,7 +214,6 @@ base::action_simple! { TxBlobSize, 0x0624, 3, CALL_ONLY, {
 }, this, {
     description: format!("Syscall: query transaction blob at index {} (0-based) size in bytes", this.idx.uint())
 }}
-
 
 #[cfg(test)]
 mod tests {
@@ -334,8 +379,7 @@ mod tests {
         assert_eq!(BalanceTableCheck::NAME, "balance_table_check");
         assert_eq!(BalanceTableCheck::SCOPE, ActScope::CALL_ONLY);
 
-        let action =
-            BalanceTableCheck::new(privkey_addr(1), table(&[(1, 100), (11, 7)]));
+        let action = BalanceTableCheck::new(privkey_addr(1), table(&[(1, 100), (11, 7)]));
         let wire = action.encode();
         // kind(u16) + addr(21) + count(u8) + per-entry fold64(serial)+fold64(amount).
         let entries_bytes: usize = [(1u64, 100u64), (11, 7)]
@@ -357,10 +401,7 @@ mod tests {
         // charged strictly more (linear in entries).
         let again = BalanceTableCheck::new(privkey_addr(1), table(&[(1, 100), (11, 7)]));
         assert_eq!(again.encode(), wire);
-        let bigger = BalanceTableCheck::new(
-            privkey_addr(1),
-            table(&[(1, 100), (11, 7), (12, 9)]),
-        );
+        let bigger = BalanceTableCheck::new(privkey_addr(1), table(&[(1, 100), (11, 7), (12, 9)]));
         assert!(bigger.size() > action.size());
 
         // The u8 count prefix bounds the table; serial 0 fails at wire decode
