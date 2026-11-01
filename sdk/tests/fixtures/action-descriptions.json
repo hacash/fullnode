@@ -1,9 +1,9 @@
 {
   "spec_version": "action-description@1",
-  "sdk_version": "0.2.3",
-  "catalog_total": 57,
+  "sdk_version": "0.2.4",
+  "catalog_total": 61,
   "sdk_profile_total": 35,
-  "call_only_total": 22,
+  "call_only_total": 26,
   "cases": [
     {
       "fixture_id": "transfer_hac_to.standard",
@@ -794,6 +794,54 @@
       "json": "{\"kind\":1556,\"diamonds\":\"WTYUIA,XVMEKB\"}",
       "raw": "06140257545955494158564d454b42",
       "fullnode_description": "Syscall: query owner addresses of HACD (WTYUIA,XVMEKB)",
+      "sdk_description": null,
+      "wallet_mode": "n/a (CALL_ONLY: Fullnode review only)"
+    },
+    {
+      "fixture_id": "hacd_smelt.standard",
+      "kind": 1557,
+      "name": "hacd_smelt",
+      "scope": "call",
+      "sdk_profile": false,
+      "json": "{\"kind\":1557,\"diamonds\":\"WTYUIA,XVMEKB\"}",
+      "raw": "06150257545955494158564d454b42",
+      "fullnode_description": "Syscall: query smelt of HACD (WTYUIA,XVMEKB); each entry is number u64 BE, visual gene 10, life gene 32",
+      "sdk_description": null,
+      "wallet_mode": "n/a (CALL_ONLY: Fullnode review only)"
+    },
+    {
+      "fixture_id": "hacd_number_batch.standard",
+      "kind": 1558,
+      "name": "hacd_number_batch",
+      "scope": "call",
+      "sdk_profile": false,
+      "json": "{\"kind\":1558,\"diamonds\":\"WTYUIA,XVMEKB\"}",
+      "raw": "06160257545955494158564d454b42",
+      "fullnode_description": "Syscall: query diamond numbers of HACD (WTYUIA,XVMEKB) as u64 big-endian, input order",
+      "sdk_description": null,
+      "wallet_mode": "n/a (CALL_ONLY: Fullnode review only)"
+    },
+    {
+      "fixture_id": "hacd_visual_gene_batch.standard",
+      "kind": 1559,
+      "name": "hacd_visual_gene_batch",
+      "scope": "call",
+      "sdk_profile": false,
+      "json": "{\"kind\":1559,\"diamonds\":\"WTYUIA,XVMEKB\"}",
+      "raw": "06170257545955494158564d454b42",
+      "fullnode_description": "Syscall: query visual genes of HACD (WTYUIA,XVMEKB), 10 bytes each, input order",
+      "sdk_description": null,
+      "wallet_mode": "n/a (CALL_ONLY: Fullnode review only)"
+    },
+    {
+      "fixture_id": "hacd_life_gene_batch.standard",
+      "kind": 1560,
+      "name": "hacd_life_gene_batch",
+      "scope": "call",
+      "sdk_profile": false,
+      "json": "{\"kind\":1560,\"diamonds\":\"WTYUIA,XVMEKB\"}",
+      "raw": "06180257545955494158564d454b42",
+      "fullnode_description": "Syscall: query life genes of HACD (WTYUIA,XVMEKB), 32 bytes each, input order",
       "sdk_description": null,
       "wallet_mode": "n/a (CALL_ONLY: Fullnode review only)"
     },

@@ -1,13 +1,13 @@
 //! VM syscall action execute bodies.
 
 use base::CoreState;
-use field::{Address, AddressW1, Balance, DiamondName, Encode};
-use sys::errf;
+use field::{Address, AddressW1, Balance, DiamondName, DiamondNameListMax200, Encode};
+use sys::{Ret, errf};
 
 use crate::codec::action::{
     AssetMeta, BalanceAsset, BalanceCoin, BalanceFungible, BalanceFungibleBatch, BalanceTableCheck, BlockAuthorAddr,
-    CheckSignature, EnvHeight, HacdInscGet, HacdInscNum, HacdNameList,
-    HacdOwnerAddrs, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum, TxBlobSize,
+    CheckSignature, EnvHeight, HacdInscGet, HacdInscNum, HacdLifeGeneBatch, HacdNameList,
+    HacdNumberBatch, HacdOwnerAddrs, HacdSmelt, HacdVisualGeneBatch, SigsetAtLeast, SigsetCount, TxBlob, TxBlobNum, TxBlobSize,
     TxMainAddr, TxMessage, TxMessageNum, TxMessageSingle,
 };
 
@@ -458,6 +458,96 @@ base::impl_action_execute! {
     }
 }
 
+/// One diamond's appraisal fields. `number` is the `Uint3` zero-extended to u64.
+struct HacdSmeltFields {
+    number: u64,
+    visual: [u8; 10],
+    life: [u8; 32],
+}
+
+fn load_hacd_smelt_fields(state: &CoreState<'_>, name: &DiamondName) -> Ret<HacdSmeltFields> {
+    let Some(smelt) = state.diamond_smelt(name)? else {
+        return errf!("diamond {} smelt not found", name.to_readable());
+    };
+    let visual = field::diamond_visual_gene(name, &smelt.life_gene);
+    let mut life = [0u8; 32];
+    life.copy_from_slice(smelt.life_gene.as_ref());
+    let mut visual_bytes = [0u8; 10];
+    visual_bytes.copy_from_slice(visual.as_ref());
+    Ok(HacdSmeltFields {
+        number: u64::from(smelt.number.uint()),
+        visual: visual_bytes,
+        life,
+    })
+}
+
+fn each_smelt(state: &CoreState<'_>, diamonds: &DiamondNameListMax200) -> Ret<Vec<HacdSmeltFields>> {
+    let _n = diamonds.check()?;
+    let mut out = Vec::with_capacity(diamonds.length());
+    for name in diamonds.as_list() {
+        out.push(load_hacd_smelt_fields(state, name)?);
+    }
+    Ok(out)
+}
+
+base::impl_action_execute! {
+    HacdSmelt {
+        (self, ctx) {
+            let state = CoreState::wrap(ctx.layer());
+            let rows = each_smelt(&state, &self.diamonds)?;
+            let mut res = Vec::with_capacity(rows.len() * (8 + 10 + 32));
+            for row in rows {
+                res.extend_from_slice(&row.number.to_be_bytes());
+                res.extend_from_slice(&row.visual);
+                res.extend_from_slice(&row.life);
+            }
+            Ok(res)
+        }
+    }
+}
+
+base::impl_action_execute! {
+    HacdNumberBatch {
+        (self, ctx) {
+            let state = CoreState::wrap(ctx.layer());
+            let rows = each_smelt(&state, &self.diamonds)?;
+            let mut res = Vec::with_capacity(rows.len() * 8);
+            for row in rows {
+                res.extend_from_slice(&row.number.to_be_bytes());
+            }
+            Ok(res)
+        }
+    }
+}
+
+base::impl_action_execute! {
+    HacdVisualGeneBatch {
+        (self, ctx) {
+            let state = CoreState::wrap(ctx.layer());
+            let rows = each_smelt(&state, &self.diamonds)?;
+            let mut res = Vec::with_capacity(rows.len() * 10);
+            for row in rows {
+                res.extend_from_slice(&row.visual);
+            }
+            Ok(res)
+        }
+    }
+}
+
+base::impl_action_execute! {
+    HacdLifeGeneBatch {
+        (self, ctx) {
+            let state = CoreState::wrap(ctx.layer());
+            let rows = each_smelt(&state, &self.diamonds)?;
+            let mut res = Vec::with_capacity(rows.len() * 32);
+            for row in rows {
+                res.extend_from_slice(&row.life);
+            }
+            Ok(res)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,8 +557,9 @@ mod tests {
         Transaction, TxRef, Vm, VmExecutionParams, VmHostActionDef, VmHostCallKind,
     };
     use field::{
-        Amount, AssetAmt, AssetAmtW1, Balance, DiamondNumber, DiamondNumberAuto, Encode,
-        Fold64, SatoshiAuto, Uint1, Uint8, UNIT_ZHU,
+        Amount, AssetAmt, AssetAmtW1, Balance, BlockHeight, DiamondNameListMax200, DiamondNumber,
+        DiamondNumberAuto, DiamondSmelt, Encode, Fixed8, Fold64, Hash, SatoshiAuto, Uint1, Uint2,
+        Uint8, UNIT_ZHU,
     };
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
@@ -1002,5 +1093,90 @@ mod tests {
         // With every serial legal, a mismatch anywhere still answers false.
         let (_, ret) = run_table_check(&mut ctx, addr, &[(1, 999), (2, 500), (11, 7)]).unwrap();
         assert_eq!(ret, vec![0]);
+    }
+
+    fn hacd_name(i: usize) -> DiamondName {
+        const ALPHA: &[u8; 16] = b"WTYUIAHXVMEKBSZN";
+        let mut raw = [b'W'; 6];
+        let mut n = i;
+        for slot in (0..6).rev() {
+            raw[slot] = ALPHA[n % 16];
+            n /= 16;
+        }
+        DiamondName::from(raw)
+    }
+
+    fn put_smelt(ctx: &mut SigsetCtx, name: DiamondName, number: u32, life31: u8) {
+        let mut life = [0u8; 32];
+        life[31] = life31;
+        let smelt = DiamondSmelt {
+            diamond: name,
+            number: DiamondNumber::from(number),
+            born_height: BlockHeight::from(0),
+            born_hash: Hash::default(),
+            prev_hash: Hash::default(),
+            miner_address: Address::default(),
+            bid_fee: Amount::zero(),
+            nonce: Fixed8::default(),
+            average_bid_burn: Uint2::from(0),
+            life_gene: Hash::from(life),
+        };
+        CoreState::wrap(ctx.layer()).diamond_smelt_set(&name, &smelt);
+    }
+
+    #[test]
+    fn hacd_smelt_views_are_positional_and_share_one_record_layout() {
+        let a = hacd_name(1);
+        let b = hacd_name(2);
+        let mut ctx = SigsetCtx::new(Vec::<Address>::new());
+        put_smelt(&mut ctx, a, 0x010203, 0xAB);
+        put_smelt(&mut ctx, b, 7, 0x10);
+        let list = DiamondNameListMax200::from(vec![a, b]).unwrap();
+
+        let (_, smelt) = ActionExecute::execute(&HacdSmelt::new(list.clone()), &mut ctx).unwrap();
+        let (_, numbers) =
+            ActionExecute::execute(&HacdNumberBatch::new(list.clone()), &mut ctx).unwrap();
+        let (_, visual) =
+            ActionExecute::execute(&HacdVisualGeneBatch::new(list.clone()), &mut ctx).unwrap();
+        let (_, life) =
+            ActionExecute::execute(&HacdLifeGeneBatch::new(list.clone()), &mut ctx).unwrap();
+
+        assert_eq!(smelt.len(), 2 * 50);
+        assert_eq!(numbers.len(), 16);
+        assert_eq!(visual.len(), 20);
+        assert_eq!(life.len(), 64);
+        for i in 0..2 {
+            let rec = &smelt[i * 50..i * 50 + 50];
+            assert_eq!(&rec[0..8], &numbers[i * 8..i * 8 + 8]);
+            assert_eq!(&rec[8..18], &visual[i * 10..i * 10 + 10]);
+            assert_eq!(&rec[18..50], &life[i * 32..i * 32 + 32]);
+        }
+        assert_eq!(&numbers[0..8], &0x010203u64.to_be_bytes());
+        assert_eq!(&numbers[8..16], &7u64.to_be_bytes());
+        assert_eq!(
+            &visual[0..10],
+            field::diamond_visual_gene(&a, &Hash::from({
+                let mut life = [0u8; 32];
+                life[31] = 0xAB;
+                life
+            }))
+            .as_ref()
+        );
+        assert_eq!(life[31], 0xAB);
+        assert_eq!(life[63], 0x10);
+
+        let missing = DiamondNameListMax200::from(vec![a, hacd_name(3)]).unwrap();
+        assert!(ActionExecute::execute(&HacdSmelt::new(missing), &mut ctx).is_err());
+
+        // The name-list type is the only cap. 51 is past hacd_owner_addrs' execute
+        // cap and must still be a legal smelt query.
+        let many: Vec<_> = (0..51).map(hacd_name).collect();
+        for (i, name) in many.iter().copied().enumerate() {
+            put_smelt(&mut ctx, name, i as u32, 1);
+        }
+        let many = DiamondNameListMax200::from(many).unwrap();
+        let (_, numbers) = ActionExecute::execute(&HacdNumberBatch::new(many), &mut ctx).unwrap();
+        assert_eq!(numbers.len(), 51 * 8);
+        assert_eq!(&numbers[50 * 8..], &50u64.to_be_bytes());
     }
 }

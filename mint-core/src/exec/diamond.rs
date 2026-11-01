@@ -14,30 +14,8 @@ use x16rs;
 use crate::action::diamond::HacdMint;
 use crate::state::{MintState, with_mint_total};
 
-const HEX_CHARS: &[u8; 16] = b"0123456789ABCDEF";
-
 pub fn calculate_diamond_visual_gene(name: &DiamondName, life_gene: &Hash) -> DiamondVisualGene {
-    let mut genehexstr = [b'0'; 20];
-    let searchgx = |x| {
-        for (i, a) in x16rs::DIAMOND_NAME_VALID_CHARS.iter().enumerate() {
-            if *a == x {
-                return HEX_CHARS[i];
-            }
-        }
-        panic!("not supply diamond char");
-    };
-    for i in 0..DiamondName::SIZE {
-        genehexstr[i + 2] = searchgx(name.as_ref()[i]);
-    }
-    let mut idx = 8;
-    for i in 20..31 {
-        let k = (life_gene.as_ref()[i] as usize) % 16;
-        genehexstr[idx] = HEX_CHARS[k];
-        idx += 1;
-    }
-    let mut genehex = hex::decode(genehexstr).unwrap();
-    genehex[0] = life_gene.as_ref()[31];
-    DiamondVisualGene::from(genehex.try_into().unwrap())
+    field::diamond_visual_gene(name, life_gene)
 }
 
 fn diamond_mint(this: &HacdMint, ctx: &mut dyn Context) -> Rerr {
