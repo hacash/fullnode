@@ -246,8 +246,8 @@ pub fn convert_and_check(
 
 #[cfg(feature = "execute")]
 fn reject_calc_hvm_io(c: &crate::calc::container::CalcContainer, cap: &SpaceCap) -> VmrtErr {
-    if c.input_max as usize > cap.call_data_size {
-        return itr_err_fmt!(ContractError, "calcfunc input_max exceeds HVM call_data_size");
+    if c.input_max as usize > crate::calc::container::CALC_IO_MAX as usize {
+        return itr_err_fmt!(ContractError, "calcfunc input_max exceeds calc io cap");
     }
     if c.output_max as usize > cap.value_size {
         return itr_err_fmt!(ContractError, "calcfunc output_max exceeds HVM value_size");
@@ -785,9 +785,9 @@ mod calc_io_load_tests {
     fn input_max_at_calc_io_max_is_accepted() {
         let cap = SpaceCap::new(0);
         let mut sto = ContractSto::default();
-        sto.userfuncs.push(calc_user(4096, 16)).unwrap();
-        check_at_100(&sto).expect("input_max 4096 within call_data_size");
-        sto.into_obj(&cap).expect("into_obj accepts input_max 4096");
+        sto.userfuncs.push(calc_user(5120, 16)).unwrap();
+        check_at_100(&sto).expect("input_max 5120 within calc io cap");
+        sto.into_obj(&cap).expect("into_obj accepts input_max 5120");
     }
 
     #[test]

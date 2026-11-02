@@ -87,7 +87,6 @@ impl CallFrame {
                             let mut param = curr_mut!().pop_value()?;
                             let item_count = match &param {
                                 Value::Compo(c) if c.is_list() => Some(c.len()),
-                                Value::Tuple(t) => Some(t.len()),
                                 _ => None,
                             };
                             if let Some(n) = item_count {
@@ -96,20 +95,24 @@ impl CallFrame {
                                     gas_extra.compo_items_read(n),
                                 )?;
                             }
-                            // Calc input is defined by `extract_rv64im_call_data`:
-                            // a scalar, a top-level Tuple, or a one-layer Compo
-                            // list flattened under `call_data_size` (4,608 B).
-                            // The declared `bytes` signature must not force-cast a
-                            // Tuple/List back to a scalar, because that is the
-                            // supported way to feed a kernel more than the HVM
-                            // scalar cap (each chunk still passes the cap check
-                            // above). Scalars keep the normal cast.
+                            // Calc input is the same byte-string slot as
+                            // ACTION / Concat-NTFUNC: `extract_call_data`
+                            // flattens a scalar or a one-layer Compo list under
+                            // `call_data_size` (5120, also `CALC_IO_MAX`). A
+                            // kernel that needs more than the HVM scalar cap
+                            // uses `list { chunk, ... }`; a Tuple is packed
+                            // argv and is rejected here like everywhere else.
+                            // The kernel's own `input_max` is enforced by the
+                            // calc pre-flight in `run`. A List must not be
+                            // force-cast back to a scalar, so it skips the
+                            // declared `bytes` type check; scalars keep the
+                            // normal cast.
                             if let Some(vtys) = plan.fnobj.agvty.as_ref() {
-                                if !matches!(param, Value::Tuple(_) | Value::Compo(_)) {
+                                if !matches!(param, Value::Compo(_)) {
                                     vtys.check_params(&mut param)?;
                                 }
                             }
-                            let input_bytes = param.extract_rv64im_call_data(&cap)?;
+                            let input_bytes = param.extract_call_data(&cap)?;
                             let cur = machine.gas_use();
                             let host_rem = VmHost::gas_remaining(host).max(0);
                             let in_res = crate::calc::ceil_div(input_bytes.len() as u64, 16) as i64;

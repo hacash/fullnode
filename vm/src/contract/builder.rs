@@ -107,8 +107,8 @@ impl Func {
             return errf!("calc container trailing bytes");
         }
         let cap = crate::rt::SpaceCap::new(0);
-        if c.input_max as usize > cap.call_data_size {
-            return errf!("calcfunc input_max exceeds HVM call_data_size");
+        if c.input_max as usize > crate::calc::container::CALC_IO_MAX as usize {
+            return errf!("calcfunc input_max exceeds calc io cap");
         }
         if c.output_max as usize > cap.value_size {
             return errf!("calcfunc output_max exceeds HVM value_size");

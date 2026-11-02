@@ -1,12 +1,26 @@
+/// Max materialized call-data body (`extract_call_data`): ACTION bodies,
+/// Concat-NTFUNC argv, and calc kernel input.
+///
+/// Also the calc container wire cap (`CALC_IO_MAX`) for `input_max` /
+/// `output_max`, so one ceiling governs both the materialized input and the
+/// declared calc ABI. Bodies are assembled from ≤ `value_size` chunks in a
+/// one-layer `Compo` list; `Tuple` is packed argv and is never a byte carrier.
+///
+/// CONSENSUS: this is a runtime rule, not height-gated. Changing it is a
+/// coordinated consensus upgrade (it widens what ACTION / Concat-NTFUNC
+/// bodies are accepted).
+pub const CALL_DATA_MAX: usize = 5120;
+
 #[derive(Debug, Clone, Default)]
 pub struct SpaceCap {
     pub loaded_contract: usize, // 20
     pub call_depth: usize,      // 32
 
     pub value_size: usize, // 1280
-    /// Max materialized ACTION / Concat-NTFUNC body length (`extract_call_data` only).
-    /// Does not apply to `Value::valid`, CAT, PUT, HREAD, or return values.
-    pub call_data_size: usize, // 4608
+    /// Max materialized ACTION / Concat-NTFUNC / calc input length
+    /// (`extract_call_data` only). Does not apply to `Value::valid`, CAT, PUT,
+    /// HREAD, or return values.
+    pub call_data_size: usize, // 5120
     pub tuple_length: usize,
     pub compo_length: usize,
 
@@ -57,7 +71,7 @@ impl SpaceCap {
             loaded_contract: 20,
             call_depth: 32,
             value_size: 1280, // = 32 * 40, diamond name list max bytes: 200*6 = 1200
-            call_data_size: 4608,
+            call_data_size: CALL_DATA_MAX,
             tuple_length: Self::DEFAULT_TUPLE_LENGTH,
             compo_length: 128,
             storage_period: 100,

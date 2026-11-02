@@ -25,8 +25,8 @@ There is no checksum; consensus commits the bytes.
 | 10 | 4 | `entry` — **absolute guest PC** |
 | 14 | 4 | `code_len` (> 0; multiple of 4 when bit 1 is clear, multiple of 2 when RVC is set) |
 | 18 | 4 | `init_len` |
-| 22 | 2 | `input_max` (0..=4096) |
-| 24 | 2 | `output_max` (1..=4096) |
+| 22 | 2 | `input_max` (0..=5120, `CALC_IO_MAX` = `CALL_DATA_MAX`; the call input is flattened from a one-layer list under the same cap) |
+| 24 | 2 | `output_max` (1..=5120, `CALC_IO_MAX`; deploy caps it at `value_size`) |
 | 26 | 4 | `rodata_len` |
 | 30 | 2 | `bss_len` (u16). Zero means no extra `.bss` (older containers). Max 65535; a larger ELF `.bss` is rejected at pack |
 

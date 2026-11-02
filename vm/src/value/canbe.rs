@@ -171,17 +171,27 @@ impl Value {
         }
     }
 
-    /// Materialize ACTION / Concat-NTFUNC call-data bytes (Concat/ACTION only).
+    /// Materialize call-data bytes: ACTION body, Concat-NTFUNC argv, and calc
+    /// kernel input.
     ///
-    /// Concat list = byte fragments (deferred CAT). Packed list = argv vector.
-    /// Packed NTFUNC must not call this function.
+    /// A one-layer `Compo` list is deferred CAT: each element uses CAT's
+    /// `extract_bytes` rules (`extract_bytes_with_error_code`, `Nil` rejected)
+    /// with `CastBeCallDataFail`; concatenate in order; running length ≤
+    /// `cap.call_data_size`. This is the only multi-chunk form at every call
+    /// boundary — a calc caller feeding a kernel more than `value_size` uses a
+    /// one-layer list too.
+    ///
+    /// `Tuple` is the packed argv container (user-call / `Packed` NTFUNC /
+    /// explicit `tuple()`) and is deliberately rejected here: `Tuple` never
+    /// means "bytes". This keeps a packed argv from being reinterpreted as a
+    /// byte string (an ACTION body or Concat-NTFUNC input) and keeps the
+    /// Packed/Concat ABI split carried by the value shape as well as by the
+    /// callee's `argv_pack`.
     ///
     /// - `Nil` → `[]` (no `call_data_size` check).
-    /// - One-layer `Compo` list: each element uses CAT's `extract_bytes` rules
-    ///   (`extract_bytes_with_error_code`, `Nil` rejected) with `CastBeCallDataFail`;
-    ///   concatenate in order; running length ≤ `cap.call_data_size`.
     /// - Other scalars: same extract, then length ≤ `call_data_size`.
-    /// - `Tuple` / `Handle` / Map / nested `Compo` / element `Nil` → `CastBeCallDataFail`.
+    /// - `Tuple` / `Handle` / Map / nested `Compo` / element `Nil` →
+    ///   `CastBeCallDataFail`.
     pub fn extract_call_data(&self, cap: &SpaceCap) -> VmrtRes<Vec<u8>> {
         let ec = CastBeCallDataFail;
         match self {
@@ -190,7 +200,7 @@ impl Value {
                 let Ok(list) = c.list_ref() else {
                     return itr_err_code!(ec);
                 };
-                concat_call_chunks(list.iter(), cap, ec)
+                concat_call_chunks(list.iter(), cap.call_data_size, ec)
             }
             _ => {
                 let bytes = self.extract_bytes_with_error_code(ec)?;
@@ -199,19 +209,6 @@ impl Value {
                 }
                 Ok(bytes)
             }
-        }
-    }
-
-    /// RV64IM call input. Top-level `Tuple` concatenates each element with the
-    /// same one-layer CAT `extract_bytes` rules as list chunks (scalars only;
-    /// element `Nil` / nested `Compo` / `Handle` / `Map` / `Tuple` →
-    /// `CastBeCallDataFail`; running length ≤ `cap.call_data_size`).
-    /// `Nil`, `Compo(List)`, and scalars delegate to [`Self::extract_call_data`].
-    /// [`Self::extract_call_data`] still rejects `Tuple`.
-    pub fn extract_rv64im_call_data(&self, cap: &SpaceCap) -> VmrtRes<Vec<u8>> {
-        match self {
-            Tuple(tuple) => concat_call_chunks(tuple.as_slice().iter(), cap, CastBeCallDataFail),
-            _ => self.extract_call_data(cap),
         }
     }
 
@@ -280,13 +277,13 @@ impl Value {
 
 fn concat_call_chunks<'a>(
     items: impl IntoIterator<Item = &'a Value>,
-    cap: &SpaceCap,
+    max: usize,
     ec: ItrErrCode,
 ) -> VmrtRes<Vec<u8>> {
     let mut out = Vec::new();
     for item in items {
         let chunk = item.extract_bytes_with_error_code(ec)?;
-        if out.len() + chunk.len() > cap.call_data_size {
+        if out.len().saturating_add(chunk.len()) > max {
             return itr_err_code!(OutOfValueSize);
         }
         out.extend_from_slice(&chunk);
@@ -368,7 +365,7 @@ fn extract_call_data_empty_list_is_empty() {
 
 #[cfg(test)]
 #[test]
-fn extract_call_data_rejects_nested_nil_tuple_handle_map() {
+fn extract_call_data_rejects_nested_nil_handle_map() {
     let cap = SpaceCap::new(0);
     let inner = extract_call_data_list(vec![Value::bytes(b"x".to_vec())]);
     let nested = CompoItem::new_list();
@@ -384,6 +381,8 @@ fn extract_call_data_rejects_nested_nil_tuple_handle_map() {
             .0,
         CastBeCallDataFail
     );
+    // `Tuple` is packed argv, not a byte-string container: the ACTION /
+    // Concat-NTFUNC materializer rejects it. Only a one-layer list is CAT.
     let tuple = Value::Tuple(TupleItem::new(vec![Value::bytes(b"x".to_vec())]).unwrap());
     assert_eq!(
         tuple.extract_call_data(&cap).unwrap_err().0,
@@ -407,69 +406,67 @@ fn extract_call_data_rejects_nested_nil_tuple_handle_map() {
 #[test]
 fn extract_call_data_call_data_size_cap() {
     let cap = SpaceCap::new(0);
+    assert_eq!(cap.call_data_size, crate::rt::CALL_DATA_MAX);
+    assert_eq!(cap.call_data_size, 5120);
     let ok = extract_call_data_list(vec![
         Value::bytes(vec![1u8; 1280]),
         Value::bytes(vec![2u8; 1280]),
         Value::bytes(vec![3u8; 1280]),
-        Value::bytes(vec![4u8; 768]),
+        Value::bytes(vec![4u8; 1280]),
     ]);
-    assert_eq!(ok.extract_call_data(&cap).unwrap().len(), 4608);
+    assert_eq!(ok.extract_call_data(&cap).unwrap().len(), 5120);
     let over = extract_call_data_list(vec![
         Value::bytes(vec![1u8; 1280]),
         Value::bytes(vec![2u8; 1280]),
         Value::bytes(vec![3u8; 1280]),
-        Value::bytes(vec![4u8; 769]),
+        Value::bytes(vec![4u8; 1281]),
     ]);
     assert_eq!(over.extract_call_data(&cap).unwrap_err().0, OutOfValueSize);
 }
 
 #[cfg(test)]
 #[test]
-fn extract_rv64im_call_data_tuple_concat_and_list_matches() {
+fn extract_call_data_list_carries_multi_chunk_input_and_rejects_tuple() {
     let cap = SpaceCap::new(0);
     let a = b"aa".to_vec();
     let b = b"bbb".to_vec();
-    let tuple = Value::Tuple(
-        TupleItem::new(vec![Value::bytes(a.clone()), Value::U8(7), Value::bytes(b.clone())])
-            .unwrap(),
-    );
+    let items = vec![
+        Value::bytes(a.clone()),
+        Value::U8(7),
+        Value::bytes(b.clone()),
+    ];
+    let list = extract_call_data_list(items.clone());
     let mut want = a;
     want.extend_from_slice(&Value::U8(7).extract_bytes().unwrap());
     want.extend_from_slice(&b);
-    assert_eq!(tuple.extract_rv64im_call_data(&cap).unwrap(), want);
+    assert_eq!(list.extract_call_data(&cap).unwrap(), want);
+    // The same chunks in a Tuple are packed argv, not bytes.
+    let tuple = Value::Tuple(TupleItem::new(items).unwrap());
     assert_eq!(
         tuple.extract_call_data(&cap).unwrap_err().0,
         CastBeCallDataFail
     );
-
-    let list = extract_call_data_list(vec![Value::bytes(b"xy".to_vec()), Value::U8(3)]);
     assert_eq!(
-        list.extract_rv64im_call_data(&cap).unwrap(),
-        list.extract_call_data(&cap).unwrap()
-    );
-    assert_eq!(
-        Value::Nil.extract_rv64im_call_data(&cap).unwrap(),
+        Value::Nil.extract_call_data(&cap).unwrap(),
         Vec::<u8>::new()
     );
 
-    let over = Value::Tuple(
-        TupleItem::new(vec![
-            Value::bytes(vec![1u8; 1280]),
-            Value::bytes(vec![2u8; 1280]),
-            Value::bytes(vec![3u8; 1280]),
-            Value::bytes(vec![4u8; 769]),
-        ])
-        .unwrap(),
-    );
-    assert_eq!(
-        over.extract_rv64im_call_data(&cap).unwrap_err().0,
-        OutOfValueSize
-    );
-    assert_eq!(
-        Value::Tuple(TupleItem::new(vec![Value::Nil]).unwrap())
-            .extract_rv64im_call_data(&cap)
-            .unwrap_err()
-            .0,
-        CastBeCallDataFail
-    );
+    // One ceiling serves every boundary: a 200-diamond HIP5 batch (4800 B
+    // over <=1280 B chunks) fits in a one-layer list, and the bound is
+    // call_data_size.
+    let batch = extract_call_data_list(vec![
+        Value::bytes(vec![1u8; 1200]), // names
+        Value::bytes(vec![2u8; 1280]), // numbers (chunk 1)
+        Value::bytes(vec![2u8; 1280]), // numbers (chunk 2)
+        Value::bytes(vec![3u8; 1040]), // visual genes
+    ]);
+    assert_eq!(batch.extract_call_data(&cap).unwrap().len(), 4800);
+    let over = extract_call_data_list(vec![
+        Value::bytes(vec![1u8; 1280]),
+        Value::bytes(vec![2u8; 1280]),
+        Value::bytes(vec![3u8; 1280]),
+        Value::bytes(vec![4u8; 1280]),
+        Value::bytes(vec![5u8; 1280]),
+    ]);
+    assert_eq!(over.extract_call_data(&cap).unwrap_err().0, OutOfValueSize);
 }

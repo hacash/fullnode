@@ -66,7 +66,19 @@ pub const CALC_MEM_KIB_MIN: u16 = 4;
 /// Consensus v1 verify cap (`CALC_CONFIG_V1.mem_kib_max`). Wire `decode`
 /// only requires [`CALC_MEM_KIB_MIN`].
 pub const CALC_MEM_KIB_MAX: u16 = 64;
-pub const CALC_IO_MAX: u16 = 4096;
+/// Wire cap for both `input_max` and `output_max`.
+///
+/// This is the same ceiling as [`crate::rt::CALL_DATA_MAX`], which bounds
+/// the materialized call-data body. The calc input is assembled from a
+/// one-layer `Compo` list whose elements are each capped by `value_size`
+/// (1280 B), so a 200-diamond HIP5 batch needs
+/// names||numbers||visuals = 4800 B in one call spread over 3+ chunks. One
+/// constant therefore governs both the runtime body and the declared calc
+/// ABI: a deploy can declare no more than the extractor can materialize. For
+/// output the on-chain bound is stricter anyway — deploy admission caps
+/// `output_max` at `value_size`. Calc-only; not reachable before the channel
+/// is activated.
+pub const CALC_IO_MAX: u16 = crate::rt::CALL_DATA_MAX as u16;
 pub const HEADER_LEN: usize = 32;
 
 /// Runtime memory map derived deterministically from the header.
@@ -238,7 +250,10 @@ impl CalcContainer {
         if self.mem_kib < CALC_MEM_KIB_MIN {
             return Err(err("calc container mem_kib out of range"));
         }
-        if self.output_max == 0 || self.output_max > CALC_IO_MAX || self.input_max > CALC_IO_MAX {
+        if self.output_max == 0
+            || self.output_max > CALC_IO_MAX
+            || self.input_max > CALC_IO_MAX
+        {
             return Err(err("calc container io size invalid"));
         }
         let compressed = profile_has_compressed(self.profile);

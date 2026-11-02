@@ -607,7 +607,7 @@ fn run_named(container: &CalcContainer, name: &str, body: Vec<u8>) -> sys::Ret<(
 }
 
 #[test]
-fn rv64im_list_and_tuple_inputs_cross_value_slot() {
+fn rv64im_list_inputs_cross_value_slot() {
     let wide = wide_container(expect_len_kernel(4096), 4096, 16);
     let chunks = vec![
         vec![1u8; 1280],
@@ -626,14 +626,16 @@ fn rv64im_list_and_tuple_inputs_cross_value_slot() {
         "err={msg}"
     );
 
-    let tuple_c = wide_container(expect_len_kernel(150), 4096, 16);
+    let list_c = wide_container(expect_len_kernel(150), 4096, 16);
     let parts = vec![vec![9u8; 100], vec![8u8; 50]];
-    run_named(
-        &tuple_c,
-        "tup",
-        call_pure("tup", &parts, PACKTUPLE as u8),
-    )
-    .expect("tuple concat");
+    // A Tuple is packed argv, not a byte-string carrier: rejected before the
+    // calc call. The same chunks in a one-layer list flatten.
+    let err = run_named(&list_c, "two", call_pure("two", &parts, PACKTUPLE as u8)).unwrap_err();
+    assert!(
+        err.to_string().contains("CastBeCallDataFail"),
+        "err={err}"
+    );
+    run_named(&list_c, "two", call_pure("two", &parts, PACKLIST as u8)).expect("list concat");
 
     let one = wide_container(expect_len_kernel(1280), 4096, 16);
     run_named(
@@ -672,10 +674,12 @@ fn rv64im_list_and_tuple_inputs_cross_value_slot() {
 }
 
 /// A compiled `function rv64im` declares `(data: bytes)`. Feeding it a
-/// top-level Tuple must be allowed (calc flattens it under call_data_size),
-/// while an oversized *scalar* must still hit the 1,280 B HVM cap.
+/// one-layer `list { ... }` must be allowed (it is the deferred-CAT form,
+/// flattened under `call_data_size`, with the kernel's `input_max` checked by
+/// the calc pre-flight), while `tuple(...)` is packed argv and is rejected.
+/// An oversized *scalar* must still hit the 1,280 B HVM cap.
 #[test]
-fn compiled_rv64im_tuple_input_crosses_scalar_cap_but_scalar_does_not() {
+fn compiled_rv64im_list_input_crosses_scalar_cap_but_scalar_does_not() {
     let container = wide_container(expect_len_kernel(4096), 4096, 16);
     let image = container.encode().expect("encode");
     let src = r#"
@@ -683,6 +687,9 @@ pragma fitsh 1.0.0
 contract WideCompiled {
     function rv64im probe(data: bytes) -> bytes
     function external call4(a: bytes, b: bytes, c: bytes, d: bytes) -> bytes {
+        return self::probe(list { a, b, c, d })
+    }
+    function external call4t(a: bytes, b: bytes, c: bytes, d: bytes) -> bytes {
         return self::probe(tuple(a, b, c, d))
     }
     function external call1(a: bytes) -> bytes {
@@ -702,8 +709,14 @@ contract WideCompiled {
         Value::Bytes(vec![3u8; 1024]),
         Value::Bytes(vec![4u8; 1024]),
     ];
-    let (_, val) = run_external_args(&sto, &addr, "call4", &chunks).expect("tuple 4096");
+    let (_, val) = run_external_args(&sto, &addr, "call4", &chunks).expect("list 4096");
     assert_eq!(val, Value::Bytes(vec![]), "kernel saw the full 4 KiB");
+
+    let err = run_external_args(&sto, &addr, "call4t", &chunks).unwrap_err();
+    assert!(
+        err.to_string().contains("CallArgvTypeFail"),
+        "tuple is packed argv, not bytes: {err}"
+    );
 
     let one = [Value::Bytes(vec![7u8; 4096])];
     let err = run_external_args(&sto, &addr, "call1", &one).unwrap_err();

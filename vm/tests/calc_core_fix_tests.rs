@@ -121,7 +121,7 @@ fn pack_container_rejects_mem_kib_above_max() {
 
 #[test]
 fn pack_container_rejects_input_max_above_io_max() {
-    assert!(pack_container(64, CODE_BASE as u32, 5000, 16, ret_code(), vec![], vec![]).is_err());
+    assert!(pack_container(64, CODE_BASE as u32, 6000, 16, ret_code(), vec![], vec![]).is_err());
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn verify_rejects_mem_kib_out_of_range() {
 #[test]
 fn verify_rejects_input_max_above_io_max() {
     let mut c = valid_container();
-    c.input_max = 5000;
+    c.input_max = 6000;
     assert!(verify_container(&c).is_err());
 }
 
