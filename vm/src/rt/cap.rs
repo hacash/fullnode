@@ -10,6 +10,12 @@
 /// bodies are accepted). The cap only rises.
 pub const CALL_DATA_MAX: usize = 5120;
 
+/// Default of `SpaceCap::calc_mem_kib_max` and of the calc v1 verify cap.
+/// L1 stays at 64 KiB; a sidechain raises the `SpaceCap` field (the only
+/// knob) up to `calc::CALC_MEM_KIB_ENGINE_MAX`. Defined here because
+/// `SpaceCap` compiles in codec-only builds; the calc module re-exports it.
+pub const CALC_MEM_KIB_MAX: u32 = 64;
+
 #[derive(Debug, Clone)]
 pub struct SpaceCap {
     pub loaded_contract: usize, // 20
@@ -112,7 +118,7 @@ impl SpaceCap {
             intent_bind_depth: 10,
             intent_new: 128,
             intent_key: 32,
-            calc_mem_kib_max: 64,
+            calc_mem_kib_max: CALC_MEM_KIB_MAX,
             calc_image_max: (u16::MAX as usize) / 4,
         }
     }

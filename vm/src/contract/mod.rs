@@ -245,15 +245,6 @@ pub fn convert_and_check(
 }
 
 #[cfg(feature = "execute")]
-fn calc_deploy_config(cap: &SpaceCap) -> crate::calc::CalcConfig {
-    let mut cfg = crate::calc::CalcConfig::v1();
-    cfg.mem_kib_max = cap
-        .calc_mem_kib_max
-        .min(crate::calc::container::CALC_MEM_KIB_ENGINE_MAX);
-    cfg
-}
-
-#[cfg(feature = "execute")]
 fn reject_calc_image(len: usize, cap: &SpaceCap) -> VmrtErr {
     // CodeStuff stores every function body with a u16 length. calc_image_max
     // can only tighten that. A larger program is split across sibling calc
@@ -261,6 +252,17 @@ fn reject_calc_image(len: usize, cap: &SpaceCap) -> VmrtErr {
     let max = cap.calc_image_max.min(u16::MAX as usize);
     if len > max {
         return itr_err_fmt!(ContractError, "calcfunc size overflow, max {}", max);
+    }
+    Ok(())
+}
+
+/// The retired `calcfuncs` wire record must be empty at every boundary: an
+/// incoming edit, a full deploy check, and a contract load. The record
+/// itself stays in the codec for state-format stability.
+#[cfg(feature = "execute")]
+fn reject_calcfuncs(len: usize) -> VmrtErr {
+    if len > 0 {
+        return itr_err_fmt!(ContractError, "calcfuncs reserved, must be empty");
     }
     Ok(())
 }
@@ -298,8 +300,11 @@ fn verify_user_func_code(
                 .map_err(|e| ItrErr::new(ContractError, &format!("calcfunc container: {}", e.1)))?;
             reject_calc_hvm_io(&c, cap)?;
             check_rv64im_pmdf(&func.pmdf)?;
-            crate::calc::verify::verify_container_with(&c, &calc_deploy_config(cap))
-                .map_err(|e| ItrErr::new(ContractError, &format!("calcfunc verify: {}", e.1)))?;
+            crate::calc::verify::verify_container_with(
+                &c,
+                &crate::calc::CalcConfig::for_space_cap(cap),
+            )
+            .map_err(|e| ItrErr::new(ContractError, &format!("calcfunc verify: {}", e.1)))?;
             Ok(())
         }
     }
@@ -429,9 +434,7 @@ impl ContractSto {
         }
         let mut did_change = false;
 
-        if edit.calcfuncs.length() > 0 {
-            return itr_err_fmt!(ContractError, "calcfuncs reserved, must be empty");
-        }
+        reject_calcfuncs(edit.calcfuncs.length())?;
 
         let inh_len = self.inherit.length();
         let lib_len = self.library.length();
@@ -610,9 +613,7 @@ impl ContractSto {
                 cap.contract_size
             );
         }
-        if self.calcfuncs.length() > 0 {
-            return itr_err_fmt!(ContractError, "calcfuncs reserved, must be empty");
-        }
+        reject_calcfuncs(self.calcfuncs.length())?;
         if self.inherit.length() > cap.inherit {
             return itr_err_fmt!(InheritError, "inherit number overflow");
         }
@@ -673,12 +674,7 @@ impl ContractSto {
         cap: &SpaceCap,
         host: crate::calc::CalcHostConfig,
     ) -> VmrtRes<ContractObj> {
-        if self.calcfuncs.length() > 0 {
-            return itr_err_fmt!(
-                ItrErrCode::ContractError,
-                "calcfuncs reserved, must be empty"
-            );
-        }
+        reject_calcfuncs(self.calcfuncs.length())?;
         let edition = self.calc_edition();
         let mut abstfns = HashMap::with_capacity(self.abstcalls.length());
         for a in self.abstcalls.as_mut() {
@@ -699,7 +695,7 @@ impl ContractSto {
                 let (c, _) = crate::calc::container::CalcContainer::decode(&code_pkg.data)?;
                 reject_calc_hvm_io(&c, cap)?;
                 check_rv64im_pmdf(&a.pmdf)?;
-                let cfg = calc_deploy_config(cap).apply_host(host);
+                let cfg = crate::calc::CalcConfig::for_space_cap(cap).apply_host(host);
                 let built = crate::calc::CalcFnObj::build_with_config(c, cfg)?;
                 FnObj::create_with_rv64im(
                     a.fncnf[0],

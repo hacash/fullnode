@@ -25,8 +25,8 @@ execute = [
 # codec-only consumer (SDK wasm) may opt in without the execution engine.
 syntax = []
 # AOT translation backend (`calc::aot`). On by default for official x86-64
-# nodes: each calc call runs the interpreter and AOT on two threads and
-# rejects the transaction if gas or the result disagree. This is the early
+# nodes: each calc call runs the interpreter and then AOT in order on the
+# calling thread and rejects the transaction if gas or the result disagree. This is the early
 # lockstep check; once that check has stayed quiet, the interpreter is
 # retired and AOT is the only engine. Other platforms turn the feature off
 # (`--no-default-features --features execute`) and run the interpreter
@@ -34,8 +34,9 @@ syntax = []
 # depends on vm with default-features = false.
 # Suite: cargo test -p vm --features calc-aot
 calc-aot = ["dep:libc"]
-# Test-only calc configs: `all_enabled`, `with_*`, and `testkit` (memory cap
-# above the v1 64 KiB, hard-capped at 16 MiB). Absent from production builds.
+# Test-only calc config: `testkit` (both host knobs on, memory cap above
+# the v1 64 KiB, hard-capped at 16 MiB) and the test/testkit-gated
+# `CalcFnObj::build` helpers. Absent from production builds.
 # Integration tests pick it up from the dev-dependency below.
 # Arch-test: cargo test -p vm --features calc-testkit --test calc_archtest
 calc-testkit = []

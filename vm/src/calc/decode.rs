@@ -864,11 +864,12 @@ fn decode_rvc(h: u32) -> Result<(Inst, u32), ItrErr> {
     Ok((inst, 2))
 }
 
-/// Per-profile static cycle weights. Values are currently identical across
-/// profiles; the table is versioned so a later repricing can land per
-/// profile without restructuring call sites.
+/// Static cycle weights. A single table serves every profile: repricing a
+/// profile after activation would change the gas of already-deployed
+/// containers, so any future price change may only attach a new table to a
+/// NEW profile value, never reprice 0..=3.
 #[derive(Debug, Clone, Copy)]
-pub struct ProfileWeights {
+pub struct InstWeights {
     pub alu: u64,
     pub load_store: u64,
     pub mul: u64,
@@ -877,8 +878,13 @@ pub struct ProfileWeights {
     pub ecall_base: u64,
 }
 
-/// Weight table for profile 0 (RV64IM + Zicclsm).
-pub const WEIGHTS_PROFILE0: ProfileWeights = ProfileWeights {
+/// The static cycle table. ALU, branches, jumps and FENCE cost 1; loads and
+/// stores 2; the MUL family 3; DIV/REM 12. clmul is priced at 24 — a
+/// 64-iteration carryless loop in software is priced by actual host work,
+/// above the DIV/REM weight (CKB-VM charges 1 for it; that is their pricing
+/// pitfall, not a rule to copy). Every other whitelisted B instruction is a
+/// single ALU pass (1 cycle, matching the CKB-VM table).
+pub const WEIGHTS: InstWeights = InstWeights {
     alu: 1,
     load_store: 2,
     mul: 3,
@@ -887,28 +893,10 @@ pub const WEIGHTS_PROFILE0: ProfileWeights = ProfileWeights {
     ecall_base: 1,
 };
 
-/// Weight table for profile 1 (profile 0 + bitmanip). Identical values
-/// until a dedicated repricing.
-pub const WEIGHTS_PROFILE1: ProfileWeights = WEIGHTS_PROFILE0;
-
-/// Cycles charged for the carryless-multiply family. Every other whitelisted
-/// B instruction is a single ALU pass (1 cycle, matching the CKB-VM table);
-/// clmul is a 64-iteration carryless loop in software, so it is priced by
-/// actual host work, and stays above the DIV/REM weight. CKB charges 1 for
-/// it — treated here as their pricing pitfall, not a rule to copy.
-pub const CLMUL_CYCLES: u64 = WEIGHTS_PROFILE1.clmul;
-
-pub fn weights_for_profile(profile: u8) -> &'static ProfileWeights {
-    match profile {
-        crate::calc::CALC_PROFILE_RV64IM => &WEIGHTS_PROFILE0,
-        _ => &WEIGHTS_PROFILE1,
-    }
-}
-
 /// Static cycle cost; ecall is priced at runtime by hash kind (plus
-/// `ecall_base`). `profile` selects the weight table.
-pub fn inst_cycles(inst: &Inst, profile: u8) -> u64 {
-    let w = weights_for_profile(profile);
+/// `ecall_base`).
+pub fn inst_cycles(inst: &Inst) -> u64 {
+    let w = &WEIGHTS;
     match inst {
         Inst::Lui { .. }
         | Inst::Auipc { .. }

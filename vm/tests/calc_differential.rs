@@ -21,7 +21,7 @@ mod diff {
     fn verify_container(
         c: &CalcContainer,
     ) -> Result<vm::calc::verify::CalcModule, String> {
-        vm::calc::verify::verify_container_with(c, &vm::calc::CalcConfig::all_enabled())
+        vm::calc::verify::verify_container(c)
             .map_err(|e| format!("{e:?}"))
     }
 

@@ -29,9 +29,9 @@
 //!   executes as a no-op, matching the single-hart interpreter.
 //!
 //! Early launch insurance: this backend is not the sole engine yet. Official x86-64
-//! nodes (feature `calc-aot`, on by default) run this translation beside
-//! the interpreter on two threads and reject the transaction when gas or
-//! the result disagree (`CalcEngineMismatch`). Nodes built without the
+//! nodes (feature `calc-aot`, on by default) run this translation after
+//! the interpreter in order on the calling thread and reject the
+//! transaction when gas or the result disagree (`CalcEngineMismatch`). Nodes built without the
 //! feature run the interpreter only. After the lockstep check has stayed
 //! quiet in production, the interpreter is retired and this backend
 //! becomes the only execution engine. `cargo test -p vm --features calc-aot`
@@ -341,9 +341,6 @@ struct ResolveCtx {
     invalid_off: u32,
     code: *const u8,
     layout: CalcLayout,
-    hash_builtins: bool,
-    rodata_readonly: bool,
-    stack_guard: bool,
 }
 
 /// Mirror of `interp::reg_alu` for the ops the generated code routes to the
@@ -420,7 +417,7 @@ pub fn alu_helper_op(op: u64, a: u64, b: u64) -> u64 {
             }
         }
         // Zbc carryless multiplies (software loop mirroring interp::clmul128;
-        // CLMUL_CYCLES charged either way — see decode::CLMUL_CYCLES).
+        // WEIGHTS.clmul charged either way — see decode::WEIGHTS).
         8 => clmul128_(a, b) as u64,        // clmul
         9 => (clmul128_(a, b) >> 64) as u64, // clmulh
         10 => (clmul128_(a, b) >> 63) as u64, // clmulr
@@ -519,10 +516,6 @@ extern "C" fn aot_ecall(
         state.aborted = 1;
         return 1;
     }
-    if !ctx.hash_builtins && HashKind::from_a7(a7).is_some() {
-        state.aborted = 1;
-        return 1;
-    }
     let kind = match HashKind::from_a7(a7) {
         Some(k) => k,
         None => {
@@ -562,16 +555,13 @@ extern "C" fn aot_ecall(
         state.aborted = 1;
         return 1;
     }
-    let digest_floor = if ctx.rodata_readonly {
-        lay.data_base
-    } else {
-        lay.rodata_base
-    };
-    if dst < digest_floor {
+    // Digest writes obey the store rules: code, the pre-rodata pad, rodata
+    // and the alignment hole are read-only; `.data` starts at data_base.
+    if dst < lay.data_base {
         state.aborted = 1;
         return 1;
     }
-    if ctx.stack_guard && dst < lay.stack_bottom && dst_end > lay.guard_base {
+    if dst < lay.stack_bottom && dst_end > lay.guard_base {
         state.aborted = 1;
         return 1;
     }
@@ -985,15 +975,11 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                     c.alu_imm(7 /*cmp*/, RAX, CODE_BASE as i32);
                     let at = c.jcc32(2); // jb
                     fixups.push((at, Fixup::Trap));
-                    // Code and the pad below rodata_base always trap. Rodata
-                    // and the alignment hole trap only when rodata is read-only.
-                    let write_floor = if module.rodata_readonly {
-                        lay.data_base
-                    } else {
-                        lay.rodata_base
-                    };
-                    debug_assert!(write_floor <= i32::MAX as u64);
-                    c.alu_imm(7 /*cmp*/, RAX, write_floor as i32);
+                    // Code, the pad below rodata_base, rodata and the
+                    // alignment hole are read-only (unconditional v1
+                    // semantics); `.data` starts at data_base.
+                    debug_assert!(lay.data_base <= i32::MAX as u64);
+                    c.alu_imm(7 /*cmp*/, RAX, lay.data_base as i32);
                     let at = c.jcc32(2); // jb
                     fixups.push((at, Fixup::Trap));
                     c.mov_rcx_rax();
@@ -1004,20 +990,18 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                     c.alu_imm(7, RCX, lay.mem_len as i32);
                     let at = c.jcc32(7); // ja
                     fixups.push((at, Fixup::Trap));
-                    // Stack-overflow guard (mirrors interp). Skipped when the
-                    // band is ordinary RW. RAX holds addr, RCX holds end.
-                    if module.stack_guard {
-                        debug_assert!(lay.stack_bottom <= i32::MAX as u64);
-                        c.alu_imm(7 /*cmp*/, RAX, lay.stack_bottom as i32);
-                        let sg1 = c.jcc32(3); // jae -> skip (addr >= bottom)
-                        debug_assert!(lay.guard_base <= i32::MAX as u64);
-                        c.alu_imm(7 /*cmp*/, RCX, lay.guard_base as i32);
-                        let sg2 = c.jcc32(6); // jbe -> skip (end <= guard)
-                        fixups.push((c.jmp32(), Fixup::Trap));
-                        let sg_skip = c.len();
-                        fixups.push((sg1, Fixup::To(sg_skip)));
-                        fixups.push((sg2, Fixup::To(sg_skip)));
-                    }
+                    // Stack-overflow guard (mirrors interp). RAX holds addr,
+                    // RCX holds end.
+                    debug_assert!(lay.stack_bottom <= i32::MAX as u64);
+                    c.alu_imm(7 /*cmp*/, RAX, lay.stack_bottom as i32);
+                    let sg1 = c.jcc32(3); // jae -> skip (addr >= bottom)
+                    debug_assert!(lay.guard_base <= i32::MAX as u64);
+                    c.alu_imm(7 /*cmp*/, RCX, lay.guard_base as i32);
+                    let sg2 = c.jcc32(6); // jbe -> skip (end <= guard)
+                    fixups.push((c.jmp32(), Fixup::Trap));
+                    let sg_skip = c.len();
+                    fixups.push((sg1, Fixup::To(sg_skip)));
+                    fixups.push((sg2, Fixup::To(sg_skip)));
                     c.ld_reg(RCX, rs2);
                     let form = match op {
                         StoreOp::Sd => MemForm::Sd,
@@ -1555,9 +1539,6 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
         invalid_off,
         code: std::ptr::null(),
         layout: *lay,
-        hash_builtins: module.hash_builtins,
-        rodata_readonly: module.rodata_readonly,
-        stack_guard: module.stack_guard,
     });
     c.patch64(fix_ctx, ctx.as_ref() as *const ResolveCtx as u64);
     c.patch64(
@@ -1654,7 +1635,7 @@ mod tests {
     use crate::calc::container::{CalcContainer, CALC_ABI_BYTES_TO_BYTES};
     use crate::calc::interp::{self, CalcAbort};
     fn verify_container(c: &CalcContainer) -> crate::rt::VmrtRes<crate::calc::verify::CalcModule> {
-        crate::calc::verify::verify_container_with(c, &crate::calc::CalcConfig::all_enabled())
+        crate::calc::verify::verify_container_with(c, &crate::calc::CALC_CONFIG_V1)
     }
 
     // ---------------------------------------------------------- assembler
@@ -1954,9 +1935,6 @@ mod tests {
         a.i(0, 17, 0, 0x13, 1); // addi a7, x0, 1  (sha2)
         a.raw(0x0000_0073);
         let code = a.finish();
-        let c = container_for(code.clone());
-        let module = verify_container(&c).expect("hash ecall verifies");
-        assert!(module.hash_builtins);
         let (cyc, ok) = diff("zero_len_unmapped_src", &code, &[], 100_000);
         assert!(!ok, "unmapped src must trap");
         assert!(cyc > 0, "hash cost is charged before the bounds trap");
@@ -2065,19 +2043,17 @@ mod tests {
         a.ret();
         let echo_code = a.finish();
         for (name, code) in [("loop", &loop_code), ("echo", &echo_code)] {
-            let enabled = crate::calc::CalcConfig::all_enabled();
-            let plain = CalcFnObj::build_with_config(
+            let plain = CalcFnObj::build_with_host(
                 container_for(code.clone()),
-                crate::calc::CalcConfig { aot_mount: false, ..enabled },
+                crate::calc::CalcHostConfig::new().with_aot_mount(false),
             )
             .unwrap();
-            let mounted = CalcFnObj::build_with_config(container_for(code.clone()), enabled).unwrap();
+            let mounted = CalcFnObj::build_with_aot(container_for(code.clone())).unwrap();
             assert!(mounted.aot_mounted(), "{name}: AOT must mount");
             for budget in [0u64, 4, 64, 300, 10_000] {
                 let limits = CalcRunLimits {
                     cycles: budget,
                     resource: i64::MAX,
-                    value_size: usize::MAX,
                     deadline: None,
                 };
                 let e1 = plain.run(&[], limits);

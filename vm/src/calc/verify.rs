@@ -38,8 +38,6 @@ pub struct Block {
 /// rewritten to instruction indices.
 #[derive(Debug, Clone)]
 pub struct CalcModule {
-    #[allow(dead_code)]
-    pub(crate) profile: u8,
     pub(crate) layout: crate::calc::container::CalcLayout,
     pub(crate) insts: Vec<Inst>,
     /// Byte address of each instruction (strictly increasing).
@@ -55,10 +53,6 @@ pub struct CalcModule {
     pub(crate) suffix_cycles: Vec<u64>,
     /// Instruction index of the entry point.
     pub(crate) entry: u32,
-    /// Captured from [`crate::calc::CalcConfig`] at verify time.
-    pub(crate) hash_builtins: bool,
-    pub(crate) rodata_readonly: bool,
-    pub(crate) stack_guard: bool,
 }
 
 impl CalcModule {
@@ -89,26 +83,19 @@ pub fn verify_container_with(
     // Header checks must run here too: a directly constructed container did
     // not pass through `decode`.
     c.validate_header(cfg)?;
-    verify_decoded(c, cfg, c.layout())
+    verify_decoded(c, c.layout())
 }
 
 fn verify_decoded(
     c: &CalcContainer,
-    cfg: &crate::calc::CalcConfig,
     layout: crate::calc::container::CalcLayout,
 ) -> VmrtRes<CalcModule> {
-    if crate::calc::container::profile_has_bitmanip(c.profile) && !cfg.profile1_bitmanip {
-        return Err(err("calc verify: profile not enabled"));
-    }
-    if crate::calc::container::profile_has_compressed(c.profile) && !cfg.compressed {
-        return Err(err("calc verify: profile not enabled"));
-    }
+    // Profile admission, hash builtins, read-only rodata, the stack guard
+    // and the free entry point are unconditional v1 semantics: every profile
+    // cell the header can name is admitted, and turning any capability off
+    // would reject or reinterpret previously legal containers.
     // Header, layout overlap and entry alignment already ran in
     // `validate_header` → `validate_invariants`.
-    let entry_u = c.entry as u64;
-    if !cfg.free_entry && entry_u != CODE_BASE {
-        return Err(err("calc verify: entry must be CODE_BASE"));
-    }
     // Pass 1: linear scan decode + boundary map. Every byte of the code
     // section must decode to a whitelisted instruction — including bytes
     // that will never execute (padding, cold paths).
@@ -199,7 +186,7 @@ fn verify_decoded(
             if i > start {
                 let cycles: u64 = insts[start..i]
                     .iter()
-                    .map(|inst| decode::inst_cycles(inst, c.profile))
+                    .map(|inst| decode::inst_cycles(inst))
                     .sum();
                 let bidx = blocks.len() as u32;
                 for b in block_of_inst.iter_mut().take(i).skip(start) {
@@ -216,12 +203,11 @@ fn verify_decoded(
     for blk in &blocks {
         let mut acc = 0u64;
         for i in (blk.start as usize..blk.end as usize).rev() {
-            acc += decode::inst_cycles(&insts[i], c.profile);
+            acc += decode::inst_cycles(&insts[i]);
             suffix_cycles[i] = acc;
         }
     }
     Ok(CalcModule {
-        profile: c.profile,
         layout,
         insts,
         addrs,
@@ -229,8 +215,5 @@ fn verify_decoded(
         block_of_inst,
         suffix_cycles,
         entry: entry_idx as u32,
-        hash_builtins: cfg.hash_builtins,
-        rodata_readonly: cfg.rodata_readonly,
-        stack_guard: cfg.stack_guard,
     })
 }

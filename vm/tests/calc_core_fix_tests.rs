@@ -186,7 +186,6 @@ fn mid_block_jalr_is_not_overcharged() {
         CalcRunLimits {
             cycles: 1000,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: None,
         },
     );
@@ -204,28 +203,11 @@ fn precheck_rejects_insufficient_resource_before_running() {
         CalcRunLimits {
             cycles: 100,
             resource: 0,
-            value_size: 1280,
             deadline: None,
         },
     );
     assert_eq!(exec.result, Err(CalcAbort2::OutOfResource));
     assert_eq!(exec.cycles_used, 0);
-}
-
-#[test]
-fn precheck_rejects_value_size_smaller_than_output_max() {
-    // output_max is 16; a value_size of 8 cannot hold the declared output.
-    let obj = CalcFnObj::build(packed()).unwrap();
-    let exec = obj.run(
-        &[],
-        CalcRunLimits {
-            cycles: 100,
-            resource: i64::MAX,
-            value_size: 8,
-            deadline: None,
-        },
-    );
-    assert_eq!(exec.result, Err(CalcAbort2::ValueTooLarge));
 }
 
 #[test]
@@ -237,7 +219,6 @@ fn precheck_allows_input_above_value_size_within_input_max() {
         CalcRunLimits {
             cycles: 100_000,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: None,
         },
     );
@@ -247,7 +228,6 @@ fn precheck_allows_input_above_value_size_within_input_max() {
         CalcRunLimits {
             cycles: 100_000,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: None,
         },
     );
@@ -263,7 +243,6 @@ fn precheck_rejects_expired_deadline() {
             // Must cover the setup charge, otherwise OutOfGas fires first.
             cycles: 1000,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: Some(Instant::now() - Duration::from_secs(1)),
         },
     );
@@ -335,8 +314,7 @@ fn zbb_kernel() -> Vec<u8> {
 
 #[test]
 fn zbb_kernel_executes() {
-    let cfg = vm::calc::CalcConfig::all_enabled();
-    let c = vm::calc::pack_container_with_config(
+    let c = vm::calc::pack_container_with_profile(
         vm::calc::CALC_PROFILE_RV64IM_B,
         4,
         CODE_BASE as u32,
@@ -345,16 +323,14 @@ fn zbb_kernel_executes() {
         zbb_kernel(),
         vec![],
         vec![],
-        &cfg,
     )
     .unwrap();
-    let obj = CalcFnObj::build_with_config(c, cfg).unwrap();
+    let obj = CalcFnObj::build(c).unwrap();
     let exec = obj.run(
         &[],
         CalcRunLimits {
             cycles: 1000,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: None,
         },
     );
@@ -404,7 +380,6 @@ fn fence_decodes_and_executes_as_nop() {
         CalcRunLimits {
             cycles: 1000,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: None,
         },
     );
@@ -419,7 +394,6 @@ fn setup_cycles_charged_on_instant_return() {
         CalcRunLimits {
             cycles: 1000,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: None,
         },
     );
@@ -437,7 +411,6 @@ fn setup_cycles_rejected_when_budget_cannot_cover_them() {
         CalcRunLimits {
             cycles: 10,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: None,
         },
     );

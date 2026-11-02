@@ -34,12 +34,8 @@ fn kernel_dict_walk_smoke() {
         &vm::calc::CALC_CONFIG_V1,
     )
     .unwrap();
-    let cfg = vm::calc::CALC_CONFIG_V1
-        .with_hash_builtins(true)
-        .with_rodata_readonly(true)
-        .with_stack_guard(true);
-    let f = CalcFnObj::build_with_config(container, cfg).unwrap();
-    let limits = CalcRunLimits { cycles: 2_000_000, resource: i64::MAX, value_size: usize::MAX, deadline: None };
+    let f = CalcFnObj::build(container).unwrap();
+    let limits = CalcRunLimits { cycles: 2_000_000, resource: i64::MAX, deadline: None };
     // raw mode: sha256("abc")
     let e = f.run(b"abc", limits);
     assert!(e.result.is_ok(), "{:?}", e.result);

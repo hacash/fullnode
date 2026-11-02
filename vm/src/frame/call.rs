@@ -142,7 +142,6 @@ impl CallFrame {
                             let limits = crate::calc::CalcRunLimits {
                                 cycles,
                                 resource,
-                                value_size: cap.value_size,
                                 deadline: machine.deadline(),
                             };
                             let exec = calcfn.run(&input_bytes, limits);
@@ -188,12 +187,6 @@ impl CallFrame {
                                     return itr_err_fmt!(
                                         ItrErrCode::ExecutionDeadline,
                                         "calc execution deadline exceeded"
-                                    );
-                                }
-                                Err(crate::calc::CalcAbort2::ValueTooLarge) => {
-                                    return itr_err_fmt!(
-                                        ItrErrCode::OutOfValueSize,
-                                        "calc value size exceeds cap"
                                     );
                                 }
                                 // Already returned above, before gas settle.

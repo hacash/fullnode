@@ -186,21 +186,17 @@ fn run_inner(
             if end > lay.mem_len {
                 trap!("calc store out of memory bounds");
             }
-            // Code and the pad below rodata_base stay non-writable. Rodata
-            // and the alignment hole are read-only only when the config says so.
-            let write_floor = if module.rodata_readonly {
-                lay.data_base
-            } else {
-                lay.rodata_base
-            };
-            if addr < write_floor {
+            // Code, the alignment pad before rodata, rodata and the
+            // [rodata_end, data_base) hole are read-only (unconditional v1
+            // semantics: `.data` starts at data_base).
+            if addr < lay.data_base {
                 trap!("calc store into read-only region (code/rodata)");
             }
             // Stack-overflow guard: a store intersecting the band between
             // .bss and the stack traps (stack grows down into it). Stores
             // fully below the guard and stores at or above the stack bottom
-            // pass. Skipped when the guard is not enabled.
-            if module.stack_guard && addr < lay.stack_bottom && end > lay.guard_base {
+            // pass.
+            if addr < lay.stack_bottom && end > lay.guard_base {
                 trap!("calc store into the stack-overflow guard band");
             }
             let val: u64 = $val;
@@ -408,10 +404,6 @@ fn run_inner(
                     if (ECALL_HINT_MIN..=ECALL_HINT_MAX).contains(&a7) {
                         trap!("calc ecall: hint/private-input not available on L1");
                     }
-                    // Disabled hash builtins trap before any hash charge.
-                    if !module.hash_builtins && HashKind::from_a7(a7).is_some() {
-                        trap!("calc ecall: builtin not enabled");
-                    }
                     // CHARGE-BEFORE-BOUNDS (documented decision): the hash
                     // cost is charged before the src/dst bounds checks, so
                     // the abort CLASS of an out-of-bounds ecall depends on
@@ -448,15 +440,13 @@ fn run_inner(
                     if src_end > lay.mem_len || dst_end > lay.mem_len {
                         trap!("calc ecall: out of memory bounds");
                     }
-                    let digest_floor = if module.rodata_readonly {
-                        lay.data_base
-                    } else {
-                        lay.rodata_base
-                    };
-                    if dst < digest_floor {
+                    // Digest writes obey the store rules: code, the
+                    // pre-rodata pad, rodata and the alignment hole are
+                    // read-only; `.data` starts at data_base.
+                    if dst < lay.data_base {
                         trap!("calc ecall: digest into read-only region");
                     }
-                    if module.stack_guard && dst < lay.stack_bottom && dst_end > lay.guard_base {
+                    if dst < lay.stack_bottom && dst_end > lay.guard_base {
                         trap!("calc ecall: digest into the stack-overflow guard band");
                     }
                     // Digest lengths are 20/32; a stack buffer avoids a heap

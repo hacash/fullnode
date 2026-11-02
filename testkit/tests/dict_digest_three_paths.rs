@@ -174,17 +174,13 @@ fn limits() -> CalcRunLimits {
     CalcRunLimits {
         cycles: 1_000_000, // the per-call consensus cycle cap
         resource: i64::MAX,
-        value_size: usize::MAX,
         deadline: None,
     }
 }
 
-fn kernel_cfg(aot: bool) -> vm::calc::CalcConfig {
-    vm::calc::CALC_CONFIG_V1
-        .with_hash_builtins(true)
-        .with_rodata_readonly(true)
-        .with_stack_guard(true)
-        .with_aot_mount(aot)
+fn kernel_obj(c: vm::calc::container::CalcContainer, aot: bool) -> CalcFnObj {
+    CalcFnObj::build_with_host(c, vm::calc::CalcHostConfig::new().with_aot_mount(aot))
+        .expect("kernel container builds")
 }
 
 fn kernel_container() -> vm::calc::container::CalcContainer {
@@ -213,12 +209,12 @@ fn kernel_container() -> vm::calc::container::CalcContainer {
 }
 
 fn kernel_fn() -> CalcFnObj {
-    CalcFnObj::build_with_config(kernel_container(), kernel_cfg(false)).expect("kernel container verifies")
+    kernel_obj(kernel_container(), false)
 }
 
 #[cfg(feature = "calc-aot")]
 fn kernel_fn_aot() -> CalcFnObj {
-    CalcFnObj::build_with_config(kernel_container(), kernel_cfg(true)).expect("AOT image compiles")
+    kernel_obj(kernel_container(), true)
 }
 
 fn deploy_dict_digest() -> TestContext {

@@ -11,9 +11,9 @@ use crate::calc::decode::{decode_at, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, S
 use crate::calc::verify::verify_container_with;
 use crate::rt::VmrtRes;
 
-/// Pre-gate semantics: profile 1, hashes, rodata, guard, free entry.
+/// Consensus v1 semantics.
 fn verify_container(c: &CalcContainer) -> VmrtRes<crate::calc::verify::CalcModule> {
-    verify_container_with(c, &crate::calc::CalcConfig::all_enabled())
+    verify_container_with(c, &crate::calc::CALC_CONFIG_V1)
 }
 
 fn make_container(code: Vec<u8>) -> CalcContainer {
@@ -188,7 +188,7 @@ fn decode_rejects_non_whitelist() {
     // ebreak and canonical unimp decode to a 1-cycle trap.
     assert_eq!(decode_at(&hexw("00100073"), 0, p).unwrap().0, Inst::Trap);
     assert_eq!(decode_at(&hexw("c0001073"), 0, p).unwrap().0, Inst::Trap);
-    assert_eq!(crate::calc::decode::inst_cycles(&Inst::Trap, p), 1);
+    assert_eq!(crate::calc::decode::inst_cycles(&Inst::Trap), 1);
     // csr read
     assert!(decode_at(&hexw("c0102573"), 0, p).is_err());
     // fence: accepted as a no-op (single-hart)
@@ -623,14 +623,13 @@ fn image_id_and_receipt_are_deterministic() {
     buf.extend_from_slice(&c.encode().unwrap());
     assert_eq!(id, sha256_bytes(&buf));
     assert_eq!(id, c.image_id());
-    let obj = CalcFnObj::build_with_config(c, crate::calc::CalcConfig::all_enabled()).unwrap();
+    let obj = CalcFnObj::build_with_host(c, crate::calc::CalcHostConfig::new()).unwrap();
     assert_eq!(obj.image_id(), id);
     let exec = obj.run(
         b"xy",
         CalcRunLimits {
             cycles: 10_000,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: None,
         },
     );
@@ -647,7 +646,6 @@ fn image_id_and_receipt_are_deterministic() {
         CalcRunLimits {
             cycles: 10_000,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: None,
         },
     );
@@ -895,13 +893,12 @@ fn halt_nonzero_exit_is_guest_exit_and_charges_cycles() {
     }
     #[cfg(feature = "calc-aot")]
     assert_aot_parity(&c, &[], 10_000);
-    let obj = CalcFnObj::build_with_config(c, crate::calc::CalcConfig::all_enabled()).unwrap();
+    let obj = CalcFnObj::build_with_host(c, crate::calc::CalcHostConfig::new()).unwrap();
     let exec = obj.run(
         &[],
         CalcRunLimits {
             cycles: 10_000,
             resource: i64::MAX,
-            value_size: 1280,
             deadline: None,
         },
     );
@@ -1031,7 +1028,6 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
         CalcRunLimits {
             cycles: 1_000_000,
             resource: 1_000_000,
-            value_size: 4096,
             deadline: None,
         },
     );

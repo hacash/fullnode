@@ -220,8 +220,6 @@ pub enum CalcAbort2 {
     Deadline,
     /// The pre-run resource budget cannot cover the minimum charge.
     OutOfResource,
-    /// The declared/actual value size exceeds the host `SpaceCap`.
-    ValueTooLarge,
     /// Interpreter and AOT disagreed on gas or the result. Fatal for the
     /// transaction; not a guest-visible abort.
     EngineMismatch,
@@ -233,7 +231,6 @@ pub enum CalcAbort2 {
 pub struct CalcRunLimits {
     pub cycles: u64,
     pub resource: i64,
-    pub value_size: usize,
     pub deadline: Option<std::time::Instant>,
 }
 
@@ -245,27 +242,10 @@ pub struct CalcFnObj {
     /// means [`Self::image_id`] hashes the container on demand.
     image_id: Option<[u8; 32]>,
     /// Mounted x86-64 image. `None` means this object runs on the interpreter
-    /// only (feature off, host turned AOT off, or this value was cloned —
-    /// the RX mapping cannot be duplicated). The consensus call path holds
-    /// an `Arc`, so the image stays mounted there.
+    /// only (feature off, or the host turned AOT off). The consensus call
+    /// path holds an `Arc`, so the image stays mounted there.
     #[cfg(feature = "calc-aot")]
     aot: Option<aot::AotFunc>,
-}
-
-impl Clone for CalcFnObj {
-    fn clone(&self) -> Self {
-        // Clones drop the AOT image: the RX mapping embeds absolute
-        // pointers to its own tables and must not be duplicated. A clone
-        // executes on the interpreter, which the differential suite pins
-        // to identical results — same semantics, host detail only.
-        Self {
-            container: self.container.clone(),
-            module: self.module.clone(),
-            image_id: self.image_id,
-            #[cfg(feature = "calc-aot")]
-            aot: None,
-        }
-    }
 }
 
 impl std::fmt::Debug for CalcFnObj {
@@ -280,14 +260,16 @@ impl std::fmt::Debug for CalcFnObj {
 }
 
 impl CalcFnObj {
-    /// Verify a container and build the executable object (deploy + load).
-    /// Uses [`CALC_CONFIG_V1`]. Host knobs stay off; pass [`CalcHostConfig`]
-    /// to [`Self::build_with_host`] to mount AOT or hash the image id.
+    /// Verify a container and build the executable object under
+    /// [`CALC_CONFIG_V1`] with host knobs off. Tests and the testkit only:
+    /// every production entry goes through [`Self::build_with_host`] /
+    /// [`Self::build_with_config`] with a `SpaceCap`-derived config.
+    #[cfg(any(test, feature = "calc-testkit"))]
     pub fn build(c: container::CalcContainer) -> VmrtRes<Self> {
         Self::build_with_config(c, CALC_CONFIG_V1)
     }
 
-    /// [`build`] under [`CALC_CONFIG_V1`] with host-only knobs applied.
+    /// `build` under [`CALC_CONFIG_V1`] with host-only knobs applied.
     pub fn build_with_host(c: container::CalcContainer, host: config::CalcHostConfig) -> VmrtRes<Self> {
         let cfg = CalcConfig {
             aot_mount: host.aot_mount,
@@ -297,7 +279,7 @@ impl CalcFnObj {
         Self::build_with_config(c, cfg)
     }
 
-    /// [`build`] with an explicit feature set. AOT mounts only when
+    /// `build` with an explicit feature set. AOT mounts only when
     /// `cfg.aot_mount` is set and the `calc-aot` feature is compiled in.
     pub fn build_with_config(c: container::CalcContainer, cfg: CalcConfig) -> VmrtRes<Self> {
         let module = verify::verify_container_with(&c, &cfg)?;
@@ -343,7 +325,8 @@ impl CalcFnObj {
 
     /// [`build_with_host`] with AOT mounting requested. A compile failure
     /// fails the build; the lockstep check must not silently disappear.
-    #[cfg(feature = "calc-aot")]
+    /// Tests and the testkit only.
+    #[cfg(all(feature = "calc-aot", any(test, feature = "calc-testkit")))]
     pub fn build_with_aot(c: container::CalcContainer) -> VmrtRes<Self> {
         Self::build_with_host(c, CalcHostConfig::new().with_aot_mount(true))
     }
@@ -400,9 +383,9 @@ impl CalcFnObj {
         if input.len() as u64 > lay.input_max {
             return finish(Err(CalcAbort2::Trap), 0, 0, 0);
         }
-        if lay.output_max > limits.value_size as u64 {
-            return finish(Err(CalcAbort2::ValueTooLarge), 0, 0, 0);
-        }
+        // `output_max` needs no run-time check: deploy and load both admit
+        // it against `SpaceCap::value_size`, the caps only rise, and the
+        // caller validates the output value against the same cap anyway.
         if limits.resource >= 0 && in_res.saturating_add(mem_res) > limits.resource {
             return finish(Err(CalcAbort2::OutOfResource), 0, 0, 0);
         }
@@ -425,42 +408,42 @@ impl CalcFnObj {
         }
         // Early lockstep insurance. Official x86-64 binaries compile
         // `calc-aot` and mount an image, so every call runs the interpreter
-        // and AOT on two threads and keeps the result only when gas
-        // (`cycles_used`) and the outcome (output bytes, abort class, halt
-        // code) match. A mismatch is `EngineMismatch`: the caller rejects
-        // the transaction and it does not enter a block. Builds without the
-        // feature, or with the image unmounted, take the interpreter alone.
-        // A host deadline is not part of this check — AOT does not observe
-        // it — so a deadline stays on the interpreter. Once production has
+        // and then AOT in order on this thread and keeps the result only
+        // when gas (`cycles_used`) and the outcome (output bytes, abort
+        // class, halt code) match. A mismatch is `EngineMismatch`: the
+        // caller rejects the transaction and it does not enter a block. A
+        // panic inside either engine is caught and reported the same way —
+        // it is a host failure with no agreed charge to keep, and the
+        // transaction is rejected either way. Builds without the feature,
+        // or with the image unmounted, take the interpreter alone. A host
+        // deadline is not part of this check — AOT does not observe it —
+        // so a deadline stays on the interpreter. Once production has
         // stayed quiet, the interpreter side of this pair is removed and
         // AOT is the only engine.
         #[cfg(feature = "calc-aot")]
         if limits.deadline.is_none() {
             if let Some(aot) = self.aot.as_ref() {
                 let budget = limits.cycles - setup;
-                let (left, right) = std::thread::scope(|scope| {
-                    let i = scope.spawn(|| {
-                        engine_from_interp(setup, interp::run(
-                            &self.module,
-                            &self.container,
-                            input,
-                            budget,
-                            None,
-                        ))
-                    });
-                    let a = scope.spawn(|| {
-                        let (out, _regs, _mem) = aot.run_with_state(
-                            &self.module,
-                            &self.container,
-                            input,
-                            budget,
-                        );
+                let interp_out = match std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| {
+                        engine_from_interp(
+                            setup,
+                            interp::run(&self.module, &self.container, input, budget, None),
+                        )
+                    }),
+                ) {
+                    Ok(out) => out,
+                    Err(_) => return finish(Err(CalcAbort2::EngineMismatch), 0, 0, 0),
+                };
+                let aot_out = match std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(|| {
+                        let (out, _regs, _mem) =
+                            aot.run_with_state(&self.module, &self.container, input, budget);
                         engine_from_aot(setup, out)
-                    });
-                    (i.join(), a.join())
-                });
-                let (Ok(interp_out), Ok(aot_out)) = (left, right) else {
-                    return finish(Err(CalcAbort2::EngineMismatch), 0, 0, 0);
+                    }),
+                ) {
+                    Ok(out) => out,
+                    Err(_) => return finish(Err(CalcAbort2::EngineMismatch), 0, 0, 0),
                 };
                 if interp_out != aot_out {
                     return finish(Err(CalcAbort2::EngineMismatch), 0, 0, 0);
@@ -1022,7 +1005,6 @@ mod tests {
             CalcRunLimits {
                 cycles: 10_000,
                 resource: i64::MAX,
-                value_size: usize::MAX,
                 deadline: None,
             },
         );
@@ -1163,7 +1145,7 @@ mod tests {
 
     #[test]
     fn wide_mem_and_bss_roundtrip_up_to_the_engine_ceiling() {
-        let cfg = CalcConfig::all_enabled().with_mem_kib_max(70_000);
+        let cfg = CalcConfig::v1().with_mem_kib_max(70_000);
         let c = pack_container_with_bss(
             container::CALC_PROFILE_RV64IM,
             70_000,

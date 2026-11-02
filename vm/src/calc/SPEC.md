@@ -21,7 +21,7 @@ There is no checksum; consensus commits the bytes.
 | 5 | 1 | `profile` bitfield. Bit 0 = Zba/Zbb/Zbs/Zbc. Bit 1 = RVC. Other bits rejected. Values 0..=3 |
 | 6 | 1 | `abi` = 1 (bytes → bytes) |
 | 7 | 1 | reserved, must be 0 |
-| 8 | 4 | `mem_kib` (u32, `decode` requires 4..=2097147; verify cap is config) |
+| 8 | 4 | `mem_kib` (u32, `decode` requires 4..=2097147; verify cap comes from `SpaceCap::calc_mem_kib_max`) |
 | 12 | 4 | `entry` — **absolute guest PC** |
 | 16 | 4 | `code_len` (> 0; multiple of 4 when bit 1 is clear, multiple of 2 when RVC is set) |
 | 20 | 4 | `init_len` |
@@ -241,8 +241,10 @@ ecall cost, or the setup charge. The setup shortfall reports
 `cycles_used = setup` (only the attempted charge; the rest of the budget is
 not burned) and is a terminal failure — the abort class and the tx outcome
 are identical either way because a transaction that reaches it cannot be
-included. Deadline is host-only (non-consensus). OutOfResource /
-ValueTooLarge are pre-flight host-limit errors (0 cycles).
+included. Deadline is host-only (non-consensus). OutOfResource is a pre-flight
+host-limit error (0 cycles). `output_max` needs no run-time check: deploy
+and load admit it against `SpaceCap::value_size`, the caps only rise, and
+the caller validates the returned value against the same cap.
 
 ## 8. Gas
 
@@ -256,9 +258,12 @@ setup = CALC_SETUP_BASE_CYCLES + mem_kib * CALC_SETUP_PER_KIB_CYCLES
 Resource: `ceil(input_len/16) + ceil(output_len/16) + mem_kib * 8`.
 Aborted runs charge 0 for output length.
 
-### Per-profile static weights
+### Static weights
 
-Tables are versioned per profile; values are currently identical.
+One table (`decode::WEIGHTS`) serves every profile. Repricing a profile
+after activation would change the gas of already-deployed containers, so a
+future price change may only attach a new table to a NEW profile value,
+never reprice 0..=3.
 
 | Class | Cycles |
 |-------|--------|
@@ -306,54 +311,49 @@ exit_code, abort (None on success), cycles_used
 
 Identical between interpreter and AOT when derived from equal `CalcExec`.
 
-## v1 enabled set
+## v1 semantics (unconditional)
 
 Official x86-64 nodes build with `calc-aot` (the vm crate default). Each
-call runs the interpreter and AOT on two threads. The call is kept only
-when `cycles_used`, the output bytes, the abort class and the halt code
-match. A mismatch is `CalcEngineMismatch` (fault 156): the transaction is
-rejected and does not enter a block. No agreed gas is settled for that
-call. Builds without the feature, and calls with a host deadline, run the
-interpreter only. This lockstep pair is the early launch check. After it
-has stayed quiet, the interpreter is retired and AOT is the only engine.
+call runs the interpreter and then AOT in order on the calling thread. The
+call is kept only when `cycles_used`, the output bytes, the abort class and
+the halt code match. A mismatch is `CalcEngineMismatch` (fault 156): the
+transaction is rejected and does not enter a block, and no agreed gas is
+settled for that call; a panic inside either engine is caught and reported
+the same way. Builds without the feature, and calls with a host deadline,
+run the interpreter only. This lockstep pair is the early launch check.
+After it has stayed quiet, the interpreter is retired and AOT is the only
+engine.
 
-Consensus default is `CALC_CONFIG_V1`. Both profile axes are **on**: the
-deployer selects the matrix cell in header byte 5. Hash
-builtins, read-only rodata, the stack guard and a free entry point are
-**on**. `compute_image_id_on_load` and `aot_mount` stay off in the
-consensus constant; they are host knobs on `CalcHostConfig` (applied by
-`CalcFnObj::build_with_host` / `build_with_aot`).
-Deploy and load both use `CALC_CONFIG_V1` plus the current `SpaceCap`
+Every execution capability is unconditional — `CalcConfig` has no switches
+for them and no legal future config can turn one off, because that would
+reject or reinterpret a previously legal container:
+
+- All four profile cells of header byte 5 are admitted; the deployer picks
+  the cell. zk images leave bit 1 clear; the chain does not forbid it.
+- Hash builtins (`a7` = 1..=6) run and are charged. HALT (`a7` = 0) always
+  works.
+- Code, the pad below `rodata_base`, rodata and the `[rodata_end,
+  data_base)` hole are read-only; stores and digest writes there trap.
+- Stores and digest writes that intersect the 256-byte stack guard band
+  trap.
+- Any instruction-boundary entry inside the code region is accepted.
+
+`CALC_CONFIG_V1` is the default build config for deploy and load. It
+carries only the admission memory cap and the two host knobs
+(`compute_image_id_on_load`, `aot_mount` — off in the constant, applied
+through `CalcHostConfig` by `CalcFnObj::build_with_host`, and at load via
+`Runtime::set_calc_host_config`; never a consensus path). The admission
+cap comes from the current `SpaceCap` through `CalcConfig::for_space_cap`
 (`calc_mem_kib_max` default 64, `call_data_size` 5120, `value_size` 1280,
 `calc_image_max` 16383). Those caps only rise, so a kernel that passed
-admission still loads. Execution flags do not vary by height. A future
-relaxation that must keep old-height replay unchanged adds that fork
-when it is actually required. AOT stays a host knob
-on `CalcHostConfig`, applied at load via `Runtime::set_calc_host_config`
-and never a consensus path.
-`CALC_CONFIG_V1` is the execution snapshot for both deploy and load.
-`CalcConfig::all_enabled()` is test-only (`mem_kib_max` stays 64; it is
-not a large-memory preset and not a consensus upgrade). A future
-consensus upgrade must add a named constant such as `CALC_CONFIG_V2`
-rather than calling `all_enabled()`. Admission grows by raising the
-current `SpaceCap`. Turning off an enabled v1 execution flag is not a
-permitted upgrade. Layout and gas constants, including
-`CYCLES_PER_COMPUTE`, do not change. `CalcConfig::v1()` is
-`CALC_CONFIG_V1`.
+admission still loads. Admission grows by raising the current `SpaceCap`;
+there is no `CALC_CONFIG_V2` to ship and no height-dependent execution
+config. Layout and gas constants, including `CYCLES_PER_COMPUTE`, do not
+change. `CalcConfig::v1()` is `CALC_CONFIG_V1`; `CalcConfig::testkit` is
+test-only (both host knobs on, memory cap up to 16 MiB, absent from
+production builds).
 
-| Flag | V1 |
-|------|----|
-| `profile1_bitmanip` | on — profile bit 0 is admitted; turning the flag off rejects any container with that bit |
-| `compressed` | on — profile bit 1 (RVC) is admitted; turning the flag off rejects any container with that bit. zk images omit the bit |
-| `hash_builtins` | on — ecall `a7` 1..=6 runs the hash builtins; turning the flag off traps "builtin not enabled" with no hash charge; HALT (`a7` 0) always works |
-| `rodata_readonly` | on — stores and digest writes into rodata and `[rodata_end, data_base)` trap; code and the pad below `rodata_base` stay non-writable either way |
-| `stack_guard` | on — stores that intersect the 256-byte guard band trap |
-| `compute_image_id_on_load` | off — `image_id()` / `receipt()` hash the container on demand; `CalcHostConfig` can turn it on |
-| `aot_mount` | off — `CalcFnObj::build` stays on the interpreter; `build_with_aot` / `CalcHostConfig::with_aot_mount(true)` mounts AOT when `calc-aot` is compiled |
-| `free_entry` | on — any instruction-boundary entry inside the code region is accepted; turning the flag off requires `entry == CODE_BASE` |
-| `mem_kib_max` | 64 — offline `verify_container` / `pack_container` reject `mem_kib` above this. Chain deploy and load use `SpaceCap::calc_mem_kib_max` (same default). Wire decode accepts up to 2097147 |
-
-Sections above describe the semantics of each capability when that flag is on.
+Sections above describe the semantics of each capability listed here.
 
 ## 10. Building a kernel
 

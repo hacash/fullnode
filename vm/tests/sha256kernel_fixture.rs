@@ -17,15 +17,12 @@
 use vm::calc::container::CalcContainer;
 use vm::calc::verify::verify_container;
 use vm::calc::{
-    pack_container_with_bss, CalcConfig, CalcFnObj, CalcRunLimits, HashKind, CALC_CONFIG_V1,
+    pack_container_with_bss, CalcFnObj, CalcHostConfig, CalcRunLimits, HashKind, CALC_CONFIG_V1,
 };
 
-fn kernel_cfg(aot: bool) -> CalcConfig {
-    CALC_CONFIG_V1
-        .with_hash_builtins(true)
-        .with_rodata_readonly(true)
-        .with_stack_guard(true)
-        .with_aot_mount(aot)
+fn kernel_build(c: CalcContainer, aot: bool) -> CalcFnObj {
+    CalcFnObj::build_with_host(c, CalcHostConfig::new().with_aot_mount(aot))
+        .expect("kernel container builds")
 }
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -64,8 +61,7 @@ fn kernel() -> (CalcFnObj, CalcContainer) {
         &CALC_CONFIG_V1,
     )
     .expect("kernel container packs");
-    let obj = CalcFnObj::build_with_config(container.clone(), kernel_cfg(false))
-        .expect("kernel container verifies");
+    let obj = kernel_build(container.clone(), false);
     (obj, container)
 }
 
@@ -74,7 +70,6 @@ fn limits() -> CalcRunLimits {
         // vm resource default: the 1M-cycle consensus cap per call
         cycles: 1_000_000,
         resource: i64::MAX,
-        value_size: usize::MAX,
         deadline: None,
     }
 }
@@ -151,7 +146,7 @@ fn kernel_dict_walk_error_paths() {
 #[test]
 fn kernel_aot_parity() {
     let (plain, container) = kernel();
-    let mounted = CalcFnObj::build_with_config(container, kernel_cfg(true)).expect("AOT image compiles");
+    let mounted = kernel_build(container, true);
     let mut docs: Vec<&[u8]> = vec![b"", b"abc", b"hacash"];
     for (doc, _) in WALKS {
         docs.push(doc);

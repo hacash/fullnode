@@ -63,10 +63,12 @@ pub const CODE_BASE: u64 = 0x1000;
 pub const IMAGE_ID_DOMAIN: &[u8] = b"hacash-calc-image-v1";
 
 pub const CALC_MEM_KIB_MIN: u32 = 4;
-/// Consensus v1 verify cap (`CALC_CONFIG_V1.mem_kib_max`, and the default
-/// of `SpaceCap::calc_mem_kib_max`). Wire `decode` only requires
+/// Default admission cap for a calc container's `mem_kib`: the default of
+/// both `SpaceCap::calc_mem_kib_max` and `CALC_CONFIG_V1.mem_kib_max`. The
+/// value is defined once next to the `SpaceCap` knob and re-exported here
+/// for the calc-internal paths. Wire `decode` only requires
 /// [`CALC_MEM_KIB_MIN`] and rejects above [`CALC_MEM_KIB_ENGINE_MAX`].
-pub const CALC_MEM_KIB_MAX: u32 = 64;
+pub use crate::rt::CALC_MEM_KIB_MAX;
 /// Largest `mem_kib` either engine can address. AOT compares guest
 /// addresses with a signed 32-bit immediate, so
 /// `CODE_BASE + mem_kib * 1024` must be `<= i32::MAX`. Technical ceiling,
@@ -263,9 +265,10 @@ impl CalcContainer {
         if lay.input_base < CODE_BASE || lay.output_base < CODE_BASE {
             return Err(err("calc container memory overflows (io overlaps unmapped)"));
         }
-        if lay.input_base < lay.output_base {
-            return Err(err("calc container memory overflows (io overlaps data)"));
-        }
+        // `output_base = align16_down(input_base - output_max)` is at or
+        // below `input_base` by construction, so the io regions cannot
+        // overlap each other; only the data/stack overlap above and the
+        // unmapped-page overlap here need checking.
         let entry_u = self.entry as u64;
         if entry_u < CODE_BASE || entry_u >= CODE_BASE + lay.code_len {
             return Err(err("calc container entry outside code"));

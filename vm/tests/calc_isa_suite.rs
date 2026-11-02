@@ -18,7 +18,7 @@ use vm::calc::interp::{self, CalcAbort};
 fn verify_container(
     c: &CalcContainer,
 ) -> Result<vm::calc::verify::CalcModule, String> {
-    vm::calc::verify::verify_container_with(c, &vm::calc::CalcConfig::all_enabled())
+    vm::calc::verify::verify_container(c)
         .map_err(|e| format!("{e:?}"))
 }
 
@@ -325,15 +325,11 @@ fn input_echo_end_to_end() {
     a.i(0, 17, 0, 0x13, 0); // a7 = HALT
     a.ecall();
     let container = isa_gen::container_for(a.finish());
-    let obj = vm::calc::CalcFnObj::build_with_config(
-        container,
-        vm::calc::CalcConfig::all_enabled(),
-    )
-    .unwrap();
+    let obj = vm::calc::CalcFnObj::build_with_host(container, vm::calc::CalcHostConfig::new())
+        .unwrap();
     let limits = vm::calc::CalcRunLimits {
         cycles: 1_000_000,
         resource: i64::MAX,
-        value_size: usize::MAX,
         deadline: None,
     };
     let input: Vec<u8> = (0..100u32).map(|i| (i * 37 + 11) as u8).collect();

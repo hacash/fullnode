@@ -45,7 +45,7 @@ fn bench(name: &str, prologue: &[u8], op_bytes: &[u8], n: usize) {
 use crate::calc::CalcRunLimits;
 
 fn no_limits() -> CalcRunLimits {
-    CalcRunLimits { cycles: u64::MAX, resource: i64::MAX, value_size: usize::MAX, deadline: None }
+    CalcRunLimits { cycles: u64::MAX, resource: i64::MAX, deadline: None }
 }
 
 #[test]

@@ -43,9 +43,9 @@ The harness maps each `*.elf` (or `*.bin` + optional `*.dat`/`*.rodata`/
 `mem_kib` is the smallest value whose layout clears that image, rounded up
 to a KiB, and is written into the container header. It must be within the
 testkit ceiling of 16384 KiB (16 MiB). Verify uses
-`CalcConfig::testkit(16384)` (`calc-testkit`, non-default), which is
-`all_enabled` capabilities plus that cap. Production builds cannot call
-`testkit`; consensus v1 still caps `mem_kib` at 64. Layout, gas and the
+`CalcConfig::testkit(16384)` (`calc-testkit`, non-default), which is the
+v1 semantics plus both host knobs and that cap. Production builds cannot
+call `testkit`; consensus v1 still caps `mem_kib` at 64. Layout, gas and the
 interpreter follow the container's own `mem_kib` — there is no separate
 usable-length override.
 

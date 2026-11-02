@@ -95,34 +95,81 @@ impl Func {
         self
     }
 
+    /// Attach a packed calc container, admitted against the L1 default
+    /// `SpaceCap`. A sidechain with raised caps uses
+    /// [`Self::rv64im_container_with_cap`].
     pub fn rv64im_container(self, c: &crate::calc::container::CalcContainer) -> Ret<Self> {
-        let bytes = c.encode().map_err(|e| e.to_string())?;
-        self.rv64im_container_bytes(bytes)
+        self.rv64im_container_with_cap(c, &crate::rt::SpaceCap::new(0))
     }
 
-    pub fn rv64im_container_bytes(mut self, bytes: Vec<u8>) -> Ret<Self> {
+    /// [`Self::rv64im_container`] admitted against `cap` — the same caps the
+    /// target chain will apply at deploy, so a sidechain tool does not
+    /// reject kernels its chain accepts.
+    pub fn rv64im_container_with_cap(
+        self,
+        c: &crate::calc::container::CalcContainer,
+        cap: &crate::rt::SpaceCap,
+    ) -> Ret<Self> {
+        let bytes = c.encode().map_err(|e| e.to_string())?;
+        self.rv64im_container_bytes_with_cap(bytes, cap)
+    }
+
+    /// Attach raw calc container bytes, admitted against the L1 default
+    /// `SpaceCap`.
+    pub fn rv64im_container_bytes(self, bytes: Vec<u8>) -> Ret<Self> {
+        self.rv64im_container_bytes_with_cap(bytes, &crate::rt::SpaceCap::new(0))
+    }
+
+    /// [`Self::rv64im_container_bytes`] admitted against `cap`.
+    pub fn rv64im_container_bytes_with_cap(
+        mut self,
+        bytes: Vec<u8>,
+        cap: &crate::rt::SpaceCap,
+    ) -> Ret<Self> {
         let (c, used) =
             crate::calc::container::CalcContainer::decode(&bytes).map_err(|e| e.to_string())?;
         if used != bytes.len() {
             return errf!("calc container trailing bytes");
         }
-        let cap = crate::rt::SpaceCap::new(0);
         if c.input_max as usize > cap.call_data_size {
             return errf!("calcfunc input_max exceeds call_data_size");
         }
         if c.output_max as usize > cap.value_size {
             return errf!("calcfunc output_max exceeds HVM value_size");
         }
-        crate::calc::verify::verify_container(&c).map_err(|e| e.to_string())?;
+        let cfg = crate::calc::CalcConfig::for_space_cap(cap);
+        crate::calc::verify::verify_container_with(&c, &cfg).map_err(|e| e.to_string())?;
         self.func.code_stuff.conf = Uint1::from(CodeConf::from_type(CodeType::RV64IM).raw());
         self.func.code_stuff.data = BytesW2::from(bytes)?;
         Ok(self)
     }
 
+    /// Pack a bare-metal RISC-V ELF into a calc container, admitted against
+    /// the L1 default `SpaceCap`.
     pub fn rv64im_elf(self, elf: &[u8], mem_kib: u32, input_max: u16, output_max: u16) -> Ret<Self> {
-        let c = crate::calc::pack_elf(elf, mem_kib, input_max, output_max)
-            .map_err(|e| e.to_string())?;
-        self.rv64im_container(&c)
+        self.rv64im_elf_with_cap(elf, mem_kib, input_max, output_max, &crate::rt::SpaceCap::new(0))
+    }
+
+    /// [`Self::rv64im_elf`] admitted against `cap`.
+    pub fn rv64im_elf_with_cap(
+        self,
+        elf: &[u8],
+        mem_kib: u32,
+        input_max: u16,
+        output_max: u16,
+        cap: &crate::rt::SpaceCap,
+    ) -> Ret<Self> {
+        let cfg = crate::calc::CalcConfig::for_space_cap(cap);
+        let c = crate::calc::pack_elf_with_config(
+            elf,
+            crate::calc::container::CALC_PROFILE_RV64IM,
+            mem_kib,
+            input_max,
+            output_max,
+            &cfg,
+        )
+        .map_err(|e| e.to_string())?;
+        self.rv64im_container_with_cap(&c, cap)
     }
 }
 
