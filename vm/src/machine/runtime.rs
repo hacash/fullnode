@@ -16,13 +16,6 @@ const UPGRADE_HEIGHTS: &[u64] = &[
     crate::contract::CALCFUNC_DISABLE_UNTIL_HEIGHT,
 ];
 
-fn upgrade_heights() -> impl Iterator<Item = u64> {
-    UPGRADE_HEIGHTS
-        .iter()
-        .copied()
-        .chain(crate::calc::CALC_CONFIG_FORK_HEIGHTS.iter().copied())
-}
-
 #[derive(Default)]
 pub struct WarmState {
     pub gas_table: GasTable,
@@ -305,7 +298,7 @@ impl Runtime {
 
     fn next_upgrade_after(height: u64) -> u64 {
         let mut next = u64::MAX;
-        for h in upgrade_heights() {
+        for h in UPGRADE_HEIGHTS.iter().copied() {
             if h > height && h < next {
                 next = h;
             }

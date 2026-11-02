@@ -137,8 +137,9 @@ fn hash_builtins_gate() {
     }
     let ok = interp::run(&on_m, &c, &[], 1_000_000, None).unwrap();
     let hash = HashKind::Sha2.cycles(0);
-    // first block is addi+ecall (1); halt block is 3 addis. Off path skips the hash charge.
-    assert_eq!(off.1 + hash + 3, ok.cycles_used, "disabled hash must not be charged");
+    // first block is addi+ecall (2). Halt block is 3 addi + ecall (4).
+    // Off path skips the hash charge.
+    assert_eq!(off.1 + hash + 4, ok.cycles_used, "disabled hash must not be charged");
     let halt_only = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, halt_code(), vec![]);
     let obj = CalcFnObj::build(halt_only).unwrap();
     assert!(obj.run(&[], limits()).result.is_ok());

@@ -420,7 +420,7 @@ pub fn alu_helper_op(op: u64, a: u64, b: u64) -> u64 {
             }
         }
         // Zbc carryless multiplies (software loop mirroring interp::clmul128;
-        // 16 cycles charged either way — see decode::CLMUL_CYCLES).
+        // CLMUL_CYCLES charged either way — see decode::CLMUL_CYCLES).
         8 => clmul128_(a, b) as u64,        // clmul
         9 => (clmul128_(a, b) >> 64) as u64, // clmulh
         10 => (clmul128_(a, b) >> 63) as u64, // clmulr

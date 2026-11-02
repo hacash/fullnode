@@ -11,7 +11,7 @@ Zicclsm, little-endian, flat memory, **no C, no F/D, no A**.
 
 ## 1. Container wire format
 
-32-byte big-endian header, then `code || rodata || init`. Magic `HCF1`.
+36-byte big-endian header, then `code || rodata || init`. Magic `HCF1`.
 There is no checksum; consensus commits the bytes.
 
 | Offset | Size | Field |
@@ -21,19 +21,27 @@ There is no checksum; consensus commits the bytes.
 | 5 | 1 | `profile` bitfield. Bit 0 = Zba/Zbb/Zbs/Zbc. Bit 1 = RVC. Other bits rejected. Values 0..=3 |
 | 6 | 1 | `abi` = 1 (bytes → bytes) |
 | 7 | 1 | reserved, must be 0 |
-| 8 | 2 | `mem_kib` (u16, `decode` requires >= 4; verify cap is config) |
-| 10 | 4 | `entry` — **absolute guest PC** |
-| 14 | 4 | `code_len` (> 0; multiple of 4 when bit 1 is clear, multiple of 2 when RVC is set) |
-| 18 | 4 | `init_len` |
-| 22 | 2 | `input_max` (0..=5120, `CALC_IO_MAX` = `CALL_DATA_MAX`; the call input is flattened from a one-layer list under the same cap) |
-| 24 | 2 | `output_max` (1..=5120, `CALC_IO_MAX`; deploy caps it at `value_size`) |
-| 26 | 4 | `rodata_len` |
-| 30 | 2 | `bss_len` (u16). Zero means no extra `.bss` (older containers). Max 65535; a larger ELF `.bss` is rejected at pack |
+| 8 | 4 | `mem_kib` (u32, `decode` requires 4..=2097147; verify cap is config) |
+| 12 | 4 | `entry` — **absolute guest PC** |
+| 16 | 4 | `code_len` (> 0; multiple of 4 when bit 1 is clear, multiple of 2 when RVC is set) |
+| 20 | 4 | `init_len` |
+| 24 | 2 | `input_max` (u16). Chain admission is `SpaceCap::call_data_size` (L1: 5120). The call input is flattened from a one-layer list under the same cap |
+| 26 | 2 | `output_max` (u16, at least 1). Chain admission is `SpaceCap::value_size` (L1: 1280) |
+| 28 | 4 | `rodata_len` |
+| 32 | 4 | `bss_len` (u32). Zero means no `.bss`. No policy cap: the fit check must still leave the 256-byte guard and the 2048-byte minimum stack |
 
 `entry` is an absolute guest PC: `CODE_BASE <= entry < CODE_BASE + code_len`,
 on an instruction boundary, aligned to 4 bytes when bit 1 is clear and to
 2 bytes when RVC is set. It is **not** a code-relative offset. Pack tools,
 verifier, interpreter and AOT all use this convention.
+
+Chain deploy admits the encoded container under `SpaceCap::calc_image_max`
+(default 16383, the same number as HVM `function_size`), and the contract
+code body keeps a `u16` length prefix, so the stored image cannot exceed
+65535 bytes. A sidechain may raise `calc_image_max` up to 65535. A larger
+program is split across sibling calc functions in the same contract; that
+call is not part of this wire format. `code_len`, `rodata_len` and
+`init_len` inside the container are already `u32`.
 
 ## 2. ISA profiles
 
@@ -102,13 +110,19 @@ mem_len    = CODE_BASE + usable_len     // exclusive end of guest space
 Resource and setup charges use `mem_kib` / `usable_len`, not the unmapped
 low page. The interpreter allocates exactly `mem_len` bytes.
 
-`decode` accepts any `mem_kib >= 4` (`CALC_MEM_KIB_MIN`) whose regions do
-not overlap. The upper bound is not a wire constant: `verify` rejects
-`mem_kib > cfg.mem_kib_max`. Consensus config v1 sets `mem_kib_max = 64`
-(`CALC_MEM_KIB_MAX`). Raising it is a consensus upgrade. The test-only
-`CalcConfig::testkit` constructor may set a cap up to 16384 KiB (16 MiB)
-and is absent from production builds. Layout always follows the container's
-own `mem_kib`.
+`decode` accepts any `mem_kib` from 4 through `CALC_MEM_KIB_ENGINE_MAX`
+(2_097_147 KiB, about 2 GiB) whose regions do not overlap. The engine
+ceiling is the AOT `i32` address compare: `CODE_BASE + mem_kib * 1024`
+must be `<= i32::MAX`. The admission cap is not a wire constant.
+`verify_container` rejects `mem_kib > cfg.mem_kib_max`. Consensus config
+v1 and `SpaceCap::calc_mem_kib_max` both default to 64 (`CALC_MEM_KIB_MAX`).
+A sidechain raises `SpaceCap::calc_mem_kib_max` (and passes the same
+number to `CalcConfig::with_mem_kib_max` when packing). That does not
+change the header. Raising the L1 default is a consensus upgrade.
+`CalcConfig::testkit` may set a cap up to 16384 KiB (16 MiB) and is
+absent from production builds. `CalcConfig::with_mem_kib_max` clamps at
+the engine ceiling and is what a sidechain packer calls. Layout always
+follows the container's own `mem_kib`.
 
 Layout (absolute addresses, 16-byte aligned where noted):
 
@@ -130,9 +144,9 @@ stack_top = output_base
 `output_base = align16_down(input_base - output_max)`. The stack is every
 byte between the guard and the output region. `CALC_STACK_SIZE` (2 KiB) is
 the minimum that must remain after `.bss` and the guard; it is not a fixed
-stack window. A header `bss_len` above 65535 cannot be represented (`u16`);
-`pack_elf` rejects it. That cap is independent of the 16 MiB testkit
-memory ceiling. The alignment padding after the defined input/output
+stack window. `bss_len` is a `u32` with no separate policy cap. `pack_elf`
+rejects a `.bss` that does not leave the guard and the minimum stack, or
+that does not fit in `u32`. The alignment padding after the defined input/output
 regions is ordinary writable memory; it is deliberately not part of the
 ABI (no pointer into it is exposed at entry).
 
@@ -251,9 +265,9 @@ Tables are versioned per profile; values are currently identical.
 | ALU, branches, jumps, FENCE, unary/bitmanip except clmul | 1 |
 | load / store | 2 |
 | MUL family | 3 |
-| DIV/REM family | 32 |
-| CLMUL family | 16 |
-| ECALL static (`ecall_base`) | 0 (hash cost added at runtime) |
+| DIV/REM family | 12 |
+| CLMUL family | 24 |
+| ECALL static (`ecall_base`) | 1 (hash cost added at runtime) |
 
 ### Basic-block prepaid charging
 
@@ -309,25 +323,22 @@ builtins, read-only rodata, the stack guard and a free entry point are
 **on**. `compute_image_id_on_load` and `aot_mount` stay off in the
 consensus constant; they are host knobs on `CalcHostConfig` (applied by
 `CalcFnObj::build_with_host` / `build_with_aot`).
-`CalcConfig::for_load()` / `for_load_at(height)` keep v1 execution
-semantics (`hash_builtins`, `rodata_readonly`, `stack_guard`,
-`free_entry`) when a container is loaded from state. They do **not**
-re-apply the v1 admission cap: `profile1_bitmanip` is open and
-`mem_kib_max` is `u16::MAX`, so a kernel deployed under a later
-`for_height` still loads. The container's own profile still selects
-the ISA whitelist (`profile not enabled` and `mem_kib exceeds config
-cap` are deploy/upgrade checks only). `for_height` fork points live in
-`CALC_CONFIG_FORK_HEIGHTS` (currently empty; every height is v1) and
-are included in the runtime upgrade-height scan. AOT stays a host knob
+Deploy and load both use `CALC_CONFIG_V1` plus the current `SpaceCap`
+(`calc_mem_kib_max` default 64, `call_data_size` 5120, `value_size` 1280,
+`calc_image_max` 16383). Those caps only rise, so a kernel that passed
+admission still loads. Execution flags do not vary by height. A future
+relaxation that must keep old-height replay unchanged adds that fork
+when it is actually required. AOT stays a host knob
 on `CalcHostConfig`, applied at load via `Runtime::set_calc_host_config`
 and never a consensus path.
-`CalcConfig::for_height()` is the deploy/upgrade admission config.
+`CALC_CONFIG_V1` is the execution snapshot for both deploy and load.
 `CalcConfig::all_enabled()` is test-only (`mem_kib_max` stays 64; it is
 not a large-memory preset and not a consensus upgrade). A future
 consensus upgrade must add a named constant such as `CALC_CONFIG_V2`
-rather than calling `all_enabled()`. Changing a v1 flag, or raising
-`mem_kib_max`, is a consensus upgrade. Layout and gas constants,
-including `CYCLES_PER_COMPUTE`, do not change. `CalcConfig::v1()` is
+rather than calling `all_enabled()`. Admission grows by raising the
+current `SpaceCap`. Turning off an enabled v1 execution flag is not a
+permitted upgrade. Layout and gas constants, including
+`CYCLES_PER_COMPUTE`, do not change. `CalcConfig::v1()` is
 `CALC_CONFIG_V1`.
 
 | Flag | V1 |
@@ -340,7 +351,7 @@ including `CYCLES_PER_COMPUTE`, do not change. `CalcConfig::v1()` is
 | `compute_image_id_on_load` | off — `image_id()` / `receipt()` hash the container on demand; `CalcHostConfig` can turn it on |
 | `aot_mount` | off — `CalcFnObj::build` stays on the interpreter; `build_with_aot` / `CalcHostConfig::with_aot_mount(true)` mounts AOT when `calc-aot` is compiled |
 | `free_entry` | on — any instruction-boundary entry inside the code region is accepted; turning the flag off requires `entry == CODE_BASE` |
-| `mem_kib_max` | 64 — `mem_kib` above this is rejected at verify, not at wire decode |
+| `mem_kib_max` | 64 — offline `verify_container` / `pack_container` reject `mem_kib` above this. Chain deploy and load use `SpaceCap::calc_mem_kib_max` (same default). Wire decode accepts up to 2097147 |
 
 Sections above describe the semantics of each capability when that flag is on.
 

@@ -193,14 +193,14 @@ fn store_into_rodata_traps() {
 /// cycle below it. The failing charge is excluded on shortfall.
 #[test]
 fn oog_boundary_cycles() {
-    // minimal program: halt sequence, exactly 3 cycles.
+    // minimal program: halt sequence, exactly 4 cycles (3 addi + ecall).
     let mut a = isa_gen::Asm::new();
     a.ret();
     let container = isa_gen::container_for(a.finish());
     let module = verify_container(&container).unwrap();
-    let (r, _, _, _) = interp::run_with_state(&module, &container, &[], 3);
+    let (r, _, _, _) = interp::run_with_state(&module, &container, &[], 4);
     assert!(r.is_ok(), "exact budget must succeed: {r:?}");
-    assert_eq!(r.unwrap().cycles_used, 3);
+    assert_eq!(r.unwrap().cycles_used, 4);
     // one cycle short: the single 3-cycle block charge is excluded -> 0 used
     let (r2, _, _, _) = interp::run_with_state(&module, &container, &[], 1);
     assert!(matches!(r2, Err((CalcAbort::OutOfGas, _))), "{r2:?}");
@@ -211,7 +211,7 @@ fn oog_boundary_cycles() {
     #[cfg(feature = "calc-aot")]
     {
         let f = vm::calc::aot::aot_compile(&module).unwrap();
-        for (budget, ok) in [(3u64, true), (1, false), (0, false)] {
+        for (budget, ok) in [(4u64, true), (1, false), (0, false)] {
             let (out, _, _) = f.run_with_state(&module, &container, &[], budget);
             assert_eq!(
                 out.abort.is_none(),
@@ -221,12 +221,12 @@ fn oog_boundary_cycles() {
             );
             assert_eq!(
                 out.cycles_used,
-                if ok { 3 } else { 0 },
+                if ok { 4 } else { 0 },
                 "AOT cycles at budget {budget}"
             );
         }
     }
-    // cost-table program at its exact total (55) and one below.
+    // cost-table program at its exact total (48) and one below.
     let case55 = all_cases()
         .into_iter()
         .find(|c| c.name == "cyc/cost-table")
@@ -250,7 +250,7 @@ fn oog_boundary_cycles() {
         assert_eq!(out.abort, Some(vm::calc::aot::AotAbort::OutOfGas));
         assert_eq!(out.cycles_used, 0);
     }
-    // multi-block partial progress: [addi,beq](2) + halt(3); at
+    // multi-block partial progress: [addi,beq](2) + halt(4); at
     // budget 3 the first block is charged, the second cannot be -> OOG
     // with exactly 2 cycles kept.
     let bs = all_cases()

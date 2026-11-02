@@ -4,8 +4,7 @@
 slot into a raw byte body. `Nil` is `[]`. A one-layer `Compo` list of
 Bytes-like scalars is deferred CAT: each element follows CAT's `extract_bytes`
 rules (`Nil` rejected) and the chunks are concatenated. Total length is capped
-by `SpaceCap::call_data_size` (`CALL_DATA_MAX`, 5120; the same ceiling as the
-calc wire cap `CALC_IO_MAX`). Ordinary `Value::valid` / CAT / PUT / HREAD /
+by `SpaceCap::call_data_size` (`CALL_DATA_MAX`, 5120). Ordinary `Value::valid` / CAT / PUT / HREAD /
 return values still use `value_size` (1280) only.
 
 ## Packed vs Concat
@@ -32,7 +31,7 @@ Calc uses the same `extract_call_data` and the same ceiling. A kernel that
 needs more than the 1,280 B HVM scalar cap spreads its input over a one-layer
 `list { chunk, ... }` (the fitsh `list` literal packs a `Compo` list); each
 chunk is still capped by `value_size`, and the flattened total by
-`call_data_size`. A kernel's declared `input_max` (≤ `CALC_IO_MAX`, the same
-5120) is enforced by `CalcFnObj::run`'s pre-flight, where over-input is
-`CalcAbort2::Trap` with 0 cycles. `tuple(...)` is not a byte carrier at any
+`call_data_size`. A kernel's declared `input_max` is admitted against that
+same `call_data_size` at deploy and load, and `CalcFnObj::run` traps when
+the delivered input is longer than `input_max` (0 cycles). `tuple(...)` is not a byte carrier at any
 call boundary, calc included.

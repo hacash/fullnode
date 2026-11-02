@@ -33,7 +33,7 @@ mod pin {
     use vm::calc::interp::run_with_state;
     use vm::calc::verify::verify_container;
 
-    const MEM_KIB: u16 = 8;
+    const MEM_KIB: u32 = 8;
     const INPUT_MAX: u16 = 512;
     const OUTPUT_MAX: u16 = 512;
     const CB: u64 = vm::calc::CALC_CODE_BASE;

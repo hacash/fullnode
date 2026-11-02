@@ -882,9 +882,9 @@ pub const WEIGHTS_PROFILE0: ProfileWeights = ProfileWeights {
     alu: 1,
     load_store: 2,
     mul: 3,
-    div: 32,
-    clmul: 16,
-    ecall_base: 0,
+    div: 12,
+    clmul: 24,
+    ecall_base: 1,
 };
 
 /// Weight table for profile 1 (profile 0 + bitmanip). Identical values
@@ -894,8 +894,8 @@ pub const WEIGHTS_PROFILE1: ProfileWeights = WEIGHTS_PROFILE0;
 /// Cycles charged for the carryless-multiply family. Every other whitelisted
 /// B instruction is a single ALU pass (1 cycle, matching the CKB-VM table);
 /// clmul is a 64-iteration carryless loop in software, so it is priced by
-/// actual host work. CKB charges 1 for it — treated here as their pricing
-/// pitfall, not a rule to copy.
+/// actual host work, and stays above the DIV/REM weight. CKB charges 1 for
+/// it — treated here as their pricing pitfall, not a rule to copy.
 pub const CLMUL_CYCLES: u64 = WEIGHTS_PROFILE1.clmul;
 
 pub fn weights_for_profile(profile: u8) -> &'static ProfileWeights {

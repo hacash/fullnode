@@ -22,7 +22,7 @@ pub mod decode;
 pub mod interp;
 pub mod verify;
 
-pub use config::{CalcConfig, CalcHostConfig, CALC_CONFIG_FORK_HEIGHTS, CALC_CONFIG_V1};
+pub use config::{CalcConfig, CalcHostConfig, CALC_CONFIG_V1};
 // x86-64 AOT. Official builds turn `calc-aot` on and `CalcFnObj::run` executes
 // it in lockstep with the interpreter. See `aot.rs`.
 #[cfg(feature = "calc-aot")]
@@ -324,7 +324,7 @@ impl CalcFnObj {
     }
 
     /// Declared usable memory in KiB (resource/setup charge input).
-    pub(crate) fn mem_kib(&self) -> u16 {
+    pub(crate) fn mem_kib(&self) -> u32 {
         self.container.mem_kib
     }
 
@@ -586,7 +586,7 @@ pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
 /// the absolute guest PC (typically [`CODE_BASE`] for a kernel whose
 /// `calc_entry` is linked at the image start).
 pub fn pack_container(
-    mem_kib: u16,
+    mem_kib: u32,
     entry: u32,
     input_max: u16,
     output_max: u16,
@@ -609,7 +609,7 @@ pub fn pack_container(
 /// [`pack_container`] with an explicit ISA profile.
 pub fn pack_container_with_profile(
     profile: u8,
-    mem_kib: u16,
+    mem_kib: u32,
     entry: u32,
     input_max: u16,
     output_max: u16,
@@ -633,7 +633,7 @@ pub fn pack_container_with_profile(
 /// [`pack_container_with_profile`] verified under `cfg`.
 pub fn pack_container_with_config(
     profile: u8,
-    mem_kib: u16,
+    mem_kib: u32,
     entry: u32,
     input_max: u16,
     output_max: u16,
@@ -674,7 +674,7 @@ pub fn pack_container_with_config(
 /// (alignment hole included).
 pub fn pack_container_with_bss(
     profile: u8,
-    mem_kib: u16,
+    mem_kib: u32,
     entry: u32,
     input_max: u16,
     output_max: u16,
@@ -684,10 +684,10 @@ pub fn pack_container_with_bss(
     bss_len: u64,
     cfg: &CalcConfig,
 ) -> VmrtRes<container::CalcContainer> {
-    if bss_len > u16::MAX as u64 {
+    if bss_len > u32::MAX as u64 {
         return Err(ItrErr::new(
             ItrErrCode::ContractError,
-            "calc container bss_len exceeds u16",
+            "calc container bss_len exceeds u32",
         ));
     }
     let lay = container::compute_layout(
@@ -703,7 +703,7 @@ pub fn pack_container_with_bss(
     let mut packed = pack_container_with_config(
         profile, mem_kib, entry, input_max, output_max, code, rodata, init, cfg,
     )?;
-    packed.bss_len = bss_len as u16;
+    packed.bss_len = bss_len as u32;
     // Re-verify with the bss field in the wire image so the stored bytes
     // and the executable layout are the same object.
     let bytes = packed.encode()?;
@@ -723,7 +723,7 @@ pub fn pack_container_with_bss(
 /// `e_entry`. Profile 0.
 pub fn pack_elf(
     elf: &[u8],
-    mem_kib: u16,
+    mem_kib: u32,
     input_max: u16,
     output_max: u16,
 ) -> VmrtRes<container::CalcContainer> {
@@ -741,7 +741,7 @@ pub fn pack_elf(
 pub fn pack_elf_with_config(
     elf: &[u8],
     profile: u8,
-    mem_kib: u16,
+    mem_kib: u32,
     input_max: u16,
     output_max: u16,
     cfg: &CalcConfig,
@@ -1159,6 +1159,33 @@ mod tests {
         assert!(lay.check_bss_fit(free).is_ok());
         let err = lay.check_bss_fit(free + 1).unwrap_err();
         assert!(err.to_string().contains("io overlaps bss"), "{err}");
+    }
+
+    #[test]
+    fn wide_mem_and_bss_roundtrip_up_to_the_engine_ceiling() {
+        let cfg = CalcConfig::all_enabled().with_mem_kib_max(70_000);
+        let c = pack_container_with_bss(
+            container::CALC_PROFILE_RV64IM,
+            70_000,
+            container::CODE_BASE as u32,
+            16,
+            16,
+            halt_text(),
+            vec![],
+            vec![],
+            70_000,
+            &cfg,
+        )
+        .unwrap();
+        assert_eq!(c.mem_kib, 70_000);
+        assert_eq!(c.bss_len, 70_000);
+        let (decoded, used) = container::CalcContainer::decode(&c.encode().unwrap()).unwrap();
+        assert_eq!(used, container::HEADER_LEN + halt_text().len());
+        assert_eq!(decoded.mem_kib, 70_000);
+        assert_eq!(decoded.bss_len, 70_000);
+        let mut over = c.clone();
+        over.mem_kib = container::CALC_MEM_KIB_ENGINE_MAX + 1;
+        assert!(container::CalcContainer::decode(&over.encode().unwrap()).is_err());
     }
 
     fn with_extra_section(mut elf: Vec<u8>, typ: u32, flags: u64, size: u64) -> Vec<u8> {

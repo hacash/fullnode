@@ -245,9 +245,30 @@ pub fn convert_and_check(
 }
 
 #[cfg(feature = "execute")]
+fn calc_deploy_config(cap: &SpaceCap) -> crate::calc::CalcConfig {
+    let mut cfg = crate::calc::CalcConfig::v1();
+    cfg.mem_kib_max = cap
+        .calc_mem_kib_max
+        .min(crate::calc::container::CALC_MEM_KIB_ENGINE_MAX);
+    cfg
+}
+
+#[cfg(feature = "execute")]
+fn reject_calc_image(len: usize, cap: &SpaceCap) -> VmrtErr {
+    // CodeStuff stores every function body with a u16 length. calc_image_max
+    // can only tighten that. A larger program is split across sibling calc
+    // functions later, not by widening this prefix.
+    let max = cap.calc_image_max.min(u16::MAX as usize);
+    if len > max {
+        return itr_err_fmt!(ContractError, "calcfunc size overflow, max {}", max);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "execute")]
 fn reject_calc_hvm_io(c: &crate::calc::container::CalcContainer, cap: &SpaceCap) -> VmrtErr {
-    if c.input_max as usize > crate::calc::container::CALC_IO_MAX as usize {
-        return itr_err_fmt!(ContractError, "calcfunc input_max exceeds calc io cap");
+    if c.input_max as usize > cap.call_data_size {
+        return itr_err_fmt!(ContractError, "calcfunc input_max exceeds call_data_size");
     }
     if c.output_max as usize > cap.value_size {
         return itr_err_fmt!(ContractError, "calcfunc output_max exceeds HVM value_size");
@@ -272,18 +293,12 @@ fn verify_user_func_code(
             if func.fncnf[0] != 0 {
                 return itr_err_fmt!(ContractError, "calc function cannot be external");
             }
-            if code_pkg.data.len() > cap.function_size {
-                return itr_err_fmt!(
-                    ContractError,
-                    "calcfunc size overflow, max {}",
-                    cap.function_size
-                );
-            }
+            reject_calc_image(code_pkg.data.len(), cap)?;
             let (c, _used) = crate::calc::container::CalcContainer::decode(&code_pkg.data)
                 .map_err(|e| ItrErr::new(ContractError, &format!("calcfunc container: {}", e.1)))?;
             reject_calc_hvm_io(&c, cap)?;
             check_rv64im_pmdf(&func.pmdf)?;
-            crate::calc::verify::verify_container_with(&c, &crate::calc::CalcConfig::for_height(height))
+            crate::calc::verify::verify_container_with(&c, &calc_deploy_config(cap))
                 .map_err(|e| ItrErr::new(ContractError, &format!("calcfunc verify: {}", e.1)))?;
             Ok(())
         }
@@ -649,19 +664,13 @@ impl ContractSto {
 
     #[cfg(feature = "execute")]
     pub fn into_obj(self, cap: &SpaceCap) -> VmrtRes<ContractObj> {
-        self.into_obj_at(cap, 0)
-    }
-
-    #[cfg(feature = "execute")]
-    pub fn into_obj_at(self, cap: &SpaceCap, height: u64) -> VmrtRes<ContractObj> {
-        self.into_obj_with(cap, height, crate::calc::CalcHostConfig::new())
+        self.into_obj_with(cap, crate::calc::CalcHostConfig::new())
     }
 
     #[cfg(feature = "execute")]
     pub fn into_obj_with(
         mut self,
         cap: &SpaceCap,
-        height: u64,
         host: crate::calc::CalcHostConfig,
     ) -> VmrtRes<ContractObj> {
         if self.calcfuncs.length() > 0 {
@@ -686,17 +695,11 @@ impl ContractSto {
                 if a.fncnf[0] != 0 {
                     return itr_err_fmt!(ContractError, "calc function cannot be external");
                 }
-                if code_pkg.data.len() > cap.function_size {
-                    return itr_err_fmt!(
-                        ContractError,
-                        "calcfunc size overflow, max {}",
-                        cap.function_size
-                    );
-                }
+                reject_calc_image(code_pkg.data.len(), cap)?;
                 let (c, _) = crate::calc::container::CalcContainer::decode(&code_pkg.data)?;
                 reject_calc_hvm_io(&c, cap)?;
                 check_rv64im_pmdf(&a.pmdf)?;
-                let cfg = crate::calc::CalcConfig::for_load_at(height).apply_host(host);
+                let cfg = calc_deploy_config(cap).apply_host(host);
                 let built = crate::calc::CalcFnObj::build_with_config(c, cfg)?;
                 FnObj::create_with_rv64im(
                     a.fncnf[0],
@@ -770,8 +773,8 @@ mod calc_io_load_tests {
     #[test]
     fn output_max_exceeds_hvm_value_size_is_rejected() {
         let mut sto = ContractSto::default();
-        // 4096 fits the calc container wire limit (CALC_IO_MAX) but exceeds
-        // the HVM value cap (SpaceCap::value_size == 1280).
+        // 4096 fits the container field but exceeds the HVM value cap
+        // (SpaceCap::value_size == 1280).
         sto.userfuncs.push(calc_user(16, 4096)).unwrap();
         let e = check_at_100(&sto).unwrap_err();
         assert!(
@@ -786,8 +789,15 @@ mod calc_io_load_tests {
         let cap = SpaceCap::new(0);
         let mut sto = ContractSto::default();
         sto.userfuncs.push(calc_user(5120, 16)).unwrap();
-        check_at_100(&sto).expect("input_max 5120 within calc io cap");
-        sto.into_obj(&cap).expect("into_obj accepts input_max 5120");
+        check_at_100(&sto).expect("input_max 5120 equals L1 call_data_size");
+        sto.into_obj(&cap).expect("load uses the same call_data_size");
+
+        let mut over = ContractSto::default();
+        over.userfuncs.push(calc_user(6000, 16)).unwrap();
+        let e = check_at_100(&over).unwrap_err();
+        assert!(e.1.contains("call_data_size"), "{e:?}");
+        let e = over.into_obj(&cap).err().expect("load rejects the same input_max");
+        assert!(e.1.contains("call_data_size"), "{e:?}");
     }
 
     #[test]
@@ -800,16 +810,34 @@ mod calc_io_load_tests {
     }
 
     #[test]
-    fn load_keeps_profile1_and_wide_mem_that_v1_admission_rejects() {
+    fn deploy_and_load_share_the_space_cap() {
+        let bytes = {
+            let mut raw = calc_user(16, 16).code_stuff.data.to_vec();
+            raw[5] = crate::calc::CALC_PROFILE_RV64IM_B;
+            raw[8..12].copy_from_slice(&65u32.to_be_bytes());
+            raw
+        };
+        let sto = || {
+            let mut sto = ContractSto::default();
+            sto.userfuncs
+                .push(user_from_bytes([8, 8, 8, 8], bytes.clone()))
+                .unwrap();
+            sto
+        };
         let cap = SpaceCap::new(0);
-        let mut bytes = calc_user(16, 16).code_stuff.data.to_vec();
-        bytes[5] = crate::calc::CALC_PROFILE_RV64IM_B;
-        bytes[8..10].copy_from_slice(&65u16.to_be_bytes());
-        let mut sto = ContractSto::default();
-        sto.userfuncs.push(user_from_bytes([8, 8, 8, 8], bytes)).unwrap();
-        let e = check_at_100(&sto).unwrap_err();
-        assert!(e.1.contains("calcfunc verify"), "{e:?}");
-        sto.into_obj_at(&cap, 100).expect("load skips v1 admission caps");
+        let gas = GasExtra::new(0, &STUB_VM_PARAMS);
+        let svc = StubServices::new(STUB_VM_PARAMS);
+        let e = sto().check(100, &cap, &gas, &svc).unwrap_err();
+        assert!(e.1.contains("mem_kib"), "{e:?}");
+        let e = sto().into_obj(&cap).err().expect("load rejects the same mem cap");
+        assert!(e.1.contains("mem_kib"), "{e:?}");
+
+        let mut wide = SpaceCap::new(0);
+        wide.calc_mem_kib_max = 128;
+        sto().check(100, &wide, &gas, &svc)
+            .expect("raised mem cap admits the kernel");
+        sto().into_obj(&wide)
+            .expect("load uses the same mem cap");
     }
 
     #[test]
@@ -836,7 +864,7 @@ mod calc_io_load_tests {
         )
         .expect("64 KiB container packs");
         let mut bytes = c.encode().unwrap();
-        bytes[8..10].copy_from_slice(&65u16.to_be_bytes());
+        bytes[8..12].copy_from_slice(&65u32.to_be_bytes());
         let (decoded, _) = crate::calc::container::CalcContainer::decode(&bytes)
             .expect("wire decode accepts mem_kib=65");
         assert_eq!(decoded.mem_kib, 65);
@@ -924,11 +952,13 @@ mod calc_io_load_tests {
 
     #[test]
     fn calcfunc_payload_over_function_size_is_rejected_before_decode() {
-        let cap = SpaceCap::new(0);
+        let mut cap = SpaceCap::new(0);
+        cap.calc_image_max = 32;
         let mut sto = ContractSto::default();
         let mut f = calc_user(16, 16);
-        // Junk larger than the per-kernel cap: rejected before decode/verify.
-        f.code_stuff.data = BytesW2::from(vec![0u8; cap.function_size + 1]).unwrap();
+        // Junk larger than the calc image cap: rejected before decode/verify.
+        // HVM `function_size` does not apply to this code type.
+        f.code_stuff.data = BytesW2::from(vec![0u8; cap.calc_image_max + 1]).unwrap();
         sto.userfuncs.push(f).unwrap();
 
         let gas = GasExtra::new(0, &STUB_VM_PARAMS);

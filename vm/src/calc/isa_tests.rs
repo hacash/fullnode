@@ -227,7 +227,7 @@ fn container_roundtrip_and_malicious() {
     let mut bad = enc.clone();
     bad[5] = 1; // profile 1 is legal
     assert!(CalcContainer::decode(&bad).is_ok());
-    // corrupting rodata_len (bytes 26..30) must not decode
+    // corrupting rodata_len (bytes 28..32) must not decode
     let mut bad = enc.clone();
     bad[28] = 1;
     assert!(CalcContainer::decode(&bad).is_err());
@@ -273,7 +273,7 @@ fn verify_rejects_malicious_code() {
     let c = make_container(code);
     let module = verify_container(&c).unwrap();
     assert_eq!(module.insts.len(), 6);
-    // lbu(2)+sd(2)+3*addi(1)+ecall(0) split: ecall terminates a block.
+    // lbu(2)+sd(2)+3*addi(1)+ecall(1) split: ecall terminates a block.
     assert!(module.blocks.iter().map(|b| b.cycles).sum::<u64>() >= 5);
 }
 
@@ -981,12 +981,12 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
     let mut bytes = make_container_profile(CALC_PROFILE_RV64IM, halt_empty())
         .encode()
         .unwrap();
-    bytes[8..10].copy_from_slice(&(CALC_MEM_KIB_MAX + 1).to_be_bytes());
+    bytes[8..12].copy_from_slice(&(CALC_MEM_KIB_MAX + 1).to_be_bytes());
     let (decoded, _) = CalcContainer::decode(&bytes).expect("decode accepts mem_kib=65");
     assert_eq!(decoded.mem_kib, CALC_MEM_KIB_MAX + 1);
     assert!(verify_container(&decoded).is_err());
     let mut low = bytes.clone();
-    low[8..10].copy_from_slice(&3u16.to_be_bytes());
+    low[8..12].copy_from_slice(&3u32.to_be_bytes());
     assert!(CalcContainer::decode(&low).is_err());
 
     let cap = CalcConfig::testkit(128).unwrap();
@@ -1023,7 +1023,7 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
     assert_eq!(consensus.layout_snapshot(), lay);
     let (r1, _, mem1, _) = interp::run_with_state(&consensus, &c, &[], 10_000);
     assert_eq!(mem1.len() as u64, lay.mem_len);
-    assert_eq!(r1, Ok(CalcRun { output: vec![], cycles_used: 3 }));
+    assert_eq!(r1, Ok(CalcRun { output: vec![], cycles_used: 4 }));
 
     let obj = CalcFnObj::build(c).unwrap();
     let exec = obj.run(
@@ -1038,8 +1038,8 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
     assert_eq!(exec.result, Ok(vec![]));
     let setup = CALC_SETUP_BASE_CYCLES + 64 * CALC_SETUP_PER_KIB_CYCLES;
     assert_eq!(setup, 64 + 64 * 16);
-    assert_eq!(exec.cycles_used, setup + 3);
-    assert_eq!(exec.cycles_used, 1091);
+    assert_eq!(exec.cycles_used, setup + 4);
+    assert_eq!(exec.cycles_used, 1092);
     assert_eq!(exec.resource, 64 * CALC_MEM_RESOURCE_PER_KIB);
     assert_eq!(exec.resource, 512);
 }

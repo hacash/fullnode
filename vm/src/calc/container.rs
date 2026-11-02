@@ -1,4 +1,4 @@
-//! Calc container v1 binary layout: fixed 32-byte big-endian
+//! Calc container v1 binary layout: fixed 36-byte big-endian
 //! header + code + rodata + initialized data.
 //!
 //! Memory image carried by the container:
@@ -14,8 +14,8 @@
 //! There is deliberately no checksum field: the container bytes are already
 //! committed by consensus once deployed (EVM/CKB-VM carry no container
 //! checksums either), and a CRC would only add deploy-time cost without
-//! authenticity. Header bytes 30..32 are `bss_len` (u16 big-endian). Zero
-//! means no extra `.bss` (containers packed before that field).
+//! authenticity. Header bytes 32..36 are `bss_len` (u32 big-endian). Zero
+//! means no extra `.bss`.
 //! Header byte 5 is the ISA profile bitfield: bit 0 = Zba/Zbb/Zbs/Zbc,
 //! bit 1 = RVC. See [`CALC_PROFILE_RV64IM`], [`CALC_PROFILE_RV64IM_B`],
 //! [`CALC_PROFILE_RV64IMC`], [`CALC_PROFILE_RV64IMC_B`].
@@ -62,24 +62,18 @@ pub const CODE_BASE: u64 = 0x1000;
 /// the encoded container). CONSENSUS CONSTANT.
 pub const IMAGE_ID_DOMAIN: &[u8] = b"hacash-calc-image-v1";
 
-pub const CALC_MEM_KIB_MIN: u16 = 4;
-/// Consensus v1 verify cap (`CALC_CONFIG_V1.mem_kib_max`). Wire `decode`
-/// only requires [`CALC_MEM_KIB_MIN`].
-pub const CALC_MEM_KIB_MAX: u16 = 64;
-/// Wire cap for both `input_max` and `output_max`.
-///
-/// This is the same ceiling as [`crate::rt::CALL_DATA_MAX`], which bounds
-/// the materialized call-data body. The calc input is assembled from a
-/// one-layer `Compo` list whose elements are each capped by `value_size`
-/// (1280 B), so a 200-diamond HIP5 batch needs
-/// names||numbers||visuals = 4800 B in one call spread over 3+ chunks. One
-/// constant therefore governs both the runtime body and the declared calc
-/// ABI: a deploy can declare no more than the extractor can materialize. For
-/// output the on-chain bound is stricter anyway — deploy admission caps
-/// `output_max` at `value_size`. Calc-only; not reachable before the channel
-/// is activated.
-pub const CALC_IO_MAX: u16 = crate::rt::CALL_DATA_MAX as u16;
-pub const HEADER_LEN: usize = 32;
+pub const CALC_MEM_KIB_MIN: u32 = 4;
+/// Consensus v1 verify cap (`CALC_CONFIG_V1.mem_kib_max`, and the default
+/// of `SpaceCap::calc_mem_kib_max`). Wire `decode` only requires
+/// [`CALC_MEM_KIB_MIN`] and rejects above [`CALC_MEM_KIB_ENGINE_MAX`].
+pub const CALC_MEM_KIB_MAX: u32 = 64;
+/// Largest `mem_kib` either engine can address. AOT compares guest
+/// addresses with a signed 32-bit immediate, so
+/// `CODE_BASE + mem_kib * 1024` must be `<= i32::MAX`. Technical ceiling,
+/// not an admission policy: a sidechain raises `SpaceCap::calc_mem_kib_max`
+/// up to this value and does not change the header again.
+pub const CALC_MEM_KIB_ENGINE_MAX: u32 = (((i32::MAX as u64) - CODE_BASE) / 1024) as u32;
+pub const HEADER_LEN: usize = 36;
 
 /// Runtime memory map derived deterministically from the header.
 ///
@@ -139,8 +133,8 @@ impl CalcLayout {
 
     /// `.bss` occupies `[data_base + init_len, data_base + init_len + bss_len)`.
     /// After it, the 256-byte guard and [`crate::calc::CALC_STACK_SIZE`]
-    /// minimum stack must still end at or before `stack_top`. `bss_len`
-    /// above `u16::MAX` cannot be stored in the header.
+    /// minimum stack must still end at or before `stack_top`. The header
+    /// stores `bss_len` as `u32`; a larger value is rejected at pack.
     pub fn check_bss_fit(&self, bss_len: u64) -> VmrtRes<()> {
         let err = || {
             ItrErr::new(
@@ -148,10 +142,10 @@ impl CalcLayout {
                 "calc container memory overflows (io overlaps bss)",
             )
         };
-        if bss_len > u16::MAX as u64 {
+        if bss_len > u32::MAX as u64 {
             return Err(ItrErr::new(
                 ItrErrCode::ContractError,
-                "calc container bss_len exceeds u16",
+                "calc container bss_len exceeds u32",
             ));
         }
         let need = self
@@ -171,7 +165,7 @@ impl CalcLayout {
 pub struct CalcContainer {
     pub profile: u8,
     pub abi: u8,
-    pub mem_kib: u16,
+    pub mem_kib: u32,
     /// Absolute guest PC of the entry instruction (not a code-relative
     /// offset). Must satisfy `CODE_BASE <= entry < CODE_BASE + code_len`
     /// and be 4-byte aligned on an instruction boundary.
@@ -179,8 +173,8 @@ pub struct CalcContainer {
     pub code: Vec<u8>,
     pub rodata: Vec<u8>,
     pub init: Vec<u8>,
-    /// Header bytes 30..32. Zero on containers that predate the field.
-    pub bss_len: u16,
+    /// Header bytes 32..36. Zero means the image has no `.bss`.
+    pub bss_len: u32,
     pub input_max: u16,
     pub output_max: u16,
 }
@@ -247,13 +241,10 @@ impl CalcContainer {
         if self.abi != CALC_ABI_BYTES_TO_BYTES {
             return Err(err("calc container abi unsupported"));
         }
-        if self.mem_kib < CALC_MEM_KIB_MIN {
+        if self.mem_kib < CALC_MEM_KIB_MIN || self.mem_kib > CALC_MEM_KIB_ENGINE_MAX {
             return Err(err("calc container mem_kib out of range"));
         }
-        if self.output_max == 0
-            || self.output_max > CALC_IO_MAX
-            || self.input_max > CALC_IO_MAX
-        {
+        if self.output_max == 0 {
             return Err(err("calc container io size invalid"));
         }
         let compressed = profile_has_compressed(self.profile);
@@ -388,14 +379,14 @@ impl CalcContainer {
         if bytes[7] != 0 {
             return Err(err("calc container reserved header byte 7 must be zero"));
         }
-        let mem_kib = u16::from_be_bytes([bytes[8], bytes[9]]);
-        let entry = u32::from_be_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
-        let code_len = u32::from_be_bytes([bytes[14], bytes[15], bytes[16], bytes[17]]) as usize;
-        let init_len = u32::from_be_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]) as usize;
-        let input_max = u16::from_be_bytes([bytes[22], bytes[23]]);
-        let output_max = u16::from_be_bytes([bytes[24], bytes[25]]);
-        let rodata_len = u32::from_be_bytes([bytes[26], bytes[27], bytes[28], bytes[29]]) as usize;
-        let bss_len = u16::from_be_bytes([bytes[30], bytes[31]]);
+        let mem_kib = u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+        let entry = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
+        let code_len = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
+        let init_len = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]) as usize;
+        let input_max = u16::from_be_bytes([bytes[24], bytes[25]]);
+        let output_max = u16::from_be_bytes([bytes[26], bytes[27]]);
+        let rodata_len = u32::from_be_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]) as usize;
+        let bss_len = u32::from_be_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]);
         let total = HEADER_LEN
             .checked_add(code_len)
             .and_then(|t| t.checked_add(rodata_len))

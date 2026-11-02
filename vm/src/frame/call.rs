@@ -98,7 +98,7 @@ impl CallFrame {
                             // Calc input is the same byte-string slot as
                             // ACTION / Concat-NTFUNC: `extract_call_data`
                             // flattens a scalar or a one-layer Compo list under
-                            // `call_data_size` (5120, also `CALC_IO_MAX`). A
+                            // `call_data_size` (5120 on L1). A
                             // kernel that needs more than the HVM scalar cap
                             // uses `list { chunk, ... }`; a Tuple is packed
                             // argv and is rejected here like everywhere else.

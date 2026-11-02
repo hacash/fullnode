@@ -18,7 +18,7 @@ fn images_dir() -> Option<PathBuf> {
 
 /// Smallest `mem_kib` whose own layout clears the image, rounded up to a
 /// whole KiB and capped at the testkit ceiling.
-fn needed_mem_kib(code: &[u8], rodata: &[u8], init: &[u8]) -> Result<u16, String> {
+fn needed_mem_kib(code: &[u8], rodata: &[u8], init: &[u8]) -> Result<u32, String> {
     let mut c = CalcContainer {
         profile: CALC_PROFILE_RV64IM,
         abi: vm::calc::CALC_ABI_BYTES_TO_BYTES,
@@ -31,7 +31,7 @@ fn needed_mem_kib(code: &[u8], rodata: &[u8], init: &[u8]) -> Result<u16, String
         input_max: 0,
         output_max: 4096,
     };
-    for kib in 4u16..=CALC_TESTKIT_MEM_KIB_CEILING {
+    for kib in 4u32..=CALC_TESTKIT_MEM_KIB_CEILING {
         c.mem_kib = kib;
         let lay = c.layout();
         if lay.stack_bottom.saturating_add(vm::calc::CALC_STACK_SIZE) <= lay.stack_top

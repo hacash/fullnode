@@ -1,17 +1,16 @@
 /// Max materialized call-data body (`extract_call_data`): ACTION bodies,
 /// Concat-NTFUNC argv, and calc kernel input.
 ///
-/// Also the calc container wire cap (`CALC_IO_MAX`) for `input_max` /
-/// `output_max`, so one ceiling governs both the materialized input and the
-/// declared calc ABI. Bodies are assembled from ≤ `value_size` chunks in a
+/// Calc `input_max` is admitted against `SpaceCap::call_data_size` (this
+/// value on L1). Bodies are assembled from ≤ `value_size` chunks in a
 /// one-layer `Compo` list; `Tuple` is packed argv and is never a byte carrier.
 ///
 /// CONSENSUS: this is a runtime rule, not height-gated. Changing it is a
 /// coordinated consensus upgrade (it widens what ACTION / Concat-NTFUNC
-/// bodies are accepted).
+/// bodies are accepted). The cap only rises.
 pub const CALL_DATA_MAX: usize = 5120;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SpaceCap {
     pub loaded_contract: usize, // 20
     pub call_depth: usize,      // 32
@@ -56,6 +55,23 @@ pub struct SpaceCap {
     pub intent_new: usize,
     /// Max keys per intent map instance (MKVMap entry cap and batch put limits).
     pub intent_key: usize,
+
+    /// Deploy admission for a calc kernel's `mem_kib`. L1 stays at 64.
+    /// A sidechain raises this up to `calc::CALC_MEM_KIB_ENGINE_MAX`
+    /// (2_097_147 KiB, about 2 GiB). The container field is already `u32`;
+    /// this is the only knob.
+    pub calc_mem_kib_max: u32,
+    /// Max encoded calc container (header + code + rodata + init).
+    /// Independent of `function_size`. Default matches `function_size`
+    /// (65535/4). The contract body prefix is `u16`, so this knob stops
+    /// at 65535; a sidechain may raise the default up to that.
+    pub calc_image_max: usize,
+}
+
+impl Default for SpaceCap {
+    fn default() -> Self {
+        Self::new(0)
+    }
 }
 
 impl SpaceCap {
@@ -96,6 +112,8 @@ impl SpaceCap {
             intent_bind_depth: 10,
             intent_new: 128,
             intent_key: 32,
+            calc_mem_kib_max: 64,
+            calc_image_max: (u16::MAX as usize) / 4,
         }
     }
 

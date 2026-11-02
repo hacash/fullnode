@@ -77,7 +77,7 @@ mod diff {
     }
 
     // ---------------- program generation ----------------
-    const MEM_KIB: u16 = 16;
+    const MEM_KIB: u32 = 16;
     // x18 (= 0x2000) region layout, above CODE_BASE so it never aliases
     // the code image. Random body stores stay inside
     // [RND_OFF, RND_OFF + RND_LEN); every other slot is outside that range

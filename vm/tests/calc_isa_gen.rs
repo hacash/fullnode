@@ -27,7 +27,7 @@ use vm::calc::container::{
     CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_PROFILE_RV64IM_B, CODE_BASE,
 };
 
-pub const MEM_KIB: u16 = 16;
+pub const MEM_KIB: u32 = 16;
 pub const INPUT_MAX: u16 = 512;
 pub const OUTPUT_MAX: u16 = 512;
 
@@ -1220,15 +1220,15 @@ fn ecall_cases() -> Vec<Case> {
 
 fn cycles_cases() -> Vec<Case> {
     let mut out = Vec::new();
-    // single block: 3 addi + ecall = 3 cycles
+    // single block: 3 addi + ecall_base = 4 cycles
     {
         let mut a = Asm::new();
         a.ret();
         let mut c = Case::ok("cyc/minimal", a.finish(), vec![]);
-        c.cycles = Some(3);
+        c.cycles = Some(4);
         out.push(c);
     }
-    // cost table: ld(2) + addi(1) + div(32) + mul(3) + clmul(16) + jalr(1)
+    // cost table: ld(2) + addi(1) + div(12) + mul(3) + clmul(24) + jalr(1)
     {
         let mut a = Asm::new();
         a.i(0, 5, 0, 0x13, 1);
@@ -1241,7 +1241,7 @@ fn cycles_cases() -> Vec<Case> {
         a.ret();
         let mut c = Case::ok("cyc/cost-table", a.finish(), vec![]);
         // 2*addi + ld + addi + div + mul + clmul + 3*addi + ecall
-        c.cycles = Some(1 + 1 + 2 + 1 + 32 + 3 + 16 + 1 + 1 + 1);
+        c.cycles = Some(1 + 1 + 2 + 1 + 12 + 3 + 24 + 1 + 1 + 1 + 1);
         out.push(c);
     }
     // branch splits blocks: [addi,beq](2) + [li,jalr](2) = 4 (taken)
@@ -1253,8 +1253,8 @@ fn cycles_cases() -> Vec<Case> {
         a.i(0, 28, 0, 0x13, 0x99); // [2] skipped
         a.ret(); // [3..] halt
         let mut c = Case::ok("cyc/branch-split", a.finish(), vec![]);
-        // [addi,beq](2) + halt block (3)
-        c.cycles = Some(5);
+        // [addi,beq](2) + halt block (3 addi + ecall)
+        c.cycles = Some(6);
         out.push(c);
     }
     // hash pricing: ecall sha2 over 32 bytes = block[setup..] + 64 + 96
@@ -1270,9 +1270,9 @@ fn cycles_cases() -> Vec<Case> {
         a.ecall(); // 64 + 96*1
         a.ret();
         let mut c = Case::ok("cyc/ecall-sha2", a.finish(), vec![]);
-        // setup addis (5) + hash ecall(0 static) + halt (3 addi + ecall)
-        // ecall is a terminator so two blocks; total static 8 + hash 160
-        c.cycles = Some(8 + 64 + 96);
+        // setup addis (5) + hash ecall(1 static) + halt (3 addi + ecall)
+        // ecall is a terminator so two blocks; total static 10 + hash 160
+        c.cycles = Some(10 + 64 + 96);
         out.push(c);
     }
     // infinite 1-cycle loop truncated by the budget

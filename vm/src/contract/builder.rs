@@ -107,8 +107,8 @@ impl Func {
             return errf!("calc container trailing bytes");
         }
         let cap = crate::rt::SpaceCap::new(0);
-        if c.input_max as usize > crate::calc::container::CALC_IO_MAX as usize {
-            return errf!("calcfunc input_max exceeds calc io cap");
+        if c.input_max as usize > cap.call_data_size {
+            return errf!("calcfunc input_max exceeds call_data_size");
         }
         if c.output_max as usize > cap.value_size {
             return errf!("calcfunc output_max exceeds HVM value_size");
@@ -119,7 +119,7 @@ impl Func {
         Ok(self)
     }
 
-    pub fn rv64im_elf(self, elf: &[u8], mem_kib: u16, input_max: u16, output_max: u16) -> Ret<Self> {
+    pub fn rv64im_elf(self, elf: &[u8], mem_kib: u32, input_max: u16, output_max: u16) -> Ret<Self> {
         let c = crate::calc::pack_elf(elf, mem_kib, input_max, output_max)
             .map_err(|e| e.to_string())?;
         self.rv64im_container(&c)

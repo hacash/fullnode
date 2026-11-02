@@ -63,22 +63,22 @@ fn decode_rejects_huge_declared_lengths_without_panicking() {
     bytes[0..4].copy_from_slice(&CALC_MAGIC);
     bytes[4] = CALC_VERSION;
     bytes[6] = CALC_ABI_BYTES_TO_BYTES;
-    bytes[8..10].copy_from_slice(&4u16.to_be_bytes()); // mem_kib
-    bytes[14..18].copy_from_slice(&u32::MAX.to_be_bytes()); // code_len
-    bytes[18..22].copy_from_slice(&u32::MAX.to_be_bytes()); // init_len
-    bytes[22..24].copy_from_slice(&16u16.to_be_bytes()); // input_max
-    bytes[24..26].copy_from_slice(&16u16.to_be_bytes()); // output_max
-    bytes[26..30].copy_from_slice(&0u32.to_be_bytes()); // rodata_len
+    bytes[8..12].copy_from_slice(&4u32.to_be_bytes()); // mem_kib
+    bytes[16..20].copy_from_slice(&u32::MAX.to_be_bytes()); // code_len
+    bytes[20..24].copy_from_slice(&u32::MAX.to_be_bytes()); // init_len
+    bytes[24..26].copy_from_slice(&16u16.to_be_bytes()); // input_max
+    bytes[26..28].copy_from_slice(&16u16.to_be_bytes()); // output_max
+    bytes[28..32].copy_from_slice(&0u32.to_be_bytes()); // rodata_len
     assert!(CalcContainer::decode(&bytes).is_err());
 }
 
 #[test]
 fn decode_accepts_bss_len_and_rejects_overflow() {
     let mut bytes = packed().encode().unwrap();
-    bytes[30..32].copy_from_slice(&1u16.to_be_bytes());
+    bytes[32..36].copy_from_slice(&1u32.to_be_bytes());
     let (c, _) = CalcContainer::decode(&bytes).expect("bss_len=1 fits");
     assert_eq!(c.bss_len, 1);
-    bytes[30..32].copy_from_slice(&u16::MAX.to_be_bytes());
+    bytes[32..36].copy_from_slice(&u32::MAX.to_be_bytes());
     assert!(CalcContainer::decode(&bytes).is_err());
 }
 
@@ -120,8 +120,10 @@ fn pack_container_rejects_mem_kib_above_max() {
 }
 
 #[test]
-fn pack_container_rejects_input_max_above_io_max() {
-    assert!(pack_container(64, CODE_BASE as u32, 6000, 16, ret_code(), vec![], vec![]).is_err());
+fn pack_container_accepts_input_max_above_l1_call_data() {
+    // The container has no HVM call-data cap. Chain admission applies
+    // SpaceCap::call_data_size separately.
+    assert!(pack_container(64, CODE_BASE as u32, 6000, 16, ret_code(), vec![], vec![]).is_ok());
 }
 
 #[test]
@@ -146,10 +148,11 @@ fn verify_rejects_mem_kib_out_of_range() {
 }
 
 #[test]
-fn verify_rejects_input_max_above_io_max() {
+fn verify_leaves_call_data_cap_to_the_chain() {
     let mut c = valid_container();
+    c.mem_kib = 64;
     c.input_max = 6000;
-    assert!(verify_container(&c).is_err());
+    assert!(verify_container(&c).is_ok());
 }
 
 // ---------------------------------------------------------------- fix 7 ---
@@ -421,8 +424,9 @@ fn setup_cycles_charged_on_instant_return() {
         },
     );
     assert!(exec.result.is_ok());
-    // 4 KiB container: 64 + 4 * 16 = 128 setup + 3 executed halt cycles.
-    assert_eq!(exec.cycles_used, 131);
+    // 4 KiB container: 64 + 4 * 16 = 128 setup + 4 halt cycles
+    // (3 addi + ecall_base 1).
+    assert_eq!(exec.cycles_used, 132);
 }
 
 #[test]
