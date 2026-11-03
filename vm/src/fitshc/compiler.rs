@@ -597,6 +597,17 @@ contract Ext {
     }
 
     #[test]
+    fn reserved_fitsh_kernel_body_reports_not_supported() {
+        let src = "pragma fitsh 1.0.0\ncontract D {\n    function rv64im kern(data: bytes) -> bytes { return kern(data) }\n}\n";
+        let err = match crate::fitshc::compile(src) {
+            Ok(_) => panic!("expected reserved-body error"),
+            Err(err) => err.to_string(),
+        };
+        assert!(err.contains("not supported yet"), "{err}");
+        assert!(err.contains("kern.rs"), "{err}");
+    }
+
+    #[test]
     fn calc_declaration_rejects_bad_signatures_and_payloads() {
         let blob = format!("0x{}", hex::encode(echo8_container_bytes()));
         let cases = [

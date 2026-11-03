@@ -3,6 +3,7 @@
 //! at fullnodedev 4de8acc); the IR→bytecode helpers below keep the pre-port
 //! `vm::fitshc` tooling surface (IR payload compilation without source).
 
+pub mod collect;
 pub mod compile_body;
 pub mod compiler;
 mod macro_expand;
@@ -11,6 +12,7 @@ pub mod parse_func;
 pub mod parse_top;
 pub mod state;
 
+pub use collect::{CalcRequest, collect_calc_requests};
 pub use compile_body::{CompiledCode, compile_body};
 pub use compiler::{
     compile, compile_with_rv64im, compile_with_rv64im_and_warnings, compile_with_warnings,

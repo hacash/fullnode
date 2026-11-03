@@ -258,6 +258,14 @@ pub(super) fn parse_rv64im_function(state: &mut ParseState) -> Ret<(Func, String
             }
         }
     } else {
+        if matches!(state.current(), Some(Partition('{'))) {
+            return errf!(
+                "rv64im function '{}' fitsh kernel body is reserved and not supported yet; \
+                 assign container bytes ('= 0x..'), supply a '{name}.rs' rust kernel, \
+                 or pass external_rv64im",
+                name
+            );
+        }
         state.external_rv64im.get(&name).cloned().ok_or_else(|| {
             format!(
                 "rv64im function '{}' requires '= 0x...' container bytes or an external_rv64im entry",

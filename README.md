@@ -34,7 +34,7 @@ The executable is written to `target/release/fullnode`. Omit `--release` for a d
 ```bash
 cargo build --release -p app --bin poworker
 cargo build --release -p app --bin diaworker
-cargo build --release -p app --bin fitshc
+cargo build --release -p fitshc-cli
 ```
 
 Build an OpenCL-enabled mining worker with:

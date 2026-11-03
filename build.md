@@ -53,7 +53,7 @@ The other executables remain independent Cargo binary targets:
 ```sh
 cargo build --release -p app --bin poworker
 cargo build --release -p app --bin diaworker
-cargo build --release -p app --bin fitshc
+cargo build --release -p fitshc-cli
 ```
 
 Enable `ocl` when building a worker that should use OpenCL:
