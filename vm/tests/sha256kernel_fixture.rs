@@ -17,7 +17,8 @@
 use vm::calc::container::CalcContainer;
 use vm::calc::verify::verify_container;
 use vm::calc::{
-    pack_container_with_bss, CalcFnObj, CalcHostConfig, CalcRunLimits, HashKind, CALC_CONFIG_V1,
+    pack_container, CalcFnObj, CalcHostConfig, CalcRunLimits, HashKind, SpaceCap,
+    CALC_PROFILE_RV64IM,
 };
 
 fn kernel_build(c: CalcContainer, aot: bool) -> CalcFnObj {
@@ -48,17 +49,21 @@ fn kernel() -> (CalcFnObj, CalcContainer) {
         16,
     )
     .expect("bss_len hex") as u64;
-    let container = pack_container_with_bss(
-        vm::calc::CALC_PROFILE_RV64IM,
+    // The container has no bss field: the fixture's zero-initialized span
+    // is part of the init image (it starts right after `.data`, exactly as
+    // the linker laid it out).
+    let mut init = fixture("image_init.bin");
+    init.resize(init.len() + bss_len as usize, 0);
+    let container = pack_container(
+        &SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
         8, // KiB
         entry,
         256,
         32,
         fixture("image_code.bin"),
         fixture("image_rodata.bin"),
-        fixture("image_init.bin"),
-        bss_len,
-        &CALC_CONFIG_V1,
+        init,
     )
     .expect("kernel container packs");
     let obj = kernel_build(container.clone(), false);

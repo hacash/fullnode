@@ -3,7 +3,8 @@
 //!
 //! Executes a verified [`CalcModule`] over a freshly zeroed flat memory.
 //! Cycles are charged in full at basic-block entry (plus hash cost at each
-//! `ecall`); every observable behavior — trap messages excluded — is a pure
+//! `ecall` when the host table is enabled; v1 executes HALT only); every
+//! observable behavior — trap messages excluded — is a pure
 //! function of (module, input), so consensus results and gas are bit-exact
 //! across runs and builds.
 
@@ -12,8 +13,8 @@ use crate::calc::decode::{
     BitImmOp, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp, UnAluOp,
 };
 use crate::calc::verify::CalcModule;
-use crate::calc::container::CODE_BASE;
-use crate::calc::{run_hash, HashKind, ECALL_HALT, ECALL_HINT_MAX, ECALL_HINT_MIN};
+use crate::calc::container::{profile_has_no_host_ecall, CODE_BASE};
+use crate::calc::{run_hash, HashKind, CALC_HASH_ECALLS_ENABLED, ECALL_HALT, ECALL_HINT_MAX, ECALL_HINT_MIN};
 
 /// Why a calc run stopped before returning normally.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -400,6 +401,15 @@ fn run_inner(
                             mem[lay.output_base as usize..(lay.output_base + n) as usize].to_vec();
                         snap!();
                         return Ok(CalcRun { output: out, cycles_used: used(cycles) });
+                    }
+                    // v1 has no host ecalls: only HALT (handled above)
+                    // executes. The hash table, its pricing and the AOT
+                    // path stay in the tree behind
+                    // `CALC_HASH_ECALLS_ENABLED` for a later coordinated
+                    // upgrade. A container that declares the HALT-only
+                    // profile cell stays HALT-only even after that flip.
+                    if !CALC_HASH_ECALLS_ENABLED || profile_has_no_host_ecall(container.profile) {
+                        trap!("calc ecall: host builtins are not enabled in v1");
                     }
                     if (ECALL_HINT_MIN..=ECALL_HINT_MAX).contains(&a7) {
                         trap!("calc ecall: hint/private-input not available on L1");

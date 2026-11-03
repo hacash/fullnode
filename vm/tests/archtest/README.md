@@ -43,7 +43,7 @@ The harness maps each `*.elf` (or `*.bin` + optional `*.dat`/`*.rodata`/
 `mem_kib` is the smallest value whose layout clears that image, rounded up
 to a KiB, and is written into the container header. It must be within the
 testkit ceiling of 16384 KiB (16 MiB). Verify uses
-`CalcConfig::testkit(16384)` (`calc-testkit`, non-default), which is the
+the engine memory ceiling (`SpaceCap::calc_mem_kib_max`), which is the
 v1 semantics plus both host knobs and that cap. Production builds cannot
 call `testkit`; consensus v1 still caps `mem_kib` at 64. Layout, gas and the
 interpreter follow the container's own `mem_kib` — there is no separate
@@ -56,7 +56,7 @@ suite `*.reference_output`). Tests without a `.sig` only check HALT 0.
 dropped silently. Branch/jal covergroups (`I_beq-01`, `I_bge-01`,
 `I_bgeu-01`, `I_blt-01`, `I_bltu-01`, `I_bne-01`, `I_jal-01`) no longer
 need an exclude: their `mem_kib` is above 64 and they run under
-`CalcConfig::testkit`. An image that still exceeds the 16 MiB ceiling is
+the engine ceiling (`CALC_MEM_KIB_ENGINE_MAX`). An image that still exceeds it is
 excluded by `build.sh`. CSR /
 `ebreak` / `ecall`-as-trap / `fence.i` / misaligned-trap tests live in
 other suite folders (privilege, Zifencei) and are not part of I/M.

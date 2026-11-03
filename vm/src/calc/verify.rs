@@ -16,7 +16,7 @@
 
 use crate::calc::container::{CalcContainer, CODE_BASE};
 use crate::calc::decode::{self, Inst};
-use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
+use crate::rt::{ItrErr, ItrErrCode, SpaceCap, VmrtRes};
 
 fn err(t: &str) -> ItrErr {
     ItrErr::new(ItrErrCode::ContractError, t)
@@ -38,6 +38,9 @@ pub struct Block {
 /// rewritten to instruction indices.
 #[derive(Debug, Clone)]
 pub struct CalcModule {
+    /// ISA profile byte of the verified container (bits: bitmanip, RVC,
+    /// no-host-ecall).
+    pub(crate) profile: u8,
     pub(crate) layout: crate::calc::container::CalcLayout,
     pub(crate) insts: Vec<Inst>,
     /// Byte address of each instruction (strictly increasing).
@@ -56,6 +59,13 @@ pub struct CalcModule {
 }
 
 impl CalcModule {
+    /// ISA profile byte of the verified container (bitmanip / RVC /
+    /// no-host-ecall bits). Test-oracle view.
+    #[doc(hidden)]
+    pub fn profile(&self) -> u8 {
+        self.profile
+    }
+
     /// Test-oracle view of the deterministic memory layout.
     #[doc(hidden)]
     pub fn layout_snapshot(&self) -> crate::calc::container::CalcLayout {
@@ -72,17 +82,19 @@ impl CalcModule {
     }
 }
 
+/// Verify under the default chain caps (`SpaceCap::new(0)`). Tests and
+/// tools only; production deploy/load pass the live cap.
 pub fn verify_container(c: &CalcContainer) -> VmrtRes<CalcModule> {
-    verify_container_with(c, &crate::calc::CALC_CONFIG_V1)
+    verify_container_with_cap(c, &SpaceCap::new(0))
 }
 
-pub fn verify_container_with(
-    c: &CalcContainer,
-    cfg: &crate::calc::CalcConfig,
-) -> VmrtRes<CalcModule> {
+/// Verify a container under the chain's current `SpaceCap`. The memory
+/// admission cap (`calc_mem_kib_max`) is the only chain input; it only
+/// rises, so a container admitted once stays admissible.
+pub fn verify_container_with_cap(c: &CalcContainer, cap: &SpaceCap) -> VmrtRes<CalcModule> {
     // Header checks must run here too: a directly constructed container did
     // not pass through `decode`.
-    c.validate_header(cfg)?;
+    c.validate_header(cap)?;
     verify_decoded(c, c.layout())
 }
 
@@ -208,6 +220,7 @@ fn verify_decoded(
         }
     }
     Ok(CalcModule {
+        profile: c.profile,
         layout,
         insts,
         addrs,

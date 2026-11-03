@@ -1,5 +1,6 @@
-//! RV64IM(+C)(+Zba/Zbb/Zbs/Zbc) whitelist decoder. The profile byte is two
-//! orthogonal bits: bit 0 bitmanip, bit 1 RVC. Branch/JAL immediates stay
+//! RV64IM(+C)(+Zba/Zbb/Zbs/Zbc) whitelist decoder. The profile byte is three
+//! orthogonal bits: bit 0 bitmanip, bit 1 RVC, bit 2 no host ecalls (which
+//! does not change decoding). Branch/JAL immediates stay
 //! byte-relative here; the verifier resolves them to absolute guest PCs.
 //! Encoding reference: RISC-V unprivileged spec Volume I (I, M, C) and
 //! Bitmanip 1.0.0. The compressed decoder is the pre-activation RV64IMC
@@ -196,8 +197,9 @@ pub enum Inst {
     /// machine, so it executes as a no-op.
     Fence,
     Ecall,
-    /// `ebreak` (`0x00100073`) or canonical `unimp` (`0xC0001073`).
-    /// Costs one ALU cycle, then traps. Does not fall through.
+    /// `ebreak` (`0x00100073`), canonical `unimp` (`0xC0001073`), or
+    /// C.EBREAK (`0x9002`, RVC profiles only). Costs one ALU cycle, then
+    /// traps. Does not fall through.
     Trap,
 }
 
@@ -831,14 +833,17 @@ fn decode_rvc(h: u32) -> Result<(Inst, u32), ItrErr> {
                         }
                     } else if rs2 == 0 {
                         if rd == 0 {
-                            // C.EBREAK: v1 keeps it outside the whitelist
-                            // (see SPEC §2). Classify it here, where the
-                            // actual 0x9002 encoding lands; the previous
-                            // branch belongs to reserved C.JR (rs1=0).
-                            return Err(bad("calc decode: c.ebreak not allowed"));
+                            // C.EBREAK is a legal RVC breakpoint with no
+                            // debugger semantics here: it is the same
+                            // 1-cycle trap as the 32-bit `ebreak` and the
+                            // canonical `unimp`. `c.unimp` (the all-zero
+                            // 0x0000 halfword) is a reserved C.ADDI4SPN
+                            // encoding and stays rejected (SPEC §2).
+                            Inst::Trap
+                        } else {
+                            // C.JALR
+                            Inst::Jalr { rd: 1, rs1: rd, imm: 0 }
                         }
-                        // C.JALR
-                        Inst::Jalr { rd: 1, rs1: rd, imm: 0 }
                     } else {
                         // C.ADD
                         Inst::RegAlu { op: RegAluOp::Add, rd, rs1: rd, rs2 }
@@ -1109,14 +1114,15 @@ mod rvc_trap_tests {
     use crate::calc::{CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IMC};
 
     #[test]
-    fn rvc_unimp_and_ebreak_remain_rejected() {
-        // Policy pin: the v1 RVC whitelist deliberately excludes both trap
-        // encodings. This test only fixes their error classification; it
-        // must not change acceptance.
+    fn rvc_unimp_rejected_ebreak_is_trap() {
+        // Policy: 0x0000 is the reserved C.ADDI4SPN imm=0 encoding and stays
+        // rejected. 0x9002 is C.EBREAK, a legal RVC breakpoint; with no
+        // debugger it is the same 1-cycle trap as the 32-bit forms.
         let e = decode_at(&[0x00, 0x00], 0, CALC_PROFILE_RV64IMC).unwrap_err();
         assert!(e.to_string().contains("c.addi4spn reserved imm 0"), "{e}");
-        let e = decode_at(&[0x02, 0x90], 0, CALC_PROFILE_RV64IMC).unwrap_err();
-        assert!(e.to_string().contains("c.ebreak not allowed"), "{e}");
+        let (inst, len) = decode_at(&[0x02, 0x90], 0, CALC_PROFILE_RV64IMC).unwrap();
+        assert_eq!(inst, Inst::Trap);
+        assert_eq!(len, 2);
         // 0x8002 is C.JR with rs1=0, a different reserved encoding.
         let e = decode_at(&[0x02, 0x80], 0, CALC_PROFILE_RV64IMC).unwrap_err();
         assert!(e.to_string().contains("c.jr rs1=0 reserved"), "{e}");
@@ -1124,7 +1130,13 @@ mod rvc_trap_tests {
 
     #[test]
     fn rvc_trap_encodings_stay_rejected_without_c() {
+        // No RVC profile: every compressed encoding is rejected, including
+        // C.EBREAK. The 32-bit trap encodings remain available there.
         assert!(decode_at(&[0x00, 0x00, 0x00, 0x00], 0, CALC_PROFILE_RV64IM).is_err());
         assert!(decode_at(&[0x02, 0x90, 0x02, 0x90], 0, CALC_PROFILE_RV64IM).is_err());
+        assert_eq!(
+            decode_at(&[0x73, 0x00, 0x10, 0x00], 0, CALC_PROFILE_RV64IM).unwrap().0,
+            Inst::Trap
+        );
     }
 }

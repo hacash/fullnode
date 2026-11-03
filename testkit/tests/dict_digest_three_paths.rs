@@ -38,8 +38,8 @@ use testkit::sim::context::TestContext;
 use testkit::sim::tx::StubTxBuilder;
 use vm::action::{ContractDeploy, contract_deploy_charge_bytes, contract_protocol_cost_min};
 use vm::calc::{
-    CYCLES_PER_COMPUTE, CalcFnObj, CalcRunLimits, HashKind, pack_container_with_bss, run_hash,
-    CALC_CONFIG_V1, CALC_PROFILE_RV64IM,
+    pack_container, run_hash, CalcFnObj, CalcRunLimits, HashKind, SpaceCap, CALC_PROFILE_RV64IM,
+    CYCLES_PER_COMPUTE,
 };
 use vm::fitshc::compiler;
 use vm::contract::ContractSto;
@@ -193,7 +193,12 @@ fn kernel_container() -> vm::calc::container::CalcContainer {
         16,
     )
     .expect("bss_len") as u64;
-    pack_container_with_bss(
+    // The container has no bss field: the fixture's zero-initialized span
+    // is part of the init image.
+    let mut init = read("image_init.bin");
+    init.resize(init.len() + bss_len as usize, 0);
+    pack_container(
+        &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         8,
         vm::calc::CALC_CODE_BASE as u32,
@@ -201,9 +206,7 @@ fn kernel_container() -> vm::calc::container::CalcContainer {
         32,
         read("image_code.bin"),
         read("image_rodata.bin"),
-        read("image_init.bin"),
-        bss_len,
-        &CALC_CONFIG_V1,
+        init,
     )
     .expect("kernel container packs")
 }

@@ -492,13 +492,11 @@ mod pin {
         };
         let container = CalcContainer {
             profile: vm::calc::CALC_PROFILE_RV64IM,
-            abi: 1,
             mem_kib: MEM_KIB,
             entry: CB as u32,
             code: bytes,
             rodata: vec![],
             init: case.init_mem.clone(),
-            bss_len: 0,
             input_max: INPUT_MAX,
             output_max: OUTPUT_MAX,
         };

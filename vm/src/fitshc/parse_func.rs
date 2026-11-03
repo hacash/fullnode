@@ -269,12 +269,10 @@ pub(super) fn parse_rv64im_function(state: &mut ParseState) -> Ret<(Func, String
     let mut func = Func::new(&name)?;
     func = func.types(Some(ValueTy::Bytes), param_types);
     func = if raw_bytes.starts_with(b"\x7fELF") {
-        func.rv64im_elf(
-            &raw_bytes,
-            crate::calc::container::CALC_MEM_KIB_MAX,
-            1024,
-            1024,
-        )?
+        // Minimum memory that still fits the image, the guard, the 2 KiB
+        // minimum stack and the declared IO regions: a kernel is not charged
+        // for memory it never touches.
+        func.rv64im_elf_min_mem(&raw_bytes, 1024, 1024)?
     } else {
         func.rv64im_container_bytes(raw_bytes)?
     };

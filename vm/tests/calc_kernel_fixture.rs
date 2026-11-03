@@ -31,13 +31,11 @@ fn calckernel_fixture_digest_matches_oracles() {
 
     let container = CalcContainer {
         profile: vm::calc::CALC_PROFILE_RV64IM,
-        abi: 1,
         mem_kib: 16,
         entry,
         code,
         rodata,
         init,
-        bss_len: 0,
         input_max: 64,
         output_max: 64,
     };

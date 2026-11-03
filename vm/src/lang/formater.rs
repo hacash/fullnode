@@ -358,8 +358,21 @@ impl<'a> Formater<'a> {
             }
             return vec![self.print_inline(node)];
         }
-        // User calls pass one packed value. A `++` expression is that value, not an
-        // argv split; packed tuples still flatten through `flatten_call_list`.
+        // User calls: the compiler always packs the argv (`ArgPackMode::Packed`
+        // in `syntax/call.rs`). Two or more source arguments become one
+        // `PACKTUPLE` value, and a single argument is passed as-is. It never
+        // auto-CATs a user call. So the two IR shapes must print differently:
+        //
+        // * packed argv (`PACKTUPLE`/`PACKLIST` array) -> flatten to
+        //   `f(a, b, ...)`; recompiling packs the same tuple again.
+        // * a `CAT` value -> keep it explicit (`f(a ++ b)`); printing it as
+        //   `f(a, b)` would recompile to a *tuple*, a different value shape
+        //   (and one a bytes-argument callee rejects).
+        //
+        // `IRLIST` is left to `flatten_call_list` because it also covers real
+        // list/map literals. Concat-argv *system* calls (native/action) take
+        // the `system_call` branch above, where the compiler re-applies
+        // `ArgPackMode::Concat`; printing those flat is required and faithful.
         if self.opt.flatten_call_list {
             if let Some(list) = node.as_any().downcast_ref::<IRNodeArray>() {
                 if let Some(elements) = self.extract_packed_call_elements(list.inst, &list.subs) {

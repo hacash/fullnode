@@ -323,7 +323,7 @@ contract PermitProbe {
     }
 
     fn echo8_container_bytes() -> Vec<u8> {
-        use crate::calc::container::{CalcContainer, CALC_ABI_BYTES_TO_BYTES};
+        use crate::calc::container::CalcContainer;
         let addi = |rd: u8, imm: i32| -> [u8; 4] {
             (0x13u32 | ((rd as u32) << 7) | (((imm as u32) & 0xFFF) << 20)).to_le_bytes()
         };
@@ -334,13 +334,11 @@ contract PermitProbe {
         code.extend_from_slice(&0x0000_0073u32.to_le_bytes());
         CalcContainer {
             profile: crate::calc::CALC_PROFILE_RV64IM,
-            abi: CALC_ABI_BYTES_TO_BYTES,
             mem_kib: 8,
             entry: crate::calc::CALC_CODE_BASE as u32,
             code,
             rodata: vec![],
             init: vec![],
-            bss_len: 0,
             input_max: 128,
             output_max: 128,
         }
@@ -475,7 +473,11 @@ contract Echo {{
         assert_eq!(echo.code_stuff.conf.uint(), crate::rt::CodeType::RV64IM as u8);
         let (c, _) = crate::calc::container::CalcContainer::decode(&echo.code_stuff.data)
             .expect("echo8 container");
-        assert_eq!(c.abi, crate::calc::CALC_ABI_BYTES_TO_BYTES);
+        assert_eq!(c.profile, crate::calc::CALC_PROFILE_RV64IM);
+        assert_eq!(
+            c.layout().data_base + c.layout().init_len,
+            c.layout().guard_base
+        );
         let direct = user_code(&sto, "direct");
         assert!(has_callselfpure(&direct), "missing CALLSELFPURE: {direct:?}");
         assert_eq!(direct, user_code(&sto, "generic"));
@@ -483,7 +485,25 @@ contract Echo {{
         assert!(has_callselfpure(&joined), "missing CALLSELFPURE: {joined:?}");
         assert!(joined.windows(1).any(|w| w == [crate::rt::Bytecode::CAT as u8]));
         roundtrip_lang("return self::echo8(0x01)");
-        roundtrip_lang("return self::echo8(0x01 ++ 0x02)");
+        // User calls never auto-CAT: a `++` argument is one CAT value and must
+        // stay explicit, otherwise recompiling `f(a, b)` would pack a tuple
+        // instead of the concatenation the kernel expects. The print must keep
+        // `++` and stay IR-idempotent.
+        {
+            let src = "return self::echo8(0x01 ++ 0x02)";
+            let ir = crate::lang::lang_to_irnode(src).unwrap_or_else(|e| panic!("{src}: {e}"));
+            let back =
+                crate::lang::irnode_to_lang(ir).unwrap_or_else(|e| panic!("decompile {src}: {e}"));
+            assert!(
+                back.contains("++"),
+                "a user-call CAT argument must stay explicit: {back}"
+            );
+            roundtrip_lang(src);
+        }
+        // Packed argv is the other convention and still flattens: the same
+        // tuple value is rebuilt from `f(a, b)` (both spellings compile to
+        // one PACKTUPLE argument).
+        roundtrip_lang("return self::echo8(tuple(0x01, 0x02))");
         roundtrip_lang("return call pure self.echo8(0x01)");
 
         let bare = format!(
@@ -539,7 +559,11 @@ contract Ext {
         assert_eq!(used, halt.code_stuff.data.len());
         assert_eq!(c.entry, crate::calc::CALC_CODE_BASE as u32);
         assert_eq!(c.code, halt_text());
-        assert_eq!(c.mem_kib, crate::calc::container::CALC_MEM_KIB_MAX);
+        // The compiler packs the *minimum* memory that fits the image, the
+        // guard, the 2 KiB stack and the declared IO, not the chain maximum.
+        assert!(c.mem_kib >= crate::calc::container::CALC_MEM_KIB_MIN);
+        assert!(c.mem_kib < crate::calc::container::CALC_MEM_KIB_MAX);
+        assert!(c.layout().fits());
         assert_eq!((c.input_max, c.output_max), (1024, 1024));
     }
 

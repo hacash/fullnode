@@ -200,8 +200,10 @@ mod diff {
                 }
             }
         }
-        // occasional hash ecall on a fixed scratch window
-        if rng.below(3) == 0 {
+        // Occasional hash ecall on a fixed scratch window. v1 disables host
+        // ecalls, so the generator only emits them once the consensus table
+        // is enabled (the ckb-vm oracle always implements them).
+        if vm::calc::CALC_HASH_ECALLS_ENABLED && rng.below(3) == 0 {
             w.push(enc_i(0x13, 0, 10, 18, EHASH_IN_OFF as i32)); // a0 = in
             w.push(enc_i(0x13, 0, 11, 0, 32)); // a1 = 32
             w.push(enc_i(0x13, 0, 12, 18, EHASH_OUT_OFF as i32)); // a2 = out
@@ -345,13 +347,11 @@ mod diff {
         let prog = gen_program(rng, idx);
         let container = CalcContainer {
             profile: vm::calc::CALC_PROFILE_RV64IM,
-            abi: 1,
             mem_kib: MEM_KIB,
             entry: vm::calc::CALC_CODE_BASE as u32,
             code: prog.code.clone(),
             rodata: vec![],
             init: vec![],
-            bss_len: 0,
             input_max: 512,
             output_max: 512,
         };
@@ -464,13 +464,11 @@ mod diff {
             }
             let container = CalcContainer {
                 profile: vm::calc::CALC_PROFILE_RV64IM,
-                abi: 1,
                 mem_kib: MEM_KIB,
                 entry: vm::calc::CALC_CODE_BASE as u32,
                 code,
                 rodata: vec![],
                 init: vec![],
-                bss_len: 0,
                 input_max: 4096,
                 output_max: 4096,
             };

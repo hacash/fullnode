@@ -5,7 +5,7 @@
 #![cfg(test)]
 #![cfg(feature = "execute")]
 
-use crate::calc::container::{CalcContainer, CALC_ABI_BYTES_TO_BYTES};
+use crate::calc::container::CalcContainer;
 use crate::contract::{ContractAbstCall, ContractCalcFunc, ContractEdit, ContractSto, ContractUserFunc};
 use crate::machine::test_ctx::TestCtx;
 use crate::machine::VmRequest;
@@ -21,13 +21,11 @@ use base::Context as _;
 fn container_with(code: Vec<u8>) -> CalcContainer {
     CalcContainer {
         profile: crate::calc::CALC_PROFILE_RV64IM,
-        abi: CALC_ABI_BYTES_TO_BYTES,
         mem_kib: 8,
         entry: crate::calc::CALC_CODE_BASE as u32,
         code,
         rodata: vec![],
         init: vec![],
-        bss_len: 0,
         input_max: 128,
         output_max: 128,
     }
@@ -305,7 +303,10 @@ fn sha256_container_bytes() -> Vec<u8> {
         16,
     )
     .expect("bss_len") as u64;
-    crate::calc::pack_container_with_bss(
+    let mut init = read("image_init.bin");
+    init.resize(init.len() + bss_len as usize, 0);
+    crate::calc::pack_container(
+        &crate::calc::SpaceCap::new(0),
         crate::calc::CALC_PROFILE_RV64IM,
         8,
         entry,
@@ -313,9 +314,7 @@ fn sha256_container_bytes() -> Vec<u8> {
         32,
         read("image_code.bin"),
         read("image_rodata.bin"),
-        read("image_init.bin"),
-        bss_len,
-        &crate::calc::CALC_CONFIG_V1,
+        init,
     )
     .expect("pack sha256")
     .encode()

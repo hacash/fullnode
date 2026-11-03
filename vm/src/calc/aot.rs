@@ -24,8 +24,9 @@
 //!   interpreter's `out_of_gas` accounting.
 //! * Div/Rem families (all special cases) go through a host helper
 //!   mirroring `interp::reg_alu`; `mulh*` use native `mul/imul`.
-//! * `ecall` (HALT, hash builtins, HINT trap) is implemented via a host
-//!   helper that mirrors `interp.rs`. `fence`
+//! * `ecall` (HALT; the hash table is compiled but disabled in v1, like the
+//!   interpreter; HINT traps) is implemented via a host helper that mirrors
+//!   `interp.rs`. `fence`
 //!   executes as a no-op, matching the single-hart interpreter.
 //!
 //! Early launch insurance: this backend is not the sole engine yet. Official x86-64
@@ -46,7 +47,10 @@ compile_error!("calc-aot generates x86-64 code and is only supported on x86_64 h
 use crate::calc::decode::{BitImmOp, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp, UnAluOp};
 use crate::calc::container::{CalcContainer, CalcLayout, CODE_BASE};
 use crate::calc::verify::CalcModule;
-use crate::calc::{run_hash, HashKind, ECALL_HALT, ECALL_HINT_MAX, ECALL_HINT_MIN};
+use crate::calc::{
+    run_hash, CalcAbort2, HashKind, CALC_HASH_ECALLS_ENABLED, ECALL_HALT, ECALL_HINT_MAX,
+    ECALL_HINT_MIN,
+};
 
 // Host register numbers (x86-64 encoding order).
 const RAX: u8 = 0;
@@ -339,6 +343,9 @@ struct ResolveCtx {
     inst_landing: Vec<u32>,
     /// Generated offset of the invalid-target stub.
     invalid_off: u32,
+    /// The container declared `CALC_PROFILE_NO_HOST_ECALL`: every `a7 != 0`
+    /// traps even after the chain enables host ecalls.
+    no_host_ecall: bool,
     code: *const u8,
     layout: CalcLayout,
 }
@@ -512,6 +519,14 @@ extern "C" fn aot_ecall(
         state.aborted = 0;
         return 1;
     }
+    // v1 has no host ecalls: only HALT (handled above) executes. The hash
+    // table and its pricing stay in the tree behind
+    // `CALC_HASH_ECALLS_ENABLED` for a later coordinated upgrade; a
+    // HALT-only container stays HALT-only even after that flip.
+    if ctx.no_host_ecall || !CALC_HASH_ECALLS_ENABLED {
+        state.aborted = 1;
+        return 1;
+    }
     if (ECALL_HINT_MIN..=ECALL_HINT_MAX).contains(&a7) {
         state.aborted = 1;
         return 1;
@@ -642,50 +657,29 @@ impl Drop for AotFunc {
     }
 }
 
-pub struct AotRun {
-    pub output: Vec<u8>,
-    pub cycles_used: u64,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AotAbort {
-    Trap,
-    OutOfGas,
-    BadTarget,
-    GuestExit,
-}
-
 /// Full stop-state of one AOT execution: output on success, abort class on
 /// failure, and the cycle total in both cases (the interpreter reports
 /// `cycles_used` on abort paths too, and the differential suite pins that
 /// equality).
+///
+/// `abort` uses the same [`CalcAbort2`] classification the interpreter is
+/// mapped to, so the two engines are directly comparable: a guest nonzero
+/// HALT is `Trap` with `exit_code` set, and an invalid jump target is `Trap`
+/// (the interpreter's trap message is not consensus data).
 pub struct AotOutcome {
     pub output: Option<Vec<u8>>,
-    pub abort: Option<AotAbort>,
+    pub abort: Option<CalcAbort2>,
     pub cycles_used: u64,
     pub exit_code: u64,
-}
-
-impl AotOutcome {
-    /// Result-style view for benchmark callers.
-    pub fn into_result(self) -> Result<AotRun, AotAbort> {
-        match (self.output, self.abort) {
-            (Some(o), None) => Ok(AotRun {
-                output: o,
-                cycles_used: self.cycles_used,
-            }),
-            (_, Some(a)) => Err(a),
-            (None, None) => unreachable!("outcome carries output or abort"),
-        }
-    }
 }
 
 impl AotFunc {
     /// Execute with interpreter-identical memory/entry setup. The cycle
     /// budget covers instructions only — the interpreter's per-call setup
     /// charge lives in `CalcFnObj::run`, outside this layer. This image does
-    /// not poll a host deadline; `CalcFnObj::run` keeps the interpreter when
-    /// a deadline is set.
+    /// not poll a host deadline: `CalcFnObj::run` still runs it in lockstep
+    /// and reports the interpreter's `Deadline` stop (host policy) when the
+    /// deadline fires.
     ///
     pub fn run(
         &self,
@@ -693,14 +687,13 @@ impl AotFunc {
         container: &CalcContainer,
         input: &[u8],
         cycle_budget: u64,
-    ) -> Result<AotRun, AotAbort> {
-        self.run_inner(module, container, input, cycle_budget)
-            .0
-            .into_result()
+    ) -> AotOutcome {
+        self.run_inner(module, container, input, cycle_budget).0
     }
 
     /// `run` plus final register and memory snapshots — the differential
-    /// counterpart of `interp::run_with_state`.
+    /// counterpart of `interp::run_with_state`. Test oracles only.
+    #[doc(hidden)]
     pub fn run_with_state(
         &self,
         module: &CalcModule,
@@ -723,7 +716,7 @@ impl AotFunc {
             return (
                 AotOutcome {
                     output: None,
-                    abort: Some(AotAbort::Trap),
+                    abort: Some(CalcAbort2::Trap),
                     cycles_used: 0,
                     exit_code: 0,
                 },
@@ -778,27 +771,19 @@ impl AotFunc {
             }
             2 => AotOutcome {
                 output: None,
-                abort: Some(AotAbort::OutOfGas),
+                abort: Some(CalcAbort2::OutOfGas),
                 cycles_used,
                 exit_code: 0,
             },
-            3 => AotOutcome {
-                output: None,
-                abort: Some(AotAbort::BadTarget),
-                cycles_used,
-                exit_code: 0,
-            },
-            4 => AotOutcome {
-                output: None,
-                abort: Some(AotAbort::GuestExit),
-                cycles_used,
-                exit_code: state.exit_code,
-            },
+            // 3 = invalid jump target: a trap, like the interpreter's
+            // `inst_at_addr` miss.
+            // 4 = guest nonzero HALT: `Trap` carrying the exit code, exactly
+            // the public classification.
             _ => AotOutcome {
                 output: None,
-                abort: Some(AotAbort::Trap),
+                abort: Some(CalcAbort2::Trap),
                 cycles_used,
-                exit_code: 0,
+                exit_code: if state.aborted == 4 { state.exit_code } else { 0 },
             },
         };
         (out, regs, mem)
@@ -1537,6 +1522,7 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
         inst_addrs: module.addrs.clone(),
         inst_landing,
         invalid_off,
+        no_host_ecall: crate::calc::container::profile_has_no_host_ecall(module.profile),
         code: std::ptr::null(),
         layout: *lay,
     });
@@ -1632,10 +1618,10 @@ fn emit_load(c: &mut Code, form: MemForm) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::calc::container::{CalcContainer, CALC_ABI_BYTES_TO_BYTES};
+    use crate::calc::container::CalcContainer;
     use crate::calc::interp::{self, CalcAbort};
     fn verify_container(c: &CalcContainer) -> crate::rt::VmrtRes<crate::calc::verify::CalcModule> {
-        crate::calc::verify::verify_container_with(c, &crate::calc::CALC_CONFIG_V1)
+        crate::calc::verify::verify_container_with_cap(c, &crate::calc::SpaceCap::new(0))
     }
 
     // ---------------------------------------------------------- assembler
@@ -1784,13 +1770,11 @@ mod tests {
     fn container_for(code: Vec<u8>) -> CalcContainer {
         CalcContainer {
             profile: crate::calc::CALC_PROFILE_RV64IM_B,
-            abi: CALC_ABI_BYTES_TO_BYTES,
             mem_kib: 4,
             entry: CODE_BASE as u32,
             code,
             rodata: Vec::new(),
             init: Vec::new(),
-            bss_len: 0,
             input_max: 64,
             output_max: 64,
         }
@@ -1827,25 +1811,27 @@ mod tests {
             Err((CalcAbort::OutOfGas, _)) => {
                 assert_eq!(
                     out.abort,
-                    Some(AotAbort::OutOfGas),
+                    Some(CalcAbort2::OutOfGas),
                     "{name}: abort class diverges (expected out-of-gas)"
                 );
             }
             Err((CalcAbort::Deadline, _)) => {
                 panic!("{name}: interpreter hit a deadline (none was set)");
             }
-            Err((CalcAbort::Trap(t), _)) => match out.abort {
-                Some(AotAbort::BadTarget) => {
-                    assert!(t.contains("invalid target"), "{name}: {t}");
-                }
-                Some(AotAbort::Trap) => {}
-                other => panic!("{name}: AOT abort {other:?} vs interp trap \"{t}\""),
-            },
+            Err((CalcAbort::Trap(_t), _)) => {
+                // AOT folds every guest trap (including an invalid jump
+                // target) into `Trap`; the message is not consensus data.
+                assert_eq!(
+                    out.abort,
+                    Some(CalcAbort2::Trap),
+                    "{name}: abort class diverges (expected trap)"
+                );
+            }
             Err((CalcAbort::GuestExit(code), _)) => {
                 assert_eq!(
                     out.abort,
-                    Some(AotAbort::GuestExit),
-                    "{name}: abort class diverges (expected guest exit)"
+                    Some(CalcAbort2::Trap),
+                    "{name}: guest exit is a trap class"
                 );
                 assert_eq!(out.exit_code, *code, "{name}: guest exit code diverges");
             }

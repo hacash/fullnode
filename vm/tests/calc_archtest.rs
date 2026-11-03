@@ -6,56 +6,38 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use vm::calc::config::CALC_TESTKIT_MEM_KIB_CEILING;
 use vm::calc::container::CalcContainer;
 use vm::calc::interp::{self, CalcAbort};
-use vm::calc::verify::verify_container_with;
-use vm::calc::{CalcConfig, CALC_CODE_BASE, CALC_PROFILE_RV64IM};
+use vm::calc::verify::verify_container_with_cap;
+use vm::calc::container::CALC_MEM_KIB_ENGINE_MAX;
+use vm::calc::{SpaceCap, CALC_CODE_BASE, CALC_PROFILE_RV64IM};
 
 fn images_dir() -> Option<PathBuf> {
     std::env::var_os("CALC_ARCHTEST_DIR").map(PathBuf::from)
 }
 
-/// Smallest `mem_kib` whose own layout clears the image, rounded up to a
-/// whole KiB and capped at the testkit ceiling.
+/// Smallest `mem_kib` whose own layout clears the image (arch-test images
+/// can be large, so this walks the engine ceiling rather than a test cap).
 fn needed_mem_kib(code: &[u8], rodata: &[u8], init: &[u8]) -> Result<u32, String> {
-    let mut c = CalcContainer {
-        profile: CALC_PROFILE_RV64IM,
-        abi: vm::calc::CALC_ABI_BYTES_TO_BYTES,
-        mem_kib: 4,
-        entry: CALC_CODE_BASE as u32,
-        code: code.to_vec(),
-        rodata: rodata.to_vec(),
-        init: init.to_vec(),
-        bss_len: 0,
-        input_max: 0,
-        output_max: 4096,
-    };
-    for kib in 4u32..=CALC_TESTKIT_MEM_KIB_CEILING {
-        c.mem_kib = kib;
-        let lay = c.layout();
-        if lay.stack_bottom.saturating_add(vm::calc::CALC_STACK_SIZE) <= lay.stack_top
-            && lay.input_base >= CALC_CODE_BASE
-        {
-            return Ok(kib);
-        }
-    }
-    Err(format!(
-        "image needs more than {CALC_TESTKIT_MEM_KIB_CEILING} KiB"
-    ))
+    vm::calc::container::min_mem_kib_for(
+        code.len() as u64,
+        rodata.len() as u64,
+        init.len() as u64,
+        0,
+        4096,
+    )
+    .ok_or_else(|| format!("image needs more than {CALC_MEM_KIB_ENGINE_MAX} KiB"))
 }
 
 fn pack(code: Vec<u8>, rodata: Vec<u8>, init: Vec<u8>, entry: u32) -> Result<CalcContainer, String> {
     let mem_kib = needed_mem_kib(&code, &rodata, &init)?;
     Ok(CalcContainer {
         profile: CALC_PROFILE_RV64IM,
-        abi: vm::calc::CALC_ABI_BYTES_TO_BYTES,
         mem_kib,
         entry,
         code,
         rodata,
         init,
-        bss_len: 0,
         input_max: 0,
         output_max: 4096,
     })
@@ -284,13 +266,17 @@ fn load_sig(path: &Path) -> Result<Option<Vec<u8>>, String> {
 /// is read from the interpreter after the same `verify_container_with` the
 /// object constructor uses.
 fn verify_image(container: &CalcContainer) -> Result<vm::calc::verify::CalcModule, String> {
-    let cfg = CalcConfig::testkit(CALC_TESTKIT_MEM_KIB_CEILING).map_err(|e| e.to_string())?;
-    // Object constructor is the consensus deploy path (verify + image id).
-    // `run` is not used here: it returns only the ABI output, and the
-    // signature span lives elsewhere in guest memory.
-    vm::calc::CalcFnObj::build_with_config(container.clone(), cfg)
+    // Arch-test images may exceed the L1 memory cap, so admit under the
+    // engine ceiling. Object construction is the consensus deploy path
+    // (verify); `run` is not used here because it returns only the ABI
+    // output while the signature span lives elsewhere in guest memory.
+    let cap = SpaceCap {
+        calc_mem_kib_max: CALC_MEM_KIB_ENGINE_MAX,
+        ..SpaceCap::new(0)
+    };
+    vm::calc::CalcFnObj::build(container.clone(), &cap, vm::calc::CalcHostConfig::new())
         .map_err(|e| format!("build: {e}"))?;
-    verify_container_with(container, &cfg).map_err(|e| format!("verify: {e}"))
+    verify_container_with_cap(container, &cap).map_err(|e| format!("verify: {e}"))
 }
 
 enum Outcome {

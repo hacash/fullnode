@@ -5,15 +5,15 @@
 #![cfg(test)]
 
 use crate::calc::container::{
-    CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IM_B, CODE_BASE,
+    CalcContainer, CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IM_B, CALC_PROFILE_RV64IMC, CODE_BASE,
 };
 use crate::calc::decode::{decode_at, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp};
-use crate::calc::verify::verify_container_with;
+use crate::calc::verify::verify_container_with_cap;
 use crate::rt::VmrtRes;
 
 /// Consensus v1 semantics.
 fn verify_container(c: &CalcContainer) -> VmrtRes<crate::calc::verify::CalcModule> {
-    verify_container_with(c, &crate::calc::CALC_CONFIG_V1)
+    verify_container_with_cap(c, &crate::rt::SpaceCap::new(0))
 }
 
 fn make_container(code: Vec<u8>) -> CalcContainer {
@@ -23,13 +23,11 @@ fn make_container(code: Vec<u8>) -> CalcContainer {
 fn make_container_profile(profile: u8, code: Vec<u8>) -> CalcContainer {
     CalcContainer {
         profile,
-        abi: CALC_ABI_BYTES_TO_BYTES,
         mem_kib: 8,
         entry: CODE_BASE as u32,
         code,
         rodata: vec![],
         init: vec![],
-        bss_len: 0,
         input_max: 64,
         output_max: 64,
     }
@@ -195,10 +193,16 @@ fn decode_rejects_non_whitelist() {
     assert!(decode_at(&hexw("0ff0000f"), 0, p).is_ok());
     // fp add (D extension)
     assert!(decode_at(&hexw("002585d3"), 0, p).is_err());
-    // compressed encodings
+    // compressed encodings (no-C profile rejects all of them)
     assert!(decode_at(&hexw("9002"), 0, p).is_err());
     assert!(decode_at(&hex("0000"), 0, p).is_err());
     assert!(decode_at(&hexw("2000"), 0, p).is_err());
+    // RVC profile: C.EBREAK is a legal 2-byte trap; the all-zero
+    // c.unimp encoding (reserved C.ADDI4SPN imm=0) stays rejected.
+    let (inst, len) = decode_at(&hexw("9002"), 0, CALC_PROFILE_RV64IMC).unwrap();
+    assert_eq!(inst, Inst::Trap);
+    assert_eq!(len, 2);
+    assert!(decode_at(&hex("0000"), 0, CALC_PROFILE_RV64IMC).is_err());
     // unknown profile
     assert!(decode_at(&hexw("00000013"), 0, 9).is_err());
 }
@@ -368,13 +372,11 @@ fn interp_div_rem_by_zero_matches_qemu() {
     let code: Vec<u8> = w.iter().flat_map(|x| x.to_le_bytes()).collect();
     let c = CalcContainer {
         profile: CALC_PROFILE_RV64IM,
-        abi: 1,
         mem_kib: 16,
         entry: CODE_BASE as u32,
         code,
         rodata: vec![],
         init: vec![],
-        bss_len: 0,
         input_max: 512,
         output_max: 512,
     };
@@ -420,13 +422,35 @@ fn pack_container_roundtrip() {
     // clang-assembled echo kernel (same as the gas tests)
     let mut code: Vec<u8> = vec![0x83, 0x42, 0x05, 0x00, 0x23, 0x30, 0x56, 0x00];
     code.extend_from_slice(&halt_empty());
-    let c = crate::calc::pack_container(8, CODE_BASE as u32, 128, 128, code.clone(), vec![], vec![]).unwrap();
+    let c = crate::calc::pack_container(
+        &crate::rt::SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        8,
+        CODE_BASE as u32,
+        128,
+        128,
+        code.clone(),
+        vec![],
+        vec![],
+    )
+    .unwrap();
     let enc = c.encode().expect("encode");
     let (c2, used) = crate::calc::container::CalcContainer::decode(&enc).unwrap();
     assert_eq!(used, enc.len());
     assert_eq!(c, c2);
     // non-fitting layout must be rejected
-    assert!(crate::calc::pack_container(4, CODE_BASE as u32, 4096, 4096, code.clone(), vec![], vec![]).is_err());
+    assert!(crate::calc::pack_container(
+        &crate::rt::SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        4,
+        CODE_BASE as u32,
+        4096,
+        4096,
+        code.clone(),
+        vec![],
+        vec![],
+    )
+    .is_err());
 }
 
 // --------------------------------------------------------------------
@@ -543,7 +567,7 @@ fn jalr_above_u32_traps_both_engines() {
     );
     let f = aot::aot_compile(&module).unwrap();
     let (out, _, _) = f.run_with_state(&module, &c, &[], 10_000);
-    assert_eq!(out.abort, Some(aot::AotAbort::BadTarget));
+    assert_eq!(out.abort, Some(crate::calc::CalcAbort2::Trap));
     assert_eq!(out.cycles_used, icyc, "cycle totals must agree");
 }
 
@@ -577,7 +601,7 @@ fn store_fault_classes_agree_across_engines() {
     assert!(matches!(r, Err((interp::CalcAbort::Trap(_), _))));
     let f = aot::aot_compile(&module).unwrap();
     let (out, _, _) = f.run_with_state(&module, &c, &[], 10_000);
-    assert_eq!(out.abort, Some(aot::AotAbort::Trap));
+    assert_eq!(out.abort, Some(crate::calc::CalcAbort2::Trap));
     assert_eq!(out.cycles_used, icyc);
 }
 
@@ -605,6 +629,18 @@ fn ecall_oob_length_abort_class_is_budget_dependent() {
     prog.extend_from_slice(&ret.to_le_bytes());
     let c = make_container(prog);
     let module = verify_container(&c).unwrap();
+    if !crate::calc::CALC_HASH_ECALLS_ENABLED {
+        // v1: the ecall itself traps before any hash pricing or bounds
+        // check, for every budget.
+        for budget in [5_000_000u64, 200] {
+            let (r, _, _, _) = interp::run_with_state(&module, &c, &[], budget);
+            assert!(
+                matches!(&r, Err((interp::CalcAbort::Trap(t), _)) if t.contains("host builtins")),
+                "budget {budget} -> host-builtin trap, got {r:?}"
+            );
+        }
+        return;
+    }
     let (r, _, _, _) = interp::run_with_state(&module, &c, &[], 5_000_000);
     assert!(
         matches!(&r, Err((interp::CalcAbort::Trap(t), _)) if t.contains("out of memory bounds")),
@@ -711,13 +747,14 @@ fn assert_aot_parity(c: &CalcContainer, input: &[u8], budget: u64) {
             assert_eq!(out.abort, None);
             assert_eq!(out.output.as_deref().unwrap_or(&[]), r.output.as_slice());
         }
-        Err((interp::CalcAbort::OutOfGas, _)) => assert_eq!(out.abort, Some(aot::AotAbort::OutOfGas)),
+        Err((interp::CalcAbort::OutOfGas, _)) => assert_eq!(out.abort, Some(crate::calc::CalcAbort2::OutOfGas)),
         Err((interp::CalcAbort::GuestExit(code), _)) => {
-            assert_eq!(out.abort, Some(aot::AotAbort::GuestExit));
+            // A guest nonzero HALT is a trap class carrying the exit code.
+            assert_eq!(out.abort, Some(crate::calc::CalcAbort2::Trap));
             assert_eq!(out.exit_code, *code);
         }
         Err((interp::CalcAbort::Trap(_), _)) => {
-            assert!(matches!(out.abort, Some(aot::AotAbort::Trap) | Some(aot::AotAbort::BadTarget)));
+            assert!(matches!(out.abort, Some(crate::calc::CalcAbort2::Trap)));
         }
         Err((interp::CalcAbort::Deadline, _)) => panic!("deadline"),
     }
@@ -748,13 +785,11 @@ fn data_base_align16_init_and_hole_is_readonly() {
     assert_eq!(code.len() as u64, code_len);
     let c = CalcContainer {
         profile: CALC_PROFILE_RV64IM,
-        abi: CALC_ABI_BYTES_TO_BYTES,
         mem_kib: 8,
         entry: CODE_BASE as u32,
         code,
         rodata,
         init: word.to_le_bytes().to_vec(),
-        bss_len: 0,
         input_max: 64,
         output_max: 64,
     };
@@ -774,13 +809,11 @@ fn data_base_align16_init_and_hole_is_readonly() {
     assert_eq!(store_hole.len() as u64, hole_code_len);
     let c2 = CalcContainer {
         profile: CALC_PROFILE_RV64IM,
-        abi: CALC_ABI_BYTES_TO_BYTES,
         mem_kib: 8,
         entry: CODE_BASE as u32,
         code: store_hole,
         rodata: vec![0u8; 13],
         init: word.to_le_bytes().to_vec(),
-        bss_len: 0,
         input_max: 64,
         output_max: 64,
     };
@@ -831,7 +864,12 @@ fn unmapped_low_page_traps_load_store_ecall_jalr() {
         match run_interp(&c, &[], 10_000) {
             Err((CalcAbort::Trap(t), _)) => {
                 assert!(
-                    t.contains("unmapped") || t.contains("invalid target") || t.contains("read-only"),
+                    t.contains("unmapped")
+                        || t.contains("invalid target")
+                        || t.contains("read-only")
+                        // v1 has host ecalls disabled: the hash-ecall buffer
+                        // probe stops at the ecall itself.
+                        || t.contains("host builtins"),
                     "{why}: {t}"
                 );
             }
@@ -947,25 +985,44 @@ fn halt_output_len_over_max_traps() {
     assert_aot_parity(&c, &[], 10_000);
 }
 
+#[test]
+fn c_ebreak_is_a_two_byte_trap() {
+    use crate::calc::interp::CalcAbort;
+    // C.EBREAK on an RVC profile: one 2-byte instruction, then a trap.
+    let c = make_container_profile(CALC_PROFILE_RV64IMC, vec![0x02, 0x90]);
+    match run_interp(&c, &[], 10_000) {
+        Err((CalcAbort::Trap(t), used)) => {
+            assert!(t.contains("trap"), "{t}");
+            assert_eq!(used, 1, "c.ebreak costs exactly one ALU cycle");
+        }
+        other => panic!("expected c.ebreak trap, got {other:?}"),
+    }
+    #[cfg(feature = "calc-aot")]
+    assert_aot_parity(&c, &[], 10_000);
+}
+
 /// V1 rejects `mem_kib > 64` at verify. Wire decode accepts any
 /// `mem_kib >= 4`. A 64 KiB container keeps the pinned layout, interpreter
 /// cycles, and `CalcFnObj` setup/resource charges.
 #[test]
 fn mem_cap_is_config_and_v1_layout_stays_pinned() {
-    use crate::calc::config::CALC_TESTKIT_MEM_KIB_CEILING;
     use crate::calc::container::{compute_layout, CALC_MEM_KIB_MAX};
     use crate::calc::interp::{self, CalcRun};
     use crate::calc::{
-        CalcConfig, CalcFnObj, CalcRunLimits, CALC_CONFIG_V1, CALC_MEM_RESOURCE_PER_KIB,
-        CALC_SETUP_BASE_CYCLES, CALC_SETUP_PER_KIB_CYCLES,
+        CalcFnObj, CalcRunLimits, CALC_MEM_RESOURCE_PER_KIB, CALC_SETUP_BASE_CYCLES,
+        CALC_SETUP_PER_KIB_CYCLES,
     };
+    use crate::rt::SpaceCap;
 
+    let v1 = SpaceCap::new(0);
     let mut over = make_container_profile(CALC_PROFILE_RV64IM, halt_empty());
     over.mem_kib = CALC_MEM_KIB_MAX + 1;
-    assert!(over.validate_header(&CALC_CONFIG_V1).is_err());
+    assert!(over.validate_header(&v1).is_err());
     assert!(verify_container(&over).is_err());
-    assert!(CalcFnObj::build(over.clone()).is_err());
+    assert!(CalcFnObj::build_v1(over.clone()).is_err());
     assert!(crate::calc::pack_container(
+        &v1,
+        CALC_PROFILE_RV64IM,
         CALC_MEM_KIB_MAX + 1,
         CODE_BASE as u32,
         16,
@@ -986,16 +1043,18 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
     low[8..12].copy_from_slice(&3u32.to_be_bytes());
     assert!(CalcContainer::decode(&low).is_err());
 
-    let cap = CalcConfig::testkit(128).unwrap();
+    // A sidechain raises the single SpaceCap knob; verify follows it.
+    let cap = SpaceCap {
+        calc_mem_kib_max: 128,
+        ..SpaceCap::new(0)
+    };
     let mut wide = decoded.clone();
     wide.mem_kib = 128;
-    let wide_m = crate::calc::verify::verify_container_with(&wide, &cap).unwrap();
+    let wide_m = verify_container_with_cap(&wide, &cap).unwrap();
     assert_eq!(wide_m.layout_snapshot().usable_len, 128 * 1024);
     assert_eq!(wide_m.layout_snapshot().mem_len, CODE_BASE + 128 * 1024);
     wide.mem_kib = 129;
-    assert!(crate::calc::verify::verify_container_with(&wide, &cap).is_err());
-    assert!(CalcConfig::testkit(CALC_TESTKIT_MEM_KIB_CEILING).is_ok());
-    assert!(CalcConfig::testkit(CALC_TESTKIT_MEM_KIB_CEILING + 1).is_err());
+    assert!(verify_container_with_cap(&wide, &cap).is_err());
 
     let mut c = make_container_profile(CALC_PROFILE_RV64IM, halt_empty());
     c.mem_kib = CALC_MEM_KIB_MAX;
@@ -1008,7 +1067,6 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
             c.code.len() as u64,
             c.rodata.len() as u64,
             c.init.len() as u64,
-            c.bss_len as u64,
             c.input_max as u64,
             c.output_max as u64,
             c.mem_kib as u64 * 1024,
@@ -1022,7 +1080,7 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
     assert_eq!(mem1.len() as u64, lay.mem_len);
     assert_eq!(r1, Ok(CalcRun { output: vec![], cycles_used: 4 }));
 
-    let obj = CalcFnObj::build(c).unwrap();
+    let obj = CalcFnObj::build_v1(c).unwrap();
     let exec = obj.run(
         &[],
         CalcRunLimits {

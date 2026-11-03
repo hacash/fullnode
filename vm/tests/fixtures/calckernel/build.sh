@@ -24,7 +24,7 @@ $OBJCP -O binary --only-section=.data $ELF image_init.bin
 $NM $ELF | awk '$3=="calc_entry"{printf "0x%s\n", $1}' > entry.txt
 OBJDUMP=$(ls ~/.rustup/toolchains/*/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-objdump | head -1)
 python3 - "$OBJDUMP" "$ELF" <<'PY'
-import subprocess, re, sys
+import os, subprocess, re, sys
 objdump, elf = sys.argv[1], sys.argv[2]
 out = subprocess.check_output([objdump, "-h", elf], text=True)
 secs = {}
@@ -65,7 +65,14 @@ for bname in (".bss", ".sbss"):
         bss_end = max(bss_end, secs[bname][1] + secs[bname][0])
 if bss_end > usable_end:
     sys.exit(f"layout check: .bss end {bss_end:#x} exceeds usable window {usable_end:#x}")
-print(f"layout ok: .text@0x1000 data_base={data_base:#x} bss_end={bss_end:#x}")
+# The v1 container has no bss field: the zero-initialized span is part of the
+# init image, so `image_init.bin` is padded to cover `.data` + `.bss`.
+span = max(0, bss_end - data_base)
+cur = os.path.getsize("image_init.bin")
+if span > cur:
+    with open("image_init.bin", "ab") as f:
+        f.write(b"\0" * (span - cur))
+print(f"layout ok: .text@0x1000 data_base={data_base:#x} bss_end={bss_end:#x} init={span:#x}")
 PY
 # qemu oracle ELF (with `_start` harness)
 RUSTC_BOOTSTRAP=1 RUSTFLAGS="-C link-arg=-Tqemu-oracle.ld -C relocation-model=static" \

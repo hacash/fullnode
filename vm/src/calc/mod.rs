@@ -3,15 +3,16 @@
 //! Container (`container.rs`) + whitelist decoder (`decode.rs`) + deploy-time
 //! verifier with basic-block pricing (`verify.rs`) + pre-decoded interpreter
 //! (`interp.rs`). The whole pipeline is deterministic and free of host
-//! access: a calc kernel can only see its own flat memory and the ecall
-//! table (HALT + hash builtins). Interpreter and AOT must be bit-identical.
+//! access: a calc kernel can only see its own flat memory and the HALT
+//! ecall (plus the host hash table, disabled in v1).
 //!
-//! Header byte 5 is two orthogonal bits:
+//! Header byte 5 is three orthogonal bits:
 //! - bit 0: Zba/Zbb/Zbs/Zbc
 //! - bit 1: RVC compressed encodings
+//! - bit 2: no host ecalls (HALT only; the zk declaration)
 //! Profiles 0 and 1 (bit 1 clear) match the zkVM rule of no C. The
 //! deployer picks the combination; a zk proof uses a container that
-//! leaves bit 1 clear.
+//! leaves bit 1 clear and sets bit 2.
 //!
 //! See `SPEC.md` for the normative wire format, memory map, ecall ABI,
 //! gas, image ID and receipt.
@@ -22,7 +23,10 @@ pub mod decode;
 pub mod interp;
 pub mod verify;
 
-pub use config::{CalcConfig, CalcHostConfig, CALC_CONFIG_V1};
+pub use config::CalcHostConfig;
+/// Re-exported so packers and tests can name the chain caps through the
+/// public `calc` module (`vm::rt` is crate-private).
+pub use crate::rt::SpaceCap;
 // x86-64 AOT. Official builds turn `calc-aot` on and `CalcFnObj::run` executes
 // it in lockstep with the interpreter. See `aot.rs`.
 #[cfg(feature = "calc-aot")]
@@ -34,10 +38,10 @@ mod isa_tests;
 use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
 
 pub use container::{
-    profile_has_bitmanip, profile_has_compressed, profile_known, CALC_ABI_BYTES_TO_BYTES,
-    CALC_PROFILE_BITMANIP, CALC_PROFILE_COMPRESSED, CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IM_B,
-    CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B, CODE_BASE as CALC_CODE_BASE,
-    IMAGE_ID_DOMAIN as CALC_IMAGE_ID_DOMAIN,
+    profile_has_bitmanip, profile_has_compressed, profile_has_no_host_ecall, profile_known,
+    CALC_PROFILE_BITMANIP, CALC_PROFILE_COMPRESSED, CALC_PROFILE_NO_HOST_ECALL,
+    CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IM_B, CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B,
+    CODE_BASE as CALC_CODE_BASE, IMAGE_ID_DOMAIN as CALC_IMAGE_ID_DOMAIN,
 };
 
 /// Exchange rate: 1 compute = N cycles. CONSENSUS CONSTANT: changing this
@@ -72,16 +76,40 @@ pub const CALC_SETUP_BASE_CYCLES: u64 = 64;
 /// Additional setup cycles per declared KiB of calc memory (zeroing cost).
 pub const CALC_SETUP_PER_KIB_CYCLES: u64 = 16;
 
-/// Minimum stack that must remain above the guard after `.bss` is placed.
-/// The stack itself is the rest of the gap up to the output region, not a
-/// fixed 2 KiB window. CONSENSUS CONSTANT (layout fit check).
+/// Minimum stack that must remain above the guard after the initialized data
+/// image. The stack itself is the rest of the gap up to the output region,
+/// not a fixed 2 KiB window. CONSENSUS CONSTANT: together with
+/// [`CALC_STACK_GUARD`] it forms the single fit rule
+/// [`CALC_MIN_FREE_RW_GAP`]; this is a floor that may only be **lowered**
+/// after activation — raising it would reject containers that were legal when
+/// deployed.
 pub const CALC_STACK_SIZE: u64 = 2 * 1024;
 
-/// Stack-overflow guard band (bytes) between `.bss` and the downward-growing
-/// stack. Stores that intersect it trap. 256 bytes covers a full compiler
-/// frame, so a single-frame overflow is caught before it lands in `.bss`.
-/// Loads are unaffected. CONSENSUS CONSTANT (layout + trap semantics).
+/// Stack-overflow guard band (bytes) between the initialized data image and
+/// the downward-growing stack. Stores that intersect it trap. 256 bytes
+/// covers a typical compiler frame, but it is a best-effort check: a single
+/// frame larger than the band can skip over it. Loads are unaffected.
+/// CONSENSUS CONSTANT (layout + trap semantics); it may only be **lowered**
+/// after activation (raising it would shrink the legal layout and turn
+/// previously legal stores into traps).
 pub const CALC_STACK_GUARD: u64 = 256;
+
+/// Minimum free RW span the layout must leave between the end of `init` and
+/// `stack_top`: the guard band plus the minimum stack. The single fit rule
+/// used by wire decode, the verifier and the packers.
+pub const CALC_MIN_FREE_RW_GAP: u64 = CALC_STACK_GUARD + CALC_STACK_SIZE;
+
+/// Consensus switch for the host hash ecalls (`a7` = 1..=6).
+///
+/// **v1 ships with host ecalls disabled**: only HALT (`a7 = 0`) executes;
+/// every other ecall number traps. The pricing (`HashKind::cycles`), the
+/// digest implementations (`run_hash`) and the AOT/interpreter code paths are
+/// kept intact and tested directly, so a later coordinated consensus upgrade
+/// can flip this constant without touching the engines again. Host ecalls are
+/// not zk-provable on their own; a container that sets the
+/// `CALC_PROFILE_NO_HOST_ECALL` profile bit must stay HALT-only even after
+/// they are enabled.
+pub const CALC_HASH_ECALLS_ENABLED: bool = false;
 
 /// ecall a7 = HALT. a0 = exit code (0 = success), a1 = output length.
 pub const ECALL_HALT: u64 = 0;
@@ -91,7 +119,8 @@ pub const ECALL_HINT_MIN: u64 = 16;
 pub const ECALL_HINT_MAX: u64 = 31;
 
 /// Hash builtin numbers behind `ecall` (a7), aligned with the native hash
-/// catalog (`rt/native_catalog.rs`). HALT is 0; 1..=6 are hashes.
+/// catalog (`rt/native_catalog.rs`). HALT is 0; 1..=6 are hashes, disabled
+/// in v1 by [`CALC_HASH_ECALLS_ENABLED`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashKind {
     Sha2 = 1,
@@ -131,8 +160,7 @@ impl HashKind {
     /// is priced at/above SHA-256, matching its real relative cost. Builtins
     /// stay an order of magnitude cheaper than computing a hash in-kernel
     /// with RV64IM instructions (~700-1300 cycles per SHA-256 block), so the
-    /// incentive to use them is preserved. Values are provisional until the
-    /// CYCLES_PER_COMPUTE calibration pass before activation.
+    /// incentive to use them is preserved.
     pub fn cycles(self, len: u64) -> u64 {
         // Saturating: `u64::MAX` bytes must not panic (runtime lengths are
         // bounded by the 64 KiB memory, but the pricing helper stays total).
@@ -216,7 +244,8 @@ pub struct CalcExec {
 pub enum CalcAbort2 {
     Trap,
     OutOfGas,
-    /// The host machine's wall-clock deadline elapsed mid-run.
+    /// The host machine's wall-clock deadline elapsed mid-run. Only the
+    /// interpreter observes a deadline (see [`CalcFnObj::run`]).
     Deadline,
     /// The pre-run resource budget cannot cover the minimum charge.
     OutOfResource,
@@ -238,9 +267,9 @@ pub struct CalcRunLimits {
 pub struct CalcFnObj {
     container: container::CalcContainer,
     module: verify::CalcModule,
-    /// `Some` when hashed at build (`compute_image_id_on_load`). `None`
-    /// means [`Self::image_id`] hashes the container on demand.
-    image_id: Option<[u8; 32]>,
+    /// Lazily hashed canonical image ID. `OnceLock` keeps the build path
+    /// free of uncharged hashing while avoiding a second code path.
+    image_id: std::sync::OnceLock<[u8; 32]>,
     /// Mounted x86-64 image. `None` means this object runs on the interpreter
     /// only (feature off, or the host turned AOT off). The consensus call
     /// path holds an `Arc`, so the image stays mounted there.
@@ -250,59 +279,66 @@ pub struct CalcFnObj {
 
 impl std::fmt::Debug for CalcFnObj {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let image_id = self.image_id();
         f.debug_struct("CalcFnObj")
             .field("container", &self.container)
-            .field("image_id", &image_id)
+            .field("image_id", &self.image_id())
             .field("module", &"<verified>")
             .finish()
     }
 }
 
 impl CalcFnObj {
-    /// Verify a container and build the executable object under
-    /// [`CALC_CONFIG_V1`] with host knobs off. Tests and the testkit only:
-    /// every production entry goes through [`Self::build_with_host`] /
-    /// [`Self::build_with_config`] with a `SpaceCap`-derived config.
-    #[cfg(any(test, feature = "calc-testkit"))]
-    pub fn build(c: container::CalcContainer) -> VmrtRes<Self> {
-        Self::build_with_config(c, CALC_CONFIG_V1)
-    }
-
-    /// `build` under [`CALC_CONFIG_V1`] with host-only knobs applied.
-    pub fn build_with_host(c: container::CalcContainer, host: config::CalcHostConfig) -> VmrtRes<Self> {
-        let cfg = CalcConfig {
-            aot_mount: host.aot_mount,
-            compute_image_id_on_load: host.compute_image_id_on_load,
-            ..CALC_CONFIG_V1
-        };
-        Self::build_with_config(c, cfg)
-    }
-
-    /// `build` with an explicit feature set. AOT mounts only when
-    /// `cfg.aot_mount` is set and the `calc-aot` feature is compiled in.
-    pub fn build_with_config(c: container::CalcContainer, cfg: CalcConfig) -> VmrtRes<Self> {
-        let module = verify::verify_container_with(&c, &cfg)?;
-        let image_id = if cfg.compute_image_id_on_load {
-            Some(c.image_id())
-        } else {
-            None
-        };
+    /// Verify a container under the chain's current `SpaceCap` and build the
+    /// executable object. This is the production deploy/load entry: the only
+    /// chain input is `cap.calc_mem_kib_max`, and `host.aot_mount` selects
+    /// the lockstep check.
+    pub fn build(
+        c: container::CalcContainer,
+        cap: &SpaceCap,
+        host: CalcHostConfig,
+    ) -> VmrtRes<Self> {
+        let module = verify::verify_container_with_cap(&c, cap)?;
         #[cfg(feature = "calc-aot")]
-        let aot = if cfg.aot_mount {
+        let aot = if host.aot_mount {
             Some(aot::aot_compile(&module).ok_or_else(|| {
                 ItrErr::new(ItrErrCode::ContractError, "calc aot compile failed")
             })?)
         } else {
             None
         };
+        #[cfg(not(feature = "calc-aot"))]
+        let _ = host;
         Ok(Self {
             container: c,
             module,
-            image_id,
+            image_id: std::sync::OnceLock::new(),
             #[cfg(feature = "calc-aot")]
             aot,
         })
+    }
+
+    /// [`Self::build`] under the default chain caps. Tests and the testkit
+    /// only: production deploy/load pass the live `SpaceCap`.
+    #[cfg(any(test, feature = "calc-testkit"))]
+    pub fn build_v1(c: container::CalcContainer) -> VmrtRes<Self> {
+        Self::build(c, &SpaceCap::new(0), CalcHostConfig::new())
+    }
+
+    /// [`Self::build_v1`] with host-only knobs applied. Tests only.
+    #[cfg(any(test, feature = "calc-testkit"))]
+    pub fn build_with_host(
+        c: container::CalcContainer,
+        host: config::CalcHostConfig,
+    ) -> VmrtRes<Self> {
+        Self::build(c, &SpaceCap::new(0), host)
+    }
+
+    /// [`Self::build_v1`] with AOT mounting requested. A compile failure
+    /// fails the build; the lockstep check must not silently disappear.
+    /// Tests and the testkit only.
+    #[cfg(all(feature = "calc-aot", any(test, feature = "calc-testkit")))]
+    pub fn build_with_aot(c: container::CalcContainer) -> VmrtRes<Self> {
+        Self::build_with_host(c, CalcHostConfig::new().with_aot_mount(true))
     }
 
     /// Declared usable memory in KiB (resource/setup charge input).
@@ -314,21 +350,10 @@ impl CalcFnObj {
         self.container.output_max
     }
 
-    /// Canonical image ID of the attached container. Computed at build when
-    /// the config asked for it, otherwise hashed on demand. Same bytes.
+    /// Canonical image ID of the attached container. Hashed on first use and
+    /// cached; the value is fully determined by the container bytes.
     pub fn image_id(&self) -> [u8; 32] {
-        match self.image_id {
-            Some(id) => id,
-            None => self.container.image_id(),
-        }
-    }
-
-    /// [`build_with_host`] with AOT mounting requested. A compile failure
-    /// fails the build; the lockstep check must not silently disappear.
-    /// Tests and the testkit only.
-    #[cfg(all(feature = "calc-aot", any(test, feature = "calc-testkit")))]
-    pub fn build_with_aot(c: container::CalcContainer) -> VmrtRes<Self> {
-        Self::build_with_host(c, CalcHostConfig::new().with_aot_mount(true))
+        *self.image_id.get_or_init(|| self.container.image_id())
     }
 
     /// Whether an AOT image is mounted on this object.
@@ -369,25 +394,25 @@ impl CalcFnObj {
         let in_res = ceil_div(input.len() as u64, 16) as i64;
         // Resource/setup charges use declared usable memory (mem_kib), not
         // the unmapped [0, CODE_BASE) page.
-        let mem_res = (lay.usable_len / 1024) as i64 * crate::calc::CALC_MEM_RESOURCE_PER_KIB;
-        let finish = |result: Result<Vec<u8>, CalcAbort2>,
-                      cycles_used: u64,
-                      resource: i64,
-                      exit_code: u64| CalcExec {
-            result,
-            cycles_used,
-            resource,
-            exit_code,
-        };
+        let mem_res = (lay.usable_len / 1024) as i64 * CALC_MEM_RESOURCE_PER_KIB;
+        // The whole resource charge is known before the run: input bytes,
+        // declared memory, and `output_max` (the container's declared
+        // maximum, even when a smaller output is returned). Admission caps
+        // reserve the same maximum, so a call that passes this pre-flight can
+        // never exceed the resource budget after the run. There is no
+        // post-run resource check.
+        let out_res_max = ceil_div(lay.output_max, 16) as i64;
         // Pre-flight checks charge base gas only: they run before any cycle.
         if input.len() as u64 > lay.input_max {
-            return finish(Err(CalcAbort2::Trap), 0, 0, 0);
+            return calc_exec(Err(CalcAbort2::Trap), 0, 0, 0, 0);
         }
-        // `output_max` needs no run-time check: deploy and load both admit
-        // it against `SpaceCap::value_size`, the caps only rise, and the
-        // caller validates the output value against the same cap anyway.
-        if limits.resource >= 0 && in_res.saturating_add(mem_res) > limits.resource {
-            return finish(Err(CalcAbort2::OutOfResource), 0, 0, 0);
+        if limits.resource >= 0
+            && in_res
+                .saturating_add(mem_res)
+                .saturating_add(out_res_max)
+                > limits.resource
+        {
+            return calc_exec(Err(CalcAbort2::OutOfResource), 0, 0, 0, 0);
         }
         // The per-call setup charge (memory allocation + zeroing + image
         // copies) is deducted up front and always kept, even on traps.
@@ -399,64 +424,68 @@ impl CalcFnObj {
             // included, so nothing beyond setup is burned; if ceil(setup/32)
             // then exceeds the compute bucket, settle fails with the same
             // ItrErrCode::OutOfGas — the failure class never changes.
-            return finish(
-                Err(CalcAbort2::OutOfGas),
-                setup,
-                in_res + mem_res,
-                0,
-            );
+            return calc_exec(Err(CalcAbort2::OutOfGas), setup, 0, in_res, mem_res);
         }
         // Early lockstep insurance. Official x86-64 binaries compile
         // `calc-aot` and mount an image, so every call runs the interpreter
         // and then AOT in order on this thread and keeps the result only
-        // when gas (`cycles_used`) and the outcome (output bytes, abort
-        // class, halt code) match. A mismatch is `EngineMismatch`: the
-        // caller rejects the transaction and it does not enter a block. A
-        // panic inside either engine is caught and reported the same way —
-        // it is a host failure with no agreed charge to keep, and the
-        // transaction is rejected either way. Builds without the feature,
-        // or with the image unmounted, take the interpreter alone. A host
-        // deadline is not part of this check — AOT does not observe it —
-        // so a deadline stays on the interpreter. Once production has
-        // stayed quiet, the interpreter side of this pair is removed and
-        // AOT is the only engine.
+        // when gas (`cycles_used`) and the consensus-observable outcome
+        // (output bytes, abort class, halt code) match. Registers and memory
+        // are compared by the differential test suites, not on the hot path;
+        // only the consensus-observable surface is checked here. A mismatch
+        // is `EngineMismatch`: the caller rejects the transaction and it does
+        // not enter a block. A panic inside either engine is caught and
+        // reported the same way — it is a host failure with no agreed charge
+        // to keep, and the transaction is rejected either way. Builds without
+        // the feature, or with the image unmounted, take the interpreter
+        // alone.
+        //
+        // A host wall-clock deadline is observed by the interpreter only. The
+        // AOT image **still runs** (the lockstep is never skipped, so preflight
+        // and consensus exercise the same engines), but a deadline stop is
+        // host policy rather than guest semantics: the AOT verdict is not
+        // compared and the call reports `Deadline`. Once production has
+        // stayed quiet, the interpreter side of this pair is removed and AOT
+        // is the only engine.
         #[cfg(feature = "calc-aot")]
-        if limits.deadline.is_none() {
-            if let Some(aot) = self.aot.as_ref() {
-                let budget = limits.cycles - setup;
-                let interp_out = match std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(|| {
-                        engine_from_interp(
-                            setup,
-                            interp::run(&self.module, &self.container, input, budget, None),
-                        )
-                    }),
-                ) {
-                    Ok(out) => out,
-                    Err(_) => return finish(Err(CalcAbort2::EngineMismatch), 0, 0, 0),
-                };
-                let aot_out = match std::panic::catch_unwind(
-                    std::panic::AssertUnwindSafe(|| {
-                        let (out, _regs, _mem) =
-                            aot.run_with_state(&self.module, &self.container, input, budget);
-                        engine_from_aot(setup, out)
-                    }),
-                ) {
-                    Ok(out) => out,
-                    Err(_) => return finish(Err(CalcAbort2::EngineMismatch), 0, 0, 0),
-                };
-                if interp_out != aot_out {
-                    return finish(Err(CalcAbort2::EngineMismatch), 0, 0, 0);
-                }
-                return finish_with_output(
-                    interp_out.result,
+        if let Some(aot) = self.aot.as_ref() {
+            let budget = limits.cycles - setup;
+            let interp_out = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                engine_from_interp(
+                    setup,
+                    interp::run(&self.module, &self.container, input, budget, limits.deadline),
+                )
+            })) {
+                Ok(out) => out,
+                Err(_) => return calc_exec(Err(CalcAbort2::EngineMismatch), 0, 0, 0, 0),
+            };
+            let aot_out = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let (out, _regs, _mem) =
+                    aot.run_with_state(&self.module, &self.container, input, budget);
+                engine_from_aot(setup, out)
+            })) {
+                Ok(out) => out,
+                Err(_) => return calc_exec(Err(CalcAbort2::EngineMismatch), 0, 0, 0, 0),
+            };
+            if matches!(interp_out.result, Err(CalcAbort2::Deadline)) {
+                return calc_exec(
+                    Err(CalcAbort2::Deadline),
                     interp_out.cycles_used,
-                    interp_out.exit_code,
-                    limits,
+                    0,
                     in_res,
                     mem_res,
                 );
             }
+            if interp_out != aot_out {
+                return calc_exec(Err(CalcAbort2::EngineMismatch), 0, 0, 0, 0);
+            }
+            return calc_exec(
+                interp_out.result,
+                interp_out.cycles_used,
+                interp_out.exit_code,
+                in_res,
+                mem_res,
+            );
         }
         let out = engine_from_interp(
             setup,
@@ -468,11 +497,12 @@ impl CalcFnObj {
                 limits.deadline,
             ),
         );
-        finish_with_output(out.result, out.cycles_used, out.exit_code, limits, in_res, mem_res)
+        calc_exec(out.result, out.cycles_used, out.exit_code, in_res, mem_res)
     }
 }
 
-/// One engine's gas and outcome, compared by the lockstep check.
+/// One engine's gas and consensus-observable outcome, compared by the
+/// lockstep check.
 #[derive(Clone, PartialEq, Eq)]
 struct EngineOut {
     result: Result<Vec<u8>, CalcAbort2>,
@@ -504,21 +534,22 @@ fn engine_from_interp(
 
 #[cfg(feature = "calc-aot")]
 fn engine_from_aot(setup: u64, out: aot::AotOutcome) -> EngineOut {
-    let cycles_used = setup + out.cycles_used;
-    let (result, exit_code) = match out.abort {
-        None => (Ok(out.output.unwrap_or_default()), 0),
-        Some(aot::AotAbort::OutOfGas) => (Err(CalcAbort2::OutOfGas), 0),
-        Some(aot::AotAbort::GuestExit) => (Err(CalcAbort2::Trap), out.exit_code),
-        Some(aot::AotAbort::BadTarget | aot::AotAbort::Trap) => (Err(CalcAbort2::Trap), 0),
-    };
-    EngineOut { result, cycles_used, exit_code }
+    EngineOut {
+        result: match out.abort {
+            None => Ok(out.output.unwrap_or_default()),
+            Some(a) => Err(a),
+        },
+        cycles_used: setup + out.cycles_used,
+        exit_code: out.exit_code,
+    }
 }
 
-fn finish_with_output(
+/// Assemble one [`CalcExec`]: the resource charge is the input, actual output
+/// and declared-memory terms (an abort has no output term).
+fn calc_exec(
     result: Result<Vec<u8>, CalcAbort2>,
     cycles_used: u64,
     exit_code: u64,
-    limits: CalcRunLimits,
     in_res: i64,
     mem_res: i64,
 ) -> CalcExec {
@@ -526,29 +557,12 @@ fn finish_with_output(
         Ok(o) => ceil_div(o.len() as u64, 16) as i64,
         Err(_) => 0,
     };
-    let finish = |result: Result<Vec<u8>, CalcAbort2>, resource: i64| CalcExec {
+    CalcExec {
         result,
         cycles_used,
-        resource,
+        resource: in_res.saturating_add(out_res).saturating_add(mem_res),
         exit_code,
-    };
-    if result.is_ok()
-        && limits.resource >= 0
-        && in_res.saturating_add(out_res).saturating_add(mem_res) > limits.resource
-    {
-        return CalcExec {
-            result: Err(CalcAbort2::OutOfResource),
-            cycles_used,
-            resource: in_res + mem_res,
-            exit_code: 0,
-        };
     }
-    let resource = if result.is_ok() {
-        in_res + out_res + mem_res
-    } else {
-        in_res + mem_res
-    };
-    finish(result, resource)
 }
 
 /// ceil(a / b) for non-negative a and positive b.
@@ -564,33 +578,30 @@ pub fn sha256_bytes(data: &[u8]) -> [u8; 32] {
     sha2::Sha256::digest(data).into()
 }
 
+/// Reject an encoded container that exceeds the chain's `calc_image_max`
+/// (also capped by the `u16` body prefix the contract code uses).
+pub(crate) fn reject_image_len(len: usize, cap: &SpaceCap) -> VmrtRes<()> {
+    let max = cap.calc_image_max.min(u16::MAX as usize);
+    if len > max {
+        return Err(ItrErr::new(
+            ItrErrCode::ContractError,
+            &format!("calcfunc size overflow, max {}", max),
+        ));
+    }
+    Ok(())
+}
+
 /// Build a calc container from a linked bare-metal image produced by the
-/// Rust cross-build pack step. Profile 0 (RV64IM + Zicclsm). `entry` is
-/// the absolute guest PC (typically [`CODE_BASE`] for a kernel whose
-/// `calc_entry` is linked at the image start).
+/// Rust cross-build pack step, admitted against `cap` (the same caps the
+/// target chain applies at deploy).
+///
+/// `init` must include the zero-initialized `.bss` span: the container has no
+/// separate bss field, so the runtime derives the layout (and the guard band
+/// position) from `init.len()` alone. [`pack_elf`] does this folding
+/// automatically.
+#[allow(clippy::too_many_arguments)]
 pub fn pack_container(
-    mem_kib: u32,
-    entry: u32,
-    input_max: u16,
-    output_max: u16,
-    code: Vec<u8>,
-    rodata: Vec<u8>,
-    init: Vec<u8>,
-) -> VmrtRes<container::CalcContainer> {
-    pack_container_with_profile(
-        container::CALC_PROFILE_RV64IM,
-        mem_kib,
-        entry,
-        input_max,
-        output_max,
-        code,
-        rodata,
-        init,
-    )
-}
-
-/// [`pack_container`] with an explicit ISA profile.
-pub fn pack_container_with_profile(
+    cap: &SpaceCap,
     profile: u8,
     mem_kib: u32,
     entry: u32,
@@ -599,41 +610,14 @@ pub fn pack_container_with_profile(
     code: Vec<u8>,
     rodata: Vec<u8>,
     init: Vec<u8>,
-) -> VmrtRes<container::CalcContainer> {
-    pack_container_with_config(
-        profile,
-        mem_kib,
-        entry,
-        input_max,
-        output_max,
-        code,
-        rodata,
-        init,
-        &CALC_CONFIG_V1,
-    )
-}
-
-/// [`pack_container_with_profile`] verified under `cfg`.
-pub fn pack_container_with_config(
-    profile: u8,
-    mem_kib: u32,
-    entry: u32,
-    input_max: u16,
-    output_max: u16,
-    code: Vec<u8>,
-    rodata: Vec<u8>,
-    init: Vec<u8>,
-    cfg: &CalcConfig,
 ) -> VmrtRes<container::CalcContainer> {
     let c = container::CalcContainer {
         profile,
-        abi: container::CALC_ABI_BYTES_TO_BYTES,
         mem_kib,
         entry,
         code,
         rodata,
         init,
-        bss_len: 0,
         input_max,
         output_max,
     };
@@ -641,6 +625,7 @@ pub fn pack_container_with_config(
     // container cannot bypass the decoder's header/length checks, then run
     // the full verifier on exactly the bytes that will be stored.
     let bytes = c.encode()?;
+    reject_image_len(bytes.len(), cap)?;
     let (decoded, used) = container::CalcContainer::decode(&bytes)?;
     if used != bytes.len() {
         return Err(ItrErr::new(
@@ -648,89 +633,25 @@ pub fn pack_container_with_config(
             "calc pack: container round-trip did not consume all bytes",
         ));
     }
-    verify::verify_container_with(&decoded, cfg)?;
-    Ok(decoded)
-}
-
-/// [`pack_container_with_config`] plus a `.bss` fit check. `bss_len` is the
-/// zero-filled span from `data_base + init_len` through the end of `.bss`
-/// (alignment hole included).
-pub fn pack_container_with_bss(
-    profile: u8,
-    mem_kib: u32,
-    entry: u32,
-    input_max: u16,
-    output_max: u16,
-    code: Vec<u8>,
-    rodata: Vec<u8>,
-    init: Vec<u8>,
-    bss_len: u64,
-    cfg: &CalcConfig,
-) -> VmrtRes<container::CalcContainer> {
-    if bss_len > u32::MAX as u64 {
-        return Err(ItrErr::new(
-            ItrErrCode::ContractError,
-            "calc container bss_len exceeds u32",
-        ));
-    }
-    let lay = container::compute_layout(
-        code.len() as u64,
-        rodata.len() as u64,
-        init.len() as u64,
-        0,
-        input_max as u64,
-        output_max as u64,
-        mem_kib as u64 * 1024,
-    );
-    lay.check_bss_fit(bss_len)?;
-    let mut packed = pack_container_with_config(
-        profile, mem_kib, entry, input_max, output_max, code, rodata, init, cfg,
-    )?;
-    packed.bss_len = bss_len as u32;
-    // Re-verify with the bss field in the wire image so the stored bytes
-    // and the executable layout are the same object.
-    let bytes = packed.encode()?;
-    let (decoded, used) = container::CalcContainer::decode(&bytes)?;
-    if used != bytes.len() {
-        return Err(ItrErr::new(
-            ItrErrCode::ContractError,
-            "calc pack: container round-trip did not consume all bytes",
-        ));
-    }
-    verify::verify_container_with(&decoded, cfg)?;
+    verify::verify_container_with_cap(&decoded, cap)?;
     Ok(decoded)
 }
 
 /// Pack an ELF64 little-endian RISC-V (`e_machine` 243) image into a calc
-/// container. Entry is the `calc_entry` symbol when present, otherwise
-/// `e_entry`. Profile 0.
+/// container with an explicit `mem_kib`. Entry is the `calc_entry` symbol
+/// when present, otherwise `e_entry`. Init includes the ELF `.bss`/`.sbss`
+/// span as explicit zeros.
 pub fn pack_elf(
-    elf: &[u8],
-    mem_kib: u32,
-    input_max: u16,
-    output_max: u16,
-) -> VmrtRes<container::CalcContainer> {
-    pack_elf_with_config(
-        elf,
-        container::CALC_PROFILE_RV64IM,
-        mem_kib,
-        input_max,
-        output_max,
-        &CALC_CONFIG_V1,
-    )
-}
-
-/// [`pack_elf`] under an explicit profile and [`CalcConfig`].
-pub fn pack_elf_with_config(
+    cap: &SpaceCap,
     elf: &[u8],
     profile: u8,
     mem_kib: u32,
     input_max: u16,
     output_max: u16,
-    cfg: &CalcConfig,
 ) -> VmrtRes<container::CalcContainer> {
-    let parsed = parse_elf64_riscv(elf, mem_kib as u64 * 1024)?;
-    pack_container_with_bss(
+    let parsed = parse_elf64_riscv(elf)?;
+    pack_container(
+        cap,
         profile,
         mem_kib,
         parsed.entry,
@@ -739,8 +660,43 @@ pub fn pack_elf_with_config(
         parsed.code,
         parsed.rodata,
         parsed.init,
-        parsed.bss_len,
-        cfg,
+    )
+}
+
+/// [`pack_elf`] with the smallest `mem_kib` that fits the image, the guard,
+/// [`CALC_STACK_SIZE`] and the declared IO regions. Pack tools use this so a
+/// kernel is not charged for memory it never touches.
+pub fn pack_elf_min_mem(
+    cap: &SpaceCap,
+    elf: &[u8],
+    profile: u8,
+    input_max: u16,
+    output_max: u16,
+) -> VmrtRes<container::CalcContainer> {
+    let parsed = parse_elf64_riscv(elf)?;
+    let mem_kib = container::min_mem_kib_for(
+        parsed.code.len() as u64,
+        parsed.rodata.len() as u64,
+        parsed.init.len() as u64,
+        input_max as u64,
+        output_max as u64,
+    )
+    .ok_or_else(|| {
+        ItrErr::new(
+            ItrErrCode::ContractError,
+            "calc elf: image cannot fit in the engine memory ceiling",
+        )
+    })?;
+    pack_container(
+        cap,
+        profile,
+        mem_kib,
+        parsed.entry,
+        input_max,
+        output_max,
+        parsed.code,
+        parsed.rodata,
+        parsed.init,
     )
 }
 
@@ -748,8 +704,8 @@ struct ParsedElf {
     entry: u32,
     code: Vec<u8>,
     rodata: Vec<u8>,
+    /// `.data`/`.sdata` and the zero span covering `.bss`/`.sbss`.
     init: Vec<u8>,
-    bss_len: u64,
 }
 
 struct ElfSec {
@@ -803,7 +759,7 @@ fn sec_bytes<'a>(elf: &'a [u8], sec: &ElfSec) -> VmrtRes<&'a [u8]> {
     elf.get(off..off + len).ok_or_else(|| elf_err("calc elf: section out of file"))
 }
 
-fn parse_elf64_riscv(elf: &[u8], usable_len: u64) -> VmrtRes<ParsedElf> {
+fn parse_elf64_riscv(elf: &[u8]) -> VmrtRes<ParsedElf> {
     if elf.len() < 64 || elf.get(..4) != Some(b"\x7fELF") {
         return Err(elf_err("calc elf: bad magic"));
     }
@@ -897,49 +853,25 @@ fn parse_elf64_riscv(elf: &[u8], usable_len: u64) -> VmrtRes<ParsedElf> {
     let rodata_base = (container::CODE_BASE + code.len() as u64 + 15) & !15;
     let data_base = (rodata_base + rodata.len() as u64 + 15) & !15;
 
+    // End of the initialized-data image: max(.data/.sdata end, .bss/.sbss
+    // end). The zero span after the initialized bytes folds `.bss` into the
+    // container's single `init` image, so the runtime needs no bss field.
+    let mut image_end = data_base;
     let mut data_secs: Vec<&ElfSec> = sections
         .iter()
         .filter(|s| (s.name == ".data" || s.name == ".sdata") && s.size > 0)
         .collect();
     data_secs.sort_by_key(|s| s.addr);
-    let init = if data_secs.is_empty() {
-        Vec::new()
-    } else {
-        if data_secs[0].addr != data_base {
-            return Err(elf_err("calc elf: .data does not start at data_base"));
+    for s in &data_secs {
+        if s.addr < data_base {
+            return Err(elf_err("calc elf: data section before data_base"));
         }
-        let end = data_secs
-            .iter()
-            .try_fold(data_base, |hi, s| {
-                s.addr.checked_add(s.size).map(|e| hi.max(e))
-            })
+        let end = s
+            .addr
+            .checked_add(s.size)
             .ok_or_else(|| elf_err("calc elf: data section overflow"))?;
-        let span = end
-            .checked_sub(data_base)
-            .ok_or_else(|| elf_err("calc elf: data span underflow"))?;
-        if span > usable_len {
-            return Err(elf_err("calc elf: data image exceeds declared memory"));
-        }
-        let mut init = vec![0u8; span as usize];
-        for s in data_secs {
-            if s.addr < data_base {
-                return Err(elf_err("calc elf: data section before data_base"));
-            }
-            let at = (s.addr - data_base) as usize;
-            let bytes = sec_bytes(elf, s)?;
-            let end_at = at
-                .checked_add(bytes.len())
-                .ok_or_else(|| elf_err("calc elf: data section overflow"))?;
-            if end_at > init.len() {
-                return Err(elf_err("calc elf: data section exceeds init image"));
-            }
-            init[at..end_at].copy_from_slice(bytes);
-        }
-        init
-    };
-
-    let init_end = data_base + init.len() as u64;
-    let mut bss_end = init_end;
+        image_end = image_end.max(end);
+    }
     for s in sections.iter().filter(|s| s.name == ".bss" || s.name == ".sbss") {
         if s.size == 0 {
             continue;
@@ -948,11 +880,23 @@ fn parse_elf64_riscv(elf: &[u8], usable_len: u64) -> VmrtRes<ParsedElf> {
         if s.addr < data_base {
             return Err(elf_err("calc elf: bss before data_base"));
         }
-        if end > bss_end {
-            bss_end = end;
-        }
+        image_end = image_end.max(end);
     }
-    let bss_len = bss_end - init_end;
+    let span = image_end
+        .checked_sub(data_base)
+        .ok_or_else(|| elf_err("calc elf: image span underflow"))?;
+    let mut init = vec![0u8; span as usize];
+    for s in data_secs {
+        let at = (s.addr - data_base) as usize;
+        let bytes = sec_bytes(elf, s)?;
+        let end_at = at
+            .checked_add(bytes.len())
+            .ok_or_else(|| elf_err("calc elf: data section overflow"))?;
+        if end_at > init.len() {
+            return Err(elf_err("calc elf: data section exceeds init image"));
+        }
+        init[at..end_at].copy_from_slice(bytes);
+    }
 
     let mut entry = u32::try_from(e_entry).map_err(|_| elf_err("calc elf: e_entry exceeds u32"))?;
     if let Some(symtab) = find(".symtab") {
@@ -978,7 +922,7 @@ fn parse_elf64_riscv(elf: &[u8], usable_len: u64) -> VmrtRes<ParsedElf> {
         }
     }
 
-    Ok(ParsedElf { entry, code, rodata, init, bss_len })
+    Ok(ParsedElf { entry, code, rodata, init })
 }
 
 #[cfg(test)]
@@ -989,6 +933,8 @@ mod tests {
     #[test]
     fn dual_run_halt_agrees() {
         let c = pack_container(
+            &SpaceCap::new(0),
+            container::CALC_PROFILE_RV64IM,
             8,
             container::CODE_BASE as u32,
             64,
@@ -1036,6 +982,50 @@ mod tests {
         // RIPEMD-160 must never be cheaper than SHA-256 (real relative cost).
         for blocks in [0u64, 1, 100, 1 << 40] {
             assert!(HashKind::Ripemd160.cycles(blocks * 64) >= HashKind::Sha2.cycles(blocks * 64));
+        }
+    }
+
+    /// Known-answer vectors: an oracle independent of the `run_hash`
+    /// implementation (the digests are published constants, not computed by
+    /// the code under test).
+    #[test]
+    fn run_hash_known_answers() {
+        fn hex(s: &str) -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        }
+        let abc = b"abc";
+        for (kind, want) in [
+            (
+                HashKind::Sha2,
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+            (
+                HashKind::Sha3,
+                "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532",
+            ),
+            (
+                HashKind::Ripemd160,
+                "8eb208f7e05d987a9b044a8e98c6b087f15a0bfc",
+            ),
+            (
+                HashKind::Keccak256,
+                "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45",
+            ),
+            (
+                HashKind::Blake2s256,
+                "508c5e8c327c14e2e1a72ba34eeb452f37458b209ed63a294d999b4c86675982",
+            ),
+            (
+                HashKind::Blake2b256,
+                "bddd813c634239723171ef3fee98579b94964e3bb1cb3e427262c8c068d52319",
+            ),
+        ] {
+            let mut out = vec![0u8; kind.digest_len() as usize];
+            run_hash(kind, abc, &mut out);
+            assert_eq!(out, hex(want), "{kind:?}");
         }
     }
 
@@ -1119,8 +1109,10 @@ mod tests {
     }
 
     #[test]
-    fn check_bss_fit_rejects_overlap_and_reports_free_span() {
+    fn layout_leaves_guard_and_min_stack_and_no_bss_field() {
         let c = pack_container(
+            &SpaceCap::new(0),
+            container::CALC_PROFILE_RV64IM,
             4,
             container::CODE_BASE as u32,
             64,
@@ -1131,22 +1123,34 @@ mod tests {
         )
         .unwrap();
         let lay = c.layout();
-        let free = lay.free_rw_bytes();
-        assert_eq!(
-            free,
-            lay.stack_top - lay.data_base - lay.init_len - crate::calc::CALC_STACK_GUARD
-                - crate::calc::CALC_STACK_SIZE
-        );
-        assert!(free > 0);
-        assert!(lay.check_bss_fit(free).is_ok());
-        let err = lay.check_bss_fit(free + 1).unwrap_err();
-        assert!(err.to_string().contains("io overlaps bss"), "{err}");
+        assert!(lay.fits());
+        assert_eq!(lay.stack_top, lay.output_base);
+        assert_eq!(lay.guard_base, lay.data_base + lay.init_len);
+        assert_eq!(lay.guard_base + CALC_STACK_GUARD, lay.stack_bottom);
+        assert!(lay.stack_bottom + CALC_STACK_SIZE <= lay.stack_top);
     }
 
     #[test]
-    fn wide_mem_and_bss_roundtrip_up_to_the_engine_ceiling() {
-        let cfg = CalcConfig::v1().with_mem_kib_max(70_000);
-        let c = pack_container_with_bss(
+    fn min_mem_kib_is_the_smallest_fitting_value() {
+        let code_len = halt_text().len() as u64;
+        let kib = container::min_mem_kib_for(code_len, 0, 0, 64, 64).expect("fits");
+        assert!(kib >= container::CALC_MEM_KIB_MIN);
+        let lay = container::compute_layout(code_len, 0, 0, 64, 64, kib as u64 * 1024);
+        assert!(lay.fits());
+        if kib > container::CALC_MEM_KIB_MIN {
+            let smaller = container::compute_layout(code_len, 0, 0, 64, 64, (kib as u64 - 1) * 1024);
+            assert!(!smaller.fits(), "kib-1 must not fit");
+        }
+    }
+
+    #[test]
+    fn wide_mem_roundtrip_up_to_the_engine_ceiling() {
+        let cap = SpaceCap {
+            calc_mem_kib_max: 70_000,
+            ..SpaceCap::new(0)
+        };
+        let c = pack_container(
+            &cap,
             container::CALC_PROFILE_RV64IM,
             70_000,
             container::CODE_BASE as u32,
@@ -1155,16 +1159,13 @@ mod tests {
             halt_text(),
             vec![],
             vec![],
-            70_000,
-            &cfg,
         )
         .unwrap();
         assert_eq!(c.mem_kib, 70_000);
-        assert_eq!(c.bss_len, 70_000);
+        assert_eq!(c.layout().usable_len, 70_000 * 1024);
         let (decoded, used) = container::CalcContainer::decode(&c.encode().unwrap()).unwrap();
         assert_eq!(used, container::HEADER_LEN + halt_text().len());
         assert_eq!(decoded.mem_kib, 70_000);
-        assert_eq!(decoded.bss_len, 70_000);
         let mut over = c.clone();
         over.mem_kib = container::CALC_MEM_KIB_ENGINE_MAX + 1;
         assert!(container::CalcContainer::decode(&over.encode().unwrap()).is_err());
@@ -1182,29 +1183,6 @@ mod tests {
     }
 
     #[test]
-    fn layout_stack_uses_remaining_memory_not_fixed_2kib() {
-        let c = pack_container(
-            8,
-            container::CODE_BASE as u32,
-            64,
-            64,
-            halt_text(),
-            vec![],
-            vec![],
-        )
-        .unwrap();
-        let lay = c.layout();
-        assert_eq!(lay.stack_top, lay.output_base);
-        assert_eq!(lay.guard_base + crate::calc::CALC_STACK_GUARD, lay.stack_bottom);
-        assert!(
-            lay.stack_top - lay.stack_bottom > crate::calc::CALC_STACK_SIZE,
-            "stack window {} must exceed the 2KiB minimum",
-            lay.stack_top - lay.stack_bottom
-        );
-        assert_eq!(lay.input_base + lay.input_max, lay.mem_len);
-    }
-
-    #[test]
     fn pack_elf_rejects_rela_and_unknown_alloc_sections() {
         let data_base = {
             let code_len = halt_text().len() as u64;
@@ -1213,19 +1191,19 @@ mod tests {
         };
         let base = synth_elf(data_base, 16, true);
         let rela = with_extra_section(base.clone(), 4, 0, 24);
-        let err = pack_elf(&rela, 4, 64, 64).unwrap_err();
+        let err = pack_elf(&SpaceCap::new(0), &rela, 0, 4, 64, 64).unwrap_err();
         assert!(
             err.to_string().contains("relocation section not allowed"),
             "{err}"
         );
         let rel = with_extra_section(base.clone(), 9, 0, 16);
-        let err = pack_elf(&rel, 4, 64, 64).unwrap_err();
+        let err = pack_elf(&SpaceCap::new(0), &rel, 0, 4, 64, 64).unwrap_err();
         assert!(
             err.to_string().contains("relocation section not allowed"),
             "{err}"
         );
         let unknown = with_extra_section(base, 1, 2, 8);
-        let err = pack_elf(&unknown, 4, 64, 64).unwrap_err();
+        let err = pack_elf(&SpaceCap::new(0), &unknown, 0, 4, 64, 64).unwrap_err();
         assert!(
             err.to_string().contains("unknown allocated section"),
             "{err}"
@@ -1233,18 +1211,37 @@ mod tests {
     }
 
     #[test]
-    fn pack_elf_uses_calc_entry_and_rejects_bss_overlap() {
+    fn pack_elf_folds_bss_into_init_and_uses_calc_entry() {
         let data_base = {
             let code_len = halt_text().len() as u64;
             let ro = (container::CODE_BASE + code_len + 15) & !15;
             (ro + 15) & !15
         };
-        let ok = pack_elf(&synth_elf(data_base, 16, true), 4, 64, 64).unwrap();
+        let ok = pack_elf(&SpaceCap::new(0), &synth_elf(data_base, 16, true), 0, 4, 64, 64)
+            .unwrap();
         assert_eq!(ok.entry, container::CODE_BASE as u32);
         assert_eq!(ok.code, halt_text());
-        let err = pack_elf(&synth_elf(data_base, 0x800, true), 4, 64, 64).unwrap_err();
-        assert!(err.to_string().contains("io overlaps bss"), "{err}");
-        let from_ehdr = pack_elf(&synth_elf(data_base, 16, false), 4, 64, 64).unwrap();
+        // `.bss` is part of the init image now: data_base..data_base+16.
+        assert_eq!(ok.init.len(), 16);
+        assert_eq!(ok.layout().guard_base, data_base + 16);
+        // The same image packs at the minimum memory that fits.
+        let min = pack_elf_min_mem(&SpaceCap::new(0), &synth_elf(data_base, 16, true), 0, 64, 64)
+            .unwrap();
+        assert!(min.layout().fits());
+        assert!(min.mem_kib <= 8);
+        // A huge `.bss` no longer fits a 4 KiB container.
+        let err = pack_elf(
+            &SpaceCap::new(0),
+            &synth_elf(data_base, 0x800, true),
+            0,
+            4,
+            64,
+            64,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("memory overflows"), "{err}");
+        let from_ehdr =
+            pack_elf(&SpaceCap::new(0), &synth_elf(data_base, 16, false), 0, 4, 64, 64).unwrap();
         assert_eq!(from_ehdr.entry, container::CODE_BASE as u32);
     }
 }

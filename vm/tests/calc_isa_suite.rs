@@ -14,6 +14,7 @@ mod isa_gen;
 
 use isa_gen::{all_cases, record_words, rodata_trap_parts, Case, Outcome};
 use vm::calc::container::CalcContainer;
+use vm::calc::CalcAbort2;
 use vm::calc::interp::{self, CalcAbort};
 fn verify_container(
     c: &CalcContainer,
@@ -78,7 +79,7 @@ fn run_interp(case: &Case, container: &CalcContainer, budget: u64) {
 
 #[cfg(feature = "calc-aot")]
 fn run_aot_parity(case: &Case, container: &CalcContainer, budget: u64) {
-    use vm::calc::aot::{self, AotAbort};
+    use vm::calc::aot;
     let module = verify_container(container).unwrap();
     if case.aot_declines {
         // AOT now implements HALT and hash ecalls; keep the hook so a
@@ -109,14 +110,14 @@ fn run_aot_parity(case: &Case, container: &CalcContainer, budget: u64) {
         Err((CalcAbort::OutOfGas, _)) => {
             assert_eq!(
                 out.abort,
-                Some(AotAbort::OutOfGas),
+                Some(CalcAbort2::OutOfGas),
                 "{}: AOT abort class (expected OOG)",
                 case.name
             );
         }
         Err((CalcAbort::Trap(_), _)) => {
             assert!(
-                matches!(out.abort, Some(AotAbort::Trap) | Some(AotAbort::BadTarget)),
+                matches!(out.abort, Some(CalcAbort2::Trap)),
                 "{}: AOT abort class (expected trap-like), got {:?}",
                 case.name,
                 out.abort
@@ -125,7 +126,7 @@ fn run_aot_parity(case: &Case, container: &CalcContainer, budget: u64) {
         Err((CalcAbort::GuestExit(code), _)) => {
             assert_eq!(
                 out.abort,
-                Some(AotAbort::GuestExit),
+                Some(CalcAbort2::Trap),
                 "{}: AOT abort class (expected GuestExit)",
                 case.name
             );
@@ -173,13 +174,11 @@ fn store_into_rodata_traps() {
     code[4..8].copy_from_slice(&word1.to_le_bytes());
     let container = CalcContainer {
         profile: vm::calc::CALC_PROFILE_RV64IM_B,
-        abi: vm::calc::container::CALC_ABI_BYTES_TO_BYTES,
         mem_kib: isa_gen::MEM_KIB,
         entry: vm::calc::CALC_CODE_BASE as u32,
         code,
         rodata,
         init: Vec::new(),
-        bss_len: 0,
         input_max: isa_gen::INPUT_MAX,
         output_max: isa_gen::OUTPUT_MAX,
     };
@@ -247,7 +246,7 @@ fn oog_boundary_cycles() {
         assert!(out.abort.is_none());
         assert_eq!(out.cycles_used, total);
         let (out, _, _) = f.run_with_state(&m55, &c55, &[], total - 1);
-        assert_eq!(out.abort, Some(vm::calc::aot::AotAbort::OutOfGas));
+        assert_eq!(out.abort, Some(vm::calc::CalcAbort2::OutOfGas));
         assert_eq!(out.cycles_used, 0);
     }
     // multi-block partial progress: [addi,beq](2) + halt(4); at
@@ -266,13 +265,15 @@ fn oog_boundary_cycles() {
     {
         let f = vm::calc::aot::aot_compile(&mbs).unwrap();
         let (out, _, _) = f.run_with_state(&mbs, &cbs, &[], 3);
-        assert_eq!(out.abort, Some(vm::calc::aot::AotAbort::OutOfGas));
+        assert_eq!(out.abort, Some(vm::calc::CalcAbort2::OutOfGas));
         assert_eq!(out.cycles_used, 2);
     }
 }
 
-/// Decode strictness: C encodings (excluded from both profiles) and
-/// malformed tails must be rejected by the verifier (whole-code decode).
+/// Decode strictness on the no-C profiles (the ISA-generator container is
+/// profile 1): compressed encodings and malformed tails must be rejected by
+/// the verifier (whole-code decode). C.EBREAK acceptance on profiles 2/3 is
+/// covered by the unit decoder suite.
 #[test]
 fn decode_strictness_reserved_forms() {
     let err = |halfwords: &[u16]| {
@@ -283,11 +284,11 @@ fn decode_strictness_reserved_forms() {
         let c = isa_gen::container_for(code);
         verify_container(&c).is_err()
     };
-    // Compressed encodings are rejected on both profiles (code_len must
+    // Compressed encodings are rejected on no-C profiles (code_len must
     // be a multiple of 4, so a lone halfword never verifies).
-    assert!(err(&[0x0000]));
-    assert!(err(&[0x0001])); // former c.nop
-    assert!(err(&[0x9002])); // former c.ebreak
+    assert!(err(&[0x0000])); // c.unimp / reserved C.ADDI4SPN imm=0
+    assert!(err(&[0x0001])); // c.nop
+    assert!(err(&[0x9002])); // c.ebreak (compressed)
     assert!(err(&[0x2000]));
     // 32-bit nop MUST verify (two identical words -> 8 bytes).
     let nop = 0x00000013u32.to_le_bytes();
@@ -343,4 +344,71 @@ fn input_echo_end_to_end() {
     // resource = ceil(in/16) + ceil(out/16) + 8 per declared KiB
     let expect_res = ((100 + 15) / 16) * 2 + isa_gen::MEM_KIB as i64 * vm::calc::CALC_MEM_RESOURCE_PER_KIB;
     assert_eq!(exec.resource, expect_res);
+}
+
+/// RVC (profiles 2/3) execution: compressed encodings are admitted by the
+/// verifier but were previously never *executed* by any test. This pins the
+/// two link values that depend on the encoded instruction length:
+/// `c.jalr` writes `pc + 2`, a 4-byte `jal` writes `pc + 4`. Both are
+/// stored to the output window and compared through the interpreter and the
+/// AOT backend.
+#[test]
+fn rvc_compressed_links_execute_with_encoded_lengths() {
+    use vm::calc::container::{CalcContainer, CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B};
+    use vm::calc::CALC_CODE_BASE;
+
+    // 0x1000: c.lui x5,1        x5 = 0x1000
+    // 0x1002: c.addi x5,10      x5 = 0x100A
+    // 0x1004: c.jalr x5         ra = 0x1006, pc = 0x100A
+    // 0x1006: c.nop             (skipped)
+    // 0x1008: c.nop             (skipped)
+    // 0x100A: c.sdsp x1,0(sp)   out[0..8]  = 0x1006
+    // 0x100C: jal x6,+12        link x6 = 0x1010, pc = 0x1018
+    // 0x1010..0x1017: c.nop x4  (skipped)
+    // 0x1018: c.sdsp x6,8(sp)   out[8..16] = 0x1010
+    // 0x101A: c.li a0,0 / 0x101C: c.li a1,16 / 0x101E: c.li a7,0
+    // 0x1020: ecall HALT
+    let halves: [u16; 16] = [
+        0x6285, 0x02A9, 0x9282, 0x0001, 0x0001, 0xE006, 0x036F, 0x00C0, 0x0001, 0x0001, 0x0001,
+        0x0001, 0xE41A, 0x4501, 0x45C1, 0x4881,
+    ];
+    let mut code = Vec::new();
+    for h in halves {
+        code.extend_from_slice(&h.to_le_bytes());
+    }
+    code.extend_from_slice(&0x0000_0073u32.to_le_bytes());
+    assert_eq!(code.len(), 36);
+
+    for profile in [CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B] {
+        let c = CalcContainer {
+            profile,
+            mem_kib: 8,
+            entry: CALC_CODE_BASE as u32,
+            code: code.clone(),
+            rodata: Vec::new(),
+            init: Vec::new(),
+            input_max: 64,
+            output_max: 64,
+        };
+        let module = verify_container(&c).unwrap_or_else(|e| panic!("profile {profile}: {e:?}"));
+        let (r, iregs, imem, _) = interp::run_with_state(&module, &c, &[], BIG);
+        let out = match &r {
+            Ok(x) => x.output.clone(),
+            Err((a, u)) => panic!("profile {profile}: interpreter abort {a:?} after {u}"),
+        };
+        let got = |i: usize| u64::from_le_bytes(out[i..i + 8].try_into().unwrap());
+        assert_eq!(got(0), 0x1006, "profile {profile}: c.jalr link must be pc+2");
+        assert_eq!(got(8), 0x1010, "profile {profile}: jal link must be pc+4");
+
+        #[cfg(feature = "calc-aot")]
+        {
+            let f = vm::calc::aot::aot_compile(&module).expect("AOT translates RVC");
+            let (ao, aregs, amem) = f.run_with_state(&module, &c, &[], BIG);
+            assert_eq!(ao.abort, None, "profile {profile}: AOT abort");
+            assert_eq!(ao.output.as_deref().unwrap_or(&[]), out.as_slice());
+            assert_eq!(ao.cycles_used, r.as_ref().unwrap().cycles_used);
+            assert_eq!(aregs, iregs);
+            assert_eq!(amem, imem);
+        }
+    }
 }

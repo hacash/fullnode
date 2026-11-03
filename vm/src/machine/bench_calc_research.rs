@@ -93,18 +93,16 @@ fn bench_calc_sha256_kernel() {
         .unwrap_or(crate::calc::CALC_CODE_BASE as u32);
     let container = CalcContainer {
         profile: crate::calc::CALC_PROFILE_RV64IM,
-        abi: 1,
         mem_kib: 16,
         entry,
         code,
         rodata,
-        init: vec![],
-        bss_len: 0x400,
+        init: vec![0u8; 0x400],
         input_max: 1024,
         output_max: 64,
     };
     let input: Vec<u8> = (0..64u8).map(|i| i.wrapping_mul(7).wrapping_add(3)).collect();
-    let f = crate::calc::CalcFnObj::build(container).expect("build");
+    let f = crate::calc::CalcFnObj::build_v1(container).expect("build");
     let t = Instant::now();
     let exec = f.run(&input, no_limits());
     let dur = t.elapsed();

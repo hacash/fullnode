@@ -24,7 +24,7 @@
 #![allow(dead_code)]
 
 use vm::calc::container::{
-    CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_PROFILE_RV64IM_B, CODE_BASE,
+    CalcContainer, CALC_PROFILE_RV64IM_B, CODE_BASE,
 };
 
 pub const MEM_KIB: u32 = 16;
@@ -472,13 +472,11 @@ impl Case {
 pub fn container_for(code: Vec<u8>) -> CalcContainer {
     CalcContainer {
         profile: CALC_PROFILE_RV64IM_B,
-        abi: CALC_ABI_BYTES_TO_BYTES,
         mem_kib: MEM_KIB,
         entry: CODE_BASE as u32,
         code,
         rodata: Vec::new(),
         init: Vec::new(),
-        bss_len: 0,
         input_max: INPUT_MAX,
         output_max: OUTPUT_MAX,
     }
@@ -1058,11 +1056,12 @@ fn fence_case() -> Case {
 fn trap_cases() -> Vec<Case> {
     let mut out = Vec::new();
     let mut t = |name: &str, code: Vec<u8>| out.push(Case::trap(name, code));
-    // store into code (addr 0)
+    // store into the code region itself (mapped, read-only)
     {
         let mut a = Asm::new();
         a.prologue();
-        a.s(3, 0, 5, 0);
+        a.li64(30, CODE_BASE, 29);
+        a.s(3, 30, 5, 0);
         a.ret();
         t("trap/store-code", a.finish());
     }
@@ -1138,13 +1137,14 @@ fn trap_cases() -> Vec<Case> {
         a.ret();
         t("trap/ecall-unknown", a.finish());
     }
-    // ecall digest destination inside code
-    {
+    // ecall digest destination inside code. Only reachable once the host
+    // ecall table is enabled: v1 traps every non-HALT ecall first.
+    if vm::calc::CALC_HASH_ECALLS_ENABLED {
         let mut a = Asm::new();
         a.prologue();
-        a.i(0, 10, 0, 0x13, 0);
-        a.i(0, 11, 0, 0x13, 0);
-        a.i(0, 12, 0, 0x13, 8);
+        a.i(0, 10, 2, 0x13, -1024); // a0 = sp-1024: a mapped, readable src
+        a.i(0, 11, 0, 0x13, 0); // len 0 (the charge is still applied)
+        a.li64(12, CODE_BASE, 29); // dst = code (read-only)
         a.i(0, 17, 0, 0x13, 1);
         a.ecall();
         a.ret();
@@ -1164,6 +1164,12 @@ fn trap_cases() -> Vec<Case> {
 }
 
 fn ecall_cases() -> Vec<Case> {
+    // v1 ships with host hash ecalls disabled: their digest cases only exist
+    // once a consensus upgrade enables the table (`CALC_HASH_ECALLS_ENABLED`).
+    // The decode/pricing surface is still exercised by the module unit tests.
+    if !vm::calc::CALC_HASH_ECALLS_ENABLED {
+        return Vec::new();
+    }
     let kinds: &[(&str, u8)] = &[
         ("sha2", 1),
         ("sha3", 2),
@@ -1269,11 +1275,14 @@ fn cycles_cases() -> Vec<Case> {
         a.i(0, 17, 0, 0x13, 1); // 1
         a.ecall(); // 64 + 96*1
         a.ret();
-        let mut c = Case::ok("cyc/ecall-sha2", a.finish(), vec![]);
-        // setup addis (5) + hash ecall(1 static) + halt (3 addi + ecall)
-        // ecall is a terminator so two blocks; total static 10 + hash 160
-        c.cycles = Some(10 + 64 + 96);
-        out.push(c);
+        // The hash ecall case only applies once the consensus table is on.
+        if vm::calc::CALC_HASH_ECALLS_ENABLED {
+            let mut c = Case::ok("cyc/ecall-sha2", a.finish(), vec![]);
+            // setup addis (5) + hash ecall(1 static) + halt (3 addi + ecall)
+            // ecall is a terminator so two blocks; total static 10 + hash 160
+            c.cycles = Some(10 + 64 + 96);
+            out.push(c);
+        }
     }
     // infinite 1-cycle loop truncated by the budget
     {

@@ -137,8 +137,7 @@ impl Func {
         if c.output_max as usize > cap.value_size {
             return errf!("calcfunc output_max exceeds HVM value_size");
         }
-        let cfg = crate::calc::CalcConfig::for_space_cap(cap);
-        crate::calc::verify::verify_container_with(&c, &cfg).map_err(|e| e.to_string())?;
+        crate::calc::verify::verify_container_with_cap(&c, cap).map_err(|e| e.to_string())?;
         self.func.code_stuff.conf = Uint1::from(CodeConf::from_type(CodeType::RV64IM).raw());
         self.func.code_stuff.data = BytesW2::from(bytes)?;
         Ok(self)
@@ -150,6 +149,38 @@ impl Func {
         self.rv64im_elf_with_cap(elf, mem_kib, input_max, output_max, &crate::rt::SpaceCap::new(0))
     }
 
+    /// [`Self::rv64im_elf`] with the smallest `mem_kib` that fits the
+    /// image, the guard, the minimum stack and the declared IO regions. Pack
+    /// tools use this so callers are not charged for memory the kernel never
+    /// touches.
+    pub fn rv64im_elf_min_mem(
+        self,
+        elf: &[u8],
+        input_max: u16,
+        output_max: u16,
+    ) -> Ret<Self> {
+        self.rv64im_elf_min_mem_with_cap(elf, input_max, output_max, &crate::rt::SpaceCap::new(0))
+    }
+
+    /// [`Self::rv64im_elf_min_mem`] admitted against `cap`.
+    pub fn rv64im_elf_min_mem_with_cap(
+        self,
+        elf: &[u8],
+        input_max: u16,
+        output_max: u16,
+        cap: &crate::rt::SpaceCap,
+    ) -> Ret<Self> {
+        let c = crate::calc::pack_elf_min_mem(
+            cap,
+            elf,
+            crate::calc::container::CALC_PROFILE_RV64IM,
+            input_max,
+            output_max,
+        )
+        .map_err(|e| e.to_string())?;
+        self.rv64im_container_with_cap(&c, cap)
+    }
+
     /// [`Self::rv64im_elf`] admitted against `cap`.
     pub fn rv64im_elf_with_cap(
         self,
@@ -159,14 +190,13 @@ impl Func {
         output_max: u16,
         cap: &crate::rt::SpaceCap,
     ) -> Ret<Self> {
-        let cfg = crate::calc::CalcConfig::for_space_cap(cap);
-        let c = crate::calc::pack_elf_with_config(
+        let c = crate::calc::pack_elf(
+            cap,
             elf,
             crate::calc::container::CALC_PROFILE_RV64IM,
             mem_kib,
             input_max,
             output_max,
-            &cfg,
         )
         .map_err(|e| e.to_string())?;
         self.rv64im_container_with_cap(&c, cap)

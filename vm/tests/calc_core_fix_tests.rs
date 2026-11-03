@@ -5,11 +5,11 @@
 use std::time::{Duration, Instant};
 
 use vm::calc::container::{
-    CalcContainer, CALC_ABI_BYTES_TO_BYTES, CALC_MAGIC, CALC_PROFILE_RV64IM, CALC_VERSION,
-    CODE_BASE, HEADER_LEN,
+    CalcContainer, CALC_MAGIC, CALC_PROFILE_RV64IM, CALC_VERSION, CODE_BASE, HEADER_LEN,
 };
 use vm::calc::verify::verify_container;
 use vm::calc::{pack_container, CalcAbort2, CalcFnObj, CalcRunLimits};
+use vm::calc::SpaceCap;
 
 /// HALT ecall with exit 0 and empty output.
 fn ret_code() -> Vec<u8> {
@@ -25,20 +25,29 @@ fn ret_code() -> Vec<u8> {
 fn valid_container() -> CalcContainer {
     CalcContainer {
         profile: CALC_PROFILE_RV64IM,
-        abi: CALC_ABI_BYTES_TO_BYTES,
         mem_kib: 4,
         entry: CODE_BASE as u32,
         code: ret_code(),
         rodata: Vec::new(),
         init: Vec::new(),
-        bss_len: 0,
         input_max: 16,
         output_max: 16,
     }
 }
 
 fn packed() -> CalcContainer {
-    pack_container(4, CODE_BASE as u32, 16, 16, ret_code(), vec![], vec![]).unwrap()
+    pack_container(
+        &SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        4,
+        CODE_BASE as u32,
+        16,
+        16,
+        ret_code(),
+        vec![],
+        vec![],
+    )
+    .unwrap()
 }
 
 // ---------------------------------------------------------------- fix 3 ---
@@ -62,7 +71,6 @@ fn decode_rejects_huge_declared_lengths_without_panicking() {
     let mut bytes = vec![0u8; HEADER_LEN];
     bytes[0..4].copy_from_slice(&CALC_MAGIC);
     bytes[4] = CALC_VERSION;
-    bytes[6] = CALC_ABI_BYTES_TO_BYTES;
     bytes[8..12].copy_from_slice(&4u32.to_be_bytes()); // mem_kib
     bytes[16..20].copy_from_slice(&u32::MAX.to_be_bytes()); // code_len
     bytes[20..24].copy_from_slice(&u32::MAX.to_be_bytes()); // init_len
@@ -73,26 +81,33 @@ fn decode_rejects_huge_declared_lengths_without_panicking() {
 }
 
 #[test]
-fn decode_accepts_bss_len_and_rejects_overflow() {
-    let mut bytes = packed().encode().unwrap();
-    bytes[32..36].copy_from_slice(&1u32.to_be_bytes());
-    let (c, _) = CalcContainer::decode(&bytes).expect("bss_len=1 fits");
-    assert_eq!(c.bss_len, 1);
-    bytes[32..36].copy_from_slice(&u32::MAX.to_be_bytes());
-    assert!(CalcContainer::decode(&bytes).is_err());
+fn decode_rejects_nonzero_reserved_header_bytes() {
+    // The 32-byte header has two reserved bytes (6..8). They are the only
+    // future wire extension point and must stay zero for v1.
+    for off in [6usize, 7] {
+        let mut bytes = packed().encode().unwrap();
+        bytes[off] = 1;
+        assert!(
+            CalcContainer::decode(&bytes).is_err(),
+            "reserved byte {off} must be zero"
+        );
+    }
 }
 
 // ---------------------------------------------------------------- fix 4 ---
 
 #[test]
 fn encode_accepts_rodata_above_u16_and_pack_rejects_on_layout() {
-    // rodata_len is now u32, so encoding itself must not fail on a 64KiB+
+    // rodata_len is u32, so encoding itself must not fail on a 64KiB+
     // rodata; the container still cannot pack because the declared 4KiB
-    // memory cannot hold it (layout overlap check).
+    // memory cannot hold it (layout fit check).
     let mut c = valid_container();
     c.rodata = vec![0u8; 65_536];
     assert!(c.encode().is_ok());
-    assert!(pack_container(4,
+    assert!(pack_container(
+        &SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        4,
         CODE_BASE as u32,
         16,
         16,
@@ -107,6 +122,7 @@ fn encode_accepts_rodata_above_u16_and_pack_rejects_on_layout() {
 fn encode_round_trips_valid_container() {
     let c = valid_container();
     let bytes = c.encode().unwrap();
+    assert_eq!(bytes.len(), HEADER_LEN + ret_code().len());
     let (decoded, used) = CalcContainer::decode(&bytes).unwrap();
     assert_eq!(used, bytes.len());
     assert_eq!(decoded, c);
@@ -115,33 +131,59 @@ fn encode_round_trips_valid_container() {
 // ---------------------------------------------------------------- fix 5 ---
 
 #[test]
-fn pack_container_rejects_mem_kib_above_max() {
-    assert!(pack_container(128, CODE_BASE as u32, 16, 16, ret_code(), vec![], vec![]).is_err());
+fn pack_container_rejects_mem_kib_above_cap() {
+    assert!(pack_container(
+        &SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        128,
+        CODE_BASE as u32,
+        16,
+        16,
+        ret_code(),
+        vec![],
+        vec![]
+    )
+    .is_err());
 }
 
 #[test]
 fn pack_container_accepts_input_max_above_l1_call_data() {
     // The container has no HVM call-data cap. Chain admission applies
     // SpaceCap::call_data_size separately.
-    assert!(pack_container(64, CODE_BASE as u32, 6000, 16, ret_code(), vec![], vec![]).is_ok());
+    assert!(pack_container(
+        &SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        64,
+        CODE_BASE as u32,
+        6000,
+        16,
+        ret_code(),
+        vec![],
+        vec![]
+    )
+    .is_ok());
 }
 
 #[test]
 fn pack_container_accepts_valid_layout() {
-    assert!(pack_container(4, CODE_BASE as u32, 16, 16, ret_code(), vec![], vec![]).is_ok());
+    assert!(pack_container(
+        &SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        4,
+        CODE_BASE as u32,
+        16,
+        16,
+        ret_code(),
+        vec![],
+        vec![]
+    )
+    .is_ok());
 }
 
 // ---------------------------------------------------------------- fix 6 ---
 
 #[test]
-fn verify_rejects_bad_abi() {
-    let mut c = valid_container();
-    c.abi = 99;
-    assert!(verify_container(&c).is_err());
-}
-
-#[test]
-fn verify_rejects_mem_kib_out_of_range() {
+fn verify_rejects_mem_kib_above_the_chain_cap() {
     let mut c = valid_container();
     c.mem_kib = 128;
     assert!(verify_container(&c).is_err());
@@ -176,11 +218,24 @@ fn mid_block_jalr_is_not_overcharged() {
         [0x73, 0x00, 0x00, 0x00],
     ]
     .concat();
-    let c = pack_container(4, CODE_BASE as u32, 16, 16, code, vec![], vec![]).unwrap();
-    let obj = CalcFnObj::build(c).unwrap();
-    // The backward `jalr` re-enters the first block at index 1, skipping
-    // `addi x5,x0,0`; only the remaining suffix (3 cycles) is charged. The
-    // per-call setup charge (64 + 4KiB * 16 = 128) applies on top.
+    let c = pack_container(
+        &SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        4,
+        CODE_BASE as u32,
+        16,
+        16,
+        code,
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let obj = CalcFnObj::build_v1(c).unwrap();
+    // Entry block A (addi,addi,addi,bne) = 4; block B (auipc,addi,jalr) = 3;
+    // the backward `jalr` re-enters block A at index 1, paying only the
+    // remaining suffix (addi,addi,bne) = 3, not the skipped prefix; then the
+    // taken branch enters the HALT block = 4. Static total 14, plus the
+    // per-call setup charge (64 + 4KiB * 16 = 128) = 142.
     let exec = obj.run(
         &[],
         CalcRunLimits {
@@ -190,14 +245,14 @@ fn mid_block_jalr_is_not_overcharged() {
         },
     );
     assert!(exec.result.is_ok(), "{:?}", exec.result);
-    assert!(exec.cycles_used >= 128 + 3, "got {}", exec.cycles_used);
+    assert_eq!(exec.cycles_used, 142);
 }
 
 // ---------------------------------------------------------------- precheck ---
 
 #[test]
 fn precheck_rejects_insufficient_resource_before_running() {
-    let obj = CalcFnObj::build(packed()).unwrap();
+    let obj = CalcFnObj::build_v1(packed()).unwrap();
     let exec = obj.run(
         &[],
         CalcRunLimits {
@@ -210,10 +265,52 @@ fn precheck_rejects_insufficient_resource_before_running() {
     assert_eq!(exec.cycles_used, 0);
 }
 
+/// The resource pre-flight reserves the declared `output_max`, not the
+/// output the kernel happens to return: a budget that clears input + memory
+/// but not the output reservation is rejected before the run, with zero
+/// cycles charged and no post-run surprise.
+#[test]
+fn resource_preflight_reserves_output_max() {
+    let obj = CalcFnObj::build_v1(packed()).unwrap();
+    // 4 KiB container: mem 32, input 0, output_max 16 bytes -> 1.
+    let exact = obj.run(
+        &[],
+        CalcRunLimits {
+            cycles: 1000,
+            resource: 33,
+            deadline: None,
+        },
+    );
+    assert!(exact.result.is_ok(), "{:?}", exact.result);
+    assert_eq!(exact.resource, 32); // actual output is empty
+    let short = obj.run(
+        &[],
+        CalcRunLimits {
+            cycles: 1000,
+            resource: 32,
+            deadline: None,
+        },
+    );
+    assert_eq!(short.result, Err(CalcAbort2::OutOfResource));
+    assert_eq!(short.cycles_used, 0);
+    assert_eq!(short.resource, 0);
+}
+
 #[test]
 fn precheck_allows_input_above_value_size_within_input_max() {
-    let c = pack_container(64, CODE_BASE as u32, 4096, 8, ret_code(), vec![], vec![]).unwrap();
-    let obj = CalcFnObj::build(c).unwrap();
+    let c = pack_container(
+        &SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        64,
+        CODE_BASE as u32,
+        4096,
+        8,
+        ret_code(),
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let obj = CalcFnObj::build_v1(c).unwrap();
     let exec = obj.run(
         &vec![0xab; 2000],
         CalcRunLimits {
@@ -236,7 +333,7 @@ fn precheck_allows_input_above_value_size_within_input_max() {
 
 #[test]
 fn precheck_rejects_expired_deadline() {
-    let obj = CalcFnObj::build(packed()).unwrap();
+    let obj = CalcFnObj::build_v1(packed()).unwrap();
     let exec = obj.run(
         &[],
         CalcRunLimits {
@@ -314,7 +411,8 @@ fn zbb_kernel() -> Vec<u8> {
 
 #[test]
 fn zbb_kernel_executes() {
-    let c = vm::calc::pack_container_with_profile(
+    let c = pack_container(
+        &SpaceCap::new(0),
         vm::calc::CALC_PROFILE_RV64IM_B,
         4,
         CODE_BASE as u32,
@@ -325,7 +423,7 @@ fn zbb_kernel_executes() {
         vec![],
     )
     .unwrap();
-    let obj = CalcFnObj::build(c).unwrap();
+    let obj = CalcFnObj::build_v1(c).unwrap();
     let exec = obj.run(
         &[],
         CalcRunLimits {
@@ -364,7 +462,17 @@ fn unreachable_padding_is_accepted() {
     // unreachable-but-decodable bytes must verify.
     let mut code = ret_code();
     code.extend_from_slice(&[0x13, 0x00, 0x00, 0x00]);
-    let r = pack_container(4, CODE_BASE as u32, 16, 16, code, vec![], vec![]);
+    let r = pack_container(
+        &SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        4,
+        CODE_BASE as u32,
+        16,
+        16,
+        code,
+        vec![],
+        vec![],
+    );
     assert!(r.is_ok());
 }
 
@@ -373,8 +481,19 @@ fn fence_decodes_and_executes_as_nop() {
     // fence iorw, iorw (0x0ff0000f) before the return.
     let mut code = vec![0x0f, 0x00, 0xf0, 0x0f];
     code.extend_from_slice(&ret_code());
-    let c = pack_container(4, CODE_BASE as u32, 16, 16, code, vec![], vec![]).unwrap();
-    let obj = CalcFnObj::build(c).unwrap();
+    let c = pack_container(
+        &SpaceCap::new(0),
+        CALC_PROFILE_RV64IM,
+        4,
+        CODE_BASE as u32,
+        16,
+        16,
+        code,
+        vec![],
+        vec![],
+    )
+    .unwrap();
+    let obj = CalcFnObj::build_v1(c).unwrap();
     let exec = obj.run(
         &[],
         CalcRunLimits {
@@ -388,7 +507,7 @@ fn fence_decodes_and_executes_as_nop() {
 
 #[test]
 fn setup_cycles_charged_on_instant_return() {
-    let obj = CalcFnObj::build(packed()).unwrap();
+    let obj = CalcFnObj::build_v1(packed()).unwrap();
     let exec = obj.run(
         &[],
         CalcRunLimits {
@@ -405,7 +524,7 @@ fn setup_cycles_charged_on_instant_return() {
 
 #[test]
 fn setup_cycles_rejected_when_budget_cannot_cover_them() {
-    let obj = CalcFnObj::build(packed()).unwrap();
+    let obj = CalcFnObj::build_v1(packed()).unwrap();
     let exec = obj.run(
         &[],
         CalcRunLimits {

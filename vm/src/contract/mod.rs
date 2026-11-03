@@ -246,14 +246,9 @@ pub fn convert_and_check(
 
 #[cfg(feature = "execute")]
 fn reject_calc_image(len: usize, cap: &SpaceCap) -> VmrtErr {
-    // CodeStuff stores every function body with a u16 length. calc_image_max
-    // can only tighten that. A larger program is split across sibling calc
-    // functions later, not by widening this prefix.
-    let max = cap.calc_image_max.min(u16::MAX as usize);
-    if len > max {
-        return itr_err_fmt!(ContractError, "calcfunc size overflow, max {}", max);
-    }
-    Ok(())
+    // One rule, shared with the calc packers: the encoded container is
+    // admitted under `calc_image_max` (also capped by the u16 body prefix).
+    crate::calc::reject_image_len(len, cap)
 }
 
 /// The retired `calcfuncs` wire record must be empty at every boundary: an
@@ -300,11 +295,8 @@ fn verify_user_func_code(
                 .map_err(|e| ItrErr::new(ContractError, &format!("calcfunc container: {}", e.1)))?;
             reject_calc_hvm_io(&c, cap)?;
             check_rv64im_pmdf(&func.pmdf)?;
-            crate::calc::verify::verify_container_with(
-                &c,
-                &crate::calc::CalcConfig::for_space_cap(cap),
-            )
-            .map_err(|e| ItrErr::new(ContractError, &format!("calcfunc verify: {}", e.1)))?;
+            crate::calc::verify::verify_container_with_cap(&c, cap)
+                .map_err(|e| ItrErr::new(ContractError, &format!("calcfunc verify: {}", e.1)))?;
             Ok(())
         }
     }
@@ -695,8 +687,7 @@ impl ContractSto {
                 let (c, _) = crate::calc::container::CalcContainer::decode(&code_pkg.data)?;
                 reject_calc_hvm_io(&c, cap)?;
                 check_rv64im_pmdf(&a.pmdf)?;
-                let cfg = crate::calc::CalcConfig::for_space_cap(cap).apply_host(host);
-                let built = crate::calc::CalcFnObj::build_with_config(c, cfg)?;
+                let built = crate::calc::CalcFnObj::build(c, cap, host)?;
                 FnObj::create_with_rv64im(
                     a.fncnf[0],
                     code_pkg,
@@ -731,6 +722,8 @@ mod calc_io_load_tests {
 
     fn calc_user(input_max: u16, output_max: u16) -> ContractUserFunc {
         let c = crate::calc::pack_container(
+            &crate::rt::SpaceCap::new(0),
+            crate::calc::CALC_PROFILE_RV64IM,
             64,
             crate::calc::CALC_CODE_BASE as u32,
             input_max,
@@ -850,6 +843,8 @@ mod calc_io_load_tests {
     #[test]
     fn mem_kib_above_v1_cap_is_rejected_at_deploy() {
         let c = crate::calc::pack_container(
+            &crate::rt::SpaceCap::new(0),
+            crate::calc::CALC_PROFILE_RV64IM,
             64,
             crate::calc::CALC_CODE_BASE as u32,
             16,

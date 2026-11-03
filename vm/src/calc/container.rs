@@ -1,4 +1,4 @@
-//! Calc container v1 binary layout: fixed 36-byte big-endian
+//! Calc container v1 binary layout: fixed 32-byte big-endian
 //! header + code + rodata + initialized data.
 //!
 //! Memory image carried by the container:
@@ -9,28 +9,40 @@
 //!   position-relative addressing (`auipc`) stays valid. Readable, but
 //!   non-executable (jump targets must stay inside `code`) and read-only.
 //! - `init`: initialized writable data, loaded at the 16-byte-aligned
-//!   `data_base`.
+//!   `data_base`. Zero-initialized (`.bss`) data is part of this image: the
+//!   packer emits the zero span explicitly, so the runtime has no separate
+//!   bss field and the layout stays a pure function of the header.
 //!
 //! There is deliberately no checksum field: the container bytes are already
 //! committed by consensus once deployed (EVM/CKB-VM carry no container
 //! checksums either), and a CRC would only add deploy-time cost without
-//! authenticity. Header bytes 32..36 are `bss_len` (u32 big-endian). Zero
-//! means no extra `.bss`.
+//! authenticity. There is also no ABI byte: the ABI is fixed by the version
+//! byte (`version = 1` means bytes -> bytes), and a structured ABI would be
+//! a new version.
+//!
 //! Header byte 5 is the ISA profile bitfield: bit 0 = Zba/Zbb/Zbs/Zbc,
-//! bit 1 = RVC. See [`CALC_PROFILE_RV64IM`], [`CALC_PROFILE_RV64IM_B`],
-//! [`CALC_PROFILE_RV64IMC`], [`CALC_PROFILE_RV64IMC_B`].
+//! bit 1 = RVC, bit 2 = no host ecalls (HALT only). See
+//! [`CALC_PROFILE_RV64IM`], [`CALC_PROFILE_RV64IM_B`],
+//! [`CALC_PROFILE_RV64IMC`], [`CALC_PROFILE_RV64IMC_B`] and
+//! [`CALC_PROFILE_NO_HOST_ECALL`].
 
-use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
+use crate::rt::{ItrErr, ItrErrCode, SpaceCap, VmrtRes};
+use crate::calc::CALC_MIN_FREE_RW_GAP;
 
 pub const CALC_MAGIC: [u8; 4] = *b"HCF1";
 pub const CALC_VERSION: u8 = 1;
-/// ABI 1: bytes -> bytes (single input byte string, single output byte string).
-pub const CALC_ABI_BYTES_TO_BYTES: u8 = 1;
 
-/// Profile byte bit 0: Zba/Zbb/Zbs/Zbc. Orthogonal to [`CALC_PROFILE_COMPRESSED`].
-pub const CALC_PROFILE_BITMANIP: u8 = 0b01;
-/// Profile byte bit 1: RVC (16-bit) encodings. Orthogonal to [`CALC_PROFILE_BITMANIP`].
-pub const CALC_PROFILE_COMPRESSED: u8 = 0b10;
+/// Profile byte bit 0: Zba/Zbb/Zbs/Zbc. Orthogonal to the other bits.
+pub const CALC_PROFILE_BITMANIP: u8 = 0b001;
+/// Profile byte bit 1: RVC (16-bit) encodings. Orthogonal to the other bits.
+pub const CALC_PROFILE_COMPRESSED: u8 = 0b010;
+/// Profile byte bit 2: the container uses **no host ecalls** other than
+/// HALT (`a7 = 0`). This is the zk/toolchain declaration: a kernel that
+/// promises to stay inside the provable RISC-V subset sets it, and the
+/// engine traps on any other ecall number. Containers that leave the bit
+/// clear may use the host ecall table when the chain enables it (v1 enables
+/// only HALT; see `CALC_HASH_ECALLS_ENABLED`).
+pub const CALC_PROFILE_NO_HOST_ECALL: u8 = 0b100;
 
 /// Profile 0: RV64IM + Zicclsm. No C, no Zba/Zbb/Zbs/Zbc. zkVM baseline.
 pub const CALC_PROFILE_RV64IM: u8 = 0;
@@ -41,9 +53,12 @@ pub const CALC_PROFILE_RV64IMC: u8 = CALC_PROFILE_COMPRESSED;
 /// Profile 3: RV64IMC + Zicclsm + Zba/Zbb/Zbs/Zbc.
 pub const CALC_PROFILE_RV64IMC_B: u8 = CALC_PROFILE_BITMANIP | CALC_PROFILE_COMPRESSED;
 
-/// Bits outside the two-axis matrix are not a profile.
+const PROFILE_KNOWN_MASK: u8 =
+    CALC_PROFILE_BITMANIP | CALC_PROFILE_COMPRESSED | CALC_PROFILE_NO_HOST_ECALL;
+
+/// Bits outside the three-bit matrix are not a profile.
 pub const fn profile_known(profile: u8) -> bool {
-    profile & !(CALC_PROFILE_BITMANIP | CALC_PROFILE_COMPRESSED) == 0
+    profile & !PROFILE_KNOWN_MASK == 0
 }
 
 pub const fn profile_has_bitmanip(profile: u8) -> bool {
@@ -52,6 +67,12 @@ pub const fn profile_has_bitmanip(profile: u8) -> bool {
 
 pub const fn profile_has_compressed(profile: u8) -> bool {
     profile & CALC_PROFILE_COMPRESSED != 0
+}
+
+/// True when the container promises HALT-only ecall use. The engine traps on
+/// every other ecall number for such a container.
+pub const fn profile_has_no_host_ecall(profile: u8) -> bool {
+    profile & CALC_PROFILE_NO_HOST_ECALL != 0
 }
 
 /// Guest address of the first code byte. Addresses in `[0, CODE_BASE)` are
@@ -64,10 +85,10 @@ pub const IMAGE_ID_DOMAIN: &[u8] = b"hacash-calc-image-v1";
 
 pub const CALC_MEM_KIB_MIN: u32 = 4;
 /// Default admission cap for a calc container's `mem_kib`: the default of
-/// both `SpaceCap::calc_mem_kib_max` and `CALC_CONFIG_V1.mem_kib_max`. The
-/// value is defined once next to the `SpaceCap` knob and re-exported here
-/// for the calc-internal paths. Wire `decode` only requires
-/// [`CALC_MEM_KIB_MIN`] and rejects above [`CALC_MEM_KIB_ENGINE_MAX`].
+/// `SpaceCap::calc_mem_kib_max`. The value is defined once next to the
+/// `SpaceCap` knob and re-exported here for the calc-internal paths. Wire
+/// `decode` only requires [`CALC_MEM_KIB_MIN`] and rejects above
+/// [`CALC_MEM_KIB_ENGINE_MAX`].
 pub use crate::rt::CALC_MEM_KIB_MAX;
 /// Largest `mem_kib` either engine can address. AOT compares guest
 /// addresses with a signed 32-bit immediate, so
@@ -75,7 +96,9 @@ pub use crate::rt::CALC_MEM_KIB_MAX;
 /// not an admission policy: a sidechain raises `SpaceCap::calc_mem_kib_max`
 /// up to this value and does not change the header again.
 pub const CALC_MEM_KIB_ENGINE_MAX: u32 = (((i32::MAX as u64) - CODE_BASE) / 1024) as u32;
-pub const HEADER_LEN: usize = 36;
+/// `magic(4) + version(1) + profile(1) + reserved(2) + mem_kib(4) + entry(4)
+/// + code_len(4) + init_len(4) + input_max(2) + output_max(2) + rodata_len(4)`.
+pub const HEADER_LEN: usize = 32;
 
 /// Runtime memory map derived deterministically from the header.
 ///
@@ -85,7 +108,7 @@ pub const HEADER_LEN: usize = 36;
 /// use `mem_kib` / `usable_len`, not the unmapped low page.
 ///
 /// Layout (all addresses absolute), low to high:
-/// unmapped | code (RX) | rodata (R) | init (RW) | bss (RW) |
+/// unmapped | code (RX) | rodata (R) | init (RW, includes zero-init data) |
 /// guard (store-trap) | stack (RW, grows down from `stack_top`) |
 /// output (RW) | input through `mem_len`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,20 +125,19 @@ pub struct CalcLayout {
     /// First writable address: `align16(rodata_end)`. Stores below this
     /// trap (code, alignment pad before rodata, rodata, and the
     /// `[rodata_end, data_base)` hole). Init is copied here. Linker
-    /// scripts must `ALIGN(16)` before `.data` so `.data`/`.bss` VMAs
-    /// equal this address (nothing is linked into the hole).
+    /// scripts must `ALIGN(16)` before `.data` so `.data` VMAs equal this
+    /// address (nothing is linked into the hole).
     pub data_base: u64,
+    /// Initialized data length, **including** zero-initialized `.bss`.
     pub init_len: u64,
-    /// Zero-filled `[data_base + init_len, data_base + init_len + bss_len)`.
-    pub bss_len: u64,
     /// Input region base (16-byte aligned). The region runs through `mem_len`.
     pub input_base: u64,
     pub input_max: u64,
     /// Output region base (16-byte aligned), just below the input region.
     pub output_base: u64,
     pub output_max: u64,
-    /// Stack-overflow guard `[guard_base, stack_bottom)`, between `.bss`
-    /// and the downward-growing stack.
+    /// Stack-overflow guard `[guard_base, stack_bottom)`, starting at the end
+    /// of the initialized data.
     pub guard_base: u64,
     /// Lowest stack address. Stores that intersect the guard below it trap.
     pub stack_bottom: u64,
@@ -125,58 +147,34 @@ pub struct CalcLayout {
 }
 
 impl CalcLayout {
-    /// Extra `.bss` bytes that still leave the guard and the minimum stack
-    /// below `stack_top`. `stack_top` does not move with `bss_len`.
-    pub const fn free_rw_bytes(&self) -> u64 {
-        let used = self.data_base.saturating_add(self.init_len).saturating_add(self.bss_len);
-        let reserved = crate::calc::CALC_STACK_GUARD.saturating_add(crate::calc::CALC_STACK_SIZE);
-        self.stack_top.saturating_sub(used).saturating_sub(reserved)
-    }
-
-    /// `.bss` occupies `[data_base + init_len, data_base + init_len + bss_len)`.
-    /// After it, the 256-byte guard and [`crate::calc::CALC_STACK_SIZE`]
-    /// minimum stack must still end at or before `stack_top`. The header
-    /// stores `bss_len` as `u32`; a larger value is rejected at pack.
-    pub fn check_bss_fit(&self, bss_len: u64) -> VmrtRes<()> {
-        let err = || {
-            ItrErr::new(
-                ItrErrCode::ContractError,
-                "calc container memory overflows (io overlaps bss)",
-            )
-        };
-        if bss_len > u32::MAX as u64 {
-            return Err(ItrErr::new(
-                ItrErrCode::ContractError,
-                "calc container bss_len exceeds u32",
-            ));
-        }
-        let need = self
-            .data_base
-            .checked_add(self.init_len)
-            .and_then(|end| end.checked_add(bss_len))
-            .and_then(|end| end.checked_add(crate::calc::CALC_STACK_GUARD))
-            .and_then(|end| end.checked_add(crate::calc::CALC_STACK_SIZE));
-        match need {
-            Some(end) if end <= self.stack_top => Ok(()),
-            _ => Err(err()),
-        }
+    /// True when the guard and the minimum stack fit below `stack_top`, and
+    /// the IO regions start above the unmapped page. This is the single fit
+    /// rule shared by wire decode, the deploy verifier and the packers.
+    pub const fn fits(&self) -> bool {
+        // Single fit rule: the initialized image plus the guard band and the
+        // minimum stack must end at or below the output region.
+        let reserved_end = self
+            .guard_base
+            .saturating_add(crate::calc::CALC_MIN_FREE_RW_GAP);
+        reserved_end <= self.stack_top
+            && self.stack_top == self.output_base
+            && self.input_base >= CODE_BASE
+            && self.output_base >= CODE_BASE
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalcContainer {
     pub profile: u8,
-    pub abi: u8,
     pub mem_kib: u32,
     /// Absolute guest PC of the entry instruction (not a code-relative
     /// offset). Must satisfy `CODE_BASE <= entry < CODE_BASE + code_len`
-    /// and be 4-byte aligned on an instruction boundary.
+    /// and be on an instruction boundary.
     pub entry: u32,
     pub code: Vec<u8>,
     pub rodata: Vec<u8>,
+    /// Initialized data plus the explicit zero span that used to be `.bss`.
     pub init: Vec<u8>,
-    /// Header bytes 32..36. Zero means the image has no `.bss`.
-    pub bss_len: u32,
     pub input_max: u16,
     pub output_max: u16,
 }
@@ -188,7 +186,6 @@ pub(crate) fn compute_layout(
     code_len: u64,
     rodata_len: u64,
     init_len: u64,
-    bss_len: u64,
     input_max: u64,
     output_max: u64,
     usable_len: u64,
@@ -203,8 +200,10 @@ pub(crate) fn compute_layout(
     // is read-only (addr < data_base) and empty: linkers ALIGN(16)
     // before `.data` so `.data`/`.bss` start here, never in the hole.
     let data_base = (rodata_base.saturating_add(rodata_len).saturating_add(15)) & !15;
-    let bss_end = data_base.saturating_add(init_len).saturating_add(bss_len);
-    let guard_base = bss_end;
+    // Init carries `.data` and the explicit zero span of `.bss`; the guard
+    // band starts where the container's writable image ends.
+    let init_end = data_base.saturating_add(init_len);
+    let guard_base = init_end;
     let stack_bottom = guard_base.saturating_add(crate::calc::CALC_STACK_GUARD);
     // Input occupies the top of the guest space through `mem_len`.
     // Output sits immediately below it. The stack is whatever remains
@@ -220,7 +219,6 @@ pub(crate) fn compute_layout(
         rodata_len,
         data_base,
         init_len,
-        bss_len,
         input_base,
         input_max,
         output_base,
@@ -231,17 +229,62 @@ pub(crate) fn compute_layout(
     }
 }
 
+/// Smallest `mem_kib` for which the layout of a container with these region
+/// lengths satisfies [`CalcLayout::fits`]. Pack tools use this instead of
+/// declaring the maximum (`CALC_MEM_KIB_MAX`), which would charge callers for
+/// memory the kernel never touches. Returns `None` only when even the engine
+/// ceiling cannot fit the regions.
+pub fn min_mem_kib_for(
+    code_len: u64,
+    rodata_len: u64,
+    init_len: u64,
+    input_max: u64,
+    output_max: u64,
+) -> Option<u32> {
+    // Lower bound: everything below the stack must fit, then the output and
+    // input regions, then round up to whole KiB. `fits()` is the authority;
+    // the loop below only absorbs the 16-byte rounding interactions.
+    let rodata_base = CODE_BASE.checked_add(code_len)?.checked_add(15)? & !15;
+    let data_base = rodata_base.checked_add(rodata_len)?.checked_add(15)? & !15;
+    let data_end = data_base.checked_add(init_len)?;
+    let need_top = data_end
+        .checked_add(CALC_MIN_FREE_RW_GAP)?
+        .checked_add(15)?
+        & !15;
+    let input_base = need_top.checked_add(output_max)?.checked_add(15)? & !15;
+    let mem_len = input_base.checked_add(input_max)?;
+    let mut kib = mem_len
+        .saturating_sub(CODE_BASE)
+        .saturating_add(1023)
+        / 1024;
+    if kib < CALC_MEM_KIB_MIN as u64 {
+        kib = CALC_MEM_KIB_MIN as u64;
+    }
+    while kib <= CALC_MEM_KIB_ENGINE_MAX as u64 {
+        let lay = compute_layout(
+            code_len,
+            rodata_len,
+            init_len,
+            input_max,
+            output_max,
+            kib * 1024,
+        );
+        if lay.fits() {
+            return Some(kib as u32);
+        }
+        kib += 1;
+    }
+    None
+}
+
 impl CalcContainer {
     /// Header, layout and entry checks shared by wire `decode`,
     /// [`Self::validate_header`] and the verifier. Does not apply
-    /// `mem_kib_max` (that is verify-time) or config feature gates.
+    /// `SpaceCap::calc_mem_kib_max` (that is chain admission).
     fn validate_invariants(&self) -> VmrtRes<()> {
         let err = |t: &str| ItrErr::new(ItrErrCode::ContractError, t);
         if !profile_known(self.profile) {
             return Err(err("calc container unknown isa profile"));
-        }
-        if self.abi != CALC_ABI_BYTES_TO_BYTES {
-            return Err(err("calc container abi unsupported"));
         }
         if self.mem_kib < CALC_MEM_KIB_MIN || self.mem_kib > CALC_MEM_KIB_ENGINE_MAX {
             return Err(err("calc container mem_kib out of range"));
@@ -255,20 +298,9 @@ impl CalcContainer {
             return Err(err("calc container code_len invalid"));
         }
         let lay = self.layout();
-        let reserved_end = lay
-            .stack_bottom
-            .checked_add(crate::calc::CALC_STACK_SIZE);
-        match reserved_end {
-            Some(end) if end <= lay.stack_top && lay.stack_top == lay.output_base => {}
-            _ => return Err(err("calc container memory overflows (io overlaps data)")),
+        if !lay.fits() {
+            return Err(err("calc container memory overflows (io overlaps data)"));
         }
-        if lay.input_base < CODE_BASE || lay.output_base < CODE_BASE {
-            return Err(err("calc container memory overflows (io overlaps unmapped)"));
-        }
-        // `output_base = align16_down(input_base - output_max)` is at or
-        // below `input_base` by construction, so the io regions cannot
-        // overlap each other; only the data/stack overlap above and the
-        // unmapped-page overlap here need checking.
         let entry_u = self.entry as u64;
         if entry_u < CODE_BASE || entry_u >= CODE_BASE + lay.code_len {
             return Err(err("calc container entry outside code"));
@@ -284,16 +316,15 @@ impl CalcContainer {
     }
 
     /// Header invariants shared by the wire decoder, the packer and the
-    /// deploy-time verifier. `verify_container` calls this so a directly
-    /// constructed container cannot bypass the header checks that `decode`
-    /// performs on wire input. The upper memory cap is `cfg.mem_kib_max`
-    /// (v1: 64); wire `decode` does not apply it.
-    pub(crate) fn validate_header(&self, cfg: &crate::calc::config::CalcConfig) -> VmrtRes<()> {
+    /// deploy-time verifier, plus the chain's memory admission cap. The cap
+    /// comes from the current `SpaceCap`; caps only rise, so a container
+    /// admitted once stays admissible.
+    pub(crate) fn validate_header(&self, cap: &SpaceCap) -> VmrtRes<()> {
         self.validate_invariants()?;
-        if self.mem_kib > cfg.mem_kib_max {
+        if self.mem_kib > cap.calc_mem_kib_max {
             return Err(ItrErr::new(
                 ItrErrCode::ContractError,
-                "calc verify: mem_kib exceeds config cap",
+                "calc verify: mem_kib exceeds chain cap",
             ));
         }
         Ok(())
@@ -306,7 +337,6 @@ impl CalcContainer {
             self.code.len() as u64,
             self.rodata.len() as u64,
             self.init.len() as u64,
-            self.bss_len as u64,
             self.input_max as u64,
             self.output_max as u64,
             self.mem_kib as u64 * 1024,
@@ -321,15 +351,10 @@ impl CalcContainer {
         h.update(IMAGE_ID_DOMAIN);
         match self.encode() {
             Ok(bytes) => h.update(&bytes),
-            Err(_) => {
-                // Lengths that do not fit the u32 wire fields cannot be
-                // deployed; the hash is still total (no panic) and
-                // domain-separated from a successful encode.
-                h.update(b"\xffencode-overflow");
-                h.update((self.code.len() as u64).to_be_bytes());
-                h.update((self.rodata.len() as u64).to_be_bytes());
-                h.update((self.init.len() as u64).to_be_bytes());
-            }
+            // Unreachable for a decoded container (wire lengths are `u32`
+            // and the payload is already bounded). Kept total so this helper
+            // never panics; the tag is domain-separated from a real encode.
+            Err(_) => h.update(b"\xffencode-overflow"),
         }
         h.finalize().into()
     }
@@ -351,8 +376,7 @@ impl CalcContainer {
         out.extend_from_slice(&CALC_MAGIC);
         out.push(CALC_VERSION);
         out.push(self.profile);
-        out.push(self.abi);
-        out.push(0); // reserved (former fncnf byte)
+        out.extend_from_slice(&[0, 0]); // reserved, must be 0
         out.extend_from_slice(&self.mem_kib.to_be_bytes());
         out.extend_from_slice(&self.entry.to_be_bytes());
         out.extend_from_slice(&code_len.to_be_bytes());
@@ -360,7 +384,6 @@ impl CalcContainer {
         out.extend_from_slice(&self.input_max.to_be_bytes());
         out.extend_from_slice(&self.output_max.to_be_bytes());
         out.extend_from_slice(&rodata_len.to_be_bytes());
-        out.extend_from_slice(&self.bss_len.to_be_bytes());
         out.extend_from_slice(&self.code);
         out.extend_from_slice(&self.rodata);
         out.extend_from_slice(&self.init);
@@ -379,8 +402,8 @@ impl CalcContainer {
             return Err(err("calc container version mismatch"));
         }
         let profile = bytes[5];
-        if bytes[7] != 0 {
-            return Err(err("calc container reserved header byte 7 must be zero"));
+        if bytes[6] != 0 || bytes[7] != 0 {
+            return Err(err("calc container reserved header bytes must be zero"));
         }
         let mem_kib = u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
         let entry = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
@@ -389,7 +412,6 @@ impl CalcContainer {
         let input_max = u16::from_be_bytes([bytes[24], bytes[25]]);
         let output_max = u16::from_be_bytes([bytes[26], bytes[27]]);
         let rodata_len = u32::from_be_bytes([bytes[28], bytes[29], bytes[30], bytes[31]]) as usize;
-        let bss_len = u32::from_be_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]);
         let total = HEADER_LEN
             .checked_add(code_len)
             .and_then(|t| t.checked_add(rodata_len))
@@ -404,13 +426,11 @@ impl CalcContainer {
         let payload = &bytes[HEADER_LEN..total];
         let c = CalcContainer {
             profile,
-            abi: bytes[6],
             mem_kib,
             entry,
             code: payload[..code_len].to_vec(),
             rodata: payload[code_len..code_len + rodata_len].to_vec(),
             init: payload[code_len + rodata_len..].to_vec(),
-            bss_len,
             input_max,
             output_max,
         };

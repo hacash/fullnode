@@ -21,7 +21,11 @@ fn kernel_dict_walk_smoke() {
         16,
     )
     .unwrap() as u64;
-    let container = vm::calc::pack_container_with_bss(
+    // `.bss` is part of the init image in the v1 container.
+    let mut init = init;
+    init.resize(init.len() + bss_len as usize, 0);
+    let container = vm::calc::pack_container(
+        &vm::calc::SpaceCap::new(0),
         vm::calc::CALC_PROFILE_RV64IM,
         8,
         entry,
@@ -30,11 +34,9 @@ fn kernel_dict_walk_smoke() {
         code,
         rodata,
         init,
-        bss_len,
-        &vm::calc::CALC_CONFIG_V1,
     )
     .unwrap();
-    let f = CalcFnObj::build(container).unwrap();
+    let f = CalcFnObj::build_v1(container).unwrap();
     let limits = CalcRunLimits { cycles: 2_000_000, resource: i64::MAX, deadline: None };
     // raw mode: sha256("abc")
     let e = f.run(b"abc", limits);
