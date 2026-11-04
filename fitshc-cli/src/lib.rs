@@ -22,12 +22,11 @@ use vm::calc::container::CalcContainer;
 use vm::fitshc::compiler::{FitshCompileOutput, compile_with_rv64im};
 use vm::fitshc::{CalcRequest, collect_calc_requests};
 
-use crate::meta::KernelMeta;
 use crate::resolve::{ElfDefaults, Resolution, resolve_requests};
 use crate::rustbuild::KernelBuildRequest;
 
 /// Options for a contract build.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct BuildConfig {
     /// `--calc name=path` overrides.
     pub overrides: BTreeMap<String, PathBuf>,
@@ -35,10 +34,33 @@ pub struct BuildConfig {
     pub no_build: bool,
     /// Rebuild core/compiler_builtins for the C profiles too.
     pub strict: bool,
-    /// IO defaults for bare `.elf` inputs.
+    /// Packing defaults for bare `.elf` inputs (profile, IO sizes, mem).
     pub elf_defaults: ElfDefaults,
     /// Cache root override (`$FITSHC_CACHE` by default).
     pub cache_root: Option<PathBuf>,
+    /// Never read or write the shared cache (release pipelines).
+    pub no_cache: bool,
+    /// Write `<name>.hcf1` / `<name>.calc.manifest.json` next to the fitsh
+    /// (or into `artifact_dir`). Defaults on for normal builds; `--no-build`
+    /// flips the default off (CI / read-only checkouts).
+    pub emit_artifacts: bool,
+    /// Optional directory for the side artifacts (defaults: the fitsh dir).
+    pub artifact_dir: Option<PathBuf>,
+}
+
+impl Default for BuildConfig {
+    fn default() -> Self {
+        BuildConfig {
+            overrides: BTreeMap::new(),
+            no_build: false,
+            strict: false,
+            elf_defaults: ElfDefaults::default(),
+            cache_root: None,
+            no_cache: false,
+            emit_artifacts: true,
+            artifact_dir: None,
+        }
+    }
 }
 
 /// What was built/fetched for one kernel.
@@ -62,7 +84,7 @@ pub struct KernelArtifact {
     pub container_bytes: Vec<u8>,
     /// Cache/build directory (rust-source kernels only).
     pub build_dir: Option<PathBuf>,
-    /// Where the packed `.hcf1` was written next to the fitsh source.
+    /// Where the packed `.hcf1` was written (when artifacts are emitted).
     pub hcf1_path: Option<PathBuf>,
 }
 
@@ -98,11 +120,11 @@ pub fn compile_fitsh_with_calcs(
                     cap,
                     strict: cfg.strict,
                     cache_root: cfg.cache_root.clone(),
+                    no_cache: cfg.no_cache,
                 };
                 let built = req.build()?;
                 warnings.extend(kernel_warnings(
                     &name,
-                    &meta,
                     &built.container,
                     built.container_bytes.len(),
                     cap,
@@ -129,17 +151,11 @@ pub fn compile_fitsh_with_calcs(
             }
             Resolution::Container(path) => {
                 let (c, bytes) = crate::resolve::load_container_file(&path, cap)?;
-                warnings.extend(kernel_warnings(
-                    &name,
-                    &KernelMeta::default(),
-                    &c,
-                    bytes.len(),
-                    cap,
-                ));
-                let artifact = KernelArtifact {
+                warnings.extend(kernel_warnings(&name, &c, bytes.len(), cap));
+                artifacts.push(KernelArtifact {
                     name: name.clone(),
                     origin,
-                    source: Some(path),
+                    source: Some(path.clone()),
                     profile_byte: c.profile,
                     input_max: c.input_max,
                     output_max: c.output_max,
@@ -153,24 +169,12 @@ pub fn compile_fitsh_with_calcs(
                     container_bytes: bytes.clone(),
                     build_dir: None,
                     hcf1_path: None,
-                };
-                artifacts.push(artifact);
+                });
                 pairs.push((name, bytes));
             }
-            Resolution::Elf { path, meta: _ } => {
-                let (c, bytes) = crate::resolve::pack_elf_file(
-                    &path,
-                    &cfg.elf_defaults,
-                    crate::meta::MemSpec::Auto,
-                    cap,
-                )?;
-                warnings.extend(kernel_warnings(
-                    &name,
-                    &KernelMeta::default(),
-                    &c,
-                    bytes.len(),
-                    cap,
-                ));
+            Resolution::Elf(path) => {
+                let (c, bytes) = crate::resolve::pack_elf_file(&path, &cfg.elf_defaults, cap)?;
+                warnings.extend(kernel_warnings(&name, &c, bytes.len(), cap));
                 artifacts.push(KernelArtifact {
                     name: name.clone(),
                     origin,
@@ -197,18 +201,32 @@ pub fn compile_fitsh_with_calcs(
     let inject: Vec<(&str, Vec<u8>)> = pairs.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
     let output = compile_with_rv64im(source, &inject).map_err(|e| e.to_string())?;
 
-    // Side artifacts next to the fitsh source: the packed container (the
-    // deployable kernel image) and its build manifest.
-    for a in artifacts.iter_mut() {
-        let (hcf1, _manifest) = write_kernel_artifacts(fitsh_path, a, cap)?;
-        a.hcf1_path = Some(hcf1);
+    // Side artifacts (the packed container + build manifest). Failures here
+    // degrade to warnings: the compiled contract is already complete, and a
+    // read-only checkout (common in CI) must not fail an otherwise valid
+    // build. Prebuilt-container entries that already live at the destination
+    // are not rewritten.
+    if cfg.emit_artifacts {
+        let dir = cfg
+            .artifact_dir
+            .clone()
+            .or_else(|| fitsh_path.parent().map(|p| p.to_path_buf()))
+            .unwrap_or_else(|| PathBuf::from("."));
+        for a in artifacts.iter_mut() {
+            match write_kernel_artifacts(&dir, a, cap) {
+                Ok(hcf1) => a.hcf1_path = Some(hcf1),
+                Err(e) => warnings.push(format!(
+                    "kernel '{}': artifacts not written ({e}); the contract itself is complete",
+                    a.name
+                )),
+            }
+        }
     }
     Ok((output, artifacts, warnings))
 }
 
 fn kernel_warnings(
     name: &str,
-    _meta: &KernelMeta,
     c: &CalcContainer,
     encoded_len: usize,
     cap: &SpaceCap,
@@ -250,18 +268,21 @@ fn kernel_warnings(
     out
 }
 
-/// Write the per-kernel deploy artifacts next to the `.fitsh` file:
-/// `<name>.hcf1` (the packed container) and `<name>.calc.manifest.json`
-/// (build record). Returns the written paths.
+/// Write the per-kernel deploy artifacts into `dir`: `<name>.hcf1` (the
+/// packed container) and `<name>.calc.manifest.json` (build record).
+/// Returns the written container path. A prebuilt container that already is
+/// the destination file is left untouched (no self-overwrite).
 pub fn write_kernel_artifacts(
-    fitsh_path: &Path,
+    dir: &Path,
     artifact: &KernelArtifact,
     cap: &SpaceCap,
-) -> Result<(PathBuf, PathBuf), String> {
-    let dir = fitsh_path.parent().unwrap_or(Path::new("."));
+) -> Result<PathBuf, String> {
     let hcf1 = dir.join(format!("{}.hcf1", artifact.name));
-    std::fs::write(&hcf1, &artifact.container_bytes)
-        .map_err(|e| format!("write {}: {e}", hcf1.display()))?;
+    let same_file = artifact.source.as_ref().is_some_and(|s| s == &hcf1);
+    if !same_file {
+        std::fs::write(&hcf1, &artifact.container_bytes)
+            .map_err(|e| format!("write {}: {e}", hcf1.display()))?;
+    }
     let manifest = dir.join(format!("{}.calc.manifest.json", artifact.name));
     let doc = json!({
         "kernel": artifact.name,
@@ -292,7 +313,7 @@ pub fn write_kernel_artifacts(
         serde_json::to_string_pretty(&doc).unwrap_or_default(),
     )
     .map_err(|e| format!("write {}: {e}", manifest.display()))?;
-    Ok((hcf1, manifest))
+    Ok(hcf1)
 }
 
 /// Execute a resolved container locally (the `fitshc run` smoke test):

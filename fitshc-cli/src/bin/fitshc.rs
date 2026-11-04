@@ -14,7 +14,8 @@
 //! with the smallest fitting memory, verified with the exact chain checks,
 //! and injected into the contract. `= 0x...` stays the prebuilt-container
 //! form; `{ ... }` (fitsh-written kernels) is reserved and reports
-//! "not supported yet". See `vm/doc/fitshc-calc.loc.md`.
+//! "not supported yet". See `vm/doc/fitshc-calc.loc.md` and the crate
+//! README.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -32,7 +33,7 @@ use vm::calc::SpaceCap;
 use vm::contract::ContractSto;
 use vm::fitshc::parse_deploy::DeployInfo;
 
-use fitshc_cli::meta::{MemSpec, ProfileName};
+use fitshc_cli::meta::{MemSpec, ProfileName, infer_kernel_has_input, parse_kernel_meta};
 use fitshc_cli::resolve::ElfDefaults;
 use fitshc_cli::rustbuild::KernelBuildRequest;
 use fitshc_cli::{BuildConfig, compile_fitsh_with_calcs, run_container};
@@ -53,16 +54,21 @@ fn usage() {
          \x20   3. <name>.hcf1 / <name>.elf      prebuilt artifacts (--no-build skips step 2)\n\
          \n\
          FLAGS:\n\
-         \x20   --calc name=path   explicit kernel override (repeatable)\n\
+         \x20   --calc name=path   explicit kernel override (repeatable; build/run)\n\
          \x20   --no-build         never invoke rustc; only prebuilt .hcf1/.elf\n\
          \x20   --strict           rebuild core/compiler_builtins (rv64imc/b: drops prebuilt +A caveat)\n\
          \x20   --in N --out N     IO sizes for bare .elf packing (default 1024/1024)\n\
          \x20   --profile P        rv64im|rv64imb|rv64imc|rv64imcb for .elf packing (default rv64imc)\n\
          \x20   --mem auto|N       memory admission for .elf packing (default auto)\n\
-         \x20   --cap l1           target chain caps (l1 only for now)\n\
-         \x20   -o <path>          output path (deploy json / container)\n\
+         \x20   --host-ecall       clear the HALT-only profile bit for .elf packing\n\
+         \x20   --no-cache         never read/write the shared build cache (release pipelines)\n\
+         \x20   --no-artifacts     do not write <name>.hcf1/.calc.manifest.json next to the fitsh\n\
+         \x20   --artifacts        force artifact writing (overrides the --no-build default)\n\
+         \x20   --out-dir <dir>    write kernel artifacts into <dir> instead of the fitsh dir\n\
+         \x20   --no-input         run: the .rs kernel takes only `out` (zero-arg form)\n\
          \x20   --input 0x..       run: call data (hex)\n\
          \x20   --cycles N         run: cycle budget (default 1000000)\n\
+         \x20   -o <path>          output path (pack: container file)\n\
          \x20   --verbose          print resolved kernel details\n\
          \x20   --periods N        deploy storage-fee basis (see below)"
     );
@@ -74,25 +80,33 @@ struct CommonArgs {
     no_build: bool,
     strict: bool,
     elf_defaults: ElfDefaults,
-    mem: MemSpec,
+    no_cache: bool,
+    /// `--artifacts` / `--no-artifacts`; `None` = subcommand default.
+    artifacts: Option<bool>,
+    out_dir: Option<PathBuf>,
     out: Option<String>,
     verbose: bool,
+    /// Validated storage periods (multiple of floor within [floor, full]).
     periods: Option<u64>,
 }
 
 impl CommonArgs {
-    fn parse(args: &[String]) -> Result<CommonArgs, String> {
+    fn parse(args: &[String], sub: &str) -> Result<CommonArgs, String> {
         let mut me = CommonArgs {
             rest: Vec::new(),
             overrides: BTreeMap::new(),
             no_build: false,
             strict: false,
             elf_defaults: ElfDefaults::default(),
-            mem: MemSpec::Auto,
+            no_cache: false,
+            artifacts: None,
+            out_dir: None,
             out: None,
             verbose: false,
             periods: None,
         };
+        let full_periods = MAINNET_PARAMS.protocol.vm.contract_store_perm_periods;
+        let period_floor = MAINNET_PARAMS.protocol.vm.contract_storage_fee.period_floor;
         let mut i = 0;
         while i < args.len() {
             let a = &args[i];
@@ -106,6 +120,9 @@ impl CommonArgs {
             }
             match a.as_str() {
                 "--calc" => {
+                    if sub == "pack" {
+                        return Err("--calc is not valid for `pack` (pack takes one ELF)".into());
+                    }
                     let v = val!("--calc");
                     let (name, path) = v
                         .split_once('=')
@@ -128,12 +145,17 @@ impl CommonArgs {
                 }
                 "--mem" => {
                     let v = val!("--mem");
-                    me.mem = if v == "auto" {
+                    me.elf_defaults.mem = if v == "auto" {
                         MemSpec::Auto
                     } else {
                         MemSpec::KiB(v.parse().map_err(|_| "--mem auto|N")?)
                     };
                 }
+                "--host-ecall" => me.elf_defaults.no_host_ecall = false,
+                "--no-cache" => me.no_cache = true,
+                "--artifacts" => me.artifacts = Some(true),
+                "--no-artifacts" => me.artifacts = Some(false),
+                "--out-dir" => me.out_dir = Some(PathBuf::from(val!("--out-dir"))),
                 "--cap" => {
                     let v = val!("--cap");
                     if v != "l1" {
@@ -143,12 +165,23 @@ impl CommonArgs {
                         ));
                     }
                 }
-                "--host-ecall" => me.elf_defaults.no_host_ecall = false,
                 "-o" | "--output" => me.out = Some(val!("-o")),
-                "--input" => return Err("--input is only valid for `fitshc run`".into()),
                 "--verbose" | "-v" => me.verbose = true,
                 "--periods" => {
-                    me.periods = Some(val!("--periods").parse().map_err(|_| "--periods N")?);
+                    let v = val!("--periods");
+                    let n: u64 = v
+                        .parse()
+                        .map_err(|_| format!("--periods expects a number, got {v:?}"))?;
+                    if period_floor == 0
+                        || n < period_floor
+                        || n > full_periods
+                        || n % period_floor != 0
+                    {
+                        return Err(format!(
+                            "--periods expects a multiple of {period_floor} in [{period_floor}, {full_periods}], got {n}"
+                        ));
+                    }
+                    me.periods = Some(n);
                 }
                 other if other.starts_with("--") => {
                     return Err(format!("unknown flag {other:?}"));
@@ -185,7 +218,7 @@ fn main() {
 }
 
 fn cmd_build(args: &[String]) -> Result<(), String> {
-    let common = CommonArgs::parse(args)?;
+    let common = CommonArgs::parse(args, "build")?;
     let file_path = common
         .rest
         .first()
@@ -199,33 +232,48 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
         strict: common.strict,
         elf_defaults: common.elf_defaults.clone(),
         cache_root: None,
+        no_cache: common.no_cache,
+        // --no-build flips the default off (CI / read-only checkouts);
+        // --artifacts / --no-artifacts override either way.
+        emit_artifacts: common.artifacts.unwrap_or(!common.no_build),
+        artifact_dir: common.out_dir.clone(),
     };
 
     let ((contract, deploy_opt, smaps, contract_name), artifacts, warnings) =
         compile_fitsh_with_calcs(&source, Path::new(&file_path), &cfg, &cap)?;
     println!("Compile success!");
 
-    // Kernel side outputs were written next to the fitsh source by the
-    // library call; report them.
     for a in &artifacts {
-        println!(
-            "Calc kernel '{}': {} (profile {:#04x}, mem {} KiB, in {}, out {}, image {} B, id {}{})",
-            a.name,
-            a.hcf1_path
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default(),
-            a.profile_byte,
-            a.mem_kib,
-            a.input_max,
-            a.output_max,
-            a.image_len,
-            &a.image_id[..16.min(a.image_id.len())],
-            if a.cache_hit { " [cache]" } else { "" },
-        );
+        match &a.hcf1_path {
+            Some(hcf1) => println!(
+                "Calc kernel '{}': {} (profile {:#04x}, mem {} KiB, in {}, out {}, image {} B, id {}{})",
+                a.name,
+                hcf1.display(),
+                a.profile_byte,
+                a.mem_kib,
+                a.input_max,
+                a.output_max,
+                a.image_len,
+                &a.image_id[..16.min(a.image_id.len())],
+                if a.cache_hit { " [cache]" } else { "" },
+            ),
+            None => println!(
+                "Calc kernel '{}': built from {} (profile {:#04x}, mem {} KiB, in {}, out {}, image {} B)",
+                a.name,
+                a.source
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+                a.profile_byte,
+                a.mem_kib,
+                a.input_max,
+                a.output_max,
+                a.image_len,
+            ),
+        }
         if common.verbose {
             println!(
-                "    manifest: {}.calc.manifest.json; regions: code {} B, rodata {} B, init {} B (cap image max {} B)",
+                "    manifest: {}.calc.manifest.json (code {} B, rodata {} B, init {} B, cap image max {} B)",
                 a.name, a.code_len, a.rodata_len, a.init_len, cap.calc_image_max
             );
         }
@@ -235,15 +283,8 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
     }
 
     let sto = contract.into_sto();
-    write_contract_map(&file_path, &smaps, &contract_name, &sto);
-    write_deploy_json(
-        &file_path,
-        &common,
-        deploy_opt,
-        sto,
-        common.rest.get(1).cloned(),
-        common.rest.get(2).cloned(),
-    );
+    write_contract_map(&file_path, &smaps, &contract_name, &sto)?;
+    write_deploy_json(&file_path, &common, deploy_opt, sto)?;
     Ok(())
 }
 
@@ -252,7 +293,7 @@ fn write_contract_map(
     smaps: &[(String, vm::SourceMap)],
     name: &str,
     sto: &ContractSto,
-) {
+) -> Result<(), String> {
     let path = Path::new(file_path);
     let stem = path
         .file_stem()
@@ -293,8 +334,9 @@ fn write_contract_map(
         &map_file,
         serde_json::to_string_pretty(&contract_map).unwrap(),
     )
-    .ok();
+    .map_err(|e| format!("write {}: {e}", map_file.display()))?;
     println!("Generated: {}", map_file.display());
+    Ok(())
 }
 
 fn write_deploy_json(
@@ -302,49 +344,40 @@ fn write_deploy_json(
     common: &CommonArgs,
     deploy_opt: Option<DeployInfo>,
     sto: ContractSto,
-    fee_pos: Option<String>,
-    nonce_pos: Option<String>,
-) {
+) -> Result<(), String> {
     let (d_fee, d_nonce, d_argv) = match deploy_opt {
         Some(info) => (info.protocol_cost, info.nonce, info.construct_argv),
         None => (None, None, None),
     };
-    let fee_str = fee_pos.as_deref().unwrap_or("1:248");
-    let txfee = Amount::from(fee_str).unwrap_or(Amount::default());
-    let nonce_val = nonce_pos
-        .as_deref()
+    let fee_str = common
+        .rest
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| "1:248".to_string());
+    let txfee = Amount::from(&fee_str).map_err(|e| format!("invalid fee {fee_str:?}: {e:?}"))?;
+    let nonce_val = common
+        .rest
+        .get(2)
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(1);
     let nonce = d_nonce.unwrap_or(Uint4::from(nonce_val));
     let argv = d_argv.unwrap_or_default();
     let charge_bytes = contract_deploy_charge_bytes(&sto) as u128;
 
-    // Storage-fee basis: --periods wins, then HACASH_STORAGE_FEE_PERIODS,
-    // then full price.
+    // Storage-fee basis: --periods (validated at parse) wins, then
+    // HACASH_STORAGE_FEE_PERIODS, then full price.
     let full_periods = MAINNET_PARAMS.protocol.vm.contract_store_perm_periods;
     let period_floor = MAINNET_PARAMS.protocol.vm.contract_storage_fee.period_floor;
     let mut periods = full_periods;
-    let mut periods_explicit = false;
     if let Some(p) = common.periods {
-        match parse_storage_periods(&p.to_string(), period_floor, full_periods) {
-            Some(v) => {
-                periods = v;
-                periods_explicit = true;
-            }
-            None => {
-                println!(
-                    "Error: --periods expects a multiple of {period_floor} in [{period_floor}, {full_periods}]"
-                );
-                return;
-            }
-        }
-    }
-    if !periods_explicit {
-        if let Ok(env_p) = env::var("HACASH_STORAGE_FEE_PERIODS") {
-            if let Some(v) = parse_storage_periods(&env_p, period_floor, full_periods) {
-                periods = v;
-            }
-        }
+        periods = p;
+    } else if let Ok(env_p) = env::var("HACASH_STORAGE_FEE_PERIODS") {
+        periods = parse_storage_periods(&env_p, period_floor, full_periods).ok_or_else(|| {
+            format!(
+                "HACASH_STORAGE_FEE_PERIODS expects a multiple of {period_floor} in \
+                 [{period_floor}, {full_periods}]"
+            )
+        })?;
     }
 
     let protocol_cost = d_fee.unwrap_or_else(|| {
@@ -391,7 +424,7 @@ fn write_deploy_json(
         &deploy_file,
         serde_json::to_string_pretty(&deploy_json).unwrap(),
     )
-    .ok();
+    .map_err(|e| format!("write {}: {e}", deploy_file.display()))?;
     println!("Generated: {}", deploy_file.display());
     if periods < full_periods {
         println!(
@@ -402,6 +435,7 @@ fn write_deploy_json(
             "Deploy priced at full price ({full_periods} periods): guaranteed inclusion. Use --periods N (current discount periods) to deploy discounted."
         );
     }
+    Ok(())
 }
 
 fn parse_storage_periods(raw: &str, floor: u64, full: u64) -> Option<u64> {
@@ -469,23 +503,28 @@ fn estimate_protocol_cost_auto_with_periods(
 }
 
 fn cmd_pack(args: &[String]) -> Result<(), String> {
-    let common = CommonArgs::parse(args)?;
+    let common = CommonArgs::parse(args, "pack")?;
+    if common.strict {
+        return Err("--strict is not valid for `pack` (it compiles nothing)".into());
+    }
     let elf_path = common
         .rest
         .first()
         .cloned()
         .ok_or_else(|| "fitshc pack requires a <kernel.elf>".to_string())?;
-    let cap = SpaceCap::new(0);
-    let (c, bytes) = fitshc_cli::resolve::pack_elf_file(
-        Path::new(&elf_path),
-        &common.elf_defaults,
-        common.mem,
-        &cap,
-    )?;
     let out = match common.out {
         Some(o) => PathBuf::from(o),
         None => Path::new(&elf_path).with_extension("hcf1"),
     };
+    if out == Path::new(&elf_path) {
+        return Err(format!(
+            "output path {} would overwrite the input ELF; pass -o with a different path",
+            out.display()
+        ));
+    }
+    let cap = SpaceCap::new(0);
+    let (c, bytes) =
+        fitshc_cli::resolve::pack_elf_file(Path::new(&elf_path), &common.elf_defaults, &cap)?;
     fs::write(&out, &bytes).map_err(|e| format!("write {}: {e}", out.display()))?;
     println!(
         "packed {} -> {} (profile {:#04x}, mem {} KiB, in {}, out {}, image {} B, id {})",
@@ -504,6 +543,7 @@ fn cmd_pack(args: &[String]) -> Result<(), String> {
 fn cmd_run(args: &[String]) -> Result<(), String> {
     let mut input_hex = String::new();
     let mut cycles: u64 = 1_000_000;
+    let mut no_input_flag = false;
     let mut filtered: Vec<String> = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -516,13 +556,17 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
                 cycles = args[i + 1].parse().map_err(|_| "--cycles N")?;
                 i += 2;
             }
+            "--no-input" => {
+                no_input_flag = true;
+                i += 1;
+            }
             other => {
                 filtered.push(other.to_string());
                 i += 1;
             }
         }
     }
-    let common = CommonArgs::parse(&filtered)?;
+    let common = CommonArgs::parse(&filtered, "run")?;
     let kernel_path = common
         .rest
         .first()
@@ -541,21 +585,34 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
     let cap = SpaceCap::new(0);
     let (container, origin) = match path.extension().and_then(|e| e.to_str()) {
         Some("rs") => {
+            if common.no_build {
+                return Err(
+                    "--no-build cannot be combined with a .rs kernel (nothing to run)".into(),
+                );
+            }
             let name = path
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .ok_or("kernel file has no stem")?;
             let source =
                 fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-            let meta = fitshc_cli::meta::parse_kernel_meta(path, &source)?;
+            let meta = parse_kernel_meta(path, &source)?;
+            // Without a fitsh declaration, infer the signature shape unless
+            // the user pinned the zero-arg form with --no-input.
+            let has_input = if no_input_flag {
+                false
+            } else {
+                infer_kernel_has_input(&source, name)?
+            };
             let built = KernelBuildRequest {
                 name,
                 source_path: path,
                 meta: &meta,
-                has_input: true,
+                has_input,
                 cap: &cap,
                 strict: common.strict,
                 cache_root: None,
+                no_cache: common.no_cache,
             }
             .build()?;
             println!(
@@ -573,8 +630,7 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
             (c, "prebuilt-container")
         }
         Some("elf") => {
-            let (c, _) =
-                fitshc_cli::resolve::pack_elf_file(path, &common.elf_defaults, common.mem, &cap)?;
+            let (c, _) = fitshc_cli::resolve::pack_elf_file(path, &common.elf_defaults, &cap)?;
             (c, "prebuilt-elf")
         }
         other => {

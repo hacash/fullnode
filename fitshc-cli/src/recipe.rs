@@ -136,6 +136,15 @@ impl ProfileName {
 
 /// Linker script placing the image exactly where the container expects it.
 /// Mirrors the proven `vm/tests/fixtures/calckernel/container.ld`.
+///
+/// The `/DISCARD/` of `.eh_frame`/`.eh_frame_hdr` is load-bearing: any panic
+/// or bounds-check path links `core::panicking`, and the *prebuilt*
+/// `riscv64imac` core (the stable recipes for profiles `rv64imc`/`rv64imcb`)
+/// carries unwind tables. Without the discard the linker drops `.eh_frame`
+/// in as an orphan *before* `.text`, which both pushes `.text` off
+/// `CODE_BASE` and makes `pack_elf` reject the unknown allocated section.
+/// The custom target JSONs set `eh-frame-header: false` already; discarding
+/// here too is defense in depth for every recipe.
 pub const CONTAINER_LD: &str = r#"/* Container layout: one contiguous exec+ro image (.text + .rodata), then
    initialized data. No page alignment — the calc container owns the map.
    Collect .sdata/.sbss/COMMON so small-data statics are not orphaned at 0.
@@ -158,6 +167,7 @@ SECTIONS
   __calc_data_base = .;
   .data : ALIGN(16) { *(.data .data.*) *(.sdata .sdata.*) }
   .bss : ALIGN(16) { *(.sbss .sbss.*) *(.bss .bss.*) *(COMMON) }
+  /DISCARD/ : { *(.eh_frame) *(.eh_frame_hdr) }
 }
 "#;
 
@@ -279,8 +289,11 @@ pub fn base_rustflags(
     user_file: &std::path::Path,
 ) -> Vec<String> {
     let mut flags = vec![
-        "-C relocation-model=static".to_string(),
-        format!("-C link-arg=-T{}", container_ld_path.display()),
+        // Single-token `-Ckey=value` forms: each element of
+        // CARGO_ENCODED_RUSTFLAGS is one argv entry, so a `-C key=value`
+        // pair with an inner space cannot be expressed there.
+        "-Crelocation-model=static".to_string(),
+        format!("-Clink-arg=-T{}", container_ld_path.display()),
     ];
     // `--remap-path-prefix` is a top-level rustc flag (`-C remap-path-prefix`
     // was removed from the codegen options); skip the empty parent of a

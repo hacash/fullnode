@@ -9,7 +9,7 @@
 //! ```
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use fitshc_cli::meta::{MemSpec, ProfileName, parse_kernel_meta};
 use fitshc_cli::rustbuild::KernelBuildRequest;
@@ -97,6 +97,7 @@ fn build_and_run(tag: &str, profile: ProfileName, strict: bool) -> (Vec<u8>, boo
         cap: &cap,
         strict,
         cache_root: Some(proj.cache()),
+        no_cache: false,
     }
     .build()
     .expect("kernel builds");
@@ -140,6 +141,7 @@ fn second_build_hits_cache_and_meta_change_invalidates() {
             cap: &cap,
             strict: false,
             cache_root: Some(proj.cache()),
+            no_cache: false,
         }
         .build()
         .unwrap()
@@ -162,6 +164,7 @@ fn second_build_hits_cache_and_meta_change_invalidates() {
         cap: &cap,
         strict: false,
         cache_root: Some(proj.cache()),
+        no_cache: false,
     }
     .build()
     .unwrap();
@@ -239,6 +242,12 @@ fn no_build_uses_hcf1_and_elf_fallbacks() {
     let (_, artifacts, _) =
         compile_fitsh_with_calcs(&source, &fitsh, &cfg, &cap).expect("initial build");
     let bytes = artifacts[0].container_bytes.clone();
+    let elf = artifacts[0]
+        .build_dir
+        .as_ref()
+        .map(|d| std::fs::read(d.join("out/kernel.elf")).ok())
+        .flatten()
+        .expect("cached ELF");
 
     // --no-build: the .rs is ignored, the sibling .hcf1 is used verbatim.
     let _ = std::fs::remove_dir_all(proj.cache());
@@ -257,6 +266,44 @@ fn no_build_uses_hcf1_and_elf_fallbacks() {
         .find(|f| f.sign.0 == vm::calc_func_sign("hash"))
         .unwrap();
     assert_eq!(f.code_stuff.data.to_vec(), bytes);
+
+    // The bare `.elf` fallback: no .rs, no .hcf1 — the sibling ELF is packed
+    // with `elf_defaults` (including an explicit `--mem`).
+    std::fs::remove_file(proj.path("hash.hcf1")).unwrap();
+    std::fs::write(proj.path("hash.elf"), &elf).unwrap();
+    let cfg_elf = BuildConfig {
+        no_build: true,
+        elf_defaults: fitshc_cli::resolve::ElfDefaults {
+            profile: ProfileName::Rv64im,
+            input_max: 1024,
+            output_max: 64,
+            no_host_ecall: true,
+            mem: MemSpec::KiB(12),
+        },
+        ..cfg.clone()
+    };
+    let ((contract, ..), artifacts3, _) =
+        compile_fitsh_with_calcs(&source, &fitsh, &cfg_elf, &cap).expect(".elf fallback build");
+    assert_eq!(artifacts3[0].origin, "prebuilt-elf");
+    assert_eq!(artifacts3[0].mem_kib, 12, "--mem must reach the .elf pack");
+    assert_eq!(artifacts3[0].input_max, 1024);
+    assert_eq!(artifacts3[0].output_max, 64);
+    let (out, _, _) = run_container(
+        vm::calc::container::CalcContainer::decode(&artifacts3[0].container_bytes)
+            .unwrap()
+            .0,
+        INPUT,
+        1_000_000,
+    )
+    .unwrap();
+    assert_eq!(out, expected_output());
+    let sto = contract.into_sto();
+    let f = sto
+        .userfuncs
+        .iter()
+        .find(|f| f.sign.0 == vm::calc_func_sign("hash"))
+        .unwrap();
+    assert_eq!(f.code_stuff.data.to_vec(), artifacts3[0].container_bytes);
 }
 
 #[test]
@@ -279,6 +326,7 @@ fn explicit_mem_kib_is_honored() {
         cap: &cap,
         strict: false,
         cache_root: Some(proj.cache()),
+        no_cache: false,
     }
     .build()
     .unwrap();
@@ -363,6 +411,7 @@ fn wrong_signature_reports_expected_contract() {
         cap: &cap,
         strict: false,
         cache_root: Some(proj.cache()),
+        no_cache: false,
     })
     .build()
     {
@@ -410,4 +459,282 @@ fn override_wins_over_rs() {
     };
     let (_, artifacts2, _) = compile_fitsh_with_calcs(&source, &fitsh, &cfg, &cap).unwrap();
     assert_eq!(artifacts2[0].container_bytes, bytes);
+}
+
+/// P0-1 regression: an *unprovable* bounds check links `core::panicking`,
+/// whose prebuilt riscv64imac core carries `.eh_frame`. The linker script
+/// must discard it, or the default (stable, non-strict) rv64imc recipe fails
+/// with `unknown allocated section` / `.text` off CODE_BASE.
+#[test]
+#[ignore = "drives the real rust toolchain"]
+fn panic_path_kernel_builds_on_default_profile() {
+    for profile in [ProfileName::Rv64imc, ProfileName::Rv64im] {
+        let proj = Project::new(&format!("panic-{}", profile.as_str()));
+        let source = format!(
+            "// calc: profile = {}\n\
+             pub fn hash(input: &[u8], out: &mut [u8]) -> usize {{\n\
+             \x20   // Unprovable index: the bounds check (and its panic path,
+             \x20   // and .eh_frame behind it) cannot be optimized away.
+             \x20   let idx = (input.first().copied().unwrap_or(0) as usize) % out.len();
+             \x20   out[idx] = 1;
+             \x20   out[0] = input.len() as u8;
+             \x20   1
+             }}\n",
+            profile.as_str()
+        );
+        let src = proj.write("hash.rs", &source);
+        let meta = parse_kernel_meta(&src, &source).unwrap();
+        let cap = SpaceCap::new(0);
+        let built = KernelBuildRequest {
+            name: "hash",
+            source_path: &src,
+            meta: &meta,
+            has_input: true,
+            cap: &cap,
+            strict: false,
+            cache_root: Some(proj.cache()),
+            no_cache: false,
+        }
+        .build()
+        .unwrap_or_else(|e| panic!("profile {profile:?}: {e}"));
+        let (out, _, _) = run_container(built.container.clone(), &[7, 9], 1_000_000).unwrap();
+        assert_eq!(out, vec![2], "profile {profile:?}");
+    }
+}
+
+/// P0-2 regression: editing a `mod helpers;` dependency must invalidate the
+/// cache even though the kernel file itself did not change.
+#[test]
+#[ignore = "drives the real rust toolchain"]
+fn helpers_change_invalidates_cache() {
+    let proj = Project::new("helpers");
+    let cap = SpaceCap::new(0);
+    proj.write("helpers.rs", "pub const VALUE: u8 = 1;\n");
+    let source = "// calc: profile = rv64im\nmod helpers;\npub fn hash(_input: &[u8], out: &mut [u8]) -> usize {\n    out[0] = helpers::VALUE;\n    1\n}\n";
+    let src = proj.write("hash.rs", source);
+    let meta = parse_kernel_meta(&src, source).unwrap();
+    fn request<'a>(
+        src: &'a std::path::Path,
+        meta: &'a fitshc_cli::meta::KernelMeta,
+        cap: &'a SpaceCap,
+        cache: &'a std::path::Path,
+    ) -> KernelBuildRequest<'a> {
+        KernelBuildRequest {
+            name: "hash",
+            source_path: src,
+            meta,
+            has_input: true,
+            cap,
+            strict: false,
+            cache_root: Some(cache.to_path_buf()),
+            no_cache: false,
+        }
+    }
+    let first = request(&src, &meta, &cap, &proj.cache()).build().unwrap();
+    assert!(!first.cache_hit);
+    let (out, _, _) = run_container(first.container, &[0xaa], 1_000_000).unwrap();
+    assert_eq!(out, vec![1]);
+
+    // Same kernel file, changed helper → must rebuild and reflect the change.
+    proj.write("helpers.rs", "pub const VALUE: u8 = 2;\n");
+    let second = request(&src, &meta, &cap, &proj.cache()).build().unwrap();
+    assert!(
+        !second.cache_hit,
+        "changed helper must invalidate the cache"
+    );
+    let (out, _, _) = run_container(second.container.clone(), &[0xaa], 1_000_000).unwrap();
+    assert_eq!(out, vec![2]);
+
+    // Unchanged helper → hit.
+    let third = request(&src, &meta, &cap, &proj.cache()).build().unwrap();
+    assert!(third.cache_hit, "unchanged helper must hit the cache");
+    assert_eq!(third.container_bytes, second.container_bytes);
+}
+
+/// P1-3: the build must be hermetic against ambient flag/toolchain env, and
+/// survive paths with spaces (cache root and kernel dir).
+#[test]
+#[ignore = "drives the real rust toolchain"]
+fn hermetic_env_and_spaces_in_paths() {
+    let exe = env!("CARGO_BIN_EXE_fitshc");
+    let base = std::env::temp_dir().join("fitshc-e2e spaces");
+    let _ = std::fs::remove_dir_all(&base);
+    let proj_dir = base.join("kernel dir");
+    std::fs::create_dir_all(&proj_dir).unwrap();
+    let kernel = proj_dir.join("hash.rs");
+    std::fs::write(&kernel, kernel_source(ProfileName::Rv64im)).unwrap();
+
+    // (a) ambient RUSTFLAGS / CARGO_ENCODED_RUSTFLAGS must be scrubbed: the
+    // bogus +A feature would otherwise break the layout or fail verify.
+    let out = std::process::Command::new(exe)
+        .arg("run")
+        .arg(&kernel)
+        .arg("--input")
+        .arg(format!("0x{}", hex::encode(INPUT)))
+        .env("FITSHC_CACHE", base.join("cache with space"))
+        .env("RUSTFLAGS", "-C target-feature=+a")
+        .env("CARGO_ENCODED_RUSTFLAGS", "-C\x1ftarget-feature=+a")
+        .output()
+        .expect("run fitshc");
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let want = format!("output: 0x{}", hex::encode(expected_output()));
+    assert!(stdout.contains(&want), "stdout: {stdout}");
+}
+
+/// P1-5: `fitshc run` on a zero-arg kernel (signature inference), plus the
+/// `--no-input` pin and the rejected `--no-build` combination.
+#[test]
+#[ignore = "drives the real rust toolchain"]
+fn run_handles_zero_arg_kernel() {
+    let exe = env!("CARGO_BIN_EXE_fitshc");
+    let proj = Project::new("zeroarg");
+    proj.write(
+        "tick.rs",
+        "// calc: profile = rv64im\npub fn tick(out: &mut [u8]) -> usize {\n    out[0] = 0x2a;\n    1\n}\n",
+    );
+    let out = std::process::Command::new(exe)
+        .arg("run")
+        .arg(proj.path("tick.rs"))
+        .env("FITSHC_CACHE", proj.cache())
+        .output()
+        .expect("run fitshc");
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("output: 0x2a"), "stdout: {stdout}");
+
+    // --no-build with a .rs kernel is rejected instead of misleading.
+    let out = std::process::Command::new(exe)
+        .arg("run")
+        .arg(proj.path("tick.rs"))
+        .arg("--no-build")
+        .env("FITSHC_CACHE", proj.cache())
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("--no-build"));
+}
+
+/// P1-6: `--no-build` in a read-only directory must not try to write kernel
+/// side artifacts (contract outputs still fail loudly if unwritable).
+#[test]
+#[ignore = "drives the real rust toolchain"]
+#[cfg(unix)]
+fn no_build_works_in_read_only_dir() {
+    use std::os::unix::fs::PermissionsExt;
+    let exe = env!("CARGO_BIN_EXE_fitshc");
+    let base = std::env::temp_dir().join("fitshc-e2e-readonly");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(
+        base.join("demo.fitsh"),
+        "pragma fitsh 1.0.0\ncontract D {\n    function rv64im hash(data: bytes) -> bytes\n}\n",
+    )
+    .unwrap();
+    std::fs::write(base.join("hash.rs"), kernel_source(ProfileName::Rv64im)).unwrap();
+    // Build once (writable) to produce hash.hcf1 next to the fitsh.
+    let out = std::process::Command::new(exe)
+        .arg("build")
+        .arg(base.join("demo.fitsh"))
+        .arg("--no-artifacts")
+        .env("FITSHC_CACHE", base.join(".cache"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let cache_out = std::fs::read_dir(base.join(".cache"))
+        .unwrap()
+        .flatten()
+        .find(|e| e.file_name().to_string_lossy().starts_with("k-"))
+        .map(|e| e.path().join("out/kernel.hcf1"))
+        .expect("cache entry");
+    std::fs::copy(cache_out, base.join("hash.hcf1")).unwrap();
+
+    // Read-only dir + --no-build: kernel artifacts are skipped entirely.
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let out = std::process::Command::new(exe)
+        .arg("build")
+        .arg(base.join("demo.fitsh"))
+        .arg("--no-build")
+        .env("FITSHC_CACHE", base.join(".cache"))
+        .output()
+        .unwrap();
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // Either full success (outputs pre-exist) or a *loud* output-write
+    // failure — but never a silent kernel-artifact failure. Errors print on
+    // stdout in this CLI.
+    let _ = &stderr;
+    assert!(
+        out.status.success()
+            || stdout.contains("demo.deploy.json")
+            || stdout.contains("contractmap"),
+        "exit={:?} stdout={stdout} stderr={stderr}",
+        out.status.code()
+    );
+    assert!(stdout.contains("Calc kernel 'hash'"), "stdout: {stdout}");
+    assert!(
+        !stdout.contains("hash.calc.manifest.json") || !stdout.contains("Error:"),
+        "--no-build must not fail on kernel artifacts: {stdout}"
+    );
+}
+
+/// P3: `pack` refuses to overwrite its input; invalid flags error early.
+#[test]
+fn pack_guards_and_flag_validation() {
+    let exe = env!("CARGO_BIN_EXE_fitshc");
+    let out = std::process::Command::new(exe)
+        .arg("pack")
+        .arg("/tmp/definitely-missing.elf")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+
+    // -o pointing at the input is rejected before writing anything.
+    let dir = std::env::temp_dir().join("fitshc-pack-guard");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let elf = dir.join("kernel.elf");
+    std::fs::write(&elf, b"\x7fELFstub").unwrap();
+    let out = std::process::Command::new(exe)
+        .arg("pack")
+        .arg(&elf)
+        .arg("-o")
+        .arg(&elf)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "overwrite must be rejected");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("overwrite"));
+
+    // Unknown flags and invalid profiles/periods fail at parse.
+    for args in [
+        vec!["build", "/tmp/none.fitsh", "--turbo"],
+        vec!["pack", "/tmp/none.elf", "--strict"],
+        vec!["build", "/tmp/none.fitsh", "--profile", "avx"],
+        vec!["build", "/tmp/none.fitsh", "--periods", "3"],
+    ] {
+        let out = std::process::Command::new(exe)
+            .args(&args)
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "accepted invalid args: {args:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stdout).starts_with("Error:"),
+            "args {args:?}"
+        );
+    }
 }

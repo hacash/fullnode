@@ -163,15 +163,30 @@ impl KernelMeta {
 }
 
 /// Parse the `// calc:` header of a kernel source. Only the leading comment
-/// block is scanned (blank lines may interleave; the first line that is
-/// neither blank nor a `//` comment ends the header). Returns the metadata
-/// with defaults applied for absent keys.
+/// block is scanned: blank lines may interleave, `/* ... */` block comments
+/// (license headers) are skipped whole, and the first line that is neither
+/// blank nor a comment ends the header. Returns the metadata with defaults
+/// applied for absent keys.
 pub fn parse_kernel_meta(file: &Path, source: &str) -> Result<KernelMeta, String> {
     let mut meta = KernelMeta::default();
     let mut seen: Vec<String> = Vec::new();
+    let mut in_block_comment = false;
     for (idx, raw) in source.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
+            continue;
+        }
+        // Inside a block comment: stay until the closing `*/`.
+        if in_block_comment {
+            if line.contains("*/") {
+                in_block_comment = false;
+            }
+            continue;
+        }
+        if line.starts_with("/*") {
+            if !line.contains("*/") {
+                in_block_comment = true;
+            }
             continue;
         }
         let Some(comment) = line.strip_prefix("//") else {
@@ -302,6 +317,125 @@ fn parse_u16(file: &Path, line_no: usize, key: &str, value: &str, min: u16) -> R
         })
 }
 
+/// Infer whether a kernel source defines the with-input or the zero-arg
+/// form of its entry function (`fitshc run` has no fitsh declaration to
+/// ask). This is a light textual scan for the *two accepted shapes* —
+/// `fn name(input: &[u8], out: &mut [u8])` and `fn name(out: &mut [u8])` —
+/// not a Rust parser; anything else is an error telling the user the two
+/// supported signatures (and rustc remains the authority on the build).
+pub fn infer_kernel_has_input(source: &str, name: &str) -> Result<bool, String> {
+    let Some(params) = find_fn_params(source, name) else {
+        return Err(format!(
+            "no `fn {name}` found in the kernel source; define \
+             `pub fn {name}(input: &[u8], out: &mut [u8]) -> usize` or \
+             `pub fn {name}(out: &mut [u8]) -> usize`"
+        ));
+    };
+    let parts = split_top_level_commas(&params);
+    let norm = |p: &str| p.replace(char::is_whitespace, "");
+    match parts.len() {
+        2 => {
+            let (a, b) = (norm(&parts[0]), norm(&parts[1]));
+            if a.contains("&[u8]") && !a.contains("mut") && b.contains("&mut[u8]") {
+                Ok(true)
+            } else {
+                Err(two_shapes_error(name))
+            }
+        }
+        1 => {
+            if norm(&parts[0]).contains("&mut[u8]") {
+                Ok(false)
+            } else {
+                Err(two_shapes_error(name))
+            }
+        }
+        _ => Err(two_shapes_error(name)),
+    }
+}
+
+fn two_shapes_error(name: &str) -> String {
+    format!(
+        "kernel function `{name}` does not match a supported signature; expected \
+         `pub fn {name}(input: &[u8], out: &mut [u8]) -> usize` or \
+         `pub fn {name}(out: &mut [u8]) -> usize`"
+    )
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
+/// Text of the parameter list of the first `fn <name>(...)` in `source`.
+fn find_fn_params(source: &str, name: &str) -> Option<String> {
+    let b = source.as_bytes();
+    let mut i = 0usize;
+    while i + 1 < b.len() {
+        if b[i] == b'f'
+            && b[i + 1] == b'n'
+            && (i == 0 || !is_ident_byte(b[i - 1]))
+            && !is_ident_byte(b[i + 2])
+        {
+            let mut j = i + 2;
+            while j < b.len() && b[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if source[j..].starts_with(name) {
+                let end = j + name.len();
+                if end >= b.len() || !is_ident_byte(b[end]) {
+                    let mut k = end;
+                    while k < b.len() && b[k].is_ascii_whitespace() {
+                        k += 1;
+                    }
+                    if b.get(k) == Some(&b'(') {
+                        // Capture until the matching ')'.
+                        let mut depth = 1usize;
+                        let start = k + 1;
+                        k += 1;
+                        while k < b.len() && depth > 0 {
+                            match b[k] {
+                                b'(' | b'[' | b'{' => depth += 1,
+                                b')' | b']' | b'}' => depth -= 1,
+                                _ => {}
+                            }
+                            k += 1;
+                        }
+                        if depth == 0 {
+                            return Some(source[start..k - 1].to_string());
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Split a parameter list on commas that are not nested in brackets.
+fn split_top_level_commas(params: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut cur = String::new();
+    for c in params.chars() {
+        match c {
+            '(' | '[' | '{' | '<' => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' | ']' | '}' | '>' => {
+                depth -= 1;
+                cur.push(c);
+            }
+            ',' if depth == 0 => out.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    if !cur.trim().is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
 #[cfg(test)]
 mod meta_tests {
     use super::*;
@@ -394,6 +528,55 @@ mod meta_tests {
         )
         .unwrap_err();
         assert!(err.contains("/x/hash.rs:2"), "{err}");
+    }
+
+    #[test]
+    fn block_comment_license_header_is_skipped() {
+        let src = "/*\n * Copyright (c) 2026 nobody\n * SPDX-License-Identifier: MIT\n */\n// calc: profile = rv64imb\npub fn kernel(_: &[u8], _: &mut [u8]) -> usize { 0 }\n";
+        let m = parse(src).unwrap();
+        assert_eq!(m.profile, ProfileName::Rv64imb);
+        // Single-line block comment + same-line close.
+        let m2 = parse("/* header */\n// calc: input_max = 8\npub fn kernel(_: &[u8], _: &mut [u8]) -> usize { 0 }").unwrap();
+        assert_eq!(m2.input_max, 8);
+        assert_eq!(m2.profile, ProfileName::Rv64imc);
+    }
+
+    #[test]
+    fn infer_kernel_has_input_matches_both_shapes() {
+        assert_eq!(
+            infer_kernel_has_input(
+                "// calc: profile = rv64im\npub fn hash(input: &[u8], out: &mut [u8]) -> usize { 0 }",
+                "hash"
+            )
+            .unwrap(),
+            true
+        );
+        assert_eq!(
+            infer_kernel_has_input("pub fn tick( out : & mut [u8] ) -> usize { 0 }", "tick")
+                .unwrap(),
+            false
+        );
+        // `_input: &[u8]` counts as the input form (name is arbitrary).
+        assert_eq!(
+            infer_kernel_has_input(
+                "pub fn hash(_input: &[u8], out: &mut [u8]) -> usize { 0 }",
+                "hash"
+            )
+            .unwrap(),
+            true
+        );
+        // Prefixed names must not match (`fn hashing` is not `fn hash`).
+        assert!(
+            infer_kernel_has_input(
+                "pub fn hashing(input: &[u8], out: &mut [u8]) -> usize { 0 }",
+                "hash"
+            )
+            .is_err()
+        );
+        // Wrong shapes error with the expected signatures.
+        let err = infer_kernel_has_input("pub fn hash(x: u32) -> u32 { x }", "hash").unwrap_err();
+        assert!(err.contains("input: &[u8]"), "{err}");
+        assert!(infer_kernel_has_input("pub fn other() {}", "hash").is_err());
     }
 
     #[test]

@@ -826,7 +826,10 @@ fn parse_elf64_riscv(elf: &[u8]) -> VmrtRes<ParsedElf> {
             ".text" | ".rodata" | ".data" | ".sdata" | ".bss" | ".sbss"
         );
         if !known {
-            return Err(elf_err("calc elf: unknown allocated section"));
+            return Err(elf_err(&format!(
+                "calc elf: unknown allocated section '{}'",
+                sec.name
+            )));
         }
     }
     let find = |name: &str| sections.iter().find(|s| s.name == name);

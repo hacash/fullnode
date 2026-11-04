@@ -99,7 +99,10 @@ directory):
 4. `<name>.hcf1` — pre-packed container (decoded + verified)
 5. `<name>.elf` — pre-compiled ELF (packed with `--in/--out/--profile/--mem`)
 
-`--no-build` skips steps 2–3 (CI / rustc-less environments).
+`--no-build` skips steps 2–3 (CI / rustc-less environments) and defaults to
+not writing kernel side artifacts (`--artifacts` forces them back on;
+failures to write artifacts degrade to warnings — the compiled contract is
+already complete).
 
 ## Subcommands
 
@@ -117,20 +120,52 @@ fitshc pack kernel.elf --profile rv64imc --in 1024 --out 1024 --mem auto -o kern
 fitshc run hash.rs --input 0x686163617368
 ```
 
-Flags: `--calc name=path` (repeatable), `--no-build`, `--strict`
-(rebuild core for C profiles — avoids the prebuilt `+A` core pulling in
-atomics), `--in/--out/--profile/--mem` (bare `.elf` packing), `--cap l1`,
-`--verbose`, `-o`.
+Flags:
+
+| flag | meaning |
+|---|---|
+| `--calc name=path` | explicit kernel override (repeatable; `build`/`run`) |
+| `--no-build` | never invoke rustc; prebuilt `.hcf1`/`.elf` only |
+| `--strict` | rebuild core/compiler_builtins (drops the prebuilt `+A` caveat) |
+| `--in N` / `--out N` | IO sizes for bare `.elf` packing (default 1024/1024) |
+| `--profile P` | `rv64im`/`rv64imb`/`rv64imc`/`rv64imcb` for `.elf` packing |
+| `--mem auto\|N` | memory admission for `.elf` packing (`build --no-build`, `pack`, `run`) |
+| `--host-ecall` | clear the HALT-only profile bit for `.elf` packing |
+| `--no-cache` | never read/write the shared build cache (release pipelines) |
+| `--artifacts` / `--no-artifacts` | force/skip `<name>.hcf1` + manifest writing (`--no-build` defaults to skip) |
+| `--out-dir <dir>` | write kernel artifacts into `<dir>` instead of the fitsh dir |
+| `--no-input` | `run`: the `.rs` kernel takes only `out` (zero-arg form; also auto-inferred from the signature) |
+| `--cap l1` | target chain caps (L1 only for now) |
+| `-o <path>` | output path (pack: container; build: deploy json) |
+| `--verbose` | print resolved kernel details |
+
+Build environment is hermetic: ambient `RUSTFLAGS`,
+`CARGO_ENCODED_RUSTFLAGS` and `RUSTC` are scrubbed from the cargo child
+(flags travel via `CARGO_ENCODED_RUSTFLAGS`, so paths with spaces work),
+and the cache key includes the tool-selection envs (`FITSHC_CARGO`,
+`FITSHC_RUSTC`) so `cargo +nightly` never reuses a stable-built entry.
 
 ## Caching & reproducibility
 
 Builds are content-addressed under `$FITSHC_CACHE` (default
 `~/.cache/fitshc`), keyed by kernel source + metadata + recipe + wrapper
-templates + rustc/cargo versions + the calc `SpaceCap` fields. A hit skips
-cargo entirely and the stored container is re-verified before reuse. Output
-paths are remapped (`--remap-path-prefix …=/calc/src`), `debuginfo=0`,
-`opt-level=z`, `lto`, `codegen-units=1`, `panic=abort`; the same source,
-toolchain and flags yield identical image IDs.
+template hash + flags + rustc/cargo versions + the calc `SpaceCap` fields.
+Transitive dependencies (`mod helpers;`, `include!`, …) are validated the
+other way round: each build records rustc's dep-info (`out/deps.json`,
+path + SHA-256 per file) and a cache hit re-hashes every listed file —
+editing a helper always rebuilds. A hit skips cargo entirely; the stored
+container is re-decoded and re-verified before reuse. Entries are built in
+a private temp dir and published with one atomic rename (concurrent builds
+of the same key are safe), and `--no-cache` bypasses the shared cache
+entirely. Output paths are remapped (`--remap-path-prefix …=/calc/src`),
+`debuginfo=0`, `opt-level=z`, `lto`, `codegen-units=1`, `panic=abort`; the
+same source, toolchain and flags yield identical image IDs.
+
+The generated linker script discards `.eh_frame`/`.eh_frame_hdr`: any
+panic or bounds-check path links `core::panicking`, and the *prebuilt*
+riscv64imac core (stable recipes) carries unwind tables that would
+otherwise land as an orphan section before `.text` and break the container
+layout.
 
 Each build records `<name>.calc.manifest.json` next to the `.fitsh`:
 source/ELF hashes, recipe, rustc version, effective `mem_kib`, region sizes,

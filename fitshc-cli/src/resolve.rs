@@ -26,16 +26,19 @@ use vm::calc::container::CalcContainer;
 use vm::calc::verify::verify_container_with_cap;
 use vm::fitshc::CalcRequest;
 
-use crate::meta::{KernelMeta, ProfileName, parse_kernel_meta};
+use crate::meta::{KernelMeta, MemSpec, ProfileName, parse_kernel_meta};
 
-/// IO defaults used when packing bare `.elf` inputs (`--calc name=x.elf`,
-/// `<name>.elf` fallback, and `fitshc pack` without explicit flags).
+/// Packing parameters used for bare `.elf` inputs (`--calc name=x.elf`,
+/// `<name>.elf` fallback, and `fitshc pack`). An ELF carries no `// calc:`
+/// header, so the CLI flags land here; they mirror the metadata defaults.
 #[derive(Debug, Clone)]
 pub struct ElfDefaults {
     pub profile: ProfileName,
     pub input_max: u16,
     pub output_max: u16,
     pub no_host_ecall: bool,
+    /// Explicit memory admission or minimum-fit `auto`.
+    pub mem: MemSpec,
 }
 
 impl Default for ElfDefaults {
@@ -46,6 +49,7 @@ impl Default for ElfDefaults {
             input_max: 1024,
             output_max: 1024,
             no_host_ecall: true,
+            mem: MemSpec::Auto,
         }
     }
 }
@@ -61,8 +65,8 @@ pub enum Resolution {
     },
     /// Packed container file (`.hcf1` or an explicit override of one).
     Container(PathBuf),
-    /// Raw ELF, to be packed with the given effective metadata.
-    Elf { path: PathBuf, meta: KernelMeta },
+    /// Raw ELF, packed later with the CLI's `ElfDefaults`.
+    Elf(PathBuf),
 }
 
 impl Resolution {
@@ -141,10 +145,7 @@ fn resolve_one(
     let elf = dir.join(format!("{name}.elf"));
     searched.push(elf.display().to_string());
     if elf.is_file() {
-        return Ok(Resolution::Elf {
-            path: elf,
-            meta: KernelMeta::default(),
-        });
+        return Ok(Resolution::Elf(elf));
     }
 
     let sig = if req.has_input {
@@ -176,10 +177,7 @@ fn classify_override(path: &Path, req: &CalcRequest) -> Result<Resolution, Strin
             })
         }
         Some("hcf1") | Some("hcf") => Ok(Resolution::Container(path.to_path_buf())),
-        Some("elf") => Ok(Resolution::Elf {
-            path: path.to_path_buf(),
-            meta: KernelMeta::default(),
-        }),
+        Some("elf") => Ok(Resolution::Elf(path.to_path_buf())),
         other => Err(format!(
             "--calc override {} has unsupported type {:?} (expected .rs, .hcf1 or .elf)",
             path.display(),
@@ -206,12 +204,11 @@ pub fn load_container_file(
     Ok((c, bytes))
 }
 
-/// Pack a `.elf` file with the effective metadata. `mem` selects an explicit
-/// `mem_kib` or the minimum-fit default.
+/// Pack a `.elf` file with the effective `ElfDefaults` (profile, IO sizes,
+/// `mem`), verified under `cap`.
 pub fn pack_elf_file(
     path: &Path,
     elf_defaults: &ElfDefaults,
-    mem: crate::meta::MemSpec,
     cap: &SpaceCap,
 ) -> Result<(CalcContainer, Vec<u8>), String> {
     let elf = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
@@ -219,12 +216,12 @@ pub fn pack_elf_file(
         profile: elf_defaults.profile,
         input_max: elf_defaults.input_max,
         output_max: elf_defaults.output_max,
-        mem_kib: mem,
+        mem_kib: elf_defaults.mem,
         no_host_ecall: elf_defaults.no_host_ecall,
     };
     meta.validate(cap)
         .map_err(|e| format!("{}: {e}", path.display()))?;
-    let c = match mem {
+    let c = match elf_defaults.mem {
         crate::meta::MemSpec::Auto => vm::calc::pack_elf_min_mem(
             cap,
             &elf,
