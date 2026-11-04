@@ -78,7 +78,12 @@ pub struct KernelBuildResult {
     pub mem_kib: u32,
     pub cache_key: String,
     pub cache_hit: bool,
+    /// Location of the build record. May already have been removed (see
+    /// `build_dir_retained`) once the in-memory bytes have been produced.
     pub build_dir: PathBuf,
+    /// False for `--no-cache` / unwritable-cache builds, whose private temp
+    /// dir is removed before returning (nothing outlives the call).
+    pub build_dir_retained: bool,
 }
 
 /// Default cache root: `$FITSHC_CACHE`, else `$XDG_CACHE_HOME|~/.cache` +
@@ -176,7 +181,10 @@ fn parse_dep_info(text: &str, base: &Path) -> Vec<PathBuf> {
     for (i, &b) in bytes.iter().enumerate() {
         match b {
             b'"' => in_quotes = !in_quotes,
-            b':' if !in_quotes => {
+            // The target/deps separator is `:` followed by whitespace. On
+            // Windows the first colon is the drive in `C:\...`; requiring
+            // the following byte to be whitespace keeps it out of the split.
+            b':' if !in_quotes && bytes.get(i + 1).map_or(true, |c| c.is_ascii_whitespace()) => {
                 colon = Some(i);
                 break;
             }
@@ -245,9 +253,15 @@ fn collect_deps(
     build_dir: &Path,
     source_path: &Path,
 ) -> Vec<(PathBuf, String)> {
+    // Candidates are canonicalized below; the build dir must be too, or a
+    // symlinked cache root makes the exclusion test miss (and the wrapper
+    // source is then recorded as a user dependency).
+    let build_dir = build_dir
+        .canonicalize()
+        .unwrap_or_else(|_| build_dir.to_path_buf());
     let candidates: Vec<PathBuf> = match dep_info
         .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|text| parse_dep_info(&text, build_dir))
+        .map(|text| parse_dep_info(&text, &build_dir))
     {
         Some(list) if !list.is_empty() => list,
         _ => scan_kernel_dir(source_path.parent().unwrap_or(Path::new("."))),
@@ -256,7 +270,7 @@ fn collect_deps(
     let mut out = Vec::new();
     for p in candidates {
         let p = p.canonicalize().unwrap_or(p);
-        if p.starts_with(build_dir) || !p.is_file() {
+        if p.starts_with(&build_dir) || !p.is_file() {
             continue;
         }
         if let Some(sha) = hash_of(&p) {
@@ -439,6 +453,7 @@ impl KernelBuildRequest<'_> {
             cache_key: key.to_string(),
             cache_hit: true,
             build_dir: entry.to_path_buf(),
+            build_dir_retained: true,
         })
     }
 
@@ -479,6 +494,18 @@ impl KernelBuildRequest<'_> {
         // throwaway temp dir for --no-cache / unwritable cache roots.
         let cache_root = self.cache_root.clone().unwrap_or_else(default_cache_root);
         let persist = !self.no_cache && std::fs::create_dir_all(&cache_root).is_ok();
+        // Canonicalize after creating it: this makes a relative
+        // FITSHC_CACHE absolute (the child cargo needs an absolute `-T`) and
+        // resolves symlinks (so dep-info paths match the build-dir
+        // exclusion). Fall back to an absolute path if canonicalization
+        // fails (e.g. a path form the platform rejects).
+        let cache_root = if persist {
+            std::fs::canonicalize(&cache_root)
+                .or_else(|_| std::path::absolute(&cache_root))
+                .unwrap_or(cache_root)
+        } else {
+            cache_root
+        };
         let (build_dir, publish_to) = if persist {
             let entry = cache_root.join(format!("k-{key}"));
             if let Some(hit) = self.try_cache_hit(&entry, &key) {
@@ -493,7 +520,8 @@ impl KernelBuildRequest<'_> {
         };
         // The `-T` script path must be absolute for the child cargo run; it
         // never reaches the image bytes (kept out of the key on purpose —
-        // moving the cache root only relocates entries).
+        // moving the cache root only relocates entries). `temp_dir()` is
+        // already absolute; `cache_root` was canonicalized above.
         let ld_path = build_dir.join("container.ld");
         let rustflags = flags.replace(
             "-Clink-arg=-Tcontainer.ld",
@@ -563,6 +591,8 @@ impl KernelBuildRequest<'_> {
         // cargo names the output dir after the target triple / JSON stem.
         let triple_dir = target_stem(&target_arg, &recipe.target);
         let release_dir = build_dir.join("target").join(&triple_dir).join("release");
+        // The target is always a bare-metal RISC-V triple/spec (empty exe
+        // suffix), so cargo emits `calc_kernel` even on a Windows host.
         let elf_path = release_dir.join("calc_kernel");
         let elf = std::fs::read(&elf_path).map_err(|e| {
             format!(
@@ -661,7 +691,11 @@ impl KernelBuildRequest<'_> {
             }
         }
 
-        Ok(KernelBuildResult {
+        let retained = match &publish_to {
+            Some(entry) => final_dir == *entry,
+            None => false,
+        };
+        let result = KernelBuildResult {
             elf_sha256: hex::encode(sha256_bytes(&elf)),
             container_bytes,
             container,
@@ -669,8 +703,15 @@ impl KernelBuildRequest<'_> {
             mem_kib: container_mem,
             cache_key: key,
             cache_hit: false,
-            build_dir: final_dir,
-        })
+            build_dir: final_dir.clone(),
+            build_dir_retained: retained,
+        };
+        if !retained {
+            // --no-cache / unwritable-cache builds are throwaway: the ELF and
+            // container are in memory by now, so do not leak the temp tree.
+            let _ = std::fs::remove_dir_all(&final_dir);
+        }
+        Ok(result)
     }
 
     /// Wrap pack/verify failures with actionable hints (see `recipe.rs` for
@@ -912,6 +953,33 @@ mod build_tests {
         assert!(
             !deps_unchanged(&dir.join("missing.json")),
             "no record must miss"
+        );
+    }
+
+    #[test]
+    fn dep_info_parser_skips_drive_and_filename_colons() {
+        // Only `:` followed by whitespace separates target from deps. With an
+        // empty base every absolute dependency is returned verbatim (also on
+        // a non-Windows host).
+        let deps = parse_dep_info(
+            "C:\\build\\calc_kernel: C:\\build\\main.rs C:\\src\\helpers.rs\n",
+            Path::new(""),
+        );
+        let names: Vec<String> = deps.iter().map(|p| p.display().to_string()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "C:\\build\\main.rs".to_string(),
+                "C:\\src\\helpers.rs".to_string()
+            ]
+        );
+
+        // A colon inside a Unix file name is not the rule separator.
+        let deps = parse_dep_info("/b/out: /s/a:b.rs /s/helpers.rs\n", Path::new(""));
+        let names: Vec<String> = deps.iter().map(|p| p.display().to_string()).collect();
+        assert_eq!(
+            names,
+            vec!["/s/a:b.rs".to_string(), "/s/helpers.rs".to_string()]
         );
     }
 

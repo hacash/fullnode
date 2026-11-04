@@ -596,7 +596,9 @@ fn run_handles_zero_arg_kernel() {
     let proj = Project::new("zeroarg");
     proj.write(
         "tick.rs",
-        "// calc: profile = rv64im\npub fn tick(out: &mut [u8]) -> usize {\n    out[0] = 0x2a;\n    1\n}\n",
+        "/// Zero-arg entry; `fn tick()` in a doc comment must be ignored.\n\
+         // fn tick(input: &[u8])\n\
+         pub fn tick(out: &mut [u8]) -> usize {\n    out[0] = 0x2a;\n    1\n}\n",
     );
     let out = std::process::Command::new(exe)
         .arg("run")
@@ -613,6 +615,38 @@ fn run_handles_zero_arg_kernel() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("output: 0x2a"), "stdout: {stdout}");
 
+    // The two-arg shape is still inferred when `fn narrow(...)` also appears
+    // in comments / string literals before the definition.
+    proj.write(
+        "narrow.rs",
+        "// calc: profile = rv64im\n\
+         const NOTE: &str = \"fn narrow()\";\n\
+         /* fn narrow(x: u32) */\n\
+         pub fn narrow(_input: &[u8], out: &mut [u8]) -> usize {\n\
+         \x20   out[0] = 0x5a;\n\
+         \x20   1\n\
+         }\n",
+    );
+    let out = std::process::Command::new(exe)
+        .arg("run")
+        .arg(proj.path("narrow.rs"))
+        .arg("--input")
+        .arg("0x01")
+        .env("FITSHC_CACHE", proj.cache())
+        .output()
+        .expect("run fitshc");
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("output: 0x5a"),
+        "stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+
     // --no-build with a .rs kernel is rejected instead of misleading.
     let out = std::process::Command::new(exe)
         .arg("run")
@@ -625,8 +659,8 @@ fn run_handles_zero_arg_kernel() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("--no-build"));
 }
 
-/// P1-6: `--no-build` in a read-only directory must not try to write kernel
-/// side artifacts (contract outputs still fail loudly if unwritable).
+/// P1-6: `--no-build` in a read-only source dir must write the contract
+/// outputs to `--out-dir` (created on demand) and skip kernel side artifacts.
 #[test]
 #[ignore = "drives the real rust toolchain"]
 #[cfg(unix)]
@@ -634,7 +668,9 @@ fn no_build_works_in_read_only_dir() {
     use std::os::unix::fs::PermissionsExt;
     let exe = env!("CARGO_BIN_EXE_fitshc");
     let base = std::env::temp_dir().join("fitshc-e2e-readonly");
+    let out_dir = std::env::temp_dir().join("fitshc-e2e-readonly-out");
     let _ = std::fs::remove_dir_all(&base);
+    let _ = std::fs::remove_dir_all(&out_dir);
     std::fs::create_dir_all(&base).unwrap();
     std::fs::write(
         base.join("demo.fitsh"),
@@ -662,34 +698,44 @@ fn no_build_works_in_read_only_dir() {
         .map(|e| e.path().join("out/kernel.hcf1"))
         .expect("cache entry");
     std::fs::copy(cache_out, base.join("hash.hcf1")).unwrap();
+    // The initial build wrote contract outputs next to the fitsh; clear them
+    // so the read-only run proves they are not re-created there.
+    let _ = std::fs::remove_file(base.join("demo.deploy.json"));
+    let _ = std::fs::remove_file(base.join("demo.contractmap.json"));
 
-    // Read-only dir + --no-build: kernel artifacts are skipped entirely.
+    // Read-only dir + --no-build + --out-dir (absent: must be created).
     std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o555)).unwrap();
     let out = std::process::Command::new(exe)
         .arg("build")
         .arg(base.join("demo.fitsh"))
         .arg("--no-build")
+        .arg("--out-dir")
+        .arg(&out_dir)
         .env("FITSHC_CACHE", base.join(".cache"))
         .output()
         .unwrap();
     std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o755)).unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    // Either full success (outputs pre-exist) or a *loud* output-write
-    // failure — but never a silent kernel-artifact failure. Errors print on
-    // stdout in this CLI.
-    let _ = &stderr;
     assert!(
-        out.status.success()
-            || stdout.contains("demo.deploy.json")
-            || stdout.contains("contractmap"),
+        out.status.success(),
         "exit={:?} stdout={stdout} stderr={stderr}",
         out.status.code()
     );
     assert!(stdout.contains("Calc kernel 'hash'"), "stdout: {stdout}");
     assert!(
-        !stdout.contains("hash.calc.manifest.json") || !stdout.contains("Error:"),
-        "--no-build must not fail on kernel artifacts: {stdout}"
+        out_dir.join("demo.deploy.json").is_file(),
+        "deploy json must land in --out-dir: {stdout}"
+    );
+    assert!(
+        out_dir.join("demo.contractmap.json").is_file(),
+        "contract map must land in --out-dir: {stdout}"
+    );
+    // No kernel side artifacts: --no-build keeps emit_artifacts off.
+    assert!(!out_dir.join("hash.hcf1").exists(), "stdout: {stdout}");
+    assert!(
+        !base.join("demo.deploy.json").exists(),
+        "read-only source dir must stay untouched"
     );
 }
 
@@ -724,6 +770,8 @@ fn pack_guards_and_flag_validation() {
     for args in [
         vec!["build", "/tmp/none.fitsh", "--turbo"],
         vec!["pack", "/tmp/none.elf", "--strict"],
+        vec!["pack", "/tmp/none.elf", "--no-build"],
+        vec!["run", "/tmp/none.rs", "--calc", "x=y"],
         vec!["build", "/tmp/none.fitsh", "--profile", "avx"],
         vec!["build", "/tmp/none.fitsh", "--periods", "3"],
     ] {
@@ -737,4 +785,104 @@ fn pack_guards_and_flag_validation() {
             "args {args:?}"
         );
     }
+}
+
+/// P1: a relative or symlinked `FITSHC_CACHE` must build (the `-T` path is
+/// made absolute) and must hit on the second run (dep-info paths and the
+/// build-dir exclusion agree after canonicalization).
+#[test]
+#[ignore = "drives the real rust toolchain"]
+fn relative_and_symlinked_cache_roots_hit() {
+    let exe = env!("CARGO_BIN_EXE_fitshc");
+    let proj = Project::new("cachepaths");
+    let kernel = proj.write("hash.rs", &kernel_source(ProfileName::Rv64im));
+    let run = |cache: &std::path::Path| {
+        std::process::Command::new(exe)
+            .arg("run")
+            .arg(&kernel)
+            .arg("--input")
+            .arg(format!("0x{}", hex::encode(INPUT)))
+            .current_dir(&proj.dir)
+            .env("FITSHC_CACHE", cache)
+            .output()
+            .unwrap()
+    };
+    let report = |out: &std::process::Output| {
+        format!(
+            "stdout={} stderr={}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+
+    // Relative cache root (the original linker-script failure).
+    let first = run(std::path::Path::new(".cache"));
+    assert!(first.status.success(), "{}", report(&first));
+    let second = run(std::path::Path::new(".cache"));
+    assert!(second.status.success(), "{}", report(&second));
+    assert!(
+        String::from_utf8_lossy(&second.stdout).contains("[cache]"),
+        "relative cache root must hit: {}",
+        report(&second)
+    );
+
+    // Symlinked cache root (the original dep-info exclusion failure).
+    #[cfg(unix)]
+    {
+        let real = proj.dir.join("real-cache");
+        let link = proj.dir.join("link-cache");
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let first = run(&link);
+        assert!(first.status.success(), "{}", report(&first));
+        let second = run(&link);
+        assert!(second.status.success(), "{}", report(&second));
+        assert!(
+            String::from_utf8_lossy(&second.stdout).contains("[cache]"),
+            "symlinked cache root must hit: {}",
+            report(&second)
+        );
+    }
+}
+
+/// P2: `--no-cache` must not leave its throwaway build dir (or a cache root)
+/// behind.
+#[test]
+#[ignore = "drives the real rust toolchain"]
+#[cfg(unix)]
+fn no_cache_removes_temp_build_dir() {
+    let exe = env!("CARGO_BIN_EXE_fitshc");
+    let proj = Project::new("nocache");
+    proj.write("hash.rs", &kernel_source(ProfileName::Rv64im));
+    let tmp = proj.dir.join("tmp");
+    std::fs::create_dir_all(&tmp).unwrap();
+    let cache = proj.dir.join("never-cache");
+    let out = std::process::Command::new(exe)
+        .arg("run")
+        .arg(proj.path("hash.rs"))
+        .arg("--input")
+        .arg(format!("0x{}", hex::encode(INPUT)))
+        .arg("--no-cache")
+        .env("TMPDIR", &tmp)
+        .env("FITSHC_CACHE", &cache)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let leftovers: Vec<String> = std::fs::read_dir(&tmp)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.starts_with("fitshc-build-k-"))
+        .collect();
+    assert!(leftovers.is_empty(), "leaked build dirs: {leftovers:?}");
+    assert!(
+        !cache.exists(),
+        "--no-cache must not create the cache root {}",
+        cache.display()
+    );
 }

@@ -54,21 +54,21 @@ fn usage() {
          \x20   3. <name>.hcf1 / <name>.elf      prebuilt artifacts (--no-build skips step 2)\n\
          \n\
          FLAGS:\n\
-         \x20   --calc name=path   explicit kernel override (repeatable; build/run)\n\
+         \x20   --calc name=path   explicit kernel override (repeatable; build only)\n\
          \x20   --no-build         never invoke rustc; only prebuilt .hcf1/.elf\n\
          \x20   --strict           rebuild core/compiler_builtins (rv64imc/b: drops prebuilt +A caveat)\n\
          \x20   --in N --out N     IO sizes for bare .elf packing (default 1024/1024)\n\
          \x20   --profile P        rv64im|rv64imb|rv64imc|rv64imcb for .elf packing (default rv64imc)\n\
          \x20   --mem auto|N       memory admission for .elf packing (default auto)\n\
          \x20   --host-ecall       clear the HALT-only profile bit for .elf packing\n\
-         \x20   --no-cache         never read/write the shared build cache (release pipelines)\n\
+         \x20   --no-cache         never read/write the shared build cache; temp build dir is removed\n\
          \x20   --no-artifacts     do not write <name>.hcf1/.calc.manifest.json next to the fitsh\n\
          \x20   --artifacts        force artifact writing (overrides the --no-build default)\n\
-         \x20   --out-dir <dir>    write kernel artifacts into <dir> instead of the fitsh dir\n\
+         \x20   --out-dir <dir>    write kernel artifacts and contractmap/deploy json into <dir>\n\
          \x20   --no-input         run: the .rs kernel takes only `out` (zero-arg form)\n\
          \x20   --input 0x..       run: call data (hex)\n\
          \x20   --cycles N         run: cycle budget (default 1000000)\n\
-         \x20   -o <path>          output path (pack: container file)\n\
+         \x20   -o <path>          output path (pack: container file; build: deploy json)\n\
          \x20   --verbose          print resolved kernel details\n\
          \x20   --periods N        deploy storage-fee basis (see below)"
     );
@@ -120,8 +120,10 @@ impl CommonArgs {
             }
             match a.as_str() {
                 "--calc" => {
-                    if sub == "pack" {
-                        return Err("--calc is not valid for `pack` (pack takes one ELF)".into());
+                    if sub != "build" {
+                        return Err(format!(
+                            "--calc is not valid for `{sub}` (it overrides kernels of a .fitsh build)"
+                        ));
                     }
                     let v = val!("--calc");
                     let (name, path) = v
@@ -283,7 +285,21 @@ fn cmd_build(args: &[String]) -> Result<(), String> {
     }
 
     let sto = contract.into_sto();
-    write_contract_map(&file_path, &smaps, &contract_name, &sto)?;
+    if let Some(dir) = &common.out_dir {
+        fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+    }
+    // The contract map is a debugging aid, the deploy JSON is the essential
+    // output: a read-only fitsh dir must not block deployment (route both to
+    // --out-dir, or -o for the deploy JSON, in CI).
+    if let Err(e) = write_contract_map(
+        &file_path,
+        &smaps,
+        &contract_name,
+        &sto,
+        common.out_dir.as_deref(),
+    ) {
+        println!("Warning: contract map not written: {e}");
+    }
     write_deploy_json(&file_path, &common, deploy_opt, sto)?;
     Ok(())
 }
@@ -293,13 +309,14 @@ fn write_contract_map(
     smaps: &[(String, vm::SourceMap)],
     name: &str,
     sto: &ContractSto,
+    out_dir: Option<&Path>,
 ) -> Result<(), String> {
     let path = Path::new(file_path);
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy())
         .unwrap_or("output".into());
-    let parent = path.parent().unwrap_or(Path::new("."));
+    let parent = out_dir.unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")));
     let mut func_maps = Vec::new();
     for (fname, sm) in smaps {
         if let Ok(json_str) = sm.to_json() {
@@ -415,7 +432,10 @@ fn write_deploy_json(
         .file_stem()
         .map(|s| s.to_string_lossy())
         .unwrap_or("output".into());
-    let parent = path.parent().unwrap_or(Path::new("."));
+    let parent = common
+        .out_dir
+        .as_deref()
+        .unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")));
     let deploy_file = match &common.out {
         Some(o) => PathBuf::from(o),
         None => parent.join(format!("{stem}.deploy.json")),
@@ -506,6 +526,9 @@ fn cmd_pack(args: &[String]) -> Result<(), String> {
     let common = CommonArgs::parse(args, "pack")?;
     if common.strict {
         return Err("--strict is not valid for `pack` (it compiles nothing)".into());
+    }
+    if common.no_build {
+        return Err("--no-build is not valid for `pack` (it never builds anything)".into());
     }
     let elf_path = common
         .rest

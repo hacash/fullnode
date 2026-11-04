@@ -204,6 +204,36 @@ pub fn load_container_file(
     Ok((c, bytes))
 }
 
+/// Actionable hints for the ELF-layout failures shared by `pack`, `run .elf`
+/// and bare `.elf` kernel fallbacks. (The rust build path has its own
+/// richer translation because it also knows the recipe/profile.)
+pub fn pack_error_hint(msg: &str) -> Option<&'static str> {
+    if msg.contains("unknown allocated section") {
+        Some(
+            "the ELF carries an extra allocated section (e.g. `.eh_frame`); link with the \
+             container script that discards it, or rebuild the kernel with the current fitshc",
+        )
+    } else if msg.contains("missing .text")
+        || msg.contains("does not start at")
+        || msg.contains("relocation section")
+    {
+        Some(
+            "the ELF layout does not match the container map; pass the container linker script \
+             (`-T container.ld`, as fitshc-generated builds do) and link statically / non-PIC",
+        )
+    } else {
+        None
+    }
+}
+
+fn attach_pack_hint(path: &Path, e: impl std::fmt::Display) -> String {
+    let msg = format!("{}: {e}", path.display());
+    match pack_error_hint(&msg) {
+        Some(hint) => format!("{msg}\nhint: {hint}"),
+        None => msg,
+    }
+}
+
 /// Pack a `.elf` file with the effective `ElfDefaults` (profile, IO sizes,
 /// `mem`), verified under `cap`.
 pub fn pack_elf_file(
@@ -238,8 +268,8 @@ pub fn pack_elf_file(
             meta.output_max,
         ),
     }
-    .map_err(|e| format!("{}: {e}", path.display()))?;
-    verify_container_with_cap(&c, cap).map_err(|e| format!("{}: {e}", path.display()))?;
+    .map_err(|e| attach_pack_hint(path, e))?;
+    verify_container_with_cap(&c, cap).map_err(|e| attach_pack_hint(path, e))?;
     let bytes = c.encode().map_err(|e| format!("{}: {e}", path.display()))?;
     Ok((c, bytes))
 }
@@ -394,5 +424,14 @@ mod resolve_tests {
         )
         .unwrap_err();
         assert!(err.contains("unknown profile"), "{err}");
+    }
+
+    #[test]
+    fn pack_error_hints_cover_layout_failures() {
+        assert!(pack_error_hint("calc elf: unknown allocated section '.eh_frame'").is_some());
+        assert!(pack_error_hint("calc elf: missing .text").is_some());
+        assert!(pack_error_hint("calc elf: .text does not start at 0x1000").is_some());
+        assert!(pack_error_hint("calc elf: relocation section present").is_some());
+        assert!(pack_error_hint("decode: bad magic").is_none());
     }
 }

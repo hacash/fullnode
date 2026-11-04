@@ -366,41 +366,67 @@ fn is_ident_byte(b: u8) -> bool {
 }
 
 /// Text of the parameter list of the first `fn <name>(...)` in `source`.
+///
+/// This is deliberately a small scanner, not a Rust parser: it only has to
+/// avoid being fooled by `fn <name>` appearing inside a comment or literal
+/// (doc comments are the common case) and must never panic on truncated
+/// input. rustc remains the authority on whether the source compiles.
 fn find_fn_params(source: &str, name: &str) -> Option<String> {
     let b = source.as_bytes();
     let mut i = 0usize;
-    while i + 1 < b.len() {
-        if b[i] == b'f'
-            && b[i + 1] == b'n'
-            && (i == 0 || !is_ident_byte(b[i - 1]))
-            && !is_ident_byte(b[i + 2])
-        {
-            let mut j = i + 2;
-            while j < b.len() && b[j].is_ascii_whitespace() {
-                j += 1;
+    while i < b.len() {
+        match b[i] {
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                i += 2;
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
             }
-            if source[j..].starts_with(name) {
-                let end = j + name.len();
-                if end >= b.len() || !is_ident_byte(b[end]) {
-                    let mut k = end;
-                    while k < b.len() && b[k].is_ascii_whitespace() {
-                        k += 1;
-                    }
-                    if b.get(k) == Some(&b'(') {
-                        // Capture until the matching ')'.
-                        let mut depth = 1usize;
-                        let start = k + 1;
-                        k += 1;
-                        while k < b.len() && depth > 0 {
-                            match b[k] {
-                                b'(' | b'[' | b'{' => depth += 1,
-                                b')' | b']' | b'}' => depth -= 1,
-                                _ => {}
-                            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i = skip_block_comment(b, i + 2);
+                continue;
+            }
+            b'"' => {
+                i = skip_quoted(b, i + 1, b'"');
+                continue;
+            }
+            b'\'' => {
+                if let Some(end) = char_literal_end(b, i) {
+                    i = end;
+                    continue;
+                }
+                i += 1;
+                continue;
+            }
+            b'r' if b.get(i + 1) == Some(&b'"') || b.get(i + 1) == Some(&b'#') => {
+                if let Some(end) = raw_string_end(b, i) {
+                    i = end;
+                    continue;
+                }
+            }
+            _ => {}
+        }
+        if b[i] == b'f' && b.get(i + 1) == Some(&b'n') {
+            let after = i + 2;
+            let keyword_ok = i == 0 || !is_ident_byte(b[i - 1]);
+            let name_ok = b.get(after).map_or(true, |&c| !is_ident_byte(c));
+            if keyword_ok && name_ok {
+                let mut j = after;
+                while j < b.len() && b[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if b.get(j..)
+                    .is_some_and(|rest| rest.starts_with(name.as_bytes()))
+                {
+                    let end = j + name.len();
+                    if b.get(end).map_or(true, |&c| !is_ident_byte(c)) {
+                        let mut k = end;
+                        while k < b.len() && b[k].is_ascii_whitespace() {
                             k += 1;
                         }
-                        if depth == 0 {
-                            return Some(source[start..k - 1].to_string());
+                        if b.get(k) == Some(&b'(') {
+                            return capture_params(source, k);
                         }
                     }
                 }
@@ -409,6 +435,100 @@ fn find_fn_params(source: &str, name: &str) -> Option<String> {
         i += 1;
     }
     None
+}
+
+fn capture_params(source: &str, open: usize) -> Option<String> {
+    let b = source.as_bytes();
+    let start = open + 1;
+    let mut k = start;
+    let mut depth = 1usize;
+    while k < b.len() && depth > 0 {
+        match b[k] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            _ => {}
+        }
+        k += 1;
+    }
+    (depth == 0).then(|| source[start..k - 1].to_string())
+}
+
+fn skip_block_comment(b: &[u8], mut i: usize) -> usize {
+    let mut depth = 1usize;
+    while i < b.len() && depth > 0 {
+        if b[i] == b'/' && b.get(i + 1) == Some(&b'*') {
+            depth += 1;
+            i += 2;
+        } else if b[i] == b'*' && b.get(i + 1) == Some(&b'/') {
+            depth -= 1;
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    i
+}
+
+fn skip_quoted(b: &[u8], mut i: usize, quote: u8) -> usize {
+    while i < b.len() {
+        if b[i] == b'\\' {
+            i = (i + 2).min(b.len());
+        } else if b[i] == quote {
+            return i + 1;
+        } else {
+            i += 1;
+        }
+    }
+    b.len()
+}
+
+/// End of a character literal at `start`, or `None` when the quote starts a
+/// lifetime (no closing quote within a scalar's width).
+fn char_literal_end(b: &[u8], start: usize) -> Option<usize> {
+    let mut j = start + 1;
+    if b.get(j) == Some(&b'\\') {
+        j += 2;
+        while j < b.len() && b[j] != b'\'' && b[j] != b'\n' {
+            j += 1;
+        }
+    } else {
+        // One scalar value is 1..=4 bytes; an escape is wider.
+        let limit = (start + 12).min(b.len());
+        j += 1;
+        while j < limit && b[j] != b'\'' && b[j] != b'\n' {
+            j += 1;
+        }
+    }
+    (b.get(j) == Some(&b'\'')).then_some(j + 1)
+}
+
+/// End of a raw string starting at the `r` in `r"..."` / `r#"..."#`.
+fn raw_string_end(b: &[u8], start: usize) -> Option<usize> {
+    let mut j = start + 1;
+    let mut hashes = 0usize;
+    while b.get(j) == Some(&b'#') {
+        hashes += 1;
+        j += 1;
+    }
+    if b.get(j) != Some(&b'"') {
+        return None; // `r#ident` raw identifier, not a string
+    }
+    j += 1;
+    while j < b.len() {
+        if b[j] == b'"' {
+            let mut k = j + 1;
+            let mut n = 0usize;
+            while n < hashes && b.get(k) == Some(&b'#') {
+                n += 1;
+                k += 1;
+            }
+            if n == hashes {
+                return Some(k);
+            }
+        }
+        j += 1;
+    }
+    Some(b.len())
 }
 
 /// Split a parameter list on commas that are not nested in brackets.
@@ -577,6 +697,28 @@ mod meta_tests {
         let err = infer_kernel_has_input("pub fn hash(x: u32) -> u32 { x }", "hash").unwrap_err();
         assert!(err.contains("input: &[u8]"), "{err}");
         assert!(infer_kernel_has_input("pub fn other() {}", "hash").is_err());
+    }
+
+    #[test]
+    fn infer_ignores_fn_mentions_in_comments_and_literals() {
+        // A doc comment before the real definition must not shadow it.
+        let src = "/// Usage: `fn hash()` is not this one.\n\
+                   // fn hash(x: u32)\n\
+                   /* fn hash(y: u32) */\n\
+                   const NOTE: &str = \"fn hash(z: u32)\";\n\
+                   pub fn hash(input: &[u8], out: &mut [u8]) -> usize { 0 }";
+        assert_eq!(infer_kernel_has_input(src, "hash").unwrap(), true);
+
+        // Raw strings and char literals are skipped too.
+        let src = "const A: &str = r#\"fn hash(q: u32)\"#;\n\
+                   const B: char = 'f';\n\
+                   pub fn tick(out: &mut [u8]) -> usize { 0 }";
+        assert_eq!(infer_kernel_has_input(src, "tick").unwrap(), false);
+
+        // Truncated input must not panic (used to index past `fn`).
+        for src in ["fn", "fn hash", "pub fn hash(", "/* fn hash", "'"] {
+            assert!(infer_kernel_has_input(src, "hash").is_err(), "{src:?}");
+        }
     }
 
     #[test]

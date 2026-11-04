@@ -144,7 +144,9 @@ pub fn compile_fitsh_with_calcs(
                     image_id: hex::encode(built.container.image_id()),
                     cache_hit: built.cache_hit,
                     container_bytes: built.container_bytes.clone(),
-                    build_dir: Some(built.build_dir),
+                    // --no-cache / unwritable-cache builds are deleted before
+                    // returning; do not record a path that no longer exists.
+                    build_dir: built.build_dir_retained.then_some(built.build_dir),
                     hcf1_path: None,
                 });
                 pairs.push((name, built.container_bytes));
@@ -277,6 +279,7 @@ pub fn write_kernel_artifacts(
     artifact: &KernelArtifact,
     cap: &SpaceCap,
 ) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     let hcf1 = dir.join(format!("{}.hcf1", artifact.name));
     let same_file = artifact.source.as_ref().is_some_and(|s| s == &hcf1);
     if !same_file {

@@ -124,20 +124,31 @@ Flags:
 
 | flag | meaning |
 |---|---|
-| `--calc name=path` | explicit kernel override (repeatable; `build`/`run`) |
-| `--no-build` | never invoke rustc; prebuilt `.hcf1`/`.elf` only |
+| `--calc name=path` | explicit kernel override (repeatable; `build` only) |
+| `--no-build` | never invoke rustc; prebuilt `.hcf1`/`.elf` only (`build`) |
 | `--strict` | rebuild core/compiler_builtins (drops the prebuilt `+A` caveat) |
 | `--in N` / `--out N` | IO sizes for bare `.elf` packing (default 1024/1024) |
 | `--profile P` | `rv64im`/`rv64imb`/`rv64imc`/`rv64imcb` for `.elf` packing |
 | `--mem auto\|N` | memory admission for `.elf` packing (`build --no-build`, `pack`, `run`) |
 | `--host-ecall` | clear the HALT-only profile bit for `.elf` packing |
-| `--no-cache` | never read/write the shared build cache (release pipelines) |
+| `--no-cache` | never read/write the shared cache; the temp build dir is removed |
 | `--artifacts` / `--no-artifacts` | force/skip `<name>.hcf1` + manifest writing (`--no-build` defaults to skip) |
-| `--out-dir <dir>` | write kernel artifacts into `<dir>` instead of the fitsh dir |
+| `--out-dir <dir>` | write kernel artifacts and contractmap/deploy json into `<dir>` (created if missing) |
 | `--no-input` | `run`: the `.rs` kernel takes only `out` (zero-arg form; also auto-inferred from the signature) |
 | `--cap l1` | target chain caps (L1 only for now) |
 | `-o <path>` | output path (pack: container; build: deploy json) |
 | `--verbose` | print resolved kernel details |
+
+A read-only checkout can still emit both contract outputs (the directory is
+created on demand):
+
+```bash
+fitshc build contract.fitsh --no-build --out-dir /tmp/fitshc-out
+```
+
+`--out-dir` only *defaults* the contractmap and deploy paths; `-o` still
+overrides the deploy JSON. The contract map is a debugging aid: if it cannot
+be written the CLI prints a warning and the deploy JSON is still produced.
 
 Build environment is hermetic: ambient `RUSTFLAGS`,
 `CARGO_ENCODED_RUSTFLAGS` and `RUSTC` are scrubbed from the cargo child
@@ -157,9 +168,19 @@ editing a helper always rebuilds. A hit skips cargo entirely; the stored
 container is re-decoded and re-verified before reuse. Entries are built in
 a private temp dir and published with one atomic rename (concurrent builds
 of the same key are safe), and `--no-cache` bypasses the shared cache
-entirely. Output paths are remapped (`--remap-path-prefix …=/calc/src`),
-`debuginfo=0`, `opt-level=z`, `lto`, `codegen-units=1`, `panic=abort`; the
-same source, toolchain and flags yield identical image IDs.
+entirely and removes its temp build dir before returning. A relative
+`$FITSHC_CACHE` and symlinked cache roots are supported: the root is
+canonicalized before use, so the linker-script path handed to cargo is
+absolute and dep-info paths match the build-dir exclusion. Output paths are
+remapped (`--remap-path-prefix …=/calc/src`), `debuginfo=0`,
+`opt-level=z`, `lto`, `codegen-units=1`, `panic=abort`; the same source,
+toolchain and flags yield identical image IDs.
+
+Cache entries are content-addressed but **not authenticated**: anyone who
+can write the cache root can seed an entry for a known key. The stored
+container is re-verified against the chain rules (so it is a valid kernel),
+but it is not provenance-checked against your source. Use `--no-cache` or a
+private `$FITSHC_CACHE` when the root is shared or untrusted.
 
 The generated linker script discards `.eh_frame`/`.eh_frame_hdr`: any
 panic or bounds-check path links `core::panicking`, and the *prebuilt*
@@ -169,7 +190,8 @@ layout.
 
 Each build records `<name>.calc.manifest.json` next to the `.fitsh`:
 source/ELF hashes, recipe, rustc version, effective `mem_kib`, region sizes,
-image ID and the `SpaceCap` snapshot.
+image ID and the `SpaceCap` snapshot. A `--no-cache` build has no retained
+`build_dir` in that manifest.
 
 ## Layering
 
