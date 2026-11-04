@@ -283,7 +283,17 @@ returned value against the same cap.
 
 ## 8. Gas
 
-`CYCLES_PER_COMPUTE = 32` (unchanged). Setup (always kept, even on trap):
+`CYCLES_PER_COMPUTE = 56` (policy composition `32 + 16 + 8`: old base
+rate + per-KiB setup cycles + per-KiB resource gas; these are different
+dimensions, so the sum is a chosen policy value, not a unit derivation).
+On the 2026-11-04 warm same-machine calibration (HVM ~33 ns/compute, AOT
+~0.38 ns/cycle) AOT parity is N ≈ 87, so N=56 is roughly +55% over AOT
+hardware cost; the older cold-state calibration (50.7/6.0/0.62) gives
+~+46%, i.e. "about +50%". Against the interpreter/lockstep it remains a
+large discount. The 200,863-cycle HIP5 kernel costs 3,587 compute at
+N=56 (6,277 at N=32); with resource 413 the total is 4,000. N is
+consensus-frozen: any later change is a hard fork. Setup (always kept,
+even on trap):
 
 ```
 setup = CALC_SETUP_BASE_CYCLES + mem_kib * CALC_SETUP_PER_KIB_CYCLES

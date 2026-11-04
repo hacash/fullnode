@@ -44,23 +44,26 @@ pub use container::{
     CODE_BASE as CALC_CODE_BASE, IMAGE_ID_DOMAIN as CALC_IMAGE_ID_DOMAIN,
 };
 
-/// Exchange rate: 1 compute = N cycles. CONSENSUS CONSTANT: changing this
+/// Exchange rate: 1 compute = 56 cycles. CONSENSUS CONSTANT: changing this
 /// value changes gas results and is a hard fork — do not touch after
 /// activation.
 ///
-/// Calibration (2026-10-29, `hacd-bench.loc`): HVM work costs ~50.7 ns per
-/// compute; the consensus calc interpreter costs ~6.0 ns per cycle and the
-/// optional x86-64 AOT ~0.62 ns per cycle. One compute therefore buys
-/// ~192 ns of interpreter work or ~20 ns of AOT work. The strict
-/// work-per-compute parity points are N ≈ 8.5 (interpreter) and N ≈ 82
-/// (AOT): N = 32 is deliberately between them — on the consensus
-/// interpreter calc is ~3.8x cheaper per unit of guest work than HVM,
-/// while on an AOT host it is ~2.5x more expensive. The batch use case
-/// stays inside the mainnet compute bucket with ~52% headroom (200 scores
-/// = 8,686 compute). This is a policy compromise, not a parity target:
-/// decide which engine the chain prices against before activation, then
-/// freeze N.
-pub const CYCLES_PER_COMPUTE: u64 = 32;
+/// `56 = 32 + 16 + 8` is a deliberate policy composition of the old base
+/// rate (32), the per-KiB setup cycle charge (16) and the per-KiB resource
+/// charge (8). Those are different dimensions, so the sum is a chosen
+/// policy value, not a unit derivation.
+///
+/// Calibration (re-measured 2026-11-04 on an i7-8550U, release+LTO,
+/// pinned, warm): HVM arithmetic ~33 ns/compute; calc interpreter
+/// ~4.1 ns/cycle; x86-64 AOT ~0.38 ns/cycle; lockstep ~4.5 ns/cycle.
+/// AOT parity is N ≈ 87, so N=56 prices calc at roughly +55% over AOT
+/// hardware cost (the older cold-state 50.7/0.62 calibration gives ~+46%:
+/// "about +50%"). It remains a large discount against the
+/// interpreter/lockstep (~7-8x cheaper). The 200-diamond HIP5 kernel
+/// (200,863 cycles) costs 3,587 compute at N=56 (6,277 at N=32; resource
+/// 413, total 4,000). Decide the pricing engine and target hardware
+/// before activation, then freeze N.
+pub const CYCLES_PER_COMPUTE: u64 = 56;
 
 /// Resource charged per declared KiB of calc memory (input bytes, output
 /// bytes and declared memory are the only resource charges on the calc path).
