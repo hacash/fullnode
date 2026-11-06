@@ -721,17 +721,15 @@ mod calc_io_load_tests {
     ];
 
     fn calc_user(input_max: u16, output_max: u16) -> ContractUserFunc {
-        let c = crate::calc::pack_container(
-            &crate::rt::SpaceCap::new(0),
-            crate::calc::CALC_PROFILE_RV64IM,
-            64,
-            crate::calc::CALC_CODE_BASE as u32,
-            input_max,
-            output_max,
-            KERNEL_CODE.to_vec(),
-            vec![],
-            vec![],
-        )
+        let c = crate::calc::pack_code(
+        &crate::rt::SpaceCap::new(0),
+        crate::calc::CALC_PROFILE_RV64IM,
+        64,
+        crate::calc::CALC_CODE_BASE as u32,
+        input_max,
+        output_max,
+        KERNEL_CODE.to_vec(),
+    )
         .expect("test container must pack");
         let mut func = ContractUserFunc::default();
         func.sign = Fixed4::from([1, 2, 3, 4]);
@@ -802,7 +800,6 @@ mod calc_io_load_tests {
     fn deploy_and_load_share_the_space_cap() {
         let bytes = {
             let mut raw = calc_user(16, 16).code_stuff.data.to_vec();
-            raw[5] = crate::calc::CALC_PROFILE_RV64IM_B;
             raw[8..12].copy_from_slice(&65u32.to_be_bytes());
             raw
         };
@@ -842,17 +839,15 @@ mod calc_io_load_tests {
 
     #[test]
     fn mem_kib_above_v1_cap_is_rejected_at_deploy() {
-        let c = crate::calc::pack_container(
-            &crate::rt::SpaceCap::new(0),
-            crate::calc::CALC_PROFILE_RV64IM,
-            64,
-            crate::calc::CALC_CODE_BASE as u32,
-            16,
-            16,
-            KERNEL_CODE.to_vec(),
-            vec![],
-            vec![],
-        )
+        let c = crate::calc::pack_code(
+        &crate::rt::SpaceCap::new(0),
+        crate::calc::CALC_PROFILE_RV64IM,
+        64,
+        crate::calc::CALC_CODE_BASE as u32,
+        16,
+        16,
+        KERNEL_CODE.to_vec(),
+    )
         .expect("64 KiB container packs");
         let mut bytes = c.encode().unwrap();
         bytes[8..12].copy_from_slice(&65u32.to_be_bytes());

@@ -24,10 +24,9 @@
 //!   interpreter's `out_of_gas` accounting.
 //! * Div/Rem families (all special cases) go through a host helper
 //!   mirroring `interp::reg_alu`; `mulh*` use native `mul/imul`.
-//! * `ecall` (HALT; the hash table is compiled but disabled in v1, like the
-//!   interpreter; HINT traps) is implemented via a host helper that mirrors
-//!   `interp.rs`. `fence`
-//!   executes as a no-op, matching the single-hart interpreter.
+//! * `ecall` (HALT; hash builtins trap unless a future profile admits
+//!   them; HINT traps) is implemented via a host helper that mirrors
+//!   `interp.rs`. `fence` executes as a no-op, matching the interpreter.
 //!
 //! Early launch insurance: this backend is not the sole engine yet. Official x86-64
 //! nodes (feature `calc-aot`, on by default) run this translation after
@@ -45,11 +44,10 @@
 compile_error!("calc-aot generates x86-64 code and is only supported on x86_64 hosts");
 
 use crate::calc::decode::{BitImmOp, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp, UnAluOp};
-use crate::calc::container::{CalcContainer, CalcLayout, CODE_BASE};
+use crate::calc::container::{perm_check, profile_has_hash, CalcContainer, CalcLayout, HALT_STUB};
 use crate::calc::verify::CalcModule;
 use crate::calc::{
-    run_hash, CalcAbort2, HashKind, CALC_HASH_ECALLS_ENABLED, ECALL_HALT, ECALL_HINT_MAX,
-    ECALL_HINT_MIN,
+    run_hash, CalcAbort2, HashKind, ECALL_HALT, ECALL_HINT_MAX, ECALL_HINT_MIN,
 };
 
 // Host register numbers (x86-64 encoding order).
@@ -343,9 +341,8 @@ struct ResolveCtx {
     inst_landing: Vec<u32>,
     /// Generated offset of the invalid-target stub.
     invalid_off: u32,
-    /// The container declared `CALC_PROFILE_NO_HOST_ECALL`: every `a7 != 0`
-    /// traps even after the chain enables host ecalls.
-    no_host_ecall: bool,
+    has_hash: bool,
+    segs: Vec<(u32, u32, u8)>,
     code: *const u8,
     layout: CalcLayout,
 }
@@ -519,11 +516,7 @@ extern "C" fn aot_ecall(
         state.aborted = 0;
         return 1;
     }
-    // v1 has no host ecalls: only HALT (handled above) executes. The hash
-    // table and its pricing stay in the tree behind
-    // `CALC_HASH_ECALLS_ENABLED` for a later coordinated upgrade; a
-    // HALT-only container stays HALT-only even after that flip.
-    if ctx.no_host_ecall || !CALC_HASH_ECALLS_ENABLED {
+    if !ctx.has_hash {
         state.aborted = 1;
         return 1;
     }
@@ -562,21 +555,15 @@ extern "C" fn aot_ecall(
             return 1;
         }
     };
-    if src < CODE_BASE || dst < CODE_BASE {
-        state.aborted = 1;
-        return 1;
-    }
     if src_end > lay.mem_len || dst_end > lay.mem_len {
         state.aborted = 1;
         return 1;
     }
-    // Digest writes obey the store rules: code, the pre-rodata pad, rodata
-    // and the alignment hole are read-only; `.data` starts at data_base.
-    if dst < lay.data_base {
+    if !perm_check(&lay, &ctx.segs, src, src_end, false) {
         state.aborted = 1;
         return 1;
     }
-    if dst < lay.stack_bottom && dst_end > lay.guard_base {
+    if !perm_check(&lay, &ctx.segs, dst, dst_end, true) {
         state.aborted = 1;
         return 1;
     }
@@ -587,6 +574,15 @@ extern "C" fn aot_ecall(
     mem[dst as usize..dst_end as usize].copy_from_slice(digest);
     r[10] = 0;
     0
+}
+
+extern "C" fn aot_mem_ok(ctx: *const ResolveCtx, addr: u64, end: u64, write: u64) -> u64 {
+    let ctx = unsafe { &*ctx };
+    if perm_check(&ctx.layout, &ctx.segs, addr, end, write != 0) {
+        0
+    } else {
+        1
+    }
 }
 
 extern "C" fn resolve_jalr(ctx: *const ResolveCtx, dest: u64) -> u64 {
@@ -725,18 +721,14 @@ impl AotFunc {
             );
         }
         let mut mem = vec![0u8; lay.mem_len as usize];
-        let code_off = CODE_BASE as usize;
-        mem[code_off..code_off + container.code.len()].copy_from_slice(&container.code);
-        mem[lay.rodata_base as usize..(lay.rodata_base + lay.rodata_len) as usize]
-            .copy_from_slice(&container.rodata);
-        mem[lay.data_base as usize..(lay.data_base + container.init.len() as u64) as usize]
-            .copy_from_slice(&container.init);
+        container.load_into(&mut mem);
         let mut regs = [0u64; 32];
         regs[10] = lay.input_base;
         regs[11] = input.len() as u64;
         regs[12] = lay.output_base;
         regs[13] = lay.output_max;
         regs[2] = lay.stack_top;
+        regs[1] = HALT_STUB;
         let input_base = lay.input_base as usize;
         mem[input_base..input_base + input.len()].copy_from_slice(input);
         // `u64::MAX as i64` is -1, and the block prologue's `jl` treats that
@@ -930,15 +922,7 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                     c.alu_imm(0, RCX, op.size() as i32); // rcx = end
                     let at = c.jcc32(2); // jc -> trap (addr+size overflow)
                     fixups.push((at, Fixup::Trap));
-                    // unmapped: cmp rax, CODE_BASE ; jb trap
-                    c.alu_imm(7 /*cmp*/, RAX, CODE_BASE as i32);
-                    let at = c.jcc32(2); // jb
-                    fixups.push((at, Fixup::Trap));
-                    // bounds: cmp rcx, mem_len ; ja trap
-                    debug_assert!(lay.mem_len <= i32::MAX as u64);
-                    c.alu_imm(7 /*cmp*/, RCX, lay.mem_len as i32);
-                    let at = c.jcc32(7); // ja
-                    fixups.push((at, Fixup::Trap));
+                    emit_perm_check(&mut c, &mut fixups, false);
                     let form = match op {
                         LoadOp::Ld => MemForm::Ld,
                         LoadOp::Lw => MemForm::LwSext,
@@ -956,37 +940,11 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                 Inst::Store { op, rs1, rs2, imm } => {
                     c.ld_reg(RAX, rs1);
                     c.alu_imm(0, RAX, imm as i32); // addr
-                    // unmapped: addr < CODE_BASE -> trap
-                    c.alu_imm(7 /*cmp*/, RAX, CODE_BASE as i32);
-                    let at = c.jcc32(2); // jb
-                    fixups.push((at, Fixup::Trap));
-                    // Code, the pad below rodata_base, rodata and the
-                    // alignment hole are read-only (unconditional v1
-                    // semantics); `.data` starts at data_base.
-                    debug_assert!(lay.data_base <= i32::MAX as u64);
-                    c.alu_imm(7 /*cmp*/, RAX, lay.data_base as i32);
-                    let at = c.jcc32(2); // jb
-                    fixups.push((at, Fixup::Trap));
                     c.mov_rcx_rax();
                     c.alu_imm(0, RCX, op.size() as i32);
                     let at = c.jcc32(2); // jc
                     fixups.push((at, Fixup::Trap));
-                    debug_assert!(lay.mem_len <= i32::MAX as u64);
-                    c.alu_imm(7, RCX, lay.mem_len as i32);
-                    let at = c.jcc32(7); // ja
-                    fixups.push((at, Fixup::Trap));
-                    // Stack-overflow guard (mirrors interp). RAX holds addr,
-                    // RCX holds end.
-                    debug_assert!(lay.stack_bottom <= i32::MAX as u64);
-                    c.alu_imm(7 /*cmp*/, RAX, lay.stack_bottom as i32);
-                    let sg1 = c.jcc32(3); // jae -> skip (addr >= bottom)
-                    debug_assert!(lay.guard_base <= i32::MAX as u64);
-                    c.alu_imm(7 /*cmp*/, RCX, lay.guard_base as i32);
-                    let sg2 = c.jcc32(6); // jbe -> skip (end <= guard)
-                    fixups.push((c.jmp32(), Fixup::Trap));
-                    let sg_skip = c.len();
-                    fixups.push((sg1, Fixup::To(sg_skip)));
-                    fixups.push((sg2, Fixup::To(sg_skip)));
+                    emit_perm_check(&mut c, &mut fixups, true);
                     c.ld_reg(RCX, rs2);
                     let form = match op {
                         StoreOp::Sd => MemForm::Sd,
@@ -1421,8 +1379,10 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
             }
             idx += 1;
         }
-        // Fallthrough to next block; past the end -> trap.
-        if idx >= module.insts.len() {
+        // Fallthrough to next block only when PC is contiguous. A hole
+        // between RX segments is an unmapped fetch (same class as PastEnd).
+        let last = (blk.end as usize).saturating_sub(1);
+        if module.sequential_next(last) != Some(blk.end as usize) {
             fixups.push((c.jmp32(), Fixup::PastEnd));
         } else {
             fixups.push((c.jmp32(), Fixup::Next(bi as u32)));
@@ -1522,7 +1482,8 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
         inst_addrs: module.addrs.clone(),
         inst_landing,
         invalid_off,
-        no_host_ecall: crate::calc::container::profile_has_no_host_ecall(module.profile),
+        has_hash: profile_has_hash(module.profile),
+        segs: module.segs.clone(),
         code: std::ptr::null(),
         layout: *lay,
     });
@@ -1559,6 +1520,64 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
     };
     ctx.code = map.0 as *const u8;
     Some(AotFunc { map, len: c.b.len(), ctx })
+}
+
+/// rax=addr, rcx=end. Traps unless `[addr, end)` has the requested perm.
+/// On success rax=addr again, ready for the actual load/store.
+///
+/// The address survives the helper call on the host stack: every callee-
+/// saved register is reserved by the frame (rbx/rbp/r12-r15), and any
+/// caller-saved register (an earlier revision used r8) may be clobbered by
+/// `aot_mem_ok` under the SysV ABI — which silently skewed every access by
+/// its own width. The stack slot is 16-byte padded so the `call` keeps the
+/// prologue's alignment invariant, and rsp is fully restored BEFORE the trap
+/// jump: the Trap stub falls into the Exit epilogue (`add rsp, 8` + pops).
+fn emit_perm_check(c: &mut Code, fixups: &mut Vec<(usize, Fixup)>, write: bool) {
+    // push rax (save addr); sub rsp, 8 keeps rsp 16-aligned at the call
+    c.op(0x50);
+    c.op(0x48);
+    c.op(0x83);
+    c.modrm(3, 5, 4); // sub rsp, 8
+    c.imm8(8);
+    // mov rdi, r14 (ctx)
+    c.rex(true, true, false, false);
+    c.op(0x89);
+    c.modrm(3, R14, RDI);
+    // mov rsi, rax (addr)
+    c.rex(true, false, false, false);
+    c.op(0x89);
+    c.modrm(3, RAX, RSI);
+    // mov rdx, rcx (end)
+    c.rex(true, false, false, false);
+    c.op(0x89);
+    c.modrm(3, RCX, RDX);
+    if write {
+        c.op(0xB9);
+        c.imm32(1);
+    } else {
+        c.op(0x31);
+        c.modrm(3, RCX, RCX);
+    }
+    c.movabs(
+        RAX,
+        aot_mem_ok as extern "C" fn(*const ResolveCtx, u64, u64, u64) -> u64 as u64,
+    );
+    c.op(0xFF);
+    c.modrm(3, 2, RAX);
+    // add rsp, 8; pop rcx (restore addr into rcx, rax holds the verdict)
+    c.op(0x48);
+    c.op(0x83);
+    c.modrm(3, 0, 4); // add rsp, 8
+    c.imm8(8);
+    c.op(0x59); // pop rcx
+    c.rex(true, false, false, false);
+    c.op(0x85);
+    c.modrm(3, RAX, RAX);
+    let at = c.jcc32(5); // jnz trap (rsp already back at prologue level)
+    fixups.push((at, Fixup::Trap));
+    c.op(0x48);
+    c.op(0x89);
+    c.modrm(3, RCX, RAX); // mov rax, rcx (addr)
 }
 
 /// Emit a load `mov rax, [rbx + rax]` in the right width/sign form.
@@ -1768,16 +1787,42 @@ mod tests {
     }
 
     fn container_for(code: Vec<u8>) -> CalcContainer {
-        CalcContainer {
-            profile: crate::calc::CALC_PROFILE_RV64IM_B,
-            mem_kib: 4,
-            entry: CODE_BASE as u32,
+        CalcContainer::from_code(
+            crate::calc::CALC_PROFILE_RV64IM,
+            8,
+            crate::calc::CALC_CODE_BASE as u32,
             code,
-            rodata: Vec::new(),
-            init: Vec::new(),
-            input_max: 64,
-            output_max: 64,
-        }
+            64,
+            64,
+        )
+    }
+
+    fn container_for_profile(code: Vec<u8>, profile: u8) -> CalcContainer {
+        CalcContainer::from_code(
+            profile,
+            8,
+            crate::calc::CALC_CODE_BASE as u32,
+            code,
+            64,
+            64,
+        )
+    }
+
+    /// [`diff`] under a non-base profile (the fuzz uses it for programs
+    /// that emit bitmanip classes).
+    fn diff_profile(
+        name: &str,
+        code: &[u8],
+        profile: u8,
+        input: &[u8],
+        budget: u64,
+    ) -> (u64, bool) {
+        diff_container(
+            name,
+            &container_for_profile(code.to_vec(), profile),
+            input,
+            budget,
+        )
     }
 
     /// Run one container through both engines and require bit-exact
@@ -1787,7 +1832,15 @@ mod tests {
     /// both engines return zeros/empty deterministically).
     /// Returns (interp cycles_used, interp-succeeded).
     fn diff(name: &str, code: &[u8], input: &[u8], budget: u64) -> (u64, bool) {
-        let c = container_for(code.to_vec());
+        diff_container(name, &container_for(code.to_vec()), input, budget)
+    }
+
+    fn diff_container(
+        name: &str,
+        c: &CalcContainer,
+        input: &[u8],
+        budget: u64,
+    ) -> (u64, bool) {
         let module = verify_container(&c)
             .unwrap_or_else(|e| panic!("{name}: container rejected: {e:?}"));
         let (ir, iregs, imem, _trace) = interp::run_with_state(&module, &c, input, budget);
@@ -1906,44 +1959,41 @@ mod tests {
         let c = container_for(a.finish());
         let module = verify_container(&c).expect("ecall verifies");
         assert!(aot_compile(&module).is_some(), "HALT ecall must AOT-compile");
-        let (_, ok) = diff("ecall_halt", &c.code, &[], 100_000);
+        let (_, ok) = diff("ecall_halt", c.first_rx_data(), &[], 100_000);
         assert!(ok);
     }
 
-    /// `len == 0` does not exempt `src < CODE_BASE`. A hash ecall with
-    /// `a0 = 0`, `a1 = 0`, and `a2` left at the ABI output base traps in
-    /// both engines with the same cycle total (hash cost is charged first).
     #[test]
-    fn hash_ecall_zero_len_below_code_base_traps() {
+    fn hash_profile_is_not_admitted() {
         let mut a = Asm::new();
-        a.i(0, 10, 0, 0x13, 0); // addi a0, x0, 0  (src)
-        a.i(0, 11, 0, 0x13, 0); // addi a1, x0, 0  (len)
-        a.i(0, 17, 0, 0x13, 1); // addi a7, x0, 1  (sha2)
+        a.i(0, 17, 0, 0x13, 1);
         a.raw(0x0000_0073);
-        let code = a.finish();
-        let (cyc, ok) = diff("zero_len_unmapped_src", &code, &[], 100_000);
-        assert!(!ok, "unmapped src must trap");
-        assert!(cyc > 0, "hash cost is charged before the bounds trap");
+        let mut c = container_for(a.finish());
+        c.profile |= crate::calc::CALC_PROFILE_HASH;
+        assert!(verify_container(&c).is_err());
     }
 
-    /// `a1 = u64::MAX` saturates the SHA-256 cycle price. Both engines must
-    /// abort `OutOfGas` on that charge (a truncated `i64` cost used to skip
-    /// the check and trap on the address instead).
     #[test]
-    fn hash_ecall_huge_len_oog_parity() {
+    fn bitmanip_profile_is_admitted_and_parity() {
         let mut a = Asm::new();
-        a.i(0, 11, 0, 0x13, -1); // addi a1, x0, -1
-        a.i(0, 17, 0, 0x13, 1); // addi a7, x0, 1 (SHA-256)
-        a.raw(0x0000_0073);
-        let (cyc, ok) = diff("hash_huge_len_oog", &a.finish(), &[], 100_000);
-        assert!(!ok, "huge hash length must exhaust the cycle budget");
-        assert!(cyc < 100_000, "failing hash charge is not kept");
+        a.r(0b0110000, 1, 20, 5, 0, 0x13); // clz
+        li(&mut a, 10, 0);
+        a.ret();
+        let mut c = container_for(a.finish());
+        c.profile = crate::calc::CALC_PROFILE_RV64IM_B;
+        assert!(verify_container(&c).is_ok(), "the B profile is admitted");
+        diff_container("bitmanip_clz", &c, &[], 100_000);
+        // Profile 0 still rejects bitmanip encodings at verify.
+        let c0 = container_for({
+            let mut a = Asm::new();
+            a.r(0b0110000, 1, 20, 5, 0, 0x13);
+            li(&mut a, 10, 0);
+            a.ret();
+            a.finish()
+        });
+        assert!(verify_container(&c0).is_err(), "B encodings rejected on profile 0");
     }
 
-    /// The whole Zbb/Zba/Zbs/Zbc subset through both engines (the ISA is
-    /// so the AOT must cover every bit-manipulation form the decoder
-    /// accepts): unary ops, single-bit immediate and register forms, shifts
-    /// (rol/ror/rori incl. W), address-adds, min/max, and the clmul family.
     #[test]
     fn zbb_zbc_full_subset_parity() {
         let mut a = Asm::new();
@@ -2004,8 +2054,15 @@ mod tests {
         li(&mut a, 10, 0); // a0 = 0: empty output at the sentinel return
         a.ret();
         let code = a.finish();
-        let (_, ok) = diff("zbb_zbc_full", &code, &[], 1_000_000);
-        assert!(ok, "zbb/zbc program must return cleanly");
+        assert!(
+            verify_container(&container_for(code.clone())).is_err(),
+            "bitmanip encodings are still rejected on profile 0"
+        );
+        // The same kernel is admitted on the B profile and must agree
+        // bit-exactly between the two engines.
+        let mut c = container_for(code);
+        c.profile = crate::calc::CALC_PROFILE_RV64IM_B;
+        diff_container("zbb_zbc_full_subset", &c, &[], 100_000);
     }
 
     /// Mounted-engine equivalence through the full HVM gas path: the same
@@ -2122,8 +2179,15 @@ mod tests {
             li(&mut a, 10, 0);
             a.ret();
             let code = a.finish();
-            let (_, ok) = diff(&format!("micro_{name}"), &code, &[], 100_000);
-            assert!(ok, "micro_{name} must return cleanly");
+            assert!(
+                verify_container(&container_for(code.clone())).is_err(),
+                "micro_{name} is bitmanip and must stay rejected on profile 0"
+            );
+            let mut c = container_for(code);
+            c.profile = crate::calc::CALC_PROFILE_RV64IM_B;
+            let (cyc, ok) = diff_container(&format!("micro_{name}"), &c, &[], 100_000);
+            assert!(ok, "micro_{name}: kernel must halt cleanly");
+            assert!(cyc > 0);
         }
     }
 
@@ -2161,7 +2225,7 @@ mod tests {
     /// touched at the very end (entry convention: a0 = input_base on entry,
     /// output length at HALT). Also exercises unreachable padding.
     #[test]
-    fn all_profile1_instructions_parity() {
+    fn all_im_instructions_parity() {
         let mut a = Asm::new();
         // -- source values
         li(&mut a, 5, -1); // t0 = -1
@@ -2247,8 +2311,46 @@ mod tests {
         let _ = (resume, after);
         a.ret();
         let code = a.finish();
-        let (_, ok) = diff("all_profile1", &code, &[], 1_000_000);
-        assert!(ok, "all_profile1 must return cleanly");
+        let (_, ok) = diff("all_im", &code, &[], 1_000_000);
+        assert!(ok, "all_im must return cleanly");
+    }
+
+    /// Regression for the perm-check address save: the backend once kept
+    /// the load/store address across the `aot_mem_ok` helper call in r8 —
+    /// a caller-saved register the helper may clobber (release builds left
+    /// it holding `end`), skewing every access by its own width. Same-width
+    /// store/load pairs coincide; MIXED widths diverge. Pins the exact
+    /// interpreter values, then requires bit-exact full-state agreement.
+    #[test]
+    fn mixed_width_store_load_parity() {
+        let mut a = Asm::new();
+        li(&mut a, 5, -1); // t0 = 0xFFFF_FFFF_FFFF_FFFF
+        li(&mut a, 6, 0x876); // t1 = sext12(0x876) = 0xFFFF_FFFF_FFFF_F876
+        a.s(3, 2, 5, -32); // sd t0, -32(sp)
+        a.s(1, 2, 6, -24); // sh t1, -24(sp) — halfword 0xF876
+        a.s(0, 2, 5, -22); // sb t0, -22(sp) — adjacent, different width
+        // Loads land in a2..a6: the HALT stub rewrites a0/a1 on return.
+        a.i(3, 12, 2, 0x03, -32); // ld  a2, -32(sp)
+        a.i(1, 13, 2, 0x03, -24); // lh  a3, -24(sp)
+        a.i(5, 14, 2, 0x03, -24); // lhu a4, -24(sp)
+        a.i(0, 15, 2, 0x03, -22); // lb  a5, -22(sp)
+        a.i(4, 16, 2, 0x03, -22); // lbu a6, -22(sp)
+        li(&mut a, 10, 0); // a0 = 0: empty output at the sentinel return
+        a.ret();
+        let code = a.finish();
+        // Pin the interpreter values before the cross-engine diff so a
+        // regression names the skewing access instead of a bare mismatch.
+        let c = container_for(code.clone());
+        let module = verify_container(&c).unwrap();
+        let (ir, iregs, _imem, _tr) = interp::run_with_state(&module, &c, &[], 100_000);
+        assert!(ir.is_ok(), "mixed_width must return cleanly: {ir:?}");
+        assert_eq!(iregs[12], u64::MAX, "ld -32");
+        assert_eq!(iregs[13], 0xFFFF_FFFF_FFFF_F876, "lh -24 (sign-extended)");
+        assert_eq!(iregs[14], 0xF876, "lhu -24");
+        assert_eq!(iregs[15], u64::MAX, "lb -22 (0xFF sign-extended)");
+        assert_eq!(iregs[16], 0xFF, "lbu -22");
+        let (_, ok) = diff("mixed_width", &code, &[], 100_000);
+        assert!(ok, "mixed_width: engines diverge on full stop state");
     }
 
     /// Directed regression for the register-form comparisons: an earlier
@@ -2517,32 +2619,48 @@ mod tests {
         assert!(ok);
     }
 
-    /// Deterministic random programs from the unified RV64IM+Zba/Zbb/Zbs/Zbc
-    /// whitelist: both engines must agree on outcome, cycles, registers and
+    /// Deterministic random programs from the RV64IM (profile 0) whitelist:
+    /// both engines must agree on outcome, cycles, registers and
     /// memory — including traps (bad loads/stores/jumps) and out-of-gas
     /// runs. Odd cases are "tame" (safe memory anchors, forward branches,
     /// no wild `jalr`) so a healthy share of runs finish cleanly. The
     /// packing is 32-bit-only (C excluded). Jump and memory density are seeded
     /// deterministically. 2000 seeds, fixed base seed for reproducibility.
     #[test]
+    fn ret_via_halt_stub_parity() {
+        let mut a = Asm::new();
+        li(&mut a, 10, 0);
+        a.ret();
+        let (_, ok) = diff("ret_via_halt_stub", &a.finish(), &[], 100_000);
+        assert!(ok, "li a0,0; ret must HALT through the trampoline");
+    }
+
+    #[test]
     fn fuzz_differential_unified() {
         let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
         let mut successes = 0usize;
+        let mut b_programs = 0usize;
         for case in 0..2000 {
             let tame = case % 2 == 0;
-            let code = gen_program(&mut seed, tame);
+            let (code, profile) = gen_program(&mut seed, tame);
             let mut input = [0u8; 32];
             for b in input.iter_mut() {
                 seed = xs(seed);
                 *b = seed as u8;
             }
-            let (_, ok) = diff(&format!("fuzz#{case}"), &code, &input, 20_000);
+            let (_, ok) = diff_profile(&format!("fuzz#{case}"), &code, profile, &input, 20_000);
             successes += ok as usize;
+            b_programs += (profile != crate::calc::CALC_PROFILE_RV64IM) as usize;
         }
-        // Sanity: the generator must produce a healthy mix (not all traps).
+        // Sanity: the generator must produce a healthy mix (not all traps)
+        // and actually exercise the B profile.
         assert!(
             successes >= 700,
             "suspiciously few clean runs: {successes}/2000"
+        );
+        assert!(
+            b_programs >= 100,
+            "suspiciously few bitmanip programs: {b_programs}/2000"
         );
     }
 
@@ -2553,7 +2671,9 @@ mod tests {
         s
     }
 
-    fn gen_program(seed: &mut u64, tame: bool) -> Vec<u8> {
+    /// Returns (code, profile): programs that emit a bitmanip class
+    /// (14/15) need the B profile, everything else runs on profile 0.
+    fn gen_program(seed: &mut u64, tame: bool) -> (Vec<u8>, u8) {
         let mut a = Asm::new();
         *seed = xs(*seed);
         let n = 8 + (*seed % 32) as usize;
@@ -2564,20 +2684,25 @@ mod tests {
         }
         let idx_hint = a.off.len();
         let _ = idx_hint;
+        let mut needs_b = false;
         for k in 0..n {
             *seed = xs(*seed);
-            let mut class = (*seed % 19) as u32;
+            // Class pool: 0..=13 the base RV64IM surface, 14/15 the
+            // admitted Zba/Zbb/Zbs/Zbc register and immediate forms
+            // (v2 profile bit 0).
+            let mut class = (*seed % 16) as u32;
             if tame {
-                // tame set: ALU/shift/branch-forward/safe-memory only
+                // tame set: ALU/shift/branch-forward/safe-memory only;
+                // 14/15 are pure ALU, so they are tame-safe too.
                 class = match class {
                     0 | 1 | 2 | 3 | 4 | 5 | 6 => class,
                     7 | 8 => class, // safe anchors below
                     9 => 9,         // forward-only targets below
-                    14 => 14,       // zbb reg-form ops are tame
-                    15 => 15,       // zbb immediate forms are tame
-                    _ => 5,         // regalu
+                    14 | 15 => class,
+                    _ => 5, // regalu
                 };
             }
+            needs_b |= class >= 14;
             let _ = k;
             let rr = |seed: &mut u64| -> u8 {
                 *seed = xs(*seed);
@@ -2771,6 +2896,14 @@ mod tests {
         }
         li(&mut a, 10, 0); // deterministic empty output on return paths
         a.ret();
-        a.finish()
+        let _ = total;
+        (
+            a.finish(),
+            if needs_b {
+                crate::calc::CALC_PROFILE_RV64IM_B
+            } else {
+                crate::calc::CALC_PROFILE_RV64IM
+            },
+        )
     }
 }

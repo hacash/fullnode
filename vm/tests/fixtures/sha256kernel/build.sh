@@ -9,9 +9,10 @@ OBJCP=$(ls ~/.rustup/toolchains/*/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-
 NM=$(ls ~/.rustup/toolchains/*/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-nm | head -1)
 OBJDUMP=$(ls ~/.rustup/toolchains/*/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-objdump | head -1)
 TARGET="$(pwd)/riscv64im_zicclsm.json"
-RUSTC_BOOTSTRAP=1 RUSTFLAGS="-C link-arg=-Tcontainer.ld -C relocation-model=static" \
+RUSTC_BOOTSTRAP=1 RUSTFLAGS="-C link-arg=-Tcontainer.ld -C link-arg=-n -C relocation-model=static" \
   cargo build -Zbuild-std=core,compiler_builtins -Zbuild-std-features=compiler-builtins-mem --release --target "$TARGET"
 ELF=target/riscv64im_zicclsm/release/sha256kernel
+cp "$ELF" kernel.elf
 $OBJCP -O binary --only-section=.text $ELF image_code.bin
 $OBJCP -O binary --only-section=.rodata $ELF image_rodata.bin
 $OBJCP -O binary --only-section=.data $ELF image_init.bin

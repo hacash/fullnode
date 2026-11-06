@@ -1,17 +1,14 @@
-//! v1 execution semantics are unconditional and pinned: every ISA profile
-//! cell is admitted, HALT runs, host ecalls are disabled, rodata/the
-//! alignment hole/code are read-only, the stack guard band traps, and any
-//! instruction-boundary entry point is accepted. There is no consensus
-//! config switch for any of these — turning one off would reject or
-//! reinterpret previously legal containers — so these tests pin the
-//! behaviors directly. `CalcFnObj::build_v1` uses the default chain caps.
+//! v2 execution semantics are unconditional and pinned: every B / RVC
+//! profile is admitted (the HASH bit is not), HALT runs, hash ecalls trap,
+//! guest holes/code/rodata trap stores, the stack starts at the end of the
+//! guest image (no guard band), and any instruction-boundary entry point is
+//! accepted. `CalcFnObj::build_v1` uses the default chain caps.
 
 use vm::calc::container::CalcContainer;
 use vm::calc::interp;
 use vm::calc::{
-    CalcFnObj, CalcHostConfig, CalcRunLimits, HashKind, CALC_CODE_BASE,
-    CALC_HASH_ECALLS_ENABLED, CALC_PROFILE_NO_HOST_ECALL, CALC_PROFILE_RV64IM,
-    CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B, CALC_PROFILE_RV64IM_B,
+    CalcFnObj, CalcHostConfig, CalcRunLimits, HashKind, CALC_CODE_BASE, CALC_PROFILE_HASH,
+    CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B, CALC_PROFILE_RV64IM_B,
 };
 use vm::calc::SpaceCap;
 
@@ -56,16 +53,7 @@ fn halt_code() -> Vec<u8> {
 }
 
 fn container(profile: u8, entry: u32, code: Vec<u8>, rodata: Vec<u8>) -> CalcContainer {
-    CalcContainer {
-        profile,
-        mem_kib: 8,
-        entry,
-        code,
-        rodata,
-        init: vec![],
-        input_max: 64,
-        output_max: 64,
-    }
+    CalcContainer::from_regions(profile, 8, entry, code, rodata, vec![], 64, 64)
 }
 
 fn limits() -> CalcRunLimits {
@@ -89,19 +77,29 @@ fn store_at(addr: u64) -> Vec<u8> {
 }
 
 #[test]
-fn build_admits_every_profile_cell() {
+fn build_admission_profile_matrix() {
+    let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, halt_code(), vec![]);
+    assert!(CalcFnObj::build_v1(c).is_ok());
+    // Every B / RVC combination is admitted.
     for profile in [
-        CALC_PROFILE_RV64IM,
         CALC_PROFILE_RV64IM_B,
         CALC_PROFILE_RV64IMC,
         CALC_PROFILE_RV64IMC_B,
-        // The third axis is orthogonal: a HALT-only declaration on top of a
-        // base cell is its own admitted profile value.
-        CALC_PROFILE_RV64IM | CALC_PROFILE_NO_HOST_ECALL,
-        CALC_PROFILE_RV64IMC_B | CALC_PROFILE_NO_HOST_ECALL,
     ] {
         let c = container(profile, CALC_CODE_BASE as u32, halt_code(), vec![]);
-        assert!(CalcFnObj::build_v1(c).is_ok(), "profile {profile}");
+        assert!(
+            CalcFnObj::build_v1(c).is_ok(),
+            "profile {profile} must be admitted"
+        );
+    }
+    // The HASH bit stays rejected, alone or combined.
+    for profile in [
+        CALC_PROFILE_HASH,
+        CALC_PROFILE_RV64IM | CALC_PROFILE_HASH,
+        CALC_PROFILE_RV64IMC_B | CALC_PROFILE_HASH,
+    ] {
+        let c = container(profile, CALC_CODE_BASE as u32, halt_code(), vec![]);
+        assert!(CalcFnObj::build_v1(c).is_err(), "profile {profile} must be rejected");
     }
 }
 
@@ -118,21 +116,11 @@ fn host_hash_ecalls_are_disabled_in_v1() {
     let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, code, vec![]);
     let obj = CalcFnObj::build_v1(c).unwrap();
     let exec = obj.run(&[], limits());
-    if CALC_HASH_ECALLS_ENABLED {
-        assert!(exec.result.is_ok(), "{exec:?}");
-        let hash = HashKind::Sha2.cycles(0);
-        assert_eq!(
-            exec.cycles_used,
-            hash + 2 + 4 + vm::calc::CALC_SETUP_BASE_CYCLES + 8 * 16
-        );
-    } else {
-        assert!(exec.result.is_err(), "hash ecall must trap in v1: {exec:?}");
-        // addi + ecall (2) at the failing block, setup for 8 KiB; no hash cost.
-        assert_eq!(
-            exec.cycles_used,
-            2 + vm::calc::CALC_SETUP_BASE_CYCLES + 8 * 16
-        );
-    }
+    assert!(exec.result.is_err(), "hash ecall must trap without HASH bit: {exec:?}");
+    assert_eq!(
+        exec.cycles_used,
+        2 + vm::calc::CALC_SETUP_BASE_CYCLES + 8 * 16
+    );
     // The price table is still total and monotone; it is the future switch.
     assert!(HashKind::Sha2.cycles(0) > 0);
     assert_eq!(HashKind::Sha2.cycles(0), 64);
@@ -145,25 +133,28 @@ fn rodata_hole_and_code_stores_trap() {
     let rodata_base = (CALC_CODE_BASE + 28 + 15) & !15;
     let data_base = (rodata_base + 1 + 15) & !15;
     assert!(rodata_base + 1 < data_base, "a one-byte rodata leaves a hole");
-    // rodata itself, the alignment hole before `.data`, and the code region
-    // are all read-only. Each target runs in its own kernel so the first
-    // trap cannot hide the others.
+    // rodata itself, the alignment hole between rodata and `.data`, and the
+    // code region all reject stores (read-only / unmapped). A real .data
+    // segment is required: everything above the last segment is legal stack
+    // now that the guard band is gone, so a trailing hole would otherwise
+    // not exist. Each target runs in its own kernel so the first trap
+    // cannot hide the others.
     for target in [rodata_base, rodata_base + 1, CALC_CODE_BASE] {
         let mut code = Vec::new();
         li(&mut code, 5, target);
         push(&mut code, w_sb(5));
         halt(&mut code);
         assert_eq!(code.len(), 28);
-        let c = CalcContainer {
-            profile: CALC_PROFILE_RV64IM,
-            mem_kib: 8,
-            entry: CALC_CODE_BASE as u32,
+        let c = CalcContainer::from_regions(
+            CALC_PROFILE_RV64IM,
+            8,
+            CALC_CODE_BASE as u32,
             code,
-            rodata: vec![0xAB],
-            init: vec![],
-            input_max: 64,
-            output_max: 64,
-        };
+            vec![0xAB],
+            vec![0u8; 16],
+            64,
+            64,
+        );
         let on = CalcFnObj::build_v1(c).unwrap();
         assert!(
             on.run(&[], limits()).result.is_err(),
@@ -173,14 +164,18 @@ fn rodata_hole_and_code_stores_trap() {
 }
 
 #[test]
-fn stack_guard_band_traps() {
-    // 28-byte store_at body: the guard starts at align16(CODE_BASE+28).
-    let guard = 0x1020u64;
-    let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, store_at(guard), vec![]);
+fn stack_reaches_guest_end() {
+    // 28-byte store_at body: with the guard band removed, the first stack
+    // byte is guest_end = CODE_BASE+28 and storing there is legal.
+    let stack_first = CALC_CODE_BASE + 28;
+    let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, store_at(stack_first), vec![]);
     let lay = c.layout();
-    assert_eq!(lay.guard_base, guard);
+    assert_eq!(lay.stack_bottom, stack_first);
     let on = CalcFnObj::build_v1(c).unwrap();
-    assert!(on.run(&[], limits()).result.is_err(), "guard band traps");
+    assert!(
+        on.run(&[], limits()).result.is_ok(),
+        "a store at the first stack byte is legal"
+    );
 }
 
 #[test]
@@ -226,19 +221,67 @@ fn aot_mount_is_a_host_knob_with_identical_results() {
 /// verification accepts every profile, and the engine runs it.
 #[test]
 fn interp_runs_v1_verified_modules() {
-    let c = container(CALC_PROFILE_RV64IM_B, CALC_CODE_BASE as u32, halt_code(), vec![]);
+    let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, halt_code(), vec![]);
     let m = vm::calc::verify::verify_container_with_cap(&c, &SpaceCap::new(0)).unwrap();
     assert!(interp::run(&m, &c, &[], 1_000_000, None).is_ok());
 }
 
-/// A `CALC_PROFILE_NO_HOST_ECALL` container keeps HALT working; with host
-/// ecalls disabled globally the non-HALT paths trap for every profile, and
-/// the profile bit is admitted and carried through verification.
 #[test]
-fn no_host_ecall_profile_admits_and_keeps_halt() {
-    let profile = CALC_PROFILE_RV64IM | CALC_PROFILE_NO_HOST_ECALL;
+fn hash_profile_is_not_admitted() {
+    let profile = CALC_PROFILE_RV64IM | CALC_PROFILE_HASH;
     let c = container(profile, CALC_CODE_BASE as u32, halt_code(), vec![]);
-    let m = vm::calc::verify::verify_container_with_cap(&c, &SpaceCap::new(0)).unwrap();
-    assert!(vm::calc::container::profile_has_no_host_ecall(m.profile()));
-    assert!(interp::run(&m, &c, &[], 1_000_000, None).is_ok());
+    assert!(vm::calc::verify::verify_container_with_cap(&c, &SpaceCap::new(0)).is_err());
+}
+
+/// IALIGN: the executable segment BASE must satisfy the profile's fetch
+/// alignment, not just its length. `push_stream` decodes by segment-relative
+/// offset, so a vaddr like `0x1002` with 4-aligned lengths used to verify
+/// — an image a spec-compliant RISC-V (and any zkVM) faults on at fetch.
+/// Regression: an unaligned RX vaddr must be rejected by verify (direct
+/// construction), by decode (wire path, which runs validate_invariants),
+/// and by build (deploy path).
+#[test]
+fn unaligned_code_vaddr_is_rejected() {
+    let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, halt_code(), vec![]);
+    assert_eq!(c.segs[0].vaddr % 4, 0, "test premise: builders align code");
+    let mut c2 = c.clone();
+    c2.segs[0].vaddr |= 0x02; // vaddr |= 2 — lengths stay 4-aligned
+    let e = vm::calc::verify::verify_container(&c2).unwrap_err();
+    assert!(
+        format!("{e:?}").contains("vaddr not 4-byte aligned"),
+        "expected the vaddr alignment rejection, got {e:?}"
+    );
+    let wire = c2.encode().unwrap();
+    let derr = CalcContainer::decode(&wire).unwrap_err();
+    assert!(format!("{derr:?}").contains("vaddr not 4-byte aligned"));
+    assert!(CalcFnObj::build_v1(c2).is_err());
+}
+
+/// `with_bss` grows the last writable segment's declared size by `bss_len`.
+/// An earlier revision assigned `memsz = filesz + bss_len`, silently
+/// SHRINKING a segment that already reserved BSS. Regression: the appended
+/// case still builds a valid chain image, and a pre-existing BSS grows.
+#[test]
+fn with_bss_appends_and_never_shrinks() {
+    use vm::calc::container::{CalcSegment, SEG_W};
+    let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, halt_code(), vec![]);
+    // Code-only container: with_bss appends a fresh RW BSS at guest_end and
+    // the result is still a valid, verifiable chain image.
+    let end = c.guest_end() as u32;
+    let c1 = c.clone().with_bss(4096);
+    let bss = c1.segs.last().unwrap();
+    assert_eq!(bss.vaddr, end);
+    assert_eq!(bss.filesz(), 0);
+    assert_eq!(bss.memsz, 4096);
+    assert_ne!(bss.flags & SEG_W, 0);
+    assert!(CalcFnObj::build_v1(c1.clone()).is_ok());
+    // A segment that already reserves BSS (memsz > filesz) must GROW by
+    // bss_len; the old assignment would have left memsz = filesz + bss_len.
+    let mut c2 = c.clone();
+    c2.segs
+        .push(CalcSegment::rw(end, vec![0xAB; 64], 64 + 1024));
+    let c3 = c2.with_bss(512);
+    let last = c3.segs.last().unwrap();
+    assert_eq!(last.filesz(), 64);
+    assert_eq!(last.memsz, 64 + 1024 + 512);
 }

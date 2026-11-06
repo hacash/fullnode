@@ -5,10 +5,11 @@
 use std::time::{Duration, Instant};
 
 use vm::calc::container::{
-    CalcContainer, CALC_MAGIC, CALC_PROFILE_RV64IM, CALC_VERSION, CODE_BASE, HEADER_LEN,
+    CalcContainer, CalcSegment, CALC_MAGIC, CALC_PROFILE_RV64IM, CALC_VERSION, CODE_BASE,
+    HEADER_LEN, SEG_HDR_LEN,
 };
 use vm::calc::verify::verify_container;
-use vm::calc::{pack_container, CalcAbort2, CalcFnObj, CalcRunLimits};
+use vm::calc::{pack_code, pack_container, CalcAbort2, CalcFnObj, CalcRunLimits};
 use vm::calc::SpaceCap;
 
 /// HALT ecall with exit 0 and empty output.
@@ -23,20 +24,18 @@ fn ret_code() -> Vec<u8> {
 
 /// A directly constructed, otherwise valid container (bypasses `decode`).
 fn valid_container() -> CalcContainer {
-    CalcContainer {
-        profile: CALC_PROFILE_RV64IM,
-        mem_kib: 4,
-        entry: CODE_BASE as u32,
-        code: ret_code(),
-        rodata: Vec::new(),
-        init: Vec::new(),
-        input_max: 16,
-        output_max: 16,
-    }
+    CalcContainer::from_code(
+            CALC_PROFILE_RV64IM,
+            4,
+            CODE_BASE as u32,
+            ret_code(),
+            16,
+            16,
+        )
 }
 
 fn packed() -> CalcContainer {
-    pack_container(
+    pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         4,
@@ -44,8 +43,6 @@ fn packed() -> CalcContainer {
         16,
         16,
         ret_code(),
-        vec![],
-        vec![],
     )
     .unwrap()
 }
@@ -68,30 +65,31 @@ fn decode_rejects_trailing_bytes() {
 
 #[test]
 fn decode_rejects_huge_declared_lengths_without_panicking() {
-    let mut bytes = vec![0u8; HEADER_LEN];
+    let mut bytes = vec![0u8; HEADER_LEN + SEG_HDR_LEN];
     bytes[0..4].copy_from_slice(&CALC_MAGIC);
     bytes[4] = CALC_VERSION;
+    bytes[6] = 1; // nseg
     bytes[8..12].copy_from_slice(&4u32.to_be_bytes()); // mem_kib
-    bytes[16..20].copy_from_slice(&u32::MAX.to_be_bytes()); // code_len
-    bytes[20..24].copy_from_slice(&u32::MAX.to_be_bytes()); // init_len
-    bytes[24..26].copy_from_slice(&16u16.to_be_bytes()); // input_max
-    bytes[26..28].copy_from_slice(&16u16.to_be_bytes()); // output_max
-    bytes[28..32].copy_from_slice(&0u32.to_be_bytes()); // rodata_len
+    bytes[12..16].copy_from_slice(&(CODE_BASE as u32).to_be_bytes());
+    bytes[16..18].copy_from_slice(&16u16.to_be_bytes());
+    bytes[18..20].copy_from_slice(&16u16.to_be_bytes());
+    bytes[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&(CODE_BASE as u32).to_be_bytes());
+    bytes[HEADER_LEN + 4..HEADER_LEN + 8].copy_from_slice(&u32::MAX.to_be_bytes()); // filesz
+    bytes[HEADER_LEN + 8..HEADER_LEN + 12].copy_from_slice(&u32::MAX.to_be_bytes()); // memsz
+    bytes[HEADER_LEN + 12] = 0x5; // RX
     assert!(CalcContainer::decode(&bytes).is_err());
 }
 
 #[test]
 fn decode_rejects_nonzero_reserved_header_bytes() {
-    // The 32-byte header has two reserved bytes (6..8). They are the only
-    // future wire extension point and must stay zero for v1.
-    for off in [6usize, 7] {
-        let mut bytes = packed().encode().unwrap();
-        bytes[off] = 1;
-        assert!(
-            CalcContainer::decode(&bytes).is_err(),
-            "reserved byte {off} must be zero"
-        );
-    }
+    // v2 header reserved byte is offset 7; each segment header has 3
+    // reserved bytes at the end of the 16-byte record.
+    let mut bytes = packed().encode().unwrap();
+    bytes[7] = 1;
+    assert!(
+        CalcContainer::decode(&bytes).is_err(),
+        "reserved byte 7 must be zero"
+    );
 }
 
 // ---------------------------------------------------------------- fix 4 ---
@@ -102,7 +100,10 @@ fn encode_accepts_rodata_above_u16_and_pack_rejects_on_layout() {
     // rodata; the container still cannot pack because the declared 4KiB
     // memory cannot hold it (layout fit check).
     let mut c = valid_container();
-    c.rodata = vec![0u8; 65_536];
+    c.segs.push(CalcSegment::ro(
+        CODE_BASE as u32 + 0x100,
+        vec![0u8; 65_536],
+    ));
     assert!(c.encode().is_ok());
     assert!(pack_container(
         &SpaceCap::new(0),
@@ -111,9 +112,10 @@ fn encode_accepts_rodata_above_u16_and_pack_rejects_on_layout() {
         CODE_BASE as u32,
         16,
         16,
-        ret_code(),
-        vec![0u8; 65_536],
-        vec![]
+        vec![
+            CalcSegment::rx(CODE_BASE as u32, ret_code()),
+            CalcSegment::ro(CODE_BASE as u32 + 0x100, vec![0u8; 65_536]),
+        ],
     )
     .is_err());
 }
@@ -122,7 +124,7 @@ fn encode_accepts_rodata_above_u16_and_pack_rejects_on_layout() {
 fn encode_round_trips_valid_container() {
     let c = valid_container();
     let bytes = c.encode().unwrap();
-    assert_eq!(bytes.len(), HEADER_LEN + ret_code().len());
+    assert_eq!(bytes.len(), HEADER_LEN + SEG_HDR_LEN + ret_code().len());
     let (decoded, used) = CalcContainer::decode(&bytes).unwrap();
     assert_eq!(used, bytes.len());
     assert_eq!(decoded, c);
@@ -132,7 +134,7 @@ fn encode_round_trips_valid_container() {
 
 #[test]
 fn pack_container_rejects_mem_kib_above_cap() {
-    assert!(pack_container(
+    assert!(pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         128,
@@ -140,8 +142,6 @@ fn pack_container_rejects_mem_kib_above_cap() {
         16,
         16,
         ret_code(),
-        vec![],
-        vec![]
     )
     .is_err());
 }
@@ -150,7 +150,7 @@ fn pack_container_rejects_mem_kib_above_cap() {
 fn pack_container_accepts_input_max_above_l1_call_data() {
     // The container has no HVM call-data cap. Chain admission applies
     // SpaceCap::call_data_size separately.
-    assert!(pack_container(
+    assert!(pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         64,
@@ -158,15 +158,13 @@ fn pack_container_accepts_input_max_above_l1_call_data() {
         6000,
         16,
         ret_code(),
-        vec![],
-        vec![]
     )
     .is_ok());
 }
 
 #[test]
 fn pack_container_accepts_valid_layout() {
-    assert!(pack_container(
+    assert!(pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         4,
@@ -174,8 +172,6 @@ fn pack_container_accepts_valid_layout() {
         16,
         16,
         ret_code(),
-        vec![],
-        vec![]
     )
     .is_ok());
 }
@@ -218,7 +214,7 @@ fn mid_block_jalr_is_not_overcharged() {
         [0x73, 0x00, 0x00, 0x00],
     ]
     .concat();
-    let c = pack_container(
+    let c = pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         4,
@@ -226,8 +222,6 @@ fn mid_block_jalr_is_not_overcharged() {
         16,
         16,
         code,
-        vec![],
-        vec![],
     )
     .unwrap();
     let obj = CalcFnObj::build_v1(c).unwrap();
@@ -272,22 +266,22 @@ fn precheck_rejects_insufficient_resource_before_running() {
 #[test]
 fn resource_preflight_reserves_output_max() {
     let obj = CalcFnObj::build_v1(packed()).unwrap();
-    // 4 KiB container: mem 32, input 0, output_max 16 bytes -> 1.
+    // 4 KiB container: mem 8, input 0, output_max 16 bytes -> 1.
     let exact = obj.run(
         &[],
         CalcRunLimits {
             cycles: 1000,
-            resource: 33,
+            resource: 9,
             deadline: None,
         },
     );
     assert!(exact.result.is_ok(), "{:?}", exact.result);
-    assert_eq!(exact.resource, 32); // actual output is empty
+    assert_eq!(exact.resource, 8); // actual output is empty
     let short = obj.run(
         &[],
         CalcRunLimits {
             cycles: 1000,
-            resource: 32,
+            resource: 8,
             deadline: None,
         },
     );
@@ -298,7 +292,7 @@ fn resource_preflight_reserves_output_max() {
 
 #[test]
 fn precheck_allows_input_above_value_size_within_input_max() {
-    let c = pack_container(
+    let c = pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         64,
@@ -306,8 +300,6 @@ fn precheck_allows_input_above_value_size_within_input_max() {
         4096,
         8,
         ret_code(),
-        vec![],
-        vec![],
     )
     .unwrap();
     let obj = CalcFnObj::build_v1(c).unwrap();
@@ -410,50 +402,38 @@ fn zbb_kernel() -> Vec<u8> {
 }
 
 #[test]
-fn zbb_kernel_executes() {
-    let c = pack_container(
-        &SpaceCap::new(0),
+fn zbb_kernel_needs_the_b_profile() {
+    let c = CalcContainer::from_code(
         vm::calc::CALC_PROFILE_RV64IM_B,
         4,
         CODE_BASE as u32,
+        zbb_kernel(),
         16,
         32,
-        zbb_kernel(),
-        vec![],
-        vec![],
-    )
-    .unwrap();
-    let obj = CalcFnObj::build_v1(c).unwrap();
-    let exec = obj.run(
-        &[],
-        CalcRunLimits {
-            cycles: 1000,
+    );
+    let obj = CalcFnObj::build_v1(c).expect("the bitmanip profile is admitted");
+    assert!(
+        obj.run(&[], vm::calc::CalcRunLimits {
+            cycles: 1_000_000,
             resource: i64::MAX,
             deadline: None,
-        },
+        })
+        .result
+        .is_ok(),
+        "the zbb kernel must run on the B profile"
     );
-    let out = exec.result.expect("zbb kernel must run");
-    // rori(0x81, 4) = 0x1000_0000_0000_0008 (low nibble wraps to bit 60).
-    let a: u64 = 0x1000_0000_0000_0008;
-    let d: u64 = a.swap_bytes();
-    let e: u64 = {
-        let mut v = 0u64;
-        for i in 0..8 {
-            if (d >> (i * 8)) & 0xFF != 0 {
-                v |= 0xFFu64 << (i * 8);
-            }
-        }
-        v
-    };
-    let f: u64 = ((a as i64).min(d as i64)) as u64;
-    let mut want = Vec::new();
-    want.extend_from_slice(&(8u32).to_le_bytes()); // sext.b(0x...08) = 8
-    want.extend_from_slice(&3u32.to_le_bytes()); // clz: highest set bit is 60
-    want.extend_from_slice(&(e as u32).to_le_bytes());
-    want.extend_from_slice(&(f as u32).to_le_bytes());
-    want.extend_from_slice(&(d as u32).to_le_bytes());
-    want.extend_from_slice(&(a as u32).to_le_bytes());
-    assert_eq!(out, want);
+    let c0 = CalcContainer::from_code(
+        CALC_PROFILE_RV64IM,
+        4,
+        CODE_BASE as u32,
+        zbb_kernel(),
+        16,
+        32,
+    );
+    assert!(
+        CalcFnObj::build_v1(c0).is_err(),
+        "B encodings are rejected on profile 0"
+    );
 }
 
 #[test]
@@ -462,7 +442,7 @@ fn unreachable_padding_is_accepted() {
     // unreachable-but-decodable bytes must verify.
     let mut code = ret_code();
     code.extend_from_slice(&[0x13, 0x00, 0x00, 0x00]);
-    let r = pack_container(
+    let r = pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         4,
@@ -470,8 +450,6 @@ fn unreachable_padding_is_accepted() {
         16,
         16,
         code,
-        vec![],
-        vec![],
     );
     assert!(r.is_ok());
 }
@@ -481,7 +459,7 @@ fn fence_decodes_and_executes_as_nop() {
     // fence iorw, iorw (0x0ff0000f) before the return.
     let mut code = vec![0x0f, 0x00, 0xf0, 0x0f];
     code.extend_from_slice(&ret_code());
-    let c = pack_container(
+    let c = pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         4,
@@ -489,8 +467,6 @@ fn fence_decodes_and_executes_as_nop() {
         16,
         16,
         code,
-        vec![],
-        vec![],
     )
     .unwrap();
     let obj = CalcFnObj::build_v1(c).unwrap();

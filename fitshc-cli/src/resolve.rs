@@ -36,7 +36,7 @@ pub struct ElfDefaults {
     pub profile: ProfileName,
     pub input_max: u16,
     pub output_max: u16,
-    pub no_host_ecall: bool,
+    pub hash: bool,
     /// Explicit memory admission or minimum-fit `auto`.
     pub mem: MemSpec,
 }
@@ -45,10 +45,10 @@ impl Default for ElfDefaults {
     fn default() -> Self {
         // Mirrors the `// calc:` metadata defaults.
         ElfDefaults {
-            profile: ProfileName::Rv64imc,
+            profile: ProfileName::Rv64im,
             input_max: 1024,
             output_max: 1024,
-            no_host_ecall: true,
+            hash: false,
             mem: MemSpec::Auto,
         }
     }
@@ -247,7 +247,7 @@ pub fn pack_elf_file(
         input_max: elf_defaults.input_max,
         output_max: elf_defaults.output_max,
         mem_kib: elf_defaults.mem,
-        no_host_ecall: elf_defaults.no_host_ecall,
+        hash: elf_defaults.hash,
     };
     meta.validate(cap)
         .map_err(|e| format!("{}: {e}", path.display()))?;
@@ -333,7 +333,7 @@ mod resolve_tests {
             panic!("expected Rs");
         };
         assert!(path.ends_with("calc/hash.rs"));
-        assert_eq!(meta.profile, ProfileName::Rv64imc);
+        assert_eq!(meta.profile, ProfileName::Rv64im);
     }
 
     #[test]

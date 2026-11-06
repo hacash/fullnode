@@ -203,7 +203,7 @@ mod diff {
         // Occasional hash ecall on a fixed scratch window. v1 disables host
         // ecalls, so the generator only emits them once the consensus table
         // is enabled (the ckb-vm oracle always implements them).
-        if vm::calc::CALC_HASH_ECALLS_ENABLED && rng.below(3) == 0 {
+        if false && rng.below(3) == 0 {
             w.push(enc_i(0x13, 0, 10, 18, EHASH_IN_OFF as i32)); // a0 = in
             w.push(enc_i(0x13, 0, 11, 0, 32)); // a1 = 32
             w.push(enc_i(0x13, 0, 12, 18, EHASH_OUT_OFF as i32)); // a2 = out
@@ -312,9 +312,14 @@ mod diff {
         {
             use ckb_vm::Memory as _;
             let m = machine.memory_mut();
-            m.store_bytes(vm::calc::CALC_CODE_BASE, &c.code).unwrap();
-            m.store_bytes(lay.rodata_base, &c.rodata).unwrap();
-            m.store_bytes(lay.data_base, &c.init).unwrap();
+            m.store_bytes(
+                vm::calc::container::HALT_STUB,
+                &vm::calc::container::HALT_STUB_BYTES,
+            )
+            .unwrap();
+            for s in &c.segs {
+                m.store_bytes(s.vaddr as u64, &s.data).unwrap();
+            }
             m.store_bytes(lay.input_base, input).unwrap();
         }
         machine.set_register(10, lay.input_base);
@@ -322,6 +327,7 @@ mod diff {
         machine.set_register(12, lay.output_base);
         machine.set_register(13, lay.output_max);
         machine.set_register(2, lay.stack_top);
+        machine.set_register(1, vm::calc::container::HALT_STUB);
         machine.update_pc(c.entry as u64);
         machine.commit_pc();
         let mut decoder = ckb_vm::decoder::build_decoder::<u64>(machine.isa(), machine.version());
@@ -345,16 +351,14 @@ mod diff {
     // ---------------- the differential driver ----------------
     fn diff_one(rng: &mut Rng, idx: u64) -> Result<(), String> {
         let prog = gen_program(rng, idx);
-        let container = CalcContainer {
-            profile: vm::calc::CALC_PROFILE_RV64IM,
-            mem_kib: MEM_KIB,
-            entry: vm::calc::CALC_CODE_BASE as u32,
-            code: prog.code.clone(),
-            rodata: vec![],
-            init: vec![],
-            input_max: 512,
-            output_max: 512,
-        };
+        let container = CalcContainer::from_code(
+            vm::calc::CALC_PROFILE_RV64IM,
+            MEM_KIB,
+            vm::calc::CALC_CODE_BASE as u32,
+            prog.code.clone(),
+            512,
+            512,
+        );
         // my side must verify first
         let module = verify_container(&container).map_err(|e| format!("verify: {e}"))?;
         // sanity: whole stream decodes (already done by verify)
@@ -462,16 +466,14 @@ mod diff {
             if std::env::var("CALC_DBG").is_ok() {
                 eprintln!("case {ci} words: {:?}", w.iter().map(|x| format!("{x:08x}")).collect::<Vec<_>>());
             }
-            let container = CalcContainer {
-                profile: vm::calc::CALC_PROFILE_RV64IM,
-                mem_kib: MEM_KIB,
-                entry: vm::calc::CALC_CODE_BASE as u32,
-                code,
-                rodata: vec![],
-                init: vec![],
-                input_max: 4096,
-                output_max: 4096,
-            };
+            let container = CalcContainer::from_code(
+            vm::calc::CALC_PROFILE_RV64IM,
+            MEM_KIB,
+            vm::calc::CALC_CODE_BASE as u32,
+            code,
+            4096,
+            4096,
+        );
             let module = verify_container(&container)
                 .unwrap_or_else(|e| panic!("case {ci} verify: {e}"));
             let mine = run(&module, &container, b"", u64::MAX, None)

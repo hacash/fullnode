@@ -5,7 +5,8 @@
 #![cfg(test)]
 
 use crate::calc::container::{
-    CalcContainer, CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IM_B, CALC_PROFILE_RV64IMC, CODE_BASE,
+    CalcContainer, CalcSegment, CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IM_B, CALC_PROFILE_RV64IMC,
+    CODE_BASE,
 };
 use crate::calc::decode::{decode_at, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp};
 use crate::calc::verify::verify_container_with_cap;
@@ -17,20 +18,11 @@ fn verify_container(c: &CalcContainer) -> VmrtRes<crate::calc::verify::CalcModul
 }
 
 fn make_container(code: Vec<u8>) -> CalcContainer {
-    make_container_profile(CALC_PROFILE_RV64IM_B, code)
+    make_container_profile(CALC_PROFILE_RV64IM, code)
 }
 
 fn make_container_profile(profile: u8, code: Vec<u8>) -> CalcContainer {
-    CalcContainer {
-        profile,
-        mem_kib: 8,
-        entry: CODE_BASE as u32,
-        code,
-        rodata: vec![],
-        init: vec![],
-        input_max: 64,
-        output_max: 64,
-    }
+    CalcContainer::from_code(profile, 8, CODE_BASE as u32, code, 64, 64)
 }
 
 fn d(bytes: &[u8]) -> Inst {
@@ -197,12 +189,12 @@ fn decode_rejects_non_whitelist() {
     assert!(decode_at(&hexw("9002"), 0, p).is_err());
     assert!(decode_at(&hex("0000"), 0, p).is_err());
     assert!(decode_at(&hexw("2000"), 0, p).is_err());
-    // RVC profile: C.EBREAK is a legal 2-byte trap; the all-zero
-    // c.unimp encoding (reserved C.ADDI4SPN imm=0) stays rejected.
     let (inst, len) = decode_at(&hexw("9002"), 0, CALC_PROFILE_RV64IMC).unwrap();
     assert_eq!(inst, Inst::Trap);
     assert_eq!(len, 2);
-    assert!(decode_at(&hex("0000"), 0, CALC_PROFILE_RV64IMC).is_err());
+    let (inst, len) = decode_at(&hex("0000"), 0, CALC_PROFILE_RV64IMC).unwrap();
+    assert_eq!(inst, Inst::Trap);
+    assert_eq!(len, 2);
     // unknown profile
     assert!(decode_at(&hexw("00000013"), 0, 9).is_err());
 }
@@ -215,12 +207,12 @@ fn container_roundtrip_and_malicious() {
     assert_eq!(used, enc.len());
     assert_eq!(c, c2);
 
-    // magic / version / isa / abi / fncnf
+    // magic / version / profile / reserved
     let mut bad = enc.clone();
     bad[0] = b'X';
     assert!(CalcContainer::decode(&bad).is_err());
     let mut bad = enc.clone();
-    bad[4] = 2;
+    bad[4] = 1;
     assert!(CalcContainer::decode(&bad).is_err());
     let mut bad = enc.clone();
     bad[5] = 9; // unknown profile
@@ -229,19 +221,24 @@ fn container_roundtrip_and_malicious() {
     bad[7] = 0b1000_0001; // reserved fncnf
     assert!(CalcContainer::decode(&bad).is_err());
     let mut bad = enc.clone();
-    bad[5] = 1; // profile 1 is legal
-    assert!(CalcContainer::decode(&bad).is_ok());
-    // corrupting rodata_len (bytes 28..32) must not decode
+    bad[5] = 4; // the HASH bit is not admitted
+    assert!(CalcContainer::decode(&bad).is_err());
+    // B / RVC profiles are admitted (the code body is 4-byte aligned, so it
+    // satisfies both the no-C and the C alignment rule).
+    for p in [1u8, 2, 3] {
+        let mut ok = enc.clone();
+        ok[5] = p;
+        assert!(CalcContainer::decode(&ok).is_ok(), "profile {p} must be admitted");
+    }
     let mut bad = enc.clone();
     bad[28] = 1;
     assert!(CalcContainer::decode(&bad).is_err());
-    // entry outside code
     let mut c3 = c.clone();
     c3.entry = 999;
     assert!(CalcContainer::decode(&c3.encode().unwrap()).is_err());
-    // non-multiple-of-4 code_len
     let mut c4 = c.clone();
-    c4.code = hex("13");
+    c4.segs[0].data = hex("13");
+    c4.segs[0].memsz = 1;
     assert!(CalcContainer::decode(&c4.encode().unwrap()).is_err());
 }
 
@@ -264,21 +261,67 @@ fn verify_rejects_malicious_code() {
     let c = make_container(code);
     assert!(verify_container(&c).is_ok());
 
-    // (d) bare self-loop (jal x0, 0) verifies; one block, 1 cycle.
+    // (d) bare self-loop (jal x0, 0) verifies; HALT stub is its own block,
+    // the jal is one 1-cycle block.
     let code = concat_hex(&["6f000000"]);
     let c = make_container(code);
     let module = verify_container(&c).unwrap();
-    assert_eq!(module.blocks.len(), 1);
-    assert_eq!(module.blocks[0].cycles, 1);
+    assert_eq!(module.blocks.len(), 2);
+    assert_eq!(module.blocks[1].cycles, 1);
 
     // (e) valid tiny kernel: lbu t0,0(a0); sd t0,0(a2); halt empty
     let mut code = concat_hex(&["83420500", "23305600"]);
     code.extend_from_slice(&halt_empty());
     let c = make_container(code);
     let module = verify_container(&c).unwrap();
-    assert_eq!(module.insts.len(), 6);
+    assert_eq!(
+        module.insts.len(),
+        crate::calc::container::HALT_STUB_INSTS + 6
+    );
     // lbu(2)+sd(2)+3*addi(1)+ecall(1) split: ecall terminates a block.
     assert!(module.blocks.iter().map(|b| b.cycles).sum::<u64>() >= 5);
+}
+
+#[test]
+fn sequential_fetch_does_not_cross_rx_holes() {
+    use crate::calc::interp::{self, CalcAbort};
+    // addi a0, a0, 1 then a hole, then HALT. Falling through must trap.
+    let first = 0x0015_0513u32.to_le_bytes().to_vec();
+    let c = CalcContainer {
+        profile: CALC_PROFILE_RV64IM,
+        mem_kib: 8,
+        entry: CODE_BASE as u32,
+        segs: vec![
+            CalcSegment::rx(CODE_BASE as u32, first.clone()),
+            CalcSegment::rx(CODE_BASE as u32 + 0x100, halt_empty()),
+        ],
+        input_max: 64,
+        output_max: 64,
+    };
+    let module = verify_container(&c).expect("hole image verifies");
+    match interp::run(&module, &c, &[], 10_000, None) {
+        Err((CalcAbort::Trap(t), _)) => {
+            assert!(t.contains("unmapped") || t.contains("fetch"), "{t}");
+        }
+        other => panic!("hole fall-through must trap, got {other:?}"),
+    }
+    #[cfg(feature = "calc-aot")]
+    assert_aot_parity(&c, &[], 10_000);
+
+    // Adjacent RX segments still fall through.
+    let adj = CalcContainer {
+        profile: CALC_PROFILE_RV64IM,
+        mem_kib: 8,
+        entry: CODE_BASE as u32,
+        segs: vec![
+            CalcSegment::rx(CODE_BASE as u32, first),
+            CalcSegment::rx(CODE_BASE as u32 + 4, halt_empty()),
+        ],
+        input_max: 64,
+        output_max: 64,
+    };
+    let module = verify_container(&adj).unwrap();
+    interp::run(&module, &adj, &[], 10_000, None).expect("adjacent RX fall-through");
 }
 
 fn concat_hex(parts: &[&str]) -> Vec<u8> {
@@ -370,16 +413,14 @@ fn interp_div_rem_by_zero_matches_qemu() {
         0x0000_0073,
     ];
     let code: Vec<u8> = w.iter().flat_map(|x| x.to_le_bytes()).collect();
-    let c = CalcContainer {
-        profile: CALC_PROFILE_RV64IM,
-        mem_kib: 16,
-        entry: CODE_BASE as u32,
+    let c = CalcContainer::from_code(
+        CALC_PROFILE_RV64IM,
+        16,
+        CODE_BASE as u32,
         code,
-        rodata: vec![],
-        init: vec![],
-        input_max: 512,
-        output_max: 512,
-    };
+        512,
+        512,
+    );
     let module = verify_container(&c).expect("verify");
     for (i, inst) in module.insts.iter().enumerate() {
         println!("inst[{i}] @ {:#x}: {:?}", module.addrs[i], inst);
@@ -422,7 +463,7 @@ fn pack_container_roundtrip() {
     // clang-assembled echo kernel (same as the gas tests)
     let mut code: Vec<u8> = vec![0x83, 0x42, 0x05, 0x00, 0x23, 0x30, 0x56, 0x00];
     code.extend_from_slice(&halt_empty());
-    let c = crate::calc::pack_container(
+    let c = crate::calc::pack_code(
         &crate::rt::SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         8,
@@ -430,8 +471,6 @@ fn pack_container_roundtrip() {
         128,
         128,
         code.clone(),
-        vec![],
-        vec![],
     )
     .unwrap();
     let enc = c.encode().expect("encode");
@@ -439,7 +478,7 @@ fn pack_container_roundtrip() {
     assert_eq!(used, enc.len());
     assert_eq!(c, c2);
     // non-fitting layout must be rejected
-    assert!(crate::calc::pack_container(
+    assert!(crate::calc::pack_code(
         &crate::rt::SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
         4,
@@ -447,8 +486,6 @@ fn pack_container_roundtrip() {
         4096,
         4096,
         code.clone(),
-        vec![],
-        vec![],
     )
     .is_err());
 }
@@ -456,7 +493,8 @@ fn pack_container_roundtrip() {
 // --------------------------------------------------------------------
 // Semantics regressions (from the 2026-10 full audit; these pin the
 // POST-FIX behavior decided in the review: zext.h in OP-32, slliw
-// imm[11:5]==0 enforced, stack-overflow guard band, jalr >u32 rejected
+// imm[11:5]==0 enforced, stack region starting at the guest image end
+// (guard band removed), jalr >u32 rejected
 // by both engines, ecall charge-before-bounds documented).
 
 /// slliw with imm[11:5] != 0 (bit 25 set in the 6-bit shamt view) is
@@ -484,42 +522,67 @@ fn zexth_requires_op32_encoding() {
     assert!(decode_at(&rv32.to_le_bytes(), 0, CALC_PROFILE_RV64IM_B).is_err());
 }
 
-/// Stack-overflow guard: a store below the stack bottom lands in the guard
-/// band and traps (it used to silently corrupt the output region); a store
-/// into the output region proper still succeeds.
+/// There is no stack-overflow guard band: the stack region starts exactly
+/// at the end of the guest image, so a store at the first byte above .bss
+/// is legal stack memory; a store beyond `mem_len` still traps as unmapped.
 #[test]
-fn stack_guard_traps_on_overflow() {
+fn stack_starts_at_guest_end() {
     use crate::calc::interp;
     let addi = |rd: u8, rs1: u8, imm: i32| -> u32 {
         0x13u32 | ((rd as u32) << 7) | ((rs1 as u32) << 15) | (((imm as u32) & 0xFFF) << 20)
     };
-    // Probe is the first byte of the guard, which now sits just above .bss
-    // rather than a fixed 2 KiB under sp. Code is 16 bytes, so data/guard
-    // start at align16(CODE_BASE+16) = 0x1010.
-    let guard = 0x1010u64;
+    // Probe is the first stack byte. The store runs, then the kernel exits
+    // with an explicit HALT (a0 = 0, a1 = 0): success proves the write was
+    // legal. stack_first is the aligned end of this very image.
+    let stack_first = 0x1010u64;
     let mut prog: Vec<u8> = Vec::new();
-    li_addr(&mut prog, 28, guard);
+    li_addr(&mut prog, 28, stack_first);
     let sd = 0x23u32 | (28 << 15) | (5 << 20); // sd x5, 0(x28)
     prog.extend_from_slice(&sd.to_le_bytes());
-    let ret = 0x67u32 | (1 << 15);
-    prog.extend_from_slice(&ret.to_le_bytes());
-    assert_eq!(prog.len(), 16);
+    prog.extend_from_slice(&addi(10, 0, 0).to_le_bytes()); // a0 = 0
+    prog.extend_from_slice(&addi(11, 0, 0).to_le_bytes()); // a1 = 0
+    prog.extend_from_slice(&addi(17, 0, 0).to_le_bytes()); // a7 = HALT
+    prog.extend_from_slice(&0x0000_0073u32.to_le_bytes()); // ecall
+    // from_code segments are not aligned, so guest_end is CODE_BASE+len;
+    // both target values encode in the same two li_addr instructions.
+    let stack_first = CODE_BASE + prog.len() as u64;
+    // Re-emit the probe with the final address baked in.
+    let mut prog: Vec<u8> = Vec::new();
+    li_addr(&mut prog, 28, stack_first);
+    prog.extend_from_slice(&sd.to_le_bytes());
+    prog.extend_from_slice(&addi(10, 0, 0).to_le_bytes()); // a0 = 0
+    prog.extend_from_slice(&addi(11, 0, 0).to_le_bytes()); // a1 = 0
+    prog.extend_from_slice(&addi(17, 0, 0).to_le_bytes()); // a7 = HALT
+    prog.extend_from_slice(&0x0000_0073u32.to_le_bytes()); // ecall
+    assert_eq!(CODE_BASE + prog.len() as u64, stack_first);
     let c = make_container(prog);
     let module = verify_container(&c).unwrap();
     let lay = module.layout_snapshot();
-    assert_eq!(lay.guard_base, guard);
-    let addr = guard;
+    assert_eq!(lay.stack_bottom, stack_first);
     assert!(
-        addr >= lay.guard_base && addr < lay.stack_bottom,
-        "probe address must sit inside the guard band"
+        lay.stack_bottom + crate::calc::CALC_STACK_SIZE <= lay.stack_top,
+        "the fit rule still reserves the minimum stack"
     );
     let (r, _, _, _) = interp::run_with_state(&module, &c, &[], 100_000);
     assert!(
-        matches!(&r, Err((interp::CalcAbort::Trap(t), _)) if t.contains("guard")),
-        "guard-band store must trap, got {r:?}"
+        r.is_ok(),
+        "a store at the first stack byte is legal, got {r:?}"
+    );
+    // A store past mem_len remains an unmapped-address trap.
+    let ret = 0x67u32 | (1 << 15);
+    let mut prog: Vec<u8> = Vec::new();
+    li_addr(&mut prog, 28, lay.mem_len);
+    prog.extend_from_slice(&sd.to_le_bytes());
+    prog.extend_from_slice(&ret.to_le_bytes());
+    let c = make_container(prog);
+    let module = verify_container(&c).unwrap();
+    let (r, _, _, _) = interp::run_with_state(&module, &c, &[], 100_000);
+    assert!(
+        matches!(&r, Err((interp::CalcAbort::Trap(t), _)) if t.contains("unmapped")),
+        "store past mem_len must trap unmapped, got {r:?}"
     );
     // Control: a store into the OUTPUT region (a2-relative, below the
-    // guard) still succeeds and the bytes are readable at return.
+    // stack) still succeeds and the bytes are readable at return.
     let mut prog: Vec<u8> = Vec::new();
     prog.extend_from_slice(&addi(28, 12, 0).to_le_bytes()); // x28 = output base
     prog.extend_from_slice(&sd.to_le_bytes()); // sd x5, 0(x28)
@@ -627,27 +690,23 @@ fn ecall_oob_length_abort_class_is_budget_dependent() {
     prog.extend_from_slice(&0x0000_0073u32.to_le_bytes());
     let ret = 0x67u32 | (1 << 15);
     prog.extend_from_slice(&ret.to_le_bytes());
-    let c = make_container(prog);
+    let c = make_container(prog.clone());
     let module = verify_container(&c).unwrap();
-    if !crate::calc::CALC_HASH_ECALLS_ENABLED {
-        // v1: the ecall itself traps before any hash pricing or bounds
-        // check, for every budget.
-        for budget in [5_000_000u64, 200] {
-            let (r, _, _, _) = interp::run_with_state(&module, &c, &[], budget);
-            assert!(
-                matches!(&r, Err((interp::CalcAbort::Trap(t), _)) if t.contains("host builtins")),
-                "budget {budget} -> host-builtin trap, got {r:?}"
-            );
-        }
-        return;
+    for budget in [5_000_000u64, 200] {
+        let (r, _, _, _) = interp::run_with_state(&module, &c, &[], budget);
+        assert!(
+            matches!(&r, Err((interp::CalcAbort::Trap(t), _)) if t.contains("hash builtins")),
+            "budget {budget} -> hash-undeclared trap, got {r:?}"
+        );
     }
-    let (r, _, _, _) = interp::run_with_state(&module, &c, &[], 5_000_000);
-    assert!(
-        matches!(&r, Err((interp::CalcAbort::Trap(t), _)) if t.contains("out of memory bounds")),
-        "big budget -> Trap, got {r:?}"
+    let hashed = make_container_profile(
+        CALC_PROFILE_RV64IM_B | crate::calc::CALC_PROFILE_HASH,
+        prog,
     );
-    let (r2, _, _, _) = interp::run_with_state(&module, &c, &[], 200);
-    assert!(matches!(r2, Err((interp::CalcAbort::OutOfGas, _))));
+    assert!(
+        verify_container(&hashed).is_err(),
+        "HASH / bitmanip profiles are not admitted"
+    );
 }
 
 #[test]
@@ -764,16 +823,14 @@ fn assert_aot_parity(c: &CalcContainer, input: &[u8], budget: u64) {
     }
 }
 
-/// `data_base = align16(rodata_end)`: init is copied there even when
-/// `rodata_len` is not a multiple of 8; a store into the alignment hole traps.
+/// Explicit VMAs: RW data is loaded at its own vaddr; a store into the
+/// hole between rodata and data traps (unmapped).
 #[test]
-fn data_base_align16_init_and_hole_is_readonly() {
+fn region_segments_and_hole_is_unmapped() {
     use crate::calc::interp::CalcAbort;
     let word: u64 = 0x0102_0304_0506_0708;
-    // lui+addi (2) + ld + sd + 4-word halt = 8 ins, 32 bytes.
     let code_len = 32u64;
     let rodata = vec![0u8; 13];
-    assert_ne!(rodata.len() % 8, 0);
     let rodata_base = (CODE_BASE + code_len + 15) & !15;
     let data_base = (rodata_base + 13 + 15) & !15;
     assert!(data_base > rodata_base + 13);
@@ -783,45 +840,45 @@ fn data_base_align16_init_and_hole_is_readonly() {
     push_w(&mut code, w_store(3, 12, 6, 0));
     halt_exit(&mut code, 0, 8);
     assert_eq!(code.len() as u64, code_len);
-    let c = CalcContainer {
-        profile: CALC_PROFILE_RV64IM,
-        mem_kib: 8,
-        entry: CODE_BASE as u32,
+    let c = CalcContainer::from_regions(
+        CALC_PROFILE_RV64IM,
+        8,
+        CODE_BASE as u32,
         code,
         rodata,
-        init: word.to_le_bytes().to_vec(),
-        input_max: 64,
-        output_max: 64,
-    };
-    assert_eq!(c.layout().data_base, data_base);
+        word.to_le_bytes().to_vec(),
+        64,
+        64,
+    );
+    assert_eq!(c.guest_end(), data_base + 8);
     let res = run_interp(&c, &[], 10_000).expect("init load");
     assert_eq!(u64::from_le_bytes(res.output[..8].try_into().unwrap()), word);
 
-    // 2 (li) + 1 (sb) + 4 (halt) = 28 bytes
     let hole_code_len = 28u64;
     let hole_ro_base = (CODE_BASE + hole_code_len + 15) & !15;
-    let hole_data_base = (hole_ro_base + 13 + 15) & !15;
-    assert!(hole_data_base > hole_ro_base + 13);
     let mut store_hole = Vec::new();
     li_addr(&mut store_hole, 5, hole_ro_base + 13);
-    push_w(&mut store_hole, w_store(0, 5, 0, 0)); // sb x0, 0(t0) at rodata_end
+    push_w(&mut store_hole, w_store(0, 5, 0, 0));
     halt_exit(&mut store_hole, 0, 0);
     assert_eq!(store_hole.len() as u64, hole_code_len);
-    let c2 = CalcContainer {
-        profile: CALC_PROFILE_RV64IM,
-        mem_kib: 8,
-        entry: CODE_BASE as u32,
-        code: store_hole,
-        rodata: vec![0u8; 13],
-        init: word.to_le_bytes().to_vec(),
-        input_max: 64,
-        output_max: 64,
-    };
+    let c2 = CalcContainer::from_regions(
+        CALC_PROFILE_RV64IM,
+        8,
+        CODE_BASE as u32,
+        store_hole,
+        vec![0u8; 13],
+        word.to_le_bytes().to_vec(),
+        64,
+        64,
+    );
     match run_interp(&c2, &[], 10_000) {
         Err((CalcAbort::Trap(t), _)) => {
-            assert!(t.contains("read-only"), "{t}");
+            assert!(
+                t.contains("unmapped") || t.contains("read-only"),
+                "{t}"
+            );
         }
-        other => panic!("store into alignment hole must trap, got {other:?}"),
+        other => panic!("store into hole must trap, got {other:?}"),
     }
 }
 
@@ -869,7 +926,8 @@ fn unmapped_low_page_traps_load_store_ecall_jalr() {
                         || t.contains("read-only")
                         // v1 has host ecalls disabled: the hash-ecall buffer
                         // probe stops at the ecall itself.
-                        || t.contains("host builtins"),
+                        || t.contains("host builtins")
+                        || t.contains("hash builtins"),
                     "{why}: {t}"
                 );
             }
@@ -906,14 +964,27 @@ fn unmapped_low_page_traps_load_store_ecall_jalr() {
     push_w(&mut j800, w_jalr(0, 5, 0));
     halt_exit(&mut j800, 0, 0);
     trap(j800, "jalr 0x800");
-    // hash ecall buffer at src=0
+    // hash ecall buffer at src=0 (HASH declared so the unmapped check runs)
     let mut ecall0 = Vec::new();
     push_w(&mut ecall0, w_addi(10, 0, 0)); // a0 = 0
     push_w(&mut ecall0, w_addi(11, 0, 1)); // a1 = 1
     push_w(&mut ecall0, w_addi(17, 0, 1)); // a7 = SHA-256
     push_w(&mut ecall0, 0x0000_0073);
     halt_exit(&mut ecall0, 0, 0);
-    trap(ecall0, "ecall src 0");
+    let hashed = make_container_profile(
+        CALC_PROFILE_RV64IM_B | crate::calc::CALC_PROFILE_HASH,
+        ecall0.clone(),
+    );
+    assert!(verify_container(&hashed).is_err());
+    match run_interp(&make_container(ecall0), &[], 10_000) {
+        Err((CalcAbort::Trap(t), _)) => {
+            assert!(
+                t.contains("hash builtins") || t.contains("unmapped"),
+                "ecall src 0: {t}"
+            );
+        }
+        other => panic!("ecall src 0: expected trap, got {other:?}"),
+    }
 }
 
 #[test]
@@ -988,17 +1059,32 @@ fn halt_output_len_over_max_traps() {
 #[test]
 fn c_ebreak_is_a_two_byte_trap() {
     use crate::calc::interp::CalcAbort;
-    // C.EBREAK on an RVC profile: one 2-byte instruction, then a trap.
+    // C.EBREAK on an RVC profile verifies (RVC is admitted) and executes as
+    // one 2-byte instruction, then a trap.
     let c = make_container_profile(CALC_PROFILE_RV64IMC, vec![0x02, 0x90]);
+    verify_container(&c).expect("the RVC profile is admitted");
+    let (inst, len) = decode_at(&hexw("9002"), 0, CALC_PROFILE_RV64IMC).unwrap();
+    assert!(matches!(inst, Inst::Trap));
+    assert_eq!(len, 2);
     match run_interp(&c, &[], 10_000) {
-        Err((CalcAbort::Trap(t), used)) => {
-            assert!(t.contains("trap"), "{t}");
-            assert_eq!(used, 1, "c.ebreak costs exactly one ALU cycle");
-        }
-        other => panic!("expected c.ebreak trap, got {other:?}"),
+        Err((CalcAbort::Trap(t), _)) => assert!(t.contains("trap"), "{t}"),
+        other => panic!("c.ebreak must trap at runtime, got {other:?}"),
+    }
+    // C.UNIMP: the all-zero halfword decodes to the same 2-byte trap.
+    let (inst, len) = decode_at(&hexw("0000"), 0, CALC_PROFILE_RV64IMC).unwrap();
+    assert!(matches!(inst, Inst::Trap));
+    assert_eq!(len, 2);
+    let c = make_container_profile(CALC_PROFILE_RV64IMC, vec![0x00, 0x00]);
+    verify_container(&c).expect("c.unimp container verifies");
+    match run_interp(&c, &[], 10_000) {
+        Err((CalcAbort::Trap(t), _)) => assert!(t.contains("trap"), "{t}"),
+        other => panic!("c.unimp must trap at runtime, got {other:?}"),
     }
     #[cfg(feature = "calc-aot")]
-    assert_aot_parity(&c, &[], 10_000);
+    {
+        assert_aot_parity(&make_container_profile(CALC_PROFILE_RV64IMC, vec![0x02, 0x90]), &[], 10_000);
+        assert_aot_parity(&make_container_profile(CALC_PROFILE_RV64IMC, vec![0x00, 0x00]), &[], 10_000);
+    }
 }
 
 /// V1 rejects `mem_kib > 64` at verify. Wire decode accepts any
@@ -1020,7 +1106,7 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
     assert!(over.validate_header(&v1).is_err());
     assert!(verify_container(&over).is_err());
     assert!(CalcFnObj::build_v1(over.clone()).is_err());
-    assert!(crate::calc::pack_container(
+    assert!(crate::calc::pack_code(
         &v1,
         CALC_PROFILE_RV64IM,
         CALC_MEM_KIB_MAX + 1,
@@ -1028,8 +1114,6 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
         16,
         16,
         halt_empty(),
-        vec![],
-        vec![],
     )
     .is_err());
     let mut bytes = make_container_profile(CALC_PROFILE_RV64IM, halt_empty())
@@ -1064,9 +1148,7 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
     assert_eq!(
         lay,
         compute_layout(
-            c.code.len() as u64,
-            c.rodata.len() as u64,
-            c.init.len() as u64,
+            c.guest_end(),
             c.input_max as u64,
             c.output_max as u64,
             c.mem_kib as u64 * 1024,
@@ -1095,6 +1177,6 @@ fn mem_cap_is_config_and_v1_layout_stays_pinned() {
     assert_eq!(exec.cycles_used, setup + 4);
     assert_eq!(exec.cycles_used, 1092);
     assert_eq!(exec.resource, 64 * CALC_MEM_RESOURCE_PER_KIB);
-    assert_eq!(exec.resource, 512);
+    assert_eq!(exec.resource, 128);
 }
 

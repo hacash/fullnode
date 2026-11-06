@@ -3,18 +3,17 @@
 //!
 //! Executes a verified [`CalcModule`] over a freshly zeroed flat memory.
 //! Cycles are charged in full at basic-block entry (plus hash cost at each
-//! `ecall` when the host table is enabled; v1 executes HALT only); every
+//! `ecall` when the image sets the HASH bit); every
 //! observable behavior — trap messages excluded — is a pure
 //! function of (module, input), so consensus results and gas are bit-exact
 //! across runs and builds.
 
-use crate::calc::container::CalcContainer;
+use crate::calc::container::{profile_has_hash, CalcContainer, HALT_STUB};
 use crate::calc::decode::{
     BitImmOp, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp, UnAluOp,
 };
 use crate::calc::verify::CalcModule;
-use crate::calc::container::{profile_has_no_host_ecall, CODE_BASE};
-use crate::calc::{run_hash, HashKind, CALC_HASH_ECALLS_ENABLED, ECALL_HALT, ECALL_HINT_MAX, ECALL_HINT_MIN};
+use crate::calc::{run_hash, HashKind, ECALL_HALT, ECALL_HINT_MAX, ECALL_HINT_MIN};
 
 /// Why a calc run stopped before returning normally.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +56,7 @@ pub fn run(
     cycle_budget: u64,
     deadline: Option<std::time::Instant>,
 ) -> Result<CalcRun, (CalcAbort, u64)> {
-    run_inner(module, container, input, cycle_budget, None, deadline)
+    run_inner(module, container, input, cycle_budget, None, None, deadline)
 }
 
 /// Test/debug entry: additionally snapshots registers and memory at the stop
@@ -79,43 +78,70 @@ pub fn run_with_state(
         container,
         input,
         cycle_budget,
-        Some((&mut regs, &mut mem, &mut trace)),
+        Some((&mut regs, &mut mem)),
+        Some(&mut trace),
         None,
     );
     (r, regs, mem, trace)
 }
 
+/// Consensus lockstep entry: like [`run_with_state`] minus the
+/// per-instruction trace. `CalcFnObj::run` compares this full stop state
+/// (registers + memory) against the AOT backend so a backend bug cannot
+/// reach a block while both engines happen to agree on the consensus
+/// surface only. The host deadline stays host policy: a deadline stop is
+/// reported, not compared.
+#[allow(clippy::type_complexity)]
+pub fn run_lockstep(
+    module: &CalcModule,
+    container: &CalcContainer,
+    input: &[u8],
+    cycle_budget: u64,
+    deadline: Option<std::time::Instant>,
+) -> (Result<CalcRun, (CalcAbort, u64)>, [u64; 32], Vec<u8>) {
+    let mut regs = [0u64; 32];
+    let mut mem: Vec<u8> = Vec::new();
+    let r = run_inner(
+        module,
+        container,
+        input,
+        cycle_budget,
+        Some((&mut regs, &mut mem)),
+        None,
+        deadline,
+    );
+    (r, regs, mem)
+}
+
+#[allow(clippy::type_complexity)]
 fn run_inner(
     module: &CalcModule,
     container: &CalcContainer,
     input: &[u8],
     cycle_budget: u64,
-    mut state_out: Option<(&mut [u64; 32], &mut Vec<u8>, &mut Vec<u64>)>,
+    mut snap_out: Option<(&mut [u64; 32], &mut Vec<u8>)>,
+    mut trace_out: Option<&mut Vec<u64>>,
     deadline: Option<std::time::Instant>,
 ) -> Result<CalcRun, (CalcAbort, u64)> {
     let lay = &module.layout;
+    let segs = container.seg_recs();
     let mut mem: Vec<u8> = vec![0u8; lay.mem_len as usize];
-    let code_off = CODE_BASE as usize;
-    mem[code_off..code_off + container.code.len()].copy_from_slice(&container.code);
-    mem[lay.rodata_base as usize..(lay.rodata_base + lay.rodata_len) as usize]
-        .copy_from_slice(&container.rodata);
-    mem[lay.data_base as usize..(lay.data_base + lay.init_len) as usize]
-        .copy_from_slice(&container.init);
+    container.load_into(&mut mem);
     if input.len() as u64 > lay.input_max {
         return Err((CalcAbort::trap("calc input exceeds declared input_max"), 0));
     }
     let input_base = lay.input_base as usize;
     mem[input_base..input_base + input.len()].copy_from_slice(input);
 
-    // ABI 1 entry registers: all zero except sp, a0/a1 (input), a2/a3
-    // (output region). ra is 0; returning via jalr to ra is an invalid
-    // target. Halt is ecall a7=0.
+    // LP64 C ABI: a0..a3 are the four buffer args, sp is stack_top,
+    // ra is the HALT trampoline so `return len` succeeds.
     let mut r = [0u64; 32];
     r[10] = lay.input_base;
     r[11] = input.len() as u64;
     r[12] = lay.output_base;
     r[13] = lay.output_max;
     r[2] = lay.stack_top;
+    r[1] = HALT_STUB;
 
     let insts = &module.insts;
     let addrs = &module.addrs;
@@ -126,7 +152,7 @@ fn run_inner(
 
     macro_rules! snap {
         () => {
-            if let Some((ro, mo, _to)) = state_out.as_mut() {
+            if let Some((ro, mo)) = snap_out.as_mut() {
                 ro.copy_from_slice(&r);
                 mo.extend_from_slice(&mem);
             }
@@ -154,11 +180,8 @@ fn run_inner(
                 Some(e) => e,
                 None => trap!("calc load address overflow"),
             };
-            if addr < CODE_BASE {
+            if !crate::calc::container::perm_check(lay, &segs, addr, end, false) {
                 trap!("calc load of unmapped address");
-            }
-            if end > lay.mem_len {
-                trap!("calc load out of memory bounds");
             }
             let b = &mem[addr as usize..end as usize];
             match op {
@@ -181,24 +204,8 @@ fn run_inner(
                 Some(e) => e,
                 None => trap!("calc store address overflow"),
             };
-            if addr < CODE_BASE {
-                trap!("calc store of unmapped address");
-            }
-            if end > lay.mem_len {
-                trap!("calc store out of memory bounds");
-            }
-            // Code, the alignment pad before rodata, rodata and the
-            // [rodata_end, data_base) hole are read-only (unconditional v1
-            // semantics: `.data` starts at data_base).
-            if addr < lay.data_base {
-                trap!("calc store into read-only region (code/rodata)");
-            }
-            // Stack-overflow guard: a store intersecting the band between
-            // .bss and the stack traps (stack grows down into it). Stores
-            // fully below the guard and stores at or above the stack bottom
-            // pass.
-            if addr < lay.stack_bottom && end > lay.guard_base {
-                trap!("calc store into the stack-overflow guard band");
+            if !crate::calc::container::perm_check(lay, &segs, addr, end, true) {
+                trap!("calc store into read-only or unmapped region");
             }
             let val: u64 = $val;
             let b = &mut mem[addr as usize..end as usize];
@@ -230,7 +237,7 @@ fn run_inner(
         let end = blk.end as usize;
         while idx < end {
             let inst = insts[idx];
-            if let Some((_, _, to)) = state_out.as_mut() {
+            if let Some(to) = trace_out.as_mut() {
                 to.push(addrs[idx] as u64);
             }
             match inst {
@@ -402,14 +409,8 @@ fn run_inner(
                         snap!();
                         return Ok(CalcRun { output: out, cycles_used: used(cycles) });
                     }
-                    // v1 has no host ecalls: only HALT (handled above)
-                    // executes. The hash table, its pricing and the AOT
-                    // path stay in the tree behind
-                    // `CALC_HASH_ECALLS_ENABLED` for a later coordinated
-                    // upgrade. A container that declares the HALT-only
-                    // profile cell stays HALT-only even after that flip.
-                    if !CALC_HASH_ECALLS_ENABLED || profile_has_no_host_ecall(container.profile) {
-                        trap!("calc ecall: host builtins are not enabled in v1");
+                    if !profile_has_hash(container.profile) {
+                        trap!("calc ecall: hash builtins not declared");
                     }
                     if (ECALL_HINT_MIN..=ECALL_HINT_MAX).contains(&a7) {
                         trap!("calc ecall: hint/private-input not available on L1");
@@ -444,20 +445,14 @@ fn run_inner(
                         Some(e) => e,
                         None => trap!("calc ecall: output address overflow"),
                     };
-                    if src < CODE_BASE || dst < CODE_BASE {
-                        trap!("calc ecall: unmapped address");
-                    }
                     if src_end > lay.mem_len || dst_end > lay.mem_len {
                         trap!("calc ecall: out of memory bounds");
                     }
-                    // Digest writes obey the store rules: code, the
-                    // pre-rodata pad, rodata and the alignment hole are
-                    // read-only; `.data` starts at data_base.
-                    if dst < lay.data_base {
-                        trap!("calc ecall: digest into read-only region");
+                    if !crate::calc::container::perm_check(lay, &segs, src, src_end, false) {
+                        trap!("calc ecall: hash src unmapped");
                     }
-                    if dst < lay.stack_bottom && dst_end > lay.guard_base {
-                        trap!("calc ecall: digest into the stack-overflow guard band");
+                    if !crate::calc::container::perm_check(lay, &segs, dst, dst_end, true) {
+                        trap!("calc ecall: digest into read-only or unmapped region");
                     }
                     // Digest lengths are 20/32; a stack buffer avoids a heap
                     // allocation per ecall.
@@ -468,14 +463,14 @@ fn run_inner(
                     r[10] = 0;
                 }
             }
-            idx += 1;
+            // Sequential fetch follows PC, not the concatenated RX stream.
+            // A hole between executable segments is unmapped.
+            match module.sequential_next(idx) {
+                Some(next) => idx = next,
+                None => trap!("calc fetch of unmapped address"),
+            }
         }
         // Fell through to the next block (normal path): charge it at entry.
-        // Running off the very end of the code stream without control flow
-        // is a trap — returning must go through HALT ecall.
-        if idx >= insts.len() {
-            trap!("calc execution ran past the end of code");
-        }
     }
 }
 
@@ -623,17 +618,6 @@ fn clmul128(a: u64, b: u64) -> u128 {
 #[inline(always)]
 fn sext32_(v: u64) -> u64 {
     (v as u32 as i32) as i64 as u64
-}
-
-impl CalcModule {
-    /// Encoded byte length of instruction `idx` (2 or 4).
-    pub fn inst_len(&self, idx: usize) -> u32 {
-        let here = self.addrs[idx];
-        let next = self.addrs.get(idx + 1).copied().unwrap_or(
-            (CODE_BASE as u32).wrapping_add(self.layout.code_len as u32),
-        );
-        next - here
-    }
 }
 
 #[cfg(test)]

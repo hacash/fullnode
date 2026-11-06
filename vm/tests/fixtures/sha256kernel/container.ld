@@ -1,23 +1,26 @@
-/* Container layout: one contiguous exec+ro image (.text + .rodata), then
-   initialized data. No page alignment — the calc container owns the map.
-   Collect .sdata/.sbss/COMMON so small-data statics are not orphaned at 0.
-   ALIGN(16) before `.data` so `.data`/`.bss` start at VM `data_base`
-   (= align16(rodata_end)); the hole is empty and read-only. */
+/* PT_LOAD projection. IMAGE is the L1 guest window (64 KiB usable
+   minus a 12 KiB host reserve for input+output+min stack).
+   Link with -n so lld does not page-align PT_LOAD. */
 ENTRY(calc_entry)
+MEMORY
+{
+  IMAGE (rwx) : ORIGIN = 0x1000, LENGTH = 0xD000
+}
+PHDRS
+{
+  text PT_LOAD FLAGS(5);
+  rodata PT_LOAD FLAGS(4);
+  data PT_LOAD FLAGS(6);
+}
 SECTIONS
 {
-  . = 0x1000;
-  .text : { *(.text.calc_entry) *(.text .text.*) }
-  . = ALIGN(16);
+  . = ORIGIN(IMAGE);
+  .text : { *(.text.calc_entry) *(.text .text.*) } :text
   .rodata : {
     *(.rodata .rodata.*) *(.srodata .srodata.*) *(.rodata.cst*)
-    /* rust-lld drops an empty .data and ignores ALIGN before it;
-       keep the location 16-aligned inside .rodata so .bss follows
-       at VM data_base. Trailing pad is read-only zeros. */
-    . = ALIGN(16);
-  }
-  . = ALIGN(16);
-  __calc_data_base = .;
-  .data : ALIGN(16) { *(.data .data.*) *(.sdata .sdata.*) }
-  .bss : ALIGN(16) { *(.sbss .sbss.*) *(.bss .bss.*) *(COMMON) }
+  } :rodata
+  .data : { *(.data .data.*) *(.sdata .sdata.*) } :data
+  .bss : { *(.sbss .sbss.*) *(.bss .bss.*) *(COMMON) } :data
+  /DISCARD/ : { *(.eh_frame) *(.eh_frame_hdr) }
+  ASSERT(. <= ORIGIN(IMAGE) + LENGTH(IMAGE), "guest image overlaps L1 host window");
 }

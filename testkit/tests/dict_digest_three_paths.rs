@@ -10,7 +10,7 @@
 //!      invoked via one CALLEXT per document. This is the shape an HVM
 //!      author would write: natives where natives exist, opcodes for the
 //!      walk.
-//!   2. **calc interp** — the RV64IMC `sha256kernel` fixture
+//!   2. **calc interp** — the RV64IM `sha256kernel` fixture
 //!      (`vm/tests/fixtures/sha256kernel`, dict-walk mode): the same parse,
 //!      walk and sha256 in pure machine code, interpreter-executed.
 //!   3. **calc AOT** — the same container translated to x86-64 and run
@@ -192,21 +192,26 @@ fn kernel_container() -> vm::calc::container::CalcContainer {
             .trim_start_matches("0x"),
         16,
     )
-    .expect("bss_len") as u64;
-    // The container has no bss field: the fixture's zero-initialized span
-    // is part of the init image.
-    let mut init = read("image_init.bin");
-    init.resize(init.len() + bss_len as usize, 0);
-    pack_container(
-        &SpaceCap::new(0),
+    .expect("bss_len") as u32;
+    let tmp = vm::calc::container::CalcContainer::from_regions(
         CALC_PROFILE_RV64IM,
         8,
         vm::calc::CALC_CODE_BASE as u32,
-        256,
-        32,
         read("image_code.bin"),
         read("image_rodata.bin"),
-        init,
+        read("image_init.bin"),
+        256,
+        32,
+    )
+    .with_bss(bss_len);
+    pack_container(
+        &SpaceCap::new(0),
+        tmp.profile,
+        tmp.mem_kib,
+        tmp.entry,
+        tmp.input_max,
+        tmp.output_max,
+        tmp.segs,
     )
     .expect("kernel container packs")
 }

@@ -115,12 +115,7 @@ fn build_and_run(tag: &str, profile: ProfileName, strict: bool) -> (Vec<u8>, boo
 #[ignore = "drives the real rust toolchain"]
 fn all_profiles_build_verify_and_execute() {
     let _ = build_and_run("p0", ProfileName::Rv64im, false);
-    let _ = build_and_run("p1", ProfileName::Rv64imb, false);
-    let _ = build_and_run("p2", ProfileName::Rv64imc, false);
-    let _ = build_and_run("p3", ProfileName::Rv64imcb, false);
-    // strict variants of the C profiles (build-std path)
-    let _ = build_and_run("p2s", ProfileName::Rv64imc, true);
-    let _ = build_and_run("p3s", ProfileName::Rv64imcb, true);
+    let _ = build_and_run("p0s", ProfileName::Rv64im, true);
 }
 
 #[test]
@@ -183,7 +178,7 @@ fn zero_arg_kernel_and_contract_injection() {
         "// calc: profile = rv64im\npub fn tick(out: &mut [u8]) -> usize {\n    out[0] = 0x2a;\n    1\n}\n",
     );
     // One-arg kernel in the calc/ subdirectory.
-    proj.write("calc/hash.rs", &kernel_source(ProfileName::Rv64imc));
+    proj.write("calc/hash.rs", &kernel_source(ProfileName::Rv64im));
     let fitsh = proj.write(
         "demo.fitsh",
         r#"pragma fitsh 1.0.0
@@ -277,7 +272,7 @@ fn no_build_uses_hcf1_and_elf_fallbacks() {
             profile: ProfileName::Rv64im,
             input_max: 1024,
             output_max: 64,
-            no_host_ecall: true,
+            hash: false,
             mem: MemSpec::KiB(12),
         },
         ..cfg.clone()
@@ -340,7 +335,7 @@ fn explicit_mem_kib_is_honored() {
 fn binary_run_and_build_subcommands() {
     let exe = env!("CARGO_BIN_EXE_fitshc");
     let proj = Project::new("bin");
-    proj.write("hash.rs", &kernel_source(ProfileName::Rv64imc));
+    proj.write("hash.rs", &kernel_source(ProfileName::Rv64im));
     let fitsh = proj.write(
         "demo.fitsh",
         "pragma fitsh 1.0.0\ncontract Demo {\n    function rv64im hash(data: bytes) -> bytes\n    function external fingerprint(x: bytes) -> bytes { return self::hash(x) }\n}\n",
@@ -463,12 +458,12 @@ fn override_wins_over_rs() {
 
 /// P0-1 regression: an *unprovable* bounds check links `core::panicking`,
 /// whose prebuilt riscv64imac core carries `.eh_frame`. The linker script
-/// must discard it, or the default (stable, non-strict) rv64imc recipe fails
+/// must discard it, or the default (stable, non-strict) rv64im recipe fails
 /// with `unknown allocated section` / `.text` off CODE_BASE.
 #[test]
 #[ignore = "drives the real rust toolchain"]
 fn panic_path_kernel_builds_on_default_profile() {
-    for profile in [ProfileName::Rv64imc, ProfileName::Rv64im] {
+    for profile in [ProfileName::Rv64im] {
         let proj = Project::new(&format!("panic-{}", profile.as_str()));
         let source = format!(
             "// calc: profile = {}\n\
@@ -773,6 +768,8 @@ fn pack_guards_and_flag_validation() {
         vec!["pack", "/tmp/none.elf", "--no-build"],
         vec!["run", "/tmp/none.rs", "--calc", "x=y"],
         vec!["build", "/tmp/none.fitsh", "--profile", "avx"],
+        vec!["build", "/tmp/none.fitsh", "--profile", "rv64imc"],
+        vec!["pack", "/tmp/none.elf", "--hash"],
         vec!["build", "/tmp/none.fitsh", "--periods", "3"],
     ] {
         let out = std::process::Command::new(exe)

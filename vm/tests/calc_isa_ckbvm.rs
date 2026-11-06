@@ -99,9 +99,14 @@ fn run_ckbvm(
         .build();
     {
         let m = machine.memory_mut();
-        m.store_bytes(vm::calc::CALC_CODE_BASE, &c.code).unwrap();
-        m.store_bytes(lay.rodata_base, &c.rodata).unwrap();
-        m.store_bytes(lay.data_base, &c.init).unwrap();
+        m.store_bytes(
+            vm::calc::container::HALT_STUB,
+            &vm::calc::container::HALT_STUB_BYTES,
+        )
+        .unwrap();
+        for s in &c.segs {
+            m.store_bytes(s.vaddr as u64, &s.data).unwrap();
+        }
         m.store_bytes(lay.input_base, input).unwrap();
     }
     machine.set_register(A0, lay.input_base);
@@ -109,6 +114,7 @@ fn run_ckbvm(
     machine.set_register(A2, lay.output_base);
     machine.set_register(A3, lay.output_max);
     machine.set_register(SP, lay.stack_top);
+    machine.set_register(1, vm::calc::container::HALT_STUB);
     machine.update_pc(c.entry as u64);
     machine.commit_pc();
     let mut decoder = ckb_vm::decoder::build_decoder::<u64>(machine.isa(), machine.version());
@@ -174,7 +180,7 @@ fn isa_cases_match_ckbvm() {
         let _ = run;
         ran += 1;
     }
-    assert!(ran > 80, "expected the full clean-return matrix, ran {ran}");
+    assert!(ran >= 70, "expected the RV64IM clean-return matrix, ran {ran}");
 }
 
 /// Random cross-engine fuzz over the same generator's host-reference

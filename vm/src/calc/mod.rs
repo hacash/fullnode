@@ -1,21 +1,8 @@
-//! HVM calc func: RV64IM(+Zicclsm) pure-compute kernels, zk-ready.
+//! HVM calc func: RV64IM(+C)(+B)(+Zicclsm) pure-compute kernels.
 //!
-//! Container (`container.rs`) + whitelist decoder (`decode.rs`) + deploy-time
-//! verifier with basic-block pricing (`verify.rs`) + pre-decoded interpreter
-//! (`interp.rs`). The whole pipeline is deterministic and free of host
-//! access: a calc kernel can only see its own flat memory and the HALT
-//! ecall (plus the host hash table, disabled in v1).
-//!
-//! Header byte 5 is three orthogonal bits:
-//! - bit 0: Zba/Zbb/Zbs/Zbc
-//! - bit 1: RVC compressed encodings
-//! - bit 2: no host ecalls (HALT only; the zk declaration)
-//! Profiles 0 and 1 (bit 1 clear) match the zkVM rule of no C. The
-//! deployer picks the combination; a zk proof uses a container that
-//! leaves bit 1 clear and sets bit 2.
-//!
-//! See `SPEC.md` for the normative wire format, memory map, ecall ABI,
-//! gas, image ID and receipt.
+//! v2 admits every B / RVC profile combination (profile bytes 0..=3);
+//! profile 0 is the zk-standardized subset (eth-act `riscv64im_zicclsm`).
+//! The HASH bit stays unadmitted. See `SPEC.md`.
 
 pub mod config;
 pub mod container;
@@ -38,36 +25,33 @@ mod isa_tests;
 use crate::rt::{ItrErr, ItrErrCode, VmrtRes};
 
 pub use container::{
-    profile_has_bitmanip, profile_has_compressed, profile_has_no_host_ecall, profile_known,
-    CALC_PROFILE_BITMANIP, CALC_PROFILE_COMPRESSED, CALC_PROFILE_NO_HOST_ECALL,
+    profile_admitted, profile_has_bitmanip, profile_has_compressed, profile_has_hash, profile_known,
+    CALC_PROFILE_BITMANIP, CALC_PROFILE_COMPRESSED, CALC_PROFILE_HASH,
     CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IM_B, CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B,
-    CODE_BASE as CALC_CODE_BASE, IMAGE_ID_DOMAIN as CALC_IMAGE_ID_DOMAIN,
+    CODE_BASE as CALC_CODE_BASE, HALT_STUB as CALC_HALT_STUB,
+    IMAGE_ID_DOMAIN as CALC_IMAGE_ID_DOMAIN,
 };
 
-/// Exchange rate: 1 compute = 56 cycles. CONSENSUS CONSTANT: changing this
+/// Exchange rate: 1 compute = 48 cycles. CONSENSUS CONSTANT: changing this
 /// value changes gas results and is a hard fork — do not touch after
 /// activation.
 ///
-/// `56 = 32 + 16 + 8` is a deliberate policy composition of the old base
-/// rate (32), the per-KiB setup cycle charge (16) and the per-KiB resource
-/// charge (8). Those are different dimensions, so the sum is a chosen
-/// policy value, not a unit derivation.
+/// `48` is a chosen policy value, not a unit derivation.
 ///
 /// Calibration (re-measured 2026-11-04 on an i7-8550U, release+LTO,
 /// pinned, warm): HVM arithmetic ~33 ns/compute; calc interpreter
 /// ~4.1 ns/cycle; x86-64 AOT ~0.38 ns/cycle; lockstep ~4.5 ns/cycle.
-/// AOT parity is N ≈ 87, so N=56 prices calc at roughly +55% over AOT
-/// hardware cost (the older cold-state 50.7/0.62 calibration gives ~+46%:
-/// "about +50%"). It remains a large discount against the
-/// interpreter/lockstep (~7-8x cheaper). The 200-diamond HIP5 kernel
-/// (200,863 cycles) costs 3,587 compute at N=56 (6,277 at N=32; resource
-/// 413, total 4,000). Decide the pricing engine and target hardware
-/// before activation, then freeze N.
-pub const CYCLES_PER_COMPUTE: u64 = 56;
+/// AOT parity is N ≈ 87, so N=48 prices calc at roughly +81% over AOT
+/// hardware cost. It is still roughly 6x cheaper than the
+/// interpreter/lockstep. The 200-diamond HIP5 kernel (200,863 cycles)
+/// costs 4,185 compute at N=48. Decide the pricing engine and target
+/// hardware before activation, then freeze N.
+pub const CYCLES_PER_COMPUTE: u64 = 48;
 
 /// Resource charged per declared KiB of calc memory (input bytes, output
 /// bytes and declared memory are the only resource charges on the calc path).
-pub const CALC_MEM_RESOURCE_PER_KIB: i64 = 8;
+/// 2 per KiB: a 64 KiB kernel costs 128 resource per call.
+pub const CALC_MEM_RESOURCE_PER_KIB: i64 = 2;
 
 /// Per-call fixed cycle charge, deducted before the first instruction runs.
 /// Every invocation costs the host a layout computation, a fresh memory
@@ -79,40 +63,22 @@ pub const CALC_SETUP_BASE_CYCLES: u64 = 64;
 /// Additional setup cycles per declared KiB of calc memory (zeroing cost).
 pub const CALC_SETUP_PER_KIB_CYCLES: u64 = 16;
 
-/// Minimum stack that must remain above the guard after the initialized data
-/// image. The stack itself is the rest of the gap up to the output region,
-/// not a fixed 2 KiB window. CONSENSUS CONSTANT: together with
-/// [`CALC_STACK_GUARD`] it forms the single fit rule
-/// [`CALC_MIN_FREE_RW_GAP`]; this is a floor that may only be **lowered**
-/// after activation — raising it would reject containers that were legal when
-/// deployed.
+/// Minimum stack that must remain above the end of the guest image. The
+/// stack itself is the rest of the gap up to the output region, not a fixed
+/// 2 KiB window. The stack region starts exactly at `guest_end`: there is
+/// deliberately **no guard band** — a frame larger than the free span
+/// overwrites guest data deterministically instead of trapping, which keeps
+/// the permission map pure PT_LOAD semantics and zk-circuit minimal.
+/// CONSENSUS CONSTANT: this is the single fit rule
+/// [`CALC_MIN_FREE_RW_GAP`]; it is a floor that may only be **lowered**
+/// after activation — raising it would reject containers that were legal
+/// when deployed.
 pub const CALC_STACK_SIZE: u64 = 2 * 1024;
 
-/// Stack-overflow guard band (bytes) between the initialized data image and
-/// the downward-growing stack. Stores that intersect it trap. 256 bytes
-/// covers a typical compiler frame, but it is a best-effort check: a single
-/// frame larger than the band can skip over it. Loads are unaffected.
-/// CONSENSUS CONSTANT (layout + trap semantics); it may only be **lowered**
-/// after activation (raising it would shrink the legal layout and turn
-/// previously legal stores into traps).
-pub const CALC_STACK_GUARD: u64 = 256;
-
-/// Minimum free RW span the layout must leave between the end of `init` and
-/// `stack_top`: the guard band plus the minimum stack. The single fit rule
-/// used by wire decode, the verifier and the packers.
-pub const CALC_MIN_FREE_RW_GAP: u64 = CALC_STACK_GUARD + CALC_STACK_SIZE;
-
-/// Consensus switch for the host hash ecalls (`a7` = 1..=6).
-///
-/// **v1 ships with host ecalls disabled**: only HALT (`a7 = 0`) executes;
-/// every other ecall number traps. The pricing (`HashKind::cycles`), the
-/// digest implementations (`run_hash`) and the AOT/interpreter code paths are
-/// kept intact and tested directly, so a later coordinated consensus upgrade
-/// can flip this constant without touching the engines again. Host ecalls are
-/// not zk-provable on their own; a container that sets the
-/// `CALC_PROFILE_NO_HOST_ECALL` profile bit must stay HALT-only even after
-/// they are enabled.
-pub const CALC_HASH_ECALLS_ENABLED: bool = false;
+/// Minimum free RW span the layout must leave between the end of the guest
+/// image and `stack_top`: the minimum stack. The single fit rule used by
+/// wire decode, the verifier and the packers.
+pub const CALC_MIN_FREE_RW_GAP: u64 = CALC_STACK_SIZE;
 
 /// ecall a7 = HALT. a0 = exit code (0 = success), a1 = output length.
 pub const ECALL_HALT: u64 = 0;
@@ -122,8 +88,9 @@ pub const ECALL_HINT_MIN: u64 = 16;
 pub const ECALL_HINT_MAX: u64 = 31;
 
 /// Hash builtin numbers behind `ecall` (a7), aligned with the native hash
-/// catalog (`rt/native_catalog.rs`). HALT is 0; 1..=6 are hashes, disabled
-/// in v1 by [`CALC_HASH_ECALLS_ENABLED`].
+/// catalog (`rt/native_catalog.rs`). HALT is 0; 1..=6 are hashes. v2 traps
+/// them: [`CALC_PROFILE_HASH`] is not admitted (hash admission is its own
+/// hard fork with its own pricing activation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashKind {
     Sha2 = 1,
@@ -234,7 +201,7 @@ pub struct CalcExec {
     pub result: Result<Vec<u8>, CalcAbort2>,
     /// Cycles consumed up to the stop point (exact on success).
     pub cycles_used: u64,
-    /// Resource charge: ceil(in/16) + ceil(out/16) + 8 per declared KiB.
+    /// Resource charge: ceil(in/16) + ceil(out/16) + 2 per declared KiB.
     pub resource: i64,
     /// 0 on success or architectural abort; guest HALT nonzero `a0`
     /// otherwise (mapped to [`CalcAbort2::Trap`] in `result`).
@@ -424,7 +391,7 @@ impl CalcFnObj {
         if limits.cycles < setup {
             // Terminal OutOfGas: report the attempted setup charge only, not
             // the whole remaining budget. A tx reaching this abort cannot be
-            // included, so nothing beyond setup is burned; if ceil(setup/32)
+            // included, so nothing beyond setup is burned; if ceil(setup/48)
             // then exceeds the compute bucket, settle fails with the same
             // ItrErrCode::OutOfGas — the failure class never changes.
             return calc_exec(Err(CalcAbort2::OutOfGas), setup, 0, in_res, mem_res);
@@ -432,16 +399,20 @@ impl CalcFnObj {
         // Early lockstep insurance. Official x86-64 binaries compile
         // `calc-aot` and mount an image, so every call runs the interpreter
         // and then AOT in order on this thread and keeps the result only
-        // when gas (`cycles_used`) and the consensus-observable outcome
-        // (output bytes, abort class, halt code) match. Registers and memory
-        // are compared by the differential test suites, not on the hot path;
-        // only the consensus-observable surface is checked here. A mismatch
-        // is `EngineMismatch`: the caller rejects the transaction and it does
-        // not enter a block. A panic inside either engine is caught and
-        // reported the same way — it is a host failure with no agreed charge
-        // to keep, and the transaction is rejected either way. Builds without
-        // the feature, or with the image unmounted, take the interpreter
-        // alone.
+        // when the engines agree on the FULL stop state: gas (`cycles_used`),
+        // the consensus-observable outcome (output bytes, abort class, halt
+        // code), all 32 registers, and the whole memory image. A mismatch in
+        // any of these is `EngineMismatch`: the caller rejects the
+        // transaction and it does not enter a block. The register/memory
+        // compare is deliberate: an engine bug that happens to agree on the
+        // consensus surface must still be surfaced while both engines run.
+        // A panic inside either engine is reported as `EngineMismatch` the
+        // same way — BUT only under unwind builds (the test profiles). The
+        // workspace release profile sets `panic = "abort"`, where a panic
+        // terminates the process before any handler runs (the supervisor
+        // restarts from durable state); `catch_unwind` here is effective
+        // exactly where tests run. Builds without the feature, or with the
+        // image unmounted, take the interpreter alone.
         //
         // A host wall-clock deadline is observed by the interpreter only. The
         // AOT image **still runs** (the lockstep is never skipped, so preflight
@@ -453,20 +424,28 @@ impl CalcFnObj {
         #[cfg(feature = "calc-aot")]
         if let Some(aot) = self.aot.as_ref() {
             let budget = limits.cycles - setup;
-            let interp_out = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                engine_from_interp(
-                    setup,
-                    interp::run(&self.module, &self.container, input, budget, limits.deadline),
-                )
-            })) {
+            let (interp_out, interp_regs, interp_mem) = match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| {
+                    let (r, regs, mem) = interp::run_lockstep(
+                        &self.module,
+                        &self.container,
+                        input,
+                        budget,
+                        limits.deadline,
+                    );
+                    (engine_from_interp(setup, r), regs, mem)
+                }),
+            ) {
                 Ok(out) => out,
                 Err(_) => return calc_exec(Err(CalcAbort2::EngineMismatch), 0, 0, 0, 0),
             };
-            let aot_out = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let (out, _regs, _mem) =
-                    aot.run_with_state(&self.module, &self.container, input, budget);
-                engine_from_aot(setup, out)
-            })) {
+            let (aot_out, aot_regs, aot_mem) = match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(|| {
+                    let (out, regs, mem) =
+                        aot.run_with_state(&self.module, &self.container, input, budget);
+                    (engine_from_aot(setup, out), regs, mem)
+                }),
+            ) {
                 Ok(out) => out,
                 Err(_) => return calc_exec(Err(CalcAbort2::EngineMismatch), 0, 0, 0, 0),
             };
@@ -479,7 +458,7 @@ impl CalcFnObj {
                     mem_res,
                 );
             }
-            if interp_out != aot_out {
+            if interp_out != aot_out || interp_regs != aot_regs || interp_mem != aot_mem {
                 return calc_exec(Err(CalcAbort2::EngineMismatch), 0, 0, 0, 0);
             }
             return calc_exec(
@@ -594,14 +573,7 @@ pub(crate) fn reject_image_len(len: usize, cap: &SpaceCap) -> VmrtRes<()> {
     Ok(())
 }
 
-/// Build a calc container from a linked bare-metal image produced by the
-/// Rust cross-build pack step, admitted against `cap` (the same caps the
-/// target chain applies at deploy).
-///
-/// `init` must include the zero-initialized `.bss` span: the container has no
-/// separate bss field, so the runtime derives the layout (and the guard band
-/// position) from `init.len()` alone. [`pack_elf`] does this folding
-/// automatically.
+/// Build a calc container from load segments, admitted against `cap`.
 #[allow(clippy::too_many_arguments)]
 pub fn pack_container(
     cap: &SpaceCap,
@@ -610,23 +582,16 @@ pub fn pack_container(
     entry: u32,
     input_max: u16,
     output_max: u16,
-    code: Vec<u8>,
-    rodata: Vec<u8>,
-    init: Vec<u8>,
+    segs: Vec<container::CalcSegment>,
 ) -> VmrtRes<container::CalcContainer> {
     let c = container::CalcContainer {
         profile,
         mem_kib,
         entry,
-        code,
-        rodata,
-        init,
+        segs,
         input_max,
         output_max,
     };
-    // Round-trip through the wire format so a directly constructed
-    // container cannot bypass the decoder's header/length checks, then run
-    // the full verifier on exactly the bytes that will be stored.
     let bytes = c.encode()?;
     reject_image_len(bytes.len(), cap)?;
     let (decoded, used) = container::CalcContainer::decode(&bytes)?;
@@ -640,10 +605,68 @@ pub fn pack_container(
     Ok(decoded)
 }
 
+/// Pack a single RX blob at [`container::CODE_BASE`].
+#[allow(clippy::too_many_arguments)]
+pub fn pack_code(
+    cap: &SpaceCap,
+    profile: u8,
+    mem_kib: u32,
+    entry: u32,
+    input_max: u16,
+    output_max: u16,
+    code: Vec<u8>,
+) -> VmrtRes<container::CalcContainer> {
+    pack_container(
+        cap,
+        profile,
+        mem_kib,
+        entry,
+        input_max,
+        output_max,
+        vec![container::CalcSegment::rx(container::CODE_BASE as u32, code)],
+    )
+}
+
+/// Pack adjacent RX / R / RW blobs at [`container::CODE_BASE`]. Tests and
+/// fixtures that still emit three regions use this; production packing is
+/// [`pack_elf`].
+#[allow(clippy::too_many_arguments)]
+pub fn pack_regions(
+    cap: &SpaceCap,
+    profile: u8,
+    mem_kib: u32,
+    entry: u32,
+    input_max: u16,
+    output_max: u16,
+    code: Vec<u8>,
+    rodata: Vec<u8>,
+    init: Vec<u8>,
+) -> VmrtRes<container::CalcContainer> {
+    let c = container::CalcContainer::from_regions(
+        profile,
+        mem_kib,
+        entry,
+        code,
+        rodata,
+        init,
+        input_max,
+        output_max,
+    );
+    pack_container(
+        cap,
+        profile,
+        mem_kib,
+        entry,
+        input_max,
+        output_max,
+        c.segs,
+    )
+}
+
 /// Pack an ELF64 little-endian RISC-V (`e_machine` 243) image into a calc
 /// container with an explicit `mem_kib`. Entry is the `calc_entry` symbol
-/// when present, otherwise `e_entry`. Init includes the ELF `.bss`/`.sbss`
-/// span as explicit zeros.
+/// when present, otherwise `e_entry`. `PT_LOAD` segments are stored as-is
+/// (`memsz - filesz` is `.bss`).
 pub fn pack_elf(
     cap: &SpaceCap,
     elf: &[u8],
@@ -652,7 +675,7 @@ pub fn pack_elf(
     input_max: u16,
     output_max: u16,
 ) -> VmrtRes<container::CalcContainer> {
-    let parsed = parse_elf64_riscv(elf)?;
+    let parsed = parse_elf64_riscv(elf, profile)?;
     pack_container(
         cap,
         profile,
@@ -660,15 +683,12 @@ pub fn pack_elf(
         parsed.entry,
         input_max,
         output_max,
-        parsed.code,
-        parsed.rodata,
-        parsed.init,
+        parsed.segs,
     )
 }
 
-/// [`pack_elf`] with the smallest `mem_kib` that fits the image, the guard,
-/// [`CALC_STACK_SIZE`] and the declared IO regions. Pack tools use this so a
-/// kernel is not charged for memory it never touches.
+/// [`pack_elf`] with the smallest `mem_kib` that fits the image,
+/// [`CALC_STACK_SIZE`] and the declared IO regions.
 pub fn pack_elf_min_mem(
     cap: &SpaceCap,
     elf: &[u8],
@@ -676,20 +696,20 @@ pub fn pack_elf_min_mem(
     input_max: u16,
     output_max: u16,
 ) -> VmrtRes<container::CalcContainer> {
-    let parsed = parse_elf64_riscv(elf)?;
-    let mem_kib = container::min_mem_kib_for(
-        parsed.code.len() as u64,
-        parsed.rodata.len() as u64,
-        parsed.init.len() as u64,
-        input_max as u64,
-        output_max as u64,
-    )
-    .ok_or_else(|| {
-        ItrErr::new(
-            ItrErrCode::ContractError,
-            "calc elf: image cannot fit in the engine memory ceiling",
-        )
-    })?;
+    let parsed = parse_elf64_riscv(elf, profile)?;
+    let guest_end = parsed
+        .segs
+        .iter()
+        .map(|s| s.end())
+        .max()
+        .unwrap_or(container::CODE_BASE);
+    let mem_kib = container::min_mem_kib_for(guest_end, input_max as u64, output_max as u64)
+        .ok_or_else(|| {
+            ItrErr::new(
+                ItrErrCode::ContractError,
+                "calc elf: image cannot fit in the engine memory ceiling",
+            )
+        })?;
     pack_container(
         cap,
         profile,
@@ -697,18 +717,13 @@ pub fn pack_elf_min_mem(
         parsed.entry,
         input_max,
         output_max,
-        parsed.code,
-        parsed.rodata,
-        parsed.init,
+        parsed.segs,
     )
 }
 
 struct ParsedElf {
     entry: u32,
-    code: Vec<u8>,
-    rodata: Vec<u8>,
-    /// `.data`/`.sdata` and the zero span covering `.bss`/`.sbss`.
-    init: Vec<u8>,
+    segs: Vec<container::CalcSegment>,
 }
 
 struct ElfSec {
@@ -762,7 +777,7 @@ fn sec_bytes<'a>(elf: &'a [u8], sec: &ElfSec) -> VmrtRes<&'a [u8]> {
     elf.get(off..off + len).ok_or_else(|| elf_err("calc elf: section out of file"))
 }
 
-fn parse_elf64_riscv(elf: &[u8]) -> VmrtRes<ParsedElf> {
+fn parse_elf64_riscv(elf: &[u8], profile: u8) -> VmrtRes<ParsedElf> {
     if elf.len() < 64 || elf.get(..4) != Some(b"\x7fELF") {
         return Err(elf_err("calc elf: bad magic"));
     }
@@ -772,140 +787,139 @@ fn parse_elf64_riscv(elf: &[u8]) -> VmrtRes<ParsedElf> {
     if elf[5] != 1 {
         return Err(elf_err("calc elf: not little-endian"));
     }
+    let e_type = ru16(elf, 16)?;
+    if e_type != 2 {
+        return Err(elf_err("calc elf: not ET_EXEC"));
+    }
     let e_machine = ru16(elf, 18)?;
     if e_machine != 243 {
         return Err(elf_err("calc elf: e_machine is not EM_RISCV"));
+    }
+    const EF_RISCV_RVC: u32 = 0x0001;
+    let e_flags = ru32(elf, 48)?;
+    if e_flags & EF_RISCV_RVC != 0 && !container::profile_has_compressed(profile) {
+        return Err(elf_err("calc elf: EF_RISCV_RVC set but profile has no C"));
     }
     let e_entry = ru64(elf, 24)?;
     let e_shoff = ru64(elf, 40)?;
     let e_shentsize = ru16(elf, 58)? as u64;
     let e_shnum = ru16(elf, 60)? as usize;
     let e_shstrndx = ru16(elf, 62)? as usize;
-    if e_shoff == 0 || e_shnum == 0 || e_shentsize < 64 {
-        return Err(elf_err("calc elf: missing section headers"));
+    // Section headers are optional. A stripped PT_LOAD-only ELF packs via
+    // `e_entry`. Relocs and `calc_entry` are read when the table is present.
+    let mut sections: Vec<ElfSec> = Vec::new();
+    if e_shoff != 0 && e_shnum != 0 {
+        if e_shentsize < 64 {
+            return Err(elf_err("calc elf: truncated section headers"));
+        }
+        if e_shstrndx >= e_shnum {
+            return Err(elf_err("calc elf: bad shstrndx"));
+        }
+        sections.reserve(e_shnum);
+        for i in 0..e_shnum {
+            let base = e_shoff
+                .checked_add((i as u64).checked_mul(e_shentsize).ok_or_else(|| elf_err("calc elf: shoff"))?)
+                .ok_or_else(|| elf_err("calc elf: shoff"))?;
+            let base = usize::try_from(base).map_err(|_| elf_err("calc elf: shoff"))?;
+            let hdr = elf.get(base..base + 64).ok_or_else(|| elf_err("calc elf: truncated section header"))?;
+            sections.push(ElfSec {
+                name: String::new(),
+                typ: ru32(hdr, 4)?,
+                flags: ru64(hdr, 8)?,
+                addr: ru64(hdr, 16)?,
+                offset: ru64(hdr, 24)?,
+                size: ru64(hdr, 32)?,
+                link: ru32(hdr, 40)?,
+                entsize: ru64(hdr, 56)?,
+            });
+        }
+        let shstr = sec_bytes(elf, &sections[e_shstrndx])?.to_vec();
+        for (i, sec) in sections.iter_mut().enumerate() {
+            let base = e_shoff
+                .checked_add((i as u64).checked_mul(e_shentsize).ok_or_else(|| elf_err("calc elf: shoff"))?)
+                .ok_or_else(|| elf_err("calc elf: shoff"))?;
+            let base = usize::try_from(base).map_err(|_| elf_err("calc elf: shoff"))?;
+            let name_off = ru32(elf, base)?;
+            sec.name = cstr_at(&shstr, name_off as u64)?;
+        }
+        const SHT_RELA: u32 = 4;
+        const SHT_REL: u32 = 9;
+        for sec in &sections {
+            if sec.typ == SHT_REL || sec.typ == SHT_RELA {
+                return Err(elf_err("calc elf: relocation section not allowed"));
+            }
+        }
     }
-    if e_shstrndx >= e_shnum {
-        return Err(elf_err("calc elf: bad shstrndx"));
+
+    let e_phoff = ru64(elf, 32)?;
+    let e_phentsize = ru16(elf, 54)? as u64;
+    let e_phnum = ru16(elf, 56)? as usize;
+    if e_phoff == 0 || e_phnum == 0 || e_phentsize < 56 {
+        return Err(elf_err("calc elf: missing program headers"));
     }
-    let mut sections = Vec::with_capacity(e_shnum);
-    for i in 0..e_shnum {
-        let base = e_shoff
-            .checked_add((i as u64).checked_mul(e_shentsize).ok_or_else(|| elf_err("calc elf: shoff"))?)
-            .ok_or_else(|| elf_err("calc elf: shoff"))?;
-        let base = usize::try_from(base).map_err(|_| elf_err("calc elf: shoff"))?;
-        let hdr = elf.get(base..base + 64).ok_or_else(|| elf_err("calc elf: truncated section header"))?;
-        sections.push(ElfSec {
-            name: String::new(),
-            typ: ru32(hdr, 4)?,
-            flags: ru64(hdr, 8)?,
-            addr: ru64(hdr, 16)?,
-            offset: ru64(hdr, 24)?,
-            size: ru64(hdr, 32)?,
-            link: ru32(hdr, 40)?,
-            entsize: ru64(hdr, 56)?,
+    const PT_LOAD: u32 = 1;
+    const PT_DYNAMIC: u32 = 2;
+    const PT_INTERP: u32 = 3;
+    const PT_TLS: u32 = 7;
+    let mut segs = Vec::new();
+    for i in 0..e_phnum {
+        let base = e_phoff
+            .checked_add((i as u64).checked_mul(e_phentsize).ok_or_else(|| elf_err("calc elf: phoff"))?)
+            .ok_or_else(|| elf_err("calc elf: phoff"))?;
+        let base = usize::try_from(base).map_err(|_| elf_err("calc elf: phoff"))?;
+        let hdr = elf.get(base..base + 56).ok_or_else(|| elf_err("calc elf: truncated phdr"))?;
+        let p_type = ru32(hdr, 0)?;
+        let p_flags = ru32(hdr, 4)?;
+        let p_offset = ru64(hdr, 8)?;
+        let p_vaddr = ru64(hdr, 16)?;
+        let p_filesz = ru64(hdr, 32)?;
+        let p_memsz = ru64(hdr, 40)?;
+        match p_type {
+            PT_LOAD => {}
+            PT_DYNAMIC | PT_INTERP | PT_TLS => {
+                return Err(elf_err("calc elf: dynamic/interp/tls not allowed"));
+            }
+            _ => continue,
+        }
+        if p_memsz == 0 {
+            continue;
+        }
+        let vaddr = u32::try_from(p_vaddr).map_err(|_| elf_err("calc elf: p_vaddr exceeds u32"))?;
+        let memsz = u32::try_from(p_memsz).map_err(|_| elf_err("calc elf: p_memsz exceeds u32"))?;
+        let filesz = usize::try_from(p_filesz).map_err(|_| elf_err("calc elf: p_filesz exceeds usize"))?;
+        if filesz as u64 > p_memsz {
+            return Err(elf_err("calc elf: p_filesz exceeds p_memsz"));
+        }
+        let off = usize::try_from(p_offset).map_err(|_| elf_err("calc elf: p_offset"))?;
+        let data = if filesz == 0 {
+            Vec::new()
+        } else {
+            elf.get(off..off + filesz)
+                .ok_or_else(|| elf_err("calc elf: PT_LOAD out of file"))?
+                .to_vec()
+        };
+        let mut flags = (p_flags & 0x7) as u8;
+        flags |= container::SEG_R;
+        if flags & container::SEG_X != 0 && filesz as u32 != memsz {
+            return Err(elf_err("calc elf: executable PT_LOAD cannot have bss"));
+        }
+        if flags & container::SEG_W != 0 && flags & container::SEG_X != 0 {
+            return Err(elf_err("calc elf: W^X violated"));
+        }
+        segs.push(container::CalcSegment {
+            vaddr,
+            memsz,
+            flags,
+            data,
         });
     }
-    let shstr = sec_bytes(elf, &sections[e_shstrndx])?.to_vec();
-    for (i, sec) in sections.iter_mut().enumerate() {
-        let base = e_shoff
-            .checked_add((i as u64).checked_mul(e_shentsize).ok_or_else(|| elf_err("calc elf: shoff"))?)
-            .ok_or_else(|| elf_err("calc elf: shoff"))?;
-        let base = usize::try_from(base).map_err(|_| elf_err("calc elf: shoff"))?;
-        let name_off = ru32(elf, base)?;
-        sec.name = cstr_at(&shstr, name_off as u64)?;
-    }
-    const SHT_RELA: u32 = 4;
-    const SHT_REL: u32 = 9;
-    const SHF_ALLOC: u64 = 2;
-    for sec in &sections {
-        if sec.typ == SHT_REL || sec.typ == SHT_RELA {
-            return Err(elf_err("calc elf: relocation section not allowed"));
-        }
-        if sec.size == 0 || sec.flags & SHF_ALLOC == 0 {
-            continue;
-        }
-        let known = matches!(
-            sec.name.as_str(),
-            ".text" | ".rodata" | ".data" | ".sdata" | ".bss" | ".sbss"
-        );
-        if !known {
-            return Err(elf_err(&format!(
-                "calc elf: unknown allocated section '{}'",
-                sec.name
-            )));
-        }
-    }
-    let find = |name: &str| sections.iter().find(|s| s.name == name);
-
-    let text = find(".text").ok_or_else(|| elf_err("calc elf: missing .text"))?;
-    if text.typ != 1 {
-        return Err(elf_err("calc elf: .text is not PROGBITS"));
-    }
-    if text.addr != container::CODE_BASE {
-        return Err(elf_err("calc elf: .text does not start at CODE_BASE"));
-    }
-    let code = sec_bytes(elf, text)?.to_vec();
-
-    let rodata = match find(".rodata") {
-        Some(sec) if sec.size > 0 => {
-            let rodata_base = (container::CODE_BASE + code.len() as u64 + 15) & !15;
-            if sec.addr != rodata_base {
-                return Err(elf_err("calc elf: .rodata does not start at rodata_base"));
-            }
-            sec_bytes(elf, sec)?.to_vec()
-        }
-        _ => Vec::new(),
-    };
-    let rodata_base = (container::CODE_BASE + code.len() as u64 + 15) & !15;
-    let data_base = (rodata_base + rodata.len() as u64 + 15) & !15;
-
-    // End of the initialized-data image: max(.data/.sdata end, .bss/.sbss
-    // end). The zero span after the initialized bytes folds `.bss` into the
-    // container's single `init` image, so the runtime needs no bss field.
-    let mut image_end = data_base;
-    let mut data_secs: Vec<&ElfSec> = sections
-        .iter()
-        .filter(|s| (s.name == ".data" || s.name == ".sdata") && s.size > 0)
-        .collect();
-    data_secs.sort_by_key(|s| s.addr);
-    for s in &data_secs {
-        if s.addr < data_base {
-            return Err(elf_err("calc elf: data section before data_base"));
-        }
-        let end = s
-            .addr
-            .checked_add(s.size)
-            .ok_or_else(|| elf_err("calc elf: data section overflow"))?;
-        image_end = image_end.max(end);
-    }
-    for s in sections.iter().filter(|s| s.name == ".bss" || s.name == ".sbss") {
-        if s.size == 0 {
-            continue;
-        }
-        let end = s.addr.checked_add(s.size).ok_or_else(|| elf_err("calc elf: bss overflow"))?;
-        if s.addr < data_base {
-            return Err(elf_err("calc elf: bss before data_base"));
-        }
-        image_end = image_end.max(end);
-    }
-    let span = image_end
-        .checked_sub(data_base)
-        .ok_or_else(|| elf_err("calc elf: image span underflow"))?;
-    let mut init = vec![0u8; span as usize];
-    for s in data_secs {
-        let at = (s.addr - data_base) as usize;
-        let bytes = sec_bytes(elf, s)?;
-        let end_at = at
-            .checked_add(bytes.len())
-            .ok_or_else(|| elf_err("calc elf: data section overflow"))?;
-        if end_at > init.len() {
-            return Err(elf_err("calc elf: data section exceeds init image"));
-        }
-        init[at..end_at].copy_from_slice(bytes);
+    segs.sort_by_key(|s| s.vaddr);
+    if segs.is_empty() {
+        return Err(elf_err("calc elf: no PT_LOAD segments"));
     }
 
     let mut entry = u32::try_from(e_entry).map_err(|_| elf_err("calc elf: e_entry exceeds u32"))?;
-    if let Some(symtab) = find(".symtab") {
+    if let Some(symtab) = sections.iter().find(|s| s.name == ".symtab") {
         let str_idx = symtab.link as usize;
         let strtab = sections.get(str_idx).ok_or_else(|| elf_err("calc elf: bad strtab"))?;
         let strbytes = sec_bytes(elf, strtab)?;
@@ -928,7 +942,7 @@ fn parse_elf64_riscv(elf: &[u8]) -> VmrtRes<ParsedElf> {
         }
     }
 
-    Ok(ParsedElf { entry, code, rodata, init })
+    Ok(ParsedElf { entry, segs })
 }
 
 #[cfg(test)]
@@ -938,7 +952,7 @@ mod tests {
     #[cfg(feature = "calc-aot")]
     #[test]
     fn dual_run_halt_agrees() {
-        let c = pack_container(
+        let c = pack_code(
             &SpaceCap::new(0),
             container::CALC_PROFILE_RV64IM,
             8,
@@ -946,8 +960,6 @@ mod tests {
             64,
             64,
             halt_text(),
-            vec![],
-            vec![],
         )
         .unwrap();
         let obj = CalcFnObj::build_with_host(c, CalcHostConfig::new()).unwrap();
@@ -1052,20 +1064,20 @@ mod tests {
         c
     }
 
-    /// Minimal ELF64 LE RISC-V: `.text` at `CODE_BASE`, optional `.bss`,
-    /// `calc_entry` in `.symtab` when `symbol` is set.
+    /// Minimal ELF64 LE RISC-V with PT_LOAD for `.text` and optional `.bss`.
     fn synth_elf(bss_addr: u64, bss_size: u64, symbol: bool) -> Vec<u8> {
         let text = halt_text();
         let shstr = b"\0.text\0.bss\0.symtab\0.strtab\0.shstrtab\0";
         let strtab = if symbol { b"\0calc_entry\0".to_vec() } else { b"\0other\0".to_vec() };
         let mut sym = vec![0u8; 24];
         sym.extend_from_slice(&1u32.to_le_bytes());
-        sym.extend_from_slice(&[0x12, 0]); // st_info, st_other
-        sym.extend_from_slice(&1u16.to_le_bytes()); // shndx .text
+        sym.extend_from_slice(&[0x12, 0]);
+        sym.extend_from_slice(&1u16.to_le_bytes());
         sym.extend_from_slice(&container::CODE_BASE.to_le_bytes());
         sym.extend_from_slice(&0u64.to_le_bytes());
 
-        let mut body = vec![0u8; 64];
+        let phnum: u16 = if bss_size > 0 { 2 } else { 1 };
+        let mut body = vec![0u8; 64 + 56 * phnum as usize];
         let text_off = body.len() as u64;
         body.extend_from_slice(&text);
         let str_off = body.len() as u64;
@@ -1075,6 +1087,22 @@ mod tests {
         let shstr_off = body.len() as u64;
         body.extend_from_slice(shstr);
         let shoff = body.len() as u64;
+
+        let mut ph = |i: usize, typ: u32, flags: u32, off: u64, vaddr: u64, filesz: u64, memsz: u64| {
+            let at = 64 + i * 56;
+            body[at..at + 4].copy_from_slice(&typ.to_le_bytes());
+            body[at + 4..at + 8].copy_from_slice(&flags.to_le_bytes());
+            body[at + 8..at + 16].copy_from_slice(&off.to_le_bytes());
+            body[at + 16..at + 24].copy_from_slice(&vaddr.to_le_bytes());
+            body[at + 24..at + 32].copy_from_slice(&vaddr.to_le_bytes());
+            body[at + 32..at + 40].copy_from_slice(&filesz.to_le_bytes());
+            body[at + 40..at + 48].copy_from_slice(&memsz.to_le_bytes());
+            body[at + 48..at + 56].copy_from_slice(&1u64.to_le_bytes());
+        };
+        ph(0, 1, 5, text_off, container::CODE_BASE, text.len() as u64, text.len() as u64);
+        if bss_size > 0 {
+            ph(1, 1, 6, 0, bss_addr, 0, bss_size);
+        }
 
         let mut sh = |name: u32, typ: u32, flags: u64, addr: u64, off: u64, size: u64, link: u32, entsize: u64| {
             let mut h = Vec::new();
@@ -1106,8 +1134,11 @@ mod tests {
         body[20..24].copy_from_slice(&1u32.to_le_bytes());
         let entry = if symbol { 0 } else { container::CODE_BASE };
         body[24..32].copy_from_slice(&entry.to_le_bytes());
+        body[32..40].copy_from_slice(&64u64.to_le_bytes());
         body[40..48].copy_from_slice(&shoff.to_le_bytes());
         body[52..54].copy_from_slice(&64u16.to_le_bytes());
+        body[54..56].copy_from_slice(&56u16.to_le_bytes());
+        body[56..58].copy_from_slice(&phnum.to_le_bytes());
         body[58..60].copy_from_slice(&64u16.to_le_bytes());
         body[60..62].copy_from_slice(&6u16.to_le_bytes());
         body[62..64].copy_from_slice(&5u16.to_le_bytes());
@@ -1115,8 +1146,8 @@ mod tests {
     }
 
     #[test]
-    fn layout_leaves_guard_and_min_stack_and_no_bss_field() {
-        let c = pack_container(
+    fn layout_leaves_min_stack_above_guest_end() {
+        let c = pack_code(
             &SpaceCap::new(0),
             container::CALC_PROFILE_RV64IM,
             4,
@@ -1124,27 +1155,25 @@ mod tests {
             64,
             64,
             halt_text(),
-            vec![],
-            vec![],
         )
         .unwrap();
         let lay = c.layout();
         assert!(lay.fits());
         assert_eq!(lay.stack_top, lay.output_base);
-        assert_eq!(lay.guard_base, lay.data_base + lay.init_len);
-        assert_eq!(lay.guard_base + CALC_STACK_GUARD, lay.stack_bottom);
+        // No guard band: the stack starts exactly at the end of the image.
+        assert_eq!(lay.stack_bottom, c.guest_end());
         assert!(lay.stack_bottom + CALC_STACK_SIZE <= lay.stack_top);
     }
 
     #[test]
     fn min_mem_kib_is_the_smallest_fitting_value() {
-        let code_len = halt_text().len() as u64;
-        let kib = container::min_mem_kib_for(code_len, 0, 0, 64, 64).expect("fits");
+        let guest_end = container::CODE_BASE + halt_text().len() as u64;
+        let kib = container::min_mem_kib_for(guest_end, 64, 64).expect("fits");
         assert!(kib >= container::CALC_MEM_KIB_MIN);
-        let lay = container::compute_layout(code_len, 0, 0, 64, 64, kib as u64 * 1024);
+        let lay = container::compute_layout(guest_end, 64, 64, kib as u64 * 1024);
         assert!(lay.fits());
         if kib > container::CALC_MEM_KIB_MIN {
-            let smaller = container::compute_layout(code_len, 0, 0, 64, 64, (kib as u64 - 1) * 1024);
+            let smaller = container::compute_layout(guest_end, 64, 64, (kib as u64 - 1) * 1024);
             assert!(!smaller.fits(), "kib-1 must not fit");
         }
     }
@@ -1155,7 +1184,7 @@ mod tests {
             calc_mem_kib_max: 70_000,
             ..SpaceCap::new(0)
         };
-        let c = pack_container(
+        let c = pack_code(
             &cap,
             container::CALC_PROFILE_RV64IM,
             70_000,
@@ -1163,14 +1192,15 @@ mod tests {
             16,
             16,
             halt_text(),
-            vec![],
-            vec![],
         )
         .unwrap();
         assert_eq!(c.mem_kib, 70_000);
         assert_eq!(c.layout().usable_len, 70_000 * 1024);
         let (decoded, used) = container::CalcContainer::decode(&c.encode().unwrap()).unwrap();
-        assert_eq!(used, container::HEADER_LEN + halt_text().len());
+        assert_eq!(
+            used,
+            container::HEADER_LEN + container::SEG_HDR_LEN + halt_text().len()
+        );
         assert_eq!(decoded.mem_kib, 70_000);
         let mut over = c.clone();
         over.mem_kib = container::CALC_MEM_KIB_ENGINE_MAX + 1;
@@ -1189,12 +1219,8 @@ mod tests {
     }
 
     #[test]
-    fn pack_elf_rejects_rela_and_unknown_alloc_sections() {
-        let data_base = {
-            let code_len = halt_text().len() as u64;
-            let ro = (container::CODE_BASE + code_len + 15) & !15;
-            (ro + 15) & !15
-        };
+    fn pack_elf_rejects_rela() {
+        let data_base = container::CODE_BASE + halt_text().len() as u64;
         let base = synth_elf(data_base, 16, true);
         let rela = with_extra_section(base.clone(), 4, 0, 24);
         let err = pack_elf(&SpaceCap::new(0), &rela, 0, 4, 64, 64).unwrap_err();
@@ -1202,40 +1228,27 @@ mod tests {
             err.to_string().contains("relocation section not allowed"),
             "{err}"
         );
-        let rel = with_extra_section(base.clone(), 9, 0, 16);
+        let rel = with_extra_section(base, 9, 0, 16);
         let err = pack_elf(&SpaceCap::new(0), &rel, 0, 4, 64, 64).unwrap_err();
         assert!(
             err.to_string().contains("relocation section not allowed"),
             "{err}"
         );
-        let unknown = with_extra_section(base, 1, 2, 8);
-        let err = pack_elf(&SpaceCap::new(0), &unknown, 0, 4, 64, 64).unwrap_err();
-        assert!(
-            err.to_string().contains("unknown allocated section"),
-            "{err}"
-        );
     }
 
     #[test]
-    fn pack_elf_folds_bss_into_init_and_uses_calc_entry() {
-        let data_base = {
-            let code_len = halt_text().len() as u64;
-            let ro = (container::CODE_BASE + code_len + 15) & !15;
-            (ro + 15) & !15
-        };
+    fn pack_elf_keeps_bss_off_chain_and_uses_calc_entry() {
+        let data_base = container::CODE_BASE + halt_text().len() as u64;
         let ok = pack_elf(&SpaceCap::new(0), &synth_elf(data_base, 16, true), 0, 4, 64, 64)
             .unwrap();
         assert_eq!(ok.entry, container::CODE_BASE as u32);
-        assert_eq!(ok.code, halt_text());
-        // `.bss` is part of the init image now: data_base..data_base+16.
-        assert_eq!(ok.init.len(), 16);
-        assert_eq!(ok.layout().guard_base, data_base + 16);
-        // The same image packs at the minimum memory that fits.
+        assert_eq!(ok.first_rx_data(), halt_text());
+        assert_eq!(ok.rw_filesz(), 0);
+        assert_eq!(ok.layout().stack_bottom, data_base + 16);
         let min = pack_elf_min_mem(&SpaceCap::new(0), &synth_elf(data_base, 16, true), 0, 64, 64)
             .unwrap();
         assert!(min.layout().fits());
         assert!(min.mem_kib <= 8);
-        // A huge `.bss` no longer fits a 4 KiB container.
         let err = pack_elf(
             &SpaceCap::new(0),
             &synth_elf(data_base, 0x800, true),
@@ -1249,5 +1262,20 @@ mod tests {
         let from_ehdr =
             pack_elf(&SpaceCap::new(0), &synth_elf(data_base, 16, false), 0, 4, 64, 64).unwrap();
         assert_eq!(from_ehdr.entry, container::CODE_BASE as u32);
+    }
+
+    #[test]
+    fn pack_elf_accepts_phdr_only_and_rejects_et_dyn() {
+        let data_base = container::CODE_BASE + halt_text().len() as u64;
+        let mut stripped = synth_elf(data_base, 16, false);
+        stripped[40..48].copy_from_slice(&0u64.to_le_bytes());
+        stripped[60..62].copy_from_slice(&0u16.to_le_bytes());
+        stripped[62..64].copy_from_slice(&0u16.to_le_bytes());
+        let ok = pack_elf(&SpaceCap::new(0), &stripped, 0, 4, 64, 64).unwrap();
+        assert_eq!(ok.entry, container::CODE_BASE as u32);
+        let mut dyn_elf = synth_elf(data_base, 16, false);
+        dyn_elf[16..18].copy_from_slice(&3u16.to_le_bytes());
+        let err = pack_elf(&SpaceCap::new(0), &dyn_elf, 0, 4, 64, 64).unwrap_err();
+        assert!(err.to_string().contains("ET_EXEC"), "{err}");
     }
 }

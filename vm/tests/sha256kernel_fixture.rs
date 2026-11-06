@@ -49,21 +49,25 @@ fn kernel() -> (CalcFnObj, CalcContainer) {
         16,
     )
     .expect("bss_len hex") as u64;
-    // The container has no bss field: the fixture's zero-initialized span
-    // is part of the init image (it starts right after `.data`, exactly as
-    // the linker laid it out).
-    let mut init = fixture("image_init.bin");
-    init.resize(init.len() + bss_len as usize, 0);
-    let container = pack_container(
-        &SpaceCap::new(0),
+    let tmp = CalcContainer::from_regions(
         CALC_PROFILE_RV64IM,
-        8, // KiB
+        8,
         entry,
-        256,
-        32,
         fixture("image_code.bin"),
         fixture("image_rodata.bin"),
-        init,
+        fixture("image_init.bin"),
+        256,
+        32,
+    )
+    .with_bss(bss_len as u32);
+    let container = pack_container(
+        &SpaceCap::new(0),
+        tmp.profile,
+        tmp.mem_kib,
+        tmp.entry,
+        tmp.input_max,
+        tmp.output_max,
+        tmp.segs,
     )
     .expect("kernel container packs");
     let obj = kernel_build(container.clone(), false);

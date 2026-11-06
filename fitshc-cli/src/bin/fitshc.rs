@@ -58,9 +58,8 @@ fn usage() {
          \x20   --no-build         never invoke rustc; only prebuilt .hcf1/.elf\n\
          \x20   --strict           rebuild core/compiler_builtins (rv64imc/b: drops prebuilt +A caveat)\n\
          \x20   --in N --out N     IO sizes for bare .elf packing (default 1024/1024)\n\
-         \x20   --profile P        rv64im|rv64imb|rv64imc|rv64imcb for .elf packing (default rv64imc)\n\
+         \x20   --profile P        rv64im (v2 admits only this; default rv64im)\n\
          \x20   --mem auto|N       memory admission for .elf packing (default auto)\n\
-         \x20   --host-ecall       clear the HALT-only profile bit for .elf packing\n\
          \x20   --no-cache         never read/write the shared build cache; temp build dir is removed\n\
          \x20   --no-artifacts     do not write <name>.hcf1/.calc.manifest.json next to the fitsh\n\
          \x20   --artifacts        force artifact writing (overrides the --no-build default)\n\
@@ -144,6 +143,8 @@ impl CommonArgs {
                     let v = val!("--profile");
                     me.elf_defaults.profile =
                         ProfileName::parse(&v).ok_or_else(|| format!("unknown profile {v:?}"))?;
+                    // rv64im / rv64imb / rv64imc / rv64imcb are all admitted
+                    // by the chain; hash stays rejected (see --hash).
                 }
                 "--mem" => {
                     let v = val!("--mem");
@@ -153,7 +154,9 @@ impl CommonArgs {
                         MemSpec::KiB(v.parse().map_err(|_| "--mem auto|N")?)
                     };
                 }
-                "--host-ecall" => me.elf_defaults.no_host_ecall = false,
+                "--hash" => {
+                    return Err("hash ecalls are not admitted in v2".into());
+                }
                 "--no-cache" => me.no_cache = true,
                 "--artifacts" => me.artifacts = Some(true),
                 "--no-artifacts" => me.artifacts = Some(false),

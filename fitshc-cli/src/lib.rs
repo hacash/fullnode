@@ -138,9 +138,9 @@ pub fn compile_fitsh_with_calcs(
                     output_max: built.container.output_max,
                     mem_kib: built.container.mem_kib,
                     image_len: built.container_bytes.len(),
-                    code_len: built.container.code.len(),
-                    rodata_len: built.container.rodata.len(),
-                    init_len: built.container.init.len(),
+                    code_len: built.container.exec_filesz(),
+                    rodata_len: built.container.ro_filesz(),
+                    init_len: built.container.rw_filesz(),
                     image_id: hex::encode(built.container.image_id()),
                     cache_hit: built.cache_hit,
                     container_bytes: built.container_bytes.clone(),
@@ -163,9 +163,9 @@ pub fn compile_fitsh_with_calcs(
                     output_max: c.output_max,
                     mem_kib: c.mem_kib,
                     image_len: bytes.len(),
-                    code_len: c.code.len(),
-                    rodata_len: c.rodata.len(),
-                    init_len: c.init.len(),
+                    code_len: c.exec_filesz(),
+                    rodata_len: c.ro_filesz(),
+                    init_len: c.rw_filesz(),
                     image_id: hex::encode(c.image_id()),
                     cache_hit: false,
                     container_bytes: bytes.clone(),
@@ -186,9 +186,9 @@ pub fn compile_fitsh_with_calcs(
                     output_max: c.output_max,
                     mem_kib: c.mem_kib,
                     image_len: bytes.len(),
-                    code_len: c.code.len(),
-                    rodata_len: c.rodata.len(),
-                    init_len: c.init.len(),
+                    code_len: c.exec_filesz(),
+                    rodata_len: c.ro_filesz(),
+                    init_len: c.rw_filesz(),
                     image_id: hex::encode(c.image_id()),
                     cache_hit: false,
                     container_bytes: bytes.clone(),
@@ -248,16 +248,16 @@ fn kernel_warnings(
             "kernel '{name}': encoded image is {encoded_len} B, above 90% of calc_image_max \
              ({} B); code={} rodata={} init={}",
             cap.calc_image_max,
-            c.code.len(),
-            c.rodata.len(),
-            c.init.len()
+            c.exec_filesz(),
+            c.ro_filesz(),
+            c.rw_filesz()
         ));
     }
-    if c.init.len() >= 2048 {
+    if c.rw_filesz() >= 2048 {
         out.push(format!(
-            "kernel '{name}': init image carries {} B of data+bss (zero-initialized data is \
-             charged against calc_image_max); prefer a smaller static or the stack gap",
-            c.init.len()
+            "kernel '{name}': RW segments carry {} B of stored data (bss is not stored; \
+             prefer a smaller static or the stack gap)",
+            c.rw_filesz()
         ));
     }
     if c.mem_kib == cap.calc_mem_kib_max {

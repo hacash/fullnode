@@ -1,4 +1,7 @@
-//! Shared ISA-level test-case generator for the calc VM (RV64IM+Zba/Zbb/Zbs/Zbc, no C).
+//! Shared ISA-level test-case generator for the calc VM: the RV64IM base
+//! (profile 0), the Zba/Zbb/Zbs/Zbc bitmanip forms (profile B) and the
+//! admitted RVC forms (profile C), every case with HOST-side reference
+//! semantics.
 //!
 //! Emits one self-contained program per instruction form: a prologue that
 //! materializes eight boundary constants into x5..x12, the instruction(s)
@@ -24,7 +27,8 @@
 #![allow(dead_code)]
 
 use vm::calc::container::{
-    CalcContainer, CALC_PROFILE_RV64IM_B, CODE_BASE,
+    CalcContainer, CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B,
+    CALC_PROFILE_RV64IM_B, CODE_BASE,
 };
 
 pub const MEM_KIB: u32 = 16;
@@ -56,7 +60,7 @@ pub const PATTERN: [u8; 16] = [
 
 pub struct Asm {
     pub bytes: Vec<u8>,
-    /// Byte address of every 4-byte instruction.
+    /// Byte address of every instruction (2 or 4 bytes).
     pub word_addr: Vec<u32>,
     b_fixups: Vec<(usize, u32, u8, u8, usize)>, // idx, f3, rs1, rs2, target
     j_fixups: Vec<(usize, u8, usize)>,          // idx, rd, target
@@ -76,6 +80,15 @@ impl Asm {
         let idx = self.word_addr.len();
         self.word_addr.push(self.bytes.len() as u32);
         self.bytes.extend_from_slice(&w.to_le_bytes());
+        idx
+    }
+
+    /// Compressed halfword (RVC profiles only); recorded like any
+    /// instruction so branch/jal fixups still resolve by byte offset.
+    pub fn half(&mut self, h: u16) -> usize {
+        let idx = self.word_addr.len();
+        self.word_addr.push(self.bytes.len() as u32);
+        self.bytes.extend_from_slice(&h.to_le_bytes());
         idx
     }
 
@@ -437,6 +450,8 @@ pub struct Case {
     pub sp_free: bool,
     /// The case may leave x1 (ra) modified at the stop point.
     pub ra_free: bool,
+    /// ISA profile the case runs under (base / B / C / C+B).
+    pub profile: u8,
 }
 
 impl Case {
@@ -450,6 +465,7 @@ impl Case {
             aot_declines: false,
             sp_free: false,
             ra_free: false,
+            profile: CALC_PROFILE_RV64IM,
         }
     }
     pub fn trap(name: &str, code: Vec<u8>) -> Self {
@@ -462,24 +478,37 @@ impl Case {
             aot_declines: false,
             sp_free: false,
             ra_free: false,
+            profile: CALC_PROFILE_RV64IM,
         }
     }
+    /// Run the case under a non-base profile (B / C / C+B).
+    pub fn with_profile(mut self, profile: u8) -> Self {
+        self.profile = profile;
+        self
+    }
+    /// The case may clobber x1 (ra), e.g. via c.jalr.
+    pub fn with_ra_free(mut self) -> Self {
+        self.ra_free = true;
+        self
+    }
     pub fn container(&self) -> CalcContainer {
-        container_for(self.code.clone())
+        container_for_profile(self.code.clone(), self.profile)
     }
 }
 
+pub fn container_for_profile(code: Vec<u8>, profile: u8) -> CalcContainer {
+    CalcContainer::from_code(
+            profile,
+            MEM_KIB,
+            CODE_BASE as u32,
+            code,
+            INPUT_MAX,
+            OUTPUT_MAX,
+        )
+}
+
 pub fn container_for(code: Vec<u8>) -> CalcContainer {
-    CalcContainer {
-        profile: CALC_PROFILE_RV64IM_B,
-        mem_kib: MEM_KIB,
-        entry: CODE_BASE as u32,
-        code,
-        rodata: Vec::new(),
-        init: Vec::new(),
-        input_max: INPUT_MAX,
-        output_max: OUTPUT_MAX,
-    }
+    container_for_profile(code, CALC_PROFILE_RV64IM)
 }
 
 /// Read the recorded words from a final memory image (slots 1..=n,
@@ -564,7 +593,7 @@ fn reg_entry(op: &str) -> (u32, u32, u32) {
 /// One case per register-register op: the full 8x8 VALS matrix (64
 /// records: (0,0), (0,1)... covering 0, 1, -1, MIN, MAX, 0x7F,
 /// 0xFFFFFFFF, random against each other).
-fn reg_matrix_cases(ops: &[&str]) -> Vec<Case> {
+fn reg_matrix_cases(ops: &[&str], profile: u8) -> Vec<Case> {
     ops.iter()
         .map(|op| {
             let mut a = Asm::new();
@@ -581,7 +610,7 @@ fn reg_matrix_cases(ops: &[&str]) -> Vec<Case> {
                 }
             }
             a.ret();
-            Case::ok(&format!("reg/{op}"), a.finish(), expect)
+            Case::ok(&format!("reg/{op}"), a.finish(), expect).with_profile(profile)
         })
         .collect()
 }
@@ -635,7 +664,6 @@ fn shift_imm_cases() -> Vec<Case> {
         ("slli", 0b000000, 1),
         ("srli", 0b000000, 5),
         ("srai", 0b010000, 5),
-        ("rori", 0b011000, 5),
     ];
     for (name, f6, f3) in wide {
         let mut a = Asm::new();
@@ -651,7 +679,6 @@ fn shift_imm_cases() -> Vec<Case> {
                     "slli" => v.wrapping_shl(sh as u32),
                     "srli" => v.wrapping_shr(sh as u32),
                     "srai" => ((v as i64).wrapping_shr(sh as u32)) as u64,
-                    "rori" => v.rotate_right(sh as u32),
                     _ => unreachable!(),
                 });
             }
@@ -664,7 +691,6 @@ fn shift_imm_cases() -> Vec<Case> {
         ("slliw", 0b0000000, 1),
         ("srliw", 0b0000000, 5),
         ("sraiw", 0b0100000, 5),
-        ("roriw", 0b0110000, 5),
     ];
     for (name, f7, f3) in words {
         let mut a = Asm::new();
@@ -680,60 +706,12 @@ fn shift_imm_cases() -> Vec<Case> {
                     "slliw" => sext32(v.wrapping_shl(sh as u32)),
                     "srliw" => sext32((v as u32).wrapping_shr(sh as u32) as u64),
                     "sraiw" => sext32((v as i32).wrapping_shr(sh as u32) as u64),
-                    "roriw" => sext32((v as u32).rotate_right(sh as u32) as u64),
                     _ => unreachable!(),
                 });
             }
         }
         a.ret();
         out.push(Case::ok(&format!("shift/{name}"), a.finish(), expect));
-    }
-    // Single-bit immediate Zbb ops over shamt {0,1,31,32,63}.
-    let bit: &[(&str, u32, u32)] = &[
-        ("bseti", 0b001010, 1),
-        ("bclri", 0b010010, 1),
-        ("binvi", 0b011010, 1),
-        ("bexti", 0b010010, 5),
-    ];
-    for (name, f6, f3) in bit {
-        let mut a = Asm::new();
-        a.prologue();
-        let mut expect = Vec::new();
-        let mut k = 0;
-        for &sh in &[0u8, 1, 31, 32, 63] {
-            for (i, &v) in VALS.iter().enumerate() {
-                a.sh(*f6, *f3, 28, 5 + i as u8, sh, OPI);
-                k += 1;
-                a.record(28, k);
-                let mask = 1u64 << sh;
-                expect.push(match *name {
-                    "bseti" => v | mask,
-                    "bclri" => v & !mask,
-                    "binvi" => v ^ mask,
-                    "bexti" => (v >> sh) & 1,
-                    _ => unreachable!(),
-                });
-            }
-        }
-        a.ret();
-        out.push(Case::ok(&format!("shift/{name}"), a.finish(), expect));
-    }
-    // slli.uw (OP-IMM-32, funct6 000010, 6-bit shamt).
-    {
-        let mut a = Asm::new();
-        a.prologue();
-        let mut expect = Vec::new();
-        let mut k = 0;
-        for &sh in &[0u8, 1, 31, 32, 63] {
-            for (i, &v) in VALS.iter().enumerate() {
-                a.sh(0b000010, 1, 28, 5 + i as u8, sh, OPI32);
-                k += 1;
-                a.record(28, k);
-                expect.push((v as u32 as u64).wrapping_shl(sh as u32));
-            }
-        }
-        a.ret();
-        out.push(Case::ok("shift/slli.uw", a.finish(), expect));
     }
     out
 }
@@ -787,7 +765,11 @@ fn utype_cases() -> Vec<Case> {
     .collect()
 }
 
-fn unary_cases() -> Vec<Case> {
+/// Zbb unary forms. All of them are bitmanip (profile bit 0), so the
+/// caller picks the profile; `unary_cases(CALC_PROFILE_RV64IM_B)` is the
+/// admitted wiring, `unary_cases(CALC_PROFILE_RV64IM)` would be rejected
+/// at verify.
+fn unary_cases(profile: u8) -> Vec<Case> {
     let forms: &[(&str, u32, u32, u32, u8)] =
         &[
             ("clz", 0b0110000, 1, OPI, 0),
@@ -814,9 +796,727 @@ fn unary_cases() -> Vec<Case> {
                 expect.push(ref_unary(name, *v));
             }
             a.ret();
-            Case::ok(&format!("un/{name}"), a.finish(), expect)
+            Case::ok(&format!("un/{name}"), a.finish(), expect).with_profile(profile)
         })
         .collect()
+}
+
+/// Zba/Zbb/Zbs immediate forms (all profile bit 0): bseti / bclri /
+/// binvi / bexti / rori / roriw / slli.uw against the VALS boundary set.
+fn bit_imm_cases() -> Vec<Case> {
+    let mut out = Vec::new();
+    // (name, imm_hi, f3, opcode, 5-bit-shamt W form, shamts)
+    // `imm_hi` is imm[11:6] for 6-bit shamt forms, imm[11:5] for roriw.
+    let forms: [(&str, u32, u32, u32, bool, &[u8]); 7] = [
+        ("bseti", 0b001010, 1, OPI, false, &[0, 1, 15, 31, 63]),
+        ("bclri", 0b010010, 1, OPI, false, &[0, 1, 15, 31, 63]),
+        ("binvi", 0b011010, 1, OPI, false, &[0, 1, 15, 31, 63]),
+        ("bexti", 0b010010, 5, OPI, false, &[0, 1, 15, 31, 63]),
+        ("rori", 0b011000, 5, OPI, false, &[0, 1, 15, 31, 63]),
+        ("roriw", 0b0110000, 5, OPI32, true, &[0, 1, 15, 31]),
+        ("slliuw", 0b000010, 1, OPI32, false, &[0, 1, 15, 31, 63]),
+    ];
+    for (name, hi, f3, oc, w, shs) in forms {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for (i, &v) in VALS.iter().enumerate() {
+            for &sh in shs {
+                if w {
+                    a.sh_w(hi, f3, 28, 5 + i as u8, sh, oc);
+                } else {
+                    a.sh(hi, f3, 28, 5 + i as u8, sh, oc);
+                }
+                k += 1;
+                a.record(28, k);
+                expect.push(match name {
+                    "bseti" => v | (1u64 << sh),
+                    "bclri" => v & !(1u64 << sh),
+                    "binvi" => v ^ (1u64 << sh),
+                    "bexti" => (v >> sh) & 1,
+                    "rori" => v.rotate_right(sh as u32),
+                    "roriw" => sext32((v as u32).rotate_right(sh as u32) as u64),
+                    // slli.uw: zero-extended word shifted left, no sext.
+                    "slliuw" => (v as u32 as u64).wrapping_shl(sh as u32),
+                    _ => unreachable!(),
+                });
+            }
+        }
+        a.ret();
+        out.push(
+            Case::ok(&format!("bimm/{name}"), a.finish(), expect)
+                .with_profile(CALC_PROFILE_RV64IM_B),
+        );
+    }
+    out
+}
+
+/// The full Zba/Zbb/Zbs/Zbc register matrix under the B profile: all 25
+/// ratified register forms against the same 8x8 VALS boundary matrix.
+fn bit_reg_cases() -> Vec<Case> {
+    reg_matrix_cases(
+        &[
+            "adduw", "sh1add", "sh2add", "sh3add", "sh1adduw", "sh2adduw", "sh3adduw",
+            "andn", "orn", "xnor", "rol", "ror", "rolw", "rorw",
+            "min", "minu", "max", "maxu",
+            "bset", "bclr", "binv", "bext",
+            "clmul", "clmulr", "clmulh",
+        ],
+        CALC_PROFILE_RV64IM_B,
+    )
+}
+
+// ==================================================== RVC (profile C) ====
+// Halfword encoders, field-for-field against `decode::decode_rvc`. Every
+// helper asserts the constraints the decoder enforces (rd != 0 forms,
+// reserved immediates) so a mis-encoded case fails here, not mysteriously.
+
+fn rvc_base(f3: u32, op: u32) -> u16 {
+    (((f3 as u32) << 13) | op) as u16
+}
+
+/// CI with the standard imm[5]|rd|imm[4:0] layout (c.addi/c.li/c.addiw).
+fn rvc_ci(f3: u32, rd: u8, imm: i32) -> u16 {
+    assert!((-32..=31).contains(&imm), "CI imm {imm}");
+    assert!(rd != 0, "CI rd=0 is a hint; not exercised here");
+    let u = (imm as u32) & 0x3F;
+    rvc_base(f3, 0b01)
+        | (((u >> 5) & 1) as u16) << 12
+        | ((rd as u16) << 7)
+        | (((u & 0x1F) as u16) << 2)
+}
+
+fn c_nop() -> u16 {
+    // c.addi x0, 0 — the one rd=0 form that is a defined NOP, not a hint.
+    rvc_base(0, 0b01)
+}
+
+fn c_addi(rd: u8, imm: i32) -> u16 {
+    rvc_ci(0, rd, imm)
+}
+
+fn c_li(rd: u8, imm: i32) -> u16 {
+    rvc_ci(2, rd, imm)
+}
+
+fn c_addiw(rd: u8, imm: i32) -> u16 {
+    rvc_ci(1, rd, imm)
+}
+
+/// c.lui: rd not in {0, 2}, 6-bit nz immediate.
+fn c_lui(rd: u8, imm: i32) -> u16 {
+    assert!(rd != 0 && rd != 2 && imm != 0, "c.lui reserved form");
+    rvc_ci(3, rd, imm)
+}
+
+/// c.addi16sp: 10-bit signed immediate (imm[9] is the sign bit, at h12).
+fn c_addi16sp(imm: i32) -> u16 {
+    assert!(imm != 0 && (-512..=511).contains(&imm), "c.addi16sp imm {imm}");
+    let u = (imm as u32) & 0x3FF;
+    rvc_base(3, 0b01)
+        | ((((u >> 9) & 1) as u16) << 12)
+        | (2u16 << 7)
+        | ((((u >> 4) & 1) as u16) << 6)
+        | ((((u >> 6) & 1) as u16) << 5)
+        | ((((u >> 7) & 3) as u16) << 3)
+        | ((((u >> 5) & 1) as u16) << 2)
+}
+
+/// c.addi4spn: nzuimm byte offset (multiple of 4, < 4096), rd' target.
+fn c_addi4spn(rd8: u8, uimm: u32) -> u16 {
+    assert!(uimm != 0 && uimm % 4 == 0 && uimm <= 1020, "c.addi4spn {uimm}");
+    assert!(rd8 < 8);
+    rvc_base(0, 0b00)
+        | ((((uimm >> 4) & 3) as u16) << 11)
+        | ((((uimm >> 6) & 0xF) as u16) << 7)
+        | ((((uimm >> 2) & 1) as u16) << 6)
+        | ((((uimm >> 3) & 1) as u16) << 5)
+        | ((rd8 as u16) << 2)
+}
+
+/// c.slli: shamt[5]|rd|shamt[4:0].
+fn c_slli(rd: u8, sh: u8) -> u16 {
+    assert!(sh <= 63);
+    rvc_base(0, 0b10)
+        | (((sh >> 5) & 1) as u16) << 12
+        | ((rd as u16) << 7)
+        | (((sh & 0x1F) as u16) << 2)
+}
+
+/// c.srli / c.srai on rd' (x8..x15).
+fn c_srli_srai(rd8: u8, sh: u8, sra: bool) -> u16 {
+    assert!(rd8 < 8 && sh <= 63);
+    rvc_base(4, 0b01)
+        | (((if sra { 1 } else { 0 }) as u16) << 10)
+        | ((rd8 as u16) << 7)
+        | (((sh >> 5) & 1) as u16) << 12
+        | (((sh & 0x1F) as u16) << 2)
+}
+
+/// c.andi on rd'.
+fn c_andi(rd8: u8, imm: i32) -> u16 {
+    assert!(rd8 < 8 && (-32..=31).contains(&imm));
+    let u = (imm as u32) & 0x3F;
+    rvc_base(4, 0b01)
+        | (2u16 << 10)
+        | (((u >> 5) & 1) as u16) << 12
+        | ((rd8 as u16) << 7)
+        | (((u & 0x1F) as u16) << 2)
+}
+
+/// c.sub / c.xor / c.or / c.and / c.subw / c.addw (CA group).
+/// sel: 00 sub/subw, 01 xor/addw, 10 or, 11 and; `w` picks the W row.
+fn c_arith(w: bool, sel: u32, rd8: u8, rs2_8: u8) -> u16 {
+    assert!(rd8 < 8 && rs2_8 < 8 && sel <= 3);
+    rvc_base(4, 0b01)
+        | (3u16 << 10)
+        | (((w as u32) as u16) << 12)
+        | ((rd8 as u16) << 7)
+        | ((sel as u16) << 5)
+        | ((rs2_8 as u16) << 2)
+}
+
+/// c.mv / c.add (CR, rs2 != 0).
+fn c_mv_add(rd: u8, rs2: u8, add: bool) -> u16 {
+    assert!(rs2 != 0);
+    rvc_base(4, 0b10) | (((add as u32) as u16) << 12) | ((rd as u16) << 7) | ((rs2 as u16) << 2)
+}
+
+/// c.jr / c.jalr (rs1 != 0); c.jalr links pc+2 into x1.
+fn c_jr(rs1: u8, jalr: bool) -> u16 {
+    assert!(rs1 != 0, "c.jr/jalr rs1=0 reserved");
+    rvc_base(4, 0b10) | (((jalr as u32) as u16) << 12) | ((rs1 as u16) << 7)
+}
+
+fn c_ebreak() -> u16 {
+    0x9002
+}
+
+/// c.lw / c.ld / c.sw / c.sd (CL/CS on rs1'/rd'/rs2').
+/// lw/sw: uimm[5:3]=h[12:10], uimm[2]=h6, uimm[6]=h5 (scale 4, <=252).
+/// ld/sd: uimm[5:3]=h[12:10], uimm[7:6]=h[6:5] (scale 8, <=248).
+fn c_lw_ld_sw_sd(f3: u32, a8: u8, base8: u8, uimm: u32) -> u16 {
+    assert!(a8 < 8 && base8 < 8);
+    let h = rvc_base(f3, 0b00)
+        | ((((uimm >> 3) & 7) as u16) << 10)
+        | ((base8 as u16) << 7)
+        | ((a8 as u16) << 2);
+    if f3 == 2 || f3 == 6 {
+        assert_eq!(uimm % 4, 0, "c.lw/sw off {uimm} not 4-aligned");
+        assert!(uimm <= 252, "c.lw/sw offset {uimm} out of range");
+        h | ((((uimm >> 2) & 1) as u16) << 6) | ((((uimm >> 6) & 1) as u16) << 5)
+    } else {
+        assert!(f3 == 3 || f3 == 7, "bad CL/CS f3 {f3}");
+        assert_eq!(uimm % 8, 0, "c.ld/sd off {uimm} not 8-aligned");
+        assert!(uimm <= 248, "c.ld/sd offset {uimm} out of range");
+        h | ((((uimm >> 6) & 3) as u16) << 5)
+    }
+}
+
+/// c.lwsp / c.ldsp (rd != 0, positive sp offset).
+/// lwsp: imm[5]=h12, imm[4:2]=h[6:4], imm[7:6]=h[3:2] (scale 4, <=252).
+/// ldsp: imm[5]=h12, imm[4:3]=h[6:5], imm[8:6]=h[4:2] (scale 8, <=504).
+fn c_lwsp_ldsp(f3: u32, rd: u8, uimm: u32) -> u16 {
+    assert!(rd != 0);
+    let h = rvc_base(f3, 0b10)
+        | ((((uimm >> 5) & 1) as u16) << 12)
+        | ((rd as u16) << 7);
+    if f3 == 2 {
+        assert_eq!(uimm % 4, 0, "c.lwsp off {uimm} not 4-aligned");
+        assert!(uimm <= 252, "c.lwsp offset {uimm} out of range");
+        h | ((((uimm >> 2) & 7) as u16) << 4) | ((((uimm >> 6) & 3) as u16) << 2)
+    } else {
+        assert!(f3 == 3, "bad c.l*sp f3 {f3}");
+        assert_eq!(uimm % 8, 0, "c.ldsp off {uimm} not 8-aligned");
+        assert!(uimm <= 504, "c.ldsp offset {uimm} out of range");
+        h | ((((uimm >> 3) & 3) as u16) << 5) | ((((uimm >> 6) & 7) as u16) << 2)
+    }
+}
+
+/// c.swsp / c.sdsp (CSS, positive sp offset).
+/// swsp: imm[5:2]=h[12:9], imm[7:6]=h[8:7] (scale 4, <=252).
+/// sdsp: imm[5:3]=h[12:10], imm[8:6]=h[9:7] (scale 8, <=504).
+fn c_swsp_sdsp(f3: u32, rs2: u8, uimm: u32) -> u16 {
+    let h = rvc_base(f3, 0b10) | ((rs2 as u16) << 2);
+    if f3 == 6 {
+        assert_eq!(uimm % 4, 0, "c.swsp off {uimm} not 4-aligned");
+        assert!(uimm <= 252, "c.swsp offset {uimm} out of range");
+        h | ((((uimm >> 2) & 0xF) as u16) << 9) | ((((uimm >> 6) & 3) as u16) << 7)
+    } else {
+        assert!(f3 == 7, "bad c.s*sp f3 {f3}");
+        assert_eq!(uimm % 8, 0, "c.sdsp off {uimm} not 8-aligned");
+        assert!(uimm <= 504, "c.sdsp offset {uimm} out of range");
+        h | ((((uimm >> 3) & 7) as u16) << 10) | ((((uimm >> 6) & 7) as u16) << 7)
+    }
+}
+
+/// c.j: CJ immediate, byte offset (even, |off| <= 2048).
+fn c_j(off: i32) -> u16 {
+    assert_eq!(off & 1, 0, "c.j offset must be even");
+    assert!((-2048..=2046).contains(&off), "c.j offset {off}");
+    let o = (off as u32) & 0xFFF;
+    rvc_base(5, 0b01)
+        | ((((o >> 11) & 1) as u16) << 12)
+        | ((((o >> 4) & 1) as u16) << 11)
+        | ((((o >> 8) & 3) as u16) << 9)
+        | ((((o >> 10) & 1) as u16) << 8)
+        | ((((o >> 6) & 1) as u16) << 7)
+        | ((((o >> 7) & 1) as u16) << 6)
+        | ((((o >> 1) & 7) as u16) << 3)
+        | ((((o >> 5) & 1) as u16) << 2)
+}
+
+/// c.beqz / c.bnez: CB immediate, byte offset (even, |off| <= 256).
+fn c_beqz_bnez(rs8: u8, off: i32, eqz: bool) -> u16 {
+    assert!(rs8 < 8 && off & 1 == 0 && (-256..=254).contains(&off));
+    let o = (off as u32) & 0x1FF;
+    rvc_base(if eqz { 6 } else { 7 }, 0b01)
+        | ((((o >> 8) & 1) as u16) << 12)
+        | ((((o >> 3) & 3) as u16) << 10)
+        | ((rs8 as u16) << 7)
+        | ((((o >> 6) & 3) as u16) << 5)
+        | ((((o >> 1) & 3) as u16) << 3)
+        | ((((o >> 5) & 1) as u16) << 2)
+}
+
+/// RVC execution vectors: every admitted compressed form at least once
+/// with exact host references (profile C), one C+B mix, and the two
+/// compressed trap forms. 32-bit prologue/record slots as in the base
+/// cases; sp-forms snapshot the entry sp in x27 and restore x2 before the
+/// sentinel return so the harness sp invariant holds.
+fn compressed_cases() -> Vec<Case> {
+    let mut out: Vec<Case> = Vec::new();
+    let ok = |name: &str, code: Vec<u8>, expect: Vec<u64>| {
+        Case::ok(name, code, expect).with_profile(CALC_PROFILE_RV64IMC)
+    };
+
+    // crv/addi: c.addi over every VALS register with edge immediates.
+    // c.addi ACCUMULATES (rd += imm), so the reference tracks the running
+    // register value.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for i in 0..8u8 {
+            let mut cur = VALS[i as usize];
+            for imm in [-32, -1, 1, 31] {
+                a.half(c_addi(5 + i, imm));
+                cur = cur.wrapping_add(imm as i64 as u64);
+                k += 1;
+                a.record(5 + i, k);
+                expect.push(cur);
+            }
+        }
+        a.ret();
+        out.push(ok("crv/addi", a.finish(), expect));
+    }
+    // crv/li
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        for (k, imm) in [-32i32, -1, 0, 1, 31].iter().enumerate() {
+            a.half(c_li(28, *imm));
+            a.record(28, (k + 1) as usize);
+            expect.push(*imm as i64 as u64);
+        }
+        a.ret();
+        out.push(ok("crv/li", a.finish(), expect));
+    }
+    // crv/addiw (rd != 0): accumulating, reference = sext32(running + imm).
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for i in 0..8u8 {
+            let mut cur = VALS[i as usize];
+            for imm in [-32, -1, 1, 31] {
+                a.half(c_addiw(5 + i, imm));
+                cur = sext32(cur.wrapping_add(imm as i64 as u64));
+                k += 1;
+                a.record(5 + i, k);
+                expect.push(cur);
+            }
+        }
+        a.ret();
+        out.push(ok("crv/addiw", a.finish(), expect));
+    }
+    // crv/lui (rd not 0/2, nz imm)
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for i in 0..8u8 {
+            for imm in [-32, -1, 1, 31] {
+                a.half(c_lui(5 + i, imm));
+                k += 1;
+                a.record(5 + i, k);
+                expect.push(((imm as i64) << 12) as u64);
+            }
+        }
+        a.ret();
+        out.push(ok("crv/lui", a.finish(), expect));
+    }
+    // crv/slli: accumulating (rd <<= sh).
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for i in 0..8u8 {
+            let mut cur = VALS[i as usize];
+            for sh in [0u8, 1, 15, 31, 63] {
+                a.half(c_slli(5 + i, sh));
+                cur = cur.wrapping_shl(sh as u32);
+                k += 1;
+                a.record(5 + i, k);
+                expect.push(cur);
+            }
+        }
+        a.ret();
+        out.push(ok("crv/slli", a.finish(), expect));
+    }
+    // crv/srli-srai (rd' = x8..x12): accumulating within each register.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for i in 0..5u8 {
+            let mut cur = VALS[(3 + i) as usize];
+            for sh in [0u8, 1, 15, 63] {
+                a.half(c_srli_srai(i, sh, false));
+                cur >>= sh;
+                k += 1;
+                a.record(8 + i, k);
+                expect.push(cur);
+                a.half(c_srli_srai(i, sh, true));
+                cur = ((cur as i64).wrapping_shr(sh as u32)) as u64;
+                k += 1;
+                a.record(8 + i, k);
+                expect.push(cur);
+            }
+        }
+        a.ret();
+        out.push(ok("crv/srli-srai", a.finish(), expect));
+    }
+    // crv/andi: accumulating (rd &= sext(imm)).
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for i in 0..5u8 {
+            let mut cur = VALS[(3 + i) as usize];
+            for imm in [-32, -1, 1, 31] {
+                a.half(c_andi(i, imm));
+                cur &= imm as i64 as u64;
+                k += 1;
+                a.record(8 + i, k);
+                expect.push(cur);
+            }
+        }
+        a.ret();
+        out.push(ok("crv/andi", a.finish(), expect));
+    }
+    // crv/arith: the CA group (sub/xor/or/and/subw/addw) on rd'/rs2'
+    // pairs. Registers mutate as the case runs, so the reference mirrors
+    // the live x8..x12 values.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut rv = [VALS[3], VALS[4], VALS[5], VALS[6], VALS[7]];
+        let mut k = 0;
+        for i in 0..5u8 {
+            let j = (i + 1) % 5;
+            for (sel, w, name) in [
+                (0u32, false, "sub"),
+                (1, false, "xor"),
+                (2, false, "or"),
+                (3, false, "and"),
+                (0, true, "subw"),
+                (1, true, "addw"),
+            ] {
+                a.half(c_arith(w, sel, i, j));
+                let (va, vb) = (rv[i as usize], rv[j as usize]);
+                rv[i as usize] = match name {
+                    "sub" => va.wrapping_sub(vb),
+                    "xor" => va ^ vb,
+                    "or" => va | vb,
+                    "and" => va & vb,
+                    "subw" => ref_reg("subw", va, vb),
+                    "addw" => ref_reg("addw", va, vb),
+                    _ => unreachable!(),
+                };
+                k += 1;
+                a.record(8 + i, k);
+                expect.push(rv[i as usize]);
+            }
+        }
+        a.ret();
+        out.push(ok("crv/arith", a.finish(), expect));
+    }
+    // crv/mv-add
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for i in 0..8u8 {
+            a.half(c_mv_add(28, 5 + i, false)); // c.mv x28, xi
+            k += 1;
+            a.record(28, k);
+            expect.push(VALS[i as usize]);
+        }
+        a.half(c_mv_add(28, 5, true)); // c.add x28, x5
+        k += 1;
+        a.record(28, k);
+        expect.push(VALS.last().unwrap().wrapping_add(VALS[0]));
+        a.ret();
+        out.push(ok("crv/mv-add", a.finish(), expect));
+    }
+    // crv/addi4spn: rd' = sp + uimm, checked as a delta against the sp
+    // snapshot in x27 (the absolute sp is a runtime value).
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for uimm in [4u32, 64, 252] {
+            a.half(c_addi4spn(0, uimm)); // x8 = sp + uimm
+            a.r(0b0100000, 0, 28, 8, 27, OP); // x28 = x8 - sp
+            k += 1;
+            a.record(28, k);
+            expect.push(uimm as u64);
+        }
+        a.ret();
+        out.push(ok("crv/addi4spn", a.finish(), expect));
+    }
+    // crv/addi16sp: delta check + sp restore.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for imm in [-512i32, -16, 16, 496] {
+            a.half(c_addi16sp(imm));
+            a.r(0b0100000, 0, 28, 2, 27, OP); // x28 = sp' - sp
+            k += 1;
+            a.record(28, k);
+            expect.push(imm as i64 as u64);
+            a.i(0, 2, 27, 0x13, 0); // restore x2 = entry sp
+        }
+        a.ret();
+        out.push(ok("crv/addi16sp", a.finish(), expect));
+    }
+    // crv/loads: c.ld/c.lw over the 16-byte PATTERN parked at sp-1024.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        a.i(0, 8, 2, 0x13, -1024); // x8 (rs1') = scratch base
+        let p0 = u64::from_le_bytes(PATTERN[0..8].try_into().unwrap());
+        let p1 = u64::from_le_bytes(PATTERN[8..16].try_into().unwrap());
+        a.li64(31, p0, 29);
+        a.s(3, 8, 31, 0);
+        a.li64(31, p1, 29);
+        a.s(3, 8, 31, 8);
+        let mut expect = Vec::new();
+        let mut k = 0;
+        for (off, want) in [(0u32, p0), (8, p1)] {
+            a.half(c_lw_ld_sw_sd(3, 4, 0, off)); // c.ld x12, off(x8)
+            k += 1;
+            a.record(12, k);
+            expect.push(want);
+        }
+        for (off, want) in [
+            (0u32, p0 as u32),
+            (4, (p0 >> 32) as u32),
+            (12, (p1 >> 32) as u32),
+        ] {
+            a.half(c_lw_ld_sw_sd(2, 3, 0, off)); // c.lw x11, off(x8)
+            k += 1;
+            a.record(11, k);
+            expect.push(want as i32 as i64 as u64);
+        }
+        a.ret();
+        out.push(ok("crv/loads", a.finish(), expect));
+    }
+    // crv/stores: c.sd/c.sw into scratch, read back with 32-bit loads.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        a.i(0, 8, 2, 0x13, -1024); // scratch base in x8 (rs1')
+        a.i(0, 31, 0, 0x13, 0);
+        a.s(3, 8, 31, 0);
+        a.s(3, 8, 31, 8);
+        let mut expect = Vec::new();
+        a.half(c_lw_ld_sw_sd(7, 1, 0, 0)); // c.sd x9, 0(x8)
+        a.i(3, 28, 8, 0x03, 0);
+        a.record(28, 1);
+        expect.push(VALS[4]);
+        a.half(c_lw_ld_sw_sd(6, 2, 0, 4)); // c.sw x10, 4(x8)
+        a.i(2, 28, 8, 0x03, 4);
+        a.record(28, 2);
+        expect.push(VALS[5] as u32 as i32 as i64 as u64);
+        a.ret();
+        out.push(ok("crv/stores", a.finish(), expect));
+    }
+    // crv/sp-loads: c.ldsp/c.lwsp over words parked ABOVE sp (output
+    // region, RW): store with 32-bit sd first.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let p0 = u64::from_le_bytes(PATTERN[0..8].try_into().unwrap());
+        let p1 = u32::from_le_bytes(PATTERN[0..4].try_into().unwrap());
+        a.li64(31, p0, 29);
+        a.s(3, 2, 31, 16); // [sp+16] = p0
+        a.li64(31, p1 as u64, 29);
+        a.s(3, 2, 31, 8); // [sp+8] = p1
+        a.half(c_lwsp_ldsp(3, 28, 16)); // c.ldsp x28, 16(sp)
+        a.record(28, 1);
+        a.half(c_lwsp_ldsp(2, 28, 8)); // c.lwsp x28, 8(sp)
+        a.record(28, 2);
+        a.ret();
+        out.push(ok("crv/sp-loads", a.finish(), vec![p0, p1 as i32 as i64 as u64]));
+    }
+    // crv/sp-stores: c.sdsp/c.swsp into [sp+off], read back with 32-bit ld.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        a.half(c_swsp_sdsp(7, 5, 16)); // c.sdsp x5, 16(sp)
+        a.i(3, 28, 2, 0x03, 16);
+        a.record(28, 1);
+        a.half(c_swsp_sdsp(6, 6, 8)); // c.swsp x6, 8(sp)
+        a.i(2, 28, 2, 0x03, 8);
+        a.record(28, 2);
+        a.ret();
+        out.push(ok(
+            "crv/sp-stores",
+            a.finish(),
+            vec![VALS[0], VALS[1] as u32 as i32 as i64 as u64],
+        ));
+    }
+    // crv/j-forward: c.j +8 over three c.nop halfwords.
+    {
+        let mut a = Asm::new();
+        let p = a.prologue();
+        let _ = p;
+        a.half(c_j(8));
+        a.half(c_nop());
+        a.half(c_nop());
+        a.half(c_nop());
+        a.i(0, 28, 0, 0x13, 7); // landing
+        a.record(28, 1);
+        a.ret();
+        out.push(ok("crv/j-forward", a.finish(), vec![7]));
+    }
+    // crv/j-backward: two-iteration countdown loop.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        a.i(0, 8, 0, 0x13, 2); // x8 = 2
+        let head = a.bytes.len() as i32;
+        a.half(c_addi(8, -1));
+        let cur = a.bytes.len() as i32;
+        a.half(c_beqz_bnez(0, head - cur, false)); // c.bnez x8, head
+        a.record(8, 1);
+        a.ret();
+        out.push(ok("crv/j-backward", a.finish(), vec![0]));
+    }
+    // crv/beqz-bnez: taken and fall-through, zero loaded via 32-bit addi.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        a.i(0, 8, 0, 0x13, 0); // x8 = 0 (VALS regs are all nonzero)
+        // c.beqz x8, +6 -> lands on the second addi below.
+        a.half(c_beqz_bnez(0, 6, true));
+        a.i(0, 28, 0, 0x13, 2); // fall-through marker (two halfword slots)
+        a.i(0, 28, 0, 0x13, 1); // taken marker
+        a.record(28, 1);
+        a.half(c_beqz_bnez(1, 6, false)); // c.bnez x9, +6 (x9 = i64::MAX != 0)
+        a.i(0, 28, 0, 0x13, 2);
+        a.i(0, 28, 0, 0x13, 1);
+        a.record(28, 2);
+        a.ret();
+        out.push(ok("crv/beqz-bnez", a.finish(), vec![1, 1]));
+    }
+    // crv/jr: computed forward jump across a c.nop pad.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let b0 = a.bytes.len();
+        a.u(30, 0x17, 0); // [b0] x30 = pc0
+        a.i(0, 31, 30, 0x13, 16); // x31 = pc0 + 16
+        a.half(c_jr(31, false)); // [b0+8]
+        a.half(c_nop());
+        a.half(c_nop());
+        a.half(c_nop());
+        assert_eq!(a.bytes.len() - b0, 16);
+        a.i(0, 28, 0, 0x13, 0x5A); // [b0+16]
+        a.record(28, 1);
+        a.ret();
+        out.push(ok("crv/jr", a.finish(), vec![0x5A]));
+    }
+    // crv/jalr-link: link = pc_of_cjalr + 2 = pc0 + 10.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        let b0 = a.bytes.len();
+        a.u(30, 0x17, 0); // [b0] x30 = pc0
+        a.i(0, 31, 30, 0x13, 16); // x31 = pc0 + 16
+        a.half(c_jr(31, true)); // [b0+8] c.jalr x31
+        a.half(c_nop());
+        a.half(c_nop());
+        a.half(c_nop());
+        assert_eq!(a.bytes.len() - b0, 16);
+        a.i(0, 28, 0, 0x13, 0x5B); // [b0+16] landing
+        a.r(0b0100000, 0, 28, 1, 30, OP); // x28 = link - pc0
+        a.record(28, 1);
+        a.ret();
+        out.push(
+            Case::ok("crv/jalr-link", a.finish(), vec![10])
+                .with_profile(CALC_PROFILE_RV64IMC)
+                .with_ra_free(),
+        );
+    }
+    // crv/jr-mid-inst: masked target lands inside a 4-byte word -> Trap.
+    {
+        let mut a = Asm::new();
+        a.u(30, 0x17, 0); // [b0]
+        a.i(0, 31, 30, 0x13, 12); // x31 = pc0 + 12
+        a.half(c_jr(31, false)); // [b0+8..10]
+        a.i(0, 28, 0, 0x13, 0); // [b0+10..14] target 12 is mid-instruction
+        a.ret();
+        out.push(Case::trap("crv/jr-mid-inst", a.finish()).with_profile(CALC_PROFILE_RV64IMC));
+    }
+    // crv/ebreak: the compressed trap, end to end.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        a.half(c_ebreak());
+        a.ret();
+        out.push(Case::trap("crv/ebreak", a.finish()).with_profile(CALC_PROFILE_RV64IMC));
+    }
+    // crvb/mixed (profile C+B): compressed and bitmanip in one stream.
+    {
+        let mut a = Asm::new();
+        a.prologue();
+        a.half(c_mv_add(9, 10, true)); // c.add x9, x10
+        a.r(0b0100000, 7, 28, 9, 5, OP); // andn x28, x9, x5
+        a.record(28, 1);
+        a.ret();
+        let want = VALS[4].wrapping_add(VALS[5]) & !VALS[0];
+        out.push(
+            Case::ok("crvb/mixed", a.finish(), vec![want])
+                .with_profile(CALC_PROFILE_RV64IMC_B),
+        );
+    }
+    out
 }
 
 /// On-chip mulhsu correction identity: mulhsu - mulh - (bit63(b) ? a : 0)
@@ -1139,7 +1839,7 @@ fn trap_cases() -> Vec<Case> {
     }
     // ecall digest destination inside code. Only reachable once the host
     // ecall table is enabled: v1 traps every non-HALT ecall first.
-    if vm::calc::CALC_HASH_ECALLS_ENABLED {
+    if false {
         let mut a = Asm::new();
         a.prologue();
         a.i(0, 10, 2, 0x13, -1024); // a0 = sp-1024: a mapped, readable src
@@ -1164,10 +1864,9 @@ fn trap_cases() -> Vec<Case> {
 }
 
 fn ecall_cases() -> Vec<Case> {
-    // v1 ships with host hash ecalls disabled: their digest cases only exist
-    // once a consensus upgrade enables the table (`CALC_HASH_ECALLS_ENABLED`).
-    // The decode/pricing surface is still exercised by the module unit tests.
-    if !vm::calc::CALC_HASH_ECALLS_ENABLED {
+    // HASH ecall digest cases are per-image. The default generator stays
+    // off so the suite remains zk-portable; HASH is covered by module tests.
+    if !false {
         return Vec::new();
     }
     let kinds: &[(&str, u8)] = &[
@@ -1234,7 +1933,7 @@ fn cycles_cases() -> Vec<Case> {
         c.cycles = Some(4);
         out.push(c);
     }
-    // cost table: ld(2) + addi(1) + div(12) + mul(3) + clmul(24) + jalr(1)
+    // cost table: ld(2) + addi(1) + div(12) + mul(3) + jalr(1)
     {
         let mut a = Asm::new();
         a.i(0, 5, 0, 0x13, 1);
@@ -1243,11 +1942,10 @@ fn cycles_cases() -> Vec<Case> {
         a.i(0, 28, 28, 0x13, 1);
         a.r(0b0000001, 4, 28, 5, 6, OP); // div
         a.r(0b0000001, 0, 28, 5, 6, OP); // mul
-        a.r(0b0000101, 1, 28, 5, 6, OP); // clmul
         a.ret();
         let mut c = Case::ok("cyc/cost-table", a.finish(), vec![]);
-        // 2*addi + ld + addi + div + mul + clmul + 3*addi + ecall
-        c.cycles = Some(1 + 1 + 2 + 1 + 12 + 3 + 24 + 1 + 1 + 1 + 1);
+        // 2*addi + ld + addi + div + mul + 3*addi + ecall
+        c.cycles = Some(1 + 1 + 2 + 1 + 12 + 3 + 1 + 1 + 1 + 1);
         out.push(c);
     }
     // branch splits blocks: [addi,beq](2) + [li,jalr](2) = 4 (taken)
@@ -1276,7 +1974,7 @@ fn cycles_cases() -> Vec<Case> {
         a.ecall(); // 64 + 96*1
         a.ret();
         // The hash ecall case only applies once the consensus table is on.
-        if vm::calc::CALC_HASH_ECALLS_ENABLED {
+        if false {
             let mut c = Case::ok("cyc/ecall-sha2", a.finish(), vec![]);
             // setup addis (5) + hash ecall(1 static) + halt (3 addi + ecall)
             // ecall is a terminator so two blocks; total static 10 + hash 160
@@ -1297,6 +1995,7 @@ fn cycles_cases() -> Vec<Case> {
             aot_declines: false,
             sp_free: false,
             ra_free: false,
+            profile: CALC_PROFILE_RV64IM,
         };
         out.push(c);
     }
@@ -1308,24 +2007,23 @@ pub fn all_cases() -> Vec<Case> {
     let mut out = Vec::new();
     out.extend(reg_matrix_cases(&[
         "add", "sub", "slt", "sltu", "xor", "or", "and", "sll", "srl", "sra",
-    ]));
+    ], CALC_PROFILE_RV64IM));
     out.extend(reg_matrix_cases(&[
         "mul", "mulh", "mulhu", "mulhsu", "div", "divu", "rem", "remu",
-    ]));
+    ], CALC_PROFILE_RV64IM));
     out.extend(reg_matrix_cases(&[
         "addw", "subw", "sllw", "srlw", "sraw", "mulw", "divw", "divuw", "remw", "remuw",
-    ]));
-    out.extend(reg_matrix_cases(&[
-        "adduw", "sh1add", "sh2add", "sh3add", "sh1adduw", "sh2adduw", "sh3adduw", "andn", "orn",
-        "xnor", "rol", "ror", "rolw", "rorw", "min", "minu", "max", "maxu", "bset", "bclr",
-        "binv", "bext",
-    ]));
-    out.extend(reg_matrix_cases(&["clmul", "clmulh", "clmulr"]));
+    ], CALC_PROFILE_RV64IM));
+    // Zba/Zbb/Zbs/Zbc register + immediate + unary forms (profile B) and
+    // the admitted RVC forms (profile C / C+B).
+    out.extend(bit_reg_cases());
+    out.extend(bit_imm_cases());
+    out.extend(unary_cases(CALC_PROFILE_RV64IM_B));
+    out.extend(compressed_cases());
     out.push(mulhsu_identity_case());
     out.extend(imm_cases());
     out.extend(shift_imm_cases());
     out.extend(utype_cases());
-    out.extend(unary_cases());
     out.extend(load_store_cases());
     out.extend(branch_jump_cases());
     out.push(fence_case());

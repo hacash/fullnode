@@ -18,29 +18,44 @@ fn images_dir() -> Option<PathBuf> {
 
 /// Smallest `mem_kib` whose own layout clears the image (arch-test images
 /// can be large, so this walks the engine ceiling rather than a test cap).
-fn needed_mem_kib(code: &[u8], rodata: &[u8], init: &[u8]) -> Result<u32, String> {
-    vm::calc::container::min_mem_kib_for(
-        code.len() as u64,
-        rodata.len() as u64,
-        init.len() as u64,
-        0,
-        4096,
-    )
-    .ok_or_else(|| format!("image needs more than {CALC_MEM_KIB_ENGINE_MAX} KiB"))
+fn needed_mem_kib(guest_end: u64) -> Result<u32, String> {
+    vm::calc::container::min_mem_kib_for(guest_end, 0, 4096)
+        .ok_or_else(|| format!("image needs more than {CALC_MEM_KIB_ENGINE_MAX} KiB"))
 }
 
 fn pack(code: Vec<u8>, rodata: Vec<u8>, init: Vec<u8>, entry: u32) -> Result<CalcContainer, String> {
-    let mem_kib = needed_mem_kib(&code, &rodata, &init)?;
-    Ok(CalcContainer {
+    pack_at(code, CALC_CODE_BASE, rodata, 0, init, 0, entry)
+}
+
+fn pack_at(
+    code: Vec<u8>,
+    code_va: u64,
+    rodata: Vec<u8>,
+    ro_va: u64,
+    init: Vec<u8>,
+    init_va: u64,
+    entry: u32,
+) -> Result<CalcContainer, String> {
+    use vm::calc::container::CalcSegment;
+    let mut segs = vec![CalcSegment::rx(code_va as u32, code)];
+    if !rodata.is_empty() {
+        segs.push(CalcSegment::ro(ro_va as u32, rodata));
+    }
+    if !init.is_empty() {
+        let n = init.len() as u32;
+        segs.push(CalcSegment::rw(init_va as u32, init, n));
+    }
+    segs.sort_by_key(|s| s.vaddr);
+    let mut c = CalcContainer {
         profile: CALC_PROFILE_RV64IM,
-        mem_kib,
+        mem_kib: CALC_MEM_KIB_ENGINE_MAX,
         entry,
-        code,
-        rodata,
-        init,
+        segs,
         input_max: 0,
         output_max: 4096,
-    })
+    };
+    c.mem_kib = needed_mem_kib(c.guest_end())?;
+    Ok(c)
 }
 
 fn read_u16(b: &[u8], o: usize) -> u16 {
@@ -190,21 +205,7 @@ fn load_elf(bytes: &[u8], name: &str) -> Result<CalcContainer, String> {
     {
         return Err(format!("{name}: entry {e_entry:#x} not in code"));
     }
-    let c = pack(code, ro_bytes, ini_bytes, e_entry as u32)?;
-    let lay = c.layout();
-    if lay.init_len != 0 && ini_va != lay.data_base {
-        return Err(format!(
-            "{name}: data VMA {ini_va:#x} != data_base {:#x}",
-            lay.data_base
-        ));
-    }
-    if lay.rodata_len != 0 && ro_va != lay.rodata_base {
-        return Err(format!(
-            "{name}: rodata VMA {ro_va:#x} != rodata_base {:#x}",
-            lay.rodata_base
-        ));
-    }
-    Ok(c)
+    pack_at(code, CALC_CODE_BASE, ro_bytes, ro_va, ini_bytes, ini_va, e_entry as u32)
 }
 
 fn load_bin(path: &Path) -> Result<CalcContainer, String> {

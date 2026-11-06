@@ -19,16 +19,14 @@ use crate::Value;
 use base::Context as _;
 
 fn container_with(code: Vec<u8>) -> CalcContainer {
-    CalcContainer {
-        profile: crate::calc::CALC_PROFILE_RV64IM,
-        mem_kib: 8,
-        entry: crate::calc::CALC_CODE_BASE as u32,
-        code,
-        rodata: vec![],
-        init: vec![],
-        input_max: 128,
-        output_max: 128,
-    }
+    CalcContainer::from_code(
+            crate::calc::CALC_PROFILE_RV64IM,
+            8,
+            crate::calc::CALC_CODE_BASE as u32,
+            code,
+            128,
+            128,
+        )
 }
 
 fn halt_len(n: i32) -> Vec<u8> {
@@ -302,19 +300,26 @@ fn sha256_container_bytes() -> Vec<u8> {
             .trim_start_matches("0x"),
         16,
     )
-    .expect("bss_len") as u64;
-    let mut init = read("image_init.bin");
-    init.resize(init.len() + bss_len as usize, 0);
-    crate::calc::pack_container(
-        &crate::calc::SpaceCap::new(0),
+    .expect("bss_len") as u32;
+    let tmp = crate::calc::container::CalcContainer::from_regions(
         crate::calc::CALC_PROFILE_RV64IM,
         8,
         entry,
-        256,
-        32,
         read("image_code.bin"),
         read("image_rodata.bin"),
-        init,
+        read("image_init.bin"),
+        256,
+        32,
+    )
+    .with_bss(bss_len);
+    crate::calc::pack_container(
+        &crate::calc::SpaceCap::new(0),
+        tmp.profile,
+        tmp.mem_kib,
+        tmp.entry,
+        tmp.input_max,
+        tmp.output_max,
+        tmp.segs,
     )
     .expect("pack sha256")
     .encode()

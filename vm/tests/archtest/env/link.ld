@@ -1,5 +1,9 @@
 OUTPUT_ARCH(riscv)
 ENTRY(rvtest_entry_point)
+MEMORY
+{
+  IMAGE (rwx) : ORIGIN = 0x1000, LENGTH = 0xD000
+}
 PHDRS
 {
   text PT_LOAD FLAGS(5);
@@ -7,7 +11,7 @@ PHDRS
 }
 SECTIONS
 {
-  . = 0x1000;
+  . = ORIGIN(IMAGE);
   .text : {
     *(.text.init)
     *(.text .text.*)
@@ -22,4 +26,5 @@ SECTIONS
     *(COMMON)
   } :data
   PROVIDE(__global_pointer$ = . + 0x800);
+  ASSERT(. <= ORIGIN(IMAGE) + LENGTH(IMAGE), "guest image overlaps L1 host window");
 }

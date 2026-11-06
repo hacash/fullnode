@@ -332,16 +332,14 @@ contract PermitProbe {
         code.extend_from_slice(&addi(11, 8));
         code.extend_from_slice(&addi(17, 0));
         code.extend_from_slice(&0x0000_0073u32.to_le_bytes());
-        CalcContainer {
-            profile: crate::calc::CALC_PROFILE_RV64IM,
-            mem_kib: 8,
-            entry: crate::calc::CALC_CODE_BASE as u32,
+        CalcContainer::from_code(
+            crate::calc::CALC_PROFILE_RV64IM,
+            8,
+            crate::calc::CALC_CODE_BASE as u32,
             code,
-            rodata: vec![],
-            init: vec![],
-            input_max: 128,
-            output_max: 128,
-        }
+            128,
+            128,
+        )
         .encode()
         .unwrap()
     }
@@ -354,15 +352,11 @@ contract PermitProbe {
         c
     }
 
-    /// Minimal ELF64 LE RISC-V with `calc_entry` at `CODE_BASE`.
+    /// Minimal ELF64 LE RISC-V with `calc_entry` at `CODE_BASE` and one
+    /// RX `PT_LOAD`. `pack_elf` projects program headers, not sections.
     fn synth_elf() -> Vec<u8> {
         let text = halt_text();
-        let code_len = text.len() as u64;
-        let data_base = {
-            let ro = (crate::calc::container::CODE_BASE + code_len + 15) & !15;
-            (ro + 15) & !15
-        };
-        let shstr = b"\0.text\0.bss\0.symtab\0.strtab\0.shstrtab\0";
+        let shstr = b"\0.text\0.symtab\0.strtab\0.shstrtab\0";
         let strtab = b"\0calc_entry\0";
         let mut sym = vec![0u8; 24];
         sym.extend_from_slice(&1u32.to_le_bytes());
@@ -371,7 +365,7 @@ contract PermitProbe {
         sym.extend_from_slice(&crate::calc::container::CODE_BASE.to_le_bytes());
         sym.extend_from_slice(&0u64.to_le_bytes());
 
-        let mut body = vec![0u8; 64];
+        let mut body = vec![0u8; 64 + 56];
         let text_off = body.len() as u64;
         body.extend_from_slice(&text);
         let str_off = body.len() as u64;
@@ -381,6 +375,15 @@ contract PermitProbe {
         let shstr_off = body.len() as u64;
         body.extend_from_slice(shstr);
         let shoff = body.len() as u64;
+
+        body[64..68].copy_from_slice(&1u32.to_le_bytes());
+        body[68..72].copy_from_slice(&5u32.to_le_bytes());
+        body[72..80].copy_from_slice(&text_off.to_le_bytes());
+        body[80..88].copy_from_slice(&crate::calc::container::CODE_BASE.to_le_bytes());
+        body[88..96].copy_from_slice(&crate::calc::container::CODE_BASE.to_le_bytes());
+        body[96..104].copy_from_slice(&(text.len() as u64).to_le_bytes());
+        body[104..112].copy_from_slice(&(text.len() as u64).to_le_bytes());
+        body[112..120].copy_from_slice(&1u64.to_le_bytes());
 
         let mut sh = |name: u32, typ: u32, flags: u64, addr: u64, off: u64, size: u64, link: u32, entsize: u64| {
             let mut h = Vec::new();
@@ -398,10 +401,9 @@ contract PermitProbe {
         };
         sh(0, 0, 0, 0, 0, 0, 0, 0);
         sh(1, 1, 6, crate::calc::container::CODE_BASE, text_off, text.len() as u64, 0, 0);
-        sh(7, 8, 3, data_base, 0, 16, 0, 0);
-        sh(12, 2, 0, 0, sym_off, sym.len() as u64, 4, 24);
-        sh(20, 3, 0, 0, str_off, strtab.len() as u64, 0, 0);
-        sh(28, 3, 0, 0, shstr_off, shstr.len() as u64, 0, 0);
+        sh(7, 2, 0, 0, sym_off, sym.len() as u64, 3, 24);
+        sh(15, 3, 0, 0, str_off, strtab.len() as u64, 0, 0);
+        sh(23, 3, 0, 0, shstr_off, shstr.len() as u64, 0, 0);
 
         body[0..4].copy_from_slice(b"\x7fELF");
         body[4] = 2;
@@ -411,11 +413,14 @@ contract PermitProbe {
         body[18..20].copy_from_slice(&243u16.to_le_bytes());
         body[20..24].copy_from_slice(&1u32.to_le_bytes());
         body[24..32].copy_from_slice(&0u64.to_le_bytes());
+        body[32..40].copy_from_slice(&64u64.to_le_bytes());
         body[40..48].copy_from_slice(&shoff.to_le_bytes());
         body[52..54].copy_from_slice(&64u16.to_le_bytes());
+        body[54..56].copy_from_slice(&56u16.to_le_bytes());
+        body[56..58].copy_from_slice(&1u16.to_le_bytes());
         body[58..60].copy_from_slice(&64u16.to_le_bytes());
-        body[60..62].copy_from_slice(&6u16.to_le_bytes());
-        body[62..64].copy_from_slice(&5u16.to_le_bytes());
+        body[60..62].copy_from_slice(&5u16.to_le_bytes());
+        body[62..64].copy_from_slice(&4u16.to_le_bytes());
         body
     }
 
@@ -474,10 +479,7 @@ contract Echo {{
         let (c, _) = crate::calc::container::CalcContainer::decode(&echo.code_stuff.data)
             .expect("echo8 container");
         assert_eq!(c.profile, crate::calc::CALC_PROFILE_RV64IM);
-        assert_eq!(
-            c.layout().data_base + c.layout().init_len,
-            c.layout().guard_base
-        );
+        assert_eq!(c.layout().stack_bottom, c.guest_end());
         let direct = user_code(&sto, "direct");
         assert!(has_callselfpure(&direct), "missing CALLSELFPURE: {direct:?}");
         assert_eq!(direct, user_code(&sto, "generic"));
@@ -558,7 +560,7 @@ contract Ext {
             .expect("elf packed");
         assert_eq!(used, halt.code_stuff.data.len());
         assert_eq!(c.entry, crate::calc::CALC_CODE_BASE as u32);
-        assert_eq!(c.code, halt_text());
+        assert_eq!(c.first_rx_data(), halt_text());
         // The compiler packs the *minimum* memory that fits the image, the
         // guard, the 2 KiB stack and the declared IO, not the chain maximum.
         assert!(c.mem_kib >= crate::calc::container::CALC_MEM_KIB_MIN);

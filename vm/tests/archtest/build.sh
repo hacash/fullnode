@@ -146,7 +146,7 @@ for i in range(e_phnum):
     else:
         ro = memsz
 CODE_BASE = 0x1000
-STACK, GUARD, OUT_MAX = 2048, 256, 4096
+STACK, OUT_MAX = 2048, 4096  # no guard band: the stack starts at guest_end
 CEIL = 16384  # CalcConfig::testkit hard ceiling, KiB
 
 def fits(kib):
@@ -154,8 +154,8 @@ def fits(kib):
     rodata_base = (CODE_BASE + code + 15) & ~15
     data_base = (rodata_base + ro + 15) & ~15
     stack_top = mem_len & ~15
-    guard_base = max(0, stack_top - STACK - GUARD)
-    output_base = max(0, guard_base - OUT_MAX) & ~15
+    stack_bottom = max(0, stack_top - STACK)
+    output_base = max(0, stack_bottom - OUT_MAX) & ~15
     input_base = output_base  # input_max = 0
     return input_base >= data_base + ini and input_base >= CODE_BASE
 

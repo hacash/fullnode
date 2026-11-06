@@ -20,20 +20,26 @@ fn kernel_dict_walk_smoke() {
             .trim_start_matches("0x"),
         16,
     )
-    .unwrap() as u64;
-    // `.bss` is part of the init image in the v1 container.
-    let mut init = init;
-    init.resize(init.len() + bss_len as usize, 0);
-    let container = vm::calc::pack_container(
-        &vm::calc::SpaceCap::new(0),
+    .unwrap() as u32;
+    let tmp = vm::calc::container::CalcContainer::from_regions(
         vm::calc::CALC_PROFILE_RV64IM,
         8,
         entry,
-        256,
-        32,
         code,
         rodata,
         init,
+        256,
+        32,
+    )
+    .with_bss(bss_len);
+    let container = vm::calc::pack_container(
+        &vm::calc::SpaceCap::new(0),
+        tmp.profile,
+        tmp.mem_kib,
+        tmp.entry,
+        tmp.input_max,
+        tmp.output_max,
+        tmp.segs,
     )
     .unwrap();
     let f = CalcFnObj::build_v1(container).unwrap();

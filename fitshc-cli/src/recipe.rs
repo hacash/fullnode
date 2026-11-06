@@ -15,20 +15,17 @@
 //!   Caveats inherited from the prebuilt core: pulling in
 //!   `core::sync::atomic` links A-extension helpers the verifier rejects,
 //!   and LLVM may emit 2-byte `unimp` (all-zero) fillers on unreachable
-//!   paths, which RVC-profile decode rejects. The generated wrapper avoids
-//!   the known `unimp` sites (real `loop` backedges, no `noreturn` asm
-//!   options); anything else surfaces as a verifier error with a hint to
-//!   switch profile or pass `--strict`.
+//!   paths, which RVC-profile decode treats as `Trap`. The generated wrapper
+//!   avoids those sites (real `loop` backedges, no `noreturn` asm options).
 //!
-//! The linker script is the fixture-proven `container.ld`: `.text` at
-//! `CODE_BASE` with `calc_entry` first, 16-byte alignment before `.rodata`
-//! and `.data`, `.bss` folded after `.data`. `pack_elf` re-derives the same
-//! layout from the section headers, so the ELF must keep it.
+//! The linker script emits ELF `PT_LOAD` at `CODE_BASE` with `calc_entry`
+//! first. `pack_elf` stores those program headers as-is (`.bss` is
+//! `memsz - filesz`). Link with `-n` so segments are not page-aligned.
 
 use crate::meta::ProfileName;
 
 /// Bump when any template or flag below changes; part of the cache key.
-pub const RECIPE_VERSION: u32 = 1;
+pub const RECIPE_VERSION: u32 = 3;
 
 /// Everything one profile needs from the toolchain.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,40 +131,39 @@ impl ProfileName {
     }
 }
 
-/// Linker script placing the image exactly where the container expects it.
-/// Mirrors the proven `vm/tests/fixtures/calckernel/container.ld`.
+/// Linker script emitting PT_LOAD at `CODE_BASE`. Combined with `-n`
+/// (`--nmagic`) so rust-lld does not page-align segments.
 ///
 /// The `/DISCARD/` of `.eh_frame`/`.eh_frame_hdr` is load-bearing: any panic
 /// or bounds-check path links `core::panicking`, and the *prebuilt*
 /// `riscv64imac` core (the stable recipes for profiles `rv64imc`/`rv64imcb`)
 /// carries unwind tables. Without the discard the linker drops `.eh_frame`
-/// in as an orphan *before* `.text`, which both pushes `.text` off
-/// `CODE_BASE` and makes `pack_elf` reject the unknown allocated section.
-/// The custom target JSONs set `eh-frame-header: false` already; discarding
-/// here too is defense in depth for every recipe.
-pub const CONTAINER_LD: &str = r#"/* Container layout: one contiguous exec+ro image (.text + .rodata), then
-   initialized data. No page alignment — the calc container owns the map.
-   Collect .sdata/.sbss/COMMON so small-data statics are not orphaned at 0.
-   ALIGN(16) before `.data` so `.data`/`.bss` start at VM `data_base`
-   (= align16(rodata_end)); the hole is empty and read-only. */
+/// in as an orphan *before* `.text`.
+pub const CONTAINER_LD: &str = r#"/* PT_LOAD projection. IMAGE is the L1 guest window (64 KiB usable
+   minus a 12 KiB host reserve for input+output+stack+guard).
+   Link with -n so lld does not page-align PT_LOAD. */
 ENTRY(calc_entry)
+MEMORY
+{
+  IMAGE (rwx) : ORIGIN = 0x1000, LENGTH = 0xD000
+}
+PHDRS
+{
+  text PT_LOAD FLAGS(5);
+  rodata PT_LOAD FLAGS(4);
+  data PT_LOAD FLAGS(6);
+}
 SECTIONS
 {
-  . = 0x1000;
-  .text : { *(.text.calc_entry) *(.text .text.*) }
-  . = ALIGN(16);
+  . = ORIGIN(IMAGE);
+  .text : { *(.text.calc_entry) *(.text .text.*) } :text
   .rodata : {
     *(.rodata .rodata.*) *(.srodata .srodata.*) *(.rodata.cst*)
-    /* rust-lld drops an empty .data and ignores ALIGN before it;
-       keep the location 16-aligned inside .rodata so .bss follows
-       at VM data_base. Trailing pad is read-only zeros. */
-    . = ALIGN(16);
-  }
-  . = ALIGN(16);
-  __calc_data_base = .;
-  .data : ALIGN(16) { *(.data .data.*) *(.sdata .sdata.*) }
-  .bss : ALIGN(16) { *(.sbss .sbss.*) *(.bss .bss.*) *(COMMON) }
+  } :rodata
+  .data : { *(.data .data.*) *(.sdata .sdata.*) } :data
+  .bss : { *(.sbss .sbss.*) *(.bss .bss.*) *(COMMON) } :data
   /DISCARD/ : { *(.eh_frame) *(.eh_frame_hdr) }
+  ASSERT(. <= ORIGIN(IMAGE) + LENGTH(IMAGE), "guest image overlaps L1 host window");
 }
 "#;
 
@@ -200,10 +196,10 @@ debug = false
 ///
 /// The wrapper:
 /// * builds `input` from `(a0, a1)` and `out` from `(a2, a3 = output_max)`;
-/// * HALTs with the returned length, or traps when it exceeds `out.len()`;
-/// * keeps real `loop {}` backedges around `ecall`/`ebreak` (a `noreturn`
-///   asm would let LLVM drop the backedge and emit a 2-byte all-zero `unimp`
-///   filler, which RVC profiles reject at verify);
+/// * returns the written length (`ra` is the HALT trampoline);
+/// * traps when the returned length exceeds `out.len()`;
+/// * keeps a real `loop {}` around `ebreak` (a `noreturn` asm would let
+///   LLVM drop the backedge and emit a 2-byte all-zero `unimp` filler);
 /// * forces the 32-bit `ebreak` encoding with `.option norvc` so the trap
 ///   path is profile-independent;
 /// * provides the `#[panic_handler]`, so panics become deterministic traps.
@@ -235,24 +231,8 @@ pub extern "C" fn calc_entry(
     let n = {call};
     if n > out.len() {{
         calc_trap()
-    }} else {{
-        calc_halt(0, n as u64)
     }}
-}}
-
-/// HALT ecall (a7=0): a0 = exit code, a1 = output length.
-#[inline(never)]
-fn calc_halt(exit: u64, out_len: u64) -> ! {{
-    loop {{
-        unsafe {{
-            core::arch::asm!(
-                "ecall",
-                in("a0") exit,
-                in("a1") out_len,
-                in("a7") 0u64,
-            );
-        }}
-    }}
+    n as u64
 }}
 
 /// Deterministic trap: 32-bit ebreak under every profile (`.option norvc`
@@ -294,6 +274,8 @@ pub fn base_rustflags(
         // pair with an inner space cannot be expressed there.
         "-Crelocation-model=static".to_string(),
         format!("-Clink-arg=-T{}", container_ld_path.display()),
+        // Do not page-align PT_LOAD; the guest map is not a Linux process.
+        "-Clink-arg=-n".to_string(),
     ];
     // `--remap-path-prefix` is a top-level rustc flag (`-C remap-path-prefix`
     // was removed from the codegen options); skip the empty parent of a
@@ -327,7 +309,8 @@ mod recipe_tests {
         let with = wrapper_source("/abs/kernel.rs", "kernel", true);
         assert!(with.contains("#[path = \"/abs/kernel.rs\"]"));
         assert!(with.contains("user::kernel(input, out)"));
-        assert!(with.contains("fn calc_halt"));
+        assert!(with.contains("n as u64"));
+        assert!(!with.contains("fn calc_halt"));
         assert!(with.contains(".option norvc"));
         assert!(!with.contains("options(noreturn)"));
         let without = wrapper_source("/abs/kernel.rs", "kernel", false);

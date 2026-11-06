@@ -14,12 +14,12 @@ use std::path::Path;
 
 use vm::calc::SpaceCap;
 use vm::calc::container::{
-    CALC_MEM_KIB_MIN, CALC_PROFILE_BITMANIP, CALC_PROFILE_COMPRESSED, CALC_PROFILE_NO_HOST_ECALL,
+    CALC_MEM_KIB_MIN, CALC_PROFILE_BITMANIP, CALC_PROFILE_COMPRESSED, CALC_PROFILE_HASH,
 };
 
 /// Bump when the meaning of a key or its default changes; part of the build
 /// cache key so a schema change never reuses stale containers.
-pub const META_SCHEMA_VERSION: u32 = 1;
+pub const META_SCHEMA_VERSION: u32 = 3;
 
 /// Kernel ISA profile names accepted by `// calc: profile = ...`. The fitsh
 /// keyword stays `rv64im` (the engine family); the profile only decides how
@@ -53,7 +53,7 @@ impl ProfileName {
         ProfileName::ALL.into_iter().find(|p| p.as_str() == word)
     }
 
-    /// Container profile bits without the no-host-ecall bit.
+    /// Container profile bits without the HASH opt-in.
     pub fn profile_bits(&self) -> u8 {
         match self {
             ProfileName::Rv64im => 0,
@@ -88,36 +88,40 @@ pub struct KernelMeta {
     pub input_max: u16,
     pub output_max: u16,
     pub mem_kib: MemSpec,
-    pub no_host_ecall: bool,
+    pub hash: bool,
 }
 
 impl Default for KernelMeta {
     fn default() -> Self {
         KernelMeta {
-            profile: ProfileName::Rv64imc,
+            profile: ProfileName::Rv64im,
             input_max: 1024,
             output_max: 1024,
             mem_kib: MemSpec::Auto,
-            no_host_ecall: true,
+            hash: false,
         }
     }
 }
 
 impl KernelMeta {
-    /// Final container profile byte (metadata bits plus the HALT-only
-    /// declaration bit).
+    /// Final container profile byte (ISA bits plus the optional HASH bit).
     pub fn profile_byte(&self) -> u8 {
         let mut b = self.profile.profile_bits();
-        if self.no_host_ecall {
-            b |= CALC_PROFILE_NO_HOST_ECALL;
+        if self.hash {
+            b |= CALC_PROFILE_HASH;
         }
         b
     }
 
     /// Chain admission checks against the target `SpaceCap`: the IO regions
     /// the container declares must fit what the chain accepts, and an
-    /// explicit `mem_kib` must be inside the admission range.
+    /// explicit `mem_kib` must be inside the admission range. Mirrors the
+    /// consensus rule: every B / RVC profile is admitted, the HASH bit is
+    /// not.
     pub fn validate(&self, cap: &SpaceCap) -> Result<(), String> {
+        if self.hash {
+            return Err("hash ecalls are not admitted in v2".to_string());
+        }
         if self.input_max as usize > cap.call_data_size {
             return Err(format!(
                 "input_max {} exceeds the chain call_data_size {}",
@@ -152,12 +156,12 @@ impl KernelMeta {
             MemSpec::KiB(k) => k.to_string(),
         };
         format!(
-            "profile={} input_max={} output_max={} mem_kib={} no_host_ecall={}",
+            "profile={} input_max={} output_max={} mem_kib={} hash={}",
             self.profile.as_str(),
             self.input_max,
             self.output_max,
             mem,
-            self.no_host_ecall
+            self.hash
         )
     }
 }
@@ -250,13 +254,13 @@ pub fn parse_kernel_meta(file: &Path, source: &str) -> Result<KernelMeta, String
                     MemSpec::KiB(n)
                 };
             }
-            "no_host_ecall" => {
-                meta.no_host_ecall = match value {
+            "hash" => {
+                meta.hash = match value {
                     "true" => true,
                     "false" => false,
                     _ => {
                         return Err(format!(
-                            "{}:{}: no_host_ecall must be true/false, got {:?}",
+                            "{}:{}: hash must be true/false, got {:?}",
                             file.display(),
                             line_no,
                             value
@@ -266,7 +270,7 @@ pub fn parse_kernel_meta(file: &Path, source: &str) -> Result<KernelMeta, String
             }
             _ => {
                 return Err(format!(
-                    "{}:{}: unknown '// calc:' key '{}' (schema: profile, input_max, output_max, mem_kib, no_host_ecall)",
+                    "{}:{}: unknown '// calc:' key '{}' (schema: profile, input_max, output_max, mem_kib, hash)",
                     file.display(),
                     line_no,
                     key
@@ -568,22 +572,24 @@ mod meta_tests {
     fn defaults_apply_when_no_header() {
         let m = parse("pub fn kernel(input: &[u8], out: &mut [u8]) -> usize { 0 }").unwrap();
         assert_eq!(m, KernelMeta::default());
-        assert_eq!(m.profile, ProfileName::Rv64imc);
-        assert_eq!(m.profile_byte(), 0b110); // RVC + no-host-ecall
+        assert_eq!(m.profile, ProfileName::Rv64im);
+        assert_eq!(m.profile_byte(), 0);
     }
 
     #[test]
     fn parses_all_keys_and_blank_lines() {
         let m = parse(
-            "// calc: profile = rv64imb\n\n// some prose\n\n// calc: input_max = 64\n//   calc: output_max = 32\n//calc:mem_kib=16\n// calc: no_host_ecall = false\n",
+            "// calc: profile = rv64imb\n\n// some prose\n\n// calc: input_max = 64\n//   calc: output_max = 32\n//calc:mem_kib=16\n// calc: hash = true\n",
         )
         .unwrap();
         assert_eq!(m.profile, ProfileName::Rv64imb);
         assert_eq!(m.input_max, 64);
         assert_eq!(m.output_max, 32);
         assert_eq!(m.mem_kib, MemSpec::KiB(16));
-        assert!(!m.no_host_ecall);
-        assert_eq!(m.profile_byte(), 0b001);
+        assert!(m.hash);
+        assert_eq!(m.profile_byte(), 0b101);
+        let err = m.validate(&SpaceCap::new(0)).unwrap_err();
+        assert!(err.contains("not admitted"), "{err}");
     }
 
     #[test]
@@ -593,7 +599,7 @@ mod meta_tests {
             "pub fn kernel(_: &[u8], _: &mut [u8]) -> usize { 0 }\n// calc: profile = rv64im\n",
         )
         .unwrap();
-        assert_eq!(m.profile, ProfileName::Rv64imc);
+        assert_eq!(m.profile, ProfileName::Rv64im);
     }
 
     #[test]
@@ -629,9 +635,9 @@ mod meta_tests {
                 .contains("mem_kib")
         );
         assert!(
-            parse("// calc: no_host_ecall = maybe\n")
+            parse("// calc: hash = maybe\n")
                 .unwrap_err()
-                .contains("no_host_ecall")
+                .contains("hash")
         );
         assert!(
             parse("// calc: broken\n")
@@ -658,7 +664,7 @@ mod meta_tests {
         // Single-line block comment + same-line close.
         let m2 = parse("/* header */\n// calc: input_max = 8\npub fn kernel(_: &[u8], _: &mut [u8]) -> usize { 0 }").unwrap();
         assert_eq!(m2.input_max, 8);
-        assert_eq!(m2.profile, ProfileName::Rv64imc);
+        assert_eq!(m2.profile, ProfileName::Rv64im);
     }
 
     #[test]

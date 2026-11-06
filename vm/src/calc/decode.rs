@@ -1,10 +1,10 @@
 //! RV64IM(+C)(+Zba/Zbb/Zbs/Zbc) whitelist decoder. The profile byte is three
-//! orthogonal bits: bit 0 bitmanip, bit 1 RVC, bit 2 no host ecalls (which
-//! does not change decoding). Branch/JAL immediates stay
-//! byte-relative here; the verifier resolves them to absolute guest PCs.
-//! Encoding reference: RISC-V unprivileged spec Volume I (I, M, C) and
-//! Bitmanip 1.0.0. The compressed decoder is the pre-activation RV64IMC
-//! implementation.
+//! additive bits: bit 0 bitmanip, bit 1 RVC, bit 2 hash ecalls (which
+//! does not change decoding). v2 admits every B / RVC combination; the
+//! HASH bit stays rejected at container admission. Branch/JAL immediates
+//! stay byte-relative here; the verifier resolves them to absolute guest
+//! PCs. Encoding reference: RISC-V unprivileged spec Volume I (I, M, C)
+//! and Bitmanip 1.0.0.
 
 use crate::rt::{ItrErr, ItrErrCode};
 
@@ -266,7 +266,7 @@ fn decode_profile_c(code: &[u8], off: usize) -> Result<(Inst, u32), ItrErr> {
     }
 }
 
-/// True when `inst` is a Zba/Zbb/Zbs/Zbc form (profile 1 only).
+/// True when `inst` is a Zba/Zbb/Zbs/Zbc form (admitted only on B profiles).
 pub fn inst_is_bitmanip(inst: &Inst) -> bool {
     match inst {
         Inst::UnAlu { .. } | Inst::BitImm { .. } | Inst::Slliuw { .. } => true,
@@ -650,9 +650,13 @@ fn decode_rvc(h: u32) -> Result<(Inst, u32), ItrErr> {
                         | (bits(h, 6, 6) << 2)
                         | (bits(h, 5, 5) << 3);
                     if imm == 0 {
-                        return Err(bad("calc decode: c.addi4spn reserved imm 0"));
+                        // All-zero halfword is c.unimp / reserved C.ADDI4SPN
+                        // imm=0. LLVM emits it on dead paths; treat as Trap
+                        // so an RVC image still verifies.
+                        Inst::Trap
+                    } else {
+                        Inst::ImmAlu { op: ImmAluOp::Addi, rd, rs1: 2, imm: imm as i64 }
                     }
-                    Inst::ImmAlu { op: ImmAluOp::Addi, rd, rs1: 2, imm: imm as i64 }
                 }
                 2 => {
                     // C.LW
@@ -833,12 +837,7 @@ fn decode_rvc(h: u32) -> Result<(Inst, u32), ItrErr> {
                         }
                     } else if rs2 == 0 {
                         if rd == 0 {
-                            // C.EBREAK is a legal RVC breakpoint with no
-                            // debugger semantics here: it is the same
-                            // 1-cycle trap as the 32-bit `ebreak` and the
-                            // canonical `unimp`. `c.unimp` (the all-zero
-                            // 0x0000 halfword) is a reserved C.ADDI4SPN
-                            // encoding and stays rejected (SPEC §2).
+                            // C.EBREAK: same 1-cycle trap as 32-bit ebreak.
                             Inst::Trap
                         } else {
                             // C.JALR
@@ -1114,12 +1113,10 @@ mod rvc_trap_tests {
     use crate::calc::{CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IMC};
 
     #[test]
-    fn rvc_unimp_rejected_ebreak_is_trap() {
-        // Policy: 0x0000 is the reserved C.ADDI4SPN imm=0 encoding and stays
-        // rejected. 0x9002 is C.EBREAK, a legal RVC breakpoint; with no
-        // debugger it is the same 1-cycle trap as the 32-bit forms.
-        let e = decode_at(&[0x00, 0x00], 0, CALC_PROFILE_RV64IMC).unwrap_err();
-        assert!(e.to_string().contains("c.addi4spn reserved imm 0"), "{e}");
+    fn rvc_unimp_and_ebreak_are_trap() {
+        let (inst, len) = decode_at(&[0x00, 0x00], 0, CALC_PROFILE_RV64IMC).unwrap();
+        assert_eq!(inst, Inst::Trap);
+        assert_eq!(len, 2);
         let (inst, len) = decode_at(&[0x02, 0x90], 0, CALC_PROFILE_RV64IMC).unwrap();
         assert_eq!(inst, Inst::Trap);
         assert_eq!(len, 2);

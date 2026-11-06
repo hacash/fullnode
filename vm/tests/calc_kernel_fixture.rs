@@ -29,16 +29,16 @@ fn calckernel_fixture_digest_matches_oracles() {
     )
     .expect("entry hex");
 
-    let container = CalcContainer {
-        profile: vm::calc::CALC_PROFILE_RV64IM,
-        mem_kib: 16,
+    let container = CalcContainer::from_regions(
+        vm::calc::CALC_PROFILE_RV64IM,
+        16,
         entry,
         code,
         rodata,
         init,
-        input_max: 64,
-        output_max: 64,
-    };
+        64,
+        64,
+    );
     let module = verify_container(&container).expect("container verifies");
 
     // Input identical to the oracle harness's KINPUT.
@@ -73,8 +73,8 @@ fn calckernel_fixture_digest_matches_oracles() {
     );
     println!(
         "calckernel fixture: {} bytes code + {} rodata, {} cycles for 64-byte input ({:.1} cycles/byte)",
-        container.code.len(),
-        container.rodata.len(),
+        container.exec_filesz(),
+        container.ro_filesz(),
         first.cycles_used,
         first.cycles_used as f64 / 64.0
     );

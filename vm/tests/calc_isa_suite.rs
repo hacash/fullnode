@@ -1,5 +1,5 @@
 //! ISA-level semantics suite for the calc VM, in riscv-tests rv64ui/um/uc
-//! style: every whitelisted RV64IM+Zba/Zbb/Zbs/Zbc instruction form runs through
+//! style: every admitted RV64IM instruction form runs through
 //! the interpreter and is checked against HOST-side Rust reference
 //! semantics (independent of the interpreter implementation). Under
 //! `--features calc-aot` the same programs additionally run through the
@@ -48,7 +48,12 @@ fn run_interp(case: &Case, container: &CalcContainer, budget: u64) {
             }
             assert_eq!(regs[2], sp, "{}: sp must be preserved", case.name);
             if !case.ra_free {
-                assert_eq!(regs[1], 0, "{}: ra starts at 0 and must be preserved", case.name);
+                assert_eq!(
+                    regs[1],
+                    vm::calc::CALC_HALT_STUB,
+                    "{}: ra starts at HALT_STUB and must be preserved",
+                    case.name
+                );
             }
         }
         Outcome::Trap => {
@@ -172,17 +177,17 @@ fn store_into_rodata_traps() {
     // second instruction: addi x30, x30, rel (x30 already holds CODE_BASE)
     let word1 = 0x13u32 | (30 << 7) | (30 << 15) | ((rel as u32) << 20);
     code[4..8].copy_from_slice(&word1.to_le_bytes());
-    let container = CalcContainer {
-        profile: vm::calc::CALC_PROFILE_RV64IM_B,
-        mem_kib: isa_gen::MEM_KIB,
-        entry: vm::calc::CALC_CODE_BASE as u32,
+    let container = CalcContainer::from_regions(
+        vm::calc::CALC_PROFILE_RV64IM,
+        isa_gen::MEM_KIB,
+        vm::calc::CALC_CODE_BASE as u32,
         code,
         rodata,
-        init: Vec::new(),
-        input_max: isa_gen::INPUT_MAX,
-        output_max: isa_gen::OUTPUT_MAX,
-    };
-    let case = Case::trap("trap/store-rodata", container.code.clone());
+        Vec::new(),
+        isa_gen::INPUT_MAX,
+        isa_gen::OUTPUT_MAX,
+    );
+    let case = Case::trap("trap/store-rodata", container.first_rx_data().to_vec());
     run_interp(&case, &container, BIG);
     #[cfg(feature = "calc-aot")]
     run_aot_parity(&case, &container, BIG);
@@ -225,7 +230,7 @@ fn oog_boundary_cycles() {
             );
         }
     }
-    // cost-table program at its exact total (48) and one below.
+    // cost-table program at its exact total and one below.
     let case55 = all_cases()
         .into_iter()
         .find(|c| c.name == "cyc/cost-table")
@@ -270,10 +275,9 @@ fn oog_boundary_cycles() {
     }
 }
 
-/// Decode strictness on the no-C profiles (the ISA-generator container is
-/// profile 1): compressed encodings and malformed tails must be rejected by
-/// the verifier (whole-code decode). C.EBREAK acceptance on profiles 2/3 is
-/// covered by the unit decoder suite.
+/// Decode strictness on profile 0: compressed encodings and malformed tails
+/// must be rejected by the verifier (whole-code decode). C.EBREAK decode is
+/// covered by the unit decoder suite; the assertion targets profile 0.
 #[test]
 fn decode_strictness_reserved_forms() {
     let err = |halfwords: &[u16]| {
@@ -341,74 +345,20 @@ fn input_echo_end_to_end() {
     let exec2 = obj.run(&input, limits);
     assert_eq!(exec.cycles_used, exec2.cycles_used, "deterministic cycles");
     assert!(exec.cycles_used > 320, "setup + body cycles");
-    // resource = ceil(in/16) + ceil(out/16) + 8 per declared KiB
+    // resource = ceil(in/16) + ceil(out/16) + 2 per declared KiB
     let expect_res = ((100 + 15) / 16) * 2 + isa_gen::MEM_KIB as i64 * vm::calc::CALC_MEM_RESOURCE_PER_KIB;
     assert_eq!(exec.resource, expect_res);
 }
 
-/// RVC (profiles 2/3) execution: compressed encodings are admitted by the
-/// verifier but were previously never *executed* by any test. This pins the
-/// two link values that depend on the encoded instruction length:
-/// `c.jalr` writes `pc + 2`, a 4-byte `jal` writes `pc + 4`. Both are
-/// stored to the output window and compared through the interpreter and the
-/// AOT backend.
+/// RVC profiles are admitted: a c.nop + HALT kernel verifies and runs.
 #[test]
-fn rvc_compressed_links_execute_with_encoded_lengths() {
+fn rvc_profiles_are_admitted() {
     use vm::calc::container::{CalcContainer, CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B};
     use vm::calc::CALC_CODE_BASE;
-
-    // 0x1000: c.lui x5,1        x5 = 0x1000
-    // 0x1002: c.addi x5,10      x5 = 0x100A
-    // 0x1004: c.jalr x5         ra = 0x1006, pc = 0x100A
-    // 0x1006: c.nop             (skipped)
-    // 0x1008: c.nop             (skipped)
-    // 0x100A: c.sdsp x1,0(sp)   out[0..8]  = 0x1006
-    // 0x100C: jal x6,+12        link x6 = 0x1010, pc = 0x1018
-    // 0x1010..0x1017: c.nop x4  (skipped)
-    // 0x1018: c.sdsp x6,8(sp)   out[8..16] = 0x1010
-    // 0x101A: c.li a0,0 / 0x101C: c.li a1,16 / 0x101E: c.li a7,0
-    // 0x1020: ecall HALT
-    let halves: [u16; 16] = [
-        0x6285, 0x02A9, 0x9282, 0x0001, 0x0001, 0xE006, 0x036F, 0x00C0, 0x0001, 0x0001, 0x0001,
-        0x0001, 0xE41A, 0x4501, 0x45C1, 0x4881,
-    ];
-    let mut code = Vec::new();
-    for h in halves {
-        code.extend_from_slice(&h.to_le_bytes());
-    }
-    code.extend_from_slice(&0x0000_0073u32.to_le_bytes());
-    assert_eq!(code.len(), 36);
-
+    let code = vec![0x01, 0x00, 0x73, 0x00, 0x00, 0x00]; // c.nop + ecall (HALT)
     for profile in [CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B] {
-        let c = CalcContainer {
-            profile,
-            mem_kib: 8,
-            entry: CALC_CODE_BASE as u32,
-            code: code.clone(),
-            rodata: Vec::new(),
-            init: Vec::new(),
-            input_max: 64,
-            output_max: 64,
-        };
-        let module = verify_container(&c).unwrap_or_else(|e| panic!("profile {profile}: {e:?}"));
-        let (r, iregs, imem, _) = interp::run_with_state(&module, &c, &[], BIG);
-        let out = match &r {
-            Ok(x) => x.output.clone(),
-            Err((a, u)) => panic!("profile {profile}: interpreter abort {a:?} after {u}"),
-        };
-        let got = |i: usize| u64::from_le_bytes(out[i..i + 8].try_into().unwrap());
-        assert_eq!(got(0), 0x1006, "profile {profile}: c.jalr link must be pc+2");
-        assert_eq!(got(8), 0x1010, "profile {profile}: jal link must be pc+4");
-
-        #[cfg(feature = "calc-aot")]
-        {
-            let f = vm::calc::aot::aot_compile(&module).expect("AOT translates RVC");
-            let (ao, aregs, amem) = f.run_with_state(&module, &c, &[], BIG);
-            assert_eq!(ao.abort, None, "profile {profile}: AOT abort");
-            assert_eq!(ao.output.as_deref().unwrap_or(&[]), out.as_slice());
-            assert_eq!(ao.cycles_used, r.as_ref().unwrap().cycles_used);
-            assert_eq!(aregs, iregs);
-            assert_eq!(amem, imem);
-        }
+        let c = CalcContainer::from_code(profile, 8, CALC_CODE_BASE as u32, code.clone(), 64, 64);
+        verify_container(&c)
+            .unwrap_or_else(|e| panic!("profile {profile} must be admitted: {e:?}"));
     }
 }

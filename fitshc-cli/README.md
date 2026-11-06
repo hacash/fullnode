@@ -35,7 +35,7 @@ contract Demo {
 `hash.rs` (same directory):
 
 ```rust
-// calc: profile = rv64imc
+// calc: profile = rv64im
 // calc: input_max = 1024
 // calc: output_max = 64
 
@@ -47,7 +47,7 @@ pub fn hash(input: &[u8], out: &mut [u8]) -> usize {
 ```bash
 fitshc build contract.fitsh
 # Compile success!
-# Calc kernel 'hash': ./hash.hcf1 (profile 0x06, mem 4 KiB, in 1024, out 64, ...)
+# Calc kernel 'hash': ./hash.hcf1 (profile 0x00, mem 4 KiB, in 1024, out 64, ...)
 # Generated: contract.contractmap.json
 # Generated: contract.deploy.json
 ```
@@ -67,7 +67,7 @@ pub fn tick(out: &mut [u8]) -> usize
 
 The file is a plain **module**, not a crate root: no `#![no_std]`, no
 `#[panic_handler]`, no linker scripts — the generated wrapper owns the whole
-ABI (`a0..a3` slices, HALT, traps, panic handler). Wrong signatures are
+ABI (`a0..a3` slices, `return len` via the HALT trampoline, traps, panic handler). Wrong signatures are
 ordinary rustc errors pointing at your file.
 
 ## `// calc:` metadata
@@ -77,16 +77,20 @@ unknown / duplicate / malformed keys are errors with file and line.
 
 | key             | default   | values                            | notes                          |
 |-----------------|-----------|-----------------------------------|--------------------------------|
-| `profile`       | `rv64imc` | `rv64im` `rv64imb` `rv64imc` `rv64imcb` | container profile bits    |
+| `profile`       | `rv64im`  | `rv64im` (v2 admits only this)          | container profile bits    |
 | `input_max`     | `1024`    | `0..=65535`, ≤ chain `call_data_size` | input region size         |
 | `output_max`    | `1024`    | `1..=65535`, ≤ chain `value_size` | output region size            |
 | `mem_kib`       | `auto`    | `auto` or `4..=calc_mem_kib_max`  | `auto` = minimum fitting fit |
-| `no_host_ecall` | `true`    | `true` / `false`                  | HALT-only declaration bit     |
+| `hash`          | `false`   | `false` (v2)                      | HASH ecalls are not admitted  |
 
 Metadata steers the build only; the container header is the runtime truth.
 The fitsh keyword stays `rv64im` (the engine family) — the profile is a
 property of the compiled kernel, and the same contract source can be
 recompiled to a different profile without touching the fitsh file.
+
+v2 images are `profile = rv64im` with `hash = false` (eth-act
+`riscv64im_zicclsm`). Other names still parse for a later fork but
+admission rejects them.
 
 ## Kernel resolution order
 
@@ -114,7 +118,7 @@ fitshc build contract.fitsh [fee] [nonce] [--periods N]
 fitshc contract.fitsh 1:248 1
 
 # pack an already-linked ELF into a verified container
-fitshc pack kernel.elf --profile rv64imc --in 1024 --out 1024 --mem auto -o kernel.hcf1
+fitshc pack kernel.elf --profile rv64im --in 1024 --out 1024 --mem auto -o kernel.hcf1
 
 # build (if .rs) and execute a kernel locally — the fastest feedback loop
 fitshc run hash.rs --input 0x686163617368
@@ -128,9 +132,8 @@ Flags:
 | `--no-build` | never invoke rustc; prebuilt `.hcf1`/`.elf` only (`build`) |
 | `--strict` | rebuild core/compiler_builtins (drops the prebuilt `+A` caveat) |
 | `--in N` / `--out N` | IO sizes for bare `.elf` packing (default 1024/1024) |
-| `--profile P` | `rv64im`/`rv64imb`/`rv64imc`/`rv64imcb` for `.elf` packing |
+| `--profile P` | `rv64im` only (v2 default) |
 | `--mem auto\|N` | memory admission for `.elf` packing (`build --no-build`, `pack`, `run`) |
-| `--host-ecall` | clear the HALT-only profile bit for `.elf` packing |
 | `--no-cache` | never read/write the shared cache; the temp build dir is removed |
 | `--artifacts` / `--no-artifacts` | force/skip `<name>.hcf1` + manifest writing (`--no-build` defaults to skip) |
 | `--out-dir <dir>` | write kernel artifacts and contractmap/deploy json into `<dir>` (created if missing) |

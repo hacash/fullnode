@@ -93,9 +93,8 @@ fn dict_walk_digest(doc: &[u8]) -> Option<[u32; 8]> {
     let alnum = |c: u8| c.is_ascii_alphanumeric();
     // Parse/walk tables live in static storage (.bss). The committed image's
     // `.bss` is 0x400 bytes (`bss_len.txt`); packers fold that zero span
-    // into the container `init` image
-    // or the guard band sitting above `.bss` traps the first table store.
-    // Container memory is zeroed before every run.
+    // into the container `init` image, which stays writable like every RW
+    // segment. Container memory is zeroed before every run.
     static mut KS: [u16; MAX_PAIRS] = [0; MAX_PAIRS];
     static mut KL: [u16; MAX_PAIRS] = [0; MAX_PAIRS];
     static mut VS: [u16; MAX_PAIRS] = [0; MAX_PAIRS];

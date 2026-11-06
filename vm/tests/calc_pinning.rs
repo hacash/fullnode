@@ -490,24 +490,32 @@ mod pin {
             }
             db = ndb;
         };
-        let container = CalcContainer {
-            profile: vm::calc::CALC_PROFILE_RV64IM,
-            mem_kib: MEM_KIB,
-            entry: CB as u32,
-            code: bytes,
-            rodata: vec![],
-            init: case.init_mem.clone(),
-            input_max: INPUT_MAX,
-            output_max: OUTPUT_MAX,
-        };
+        let container = CalcContainer::from_regions(
+            vm::calc::CALC_PROFILE_RV64IM,
+            MEM_KIB,
+            CB as u32,
+            bytes,
+            vec![],
+            case.init_mem.clone(),
+            INPUT_MAX,
+            OUTPUT_MAX,
+        );
         // The first under-test word sits right after the prologue.
         let mut prologue_bytes = 0usize;
         for (r, v) in &case.init {
             let v = if Some(*r) == case.db_reg { db } else { *v };
             prologue_bytes += enc_li(*r, v).len() * 4;
         }
-        let module = verify_container(&container).expect(case.name);
-        assert_eq!(module.layout_snapshot().data_base, db, "{}: data base mismatch", case.name);
+        verify_container(&container).expect(case.name);
+        if !case.init_mem.is_empty() {
+            let v = container
+                .segs
+                .iter()
+                .find(|s| s.flags & vm::calc::container::SEG_W != 0)
+                .map(|s| s.vaddr as u64)
+                .expect("rw segment");
+            assert_eq!(v, db, "{}: data base mismatch", case.name);
+        }
         Built {
             container,
             test_pc: prologue_bytes as u64,
@@ -525,7 +533,7 @@ mod pin {
         let (res, regs, mem, _trace) = run_with_state(&module, &b.container, &[], 100_000);
         match res {
             Ok(_) => {}
-            Err((a, cyc)) => panic!("{}: ours failed: {a:?} at {cyc}\ncode: {:x?}", case.name, b.container.code),
+            Err((a, cyc)) => panic!("{}: ours failed: {a:?} at {cyc}\ncode: {:x?}", case.name, b.container.first_rx_data()),
         }
         (regs, mem)
     }
@@ -554,15 +562,21 @@ mod pin {
         let mut machine = DefaultMachineBuilder::new(core).syscall(Box::new(sys)).build();
         {
             let m = machine.memory_mut();
-            m.store_bytes(CB, &b.container.code).unwrap();
-            m.store_bytes(lay.rodata_base, &b.container.rodata).unwrap();
-            m.store_bytes(lay.data_base, &b.container.init).unwrap();
+            m.store_bytes(
+                vm::calc::container::HALT_STUB,
+                &vm::calc::container::HALT_STUB_BYTES,
+            )
+            .unwrap();
+            for s in &b.container.segs {
+                m.store_bytes(s.vaddr as u64, &s.data).unwrap();
+            }
         }
         machine.set_register(10, lay.input_base);
         machine.set_register(11, 0);
         machine.set_register(12, lay.output_base);
         machine.set_register(13, lay.output_max);
         machine.set_register(2, lay.stack_top);
+        machine.set_register(1, vm::calc::container::HALT_STUB);
         machine.update_pc(CB);
         machine.commit_pc();
         let mut decoder = ckb_vm::decoder::build_decoder::<u64>(machine.isa(), machine.version());
@@ -586,7 +600,7 @@ mod pin {
     fn check_case(case: Case) {
         let b = build(&case);
         if std::env::var("PIN_DEBUG").is_ok() {
-            eprintln!("case {}: code={:x?}", case.name, b.container.code);
+            eprintln!("case {}: code={:x?}", case.name, b.container.first_rx_data());
         }
         let (regs_o, mem_o) = run_ours(&case, &b);
         let (regs_c, mem_c) = run_ckb(&b);
@@ -616,7 +630,7 @@ mod pin {
         // its real pc, compare the register it writes against ours and the
         // next pc against the static expectation.
         if let Some(sc) = &case.sc {
-            let bytes = &b.container.code;
+            let bytes = b.container.first_rx_data();
             let decoded = decode_at(bytes, b.test_pc as usize, vm::calc::CALC_PROFILE_RV64IM).expect(case.name);
             let pc = CB + b.test_pc;
             let (a, next) = match sc {
@@ -850,14 +864,14 @@ mod pin {
                 .code(&[W(enc_jal(5, 8)), W(enc_i(0x13, 0, 9, 0, 99))])
                 .expects(&[(5, CB + 4), (9, 0)]),
             // jal x0 must NOT write a link register: observed through a copy
-            // of x1 taken BEFORE the epilogue reload masks it.
+            // of x1 taken BEFORE the epilogue. ra starts at HALT_STUB.
             Case::new("jal x0 no link")
                 .code(&[
                     W(enc_i(0x13, 0, 9, 0, 99)), // addi x9, x0, 99
                     W(enc_i(0x13, 0, 5, 1, 0)),  // addi x5, x1, 0 (copy ra)
                     W(enc_jal(0, 4)),            // -> epilogue at 12
                 ])
-                .expect(5, 0),
+                .expect(5, vm::calc::CALC_HALT_STUB),
             // jalr x6, x5, 0: x5 is the absolute address of the addi (after
             // the 8-byte lui+addi prologue that materializes CODE_BASE+12).
             Case::new("jalr dynamic target")

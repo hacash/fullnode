@@ -658,9 +658,9 @@ impl KernelBuildRequest<'_> {
             "deps": deps.iter().map(|(p, s)| json!({"path": p.display().to_string(), "sha256": s})).collect::<Vec<_>>(),
             "image": {
                 "mem_kib": container.mem_kib,
-                "code": container.code.len(),
-                "rodata": container.rodata.len(),
-                "init": container.init.len(),
+                "code": container.exec_filesz(),
+                "rodata": container.ro_filesz(),
+                "init": container.rw_filesz(),
                 "total": container_bytes.len(),
                 "id": hex::encode(container.image_id()),
             },
@@ -797,7 +797,7 @@ fn manifest_meta(meta: &KernelMeta) -> serde_json::Value {
             MemSpec::Auto => "auto".to_string(),
             MemSpec::KiB(k) => k.to_string(),
         },
-        "no_host_ecall": meta.no_host_ecall,
+        "hash": meta.hash,
     })
 }
 
@@ -898,7 +898,7 @@ mod build_tests {
             key_of(
                 "kernel",
                 &KernelMeta {
-                    profile: ProfileName::Rv64im,
+                    profile: ProfileName::Rv64imc,
                     ..KernelMeta::default()
                 },
                 false,

@@ -2,7 +2,7 @@
 //!
 //! There is deliberately **no consensus configuration struct** here. Every
 //! guest-visible execution capability — the ISA profile cells, HALT, the
-//! memory layout, read-only regions and the stack guard — is unconditional
+//! memory layout and read-only regions — is unconditional
 //! and frozen for v1: a later config must never be able to reject or
 //! reinterpret a previously legal container, so no such switch exists.
 //!

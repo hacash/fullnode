@@ -1,86 +1,101 @@
 # Hacash calc VM specification
 
-Normative semantics for the HVM calc-func RISC-V micro-VM. Interpreter and
-x86-64 AOT (`calc-aot`) **must be bit-identical** on outputs, register file,
-memory, cycle totals, abort class, image ID and receipt. This channel is not
-yet activated on mainnet; the wire format here is v1.
+Normative semantics for the HVM calc-func RISC-V micro-VM. The x86-64
+AOT (`calc-aot`) is the **normative consensus engine**; the interpreter
+is launch-time bug insurance that must stay bit-identical to it (outputs,
+register file, memory, cycle totals, abort class, image ID and receipt)
+and is removed once production is stable — see "v2 semantics". This
+channel is not yet activated on mainnet; the wire format here is **v2**.
 
-Target compatibility: **profile 0** matches Ethereum zkVM
+Three layers:
+
+1. **Off-chain ELF** — static LP64 RISC-V, produced by a mature toolchain.
+2. **On-chain container** — lossless projection of ELF `PT_LOAD` (this wire).
+3. **Loaded machine** — RV64IM(+C)(+B), flat memory, HALT trampoline, host
+   window at the top of `mem_kib`; profile 0 additionally is the machine a
+   zk prover can prove with a standardized circuit.
+
+Target compatibility: profile byte = three additive ISA bits (bit 0 B, bit 1
+RVC, bit 2 HASH). Profile 0 matches the Ethereum zkVM baseline
 `riscv64im_zicclsm-unknown-none-elf` (eth-act/zkvm-standards): RV64I + M +
-Zicclsm, little-endian, flat memory, **no C, no F/D, no A**.
+Zicclsm, little-endian, flat memory, **no C, no B, no F/D, no A, no OS
+syscalls**. **v2 admits every B / RVC combination (bytes 0..=3) and rejects
+the HASH bit**; zk portability is a per-profile property — only profile 0 is
+the zk-standardized subset, and nothing requires every profile to be
+zk-provable.
 
 ## 1. Container wire format
 
-32-byte big-endian header, then `code || rodata || init`. Magic `HCF1`.
-There is no checksum; consensus commits the bytes. There is no ABI byte and
-no `bss` field: the ABI is fixed by `version = 1` (bytes -> bytes), and
-zero-initialized data is part of the `init` image (see §3).
+20-byte big-endian header, then `nseg × 16` segment headers, then payloads
+in table order. Magic `HCF1`. There is no checksum; consensus commits the
+bytes. The ABI is fixed by `version = 2` (bytes → bytes). `.bss` is
+`memsz - filesz` and is **not** stored.
 
 | Offset | Size | Field |
 |--------|------|--------|
 | 0 | 4 | magic `HCF1` |
-| 4 | 1 | version = 1 |
-| 5 | 1 | `profile` bitfield. Bit 0 = Zba/Zbb/Zbs/Zbc. Bit 1 = RVC. Bit 2 = no host ecalls (HALT only). Other bits rejected. Values 0..=7 |
-| 6 | 2 | reserved, must be 0 |
-| 8 | 4 | `mem_kib` (u32, `decode` requires 4..=2097147; the chain cap comes from `SpaceCap::calc_mem_kib_max`) |
+| 4 | 1 | version = 2 |
+| 5 | 1 | `profile` — ISA bits (see §2); bit 2 (HASH) must be 0 |
+| 6 | 1 | `nseg` (1..=16) |
+| 7 | 1 | reserved, must be 0 |
+| 8 | 4 | `mem_kib` (u32, `decode` requires 4..=2097147) |
 | 12 | 4 | `entry` — **absolute guest PC** |
-| 16 | 4 | `code_len` (> 0; multiple of 4 when bit 1 is clear, multiple of 2 when RVC is set) |
-| 20 | 4 | `init_len` (initialized data **plus** the explicit zero span of `.bss`) |
-| 24 | 2 | `input_max` (u16). Chain admission is `SpaceCap::call_data_size` (L1: 5120). The call input is flattened from a one-layer list under the same cap |
-| 26 | 2 | `output_max` (u16, at least 1). Chain admission is `SpaceCap::value_size` (L1: 1280) |
-| 28 | 4 | `rodata_len` |
+| 16 | 2 | `input_max` (u16) |
+| 18 | 2 | `output_max` (u16, at least 1) |
 
-`entry` is an absolute guest PC: `CODE_BASE <= entry < CODE_BASE + code_len`,
-on an instruction boundary, aligned to 4 bytes when bit 1 is clear and to
-2 bytes when RVC is set. It is **not** a code-relative offset. Pack tools,
-verifier, interpreter and AOT all use this convention.
+Each segment header (16 bytes, big-endian):
+
+| Offset | Size | Field |
+|--------|------|--------|
+| 0 | 4 | `vaddr` |
+| 4 | 4 | `filesz` |
+| 8 | 4 | `memsz` (`>= filesz`) |
+| 12 | 1 | `flags` (ELF `PF_*`: X=1, W=2, R=4) |
+| 13 | 3 | reserved, must be 0 |
+
+Then `nseg` payloads of `filesz` bytes each. `memsz - filesz` is zero-filled
+at load. Executable segments require `filesz == memsz` (no executable BSS).
+W^X: a segment cannot be both W and X. Every segment is readable. Segments
+are sorted, non-overlapping, `vaddr >= CODE_BASE`, and end at or below the
+host window (`guest_end`). Holes between segments are **unmapped**,
+including instruction fetch: sequential execution follows `pc + inst_len`,
+not the concatenated RX stream.
+
+`entry` is an absolute guest PC inside some executable segment, on an
+instruction boundary (4-byte, or 2-byte on RVC profiles).
 
 Chain deploy admits the encoded container under `SpaceCap::calc_image_max`
-(default 16383, the same number as HVM `function_size`), and the contract
-code body keeps a `u16` length prefix, so the stored image cannot exceed
-65535 bytes. A sidechain may raise `calc_image_max` up to 65535. A larger
-program is split across sibling calc functions in the same contract; that
-call is not part of this wire format. `code_len`, `rodata_len` and
-`init_len` inside the container are already `u32`. Because `.bss` is folded
-into `init`, zero-initialized static data counts against `calc_image_max`;
-a kernel with a very large static buffer must use explicit memory instead.
-
-The two reserved header bytes are the only future wire extension point and
-must be zero for v1; a new field needs a new `version`.
+(default 16383) with a `u16` body prefix, so the stored image cannot exceed
+65535 bytes. A sidechain may raise `calc_image_max` up to 65535.
 
 ## 2. ISA profiles
 
-Header byte 5 is an orthogonal matrix. Bit 0 and bit 1 are chosen by the
-deployer; bit 2 is the deployer's zk declaration. zk proofs use a container
-with bit 1 clear (profiles 0/1 and 4/5); profiles 2/3 (RVC) are a
-toolchain-density convenience, not the industry RISC-V zkVM baseline.
+Header byte 5 is the profile id — three additive bits:
 
-| Value | Constant | ISA |
-|-------|----------|-----|
-| 0 | `CALC_PROFILE_RV64IM` | RV64I + M + Zicclsm. No C. No bitmanip. zkVM baseline |
-| 1 | `CALC_PROFILE_RV64IM_B` | profile 0 plus Zba/Zbb/Zbs/Zbc. No C |
-| 2 | `CALC_PROFILE_RV64IMC` | profile 0 plus RVC |
-| 3 | `CALC_PROFILE_RV64IMC_B` | profile 2 plus Zba/Zbb/Zbs/Zbc |
-| +4 | `CALC_PROFILE_NO_HOST_ECALL` | orthogonal bit 2: no host ecalls, only HALT |
+| Bit | Constant | Meaning |
+|-----|----------|---------|
+| 0 | `CALC_PROFILE_BITMANIP` | Zba/Zbb/Zbs/Zbc encodings are part of the image |
+| 1 | `CALC_PROFILE_COMPRESSED` | RVC (16-bit) encodings are part of the image |
+| 2 | `CALC_PROFILE_HASH` | hash ecalls (`a7` = 1..=6) are part of the image |
 
-Profiles 0 and 1: `code_len % 4 == 0`; every instruction is 4 bytes.
-Compressed encodings (`inst[1:0] != 0b11`) are rejected. Profiles 2 and 3:
-`code_len % 2 == 0`; instructions are 2 or 4 bytes; jump targets must be
-instruction boundaries (2-byte aligned is not enough). `ebreak`
-(`0x00100073`), canonical `unimp`
-(`0xC0001073`, `csrrw x0, cycle, x0`), and C.EBREAK (`0x9002`, RVC
-profiles only) decode to `Inst::Trap`: static cost 1 ALU cycle, then the
-interpreter traps and AOT jumps to the trap stub. The all-zero 16-bit
-encoding (C.UNIMP / reserved `C.ADDI4SPN` imm=0) stays a decode reject.
-Other CSR, A, F/D, and unknown opcodes trap-reject at verify.
+| Value | Constant | ISA | v2 admission |
+|-------|----------|-----|--------------|
+| 0 | `CALC_PROFILE_RV64IM` | RV64I + M + Zicclsm | **admitted** — the zk-standard subset (eth-act baseline) |
+| 1 | `CALC_PROFILE_RV64IM_B` | + Zba/Zbb/Zbs/Zbc | **admitted** — outside the zk-standard subset |
+| 2 | `CALC_PROFILE_RV64IMC` | + RVC | **admitted** — outside the zk-standard subset |
+| 3 | `CALC_PROFILE_RV64IMC_B` | + RVC + bitmanip | **admitted** — outside the zk-standard subset |
+| 4..=7 | — | any + HASH | **rejected** — hash activation is its own hard fork with its own pricing table |
 
-Bit 2 (`CALC_PROFILE_NO_HOST_ECALL`) is a promise that the container only
-uses HALT (`a7 = 0`); the engine traps every other ecall number. It is the
-zk-ready declaration and is enforced at run time (the ecall number is
-computed). It is currently redundant with the v1 host-ecall disable (§6);
-it exists so a proven subset stays HALT-only if the table is enabled later.
+zk portability is declared by the profile byte itself, not by a separate
+switch: profile 0 is the only profile whose ISA subset is zk-standardized,
+and the system never requires every admitted profile to be zk-provable.
+Every profile shares one gas weight table; a future repricing may only
+attach a new table to a NEW profile value (§8).
 
-### Profile 0 whitelist
+The HALT trampoline is always plain RV64I (profile 0 stream), regardless of
+the guest profile.
+
+### Base whitelist (every profile)
 
 RV64I: LUI, AUIPC, JAL, JALR, BEQ/BNE/BLT/BGE/BLTU/BGEU, LB/LH/LW/LD/LBU/LHU/LWU,
 SB/SH/SW/SD, ADDI/SLTI/SLTIU/XORI/ORI/ANDI, SLLI/SRLI/SRAI, ADD/SUB/SLL/SLT/SLTU/XOR/SRL/SRA/OR/AND,
@@ -89,30 +104,52 @@ EBREAK and canonical UNIMP (both `Inst::Trap`, 1 cycle, then trap).
 
 RV64M: MUL/MULH/MULHSU/MULHU/DIV/DIVU/REM/REMU and W-forms.
 
-### Bit 0 additions (profiles 1 and 3: Zba/Zbb/Zbs/Zbc)
+### Bit 0 (B): Zba/Zbb/Zbs/Zbc
 
-`add.uw`, `sh1add`/`sh2add`/`sh3add` and `.uw` forms, `andn`/`orn`/`xnor`,
-`rol`/`ror`/`rolw`/`rorw`/`rori`/`roriw`, `min`/`minu`/`max`/`maxu`,
-`clz`/`ctz`/`cpop`/`clzw`/`ctzw`/`cpopw`, `sext.b`/`sext.h`/`zext.h`,
-`orc.b`/`rev8`, `bset`/`bclr`/`binv`/`bext` and immediate forms,
-`slli.uw`, `clmul`/`clmulh`/`clmulr`.
+Admitted when bit 0 is set; a profile-0 image containing these encodings
+fails verify. `add.uw`, `sh1add`/`sh2add`/`sh3add` and `.uw` forms,
+`andn`/`orn`/`xnor`, `rol`/`ror`/`rolw`/`rorw`/`rori`/`roriw`,
+`min`/`minu`/`max`/`maxu`, `clz`/`ctz`/`cpop`/`clzw`/`ctzw`/`cpopw`,
+`sext.b`/`sext.h`/`zext.h`, `orc.b`/`rev8`, `bset`/`bclr`/`binv`/`bext`
+and immediate forms, `slli.uw`, `clmul`/`clmulh`/`clmulr`.
 
-### Bit 1 additions (profiles 2 and 3: RVC)
+### Bit 1 (C): RVC
 
-The RV64 C whitelist from the pre-activation decoder: `c.addi4spn`,
-`c.lw`/`c.ld`/`c.sw`/`c.sd`, `c.addi`/`c.nop`/`c.addiw`/`c.li`,
-`c.addi16sp`/`c.lui`, `c.srli`/`c.srai`/`c.andi`, the `c.sub`/`c.xor`/
-`c.or`/`c.and`/`c.subw`/`c.addw` group, `c.j`, `c.beqz`/`c.bnez`,
-`c.slli`, `c.lwsp`/`c.ldsp`/`c.jr`/`c.mv`/`c.jalr`/`c.add`, `c.swsp`/
-`c.sdsp`. `c.ebreak` decodes to `Inst::Trap`; the all-zero `c.unimp`
-encoding (reserved `C.ADDI4SPN` imm=0) is rejected at decode. Quadrant 0
-funct3 values outside that list are rejected. Jump and link addresses use
-the encoded length (2 or 4), not a fixed 4.
+Admitted when bit 1 is set; executable segments then align to 2 bytes and
+entries may be 2-byte aligned. `c.addi4spn`, `c.lw`/`c.ld`/`c.sw`/`c.sd`,
+`c.addi`/`c.nop`/`c.addiw`/`c.li`, `c.addi16sp`/`c.lui`, `c.srli`/`c.srai`/
+`c.andi`, the `c.sub`/`c.xor`/`c.or`/`c.and`/`c.subw`/`c.addw` group,
+`c.j`, `c.beqz`/`c.bnez`, `c.slli`, `c.lwsp`/`c.ldsp`/`c.jr`/`c.mv`/
+`c.jalr`/`c.add`, `c.swsp`/`c.sdsp`. `c.ebreak` (`0x9002`) and `c.unimp`
+(the all-zero halfword) decode to `Inst::Trap`: 1 cycle, then trap. Jump
+and link addresses use the encoded length (2 or 4). Without bit 1, every
+compressed encoding (including the all-zero halfword) is rejected.
+
+### Bit 2 (HASH): not admitted
+
+`profile & 0b100 != 0` is rejected at container admission, alone or
+combined. Hash ecalls (`a7` = 1..=6) therefore always trap on v2 images,
+charging the static ecall cost only; the implementations and price table
+stay in the tree for a future profile value.
+
+### Bits 3..=7: reserved and disabled
+
+Profile values 8..=255 decode to nothing: `profile_known` requires the
+byte to be a subset of bits 0..=2, so `decode` rejects every value with
+any of bits 3..=7 set ("unknown isa profile"). They are **disabled, not
+planned**: no behavior is assigned to them in v2. A future hard fork may
+first **define** one of these values — a definition names the value's ISA
+membership and, per §8, attaches that value's own pricing table — and
+only then does admission grow to accept containers carrying it. Until
+such a definition exists, every value with bits 3..=7 set is rejected,
+and no already-admitted value (0..=3) can ever be redefined.
 
 ## 3. Memory map
 
-`CODE_BASE = 0x1000`. Addresses `[0, CODE_BASE)` are **unmapped**: any
-load, store, jump or ecall buffer that touches them traps.
+`CODE_BASE = 0x1000`. `HALT_STUB = 0x0FF0` (16 bytes of real RV64I, always
+decoded as profile 0): `mv a1,a0; li a0,0; li a7,0; ecall`.
+`HALT_STUB + 16 == CODE_BASE`; there is no gap between the stub and
+guest IMAGE. Addresses `[0, HALT_STUB)` are **unmapped**.
 
 `mem_kib` sizes the usable region **above** `CODE_BASE`:
 
@@ -121,73 +158,59 @@ usable_len = mem_kib * 1024
 mem_len    = CODE_BASE + usable_len     // exclusive end of guest space
 ```
 
-Resource and setup charges use `mem_kib` / `usable_len`, not the unmapped
-low page. The interpreter allocates exactly `mem_len` bytes.
+Resource and setup charges use `mem_kib` / `usable_len`. The interpreter
+allocates exactly `mem_len` bytes.
 
 `decode` accepts any `mem_kib` from 4 through `CALC_MEM_KIB_ENGINE_MAX`
-(2_097_147 KiB, about 2 GiB) whose regions do not overlap. The engine
-ceiling is the AOT `i32` address compare: `CODE_BASE + mem_kib * 1024`
-must be `<= i32::MAX`. The admission cap is not a wire constant.
+(2_097_147 KiB) whose regions do not overlap. The ceiling is a frozen
+consensus constant of the **loaded machine**, not an engine implementation
+detail: the whole guest memory must satisfy
+`CODE_BASE + mem_kib * 1024 <= 0x7FFF_FFFF`, so every address the machine
+can form fits a signed 32-bit integer. That address width is part of the
+architecture — a zk circuit, an independent re-implementation and the AOT
+alike standardize on it — and no engine may widen or narrow it on its own.
 `verify_container_with_cap` rejects `mem_kib > cap.calc_mem_kib_max`.
-`SpaceCap::calc_mem_kib_max` defaults to 64 (`CALC_MEM_KIB_MAX`).
-A sidechain raises `SpaceCap::calc_mem_kib_max` and passes the same
-`SpaceCap` to the packer. That does not change the header. Raising the L1
-default is a consensus upgrade. Layout always follows the container's own
-`mem_kib`.
+`SpaceCap::calc_mem_kib_max` defaults to 64. Layout always follows the
+container's own `mem_kib`.
 
-Layout (absolute addresses, 16-byte aligned where noted):
+Layout (absolute addresses):
 
 ```
-[0, CODE_BASE)                              unmapped
-[CODE_BASE, CODE_BASE+code_len)             code   RX
-[rodata_base, rodata_base+rodata_len)       rodata R  (rodata_base = align16(CODE_BASE+code_len))
-[rodata_end, data_base)                     hole   R  (empty; nothing is linked here)
-[data_base, data_base+init_len)             init   RW (data_base = align16(rodata_end))
-[data_end, data_end+CALC_STACK_GUARD)       guard  store-trap (256 bytes, guard_base = data_end)
+[0, HALT_STUB)                              unmapped
+[HALT_STUB, HALT_STUB+16)                   HALT trampoline  RX (injected, not in the wire)
+each PT_LOAD [vaddr, vaddr+memsz)           guest segment, flags as declared
+holes between segments                      unmapped (load, store, **and fetch**)
 [stack_bottom, stack_top)                   stack  RW, grows down; sp = stack_top
 [output_base, output_base+output_max)       output RW
-[input_base, input_base+input_max)          input  RW (input_base = align16_down(mem_len-input_max))
-[input_base+input_max, mem_len)             tail   RW (alignment padding, unused)
-stack_top = output_base
+[input_base, input_base+input_max)          input  RW
+[input_base+input_max, mem_len)             tail   RW
+stack_top    = output_base
+stack_bottom = guest_end = max(segment ends), or CODE_BASE if empty
 ```
 
-`output_base = align16_down(input_base - output_max)`. The stack is every
-byte between the guard and the output region. `CALC_STACK_SIZE` (2 KiB) is
-the minimum that must remain after the guard; it is not a fixed stack
-window. Both `CALC_STACK_SIZE` and `CALC_STACK_GUARD` are consensus
-constants that may only be **lowered** after activation: raising them
-would reject previously legal containers and turn previously legal stores
-into traps. The fit rule is single: `data_end + CALC_MIN_FREE_RW_GAP <=
-stack_top`, where `CALC_MIN_FREE_RW_GAP = CALC_STACK_GUARD +
-CALC_STACK_SIZE`.
+There is **no stack-overflow guard band**: the stack region starts exactly
+at the end of the guest image. A call frame deeper than the free span
+overwrites guest data — deterministic guest behavior, not a trap — which
+keeps the permission map pure PT_LOAD semantics and the zk circuit minimal.
 
-`init` carries both `.data` and the explicit zero span of `.bss` (the
-packer folds the ELF `.bss`/`.sbss` VMA into `init`). There is no separate
-bss field, and the guard therefore always starts at the end of the
-container's zero-initialized image. `pack_elf` rejects a `.bss` that does
-not fit the layout; `min_mem_kib_for` returns the smallest `mem_kib` that
-does.
+Host IO/stack sit at the **top** of `mem_kib`. `output_base =
+align16_down(input_base - output_max)`. `input_base =
+align16_down(mem_len - input_max)`. The stack is every byte between
+`guest_end` and the output region. `CALC_STACK_SIZE` (2 KiB) is the minimum
+that must remain. The fit rule is `guest_end + CALC_MIN_FREE_RW_GAP <=
+stack_top`, where `CALC_MIN_FREE_RW_GAP = CALC_STACK_SIZE`.
 
-Stores with `addr < data_base` trap (code, the optional alignment pad
-before rodata, rodata, and the `[rodata_end, data_base)` hole). The hole
-exists so `.data`/`.bss` VMAs match the 16-byte `data_base`; linker
-scripts `ALIGN(16)` before `.data` and link nothing into the hole.
-Stores intersecting the 256-byte stack guard trap. Loads may read the
-guard. Linker script `.text` stays at `0x1000`.
+Stores into unmapped holes or RX/RO segments trap. Loads/stores/fetches of
+unmapped holes trap. Fall-through from an RX segment into a hole is a fetch
+trap, not execution of the next concatenated instruction.
 
 ## 4. Misaligned access (Zicclsm)
 
 Loads and stores at **any alignment** execute correctly: little-endian,
 byte-wise copy of the accessed width. Bounds and permission checks apply
 to the **full** `[addr, addr+size)` range. There is **no extra cycle
-charge** for misalignment: a per-access surcharge cannot be prepaid in the
-basic-block model without peeking at the address. Cost equals the aligned
-weight. AOT matches (x86-64 unaligned loads/stores).
-
-Instruction fetch and jump targets must be instruction boundaries: 4-byte
-aligned on profiles 0/1 and 2-byte aligned on profiles 2/3. `jalr` still
-clears bit 0 of the target, and a target that is not an exact instruction
-start traps.
+charge** for misalignment. Instruction fetch and jump targets must be
+instruction boundaries. `jalr` still clears bit 0 of the target.
 
 ## 5. Register state at entry
 
@@ -195,14 +218,18 @@ All 32 registers are 0 except:
 
 | Reg | Value |
 |-----|--------|
+| `ra` (x1) | `HALT_STUB` |
 | `sp` (x2) | `stack_top` |
 | `a0` (x10) | `input_base` |
 | `a1` (x11) | input length in bytes |
 | `a2` (x12) | `output_base` |
 | `a3` (x13) | `output_max` |
 
-`ra` is 0. `jalr` to `ra` (or any non-code address) is an invalid target
-and traps. There is no return sentinel.
+This is the LP64 `extern "C"` four-argument ABI. Returning from
+`calc_entry` (`ret` / `jalr x0, ra, 0`) lands on the trampoline: `a0`
+(returned length) is moved to `a1`, exit code is 0, then HALT. The stub
+bytes are part of the RISC-V trace, so a zk proof of `return n` is a
+proof of those four instructions plus HALT.
 
 ## 6. ecall ABI
 
@@ -218,101 +245,79 @@ Syscall number in `a7`.
 | 5 | BLAKE2s-256 | same | 32 bytes |
 | 6 | BLAKE2b-256 | same | 32 bytes |
 | 7..=15 | reserved | | trap |
-| 16..=31 | HINT / private input | | **trap** (L1 nodes cannot agree on hint content) |
+| 16..=31 | HINT / private input | | **trap** |
 | ≥ 32 | unknown | | trap |
 
-**v1 executes HALT only.** Host ecalls (`a7` = 1..=6) are compiled but
-disabled by `CALC_HASH_ECALLS_ENABLED = false`: every non-HALT ecall traps.
-The digest implementations (`run_hash`), the pricing (`HashKind::cycles`)
-and both engine paths stay in the tree behind that constant, so a later
-coordinated consensus upgrade can enable the table without re-deriving it.
-A container that sets the `CALC_PROFILE_NO_HOST_ECALL` bit keeps trapping
-non-HALT ecalls even after that flip.
-
-The table above is the contract for the enabled state. Hash ecalls charge
-`64 + ceil(len/64) * per_block` **before** bounds checks (so a too-small
-budget yields OutOfGas rather than Trap). Per-block: SHA-256=96,
-SHA3/RIPEMD/Keccak=128, BLAKE2=64.
+HALT always works. Hash ecalls (`a7` = 1..=6) **trap** (static ecall cost
+only). The implementations stay in the tree for a later profile id; v2
+does not admit HASH. Bounds checks use the same permission map as loads
+(the HALT stub is readable).
 
 HALT with `a0 == 0` is success: the host copies `a1` bytes from the output
-region (must be `<= output_max`). HALT with `a0 != 0` is a guest-reported
-failure: classified as **Trap** (`CalcAbort2::Trap`), receipt
-`exit_code = a0`, empty output / empty output hash. Cycles consumed so far
-are still charged.
-
-Write the output **before** HALT. The hash builtins execute host-native
-code outside the RISC-V instruction trace. They are deterministic on L1,
-but a zk proof of a kernel that calls one requires a matching
-precompile/circuit; that is why v1 keeps them off and why the profile byte
-carries the HALT-only bit.
+region (`<= output_max`). HALT with `a0 != 0` is **Trap**
+(`CalcAbort2::Trap`), receipt `exit_code = a0`, empty output. Cycles
+consumed so far are still charged. Write the output **before** HALT (or
+before `return`).
 
 ## 7. Traps
 
 Deterministic Trap-class aborts (cycles consumed up to the failing
 instruction's block charge, excluding a charge that does not fit):
 
-- unmapped address (`< CODE_BASE`)
-- load/store/ecall out of `mem_len` or address overflow
-- store / digest into code or rodata
-- store / digest into the stack guard
-- `jal`/`jalr`/`branch` target not an instruction boundary inside code
-- `ebreak` / canonical `unimp` (`Inst::Trap`)
-- unknown / disabled host ecall / HINT ecall
+- unmapped address (below `HALT_STUB`, the gap below `CODE_BASE`, holes
+  between segments, or `>= mem_len`)
+- load/store/ecall address overflow
+- store / digest into a non-writable region (RX/RO, HALT stub)
+- `jal`/`jalr`/`branch` target not an instruction boundary in an RX
+  segment or the HALT stub
+- `ebreak` / canonical `unimp` / `c.ebreak` / `c.unimp` (`Inst::Trap`)
+- hash ecall (`a7 = 1..=6`)
+- HINT ecall / unknown ecall
 - output length > `output_max` on HALT
 - guest HALT with nonzero exit code
 - input longer than `input_max` (pre-flight, 0 cycles)
 
 OutOfGas: remaining budget cannot cover the next prepaid block, the hash
 ecall cost, or the setup charge. The setup shortfall reports
-`cycles_used = setup` (only the attempted charge; the rest of the budget is
-not burned) and is a terminal failure — the abort class and the tx outcome
-are identical either way because a transaction that reaches it cannot be
-included. Deadline is host-only (non-consensus).
+`cycles_used = setup` and is a terminal failure.
 
 **OutOfResource is pre-flight only (0 cycles).** The resource charge of a
 call is fully determined before it runs: `ceil(input_len/16)` +
-`ceil(output_max/16)` + `8 per declared KiB`. `output_max` — the
-container's declared maximum, not the bytes the kernel happens to return —
-is reserved by the pre-flight, so a successful call can never exceed the
-resource budget after the run. There is no post-run resource check. The
-returned `resource` field still charges the *actual* output length.
-
-`output_max` needs no run-time check: deploy and load admit it against
-`SpaceCap::value_size`, the caps only rise, and the caller validates the
-returned value against the same cap.
+`ceil(output_max/16)` + `2 per declared KiB`. There is no post-run
+resource check. The returned `resource` field still charges the *actual*
+output length.
 
 ## 8. Gas
 
-`CYCLES_PER_COMPUTE = 56` (policy composition `32 + 16 + 8`: old base
-rate + per-KiB setup cycles + per-KiB resource gas; these are different
-dimensions, so the sum is a chosen policy value, not a unit derivation).
+`CYCLES_PER_COMPUTE = 48` (a chosen policy value, not a unit derivation).
 On the 2026-11-04 warm same-machine calibration (HVM ~33 ns/compute, AOT
-~0.38 ns/cycle) AOT parity is N ≈ 87, so N=56 is roughly +55% over AOT
-hardware cost; the older cold-state calibration (50.7/6.0/0.62) gives
-~+46%, i.e. "about +50%". Against the interpreter/lockstep it remains a
-large discount. The 200,863-cycle HIP5 kernel costs 3,587 compute at
-N=56 (6,277 at N=32); with resource 413 the total is 4,000. N is
-consensus-frozen: any later change is a hard fork. Setup (always kept,
-even on trap):
+~0.38 ns/cycle) AOT parity is N ≈ 87, so N=48 is roughly +81% over AOT
+hardware cost. Against the interpreter/lockstep it remains a large
+discount (roughly 6x). The 200,863-cycle HIP5 kernel costs 4,185 compute
+at N=48. N is consensus-frozen: any later change is a hard fork. Setup
+(always kept, even on trap):
 
 ```
 setup = CALC_SETUP_BASE_CYCLES + mem_kib * CALC_SETUP_PER_KIB_CYCLES
       = 64 + mem_kib * 16
 ```
 
-Resource: `ceil(input_len/16) + ceil(output_len/16) + mem_kib * 8`.
+Resource: `ceil(input_len/16) + ceil(output_len/16) + mem_kib * 2`.
 Aborted runs charge 0 for output length.
 
 The resource pre-flight reserves the declared `output_max` on the same
 formula (see §7); this is what makes the charge known before execution.
+
+HVM compute gas and zk cycle counts are different meters. Consensus
+charges the table in this section. A zk proof of the same image uses the
+prover's own cycle accounting.
 
 ### Static weights
 
 One table (`decode::WEIGHTS`) serves every profile: repricing a profile
 after activation would change the gas of already-deployed containers, so a
 future price change may only attach a new table to a NEW profile value,
-never reprice 0..=7. (The mechanism is not built yet; adding it is a
-widening.)
+never reprice 0..=7.
 
 | Class | Cycles |
 |-------|--------|
@@ -321,15 +326,17 @@ widening.)
 | MUL family | 3 |
 | DIV/REM family | 12 |
 | CLMUL family | 24 |
-| ECALL static (`ecall_base`) | 1 (hash cost added at runtime when enabled) |
+| ECALL static (`ecall_base`) | 1 (hash cost added at runtime when HASH is set) |
 
 ### Basic-block prepaid charging
 
 The verifier splits code at every JAL/JALR/branch/ECALL/Trap (terminator)
-and at the instruction after a terminator. Entering a block charges
-`suffix_cycles[idx]`: the sum of static weights from the **entry
-instruction** to the block end. A `jalr` into the middle of a block
-therefore does **not** pay for skipped prefix instructions.
+and at the instruction after a terminator. Index 0 of the instruction
+stream is the injected HALT stub (always uncompressed). Guest RX segments
+follow. Entering a block charges `suffix_cycles[idx]`: the sum of static
+weights from the **entry instruction** to the block end. A `jalr` into the
+middle of a block therefore does **not** pay for skipped prefix
+instructions.
 
 On trap or OOG: if the remaining budget cannot cover the next suffix
 charge, abort OutOfGas **without** taking that charge. A trap after a
@@ -339,7 +346,7 @@ inside the ecall, after the static suffix has already been paid.
 ## 9. Image ID and receipt
 
 ```
-image_id = SHA-256( b"hacash-calc-image-v1" || encode(container) )
+image_id = SHA-256( b"hacash-calc-image-v2" || encode(container) )
 ```
 
 `CalcContainer::image_id()` and `CalcFnObj::image_id()` return this. The
@@ -347,10 +354,8 @@ object hashes it on first use (`OnceLock`), never per call.
 
 The call receipt is a **derived artifact**, not part of consensus
 execution. `CalcFnObj::run` returns `CalcExec { result, cycles_used,
-resource, exit_code }` only — it does **not** SHA-256 the input or
-output (that would be uncharged host work on the hot path). Callers
-that need a proof statement invoke `CalcFnObj::receipt(&self, input,
-exec)`:
+resource, exit_code }` only. Callers that need a proof statement invoke
+`CalcFnObj::receipt(&self, input, exec)`:
 
 ```
 image_id, input_hash = SHA-256(input),
@@ -360,96 +365,102 @@ exit_code, abort (None on success), cycles_used
 
 Identical between interpreter and AOT when derived from equal `CalcExec`.
 
-## v1 semantics (unconditional)
+## v2 semantics (unconditional)
 
-Official x86-64 nodes build with `calc-aot` (the vm crate default). Each
-call runs the interpreter and then AOT in order on the calling thread. The
-call is kept only when `cycles_used`, the output bytes, the abort class and
-the halt code match. A mismatch is `CalcEngineMismatch` (fault 156): the
-transaction is rejected and does not enter a block, and no agreed gas is
-settled for that call; a panic inside either engine is caught and reported
-the same way. Builds without the feature, or with the image unmounted, run
-the interpreter only. This lockstep pair is the early launch check. After
-it has stayed quiet, the interpreter is retired and AOT is the only engine.
+**Normative engine.** The x86-64 AOT (`calc-aot`) is the canonical
+consensus engine, permanently. The interpreter is **temporary launch-time
+bug insurance only**: it exists to catch AOT defects during the initial
+period after activation, and once production has run quiet it is removed
+and the AOT becomes the sole normative engine. That removal is not a
+semantics change — the two engines are held bit-identical on the entire
+observable surface (below), so consensus outputs are the same with and
+without the interpreter.
+
+Today, official x86-64 nodes build with `calc-aot` (the vm crate default).
+Each call runs the interpreter and then AOT in order on the calling thread.
+The call is kept only when `cycles_used`, the output bytes, the abort class
+and the halt code match. A mismatch is `CalcEngineMismatch` (fault 156):
+the transaction is rejected and does not enter a block. Builds without the
+feature, or with the image unmounted, run the interpreter only.
 
 The lockstep compares the **consensus-observable** surface (output bytes,
-abort class, exit code, cycles). Registers and memory are compared by the
-differential test suites, not on the hot path.
+abort class, exit code, cycles) AND the full stop state — all 32 registers
+and the whole memory image — so an engine bug that happens to agree on the
+consensus surface alone is still surfaced while both engines run (this
+caught a backend that skewed every load/store address by its own width).
+
+A panic inside either engine is reported as `EngineMismatch` under unwind
+builds (the test profiles). The workspace release profile sets
+`panic = "abort"`, where a panic terminates the process before any handler
+runs; the supervisor restarts from durable state.
 
 A host wall-clock deadline is observed by the interpreter only. The AOT
-image **still runs** (a deadline never skips the lockstep, so preflight and
-consensus exercise the same engines); a deadline stop is host policy, not
-guest semantics, so the AOT verdict is not compared and the call reports
-`Deadline`.
+image **still runs**; a deadline stop is host policy, so the AOT verdict is
+not compared and the call reports `Deadline`.
 
 Every execution capability is unconditional — the only chain parameter is
 `SpaceCap::calc_mem_kib_max`, and no legal future value can turn a
 capability off, because that would reject or reinterpret a previously legal
 container:
 
-- All eight profile cells of header byte 5 are admitted; the deployer picks
-  the cell. zk images leave bit 1 clear and set bit 2; the chain does not
-  forbid either choice.
-- HALT (`a7` = 0) always works. Host hash ecalls are disabled in v1 (§6).
-- Code, the pad below `rodata_base`, rodata and the `[rodata_end,
-  data_base)` hole are read-only; stores and digest writes there trap.
-- Stores and digest writes that intersect the 256-byte stack guard band
-  trap.
-- Any instruction-boundary entry inside the code region is accepted.
+- Header byte 5: every B / RVC combination (0..=3) is admitted; the HASH
+  bit is rejected.
+- HALT (`a7` = 0) always works. Hash ecalls trap.
+- Guest segments have the permissions they declare. Holes are unmapped
+  for load, store, and fetch. The HALT stub is RX. The stack region is
+  `[guest_end, stack_top)` and is RW.
+- Any instruction-boundary entry inside an RX segment is accepted
+  (4-byte boundaries, or 2-byte on RVC profiles).
 
 There is no consensus config struct and no height-dependent execution
-config. Admission grows by raising the current `SpaceCap`; a deployed
-kernel loads under every later cap because caps only rise. The layout
-constants (`CODE_BASE`, the 16-byte alignment, `CALC_STACK_GUARD`,
-`CALC_STACK_SIZE`, `CALC_MEM_KIB_MIN`) are frozen: after activation they may
-only be relaxed (guard/stack/min-memory lowered), never tightened. `abi` and
-`bss` are not wire fields in v1; `.bss` is part of `init`.
+config. Admission grows by raising the current `SpaceCap` (or, for ISA
+surface, by admitting a new profile value — never by reinterpreting an
+existing one). The layout constants (`CODE_BASE`, `HALT_STUB`,
+`CALC_STACK_SIZE`, `CALC_MEM_KIB_MIN`) are frozen: after activation they
+may only be relaxed.
 
 ## 10. Building a kernel
 
-There is no tier-2 `riscv64im` rustc target. `riscv64imac-unknown-none-elf`
-plus `-C target-feature=-c` still links **prebuilt** `compiler_builtins`
-that contain C, so the image is not 4-byte-only. Fixtures therefore use a
-custom target JSON (`riscv64im_zicclsm.json`: arch `riscv64`, features
-`+m,-a,-c,-d,-f`, `llvm-abiname: lp64`, `os: none`, `panic-strategy:
-abort`) and rebuild libcore:
+One recipe: static ELF that `pack_elf` projects as profile 0.
 
 ```
 RUSTC_BOOTSTRAP=1 cargo build -Zbuild-std=core,compiler_builtins -Zbuild-std-features=compiler-builtins-mem --release \
   --target riscv64im_zicclsm.json
-RUSTFLAGS="-C relocation-model=static -C link-arg=-Tcontainer.ld"
+RUSTFLAGS="-C relocation-model=static -C link-arg=-Tcontainer.ld -C link-arg=-n"
 ```
 
 (`zicclsm` is a memory-model convention — misaligned loads/stores — not an
-LLVM feature flag.) Linker script starts at `CODE_BASE` (`. = 0x1000`).
-Entry is `calc_entry`; `llvm-nm` of that symbol is the absolute `entry`
-written into the header. The kernel **must HALT via ecall** (`a7=0`); a
-compiled `ret` jumps to `ra=0` and traps.
+LLVM feature flag.) Linker script `MEMORY { IMAGE }` starts at `CODE_BASE`
+(`0x1000`) and ends before the L1 host reserve (12 KiB under a 64 KiB
+`mem_kib` cap). It emits `PT_LOAD` via `PHDRS`, linked with `-n`
+(`--nmagic`) so segments are not page-aligned. Do not `ALIGN` inside
+`.text` with zero fill: profiles without RVC reject compressed encodings,
+including 4-byte zeros. Entry is `calc_entry`; that symbol (else
+`e_entry`) is the absolute `entry` written into the header. Section headers
+are optional; a stripped PT_LOAD-only `ET_EXEC` packs via `e_entry`.
+`ET_DYN` is rejected.
 
-Pack tools use `pack_elf_min_mem`: the smallest `mem_kib` that fits
-`code + rodata + init (.data + .bss) + guard + CALC_STACK_SIZE + the
-declared IO regions`. Declaring `CALC_MEM_KIB_MAX` instead would charge
-every call for memory the kernel never touches.
+The generated wrapper is `extern "C" fn calc_entry(a0, a1, a2, a3) -> u64`.
+It returns the output length. `ra` is the HALT trampoline, so a compiled
+`ret` is a successful HALT. Overflow of `out.len()` is a 32-bit `ebreak`.
 
-Profile 1: set JSON `features` to `+m,+zba,+zbb,+zbs,+zbc,-a,-c,-d,-f`.
-
-Stable Rust path (profiles 2/3): the tier-2
-`riscv64imac-unknown-none-elf` target with
-`RUSTFLAGS="-C relocation-model=static -C link-arg=-Tcontainer.ld -C target-feature=-a"`
-builds RV64IMC code without `-Zbuild-std` or `RUSTC_BOOTSTRAP`; the
-`calckernel` fixture builds and contains no A-extension instructions. This
-path is only usable when the container selects profile 2/3 (C is part of
-the image). Two caveats: prebuilt `core`/`compiler_builtins` are compiled
-for a +A target, so a kernel that pulls in an atomic helper can still fail
-verification (keep atomics out; LTO/`--gc-sections` drops unused helpers),
-and profiles 2/3 accept `c.ebreak` but still reject `c.unimp` (§2). A kernel
-path that LLVM lowers to the all-zero `c.unimp` therefore needs the profile
-0/1 custom-target build or a workaround (a 32-bit trap encoding; LTO/
-`--gc-sections` for dead paths). Profiles 0/1 (the zkVM-compatible,
-4-byte-only subset) still require the custom target JSON and the nightly
-`-Zbuild-std` recipe above.
+`pack_elf` rejects `PT_DYNAMIC` / `PT_INTERP` / `PT_TLS`, `SHT_REL` /
+`SHT_RELA` when present, `EF_RISCV_RVC` on a no-C profile, W^X, and
+executable BSS. Pack tools use `pack_elf_min_mem`: the smallest `mem_kib`
+that fits `guest_end + CALC_STACK_SIZE + the declared IO regions`.
 
 ## 11. RISC-V architecture tests
 
-See `vm/tests/archtest/README.md`. The harness is `vm/tests/calc_archtest.rs`
-(`#[ignore]` until `CALC_ARCHTEST_DIR` is set). Do not vendor the suite.
+Two external conformance layers back the engine:
+
+- `vm/tests/archtest/README.md` — the riscv-arch-test harness
+  (`vm/tests/calc_archtest.rs`, `#[ignore]` until `CALC_ARCHTEST_DIR` is
+  set; every image maps as a profile-0 container). Do not vendor the suite.
+- `vm/tests/calc_riscvtests.rs` — the committed riscv-tests corpus
+  (`rv64ui` + `rv64um`, 65 ELF images under
+  `vm/tests/fixtures/riscvtests/elf/`, sources not vendored), each run
+  through the production pack path and the engine lockstep.
+
+The ISA generator suites (`calc_isa_suite.rs` + `calc_isa_gen.rs`) pin
+host-reference semantics for the base, bitmanip (profile B) and
+compressed (profile C / C+B) surfaces on top of these.
