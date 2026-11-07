@@ -82,7 +82,7 @@ fn run_interp(case: &Case, container: &CalcContainer, budget: u64) {
     }
 }
 
-#[cfg(feature = "calc-aot")]
+#[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
 fn run_aot_parity(case: &Case, container: &CalcContainer, budget: u64) {
     use vm::calc::aot;
     let module = verify_container(container).unwrap();
@@ -159,7 +159,7 @@ fn isa_interpreter_matches_host_reference() {
     for case in all_cases() {
         let container = case.container();
         run_interp(&case, &container, case_budget(&case));
-        #[cfg(feature = "calc-aot")]
+        #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
         run_aot_parity(&case, &container, case_budget(&case));
     }
 }
@@ -189,7 +189,7 @@ fn store_into_rodata_traps() {
     );
     let case = Case::trap("trap/store-rodata", container.first_rx_data().to_vec());
     run_interp(&case, &container, BIG);
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     run_aot_parity(&case, &container, BIG);
 }
 
@@ -212,7 +212,7 @@ fn oog_boundary_cycles() {
     let (r3, _, _, _) = interp::run_with_state(&module, &container, &[], 0);
     assert!(matches!(r3, Err((CalcAbort::OutOfGas, _))));
     assert_eq!(r3.unwrap_err().1, 0);
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     {
         let f = vm::calc::aot::aot_compile(&module).unwrap();
         for (budget, ok) in [(4u64, true), (1, false), (0, false)] {
@@ -244,7 +244,7 @@ fn oog_boundary_cycles() {
     let (r, _, _, _) = interp::run_with_state(&m55, &c55, &[], total - 1);
     assert!(matches!(r, Err((CalcAbort::OutOfGas, _))));
     assert_eq!(r.unwrap_err().1, 0, "single-block program: charge excluded");
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     {
         let f = vm::calc::aot::aot_compile(&m55).unwrap();
         let (out, _, _) = f.run_with_state(&m55, &c55, &[], total);
@@ -266,7 +266,7 @@ fn oog_boundary_cycles() {
     let (r, _, _, _) = interp::run_with_state(&mbs, &cbs, &[], 3);
     assert!(matches!(r, Err((CalcAbort::OutOfGas, _))), "{r:?}");
     assert_eq!(r.unwrap_err().1, 2, "partial progress kept");
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     {
         let f = vm::calc::aot::aot_compile(&mbs).unwrap();
         let (out, _, _) = f.run_with_state(&mbs, &cbs, &[], 3);

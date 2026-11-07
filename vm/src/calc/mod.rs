@@ -16,7 +16,7 @@ pub use config::CalcHostConfig;
 pub use crate::rt::SpaceCap;
 // x86-64 AOT. Official builds turn `calc-aot` on and `CalcFnObj::run` executes
 // it in lockstep with the interpreter. See `aot.rs`.
-#[cfg(feature = "calc-aot")]
+#[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
 pub mod aot;
 
 #[cfg(test)]
@@ -243,7 +243,7 @@ pub struct CalcFnObj {
     /// Mounted x86-64 image. `None` means this object runs on the interpreter
     /// only (feature off, or the host turned AOT off). The consensus call
     /// path holds an `Arc`, so the image stays mounted there.
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     aot: Option<aot::AotFunc>,
 }
 
@@ -268,7 +268,7 @@ impl CalcFnObj {
         host: CalcHostConfig,
     ) -> VmrtRes<Self> {
         let module = verify::verify_container_with_cap(&c, cap)?;
-        #[cfg(feature = "calc-aot")]
+        #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
         let aot = if host.aot_mount {
             Some(aot::aot_compile(&module).ok_or_else(|| {
                 ItrErr::new(ItrErrCode::ContractError, "calc aot compile failed")
@@ -276,13 +276,13 @@ impl CalcFnObj {
         } else {
             None
         };
-        #[cfg(not(feature = "calc-aot"))]
+        #[cfg(not(all(feature = "calc-aot", target_arch = "x86_64")))]
         let _ = host;
         Ok(Self {
             container: c,
             module,
             image_id: std::sync::OnceLock::new(),
-            #[cfg(feature = "calc-aot")]
+            #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
             aot,
         })
     }
@@ -306,9 +306,23 @@ impl CalcFnObj {
     /// [`Self::build_v1`] with AOT mounting requested. A compile failure
     /// fails the build; the lockstep check must not silently disappear.
     /// Tests and the testkit only.
-    #[cfg(all(feature = "calc-aot", any(test, feature = "calc-testkit")))]
+    #[cfg(all(
+        feature = "calc-aot",
+        target_arch = "x86_64",
+        any(test, feature = "calc-testkit")
+    ))]
     pub fn build_with_aot(c: container::CalcContainer) -> VmrtRes<Self> {
         Self::build_with_host(c, CalcHostConfig::new().with_aot_mount(true))
+    }
+
+    /// Test/testkit compatibility shim for builds without an x86-64 AOT
+    /// engine: the object is built on the interpreter, and `aot_mounted()`
+    /// stays false. Production code must use [`Self::build`] plus an explicit
+    /// [`CalcHostConfig`].
+    #[cfg(any(test, feature = "calc-testkit"))]
+    #[cfg(not(all(feature = "calc-aot", target_arch = "x86_64")))]
+    pub fn build_with_aot(c: container::CalcContainer) -> VmrtRes<Self> {
+        Self::build(c, &SpaceCap::new(0), CalcHostConfig::new())
     }
 
     /// Declared usable memory in KiB (resource/setup charge input).
@@ -327,9 +341,16 @@ impl CalcFnObj {
     }
 
     /// Whether an AOT image is mounted on this object.
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     pub fn aot_mounted(&self) -> bool {
         self.aot.is_some()
+    }
+
+    /// Whether an AOT image is mounted on this object. Always false on
+    /// targets without the x86-64 backend.
+    #[cfg(not(all(feature = "calc-aot", target_arch = "x86_64")))]
+    pub fn aot_mounted(&self) -> bool {
+        false
     }
 
     /// Derived proof statement for a completed [`CalcExec`]. SHA-256 of
@@ -421,7 +442,7 @@ impl CalcFnObj {
         // compared and the call reports `Deadline`. Once production has
         // stayed quiet, the interpreter side of this pair is removed and AOT
         // is the only engine.
-        #[cfg(feature = "calc-aot")]
+        #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
         if let Some(aot) = self.aot.as_ref() {
             let budget = limits.cycles - setup;
             let (interp_out, interp_regs, interp_mem) = match std::panic::catch_unwind(
@@ -514,7 +535,7 @@ fn engine_from_interp(
     }
 }
 
-#[cfg(feature = "calc-aot")]
+#[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
 fn engine_from_aot(setup: u64, out: aot::AotOutcome) -> EngineOut {
     EngineOut {
         result: match out.abort {
@@ -949,7 +970,7 @@ fn parse_elf64_riscv(elf: &[u8], profile: u8) -> VmrtRes<ParsedElf> {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     #[test]
     fn dual_run_halt_agrees() {
         let c = pack_code(

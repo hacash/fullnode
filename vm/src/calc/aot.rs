@@ -37,11 +37,10 @@
 //! becomes the only execution engine. `cargo test -p vm --features calc-aot`
 //! runs the differential suite at the bottom of this file.
 
-// The generated code is x86-64 SysV only. Enabling the feature on another
-// host architecture would compile this module and then SIGILL at run time;
-// fail the build instead.
-#[cfg(not(target_arch = "x86_64"))]
-compile_error!("calc-aot generates x86-64 code and is only supported on x86_64 hosts");
+// This module is target-gated to x86-64 in `calc/mod.rs`. The generated
+// code uses the System V AMD64 register conventions on every host OS; on
+// Windows the entry point and every helper are declared `extern "sysv64"`
+// so the Rust side matches that convention (Win64 `extern "C"` would not).
 
 use crate::calc::decode::{BitImmOp, BrKind, ImmAluOp, Inst, LoadOp, RegAluOp, ShiftKind, StoreOp, UnAluOp};
 use crate::calc::container::{perm_check, profile_has_hash, CalcContainer, CalcLayout, HALT_STUB};
@@ -481,14 +480,14 @@ pub fn unalu_helper_op(op: u64, a: u64) -> u64 {
     }
 }
 
-extern "C" fn alu_helper(op: u64, a: u64, b: u64) -> u64 {
+extern "sysv64" fn alu_helper(op: u64, a: u64, b: u64) -> u64 {
     alu_helper_op(op, a, b)
 }
 
 /// Host ecall: HALT, hash builtins, HINT trap. Returns 0 = continue,
 /// 1 = stop (aborted / halt already recorded on `state`).
 /// `state` is the per-call `AotState` held in `R13` at the call site.
-extern "C" fn aot_ecall(
+extern "sysv64" fn aot_ecall(
     ctx: *const ResolveCtx,
     regs: *mut u64,
     mem: *mut u8,
@@ -576,7 +575,7 @@ extern "C" fn aot_ecall(
     0
 }
 
-extern "C" fn aot_mem_ok(ctx: *const ResolveCtx, addr: u64, end: u64, write: u64) -> u64 {
+extern "sysv64" fn aot_mem_ok(ctx: *const ResolveCtx, addr: u64, end: u64, write: u64) -> u64 {
     let ctx = unsafe { &*ctx };
     if perm_check(&ctx.layout, &ctx.segs, addr, end, write != 0) {
         0
@@ -585,7 +584,7 @@ extern "C" fn aot_mem_ok(ctx: *const ResolveCtx, addr: u64, end: u64, write: u64
     }
 }
 
-extern "C" fn resolve_jalr(ctx: *const ResolveCtx, dest: u64) -> u64 {
+extern "sysv64" fn resolve_jalr(ctx: *const ResolveCtx, dest: u64) -> u64 {
     let ctx = unsafe { &*ctx };
     // A miss returns the invalid-target stub. That stub writes
     // `aborted = 3` through R13 (the per-call `AotState`) and jumps to Exit,
@@ -648,10 +647,191 @@ impl Drop for AotFunc {
         // RX image; it must stay alive until the mapping is released.
         let _ = self.ctx.code;
         unsafe {
-            libc::munmap(self.map.0.cast(), self.map.1);
+            unmap_code(self.map.0, self.map.1);
         }
     }
 }
+
+// ---------------------------------------------------------- executable pages
+//
+// Every host gets a small W^X allocator: allocate RW, copy the translated
+// code, then flip the pages to RX. The AOT module is only compiled for
+// x86-64, so the three implementations below cover every supported host:
+//
+//   * Linux / BSD / other Unix  -> mmap + mprotect
+//   * macOS x86-64              -> MAP_JIT first (hardened runtime), then
+//                                  plain mmap; both end in mprotect(RX)
+//   * Windows x86-64            -> VirtualAlloc + VirtualProtect
+//
+// A target without either family still compiles (for the interpreter-only
+// build) but `aot_compile` returns `None`.
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn map_code(bytes: &[u8]) -> Option<(*mut u8, usize)> {
+    let sz = (bytes.len() + 4095) / 4096 * 4096;
+    unsafe {
+        let p = libc::mmap(
+            std::ptr::null_mut(),
+            sz,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if p == libc::MAP_FAILED {
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p as *mut u8, bytes.len());
+        if libc::mprotect(p, sz, libc::PROT_READ | libc::PROT_EXEC) != 0 {
+            libc::munmap(p, sz);
+            return None;
+        }
+        Some((p as *mut u8, sz))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn map_code(bytes: &[u8]) -> Option<(*mut u8, usize)> {
+    fn try_map(
+        bytes: &[u8],
+        sz: usize,
+        flags: libc::c_int,
+        prot: libc::c_int,
+    ) -> Option<(*mut u8, usize)> {
+        unsafe {
+            let p = libc::mmap(std::ptr::null_mut(), sz, prot, flags, -1, 0);
+            if p == libc::MAP_FAILED {
+                return None;
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), p as *mut u8, bytes.len());
+            if prot & libc::PROT_EXEC == 0 {
+                // Ordinary RW mapping: flip to RX before exposing the code.
+                if libc::mprotect(p, sz, libc::PROT_READ | libc::PROT_EXEC) != 0 {
+                    libc::munmap(p, sz);
+                    return None;
+                }
+            } else {
+                // MAP_JIT + RWX fallback: the page is already executable.
+                // Try to tighten it to RX, but keep the mapping if the
+                // platform refuses (hardened-runtime JIT pages).
+                let _ = libc::mprotect(p, sz, libc::PROT_READ | libc::PROT_EXEC);
+            }
+            Some((p as *mut u8, sz))
+        }
+    }
+
+    let sz = (bytes.len() + 4095) / 4096 * 4096;
+    // Hardened-runtime binaries need MAP_JIT (and the
+    // com.apple.security.cs.allow-jit entitlement). Try:
+    //   1. MAP_JIT + RW, then mprotect(RX)         (preferred W^X)
+    //   2. MAP_JIT + RWX, then best-effort mprotect(RX) (hardened JIT)
+    //   3. plain RW, then mprotect(RX)             (non-hardened builds)
+    try_map(
+        bytes,
+        sz,
+        libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_JIT,
+        libc::PROT_READ | libc::PROT_WRITE,
+    )
+    .or_else(|| {
+        try_map(
+            bytes,
+            sz,
+            libc::MAP_PRIVATE | libc::MAP_ANON | libc::MAP_JIT,
+            libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+        )
+    })
+    .or_else(|| {
+        try_map(
+            bytes,
+            sz,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            libc::PROT_READ | libc::PROT_WRITE,
+        )
+    })
+}
+
+#[cfg(unix)]
+unsafe fn unmap_code(p: *mut u8, sz: usize) {
+    unsafe {
+        libc::munmap(p.cast(), sz);
+    }
+}
+
+#[cfg(windows)]
+fn map_code(bytes: &[u8]) -> Option<(*mut u8, usize)> {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn VirtualAlloc(
+            lpAddress: *mut core::ffi::c_void,
+            dwSize: usize,
+            flAllocationType: u32,
+            flProtect: u32,
+        ) -> *mut core::ffi::c_void;
+        fn VirtualProtect(
+            lpAddress: *mut core::ffi::c_void,
+            dwSize: usize,
+            flNewProtect: u32,
+            lpflOldProtect: *mut u32,
+        ) -> i32;
+        fn VirtualFree(lpAddress: *mut core::ffi::c_void, dwSize: usize, dwFreeType: u32)
+            -> i32;
+        fn FlushInstructionCache(
+            hProcess: *mut core::ffi::c_void,
+            lpBaseAddress: *const core::ffi::c_void,
+            dwSize: usize,
+        ) -> i32;
+        fn GetCurrentProcess() -> *mut core::ffi::c_void;
+    }
+    const MEM_COMMIT: u32 = 0x1000;
+    const MEM_RESERVE: u32 = 0x2000;
+    const MEM_RELEASE: u32 = 0x8000;
+    const PAGE_READWRITE: u32 = 0x04;
+    const PAGE_EXECUTE_READ: u32 = 0x20;
+
+    let sz = (bytes.len() + 4095) / 4096 * 4096;
+    unsafe {
+        let p = VirtualAlloc(
+            std::ptr::null_mut(),
+            sz,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE,
+        );
+        if p.is_null() {
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p as *mut u8, bytes.len());
+        let mut old = 0u32;
+        if VirtualProtect(p, sz, PAGE_EXECUTE_READ, &mut old) == 0 {
+            VirtualFree(p, 0, MEM_RELEASE);
+            return None;
+        }
+        // x86 has coherent I-cache, but the documented JIT contract still
+        // asks for a flush; it is cheap and keeps the code correct on any
+        // host that emulates the API.
+        FlushInstructionCache(GetCurrentProcess(), p, sz);
+        Some((p as *mut u8, sz))
+    }
+}
+
+#[cfg(windows)]
+unsafe fn unmap_code(p: *mut u8, _sz: usize) {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn VirtualFree(lpAddress: *mut core::ffi::c_void, dwSize: usize, dwFreeType: u32) -> i32;
+    }
+    const MEM_RELEASE: u32 = 0x8000;
+    unsafe {
+        VirtualFree(p as *mut core::ffi::c_void, 0, MEM_RELEASE);
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn map_code(_bytes: &[u8]) -> Option<(*mut u8, usize)> {
+    None
+}
+
+#[cfg(not(any(unix, windows)))]
+unsafe fn unmap_code(_p: *mut u8, _sz: usize) {}
 
 /// Full stop-state of one AOT execution: output on success, abort class on
 /// failure, and the cycle total in both cases (the interpreter reports
@@ -742,8 +922,8 @@ impl AotFunc {
             exit_code: 0,
         };
         let state_ptr = std::ptr::addr_of_mut!(state);
-        let f: extern "C" fn(*mut u8, *mut u64, *mut AotState) = unsafe {
-            std::mem::transmute::<*const u8, extern "C" fn(*mut u8, *mut u64, *mut AotState)>(
+        let f: extern "sysv64" fn(*mut u8, *mut u64, *mut AotState) = unsafe {
+            std::mem::transmute::<*const u8, extern "sysv64" fn(*mut u8, *mut u64, *mut AotState)>(
                 self.map.0 as *const u8,
             )
         };
@@ -799,7 +979,8 @@ enum Fixup {
     Exit,
 }
 
-/// Translate a verified module. Returns `None` only if mmap fails.
+/// Translate a verified module. Returns `None` only if the host cannot
+/// allocate executable pages (or on a target with no AOT backend).
 pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
     let lay = &module.layout;
     let mut c = Code::new();
@@ -1365,7 +1546,7 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
                     c.modrm(3, R13, RCX); // mov rcx, r13
                     c.movabs(
                         RAX,
-                        aot_ecall as extern "C" fn(*const ResolveCtx, *mut u64, *mut u8, *mut AotState) -> u64
+                        aot_ecall as extern "sysv64" fn(*const ResolveCtx, *mut u64, *mut u8, *mut AotState) -> u64
                             as u64,
                     );
                     c.op(0xFF);
@@ -1490,33 +1671,17 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
     c.patch64(fix_ctx, ctx.as_ref() as *const ResolveCtx as u64);
     c.patch64(
         fix_resolve,
-        resolve_jalr as extern "C" fn(*const ResolveCtx, u64) -> u64 as u64,
+        resolve_jalr as extern "sysv64" fn(*const ResolveCtx, u64) -> u64 as u64,
     );
     c.patch64(
         fix_alu,
-        alu_helper as extern "C" fn(u64, u64, u64) -> u64 as u64,
+        alu_helper as extern "sysv64" fn(u64, u64, u64) -> u64 as u64,
     );
 
-    // ---- mmap RW, one copy, then RX
-    let sz = (c.b.len() + 4095) / 4096 * 4096;
-    let map = unsafe {
-        let p = libc::mmap(
-            std::ptr::null_mut(),
-            sz,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-            -1,
-            0,
-        );
-        if p == libc::MAP_FAILED {
-            return None;
-        }
-        std::ptr::copy_nonoverlapping(c.b.as_ptr(), p as *mut u8, c.b.len());
-        if libc::mprotect(p, sz, libc::PROT_READ | libc::PROT_EXEC) != 0 {
-            libc::munmap(p, sz);
-            return None;
-        }
-        (p as *mut u8, sz)
+    // ---- map RW, one copy, then RX
+    let map = match map_code(&c.b) {
+        Some(m) => m,
+        None => return None,
     };
     ctx.code = map.0 as *const u8;
     Some(AotFunc { map, len: c.b.len(), ctx })
@@ -1560,7 +1725,7 @@ fn emit_perm_check(c: &mut Code, fixups: &mut Vec<(usize, Fixup)>, write: bool) 
     }
     c.movabs(
         RAX,
-        aot_mem_ok as extern "C" fn(*const ResolveCtx, u64, u64, u64) -> u64 as u64,
+        aot_mem_ok as extern "sysv64" fn(*const ResolveCtx, u64, u64, u64) -> u64 as u64,
     );
     c.op(0xFF);
     c.modrm(3, 2, RAX);

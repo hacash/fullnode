@@ -305,7 +305,7 @@ fn sequential_fetch_does_not_cross_rx_holes() {
         }
         other => panic!("hole fall-through must trap, got {other:?}"),
     }
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     assert_aot_parity(&c, &[], 10_000);
 
     // Adjacent RX segments still fall through.
@@ -599,7 +599,7 @@ fn stack_starts_at_guest_end() {
 
 /// A `jalr` to an address above u32::MAX is an invalid target on BOTH
 /// engines (the AOT resolver used to truncate to u32 and jump; fixed).
-#[cfg(feature = "calc-aot")]
+#[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
 #[test]
 fn jalr_above_u32_traps_both_engines() {
     use crate::calc::aot;
@@ -638,7 +638,7 @@ fn jalr_above_u32_traps_both_engines() {
 /// readonly -> guard -> alignment; AOT: readonly -> bounds -> guard ->
 /// alignment) but the abort CLASS and the cycle total are identical —
 /// only the message text differs, and messages are not consensus data.
-#[cfg(feature = "calc-aot")]
+#[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
 #[test]
 fn store_fault_classes_agree_across_engines() {
     use crate::calc::aot;
@@ -788,7 +788,7 @@ fn run_interp(c: &CalcContainer, input: &[u8], budget: u64) -> Result<crate::cal
     crate::calc::interp::run(&module, c, input, budget, None)
 }
 
-#[cfg(feature = "calc-aot")]
+#[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
 fn assert_aot_parity(c: &CalcContainer, input: &[u8], budget: u64) {
     use crate::calc::aot;
     use crate::calc::interp;
@@ -909,7 +909,7 @@ fn misaligned_lw_ld_sw_sd_crossing_8byte() {
     let ld = u64::from_le_bytes(input[7..15].try_into().unwrap());
     assert_eq!(&res.output[1..5], &lw.to_le_bytes());
     assert_eq!(&res.output[7..15], &ld.to_le_bytes());
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     assert_aot_parity(&c, &input, 10_000);
 }
 
@@ -933,7 +933,7 @@ fn unmapped_low_page_traps_load_store_ecall_jalr() {
             }
             other => panic!("{why}: expected trap, got {other:?}"),
         }
-        #[cfg(feature = "calc-aot")]
+        #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
         assert_aot_parity(&c, &[], 10_000);
         let _ = why;
     };
@@ -1000,7 +1000,7 @@ fn halt_nonzero_exit_is_guest_exit_and_charges_cycles() {
         }
         other => panic!("expected GuestExit(7), got {other:?}"),
     }
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     assert_aot_parity(&c, &[], 10_000);
     let obj = CalcFnObj::build_with_host(c, crate::calc::CalcHostConfig::new()).unwrap();
     let exec = obj.run(
@@ -1035,7 +1035,7 @@ fn ecall_hint_range_traps() {
             }
             other => panic!("a7={a7}: expected hint trap, got {other:?}"),
         }
-        #[cfg(feature = "calc-aot")]
+        #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
         assert_aot_parity(&c, &[], 10_000);
     }
 }
@@ -1052,7 +1052,7 @@ fn halt_output_len_over_max_traps() {
         }
         other => panic!("expected output_max trap, got {other:?}"),
     }
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     assert_aot_parity(&c, &[], 10_000);
 }
 
@@ -1080,7 +1080,7 @@ fn c_ebreak_is_a_two_byte_trap() {
         Err((CalcAbort::Trap(t), _)) => assert!(t.contains("trap"), "{t}"),
         other => panic!("c.unimp must trap at runtime, got {other:?}"),
     }
-    #[cfg(feature = "calc-aot")]
+    #[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
     {
         assert_aot_parity(&make_container_profile(CALC_PROFILE_RV64IMC, vec![0x02, 0x90]), &[], 10_000);
         assert_aot_parity(&make_container_profile(CALC_PROFILE_RV64IMC, vec![0x00, 0x00]), &[], 10_000);

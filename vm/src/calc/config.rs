@@ -33,12 +33,17 @@ impl Default for CalcHostConfig {
 }
 
 impl CalcHostConfig {
-    /// AOT mounts when this binary was built with `calc-aot` (the official
-    /// x86-64 default). Builds that turn the feature off stay on the
-    /// interpreter. `with_aot_mount(false)` is the explicit off switch.
+    /// AOT mounts only when this binary targets x86-64 (Linux, macOS or
+    /// Windows) and was built with `calc-aot` (the default). Every other
+    /// target, and builds that turn the feature off, stay on the interpreter.
+    /// `with_aot_mount(false)` is the explicit off switch.
     pub const fn new() -> Self {
         Self {
-            aot_mount: cfg!(feature = "calc-aot"),
+            aot_mount: cfg!(all(
+                feature = "calc-aot",
+                target_arch = "x86_64",
+                any(target_family = "unix", target_family = "windows")
+            )),
         }
     }
 

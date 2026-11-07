@@ -24,14 +24,14 @@ execute = [
 # only on codec-side types (+ `sys` hashing for `calc_func_sign`), so a
 # codec-only consumer (SDK wasm) may opt in without the execution engine.
 syntax = []
-# AOT translation backend (`calc::aot`). On by default for official x86-64
-# nodes: each calc call runs the interpreter and then AOT in order on the
-# calling thread and rejects the transaction if gas or the result disagree. This is the early
-# lockstep check; once that check has stayed quiet, the interpreter is
-# retired and AOT is the only engine. Other platforms turn the feature off
-# (`--no-default-features --features execute`) and run the interpreter
-# alone. Enabling it off x86-64 is a compile_error. The wasm SDK already
-# depends on vm with default-features = false.
+# AOT translation backend (`calc::aot`). On by default for x86-64 hosts
+# (Linux, macOS and Windows): each calc call runs the interpreter and then
+# AOT in order on the calling thread and rejects the transaction if gas or
+# the result disagree. This is the early lockstep check; once that check has
+# stayed quiet, the interpreter is retired and AOT is the only engine.
+# Other architectures build the feature as a no-op and run the interpreter
+# alone (`--no-default-features --features execute` also works). The wasm
+# SDK already depends on vm with default-features = false.
 # Suite: cargo test -p vm --features calc-aot
 calc-aot = ["dep:libc"]
 # Test-only calc config: `testkit` (both host knobs on, memory cap above
@@ -47,7 +47,7 @@ required-features = ["calc-testkit"]
 [dev-dependencies]
 # Enables `calc-testkit` for this package's own tests (integration tests do
 # not see `cfg(test)` on the library). Not a normal dependency.
-vm = { path = ".", features = ["calc-testkit"] }
+vm = { path = ".", default-features = false, features = ["calc-testkit"] }
 # Differential-testing oracles for the calc interpreter (never runtime deps).
 # ckb-vm: full-program differential engine (memory ops, MULH family; see
 #   tests/calc_differential.rs).

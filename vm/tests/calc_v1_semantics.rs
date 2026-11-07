@@ -203,7 +203,7 @@ fn image_id_is_cached_and_matches_the_container() {
     assert_eq!(obj.receipt(&[], &exec).image_id, c.image_id());
 }
 
-#[cfg(feature = "calc-aot")]
+#[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
 #[test]
 fn aot_mount_is_a_host_knob_with_identical_results() {
     let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, halt_code(), vec![]);

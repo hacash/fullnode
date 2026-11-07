@@ -151,7 +151,7 @@ fn kernel_dict_walk_error_paths() {
     }
 }
 
-#[cfg(feature = "calc-aot")]
+#[cfg(all(feature = "calc-aot", target_arch = "x86_64"))]
 #[test]
 fn kernel_aot_parity() {
     let (plain, container) = kernel();
