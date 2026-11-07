@@ -2,19 +2,19 @@
 
 use field::Hash;
 use field::{
-    json_decode_value, json_split_object, Address, AssetAmt, BlockHeight, Decode,
+    json_decode_value, json_split_object, AddrOrPtr, Address, AssetAmt, BlockHeight, Decode,
     DiamondNameListMax200, DiamondNumber, Encode, Fold64, FromJSON, ListW1, Sign, Uint4,
 };
 use sys::{Account, errf, Ret};
 
 macro_rules! define_tex_cells {
-    ($( $variant:ident = $id:literal { $field:ident : $ty:ty } asset=$asset:literal ),+ $(,)?) => {
+    ($( $variant:ident = $id:literal { $( $field:ident : $ty:ty ),+ $(,)? } asset=$asset:literal ),+ $(,)?) => {
         #[derive(Debug, Clone)]
         /// One TEX settlement or condition cell. This is public so trusted
         /// wallet/test tooling can assemble a signed `TexCellExecute` without
         /// relying on wire-format internals.
         pub enum TexCell {
-            $( $variant { $field: $ty } ),+
+            $( $variant { $( $field: $ty ),+ } ),+
         }
 
 impl TexCell {
@@ -50,6 +50,48 @@ impl TexCell {
                 "get {} atoms of Asset #{} from TEX escrow",
                 asset.amount.uint(),
                 asset.serial.uint()
+            ),
+            Self::DirectedZhuPay { to, haczhu } => format!(
+                "pay {} HAC directly to {}",
+                hac(haczhu),
+                field::descfmt::addr_or_ptr_text(to)
+            ),
+            Self::DirectedZhuGet { from, haczhu } => format!(
+                "take {} HAC directly from {} (the source must be a transaction signer)",
+                hac(haczhu),
+                field::descfmt::addr_or_ptr_text(from)
+            ),
+            Self::DirectedSatPay { to, satnum } => format!(
+                "pay {} SAT directly to {}",
+                satnum.uint(),
+                field::descfmt::addr_or_ptr_text(to)
+            ),
+            Self::DirectedSatGet { from, satnum } => format!(
+                "take {} SAT directly from {} (the source must be a transaction signer)",
+                satnum.uint(),
+                field::descfmt::addr_or_ptr_text(from)
+            ),
+            Self::DirectedDiaPay { to, diamonds } => format!(
+                "pay HACD ({}) directly to {}",
+                diamonds.splitstr(),
+                field::descfmt::addr_or_ptr_text(to)
+            ),
+            Self::DirectedDiaGet { from, diamonds } => format!(
+                "take HACD ({}) directly from {} (the source must be a transaction signer)",
+                diamonds.splitstr(),
+                field::descfmt::addr_or_ptr_text(from)
+            ),
+            Self::DirectedAssetPay { to, asset } => format!(
+                "pay {} atoms of Asset #{} directly to {}",
+                asset.amount.uint(),
+                asset.serial.uint(),
+                field::descfmt::addr_or_ptr_text(to)
+            ),
+            Self::DirectedAssetGet { from, asset } => format!(
+                "take {} atoms of Asset #{} directly from {} (the source must be a transaction signer)",
+                asset.amount.uint(),
+                asset.serial.uint(),
+                field::descfmt::addr_or_ptr_text(from)
             ),
             Self::CondZhuAtMost { haczhu } => {
                 format!("require HAC balance at most {} HAC", hac(haczhu))
@@ -107,15 +149,15 @@ impl TexCell {
         impl Encode for TexCell {
             fn size(&self) -> usize {
                 1 + match self {
-                    $(Self::$variant { $field } => $field.size()),+
+                    $(Self::$variant { $( $field ),+ } => 0 $( + $field.size() )+),+
                 }
             }
 
             fn encode_to(&self, out: &mut Vec<u8>) {
                 match self {
-                    $(Self::$variant { $field } => {
+                    $(Self::$variant { $( $field ),+ } => {
                         field::Uint1::from($id).encode_to(out);
-                        $field.encode_to(out);
+                        $( $field.encode_to(out); )+
                     }),+
                 }
             }
@@ -126,7 +168,7 @@ impl TexCell {
                 let mut reader = field::Reader::new(buf);
                 let cid: field::Uint1 = reader.read()?;
                 let value = match cid.uint() {
-                    $($id => Self::$variant { $field: reader.read()? }),+,
+                    $($id => Self::$variant { $( $field: reader.read()? ),+ }),+,
                     id => return errf!("cannot find tex cell id '{}'", id),
                 };
                 Ok((value, reader.used()))
@@ -136,9 +178,10 @@ impl TexCell {
         impl field::ToJSON for TexCell {
             fn to_json_fmt(&self, fmt: &field::JSONFormater) -> String {
                 match self {
-                    $(Self::$variant { $field } => {
-                        let mut json = format!("{{\"cellid\":{},\"{}\":", $id, stringify!($field));
-                        json.push_str(&field::ToJSON::to_json_fmt($field, fmt));
+                    $(Self::$variant { $( $field ),+ } => {
+                        let mut json = format!("{{\"cellid\":{}", $id);
+                        $( json.push_str(&format!(",\"{}\":", stringify!($field)));
+                        json.push_str(&field::ToJSON::to_json_fmt($field, fmt)); )+
                         json.push('}');
                         json
                     }),+
@@ -147,7 +190,7 @@ impl TexCell {
         }
 
         fn decode_tex_cell_json(json: &str) -> Ret<TexCell> {
-            // Field lists are short (cellid + one payload field); a `Vec` with
+            // Field lists are short (cellid + a few payload fields); a `Vec` with
             // linear lookup keeps the hash-table machinery out of the wasm graph.
             let mut fields: Vec<(&str, &str)> = Vec::new();
             for (key, value) in json_split_object(json)? {
@@ -164,18 +207,29 @@ impl TexCell {
                 .and_then(json_decode_value)?;
             match cid.uint() {
                 $($id => {
-                    let field_name = stringify!($field);
-                    if let Some(unknown) = fields.iter().find(|(k, _)| *k != "cellid" && *k != field_name) {
+                    let field_names: &[&str] = &[$( stringify!($field) ),+];
+                    if let Some(unknown) = fields
+                        .iter()
+                        .find(|(k, _)| *k != "cellid" && !field_names.contains(k))
+                    {
                         return sys::normalf!("TEX cell {} JSON field {} is unknown", $id, unknown.0);
                     }
-                    let raw = fields
-                        .iter()
-                        .find(|(k, _)| *k == field_name)
-                        .map(|(_, v)| *v)
-                        .ok_or_else(|| {
-                            sys::Error::normal(format!("TEX cell {} JSON missing {}", $id, field_name))
-                        })?;
-                    Ok(TexCell::$variant { $field: json_decode_value(raw)? })
+                    Ok(TexCell::$variant {
+                        $( $field: {
+                            let field_name = stringify!($field);
+                            let raw = fields
+                                .iter()
+                                .find(|(k, _)| *k == field_name)
+                                .map(|(_, v)| *v)
+                                .ok_or_else(|| {
+                                    sys::Error::normal(format!(
+                                        "TEX cell {} JSON missing {}",
+                                        $id, field_name
+                                    ))
+                                })?;
+                            json_decode_value(raw)?
+                        } ),+
+                    })
                 }),+,
                 id => sys::normalf!("cannot find tex cell id '{}'", id),
             }
@@ -214,6 +268,14 @@ define_tex_cells! {
     CondHeightAtMost = 23 { height: BlockHeight } asset=false,
     CondHeightAtLeast = 24 { height: BlockHeight } asset=false,
     CondChainIdEq = 25 { chainid: Uint4 } asset=false,
+    DirectedZhuPay = 26 { to: AddrOrPtr, haczhu: Fold64 } asset=false,
+    DirectedZhuGet = 27 { from: AddrOrPtr, haczhu: Fold64 } asset=false,
+    DirectedSatPay = 28 { to: AddrOrPtr, satnum: Fold64 } asset=false,
+    DirectedSatGet = 29 { from: AddrOrPtr, satnum: Fold64 } asset=false,
+    DirectedDiaPay = 30 { to: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=true,
+    DirectedDiaGet = 31 { from: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=true,
+    DirectedAssetPay = 32 { to: AddrOrPtr, asset: AssetAmt } asset=true,
+    DirectedAssetGet = 33 { from: AddrOrPtr, asset: AssetAmt } asset=true,
 }
 
 impl field::WireElementName for TexCell {
@@ -386,5 +448,142 @@ mod tests {
         let mut cell_wire = cell.encode();
         cell_wire[0] = 99;
         assert!(TexCell::decode(&cell_wire).is_err());
+    }
+
+    fn directed_sample_cells() -> Vec<TexCell> {
+        let to = AddrOrPtr::Addr(Address::from([
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ]));
+        let asset = AssetAmt {
+            serial: Fold64::from(11).unwrap(),
+            amount: Fold64::from(5).unwrap(),
+        };
+        vec![
+            TexCell::DirectedZhuPay {
+                to,
+                haczhu: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedZhuGet {
+                from: AddrOrPtr::Ptr(0),
+                haczhu: Fold64::from(2000).unwrap(),
+            },
+            TexCell::DirectedSatPay {
+                to,
+                satnum: Fold64::from(7).unwrap(),
+            },
+            TexCell::DirectedSatGet {
+                from: AddrOrPtr::Ptr(1),
+                satnum: Fold64::from(9).unwrap(),
+            },
+            TexCell::DirectedDiaPay {
+                to,
+                diamonds: DiamondNameListMax200::from_readable("WTYUIA,HYXYHY").unwrap(),
+            },
+            TexCell::DirectedDiaGet {
+                from: AddrOrPtr::Ptr(0),
+                diamonds: DiamondNameListMax200::from_readable("WTYUIA").unwrap(),
+            },
+            TexCell::DirectedAssetPay {
+                to,
+                asset: asset.clone(),
+            },
+            TexCell::DirectedAssetGet {
+                from: AddrOrPtr::Ptr(2),
+                asset,
+            },
+        ]
+    }
+
+    #[test]
+    fn directed_cells_wire_roundtrip_and_carry_the_asset_flag() {
+        for cell in directed_sample_cells() {
+            assert_eq!(cell.size(), cell.encode().len());
+            let wire = cell.encode();
+            let (decoded, used) = TexCell::decode(&wire).unwrap();
+            assert_eq!(used, wire.len());
+            assert_eq!(decoded.encode(), wire);
+            // Dia/Asset directed cells ride the asset gas tier like AssetPay,
+            // Zhu/Sat like their escrow siblings.
+            assert_eq!(
+                cell.is_asset_transfer(),
+                matches!(
+                    &cell,
+                    TexCell::DirectedDiaPay { .. }
+                        | TexCell::DirectedDiaGet { .. }
+                        | TexCell::DirectedAssetPay { .. }
+                        | TexCell::DirectedAssetGet { .. }
+                ),
+                "{}",
+                cell.describe()
+            );
+        }
+    }
+
+    #[test]
+    fn directed_cells_json_roundtrip_with_address_and_ptr_forms() {
+        let target = Address::from([
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ]);
+        for cell in directed_sample_cells() {
+            let json = cell.to_json();
+            let mut back = TexCell::default();
+            back.from_json(&json).unwrap();
+            assert_eq!(back.encode(), cell.encode(), "{json}");
+        }
+        // Addr renders as the readable address string, Ptr as a bare index.
+        let pay = TexCell::DirectedZhuPay {
+            to: AddrOrPtr::Addr(target),
+            haczhu: Fold64::from(1000).unwrap(),
+        };
+        assert_eq!(
+            pay.to_json(),
+            format!("{{\"cellid\":26,\"to\":{},\"haczhu\":1000}}", target.to_json())
+        );
+        let get = TexCell::DirectedZhuGet {
+            from: AddrOrPtr::Ptr(0),
+            haczhu: Fold64::from(2000).unwrap(),
+        };
+        assert_eq!(get.to_json(), "{\"cellid\":27,\"from\":0,\"haczhu\":2000}");
+    }
+
+    #[test]
+    fn directed_cells_json_rejects_unknown_missing_and_duplicate_fields() {
+        let addr_json = Address::from([0u8; 21]).to_json();
+        let mut cell = TexCell::default();
+        assert!(cell
+            .from_json(&format!(
+                "{{\"cellid\":26,\"to\":{addr_json},\"haczhu\":1,\"surprise\":2}}"
+            ))
+            .is_err());
+        assert!(cell
+            .from_json(&format!("{{\"cellid\":26,\"to\":{addr_json}}}"))
+            .is_err());
+        assert!(cell
+            .from_json(&format!("{{\"cellid\":26,\"to\":{addr_json},\"haczhu\":1,\"haczhu\":2}}"))
+            .is_err());
+        assert!(cell.from_json("{\"cellid\":40,\"to\":0,\"haczhu\":1}").is_err());
+    }
+
+    #[test]
+    fn directed_cell_descriptions_name_counterparty_and_direction() {
+        let target = Address::from([
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ]);
+        let pay = TexCell::DirectedZhuPay {
+            to: AddrOrPtr::Addr(target),
+            haczhu: Fold64::from(1000).unwrap(),
+        };
+        assert_eq!(
+            pay.describe(),
+            format!("pay 0.00001 HAC directly to {}", target.to_readable())
+        );
+        let get = TexCell::DirectedZhuGet {
+            from: AddrOrPtr::Ptr(0),
+            haczhu: Fold64::from(2000).unwrap(),
+        };
+        assert_eq!(
+            get.describe(),
+            "take 0.00002 HAC directly from <address pointer 0> (the source must be a transaction signer)"
+        );
     }
 }

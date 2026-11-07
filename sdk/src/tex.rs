@@ -518,6 +518,80 @@ mod tests {
     }
 
     #[test]
+    fn directed_cells_inspect_as_payments_and_receipts_naming_the_counterparty() {
+        let address = Address::default().to_readable();
+        let target = Address::from([
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ])
+        .to_readable();
+        let raw = format!(
+            r#"{{"schema":"{SCHEMA_TEX_AUTHORIZATION}","address":"{address}","cells":[
+                {{"cellid":26,"to":"{target}","haczhu":1000}},
+                {{"cellid":27,"from":0,"haczhu":2000}},
+                {{"cellid":28,"to":"{target}","satnum":7}},
+                {{"cellid":29,"from":1,"satnum":9}},
+                {{"cellid":30,"to":"{target}","diamonds":["WTYUIA"]}},
+                {{"cellid":31,"from":0,"diamonds":["HYXYHY"]}},
+                {{"cellid":32,"to":"{target}","asset":{{"serial":11,"amount":5}}}},
+                {{"cellid":33,"from":0,"asset":{{"serial":11,"amount":5}}}}
+            ]}}"#
+        );
+        let auth = decode_authorization_json(&raw).unwrap();
+        let review = inspect(&auth).unwrap();
+        assert_eq!(
+            review
+                .payments
+                .iter()
+                .map(|c| c.cellid)
+                .collect::<Vec<_>>(),
+            vec![26, 28, 30, 32]
+        );
+        assert_eq!(
+            review
+                .receipts
+                .iter()
+                .map(|c| c.cellid)
+                .collect::<Vec<_>>(),
+            vec![27, 29, 31, 33]
+        );
+        // Payments name the target; nothing may hide the counterparty.
+        for pay in &review.payments {
+            assert!(pay.description.contains(&target), "{}", pay.description);
+            assert!(pay.description.contains("directly to"), "{}", pay.description);
+        }
+        // Receipts must warn that the source is a transaction signer and
+        // render pointer sources as ptr:N.
+        for get in &review.receipts {
+            assert!(
+                get.description.contains("transaction signer"),
+                "{}",
+                get.description
+            );
+            assert!(
+                get.description.contains("(you, when executing)"),
+                "{}",
+                get.description
+            );
+        }
+        assert_eq!(
+            review.cells[0].description,
+            format!("Pay 0.00001 HAC (1000 zhu) directly to {target}")
+        );
+        assert_eq!(
+            review.cells[1].description,
+            "Take 0.00002 HAC (2000 zhu) directly from transaction signer ptr:0 (you, when executing)"
+        );
+        assert_eq!(
+            review.cells[4].description,
+            format!("Pay HACD WTYUIA directly to {target}")
+        );
+        // Canonical cells and the digest survive the authorization roundtrip.
+        let digest = authorization_digest(&auth).unwrap();
+        let roundtrip = decode_authorization_json(&auth.to_json_string()).unwrap();
+        assert_eq!(authorization_digest(&roundtrip).unwrap(), digest);
+    }
+
+    #[test]
     fn every_tex_cell_serializes_precision_sensitive_values_as_strings() {
         let address = Address::default().to_readable();
         let huge = "9007199254740993";
@@ -682,6 +756,60 @@ fn canonical_cell_json(cell: &protocol::action_std::TexCell) -> String {
         C::CondHeightAtMost { height } => scalar(23, "height", height.uint() as u64),
         C::CondHeightAtLeast { height } => scalar(24, "height", height.uint() as u64),
         C::CondChainIdEq { chainid } => scalar(25, "chainid", chainid.uint() as u64),
+        C::DirectedZhuPay { to, haczhu } => format!(
+            "{{\"cellid\":26,\"to\":{},\"haczhu\":{}}}",
+            to.to_json(),
+            integer(haczhu.uint())
+        ),
+        C::DirectedZhuGet { from, haczhu } => format!(
+            "{{\"cellid\":27,\"from\":{},\"haczhu\":{}}}",
+            from.to_json(),
+            integer(haczhu.uint())
+        ),
+        C::DirectedSatPay { to, satnum } => format!(
+            "{{\"cellid\":28,\"to\":{},\"satnum\":{}}}",
+            to.to_json(),
+            integer(satnum.uint())
+        ),
+        C::DirectedSatGet { from, satnum } => format!(
+            "{{\"cellid\":29,\"from\":{},\"satnum\":{}}}",
+            from.to_json(),
+            integer(satnum.uint())
+        ),
+        C::DirectedDiaPay { to, diamonds } => format!(
+            "{{\"cellid\":30,\"to\":{},\"diamonds\":{}}}",
+            to.to_json(),
+            diamonds.to_json()
+        ),
+        C::DirectedDiaGet { from, diamonds } => format!(
+            "{{\"cellid\":31,\"from\":{},\"diamonds\":{}}}",
+            from.to_json(),
+            diamonds.to_json()
+        ),
+        C::DirectedAssetPay { to, asset } => format!(
+            "{{\"cellid\":32,\"to\":{},\"asset\":{{\"serial\":{},\"amount\":{}}}}}",
+            to.to_json(),
+            integer(asset.serial.uint()),
+            integer(asset.amount.uint())
+        ),
+        C::DirectedAssetGet { from, asset } => format!(
+            "{{\"cellid\":33,\"from\":{},\"asset\":{{\"serial\":{},\"amount\":{}}}}}",
+            from.to_json(),
+            integer(asset.serial.uint()),
+            integer(asset.amount.uint())
+        ),
+    }
+}
+
+/// Human rendering of a directed cell's counterparty in the canonical cell
+/// JSON: a quoted readable address stays as-is, a bare number is a transaction
+/// address-list pointer (`ptr:0` = the transaction main / executor).
+fn directed_counterparty_text(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('"') {
+        trimmed.trim_matches('"').to_owned()
+    } else {
+        format!("ptr:{}", trimmed)
     }
 }
 
@@ -700,8 +828,8 @@ pub fn inspect(authorization: &Authorization) -> Result<Inspection, SdkError> {
             "TEX cell",
         )?;
         let category = match cellid {
-            1 | 3 | 5 | 7 => "pay",
-            2 | 4 | 6 | 8 => "get",
+            1 | 3 | 5 | 7 | 26 | 28 | 30 | 32 => "pay",
+            2 | 4 | 6 | 8 | 27 | 29 | 31 | 33 => "get",
             11..=25 => "condition",
             _ => "unknown",
         };
@@ -754,6 +882,70 @@ pub fn inspect(authorization: &Authorization) -> Result<Inspection, SdkError> {
             20 => format!("Require asset balance at most {}", value),
             21 => format!("Require asset balance at least {}", value),
             22 => format!("Require asset balance equal to {}", value),
+            26..=33 => {
+                let endpoint = pairs
+                    .iter()
+                    .find(|(k, _)| *k == "to" || *k == "from")
+                    .map(|(_, v)| *v)
+                    .unwrap_or("");
+                let counterparty = directed_counterparty_text(endpoint);
+                let field_value = |key: &str| {
+                    pairs
+                        .iter()
+                        .find(|(k, _)| *k == key)
+                        .map(|(_, v)| v.trim_matches('"'))
+                        .unwrap_or("")
+                };
+                let hac_text = |raw: &str| raw
+                    .parse::<u64>()
+                    .map(|zhu| field::Amount::zhu(zhu).to_hac_string())
+                    .unwrap_or_else(|_| raw.to_owned());
+                match cellid {
+                    26 => format!(
+                        "Pay {} HAC ({} zhu) directly to {}",
+                        hac_text(field_value("haczhu")),
+                        field_value("haczhu"),
+                        counterparty
+                    ),
+                    27 => format!(
+                        "Take {} HAC ({} zhu) directly from transaction signer {} (you, when executing)",
+                        hac_text(field_value("haczhu")),
+                        field_value("haczhu"),
+                        counterparty
+                    ),
+                    28 => format!(
+                        "Pay {} SAT directly to {}",
+                        field_value("satnum"),
+                        counterparty
+                    ),
+                    29 => format!(
+                        "Take {} SAT directly from transaction signer {} (you, when executing)",
+                        field_value("satnum"),
+                        counterparty
+                    ),
+                    30 => format!(
+                        "Pay HACD {} directly to {}",
+                        field_value("diamonds"),
+                        counterparty
+                    ),
+                    31 => format!(
+                        "Take HACD {} directly from transaction signer {} (you, when executing)",
+                        field_value("diamonds"),
+                        counterparty
+                    ),
+                    32 => format!(
+                        "Pay asset {} directly to {}",
+                        field_value("asset"),
+                        counterparty
+                    ),
+                    33 => format!(
+                        "Take asset {} directly from transaction signer {} (you, when executing)",
+                        field_value("asset"),
+                        counterparty
+                    ),
+                    _ => unreachable!("26..=33 outer arm covers every directed cellid"),
+                }
+            }
             _ => {
                 unknown_conditions.push(index);
                 format!("Unknown TEX cell {}", cellid)
