@@ -109,14 +109,23 @@ impl TexCell {
             Self::CondSatEq { satoshi } => {
                 format!("require SAT balance equal to {}", satoshi.uint())
             }
-            Self::CondDiaAtMost { diamond } => {
-                format!("require HACD count at most {}", diamond.uint())
+            Self::CondDiaActualAtMost { diamond } => {
+                format!("require actual HACD count at most {}", diamond.uint())
             }
-            Self::CondDiaAtLeast { diamond } => {
-                format!("require HACD count at least {}", diamond.uint())
+            Self::CondDiaActualAtLeast { diamond } => {
+                format!("require actual HACD count at least {}", diamond.uint())
             }
-            Self::CondDiaEq { diamond } => {
-                format!("require HACD count equal to {}", diamond.uint())
+            Self::CondDiaActualEq { diamond } => {
+                format!("require actual HACD count equal to {}", diamond.uint())
+            }
+            Self::CondDiaProjectedAtMost { diamond } => {
+                format!("require projected HACD count at most {}", diamond.uint())
+            }
+            Self::CondDiaProjectedAtLeast { diamond } => {
+                format!("require projected HACD count at least {}", diamond.uint())
+            }
+            Self::CondDiaProjectedEq { diamond } => {
+                format!("require projected HACD count equal to {}", diamond.uint())
             }
             Self::CondAssetAtMost { asset } => format!(
                 "require Asset #{} balance at most {} atoms",
@@ -259,9 +268,9 @@ define_tex_cells! {
     CondSatAtMost = 14 { satoshi: Fold64 } asset=false,
     CondSatAtLeast = 15 { satoshi: Fold64 } asset=false,
     CondSatEq = 16 { satoshi: Fold64 } asset=false,
-    CondDiaAtMost = 17 { diamond: Fold64 } asset=false,
-    CondDiaAtLeast = 18 { diamond: Fold64 } asset=false,
-    CondDiaEq = 19 { diamond: Fold64 } asset=false,
+    CondDiaActualAtMost = 17 { diamond: Fold64 } asset=false,
+    CondDiaActualAtLeast = 18 { diamond: Fold64 } asset=false,
+    CondDiaActualEq = 19 { diamond: Fold64 } asset=false,
     CondAssetAtMost = 20 { asset: AssetAmt } asset=false,
     CondAssetAtLeast = 21 { asset: AssetAmt } asset=false,
     CondAssetEq = 22 { asset: AssetAmt } asset=false,
@@ -276,6 +285,9 @@ define_tex_cells! {
     DirectedDiaGet = 31 { from: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=false,
     DirectedAssetPay = 32 { to: AddrOrPtr, asset: AssetAmt } asset=true,
     DirectedAssetGet = 33 { from: AddrOrPtr, asset: AssetAmt } asset=true,
+    CondDiaProjectedAtMost = 34 { diamond: Fold64 } asset=false,
+    CondDiaProjectedAtLeast = 35 { diamond: Fold64 } asset=false,
+    CondDiaProjectedEq = 36 { diamond: Fold64 } asset=false,
 }
 
 impl field::WireElementName for TexCell {
@@ -468,6 +480,79 @@ mod tests {
         let mut cell_wire = cell.encode();
         cell_wire[0] = 99;
         assert!(TexCell::decode(&cell_wire).is_err());
+    }
+
+    #[test]
+    fn dia_actual_conditions_keep_legacy_ids_and_projected_conditions_use_new_ids() {
+        let cases = [
+            (
+                TexCell::CondDiaActualAtMost {
+                    diamond: Fold64::from(7).unwrap(),
+                },
+                17u8,
+                7u64,
+                "require actual HACD count at most 7",
+            ),
+            (
+                TexCell::CondDiaActualAtLeast {
+                    diamond: Fold64::from(8).unwrap(),
+                },
+                18,
+                8,
+                "require actual HACD count at least 8",
+            ),
+            (
+                TexCell::CondDiaActualEq {
+                    diamond: Fold64::from(9).unwrap(),
+                },
+                19,
+                9,
+                "require actual HACD count equal to 9",
+            ),
+            (
+                TexCell::CondDiaProjectedAtMost {
+                    diamond: Fold64::from(10).unwrap(),
+                },
+                34,
+                10,
+                "require projected HACD count at most 10",
+            ),
+            (
+                TexCell::CondDiaProjectedAtLeast {
+                    diamond: Fold64::from(11).unwrap(),
+                },
+                35,
+                11,
+                "require projected HACD count at least 11",
+            ),
+            (
+                TexCell::CondDiaProjectedEq {
+                    diamond: Fold64::from(12).unwrap(),
+                },
+                36,
+                12,
+                "require projected HACD count equal to 12",
+            ),
+        ];
+        for (cell, id, value, text) in cases {
+            // The legacy actual-count cells keep 17/18/19; the projected
+            // variants are new ids and must never collide with them.
+            let wire = cell.encode();
+            assert_eq!(wire[0], id, "{text}");
+            assert_eq!(cell.size(), wire.len(), "{text}");
+            let (decoded, used) = TexCell::decode(&wire).unwrap();
+            assert_eq!(used, wire.len(), "{text}");
+            assert_eq!(decoded.encode(), wire, "{text}");
+
+            let json = cell.to_json();
+            assert_eq!(json, format!("{{\"cellid\":{id},\"diamond\":{value}}}"));
+            let mut back = TexCell::default();
+            back.from_json(&json).unwrap();
+            assert_eq!(back.encode(), wire, "{json}");
+
+            assert_eq!(cell.describe(), text);
+            assert!(!cell.is_asset_transfer(), "{text}");
+        }
     }
 
     fn directed_sample_cells() -> Vec<TexCell> {

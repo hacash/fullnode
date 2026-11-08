@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use field::{Address, AssetAmt, DiamondName, DiamondNameListMax200, Fold64};
 use sys::{Ret, errf};
@@ -23,6 +23,13 @@ pub struct TexLedger {
     /// the records; no `DiaPay` runs after settlement.
     pub dia_recorded: HashSet<DiamondName>,
     pub diatrs: Vec<(Address, usize)>,
+    /// Per-address pending deferred-clearing totals: names this payer committed
+    /// through `DiaPay` / counts this recipient is due through `DiaGet`. Kept
+    /// alongside the ordered records so projected HACD-count conditions are
+    /// O(1) instead of scanning every pending record. Per-tx scratch like the
+    /// rest of the ledger.
+    pub dia_pay_pending: HashMap<Address, usize>,
+    pub dia_get_pending: HashMap<Address, usize>,
     pub entries: Vec<TexEntry>,
     pub asset_checked: HashSet<u64>,
 }
@@ -63,6 +70,13 @@ pub fn record_diamond_pay(
         tex.diamonds.push((*payer, *name));
     }
     tex.dia = newdia;
+    // Successful record only: failed cells revert the whole transaction, but
+    // the O(1) pending total must never run ahead of the ordered records.
+    let pending = tex.dia_pay_pending.entry(*payer).or_insert(0);
+    let Some(next) = pending.checked_add(names.length()) else {
+        return errf!("tex diamond pay pending overflow");
+    };
+    *pending = next;
     Ok(())
 }
 
@@ -93,6 +107,11 @@ impl TexLedger {
         };
         self.dia = diares;
         self.diatrs.push((addr, count));
+        let pending = self.dia_get_pending.entry(addr).or_insert(0);
+        let Some(next) = pending.checked_add(count) else {
+            return errf!("tex diamond get pending overflow");
+        };
+        *pending = next;
         Ok(())
     }
 

@@ -592,6 +592,49 @@ mod tests {
     }
 
     #[test]
+    fn dia_actual_and_projected_conditions_inspect_as_conditions_with_distinct_wording() {
+        let address = Address::default().to_readable();
+        let raw = format!(
+            r#"{{"schema":"{SCHEMA_TEX_AUTHORIZATION}","address":"{address}","cells":[
+                {{"cellid":17,"diamond":3}},{{"cellid":18,"diamond":4}},{{"cellid":19,"diamond":5}},
+                {{"cellid":34,"diamond":6}},{{"cellid":35,"diamond":7}},{{"cellid":36,"diamond":8}}
+            ]}}"#
+        );
+        let auth = decode_authorization_json(&raw).unwrap();
+        let review = inspect(&auth).unwrap();
+        assert_eq!(review.cells.len(), 6);
+        assert!(review.cells.iter().all(|c| c.category == "condition"));
+        assert!(review.payments.is_empty());
+        assert!(review.receipts.is_empty());
+        assert!(review.unknown_conditions.is_empty());
+        assert_eq!(
+            review
+                .cells
+                .iter()
+                .map(|c| c.description.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Require actual HACD count at most 3",
+                "Require actual HACD count at least 4",
+                "Require actual HACD count equal to 5",
+                "Require projected HACD count at most 6",
+                "Require projected HACD count at least 7",
+                "Require projected HACD count equal to 8",
+            ]
+        );
+        // Legacy actual-count cells keep 17-19; the projected variants are the
+        // new condition ids 34-36.
+        for (cell, id) in auth.cells.iter().zip([17u8, 18, 19, 34, 35, 36]) {
+            assert!(cell.starts_with(&format!("{{\"cellid\":{id},")), "{cell}");
+        }
+        let roundtrip = decode_authorization_json(&auth.to_json_string()).unwrap();
+        assert_eq!(
+            authorization_digest(&auth).unwrap(),
+            authorization_digest(&roundtrip).unwrap()
+        );
+    }
+
+    #[test]
     fn every_tex_cell_serializes_precision_sensitive_values_as_strings() {
         let address = Address::default().to_readable();
         let huge = "9007199254740993";
@@ -609,11 +652,12 @@ mod tests {
                 {{"cellid":21,"asset":{{"serial":{huge},"amount":{huge}}}}},
                 {{"cellid":22,"asset":{{"serial":{huge},"amount":{huge}}}}},
                 {{"cellid":23,"height":1099511627775}},{{"cellid":24,"height":1099511627775}},
-                {{"cellid":25,"chainid":4294967295}}
+                {{"cellid":25,"chainid":4294967295}},
+                {{"cellid":34,"diamond":{huge}}},{{"cellid":35,"diamond":{huge}}},{{"cellid":36,"diamond":{huge}}}
             ]}}"#
         );
         let auth = decode_authorization_json(&raw).unwrap();
-        assert_eq!(auth.cells.len(), 23);
+        assert_eq!(auth.cells.len(), 26);
         for cell in &auth.cells {
             let pairs = jsonparse::object_pairs(cell, "cell").unwrap();
             assert!(pairs.iter().any(|(key, _)| *key == "cellid"));
@@ -779,9 +823,9 @@ fn canonical_cell_json(cell: &protocol::action_std::TexCell) -> String {
         C::CondSatAtMost { satoshi } => scalar(14, "satoshi", satoshi.uint()),
         C::CondSatAtLeast { satoshi } => scalar(15, "satoshi", satoshi.uint()),
         C::CondSatEq { satoshi } => scalar(16, "satoshi", satoshi.uint()),
-        C::CondDiaAtMost { diamond } => scalar(17, "diamond", diamond.uint()),
-        C::CondDiaAtLeast { diamond } => scalar(18, "diamond", diamond.uint()),
-        C::CondDiaEq { diamond } => scalar(19, "diamond", diamond.uint()),
+        C::CondDiaActualAtMost { diamond } => scalar(17, "diamond", diamond.uint()),
+        C::CondDiaActualAtLeast { diamond } => scalar(18, "diamond", diamond.uint()),
+        C::CondDiaActualEq { diamond } => scalar(19, "diamond", diamond.uint()),
         C::CondAssetAtMost { asset: value } => asset(20, value),
         C::CondAssetAtLeast { asset: value } => asset(21, value),
         C::CondAssetEq { asset: value } => asset(22, value),
@@ -796,6 +840,9 @@ fn canonical_cell_json(cell: &protocol::action_std::TexCell) -> String {
         C::DirectedDiaGet { from, diamonds } => directed_dia(31, "from", from, diamonds),
         C::DirectedAssetPay { to, asset } => directed_asset(32, "to", to, asset),
         C::DirectedAssetGet { from, asset } => directed_asset(33, "from", from, asset),
+        C::CondDiaProjectedAtMost { diamond } => scalar(34, "diamond", diamond.uint()),
+        C::CondDiaProjectedAtLeast { diamond } => scalar(35, "diamond", diamond.uint()),
+        C::CondDiaProjectedEq { diamond } => scalar(36, "diamond", diamond.uint()),
     }
 }
 
@@ -828,7 +875,7 @@ pub fn inspect(authorization: &Authorization) -> Result<Inspection, SdkError> {
         let category = match cellid {
             1 | 3 | 5 | 7 | 26 | 28 | 30 | 32 => "pay",
             2 | 4 | 6 | 8 | 27 | 29 | 31 | 33 => "get",
-            11..=25 => "condition",
+            11..=25 | 34..=36 => "condition",
             _ => "unknown",
         };
         let value = pairs
@@ -874,12 +921,15 @@ pub fn inspect(authorization: &Authorization) -> Result<Inspection, SdkError> {
             14 => format!("Require SAT balance at most {}", display_value),
             15 => format!("Require SAT balance at least {}", display_value),
             16 => format!("Require SAT balance equal to {}", display_value),
-            17 => format!("Require HACD count at most {}", display_value),
-            18 => format!("Require HACD count at least {}", display_value),
-            19 => format!("Require HACD count equal to {}", display_value),
+            17 => format!("Require actual HACD count at most {}", display_value),
+            18 => format!("Require actual HACD count at least {}", display_value),
+            19 => format!("Require actual HACD count equal to {}", display_value),
             20 => format!("Require asset balance at most {}", value),
             21 => format!("Require asset balance at least {}", value),
             22 => format!("Require asset balance equal to {}", value),
+            34 => format!("Require projected HACD count at most {}", display_value),
+            35 => format!("Require projected HACD count at least {}", display_value),
+            36 => format!("Require projected HACD count equal to {}", display_value),
             26..=33 => {
                 let endpoint = pairs
                     .iter()

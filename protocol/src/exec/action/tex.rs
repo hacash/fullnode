@@ -32,6 +32,30 @@ fn tex_check_asset_serial(ctx: &mut dyn Context, serial: Fold64) -> Rerr {
     Ok(())
 }
 
+/// HACD count the bundle authorizer is *projected* to hold after the pending
+/// deferred clearing in this transaction settles: the settled `Balance.diamond`
+/// count minus the names this authorizer committed with `DiaPay`, plus the
+/// counts it is due through `DiaGet`. Computed on demand from the ledger's
+/// per-address pending counters, before `do_settlement`, and never written to
+/// any ledger state; an invalid bundle still fails and reverts at settlement.
+fn projected_diamond_count(ctx: &mut dyn Context, taradr: &Address) -> Ret<i128> {
+    let actual = CoreState::wrap(ctx.layer())
+        .balance(taradr)?
+        .unwrap_or_default()
+        .diamond
+        .uint();
+    let tex = ctx.tex_ledger();
+    let pay_pending = tex.dia_pay_pending.get(taradr).copied().unwrap_or(0);
+    let get_pending = tex.dia_get_pending.get(taradr).copied().unwrap_or(0);
+    let Some(projected) = (actual as i128)
+        .checked_sub(pay_pending as i128)
+        .and_then(|value| value.checked_add(get_pending as i128))
+    else {
+        return errf!("tex projected diamond count overflow");
+    };
+    Ok(projected)
+}
+
 /// Directed cells move value outside the TEX escrow, so the endpoint they name
 /// must be an ordinary user address: the settlement address, every other
 /// system address (privkey unknown, including the blackhole), and every
@@ -330,7 +354,7 @@ impl TexCell {
                     errf!("cell condition sat check failed")
                 }
             }
-            Self::CondDiaAtMost { diamond } => {
+            Self::CondDiaActualAtMost { diamond } => {
                 let dia = CoreState::wrap(ctx.layer())
                     .balance(taradr)?
                     .unwrap_or_default()
@@ -339,10 +363,10 @@ impl TexCell {
                 if diamond.uint() >= dia {
                     Ok(())
                 } else {
-                    errf!("cell condition dia check failed")
+                    errf!("cell condition actual dia check failed")
                 }
             }
-            Self::CondDiaAtLeast { diamond } => {
+            Self::CondDiaActualAtLeast { diamond } => {
                 let dia = CoreState::wrap(ctx.layer())
                     .balance(taradr)?
                     .unwrap_or_default()
@@ -351,10 +375,10 @@ impl TexCell {
                 if diamond.uint() <= dia {
                     Ok(())
                 } else {
-                    errf!("cell condition dia check failed")
+                    errf!("cell condition actual dia check failed")
                 }
             }
-            Self::CondDiaEq { diamond } => {
+            Self::CondDiaActualEq { diamond } => {
                 let dia = CoreState::wrap(ctx.layer())
                     .balance(taradr)?
                     .unwrap_or_default()
@@ -363,7 +387,31 @@ impl TexCell {
                 if diamond.uint() == dia {
                     Ok(())
                 } else {
-                    errf!("cell condition dia check failed")
+                    errf!("cell condition actual dia check failed")
+                }
+            }
+            Self::CondDiaProjectedAtMost { diamond } => {
+                let dia = projected_diamond_count(ctx, taradr)?;
+                if (diamond.uint() as i128) >= dia {
+                    Ok(())
+                } else {
+                    errf!("cell condition projected dia check failed")
+                }
+            }
+            Self::CondDiaProjectedAtLeast { diamond } => {
+                let dia = projected_diamond_count(ctx, taradr)?;
+                if (diamond.uint() as i128) <= dia {
+                    Ok(())
+                } else {
+                    errf!("cell condition projected dia check failed")
+                }
+            }
+            Self::CondDiaProjectedEq { diamond } => {
+                let dia = projected_diamond_count(ctx, taradr)?;
+                if (diamond.uint() as i128) == dia {
+                    Ok(())
+                } else {
+                    errf!("cell condition projected dia check failed")
                 }
             }
             Self::CondAssetAtMost { asset } => {
@@ -1868,6 +1916,194 @@ mod tests {
         }
         assert_eq!(dia_balance(&mut ctx, &payer_addr), 0);
         assert_eq!(dia_balance(&mut ctx, &recipient_addr), 2);
+        assert_ledger_diamonds_drained(&ctx);
+    }
+
+    /// Actual HACD conditions read the settled `Balance.diamond` count, while
+    /// the projected variants account for the pending `DiaPay` records. With a
+    /// pay of 2 pending and 3 settled names, actual is 3 and projected is 1 —
+    /// both conditions can be asserted in one bundle and genuinely disagree.
+    #[test]
+    fn dia_pay_actual_condition_ignores_pending_pay_while_projected_deducts_it() {
+        let payer = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let recipient = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let payer_addr = Address::from(*payer.address());
+        let recipient_addr = Address::from(*recipient.address());
+        let names = vec![hacd_name(1), hacd_name(2), hacd_name(3)];
+        let bundle = |extra: Vec<TexCell>| {
+            let mut cells = vec![TexCell::DiaPay {
+                diamonds: DiamondNameListMax200::from(names[..2].to_vec()).unwrap(),
+            }];
+            cells.extend(extra);
+            typed_tx(
+                &recipient,
+                vec![recipient_addr],
+                vec![tex_bundle(&payer, cells)],
+            )
+        };
+
+        // Actual still sees the pre-settlement 3; projected is 3 - 2 = 1.
+        let mut ctx = DirectedCtx::new(bundle(vec![
+            TexCell::CondDiaActualEq {
+                diamond: Fold64::from(3).unwrap(),
+            },
+            TexCell::CondDiaProjectedEq {
+                diamond: Fold64::from(1).unwrap(),
+            },
+            TexCell::CondDiaProjectedAtMost {
+                diamond: Fold64::from(1).unwrap(),
+            },
+            TexCell::CondDiaProjectedAtLeast {
+                diamond: Fold64::from(1).unwrap(),
+            },
+        ]));
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+        run_all_actions(&mut ctx).unwrap();
+        assert_eq!(ctx.tex.dia_pay_pending.get(&payer_addr).copied(), Some(2));
+        assert!(ctx.tex.dia_get_pending.is_empty());
+
+        // Disagreement, direction one: claiming the actual count is 1 fails.
+        let mut ctx = DirectedCtx::new(bundle(vec![TexCell::CondDiaActualEq {
+            diamond: Fold64::from(1).unwrap(),
+        }]));
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+        let err = run_all_actions(&mut ctx).unwrap_err().to_string();
+        assert!(err.contains("actual dia check failed"), "{err}");
+
+        // Disagreement, direction two: claiming the projected count is 3 fails.
+        let mut ctx = DirectedCtx::new(bundle(vec![TexCell::CondDiaProjectedEq {
+            diamond: Fold64::from(3).unwrap(),
+        }]));
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+        let err = run_all_actions(&mut ctx).unwrap_err().to_string();
+        assert!(err.contains("projected dia check failed"), "{err}");
+    }
+
+    /// Actual HACD conditions ignore the pending `DiaGet` receipts; the
+    /// projected variants add them. The recipient settles at 1 name, books a
+    /// get of 2, so actual is 1 and projected is 3 while the cells run.
+    #[test]
+    fn dia_get_actual_condition_ignores_pending_get_while_projected_adds_it() {
+        let payer = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let recipient = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let payer_addr = Address::from(*payer.address());
+        let recipient_addr = Address::from(*recipient.address());
+        let payer_names = vec![hacd_name(1), hacd_name(2)];
+        let recipient_names = vec![hacd_name(3)];
+        let bundle = |extra: Vec<TexCell>| {
+            let mut cells = vec![TexCell::DiaGet {
+                dianum: DiamondNumber::from(2u32),
+            }];
+            cells.extend(extra);
+            typed_tx(
+                &recipient,
+                vec![recipient_addr],
+                vec![
+                    tex_bundle(
+                        &payer,
+                        vec![TexCell::DiaPay {
+                            diamonds: DiamondNameListMax200::from(payer_names.clone()).unwrap(),
+                        }],
+                    ),
+                    tex_bundle(&recipient, cells),
+                ],
+            )
+        };
+
+        let mut ctx = DirectedCtx::new(bundle(vec![
+            TexCell::CondDiaActualEq {
+                diamond: Fold64::from(1).unwrap(),
+            },
+            TexCell::CondDiaProjectedEq {
+                diamond: Fold64::from(3).unwrap(),
+            },
+            TexCell::CondDiaProjectedAtLeast {
+                diamond: Fold64::from(3).unwrap(),
+            },
+            TexCell::CondDiaProjectedAtMost {
+                diamond: Fold64::from(3).unwrap(),
+            },
+        ]));
+        seed_diamonds(&mut ctx, &payer_addr, &payer_names);
+        seed_diamonds(&mut ctx, &recipient_addr, &recipient_names);
+        run_all_actions(&mut ctx).unwrap();
+        assert_eq!(ctx.tex.dia_pay_pending.get(&payer_addr).copied(), Some(2));
+        assert_eq!(
+            ctx.tex.dia_get_pending.get(&recipient_addr).copied(),
+            Some(2)
+        );
+
+        // The pending get is only projected: the actual count is still 1.
+        let mut ctx = DirectedCtx::new(bundle(vec![TexCell::CondDiaActualEq {
+            diamond: Fold64::from(3).unwrap(),
+        }]));
+        seed_diamonds(&mut ctx, &payer_addr, &payer_names);
+        seed_diamonds(&mut ctx, &recipient_addr, &recipient_names);
+        let err = run_all_actions(&mut ctx).unwrap_err().to_string();
+        assert!(err.contains("actual dia check failed"), "{err}");
+
+        // Settlement then delivers the pay records and the settled count takes
+        // over; the projected addition is gone once the ledger is drained.
+        let mut ctx = DirectedCtx::new(bundle(vec![]));
+        seed_diamonds(&mut ctx, &payer_addr, &payer_names);
+        seed_diamonds(&mut ctx, &recipient_addr, &recipient_names);
+        run_all_actions(&mut ctx).unwrap();
+        crate::exec::tex::do_settlement(&mut ctx).unwrap();
+        for name in &payer_names {
+            assert_eq!(dia_owner(&mut ctx, name), recipient_addr);
+        }
+        assert_eq!(dia_balance(&mut ctx, &payer_addr), 0);
+        assert_eq!(dia_balance(&mut ctx, &recipient_addr), 3);
+    }
+
+    /// Regression guard: this feature reads the ledger but does not change
+    /// settlement. A valid pay/get pair still moves every named diamond from
+    /// the payer to the recipient, and the settled actual count equals the
+    /// named ownership on both sides.
+    #[test]
+    fn settlement_still_moves_names_and_actual_count_matches_named_ownership() {
+        let payer = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let recipient = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let payer_addr = Address::from(*payer.address());
+        let recipient_addr = Address::from(*recipient.address());
+        let names = vec![hacd_name(1), hacd_name(2)];
+        let mut ctx = DirectedCtx::new(typed_tx(
+            &recipient,
+            vec![recipient_addr],
+            vec![
+                tex_bundle(
+                    &payer,
+                    vec![TexCell::DiaPay {
+                        diamonds: DiamondNameListMax200::from(names.clone()).unwrap(),
+                    }],
+                ),
+                tex_bundle(
+                    &recipient,
+                    vec![TexCell::DiaGet {
+                        dianum: DiamondNumber::from(2u32),
+                    }],
+                ),
+            ],
+        ));
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+
+        // Before settlement nothing has moved: actual counts are the settled ones.
+        assert_eq!(dia_balance(&mut ctx, &payer_addr), 2);
+        assert_eq!(dia_balance(&mut ctx, &recipient_addr), 0);
+        run_all_actions(&mut ctx).unwrap();
+        assert_eq!(dia_balance(&mut ctx, &payer_addr), 2);
+        assert_eq!(ctx.tex.dia_pay_pending.get(&payer_addr).copied(), Some(2));
+        assert_eq!(
+            ctx.tex.dia_get_pending.get(&recipient_addr).copied(),
+            Some(2)
+        );
+
+        crate::exec::tex::do_settlement(&mut ctx).unwrap();
+        for name in &names {
+            assert_eq!(dia_owner(&mut ctx, name), recipient_addr);
+        }
+        assert_eq!(dia_balance(&mut ctx, &payer_addr), 0);
+        assert_eq!(dia_balance(&mut ctx, &recipient_addr) as usize, names.len());
         assert_ledger_diamonds_drained(&ctx);
     }
 }
