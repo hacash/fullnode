@@ -446,8 +446,21 @@ fn hacd_adjust_count(
     Ok(vec![])
 }
 
+/// Check-only ownership query: every named diamond must exist, be unmortgaged
+/// and belong to `owner`. Moves nothing.
+pub fn check_diamonds_ownership(
+    state: &mut CoreState,
+    owner: &Address,
+    diamonds: &DiamondNameListMax200,
+) -> Ret<()> {
+    for name in diamonds.as_list() {
+        check_diamond_status(state, owner, name)?;
+    }
+    Ok(())
+}
+
 /// Named diamond transfer: per-name ownership, optional owned-list, then count.
-/// Recipient policy lives in `protocol::exec::apply` (`User` vs `TexEscrow`).
+/// The recipient guard (no system addresses) lives in `protocol::exec::apply`.
 pub fn hacd_transfer(
     ctx: &mut dyn Context,
     from: &Address,

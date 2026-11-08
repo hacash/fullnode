@@ -1,13 +1,14 @@
 //! TexCellExecute execute body and TEX cell state changes.
 
 use base::{
-    Context, CoreState, ExecFrom, asset_add, asset_sub, hac_add, hac_sub, sat_add, sat_sub,
+    Context, CoreState, ExecFrom, asset_add, asset_sub, hac_add, hac_sub, record_diamond_pay,
+    sat_add, sat_sub,
 };
 use field::{AddrOrPtr, Address, Amount, Fold64, Hash, Satoshi, Sign, ToJSON};
 use sys::{Account, Rerr, Ret, errf};
 
 use crate::codec::action::tex::{TexCell, TexCellExecute};
-use crate::exec::apply::{DiamondMove, diamonds_transfer};
+use crate::exec::apply::diamonds_transfer;
 use crate::params::SETTLEMENT_ADDR;
 
 fn tex_check_asset_serial(ctx: &mut dyn Context, serial: Fold64) -> Rerr {
@@ -136,15 +137,11 @@ impl TexCell {
                 Ok(())
             }
             Self::DiaPay { diamonds } => {
-                diamonds_transfer(
-                    ctx,
-                    taradr,
-                    &SETTLEMENT_ADDR,
-                    diamonds,
-                    DiamondMove::TexEscrow,
-                )?;
+                // Deferred clearing: nothing moves here. The ledger booking
+                // re-checks that the authorizer owns every named diamond and
+                // rejects duplicates; do_settlement delivers the diamonds.
                 let max = crate::execution_params(ctx.services().as_ref())?.tex_diamond_pay_max;
-                ctx.tex_ledger_mut_top()?.record_diamond_pay(diamonds, max)
+                record_diamond_pay(ctx, taradr, diamonds, max)
             }
             Self::DiaGet { dianum } => {
                 if dianum.uint() == 0 {
@@ -216,13 +213,13 @@ impl TexCell {
             Self::DirectedDiaPay { to, diamonds } => {
                 let target = to.real(&ctx.env().tx.addrs)?;
                 check_direct_endpoint(&target)?;
-                diamonds_transfer(ctx, taradr, &target, diamonds, DiamondMove::User)?;
+                diamonds_transfer(ctx, taradr, &target, diamonds)?;
                 Ok(())
             }
             Self::DirectedDiaGet { from, diamonds } => {
                 let source = resolve_directed_source(ctx, from)?;
                 check_direct_endpoint(&source)?;
-                diamonds_transfer(ctx, &source, taradr, diamonds, DiamondMove::User)?;
+                diamonds_transfer(ctx, &source, taradr, diamonds)?;
                 Ok(())
             }
             Self::DirectedAssetPay { to, asset } => {
@@ -445,9 +442,10 @@ base::impl_action_execute! {
 mod tests {
     use super::*;
     use base::{
-        ActionDispatcher, ActionExecute, BinaryCodecs, BlockHasherFn, BlockRef, DIAMOND_STATUS_NORMAL,
-        Env, ExecutionServices, JsonCodecs, StateLayer, StateRead, TexLedger, Transaction, TxInfo,
-        TxRef, Vm, VmExecutionParams, VmHostActionDef, VmHostCallKind,
+        ActionDispatcher, ActionExecute, ActionRef, BinaryCodecs, BlockHasherFn, BlockRef,
+        DIAMOND_STATUS_NORMAL, Env, ExecutionServices, JsonCodecs, StateLayer, StateRead,
+        TexLedger, Transaction, TxInfo, TxRef, Vm, VmExecutionParams, VmHostActionDef,
+        VmHostCallKind,
     };
     use field::{
         AssetAmt, AssetAmtW1, Balance, BlockHeight, DiamondName, DiamondNameListMax200,
@@ -457,6 +455,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
+    use crate::action_std::TransferHacdTo;
     use crate::codec::tx::StdTransaction;
 
     #[derive(Default)]
@@ -724,7 +723,16 @@ mod tests {
         assert_eq!(ctx.tex.dia, 0);
         assert!(ctx.tex.entries.is_empty());
         assert!(ctx.tex.diamonds.is_empty());
+        assert!(ctx.tex.dia_recorded.is_empty());
         assert!(ctx.tex.diatrs.is_empty());
+    }
+
+    /// Post-settlement state: the pay-records are fully handed out. The
+    /// `diatrs` entries and the dia counter stay as recorded — the ledger is
+    /// per-tx scratch and is dropped with the context.
+    fn assert_ledger_diamonds_drained(ctx: &DirectedCtx) {
+        assert!(ctx.tex.diamonds.is_empty());
+        assert!(ctx.tex.dia_recorded.is_empty());
     }
 
     #[test]
@@ -1000,7 +1008,7 @@ mod tests {
                 },
             },
             // The blackhole and every other unknown-privkey address are system
-            // addresses for directed moves, mirroring DiamondMove::User.
+            // addresses for directed moves, mirroring the diamond recipient guard.
             TexCell::DirectedZhuPay {
                 to: AddrOrPtr::Addr(Address::from([0u8; 21])),
                 haczhu: Fold64::from(1000).unwrap(),
@@ -1184,5 +1192,483 @@ mod tests {
         );
         assert_eq!(hac_balance(&mut ctx, &taker_addr), Amount::default());
         assert_ledger_residual_zero(&ctx);
+    }
+
+    // ======================== deferred HACD clearing ========================
+
+    /// Type-3 tx carrying arbitrary pre-built actions (several TEX bundles
+    /// signed by different authorizers, ordinary transfers, ...), all executed
+    /// by `main`.
+    fn typed_tx(
+        main: &sys::Account,
+        addrlist: Vec<Address>,
+        actions: Vec<ActionRef>,
+    ) -> StdTransaction {
+        let mut tx = StdTransaction::new_by(
+            hacash_params::TX_TYPE_3,
+            addrlist[0],
+            Amount::from("1:244").unwrap(),
+            1_700_000_000,
+        );
+        tx.addrlist = field::AddrOrList::from_list(addrlist).unwrap();
+        for act in actions {
+            tx.push_action_in(act);
+        }
+        tx.fill_sign_account(main).unwrap();
+        tx
+    }
+
+    fn tex_bundle(
+        authorizer: &sys::Account,
+        cells: Vec<TexCell>,
+    ) -> ActionRef {
+        Arc::new(
+            TexCellExecute::create_signed(Address::from(*authorizer.address()), cells, authorizer)
+                .unwrap(),
+        ) as ActionRef
+    }
+
+    fn run_all_actions(ctx: &mut DirectedCtx) -> Ret<()> {
+        let actions = ctx.tx.actions().to_vec();
+        for act in &actions {
+            ActionDispatcher::dispatch_top(ctx.as_context_mut(), act).map(|_| ())?;
+        }
+        Ok(())
+    }
+
+    fn dia_owner(ctx: &mut DirectedCtx, name: &DiamondName) -> Address {
+        CoreState::wrap(ctx.layer())
+            .diamond(name)
+            .unwrap()
+            .unwrap()
+            .address
+    }
+
+    fn dia_balance(ctx: &mut DirectedCtx, addr: &Address) -> u64 {
+        CoreState::wrap(ctx.layer())
+            .balance(addr)
+            .unwrap()
+            .map(|b| b.diamond.uint())
+            .unwrap_or(0)
+    }
+
+    /// Deferred clearing happy path: the DiaPay only records (payer, names)
+    /// and the payer keeps its diamonds until settlement, which then delivers
+    /// them straight from the payer to the recipient — the settlement address
+    /// never holds them.
+    #[test]
+    fn deferred_dia_pay_delivers_diamonds_directly_at_settlement() {
+        let payer = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let recipient = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let payer_addr = Address::from(*payer.address());
+        let recipient_addr = Address::from(*recipient.address());
+        let names = vec![hacd_name(1), hacd_name(2)];
+        let mut ctx = DirectedCtx::new(typed_tx(
+            &recipient,
+            vec![recipient_addr],
+            vec![
+                tex_bundle(
+                    &payer,
+                    vec![TexCell::DiaPay {
+                        diamonds: DiamondNameListMax200::from(names.clone()).unwrap(),
+                    }],
+                ),
+                tex_bundle(
+                    &recipient,
+                    vec![TexCell::DiaGet {
+                        dianum: DiamondNumber::from(2u32),
+                    }],
+                ),
+            ],
+        ));
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+
+        run_all_actions(&mut ctx).unwrap();
+        // Deferred: nothing has moved yet — the payer still owns everything.
+        for name in &names {
+            assert_eq!(dia_owner(&mut ctx, name), payer_addr);
+        }
+        assert_eq!(dia_balance(&mut ctx, &payer_addr), 2);
+        assert_eq!(dia_balance(&mut ctx, &recipient_addr), 0);
+
+        crate::exec::tex::do_settlement(&mut ctx).unwrap();
+        for name in &names {
+            assert_eq!(dia_owner(&mut ctx, name), recipient_addr);
+        }
+        assert_eq!(dia_balance(&mut ctx, &payer_addr), 0);
+        assert_eq!(dia_balance(&mut ctx, &recipient_addr), 2);
+        assert_eq!(
+            dia_balance(&mut ctx, &crate::params::SETTLEMENT_ADDR),
+            0
+        );
+        assert_ledger_diamonds_drained(&ctx);
+    }
+
+    /// FIFO across multiple payers: one DiaGet whose count spans two DiaPay
+    /// records is delivered in pay order, each segment transferred by its
+    /// original payer — a wrong grouping would fail the ownership re-verify.
+    #[test]
+    fn deferred_settlement_walks_pay_records_fifo_across_payers() {
+        let payer1 = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let payer2 = sys::Account::create_by_secret_key_value([7u8; 32]).unwrap();
+        let recipient = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let payer1_addr = Address::from(*payer1.address());
+        let payer2_addr = Address::from(*payer2.address());
+        let recipient_addr = Address::from(*recipient.address());
+        let names1 = vec![hacd_name(1), hacd_name(2)];
+        let names2 = vec![hacd_name(3)];
+        let mut ctx = DirectedCtx::new(typed_tx(
+            &recipient,
+            vec![recipient_addr],
+            vec![
+                tex_bundle(
+                    &payer1,
+                    vec![TexCell::DiaPay {
+                        diamonds: DiamondNameListMax200::from(names1.clone()).unwrap(),
+                    }],
+                ),
+                tex_bundle(
+                    &payer2,
+                    vec![TexCell::DiaPay {
+                        diamonds: DiamondNameListMax200::from(names2.clone()).unwrap(),
+                    }],
+                ),
+                tex_bundle(
+                    &recipient,
+                    vec![TexCell::DiaGet {
+                        dianum: DiamondNumber::from(3u32),
+                    }],
+                ),
+            ],
+        ));
+        seed_diamonds(&mut ctx, &payer1_addr, &names1);
+        seed_diamonds(&mut ctx, &payer2_addr, &names2);
+
+        run_all_actions(&mut ctx).unwrap();
+        crate::exec::tex::do_settlement(&mut ctx).unwrap();
+        for name in names1.iter().chain(names2.iter()) {
+            assert_eq!(dia_owner(&mut ctx, name), recipient_addr);
+        }
+        assert_eq!(dia_balance(&mut ctx, &payer1_addr), 0);
+        assert_eq!(dia_balance(&mut ctx, &payer2_addr), 0);
+        assert_eq!(dia_balance(&mut ctx, &recipient_addr), 3);
+        assert_ledger_diamonds_drained(&ctx);
+    }
+
+    /// Σ pays ≠ Σ gets fails settlement. In strict mode the `dia` residual
+    /// catches both directions; under fast sync the residual check is skipped
+    /// but the FIFO walk still fails on a short pool and still delivers on a
+    /// long one (the leftover records stay in the ledger, as before).
+    #[test]
+    fn deferred_settlement_fails_when_pays_and_gets_do_not_match() {
+        let payer = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let recipient = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let payer_addr = Address::from(*payer.address());
+        let recipient_addr = Address::from(*recipient.address());
+        let names = vec![hacd_name(1), hacd_name(2)];
+        let pay_get = |pays: usize, gets: u32| {
+            typed_tx(
+                &recipient,
+                vec![recipient_addr],
+                vec![
+                    tex_bundle(
+                        &payer,
+                        vec![TexCell::DiaPay {
+                            diamonds: DiamondNameListMax200::from(
+                                names.iter().take(pays).cloned().collect::<Vec<_>>(),
+                            )
+                            .unwrap(),
+                        }],
+                    ),
+                    tex_bundle(
+                        &recipient,
+                        vec![TexCell::DiaGet {
+                            dianum: DiamondNumber::from(gets),
+                        }],
+                    ),
+                ],
+            )
+        };
+
+        // Pays > gets, strict mode: the nonzero dia residual fails first.
+        let mut ctx = DirectedCtx::new(pay_get(2, 1));
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+        run_all_actions(&mut ctx).unwrap();
+        let err = crate::exec::tex::do_settlement(&mut ctx)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("coin settlement check failed"), "{err}");
+
+        // Pays < gets, fast sync: the residual check is skipped, the walk is not.
+        let mut ctx = DirectedCtx::new(pay_get(1, 2));
+        ctx.env.chain.fast_sync = true;
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+        run_all_actions(&mut ctx).unwrap();
+        let err = crate::exec::tex::do_settlement(&mut ctx)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("diamonds settlement check failed"), "{err}");
+
+        // Pays > gets, fast sync: delivery runs and the leftover stays recorded.
+        let mut ctx = DirectedCtx::new(pay_get(2, 1));
+        ctx.env.chain.fast_sync = true;
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+        run_all_actions(&mut ctx).unwrap();
+        crate::exec::tex::do_settlement(&mut ctx).unwrap();
+        assert_eq!(dia_owner(&mut ctx, &names[0]), recipient_addr);
+        assert_eq!(dia_owner(&mut ctx, &names[1]), payer_addr);
+        assert_eq!(ctx.tex.diamonds.len(), 1);
+    }
+
+    /// Record-time duplicate rejection: with deferred clearing nothing moves,
+    /// so the ownership check alone would let overlapping DiaPays through —
+    /// the explicit dedup must reject the second pay immediately.
+    #[test]
+    fn deferred_dia_pay_rejects_a_name_already_recorded_in_the_tx() {
+        let payer = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let payer_addr = Address::from(*payer.address());
+        let names = vec![hacd_name(1), hacd_name(2), hacd_name(3)];
+        let mut ctx = DirectedCtx::new(typed_tx(
+            &payer,
+            vec![payer_addr],
+            vec![tex_bundle(
+                &payer,
+                vec![
+                    TexCell::DiaPay {
+                        diamonds: DiamondNameListMax200::from(vec![names[0], names[1]]).unwrap(),
+                    },
+                    TexCell::DiaPay {
+                        diamonds: DiamondNameListMax200::from(vec![names[0], names[2]]).unwrap(),
+                    },
+                ],
+            )],
+        ));
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+
+        let err = run_all_actions(&mut ctx).unwrap_err().to_string();
+        assert!(err.contains("already recorded for settlement"), "{err}");
+        // Only the first pay's records are in the ledger.
+        assert_eq!(ctx.tex.diamonds.len(), 2);
+        assert_eq!(ctx.tex.diamonds[0], (payer_addr, names[0]));
+        assert_eq!(ctx.tex.diamonds[1], (payer_addr, names[1]));
+    }
+
+    /// Mid-tx movement of recorded diamonds reverts settlement: after the
+    /// DiaPay records the names, a legitimate main-signed transfer moves them
+    /// away; the ownership re-verify in do_settlement fails and the caller
+    /// discards the whole transaction's state changes.
+    #[test]
+    fn deferred_settlement_reverts_when_recorded_diamonds_move_mid_tx() {
+        let payer = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let other = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let payer_addr = Address::from(*payer.address());
+        let other_addr = Address::from(*other.address());
+        let names = vec![hacd_name(1), hacd_name(2)];
+        let mut ctx = DirectedCtx::new(typed_tx(
+            &payer,
+            vec![payer_addr],
+            vec![
+                tex_bundle(
+                    &payer,
+                    vec![TexCell::DiaPay {
+                        diamonds: DiamondNameListMax200::from(names.clone()).unwrap(),
+                    }],
+                ),
+                Arc::new(TransferHacdTo::new(
+                    other_addr,
+                    DiamondNameListMax200::from(names.clone()).unwrap(),
+                )) as ActionRef,
+                tex_bundle(
+                    &other,
+                    vec![TexCell::DiaGet {
+                        dianum: DiamondNumber::from(2u32),
+                    }],
+                ),
+            ],
+        ));
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+        let snapshot = ctx.layer.0.clone();
+
+        // Both actions are legitimate on their own: the payer still owns the
+        // diamonds when the transfer executes.
+        run_all_actions(&mut ctx).unwrap();
+        for name in &names {
+            assert_eq!(dia_owner(&mut ctx, name), other_addr);
+        }
+        let err = crate::exec::tex::do_settlement(&mut ctx)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not belong to address"), "{err}");
+
+        // The block apply discards a failed tx wholesale; mirror that here.
+        ctx.layer.0 = snapshot;
+        for name in &names {
+            assert_eq!(dia_owner(&mut ctx, name), payer_addr);
+        }
+        assert_eq!(dia_balance(&mut ctx, &payer_addr), 2);
+        assert_eq!(dia_balance(&mut ctx, &other_addr), 0);
+    }
+
+    /// The DiaPay ownership check runs at record time: committing diamonds the
+    /// authorizer does not own (or that do not exist) fails the cell
+    /// immediately and leaves the ledger untouched.
+    #[test]
+    fn deferred_dia_pay_rejects_diamonds_the_authorizer_does_not_own() {
+        let owner = sys::Account::create_by_secret_key_value([7u8; 32]).unwrap();
+        let payer = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let owner_addr = Address::from(*owner.address());
+        let payer_addr = Address::from(*payer.address());
+        let owned = hacd_name(1);
+        let missing = hacd_name(2);
+        let pay_tx = |diamonds: DiamondNameListMax200| {
+            typed_tx(
+                &payer,
+                vec![payer_addr],
+                vec![tex_bundle(
+                    &payer,
+                    vec![TexCell::DiaPay { diamonds }],
+                )],
+            )
+        };
+
+        // The diamond exists but belongs to someone else.
+        let mut ctx = DirectedCtx::new(pay_tx(DiamondNameListMax200::from(vec![owned]).unwrap()));
+        seed_diamonds(&mut ctx, &owner_addr, &[owned]);
+        let err = run_all_actions(&mut ctx).unwrap_err().to_string();
+        assert!(err.contains("does not belong to address"), "{err}");
+
+        // The diamond does not exist at all.
+        let mut ctx = DirectedCtx::new(pay_tx(DiamondNameListMax200::from(vec![missing]).unwrap()));
+        let err = run_all_actions(&mut ctx).unwrap_err().to_string();
+        assert!(err.contains("not found"), "{err}");
+
+        assert!(ctx.tex.diamonds.is_empty());
+        assert_eq!(ctx.tex.dia, 0);
+    }
+
+    /// Directed diamond cells and the deferred pool coexist: the directed move
+    /// delivers directly while the pool path defers to settlement. But a
+    /// directed move of a name a DiaPay recorded trips the ownership
+    /// re-verify at settlement and reverts the transaction.
+    #[test]
+    fn directed_and_pool_dia_cells_coexist_and_conflicts_revert() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let payer2 = sys::Account::create_by_secret_key_value([7u8; 32]).unwrap();
+        let recipient = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let maker_addr = Address::from(*maker.address());
+        let payer2_addr = Address::from(*payer2.address());
+        let recipient_addr = Address::from(*recipient.address());
+        let directed_name = hacd_name(4);
+        let pool_name = hacd_name(5);
+        let mut ctx = DirectedCtx::new(typed_tx(
+            &recipient,
+            vec![recipient_addr],
+            vec![
+                tex_bundle(
+                    &maker,
+                    vec![TexCell::DirectedDiaPay {
+                        to: AddrOrPtr::Addr(recipient_addr),
+                        diamonds: DiamondNameListMax200::from(vec![directed_name]).unwrap(),
+                    }],
+                ),
+                tex_bundle(
+                    &payer2,
+                    vec![TexCell::DiaPay {
+                        diamonds: DiamondNameListMax200::from(vec![pool_name]).unwrap(),
+                    }],
+                ),
+                tex_bundle(
+                    &recipient,
+                    vec![TexCell::DiaGet {
+                        dianum: DiamondNumber::from(1u32),
+                    }],
+                ),
+            ],
+        ));
+        seed_diamonds(&mut ctx, &maker_addr, &[directed_name]);
+        seed_diamonds(&mut ctx, &payer2_addr, &[pool_name]);
+
+        run_all_actions(&mut ctx).unwrap();
+        // The directed move already delivered; the pool record is still parked.
+        assert_eq!(dia_owner(&mut ctx, &directed_name), recipient_addr);
+        assert_eq!(dia_owner(&mut ctx, &pool_name), payer2_addr);
+        crate::exec::tex::do_settlement(&mut ctx).unwrap();
+        assert_eq!(dia_owner(&mut ctx, &pool_name), recipient_addr);
+        assert_eq!(dia_balance(&mut ctx, &payer2_addr), 0);
+        assert_ledger_diamonds_drained(&ctx);
+
+        // Conflict: the pool records the name, then a directed move takes it.
+        let pool_name = hacd_name(6);
+        let mut ctx = DirectedCtx::new(typed_tx(
+            &recipient,
+            vec![recipient_addr],
+            vec![
+                tex_bundle(
+                    &maker,
+                    vec![TexCell::DiaPay {
+                        diamonds: DiamondNameListMax200::from(vec![pool_name]).unwrap(),
+                    }],
+                ),
+                tex_bundle(
+                    &maker,
+                    vec![TexCell::DirectedDiaPay {
+                        to: AddrOrPtr::Addr(recipient_addr),
+                        diamonds: DiamondNameListMax200::from(vec![pool_name]).unwrap(),
+                    }],
+                ),
+                tex_bundle(
+                    &recipient,
+                    vec![TexCell::DiaGet {
+                        dianum: DiamondNumber::from(1u32),
+                    }],
+                ),
+            ],
+        ));
+        seed_diamonds(&mut ctx, &maker_addr, &[pool_name]);
+        run_all_actions(&mut ctx).unwrap();
+        let err = crate::exec::tex::do_settlement(&mut ctx)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("does not belong to address"), "{err}");
+    }
+
+    /// Fast sync skips the residual checks but the deferred distribution must
+    /// still run and still deliver the diamonds payer-to-recipient.
+    #[test]
+    fn deferred_settlement_distribution_runs_under_fast_sync() {
+        let payer = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let recipient = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let payer_addr = Address::from(*payer.address());
+        let recipient_addr = Address::from(*recipient.address());
+        let names = vec![hacd_name(1), hacd_name(2)];
+        let mut ctx = DirectedCtx::new(typed_tx(
+            &recipient,
+            vec![recipient_addr],
+            vec![
+                tex_bundle(
+                    &payer,
+                    vec![TexCell::DiaPay {
+                        diamonds: DiamondNameListMax200::from(names.clone()).unwrap(),
+                    }],
+                ),
+                tex_bundle(
+                    &recipient,
+                    vec![TexCell::DiaGet {
+                        dianum: DiamondNumber::from(2u32),
+                    }],
+                ),
+            ],
+        ));
+        ctx.env.chain.fast_sync = true;
+        seed_diamonds(&mut ctx, &payer_addr, &names);
+
+        run_all_actions(&mut ctx).unwrap();
+        crate::exec::tex::do_settlement(&mut ctx).unwrap();
+        for name in &names {
+            assert_eq!(dia_owner(&mut ctx, name), recipient_addr);
+        }
+        assert_eq!(dia_balance(&mut ctx, &payer_addr), 0);
+        assert_eq!(dia_balance(&mut ctx, &recipient_addr), 2);
+        assert_ledger_diamonds_drained(&ctx);
     }
 }

@@ -1,43 +1,72 @@
 use std::collections::HashSet;
 
-use field::{Address, AssetAmt, DiamondName, DiamondNameListMax200, Fold64, Hash};
+use field::{Address, AssetAmt, DiamondName, DiamondNameListMax200, Fold64};
 use sys::{Ret, errf};
+
+use crate::Context;
+
+use super::CoreState;
+use super::operate::check_diamonds_ownership;
 
 #[derive(Clone, Default, Debug)]
 pub struct TexLedger {
     pub zhu: i64,
     pub sat: i64,
     pub dia: i32,
-    /// Diamond names paid into the settlement pool (FIFO for gets).
-    pub diamonds: Vec<Hash>,
+    /// Diamond names committed by `DiaPay` cells as `(payer, name)` records in
+    /// pay order. Deferred clearing moves nothing at record time; settlement
+    /// delivers each name straight from its original payer.
+    pub diamonds: Vec<(Address, DiamondName)>,
+    /// Names already present in `diamonds`, so a duplicate `DiaPay` is rejected
+    /// at record time (the physical escrow move used to reject duplicates
+    /// implicitly through the ownership check). Cleared when settlement takes
+    /// the records; no `DiaPay` runs after settlement.
+    pub dia_recorded: HashSet<DiamondName>,
     pub diatrs: Vec<(Address, usize)>,
     pub entries: Vec<TexEntry>,
     pub asset_checked: HashSet<u64>,
 }
 
-impl TexLedger {
-    pub fn record_diamond_pay(
-        &mut self,
-        names: &DiamondNameListMax200,
-        max_diamonds: usize,
-    ) -> Ret<()> {
-        let n = names.length() as i32;
-        let Some(newdia) = self.dia.checked_add(n) else {
-            return errf!("cell state diamond record overflow");
-        };
-        let Some(new_len) = self.diamonds.len().checked_add(names.length()) else {
-            return errf!("tex diamond pay record overflow");
-        };
-        if new_len > max_diamonds {
-            return errf!("tex diamond pay exceeds {} diamonds", max_diamonds);
-        }
-        for name in names.as_list() {
-            self.diamonds.push(diamond_name_as_hash(name));
-        }
-        self.dia = newdia;
-        Ok(())
+/// DiaPay record-time booking (deferred clearing): the named diamonds are not
+/// moved. The authorizer must currently own every one of them (check-only
+/// ownership query), a name already recorded in this transaction is rejected,
+/// and on success the names join the FIFO pay-records and the `dia` counter
+/// advances. Delivery happens in `do_settlement`.
+pub fn record_diamond_pay(
+    ctx: &mut dyn Context,
+    payer: &Address,
+    names: &DiamondNameListMax200,
+    max_diamonds: usize,
+) -> Ret<()> {
+    {
+        let mut state = CoreState::wrap(ctx.layer());
+        check_diamonds_ownership(&mut state, payer, names)?;
     }
+    let tex = ctx.tex_ledger_mut_top()?;
+    let n = names.length() as i32;
+    let Some(newdia) = tex.dia.checked_add(n) else {
+        return errf!("cell state diamond record overflow");
+    };
+    let Some(new_len) = tex.diamonds.len().checked_add(names.length()) else {
+        return errf!("tex diamond pay record overflow");
+    };
+    if new_len > max_diamonds {
+        return errf!("tex diamond pay exceeds {} diamonds", max_diamonds);
+    }
+    for name in names.as_list() {
+        if !tex.dia_recorded.insert(*name) {
+            return errf!(
+                "diamond {} is already recorded for settlement",
+                name.to_readable()
+            );
+        }
+        tex.diamonds.push((*payer, *name));
+    }
+    tex.dia = newdia;
+    Ok(())
+}
 
+impl TexLedger {
     pub fn record_diamond_get(
         &mut self,
         addr: Address,
@@ -89,12 +118,6 @@ impl TexLedger {
     pub fn asset_is_checked(&self, serial: Fold64) -> bool {
         self.asset_checked.contains(&serial.uint())
     }
-}
-
-fn diamond_name_as_hash(name: &DiamondName) -> Hash {
-    let mut buf = [0u8; 32];
-    buf[..DiamondName::SIZE].copy_from_slice(name.as_ref());
-    Hash::from(buf)
 }
 
 #[derive(Clone, Debug)]

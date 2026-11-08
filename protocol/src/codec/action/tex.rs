@@ -38,7 +38,7 @@ impl TexCell {
             Self::SatPay { satnum } => format!("pay {} SAT into TEX escrow", satnum.uint()),
             Self::SatGet { satnum } => format!("get {} SAT from TEX escrow", satnum.uint()),
             Self::DiaPay { diamonds } => {
-                format!("pay HACD ({}) into TEX escrow", diamonds.splitstr())
+                format!("commit HACD ({}) for settlement delivery", diamonds.splitstr())
             }
             Self::DiaGet { dianum } => format!("get {} HACD from TEX escrow", dianum.uint()),
             Self::AssetPay { asset } => format!(
