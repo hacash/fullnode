@@ -32,13 +32,6 @@ fn tex_check_asset_serial(ctx: &mut dyn Context, serial: Fold64) -> Rerr {
     Ok(())
 }
 
-fn verify_signature(hash: &Hash, addr: &Address, sign: &Sign) -> bool {
-    let got = Address::from(Account::get_address_by_public_key(
-        sign.publickey.into_array(),
-    ));
-    got == *addr && Account::verify_signature(&hash.0, &sign.publickey, &sign.signature)
-}
-
 /// Directed cells move value outside the TEX escrow, so the endpoint they name
 /// must be an ordinary user address: the settlement address, every other
 /// system address (privkey unknown, including the blackhole), and every
@@ -453,13 +446,10 @@ base::impl_action_execute! {
                 );
             }
             self.addr.must_privkey()?;
+            // Cached per transaction (same-tx replays must not re-run ECDSA)
+            // and skipped under fast sync, like every other signature check.
             let thx = self.get_sign_stuff();
-            if !verify_signature(&thx, &self.addr, &self.sign) {
-                return errf!(
-                    "address {} signature verification failed in tex cell action",
-                    self.addr.to_readable()
-                );
-            }
+            ctx.check_bundle_sign(&thx, &self.addr, &self.sign)?;
             for cell in &self.cells {
                 cell.execute(ctx, &self.addr)?;
             }
