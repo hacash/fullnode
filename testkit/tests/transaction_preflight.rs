@@ -112,34 +112,39 @@ fn fixture_action_address(tx: &dyn TransactionSign, index: usize, field: &str) -
     Address::from_readable(address).unwrap()
 }
 
-fn fixture_escrow_address(tx: &dyn TransactionSign) -> Address {
-    let index = tx.actions().iter().position(|a| {
-        let json = a.to_json();
-        json.contains("\"kind\":22") && json.contains("\"height\":126")
-    }).expect("fixture contains short-window escrow TEX action");
-    fixture_action_address(tx, index, "addr")
-}
-
-fn fixture_maker_address(tx: &dyn TransactionSign) -> Address {
-    let escrow = fixture_escrow_address(tx);
-    for (index, action) in tx.actions().iter().enumerate() {
-        if action.to_json().contains("\"kind\":22") {
-            let address = fixture_action_address(tx, index, "addr");
-            if address != escrow && address != tx.main() { return address; }
-        }
-    }
-    panic!("fixture has no distinct maker TEX signer")
-}
-
-fn fixture_fee_address(tx: &dyn TransactionSign) -> Address {
-    let marker = "\"to\":\"";
-    for action in tx.actions().iter().rev() {
+/// Every kind-22 action in a compressed-form settlement fixture is a maker
+/// bundle whose value cells are exclusively directed (26-33): the ledger
+/// Pay/Get family (cellid 1-8) must never appear, or the escrow accounting the
+/// directed model removed would silently come back.
+fn fixture_assert_compressed_maker_actions(tx: &dyn TransactionSign) {
+    let mut maker_actions = 0;
+    for action in tx.actions() {
         let json = action.to_json();
-        if let Some(address) = json.split_once(marker).and_then(|(_, tail)| tail.split_once('"').map(|(address, _)| address)) {
-            return Address::from_readable(address).unwrap();
+        if !json.contains("\"kind\":22") { continue; }
+        maker_actions += 1;
+        for cellid in 1..=8 {
+            assert!(!json.contains(&format!("\"cellid\":{cellid}")),
+                "compressed maker action must not carry escrow cell {cellid}: {json}");
         }
     }
-    panic!("fixture has no ordinary fee transfer")
+    assert!(maker_actions > 0, "fixture contains no TEX maker action");
+}
+
+/// The static recipient of the maker's directed fee cell (cellid 26/30/32 with
+/// a quoted address): the platform fee counterparty of the settlement.
+fn fixture_fee_address(tx: &dyn TransactionSign) -> Address {
+    for action in tx.actions().iter() {
+        let json = action.to_json();
+        if !json.contains("\"kind\":22") { continue; }
+        for (cellid, field) in [(26usize, "to"), (30, "to"), (32, "to")] {
+            let marker = format!("\"cellid\":{cellid},\"{field}\":\"");
+            if let Some((_, tail)) = json.split_once(&marker) {
+                let address = tail.split_once('"').expect("fee address terminator").0;
+                return Address::from_readable(address).unwrap();
+            }
+        }
+    }
+    panic!("fixture has no directed fee cell with a static recipient")
 }
 
 fn signed_tex_transaction(cells: Vec<TexCell>) -> StdTransaction {
@@ -596,24 +601,24 @@ fn builder_generated_80_lot_hac_asset_settlement_executes_fully() {
     assert_eq!(used, raw.len());
     assert_eq!(tx.ty(), hacash_params::TX_TYPE_3);
 
+    // The compressed C-form: 80 maker bundles and nothing else (chain 0 adds no
+    // ChainAllow guard); every value leg is directed against the taker/main.
+    fixture_assert_compressed_maker_actions(tx.as_ref());
+    assert_eq!(tx.actions().len(), 80);
+
     let taker = Account::create_by_password("settlement taker").unwrap();
     let maker = Account::create_by_password("settlement maker").unwrap();
-    let escrow = Account::create_by_password("settlement escrow").unwrap();
     let fee = Account::create_by_password("settlement fee").unwrap();
     let taker_addr = Address::from(*taker.address());
     let maker_addr = Address::from(*maker.address());
-    let escrow_addr = Address::from(*escrow.address());
     let fee_addr = Address::from(*fee.address());
     let serial = Fold64::from(1028).unwrap();
     let parent = root();
     let mut state = StateChunkRef::block_draft_on(&parent, 120);
-
     let mut taker_balance = Balance::hac(Amount::from("100:248").unwrap());
     taker_balance.asset_set(AssetAmt { serial, amount: Fold64::from(2_000_000_000).unwrap() }).unwrap();
     CoreState::wrap(&mut state).balance_set(&taker_addr, &taker_balance);
     CoreState::wrap(&mut state).balance_set(&maker_addr, &Balance::hac(Amount::zhu(1_000_000_000_000)));
-    CoreState::wrap(&mut state).balance_set(&escrow_addr, &Balance::default());
-    CoreState::wrap(&mut state).balance_set(&fee_addr, &Balance::default());
     CoreState::wrap(&mut state).asset_set(&serial, &AssetSmelt {
         serial, supply: Fold64::from(2_000_000_000).unwrap(), decimal: Uint1::from(6), issuer: maker_addr,
         ticket: BytesW1::default(), name: BytesW1::default(),
@@ -625,13 +630,20 @@ fn builder_generated_80_lot_hac_asset_settlement_executes_fully() {
     let taker_after = CoreStateRead::wrap(&state).balance(&taker_addr).unwrap().unwrap();
     let maker_after = CoreStateRead::wrap(&state).balance(&maker_addr).unwrap().unwrap();
     let fee_after = CoreStateRead::wrap(&state).balance(&fee_addr).unwrap().unwrap();
-    let escrow_after = CoreStateRead::wrap(&state).balance(&escrow_addr).unwrap().unwrap();
-    assert_eq!(taker_after.asset(serial).unwrap().amount.uint(), 395_200_000);
-    assert_eq!(maker_after.asset(serial).unwrap().amount.uint(), 1_600_000_000);
+    // Per fill the taker pays 20M quote atoms and receives 10^10 zhu; the maker
+    // pays the directed fee of 60000 quote atoms per fill out of its proceeds.
+    assert_eq!(taker_after.asset(serial).unwrap().amount.uint(), 400_000_000);
+    assert_eq!(maker_after.asset(serial).unwrap().amount.uint(), 1_595_200_000);
     assert_eq!(fee_after.asset(serial).unwrap().amount.uint(), 4_800_000);
-    assert_eq!(escrow_after.asset(serial).map(|asset| asset.amount.uint()).unwrap_or(0), 0);
+    // The maker is not the tx main: its HAC delta is exactly the 80 x 10^10 zhu
+    // it paid the taker through the directed delivery legs.
+    assert_eq!(maker_after.hacash.to_zhu_u64().unwrap(), 200_000_000_000);
+    // The taker received the full directed price and paid fee+gas from its seed.
+    let taker_hac = taker_after.hacash.to_zhu_u64().unwrap();
+    assert!(taker_hac > 800_000_000_000 && taker_hac <= 10_000_000_000 + 800_000_000_000,
+        "taker HAC {taker_hac} must include the 80-fill directed price");
+    assert_eq!(CoreStateRead::wrap(&state).balance(&protocol::exec::tex::SETTLEMENT_ADDR).unwrap().and_then(|b| b.asset(serial).map(|a| a.amount.uint())).unwrap_or(0), 0);
 }
-
 
 #[test]
 fn builder_generated_max_200_hacd_group_executes_fully() {
@@ -641,22 +653,23 @@ fn builder_generated_max_200_hacd_group_executes_fully() {
     assert_eq!(used, raw.len());
     assert_eq!(tx.ty(), hacash_params::TX_TYPE_3);
 
+    // Compressed single-fill form: one maker bundle, no delivery transfer (the
+    // DirectedDiaPay leg carries the 200 names against the taker).
+    fixture_assert_compressed_maker_actions(tx.as_ref());
+    assert_eq!(tx.actions().len(), 1);
+
     let taker = Account::create_by_password("settlement HACD taker").unwrap();
     let maker = Account::create_by_password("settlement HACD maker").unwrap();
-    let escrow = Account::create_by_password("settlement HACD escrow").unwrap();
     let fee = Account::create_by_password("settlement HACD fee").unwrap();
     let taker_addr = Address::from(*taker.address());
     let maker_addr = Address::from(*maker.address());
-    let escrow_addr = Address::from(*escrow.address());
     let fee_addr = Address::from(*fee.address());
     let parent = root();
     let mut state = StateChunkRef::block_draft_on(&parent, 120);
-    let mut taker_balance = Balance::hac(Amount::from("100:248").unwrap());
-    taker_balance.diamond = DiamondNumberAuto::from_diamond(&DiamondNumber::from(200));
-    CoreState::wrap(&mut state).balance_set(&taker_addr, &taker_balance);
+    CoreState::wrap(&mut state).balance_set(&taker_addr, &Balance::hac(Amount::from("100:248").unwrap()));
     CoreState::wrap(&mut state).balance_set(&maker_addr, &Balance::hac(Amount::from("100:248").unwrap()));
-    CoreState::wrap(&mut state).balance_set(&escrow_addr, &Balance::default());
-    CoreState::wrap(&mut state).balance_set(&fee_addr, &Balance::default());
+    // The maker owns the whole named group: the directed diamond pay delivers
+    // each name maker -> taker at execution, never through the settlement addr.
     let alphabet = b"WTYUIAHXVMEKBSZN";
     let mut owned = DiamondOwnedForm::default();
     let mut seeded_names = Vec::with_capacity(200);
@@ -670,33 +683,39 @@ fn builder_generated_max_200_hacd_group_executes_fully() {
         let name = DiamondName::from_readable(String::from_utf8(chars.to_vec()).unwrap()).unwrap();
         seeded_names.push(name);
         CoreState::wrap(&mut state).diamond_set(&name, &DiamondSto {
-            status: Uint1::from(1), address: taker_addr,
+            status: Uint1::from(1), address: maker_addr,
             prev_engraved_height: BlockHeight::from(0), inscripts: field::Inscripts::default(),
         });
         owned.push_one(&name).unwrap();
     }
-    CoreState::wrap(&mut state).diamond_owned_set(&taker_addr, &owned);
+    {
+        let mut maker_balance = CoreStateRead::wrap(&state).balance(&maker_addr).unwrap().unwrap();
+        maker_balance.diamond = DiamondNumberAuto::from_diamond(&DiamondNumber::from(200));
+        CoreState::wrap(&mut state).balance_set(&maker_addr, &maker_balance);
+    }
+    CoreState::wrap(&mut state).diamond_owned_set(&maker_addr, &owned);
 
     let mut tx_env = env(tx.as_ref());
     tx_env.block.height = 120;
-    let actions = tx.actions();
-    assert_eq!(actions.len(), 44);
-    let input = actions[0].as_any().downcast_ref::<protocol::action_std::TransferHacdTo>().unwrap();
-    assert_eq!(input.diamonds.length(), 200);
-    assert!(actions.last().unwrap().description().contains("0.0012"), "fee action: {}", actions.last().unwrap().description());
-    assert!(actions[42].description().contains("get 0.4 HAC"), "receive action: {}", actions[42].description());
     execute_and_commit(services, &state, tx_env, tx)
         .expect("actual 200-name SDK-builder transaction should execute and commit in test state");
     let taker_after = CoreStateRead::wrap(&state).balance(&taker_addr).unwrap().unwrap();
     let maker_after = CoreStateRead::wrap(&state).balance(&maker_addr).unwrap().unwrap();
-    assert_eq!(taker_after.diamond.to_diamond().unwrap().uint(), 0);
-    assert_eq!(maker_after.diamond.to_diamond().unwrap().uint(), 200);
+    // The taker paid the 0.01 HAC price (1M zhu) and received all 200 names.
+    assert_eq!(taker_after.diamond.to_diamond().unwrap().uint(), 200);
+    assert_eq!(maker_after.diamond.to_diamond().unwrap().uint(), 0);
     for name in seeded_names {
-        assert_eq!(CoreStateRead::wrap(&state).diamond(&name).unwrap().unwrap().address, maker_addr);
+        assert_eq!(CoreStateRead::wrap(&state).diamond(&name).unwrap().unwrap().address, taker_addr);
     }
-    assert!(CoreStateRead::wrap(&state).diamond_owned(&escrow_addr).unwrap().is_none());
-    assert_eq!(CoreStateRead::wrap(&state).balance(&fee_addr).unwrap().unwrap().hacash.to_zhu_u64().unwrap(), 120_000);
-    assert_eq!(maker_after.hacash.to_zhu_u64().unwrap(), 9_960_000_000);
+    // The maker nets price minus its directed fee: 1M - 3000 zhu.
+    assert_eq!(maker_after.hacash.to_zhu_u64().unwrap(), 10_000_000_000 + 1_000_000 - 3_000);
+    assert_eq!(CoreStateRead::wrap(&state).balance(&fee_addr).unwrap().unwrap().hacash.to_zhu_u64().unwrap(), 3_000);
+    // The taker additionally paid the tx fee and gas as main: bound the burn.
+    let taker_hac = taker_after.hacash.to_zhu_u64().unwrap();
+    assert!(taker_hac > 9_800_000_000 && taker_hac <= 10_000_000_000 - 1_000_000,
+        "taker HAC {taker_hac} must reflect the directed price and fee burn");
+    // Deferred-free delivery: the settlement address never held a diamond.
+    assert!(CoreStateRead::wrap(&state).diamond_owned(&protocol::exec::tex::SETTLEMENT_ADDR).unwrap().is_none());
 }
 
 #[test]
@@ -705,13 +724,13 @@ fn builder_generated_80_lot_asset_asset_settlement_executes_and_accounts_for_fee
     let raw = hex::decode(include_str!("fixtures/tex-settlement-builder-asset-asset.hex").trim()).unwrap();
     let (tx, used) = protocol::tx_std::create_transaction_type3(services.as_ref(), &raw).unwrap();
     assert_eq!(used, raw.len());
+    fixture_assert_compressed_maker_actions(tx.as_ref());
+    assert_eq!(tx.actions().len(), 80);
     let taker = Account::create_by_password("settlement AA taker").unwrap();
     let maker = Account::create_by_password("settlement AA maker").unwrap();
-    let escrow = Account::create_by_password("settlement AA escrow").unwrap();
     let fee = Account::create_by_password("settlement AA fee").unwrap();
     let taker_addr = Address::from(*taker.address());
     let maker_addr = Address::from(*maker.address());
-    let escrow_addr = Address::from(*escrow.address());
     let fee_addr = Address::from(*fee.address());
     let base_serial = Fold64::from(1028).unwrap();
     let quote_serial = Fold64::from(1029).unwrap();
@@ -723,8 +742,6 @@ fn builder_generated_80_lot_asset_asset_settlement_executes_and_accounts_for_fee
     maker_balance.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(1_000).unwrap() }).unwrap();
     CoreState::wrap(&mut state).balance_set(&taker_addr, &taker_balance);
     CoreState::wrap(&mut state).balance_set(&maker_addr, &maker_balance);
-    CoreState::wrap(&mut state).balance_set(&escrow_addr, &Balance::default());
-    CoreState::wrap(&mut state).balance_set(&fee_addr, &Balance::default());
     for (serial, issuer) in [(base_serial, maker_addr), (quote_serial, taker_addr)] {
         CoreState::wrap(&mut state).asset_set(&serial, &AssetSmelt {
             serial, supply: Fold64::from(100_000).unwrap(), decimal: Uint1::from(6), issuer,
@@ -737,13 +754,14 @@ fn builder_generated_80_lot_asset_asset_settlement_executes_and_accounts_for_fee
     let taker_after = CoreStateRead::wrap(&state).balance(&taker_addr).unwrap().unwrap();
     let maker_after = CoreStateRead::wrap(&state).balance(&maker_addr).unwrap().unwrap();
     let fee_after = CoreStateRead::wrap(&state).balance(&fee_addr).unwrap().unwrap();
-    let escrow_after = CoreStateRead::wrap(&state).balance(&escrow_addr).unwrap().unwrap();
+    // 80 fills: taker pays 20 quote atoms per fill for 10 base atoms; the maker
+    // pays 1 quote atom of directed fee per fill.
     assert_eq!(taker_after.asset(base_serial).unwrap().amount.uint(), 800);
-    assert_eq!(taker_after.asset(quote_serial).unwrap().amount.uint(), 395);
+    assert_eq!(taker_after.asset(quote_serial).unwrap().amount.uint(), 400);
     assert_eq!(maker_after.asset(base_serial).unwrap().amount.uint(), 200);
-    assert_eq!(maker_after.asset(quote_serial).unwrap().amount.uint(), 1_600);
-    assert_eq!(fee_after.asset(quote_serial).unwrap().amount.uint(), 5);
-    assert_eq!(escrow_after.asset(quote_serial).map(|a| a.amount.uint()).unwrap_or(0), 0);
+    assert_eq!(maker_after.asset(quote_serial).unwrap().amount.uint(), 1_520);
+    assert_eq!(fee_after.asset(quote_serial).unwrap().amount.uint(), 80);
+    assert_eq!(CoreStateRead::wrap(&state).balance(&protocol::exec::tex::SETTLEMENT_ADDR).unwrap().and_then(|b| b.asset(quote_serial).map(|a| a.amount.uint())).unwrap_or(0), 0);
 }
 
 #[test]
@@ -752,13 +770,13 @@ fn builder_generated_maker_sell_hacd_transfers_named_diamond_and_fee() {
     let raw = hex::decode(include_str!("fixtures/tex-settlement-builder-hacd-sell.hex").trim()).unwrap();
     let (tx, used) = protocol::tx_std::create_transaction_type3(services.as_ref(), &raw).unwrap();
     assert_eq!(used, raw.len());
+    fixture_assert_compressed_maker_actions(tx.as_ref());
+    assert_eq!(tx.actions().len(), 1);
     let taker = Account::create_by_password("settlement HACD sell taker").unwrap();
     let maker = Account::create_by_password("settlement HACD sell maker").unwrap();
-    let escrow = Account::create_by_password("settlement HACD sell escrow").unwrap();
     let fee = Account::create_by_password("settlement HACD sell fee").unwrap();
     let taker_addr = Address::from(*taker.address());
     let maker_addr = Address::from(*maker.address());
-    let escrow_addr = Address::from(*escrow.address());
     let fee_addr = Address::from(*fee.address());
     let name = DiamondName::from_readable("WTYUIA").unwrap();
     let parent = root();
@@ -767,8 +785,6 @@ fn builder_generated_maker_sell_hacd_transfers_named_diamond_and_fee() {
     let mut maker_balance = Balance::hac(Amount::from("100:248").unwrap());
     maker_balance.diamond = DiamondNumberAuto::from_diamond(&DiamondNumber::from(1));
     CoreState::wrap(&mut state).balance_set(&maker_addr, &maker_balance);
-    CoreState::wrap(&mut state).balance_set(&escrow_addr, &Balance::default());
-    CoreState::wrap(&mut state).balance_set(&fee_addr, &Balance::default());
     CoreState::wrap(&mut state).diamond_set(&name, &DiamondSto {
         status: Uint1::from(1), address: maker_addr,
         prev_engraved_height: BlockHeight::from(0), inscripts: field::Inscripts::default(),
@@ -776,9 +792,6 @@ fn builder_generated_maker_sell_hacd_transfers_named_diamond_and_fee() {
     let mut owned = DiamondOwnedForm::default(); owned.push_one(&name).unwrap();
     CoreState::wrap(&mut state).diamond_owned_set(&maker_addr, &owned);
     let mut tx_env = env(tx.as_ref()); tx_env.block.height = 120;
-    let actions = tx.actions();
-    assert_eq!(actions.len(), 5);
-    assert!(actions[1].description().contains("0.00003"), "fee: {}", actions[1].description());
     execute_and_commit(services, &state, tx_env, tx)
         .expect("actual maker-sells-HACD builder transaction should execute");
     let taker_after = CoreStateRead::wrap(&state).balance(&taker_addr).unwrap().unwrap();
@@ -787,6 +800,8 @@ fn builder_generated_maker_sell_hacd_transfers_named_diamond_and_fee() {
     assert_eq!(taker_after.diamond.to_diamond().unwrap().uint(), 1);
     assert_eq!(maker_after.diamond.to_diamond().unwrap().uint(), 0);
     assert_eq!(CoreStateRead::wrap(&state).diamond(&name).unwrap().unwrap().address, taker_addr);
+    // Price 1M zhu minus the 3000-zhu directed fee lands on the maker.
+    assert_eq!(maker_after.hacash.to_zhu_u64().unwrap(), 10_000_000_000 + 1_000_000 - 3_000);
     assert_eq!(fee_after.hacash.to_zhu_u64().unwrap(), 3_000);
 }
 
@@ -796,111 +811,130 @@ fn builder_generated_reverse_direction_matrix_executes_and_accounts_for_each_leg
     let base_serial = Fold64::from(1028).unwrap();
     let quote_serial = Fold64::from(1029).unwrap();
 
-    // HAC/Asset: maker buys HAC, so the taker pays HAC and receives gross
-    // quote assets before paying the one-unit platform fee.
+    // HAC/Asset: maker buys HAC; the taker pays 1M zhu per fill and receives
+    // 20 base-asset atoms per fill; the directed fee is 1 quote atom per fill.
     {
         let raw = hex::decode(include_str!("fixtures/tex-settlement-builder-reverse-ha.hex").trim()).unwrap();
-        let (tx, used) = protocol::tx_std::create_transaction_type3(services.as_ref(), &raw).unwrap();
-        assert_eq!(used, raw.len());
-        let (ta, ma, ea, fa) = (tx.main(), fixture_maker_address(tx.as_ref()), fixture_escrow_address(tx.as_ref()), fixture_fee_address(tx.as_ref()));
+        let (tx, used) = protocol::tx_std::create_transaction_type3(services.as_ref(), &raw).unwrap(); assert_eq!(used, raw.len());
+        fixture_assert_compressed_maker_actions(tx.as_ref());
+        assert_eq!(tx.actions().len(), 2);
+        let taker = Account::create_by_password("settlement reverse HA taker").unwrap();
+        let maker = Account::create_by_password("settlement reverse HA maker").unwrap();
+        let fee = Account::create_by_password("settlement reverse HA fee").unwrap();
+        let (ta, ma, fa) = (Address::from(*taker.address()), Address::from(*maker.address()), Address::from(*fee.address()));
         let parent = root(); let mut state = StateChunkRef::block_draft_on(&parent, 120);
-        let mut tb = Balance::hac(Amount::zhu(10_000_000_000_000));
-        tb.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
-        let mut mb = Balance::hac(Amount::zhu(10_000_000_000_000));
-        mb.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
-        CoreState::wrap(&mut state).balance_set(&ta, &tb); CoreState::wrap(&mut state).balance_set(&ma, &mb);
-        CoreState::wrap(&mut state).balance_set(&ea, &Balance::hac(Amount::zhu(10_000_000_000_000))); CoreState::wrap(&mut state).balance_set(&fa, &Balance::hac(Amount::zhu(10_000_000_000_000)));
+        for addr in [&ta, &ma, &fa] {
+            let mut b = Balance::hac(Amount::zhu(10_000_000_000_000));
+            b.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
+            CoreState::wrap(&mut state).balance_set(addr, &b);
+        }
         for (serial, issuer) in [(base_serial, ma), (quote_serial, ta)] {
             CoreState::wrap(&mut state).asset_set(&serial, &AssetSmelt { serial, supply: Fold64::from(1_000).unwrap(), decimal: Uint1::from(6), issuer, ticket: BytesW1::default(), name: BytesW1::default() });
         }
-        CoreState::wrap(&mut state).asset_set(&base_serial, &AssetSmelt { serial: base_serial, supply: Fold64::from(1_000).unwrap(), decimal: Uint1::from(6), issuer: ma, ticket: BytesW1::default(), name: BytesW1::default() });
         let mut tx_env = env(tx.as_ref()); tx_env.block.height = 120;
         execute_and_commit(services.clone(), &state, tx_env, tx).expect("builder-originated HAC/Asset reverse transaction executes");
         let t = CoreStateRead::wrap(&state).balance(&ta).unwrap().unwrap();
         let m = CoreStateRead::wrap(&state).balance(&ma).unwrap().unwrap();
-        assert!(t.hacash.to_zhu_u64().unwrap() < 10_000_000_000_000 - 2_000_000);
+        // Two fills: taker -2M zhu +40 base; maker +2M zhu -40 base -2 fee.
         assert_eq!(m.hacash.to_zhu_u64().unwrap(), 10_000_000_000_000 + 2_000_000);
-        assert_eq!(t.asset(base_serial).unwrap().amount.uint(), 139);
-        assert_eq!(m.asset(base_serial).unwrap().amount.uint(), 60);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&fa).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 1);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&ea).unwrap().unwrap().hacash.to_zhu_u64().unwrap(), 10_000_000_000_000);
+        assert_eq!(t.asset(base_serial).unwrap().amount.uint(), 140);
+        assert_eq!(m.asset(base_serial).unwrap().amount.uint(), 58);
+        assert_eq!(CoreStateRead::wrap(&state).balance(&fa).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 2);
+        assert!(t.hacash.to_zhu_u64().unwrap() < 10_000_000_000_000 - 1_000_000, "taker paid the directed price and fee/gas");
     }
 
-    // Asset/Asset: maker buys base asset; fee is charged against the taker's
-    // gross quote receipt, leaving the TEX ledger balanced at gross value.
+    // Asset/Asset: maker buys the base asset; two fills at 10 base / 20 quote.
     {
         let raw = hex::decode(include_str!("fixtures/tex-settlement-builder-reverse-aa.hex").trim()).unwrap();
         let (tx, used) = protocol::tx_std::create_transaction_type3(services.as_ref(), &raw).unwrap(); assert_eq!(used, raw.len());
-        let (ta, ma, ea, fa) = (tx.main(), fixture_maker_address(tx.as_ref()), fixture_escrow_address(tx.as_ref()), fixture_fee_address(tx.as_ref()));
+        fixture_assert_compressed_maker_actions(tx.as_ref());
+        assert_eq!(tx.actions().len(), 2);
+        let taker = Account::create_by_password("settlement reverse AA taker").unwrap();
+        let maker = Account::create_by_password("settlement reverse AA maker").unwrap();
+        let fee = Account::create_by_password("settlement reverse AA fee").unwrap();
+        let (ta, ma, fa) = (Address::from(*taker.address()), Address::from(*maker.address()), Address::from(*fee.address()));
         let parent = root(); let mut state = StateChunkRef::block_draft_on(&parent, 120);
-        let mut tb = Balance::hac(Amount::zhu(10_000_000_000_000)); tb.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
-        tb.asset_set(AssetAmt { serial: quote_serial, amount: Fold64::from(100).unwrap() }).unwrap();
-        let mut mb = Balance::hac(Amount::zhu(10_000_000_000_000)); mb.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
-        mb.asset_set(AssetAmt { serial: quote_serial, amount: Fold64::from(100).unwrap() }).unwrap();
-        CoreState::wrap(&mut state).balance_set(&ta, &tb); CoreState::wrap(&mut state).balance_set(&ma, &mb);
-        CoreState::wrap(&mut state).balance_set(&ea, &Balance::hac(Amount::zhu(10_000_000_000_000))); CoreState::wrap(&mut state).balance_set(&fa, &Balance::hac(Amount::zhu(10_000_000_000_000)));
+        for addr in [&ta, &ma, &fa] {
+            let mut b = Balance::hac(Amount::zhu(10_000_000_000_000));
+            b.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
+            b.asset_set(AssetAmt { serial: quote_serial, amount: Fold64::from(100).unwrap() }).unwrap();
+            CoreState::wrap(&mut state).balance_set(addr, &b);
+        }
         for (serial, issuer) in [(base_serial, ma), (quote_serial, ta)] {
             CoreState::wrap(&mut state).asset_set(&serial, &AssetSmelt { serial, supply: Fold64::from(1_000).unwrap(), decimal: Uint1::from(6), issuer, ticket: BytesW1::default(), name: BytesW1::default() });
         }
         let mut tx_env = env(tx.as_ref()); tx_env.block.height = 120;
         execute_and_commit(services.clone(), &state, tx_env, tx).expect("builder-originated Asset/Asset reverse transaction executes");
-        let t = CoreStateRead::wrap(&state).balance(&ta).unwrap().unwrap(); let m = CoreStateRead::wrap(&state).balance(&ma).unwrap().unwrap();
-        assert_eq!(t.asset(base_serial).unwrap().amount.uint(), 80); assert_eq!(t.asset(quote_serial).unwrap().amount.uint(), 139);
-        assert_eq!(m.asset(base_serial).unwrap().amount.uint(), 120); assert_eq!(m.asset(quote_serial).unwrap().amount.uint(), 60);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&fa).unwrap().unwrap().asset(quote_serial).unwrap().amount.uint(), 1);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&ea).unwrap().unwrap().asset(base_serial), None);
+        let t = CoreStateRead::wrap(&state).balance(&ta).unwrap().unwrap();
+        let m = CoreStateRead::wrap(&state).balance(&ma).unwrap().unwrap();
+        // Taker: -20 base, +40 quote. Maker: +20 base, -40 quote, -2 fee.
+        assert_eq!(t.asset(base_serial).unwrap().amount.uint(), 80);
+        assert_eq!(t.asset(quote_serial).unwrap().amount.uint(), 140);
+        assert_eq!(m.asset(base_serial).unwrap().amount.uint(), 120);
+        assert_eq!(m.asset(quote_serial).unwrap().amount.uint(), 58);
+        assert_eq!(CoreStateRead::wrap(&state).balance(&fa).unwrap().unwrap().asset(quote_serial).unwrap().amount.uint(), 2);
+        assert_eq!(CoreStateRead::wrap(&state).balance(&protocol::exec::tex::SETTLEMENT_ADDR).unwrap().and_then(|b| b.asset(base_serial)).map(|a| a.amount.uint()).unwrap_or(0), 0);
     }
 
     // HACD/Asset, maker sells its named diamond for 20 asset units.
     {
         let raw = hex::decode(include_str!("fixtures/tex-settlement-builder-hacd-asset-sell.hex").trim()).unwrap();
         let (tx, used) = protocol::tx_std::create_transaction_type3(services.as_ref(), &raw).unwrap(); assert_eq!(used, raw.len());
-        let (ta, ma, ea, fa) = (tx.main(), fixture_maker_address(tx.as_ref()), fixture_escrow_address(tx.as_ref()), fixture_fee_address(tx.as_ref()));
+        fixture_assert_compressed_maker_actions(tx.as_ref());
+        assert_eq!(tx.actions().len(), 1);
+        let taker = Account::create_by_password("settlement HACD asset sell taker").unwrap();
+        let maker = Account::create_by_password("settlement HACD asset sell maker").unwrap();
+        let fee = Account::create_by_password("settlement HACD asset sell fee").unwrap();
+        let (ta, ma, fa) = (Address::from(*taker.address()), Address::from(*maker.address()), Address::from(*fee.address()));
         let name = DiamondName::from_readable("WTYUIA").unwrap(); let parent = root(); let mut state = StateChunkRef::block_draft_on(&parent, 120);
         let mut tb = Balance::hac(Amount::zhu(10_000_000_000_000)); tb.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
         let mut mb = Balance::hac(Amount::zhu(10_000_000_000_000)); mb.diamond = DiamondNumberAuto::from_diamond(&DiamondNumber::from(1));
         CoreState::wrap(&mut state).balance_set(&ta, &tb); CoreState::wrap(&mut state).balance_set(&ma, &mb);
-        CoreState::wrap(&mut state).balance_set(&ea, &Balance::hac(Amount::zhu(10_000_000_000_000))); CoreState::wrap(&mut state).balance_set(&fa, &Balance::hac(Amount::zhu(10_000_000_000_000)));
-        for (serial, issuer) in [(base_serial, ma)] { CoreState::wrap(&mut state).asset_set(&serial, &AssetSmelt { serial, supply: Fold64::from(100).unwrap(), decimal: Uint1::from(6), issuer, ticket: BytesW1::default(), name: BytesW1::default() }); }
+        let mut fb = Balance::hac(Amount::zhu(10_000_000_000_000));
+        CoreState::wrap(&mut state).balance_set(&fa, &fb);
+        CoreState::wrap(&mut state).asset_set(&base_serial, &AssetSmelt { serial: base_serial, supply: Fold64::from(100).unwrap(), decimal: Uint1::from(6), issuer: ma, ticket: BytesW1::default(), name: BytesW1::default() });
         CoreState::wrap(&mut state).diamond_set(&name, &DiamondSto { status: Uint1::from(1), address: ma, prev_engraved_height: BlockHeight::from(0), inscripts: field::Inscripts::default() });
         let mut owned = DiamondOwnedForm::default(); owned.push_one(&name).unwrap(); CoreState::wrap(&mut state).diamond_owned_set(&ma, &owned);
         let mut tx_env = env(tx.as_ref()); tx_env.block.height = 120;
         execute_and_commit(services.clone(), &state, tx_env, tx).expect("builder-originated HACD/Asset sell executes");
         assert_eq!(CoreStateRead::wrap(&state).diamond(&name).unwrap().unwrap().address, ta);
         assert_eq!(CoreStateRead::wrap(&state).balance(&ta).unwrap().unwrap().diamond.to_diamond().unwrap().uint(), 1);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&ma).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 20);
+        // Maker received 20 base atoms and paid the 1-atom directed fee.
+        assert_eq!(CoreStateRead::wrap(&state).balance(&ma).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 19);
         assert_eq!(CoreStateRead::wrap(&state).balance(&fa).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 1);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&ea).unwrap().unwrap().diamond.to_diamond().unwrap().uint(), 0);
     }
 
-    // HACD/Asset, maker buys the taker's named diamond; taker receives gross
-    // assets and separately pays the platform fee.
+    // HACD/Asset compressed maker buy: the taker's named delivery rides as a
+    // plain TransferHacdTo action and the maker's price payment is the bundle's
+    // single directed leg; there is no fee cell on this shape.
     {
         let raw = hex::decode(include_str!("fixtures/tex-settlement-builder-hacd-asset-buy.hex").trim()).unwrap();
         let (tx, used) = protocol::tx_std::create_transaction_type3(services.as_ref(), &raw).unwrap(); assert_eq!(used, raw.len());
-        let (ta, ma, ea, fa) = (tx.main(), fixture_maker_address(tx.as_ref()), fixture_escrow_address(tx.as_ref()), fixture_fee_address(tx.as_ref()));
+        fixture_assert_compressed_maker_actions(tx.as_ref());
+        assert_eq!(tx.actions().len(), 2);
+        let taker = Account::create_by_password("settlement HACD asset buy taker").unwrap();
+        let maker = Account::create_by_password("settlement HACD asset buy maker").unwrap();
+        let (ta, ma) = (Address::from(*taker.address()), Address::from(*maker.address()));
         let name = DiamondName::from_readable("WTYUIA").unwrap(); let parent = root(); let mut state = StateChunkRef::block_draft_on(&parent, 120);
-        let mut tb = Balance::hac(Amount::zhu(10_000_000_000_000)); tb.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
-        tb.diamond = DiamondNumberAuto::from_diamond(&DiamondNumber::from(1));
+        let mut tb = Balance::hac(Amount::zhu(10_000_000_000_000)); tb.diamond = DiamondNumberAuto::from_diamond(&DiamondNumber::from(1));
+        tb.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
         let mut mb = Balance::hac(Amount::zhu(10_000_000_000_000)); mb.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
         CoreState::wrap(&mut state).balance_set(&ta, &tb); CoreState::wrap(&mut state).balance_set(&ma, &mb);
-        CoreState::wrap(&mut state).balance_set(&ea, &Balance::hac(Amount::zhu(10_000_000_000_000))); CoreState::wrap(&mut state).balance_set(&fa, &Balance::hac(Amount::zhu(10_000_000_000_000)));
         CoreState::wrap(&mut state).asset_set(&base_serial, &AssetSmelt { serial: base_serial, supply: Fold64::from(100).unwrap(), decimal: Uint1::from(6), issuer: ma, ticket: BytesW1::default(), name: BytesW1::default() });
         CoreState::wrap(&mut state).diamond_set(&name, &DiamondSto { status: Uint1::from(1), address: ta, prev_engraved_height: BlockHeight::from(0), inscripts: field::Inscripts::default() });
         let mut owned = DiamondOwnedForm::default(); owned.push_one(&name).unwrap(); CoreState::wrap(&mut state).diamond_owned_set(&ta, &owned);
-        let maker_json = tx.actions().iter().map(|action| action.to_json())
-            .find(|json| json.contains(&format!("\"addr\":\"{}\"", ma.to_readable())))
-            .expect("builder transaction includes maker TEX action");
-        assert!(maker_json.contains("\"cellid\":7") && maker_json.contains("\"cellid\":6") && !maker_json.contains("\"cellid\":5"),
-            "HACD/Asset maker-buy action must pay asset and receive HACD: {maker_json}");
+        // Shape: the delivery transfer first, then the four-cell maker bundle
+        // whose only value cell is the directed price payment (cellid 32).
+        assert!(tx.actions()[0].to_json().contains("\"kind\":7"), "delivery transfer leads: {}", tx.actions()[0].to_json());
+        let maker_json = tx.actions()[1].to_json();
+        assert!(maker_json.contains("\"cellid\":32") && maker_json.contains("\"to\":0") && !maker_json.contains("\"cellid\":26"),
+            "compressed maker-buy action must pay assets to the transaction signer only: {maker_json}");
         let mut tx_env = env(tx.as_ref()); tx_env.block.height = 120;
         execute_and_commit(services, &state, tx_env, tx).expect("builder-originated HACD/Asset buy executes");
         assert_eq!(CoreStateRead::wrap(&state).diamond(&name).unwrap().unwrap().address, ma);
         assert_eq!(CoreStateRead::wrap(&state).balance(&ta).unwrap().unwrap().diamond.to_diamond().unwrap().uint(), 0);
         assert_eq!(CoreStateRead::wrap(&state).balance(&ma).unwrap().unwrap().diamond.to_diamond().unwrap().uint(), 1);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&ta).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 119);
+        assert_eq!(CoreStateRead::wrap(&state).balance(&ta).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 120);
         assert_eq!(CoreStateRead::wrap(&state).balance(&ma).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 80);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&fa).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 1);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&ea).unwrap().unwrap().diamond.to_diamond().unwrap().uint(), 0);
     }
 }
