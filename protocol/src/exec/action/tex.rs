@@ -42,12 +42,20 @@ fn verify_signature(hash: &Hash, addr: &Address, sign: &Sign) -> bool {
 /// Directed cells move value outside the TEX escrow, so the endpoint they name
 /// must be an ordinary user address: the settlement address, every other
 /// system address (privkey unknown, including the blackhole), and every
-/// non-privkey address (multisig/scriptmh/contract) are rejected. The type
-/// restriction is deliberate: directed cells move balances directly through
+/// non-privkey address (multisig/scriptmh/contract) are rejected. The
+/// authorizer itself is not a valid endpoint either: a directed self-transfer
+/// is always rejected instead of silently no-oping. The type restriction is
+/// deliberate: directed cells move balances directly through
 /// `hac_sub`/`hac_add` and never route through the transfer hook machinery
 /// (`resolve_transfer_routing`), so crediting or debiting a contract or
 /// script address here would silently skip its authorize/receive hooks.
-fn check_direct_endpoint(addr: &Address) -> Rerr {
+fn check_direct_endpoint(taradr: &Address, addr: &Address) -> Rerr {
+    if *addr == *taradr {
+        return errf!(
+            "directed cell endpoint cannot be the authorizer itself: {}",
+            addr.to_readable()
+        );
+    }
     if let Err(e) = addr.must_privkey() {
         return errf!("direct cell endpoint must be a privkey user address: {}", e);
     }
@@ -64,6 +72,22 @@ fn check_direct_endpoint(addr: &Address) -> Rerr {
         );
     }
     Ok(())
+}
+
+/// A directed PAY recipient must be pinned by the authorizer's signature:
+/// the transaction main (`Ptr(0)`) or an explicit static address. Any other
+/// pointer resolves against the transaction address list, which the
+/// replayable bundle signature does not bind — the executor could place any
+/// address at that slot and redirect the authorizer's funds. Directed GET
+/// sources are exempt: they are declared in the action's `req_sign`, so the
+/// signature consent binds them to the transaction.
+fn check_direct_pay_form(to: &AddrOrPtr) -> Rerr {
+    match to {
+        AddrOrPtr::Addr(_) | AddrOrPtr::Ptr(0) => Ok(()),
+        AddrOrPtr::Ptr(_) => errf!(
+            "direct pay target must be the transaction main (ptr 0) or an explicit static address, not a free pointer"
+        ),
+    }
 }
 
 /// Resolve a DirectedGet source. Consent is no longer checked here: every
@@ -171,8 +195,9 @@ impl TexCell {
                 Ok(())
             }
             Self::DirectedZhuPay { to, haczhu } => {
+                check_direct_pay_form(to)?;
                 let target = to.real(&ctx.env().tx.addrs)?;
-                check_direct_endpoint(&target)?;
+                check_direct_endpoint(taradr, &target)?;
                 let zhu = haczhu.uint();
                 if zhu > 10_000_000_000_000_000 {
                     return errf!("cell zhu too large");
@@ -184,7 +209,7 @@ impl TexCell {
             }
             Self::DirectedZhuGet { from, haczhu } => {
                 let source = resolve_directed_source(ctx, from)?;
-                check_direct_endpoint(&source)?;
+                check_direct_endpoint(taradr, &source)?;
                 let zhu = haczhu.uint();
                 if zhu > 10_000_000_000_000_000 {
                     return errf!("cell zhu too large");
@@ -195,8 +220,9 @@ impl TexCell {
                 Ok(())
             }
             Self::DirectedSatPay { to, satnum } => {
+                check_direct_pay_form(to)?;
                 let target = to.real(&ctx.env().tx.addrs)?;
-                check_direct_endpoint(&target)?;
+                check_direct_endpoint(taradr, &target)?;
                 let sat = Satoshi::from(satnum.uint());
                 sat_sub(ctx, taradr, &sat)?;
                 sat_add(ctx, &target, &sat)?;
@@ -204,27 +230,30 @@ impl TexCell {
             }
             Self::DirectedSatGet { from, satnum } => {
                 let source = resolve_directed_source(ctx, from)?;
-                check_direct_endpoint(&source)?;
+                check_direct_endpoint(taradr, &source)?;
                 let sat = Satoshi::from(satnum.uint());
                 sat_sub(ctx, &source, &sat)?;
                 sat_add(ctx, taradr, &sat)?;
                 Ok(())
             }
             Self::DirectedDiaPay { to, diamonds } => {
+                check_direct_pay_form(to)?;
                 let target = to.real(&ctx.env().tx.addrs)?;
-                check_direct_endpoint(&target)?;
+                check_direct_endpoint(taradr, &target)?;
                 diamonds_transfer(ctx, taradr, &target, diamonds)?;
                 Ok(())
             }
             Self::DirectedDiaGet { from, diamonds } => {
                 let source = resolve_directed_source(ctx, from)?;
-                check_direct_endpoint(&source)?;
+                check_direct_endpoint(taradr, &source)?;
                 diamonds_transfer(ctx, &source, taradr, diamonds)?;
                 Ok(())
             }
             Self::DirectedAssetPay { to, asset } => {
+                check_direct_pay_form(to)?;
                 let target = to.real(&ctx.env().tx.addrs)?;
-                check_direct_endpoint(&target)?;
+                check_direct_endpoint(taradr, &target)?;
+                tex_check_asset_serial(ctx, asset.serial)?;
                 let mut state = CoreState::wrap(ctx.layer());
                 asset_sub(&mut state, taradr, asset)?;
                 asset_add(&mut state, &target, asset)?;
@@ -232,7 +261,8 @@ impl TexCell {
             }
             Self::DirectedAssetGet { from, asset } => {
                 let source = resolve_directed_source(ctx, from)?;
-                check_direct_endpoint(&source)?;
+                check_direct_endpoint(taradr, &source)?;
+                tex_check_asset_serial(ctx, asset.serial)?;
                 let mut state = CoreState::wrap(ctx.layer());
                 asset_sub(&mut state, &source, asset)?;
                 asset_add(&mut state, taradr, asset)?;
@@ -448,9 +478,9 @@ mod tests {
         VmHostCallKind,
     };
     use field::{
-        AssetAmt, AssetAmtW1, Balance, BlockHeight, DiamondName, DiamondNameListMax200,
-        DiamondNumber, DiamondNumberAuto, DiamondOwnedForm, DiamondSto, Inscripts, SatoshiAuto,
-        Uint8, UNIT_ZHU,
+        AssetAmt, AssetAmtW1, AssetSmelt, Balance, BlockHeight, BytesW1, DiamondName,
+        DiamondNameListMax200, DiamondNumber, DiamondNumberAuto, DiamondOwnedForm, DiamondSto,
+        Inscripts, SatoshiAuto, Uint1, Uint8, UNIT_ZHU,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -826,6 +856,19 @@ mod tests {
         };
         CoreState::wrap(ctx.layer()).balance_set(&maker_addr, &maker_balance);
         CoreState::wrap(ctx.layer()).balance_set(&taker_addr, &taker_balance);
+        // Directed asset cells verify the serial like the escrow cells, so the
+        // #11 record must exist in state.
+        CoreState::wrap(ctx.layer()).asset_set(
+            &sat(11),
+            &AssetSmelt {
+                serial: sat(11),
+                supply: sat(1_000_000),
+                decimal: Uint1::from(8),
+                issuer: maker_addr,
+                ticket: BytesW1::default(),
+                name: BytesW1::default(),
+            },
+        );
 
         run_directed_cells(&mut ctx).unwrap();
         let maker_after = CoreState::wrap(ctx.layer())
@@ -863,6 +906,53 @@ mod tests {
         );
         assert_ledger_residual_zero(&ctx);
         crate::exec::tex::do_settlement(&mut ctx).unwrap();
+    }
+
+    /// Directed asset cells check the serial like the escrow cells: a zero or
+    /// unknown serial is rejected before any balance moves, and the ledger is
+    /// left untouched.
+    #[test]
+    fn directed_asset_cells_check_asset_serial_like_escrow() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let taker_addr = Address::from(*taker.address());
+        let asset = |serial: u64| AssetAmt {
+            serial: Fold64::from(serial).unwrap(),
+            amount: Fold64::from(1).unwrap(),
+        };
+
+        // Serial 999 has no asset record in state, on both directions. No
+        // balances are seeded: the serial check fires before the balance move,
+        // so the message itself proves the check ran.
+        for cells in [
+            vec![TexCell::DirectedAssetPay {
+                to: AddrOrPtr::Addr(taker_addr),
+                asset: asset(999),
+            }],
+            vec![TexCell::DirectedAssetGet {
+                from: AddrOrPtr::Addr(taker_addr),
+                asset: asset(999),
+            }],
+        ] {
+            let mut ctx = DirectedCtx::new(directed_tx(&taker, vec![taker_addr], cells, &maker));
+            let err = run_directed_cells(&mut ctx).unwrap_err().to_string();
+            assert!(err.contains("does not exist"), "{err}");
+            assert!(ctx.tex.entries.is_empty());
+        }
+
+        // Zero serial.
+        let mut ctx = DirectedCtx::new(directed_tx(
+            &taker,
+            vec![taker_addr],
+            vec![TexCell::DirectedAssetPay {
+                to: AddrOrPtr::Addr(taker_addr),
+                asset: asset(0),
+            }],
+            &maker,
+        ));
+        let err = run_directed_cells(&mut ctx).unwrap_err().to_string();
+        assert!(err.contains("cannot be zero"), "{err}");
+        assert!(ctx.tex.entries.is_empty());
     }
 
     #[test]
@@ -981,6 +1071,45 @@ mod tests {
         assert_ledger_residual_zero(&ctx);
     }
 
+    /// A directed pay target must be pinned by the authorizer's signature:
+    /// the bundle signature covers the cells, not the transaction address
+    /// list, so `Ptr(k)` with k >= 1 would let the executing main redirect
+    /// the authorizer's payment to any address placed at that slot. Only
+    /// `Ptr(0)` (the main the signer's intent names) and explicit static
+    /// addresses are accepted.
+    #[test]
+    fn directed_pay_rejects_free_pointer_targets() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let taker_addr = Address::from(*taker.address());
+        let cases = vec![
+            TexCell::DirectedZhuPay {
+                to: AddrOrPtr::Ptr(1),
+                haczhu: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedSatPay {
+                to: AddrOrPtr::Ptr(2),
+                satnum: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedDiaPay {
+                to: AddrOrPtr::Ptr(1),
+                diamonds: DiamondNameListMax200::from_readable("WTYUIA").unwrap(),
+            },
+            TexCell::DirectedAssetPay {
+                to: AddrOrPtr::Ptr(3),
+                asset: AssetAmt {
+                    serial: Fold64::from(11).unwrap(),
+                    amount: Fold64::from(5).unwrap(),
+                },
+            },
+        ];
+        for cells in cases.into_iter().map(|c| vec![c]) {
+            let mut ctx = DirectedCtx::new(directed_tx(&taker, vec![taker_addr], cells, &maker));
+            let err = run_directed_cells(&mut ctx).unwrap_err().to_string();
+            assert!(err.contains("not a free pointer"), "{err}");
+        }
+    }
+
     #[test]
     fn directed_pay_rejects_the_settlement_and_system_addresses_and_bad_ptrs() {
         let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
@@ -1025,7 +1154,8 @@ mod tests {
             assert!(
                 err.contains("settlement")
                     || err.contains("system address")
-                    || err.contains("out of range"),
+                    || err.contains("out of range")
+                    || err.contains("not a free pointer"),
                 "{err}"
             );
         }
@@ -1085,6 +1215,85 @@ mod tests {
             let err = run_directed_cells(&mut ctx).unwrap_err().to_string();
             assert!(err.contains("must be PRIVAKEY type"), "{err}");
         }
+    }
+
+    /// The authorizer itself is not a valid directed endpoint: all eight
+    /// directed cells reject a self-transfer uniformly at the guard (before,
+    /// Zhu/Sat/Asset cells silently no-oped while the diamond move rejected
+    /// with "cannot transfer to self"). `run_directed_cells` executes the
+    /// action directly, so this exercises the exec-level guard itself.
+    #[test]
+    fn directed_cells_reject_self_transfers() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let maker_addr = Address::from(*maker.address());
+        let taker_addr = Address::from(*taker.address());
+        let asset = |n: u64| AssetAmt {
+            serial: Fold64::from(11).unwrap(),
+            amount: Fold64::from(n).unwrap(),
+        };
+        let cases = vec![
+            TexCell::DirectedZhuPay {
+                to: AddrOrPtr::Addr(maker_addr),
+                haczhu: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedZhuGet {
+                from: AddrOrPtr::Addr(maker_addr),
+                haczhu: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedSatPay {
+                to: AddrOrPtr::Addr(maker_addr),
+                satnum: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedSatGet {
+                from: AddrOrPtr::Addr(maker_addr),
+                satnum: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedDiaPay {
+                to: AddrOrPtr::Addr(maker_addr),
+                diamonds: DiamondNameListMax200::from_readable("WTYUIA").unwrap(),
+            },
+            TexCell::DirectedDiaGet {
+                from: AddrOrPtr::Addr(maker_addr),
+                diamonds: DiamondNameListMax200::from_readable("WTYUIA").unwrap(),
+            },
+            TexCell::DirectedAssetPay {
+                to: AddrOrPtr::Addr(maker_addr),
+                asset: asset(5),
+            },
+            TexCell::DirectedAssetGet {
+                from: AddrOrPtr::Addr(maker_addr),
+                asset: asset(5),
+            },
+        ];
+        for cells in cases.into_iter().map(|c| vec![c]) {
+            let mut ctx = DirectedCtx::new(directed_tx(&taker, vec![taker_addr], cells, &maker));
+            let err = run_directed_cells(&mut ctx).unwrap_err().to_string();
+            assert!(err.contains("authorizer"), "{err}");
+        }
+
+        // A Ptr endpoint that resolves to the authorizer (index 1 of the tx
+        // address list) is caught the same way.
+        let mut ctx = DirectedCtx::new(directed_tx(
+            &taker,
+            vec![taker_addr, maker_addr],
+            vec![TexCell::DirectedZhuGet {
+                from: AddrOrPtr::Ptr(1),
+                haczhu: Fold64::from(1000).unwrap(),
+            }],
+            &maker,
+        ));
+        CoreState::wrap(ctx.layer()).balance_set(
+            &maker_addr,
+            &Balance::hac(Amount::coin_u128(1000, UNIT_ZHU)),
+        );
+        let err = run_directed_cells(&mut ctx).unwrap_err().to_string();
+        assert!(err.contains("authorizer"), "{err}");
+        // The guard fires before any balance moves.
+        assert_eq!(
+            hac_balance(&mut ctx, &maker_addr),
+            Amount::coin_u128(1000, UNIT_ZHU)
+        );
     }
 
     /// DirectedGet from the settlement address is rejected by the direct

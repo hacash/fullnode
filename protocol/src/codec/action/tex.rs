@@ -335,6 +335,11 @@ impl TexCellExecute {
     }
 
     /// Final TEX authorization signing digest, shared with external signing tools.
+    /// Read-only view of the bundle's cells for SDK review/policy layers.
+    pub fn cells(&self) -> &[TexCell] {
+        self.cells.as_list()
+    }
+
     pub fn sign_hash(&self) -> Hash {
         self.get_sign_stuff()
     }

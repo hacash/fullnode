@@ -402,6 +402,17 @@ fn collect_asset_serials(action: &base::ActionRef, out: &mut Vec<u64>) {
             }
         }
     }
+    // TEX bundles carry their own asset cells; their serials belong in the
+    // review even though the bundle exposes no `transfer_intent`.
+    if let Some(tex) = crate::audit::tex_review_facts(action.as_ref()) {
+        for serial in &tex.asset_serials {
+            if let Ok(value) = serial.parse::<u64>() {
+                if !out.contains(&value) {
+                    out.push(value);
+                }
+            }
+        }
+    }
 }
 
 /// `tx.inspect_report`: complete report without chain context; never fails on

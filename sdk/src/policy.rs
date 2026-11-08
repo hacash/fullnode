@@ -55,6 +55,12 @@ fn count_diamond_names(review: &Review) -> u32 {
                 total = total.saturating_add(*count);
             }
         }
+        // TEX bundles move named diamonds outside `transfer_intent`, so their
+        // cells count toward the same cap (a directed get can pull them from
+        // the transaction signer -- exactly what the cap must bound).
+        if let Some(tex) = &action.tex {
+            total = total.saturating_add(tex.diamond_names);
+        }
     });
     total
 }
@@ -238,6 +244,7 @@ mod tests {
             transfer: None,
             children: None,
             blob: false,
+            tex: None,
         }];
         let decision = evaluate_policy(&review, &policy).unwrap();
         assert_eq!(decision.decision, "deny");
@@ -265,6 +272,7 @@ mod tests {
             transfer: None,
             children,
             blob: false,
+            tex: None,
         }
     }
 
@@ -328,6 +336,26 @@ mod tests {
         };
         let mut review = sample_review();
         review.actions = vec![desc(25, "0", Some(vec![hacd_desc("0/0", 3)]))];
+        let decision = evaluate_policy(&review, &policy).unwrap();
+        assert_eq!(decision.decision, "deny");
+    }
+
+    /// A TEX bundle's named diamonds move outside `transfer_intent`, so the
+    /// cap must read the bundle's own facts -- a directed get can pull them
+    /// from the transaction signer, exactly what the cap exists to bound.
+    #[test]
+    fn max_diamond_names_counts_tex_bundle_cells() {
+        let policy = Policy {
+            max_diamond_names: Some(2),
+            ..Default::default()
+        };
+        let mut review = sample_review();
+        let mut action = desc(22, "0", None);
+        action.tex = Some(crate::audit::TexCellDesc {
+            diamond_names: 3,
+            asset_serials: vec![],
+        });
+        review.actions = vec![action];
         let decision = evaluate_policy(&review, &policy).unwrap();
         assert_eq!(decision.decision, "deny");
     }
