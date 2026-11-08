@@ -69,6 +69,24 @@ fn resolve_directed_source(ctx: &dyn Context, from: &AddrOrPtr) -> Ret<Address> 
     from.real(&ctx.env().tx.addrs)
 }
 
+/// Execution gate for DirectedGet. The cell turns the transaction signer into
+/// a counterparty of the bundle (funds are pulled from the signer), and the
+/// product decision on enabling that semantics is still open. Chains that have
+/// already grown past this height (mainnet) refuse execution, while young test
+/// networks (height starting from 0) exercise the cells. Lift deliberately and
+/// with a consensus-coordinated activation.
+const DIRECTED_GET_OPEN_UNTIL_HEIGHT: u64 = 790_000;
+
+fn directed_get_enabled(ctx: &dyn Context) -> Rerr {
+    if ctx.env().block.height > DIRECTED_GET_OPEN_UNTIL_HEIGHT {
+        return errf!(
+            "directed get cells are disabled above height {} (enablement pending product decision)",
+            DIRECTED_GET_OPEN_UNTIL_HEIGHT
+        );
+    }
+    Ok(())
+}
+
 impl TexCell {
     fn execute(&self, ctx: &mut dyn Context, taradr: &Address) -> Rerr {
         match self {
@@ -179,6 +197,7 @@ impl TexCell {
                 Ok(())
             }
             Self::DirectedZhuGet { from, haczhu } => {
+                directed_get_enabled(ctx)?;
                 let source = resolve_directed_source(ctx, from)?;
                 check_direct_endpoint(&source)?;
                 let zhu = haczhu.uint();
@@ -199,6 +218,7 @@ impl TexCell {
                 Ok(())
             }
             Self::DirectedSatGet { from, satnum } => {
+                directed_get_enabled(ctx)?;
                 let source = resolve_directed_source(ctx, from)?;
                 check_direct_endpoint(&source)?;
                 let sat = Satoshi::from(satnum.uint());
@@ -213,6 +233,7 @@ impl TexCell {
                 Ok(())
             }
             Self::DirectedDiaGet { from, diamonds } => {
+                directed_get_enabled(ctx)?;
                 let source = resolve_directed_source(ctx, from)?;
                 check_direct_endpoint(&source)?;
                 diamonds_transfer(ctx, &source, taradr, diamonds, DiamondMove::User)?;
@@ -227,6 +248,7 @@ impl TexCell {
                 Ok(())
             }
             Self::DirectedAssetGet { from, asset } => {
+                directed_get_enabled(ctx)?;
                 let source = resolve_directed_source(ctx, from)?;
                 check_direct_endpoint(&source)?;
                 let mut state = CoreState::wrap(ctx.layer());
@@ -964,6 +986,66 @@ mod tests {
             Amount::coin_u128(9000, UNIT_ZHU)
         );
         assert_eq!(hac_balance(&mut ctx, &maker_addr), Amount::default());
+    }
+
+    #[test]
+    fn directed_get_is_height_gated_until_enablement_is_decided() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let maker_addr = Address::from(*maker.address());
+        let taker_addr = Address::from(*taker.address());
+        let cells = vec![TexCell::DirectedZhuGet {
+            from: AddrOrPtr::Ptr(0),
+            haczhu: Fold64::from(1000).unwrap(),
+        }];
+
+        // Above the open-until height (mainnet-shaped): refused before any
+        // balance moves.
+        let mut ctx = DirectedCtx::new(directed_tx(
+            &taker,
+            vec![taker_addr],
+            cells.clone(),
+            &maker,
+        ));
+        ctx.env.block.height = DIRECTED_GET_OPEN_UNTIL_HEIGHT + 1;
+        CoreState::wrap(ctx.layer()).balance_set(
+            &taker_addr,
+            &Balance::hac(Amount::coin_u128(5000, UNIT_ZHU)),
+        );
+        let err = run_directed_cells(&mut ctx).unwrap_err().to_string();
+        assert!(err.contains("disabled above height"), "{err}");
+        assert_eq!(
+            hac_balance(&mut ctx, &taker_addr),
+            Amount::coin_u128(5000, UNIT_ZHU)
+        );
+        assert_eq!(hac_balance(&mut ctx, &maker_addr), Amount::default());
+
+        // At the boundary height exactly (young test network): still open.
+        let mut ctx = DirectedCtx::new(directed_tx(
+            &taker,
+            vec![taker_addr],
+            cells,
+            &maker,
+        ));
+        ctx.env.block.height = DIRECTED_GET_OPEN_UNTIL_HEIGHT;
+        CoreState::wrap(ctx.layer()).balance_set(
+            &taker_addr,
+            &Balance::hac(Amount::coin_u128(5000, UNIT_ZHU)),
+        );
+        CoreState::wrap(ctx.layer()).balance_set(
+            &maker_addr,
+            &Balance::hac(Amount::coin_u128(2000, UNIT_ZHU)),
+        );
+        run_directed_cells(&mut ctx).unwrap();
+        assert_eq!(
+            hac_balance(&mut ctx, &maker_addr),
+            Amount::coin_u128(3000, UNIT_ZHU)
+        );
+        assert_eq!(
+            hac_balance(&mut ctx, &taker_addr),
+            Amount::coin_u128(4000, UNIT_ZHU)
+        );
+        assert_ledger_residual_zero(&ctx);
     }
 
     #[test]
