@@ -39,10 +39,17 @@ fn verify_signature(hash: &Hash, addr: &Address, sign: &Sign) -> bool {
 }
 
 /// Directed cells move value outside the TEX escrow, so the endpoint they name
-/// must be an ordinary user address: the settlement address and every other
-/// system address (privkey unknown, including the blackhole) are rejected,
-/// mirroring the diamond `DiamondMove::User` guard.
+/// must be an ordinary user address: the settlement address, every other
+/// system address (privkey unknown, including the blackhole), and every
+/// non-privkey address (multisig/scriptmh/contract) are rejected. The type
+/// restriction is deliberate: directed cells move balances directly through
+/// `hac_sub`/`hac_add` and never route through the transfer hook machinery
+/// (`resolve_transfer_routing`), so crediting or debiting a contract or
+/// script address here would silently skip its authorize/receive hooks.
 fn check_direct_endpoint(addr: &Address) -> Rerr {
+    if let Err(e) = addr.must_privkey() {
+        return errf!("direct cell endpoint must be a privkey user address: {}", e);
+    }
     if *addr == SETTLEMENT_ADDR {
         return errf!(
             "direct cell cannot involve the tex settlement address {}",
@@ -1095,6 +1102,62 @@ mod tests {
                     || err.contains("out of range"),
                 "{err}"
             );
+        }
+    }
+
+    /// Directed endpoints must be ordinary privkey user addresses. Multisig
+    /// and contract addresses (non-privkey versions) are rejected on both the
+    /// pay target and the get source: directed cells move balances through
+    /// `hac_sub`/`hac_add` without the transfer hook machinery, so touching a
+    /// contract or script address would skip its authorize/receive hooks, and
+    /// the dispatcher's signature consent does not apply to non-privkey
+    /// sources (a directed get from a multisig balance would have no consent
+    /// at all).
+    #[test]
+    fn directed_endpoints_reject_multisig_and_contract_addresses() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let taker_addr = Address::from(*taker.address());
+        // Version bytes 1 (contract) and 5 (scriptmh/multisig family).
+        let contract_addr = Address::from([
+            1, 0x11, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ]);
+        let script_addr = Address::from([
+            5, 0x22, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ]);
+        let cases = vec![
+            TexCell::DirectedZhuPay {
+                to: AddrOrPtr::Addr(contract_addr),
+                haczhu: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedZhuPay {
+                to: AddrOrPtr::Addr(script_addr),
+                haczhu: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedZhuGet {
+                from: AddrOrPtr::Addr(contract_addr),
+                haczhu: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedZhuGet {
+                from: AddrOrPtr::Addr(script_addr),
+                haczhu: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedDiaPay {
+                to: AddrOrPtr::Addr(contract_addr),
+                diamonds: DiamondNameListMax200::from_readable("WTYUIA").unwrap(),
+            },
+            TexCell::DirectedAssetGet {
+                from: AddrOrPtr::Addr(script_addr),
+                asset: AssetAmt {
+                    serial: Fold64::from(11).unwrap(),
+                    amount: Fold64::from(5).unwrap(),
+                },
+            },
+        ];
+        for cells in cases.into_iter().map(|c| vec![c]) {
+            let mut ctx = DirectedCtx::new(directed_tx(&taker, vec![taker_addr], cells, &maker));
+            let err = run_directed_cells(&mut ctx).unwrap_err().to_string();
+            assert!(err.contains("must be PRIVAKEY type"), "{err}");
         }
     }
 

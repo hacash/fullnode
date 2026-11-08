@@ -272,8 +272,8 @@ define_tex_cells! {
     DirectedZhuGet = 27 { from: AddrOrPtr, haczhu: Fold64 } asset=false,
     DirectedSatPay = 28 { to: AddrOrPtr, satnum: Fold64 } asset=false,
     DirectedSatGet = 29 { from: AddrOrPtr, satnum: Fold64 } asset=false,
-    DirectedDiaPay = 30 { to: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=true,
-    DirectedDiaGet = 31 { from: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=true,
+    DirectedDiaPay = 30 { to: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=false,
+    DirectedDiaGet = 31 { from: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=false,
     DirectedAssetPay = 32 { to: AddrOrPtr, asset: AssetAmt } asset=true,
     DirectedAssetGet = 33 { from: AddrOrPtr, asset: AssetAmt } asset=true,
 }
@@ -517,15 +517,15 @@ mod tests {
             let (decoded, used) = TexCell::decode(&wire).unwrap();
             assert_eq!(used, wire.len());
             assert_eq!(decoded.encode(), wire);
-            // Dia/Asset directed cells ride the asset gas tier like AssetPay,
-            // Zhu/Sat like their escrow siblings.
+            // Asset directed cells ride the asset gas tier like AssetPay;
+            // diamond directed cells match their escrow siblings (DiaPay/DiaGet,
+            // asset=false), so a directed diamond settlement costs the same as
+            // the pool-based one it replaces. Zhu/Sat likewise.
             assert_eq!(
                 cell.is_asset_transfer(),
                 matches!(
                     &cell,
-                    TexCell::DirectedDiaPay { .. }
-                        | TexCell::DirectedDiaGet { .. }
-                        | TexCell::DirectedAssetPay { .. }
+                    TexCell::DirectedAssetPay { .. }
                         | TexCell::DirectedAssetGet { .. }
                 ),
                 "{}",
