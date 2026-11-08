@@ -732,6 +732,38 @@ fn canonical_cell_json(cell: &protocol::action_std::TexCell) -> String {
             integer(value.amount.uint())
         )
     };
+    let directed = |id: u8,
+                    endpoint_key: &str,
+                    endpoint: &field::AddrOrPtr,
+                    value_key: &str,
+                    value: u64| {
+        format!(
+            "{{\"cellid\":{id},\"{endpoint_key}\":{},\"{value_key}\":{}}}",
+            endpoint.to_json(),
+            integer(value)
+        )
+    };
+    let directed_dia = |id: u8,
+                        endpoint_key: &str,
+                        endpoint: &field::AddrOrPtr,
+                        diamonds: &field::DiamondNameListMax200| {
+        format!(
+            "{{\"cellid\":{id},\"{endpoint_key}\":{},\"diamonds\":{}}}",
+            endpoint.to_json(),
+            diamonds.to_json()
+        )
+    };
+    let directed_asset = |id: u8,
+                          endpoint_key: &str,
+                          endpoint: &field::AddrOrPtr,
+                          value: &field::AssetAmt| {
+        format!(
+            "{{\"cellid\":{id},\"{endpoint_key}\":{},\"asset\":{{\"serial\":{},\"amount\":{}}}}}",
+            endpoint.to_json(),
+            integer(value.serial.uint()),
+            integer(value.amount.uint())
+        )
+    };
     match cell {
         C::ZhuPay { haczhu } => scalar(1, "haczhu", haczhu.uint()),
         C::ZhuGet { haczhu } => scalar(2, "haczhu", haczhu.uint()),
@@ -756,48 +788,14 @@ fn canonical_cell_json(cell: &protocol::action_std::TexCell) -> String {
         C::CondHeightAtMost { height } => scalar(23, "height", height.uint() as u64),
         C::CondHeightAtLeast { height } => scalar(24, "height", height.uint() as u64),
         C::CondChainIdEq { chainid } => scalar(25, "chainid", chainid.uint() as u64),
-        C::DirectedZhuPay { to, haczhu } => format!(
-            "{{\"cellid\":26,\"to\":{},\"haczhu\":{}}}",
-            to.to_json(),
-            integer(haczhu.uint())
-        ),
-        C::DirectedZhuGet { from, haczhu } => format!(
-            "{{\"cellid\":27,\"from\":{},\"haczhu\":{}}}",
-            from.to_json(),
-            integer(haczhu.uint())
-        ),
-        C::DirectedSatPay { to, satnum } => format!(
-            "{{\"cellid\":28,\"to\":{},\"satnum\":{}}}",
-            to.to_json(),
-            integer(satnum.uint())
-        ),
-        C::DirectedSatGet { from, satnum } => format!(
-            "{{\"cellid\":29,\"from\":{},\"satnum\":{}}}",
-            from.to_json(),
-            integer(satnum.uint())
-        ),
-        C::DirectedDiaPay { to, diamonds } => format!(
-            "{{\"cellid\":30,\"to\":{},\"diamonds\":{}}}",
-            to.to_json(),
-            diamonds.to_json()
-        ),
-        C::DirectedDiaGet { from, diamonds } => format!(
-            "{{\"cellid\":31,\"from\":{},\"diamonds\":{}}}",
-            from.to_json(),
-            diamonds.to_json()
-        ),
-        C::DirectedAssetPay { to, asset } => format!(
-            "{{\"cellid\":32,\"to\":{},\"asset\":{{\"serial\":{},\"amount\":{}}}}}",
-            to.to_json(),
-            integer(asset.serial.uint()),
-            integer(asset.amount.uint())
-        ),
-        C::DirectedAssetGet { from, asset } => format!(
-            "{{\"cellid\":33,\"from\":{},\"asset\":{{\"serial\":{},\"amount\":{}}}}}",
-            from.to_json(),
-            integer(asset.serial.uint()),
-            integer(asset.amount.uint())
-        ),
+        C::DirectedZhuPay { to, haczhu } => directed(26, "to", to, "haczhu", haczhu.uint()),
+        C::DirectedZhuGet { from, haczhu } => directed(27, "from", from, "haczhu", haczhu.uint()),
+        C::DirectedSatPay { to, satnum } => directed(28, "to", to, "satnum", satnum.uint()),
+        C::DirectedSatGet { from, satnum } => directed(29, "from", from, "satnum", satnum.uint()),
+        C::DirectedDiaPay { to, diamonds } => directed_dia(30, "to", to, diamonds),
+        C::DirectedDiaGet { from, diamonds } => directed_dia(31, "from", from, diamonds),
+        C::DirectedAssetPay { to, asset } => directed_asset(32, "to", to, asset),
+        C::DirectedAssetGet { from, asset } => directed_asset(33, "from", from, asset),
     }
 }
 

@@ -58,19 +58,15 @@ fn check_direct_endpoint(addr: &Address) -> Rerr {
     Ok(())
 }
 
-/// Resolve a DirectedGet source and enforce the consent rule: signing the
-/// transaction is the payment consent, so the resolved source must be a member
-/// of `tx.addrs` (a static third party never signed and would make the cell a
-/// theft primitive).
+/// Resolve a DirectedGet source. Consent is no longer checked here: every
+/// DirectedGet `from` is declared in the action's `req_sign`, so the dispatcher
+/// runs the real signature check (`ctx.check_sign`) on each source before any
+/// cell executes — co-signing the transaction is the payment consent. This
+/// keeps the single maintenance point on the dispatch level, like
+/// `TransferHacFrom`/`TransferHacFromTo`, and legalizes static sources that
+/// co-sign. The exec-time system-address guard (`check_direct_endpoint`) stays.
 fn resolve_directed_source(ctx: &dyn Context, from: &AddrOrPtr) -> Ret<Address> {
-    let source = from.real(&ctx.env().tx.addrs)?;
-    if !ctx.env().tx.addrs.contains(&source) {
-        return errf!(
-            "direct get source {} must be a transaction signer",
-            source.to_readable()
-        );
-    }
-    Ok(source)
+    from.real(&ctx.env().tx.addrs)
 }
 
 impl TexCell {
@@ -442,8 +438,8 @@ base::impl_action_execute! {
 mod tests {
     use super::*;
     use base::{
-        ActionExecute, BinaryCodecs, BlockHasherFn, BlockRef, DIAMOND_STATUS_NORMAL, Env,
-        ExecutionServices, JsonCodecs, StateLayer, StateRead, TexLedger, Transaction, TxInfo,
+        ActionDispatcher, ActionExecute, BinaryCodecs, BlockHasherFn, BlockRef, DIAMOND_STATUS_NORMAL,
+        Env, ExecutionServices, JsonCodecs, StateLayer, StateRead, TexLedger, Transaction, TxInfo,
         TxRef, Vm, VmExecutionParams, VmHostActionDef, VmHostCallKind,
     };
     use field::{
@@ -544,8 +540,8 @@ mod tests {
     impl DirectedCtx {
         /// Mainnet-shaped context for a wire-real type-3 tx: `env.tx` is
         /// populated exactly like the block apply loop does, so `AddrOrPtr`
-        /// resolution and the signer-membership consent check run against the
-        /// real transaction address list.
+        /// resolution and the dispatch-level signature consent (`req_sign` +
+        /// `check_sign`) run against the real transaction address list.
         fn new(tx: StdTransaction) -> Self {
             let mut env = Env::default();
             env.chain.consensus_flags =
@@ -583,8 +579,11 @@ mod tests {
         fn exec_from_set(&mut self, from: ExecFrom) {
             self.exec_from = from;
         }
-        fn check_sign(&mut self, _adr: &Address) -> Rerr {
-            Ok(())
+        /// Real per-signer verification against this tx's signatures, mirroring
+        /// the production context in strict mode (no fast-sync shortcut), so the
+        /// dispatcher's req_sign consent check behaves like consensus.
+        fn check_sign(&mut self, adr: &Address) -> Rerr {
+            crate::tx_std::verify_target_signature(adr, self.tx.as_ref()).map(|_| ())
         }
         fn layer(&mut self) -> &mut dyn StateLayer {
             &mut self.layer
@@ -926,8 +925,12 @@ mod tests {
         );
     }
 
+    /// Consent for DirectedGet lives at dispatch: every directed get `from` is
+    /// declared in the action's `req_sign`, so a static source that did not
+    /// co-sign the transaction fails the dispatcher's `ctx.check_sign` before
+    /// any cell executes. There is no exec-time membership re-check.
     #[test]
-    fn directed_get_rejects_a_source_outside_the_transaction_signers() {
+    fn directed_get_rejects_a_source_that_did_not_sign_the_transaction() {
         let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
         let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
         let maker_addr = Address::from(*maker.address());
@@ -951,8 +954,11 @@ mod tests {
             &Balance::hac(Amount::coin_u128(9000, UNIT_ZHU)),
         );
 
-        let err = run_directed_cells(&mut ctx).unwrap_err().to_string();
-        assert!(err.contains("must be a transaction signer"), "{err}");
+        let act = ctx.tx.actions()[0].clone();
+        let err = ActionDispatcher::dispatch_top(ctx.as_context_mut(), &act)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("signature verification failed"), "{err}");
         assert_eq!(
             hac_balance(&mut ctx, &bystander),
             Amount::coin_u128(9000, UNIT_ZHU)
@@ -1010,10 +1016,11 @@ mod tests {
         }
     }
 
-    /// DirectedGet from the settlement address is rejected before the endpoint
-    /// guard even fires: consent is rule 2 and the system-address guard rule 3,
-    /// so the signer-membership error wins (the settlement address can never be
-    /// a transaction signer).
+    /// DirectedGet from the settlement address is rejected by the direct
+    /// endpoint guard: consent moved to the dispatcher (`req_sign` +
+    /// `check_sign`), so the rule that remains at exec time is the
+    /// system-address guard — which also holds under fast sync, where
+    /// `check_sign` is skipped and this guard is the last line of defense.
     #[test]
     fn directed_get_rejects_the_settlement_address_as_source() {
         let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
@@ -1029,11 +1036,14 @@ mod tests {
             &maker,
         ));
         let err = run_directed_cells(&mut ctx).unwrap_err().to_string();
-        assert!(err.contains("must be a transaction signer"), "{err}");
+        assert!(
+            err.contains("cannot involve the tex settlement address"),
+            "{err}"
+        );
     }
 
     /// A co-signer source: `from: Ptr(1)` resolves to the second entry of the
-    /// transaction address list, which has signed the tx, so the get succeeds.
+    /// transaction address list, which co-signed the tx, so the get succeeds.
     #[test]
     fn directed_get_accepts_a_cosigner_source_resolved_by_ptr() {
         let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
@@ -1042,7 +1052,7 @@ mod tests {
         let maker_addr = Address::from(*maker.address());
         let taker_addr = Address::from(*taker.address());
         let cosigner_addr = Address::from(*cosigner.address());
-        let mut ctx = DirectedCtx::new(directed_tx(
+        let mut tx = directed_tx(
             &taker,
             vec![taker_addr, cosigner_addr],
             vec![TexCell::DirectedZhuGet {
@@ -1050,7 +1060,9 @@ mod tests {
                 haczhu: Fold64::from(300).unwrap(),
             }],
             &maker,
-        ));
+        );
+        tx.fill_sign_account(&cosigner).unwrap();
+        let mut ctx = DirectedCtx::new(tx);
         CoreState::wrap(ctx.layer()).balance_set(
             &cosigner_addr,
             &Balance::hac(Amount::coin_u128(500, UNIT_ZHU)),
@@ -1067,5 +1079,47 @@ mod tests {
             Amount::coin_u128(300, UNIT_ZHU)
         );
         assert_eq!(hac_balance(&mut ctx, &taker_addr), Amount::default());
+    }
+
+    /// A static third-party source is legal when it co-signs every executing
+    /// transaction: the address joins the tx address list AND signs the
+    /// envelope, so the dispatcher's req_sign `check_sign` passes and the get
+    /// moves its funds (per-execution consent; replay needs a fresh signature).
+    #[test]
+    fn directed_get_accepts_a_static_source_that_cosigns_the_transaction() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let source = sys::Account::create_by_secret_key_value([7u8; 32]).unwrap();
+        let maker_addr = Address::from(*maker.address());
+        let taker_addr = Address::from(*taker.address());
+        let source_addr = Address::from(*source.address());
+        let mut tx = directed_tx(
+            &taker,
+            vec![taker_addr, source_addr],
+            vec![TexCell::DirectedZhuGet {
+                from: AddrOrPtr::Addr(source_addr),
+                haczhu: Fold64::from(300).unwrap(),
+            }],
+            &maker,
+        );
+        tx.fill_sign_account(&source).unwrap();
+        let mut ctx = DirectedCtx::new(tx);
+        CoreState::wrap(ctx.layer()).balance_set(
+            &source_addr,
+            &Balance::hac(Amount::coin_u128(500, UNIT_ZHU)),
+        );
+
+        let act = ctx.tx.actions()[0].clone();
+        ActionDispatcher::dispatch_top(ctx.as_context_mut(), &act).unwrap();
+        assert_eq!(
+            hac_balance(&mut ctx, &source_addr),
+            Amount::coin_u128(200, UNIT_ZHU)
+        );
+        assert_eq!(
+            hac_balance(&mut ctx, &maker_addr),
+            Amount::coin_u128(300, UNIT_ZHU)
+        );
+        assert_eq!(hac_balance(&mut ctx, &taker_addr), Amount::default());
+        assert_ledger_residual_zero(&ctx);
     }
 }

@@ -298,6 +298,21 @@ base::action_simple! { TexCellExecute, 22, 3, TOP, {
     pub(crate) cells: ListW1<TexCell>,
     sign: Sign
 }, this, {
+    // DirectedGet consent: every directed get source must co-sign each
+    // transaction that executes this bundle (the dispatcher's check_sign),
+    // replacing the old exec-time tx.addrs membership check.
+    req_sign: this
+        .cells
+        .as_list()
+        .iter()
+        .filter_map(|c| match c {
+            TexCell::DirectedZhuGet { from, .. } => Some(from.clone()),
+            TexCell::DirectedSatGet { from, .. } => Some(from.clone()),
+            TexCell::DirectedDiaGet { from, .. } => Some(from.clone()),
+            TexCell::DirectedAssetGet { from, .. } => Some(from.clone()),
+            _ => None,
+        })
+        .collect(),
     extra9: this.has_asset_transfer_cell(),
     ctor: none,
     description: format!(
