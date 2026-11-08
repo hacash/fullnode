@@ -310,21 +310,10 @@ base::action_simple! { TexCellExecute, 22, 3, TOP, {
     pub(crate) cells: ListW1<TexCell>,
     sign: Sign
 }, this, {
-    // DirectedGet consent: every directed get source must co-sign each
-    // transaction that executes this bundle (the dispatcher's check_sign),
-    // replacing the old exec-time tx.addrs membership check.
-    req_sign: this
-        .cells
-        .as_list()
-        .iter()
-        .filter_map(|c| match c {
-            TexCell::DirectedZhuGet { from, .. } => Some(from.clone()),
-            TexCell::DirectedSatGet { from, .. } => Some(from.clone()),
-            TexCell::DirectedDiaGet { from, .. } => Some(from.clone()),
-            TexCell::DirectedAssetGet { from, .. } => Some(from.clone()),
-            _ => None,
-        })
-        .collect(),
+    // DirectedGet sources are pinned to the transaction main (ptr 0) by the
+    // exec-time form guard, so no bundle-derived signer set exists: the trait
+    // default (empty req_sign) applies and only the transaction main must
+    // sign, which the envelope already requires.
     extra9: this.has_asset_transfer_cell(),
     ctor: none,
     description: format!(
@@ -428,6 +417,10 @@ mod tests {
             &action.sign.publickey,
             &action.sign.signature,
         ));
+        // Directed get sources are pinned to the transaction main, so no
+        // extra signers are derived from the cells: the empty req_sign
+        // default applies and the envelope's main signature suffices.
+        assert!(base::Action::req_sign(&TexCellExecute::default()).is_empty());
     }
 
     #[test]

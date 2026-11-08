@@ -529,7 +529,7 @@ mod tests {
                 {{"cellid":26,"to":"{target}","haczhu":1000}},
                 {{"cellid":27,"from":0,"haczhu":2000}},
                 {{"cellid":28,"to":"{target}","satnum":7}},
-                {{"cellid":29,"from":1,"satnum":9}},
+                {{"cellid":29,"from":0,"satnum":9}},
                 {{"cellid":30,"to":"{target}","diamonds":["WTYUIA"]}},
                 {{"cellid":31,"from":0,"diamonds":["HYXYHY"]}},
                 {{"cellid":32,"to":"{target}","asset":{{"serial":11,"amount":5}}}},
