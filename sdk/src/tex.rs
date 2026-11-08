@@ -526,14 +526,14 @@ mod tests {
         .to_readable();
         let raw = format!(
             r#"{{"schema":"{SCHEMA_TEX_AUTHORIZATION}","address":"{address}","cells":[
-                {{"cellid":26,"to":"{target}","haczhu":1000}},
-                {{"cellid":27,"from":0,"haczhu":2000}},
-                {{"cellid":28,"to":"{target}","satnum":7}},
-                {{"cellid":29,"from":0,"satnum":9}},
-                {{"cellid":30,"to":"{target}","diamonds":["WTYUIA"]}},
-                {{"cellid":31,"from":0,"diamonds":["HYXYHY"]}},
-                {{"cellid":32,"to":"{target}","asset":{{"serial":11,"amount":5}}}},
-                {{"cellid":33,"from":0,"asset":{{"serial":11,"amount":5}}}}
+                {{"cellid":29,"to":"{target}","haczhu":1000}},
+                {{"cellid":30,"from":0,"haczhu":2000}},
+                {{"cellid":31,"to":"{target}","satnum":7}},
+                {{"cellid":32,"from":0,"satnum":9}},
+                {{"cellid":33,"to":"{target}","diamonds":["WTYUIA"]}},
+                {{"cellid":34,"from":0,"diamonds":["HYXYHY"]}},
+                {{"cellid":35,"to":"{target}","asset":{{"serial":11,"amount":5}}}},
+                {{"cellid":36,"from":0,"asset":{{"serial":11,"amount":5}}}}
             ]}}"#
         );
         let auth = decode_authorization_json(&raw).unwrap();
@@ -544,7 +544,7 @@ mod tests {
                 .iter()
                 .map(|c| c.cellid)
                 .collect::<Vec<_>>(),
-            vec![26, 28, 30, 32]
+            vec![29, 31, 33, 35]
         );
         assert_eq!(
             review
@@ -552,7 +552,7 @@ mod tests {
                 .iter()
                 .map(|c| c.cellid)
                 .collect::<Vec<_>>(),
-            vec![27, 29, 31, 33]
+            vec![30, 32, 34, 36]
         );
         // Payments name the target; nothing may hide the counterparty.
         for pay in &review.payments {
@@ -597,7 +597,7 @@ mod tests {
         let raw = format!(
             r#"{{"schema":"{SCHEMA_TEX_AUTHORIZATION}","address":"{address}","cells":[
                 {{"cellid":17,"diamond":3}},{{"cellid":18,"diamond":4}},{{"cellid":19,"diamond":5}},
-                {{"cellid":34,"diamond":6}},{{"cellid":35,"diamond":7}},{{"cellid":36,"diamond":8}}
+                {{"cellid":26,"diamond":6}},{{"cellid":27,"diamond":7}},{{"cellid":28,"diamond":8}}
             ]}}"#
         );
         let auth = decode_authorization_json(&raw).unwrap();
@@ -623,8 +623,8 @@ mod tests {
             ]
         );
         // Legacy actual-count cells keep 17-19; the projected variants are the
-        // new condition ids 34-36.
-        for (cell, id) in auth.cells.iter().zip([17u8, 18, 19, 34, 35, 36]) {
+        // new condition ids 26-28.
+        for (cell, id) in auth.cells.iter().zip([17u8, 18, 19, 26, 27, 28]) {
             assert!(cell.starts_with(&format!("{{\"cellid\":{id},")), "{cell}");
         }
         let roundtrip = decode_authorization_json(&auth.to_json_string()).unwrap();
@@ -653,7 +653,7 @@ mod tests {
                 {{"cellid":22,"asset":{{"serial":{huge},"amount":{huge}}}}},
                 {{"cellid":23,"height":1099511627775}},{{"cellid":24,"height":1099511627775}},
                 {{"cellid":25,"chainid":4294967295}},
-                {{"cellid":34,"diamond":{huge}}},{{"cellid":35,"diamond":{huge}}},{{"cellid":36,"diamond":{huge}}}
+                {{"cellid":26,"diamond":{huge}}},{{"cellid":27,"diamond":{huge}}},{{"cellid":28,"diamond":{huge}}}
             ]}}"#
         );
         let auth = decode_authorization_json(&raw).unwrap();
@@ -832,17 +832,17 @@ fn canonical_cell_json(cell: &protocol::action_std::TexCell) -> String {
         C::CondHeightAtMost { height } => scalar(23, "height", height.uint() as u64),
         C::CondHeightAtLeast { height } => scalar(24, "height", height.uint() as u64),
         C::CondChainIdEq { chainid } => scalar(25, "chainid", chainid.uint() as u64),
-        C::DirectedZhuPay { to, haczhu } => directed(26, "to", to, "haczhu", haczhu.uint()),
-        C::DirectedZhuGet { from, haczhu } => directed(27, "from", from, "haczhu", haczhu.uint()),
-        C::DirectedSatPay { to, satnum } => directed(28, "to", to, "satnum", satnum.uint()),
-        C::DirectedSatGet { from, satnum } => directed(29, "from", from, "satnum", satnum.uint()),
-        C::DirectedDiaPay { to, diamonds } => directed_dia(30, "to", to, diamonds),
-        C::DirectedDiaGet { from, diamonds } => directed_dia(31, "from", from, diamonds),
-        C::DirectedAssetPay { to, asset } => directed_asset(32, "to", to, asset),
-        C::DirectedAssetGet { from, asset } => directed_asset(33, "from", from, asset),
-        C::CondDiaProjectedAtMost { diamond } => scalar(34, "diamond", diamond.uint()),
-        C::CondDiaProjectedAtLeast { diamond } => scalar(35, "diamond", diamond.uint()),
-        C::CondDiaProjectedEq { diamond } => scalar(36, "diamond", diamond.uint()),
+        C::CondDiaProjectedAtMost { diamond } => scalar(26, "diamond", diamond.uint()),
+        C::CondDiaProjectedAtLeast { diamond } => scalar(27, "diamond", diamond.uint()),
+        C::CondDiaProjectedEq { diamond } => scalar(28, "diamond", diamond.uint()),
+        C::DirectedZhuPay { to, haczhu } => directed(29, "to", to, "haczhu", haczhu.uint()),
+        C::DirectedZhuGet { from, haczhu } => directed(30, "from", from, "haczhu", haczhu.uint()),
+        C::DirectedSatPay { to, satnum } => directed(31, "to", to, "satnum", satnum.uint()),
+        C::DirectedSatGet { from, satnum } => directed(32, "from", from, "satnum", satnum.uint()),
+        C::DirectedDiaPay { to, diamonds } => directed_dia(33, "to", to, diamonds),
+        C::DirectedDiaGet { from, diamonds } => directed_dia(34, "from", from, diamonds),
+        C::DirectedAssetPay { to, asset } => directed_asset(35, "to", to, asset),
+        C::DirectedAssetGet { from, asset } => directed_asset(36, "from", from, asset),
     }
 }
 
@@ -873,9 +873,9 @@ pub fn inspect(authorization: &Authorization) -> Result<Inspection, SdkError> {
             "TEX cell",
         )?;
         let category = match cellid {
-            1 | 3 | 5 | 7 | 26 | 28 | 30 | 32 => "pay",
-            2 | 4 | 6 | 8 | 27 | 29 | 31 | 33 => "get",
-            11..=25 | 34..=36 => "condition",
+            1 | 3 | 5 | 7 | 29 | 31 | 33 | 35 => "pay",
+            2 | 4 | 6 | 8 | 30 | 32 | 34 | 36 => "get",
+            11..=28 => "condition",
             _ => "unknown",
         };
         let value = pairs
@@ -927,10 +927,10 @@ pub fn inspect(authorization: &Authorization) -> Result<Inspection, SdkError> {
             20 => format!("Require asset balance at most {}", value),
             21 => format!("Require asset balance at least {}", value),
             22 => format!("Require asset balance equal to {}", value),
-            34 => format!("Require projected HACD count at most {}", display_value),
-            35 => format!("Require projected HACD count at least {}", display_value),
-            36 => format!("Require projected HACD count equal to {}", display_value),
-            26..=33 => {
+            26 => format!("Require projected HACD count at most {}", display_value),
+            27 => format!("Require projected HACD count at least {}", display_value),
+            28 => format!("Require projected HACD count equal to {}", display_value),
+            29..=36 => {
                 let endpoint = pairs
                     .iter()
                     .find(|(k, _)| *k == "to" || *k == "from")
@@ -949,49 +949,49 @@ pub fn inspect(authorization: &Authorization) -> Result<Inspection, SdkError> {
                     .map(|zhu| field::Amount::zhu(zhu).to_hac_string())
                     .unwrap_or_else(|_| raw.to_owned());
                 match cellid {
-                    26 => format!(
+                    29 => format!(
                         "Pay {} HAC ({} zhu) directly to {}",
                         hac_text(field_value("haczhu")),
                         field_value("haczhu"),
                         counterparty
                     ),
-                    27 => format!(
+                    30 => format!(
                         "Take {} HAC ({} zhu) directly from transaction signer {} (you, when executing)",
                         hac_text(field_value("haczhu")),
                         field_value("haczhu"),
                         counterparty
                     ),
-                    28 => format!(
+                    31 => format!(
                         "Pay {} SAT directly to {}",
                         field_value("satnum"),
                         counterparty
                     ),
-                    29 => format!(
+                    32 => format!(
                         "Take {} SAT directly from transaction signer {} (you, when executing)",
                         field_value("satnum"),
                         counterparty
                     ),
-                    30 => format!(
+                    33 => format!(
                         "Pay HACD {} directly to {}",
                         field_value("diamonds"),
                         counterparty
                     ),
-                    31 => format!(
+                    34 => format!(
                         "Take HACD {} directly from transaction signer {} (you, when executing)",
                         field_value("diamonds"),
                         counterparty
                     ),
-                    32 => format!(
+                    35 => format!(
                         "Pay asset {} directly to {}",
                         field_value("asset"),
                         counterparty
                     ),
-                    33 => format!(
+                    36 => format!(
                         "Take asset {} directly from transaction signer {} (you, when executing)",
                         field_value("asset"),
                         counterparty
                     ),
-                    _ => unreachable!("26..=33 outer arm covers every directed cellid"),
+                    _ => unreachable!("29..=36 outer arm covers every directed cellid"),
                 }
             }
             _ => {

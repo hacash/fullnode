@@ -277,17 +277,17 @@ define_tex_cells! {
     CondHeightAtMost = 23 { height: BlockHeight } asset=false,
     CondHeightAtLeast = 24 { height: BlockHeight } asset=false,
     CondChainIdEq = 25 { chainid: Uint4 } asset=false,
-    DirectedZhuPay = 26 { to: AddrOrPtr, haczhu: Fold64 } asset=false,
-    DirectedZhuGet = 27 { from: AddrOrPtr, haczhu: Fold64 } asset=false,
-    DirectedSatPay = 28 { to: AddrOrPtr, satnum: Fold64 } asset=false,
-    DirectedSatGet = 29 { from: AddrOrPtr, satnum: Fold64 } asset=false,
-    DirectedDiaPay = 30 { to: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=false,
-    DirectedDiaGet = 31 { from: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=false,
-    DirectedAssetPay = 32 { to: AddrOrPtr, asset: AssetAmt } asset=true,
-    DirectedAssetGet = 33 { from: AddrOrPtr, asset: AssetAmt } asset=true,
-    CondDiaProjectedAtMost = 34 { diamond: Fold64 } asset=false,
-    CondDiaProjectedAtLeast = 35 { diamond: Fold64 } asset=false,
-    CondDiaProjectedEq = 36 { diamond: Fold64 } asset=false,
+    CondDiaProjectedAtMost = 26 { diamond: Fold64 } asset=false,
+    CondDiaProjectedAtLeast = 27 { diamond: Fold64 } asset=false,
+    CondDiaProjectedEq = 28 { diamond: Fold64 } asset=false,
+    DirectedZhuPay = 29 { to: AddrOrPtr, haczhu: Fold64 } asset=false,
+    DirectedZhuGet = 30 { from: AddrOrPtr, haczhu: Fold64 } asset=false,
+    DirectedSatPay = 31 { to: AddrOrPtr, satnum: Fold64 } asset=false,
+    DirectedSatGet = 32 { from: AddrOrPtr, satnum: Fold64 } asset=false,
+    DirectedDiaPay = 33 { to: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=false,
+    DirectedDiaGet = 34 { from: AddrOrPtr, diamonds: DiamondNameListMax200 } asset=false,
+    DirectedAssetPay = 35 { to: AddrOrPtr, asset: AssetAmt } asset=true,
+    DirectedAssetGet = 36 { from: AddrOrPtr, asset: AssetAmt } asset=true,
 }
 
 impl field::WireElementName for TexCell {
@@ -506,7 +506,7 @@ mod tests {
                 TexCell::CondDiaProjectedAtMost {
                     diamond: Fold64::from(10).unwrap(),
                 },
-                34,
+                26,
                 10,
                 "require projected HACD count at most 10",
             ),
@@ -514,7 +514,7 @@ mod tests {
                 TexCell::CondDiaProjectedAtLeast {
                     diamond: Fold64::from(11).unwrap(),
                 },
-                35,
+                27,
                 11,
                 "require projected HACD count at least 11",
             ),
@@ -522,7 +522,7 @@ mod tests {
                 TexCell::CondDiaProjectedEq {
                     diamond: Fold64::from(12).unwrap(),
                 },
-                36,
+                28,
                 12,
                 "require projected HACD count equal to 12",
             ),
@@ -635,13 +635,13 @@ mod tests {
         };
         assert_eq!(
             pay.to_json(),
-            format!("{{\"cellid\":26,\"to\":{},\"haczhu\":1000}}", target.to_json())
+            format!("{{\"cellid\":29,\"to\":{},\"haczhu\":1000}}", target.to_json())
         );
         let get = TexCell::DirectedZhuGet {
             from: AddrOrPtr::Ptr(0),
             haczhu: Fold64::from(2000).unwrap(),
         };
-        assert_eq!(get.to_json(), "{\"cellid\":27,\"from\":0,\"haczhu\":2000}");
+        assert_eq!(get.to_json(), "{\"cellid\":30,\"from\":0,\"haczhu\":2000}");
     }
 
     #[test]
@@ -650,14 +650,14 @@ mod tests {
         let mut cell = TexCell::default();
         assert!(cell
             .from_json(&format!(
-                "{{\"cellid\":26,\"to\":{addr_json},\"haczhu\":1,\"surprise\":2}}"
+                "{{\"cellid\":29,\"to\":{addr_json},\"haczhu\":1,\"surprise\":2}}"
             ))
             .is_err());
         assert!(cell
-            .from_json(&format!("{{\"cellid\":26,\"to\":{addr_json}}}"))
+            .from_json(&format!("{{\"cellid\":29,\"to\":{addr_json}}}"))
             .is_err());
         assert!(cell
-            .from_json(&format!("{{\"cellid\":26,\"to\":{addr_json},\"haczhu\":1,\"haczhu\":2}}"))
+            .from_json(&format!("{{\"cellid\":29,\"to\":{addr_json},\"haczhu\":1,\"haczhu\":2}}"))
             .is_err());
         assert!(cell.from_json("{\"cellid\":40,\"to\":0,\"haczhu\":1}").is_err());
     }
