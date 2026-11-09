@@ -180,6 +180,54 @@ impl DescribeOptions {
     }
 }
 
+/// Diamond and asset facts of a `TexCellExecute` (kind 22): the bundle's
+/// cells move diamonds and assets for the authorizer and -- through directed
+/// gets -- also from the transaction signers, so policy caps and
+/// asset-serial reviews must see them. `None` on every other action kind.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TexCellDesc {
+    /// Total named diamonds across `DiaPay`/`DirectedDiaPay`/`DirectedDiaGet`
+    /// cells (`DiaGet` is count-only and carries no names).
+    pub diamond_names: u32,
+    /// Distinct asset serials across asset cells (pay/get/directed/condition).
+    pub asset_serials: Vec<String>,
+}
+
+/// Extract the review facts of a kind-22 bundle, if `action` is one.
+pub fn tex_review_facts(action: &dyn Action) -> Option<TexCellDesc> {
+    let tex = action
+        .as_any()
+        .downcast_ref::<protocol::action_std::TexCellExecute>()?;
+    let mut diamond_names = 0u32;
+    let mut asset_serials: Vec<String> = Vec::new();
+    for cell in tex.cells() {
+        match cell {
+            protocol::action_std::TexCell::DiaPay { diamonds }
+            | protocol::action_std::TexCell::DirectedDiaPay { diamonds, .. }
+            | protocol::action_std::TexCell::DirectedDiaGet { diamonds, .. } => {
+                diamond_names = diamond_names.saturating_add(diamonds.length() as u32);
+            }
+            protocol::action_std::TexCell::AssetPay { asset }
+            | protocol::action_std::TexCell::AssetGet { asset }
+            | protocol::action_std::TexCell::DirectedAssetPay { asset, .. }
+            | protocol::action_std::TexCell::DirectedAssetGet { asset, .. }
+            | protocol::action_std::TexCell::CondAssetAtMost { asset }
+            | protocol::action_std::TexCell::CondAssetAtLeast { asset }
+            | protocol::action_std::TexCell::CondAssetEq { asset } => {
+                let serial = asset.serial.uint().to_string();
+                if !asset_serials.contains(&serial) {
+                    asset_serials.push(serial);
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(TexCellDesc {
+        diamond_names,
+        asset_serials,
+    })
+}
+
 /// One action in the review tree. `path` is the nested index path ("0", "1/2").
 /// AST control-flow children are collected into `children` when present.
 #[derive(Debug, Clone, PartialEq)]
@@ -210,6 +258,9 @@ pub struct ActionDesc {
     /// Schema-declared blob fact (opaque byte-carrier action such as
     /// `tx_message`/`tx_blob`); `policy.deny_blob` reads it directly.
     pub blob: bool,
+    /// TEX bundle facts (diamond names / asset serials) for kind-22 actions;
+    /// `policy.max_diamond_names` reads the count, `tx.inspect` the serials.
+    pub tex: Option<TexCellDesc>,
 }
 
 /// VM code metadata of a code-carrying action (schema `hacash.sdk/action-desc@3`
@@ -356,6 +407,7 @@ pub fn describe_action(
         blob: crate::selection::action_schema(kind)
             .map(|schema| schema.blob)
             .unwrap_or(false),
+        tex: tex_review_facts(action),
     })
 }
 
@@ -705,6 +757,50 @@ fn describe_options_reject_unknown_and_non_boolean() {
     let err = DescribeOptions::from_json_pairs(&[("json", "maybe")]).unwrap_err();
     assert_eq!(err.code, "parse_failed");
 }
+
+    #[test]
+    fn tex_review_facts_count_bundle_diamonds_and_asset_serials() {
+        let maker = sys::Account::create_by_password("audit tex facts").unwrap();
+        let payee = field::Address::from([7u8; 21]);
+        let action = protocol::action_std::TexCellExecute::create_signed(
+            field::Address::from(*maker.address()),
+            vec![
+                protocol::action_std::TexCell::DiaPay {
+                    diamonds: field::DiamondNameListMax200::from_readable("WTYUIA,WTYUIB")
+                        .unwrap(),
+                },
+                protocol::action_std::TexCell::DirectedDiaGet {
+                    from: field::AddrOrPtr::Ptr(0),
+                    diamonds: field::DiamondNameListMax200::from_readable("XVMEKB").unwrap(),
+                },
+                protocol::action_std::TexCell::DirectedZhuPay {
+                    to: field::AddrOrPtr::Ptr(0),
+                    haczhu: field::Fold64::from(1).unwrap(),
+                },
+                protocol::action_std::TexCell::DirectedAssetPay {
+                    to: field::AddrOrPtr::Addr(payee),
+                    asset: field::AssetAmt {
+                        serial: field::Fold64::from(1028).unwrap(),
+                        amount: field::Fold64::from(1).unwrap(),
+                    },
+                },
+                protocol::action_std::TexCell::CondAssetEq {
+                    asset: field::AssetAmt {
+                        serial: field::Fold64::from(1028).unwrap(),
+                        amount: field::Fold64::from(1).unwrap(),
+                    },
+                },
+            ],
+            &maker,
+        )
+        .unwrap();
+        let facts = crate::audit::tex_review_facts(&action).unwrap();
+        assert_eq!(facts.diamond_names, 3);
+        assert_eq!(facts.asset_serials, vec!["1028".to_owned()]);
+        // Non-TEX actions carry no bundle facts.
+        let transfer = protocol::action_std::TransferHacTo::default();
+        assert!(crate::audit::tex_review_facts(&transfer).is_none());
+    }
 
 #[test]
 fn action_desc_json_roundtrips_through_tx_encode() {

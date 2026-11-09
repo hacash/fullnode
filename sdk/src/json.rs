@@ -7,7 +7,7 @@ use sys::errf;
 use crate::account::{AddressFromPublicKeyResult, VerifyAddressResult, VerifySignatureResult};
 use crate::amount::ParsedAmount;
 use crate::attach::{AttachResult, SignatureProof, SignatureReport, SigningRequest, VerifyResult};
-use crate::audit::{ActionCodeDesc, ActionDesc, PayloadDesc, TransferDesc};
+use crate::audit::{ActionCodeDesc, ActionDesc, PayloadDesc, TexCellDesc, TransferDesc};
 use crate::build::BuiltTransaction;
 use crate::error::SdkError;
 use crate::inspect::{HeightRangeDesc, InspectContext, Review, SignatureEntry, TransactionJson};
@@ -736,6 +736,14 @@ impl_sdk_json! {
         blob: bool_def_false,
         transfer: opt_obj TransferDesc,
         children: opt_obj_arr ActionDesc,
+        tex: opt_obj TexCellDesc,
+    } both
+}
+
+impl_sdk_json! {
+    TexCellDesc {
+        diamond_names: u32,
+        asset_serials: str_arr,
     } both
 }
 

@@ -25,6 +25,9 @@ pub struct ProtocolParams {
     pub diamond_form_flag: u64,
     pub max_type3_signers: usize,
     pub tex_diamond_pay_max: usize,
+    /// Upper bound of one `DiaGet` cell.
+    pub tex_diamond_get_max: usize,
+    /// Upper bound of the sum of every `DiaGet` in one transaction.
     pub tex_diamond_get_max_per_tx: usize,
     pub tx_actions_max: usize,
     pub tx_gas_budget_cap_byte: u8,
@@ -141,7 +144,8 @@ pub const MAINNET_PARAMS: HacashParams = HacashParams {
         diamond_form_flag: 1,
         max_type3_signers: 200,
         tex_diamond_pay_max: 60_000,
-        tex_diamond_get_max_per_tx: 200,
+        tex_diamond_get_max: 200,
+        tex_diamond_get_max_per_tx: 10_000,
         tx_actions_max: 200,
         tx_gas_budget_cap_byte: 99,
         tx_type_1: 1,

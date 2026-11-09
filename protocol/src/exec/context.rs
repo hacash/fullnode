@@ -8,7 +8,7 @@ use base::{
     ActOut, ActionDispatcher, Context, Env, ExecFrom, ExecutionServices, LogEntry, P2sh,
     StateChunkRef, StateLayer, TexLedger, Transaction, TxRef, Vm,
 };
-use field::Address;
+use field::{Address, Hash, Sign};
 use sys::{Rerr, Ret, errf};
 
 use super::gas::{GasDiag, TxGasMeter, gas_initialize_on, gas_refund_on};
@@ -32,6 +32,11 @@ pub struct ContextInst {
     exec_from: ExecFrom,
     psh: HashMap<Address, Box<dyn P2sh>>,
     check_sign_cache: HashMap<Address, Ret<()>>,
+    bundle_sign_cache: HashMap<Hash, Ret<()>>,
+    /// Test-only: counts real ECDSA verifications behind `check_bundle_sign`,
+    /// so tests can assert same-tx replays hit the cache.
+    #[cfg(test)]
+    bundle_verify_count: usize,
     /// `None` with `vm_active == false` means lazily uninitialized; `None`
     /// with `vm_active == true` means the VM currently owns the call stack.
     vm: Option<Box<dyn Vm>>,
@@ -57,6 +62,9 @@ impl ContextInst {
             exec_from: ExecFrom::Top,
             psh: HashMap::new(),
             check_sign_cache: HashMap::new(),
+            bundle_sign_cache: HashMap::new(),
+            #[cfg(test)]
+            bundle_verify_count: 0,
             vm: None,
             vm_active: false,
             tex: TexLedger::default(),
@@ -145,6 +153,34 @@ impl Context for ContextInst {
     /// replay of a strict-executed block would write different state.
     fn check_sign_data(&mut self, adr: &Address) -> Rerr {
         self.check_sign_cached(adr)
+    }
+
+    /// Bundle signatures: fast sync skips like `check_sign`; strict mode
+    /// caches by (message, public key, signature) so replaying one bundle N
+    /// times in a transaction runs one ECDSA verification, not N. Bundle
+    /// results never feed consensus-visible state, so there is no
+    /// `check_sign_data` counterpart to keep mode-independent.
+    fn check_bundle_sign(&mut self, msg: &Hash, addr: &Address, sign: &Sign) -> Rerr {
+        if self.env.chain.fast_sync {
+            return Ok(());
+        }
+        let mut key_bytes = Vec::with_capacity(Hash::SIZE + 33 + 64);
+        key_bytes.extend_from_slice(msg.as_ref());
+        key_bytes.extend_from_slice(&sign.publickey.into_array());
+        key_bytes.extend_from_slice(sign.signature.as_ref());
+        let key = Hash::from(sys::calculate_hash(&key_bytes));
+        if let Some(cached) = self.bundle_sign_cache.get(&key) {
+            return cached.clone();
+        }
+        let result = base::verify_standalone_sign(msg, addr, sign);
+        if result.is_ok() {
+            #[cfg(test)]
+            {
+                self.bundle_verify_count += 1;
+            }
+        }
+        self.bundle_sign_cache.insert(key, result.clone());
+        result
     }
 
     fn layer(&mut self) -> &mut dyn StateLayer {
@@ -429,5 +465,49 @@ mod tests {
         assert!(fast.check_sign_data(&other).is_err()); // still the real answer
         assert!(fast.check_sign_data(&main).is_ok());
         assert!(fast.check_sign(&other).is_ok()); // bypass unaffected by cache
+    }
+
+    /// Same-tx replay of one bundle must run one ECDSA verification, not N:
+    /// the per-tx bundle-sign cache absorbs the duplicates. A different
+    /// signature over the same message is a different cache entry.
+    #[test]
+    fn bundle_sign_cache_absorbs_same_tx_replays() {
+        let (mut ctx, _main, _other) = build_ctx(false);
+        let signer = sys::Account::create_by_password("bundle cache").unwrap();
+        let addr = Address::from(*signer.address());
+        let msg = Hash::from(sys::calculate_hash(b"bundle message bytes".to_vec()));
+        let mut sign = field::Sign::create_by(&signer, &msg);
+
+        ctx.check_bundle_sign(&msg, &addr, &sign).unwrap();
+        ctx.check_bundle_sign(&msg, &addr, &sign).unwrap();
+        ctx.check_bundle_sign(&msg, &addr, &sign).unwrap();
+        assert_eq!(ctx.bundle_verify_count, 1, "replays must hit the cache");
+
+        // A different keypair over the same message is a different entry.
+        let other = sys::Account::create_by_password("bundle cache 2").unwrap();
+        let sign2 = field::Sign::create_by(&other, &msg);
+        ctx.check_bundle_sign(&msg, &Address::from(*other.address()), &sign2)
+            .unwrap();
+        assert_eq!(ctx.bundle_verify_count, 2);
+
+        // An invalid signature is a real failure and never cached as Ok.
+        let mut bad = sign.clone();
+        bad.signature = field::Fixed::from([0u8; 64]);
+        assert!(ctx.check_bundle_sign(&msg, &addr, &bad).is_err());
+    }
+
+    /// Fast sync trusts the synced chain (PoW), so bundle verification is
+    /// skipped like every other signature check — even a broken signature
+    /// passes, and nothing is written into the strict-mode cache.
+    #[test]
+    fn bundle_sign_skips_under_fast_sync() {
+        let (mut ctx, _main, _other) = build_ctx(true);
+        let signer = sys::Account::create_by_password("bundle fast").unwrap();
+        let addr = Address::from(*signer.address());
+        let msg = Hash::from(sys::calculate_hash(b"bundle message bytes".to_vec()));
+        let mut bad = field::Sign::create_by(&signer, &msg);
+        bad.signature = field::Fixed::from([0u8; 64]);
+        assert!(ctx.check_bundle_sign(&msg, &addr, &bad).is_ok());
+        assert_eq!(ctx.bundle_verify_count, 0, "fast sync must not verify");
     }
 }

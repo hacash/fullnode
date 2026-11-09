@@ -518,6 +518,123 @@ mod tests {
     }
 
     #[test]
+    fn directed_cells_inspect_as_payments_and_receipts_naming_the_counterparty() {
+        let address = Address::default().to_readable();
+        let target = Address::from([
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        ])
+        .to_readable();
+        let raw = format!(
+            r#"{{"schema":"{SCHEMA_TEX_AUTHORIZATION}","address":"{address}","cells":[
+                {{"cellid":29,"to":"{target}","haczhu":1000}},
+                {{"cellid":30,"from":0,"haczhu":2000}},
+                {{"cellid":31,"to":"{target}","satnum":7}},
+                {{"cellid":32,"from":0,"satnum":9}},
+                {{"cellid":33,"to":"{target}","diamonds":["WTYUIA"]}},
+                {{"cellid":34,"from":0,"diamonds":["HYXYHY"]}},
+                {{"cellid":35,"to":"{target}","asset":{{"serial":11,"amount":5}}}},
+                {{"cellid":36,"from":0,"asset":{{"serial":11,"amount":5}}}}
+            ]}}"#
+        );
+        let auth = decode_authorization_json(&raw).unwrap();
+        let review = inspect(&auth).unwrap();
+        assert_eq!(
+            review
+                .payments
+                .iter()
+                .map(|c| c.cellid)
+                .collect::<Vec<_>>(),
+            vec![29, 31, 33, 35]
+        );
+        assert_eq!(
+            review
+                .receipts
+                .iter()
+                .map(|c| c.cellid)
+                .collect::<Vec<_>>(),
+            vec![30, 32, 34, 36]
+        );
+        // Payments name the target; nothing may hide the counterparty.
+        for pay in &review.payments {
+            assert!(pay.description.contains(&target), "{}", pay.description);
+            assert!(pay.description.contains("directly to"), "{}", pay.description);
+        }
+        // Receipts must warn that the source is a transaction signer and
+        // render pointer sources as ptr:N.
+        for get in &review.receipts {
+            assert!(
+                get.description.contains("transaction signer"),
+                "{}",
+                get.description
+            );
+            assert!(
+                get.description.contains("(you, when executing)"),
+                "{}",
+                get.description
+            );
+        }
+        assert_eq!(
+            review.cells[0].description,
+            format!("Pay 0.00001 HAC (1000 zhu) directly to {target}")
+        );
+        assert_eq!(
+            review.cells[1].description,
+            "Take 0.00002 HAC (2000 zhu) directly from transaction signer ptr:0 (you, when executing)"
+        );
+        assert_eq!(
+            review.cells[4].description,
+            format!("Pay HACD WTYUIA directly to {target}")
+        );
+        // Canonical cells and the digest survive the authorization roundtrip.
+        let digest = authorization_digest(&auth).unwrap();
+        let roundtrip = decode_authorization_json(&auth.to_json_string()).unwrap();
+        assert_eq!(authorization_digest(&roundtrip).unwrap(), digest);
+    }
+
+    #[test]
+    fn dia_actual_and_projected_conditions_inspect_as_conditions_with_distinct_wording() {
+        let address = Address::default().to_readable();
+        let raw = format!(
+            r#"{{"schema":"{SCHEMA_TEX_AUTHORIZATION}","address":"{address}","cells":[
+                {{"cellid":17,"diamond":3}},{{"cellid":18,"diamond":4}},{{"cellid":19,"diamond":5}},
+                {{"cellid":26,"diamond":6}},{{"cellid":27,"diamond":7}},{{"cellid":28,"diamond":8}}
+            ]}}"#
+        );
+        let auth = decode_authorization_json(&raw).unwrap();
+        let review = inspect(&auth).unwrap();
+        assert_eq!(review.cells.len(), 6);
+        assert!(review.cells.iter().all(|c| c.category == "condition"));
+        assert!(review.payments.is_empty());
+        assert!(review.receipts.is_empty());
+        assert!(review.unknown_conditions.is_empty());
+        assert_eq!(
+            review
+                .cells
+                .iter()
+                .map(|c| c.description.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Require actual HACD count at most 3",
+                "Require actual HACD count at least 4",
+                "Require actual HACD count equal to 5",
+                "Require projected HACD count at most 6",
+                "Require projected HACD count at least 7",
+                "Require projected HACD count equal to 8",
+            ]
+        );
+        // Legacy actual-count cells keep 17-19; the projected variants are the
+        // new condition ids 26-28.
+        for (cell, id) in auth.cells.iter().zip([17u8, 18, 19, 26, 27, 28]) {
+            assert!(cell.starts_with(&format!("{{\"cellid\":{id},")), "{cell}");
+        }
+        let roundtrip = decode_authorization_json(&auth.to_json_string()).unwrap();
+        assert_eq!(
+            authorization_digest(&auth).unwrap(),
+            authorization_digest(&roundtrip).unwrap()
+        );
+    }
+
+    #[test]
     fn every_tex_cell_serializes_precision_sensitive_values_as_strings() {
         let address = Address::default().to_readable();
         let huge = "9007199254740993";
@@ -535,11 +652,12 @@ mod tests {
                 {{"cellid":21,"asset":{{"serial":{huge},"amount":{huge}}}}},
                 {{"cellid":22,"asset":{{"serial":{huge},"amount":{huge}}}}},
                 {{"cellid":23,"height":1099511627775}},{{"cellid":24,"height":1099511627775}},
-                {{"cellid":25,"chainid":4294967295}}
+                {{"cellid":25,"chainid":4294967295}},
+                {{"cellid":26,"diamond":{huge}}},{{"cellid":27,"diamond":{huge}}},{{"cellid":28,"diamond":{huge}}}
             ]}}"#
         );
         let auth = decode_authorization_json(&raw).unwrap();
-        assert_eq!(auth.cells.len(), 23);
+        assert_eq!(auth.cells.len(), 26);
         for cell in &auth.cells {
             let pairs = jsonparse::object_pairs(cell, "cell").unwrap();
             assert!(pairs.iter().any(|(key, _)| *key == "cellid"));
@@ -658,6 +776,38 @@ fn canonical_cell_json(cell: &protocol::action_std::TexCell) -> String {
             integer(value.amount.uint())
         )
     };
+    let directed = |id: u8,
+                    endpoint_key: &str,
+                    endpoint: &field::AddrOrPtr,
+                    value_key: &str,
+                    value: u64| {
+        format!(
+            "{{\"cellid\":{id},\"{endpoint_key}\":{},\"{value_key}\":{}}}",
+            endpoint.to_json(),
+            integer(value)
+        )
+    };
+    let directed_dia = |id: u8,
+                        endpoint_key: &str,
+                        endpoint: &field::AddrOrPtr,
+                        diamonds: &field::DiamondNameListMax200| {
+        format!(
+            "{{\"cellid\":{id},\"{endpoint_key}\":{},\"diamonds\":{}}}",
+            endpoint.to_json(),
+            diamonds.to_json()
+        )
+    };
+    let directed_asset = |id: u8,
+                          endpoint_key: &str,
+                          endpoint: &field::AddrOrPtr,
+                          value: &field::AssetAmt| {
+        format!(
+            "{{\"cellid\":{id},\"{endpoint_key}\":{},\"asset\":{{\"serial\":{},\"amount\":{}}}}}",
+            endpoint.to_json(),
+            integer(value.serial.uint()),
+            integer(value.amount.uint())
+        )
+    };
     match cell {
         C::ZhuPay { haczhu } => scalar(1, "haczhu", haczhu.uint()),
         C::ZhuGet { haczhu } => scalar(2, "haczhu", haczhu.uint()),
@@ -673,15 +823,38 @@ fn canonical_cell_json(cell: &protocol::action_std::TexCell) -> String {
         C::CondSatAtMost { satoshi } => scalar(14, "satoshi", satoshi.uint()),
         C::CondSatAtLeast { satoshi } => scalar(15, "satoshi", satoshi.uint()),
         C::CondSatEq { satoshi } => scalar(16, "satoshi", satoshi.uint()),
-        C::CondDiaAtMost { diamond } => scalar(17, "diamond", diamond.uint()),
-        C::CondDiaAtLeast { diamond } => scalar(18, "diamond", diamond.uint()),
-        C::CondDiaEq { diamond } => scalar(19, "diamond", diamond.uint()),
+        C::CondDiaActualAtMost { diamond } => scalar(17, "diamond", diamond.uint()),
+        C::CondDiaActualAtLeast { diamond } => scalar(18, "diamond", diamond.uint()),
+        C::CondDiaActualEq { diamond } => scalar(19, "diamond", diamond.uint()),
         C::CondAssetAtMost { asset: value } => asset(20, value),
         C::CondAssetAtLeast { asset: value } => asset(21, value),
         C::CondAssetEq { asset: value } => asset(22, value),
         C::CondHeightAtMost { height } => scalar(23, "height", height.uint() as u64),
         C::CondHeightAtLeast { height } => scalar(24, "height", height.uint() as u64),
         C::CondChainIdEq { chainid } => scalar(25, "chainid", chainid.uint() as u64),
+        C::CondDiaProjectedAtMost { diamond } => scalar(26, "diamond", diamond.uint()),
+        C::CondDiaProjectedAtLeast { diamond } => scalar(27, "diamond", diamond.uint()),
+        C::CondDiaProjectedEq { diamond } => scalar(28, "diamond", diamond.uint()),
+        C::DirectedZhuPay { to, haczhu } => directed(29, "to", to, "haczhu", haczhu.uint()),
+        C::DirectedZhuGet { from, haczhu } => directed(30, "from", from, "haczhu", haczhu.uint()),
+        C::DirectedSatPay { to, satnum } => directed(31, "to", to, "satnum", satnum.uint()),
+        C::DirectedSatGet { from, satnum } => directed(32, "from", from, "satnum", satnum.uint()),
+        C::DirectedDiaPay { to, diamonds } => directed_dia(33, "to", to, diamonds),
+        C::DirectedDiaGet { from, diamonds } => directed_dia(34, "from", from, diamonds),
+        C::DirectedAssetPay { to, asset } => directed_asset(35, "to", to, asset),
+        C::DirectedAssetGet { from, asset } => directed_asset(36, "from", from, asset),
+    }
+}
+
+/// Human rendering of a directed cell's counterparty in the canonical cell
+/// JSON: a quoted readable address stays as-is, a bare number is a transaction
+/// address-list pointer (`ptr:0` = the transaction main / executor).
+fn directed_counterparty_text(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.starts_with('"') {
+        trimmed.trim_matches('"').to_owned()
+    } else {
+        format!("ptr:{}", trimmed)
     }
 }
 
@@ -700,9 +873,9 @@ pub fn inspect(authorization: &Authorization) -> Result<Inspection, SdkError> {
             "TEX cell",
         )?;
         let category = match cellid {
-            1 | 3 | 5 | 7 => "pay",
-            2 | 4 | 6 | 8 => "get",
-            11..=25 => "condition",
+            1 | 3 | 5 | 7 | 29 | 31 | 33 | 35 => "pay",
+            2 | 4 | 6 | 8 | 30 | 32 | 34 | 36 => "get",
+            11..=28 => "condition",
             _ => "unknown",
         };
         let value = pairs
@@ -748,12 +921,79 @@ pub fn inspect(authorization: &Authorization) -> Result<Inspection, SdkError> {
             14 => format!("Require SAT balance at most {}", display_value),
             15 => format!("Require SAT balance at least {}", display_value),
             16 => format!("Require SAT balance equal to {}", display_value),
-            17 => format!("Require HACD count at most {}", display_value),
-            18 => format!("Require HACD count at least {}", display_value),
-            19 => format!("Require HACD count equal to {}", display_value),
+            17 => format!("Require actual HACD count at most {}", display_value),
+            18 => format!("Require actual HACD count at least {}", display_value),
+            19 => format!("Require actual HACD count equal to {}", display_value),
             20 => format!("Require asset balance at most {}", value),
             21 => format!("Require asset balance at least {}", value),
             22 => format!("Require asset balance equal to {}", value),
+            26 => format!("Require projected HACD count at most {}", display_value),
+            27 => format!("Require projected HACD count at least {}", display_value),
+            28 => format!("Require projected HACD count equal to {}", display_value),
+            29..=36 => {
+                let endpoint = pairs
+                    .iter()
+                    .find(|(k, _)| *k == "to" || *k == "from")
+                    .map(|(_, v)| *v)
+                    .unwrap_or("");
+                let counterparty = directed_counterparty_text(endpoint);
+                let field_value = |key: &str| {
+                    pairs
+                        .iter()
+                        .find(|(k, _)| *k == key)
+                        .map(|(_, v)| v.trim_matches('"'))
+                        .unwrap_or("")
+                };
+                let hac_text = |raw: &str| raw
+                    .parse::<u64>()
+                    .map(|zhu| field::Amount::zhu(zhu).to_hac_string())
+                    .unwrap_or_else(|_| raw.to_owned());
+                match cellid {
+                    29 => format!(
+                        "Pay {} HAC ({} zhu) directly to {}",
+                        hac_text(field_value("haczhu")),
+                        field_value("haczhu"),
+                        counterparty
+                    ),
+                    30 => format!(
+                        "Take {} HAC ({} zhu) directly from transaction signer {} (you, when executing)",
+                        hac_text(field_value("haczhu")),
+                        field_value("haczhu"),
+                        counterparty
+                    ),
+                    31 => format!(
+                        "Pay {} SAT directly to {}",
+                        field_value("satnum"),
+                        counterparty
+                    ),
+                    32 => format!(
+                        "Take {} SAT directly from transaction signer {} (you, when executing)",
+                        field_value("satnum"),
+                        counterparty
+                    ),
+                    33 => format!(
+                        "Pay HACD {} directly to {}",
+                        field_value("diamonds"),
+                        counterparty
+                    ),
+                    34 => format!(
+                        "Take HACD {} directly from transaction signer {} (you, when executing)",
+                        field_value("diamonds"),
+                        counterparty
+                    ),
+                    35 => format!(
+                        "Pay asset {} directly to {}",
+                        field_value("asset"),
+                        counterparty
+                    ),
+                    36 => format!(
+                        "Take asset {} directly from transaction signer {} (you, when executing)",
+                        field_value("asset"),
+                        counterparty
+                    ),
+                    _ => unreachable!("29..=36 outer arm covers every directed cellid"),
+                }
+            }
             _ => {
                 unknown_conditions.push(index);
                 format!("Unknown TEX cell {}", cellid)

@@ -1,8 +1,8 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use field::Address;
-use sys::{Rerr, Ret};
+use field::{Address, Hash, Sign};
+use sys::{Rerr, Ret, errf};
 
 use crate::iface::action::ActOut;
 use crate::iface::transaction::Transaction;
@@ -11,6 +11,22 @@ use crate::ledger::TexLedger;
 use crate::registry::ExecutionServices;
 use crate::runtime::{AddrOrPtr, Env, ExecFrom, GasBuckets};
 use crate::state::{LogEntry, StateChunkRef, StateLayer};
+
+/// Real verification of one standalone (bundle-style) signature: the
+/// address derived from the public key must match the signer address and
+/// the ECDSA must verify over the message bytes.
+pub fn verify_standalone_sign(msg: &Hash, addr: &Address, sign: &Sign) -> Rerr {
+    let got = Address::from(sys::Account::get_address_by_public_key(
+        sign.publickey.into_array(),
+    ));
+    if got != *addr {
+        return errf!("address {} signature verification failed", addr.to_readable());
+    }
+    if !sys::Account::verify_signature(&msg.0, &sign.publickey, &sign.signature) {
+        return errf!("address {} signature verification failed", addr.to_readable());
+    }
+    Ok(())
+}
 
 pub trait Context {
     // Inputs: immutable services, execution environment, and transaction.
@@ -31,6 +47,22 @@ pub trait Context {
     /// state for one block under strict execution vs fast-sync replay.
     fn check_sign_data(&mut self, adr: &Address) -> Rerr {
         self.check_sign(adr)
+    }
+
+    /// Verify a standalone (bundle-style) signature: one whose message bytes
+    /// are independent of the carrying transaction — a `TexCellExecute`
+    /// signs `addr + cells`, so the same signed bundle can repeat N times
+    /// inside one transaction and replay across many. Fast sync trusts the
+    /// synced chain (PoW) and skips, mirroring `check_sign` (the tx envelope
+    /// skips there too). A failure reverts the whole transaction and the
+    /// result never feeds consensus-visible state, so skipping cannot change
+    /// replayed state. Implementations should cache results per transaction:
+    /// replaying one bundle N times must not run N ECDSA verifications.
+    fn check_bundle_sign(&mut self, msg: &Hash, addr: &Address, sign: &Sign) -> Rerr {
+        if self.env().chain.fast_sync {
+            return Ok(());
+        }
+        verify_standalone_sign(msg, addr, sign)
     }
 
     // Address, state, and execution-log access.
