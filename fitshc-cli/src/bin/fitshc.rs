@@ -5,6 +5,7 @@
 //! fitshc <file.fitsh> [fee] [nonce] [--periods N]      compile + deploy json (legacy form)
 //! fitshc build <file.fitsh> [fee] [nonce] [flags]      same, explicit form
 //! fitshc pack <kernel.elf> [--profile P] [flags]       ELF → verified .hcf1 container
+//! fitshc image <kernel.rs> [-o file] [--hex]           .rs → function rv64im container bytes
 //! fitshc run <kernel.rs|.hcf1|.elf> [--input 0x..]     build (if .rs) and execute locally
 //! ```
 //!
@@ -46,6 +47,7 @@ fn usage() {
          \x20   fitshc <file.fitsh> [fee] [nonce] [--periods N] [flags]   compile contract (legacy form)\n\
          \x20   fitshc build <file.fitsh> [fee] [nonce] [flags]           same, explicit form\n\
          \x20   fitshc pack <kernel.elf> [flags]                          pack ELF → verified .hcf1\n\
+         \x20   fitshc image <kernel.rs> [-o file] [--hex]                .rs → function rv64im container bytes\n\
          \x20   fitshc run <kernel.rs|kernel.hcf1|kernel.elf> [flags]     build + execute a kernel locally\n\
          \n\
          KERNEL RESOLUTION (function rv64im <name> without '= 0x..'):\n\
@@ -64,10 +66,11 @@ fn usage() {
          \x20   --no-artifacts     do not write <name>.hcf1/.calc.manifest.json next to the fitsh\n\
          \x20   --artifacts        force artifact writing (overrides the --no-build default)\n\
          \x20   --out-dir <dir>    write kernel artifacts and contractmap/deploy json into <dir>\n\
-         \x20   --no-input         run: the .rs kernel takes only `out` (zero-arg form)\n\
+         \x20   --no-input         image/run: the .rs kernel takes only `out` (zero-arg form)\n\
+         \x20   --hex              image: also print the container as 0x… on stdout\n\
          \x20   --input 0x..       run: call data (hex)\n\
          \x20   --cycles N         run: cycle budget (default 1000000)\n\
-         \x20   -o <path>          output path (pack: container file; build: deploy json)\n\
+         \x20   -o <path>          output path (image/pack: container file; build: deploy json)\n\
          \x20   --verbose          print resolved kernel details\n\
          \x20   --periods N        deploy storage-fee basis (see below)"
     );
@@ -85,6 +88,10 @@ struct CommonArgs {
     out_dir: Option<PathBuf>,
     out: Option<String>,
     verbose: bool,
+    /// `image`/`run`: kernel takes only `out`.
+    no_input: bool,
+    /// `image`: print `0x` + hex of the container on stdout.
+    hex: bool,
     /// Validated storage periods (multiple of floor within [floor, full]).
     periods: Option<u64>,
 }
@@ -102,6 +109,8 @@ impl CommonArgs {
             out_dir: None,
             out: None,
             verbose: false,
+            no_input: false,
+            hex: false,
             periods: None,
         };
         let full_periods = MAINNET_PARAMS.protocol.vm.contract_store_perm_periods;
@@ -131,15 +140,40 @@ impl CommonArgs {
                     me.overrides
                         .insert(name.trim().to_string(), PathBuf::from(path.trim()));
                 }
-                "--no-build" => me.no_build = true,
+                "--no-build" => {
+                    if sub == "image" {
+                        return Err(
+                            "--no-build is not valid for `image` (it compiles the .rs)".into()
+                        );
+                    }
+                    me.no_build = true;
+                }
                 "--strict" => me.strict = true,
                 "--in" => {
+                    if sub == "image" {
+                        return Err(
+                            "--in is not valid for `image`; set `// calc: input_max` in the .rs"
+                                .into(),
+                        );
+                    }
                     me.elf_defaults.input_max = val!("--in").parse().map_err(|_| "--in N")?;
                 }
                 "--out" => {
+                    if sub == "image" {
+                        return Err(
+                            "--out is not valid for `image`; set `// calc: output_max` in the .rs"
+                                .into(),
+                        );
+                    }
                     me.elf_defaults.output_max = val!("--out").parse().map_err(|_| "--out N")?;
                 }
                 "--profile" => {
+                    if sub == "image" {
+                        return Err(
+                            "--profile is not valid for `image`; set `// calc: profile` in the .rs"
+                                .into(),
+                        );
+                    }
                     let v = val!("--profile");
                     me.elf_defaults.profile =
                         ProfileName::parse(&v).ok_or_else(|| format!("unknown profile {v:?}"))?;
@@ -147,6 +181,12 @@ impl CommonArgs {
                     // by the chain; hash stays rejected (see --hash).
                 }
                 "--mem" => {
+                    if sub == "image" {
+                        return Err(
+                            "--mem is not valid for `image`; set `// calc: mem_kib` in the .rs"
+                                .into(),
+                        );
+                    }
                     let v = val!("--mem");
                     me.elf_defaults.mem = if v == "auto" {
                         MemSpec::Auto
@@ -158,9 +198,41 @@ impl CommonArgs {
                     return Err("hash ecalls are not admitted in v1".into());
                 }
                 "--no-cache" => me.no_cache = true,
-                "--artifacts" => me.artifacts = Some(true),
-                "--no-artifacts" => me.artifacts = Some(false),
-                "--out-dir" => me.out_dir = Some(PathBuf::from(val!("--out-dir"))),
+                "--no-input" => {
+                    if sub != "image" && sub != "run" {
+                        return Err(format!("--no-input is not valid for `{sub}`"));
+                    }
+                    me.no_input = true;
+                }
+                "--hex" => {
+                    if sub != "image" {
+                        return Err(format!(
+                            "--hex is not valid for `{sub}` (it prints an image container)"
+                        ));
+                    }
+                    me.hex = true;
+                }
+                "--artifacts" => {
+                    if sub == "image" {
+                        return Err(
+                            "--artifacts is not valid for `image` (the container file is the output)"
+                                .into(),
+                        );
+                    }
+                    me.artifacts = Some(true);
+                }
+                "--no-artifacts" => {
+                    if sub == "image" {
+                        return Err("--no-artifacts is not valid for `image`".into());
+                    }
+                    me.artifacts = Some(false);
+                }
+                "--out-dir" => {
+                    if sub == "image" {
+                        return Err("--out-dir is not valid for `image`; pass -o <file>".into());
+                    }
+                    me.out_dir = Some(PathBuf::from(val!("--out-dir")));
+                }
                 "--cap" => {
                     let v = val!("--cap");
                     if v != "l1" {
@@ -173,6 +245,9 @@ impl CommonArgs {
                 "-o" | "--output" => me.out = Some(val!("-o")),
                 "--verbose" | "-v" => me.verbose = true,
                 "--periods" => {
+                    if sub == "image" {
+                        return Err("--periods is not valid for `image`".into());
+                    }
                     let v = val!("--periods");
                     let n: u64 = v
                         .parse()
@@ -199,6 +274,26 @@ impl CommonArgs {
     }
 }
 
+/// Absolute path with `.` and `..` removed, without requiring the file to exist.
+fn lex_abs(path: &Path) -> PathBuf {
+    let abs = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        env::current_dir().unwrap_or_default().join(path)
+    };
+    let mut out = PathBuf::new();
+    for c in abs.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
@@ -208,12 +303,13 @@ fn main() {
     let result = match args[1].as_str() {
         "build" if args.len() > 2 => cmd_build(&args[2..]),
         "pack" if args.len() > 2 => cmd_pack(&args[2..]),
+        "image" if args.len() > 2 => cmd_image(&args[2..]),
         "run" if args.len() > 2 => cmd_run(&args[2..]),
         "-h" | "--help" | "help" => {
             usage();
             Ok(())
         }
-        "build" | "pack" | "run" => Err(format!("{} requires a file argument", args[1])),
+        "build" | "pack" | "image" | "run" => Err(format!("{} requires a file argument", args[1])),
         _ => cmd_build(&args[1..]),
     };
     if let Err(e) = result {
@@ -523,6 +619,83 @@ fn estimate_protocol_cost_auto_with_periods(
         cur = next;
     }
     cur
+}
+
+/// Compile one `.rs` kernel and write the bytes `function rv64im = 0x` stores:
+/// `CalcContainer::encode()`, admitted by `Func::rv64im_container_bytes`.
+fn cmd_image(args: &[String]) -> Result<(), String> {
+    let common = CommonArgs::parse(args, "image")?;
+    if common.rest.len() != 1 {
+        return Err("fitshc image requires exactly one <kernel.rs>".into());
+    }
+    let rs_path = PathBuf::from(&common.rest[0]);
+    if rs_path.extension().and_then(|e| e.to_str()) != Some("rs") {
+        return Err(format!(
+            "fitshc image expects a .rs kernel, got {}",
+            rs_path.display()
+        ));
+    }
+    let name = rs_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or("kernel file has no stem")?;
+    let out = match &common.out {
+        Some(o) => PathBuf::from(o),
+        None => rs_path.with_extension("hcf1"),
+    };
+    if lex_abs(&out) == lex_abs(&rs_path) {
+        return Err(format!(
+            "output path {} would overwrite the input source; pass -o with a different path",
+            out.display()
+        ));
+    }
+    let source =
+        fs::read_to_string(&rs_path).map_err(|e| format!("read {}: {e}", rs_path.display()))?;
+    let meta = parse_kernel_meta(&rs_path, &source)?;
+    let has_input = if common.no_input {
+        false
+    } else {
+        infer_kernel_has_input(&source, name)?
+    };
+    let cap = SpaceCap::new(0);
+    let built = KernelBuildRequest {
+        name,
+        source_path: &rs_path,
+        meta: &meta,
+        has_input,
+        cap: &cap,
+        strict: common.strict,
+        cache_root: None,
+        no_cache: common.no_cache,
+    }
+    .build()?;
+    // Same gate as a FitSH `= 0x` body. Fail before any output file exists.
+    vm::contract::Func::new(name)
+        .and_then(|f| f.rv64im_container_bytes_with_cap(built.container_bytes.clone(), &cap))
+        .map_err(|e| e.to_string())?;
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
+    }
+    fs::write(&out, &built.container_bytes).map_err(|e| format!("write {}: {e}", out.display()))?;
+    let summary = format!(
+        "image {} -> {} (profile {:#04x}, mem {} KiB, in {}, out {}, {} B)",
+        rs_path.display(),
+        out.display(),
+        built.container.profile,
+        built.mem_kib,
+        built.container.input_max,
+        built.container.output_max,
+        built.container_bytes.len()
+    );
+    if common.hex {
+        println!("0x{}", hex::encode(&built.container_bytes));
+        eprintln!("{summary}");
+    } else {
+        println!("{summary}");
+    }
+    Ok(())
 }
 
 fn cmd_pack(args: &[String]) -> Result<(), String> {

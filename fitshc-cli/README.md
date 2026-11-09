@@ -120,6 +120,9 @@ fitshc contract.fitsh 1:248 1
 # pack an already-linked ELF into a verified container
 fitshc pack kernel.elf --profile rv64im --in 1024 --out 1024 --mem auto -o kernel.hcf1
 
+# compile a .rs kernel to the bytes stored by `function rv64im = 0x…`
+fitshc image hash.rs -o hash.hcf1 --hex
+
 # build (if .rs) and execute a kernel locally — the fastest feedback loop
 fitshc run hash.rs --input 0x686163617368
 ```
@@ -137,9 +140,10 @@ Flags:
 | `--no-cache` | never read/write the shared cache; the temp build dir is removed |
 | `--artifacts` / `--no-artifacts` | force/skip `<name>.hcf1` + manifest writing (`--no-build` defaults to skip) |
 | `--out-dir <dir>` | write kernel artifacts and contractmap/deploy json into `<dir>` (created if missing) |
-| `--no-input` | `run`: the `.rs` kernel takes only `out` (zero-arg form; also auto-inferred from the signature) |
+| `--no-input` | `image` / `run`: the `.rs` kernel takes only `out` (zero-arg form; also auto-inferred from the signature) |
+| `--hex` | `image`: also print the container as `0x…` on stdout (the `= 0x` literal) |
 | `--cap l1` | target chain caps (L1 only for now) |
-| `-o <path>` | output path (pack: container; build: deploy json) |
+| `-o <path>` | output path (image/pack: container file; build: deploy json) |
 | `--verbose` | print resolved kernel details |
 
 A read-only checkout can still emit both contract outputs (the directory is

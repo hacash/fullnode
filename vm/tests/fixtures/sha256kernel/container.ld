@@ -22,5 +22,4 @@ SECTIONS
   .data : { *(.data .data.*) *(.sdata .sdata.*) } :data
   .bss : { *(.sbss .sbss.*) *(.bss .bss.*) *(COMMON) } :data
   /DISCARD/ : { *(.eh_frame) *(.eh_frame_hdr) }
-  ASSERT(. <= ORIGIN(IMAGE) + LENGTH(IMAGE), "guest image overlaps L1 host window");
 }

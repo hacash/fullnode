@@ -883,3 +883,47 @@ fn no_cache_removes_temp_build_dir() {
         cache.display()
     );
 }
+
+/// `fitshc image` writes the bytes a `function rv64im = 0x` body stores.
+#[test]
+#[ignore = "drives the real rust toolchain"]
+fn image_writes_admitted_function_body() {
+    let exe = env!("CARGO_BIN_EXE_fitshc");
+    let proj = Project::new("image-ok");
+    proj.write("hash.rs", &kernel_source(ProfileName::Rv64im));
+    let out_path = proj.path("hash.hcf1");
+    let out = std::process::Command::new(exe)
+        .arg("image")
+        .arg(proj.path("hash.rs"))
+        .arg("-o")
+        .arg(&out_path)
+        .arg("--hex")
+        .arg("--no-cache")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let hex_line = String::from_utf8_lossy(&out.stdout);
+    let hex_line = hex_line.trim();
+    assert!(
+        hex_line.starts_with("0x4843463101"),
+        "container hex must be HCF1 version 1, got {hex_line:.40}"
+    );
+    let file = std::fs::read(&out_path).unwrap();
+    assert_eq!(file.first().copied(), Some(b'H'));
+    assert_eq!(file.get(4).copied(), Some(1), "version byte");
+    let func = vm::contract::Func::new("hash")
+        .unwrap()
+        .rv64im_container_bytes(file.clone())
+        .expect("image bytes must pass function rv64im admission");
+    let sto = vm::contract::Contract::new().func(func).into_sto();
+    assert_eq!(
+        sto.userfuncs[0].code_stuff.conf.uint() & CodeType::TYPE_MASK,
+        CodeType::RV64IM as u8
+    );
+    assert_eq!(sto.userfuncs[0].code_stuff.data.to_vec(), file);
+}

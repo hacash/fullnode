@@ -139,6 +139,10 @@ impl ProfileName {
 /// `riscv64imac` core (the stable recipes for profiles `rv64imc`/`rv64imcb`)
 /// carries unwind tables. Without the discard the linker drops `.eh_frame`
 /// in as an orphan *before* `.text`.
+///
+/// There is no `ASSERT`. rust-lld from LLVM 21 rejects it in this script
+/// (`malformed number` at the closing brace). `IMAGE`'s `LENGTH` is the fit
+/// check: a section that runs past the region is a link error.
 pub const CONTAINER_LD: &str = r#"/* PT_LOAD projection. IMAGE is the L1 guest window (64 KiB usable
    minus a 12 KiB host reserve for input+output+stack+guard).
    Link with -n so lld does not page-align PT_LOAD. */
@@ -163,7 +167,6 @@ SECTIONS
   .data : { *(.data .data.*) *(.sdata .sdata.*) } :data
   .bss : { *(.sbss .sbss.*) *(.bss .bss.*) *(COMMON) } :data
   /DISCARD/ : { *(.eh_frame) *(.eh_frame_hdr) }
-  ASSERT(. <= ORIGIN(IMAGE) + LENGTH(IMAGE), "guest image overlaps L1 host window");
 }
 "#;
 
