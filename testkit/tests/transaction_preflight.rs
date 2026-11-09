@@ -116,6 +116,13 @@ fn fixture_action_address(tx: &dyn TransactionSign, index: usize, field: &str) -
 /// bundle whose value cells are exclusively directed (26-33): the ledger
 /// Pay/Get family (cellid 1-8) must never appear, or the escrow accounting the
 /// directed model removed would silently come back.
+/// The TEX settlement address bytes (protocol `params::SETTLEMENT_ADDR`, which
+/// is `pub(crate)` and not reachable from an integration test): twenty zero
+/// bytes then 0x01. Directed cells must leave it untouched.
+const TEST_SETTLEMENT_ADDR: Address = Address::from([
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+]);
+
 fn fixture_assert_compressed_maker_actions(tx: &dyn TransactionSign) {
     let mut maker_actions = 0;
     for action in tx.actions() {
@@ -123,20 +130,22 @@ fn fixture_assert_compressed_maker_actions(tx: &dyn TransactionSign) {
         if !json.contains("\"kind\":22") { continue; }
         maker_actions += 1;
         for cellid in 1..=8 {
-            assert!(!json.contains(&format!("\"cellid\":{cellid}")),
+            // The cell JSON continues with a comma after the cellid value, so
+            // the needle "cellid":2 must not match "cellid":26 or "cellid":28.
+            assert!(!json.contains(&format!("\"cellid\":{cellid},")),
                 "compressed maker action must not carry escrow cell {cellid}: {json}");
         }
     }
     assert!(maker_actions > 0, "fixture contains no TEX maker action");
 }
 
-/// The static recipient of the maker's directed fee cell (cellid 26/30/32 with
+/// The static recipient of the maker's directed fee cell (cellid 29/33/35 with
 /// a quoted address): the platform fee counterparty of the settlement.
 fn fixture_fee_address(tx: &dyn TransactionSign) -> Address {
     for action in tx.actions().iter() {
         let json = action.to_json();
         if !json.contains("\"kind\":22") { continue; }
-        for (cellid, field) in [(26usize, "to"), (30, "to"), (32, "to")] {
+        for (cellid, field) in [(29usize, "to"), (33, "to"), (35, "to")] {
             let marker = format!("\"cellid\":{cellid},\"{field}\":\"");
             if let Some((_, tail)) = json.split_once(&marker) {
                 let address = tail.split_once('"').expect("fee address terminator").0;
@@ -594,17 +603,18 @@ fn maker_buy_receives_gross_taker_quote_then_fee_and_clears_ledger() {
 }
 
 #[test]
-fn builder_generated_80_lot_hac_asset_settlement_executes_fully() {
+fn builder_generated_max_lot_hac_asset_settlement_executes_fully() {
     let services = Arc::new(app::standard_registry().unwrap());
-    let raw = hex::decode(include_str!("fixtures/tex-settlement-builder-80.hex").trim()).unwrap();
+    let raw = hex::decode(include_str!("fixtures/tex-settlement-builder-maxlots.hex").trim()).unwrap();
     let (tx, used) = protocol::tx_std::create_transaction_type3(services.as_ref(), &raw).unwrap();
     assert_eq!(used, raw.len());
     assert_eq!(tx.ty(), hacash_params::TX_TYPE_3);
 
-    // The compressed C-form: 80 maker bundles and nothing else (chain 0 adds no
-    // ChainAllow guard); every value leg is directed against the taker/main.
+    // The compressed C-form: 50 maker bundles (the configured per-intent cap,
+    // which also keeps the asset-tier body inside the 10x gas billing budget)
+    // and nothing else; every value leg is directed against the taker/main.
     fixture_assert_compressed_maker_actions(tx.as_ref());
-    assert_eq!(tx.actions().len(), 80);
+    assert_eq!(tx.actions().len(), 50);
 
     let taker = Account::create_by_password("settlement taker").unwrap();
     let maker = Account::create_by_password("settlement maker").unwrap();
@@ -626,23 +636,23 @@ fn builder_generated_80_lot_hac_asset_settlement_executes_fully() {
     let mut tx_env = env(tx.as_ref());
     tx_env.block.height = 120;
     execute_and_commit(services, &state, tx_env, tx)
-        .expect("the actual 80-fill SDK-builder transaction should execute and commit in test state");
+        .expect("the actual 50-fill SDK-builder transaction should execute and commit in test state");
     let taker_after = CoreStateRead::wrap(&state).balance(&taker_addr).unwrap().unwrap();
     let maker_after = CoreStateRead::wrap(&state).balance(&maker_addr).unwrap().unwrap();
     let fee_after = CoreStateRead::wrap(&state).balance(&fee_addr).unwrap().unwrap();
     // Per fill the taker pays 20M quote atoms and receives 10^10 zhu; the maker
     // pays the directed fee of 60000 quote atoms per fill out of its proceeds.
-    assert_eq!(taker_after.asset(serial).unwrap().amount.uint(), 400_000_000);
-    assert_eq!(maker_after.asset(serial).unwrap().amount.uint(), 1_595_200_000);
-    assert_eq!(fee_after.asset(serial).unwrap().amount.uint(), 4_800_000);
-    // The maker is not the tx main: its HAC delta is exactly the 80 x 10^10 zhu
+    assert_eq!(taker_after.asset(serial).unwrap().amount.uint(), 1_000_000_000);
+    assert_eq!(maker_after.asset(serial).unwrap().amount.uint(), 997_000_000);
+    assert_eq!(fee_after.asset(serial).unwrap().amount.uint(), 3_000_000);
+    // The maker is not the tx main: its HAC delta is exactly the 50 x 10^10 zhu
     // it paid the taker through the directed delivery legs.
-    assert_eq!(maker_after.hacash.to_zhu_u64().unwrap(), 200_000_000_000);
+    assert_eq!(maker_after.hacash.to_zhu_u64().unwrap(), 500_000_000_000);
     // The taker received the full directed price and paid fee+gas from its seed.
     let taker_hac = taker_after.hacash.to_zhu_u64().unwrap();
-    assert!(taker_hac > 800_000_000_000 && taker_hac <= 10_000_000_000 + 800_000_000_000,
-        "taker HAC {taker_hac} must include the 80-fill directed price");
-    assert_eq!(CoreStateRead::wrap(&state).balance(&protocol::exec::tex::SETTLEMENT_ADDR).unwrap().and_then(|b| b.asset(serial).map(|a| a.amount.uint())).unwrap_or(0), 0);
+    assert!(taker_hac > 500_000_000_000 && taker_hac <= 10_000_000_000 + 500_000_000_000,
+        "taker HAC {taker_hac} must include the 50-fill directed price");
+    assert_eq!(CoreStateRead::wrap(&state).balance(&TEST_SETTLEMENT_ADDR).unwrap().and_then(|b| b.asset(serial).map(|a| a.amount.uint())).unwrap_or(0), 0);
 }
 
 #[test]
@@ -715,17 +725,17 @@ fn builder_generated_max_200_hacd_group_executes_fully() {
     assert!(taker_hac > 9_800_000_000 && taker_hac <= 10_000_000_000 - 1_000_000,
         "taker HAC {taker_hac} must reflect the directed price and fee burn");
     // Deferred-free delivery: the settlement address never held a diamond.
-    assert!(CoreStateRead::wrap(&state).diamond_owned(&protocol::exec::tex::SETTLEMENT_ADDR).unwrap().is_none());
+    assert!(CoreStateRead::wrap(&state).diamond_owned(&TEST_SETTLEMENT_ADDR).unwrap().is_none());
 }
 
 #[test]
-fn builder_generated_80_lot_asset_asset_settlement_executes_and_accounts_for_fee() {
+fn builder_generated_max_lot_asset_asset_settlement_executes_and_accounts_for_fee() {
     let services = Arc::new(app::standard_registry().unwrap());
     let raw = hex::decode(include_str!("fixtures/tex-settlement-builder-asset-asset.hex").trim()).unwrap();
     let (tx, used) = protocol::tx_std::create_transaction_type3(services.as_ref(), &raw).unwrap();
     assert_eq!(used, raw.len());
     fixture_assert_compressed_maker_actions(tx.as_ref());
-    assert_eq!(tx.actions().len(), 80);
+    assert_eq!(tx.actions().len(), 50);
     let taker = Account::create_by_password("settlement AA taker").unwrap();
     let maker = Account::create_by_password("settlement AA maker").unwrap();
     let fee = Account::create_by_password("settlement AA fee").unwrap();
@@ -750,18 +760,18 @@ fn builder_generated_80_lot_asset_asset_settlement_executes_and_accounts_for_fee
     }
     let mut tx_env = env(tx.as_ref()); tx_env.block.height = 120;
     execute_and_commit(services, &state, tx_env, tx)
-        .expect("actual 80-fill Asset/Asset builder transaction should execute");
+        .expect("actual 50-fill Asset/Asset builder transaction should execute");
     let taker_after = CoreStateRead::wrap(&state).balance(&taker_addr).unwrap().unwrap();
     let maker_after = CoreStateRead::wrap(&state).balance(&maker_addr).unwrap().unwrap();
     let fee_after = CoreStateRead::wrap(&state).balance(&fee_addr).unwrap().unwrap();
-    // 80 fills: taker pays 20 quote atoms per fill for 10 base atoms; the maker
+    // 50 fills: taker pays 20 quote atoms per fill for 10 base atoms; the maker
     // pays 1 quote atom of directed fee per fill.
-    assert_eq!(taker_after.asset(base_serial).unwrap().amount.uint(), 800);
-    assert_eq!(taker_after.asset(quote_serial).unwrap().amount.uint(), 400);
-    assert_eq!(maker_after.asset(base_serial).unwrap().amount.uint(), 200);
-    assert_eq!(maker_after.asset(quote_serial).unwrap().amount.uint(), 1_520);
-    assert_eq!(fee_after.asset(quote_serial).unwrap().amount.uint(), 80);
-    assert_eq!(CoreStateRead::wrap(&state).balance(&protocol::exec::tex::SETTLEMENT_ADDR).unwrap().and_then(|b| b.asset(quote_serial).map(|a| a.amount.uint())).unwrap_or(0), 0);
+    assert_eq!(taker_after.asset(base_serial).unwrap().amount.uint(), 500);
+    assert_eq!(taker_after.asset(quote_serial).unwrap().amount.uint(), 1_000);
+    assert_eq!(maker_after.asset(base_serial).unwrap().amount.uint(), 500);
+    assert_eq!(maker_after.asset(quote_serial).unwrap().amount.uint(), 950);
+    assert_eq!(fee_after.asset(quote_serial).unwrap().amount.uint(), 50);
+    assert_eq!(CoreStateRead::wrap(&state).balance(&TEST_SETTLEMENT_ADDR).unwrap().and_then(|b| b.asset(quote_serial).map(|a| a.amount.uint())).unwrap_or(0), 0);
 }
 
 #[test]
@@ -839,7 +849,9 @@ fn builder_generated_reverse_direction_matrix_executes_and_accounts_for_each_leg
         assert_eq!(m.hacash.to_zhu_u64().unwrap(), 10_000_000_000_000 + 2_000_000);
         assert_eq!(t.asset(base_serial).unwrap().amount.uint(), 140);
         assert_eq!(m.asset(base_serial).unwrap().amount.uint(), 58);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&fa).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 2);
+        // The fee address is seeded with 100 base atoms, so two 1-atom directed
+        // fees land it at 102.
+        assert_eq!(CoreStateRead::wrap(&state).balance(&fa).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 102);
         assert!(t.hacash.to_zhu_u64().unwrap() < 10_000_000_000_000 - 1_000_000, "taker paid the directed price and fee/gas");
     }
 
@@ -872,8 +884,9 @@ fn builder_generated_reverse_direction_matrix_executes_and_accounts_for_each_leg
         assert_eq!(t.asset(quote_serial).unwrap().amount.uint(), 140);
         assert_eq!(m.asset(base_serial).unwrap().amount.uint(), 120);
         assert_eq!(m.asset(quote_serial).unwrap().amount.uint(), 58);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&fa).unwrap().unwrap().asset(quote_serial).unwrap().amount.uint(), 2);
-        assert_eq!(CoreStateRead::wrap(&state).balance(&protocol::exec::tex::SETTLEMENT_ADDR).unwrap().and_then(|b| b.asset(base_serial)).map(|a| a.amount.uint()).unwrap_or(0), 0);
+        // Seeded 100 quote atoms + two 1-atom directed fees.
+        assert_eq!(CoreStateRead::wrap(&state).balance(&fa).unwrap().unwrap().asset(quote_serial).unwrap().amount.uint(), 102);
+        assert_eq!(CoreStateRead::wrap(&state).balance(&TEST_SETTLEMENT_ADDR).unwrap().and_then(|b| b.asset(base_serial)).map(|a| a.amount.uint()).unwrap_or(0), 0);
     }
 
     // HACD/Asset, maker sells its named diamond for 20 asset units.
@@ -924,10 +937,10 @@ fn builder_generated_reverse_direction_matrix_executes_and_accounts_for_each_leg
         CoreState::wrap(&mut state).diamond_set(&name, &DiamondSto { status: Uint1::from(1), address: ta, prev_engraved_height: BlockHeight::from(0), inscripts: field::Inscripts::default() });
         let mut owned = DiamondOwnedForm::default(); owned.push_one(&name).unwrap(); CoreState::wrap(&mut state).diamond_owned_set(&ta, &owned);
         // Shape: the delivery transfer first, then the four-cell maker bundle
-        // whose only value cell is the directed price payment (cellid 32).
+        // whose only value cell is the directed price payment (cellid 35).
         assert!(tx.actions()[0].to_json().contains("\"kind\":7"), "delivery transfer leads: {}", tx.actions()[0].to_json());
         let maker_json = tx.actions()[1].to_json();
-        assert!(maker_json.contains("\"cellid\":32") && maker_json.contains("\"to\":0") && !maker_json.contains("\"cellid\":26"),
+        assert!(maker_json.contains("\"cellid\":35") && maker_json.contains("\"to\":0") && !maker_json.contains("\"cellid\":29"),
             "compressed maker-buy action must pay assets to the transaction signer only: {maker_json}");
         let mut tx_env = env(tx.as_ref()); tx_env.block.height = 120;
         execute_and_commit(services, &state, tx_env, tx).expect("builder-originated HACD/Asset buy executes");
