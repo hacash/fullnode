@@ -32,21 +32,21 @@ pub use container::{
     IMAGE_ID_DOMAIN as CALC_IMAGE_ID_DOMAIN,
 };
 
-/// Exchange rate: 1 compute = 48 cycles. CONSENSUS CONSTANT: changing this
+/// Exchange rate: 1 compute = 56 cycles. CONSENSUS CONSTANT: changing this
 /// value changes gas results and is a hard fork — do not touch after
 /// activation.
 ///
-/// `48` is a chosen policy value, not a unit derivation.
+/// `56` is a chosen policy value, not a unit derivation.
 ///
 /// Calibration (re-measured 2026-11-04 on an i7-8550U, release+LTO,
 /// pinned, warm): HVM arithmetic ~33 ns/compute; calc interpreter
 /// ~4.1 ns/cycle; x86-64 AOT ~0.38 ns/cycle; lockstep ~4.5 ns/cycle.
-/// AOT parity is N ≈ 87, so N=48 prices calc at roughly +81% over AOT
-/// hardware cost. It is still roughly 6x cheaper than the
+/// AOT parity is N ≈ 87, so N=56 prices calc at roughly +55% over AOT
+/// hardware cost. It is still roughly 7x cheaper than the
 /// interpreter/lockstep. The 200-diamond HIP5 kernel (200,863 cycles)
-/// costs 4,185 compute at N=48. Decide the pricing engine and target
+/// costs 3,587 compute at N=56. Decide the pricing engine and target
 /// hardware before activation, then freeze N.
-pub const CYCLES_PER_COMPUTE: u64 = 48;
+pub const CYCLES_PER_COMPUTE: u64 = 56;
 
 /// Resource charged per declared KiB of calc memory (input bytes, output
 /// bytes and declared memory are the only resource charges on the calc path).
@@ -412,7 +412,7 @@ impl CalcFnObj {
         if limits.cycles < setup {
             // Terminal OutOfGas: report the attempted setup charge only, not
             // the whole remaining budget. A tx reaching this abort cannot be
-            // included, so nothing beyond setup is burned; if ceil(setup/48)
+            // included, so nothing beyond setup is burned; if ceil(setup/CYCLES_PER_COMPUTE)
             // then exceeds the compute bucket, settle fails with the same
             // ItrErrCode::OutOfGas — the failure class never changes.
             return calc_exec(Err(CalcAbort2::OutOfGas), setup, 0, in_res, mem_res);

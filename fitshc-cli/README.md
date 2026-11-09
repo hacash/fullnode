@@ -77,20 +77,20 @@ unknown / duplicate / malformed keys are errors with file and line.
 
 | key             | default   | values                            | notes                          |
 |-----------------|-----------|-----------------------------------|--------------------------------|
-| `profile`       | `rv64im`  | `rv64im` (v2 admits only this)          | container profile bits    |
+| `profile`       | `rv64im`  | `rv64im` / `rv64imb` / `rv64imc` / `rv64imcb` | container profile bits 0..=3 |
 | `input_max`     | `1024`    | `0..=65535`, ≤ chain `call_data_size` | input region size         |
 | `output_max`    | `1024`    | `1..=65535`, ≤ chain `value_size` | output region size            |
 | `mem_kib`       | `auto`    | `auto` or `4..=calc_mem_kib_max`  | `auto` = minimum fitting fit |
-| `hash`          | `false`   | `false` (v2)                      | HASH ecalls are not admitted  |
+| `hash`          | `false`   | `false`                           | `true` is rejected; v1 does not admit HASH |
 
 Metadata steers the build only; the container header is the runtime truth.
 The fitsh keyword stays `rv64im` (the engine family) — the profile is a
 property of the compiled kernel, and the same contract source can be
 recompiled to a different profile without touching the fitsh file.
 
-v2 images are `profile = rv64im` with `hash = false` (eth-act
-`riscv64im_zicclsm`). Other names still parse for a later fork but
-admission rejects them.
+v1 containers carry version byte 1. Profiles 0..=3 are admitted;
+`hash` must stay false. Profile 0 (`rv64im`, eth-act `riscv64im_zicclsm`)
+is the zk-standardized subset.
 
 ## Kernel resolution order
 
@@ -135,7 +135,7 @@ Flags:
 | `--no-build` | never invoke rustc; prebuilt `.hcf1`/`.elf` only (`build`) |
 | `--strict` | rebuild core/compiler_builtins (drops the prebuilt `+A` caveat) |
 | `--in N` / `--out N` | IO sizes for bare `.elf` packing (default 1024/1024) |
-| `--profile P` | `rv64im` only (v2 default) |
+| `--profile P` | `rv64im` (default), `rv64imb`, `rv64imc`, or `rv64imcb` |
 | `--mem auto\|N` | memory admission for `.elf` packing (`build --no-build`, `pack`, `run`) |
 | `--no-cache` | never read/write the shared cache; the temp build dir is removed |
 | `--artifacts` / `--no-artifacts` | force/skip `<name>.hcf1` + manifest writing (`--no-build` defaults to skip) |

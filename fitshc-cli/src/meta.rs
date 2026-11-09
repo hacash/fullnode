@@ -73,8 +73,7 @@ impl ProfileName {
 }
 
 /// `mem_kib` admission: the smallest memory that fits the image plus the
-/// guard and the 2 KiB minimum stack (`pack_elf_min_mem`), or an explicit
-/// value.
+/// 2 KiB minimum stack (`pack_elf_min_mem`), or an explicit value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemSpec {
     Auto,

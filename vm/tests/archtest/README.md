@@ -26,7 +26,7 @@ those to `.option norvc` so the image stays 4-byte-only.
 
 Suites: `riscv-test-suite/rv64i_m/I` and `.../M`. The C and B suites are not
 built here: the harness maps every image as a profile-0 container, so C
-encodings and bitmanip would fail verify even though v2 admits the B / RVC
+encodings and bitmanip would fail verify even though v1 admits the B / RVC
 profiles (see `SPEC.md` §2). The HASH bit stays unadmitted.
 
 ## Run

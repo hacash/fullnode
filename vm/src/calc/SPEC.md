@@ -4,8 +4,8 @@ Normative semantics for the HVM calc-func RISC-V micro-VM. The x86-64
 AOT (`calc-aot`) is the **normative consensus engine**; the interpreter
 is launch-time bug insurance that must stay bit-identical to it (outputs,
 register file, memory, cycle totals, abort class, image ID and receipt)
-and is removed once production is stable — see "v2 semantics". This
-channel is not yet activated on mainnet; the wire format here is **v2**.
+and is removed once production is stable — see "v1 semantics". This
+channel is not yet activated on mainnet; the wire format here is **v1**.
 
 Three layers:
 
@@ -19,7 +19,7 @@ Target compatibility: profile byte = three additive ISA bits (bit 0 B, bit 1
 RVC, bit 2 HASH). Profile 0 matches the Ethereum zkVM baseline
 `riscv64im_zicclsm-unknown-none-elf` (eth-act/zkvm-standards): RV64I + M +
 Zicclsm, little-endian, flat memory, **no C, no B, no F/D, no A, no OS
-syscalls**. **v2 admits every B / RVC combination (bytes 0..=3) and rejects
+syscalls**. **v1 admits every B / RVC combination (bytes 0..=3) and rejects
 the HASH bit**; zk portability is a per-profile property — only profile 0 is
 the zk-standardized subset, and nothing requires every profile to be
 zk-provable.
@@ -28,20 +28,22 @@ zk-provable.
 
 20-byte big-endian header, then `nseg × 16` segment headers, then payloads
 in table order. Magic `HCF1`. There is no checksum; consensus commits the
-bytes. The ABI is fixed by `version = 2` (bytes → bytes). `.bss` is
-`memsz - filesz` and is **not** stored.
+bytes. The ABI is fixed by `version = 1` (bytes → bytes). Bytes
+`[0, 16)` are the chain-policy prefix (magic through `output_max`). The
+ELF projection starts at `entry` (offset 16). `.bss` is `memsz - filesz`
+and is **not** stored.
 
 | Offset | Size | Field |
 |--------|------|--------|
 | 0 | 4 | magic `HCF1` |
-| 4 | 1 | version = 2 |
+| 4 | 1 | version = 1 |
 | 5 | 1 | `profile` — ISA bits (see §2); bit 2 (HASH) must be 0 |
 | 6 | 1 | `nseg` (1..=16) |
 | 7 | 1 | reserved, must be 0 |
 | 8 | 4 | `mem_kib` (u32, `decode` requires 4..=2097147) |
-| 12 | 4 | `entry` — **absolute guest PC** |
-| 16 | 2 | `input_max` (u16) |
-| 18 | 2 | `output_max` (u16, at least 1) |
+| 12 | 2 | `input_max` (u16) |
+| 14 | 2 | `output_max` (u16, at least 1) |
+| 16 | 4 | `entry` — **absolute guest PC** |
 
 Each segment header (16 bytes, big-endian):
 
@@ -78,7 +80,7 @@ Header byte 5 is the profile id — three additive bits:
 | 1 | `CALC_PROFILE_COMPRESSED` | RVC (16-bit) encodings are part of the image |
 | 2 | `CALC_PROFILE_HASH` | hash ecalls (`a7` = 1..=6) are part of the image |
 
-| Value | Constant | ISA | v2 admission |
+| Value | Constant | ISA | v1 admission |
 |-------|----------|-----|--------------|
 | 0 | `CALC_PROFILE_RV64IM` | RV64I + M + Zicclsm | **admitted** — the zk-standard subset (eth-act baseline) |
 | 1 | `CALC_PROFILE_RV64IM_B` | + Zba/Zbb/Zbs/Zbc | **admitted** — outside the zk-standard subset |
@@ -128,7 +130,7 @@ compressed encoding (including the all-zero halfword) is rejected.
 ### Bit 2 (HASH): not admitted
 
 `profile & 0b100 != 0` is rejected at container admission, alone or
-combined. Hash ecalls (`a7` = 1..=6) therefore always trap on v2 images,
+combined. Hash ecalls (`a7` = 1..=6) therefore always trap on v1 images,
 charging the static ecall cost only; the implementations and price table
 stay in the tree for a future profile value.
 
@@ -137,7 +139,7 @@ stay in the tree for a future profile value.
 Profile values 8..=255 decode to nothing: `profile_known` requires the
 byte to be a subset of bits 0..=2, so `decode` rejects every value with
 any of bits 3..=7 set ("unknown isa profile"). They are **disabled, not
-planned**: no behavior is assigned to them in v2. A future hard fork may
+planned**: no behavior is assigned to them in v1. A future hard fork may
 first **define** one of these values — a definition names the value's ISA
 membership and, per §8, attaches that value's own pricing table — and
 only then does admission grow to accept containers carrying it. Until
@@ -249,7 +251,7 @@ Syscall number in `a7`.
 | ≥ 32 | unknown | | trap |
 
 HALT always works. Hash ecalls (`a7` = 1..=6) **trap** (static ecall cost
-only). The implementations stay in the tree for a later profile id; v2
+only). The implementations stay in the tree for a later profile id; v1
 does not admit HASH. Bounds checks use the same permission map as loads
 (the HALT stub is readable).
 
@@ -289,12 +291,12 @@ output length.
 
 ## 8. Gas
 
-`CYCLES_PER_COMPUTE = 48` (a chosen policy value, not a unit derivation).
+`CYCLES_PER_COMPUTE = 56` (a chosen policy value, not a unit derivation).
 On the 2026-11-04 warm same-machine calibration (HVM ~33 ns/compute, AOT
-~0.38 ns/cycle) AOT parity is N ≈ 87, so N=48 is roughly +81% over AOT
+~0.38 ns/cycle) AOT parity is N ≈ 87, so N=56 is roughly +55% over AOT
 hardware cost. Against the interpreter/lockstep it remains a large
-discount (roughly 6x). The 200,863-cycle HIP5 kernel costs 4,185 compute
-at N=48. N is consensus-frozen: any later change is a hard fork. Setup
+discount (roughly 7x). The 200,863-cycle HIP5 kernel costs 3,587 compute
+at N=56. N is consensus-frozen: any later change is a hard fork. Setup
 (always kept, even on trap):
 
 ```
@@ -346,11 +348,13 @@ inside the ecall, after the static suffix has already been paid.
 ## 9. Image ID and receipt
 
 ```
-image_id = SHA-256( b"hacash-calc-image-v2" || encode(container) )
+image_id = SHA-256( b"hacash-calc-image-v1" || encode(container) )
 ```
 
 `CalcContainer::image_id()` and `CalcFnObj::image_id()` return this. The
-object hashes it on first use (`OnceLock`), never per call.
+object hashes it on first use (`OnceLock`), never per call. If `encode`
+fails, the hash covers the domain plus the sentinel `\xffencode-overflow`
+instead of the container bytes.
 
 The call receipt is a **derived artifact**, not part of consensus
 execution. `CalcFnObj::run` returns `CalcExec { result, cycles_used,
@@ -365,7 +369,7 @@ exit_code, abort (None on success), cycles_used
 
 Identical between interpreter and AOT when derived from equal `CalcExec`.
 
-## v2 semantics (unconditional)
+## v1 semantics (unconditional)
 
 **Normative engine.** The x86-64 AOT (`calc-aot`) is the canonical
 consensus engine, permanently. The interpreter is **temporary launch-time
@@ -398,8 +402,10 @@ A host wall-clock deadline is observed by the interpreter only. The AOT
 image **still runs**; a deadline stop is host policy, so the AOT verdict is
 not compared and the call reports `Deadline`.
 
-Every execution capability is unconditional — the only chain parameter is
-`SpaceCap::calc_mem_kib_max`, and no legal future value can turn a
+Every execution capability is unconditional. Chain admission is the
+`SpaceCap` fields that already bound a container: `calc_mem_kib_max`,
+`calc_image_max`, `call_data_size` (against `input_max`) and `value_size`
+(against `output_max`). No legal future value of those fields can turn a
 capability off, because that would reject or reinterpret a previously legal
 container:
 

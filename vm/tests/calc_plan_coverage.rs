@@ -151,7 +151,7 @@ fn setup_cycles(c: &CalcContainer) -> u64 {
 /// fork and must go through the activation process (SPEC.md §8).
 #[test]
 fn consensus_constants_are_pinned() {
-    assert_eq!(CYCLES_PER_COMPUTE, 48, "1 compute = 48 cycles (hard fork to change)");
+    assert_eq!(CYCLES_PER_COMPUTE, 56, "1 compute = 56 cycles (hard fork to change)");
     assert_eq!(CALC_MEM_RESOURCE_PER_KIB, 2);
     assert_eq!(CALC_SETUP_BASE_CYCLES, 64);
     assert_eq!(CALC_SETUP_PER_KIB_CYCLES, 16);
