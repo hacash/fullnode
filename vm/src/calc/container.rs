@@ -1,7 +1,7 @@
-//! Calc container v2: 20-byte header + PT_LOAD-like segment table.
+//! Calc container v1: 20-byte header + PT_LOAD-like segment table.
 //!
 //! Header byte 5 is a profile id — three additive bits: bit 0 bitmanip (B),
-//! bit 1 RVC, bit 2 hash ecalls. v2 admits every B / RVC combination
+//! bit 1 RVC, bit 2 hash ecalls. v1 admits every B / RVC combination
 //! (profiles 0..=3); the HASH bit is not admitted. The profile byte is
 //! itself the zk declaration: profile 0 is the zk-standardized subset
 //! (eth-act `riscv64im_zicclsm`); B / C profiles execute on the same
@@ -12,12 +12,17 @@
 //! Segments are a lossless projection of ELF `PT_LOAD`. `.bss` is
 //! `memsz - filesz` (zero-filled at load, not stored). Host IO/stack sit
 //! at the top of `mem_kib`; guest segments must stay below that window.
+//!
+//! Wire order is two contiguous spans. Bytes `[0, 16)` are the chain policy
+//! prefix (magic through `output_max`). The projection starts at `entry`
+//! (offset 16), then the segment table, then tightly packed `filesz`
+//! payloads. Segment records stay 16 bytes with a 3-byte reserved tail.
 
 use crate::calc::CALC_MIN_FREE_RW_GAP;
 use crate::rt::{ItrErr, ItrErrCode, SpaceCap, VmrtRes};
 
 pub const CALC_MAGIC: [u8; 4] = *b"HCF1";
-pub const CALC_VERSION: u8 = 2;
+pub const CALC_VERSION: u8 = 1;
 
 /// ELF `PF_X`.
 pub const SEG_X: u8 = 0x1;
@@ -31,7 +36,7 @@ pub const CALC_PROFILE_BITMANIP: u8 = 0b001;
 /// Profile byte bit 1: RVC (16-bit) encodings.
 pub const CALC_PROFILE_COMPRESSED: u8 = 0b010;
 /// Profile byte bit 2: hash ecalls (`a7` = 1..=6) are part of this image.
-/// Not admitted in v2: the number stays reserved so hash admission is a
+/// Not admitted in v1: the number stays reserved so hash admission is a
 /// distinct hard fork with its own pricing activation.
 pub const CALC_PROFILE_HASH: u8 = 0b100;
 
@@ -45,7 +50,7 @@ pub const CALC_PROFILE_RV64IMC: u8 = CALC_PROFILE_COMPRESSED;
 /// RV64IMC + bitmanip. **admitted.**
 pub const CALC_PROFILE_RV64IMC_B: u8 = CALC_PROFILE_BITMANIP | CALC_PROFILE_COMPRESSED;
 
-/// Profile bits v2 admits. The HASH bit is deliberately outside: a hash
+/// Profile bits v1 admits. The HASH bit is deliberately outside: a hash
 /// activation must bring its own pricing table on a new profile value.
 pub const CALC_PROFILE_ADMITTED_MASK: u8 = CALC_PROFILE_BITMANIP | CALC_PROFILE_COMPRESSED;
 
@@ -96,7 +101,7 @@ pub const HALT_STUB_BYTES: [u8; 16] = [
 ];
 
 /// Domain tag for the canonical image ID.
-pub const IMAGE_ID_DOMAIN: &[u8] = b"hacash-calc-image-v2";
+pub const IMAGE_ID_DOMAIN: &[u8] = b"hacash-calc-image-v1";
 
 pub const CALC_MEM_KIB_MIN: u32 = 4;
 pub use crate::rt::CALC_MEM_KIB_MAX;
@@ -106,6 +111,9 @@ pub use crate::rt::CALC_MEM_KIB_MAX;
 pub const CALC_MEM_KIB_ENGINE_MAX: u32 = (((i32::MAX as u64) - CODE_BASE) / 1024) as u32;
 
 pub const HEADER_LEN: usize = 20;
+/// Chain-policy prefix: magic through `output_max`. The ELF-derived
+/// `entry` word starts at this offset.
+pub const POLICY_PREFIX_LEN: usize = 16;
 pub const SEG_HDR_LEN: usize = 16;
 pub const MAX_SEGS: usize = 16;
 
@@ -460,7 +468,7 @@ impl CalcContainer {
         }
         if !profile_admitted(self.profile) {
             return Err(err(
-                "calc container isa profile not admitted (hash is not in v2)",
+                "calc container isa profile not admitted (hash is not in v1)",
             ));
         }
         if self.mem_kib < CALC_MEM_KIB_MIN || self.mem_kib > CALC_MEM_KIB_ENGINE_MAX {
@@ -609,9 +617,10 @@ impl CalcContainer {
         out.push(nseg);
         out.push(0);
         out.extend_from_slice(&self.mem_kib.to_be_bytes());
-        out.extend_from_slice(&self.entry.to_be_bytes());
         out.extend_from_slice(&self.input_max.to_be_bytes());
         out.extend_from_slice(&self.output_max.to_be_bytes());
+        out.extend_from_slice(&self.entry.to_be_bytes());
+        debug_assert_eq!(out.len(), POLICY_PREFIX_LEN + 4);
         for s in &self.segs {
             let filesz = s.filesz();
             out.extend_from_slice(&s.vaddr.to_be_bytes());
@@ -645,9 +654,9 @@ impl CalcContainer {
             return Err(err("calc container segment count invalid"));
         }
         let mem_kib = u32::from_be_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-        let entry = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
-        let input_max = u16::from_be_bytes([bytes[16], bytes[17]]);
-        let output_max = u16::from_be_bytes([bytes[18], bytes[19]]);
+        let input_max = u16::from_be_bytes([bytes[12], bytes[13]]);
+        let output_max = u16::from_be_bytes([bytes[14], bytes[15]]);
+        let entry = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
         let table = nseg
             .checked_mul(SEG_HDR_LEN)
             .ok_or_else(|| err("calc container length overflow"))?;

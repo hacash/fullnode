@@ -1,6 +1,6 @@
 //! HVM calc func: RV64IM(+C)(+B)(+Zicclsm) pure-compute kernels.
 //!
-//! v2 admits every B / RVC profile combination (profile bytes 0..=3);
+//! v1 admits every B / RVC profile combination (profile bytes 0..=3);
 //! profile 0 is the zk-standardized subset (eth-act `riscv64im_zicclsm`).
 //! The HASH bit stays unadmitted. See `SPEC.md`.
 
@@ -88,7 +88,7 @@ pub const ECALL_HINT_MIN: u64 = 16;
 pub const ECALL_HINT_MAX: u64 = 31;
 
 /// Hash builtin numbers behind `ecall` (a7), aligned with the native hash
-/// catalog (`rt/native_catalog.rs`). HALT is 0; 1..=6 are hashes. v2 traps
+/// catalog (`rt/native_catalog.rs`). HALT is 0; 1..=6 are hashes. v1 traps
 /// them: [`CALC_PROFILE_HASH`] is not admitted (hash admission is its own
 /// hard fork with its own pricing activation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

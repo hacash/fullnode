@@ -366,7 +366,7 @@ impl KernelBuildRequest<'_> {
     fn cache_key(&self, recipe: &Recipe, flags: &str, versions: &(String, String)) -> String {
         let source = std::fs::read(self.source_path).unwrap_or_default();
         let mut key = Vec::new();
-        key.extend_from_slice(b"fitshc-kernel-v2\0");
+        key.extend_from_slice(b"fitshc-kernel-v1\0");
         key.extend_from_slice(
             format!(
                 "recipe={RECIPE_VERSION} meta_schema={} strict={} name={} has_input={}\0",

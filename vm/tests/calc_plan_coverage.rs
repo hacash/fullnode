@@ -369,7 +369,7 @@ fn container_decode_error_matrix() {
     b[0] = b'X';
     decode_err_contains(&b, "magic mismatch");
     // version
-    for v in [1u8, 3] {
+    for v in [0u8, 2] {
         let mut b = bytes.clone();
         b[4] = v;
         decode_err_contains(&b, "version mismatch");
@@ -400,12 +400,12 @@ fn container_decode_error_matrix() {
     // huge declared lengths must not panic
     let mut b = vec![0u8; 20 + 16];
     b[0..4].copy_from_slice(b"HCF1");
-    b[4] = 2;
+    b[4] = 1;
     b[6] = 1;
     b[8..12].copy_from_slice(&4u32.to_be_bytes());
-    b[12..16].copy_from_slice(&(CODE_BASE as u32).to_be_bytes());
-    b[16..18].copy_from_slice(&16u16.to_be_bytes());
-    b[18..20].copy_from_slice(&16u16.to_be_bytes());
+    b[12..14].copy_from_slice(&16u16.to_be_bytes());
+    b[14..16].copy_from_slice(&16u16.to_be_bytes());
+    b[16..20].copy_from_slice(&(CODE_BASE as u32).to_be_bytes());
     b[20..24].copy_from_slice(&(CODE_BASE as u32).to_be_bytes());
     b[24..28].copy_from_slice(&u32::MAX.to_be_bytes());
     b[28..32].copy_from_slice(&u32::MAX.to_be_bytes());
@@ -991,7 +991,7 @@ fn enc_j(imm: impl Fn(i64) -> i64, v: i64, rd: u32, op: u32) -> [u8; 4] {
 /// D-2xx: bitmanip decodes under profile B (the decoder keeps the table for a
 /// future profile id) and profile-0 rejection for a representative subset.
 #[test]
-fn decode_bitmanip_profile_b_and_v2_rejection() {
+fn decode_bitmanip_profile_b_and_v1_rejection() {
     let cases: Vec<([u8; 4], Inst)> = vec![
         (enc_i(0x600, 4, 1, 3, 0x13), Inst::UnAlu { op: UnAluOp::Clz, rd: 3, rs1: 4 }),
         (enc_i(0x601, 4, 1, 3, 0x13), Inst::UnAlu { op: UnAluOp::Ctz, rd: 3, rs1: 4 }),
@@ -1058,7 +1058,7 @@ fn decode_bitmanip_profile_b_and_v2_rejection() {
             Ok(got) => assert_eq!(got.0, want, "profile B decode of {word_u:#010x}"),
             Err(e) => panic!("profile B decode of {word_u:#010x} failed: {}", e.1),
         }
-        // v2 rejects the whole bitmanip surface on profile 0
+        // v1 rejects the whole bitmanip surface on profile 0
         let err = decode_at(&word, 0, CALC_PROFILE_RV64IM).unwrap_err();
         assert!(
             err.1.contains("bitmanip instruction not in this profile"),
@@ -1466,7 +1466,7 @@ fn ecall_number_branch_matrix() {
     }
 }
 
-/// E-407: hash builtin unit surface (v2 traps them on the guest path; the
+/// E-407: hash builtin unit surface (v1 traps them on the guest path; the
 /// implementations stay for a future profile id — this pins their semantics).
 #[test]
 fn hash_builtins_unit_surface() {

@@ -120,7 +120,7 @@ impl KernelMeta {
     /// not.
     pub fn validate(&self, cap: &SpaceCap) -> Result<(), String> {
         if self.hash {
-            return Err("hash ecalls are not admitted in v2".to_string());
+            return Err("hash ecalls are not admitted in v1".to_string());
         }
         if self.input_max as usize > cap.call_data_size {
             return Err(format!(

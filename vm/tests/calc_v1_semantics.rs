@@ -1,4 +1,4 @@
-//! v2 execution semantics are unconditional and pinned: every B / RVC
+//! v1 execution semantics are unconditional and pinned: every B / RVC
 //! profile is admitted (the HASH bit is not), HALT runs, hash ecalls trap,
 //! guest holes/code/rodata trap stores, the stack starts at the end of the
 //! guest image (no guard band), and any instruction-boundary entry point is

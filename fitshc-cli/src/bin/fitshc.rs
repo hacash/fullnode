@@ -58,7 +58,7 @@ fn usage() {
          \x20   --no-build         never invoke rustc; only prebuilt .hcf1/.elf\n\
          \x20   --strict           rebuild core/compiler_builtins (rv64imc/b: drops prebuilt +A caveat)\n\
          \x20   --in N --out N     IO sizes for bare .elf packing (default 1024/1024)\n\
-         \x20   --profile P        rv64im (v2 admits only this; default rv64im)\n\
+         \x20   --profile P        rv64im (v1 admits only this; default rv64im)\n\
          \x20   --mem auto|N       memory admission for .elf packing (default auto)\n\
          \x20   --no-cache         never read/write the shared build cache; temp build dir is removed\n\
          \x20   --no-artifacts     do not write <name>.hcf1/.calc.manifest.json next to the fitsh\n\
@@ -155,7 +155,7 @@ impl CommonArgs {
                     };
                 }
                 "--hash" => {
-                    return Err("hash ecalls are not admitted in v2".into());
+                    return Err("hash ecalls are not admitted in v1".into());
                 }
                 "--no-cache" => me.no_cache = true,
                 "--artifacts" => me.artifacts = Some(true),

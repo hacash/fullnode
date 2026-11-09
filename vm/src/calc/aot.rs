@@ -2854,7 +2854,7 @@ mod tests {
             *seed = xs(*seed);
             // Class pool: 0..=13 the base RV64IM surface, 14/15 the
             // admitted Zba/Zbb/Zbs/Zbc register and immediate forms
-            // (v2 profile bit 0).
+            // (v1 profile bit 0).
             let mut class = (*seed % 16) as u32;
             if tame {
                 // tame set: ALU/shift/branch-forward/safe-memory only;

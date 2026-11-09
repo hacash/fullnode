@@ -70,9 +70,9 @@ fn decode_rejects_huge_declared_lengths_without_panicking() {
     bytes[4] = CALC_VERSION;
     bytes[6] = 1; // nseg
     bytes[8..12].copy_from_slice(&4u32.to_be_bytes()); // mem_kib
-    bytes[12..16].copy_from_slice(&(CODE_BASE as u32).to_be_bytes());
-    bytes[16..18].copy_from_slice(&16u16.to_be_bytes());
-    bytes[18..20].copy_from_slice(&16u16.to_be_bytes());
+    bytes[12..14].copy_from_slice(&16u16.to_be_bytes()); // input_max
+    bytes[14..16].copy_from_slice(&16u16.to_be_bytes()); // output_max
+    bytes[16..20].copy_from_slice(&(CODE_BASE as u32).to_be_bytes()); // entry
     bytes[HEADER_LEN..HEADER_LEN + 4].copy_from_slice(&(CODE_BASE as u32).to_be_bytes());
     bytes[HEADER_LEN + 4..HEADER_LEN + 8].copy_from_slice(&u32::MAX.to_be_bytes()); // filesz
     bytes[HEADER_LEN + 8..HEADER_LEN + 12].copy_from_slice(&u32::MAX.to_be_bytes()); // memsz
@@ -82,7 +82,7 @@ fn decode_rejects_huge_declared_lengths_without_panicking() {
 
 #[test]
 fn decode_rejects_nonzero_reserved_header_bytes() {
-    // v2 header reserved byte is offset 7; each segment header has 3
+    // v1 header reserved byte is offset 7; each segment header has 3
     // reserved bytes at the end of the 16-byte record.
     let mut bytes = packed().encode().unwrap();
     bytes[7] = 1;
@@ -128,6 +128,17 @@ fn encode_round_trips_valid_container() {
     let (decoded, used) = CalcContainer::decode(&bytes).unwrap();
     assert_eq!(used, bytes.len());
     assert_eq!(decoded, c);
+}
+
+#[test]
+fn header_policy_prefix_precedes_entry() {
+    let c = valid_container();
+    let bytes = c.encode().unwrap();
+    assert_eq!(u32::from_be_bytes(bytes[8..12].try_into().unwrap()), c.mem_kib);
+    assert_eq!(u16::from_be_bytes(bytes[12..14].try_into().unwrap()), c.input_max);
+    assert_eq!(u16::from_be_bytes(bytes[14..16].try_into().unwrap()), c.output_max);
+    assert_eq!(u32::from_be_bytes(bytes[16..20].try_into().unwrap()), c.entry);
+    assert_eq!(&bytes[20..24], &(CODE_BASE as u32).to_be_bytes());
 }
 
 // ---------------------------------------------------------------- fix 5 ---
@@ -338,7 +349,7 @@ fn precheck_rejects_expired_deadline() {
     assert_eq!(exec.result, Err(CalcAbort2::Deadline));
 }
 
-// ------------------------------------------------------------- v2 changes ---
+// ------------------------------------------------------------- v1 changes ---
 
 /// Instruction word builders (little-endian encodings assembled the same way
 /// the decoder extracts them; conformance itself is cross-checked against

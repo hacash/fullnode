@@ -1,6 +1,6 @@
 //! RV64IM(+C)(+Zba/Zbb/Zbs/Zbc) whitelist decoder. The profile byte is three
 //! additive bits: bit 0 bitmanip, bit 1 RVC, bit 2 hash ecalls (which
-//! does not change decoding). v2 admits every B / RVC combination; the
+//! does not change decoding). v1 admits every B / RVC combination; the
 //! HASH bit stays rejected at container admission. Branch/JAL immediates
 //! stay byte-relative here; the verifier resolves them to absolute guest
 //! PCs. Encoding reference: RISC-V unprivileged spec Volume I (I, M, C)
