@@ -85,22 +85,25 @@ impl TexLedger {
         &mut self,
         addr: Address,
         count: usize,
-        max_diamonds: usize,
+        max_per_cell: usize,
+        max_per_tx: usize,
     ) -> Ret<()> {
         if count == 0 {
             return errf!("tex diamond_get count cannot be zero");
         }
-        // The cap is per transaction: the SUM over every `DiaGet` record in
-        // this tx, not each cell on its own — otherwise many just-under-cap
-        // cells would jointly exceed the limit the parameter name promises.
+        // One cell stays at its own cap. A second cap covers the sum of every
+        // DiaGet already recorded in this transaction plus this cell.
+        if count > max_per_cell {
+            return errf!("Tex state diamond trs num cannot exceed {}", max_per_cell);
+        }
         let total = self
             .diatrs
             .iter()
             .try_fold(0usize, |acc, (_, c)| acc.checked_add(*c))
             .and_then(|acc| acc.checked_add(count));
         match total {
-            Some(total) if total <= max_diamonds => {}
-            _ => return errf!("Tex state diamond trs num cannot exceed {}", max_diamonds),
+            Some(total) if total <= max_per_tx => {}
+            _ => return errf!("Tex state diamond get total cannot exceed {}", max_per_tx),
         }
         let Some(diares) = self.dia.checked_sub(count as i32) else {
             return errf!("cell state diamond overflow");
@@ -160,16 +163,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn diamond_get_cap_is_cumulative_across_cells() {
+    fn diamond_get_cap_is_per_cell_and_cumulative_per_tx() {
         let mut tex = TexLedger::default();
-        tex.dia = 400;
-        tex.record_diamond_get(Address::from([1u8; 21]), 200, 200).unwrap();
-        // A second just-at-cap cell must not slip past the per-tx total.
+        tex.dia = 20_000;
         let err = tex
-            .record_diamond_get(Address::from([2u8; 21]), 1, 200)
+            .record_diamond_get(Address::from([1u8; 21]), 201, 200, 10_000)
             .unwrap_err();
-        assert!(err.to_string().contains("cannot exceed"), "{err}");
-        // Room under the cap still records.
-        tex.record_diamond_get(Address::from([2u8; 21]), 200, 400).unwrap();
+        assert!(err.to_string().contains("cannot exceed 200"), "{err}");
+
+        tex.record_diamond_get(Address::from([1u8; 21]), 200, 200, 10_000)
+            .unwrap();
+        // A second full cell still fits; the per-tx cap is the sum, not 200.
+        tex.record_diamond_get(Address::from([2u8; 21]), 200, 200, 10_000)
+            .unwrap();
+
+        tex.diatrs.push((Address::from([3u8; 21]), 9_600));
+        let err = tex
+            .record_diamond_get(Address::from([4u8; 21]), 200, 200, 10_000)
+            .unwrap_err();
+        assert!(err.to_string().contains("cannot exceed 10000"), "{err}");
+        tex.record_diamond_get(Address::from([4u8; 21]), 200, 200, 10_200)
+            .unwrap();
     }
 }

@@ -198,10 +198,13 @@ impl TexCell {
                 if dianum.uint() == 0 {
                     return errf!("cell diamond get: number cannot be zero");
                 }
-                let max =
-                    crate::execution_params(ctx.services().as_ref())?.tex_diamond_get_max_per_tx;
-                ctx.tex_ledger_mut_top()?
-                    .record_diamond_get(*taradr, dianum.uint() as usize, max)
+                let params = crate::execution_params(ctx.services().as_ref())?;
+                ctx.tex_ledger_mut_top()?.record_diamond_get(
+                    *taradr,
+                    dianum.uint() as usize,
+                    params.tex_diamond_get_max,
+                    params.tex_diamond_get_max_per_tx,
+                )
             }
             Self::AssetPay { asset } => {
                 tex_check_asset_serial(ctx, asset.serial)?;
