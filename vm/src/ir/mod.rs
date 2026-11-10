@@ -3,7 +3,9 @@ use std::iter;
 
 use dyn_clone::{DynClone, clone_trait_object};
 use field::{Address, Encode};
-use sys::{Rerr, Ret, errf};
+#[cfg(feature = "syntax")]
+use sys::Rerr;
+use sys::{Ret, errf};
 
 use crate::rt::Bytecode::*;
 use crate::rt::ItrErrCode::*;

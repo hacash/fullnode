@@ -4,8 +4,8 @@ use base::{
     Context, CoreState, ExecFrom, asset_add, asset_sub, hac_add, hac_sub, record_diamond_pay,
     sat_add, sat_sub,
 };
-use field::{AddrOrPtr, Address, Amount, Fold64, Hash, Satoshi, Sign, ToJSON};
-use sys::{Account, Rerr, Ret, errf};
+use field::{AddrOrPtr, Address, Amount, Fold64, Satoshi, ToJSON};
+use sys::{Rerr, Ret, errf};
 
 use crate::codec::action::tex::{TexCell, TexCellExecute};
 use crate::exec::apply::diamonds_transfer;

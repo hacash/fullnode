@@ -1,8 +1,12 @@
 use sys::*;
 
+#[cfg(feature = "syntax")]
 use field::Address as FieldAddress;
 
 use super::ir::*;
+// `tokenizer.rs` builds `Token` variants unqualified; `formater.rs` uses `*`
+// inline and needs no import.
+#[cfg(feature = "syntax")]
 use super::rt::Token::*;
 use super::rt::*;
 use super::*;

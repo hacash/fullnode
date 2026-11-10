@@ -476,7 +476,7 @@ mod tests {
         let signer = sys::Account::create_by_password("bundle cache").unwrap();
         let addr = Address::from(*signer.address());
         let msg = Hash::from(sys::calculate_hash(b"bundle message bytes".to_vec()));
-        let mut sign = field::Sign::create_by(&signer, &msg);
+        let sign = field::Sign::create_by(&signer, &msg);
 
         ctx.check_bundle_sign(&msg, &addr, &sign).unwrap();
         ctx.check_bundle_sign(&msg, &addr, &sign).unwrap();

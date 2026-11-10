@@ -47,23 +47,6 @@ fn corpus_profiles() -> BTreeMap<String, u8> {
         .collect()
 }
 
-fn corpus_files() -> Vec<(String, PathBuf)> {
-    let mut files: Vec<(String, PathBuf)> = std::fs::read_dir(corpus_dir())
-        .expect("riscvtests corpus dir exists")
-        .filter_map(|e| {
-            let p = e.ok()?.path();
-            if p.extension()?.to_str()? == "elf" {
-                let name = p.file_stem()?.to_str()?.to_string();
-                Some((name, p))
-            } else {
-                None
-            }
-        })
-        .collect();
-    files.sort();
-    files
-}
-
 /// Images whose designed behavior is to end in a guest trap (see
 /// fixtures/riscvtests/rvc_ebreak.S and rvc_unimp.S).
 const TRAP_IMAGES: [&str; 2] = ["rvc_ebreak", "rvc_unimp"];

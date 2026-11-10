@@ -104,14 +104,6 @@ fn env(tx: &dyn TransactionSign) -> Env {
     env
 }
 
-fn fixture_action_address(tx: &dyn TransactionSign, index: usize, field: &str) -> Address {
-    let json = tx.actions()[index].to_json();
-    let marker = format!("\"{field}\":\"");
-    let address = json.split_once(&marker).unwrap_or_else(|| panic!("fixture action address field {field} missing in {json}")).1
-        .split_once('"').expect("fixture action address terminator").0;
-    Address::from_readable(address).unwrap()
-}
-
 /// Every kind-22 action in a compressed-form settlement fixture is a maker
 /// bundle whose value cells are exclusively directed (26-33): the ledger
 /// Pay/Get family (cellid 1-8) must never appear, or the escrow accounting the
@@ -137,23 +129,6 @@ fn fixture_assert_compressed_maker_actions(tx: &dyn TransactionSign) {
         }
     }
     assert!(maker_actions > 0, "fixture contains no TEX maker action");
-}
-
-/// The static recipient of the maker's directed fee cell (cellid 29/33/35 with
-/// a quoted address): the platform fee counterparty of the settlement.
-fn fixture_fee_address(tx: &dyn TransactionSign) -> Address {
-    for action in tx.actions().iter() {
-        let json = action.to_json();
-        if !json.contains("\"kind\":22") { continue; }
-        for (cellid, field) in [(29usize, "to"), (33, "to"), (35, "to")] {
-            let marker = format!("\"cellid\":{cellid},\"{field}\":\"");
-            if let Some((_, tail)) = json.split_once(&marker) {
-                let address = tail.split_once('"').expect("fee address terminator").0;
-                return Address::from_readable(address).unwrap();
-            }
-        }
-    }
-    panic!("fixture has no directed fee cell with a static recipient")
 }
 
 fn signed_tex_transaction(cells: Vec<TexCell>) -> StdTransaction {
@@ -903,7 +878,7 @@ fn builder_generated_reverse_direction_matrix_executes_and_accounts_for_each_leg
         let mut tb = Balance::hac(Amount::zhu(10_000_000_000_000)); tb.asset_set(AssetAmt { serial: base_serial, amount: Fold64::from(100).unwrap() }).unwrap();
         let mut mb = Balance::hac(Amount::zhu(10_000_000_000_000)); mb.diamond = DiamondNumberAuto::from_diamond(&DiamondNumber::from(1));
         CoreState::wrap(&mut state).balance_set(&ta, &tb); CoreState::wrap(&mut state).balance_set(&ma, &mb);
-        let mut fb = Balance::hac(Amount::zhu(10_000_000_000_000));
+        let fb = Balance::hac(Amount::zhu(10_000_000_000_000));
         CoreState::wrap(&mut state).balance_set(&fa, &fb);
         CoreState::wrap(&mut state).asset_set(&base_serial, &AssetSmelt { serial: base_serial, supply: Fold64::from(100).unwrap(), decimal: Uint1::from(6), issuer: ma, ticket: BytesW1::default(), name: BytesW1::default() });
         CoreState::wrap(&mut state).diamond_set(&name, &DiamondSto { status: Uint1::from(1), address: ma, prev_engraved_height: BlockHeight::from(0), inscripts: field::Inscripts::default() });

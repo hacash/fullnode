@@ -809,8 +809,6 @@ struct ParsedElf {
 struct ElfSec {
     name: String,
     typ: u32,
-    flags: u64,
-    addr: u64,
     offset: u64,
     size: u64,
     link: u32,
@@ -905,8 +903,6 @@ fn parse_elf64_riscv(elf: &[u8], profile: u8) -> VmrtRes<ParsedElf> {
             sections.push(ElfSec {
                 name: String::new(),
                 typ: ru32(hdr, 4)?,
-                flags: ru64(hdr, 8)?,
-                addr: ru64(hdr, 16)?,
                 offset: ru64(hdr, 24)?,
                 size: ru64(hdr, 32)?,
                 link: ru32(hdr, 40)?,

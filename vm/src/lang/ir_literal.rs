@@ -4,6 +4,9 @@ use crate::rt::Bytecode::*;
 use crate::value::{Value, ValueTy};
 
 /// Static type of an IR subtree when it is a literal or an explicit cast wrapper.
+/// Only the parser (`const_literal.rs`) needs it; the decompiler infers types
+/// from the encoded instruction itself.
+#[cfg(feature = "syntax")]
 pub(crate) fn ir_node_effective_ty(node: &dyn IRNode) -> Option<ValueTy> {
     if let Some(ty) = ir_literal_ty(node) {
         return Some(ty);
@@ -27,6 +30,8 @@ pub(crate) fn ir_node_effective_ty(node: &dyn IRNode) -> Option<ValueTy> {
     None
 }
 
+/// Literal / leaf-opcode type used by `ir_node_effective_ty`.
+#[cfg(feature = "syntax")]
 pub(crate) fn ir_literal_ty(node: &dyn IRNode) -> Option<ValueTy> {
     if let Some(leaf) = node.as_any().downcast_ref::<IRNodeLeaf>() {
         return match leaf.inst {

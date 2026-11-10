@@ -963,8 +963,6 @@ impl AotFunc {
 }
 
 enum Fixup {
-    /// Patch rel32 to a byte offset in the code buffer.
-    To(usize),
     /// Patch rel32 to the prologue of the block containing this inst idx.
     Block(u32),
     /// Trap stub (aborted = 1).
@@ -1643,7 +1641,6 @@ pub fn aot_compile(module: &CalcModule) -> Option<AotFunc> {
     // ---- patch fixups
     for (at, f) in fixups {
         let target: usize = match f {
-            Fixup::To(to) => to,
             Fixup::Block(ti) => block_off[module.block_of_inst[ti as usize] as usize] as usize,
             Fixup::Trap => trap_off as usize,
             Fixup::Gas => gas_off as usize,
