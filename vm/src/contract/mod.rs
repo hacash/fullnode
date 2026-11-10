@@ -26,22 +26,6 @@ pub type ContractUserFuncList = ListW2<ContractUserFunc>;
 pub type ContractCalcFuncList = ListW2<ContractCalcFunc>;
 pub type ContractAddrReplaceAtList = ListW1<ContractAddrReplaceAt>;
 
-/// Calc func channel activation window: the channel is disabled in the
-/// half-open height window `[CALCFUNC_DISABLE_FROM_HEIGHT,
-/// CALCFUNC_DISABLE_UNTIL_HEIGHT)`. Test chains (height < 790,000) keep the
-/// pre-launch window; the live network is currently inside the disabled
-/// window, so deployment / upgrade keep rejecting `CodeType::RV64IM` user
-/// functions. The channel
-/// re-enables at 820,000; change these bounds only as part of a coordinated
-/// consensus upgrade.
-pub const CALCFUNC_DISABLE_FROM_HEIGHT: u64 = 790_000;
-pub const CALCFUNC_DISABLE_UNTIL_HEIGHT: u64 = 820_000;
-
-/// Whether calcfunc deployment / upgrade is allowed at `height`.
-pub const fn calcfunc_enabled_at(height: u64) -> bool {
-    height < CALCFUNC_DISABLE_FROM_HEIGHT || height >= CALCFUNC_DISABLE_UNTIL_HEIGHT
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, field::FieldCodec)]
 pub struct ContractMeta {
     pub vrsn: Fixed1,
@@ -517,12 +501,13 @@ impl ContractSto {
         }
 
         if edit.userfuncs.length() > 0 {
+            // `base::upgrade_enabled_at` is also the HACD smelt view gate.
             if edit
                 .userfuncs
                 .as_list()
                 .iter()
                 .any(|f| code_stuff_is_rv64im(&f.code_stuff))
-                && !calcfunc_enabled_at(height)
+                && !base::upgrade_enabled_at(height)
             {
                 return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
             }
@@ -573,7 +558,7 @@ impl ContractSto {
             .as_list()
             .iter()
             .any(|f| code_stuff_is_rv64im(&f.code_stuff))
-            && !calcfunc_enabled_at(height)
+            && !base::upgrade_enabled_at(height)
         {
             return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
         }
@@ -962,7 +947,7 @@ mod calc_io_load_tests {
         let cap = SpaceCap::new(0);
         let gas = GasExtra::new(0, &STUB_VM_PARAMS);
         let svc = StubServices::new(STUB_VM_PARAMS);
-        let height = CALCFUNC_DISABLE_FROM_HEIGHT;
+        let height = base::UPGRADE_DISABLE_FROM_HEIGHT;
 
         let mut sto = ContractSto::default();
         sto.userfuncs.push(calc_user(16, 16)).unwrap();
@@ -1036,17 +1021,3 @@ mod calc_io_load_tests {
     }
 }
 
-#[cfg(test)]
-mod calc_gate_window_tests {
-    use super::{
-        calcfunc_enabled_at, CALCFUNC_DISABLE_FROM_HEIGHT, CALCFUNC_DISABLE_UNTIL_HEIGHT,
-    };
-
-    #[test]
-    fn gate_is_disabled_only_in_the_configured_window() {
-        assert!(calcfunc_enabled_at(CALCFUNC_DISABLE_FROM_HEIGHT - 1));
-        assert!(!calcfunc_enabled_at(CALCFUNC_DISABLE_FROM_HEIGHT));
-        assert!(!calcfunc_enabled_at(CALCFUNC_DISABLE_UNTIL_HEIGHT - 1));
-        assert!(calcfunc_enabled_at(CALCFUNC_DISABLE_UNTIL_HEIGHT));
-    }
-}

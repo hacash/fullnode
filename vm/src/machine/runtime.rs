@@ -12,8 +12,8 @@ use crate::space::{CtcKVMap, GKVMap, Heap, Stack};
 use crate::value::ContractAddress;
 
 const UPGRADE_HEIGHTS: &[u64] = &[
-    crate::contract::CALCFUNC_DISABLE_FROM_HEIGHT,
-    crate::contract::CALCFUNC_DISABLE_UNTIL_HEIGHT,
+    base::UPGRADE_DISABLE_FROM_HEIGHT,
+    base::UPGRADE_DISABLE_UNTIL_HEIGHT,
 ];
 
 #[derive(Default)]

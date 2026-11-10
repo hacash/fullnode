@@ -145,7 +145,7 @@ fn deploy_check_height_gate_restores_pre_calc_behavior() {
     let cap = SpaceCap::new(0);
     let reg: std::sync::Arc<dyn base::ExecutionServices> =
         std::sync::Arc::new(crate::machine::test_ctx::StubServices::new(params.clone()));
-    let gate = crate::contract::CALCFUNC_DISABLE_FROM_HEIGHT;
+    let gate = base::UPGRADE_DISABLE_FROM_HEIGHT;
 
     // inside the test window the container validates
     sto.check(gate - 1, &cap, &gas, reg.as_ref()).expect("window open below the gate");

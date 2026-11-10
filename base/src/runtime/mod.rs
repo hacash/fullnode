@@ -4,6 +4,7 @@ pub(crate) mod dispatcher;
 pub(crate) mod env;
 pub(crate) mod gas;
 pub(crate) mod scope;
+mod upgrade;
 
 #[cfg(feature = "execute")]
 pub use dispatcher::*;
@@ -11,3 +12,4 @@ pub use dispatcher::*;
 pub use env::*;
 pub use gas::*;
 pub use scope::*;
+pub use upgrade::*;
