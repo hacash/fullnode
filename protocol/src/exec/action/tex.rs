@@ -718,6 +718,7 @@ mod tests {
                     self.exec_from
                 );
             }
+            self.tex.ensure_open()?;
             Ok(&mut self.tex)
         }
         fn p2sh_set(&mut self, _addr: Address, _p2sh: Box<dyn base::P2sh>) -> Rerr {
@@ -811,12 +812,14 @@ mod tests {
         assert!(ctx.tex.diatrs.is_empty());
     }
 
-    /// Post-settlement state: the pay-records are fully handed out. The
-    /// `diatrs` entries and the dia counter stay as recorded — the ledger is
-    /// per-tx scratch and is dropped with the context.
+    /// Post-settlement scratch: pay-records are delivered, then the segment
+    /// scratch is dropped and the ledger stays closed.
     fn assert_ledger_diamonds_drained(ctx: &DirectedCtx) {
+        assert!(ctx.tex.settled);
         assert!(ctx.tex.diamonds.is_empty());
         assert!(ctx.tex.dia_recorded.is_empty());
+        assert!(ctx.tex.diatrs.is_empty());
+        assert!(ctx.tex.entries.is_empty());
     }
 
     #[test]
@@ -1718,7 +1721,8 @@ mod tests {
             .to_string();
         assert!(err.contains("diamonds settlement check failed"), "{err}");
 
-        // Pays > gets, fast sync: delivery runs and the leftover stays recorded.
+        // Pays > gets, fast sync: the matched prefix is delivered. The unmatched
+        // scratch record is dropped when the segment closes; it is not chain state.
         let mut ctx = DirectedCtx::new(pay_get(2, 1));
         ctx.env.chain.fast_sync = true;
         seed_diamonds(&mut ctx, &payer_addr, &names);
@@ -1726,7 +1730,34 @@ mod tests {
         crate::exec::tex::do_settlement(&mut ctx).unwrap();
         assert_eq!(dia_owner(&mut ctx, &names[0]), recipient_addr);
         assert_eq!(dia_owner(&mut ctx, &names[1]), payer_addr);
-        assert_eq!(ctx.tex.diamonds.len(), 1);
+        assert!(ctx.tex.settled);
+        assert!(ctx.tex.diamonds.is_empty());
+        assert!(ctx.tex.diatrs.is_empty());
+    }
+
+    #[test]
+    fn settlement_closes_scratch_and_rejects_a_second_call() {
+        let main = sys::Account::create_by_secret_key_value([3u8; 32]).unwrap();
+        let main_addr = Address::from(*main.address());
+        let mut ctx = DirectedCtx::new(typed_tx(&main, vec![main_addr], vec![]));
+        ctx.tex.dia_pay_pending.insert(main_addr, 4);
+        ctx.tex.entries.push(base::TexEntry {
+            addr: main_addr,
+            asset_serial: 1,
+            delta: 0,
+        });
+        ctx.tex.asset_checked.insert(1);
+        crate::exec::tex::do_settlement(&mut ctx).unwrap();
+        assert!(ctx.tex.settled);
+        assert!(ctx.tex.dia_pay_pending.is_empty());
+        assert!(ctx.tex.entries.is_empty());
+        assert!(ctx.tex.asset_checked.is_empty());
+        let err = crate::exec::tex::do_settlement(&mut ctx)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("only run once"), "{err}");
+        let err = ctx.tex_ledger_mut_top().unwrap_err().to_string();
+        assert!(err.contains("closed"), "{err}");
     }
 
     /// Record-time duplicate rejection: with deferred clearing nothing moves,

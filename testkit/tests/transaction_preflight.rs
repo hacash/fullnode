@@ -526,23 +526,14 @@ fn maker_buy_receives_gross_taker_quote_then_fee_and_clears_ledger() {
     let parent = root();
     let mut state = StateChunkRef::block_draft_on(&parent, 120);
     let funded = Balance::hac(Amount::from("100:248").unwrap());
-    // The asset fee is paid before the TEX tail: once TexCellExecute appears,
-    // every later top-level action must be one too.
-    let mut taker_balance = funded.clone();
-    taker_balance
-        .asset_set(AssetAmt {
-            serial,
-            amount: Fold64::from(1).unwrap(),
-        })
-        .unwrap();
-    CoreState::wrap(&mut state).balance_set(&taker_addr, &taker_balance);
+    CoreState::wrap(&mut state).balance_set(&taker_addr, &funded);
     let mut maker_balance = funded.clone();
     maker_balance.asset_set(AssetAmt { serial, amount: Fold64::from(1_000).unwrap() }).unwrap();
     CoreState::wrap(&mut state).balance_set(&maker_addr, &maker_balance);
     CoreState::wrap(&mut state).balance_set(&escrow_addr, &funded);
     CoreState::wrap(&mut state).balance_set(&fee_addr, &funded);
     CoreState::wrap(&mut state).asset_set(&serial, &AssetSmelt {
-        serial, supply: Fold64::from(1_001).unwrap(), decimal: Uint1::from(6), issuer: maker_addr,
+        serial, supply: Fold64::from(1_000).unwrap(), decimal: Uint1::from(6), issuer: maker_addr,
         ticket: BytesW1::default(), name: BytesW1::default(),
     });
     let before_taker = CoreStateRead::wrap(&state).balance(&taker_addr).unwrap();
@@ -571,10 +562,10 @@ fn maker_buy_receives_gross_taker_quote_then_fee_and_clears_ledger() {
         Amount::from("1:244").unwrap(), sys::curtimes().saturating_sub(1));
     tx.gas_max = Uint1::from(hacash_params::TX_GAS_BUDGET_CAP_BYTE);
     tx.push_action_in(Arc::new(TransferHacTo::new(escrow_addr, Amount::zhu(800_000))));
-    tx.push_action_in(Arc::new(TransferAssetTo::new(fee_addr, AssetAmt { serial, amount: Fold64::from(1).unwrap() })));
     tx.push_action_in(Arc::new(e_pay));
     for _ in 0..80 { tx.push_action_in(Arc::new(maker_fill.clone())); }
     tx.push_action_in(Arc::new(taker_get));
+    tx.push_action_in(Arc::new(TransferAssetTo::new(fee_addr, AssetAmt { serial, amount: Fold64::from(1).unwrap() })));
     tx.fill_sign_account(&taker).unwrap();
     let tx: TxRef = Arc::new(tx);
     let mut tx_env = env(tx.as_ref()); tx_env.block.height = 120;

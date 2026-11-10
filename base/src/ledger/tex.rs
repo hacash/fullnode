@@ -32,6 +32,10 @@ pub struct TexLedger {
     pub dia_get_pending: HashMap<Address, usize>,
     pub entries: Vec<TexEntry>,
     pub asset_checked: HashSet<u64>,
+    /// Set when a segment has been settled. Scratch is cleared at the same
+    /// time so another segment could start empty; this flag is what still
+    /// refuses that second settlement.
+    pub settled: bool,
 }
 
 /// DiaPay record-time booking (deferred clearing): the named diamonds are not
@@ -149,6 +153,22 @@ impl TexLedger {
     pub fn asset_is_checked(&self, serial: Fold64) -> bool {
         self.asset_checked.contains(&serial.uint())
     }
+
+    pub fn ensure_open(&self) -> Ret<()> {
+        if self.settled {
+            return errf!("tex ledger is closed after settlement");
+        }
+        Ok(())
+    }
+
+    /// Drop every per-segment record and refuse another settlement. Balances
+    /// already moved stay moved; only this scratch ledger is reset.
+    pub fn close_segment(&mut self) {
+        *self = Self {
+            settled: true,
+            ..Self::default()
+        };
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -184,5 +204,26 @@ mod tests {
         assert!(err.to_string().contains("cannot exceed 10000"), "{err}");
         tex.record_diamond_get(Address::from([4u8; 21]), 200, 200, 10_200)
             .unwrap();
+    }
+
+    #[test]
+    fn close_segment_drops_scratch_and_stays_settled() {
+        let mut tex = TexLedger::default();
+        tex.zhu = 0;
+        tex.diatrs.push((Address::from([1u8; 21]), 2));
+        tex.dia_get_pending.insert(Address::from([1u8; 21]), 2);
+        tex.entries.push(TexEntry {
+            addr: Address::default(),
+            asset_serial: 1,
+            delta: 0,
+        });
+        tex.asset_checked.insert(1);
+        tex.close_segment();
+        assert!(tex.settled);
+        assert!(tex.diatrs.is_empty());
+        assert!(tex.dia_get_pending.is_empty());
+        assert!(tex.entries.is_empty());
+        assert!(tex.asset_checked.is_empty());
+        assert!(tex.ensure_open().is_err());
     }
 }

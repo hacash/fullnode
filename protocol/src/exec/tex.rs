@@ -5,14 +5,14 @@
 use std::collections::HashMap;
 
 use base::{Context, CoreState, ExecFrom, check_diamonds_ownership};
-use field::{Address, Amount, DiamondName, DiamondNameListMax200, SatoshiAuto};
+use field::{Address, DiamondName, DiamondNameListMax200};
 use sys::{Rerr, errf};
 
 use crate::exec::apply::diamonds_transfer;
 
 // Defined in `params` (non-exec module) because `TexCellExecute`'s codec reads it too;
 // `tex` compiles unconditionally and is dead-code-eliminated in SDK/wasm builds.
-pub use crate::params::SETTLEMENT_ADDR;
+// pub use crate::params::SETTLEMENT_ADDR;
 
 /// Close the tex ledger: settlement checks (residuals must be zero), then
 /// deliver the recorded DiaPay diamonds from each payer to the `diatrs`
@@ -20,6 +20,9 @@ pub use crate::params::SETTLEMENT_ADDR;
 pub fn do_settlement(ctx: &mut dyn Context) -> Rerr {
     if ctx.exec_from() != ExecFrom::Top {
         return errf!("do_settlement only allowed in TOP context");
+    }
+    if ctx.tex_ledger().settled {
+        return errf!("tex settlement can only run once per transaction");
     }
     let mut diamond_trs = Vec::new();
     let fast_sync = ctx.env().chain.fast_sync;
@@ -75,6 +78,7 @@ pub fn do_settlement(ctx: &mut dyn Context) -> Rerr {
             diamonds_transfer(ctx, &payer, &addr, &dialist)?;
         }
     }
+    ctx.tex_ledger_mut_top()?.close_segment();
     Ok(())
 }
 
@@ -105,30 +109,4 @@ fn take_head_diamonds(
             Ok((payer, list))
         })
         .collect()
-}
-
-/// Clear leaked HAC/SAT/Asset on the settlement address after normal settlement;
-/// diamonds no longer pass through the settlement address at all (deferred
-/// clearing delivers them payer-to-recipient directly).
-pub fn settlement_addr_postsettle_cleanup(ctx: &mut dyn Context) -> Rerr {
-    let mut state = CoreState::wrap(ctx.layer());
-    if let Some(mut bls) = state.balance(&SETTLEMENT_ADDR)? {
-        let mut dirty = false;
-        if bls.hacash > Amount::zero() {
-            bls.hacash = Amount::zero();
-            dirty = true;
-        }
-        if bls.satoshi.uint() > 0 {
-            bls.satoshi = SatoshiAuto::default();
-            dirty = true;
-        }
-        if bls.assets.length() > 0 {
-            bls.assets = field::AssetAmtW1::default();
-            dirty = true;
-        }
-        if dirty {
-            state.balance_set(&SETTLEMENT_ADDR, &bls);
-        }
-    }
-    Ok(())
 }

@@ -196,6 +196,7 @@ impl Context for TestContext {
         &self.tex
     }
     fn tex_ledger_mut_top(&mut self) -> Ret<&mut TexLedger> {
+        self.tex.ensure_open()?;
         Ok(&mut self.tex)
     }
     fn p2sh(&self, address: &Address) -> Ret<&dyn P2sh> {

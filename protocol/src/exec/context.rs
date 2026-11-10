@@ -305,6 +305,7 @@ impl Context for ContextInst {
                 self.exec_from
             );
         }
+        self.tex.ensure_open()?;
         Ok(&mut self.tex)
     }
 

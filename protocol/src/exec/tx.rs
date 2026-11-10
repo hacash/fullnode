@@ -147,13 +147,34 @@ fn record_legacy_extra9_burn(ctx: &mut dyn Context, fee: &Amount, fee_got: &Amou
 }
 
 fn execute_actions(ctx: &mut dyn Context, actions: &[ActionRef], charge_extra9: bool) -> Rerr {
+    let tex_kind = crate::codec::action::tex::TexCellExecute::KIND;
+    let mut in_tex = false;
+    let mut settled = false;
     for act in actions {
+        let is_tex = act.kind() == tex_kind;
+        if in_tex && !is_tex {
+            crate::exec::tex::do_settlement(ctx)?;
+            in_tex = false;
+            settled = true;
+        }
+        if is_tex && settled {
+            return errf!("tex settlement can only run once per transaction");
+        }
         ctx.exec_from_set(ExecFrom::Top);
+        if is_tex {
+            in_tex = true;
+        }
         if charge_extra9 {
             let _ = ActionDispatcher::dispatch_top(ctx, act)?;
         } else {
             let _ = ActionDispatcher::dispatch_top_without_extra9(ctx, act)?;
         }
+    }
+    // The segment runs through the last action, so the loop never saw a
+    // non-TEX boundary. A segment already closed, or a transaction with no
+    // TEX, does not settle here.
+    if in_tex {
+        crate::exec::tex::do_settlement(ctx)?;
     }
     Ok(())
 }
@@ -194,20 +215,17 @@ impl TransactionExecute for StdTransaction {
         if is_type3 {
             let gas_initialized = crate::exec::gas::tx_gas_initialize(ctx)?;
             execute_actions(ctx, &self.actions, true)?;
-            crate::exec::tex::do_settlement(ctx)?;
             ctx.run_deferred_phase()?;
             if gas_initialized {
                 ctx.gas_refund()?;
             }
         } else {
             execute_actions(ctx, &self.actions, false)?;
-            crate::exec::tex::do_settlement(ctx)?;
         }
         hac_sub(ctx, &prep.main, &prep.fee)?;
         if !is_type3 {
             record_legacy_extra9_burn(ctx, &prep.fee, &self.fee_got())?;
         }
-        crate::exec::tex::settlement_addr_postsettle_cleanup(ctx)?;
         Ok(())
     }
 }
