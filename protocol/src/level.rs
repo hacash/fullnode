@@ -1,5 +1,7 @@
 //! Recursive transaction action-tree analysis. `topology_facts` is the single
-//! protocol-owned walk of scope / min-tx-type / flags / AST depth / top-rule; the execute path gates on the first finding, the SDK reports the full list.
+//! protocol-owned walk of scope / min-tx-type / flags / AST depth / top-rule
+//! and the TEX tail rule; the execute path gates on the first finding, the
+//! SDK reports the full list.
 
 use base::{ActScope, Action, ActionRef, ExecFrom, TopRule};
 #[cfg(feature = "execute")]
@@ -162,6 +164,30 @@ fn check_top_rule(act: &dyn Action, stats: &mut Stats) {
     }
 }
 
+/// Once a top-level `TexCellExecute` appears, every later top-level action
+/// must also be one. Transfers, calls and guards stay legal before that
+/// tail. Nested actions are not scanned: `TexCellExecute` is TOP-scoped, so
+/// a copy inside AST is already a scope finding.
+fn check_tex_tail(actions: &[ActionRef], stats: &mut Stats) {
+    let tex_kind = crate::codec::action::tex::TexCellExecute::KIND;
+    let mut seen_tex = false;
+    for (index, act) in actions.iter().enumerate() {
+        if act.kind() == tex_kind {
+            seen_tex = true;
+            continue;
+        }
+        if !seen_tex {
+            continue;
+        }
+        let text = format!(
+            "tx topology invalid: TexCellExecute must be a contiguous tail of the top-level action list; action {} at index {index} follows it",
+            act.kind()
+        );
+        stats.findings.push(text.clone());
+        stats.action_notes.push((index, text));
+    }
+}
+
 /// Analyse the action tree without gating. `flags = None` skips the
 /// activation-flag check (the SDK inspect context has no consensus flags).
 pub fn topology_facts(
@@ -216,6 +242,7 @@ pub fn topology_facts_with_action_limit(
     for act in actions {
         check_top_rule(act.as_ref(), &mut stats);
     }
+    check_tex_tail(actions, &mut stats);
     TopologyFacts {
         findings: stats.findings,
         action_notes: stats.action_notes,
@@ -480,5 +507,37 @@ mod tests {
         // update with a guard companion remains the one allowed shape
         let allowed = vec![required_signers(), contract_update()];
         assert!(findings(&allowed).is_empty(), "{:?}", findings(&allowed));
+    }
+
+    fn tex_cell() -> ActionRef {
+        stub(
+            crate::codec::action::tex::TexCellExecute::KIND,
+            3,
+            ActScope::TOP,
+        )
+    }
+
+    #[test]
+    fn tex_cell_execute_must_be_a_contiguous_top_level_tail() {
+        assert!(
+            findings(&[transfer(), tex_cell(), tex_cell()]).is_empty(),
+            "transfers before the TEX tail are legal"
+        );
+        assert!(findings(&[tex_cell()]).is_empty());
+        let after = findings(&[tex_cell(), transfer()]);
+        assert!(
+            after.iter().any(|f| f.contains("contiguous tail")),
+            "{after:?}"
+        );
+        let gap = findings(&[transfer(), tex_cell(), transfer(), tex_cell()]);
+        assert!(
+            gap.iter().any(|f| f.contains("index 2")),
+            "the action after the first TEX cell is the violation, got {gap:?}"
+        );
+        let guard_after = findings(&[tex_cell(), required_signers()]);
+        assert!(
+            guard_after.iter().any(|f| f.contains("contiguous tail")),
+            "{guard_after:?}"
+        );
     }
 }
