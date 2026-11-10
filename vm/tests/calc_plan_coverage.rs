@@ -156,7 +156,16 @@ fn consensus_constants_are_pinned() {
     assert_eq!(CALC_SETUP_BASE_CYCLES, 64);
     assert_eq!(CALC_SETUP_PER_KIB_CYCLES, 16);
     assert_eq!(vm::calc::container::CALC_MEM_KIB_MIN, 4);
-    assert_eq!(vm::calc::CALC_MIN_FREE_RW_GAP, 2048, "minimum stack only; no guard band");
+    assert_eq!(
+        vm::calc::CALC_STACK_GUARD,
+        2048,
+        "unmapped guard band above the guest image"
+    );
+    assert_eq!(
+        vm::calc::CALC_MIN_FREE_RW_GAP,
+        4096,
+        "guard band + minimum stack"
+    );
 
     let cap = SpaceCap::new(0);
     assert_eq!(cap.calc_mem_kib_max, 64, "L1 default mem cap");
@@ -238,9 +247,9 @@ fn cycle_charges_match_weights() {
 /// cannot cover it, exact on instant return.
 #[test]
 fn setup_charge_semantics() {
-    let c = CalcContainer::from_code(CALC_PROFILE_RV64IM, 4, CODE_BASE as u32, halt_empty(), 16, 16);
-    let setup = CALC_SETUP_BASE_CYCLES + 4 * CALC_SETUP_PER_KIB_CYCLES;
-    assert_eq!(setup, 128);
+    let c = CalcContainer::from_code(CALC_PROFILE_RV64IM, 5, CODE_BASE as u32, halt_empty(), 16, 16);
+    let setup = CALC_SETUP_BASE_CYCLES + 5 * CALC_SETUP_PER_KIB_CYCLES;
+    assert_eq!(setup, 144);
 
     // budget < setup -> terminal OutOfGas reporting exactly the setup
     let obj = CalcFnObj::build_with_host(c.clone(), CalcHostConfig::new()).unwrap();
@@ -270,7 +279,7 @@ fn setup_charge_semantics() {
     // trap keeps the setup charge: ebreak kernel costs setup + 1
     let tc = CalcContainer::from_code(
         CALC_PROFILE_RV64IM,
-        4,
+        5,
         CODE_BASE as u32,
         vec![0x73, 0x00, 0x10, 0x00], // ebreak
         16,
@@ -615,8 +624,11 @@ fn mem_kib_boundary_sweep() {
             .encode()
             .unwrap()
     };
-    assert!(CalcContainer::decode(&mk(4)).is_ok(), "minimum");
-    assert!(CalcContainer::decode(&mk(5)).is_ok());
+    assert!(
+        CalcContainer::decode(&mk(4)).is_err(),
+        "4 KiB no longer fits the guard band + minimum stack"
+    );
+    assert!(CalcContainer::decode(&mk(5)).is_ok(), "minimum under the guard fit rule");
     assert!(CalcContainer::decode(&mk(64)).is_ok(), "L1 cap");
     assert!(CalcContainer::decode(&mk(65)).is_ok(), "above L1 cap still decodes");
     assert!(CalcContainer::decode(&mk(3)).is_err(), "below minimum");
@@ -744,9 +756,10 @@ fn pack_elf_accepts_static_exec() {
     let c = pack_elf(&SpaceCap::new(0), &good_elf(), CALC_PROFILE_RV64IM, 8, 16, 16).unwrap();
     assert_eq!(c.entry, CODE_BASE as u32);
     assert_eq!(c.segs.len(), 1);
-    // min_mem picks the smallest fitting mem_kib (4 for this tiny image)
+    // min_mem picks the smallest fitting mem_kib (5 for this tiny image
+    // under the guard band fit rule)
     let c = pack_elf_min_mem(&SpaceCap::new(0), &good_elf(), CALC_PROFILE_RV64IM, 16, 16).unwrap();
-    assert_eq!(c.mem_kib, 4);
+    assert_eq!(c.mem_kib, 5);
 }
 
 #[test]
@@ -1136,16 +1149,23 @@ const CODE0: u64 = 0x1000;
 const HOLE: u64 = 0x1800;
 const RW0: u64 = 0x2010;
 const RO0: u64 = 0x2088;
-const GUEST_END0: u64 = 0x20C8;
-const STACK0: u64 = 0x2200;
-const OUT0: u64 = 0x2F88;
-const IN0: u64 = 0x2FC8;
-const BEYOND: u64 = 0x3004;
+/// Guard band head probe: guest_end = RO end = 0x20C0, so 0x20C8 is inside
+/// the unmapped band [0x20C0, 0x28C0).
+const GUARD0: u64 = 0x20C8;
+/// Guard band last byte.
+const GUARD1: u64 = 0x28BF;
+/// First usable stack byte: guest_end + CALC_STACK_GUARD.
+const STACK0: u64 = 0x28C0;
+const OUT0: u64 = 0x3388;
+const IN0: u64 = 0x33C8;
+const BEYOND: u64 = 0x3404;
 
 fn matrix_container(code: Vec<u8>) -> CalcContainer {
     CalcContainer {
         profile: CALC_PROFILE_RV64IM,
-        mem_kib: 8,
+        // 9 KiB: the guard band + minimum stack (4 KiB above the image end
+        // 0x20C0) plus the IO window no longer fit in 8 KiB.
+        mem_kib: 9,
         entry: CODE_BASE as u32,
         segs: vec![
             CalcSegment::rx(CODE_BASE as u32, code),
@@ -1207,7 +1227,8 @@ enum AccessKind {
 #[test]
 fn permission_matrix_load_store_fetch() {
     use AccessKind::*;
-    // (region, load expectation) — loads: Ok everywhere mapped.
+    // (region, load expectation) — loads: Ok everywhere mapped; the guard
+    // band is unmapped for loads too.
     for (name, addr, ok) in [
         ("low unmapped", LOW, false),
         ("halt stub", STUB, true),
@@ -1215,7 +1236,8 @@ fn permission_matrix_load_store_fetch() {
         ("hole", HOLE, false),
         ("rw", RW0, true),
         ("ro", RO0, true),
-        ("stack head", GUEST_END0, true),
+        ("guard head", GUARD0, false),
+        ("guard last", GUARD1, false),
         ("stack", STACK0, true),
         ("output", OUT0, true),
         ("input", IN0, true),
@@ -1227,7 +1249,8 @@ fn permission_matrix_load_store_fetch() {
             expect_trap(res, "unmapped");
         }
     }
-    // stores: only RW-classified regions accept writes.
+    // stores: only RW-classified regions accept writes; the guard band
+    // turns the overflow write into an unmapped-address trap.
     for (name, addr, msg) in [
         ("low unmapped", LOW, Some("read-only or unmapped")),
         ("halt stub", STUB, Some("read-only or unmapped")),
@@ -1235,7 +1258,8 @@ fn permission_matrix_load_store_fetch() {
         ("hole", HOLE, Some("read-only or unmapped")),
         ("rw", RW0, None),
         ("ro", RO0, Some("read-only or unmapped")),
-        ("stack head", GUEST_END0, None),
+        ("guard head", GUARD0, Some("read-only or unmapped")),
+        ("guard last", GUARD1, Some("read-only or unmapped")),
         ("stack", STACK0, None),
         ("output", OUT0, None),
         ("input", IN0, None),
@@ -1254,7 +1278,8 @@ fn permission_matrix_load_store_fetch() {
         ("hole", HOLE),
         ("rw", RW0),
         ("ro", RO0),
-        ("stack head", GUEST_END0),
+        ("guard head", GUARD0),
+        ("guard last", GUARD1),
         ("stack", STACK0),
         ("output", OUT0),
         ("input", IN0),
@@ -1304,12 +1329,12 @@ fn misaligned_cross_region_access() {
     let case = |addr: u64, off: i32, load: bool| case_w(addr, off, load, 3); // 8-byte ld/sd
     // load RW tail crossing into RO: both readable -> ok
     assert!(case(0x2080, -4, true).is_ok());
-    // load RO tail crossing into the stack start: stack is readable -> ok
-    assert!(case(0x20C4, -8, true).is_ok());
+    // load RO tail crossing into the guard band: the band is unmapped -> trap
+    expect_trap(case(0x20C4, -8, true), "unmapped");
     // load stack tail crossing into the output region: RW -> ok
     assert!(case(0x2F80, -4, true).is_ok());
     // load crossing the end of memory -> trap
-    expect_trap(case(0x3000, -4, true), "unmapped");
+    expect_trap(case(0x3400, -4, true), "unmapped");
     // load entirely inside the hole -> trap
     expect_trap(case(0x2000, -8, true), "unmapped");
     // load straddling hole -> RW boundary -> trap
@@ -1320,16 +1345,16 @@ fn misaligned_cross_region_access() {
     assert!(case(0x2080, -8, false).is_ok());
     // store RO tail crossing into the stack start: RO byte -> trap read-only
     expect_trap(case(0x20C4, -8, false), "read-only");
-    // store entirely inside the stack at its start -> ok (no guard band)
-    assert!(case(0x20C4, -4, false).is_ok());
-    // store at the former guard/stack boundary -> plain stack RW now
-    assert!(case(0x21C0, -4, false).is_ok());
+    // store entirely inside the guard band at its start -> unmapped trap
+    expect_trap(case(0x20C4, -4, false), "unmapped");
+    // store at the first usable stack byte -> plain stack RW
+    assert!(case(0x28C4, -4, false).is_ok());
     // store at stack bottom -> ok
-    assert!(case(0x21C0, 0, false).is_ok());
+    assert!(case(0x28C4, 0, false).is_ok());
     // 4-byte store ending exactly at mem_len -> ok (input region)
-    assert!(case_w(0x3000, -4, false, 2).is_ok());
+    assert!(case_w(0x3400, -4, false, 2).is_ok());
     // 8-byte store crossing mem_len -> trap
-    expect_trap(case(0x3000, -4, false), "read-only or unmapped");
+    expect_trap(case(0x3400, -4, false), "read-only or unmapped");
 }
 
 /// E-203: register-computed wraparound addresses.

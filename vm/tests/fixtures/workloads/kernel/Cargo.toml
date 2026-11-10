@@ -1,0 +1,75 @@
+[package]
+name = "calc-kernels"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = false
+overflow-checks = false
+
+[dependencies]
+crypto-bigint = { version = "=0.5.5", default-features = false }
+sha2 = { version = "=0.10.9", default-features = false }
+tiny-keccak = { version = "=2.0.2", default-features = false, features = ["keccak"] }
+k256 = { version = "=0.13.4", default-features = false, features = ["ecdsa"] }
+
+[[bin]]
+name = "uni_v2"
+path = "src/bin/uni_v2.rs"
+
+[[bin]]
+name = "uni_v3"
+path = "src/bin/uni_v3.rs"
+
+[[bin]]
+name = "curve"
+path = "src/bin/curve.rs"
+
+[[bin]]
+name = "rpow"
+path = "src/bin/rpow.rs"
+
+[[bin]]
+name = "aave"
+path = "src/bin/aave.rs"
+
+[[bin]]
+name = "bpow"
+path = "src/bin/bpow.rs"
+
+[[bin]]
+name = "black_scholes"
+path = "src/bin/black_scholes.rs"
+
+[[bin]]
+name = "settle"
+path = "src/bin/settle.rs"
+
+[[bin]]
+name = "median"
+path = "src/bin/median.rs"
+
+[[bin]]
+name = "sha256"
+path = "src/bin/sha256.rs"
+
+[[bin]]
+name = "keccak"
+path = "src/bin/keccak.rs"
+
+[[bin]]
+name = "secp256k1"
+path = "src/bin/secp256k1.rs"
+
+[[bin]]
+name = "poseidon"
+path = "src/bin/poseidon.rs"
+
+[[bin]]
+name = "rsa2048"
+path = "src/bin/rsa2048.rs"

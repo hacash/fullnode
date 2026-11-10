@@ -303,7 +303,9 @@ fn sha256_container_bytes() -> Vec<u8> {
     .expect("bss_len") as u32;
     let tmp = crate::calc::container::CalcContainer::from_regions(
         crate::calc::CALC_PROFILE_RV64IM,
-        8,
+        // 8 KiB fit the old no-guard layout; the guard band + minimum stack
+        // (4 KiB above the image) needs this headroom for bss 0x400.
+        10,
         entry,
         read("image_code.bin"),
         read("image_rodata.bin"),

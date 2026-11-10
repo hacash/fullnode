@@ -173,10 +173,9 @@ pub struct CalcLayout {
     pub input_max: u64,
     pub output_base: u64,
     pub output_max: u64,
-    /// First stack byte. There is no guard band: the stack region starts
-    /// exactly at `guest_end` and a deep call frame may legally write over
-    /// the end of guest data — that is deterministic guest behavior, not a
-    /// trap.
+    /// Lowest stack byte. The band `[guest_end, stack_bottom)` is the
+    /// stack-overflow guard: unmapped, any load or store that intersects it
+    /// traps (see [`crate::calc::CALC_STACK_GUARD`]).
     pub stack_bottom: u64,
     pub stack_top: u64,
 }
@@ -191,7 +190,7 @@ impl CalcLayout {
             && self.input_base >= CODE_BASE
             && self.output_base >= CODE_BASE
             && self.guest_end >= CODE_BASE
-            && self.stack_bottom == self.guest_end
+            && self.stack_bottom == self.guest_end + crate::calc::CALC_STACK_GUARD
     }
 }
 
@@ -354,7 +353,7 @@ pub(crate) fn compute_layout(
     let input_base = mem_len.saturating_sub(input_max) & !15;
     let output_base = input_base.saturating_sub(output_max) & !15;
     let stack_top = output_base;
-    let stack_bottom = guest_end;
+    let stack_bottom = guest_end + crate::calc::CALC_STACK_GUARD;
     CalcLayout {
         mem_len,
         usable_len,
@@ -456,8 +455,9 @@ fn perm_at(lay: &CalcLayout, segs: &[(u32, u32, u8)], addr: u64) -> Option<(u64,
     if addr < lay.stack_bottom {
         return None;
     }
-    // [stack_bottom, mem_len): the RW stack + host IO window. There is no
-    // guard band between the guest image and the stack.
+    // [stack_bottom, mem_len): the RW stack + host IO window. The band
+    // [guest_end, stack_bottom) is the stack-overflow guard and falls into
+    // the unmapped branch above — loads and stores there both trap.
     Some((lay.mem_len, true, true))
 }
 

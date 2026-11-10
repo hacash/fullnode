@@ -212,7 +212,7 @@ fn container_roundtrip_and_malicious() {
     bad[0] = b'X';
     assert!(CalcContainer::decode(&bad).is_err());
     let mut bad = enc.clone();
-    bad[4] = 1;
+    bad[4] = 2; // any byte != CALC_VERSION (1) must be rejected
     assert!(CalcContainer::decode(&bad).is_err());
     let mut bad = enc.clone();
     bad[5] = 9; // unknown profile
@@ -493,8 +493,8 @@ fn pack_container_roundtrip() {
 // --------------------------------------------------------------------
 // Semantics regressions (from the 2026-10 full audit; these pin the
 // POST-FIX behavior decided in the review: zext.h in OP-32, slliw
-// imm[11:5]==0 enforced, stack region starting at the guest image end
-// (guard band removed), jalr >u32 rejected
+// imm[11:5]==0 enforced, stack guard band above the guest image end,
+// jalr >u32 rejected
 // by both engines, ecall charge-before-bounds documented).
 
 /// slliw with imm[11:5] != 0 (bit 25 set in the 6-bit shamt view) is
@@ -522,52 +522,65 @@ fn zexth_requires_op32_encoding() {
     assert!(decode_at(&rv32.to_le_bytes(), 0, CALC_PROFILE_RV64IM_B).is_err());
 }
 
-/// There is no stack-overflow guard band: the stack region starts exactly
-/// at the end of the guest image, so a store at the first byte above .bss
-/// is legal stack memory; a store beyond `mem_len` still traps as unmapped.
+/// Stack-overflow guard band: `[guest_end, guest_end + CALC_STACK_GUARD)`
+/// is unmapped — any load or store that intersects it traps — and the
+/// first usable stack byte is `guest_end + CALC_STACK_GUARD`. A store
+/// beyond `mem_len` still traps as unmapped; an output-region store stays
+/// legal.
 #[test]
-fn stack_starts_at_guest_end() {
+fn stack_guard_band_traps_and_first_stack_byte_is_legal() {
     use crate::calc::interp;
     let addi = |rd: u8, rs1: u8, imm: i32| -> u32 {
         0x13u32 | ((rd as u32) << 7) | ((rs1 as u32) << 15) | (((imm as u32) & 0xFFF) << 20)
     };
-    // Probe is the first stack byte. The store runs, then the kernel exits
-    // with an explicit HALT (a0 = 0, a1 = 0): success proves the write was
-    // legal. stack_first is the aligned end of this very image.
-    let stack_first = 0x1010u64;
-    let mut prog: Vec<u8> = Vec::new();
-    li_addr(&mut prog, 28, stack_first);
     let sd = 0x23u32 | (28 << 15) | (5 << 20); // sd x5, 0(x28)
-    prog.extend_from_slice(&sd.to_le_bytes());
-    prog.extend_from_slice(&addi(10, 0, 0).to_le_bytes()); // a0 = 0
-    prog.extend_from_slice(&addi(11, 0, 0).to_le_bytes()); // a1 = 0
-    prog.extend_from_slice(&addi(17, 0, 0).to_le_bytes()); // a7 = HALT
-    prog.extend_from_slice(&0x0000_0073u32.to_le_bytes()); // ecall
-    // from_code segments are not aligned, so guest_end is CODE_BASE+len;
-    // both target values encode in the same two li_addr instructions.
-    let stack_first = CODE_BASE + prog.len() as u64;
-    // Re-emit the probe with the final address baked in.
-    let mut prog: Vec<u8> = Vec::new();
-    li_addr(&mut prog, 28, stack_first);
-    prog.extend_from_slice(&sd.to_le_bytes());
-    prog.extend_from_slice(&addi(10, 0, 0).to_le_bytes()); // a0 = 0
-    prog.extend_from_slice(&addi(11, 0, 0).to_le_bytes()); // a1 = 0
-    prog.extend_from_slice(&addi(17, 0, 0).to_le_bytes()); // a7 = HALT
-    prog.extend_from_slice(&0x0000_0073u32.to_le_bytes()); // ecall
-    assert_eq!(CODE_BASE + prog.len() as u64, stack_first);
-    let c = make_container(prog);
+    let ld = 0x03u32 | (3 << 12) | (28 << 15) | (28 << 7); // ld x28, 0(x28)
+    // One probe kernel per target: li_addr(28, target) + op + explicit
+    // HALT (a0 = 0, a1 = 0). li_addr always emits two instructions, so
+    // guest_end is target-independent: guest_end = CODE_BASE + prog.len().
+    let probe = |target: u64, op: u32| -> Vec<u8> {
+        let mut p: Vec<u8> = Vec::new();
+        li_addr(&mut p, 28, target);
+        p.extend_from_slice(&op.to_le_bytes());
+        p.extend_from_slice(&addi(10, 0, 0).to_le_bytes()); // a0 = 0
+        p.extend_from_slice(&addi(11, 0, 0).to_le_bytes()); // a1 = 0
+        p.extend_from_slice(&addi(17, 0, 0).to_le_bytes()); // a7 = HALT
+        p.extend_from_slice(&0x0000_0073u32.to_le_bytes()); // ecall
+        p
+    };
+    let guest_end = CODE_BASE + probe(CODE_BASE, sd).len() as u64;
+    let guard = crate::calc::CALC_STACK_GUARD;
+    let first_stack = guest_end + guard;
+    // The first usable stack byte: legal.
+    let c = make_container(probe(first_stack, sd));
     let module = verify_container(&c).unwrap();
     let lay = module.layout_snapshot();
-    assert_eq!(lay.stack_bottom, stack_first);
+    assert_eq!(lay.stack_bottom, first_stack);
     assert!(
         lay.stack_bottom + crate::calc::CALC_STACK_SIZE <= lay.stack_top,
-        "the fit rule still reserves the minimum stack"
+        "the fit rule still reserves the minimum usable stack"
     );
     let (r, _, _, _) = interp::run_with_state(&module, &c, &[], 100_000);
     assert!(
         r.is_ok(),
         "a store at the first stack byte is legal, got {r:?}"
     );
+    // Guard band boundaries: stores at the first and last band byte and
+    // loads from both trap as unmapped.
+    for (name, target, op) in [
+        ("store at guard first byte", guest_end, sd),
+        ("store at guard last byte", guest_end + guard - 1, sd),
+        ("load at guard first byte", guest_end, ld),
+        ("load at guard last byte", guest_end + guard - 1, ld),
+    ] {
+        let c = make_container(probe(target, op));
+        let module = verify_container(&c).unwrap();
+        let (r, _, _, _) = interp::run_with_state(&module, &c, &[], 100_000);
+        assert!(
+            matches!(&r, Err((interp::CalcAbort::Trap(t), _)) if t.contains("unmapped")),
+            "{name} must trap unmapped, got {r:?}"
+        );
+    }
     // A store past mem_len remains an unmapped-address trap.
     let ret = 0x67u32 | (1 << 15);
     let mut prog: Vec<u8> = Vec::new();

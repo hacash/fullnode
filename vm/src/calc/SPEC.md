@@ -182,25 +182,33 @@ Layout (absolute addresses):
 [HALT_STUB, HALT_STUB+16)                   HALT trampoline  RX (injected, not in the wire)
 each PT_LOAD [vaddr, vaddr+memsz)           guest segment, flags as declared
 holes between segments                      unmapped (load, store, **and fetch**)
+[guest_end, guard_end)                      stack-overflow guard — unmapped, any access traps
 [stack_bottom, stack_top)                   stack  RW, grows down; sp = stack_top
 [output_base, output_base+output_max)       output RW
 [input_base, input_base+input_max)          input  RW
 [input_base+input_max, mem_len)             tail   RW
 stack_top    = output_base
-stack_bottom = guest_end = max(segment ends), or CODE_BASE if empty
+stack_bottom = guard_end = guest_end + CALC_STACK_GUARD
+guest_end    = max(segment ends), or CODE_BASE if empty
 ```
 
-There is **no stack-overflow guard band**: the stack region starts exactly
-at the end of the guest image. A call frame deeper than the free span
-overwrites guest data — deterministic guest behavior, not a trap — which
-keeps the permission map pure PT_LOAD semantics and the zk circuit minimal.
+There is a **stack-overflow guard band**: `[guest_end, guest_end +
+CALC_STACK_GUARD)` is unmapped, and any load or store that intersects it
+traps. A call frame whose writes cross the image end therefore fails
+loudly instead of silently corrupting guest data. The band is not complete
+protection — a single frame larger than the band can move `sp` past it in
+one step and land inside a writable guest segment — so pack tools still
+verify frame budgets against the usable stack (`fitshc` warns when the
+declared window leaves a thin stack).
 
 Host IO/stack sit at the **top** of `mem_kib`. `output_base =
 align16_down(input_base - output_max)`. `input_base =
-align16_down(mem_len - input_max)`. The stack is every byte between
-`guest_end` and the output region. `CALC_STACK_SIZE` (2 KiB) is the minimum
-that must remain. The fit rule is `guest_end + CALC_MIN_FREE_RW_GAP <=
-stack_top`, where `CALC_MIN_FREE_RW_GAP = CALC_STACK_SIZE`.
+align16_down(mem_len - input_max)`. The stack is every byte between the
+guard band and the output region. Of the mandatory free span,
+`CALC_STACK_GUARD` (2 KiB) is the trap band and `CALC_STACK_SIZE` (2 KiB)
+is the minimum usable stack. The fit rule is `guest_end +
+CALC_MIN_FREE_RW_GAP <= stack_top`, where `CALC_MIN_FREE_RW_GAP =
+CALC_STACK_GUARD + CALC_STACK_SIZE`.
 
 Stores into unmapped holes or RX/RO segments trap. Loads/stores/fetches of
 unmapped holes trap. Fall-through from an RX segment into a hole is a fetch
@@ -267,7 +275,8 @@ Deterministic Trap-class aborts (cycles consumed up to the failing
 instruction's block charge, excluding a charge that does not fit):
 
 - unmapped address (below `HALT_STUB`, the gap below `CODE_BASE`, holes
-  between segments, or `>= mem_len`)
+  between segments, the stack guard band `[guest_end, guest_end +
+  CALC_STACK_GUARD)`, or `>= mem_len`)
 - load/store/ecall address overflow
 - store / digest into a non-writable region (RX/RO, HALT stub)
 - `jal`/`jalr`/`branch` target not an instruction boundary in an RX
@@ -413,8 +422,10 @@ container:
   bit is rejected.
 - HALT (`a7` = 0) always works. Hash ecalls trap.
 - Guest segments have the permissions they declare. Holes are unmapped
-  for load, store, and fetch. The HALT stub is RX. The stack region is
-  `[guest_end, stack_top)` and is RW.
+  for load, store, and fetch. The HALT stub is RX. The stack guard band
+  `[guest_end, guest_end + CALC_STACK_GUARD)` is unmapped (any access
+  traps); the stack region `[guest_end + CALC_STACK_GUARD, stack_top)` is
+  RW.
 - Any instruction-boundary entry inside an RX segment is accepted
   (4-byte boundaries, or 2-byte on RVC profiles).
 
@@ -422,8 +433,12 @@ There is no consensus config struct and no height-dependent execution
 config. Admission grows by raising the current `SpaceCap` (or, for ISA
 surface, by admitting a new profile value — never by reinterpreting an
 existing one). The layout constants (`CODE_BASE`, `HALT_STUB`,
-`CALC_STACK_SIZE`, `CALC_MEM_KIB_MIN`) are frozen: after activation they
-may only be relaxed.
+`CALC_STACK_GUARD`, `CALC_STACK_SIZE`, `CALC_MIN_FREE_RW_GAP`,
+`CALC_MEM_KIB_MIN`) are frozen: after activation `CALC_STACK_GUARD` and
+`CALC_MIN_FREE_RW_GAP` cannot change in **either** direction (raising
+would reject legal containers; lowering would turn traps back into silent
+writes or cut the guaranteed minimum stack), and the others may only be
+relaxed.
 
 ## 10. Building a kernel
 
@@ -453,7 +468,8 @@ It returns the output length. `ra` is the HALT trampoline, so a compiled
 `pack_elf` rejects `PT_DYNAMIC` / `PT_INTERP` / `PT_TLS`, `SHT_REL` /
 `SHT_RELA` when present, `EF_RISCV_RVC` on a no-C profile, W^X, and
 executable BSS. Pack tools use `pack_elf_min_mem`: the smallest `mem_kib`
-that fits `guest_end + CALC_STACK_SIZE + the declared IO regions`.
+that fits `guest_end + CALC_STACK_GUARD + CALC_STACK_SIZE + the declared
+IO regions`.
 
 ## 11. RISC-V architecture tests
 

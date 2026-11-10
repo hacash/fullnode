@@ -26,7 +26,7 @@ fn ret_code() -> Vec<u8> {
 fn valid_container() -> CalcContainer {
     CalcContainer::from_code(
             CALC_PROFILE_RV64IM,
-            4,
+            5,
             CODE_BASE as u32,
             ret_code(),
             16,
@@ -38,7 +38,7 @@ fn packed() -> CalcContainer {
     pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
-        4,
+        5,
         CODE_BASE as u32,
         16,
         16,
@@ -108,7 +108,7 @@ fn encode_accepts_rodata_above_u16_and_pack_rejects_on_layout() {
     assert!(pack_container(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
-        4,
+        5,
         CODE_BASE as u32,
         16,
         16,
@@ -178,7 +178,7 @@ fn pack_container_accepts_valid_layout() {
     assert!(pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
-        4,
+        5,
         CODE_BASE as u32,
         16,
         16,
@@ -228,7 +228,7 @@ fn mid_block_jalr_is_not_overcharged() {
     let c = pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
-        4,
+        5,
         CODE_BASE as u32,
         16,
         16,
@@ -240,7 +240,7 @@ fn mid_block_jalr_is_not_overcharged() {
     // the backward `jalr` re-enters block A at index 1, paying only the
     // remaining suffix (addi,addi,bne) = 3, not the skipped prefix; then the
     // taken branch enters the HALT block = 4. Static total 14, plus the
-    // per-call setup charge (64 + 4KiB * 16 = 128) = 142.
+    // per-call setup charge (64 + 5KiB * 16 = 144) = 158.
     let exec = obj.run(
         &[],
         CalcRunLimits {
@@ -250,7 +250,7 @@ fn mid_block_jalr_is_not_overcharged() {
         },
     );
     assert!(exec.result.is_ok(), "{:?}", exec.result);
-    assert_eq!(exec.cycles_used, 142);
+    assert_eq!(exec.cycles_used, 158);
 }
 
 // ---------------------------------------------------------------- precheck ---
@@ -277,22 +277,22 @@ fn precheck_rejects_insufficient_resource_before_running() {
 #[test]
 fn resource_preflight_reserves_output_max() {
     let obj = CalcFnObj::build_v1(packed()).unwrap();
-    // 4 KiB container: mem 8, input 0, output_max 16 bytes -> 1.
+    // 5 KiB container: mem 10, input 0, output_max 16 bytes -> 1.
     let exact = obj.run(
         &[],
         CalcRunLimits {
             cycles: 1000,
-            resource: 9,
+            resource: 11,
             deadline: None,
         },
     );
     assert!(exact.result.is_ok(), "{:?}", exact.result);
-    assert_eq!(exact.resource, 8); // actual output is empty
+    assert_eq!(exact.resource, 10); // actual output is empty
     let short = obj.run(
         &[],
         CalcRunLimits {
             cycles: 1000,
-            resource: 8,
+            resource: 10,
             deadline: None,
         },
     );
@@ -416,7 +416,7 @@ fn zbb_kernel() -> Vec<u8> {
 fn zbb_kernel_needs_the_b_profile() {
     let c = CalcContainer::from_code(
         vm::calc::CALC_PROFILE_RV64IM_B,
-        4,
+        5,
         CODE_BASE as u32,
         zbb_kernel(),
         16,
@@ -435,7 +435,7 @@ fn zbb_kernel_needs_the_b_profile() {
     );
     let c0 = CalcContainer::from_code(
         CALC_PROFILE_RV64IM,
-        4,
+        5,
         CODE_BASE as u32,
         zbb_kernel(),
         16,
@@ -456,7 +456,7 @@ fn unreachable_padding_is_accepted() {
     let r = pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
-        4,
+        5,
         CODE_BASE as u32,
         16,
         16,
@@ -473,7 +473,7 @@ fn fence_decodes_and_executes_as_nop() {
     let c = pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
-        4,
+        5,
         CODE_BASE as u32,
         16,
         16,
@@ -504,9 +504,9 @@ fn setup_cycles_charged_on_instant_return() {
         },
     );
     assert!(exec.result.is_ok());
-    // 4 KiB container: 64 + 4 * 16 = 128 setup + 4 halt cycles
+    // 5 KiB container: 64 + 5 * 16 = 144 setup + 4 halt cycles
     // (3 addi + ecall_base 1).
-    assert_eq!(exec.cycles_used, 132);
+    assert_eq!(exec.cycles_used, 148);
 }
 
 #[test]
@@ -521,8 +521,8 @@ fn setup_cycles_rejected_when_budget_cannot_cover_them() {
         },
     );
     assert_eq!(exec.result, Err(CalcAbort2::OutOfGas));
-    // Only the attempted setup charge is reported (4 KiB container:
-    // 64 + 4 * 16 = 128); the rest of the budget is not burned — the tx
+    // Only the attempted setup charge is reported (5 KiB container:
+    // 64 + 5 * 16 = 144); the rest of the budget is not burned — the tx
     // that reaches this abort cannot be included.
-    assert_eq!(exec.cycles_used, 128);
+    assert_eq!(exec.cycles_used, 144);
 }

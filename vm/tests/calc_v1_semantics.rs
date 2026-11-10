@@ -1,14 +1,15 @@
 //! v1 execution semantics are unconditional and pinned: every B / RVC
 //! profile is admitted (the HASH bit is not), HALT runs, hash ecalls trap,
-//! guest holes/code/rodata trap stores, the stack starts at the end of the
-//! guest image (no guard band), and any instruction-boundary entry point is
+//! guest holes/code/rodata trap stores, the stack guard band above the
+//! guest image traps, and any instruction-boundary entry point is
 //! accepted. `CalcFnObj::build_v1` uses the default chain caps.
 
 use vm::calc::container::CalcContainer;
 use vm::calc::interp;
 use vm::calc::{
-    CalcFnObj, CalcHostConfig, CalcRunLimits, HashKind, CALC_CODE_BASE, CALC_PROFILE_HASH,
-    CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B, CALC_PROFILE_RV64IM_B,
+    CalcAbort2, CalcFnObj, CalcHostConfig, CalcRunLimits, HashKind, CALC_CODE_BASE,
+    CALC_PROFILE_HASH, CALC_PROFILE_RV64IM, CALC_PROFILE_RV64IMC, CALC_PROFILE_RV64IMC_B,
+    CALC_PROFILE_RV64IM_B,
 };
 use vm::calc::SpaceCap;
 
@@ -135,10 +136,10 @@ fn rodata_hole_and_code_stores_trap() {
     assert!(rodata_base + 1 < data_base, "a one-byte rodata leaves a hole");
     // rodata itself, the alignment hole between rodata and `.data`, and the
     // code region all reject stores (read-only / unmapped). A real .data
-    // segment is required: everything above the last segment is legal stack
-    // now that the guard band is gone, so a trailing hole would otherwise
-    // not exist. Each target runs in its own kernel so the first trap
-    // cannot hide the others.
+    // segment is required: the guard band above the last segment traps, so
+    // without a trailing segment a trailing hole could not exist. Each
+    // target runs in its own kernel so the first trap cannot hide the
+    // others.
     for target in [rodata_base, rodata_base + 1, CALC_CODE_BASE] {
         let mut code = Vec::new();
         li(&mut code, 5, target);
@@ -164,13 +165,28 @@ fn rodata_hole_and_code_stores_trap() {
 }
 
 #[test]
-fn stack_reaches_guest_end() {
-    // 28-byte store_at body: with the guard band removed, the first stack
-    // byte is guest_end = CODE_BASE+28 and storing there is legal.
-    let stack_first = CALC_CODE_BASE + 28;
-    let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, store_at(stack_first), vec![]);
+fn stack_guard_band_and_first_stack_byte() {
+    // 28-byte store_at body: the guard band is
+    // [guest_end, guest_end + CALC_STACK_GUARD) — stores there trap — and
+    // the first usable stack byte is guest_end + CALC_STACK_GUARD.
+    let guest_end = CALC_CODE_BASE + 28;
+    let stack_first = guest_end + vm::calc::CALC_STACK_GUARD;
+    let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, store_at(guest_end), vec![]);
     let lay = c.layout();
     assert_eq!(lay.stack_bottom, stack_first);
+    let on = CalcFnObj::build_v1(c).unwrap();
+    let res = on.run(&[], limits());
+    assert!(
+        matches!(res.result, Err(CalcAbort2::Trap)),
+        "a store at the guard band first byte must trap, got {:?}",
+        res.result
+    );
+    let c = container(
+        CALC_PROFILE_RV64IM,
+        CALC_CODE_BASE as u32,
+        store_at(stack_first),
+        vec![],
+    );
     let on = CalcFnObj::build_v1(c).unwrap();
     assert!(
         on.run(&[], limits()).result.is_ok(),
@@ -264,7 +280,10 @@ fn unaligned_code_vaddr_is_rejected() {
 #[test]
 fn with_bss_appends_and_never_shrinks() {
     use vm::calc::container::{CalcSegment, SEG_W};
-    let c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, halt_code(), vec![]);
+    let mut c = container(CALC_PROFILE_RV64IM, CALC_CODE_BASE as u32, halt_code(), vec![]);
+    // 9 KiB: the 4 KiB BSS grows guest_end past what the old 8 KiB window
+    // could hold once the guard band + minimum stack are reserved above it.
+    c.mem_kib = 9;
     // Code-only container: with_bss appends a fresh RW BSS at guest_end and
     // the result is still a valid, verifiable chain image.
     let end = c.guest_end() as u32;

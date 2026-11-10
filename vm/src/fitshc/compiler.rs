@@ -479,7 +479,7 @@ contract Echo {{
         let (c, _) = crate::calc::container::CalcContainer::decode(&echo.code_stuff.data)
             .expect("echo8 container");
         assert_eq!(c.profile, crate::calc::CALC_PROFILE_RV64IM);
-        assert_eq!(c.layout().stack_bottom, c.guest_end());
+        assert_eq!(c.layout().stack_bottom, c.guest_end() + crate::calc::CALC_STACK_GUARD);
         let direct = user_code(&sto, "direct");
         assert!(has_callselfpure(&direct), "missing CALLSELFPURE: {direct:?}");
         assert_eq!(direct, user_code(&sto, "generic"));

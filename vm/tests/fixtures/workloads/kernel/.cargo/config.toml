@@ -1,0 +1,10 @@
+[build]
+target = "riscv64im_zicclsm.json"
+
+[target.riscv64im_zicclsm]
+rustflags = [
+  "-C", "relocation-model=static",
+  "-C", "link-arg=-Tcontainer.ld",
+  "-C", "link-arg=-n",
+  "-C", "debuginfo=0",
+]

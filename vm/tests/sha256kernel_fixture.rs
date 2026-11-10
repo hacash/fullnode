@@ -51,7 +51,9 @@ fn kernel() -> (CalcFnObj, CalcContainer) {
     .expect("bss_len hex") as u64;
     let tmp = CalcContainer::from_regions(
         CALC_PROFILE_RV64IM,
-        8,
+        // 10 KiB: guard band + minimum stack above the 0x400 BSS no longer
+        // fit in 8 KiB.
+        10,
         entry,
         fixture("image_code.bin"),
         fixture("image_rodata.bin"),

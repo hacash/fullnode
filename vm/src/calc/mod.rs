@@ -63,22 +63,38 @@ pub const CALC_SETUP_BASE_CYCLES: u64 = 64;
 /// Additional setup cycles per declared KiB of calc memory (zeroing cost).
 pub const CALC_SETUP_PER_KIB_CYCLES: u64 = 16;
 
-/// Minimum stack that must remain above the end of the guest image. The
-/// stack itself is the rest of the gap up to the output region, not a fixed
-/// 2 KiB window. The stack region starts exactly at `guest_end`: there is
-/// deliberately **no guard band** — a frame larger than the free span
-/// overwrites guest data deterministically instead of trapping, which keeps
-/// the permission map pure PT_LOAD semantics and zk-circuit minimal.
-/// CONSENSUS CONSTANT: this is the single fit rule
-/// [`CALC_MIN_FREE_RW_GAP`]; it is a floor that may only be **lowered**
-/// after activation — raising it would reject containers that were legal
-/// when deployed.
+/// Minimum usable stack that must remain between the guard band and
+/// `stack_top`. The stack itself is the rest of the gap up to the output
+/// region, not a fixed 2 KiB window.
+/// CONSENSUS CONSTANT: paired with [`CALC_STACK_GUARD`] it forms the single
+/// fit rule [`CALC_MIN_FREE_RW_GAP`].
 pub const CALC_STACK_SIZE: u64 = 2 * 1024;
 
-/// Minimum free RW span the layout must leave between the end of the guest
-/// image and `stack_top`: the minimum stack. The single fit rule used by
-/// wire decode, the verifier and the packers.
-pub const CALC_MIN_FREE_RW_GAP: u64 = CALC_STACK_SIZE;
+/// Stack-overflow guard band (bytes) directly above the end of the guest
+/// image: `[guest_end, guest_end + CALC_STACK_GUARD)` is unmapped and any
+/// load or store that intersects it traps. This converts the
+/// contiguous-descent stack overflow (call-depth driven — the common kernel
+/// failure mode) from silent guest-data corruption into a deterministic
+/// trap. It is NOT complete protection: a single frame larger than the band
+/// can move `sp` past it in one step and land inside a writable guest
+/// segment, so pack tools (`pack_elf_min_mem`, fitshc) must still verify
+/// frame budgets against the usable stack.
+///
+/// CONSENSUS CONSTANT: fully frozen after activation. Raising it turns
+/// previously legal stores into traps; lowering it turns traps back into
+/// silent writes — both reinterpret the behavior of already-deployed
+/// containers, so neither is a relaxation. It is definable only
+/// pre-activation, which is why this band ships before the calc channel
+/// goes live.
+pub const CALC_STACK_GUARD: u64 = 2 * 1024;
+
+/// Minimum free span the layout must leave between the end of the guest
+/// image and `stack_top`: the guard band plus the minimum stack. The single
+/// fit rule used by wire decode, the verifier and the packers.
+/// CONSENSUS CONSTANT: fully frozen after activation — raising it would
+/// reject containers that were legal when deployed, lowering it would eat
+/// into the guard band or the guaranteed minimum stack.
+pub const CALC_MIN_FREE_RW_GAP: u64 = CALC_STACK_GUARD + CALC_STACK_SIZE;
 
 /// ecall a7 = HALT. a0 = exit code (0 = success), a1 = output length.
 pub const ECALL_HALT: u64 = 0;
@@ -708,8 +724,8 @@ pub fn pack_elf(
     )
 }
 
-/// [`pack_elf`] with the smallest `mem_kib` that fits the image,
-/// [`CALC_STACK_SIZE`] and the declared IO regions.
+/// [`pack_elf`] with the smallest `mem_kib` that fits the image, the guard
+/// band, [`CALC_STACK_SIZE`] and the declared IO regions.
 pub fn pack_elf_min_mem(
     cap: &SpaceCap,
     elf: &[u8],
@@ -740,6 +756,49 @@ pub fn pack_elf_min_mem(
         output_max,
         parsed.segs,
     )
+}
+
+/// Load an ELF into a verified container without the contract body's `u16`
+/// image-length ceiling. Testkit only: a kernel that cannot be deployed
+/// (image above 65535, or `mem_kib` above the L1 cap) can still be executed
+/// by the interpreter and, when mounted, AOT. `mem_kib = None` selects the
+/// smallest window that fits the image, the stack and the declared IO.
+#[cfg(any(test, feature = "calc-testkit"))]
+pub fn load_elf_direct(
+    cap: &SpaceCap,
+    elf: &[u8],
+    profile: u8,
+    mem_kib: Option<u32>,
+    input_max: u16,
+    output_max: u16,
+) -> VmrtRes<container::CalcContainer> {
+    let parsed = parse_elf64_riscv(elf, profile)?;
+    let guest_end = parsed
+        .segs
+        .iter()
+        .map(|s| s.end())
+        .max()
+        .unwrap_or(container::CODE_BASE);
+    let mem_kib = match mem_kib {
+        Some(k) => k,
+        None => container::min_mem_kib_for(guest_end, input_max as u64, output_max as u64)
+            .ok_or_else(|| {
+                ItrErr::new(
+                    ItrErrCode::ContractError,
+                    "calc elf: image cannot fit in the engine memory ceiling",
+                )
+            })?,
+    };
+    let c = container::CalcContainer {
+        profile,
+        mem_kib,
+        entry: parsed.entry,
+        segs: parsed.segs,
+        input_max,
+        output_max,
+    };
+    verify::verify_container_with_cap(&c, cap)?;
+    Ok(c)
 }
 
 struct ParsedElf {
@@ -1171,7 +1230,7 @@ mod tests {
         let c = pack_code(
             &SpaceCap::new(0),
             container::CALC_PROFILE_RV64IM,
-            4,
+            5,
             container::CODE_BASE as u32,
             64,
             64,
@@ -1181,8 +1240,9 @@ mod tests {
         let lay = c.layout();
         assert!(lay.fits());
         assert_eq!(lay.stack_top, lay.output_base);
-        // No guard band: the stack starts exactly at the end of the image.
-        assert_eq!(lay.stack_bottom, c.guest_end());
+        // The guard band [guest_end, guest_end + CALC_STACK_GUARD) sits
+        // between the image and the stack.
+        assert_eq!(lay.stack_bottom, c.guest_end() + CALC_STACK_GUARD);
         assert!(lay.stack_bottom + CALC_STACK_SIZE <= lay.stack_top);
     }
 
@@ -1260,12 +1320,12 @@ mod tests {
     #[test]
     fn pack_elf_keeps_bss_off_chain_and_uses_calc_entry() {
         let data_base = container::CODE_BASE + halt_text().len() as u64;
-        let ok = pack_elf(&SpaceCap::new(0), &synth_elf(data_base, 16, true), 0, 4, 64, 64)
+        let ok = pack_elf(&SpaceCap::new(0), &synth_elf(data_base, 16, true), 0, 5, 64, 64)
             .unwrap();
         assert_eq!(ok.entry, container::CODE_BASE as u32);
         assert_eq!(ok.first_rx_data(), halt_text());
         assert_eq!(ok.rw_filesz(), 0);
-        assert_eq!(ok.layout().stack_bottom, data_base + 16);
+        assert_eq!(ok.layout().stack_bottom, data_base + 16 + CALC_STACK_GUARD);
         let min = pack_elf_min_mem(&SpaceCap::new(0), &synth_elf(data_base, 16, true), 0, 64, 64)
             .unwrap();
         assert!(min.layout().fits());
@@ -1274,14 +1334,14 @@ mod tests {
             &SpaceCap::new(0),
             &synth_elf(data_base, 0x800, true),
             0,
-            4,
+            5,
             64,
             64,
         )
         .unwrap_err();
         assert!(err.to_string().contains("memory overflows"), "{err}");
         let from_ehdr =
-            pack_elf(&SpaceCap::new(0), &synth_elf(data_base, 16, false), 0, 4, 64, 64).unwrap();
+            pack_elf(&SpaceCap::new(0), &synth_elf(data_base, 16, false), 0, 5, 64, 64).unwrap();
         assert_eq!(from_ehdr.entry, container::CODE_BASE as u32);
     }
 
@@ -1292,7 +1352,7 @@ mod tests {
         stripped[40..48].copy_from_slice(&0u64.to_le_bytes());
         stripped[60..62].copy_from_slice(&0u16.to_le_bytes());
         stripped[62..64].copy_from_slice(&0u16.to_le_bytes());
-        let ok = pack_elf(&SpaceCap::new(0), &stripped, 0, 4, 64, 64).unwrap();
+        let ok = pack_elf(&SpaceCap::new(0), &stripped, 0, 5, 64, 64).unwrap();
         assert_eq!(ok.entry, container::CODE_BASE as u32);
         let mut dyn_elf = synth_elf(data_base, 16, false);
         dyn_elf[16..18].copy_from_slice(&3u16.to_le_bytes());

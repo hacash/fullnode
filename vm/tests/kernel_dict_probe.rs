@@ -23,7 +23,9 @@ fn kernel_dict_walk_smoke() {
     .unwrap() as u32;
     let tmp = vm::calc::container::CalcContainer::from_regions(
         vm::calc::CALC_PROFILE_RV64IM,
-        8,
+        // 10 KiB: guard band + minimum stack above the 0x400 BSS no longer
+        // fit in 8 KiB.
+        10,
         entry,
         code,
         rodata,

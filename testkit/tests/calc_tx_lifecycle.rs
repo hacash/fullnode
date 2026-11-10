@@ -75,7 +75,7 @@ fn container_of(code: Vec<u8>) -> Vec<u8> {
     pack_code(
         &SpaceCap::new(0),
         CALC_PROFILE_RV64IM,
-        4,
+        5,
         0x1000,
         64,
         64,
