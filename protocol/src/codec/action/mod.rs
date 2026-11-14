@@ -23,7 +23,7 @@ pub use guard::{
     guard_facts, height_in_range, BalanceFloor, ChainAllow, GuardFacts, HeightScope,
     RequiredSigners,
 };
-pub use tex::{TexCell, TexCellExecute, TEX_CELL_SCHEMA};
+pub use tex::{TexCell, TexCellExecute, TexCellRepeat, TEX_CELL_SCHEMA};
 pub use transfer::{
     TransferAssetFrom, TransferAssetFromTo, TransferAssetTo, TransferHacFrom, TransferHacFromTo,
     TransferHacTo, TransferHacdFrom, TransferHacdFromTo, TransferHacdSingleTo, TransferHacdTo,

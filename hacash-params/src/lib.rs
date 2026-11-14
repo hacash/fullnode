@@ -29,6 +29,19 @@ pub struct ProtocolParams {
     pub tex_diamond_get_max: usize,
     /// Upper bound of the sum of every `DiaGet` in one transaction.
     pub tex_diamond_get_max_per_tx: usize,
+    /// Upper bound of one `TexCellRepeat`'s `times`. Decode-level rules are
+    /// parameter-free (times ≥ 2: one-shot execution is kind 22 itself); the
+    /// ceilings are runtime checks (`check_repeat_action_caps` at tx
+    /// precheck/execute and at `from_signed_with_params` construction), so a
+    /// network can raise them without a wire change — the `Uint2` field width
+    /// bounds them at 65,535.
+    pub tex_repeat_times_max: u16,
+    /// `TexCellRepeat` per-action cap: `times × cells` after expansion
+    /// (runtime check, as above).
+    pub tex_repeat_cells_max: usize,
+    /// Tx-wide cap of `Σ times × cells` over `TexCellRepeat` actions only
+    /// (kind 22 cells are not counted, so historical txs stay valid).
+    pub tex_repeat_cells_max_per_tx: usize,
     pub tx_actions_max: usize,
     pub tx_gas_budget_cap_byte: u8,
     pub tx_type_1: u8,
@@ -146,6 +159,9 @@ pub const MAINNET_PARAMS: HacashParams = HacashParams {
         tex_diamond_pay_max: 60_000,
         tex_diamond_get_max: 200,
         tex_diamond_get_max_per_tx: 10_000,
+        tex_repeat_times_max: 200,
+        tex_repeat_cells_max: 1024,
+        tex_repeat_cells_max_per_tx: 1024,
         tx_actions_max: 200,
         tx_gas_budget_cap_byte: 99,
         tx_type_1: 1,
@@ -287,6 +303,9 @@ mod tests {
         assert_eq!(MAINNET_PARAMS.mint.max_tx_size, 16 * 1024);
         assert_eq!(MAINNET_PARAMS.mint.max_block_txs, 1000);
         assert_eq!(MAINNET_PARAMS.protocol.tx_actions_max, 200);
+        assert_eq!(MAINNET_PARAMS.protocol.tex_repeat_times_max, 200);
+        assert_eq!(MAINNET_PARAMS.protocol.tex_repeat_cells_max, 1024);
+        assert_eq!(MAINNET_PARAMS.protocol.tex_repeat_cells_max_per_tx, 1024);
         assert_eq!(MAINNET_PARAMS.protocol.tx_gas_budget_cap_byte, 99);
         assert_eq!(MAINNET_PARAMS.protocol.tx_type_2, 2);
     }

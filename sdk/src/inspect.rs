@@ -206,6 +206,26 @@ fn build_review(
     {
         limits_violations.push(error.to_string());
     }
+    // A kind-23 `TexCellRepeat` always charges gas (`times >= 2` bills at
+    // least one extra payload), so a repeat-carrying tx with an empty
+    // `gas_max` budget can never execute: surface it as a consensus-limit
+    // fact here instead of letting the node fail at execute time.
+    let repeat_present = tx
+        .actions()
+        .iter()
+        .any(|act| act.kind() == protocol::action_std::TexCellRepeat::KIND);
+    let gas_budget_empty = match tx.gas_max_byte() {
+        Some(byte) => {
+            let params = &hacash_params::MAINNET_PARAMS.protocol;
+            params.decode_gas_budget(byte.min(params.tx_gas_budget_cap_byte)) <= 0
+        }
+        None => true,
+    };
+    if repeat_present && gas_budget_empty {
+        limits_violations.push(
+            "transaction carrying TexCellRepeat (kind 23) requires gas_max > 0".to_owned(),
+        );
+    }
 
     let flags = context.and_then(|ctx| ctx.consensus_flags);
     let topology =

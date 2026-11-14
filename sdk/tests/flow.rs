@@ -1412,3 +1412,77 @@ fn over_tx_actions_max_builds_and_inspect_reports_topology() {
     );
     assert!(!review.protocol_valid);
 }
+
+/// A kind-23 `TexCellRepeat` always charges gas (`times >= 2`), so a
+/// repeat-carrying tx with an empty `gas_max` budget surfaces as a
+/// consensus-limit fact in `tx.inspect` — the same rule the protocol
+/// precheck enforces — instead of only failing at node execute time.
+#[test]
+fn inspect_flags_repeat_tx_with_empty_gas_budget_as_a_limit_violation() {
+    use field::Encode;
+    let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+    let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+    let bundle = protocol::action_std::TexCellExecute::create_signed(
+        field::Address::from(*maker.address()),
+        vec![protocol::action_std::TexCell::ZhuPay {
+            haczhu: field::Fold64::from(1).unwrap(),
+        }],
+        &maker,
+    )
+    .unwrap();
+    let rep = protocol::action_std::TexCellRepeat::from_signed(&bundle, 50).unwrap();
+    let mut tx = protocol::tx_std::StdTransaction::new_by(
+        hacash_params::TX_TYPE_3,
+        field::Address::from(*taker.address()),
+        field::Amount::from("1:244").unwrap(),
+        1_755_223_764,
+    );
+    tx.gas_max = field::Uint1::from(0);
+    tx.push_action_in(std::sync::Arc::new(rep));
+    tx.fill_sign_account(&taker).unwrap();
+
+    let review = inspect_report(
+        &hex::encode(tx.encode()),
+        None,
+        &profile(),
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        review
+            .limits_violations
+            .iter()
+            .any(|f| f.contains("requires gas_max > 0")),
+        "{:?}",
+        review.limits_violations
+    );
+    assert!(!review.protocol_valid);
+
+    // The same repeat under a real budget carries no such finding.
+    let mut funded = protocol::tx_std::StdTransaction::new_by(
+        hacash_params::TX_TYPE_3,
+        field::Address::from(*taker.address()),
+        field::Amount::from("1:244").unwrap(),
+        1_755_223_764,
+    );
+    funded.gas_max = field::Uint1::from(hacash_params::TX_GAS_BUDGET_CAP_BYTE);
+    funded.push_action_in(std::sync::Arc::new(
+        protocol::action_std::TexCellRepeat::from_signed(&bundle, 50).unwrap(),
+    ));
+    funded.fill_sign_account(&taker).unwrap();
+    let review = inspect_report(
+        &hex::encode(funded.encode()),
+        None,
+        &profile(),
+        &sdk::DescribeOptions::default(),
+    )
+    .unwrap();
+    assert!(
+        !review
+            .limits_violations
+            .iter()
+            .any(|f| f.contains("requires gas_max > 0")),
+        "{:?}",
+        review.limits_violations
+    );
+}

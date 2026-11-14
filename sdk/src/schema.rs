@@ -14,7 +14,8 @@ pub const SCHEMA_CODEC_PROFILE: &str = "hacash.sdk/codec-profile@2";
 /// SDK boundary convention).
 pub const SCHEMA_REVIEW: &str = "hacash.sdk/review@7";
 /// v2: adds `description` / `json` / `code` facets (DescribeOptions).
-pub const SCHEMA_ACTION_DESC: &str = "hacash.sdk/action-desc@3";
+/// v4: `TexCellDesc` gains `times` (kind-23 `TexCellRepeat` execution count).
+pub const SCHEMA_ACTION_DESC: &str = "hacash.sdk/action-desc@4";
 pub const SCHEMA_TRANSFER_DESC: &str = "hacash.sdk/transfer-desc@1";
 pub const SCHEMA_TRANSACTION_SPEC: &str = "hacash.sdk/transaction-spec@2";
 /// v2: preserves wire Single/List address-table shape in optional `addrlist`.
@@ -25,7 +26,8 @@ pub const SCHEMA_SIGNATURE_PROOF: &str = "hacash.sdk/signature-proof@1";
 pub const SCHEMA_SIGNATURE_REPORT: &str = "hacash.sdk/signature-report@1";
 pub const SCHEMA_ATTACH_RESULT: &str = "hacash.sdk/attach-result@2";
 pub const SCHEMA_VERIFY_RESULT: &str = "hacash.sdk/verify-result@1";
-pub const SCHEMA_POLICY: &str = "hacash.sdk/policy@1";
+/// v2: adds `max_repeat_times` (kind-23 `TexCellRepeat` amplification cap).
+pub const SCHEMA_POLICY: &str = "hacash.sdk/policy@2";
 pub const SCHEMA_POLICY_DECISION: &str = "hacash.sdk/policy-decision@1";
 /// v2: fee purity/floor figures carry an explicit `fee_purity_unit` (232 = 10⁻¹⁶ HAC
 /// per billing byte); floors are u232 values.

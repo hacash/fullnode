@@ -9,6 +9,78 @@ use sys::{Rerr, Ret, errf};
 
 use crate::codec::tx::{DefaultPreludeTx, StdTransaction};
 
+/// Tx-level caps for `TexCellRepeat` (kind 23): the per-action ceilings
+/// (`check_repeat_action_caps`, from `params` — decode only enforces the
+/// parameter-free floor `times ≥ 2`), then the tx-wide sums. The expanded-cell
+/// cap sums repeat actions only — kind 22 cells are not counted, so historical
+/// transactions (which can carry well over 1,024 kind-22 cells within the
+/// 16KB limit) stay valid after activation. The expanded-action count charges
+/// each repeat with its `times` and every other action with 1, which degrades
+/// to the existing `actions.len() ≤ tx_actions_max` rule for repeat-free txs.
+/// Mandatory here (execute runs under fast sync too); `precheck_tx` repeats it
+/// only as an early failure.
+fn check_tex_repeat_caps(params: &hacash_params::ProtocolParams, actions: &[ActionRef]) -> Rerr {
+    let repeat_kind = crate::codec::action::tex::TexCellRepeat::KIND;
+    let mut expanded_actions: usize = 0;
+    let mut expanded_cells: usize = 0;
+    for act in actions {
+        if act.kind() != repeat_kind {
+            expanded_actions += 1;
+            continue;
+        }
+        let Some(rep) = act
+            .as_any()
+            .downcast_ref::<crate::codec::action::tex::TexCellRepeat>()
+        else {
+            return errf!("tx action kind {repeat_kind} is not TexCellRepeat");
+        };
+        crate::codec::action::tex::check_repeat_action_caps(params, rep)?;
+        let times = rep.times() as usize;
+        expanded_actions += times;
+        expanded_cells += times.saturating_mul(rep.cells().len());
+    }
+    if expanded_actions > params.tx_actions_max {
+        return errf!(
+            "tx expanded actions exceed limit {} > {}",
+            expanded_actions,
+            params.tx_actions_max
+        );
+    }
+    if expanded_cells > params.tex_repeat_cells_max_per_tx {
+        return errf!(
+            "tx repeat cells exceed limit {} > {}",
+            expanded_cells,
+            params.tex_repeat_cells_max_per_tx
+        );
+    }
+    Ok(())
+}
+
+/// A `TexCellRepeat` (kind 23) always charges gas — `times ≥ 2` bills at least
+/// one extra payload — so a type-3 envelope with `gas_max = 0` can never run
+/// one: reject it in precheck instead of failing at execute time with
+/// "gas not initialized" after the fee totals are already booked. Kind-22
+/// non-asset txs keep their `gas_max = 0` path; only repeat-carrying txs are
+/// constrained. Mandatory in `execute_actions` too (fast sync runs it there).
+fn check_tex_repeat_gas(ctx: &dyn Context, actions: &[ActionRef]) -> Rerr {
+    let repeat_kind = crate::codec::action::tex::TexCellRepeat::KIND;
+    if !actions.iter().any(|act| act.kind() == repeat_kind) {
+        return Ok(());
+    }
+    let params = crate::execution_params(ctx.services().as_ref())?;
+    let budget = match ctx.tx().gas_max_byte() {
+        Some(byte) => params.decode_gas_budget(byte.min(params.tx_gas_budget_cap_byte)),
+        None => return errf!("tx type {} gas_max must exist", ctx.tx().ty()),
+    };
+    if budget <= 0 {
+        return errf!(
+            "transaction carrying TexCellRepeat (kind {}) requires gas_max > 0",
+            repeat_kind
+        );
+    }
+    Ok(())
+}
+
 fn precheck_tx(ctx: &dyn Context, tx: &dyn Transaction, actions: &[ActionRef]) -> Rerr {
     let params = crate::execution_params(ctx.services().as_ref())?;
     if tx.ty() == hacash_params::TX_TYPE_3 {
@@ -29,6 +101,8 @@ fn precheck_tx(ctx: &dyn Context, tx: &dyn Transaction, actions: &[ActionRef]) -
             params.tx_actions_max
         );
     }
+    check_tex_repeat_caps(params, actions)?;
+    check_tex_repeat_gas(ctx, actions)?;
     let need = tx.required_flags();
     if let Some(note) =
         crate::facts::activation_finding(tx.ty(), need, ctx.env().chain.consensus_flags)
@@ -147,11 +221,15 @@ fn record_legacy_extra9_burn(ctx: &mut dyn Context, fee: &Amount, fee_got: &Amou
 }
 
 fn execute_actions(ctx: &mut dyn Context, actions: &[ActionRef], charge_extra9: bool) -> Rerr {
+    let params = crate::execution_params(ctx.services().as_ref())?;
+    check_tex_repeat_caps(params, actions)?;
+    check_tex_repeat_gas(ctx, actions)?;
     let tex_kind = crate::codec::action::tex::TexCellExecute::KIND;
+    let repeat_kind = crate::codec::action::tex::TexCellRepeat::KIND;
     let mut in_tex = false;
     let mut settled = false;
     for act in actions {
-        let is_tex = act.kind() == tex_kind;
+        let is_tex = act.kind() == tex_kind || act.kind() == repeat_kind;
         if in_tex && !is_tex {
             crate::exec::tex::do_settlement(ctx)?;
             in_tex = false;
@@ -227,5 +305,76 @@ impl TransactionExecute for StdTransaction {
             record_legacy_extra9_burn(ctx, &prep.fee, &self.fee_got())?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use crate::codec::action::tex::{TexCell, TexCellExecute, TexCellRepeat};
+    use field::{Address, Fold64, ListW1, Sign, Uint2};
+
+    fn repeat(times: u16, cells: usize) -> ActionRef {
+        Arc::new(TexCellRepeat {
+            kind: Uint2::from(TexCellRepeat::KIND),
+            times: Uint2::from(times),
+            addr: Address::default(),
+            cells: ListW1::from(
+                vec![
+                    TexCell::ZhuPay {
+                        haczhu: Fold64::from(1).unwrap(),
+                    };
+                    cells
+                ],
+            )
+            .unwrap(),
+            sign: Sign::default(),
+        })
+    }
+
+    fn kind22() -> ActionRef {
+        Arc::new(TexCellExecute {
+            kind: Uint2::from(TexCellExecute::KIND),
+            addr: Address::default(),
+            cells: ListW1::from(vec![TexCell::ZhuPay {
+                haczhu: Fold64::from(1).unwrap(),
+            }])
+            .unwrap(),
+            sign: Sign::default(),
+        })
+    }
+
+    fn caps(actions: &[ActionRef]) -> Rerr {
+        check_tex_repeat_caps(&hacash_params::MAINNET_PARAMS.protocol, actions)
+    }
+
+    /// The tx-level caps: per-action ceilings from `params` (a Uint2-representable
+    /// `times` decodes fine but is refused here), `Σ times` + one per other
+    /// action vs `tx_actions_max`, and `Σ times × cells` over repeat actions
+    /// ONLY vs the per-tx cell cap — kind-22 cells are never counted, so
+    /// pre-repeat historical shapes (which can carry well over 1,024 kind-22
+    /// cells within 16KB) stay valid.
+    #[test]
+    fn repeat_caps_sum_repeat_actions_only() {
+        // Per-action times ceiling: 201 > tex_repeat_times_max 200.
+        assert!(caps(&[repeat(201, 1)]).is_err());
+        // 2×(100×5): Σtimes=200, Σcells=1,000 — both caps exactly met.
+        caps(&[repeat(100, 5), repeat(100, 5)]).unwrap();
+        // Σtimes=202 > 200.
+        assert!(caps(&[repeat(101, 5), repeat(101, 5)]).is_err());
+        // Σcells=1,200 > 1,024 while Σtimes=200 is fine: the cell cap binds.
+        assert!(caps(&[repeat(100, 6), repeat(100, 6)]).is_err());
+        // Historical safety: 200 plain kind-22 actions (300 kind-22 cells,
+        // more per tx than any repeat tx may have) stay valid.
+        let actions: Vec<ActionRef> = (0..200).map(|_| kind22()).collect();
+        caps(&actions).unwrap();
+        // Mixed counting: others count 1 each, the repeat counts its times.
+        let mut actions: Vec<ActionRef> = (0..150).map(|_| kind22()).collect();
+        actions.push(repeat(60, 1)); // 150 + 60 = 210 > 200
+        assert!(caps(&actions).is_err());
+        actions.pop();
+        actions.push(repeat(50, 1)); // 150 + 50 = 200
+        caps(&actions).unwrap();
     }
 }

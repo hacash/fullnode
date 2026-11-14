@@ -1,9 +1,9 @@
-//! TexCellExecute (kind 22) and TEX cell codecs.
+//! TexCellExecute (kind 22), TexCellRepeat (kind 23) and TEX cell codecs.
 
 use field::Hash;
 use field::{
     json_decode_value, json_split_object, AddrOrPtr, Address, AssetAmt, BlockHeight, Decode,
-    DiamondNameListMax200, DiamondNumber, Encode, Fold64, FromJSON, ListW1, Sign, Uint4,
+    DiamondNameListMax200, DiamondNumber, Encode, Fold64, FromJSON, ListW1, Sign, Uint2, Uint4,
 };
 use sys::{Account, errf, Ret};
 
@@ -329,10 +329,7 @@ impl TexCellExecute {
     }
 
     pub(crate) fn get_sign_stuff(&self) -> Hash {
-        let mut stf = Vec::with_capacity(self.addr.size() + self.cells.size());
-        self.addr.encode_to(&mut stf);
-        self.cells.encode_to(&mut stf);
-        Hash::from(sys::calculate_hash(stf))
+        tex_bundle_sign_stuff(&self.addr, &self.cells)
     }
 
     /// Final TEX authorization signing digest, shared with external signing tools.
@@ -361,6 +358,148 @@ impl TexCellExecute {
     }
 }
 
+/// Sign digest shared by `TexCellExecute` (kind 22) and `TexCellRepeat` (kind
+/// 23): `hash(addr || cells)`. Neither the action kind nor `times` is covered,
+/// so a maker-signed kind-22 bundle wraps into a repeat verbatim without
+/// re-signing; the taker only chooses `times` and the placement.
+pub(crate) fn tex_bundle_sign_stuff(addr: &Address, cells: &ListW1<TexCell>) -> Hash {
+    let mut stf = Vec::with_capacity(addr.size() + cells.size());
+    addr.encode_to(&mut stf);
+    cells.encode_to(&mut stf);
+    Hash::from(sys::calculate_hash(stf))
+}
+
+/// Decode-level rules for `TexCellRepeat`; the derive runs it on both the wire
+/// and the JSON decode path. Only parameter-free semantics live here, so a
+/// network can raise the ceilings (`check_repeat_action_caps`) without
+/// touching the wire: `times` is an amplification count and therefore starts
+/// at 2 — a one-shot execution is exactly kind 22 at lower cost, so `times=1`
+/// is refused as meaningless — and named-diamond cells (`DiaPay` /
+/// `DirectedDiaPay` / `DirectedDiaGet`) are rejected unconditionally: with
+/// `times ≥ 2` a second iteration can never succeed (duplicate settlement
+/// record or an already-moved source), so the shape is refused before it can
+/// be packed into a block.
+pub(crate) fn validate_repeat_bundle(action: &TexCellRepeat) -> Ret<()> {
+    let times = action.times.uint() as usize;
+    if times < 2 {
+        return errf!("TexCellRepeat times must be at least 2 (use kind 22 for one-shot execution)");
+    }
+    for cell in action.cells.as_list() {
+        if matches!(
+            cell,
+            TexCell::DiaPay { .. }
+                | TexCell::DirectedDiaPay { .. }
+                | TexCell::DirectedDiaGet { .. }
+        ) {
+            return errf!(
+                "TEX named diamond cell cannot repeat (times {}): {}",
+                times,
+                cell.describe()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Runtime per-action ceilings for `TexCellRepeat`, read from the network's
+/// `ProtocolParams` at precheck/execute and re-checked at construction
+/// (`from_signed_with_params`). Kept separate from `validate_repeat_bundle`
+/// (decode-level, parameter-free) so a network can raise amplification
+/// without any wire change; the `Uint2` field width bounds `times` at 65,535.
+pub(crate) fn check_repeat_action_caps(
+    params: &hacash_params::ProtocolParams,
+    action: &TexCellRepeat,
+) -> Ret<()> {
+    let times = action.times.uint() as usize;
+    if times > params.tex_repeat_times_max as usize {
+        return errf!(
+            "TexCellRepeat times {} exceeds max {}",
+            times,
+            params.tex_repeat_times_max
+        );
+    }
+    let expanded = times.saturating_mul(action.cells.as_list().len());
+    if expanded > params.tex_repeat_cells_max {
+        return errf!(
+            "TexCellRepeat expands to {} cell executions per action, exceeding max {}",
+            expanded,
+            params.tex_repeat_cells_max
+        );
+    }
+    Ok(())
+}
+
+base::action_simple! { TexCellRepeat, 23, 3, TOP, {
+    times: Uint2,
+    addr: Address,
+    pub(crate) cells: ListW1<TexCell>,
+    sign: Sign
+}, this, {
+    // Same signer-set reasoning as kind 22: DirectedGet sources are pinned to
+    // the transaction main by the exec-time form guard, so the empty req_sign
+    // default applies and only the envelope's signatures are required.
+    ctor: none,
+    validate: validate_repeat_bundle,
+    description: format!(
+        "Execute TEX cells signed by {} {} times: {}",
+        this.addr.to_readable(),
+        this.times.uint(),
+        this.cells.as_list().iter().map(|c| c.describe()).collect::<Vec<_>>().join("; ")
+    )
+}}
+
+impl TexCellRepeat {
+    pub(crate) fn has_asset_transfer_cell(&self) -> bool {
+        self.cells.iter().any(|c| c.is_asset_transfer())
+    }
+
+    pub(crate) fn get_sign_stuff(&self) -> Hash {
+        tex_bundle_sign_stuff(&self.addr, &self.cells)
+    }
+
+    pub fn cells(&self) -> &[TexCell] {
+        self.cells.as_list()
+    }
+
+    pub fn times(&self) -> u16 {
+        self.times.uint()
+    }
+
+    pub fn sign_hash(&self) -> Hash {
+        self.get_sign_stuff()
+    }
+
+    /// Wrap an already-signed kind-22 bundle under the MAINNET parameter set;
+    /// see [`TexCellRepeat::from_signed_with_params`].
+    pub fn from_signed(exec: &TexCellExecute, times: u16) -> Ret<Self> {
+        Self::from_signed_with_params(exec, times, &hacash_params::MAINNET_PARAMS.protocol)
+    }
+
+    /// Wrap an already-signed kind-22 bundle. `addr/cells/sign` are copied
+    /// verbatim — the maker's signature stays valid because the digest covers
+    /// neither the kind nor `times` — and no re-signing happens. `times` is
+    /// the taker's amplification choice (≥ 2, decode rules re-checked here),
+    /// bound only by the transaction envelope signature (bearer model): the
+    /// maker authorizes the cells, not the count. The amplification ceilings
+    /// come from `params`, mirroring the node's precheck/execute-side check.
+    pub fn from_signed_with_params(
+        exec: &TexCellExecute,
+        times: u16,
+        params: &hacash_params::ProtocolParams,
+    ) -> Ret<Self> {
+        let action = Self {
+            kind: field::Uint2::from(Self::KIND),
+            times: Uint2::from(times),
+            addr: exec.addr,
+            cells: exec.cells.clone(),
+            sign: exec.sign.clone(),
+        };
+        validate_repeat_bundle(&action)?;
+        check_repeat_action_caps(params, &action)?;
+        Ok(action)
+    }
+}
+
 // ================================ wire schema ================================
 
 impl base::StructSchemaProvider for TexCell {
@@ -378,6 +517,7 @@ pub const TEX_CELL_SCHEMA: base::StructSchema =
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base::Action as _;
     use field::{Decode, Encode, Fold64, FromJSON, ListW1, ToJSON};
 
     fn sample_sign() -> Sign {
@@ -683,5 +823,180 @@ mod tests {
             get.describe(),
             "take 0.00002 HAC directly from <address pointer 0> (the source must be a transaction signer)"
         );
+    }
+    // ============================ TexCellRepeat (kind 23) ============================
+
+    fn repeat_sample(cells: Vec<TexCell>, times: u16) -> TexCellRepeat {
+        TexCellRepeat {
+            kind: field::Uint2::from(TexCellRepeat::KIND),
+            times: Uint2::from(times),
+            addr: Address::default(),
+            cells: ListW1::from(cells).unwrap(),
+            sign: sample_sign(),
+        }
+    }
+
+    fn repeat_small_cells(n: usize) -> Vec<TexCell> {
+        (0..n)
+            .map(|i| TexCell::ZhuPay {
+                haczhu: Fold64::from(i as u64 + 1).unwrap(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn tex_cell_repeat_kind_is_23_and_wire_roundtrips() {
+        assert_eq!(TexCellRepeat::KIND, 23);
+        let rep = repeat_sample(repeat_small_cells(2), 100);
+        assert_eq!(rep.size(), rep.encode().len());
+        let wire = rep.encode();
+        let (decoded, used) = TexCellRepeat::decode(&wire).unwrap();
+        assert_eq!(used, wire.len());
+        assert_eq!(decoded.encode(), wire);
+        // kind(2) + times(2) + addr(21) + cells + sign(97): the taker-chosen
+        // amplification is an operator prefix, the maker bytes follow verbatim
+        // and the signature trailer stays last.
+        assert_eq!(wire[0], 0);
+        assert_eq!(wire[1], 23);
+        assert_eq!(&wire[2..4], &[0, 100]);
+
+        let json = rep.to_json();
+        assert!(json.contains("\"times\":100"), "{json}");
+        let mut back = repeat_sample(repeat_small_cells(2), 2);
+        back.from_json(&json).unwrap();
+        assert_eq!(back.encode(), wire);
+    }
+
+    #[test]
+    fn tex_cell_repeat_decode_enforces_only_the_parameter_free_floor() {
+        // times is an amplification count: 0 and 1 are refused at decode
+        // (one-shot execution is kind 22 at lower cost). This rule holds for
+        // every network, so it is parameter-free.
+        let wire = repeat_sample(repeat_small_cells(1), 0).encode();
+        let err = TexCellRepeat::decode(&wire).unwrap_err();
+        assert!(err.to_string().contains("must be at least 2"), "{err}");
+
+        let wire = repeat_sample(repeat_small_cells(1), 1).encode();
+        let err = TexCellRepeat::decode(&wire).unwrap_err();
+        assert!(err.to_string().contains("must be at least 2"), "{err}");
+
+        // The ceilings are NOT decode rules: any Uint2-representable count
+        // decodes, including shapes no current profile funds. Raising
+        // `tex_repeat_times_max` on a side chain requires no wire change.
+        for times in [2u16, 200, 201, 65_535] {
+            let wire = repeat_sample(repeat_small_cells(1), times).encode();
+            let (decoded, used) = TexCellRepeat::decode(&wire).unwrap();
+            assert_eq!(used, wire.len());
+            assert_eq!(decoded.times(), times);
+        }
+    }
+
+    #[test]
+    fn tex_cell_repeat_runtime_caps_enforce_times_and_expanded_cells() {
+        let params = hacash_params::MAINNET_PARAMS.protocol;
+
+        // times ceiling: 201 > tex_repeat_times_max 200.
+        let rep = repeat_sample(repeat_small_cells(1), 201);
+        let err = check_repeat_action_caps(&params, &rep).unwrap_err();
+        assert!(err.to_string().contains("exceeds max 200"), "{err}");
+        check_repeat_action_caps(&params, &repeat_sample(repeat_small_cells(1), 200)).unwrap();
+
+        // Expanded-cell ceiling: 171 × 6 = 1,026 > 1,024 → rejected;
+        // 170 × 6 = 1,020 → accepted.
+        let err = check_repeat_action_caps(&params, &repeat_sample(repeat_small_cells(6), 171))
+            .unwrap_err();
+        assert!(err.to_string().contains("exceeding max 1024"), "{err}");
+        check_repeat_action_caps(&params, &repeat_sample(repeat_small_cells(6), 170)).unwrap();
+
+        // A profile that raises the ceilings unlocks the shapes: parameter
+        // migration is exactly the point (the wire never blocked them).
+        let roomy = hacash_params::ProtocolParams {
+            tex_repeat_times_max: 500,
+            tex_repeat_cells_max: 4096,
+            ..params
+        };
+        check_repeat_action_caps(&roomy, &repeat_sample(repeat_small_cells(1), 201)).unwrap();
+        check_repeat_action_caps(&roomy, &repeat_sample(repeat_small_cells(6), 171)).unwrap();
+        check_repeat_action_caps(&roomy, &repeat_sample(repeat_small_cells(1), 501)).unwrap_err();
+    }
+
+    #[test]
+    fn tex_cell_repeat_rejects_named_diamond_cells() {
+        let named = vec![
+            TexCell::DiaPay {
+                diamonds: DiamondNameListMax200::from_readable("WTYUIA").unwrap(),
+            },
+            TexCell::DirectedDiaPay {
+                to: AddrOrPtr::Ptr(0),
+                diamonds: DiamondNameListMax200::from_readable("WTYUIA").unwrap(),
+            },
+            TexCell::DirectedDiaGet {
+                from: AddrOrPtr::Ptr(0),
+                diamonds: DiamondNameListMax200::from_readable("WTYUIA").unwrap(),
+            },
+        ];
+        for cell in named {
+            // Unconditional: times ≥ 2 always, so a second iteration of a
+            // named-diamond cell can never succeed.
+            let wire = repeat_sample(vec![cell.clone()], 2).encode();
+            let err = TexCellRepeat::decode(&wire).unwrap_err();
+            assert!(
+                err.to_string().contains("cannot repeat"),
+                "{}: {err}",
+                cell.describe()
+            );
+        }
+    }
+
+    #[test]
+    fn tex_cell_repeat_from_signed_keeps_the_maker_signature_valid() {
+        let account = sys::Account::create_by_password("repeat wrapper").unwrap();
+        let addr = Address::from(*account.address());
+        let bundle = TexCellExecute::create_signed(
+            addr,
+            vec![
+                TexCell::ZhuPay {
+                    haczhu: Fold64::from(1000000).unwrap(),
+                },
+                TexCell::CondChainIdEq {
+                    chainid: Uint4::from(0),
+                },
+            ],
+            &account,
+        )
+        .unwrap();
+        let rep = TexCellRepeat::from_signed(&bundle, 100).unwrap();
+        // Same digest as the bundle: kind and times are outside the signature.
+        assert_eq!(rep.sign_hash(), bundle.sign_hash());
+        assert!(sys::Account::verify_signature(
+            &rep.sign_hash().0,
+            &rep.sign.publickey,
+            &rep.sign.signature,
+        ));
+        // from_signed re-runs the floor plus the MAINNET ceilings: below 2
+        // and over the cap are refused.
+        assert!(TexCellRepeat::from_signed(&bundle, 201).is_err());
+        assert!(TexCellRepeat::from_signed(&bundle, 1).is_err());
+        assert!(TexCellRepeat::from_signed(&bundle, 0).is_err());
+        TexCellRepeat::from_signed(&bundle, 2).unwrap();
+        // The with_params variant lets a network with higher ceilings build
+        // what its own precheck/execute would accept.
+        let roomy = hacash_params::ProtocolParams {
+            tex_repeat_times_max: 500,
+            ..hacash_params::MAINNET_PARAMS.protocol
+        };
+        TexCellRepeat::from_signed_with_params(&bundle, 300, &roomy).unwrap();
+        assert!(TexCellRepeat::from_signed_with_params(&bundle, 501, &roomy).is_err());
+
+        // Description: the count is explicit, the cells are listed once.
+        let desc = rep.description();
+        assert!(
+            desc.starts_with(&format!(
+                "Execute TEX cells signed by {} 100 times: ",
+                addr.to_readable()
+            )),
+            "{desc}"
+        );
+        assert_eq!(desc.matches("pay 0.01 HAC into TEX escrow").count(), 1);
     }
 }

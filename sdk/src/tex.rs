@@ -277,22 +277,38 @@ pub fn verify_action(action_hex: &str) -> Result<String, SdkError> {
         hex::decode(action_hex.strip_prefix("0x").unwrap_or(action_hex)).map_err(|error| {
             jsonparse::parse_failed(format!("signed TEX action is not hex: {error}"))
         })?;
-    let (action, used) =
-        protocol::action_std::TexCellExecute::decode(&wire).map_err(SdkError::from)?;
-    if action.kind() != 22 {
-        return Err(jsonparse::parse_failed("signed action is not TEX kind 22"));
-    }
-    if used != wire.len() {
-        return Err(jsonparse::parse_failed(
-            "trailing bytes after signed TEX action",
-        ));
-    }
-    if action.encode() != wire {
-        return Err(jsonparse::parse_failed(
-            "signed TEX action is not canonically encoded",
-        ));
-    }
-    let action_json = action.to_json();
+    // Kind 22 maker bundle or its kind-23 repeat wrapper: both carry the same
+    // addr/cells/sign and verify the same maker signature over
+    // hash(addr || cells); the wrapper's `times` is not part of the digest.
+    let (action_json, digest) = if let Ok((action, used)) =
+        protocol::action_std::TexCellExecute::decode(&wire)
+    {
+        if used != wire.len() {
+            return Err(jsonparse::parse_failed(
+                "trailing bytes after signed TEX action",
+            ));
+        }
+        if action.encode() != wire {
+            return Err(jsonparse::parse_failed(
+                "signed TEX action is not canonically encoded",
+            ));
+        }
+        (action.to_json(), action.sign_hash().0)
+    } else if let Ok((repeat, used)) = protocol::action_std::TexCellRepeat::decode(&wire) {
+        if used != wire.len() {
+            return Err(jsonparse::parse_failed(
+                "trailing bytes after signed TEX action",
+            ));
+        }
+        if repeat.encode() != wire {
+            return Err(jsonparse::parse_failed(
+                "signed TEX action is not canonically encoded",
+            ));
+        }
+        (repeat.to_json(), repeat.sign_hash().0)
+    } else {
+        return Err(jsonparse::parse_failed("signed action is not TEX kind 22/23"));
+    };
     let fields = jsonparse::object_pairs(&action_json, "signed TEX action")?;
     let address = jsonparse::string_value(
         jsonparse::required(&fields, "addr", "signed TEX action")?,
@@ -336,7 +352,6 @@ pub fn verify_action(action_hex: &str) -> Result<String, SdkError> {
             "TEX public key does not match authorization address",
         ));
     }
-    let digest = action.sign_hash().0;
     if !sys::Account::verify_signature(&digest, &pk, &sig) {
         return Err(SdkError::new(
             SdkErrorCode::BadSignature,
@@ -345,6 +360,41 @@ pub fn verify_action(action_hex: &str) -> Result<String, SdkError> {
     }
     Ok(format!("{{\"schema\":\"hacash.tex/verify-result@1\",\"ok\":true,\"address\":{},\"digest\":{},\"authorization\":{}}}",
         field::json_escape(&auth.address), field::json_escape(&hex::encode(digest)), auth.to_json_string()))
+}
+
+/// Wrap an already-signed kind-22 action hex into a kind-23 `TexCellRepeat`
+/// hex. The maker's `addr/cells/sign` are copied verbatim — the signature
+/// covers `hash(addr || cells)` only, so it stays valid without re-signing;
+/// `times` is the taker's amplification choice: the parameter-free decode
+/// floor (≥ 2; one-shot execution is kind 22 itself) and the MAINNET
+/// ceilings (`from_signed` default) are re-checked here. Returns plain hex,
+/// no `0x` prefix.
+pub fn repeat_of(signed_action_hex: &str, times: u16) -> Result<String, SdkError> {
+    let wire = hex::decode(signed_action_hex.strip_prefix("0x").unwrap_or(signed_action_hex))
+        .map_err(|error| {
+            jsonparse::parse_failed(format!("signed TEX action is not hex: {error}"))
+        })?;
+    let (action, used) =
+        protocol::action_std::TexCellExecute::decode(&wire).map_err(SdkError::from)?;
+    if used != wire.len() {
+        return Err(jsonparse::parse_failed(
+            "trailing bytes after signed TEX action",
+        ));
+    }
+    let repeat =
+        protocol::action_std::TexCellRepeat::from_signed(&action, times).map_err(SdkError::from)?;
+    Ok(hex::encode(repeat.encode()))
+}
+
+/// Service-layer wrapper around [`repeat_of`]: returns the structured
+/// `hacash.tex/repeat@1` envelope with the repeat hex (no `0x` prefix inside
+/// `action` is kept as a `0x`-prefixed string here, mirroring `bundle@1`).
+pub fn repeat(action_hex: &str, times: u16) -> Result<String, SdkError> {
+    let repeat_hex = repeat_of(action_hex, times)?;
+    Ok(format!(
+        "{{\"schema\":\"hacash.tex/repeat@1\",\"times\":{},\"action\":\"0x{}\"}}",
+        times, repeat_hex
+    ))
 }
 
 #[cfg(test)]
@@ -1035,4 +1085,47 @@ pub fn inspect(authorization: &Authorization) -> Result<Inspection, SdkError> {
         receipts,
         unknown_conditions,
     })
+}
+
+#[cfg(test)]
+mod tex_repeat_tests {
+    use super::*;
+    use field::{Address, Fold64};
+
+    /// Kind 23: `repeat_of` wraps a signed bundle without re-signing, and
+    /// `verify_action` accepts both the bundle and its wrapper with the same
+    /// digest and authorization.
+    #[test]
+    fn repeat_of_wraps_signed_bundle_and_verify_action_accepts_both_kinds() {
+        let account = sys::Account::create_by_password("sdk repeat verify").unwrap();
+        let addr = Address::from(*account.address());
+        let action = protocol::action_std::TexCellExecute::create_signed(
+            addr,
+            vec![protocol::action_std::TexCell::ZhuPay {
+                haczhu: Fold64::from(1).unwrap(),
+            }],
+            &account,
+        )
+        .unwrap();
+        let bundle_hex = hex::encode(action.encode());
+        let repeat_hex = repeat_of(&bundle_hex, 100).unwrap();
+        let (rep, used) = protocol::action_std::TexCellRepeat::decode(
+            &hex::decode(&repeat_hex).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(used, repeat_hex.len() / 2);
+        assert_eq!(rep.times(), 100);
+        assert_eq!(rep.sign_hash(), action.sign_hash());
+
+        let from_bundle = verify_action(&bundle_hex).unwrap();
+        let from_repeat = verify_action(&format!("0x{repeat_hex}")).unwrap();
+        assert_eq!(from_bundle, from_repeat);
+
+        // Decode caps bind at construction too: below 2 and over the cap.
+        assert!(repeat_of(&bundle_hex, 201).is_err());
+        assert!(repeat_of(&bundle_hex, 1).is_err());
+        assert!(repeat_of(&bundle_hex, 0).is_err());
+        // Non-TEX wire is refused.
+        assert!(verify_action("abcd").is_err());
+    }
 }

@@ -180,27 +180,45 @@ impl DescribeOptions {
     }
 }
 
-/// Diamond and asset facts of a `TexCellExecute` (kind 22): the bundle's
-/// cells move diamonds and assets for the authorizer and -- through directed
-/// gets -- also from the transaction signers, so policy caps and
-/// asset-serial reviews must see them. `None` on every other action kind.
+/// Diamond and asset facts of a TEX bundle action (kind 22 `TexCellExecute`
+/// and its kind-23 `TexCellRepeat` wrapper): the bundle's cells move diamonds
+/// and assets for the authorizer and -- through directed gets -- also from the
+/// transaction signers, so policy caps and asset-serial reviews must see them.
+/// `None` on every other action kind.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TexCellDesc {
     /// Total named diamonds across `DiaPay`/`DirectedDiaPay`/`DirectedDiaGet`
-    /// cells (`DiaGet` is count-only and carries no names).
+    /// cells (`DiaGet` is count-only and carries no names). Counted for one
+    /// copy of the cells and never multiplied by `times` — named-diamond
+    /// cells cannot repeat.
     pub diamond_names: u32,
     /// Distinct asset serials across asset cells (pay/get/directed/condition).
     pub asset_serials: Vec<String>,
+    /// Execution count the taker chose: `None` on kind 22 (always one), the
+    /// repeat's `times` on kind 23 (always ≥ 2 — decode refuses lower). Bound
+    /// by the envelope signature, not the maker's — wallets must surface this
+    /// as "may replay up to N times".
+    pub times: Option<u32>,
 }
 
-/// Extract the review facts of a kind-22 bundle, if `action` is one.
+/// Extract the review facts of a kind-22 bundle or its kind-23 repeat wrapper.
 pub fn tex_review_facts(action: &dyn Action) -> Option<TexCellDesc> {
-    let tex = action
+    let (cells, times) = if let Some(tex) = action
         .as_any()
-        .downcast_ref::<protocol::action_std::TexCellExecute>()?;
+        .downcast_ref::<protocol::action_std::TexCellExecute>()
+    {
+        (tex.cells(), None)
+    } else if let Some(rep) = action
+        .as_any()
+        .downcast_ref::<protocol::action_std::TexCellRepeat>()
+    {
+        (rep.cells(), Some(rep.times() as u32))
+    } else {
+        return None;
+    };
     let mut diamond_names = 0u32;
     let mut asset_serials: Vec<String> = Vec::new();
-    for cell in tex.cells() {
+    for cell in cells {
         match cell {
             protocol::action_std::TexCell::DiaPay { diamonds }
             | protocol::action_std::TexCell::DirectedDiaPay { diamonds, .. }
@@ -225,6 +243,7 @@ pub fn tex_review_facts(action: &dyn Action) -> Option<TexCellDesc> {
     Some(TexCellDesc {
         diamond_names,
         asset_serials,
+        times,
     })
 }
 
@@ -258,8 +277,9 @@ pub struct ActionDesc {
     /// Schema-declared blob fact (opaque byte-carrier action such as
     /// `tx_message`/`tx_blob`); `policy.deny_blob` reads it directly.
     pub blob: bool,
-    /// TEX bundle facts (diamond names / asset serials) for kind-22 actions;
-    /// `policy.max_diamond_names` reads the count, `tx.inspect` the serials.
+    /// TEX bundle facts (diamond names / asset serials / repeat times) for
+    /// kind-22/23 actions; `policy.max_diamond_names` reads the count,
+    /// `tx.inspect` the serials.
     pub tex: Option<TexCellDesc>,
 }
 
@@ -544,7 +564,7 @@ mod tests {
             .iter()
             .map(|s| s.name)
             .collect();
-        assert_eq!(names.len(), 35, "SDK capability profile changed");
+        assert_eq!(names.len(), 36, "SDK capability profile changed");
         for name in &names {
             let (_, note) = classify_auditability(name);
             assert!(

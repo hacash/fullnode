@@ -744,6 +744,7 @@ impl_sdk_json! {
     TexCellDesc {
         diamond_names: u32,
         asset_serials: str_arr,
+        times: opt_u32,
     } both
 }
 
@@ -911,6 +912,7 @@ impl_sdk_json! {
         deny_kinds: opt_u16_arr,
         deny_blob: opt_bool,
         max_diamond_names: opt_u32,
+        max_repeat_times: opt_u32,
         confirm_auditability: opt_str_arr,
     } both
 }

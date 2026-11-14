@@ -223,6 +223,7 @@ pub(crate) enum RequestField {
     OptionalJson(&'static str),
     OptionalU64(&'static str),
     U8(&'static str),
+    U16(&'static str),
     /// Inspect context `{current_height, expected_chain_id}`: marker 0/1,
     /// then u64 + u32 when present.
     OptionalInspectContext(&'static str),
@@ -239,6 +240,7 @@ impl RequestField {
             | RequestField::OptionalJson(a)
             | RequestField::OptionalU64(a)
             | RequestField::U8(a)
+            | RequestField::U16(a)
             | RequestField::OptionalInspectContext(a) => *a,
         }
     }
@@ -274,6 +276,9 @@ macro_rules! op_req {
     };
     (u8($a:literal)) => {
         RequestField::U8($a)
+    };
+    (u16($a:literal)) => {
+        RequestField::U16($a)
     };
     (opt_ctx($a:literal)) => {
         RequestField::OptionalInspectContext($a)
@@ -333,4 +338,5 @@ define_operations! {
     (OP_TEX_PREPARE_SIGNATURE, "tex.prepare_signature", [json("authorization"), string("signer_address"), optional_string("origin"), opt_u64("expires_at")]),
     (OP_TEX_ATTACH_SIGNATURE, "tex.attach_signature", [json("authorization"), json("proof"), json("request")]),
     (OP_TEX_VERIFY, "tex.verify", [string("action")]),
+    (OP_TEX_REPEAT, "tex.repeat", [string("action"), u16("times")]),
 }

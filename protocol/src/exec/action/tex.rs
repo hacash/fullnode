@@ -1,13 +1,16 @@
 //! TexCellExecute execute body and TEX cell state changes.
 
 use base::{
-    Context, CoreState, ExecFrom, asset_add, asset_sub, hac_add, hac_sub, record_diamond_pay,
-    sat_add, sat_sub,
+    ActOut, Context, CoreState, ExecFrom, asset_add, asset_sub, hac_add, hac_sub,
+    record_diamond_pay, sat_add, sat_sub,
 };
-use field::{AddrOrPtr, Address, Amount, Fold64, Satoshi, ToJSON};
+use field::{AddrOrPtr, Address, Amount, Encode, Fold64, ListW1, Satoshi, Sign, ToJSON};
 use sys::{Rerr, Ret, errf};
 
-use crate::codec::action::tex::{TexCell, TexCellExecute};
+use crate::codec::action::tex::{
+    TexCell, TexCellExecute, TexCellRepeat, check_repeat_action_caps, tex_bundle_sign_stuff,
+    validate_repeat_bundle,
+};
 use crate::exec::apply::diamonds_transfer;
 use crate::params::SETTLEMENT_ADDR;
 
@@ -501,6 +504,35 @@ impl TexCell {
     }
 }
 
+/// Signed bundle body shared by kind 22 and kind 23. Not a wire type: both
+/// actions keep their own flat encoding and, at execution, lend `addr`,
+/// `cells`, and `sign` to this view. `verify` then `replay` is the one cell
+/// path; kind 23 charges its own gas between the two steps.
+struct TexCellContent<'a> {
+    addr: &'a Address,
+    cells: &'a ListW1<TexCell>,
+    sign: &'a Sign,
+}
+
+impl TexCellContent<'_> {
+    fn verify(&self, ctx: &mut dyn Context) -> Rerr {
+        self.addr.must_privkey()?;
+        // Cached per transaction (same-tx replays must not re-run ECDSA)
+        // and skipped under fast sync, like every other signature check.
+        let thx = tex_bundle_sign_stuff(self.addr, self.cells);
+        ctx.check_bundle_sign(&thx, self.addr, self.sign)
+    }
+
+    fn replay(&self, ctx: &mut dyn Context, times: u16) -> Rerr {
+        for _ in 0..times {
+            for cell in self.cells.as_list() {
+                cell.execute(ctx, self.addr)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 base::impl_action_execute! {
     TexCellExecute {
         (self, ctx) {
@@ -510,16 +542,93 @@ base::impl_action_execute! {
                     ctx.exec_from()
                 );
             }
-            self.addr.must_privkey()?;
-            // Cached per transaction (same-tx replays must not re-run ECDSA)
-            // and skipped under fast sync, like every other signature check.
-            let thx = self.get_sign_stuff();
-            ctx.check_bundle_sign(&thx, &self.addr, &self.sign)?;
-            for cell in &self.cells {
-                cell.execute(ctx, &self.addr)?;
-            }
+            let content = TexCellContent {
+                addr: &self.addr,
+                cells: &self.cells,
+                sign: &self.sign,
+            };
+            content.verify(ctx)?;
+            content.replay(ctx, 1)?;
             Ok(vec![])
         }
+    }
+}
+
+/// `DiaGet` draws down the diamonds `DiaPay` recorded in the same segment, and
+/// the per-tx cap is a cumulative scan inside `TexLedger` that a repeat's
+/// `times × Σ dianum` can blow past mid-loop. Precheck the per-action share up
+/// front so the tx fails before any cell runs; the check is conservative (it
+/// cannot see other actions' `DiaGet`s) and the authoritative cap stays in
+/// `record_diamond_get`.
+fn check_repeat_dia_get_budget(
+    action: &TexCellRepeat,
+    params: &hacash_params::ProtocolParams,
+) -> Rerr {
+    let mut want: u64 = 0;
+    for cell in action.cells() {
+        if let TexCell::DiaGet { dianum } = cell {
+            want = want.saturating_add(dianum.uint() as u64);
+        }
+    }
+    if want == 0 {
+        return Ok(());
+    }
+    let total = want.saturating_mul(action.times() as u64);
+    if total > params.tex_diamond_get_max_per_tx as u64 {
+        return errf!(
+            "TexCellRepeat DiaGet total {} exceeds per-tx cap {}",
+            total,
+            params.tex_diamond_get_max_per_tx
+        );
+    }
+    Ok(())
+}
+
+/// Kind 23: run the maker's cell list `times` times. The cell path is
+/// `TexCellContent`, the same view kind 22 uses. Three differences stay here:
+/// the loop count, the gas (charged here instead of the dispatcher's extra9
+/// hook), and the shape rules (decode-level floor plus the runtime per-action
+/// caps from `ProtocolParams`) re-checked so the execute view alone stays sound.
+///
+/// Gas (`F = kind + addr + sign = 120B`, `P = cells.size()`):
+/// asset cells keep the 9× asset tax — `9F + times × 9P` (envelope taxed once,
+/// payload per execution, identical to N flat kind-22 copies minus their
+/// duplicated envelopes); non-asset cells bill only the extra repetitions,
+/// `(times − 1) × P` — the first `F + P` rides the tx fee exactly like a flat
+/// kind-22 action. Charging up front means an underfunded budget fails before
+/// any cell runs; a later cell failure reverts the whole transaction, same as
+/// kind 22. The returned `ActOut` gas stays 0 — everything was charged here.
+impl base::ActionExecute for TexCellRepeat {
+    fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
+        if ctx.exec_from() != ExecFrom::Top {
+            return errf!(
+                "TexCellRepeat can only run in TOP context, got {}",
+                ctx.exec_from()
+            );
+        }
+        let content = TexCellContent {
+            addr: &self.addr,
+            cells: &self.cells,
+            sign: &self.sign,
+        };
+        content.verify(ctx)?;
+        validate_repeat_bundle(self)?;
+        let params = crate::execution_params(ctx.services().as_ref())?;
+        check_repeat_action_caps(&params, self)?;
+        check_repeat_dia_get_budget(self, &params)?;
+        let envelope =
+            (field::Uint2::from(TexCellRepeat::KIND).size() + self.addr.size() + self.sign.size())
+                as i64;
+        let payload = self.cells.size() as i64;
+        let times = self.times() as i64;
+        let gas = if self.has_asset_transfer_cell() {
+            9 * envelope + times * 9 * payload
+        } else {
+            (times - 1) * payload
+        };
+        ctx.gas_charge(gas)?;
+        content.replay(ctx, self.times())?;
+        Ok((0, vec![]))
     }
 }
 
@@ -605,7 +714,10 @@ mod tests {
             None
         }
         fn vm_params(&self) -> Ret<&VmExecutionParams> {
-            errf!("stub: vm_params")
+            // Live mainnet VM params: gas pricing (fee purity floor) reads
+            // them through `gas_initialize_on`, so the gas-accounting tests
+            // run the real escrow math.
+            Ok(&hacash_params::MAINNET_PARAMS.protocol.vm)
         }
         fn execution_profile(&self) -> Ret<&'static dyn base::ExecutionProfile> {
             Ok(&hacash_params::MAINNET_PARAMS)
@@ -626,6 +738,9 @@ mod tests {
         layer: MemLayer,
         exec_from: ExecFrom,
         tex: TexLedger,
+        /// Real meter only in tests that exercise gas accounting; `None` keeps
+        /// the charge-free stub behavior every pre-existing test relies on.
+        gas: Option<crate::exec::gas::TxGasMeter>,
     }
 
     impl DirectedCtx {
@@ -649,7 +764,19 @@ mod tests {
                 layer: MemLayer::default(),
                 exec_from: ExecFrom::Top,
                 tex: TexLedger::default(),
+                gas: None,
             }
+        }
+
+        /// Opt into real gas accounting (escrow/charge/fail semantics).
+        fn with_gas_meter(mut self) -> Self {
+            self.gas = Some(crate::exec::gas::TxGasMeter::new());
+            self
+        }
+
+        /// Net used gas under the real meter (`None` when the stub is active).
+        fn gas_used(&self) -> Option<i64> {
+            self.gas.as_ref().map(|m| m.diag().used_net)
         }
     }
 
@@ -680,19 +807,32 @@ mod tests {
         }
         fn emit_log(&mut self, _entry: base::LogEntry) {}
         fn gas_remaining(&self) -> i64 {
-            i64::MAX
+            self.gas.as_ref().map(|m| m.remaining()).unwrap_or(i64::MAX)
         }
-        fn gas_charge(&mut self, _gas: i64) -> Rerr {
-            Ok(())
+        fn gas_charge(&mut self, gas: i64) -> Rerr {
+            match &mut self.gas {
+                Some(meter) => meter.charge(gas),
+                None => Ok(()),
+            }
         }
         fn gas_rebate(&mut self, _gas: i64) -> Rerr {
             Ok(())
         }
-        fn gas_initialize(&mut self, _budget: i64) -> Rerr {
-            Ok(())
+        fn gas_initialize(&mut self, budget: i64) -> Rerr {
+            let Some(mut meter) = self.gas.take() else {
+                return Ok(());
+            };
+            let res = crate::exec::gas::gas_initialize_on(&mut meter, self, budget);
+            self.gas = Some(meter);
+            res
         }
         fn gas_refund(&mut self) -> Rerr {
-            Ok(())
+            let Some(mut meter) = self.gas.take() else {
+                return Ok(());
+            };
+            let res = crate::exec::gas::gas_refund_on(&mut meter, self);
+            self.gas = Some(meter);
+            res
         }
         fn snapshot_volatile(&self) -> Box<dyn std::any::Any> {
             Box::new(())
@@ -2198,5 +2338,357 @@ mod tests {
         assert_eq!(dia_balance(&mut ctx, &payer_addr), 0);
         assert_eq!(dia_balance(&mut ctx, &recipient_addr) as usize, names.len());
         assert_ledger_diamonds_drained(&ctx);
+    }
+
+    // ============================ TexCellRepeat (kind 23) ============================
+
+    /// Type-3 tx carrying one `TexCellRepeat` wrapping a maker-signed bundle.
+    fn repeat_tx(
+        main: &sys::Account,
+        addrlist: Vec<Address>,
+        cells: Vec<TexCell>,
+        times: u16,
+        authorizer: &sys::Account,
+    ) -> StdTransaction {
+        let mut tx = StdTransaction::new_by(
+            hacash_params::TX_TYPE_3,
+            addrlist[0],
+            Amount::from("1:244").unwrap(),
+            1_700_000_000,
+        );
+        tx.addrlist = field::AddrOrList::from_list(addrlist).unwrap();
+        let bundle =
+            TexCellExecute::create_signed(Address::from(*authorizer.address()), cells, authorizer)
+                .unwrap();
+        tx.push_action_in(Arc::new(TexCellRepeat::from_signed(&bundle, times).unwrap()));
+        tx.fill_sign_account(main).unwrap();
+        tx
+    }
+
+    /// Type-3 tx carrying `copies` flat kind-22 actions of the same bundle.
+    fn directed_flat_tx(
+        main: &sys::Account,
+        addrlist: Vec<Address>,
+        cells: Vec<TexCell>,
+        copies: usize,
+        authorizer: &sys::Account,
+    ) -> StdTransaction {
+        let mut tx = StdTransaction::new_by(
+            hacash_params::TX_TYPE_3,
+            addrlist[0],
+            Amount::from("1:244").unwrap(),
+            1_700_000_000,
+        );
+        tx.addrlist = field::AddrOrList::from_list(addrlist).unwrap();
+        for _ in 0..copies {
+            let action = TexCellExecute::create_signed(
+                Address::from(*authorizer.address()),
+                cells.clone(),
+                authorizer,
+            )
+            .unwrap();
+            tx.push_action_in(Arc::new(action));
+        }
+        tx.fill_sign_account(main).unwrap();
+        tx
+    }
+
+    fn run_repeat(ctx: &mut DirectedCtx) -> Ret<()> {
+        let act = ctx.tx.actions()[0].clone();
+        let rep = act.as_any().downcast_ref::<TexCellRepeat>().unwrap();
+        ActionExecute::execute(rep, ctx.as_context_mut()).map(|_| ())
+    }
+
+    /// `times=50` of one bundle lands exactly where 50 flat kind-22 copies of
+    /// the same bundle land: cell order, net balances and the ledger residual
+    /// are identical (the isomorphism the design rests on).
+    #[test]
+    fn repeat_times50_matches_fifty_flat_kind22_copies() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let maker_addr = Address::from(*maker.address());
+        let taker_addr = Address::from(*taker.address());
+        let cells = vec![
+            TexCell::DirectedZhuPay {
+                to: AddrOrPtr::Addr(taker_addr),
+                haczhu: Fold64::from(1000).unwrap(),
+            },
+            TexCell::DirectedZhuGet {
+                from: AddrOrPtr::Ptr(0),
+                haczhu: Fold64::from(2000).unwrap(),
+            },
+        ];
+        let fund = Amount::coin_u128(1_000_000, UNIT_ZHU);
+
+        let mut rep_ctx = DirectedCtx::new(repeat_tx(
+            &taker,
+            vec![taker_addr],
+            cells.clone(),
+            50,
+            &maker,
+        ));
+        CoreState::wrap(rep_ctx.layer()).balance_set(&maker_addr, &Balance::hac(fund.clone()));
+        CoreState::wrap(rep_ctx.layer()).balance_set(&taker_addr, &Balance::hac(fund.clone()));
+        run_repeat(&mut rep_ctx).unwrap();
+
+        let mut flat_ctx = DirectedCtx::new(directed_flat_tx(
+            &taker,
+            vec![taker_addr],
+            cells,
+            50,
+            &maker,
+        ));
+        CoreState::wrap(flat_ctx.layer()).balance_set(&maker_addr, &Balance::hac(fund.clone()));
+        CoreState::wrap(flat_ctx.layer()).balance_set(&taker_addr, &Balance::hac(fund.clone()));
+        run_all_actions(&mut flat_ctx).unwrap();
+
+        // Per iteration: maker −1000 +2000 = +1000 zhu; taker (main) −1000.
+        assert_eq!(
+            hac_balance(&mut rep_ctx, &maker_addr),
+            hac_balance(&mut flat_ctx, &maker_addr)
+        );
+        assert_eq!(
+            hac_balance(&mut rep_ctx, &taker_addr),
+            hac_balance(&mut flat_ctx, &taker_addr)
+        );
+        assert_eq!(
+            hac_balance(&mut rep_ctx, &maker_addr),
+            Amount::coin_u128(1_050_000, UNIT_ZHU)
+        );
+        assert_eq!(
+            hac_balance(&mut rep_ctx, &taker_addr),
+            Amount::coin_u128(950_000, UNIT_ZHU)
+        );
+        assert_ledger_residual_zero(&rep_ctx);
+        assert_ledger_residual_zero(&flat_ctx);
+    }
+
+    /// Exact gas: asset `9F + times × 9P` (F = kind+addr+sign = 120, P =
+    /// cells.size() = 5 here), non-asset `(times − 1) × P`. Against flat
+    /// kind-22 copies the repeat is exactly the same executions minus the
+    /// duplicated envelopes (`9F` per extra copy on the asset tier), and a
+    /// failed cell after an up-front charge still counts the gas.
+    #[test]
+    fn repeat_gas_matches_formula_and_saves_the_envelope_vs_flat_copies() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let maker_addr = Address::from(*maker.address());
+        let taker_addr = Address::from(*taker.address());
+        // 20 HAC: the gas escrow at the fee floor needs ~0.56 HAC headroom.
+        let fund = Amount::from("20000:248").unwrap();
+        // serial 11 and amount 5 are < 32, so each folds to one byte:
+        // DirectedAssetPay cell = 1 id + 1 ptr + 1 + 1 = 4B, P = 1 + 4 = 5B.
+        let serial = Fold64::from(11).unwrap();
+        // Ptr(0) pins the pay target to the transaction main (taker): 1B, so
+        // the cell is 4B and P = 1 + 4 = 5B.
+        let asset_cells = vec![TexCell::DirectedAssetPay {
+            to: AddrOrPtr::Ptr(0),
+            asset: AssetAmt {
+                serial,
+                amount: Fold64::from(5).unwrap(),
+            },
+        }];
+        let envelope: i64 = (2 + 21 + 97) as i64; // kind + addr + sign
+        let payload: i64 = 5;
+
+        let build = |cells: Vec<TexCell>, times: u16| {
+            let mut ctx = DirectedCtx::new(repeat_tx(
+                &taker,
+                vec![taker_addr],
+                cells,
+                times,
+                &maker,
+            ))
+            .with_gas_meter();
+            CoreState::wrap(ctx.layer()).balance_set(&taker_addr, &Balance::hac(fund.clone()));
+            CoreState::wrap(ctx.layer()).asset_set(
+                &serial,
+                &AssetSmelt {
+                    serial,
+                    supply: Fold64::from(1_000_000).unwrap(),
+                    decimal: Uint1::from(8),
+                    issuer: maker_addr,
+                    ticket: BytesW1::default(),
+                    name: BytesW1::default(),
+                },
+            );
+            CoreState::wrap(ctx.layer()).balance_set(
+                &maker_addr,
+                &Balance {
+                    hacash: fund.clone(),
+                    assets: AssetAmtW1::from(vec![AssetAmt {
+                        serial,
+                        amount: Fold64::from(100).unwrap(),
+                    }])
+                    .unwrap(),
+                    ..Default::default()
+                },
+            );
+            ctx
+        };
+
+        // Asset tier, real meter: times=2 → 9F + 2 × 9P.
+        let mut ctx = build(asset_cells.clone(), 2);
+        ctx.gas_initialize(111_911).unwrap();
+        run_repeat(&mut ctx).unwrap();
+        assert_eq!(ctx.gas_used(), Some(9 * envelope + 2 * 9 * payload));
+        // Two flat kind-22 copies through the real dispatcher: 2 × 9 × (F+P).
+        // The repeat does the same executions but taxes the envelope once.
+        let mut flat = DirectedCtx::new(directed_flat_tx(
+            &taker,
+            vec![taker_addr],
+            asset_cells.clone(),
+            2,
+            &maker,
+        ))
+        .with_gas_meter();
+        CoreState::wrap(flat.layer()).balance_set(&taker_addr, &Balance::hac(fund.clone()));
+        CoreState::wrap(flat.layer()).asset_set(
+            &serial,
+            &AssetSmelt {
+                serial,
+                supply: Fold64::from(1_000_000).unwrap(),
+                decimal: Uint1::from(8),
+                issuer: maker_addr,
+                ticket: BytesW1::default(),
+                name: BytesW1::default(),
+            },
+        );
+        CoreState::wrap(flat.layer()).balance_set(
+            &maker_addr,
+            &Balance {
+                hacash: fund.clone(),
+                assets: AssetAmtW1::from(vec![AssetAmt {
+                    serial,
+                    amount: Fold64::from(100).unwrap(),
+                }])
+                .unwrap(),
+                ..Default::default()
+            },
+        );
+        flat.gas_initialize(111_911).unwrap();
+        run_all_actions(&mut flat).unwrap();
+        assert_eq!(flat.gas_used(), Some(2 * 9 * (envelope + payload)));
+        assert_eq!(ctx.gas_used(), Some(flat.gas_used().unwrap() - 9 * envelope));
+
+        // Asset tier: times=10 → 9F + 10 × 9P.
+        let mut ctx = build(asset_cells, 10);
+        ctx.gas_initialize(111_911).unwrap();
+        run_repeat(&mut ctx).unwrap();
+        assert_eq!(ctx.gas_used(), Some(9 * envelope + 10 * 9 * payload));
+    }
+
+    /// `gas_max=0` (meter never initialized): with `times ≥ 2` every repeat
+    /// charges above zero — asset `9F + times × 9P`, non-asset
+    /// `(times − 1) × P` — so an uninitialized meter always fails before any
+    /// cell runs. (Kind 22's non-asset zero-charge path has no repeat
+    /// counterpart: the extra executions are always billed.)
+    #[test]
+    fn repeat_gas_max_zero_always_fails_uninitialized() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let maker_addr = Address::from(*maker.address());
+        let taker_addr = Address::from(*taker.address());
+        let serial = Fold64::from(11).unwrap();
+        let asset_cells = vec![TexCell::DirectedAssetPay {
+            to: AddrOrPtr::Addr(taker_addr),
+            asset: AssetAmt {
+                serial,
+                amount: Fold64::from(5).unwrap(),
+            },
+        }];
+        // ZhuPay cell: 1 id + 2B fold(1000) = 3B, P = 4B; escrow move needs no
+        // seeded records and no balance for the payer above the pay amount.
+        let plain_cells = vec![TexCell::ZhuPay {
+            haczhu: Fold64::from(1000).unwrap(),
+        }];
+
+        let mut ctx = DirectedCtx::new(repeat_tx(
+            &taker,
+            vec![taker_addr],
+            asset_cells,
+            2,
+            &maker,
+        ))
+        .with_gas_meter();
+        CoreState::wrap(ctx.layer()).balance_set(
+            &maker_addr,
+            &Balance::hac(Amount::coin_u128(10_000, UNIT_ZHU)),
+        );
+        CoreState::wrap(ctx.layer()).asset_set(
+            &serial,
+            &AssetSmelt {
+                serial,
+                supply: Fold64::from(1_000_000).unwrap(),
+                decimal: Uint1::from(8),
+                issuer: maker_addr,
+                ticket: BytesW1::default(),
+                name: BytesW1::default(),
+            },
+        );
+        let err = run_repeat(&mut ctx).unwrap_err();
+        assert!(err.to_string().contains("gas not initialized"), "{err}");
+
+        // Non-asset times=2: gas = P > 0 → fails uninitialized, no cell ran.
+        let mut ctx = DirectedCtx::new(repeat_tx(
+            &taker,
+            vec![taker_addr],
+            plain_cells,
+            2,
+            &maker,
+        ))
+        .with_gas_meter();
+        CoreState::wrap(ctx.layer()).balance_set(
+            &maker_addr,
+            &Balance::hac(Amount::coin_u128(10_000, UNIT_ZHU)),
+        );
+        let err = run_repeat(&mut ctx).unwrap_err();
+        assert!(err.to_string().contains("gas not initialized"), "{err}");
+        assert_eq!(ctx.tex.zhu, 0);
+    }
+
+    /// The per-action DiaGet precheck fails an over-budget repeat before any
+    /// cell runs; the just-under-budget shape passes the precheck (and then
+    /// fails later on real ledger rules, which flat copies would hit too).
+    #[test]
+    fn repeat_dia_get_precheck_bounds_times_by_per_tx_cap() {
+        let maker = sys::Account::create_by_secret_key_value([9u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([8u8; 32]).unwrap();
+        let taker_addr = Address::from(*taker.address());
+        // 51 × 200 = 10,200 > 10,000 per-tx cap → precheck rejects up front.
+        let mut ctx = DirectedCtx::new(repeat_tx(
+            &taker,
+            vec![taker_addr],
+            vec![TexCell::DiaGet {
+                dianum: field::DiamondNumber::from(200),
+            }],
+            51,
+            &maker,
+        ));
+        let err = run_repeat(&mut ctx).unwrap_err();
+        assert!(err.to_string().contains("DiaGet total"), "{err}");
+        assert!(ctx.tex.diatrs.is_empty(), "no cell may run before the error");
+
+        // 50 × 200 = 10,000 passes the precheck and executes — `record_diamond_get`
+        // only guards overflow, the recorded `dia` net goes negative, and the
+        // unmatched get fails at settlement exactly as fifty flat kind-22
+        // copies would (their gets also book negative; settlement rejects the
+        // nonzero residual).
+        let mut ctx = DirectedCtx::new(repeat_tx(
+            &taker,
+            vec![taker_addr],
+            vec![TexCell::DiaGet {
+                dianum: field::DiamondNumber::from(200),
+            }],
+            50,
+            &maker,
+        ));
+        run_repeat(&mut ctx).unwrap();
+        assert_eq!(ctx.tex.dia, -10_000);
+        let err = crate::exec::tex::do_settlement(&mut ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("coin settlement check failed"),
+            "{err}"
+        );
     }
 }

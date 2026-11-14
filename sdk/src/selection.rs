@@ -111,7 +111,7 @@ mod tests {
         let selected: Vec<u16> = sdk_action_codecs()
             .map(|binding| binding.schema.kind)
             .collect();
-        assert_eq!(selected.len(), 35, "SDK capability profile changed");
+        assert_eq!(selected.len(), 36, "SDK capability profile changed");
 
         let mut call_only: Vec<u16> = protocol::ACTION_CODECS
             .iter()

@@ -164,19 +164,21 @@ fn check_top_rule(act: &dyn Action, stats: &mut Stats) {
     }
 }
 
-/// One contiguous run of top-level `TexCellExecute`. Actions before and after
-/// that run are legal. A second run is not: settlement still runs once.
+/// One contiguous run of top-level TEX actions (`TexCellExecute` kind 22 and
+/// `TexCellRepeat` kind 23, mixable). Actions before and after that run are
+/// legal. A second run is not: settlement still runs once.
 fn check_tex_segment(actions: &[ActionRef], stats: &mut Stats) {
     let tex_kind = crate::codec::action::tex::TexCellExecute::KIND;
+    let repeat_kind = crate::codec::action::tex::TexCellRepeat::KIND;
     let mut phase = 0u8;
     for (index, act) in actions.iter().enumerate() {
-        let is_tex = act.kind() == tex_kind;
+        let is_tex = act.kind() == tex_kind || act.kind() == repeat_kind;
         match (phase, is_tex) {
             (0, true) => phase = 1,
             (1, false) => phase = 2,
             (2, true) => {
                 let text = format!(
-                    "tx topology invalid: TexCellExecute must form one contiguous segment; action {} at index {index} opens a second segment",
+                    "tx topology invalid: TEX cell actions must form one contiguous segment; action {} at index {index} opens a second segment",
                     act.kind()
                 );
                 stats.findings.push(text.clone());
@@ -267,7 +269,9 @@ pub fn precheck_tx_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::action::{EnvHeight, TransferHacTo};
+    use crate::codec::action::{
+        EnvHeight, TexCell, TexCellExecute, TexCellRepeat, TransferHacTo,
+    };
     use base::ActionCodec;
     use field::{Address, Amount, Encode, Uint2};
     use std::any::Any;
@@ -527,6 +531,53 @@ mod tests {
         assert!(
             second.iter().any(|f| f.contains("index 3") && f.contains("second segment")),
             "{second:?}"
+        );
+    }
+
+
+    fn tex_execute() -> ActionRef {
+        Arc::new(TexCellExecute {
+            kind: Uint2::from(TexCellExecute::KIND),
+            addr: Address::default(),
+            cells: field::ListW1::from(vec![TexCell::ZhuPay {
+                haczhu: field::Fold64::from(1).unwrap(),
+            }])
+            .unwrap(),
+            sign: field::Sign::default(),
+        })
+    }
+
+    fn tex_repeat() -> ActionRef {
+        Arc::new(TexCellRepeat {
+            kind: Uint2::from(TexCellRepeat::KIND),
+            times: field::Uint2::from(50u16),
+            addr: Address::default(),
+            cells: field::ListW1::from(vec![TexCell::ZhuPay {
+                haczhu: field::Fold64::from(1).unwrap(),
+            }])
+            .unwrap(),
+            sign: field::Sign::default(),
+        })
+    }
+
+    /// Kind 22 and kind 23 mix freely inside one contiguous TEX run.
+    #[test]
+    fn tex_segment_accepts_mixed_execute_and_repeat_runs() {
+        let actions = vec![tex_repeat(), tex_execute(), tex_repeat()];
+        let facts = topology_facts(3, &actions, None, 6);
+        assert!(facts.findings.is_empty(), "{:?}", facts.findings);
+    }
+
+    /// A non-TEX action still closes the run: a later TEX action opens a
+    /// second segment and is rejected, exactly like the kind-22-only rule.
+    #[test]
+    fn tex_segment_rejects_a_second_run_after_a_non_tex_action() {
+        let actions = vec![tex_repeat(), transfer(), tex_execute()];
+        let facts = topology_facts(3, &actions, None, 6);
+        assert!(
+            facts.findings.iter().any(|f| f.contains("contiguous segment")),
+            "{:?}",
+            facts.findings
         );
     }
 }

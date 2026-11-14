@@ -6,7 +6,7 @@ use crate::inspect::Review;
 use crate::json::SdkJsonTo;
 use crate::schema::{DOMAIN_POLICY_DECISION, SCHEMA_POLICY, SCHEMA_POLICY_DECISION};
 
-/// Caller-provided policy, frozen schema `hacash.sdk/policy@1` (doc 14 §4.8).
+/// Caller-provided policy, frozen schema `hacash.sdk/policy@2` (doc 14 §4.8).
 /// Absent fields take protocol defaults; nothing here is a product constant.
 #[derive(Debug, Clone, Default)]
 pub struct Policy {
@@ -14,6 +14,9 @@ pub struct Policy {
     pub deny_kinds: Option<Vec<u16>>,
     pub deny_blob: Option<bool>,
     pub max_diamond_names: Option<u32>,
+    /// Cap on `TexCellRepeat` amplification: a kind-23 action whose `times`
+    /// exceeds it is denied. `None`/absent allows any protocol-legal times.
+    pub max_repeat_times: Option<u32>,
     pub confirm_auditability: Option<Vec<String>>,
 }
 
@@ -109,6 +112,19 @@ pub fn evaluate_policy(review: &Review, policy: &Policy) -> Result<PolicyDecisio
                 "diamond count {count} exceeds policy maximum {max_names}"
             ));
         }
+    }
+    if let Some(max_times) = policy.max_repeat_times {
+        walk_actions(&review.actions, &mut |action| {
+            if let Some(times) = action.tex.as_ref().and_then(|tex| tex.times) {
+                if times > max_times {
+                    decision = "deny";
+                    findings.push(format!(
+                        "TEX repeat times {times} exceeds policy maximum {max_times} (path {})",
+                        action.path
+                    ));
+                }
+            }
+        });
     }
     if let Some(confirm_grades) = &policy.confirm_auditability {
         if confirm_grades.contains(&review.auditability) {
@@ -354,9 +370,63 @@ mod tests {
         action.tex = Some(crate::audit::TexCellDesc {
             diamond_names: 3,
             asset_serials: vec![],
+            times: None,
         });
         review.actions = vec![action];
         let decision = evaluate_policy(&review, &policy).unwrap();
         assert_eq!(decision.decision, "deny");
+    }
+
+    /// The repeat-amplification cap reads `TexCellDesc.times`: a kind-23
+    /// action above the cap is denied, one at the cap passes, and kind-22
+    /// bundles (`times: None`) are never affected.
+    #[test]
+    fn max_repeat_times_bounds_tex_repeat_amplification() {
+        let policy = Policy {
+            max_repeat_times: Some(50),
+            ..Default::default()
+        };
+        let mut review = sample_review();
+        let mut over = desc(23, "0", None);
+        over.tex = Some(crate::audit::TexCellDesc {
+            diamond_names: 0,
+            asset_serials: vec![],
+            times: Some(51),
+        });
+        review.actions = vec![over];
+        let decision = evaluate_policy(&review, &policy).unwrap();
+        assert_eq!(decision.decision, "deny");
+        assert!(
+            decision
+                .findings
+                .iter()
+                .any(|f| f.contains("repeat times 51 exceeds policy maximum 50")),
+            "{:?}",
+            decision.findings
+        );
+
+        // Exactly at the cap: allowed. Nested too (children are walked).
+        let mut review = sample_review();
+        let mut at_cap = desc(23, "0", None);
+        at_cap.tex = Some(crate::audit::TexCellDesc {
+            diamond_names: 0,
+            asset_serials: vec![],
+            times: Some(50),
+        });
+        review.actions = vec![desc(25, "0", Some(vec![at_cap]))];
+        let decision = evaluate_policy(&review, &policy).unwrap();
+        assert_eq!(decision.decision, "allow");
+
+        // Kind-22 facts carry no times: the cap does not apply.
+        let mut review = sample_review();
+        let mut flat = desc(22, "0", None);
+        flat.tex = Some(crate::audit::TexCellDesc {
+            diamond_names: 0,
+            asset_serials: vec![],
+            times: None,
+        });
+        review.actions = vec![flat];
+        let decision = evaluate_policy(&review, &policy).unwrap();
+        assert_eq!(decision.decision, "allow");
     }
 }

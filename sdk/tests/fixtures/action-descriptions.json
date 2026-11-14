@@ -1,8 +1,8 @@
 {
-  "spec_version": "action-description@1",
+  "spec_version": "action-description@2",
   "sdk_version": "0.2.4",
-  "catalog_total": 61,
-  "sdk_profile_total": 35,
+  "catalog_total": 62,
+  "sdk_profile_total": 36,
   "call_only_total": 26,
   "cases": [
     {
@@ -339,6 +339,18 @@
       "raw": "001600e63c33a796b3032ce6b856f68fccf06608d9ed1817014f4240025e848003212c042190050257545955494158564d454b420600000307072046080820500b50c8e00c524f800d53d6200e208c0f20961020a0111112121313141420c8151520d2161620dc1700000dbba01800000dbba11900000001021111111111111111111111111111111111111111111111111111111111111111abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
       "fullnode_description": "Execute TEX cells signed by 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9: pay 0.01 HAC into TEX escrow; get 0.02 HAC from TEX escrow; pay 300 SAT into TEX escrow; get 400 SAT from TEX escrow; commit HACD (WTYUIA,XVMEKB) for settlement delivery; get 3 HACD from TEX escrow; pay 70 atoms of Asset #7 into TEX escrow; get 80 atoms of Asset #8 from TEX escrow; require HAC balance at most 0.011 HAC; require HAC balance at least 0.012 HAC; require HAC balance equal to 0.013 HAC; require SAT balance at most 140; require SAT balance at least 150; require SAT balance equal to 160; require actual HACD count at most 17; require actual HACD count at least 18; require actual HACD count equal to 19; require Asset #20 balance at most 200 atoms; require Asset #21 balance at least 210 atoms; require Asset #22 balance equal to 220 atoms; require block height at most 900000; require block height at least 900001; require chain ID equal to 1",
       "sdk_description": "Execute TEX cells signed by 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9: pay 0.01 HAC into TEX escrow; get 0.02 HAC from TEX escrow; pay 300 SAT into TEX escrow; get 400 SAT from TEX escrow; commit HACD (WTYUIA,XVMEKB) for settlement delivery; get 3 HACD from TEX escrow; pay 70 atoms of Asset #7 into TEX escrow; get 80 atoms of Asset #8 from TEX escrow; require HAC balance at most 0.011 HAC; require HAC balance at least 0.012 HAC; require HAC balance equal to 0.013 HAC; require SAT balance at most 140; require SAT balance at least 150; require SAT balance equal to 160; require actual HACD count at most 17; require actual HACD count at least 18; require actual HACD count equal to 19; require Asset #20 balance at most 200 atoms; require Asset #21 balance at least 210 atoms; require Asset #22 balance equal to 220 atoms; require block height at most 900000; require block height at least 900001; require chain ID equal to 1",
+      "wallet_mode": "structured: TEX cells"
+    },
+    {
+      "fixture_id": "tex_cell_repeat.standard",
+      "kind": 23,
+      "name": "tex_cell_repeat",
+      "scope": "top",
+      "sdk_profile": true,
+      "json": "{\"kind\":23,\"times\":100,\"addr\":\"1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9\",\"cells\":[{\"cellid\":1,\"haczhu\":1000000},{\"cellid\":7,\"asset\":{\"serial\":7,\"amount\":70}}],\"sign\":{\"publickey\":\"0x021111111111111111111111111111111111111111111111111111111111111111\",\"signature\":\"0xabababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab\"}}",
+      "raw": "0017006400e63c33a796b3032ce6b856f68fccf06608d9ed1802014f424007072046021111111111111111111111111111111111111111111111111111111111111111abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab",
+      "fullnode_description": "Execute TEX cells signed by 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9 100 times: pay 0.01 HAC into TEX escrow; pay 70 atoms of Asset #7 into TEX escrow",
+      "sdk_description": "Execute TEX cells signed by 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9 100 times: pay 0.01 HAC into TEX escrow; pay 70 atoms of Asset #7 into TEX escrow",
       "wallet_mode": "structured: TEX cells"
     },
     {

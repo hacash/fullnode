@@ -16,7 +16,8 @@ use sys::check_readable_string;
 use crate::{AddrOrPtr, Amount};
 
 /// Version tag of the frozen description wording rules (see the spec doc).
-pub const DESC_SPEC_VERSION: &str = "action-description@1";
+/// v2: catalog grows by `TexCellRepeat` (kind 23) — no wording-rule change.
+pub const DESC_SPEC_VERSION: &str = "action-description@2";
 
 /// Shared byte-payload preview cap for blob-style description previews.
 /// Previews never truncate addresses, amounts or safety-critical lists —

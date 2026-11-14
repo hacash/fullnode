@@ -8,7 +8,7 @@ use base::{
 use field::{Address, Amount, AssetAmt, AssetSmelt, Balance, BlockHeight, BytesW1, DiamondName, DiamondNumber, DiamondNumberAuto, DiamondOwnedForm, DiamondSto, Encode, Fold64, Hash, Uint1};
 use mint::api::preflight::execute_signed_transaction;
 use protocol::{
-    action_std::{TexCell, TexCellExecute, TransferAssetTo, TransferHacTo},
+    action_std::{TexCell, TexCellExecute, TexCellRepeat, TransferAssetTo, TransferHacTo},
     tx_std::StdTransaction,
 };
 use sys::Account;
@@ -925,4 +925,242 @@ fn builder_generated_reverse_direction_matrix_executes_and_accounts_for_each_leg
         assert_eq!(CoreStateRead::wrap(&state).balance(&ta).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 120);
         assert_eq!(CoreStateRead::wrap(&state).balance(&ma).unwrap().unwrap().asset(base_serial).unwrap().amount.uint(), 80);
     }
+}
+
+/// Kind-23 e2e: one `TexCellRepeat` wrapping a maker bundle settles exactly
+/// like the same bundle repeated as 50 flat kind-22 actions — same escrow
+/// residual, same balances — through the full tx pipeline (precheck, caps,
+/// gas escrow, settlement, refund).
+#[test]
+fn tex_repeat_matches_fifty_flat_copies_through_the_full_pipeline() {
+    let taker = Account::create_by_secret_key_value([51; 32]).unwrap();
+    let maker1 = Account::create_by_secret_key_value([52; 32]).unwrap();
+    let maker2 = Account::create_by_secret_key_value([53; 32]).unwrap();
+    let taker_addr = Address::from(*taker.address());
+    let maker1_addr = Address::from(*maker1.address());
+    let maker2_addr = Address::from(*maker2.address());
+    // Escrow pay cell folds to 3B, so the repeat's payload P = 4B and its
+    // 49 extra executions cost 196 gas; budget byte 6 decodes to 207.
+    let pay_cells = vec![TexCell::ZhuPay {
+        haczhu: Fold64::from(100).unwrap(),
+    }];
+    let get_cells = vec![TexCell::ZhuGet {
+        haczhu: Fold64::from(5_000).unwrap(),
+    }];
+
+    let parent = root();
+    let build =
+        |repeat_times: Option<u16>| -> (StateChunkRef, TxRef, Arc<app::Registry>) {
+            let services = Arc::new(app::standard_registry().unwrap());
+            let mut state = StateChunkRef::block_draft_on(&parent, 1);
+            CoreState::wrap(&mut state).balance_set(
+                &taker_addr,
+                &Balance::hac(Amount::from("100:248").unwrap()),
+            );
+            CoreState::wrap(&mut state).balance_set(
+                &maker1_addr,
+                &Balance::hac(Amount::from("1:248").unwrap()),
+            );
+            CoreState::wrap(&mut state).balance_set(
+                &maker2_addr,
+                &Balance::hac(Amount::from("1:248").unwrap()),
+            );
+            let mut tx = StdTransaction::new_by(
+                hacash_params::TX_TYPE_3,
+                taker_addr,
+                Amount::from("1:248").unwrap(),
+                sys::curtimes().saturating_sub(1),
+            );
+            tx.gas_max = Uint1::from(6);
+            match repeat_times {
+                Some(times) => {
+                    let bundle = TexCellExecute::create_signed(
+                        maker1_addr,
+                        pay_cells.clone(),
+                        &maker1,
+                    )
+                    .unwrap();
+                    let rep = TexCellRepeat::from_signed(&bundle, times).unwrap();
+                    tx.push_action_in(Arc::new(rep));
+                }
+                None => {
+                    for _ in 0..50 {
+                        tx.push_action_in(Arc::new(TexCellExecute::create_signed(
+                            maker1_addr,
+                            pay_cells.clone(),
+                            &maker1,
+                        )
+                        .unwrap()));
+                    }
+                }
+            }
+            tx.push_action_in(Arc::new(
+                TexCellExecute::create_signed(maker2_addr, get_cells.clone(), &maker2).unwrap(),
+            ));
+            tx.fill_sign_account(&taker).unwrap();
+            let tx: TxRef = Arc::new(tx);
+            (state, tx, services)
+        };
+
+    let run = |repeat_times: Option<u16>| -> (sys::Ret<()>, StateChunkRef) {
+        let (state, tx, services) = build(repeat_times);
+        let mut tx_env = env(tx.as_ref());
+        tx_env.block.height = 1;
+        let res = execute_and_commit(services, &state, tx_env, tx);
+        (res, state)
+    };
+    let maker1_after =
+        |state: &StateChunkRef| CoreStateRead::wrap(state).balance(&maker1_addr).unwrap().unwrap().hacash;
+    let maker2_after =
+        |state: &StateChunkRef| CoreStateRead::wrap(state).balance(&maker2_addr).unwrap().unwrap().hacash;
+
+    let (res, rep_state) = run(Some(50));
+    res.expect("repeat tx executes");
+    let (res, flat_state) = run(None);
+    res.expect("fifty flat copies execute");
+    assert_eq!(maker1_after(&rep_state), maker1_after(&flat_state));
+    assert_eq!(maker2_after(&rep_state), maker2_after(&flat_state));
+    // 50 × 100 zhu moved from maker1 into escrow, then out to maker2
+    // (1 HAC = 10^8 zhu, so each side sits 5,000 zhu away from its 1 HAC seed).
+    assert_eq!(maker1_after(&rep_state), Amount::zhu(99_995_000));
+    assert_eq!(maker2_after(&rep_state), Amount::zhu(100_005_000));
+}
+
+/// The tx-level expanded-action cap fails the tx in precheck, before any gas
+/// escrow or state touch: three repeats of times=70 sum to 210 > 200 logical
+/// actions even though each decode-level shape is legal.
+#[test]
+fn tex_repeat_over_tx_action_cap_is_rejected_in_precheck() {
+    let services = Arc::new(app::standard_registry().unwrap());
+    let taker = Account::create_by_secret_key_value([54; 32]).unwrap();
+    let maker = Account::create_by_secret_key_value([55; 32]).unwrap();
+    let taker_addr = Address::from(*taker.address());
+    let maker_addr = Address::from(*maker.address());
+    let parent = root();
+    let mut state = StateChunkRef::block_draft_on(&parent, 1);
+    CoreState::wrap(&mut state).balance_set(
+        &taker_addr,
+        &Balance::hac(Amount::from("100:248").unwrap()),
+    );
+    CoreState::wrap(&mut state).balance_set(
+        &maker_addr,
+        &Balance::hac(Amount::from("1:248").unwrap()),
+    );
+    let cells = vec![TexCell::ZhuPay {
+        haczhu: Fold64::from(1).unwrap(),
+    }];
+    let bundle = TexCellExecute::create_signed(maker_addr, cells, &maker).unwrap();
+    let mut tx = StdTransaction::new_by(
+        hacash_params::TX_TYPE_3,
+        taker_addr,
+        Amount::from("1:248").unwrap(),
+        sys::curtimes().saturating_sub(1),
+    );
+    tx.gas_max = Uint1::from(hacash_params::TX_GAS_BUDGET_CAP_BYTE);
+    for _ in 0..3 {
+        let rep = TexCellRepeat::from_signed(&bundle, 70).unwrap();
+        tx.push_action_in(Arc::new(rep));
+    }
+    tx.fill_sign_account(&taker).unwrap();
+    let tx: TxRef = Arc::new(tx);
+    let mut tx_env = env(tx.as_ref());
+    tx_env.block.height = 1;
+    let err = execute_signed_transaction(
+        services,
+        StateChunkRef::tx_on(&state, tx.hash()),
+        tx_env,
+        tx,
+        Instant::now() + Duration::from_secs(10),
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string().contains("expanded actions exceed limit"),
+        "{err}"
+    );
+}
+
+/// A kind-23 repeat always charges gas (`times >= 2` bills at least one extra
+/// payload), so `gas_max = 0` is rejected in precheck — before any escrow or
+/// state touch — instead of failing at execute time with "gas not
+/// initialized". A kind-22-only tx with the same envelope stays legal.
+#[test]
+fn tex_repeat_with_zero_gas_max_is_rejected_in_precheck() {
+    let services = Arc::new(app::standard_registry().unwrap());
+    let taker = Account::create_by_secret_key_value([56; 32]).unwrap();
+    let maker = Account::create_by_secret_key_value([57; 32]).unwrap();
+    let taker_addr = Address::from(*taker.address());
+    let maker_addr = Address::from(*maker.address());
+    let parent = root();
+    let mut state = StateChunkRef::block_draft_on(&parent, 1);
+    CoreState::wrap(&mut state).balance_set(
+        &taker_addr,
+        &Balance::hac(Amount::from("100:248").unwrap()),
+    );
+    CoreState::wrap(&mut state).balance_set(
+        &maker_addr,
+        &Balance::hac(Amount::from("1:248").unwrap()),
+    );
+    let cells = vec![TexCell::ZhuPay {
+        haczhu: Fold64::from(1).unwrap(),
+    }];
+    let bundle = TexCellExecute::create_signed(maker_addr, cells, &maker).unwrap();
+    let mut tx = StdTransaction::new_by(
+        hacash_params::TX_TYPE_3,
+        taker_addr,
+        Amount::from("1:248").unwrap(),
+        sys::curtimes().saturating_sub(1),
+    );
+    tx.gas_max = Uint1::from(0);
+    let rep = TexCellRepeat::from_signed(&bundle, 50).unwrap();
+    tx.push_action_in(Arc::new(rep));
+    tx.fill_sign_account(&taker).unwrap();
+    let tx: TxRef = Arc::new(tx);
+    let mut tx_env = env(tx.as_ref());
+    tx_env.block.height = 1;
+    let err = execute_signed_transaction(
+        services.clone(),
+        StateChunkRef::tx_on(&state, tx.hash()),
+        tx_env,
+        tx.clone(),
+        Instant::now() + Duration::from_secs(10),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("requires gas_max > 0"), "{err}");
+
+    // The kind-22 twin with the same zero-gas_max envelope stays legal: a
+    // flat self-balancing bundle charges no gas, so the tx executes fully
+    // (escrow in/out nets to zero and settlement passes).
+    let flat_bundle = TexCellExecute::create_signed(
+        maker_addr,
+        vec![
+            TexCell::ZhuPay {
+                haczhu: Fold64::from(1).unwrap(),
+            },
+            TexCell::ZhuGet {
+                haczhu: Fold64::from(1).unwrap(),
+            },
+        ],
+        &maker,
+    )
+    .unwrap();
+    let mut flat = StdTransaction::new_by(
+        hacash_params::TX_TYPE_3,
+        taker_addr,
+        Amount::from("1:248").unwrap(),
+        sys::curtimes().saturating_sub(1),
+    );
+    flat.gas_max = Uint1::from(0);
+    flat.push_action_in(Arc::new(flat_bundle));
+    flat.fill_sign_account(&taker).unwrap();
+    let flat: TxRef = Arc::new(flat);
+    let mut flat_env = env(flat.as_ref());
+    flat_env.block.height = 1;
+    execute_signed_transaction(
+        services.clone(),
+        StateChunkRef::tx_on(&state, flat.hash()),
+        flat_env,
+        flat,
+        Instant::now() + Duration::from_secs(10),
+    )
+    .expect("kind-22 tx with gas_max = 0 passes precheck");
 }

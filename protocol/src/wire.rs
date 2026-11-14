@@ -71,6 +71,7 @@ pub const ACTION_CODECS: &[ActionCodecBinding] = &[
     base::action_codec_binding!(AstSelect, create_ast_select, decode_ast_select_json),
     base::action_codec_binding!(AstIf, create_ast_if, decode_ast_if_json),
     base::action_codec_binding!(TexCellExecute),
+    base::action_codec_binding!(TexCellRepeat),
 ];
 
 /// Nested structs referenced by protocol action schemas.

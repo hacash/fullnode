@@ -12,10 +12,10 @@ use crate::profile::{
     OP_ACCOUNT_VERIFY_ADDRESS, OP_ACCOUNT_VERIFY_SIGNATURE, OP_ACTION_DESCRIBE, OP_AMOUNT_FORMAT,
     OP_AMOUNT_PARSE, OP_DIAMOND_LOOKUP, OP_MESSAGE_PREPARE_SIGNATURE, OP_MESSAGE_VERIFY,
     OP_POLICY_EVALUATE, OP_SYSTEM_PARAMS, OP_SYSTEM_SDK_VERSION, OP_TEX_ATTACH_SIGNATURE,
-    OP_TEX_BUILD, OP_TEX_INSPECT, OP_TEX_PREPARE_SIGNATURE, OP_TEX_VERIFY, OP_TX_ATTACH_SIGNATURE,
-    OP_TX_ATTACH_SIGNATURE_UNBOUND, OP_TX_BUILD, OP_TX_DECODE, OP_TX_ENCODE, OP_TX_ESTIMATE_FEE,
-    OP_TX_INSPECT, OP_TX_INSPECT_REPORT, OP_TX_PREPARE_SIGNATURE, OP_TX_SIGNATURE_REPORT,
-    OP_TX_VERIFY, OP_VM_CODE, OP_VM_DECODE_CALL,
+    OP_TEX_BUILD, OP_TEX_INSPECT, OP_TEX_PREPARE_SIGNATURE, OP_TEX_REPEAT, OP_TEX_VERIFY,
+    OP_TX_ATTACH_SIGNATURE, OP_TX_ATTACH_SIGNATURE_UNBOUND, OP_TX_BUILD, OP_TX_DECODE,
+    OP_TX_ENCODE, OP_TX_ESTIMATE_FEE, OP_TX_INSPECT, OP_TX_INSPECT_REPORT,
+    OP_TX_PREPARE_SIGNATURE, OP_TX_SIGNATURE_REPORT, OP_TX_VERIFY, OP_VM_CODE, OP_VM_DECODE_CALL,
 };
 
 pub(crate) fn profile() -> &'static CodecProfile {
@@ -86,6 +86,7 @@ enum ReqValue {
     OptJson(Option<String>),
     OptU64(Option<u64>),
     U8(u8),
+    U16(u16),
     OptInspectContext(Option<crate::inspect::InspectContext>),
 }
 
@@ -146,6 +147,16 @@ impl ReqValue {
             _ => Err(SdkError::new(
                 SdkErrorCode::ParseFailed,
                 "request field is not a u8",
+            )),
+        }
+    }
+
+    fn u16(&self) -> Result<u16, SdkError> {
+        match self {
+            ReqValue::U16(value) => Ok(*value),
+            _ => Err(SdkError::new(
+                SdkErrorCode::ParseFailed,
+                "request field is not a u16",
             )),
         }
     }
@@ -221,6 +232,9 @@ fn parse_request_json(
             }
             RequestField::U8(_) => {
                 ReqValue::U8(jsonparse::required_number(&pairs, name, &context)?)
+            }
+            RequestField::U16(_) => {
+                ReqValue::U16(jsonparse::required_number(&pairs, name, &context)?)
             }
             RequestField::OptionalInspectContext(_) => {
                 let value = match jsonparse::find(&pairs, name) {
@@ -544,6 +558,10 @@ fn route_json(operation_id: u16, payload: &str) -> Result<String, SdkError> {
             let v = parse_request_json(operation_id, payload)?;
             crate::tex::verify_action(req_field(&v, "action")?.str()?)
         }
+        OP_TEX_REPEAT => {
+            let v = parse_request_json(operation_id, payload)?;
+            crate::tex::repeat(req_field(&v, "action")?.str()?, req_field(&v, "times")?.u16()?)
+        }
         _ => Err(SdkError::new(
             SdkErrorCode::UnknownOperation,
             format!("unknown operation id {}", operation_id),
@@ -655,6 +673,7 @@ mod tests {
         assert_eq!(crate::profile::OP_TEX_PREPARE_SIGNATURE, 28);
         assert_eq!(crate::profile::OP_TEX_ATTACH_SIGNATURE, 29);
         assert_eq!(crate::profile::OP_TEX_VERIFY, 30);
+        assert_eq!(crate::profile::OP_TEX_REPEAT, 31);
         let address = field::Address::default().to_readable();
         let auth = format!(
             r#"{{"schema":"hacash.tex/authorization@1","address":"{address}","cells":[{{"cellid":1,"haczhu":123}},{{"cellid":25,"chainid":0}},{{"cellid":23,"height":"1099511627775"}}]}}"#
@@ -735,6 +754,34 @@ mod tests {
             &format!("{{\"action\":\"0x{}\"}}", hex::encode(action.encode())),
         );
         assert!(verify.contains("\"ok\":true"), "{verify}");
+
+        // tex.repeat wraps the signed bundle without re-signing; the wrapped
+        // hex re-verifies, and below-2 times is refused at the boundary.
+        let bundle_hex = hex::encode(action.encode());
+        let repeat = invoke_ok(
+            OP_TEX_REPEAT,
+            &format!("{{\"action\":\"{bundle_hex}\",\"times\":50}}"),
+        );
+        assert!(repeat.contains("\"schema\":\"hacash.tex/repeat@1\""), "{repeat}");
+        assert!(repeat.contains("\"times\":50"), "{repeat}");
+        let wrapped = repeat
+            .split("\"action\":\"0x")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("repeat envelope carries the action hex");
+        use field::Decode;
+        let rep = protocol::action_std::TexCellRepeat::decode(&hex::decode(wrapped).unwrap())
+            .unwrap()
+            .0;
+        assert_eq!(rep.times(), 50);
+        assert_eq!(rep.sign_hash(), action.sign_hash());
+        let verify = invoke_ok(OP_TEX_VERIFY, &format!("{{\"action\":\"0x{wrapped}\"}}"));
+        assert!(verify.contains("\"ok\":true"), "{verify}");
+        let rejected = invoke_json(
+            OP_TEX_REPEAT,
+            format!("{{\"action\":\"{bundle_hex}\",\"times\":1}}").as_bytes(),
+        );
+        assert!(rejected.contains("\"ok\":0"), "{rejected}");
     }
 
     /// Operation names are the public interface: unique, non-empty, and
