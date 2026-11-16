@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use vm::calc::SpaceCap;
 use vm::calc::container::CalcContainer;
-use vm::fitshc::compiler::{FitshCompileOutput, compile_with_rv64im};
+use vm::fitshc::compiler::{FitshCompileOutput, compile_with_rv64im_at};
 use vm::fitshc::{CalcRequest, collect_calc_requests};
 
 use crate::resolve::{ElfDefaults, Resolution, resolve_requests};
@@ -197,11 +197,60 @@ pub fn compile_fitsh_with_calcs(
                 });
                 pairs.push((name, bytes));
             }
+            Resolution::FitshBody { req } => {
+                // Native fitsh kernel body: lower with the fitsh→RV64IM
+                // backend. Metadata comes from the body's leading
+                // `// calc:` comment block (same schema as rust kernels);
+                // errors keep the function name for pointing at the source.
+                let meta = crate::meta::fitsh_body_meta(fitsh_path, source, &req.name)?;
+                let bytes = vm::fitshc::compile_rv64im_body_kernel_at(
+                    &req.name,
+                    req.body.clone().unwrap_or_default(),
+                    &req.body_spans,
+                    req.arg_name.as_deref(),
+                    &[],
+                    &[],
+                    &[],
+                    &meta,
+                    cap,
+                    Some(&fitsh_path.display().to_string()),
+                )
+                .map_err(|e| e.to_string())?;
+                let c = vm::fitshc::kernel::decode_container(&bytes).map_err(|e| e.to_string())?;
+                // fitsh bodies are stackless by construction (no calls, no
+                // spills — the frame is bank/frame registers): the
+                // small-stack heuristic never applies to them
+                warnings.extend(
+                    kernel_warnings(&name, &c, bytes.len(), cap)
+                        .into_iter()
+                        .filter(|w| !w.contains("B of stack remain")),
+                );
+                artifacts.push(KernelArtifact {
+                    name: name.clone(),
+                    origin,
+                    source: Some(fitsh_path.to_path_buf()),
+                    profile_byte: c.profile,
+                    input_max: c.input_max,
+                    output_max: c.output_max,
+                    mem_kib: c.mem_kib,
+                    image_len: bytes.len(),
+                    code_len: c.exec_filesz(),
+                    rodata_len: c.ro_filesz(),
+                    init_len: c.rw_filesz(),
+                    image_id: hex::encode(c.image_id()),
+                    cache_hit: false,
+                    container_bytes: bytes.clone(),
+                    build_dir: None,
+                    hcf1_path: None,
+                });
+                pairs.push((name, bytes));
+            }
         }
     }
 
     let inject: Vec<(&str, Vec<u8>)> = pairs.iter().map(|(n, b)| (n.as_str(), b.clone())).collect();
-    let output = compile_with_rv64im(source, &inject).map_err(|e| e.to_string())?;
+    let output = compile_with_rv64im_at(&fitsh_path.display().to_string(), source, &inject)
+        .map_err(|e| e.to_string())?;
 
     // Side artifacts (the packed container + build manifest). Failures here
     // degrade to warnings: the compiled contract is already complete, and a
@@ -319,6 +368,53 @@ pub fn write_kernel_artifacts(
     Ok(hcf1)
 }
 
+/// Compile the single native fitsh kernel body of a contract (`run` /
+/// `image` on a `.fitsh` file). Errors name the candidates when the
+/// contract carries zero or several body kernels, or forwards the lowering
+/// error otherwise.
+pub fn single_body_kernel(
+    fitsh_path: &Path,
+    source: &str,
+    cap: &SpaceCap,
+) -> Result<(String, Vec<u8>), String> {
+    let requests = vm::fitshc::collect_calc_requests(source).map_err(|e| e.to_string())?;
+    let bodies: Vec<_> = requests.iter().filter(|r| r.body.is_some()).collect();
+    match bodies.len() {
+        1 => {}
+        0 => {
+            return Err(format!(
+                "{}: no native fitsh kernel body (function rv64im f(...) {{ ... }}) found",
+                fitsh_path.display()
+            ));
+        }
+        n => {
+            let names: Vec<String> = bodies.iter().map(|r| r.name.clone()).collect();
+            return Err(format!(
+                "{}: {n} fitsh kernel bodies ({}) but this command runs one; \
+                 split the contract or use `fitshc build`",
+                fitsh_path.display(),
+                names.join(", ")
+            ));
+        }
+    }
+    let req = bodies[0];
+    let meta = crate::meta::fitsh_body_meta(fitsh_path, source, &req.name)?;
+    let bytes = vm::fitshc::compile_rv64im_body_kernel_at(
+        &req.name,
+        req.body.clone().unwrap_or_default(),
+        &req.body_spans,
+        req.arg_name.as_deref(),
+        &[],
+        &[],
+        &[],
+        &meta,
+        cap,
+        Some(&fitsh_path.display().to_string()),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((req.name.clone(), bytes))
+}
+
 /// Execute a resolved container locally (the `fitshc run` smoke test):
 /// interpreter+AOT exactly like a node would.
 pub fn run_container(
@@ -337,7 +433,54 @@ pub fn run_container(
     let exec = obj.run(input, limits);
     match exec.result {
         Ok(out) => Ok((out, exec.cycles_used, exec.resource.max(0) as u64)),
-        Err(e) => Err(format!("kernel run failed: {e:?}")),
+        Err(e) => Err(format!(
+            "kernel run failed: {} (cycles used: {})",
+            describe_run_abort(&e, exec.exit_code),
+            exec.cycles_used
+        )),
+    }
+}
+
+/// Decode a calc run abort for the CLI failure surface (P2-D03 T4).
+///
+/// Architectural aborts travel as a guest HALT with a nonzero exit code
+/// (`vm/src/calc/interp.rs` GuestExit → `CalcExec { result: Err(Trap),
+/// exit_code }`), so the exit code — not the coarse `CalcAbort2::Trap`
+/// classification — carries the meaning: 90 = arithmetic fault, 71 = cast
+/// failure (same constants as `ItrErrCode`, rv64 trap thunk). Everything
+/// else maps to a plain-language cause.
+pub fn describe_run_abort(abort: &vm::calc::CalcAbort2, exit_code: u64) -> String {
+    const EXIT_ARITH: u64 = 90;
+    const EXIT_CAST: u64 = 71;
+    match abort {
+        vm::calc::CalcAbort2::Trap => {
+            if exit_code == EXIT_ARITH {
+                "kernel aborted: arithmetic fault (exit code 90) — checked overflow \
+                 or division fault"
+                    .to_string()
+            } else if exit_code == EXIT_CAST {
+                "kernel aborted: cast failure (exit code 71) — a runtime `as` cast \
+                 was out of range"
+                    .to_string()
+            } else if exit_code != 0 {
+                format!("kernel exited with code {exit_code} (guest halt)")
+            } else {
+                "kernel aborted: machine trap (no exit code reported)".to_string()
+            }
+        }
+        vm::calc::CalcAbort2::OutOfGas => {
+            "kernel aborted: out of gas (cycle budget exhausted)".to_string()
+        }
+        vm::calc::CalcAbort2::Deadline => {
+            "kernel aborted: wall-clock deadline elapsed".to_string()
+        }
+        vm::calc::CalcAbort2::OutOfResource => {
+            "kernel aborted: resource budget cannot cover the minimum charge".to_string()
+        }
+        vm::calc::CalcAbort2::EngineMismatch => {
+            "kernel aborted: interpreter/AOT engine mismatch (fatal, not guest-visible)"
+                .to_string()
+        }
     }
 }
 
@@ -355,6 +498,27 @@ mod lib_tests {
                 .unwrap();
         assert!(artifacts.is_empty());
         assert_eq!(out.3, "D");
+    }
+
+    #[test]
+    fn run_abort_decode_pins_exit_code_messages() {
+        use vm::calc::CalcAbort2;
+        let m = describe_run_abort(&CalcAbort2::Trap, 90);
+        assert!(m.contains("arithmetic fault") && m.contains("90"), "{m}");
+        let m = describe_run_abort(&CalcAbort2::Trap, 71);
+        assert!(m.contains("cast failure") && m.contains("71"), "{m}");
+        let m = describe_run_abort(&CalcAbort2::Trap, 5);
+        assert!(m.contains("kernel exited with code 5"), "{m}");
+        let m = describe_run_abort(&CalcAbort2::Trap, 0);
+        assert!(m.contains("machine trap"), "{m}");
+        let m = describe_run_abort(&CalcAbort2::OutOfGas, 0);
+        assert!(m.contains("out of gas"), "{m}");
+        let m = describe_run_abort(&CalcAbort2::Deadline, 0);
+        assert!(m.contains("deadline"), "{m}");
+        let m = describe_run_abort(&CalcAbort2::OutOfResource, 0);
+        assert!(m.contains("resource budget"), "{m}");
+        let m = describe_run_abort(&CalcAbort2::EngineMismatch, 0);
+        assert!(m.contains("engine mismatch"), "{m}");
     }
 
     #[test]

@@ -2,7 +2,7 @@ use super::compile_body::{compile_body_with_macros, CompiledCode};
 use super::state::ParseState;
 use crate::contract::Func;
 use crate::rt::SourceMap;
-use crate::rt::{KwTy, Token};
+use crate::rt::{KwTy, Token, TokenSpan};
 use crate::value::ValueTy;
 use crate::Token::*;
 use sys::*;
@@ -115,7 +115,12 @@ fn asm_token_text(token: &Token) -> Ret<String> {
         }
         Token::Operator(op) => op.symbol().to_string(),
         Token::Partition(c) => c.to_string(),
-        other => return errf!("invalid token in raw bytecode function: {:?}", other),
+        other => {
+            return errf!(
+                "invalid token {} in raw bytecode function",
+                crate::lang::token_desc(other)
+            )
+        }
     })
 }
 
@@ -151,23 +156,31 @@ fn raw_bytecode_function(body: &[Token]) -> Ret<Vec<u8>> {
 }
 
 fn parse_rv64im_param_type(state: &mut ParseState, name: &str) -> Ret<ValueTy> {
+    // Capture the declared type token before parse_type() consumes it, so the
+    // reject names what the user actually wrote (T5/E05).
+    let got = crate::lang::token_desc_opt(state.current());
+    let at = state.pos_here();
     match parse_type(state)? {
         Some(ValueTy::Bytes) => Ok(ValueTy::Bytes),
         _ => errf!(
-            "rv64im function '{}' parameter type must be bytes",
-            name
+            "{}rv64im function '{}' parameter type must be bytes (got {}); \
+             rv64im kernels take at most one bytes parameter — the call data",
+            at,
+            name,
+            got
         ),
     }
 }
 
 pub(super) fn parse_rv64im_function(state: &mut ParseState) -> Ret<(Func, String)> {
     let Some(Identifier(name)) = state.current() else {
-        return errf!("expected rv64im function name");
+        return errf!("{}expected rv64im function name", state.pos_here());
     };
     let name = name.clone();
     state.advance();
 
     let mut param_types = Vec::new();
+    let mut arg_name: Option<String> = None;
     if matches!(state.current(), Some(Partition('('))) {
         state.advance();
         loop {
@@ -179,11 +192,14 @@ pub(super) fn parse_rv64im_function(state: &mut ParseState) -> Ret<(Func, String
                 break;
             }
             if state.idx >= state.max {
-                return errf!("args list not closed (missing ')')");
+                return errf!("{}args list not closed (missing ')')", state.pos_here());
             }
-            let Some(Identifier(_)) = state.current() else {
-                return errf!("expected arg name");
+            let Some(Identifier(pname)) = state.current() else {
+                return errf!("{}expected arg name", state.pos_here());
             };
+            if arg_name.is_none() {
+                arg_name = Some(pname.clone());
+            }
             state.advance();
             if param_types.len() >= crate::MAX_FUNC_PARAM_LEN {
                 return errf!(
@@ -198,7 +214,7 @@ pub(super) fn parse_rv64im_function(state: &mut ParseState) -> Ret<(Func, String
             ) {
                 state.advance();
             } else {
-                return errf!("expected ':' after arg name");
+                return errf!("{}expected ':' after arg name", state.pos_here());
             }
             param_types.push(parse_rv64im_param_type(state, &name)?);
             if matches!(state.current(), Some(Partition(','))) {
@@ -210,7 +226,8 @@ pub(super) fn parse_rv64im_function(state: &mut ParseState) -> Ret<(Func, String
         [] | [ValueTy::Bytes] => {}
         _ => {
             return errf!(
-                "rv64im function '{}' params must be empty or one bytes",
+                "{}rv64im function '{}' params must be empty or one bytes",
+                state.pos_here(),
                 name
             );
         }
@@ -225,7 +242,11 @@ pub(super) fn parse_rv64im_function(state: &mut ParseState) -> Ret<(Func, String
         }
         let ty = parse_type(state)?;
         if ty != Some(ValueTy::Bytes) {
-            return errf!("rv64im function '{}' return type must be bytes", name);
+            return errf!(
+                "{}rv64im function '{}' return type must be bytes",
+                state.pos_here(),
+                name
+            );
         }
         if wrapped {
             state.eat_partition(')')?;
@@ -242,30 +263,44 @@ pub(super) fn parse_rv64im_function(state: &mut ParseState) -> Ret<(Func, String
             Some(Identifier(const_name)) => {
                 state.advance();
                 let Some((_, node)) = state.consts.iter().find(|(n, _)| n == &const_name) else {
-                    return errf!("unknown const '{}'", const_name);
+                    return errf!("{}unknown const '{}'", state.pos_here(), const_name);
                 };
                 match crate::lang::ir_literal_value(node.as_ref())? {
                     Some(crate::value::Value::Bytes(bytes)) => bytes,
-                    _ => return errf!("const '{}' is not bytes", const_name),
+                    _ => return errf!("{}const '{}' is not bytes", state.pos_here(), const_name),
                 }
             }
             other => {
                 return errf!(
-                    "rv64im function '{}' requires bytes literal or const, got {:?}",
+                    "rv64im function '{}' requires bytes literal or const, got {}",
                     name,
-                    other
+                    crate::lang::token_desc_opt(other.as_ref())
                 );
             }
         }
-    } else {
-        if matches!(state.current(), Some(Partition('{'))) {
-            return errf!(
-                "rv64im function '{}' fitsh kernel body is reserved and not supported yet; \
-                 assign container bytes ('= 0x..'), supply a '{name}.rs' rust kernel, \
-                 or pass external_rv64im",
-                name
-            );
+    } else if matches!(state.current(), Some(Partition('{'))) {
+        // Native fitsh kernel body: lower with the fitsh→RV64IM backend.
+        // When the build tool already compiled the body (with its `// calc:`
+        // metadata) it injected the container bytes via `external_rv64im` —
+        // consume the tokens and use those bytes; otherwise this is the pure
+        // library path and the body lowers here with default metadata.
+        let (body_tokens, body_spans) = parse_func_body_tokens_spans(state)?;
+        match state.external_rv64im.get(&name) {
+            Some(bytes) => bytes.clone(),
+            None => crate::fitshc::kernel::compile_rv64im_body_kernel_at(
+                &name,
+                body_tokens,
+                &body_spans,
+                arg_name.as_deref(),
+                &state.libs,
+                &state.consts,
+                &state.macros,
+                &crate::fitshc::kernel::Rv64imBodyMeta::default(),
+                &crate::rt::SpaceCap::new(0),
+                state.file.as_deref(),
+            )?,
         }
+    } else {
         state.external_rv64im.get(&name).cloned().ok_or_else(|| {
             format!(
                 "rv64im function '{}' requires '= 0x...' container bytes or an external_rv64im entry",
@@ -302,11 +337,14 @@ pub fn parse_function(state: &mut ParseState, consume_kw: bool) -> Ret<(Func, So
     let is_raw_bytecode = matches!(state.current(), Some(Keyword(KwTy::ByteCode)));
     let is_ircode = parse_optional_code_modifier(state, "function")?;
     if matches!(state.current(), Some(Keyword(KwTy::External))) {
-        return errf!("function modifier 'external' must appear before code modifier");
+        return errf!(
+            "{}function modifier 'external' must appear before code modifier",
+            state.pos_here()
+        );
     }
 
     let (name, args, ret_ty) = parse_func_sig(state)?;
-    let body_tokens = parse_func_body_tokens(state)?;
+    let (body_tokens, body_spans) = parse_func_body_tokens_spans(state)?;
 
     // Setup Func
     let mut func = Func::new(&name)?;
@@ -333,6 +371,8 @@ pub fn parse_function(state: &mut ParseState, consume_kw: bool) -> Ret<(Func, So
                 &state.consts,
                 is_ircode,
                 &state.macros,
+                &body_spans,
+                state.file.as_deref(),
             )?;
 
         func = match compiled {
@@ -354,7 +394,11 @@ pub fn parse_func_sig(
         state.advance();
         n
     } else {
-        return errf!("expected function name but got {:?}", state.current());
+        return errf!(
+            "{}expected function name but got {}",
+            state.pos_here(),
+            crate::lang::token_desc_opt(state.current())
+        );
     };
 
     let mut args = Vec::new();
@@ -369,7 +413,7 @@ pub fn parse_func_sig(
                 break;
             }
             if state.idx >= state.max {
-                return errf!("args list not closed (missing ')')");
+                return errf!("{}args list not closed (missing ')')", state.pos_here());
             }
 
             // arg: type
@@ -378,7 +422,7 @@ pub fn parse_func_sig(
                 state.advance();
                 n
             } else {
-                return errf!("expected arg name");
+                return errf!("{}expected arg name", state.pos_here());
             };
 
             // :
@@ -387,14 +431,22 @@ pub fn parse_func_sig(
             } else if let Some(Partition(':')) = state.current() {
                 state.advance();
             } else {
-                return errf!("expected ':' after arg name");
+                return errf!("{}expected ':' after arg name", state.pos_here());
             }
 
             // type
             let rtype = parse_type(state)?;
             let aty = match rtype {
                 Some(t) => t,
-                None => return errf!("unknown type"),
+                None => {
+                    return errf!(
+                        "{}unknown type for parameter '{}': got {} (supported: u8, \
+                         u16, u32, u64, u128, address, bytes, bool, tuple, list, map)",
+                        state.pos_here(),
+                        arg_name,
+                        crate::lang::token_desc_opt(state.current())
+                    );
+                }
             };
             aty.check_func_argv_type()?;
             args.push((arg_name, aty));
@@ -425,14 +477,20 @@ pub fn parse_func_sig(
 
         ret_ty = match rtype {
             Some(t) => Some(t),
-            None => return errf!("unknown return type"),
+            None => {
+                return errf!(
+                    "unknown return type: got {} (supported: u8, u16, u32, u64, \
+                     u128, address, bytes, bool, tuple, list, map)",
+                    crate::lang::token_desc_opt(state.current())
+                );
+            }
         };
 
         if wrapped {
             if let Some(Partition(')')) = state.current() {
                 state.advance();
             } else {
-                return errf!("expected ')' after return type");
+                return errf!("{}expected ')' after return type", state.pos_here());
             }
         }
     }
@@ -441,7 +499,16 @@ pub fn parse_func_sig(
 }
 
 pub fn parse_func_body_tokens(state: &mut ParseState) -> Ret<Vec<Token>> {
+    parse_func_body_tokens_spans(state).map(|(tokens, _)| tokens)
+}
+
+/// P2-D03 T1: body tokens with their span sidecar (a contiguous slice of the
+/// outer stream), so body-level errors carry positions.
+pub fn parse_func_body_tokens_spans(
+    state: &mut ParseState,
+) -> Ret<(Vec<Token>, Vec<TokenSpan>)> {
     state.eat_partition('{')?;
+    let start = state.idx;
     let mut inner = Vec::new();
     let mut depth = 1;
     while state.idx < state.max {
@@ -454,12 +521,19 @@ pub fn parse_func_body_tokens(state: &mut ParseState) -> Ret<Vec<Token>> {
         }
         if depth == 0 {
             state.advance(); // consume closing }
-            return Ok(inner);
+            let spans = state
+                .spans
+                .get(start..state.idx - 1)
+                .unwrap_or(&Vec::new())
+                .to_vec();
+            return Ok((inner, spans));
         }
         inner.push(t.clone());
         state.advance();
     }
-    errf!("bracket mismatch")
+    Err(state.err_here(format!(
+        "bracket mismatch: function body not closed (missing '}}')"
+    )))
 }
 
 #[cfg(test)]

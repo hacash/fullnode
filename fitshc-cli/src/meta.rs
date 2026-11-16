@@ -757,3 +757,177 @@ mod meta_tests {
         );
     }
 }
+
+
+/// Extract the raw source text of `function rv64im <name>(...) { ... }`'s
+/// body from a contract source (comment- and string-aware raw scan — the
+/// tokenizer drops comments, and the `// calc:` metadata lives in them).
+pub fn fitsh_body_source(source: &str, name: &str) -> Option<String> {
+    let b = source.as_bytes();
+    let n = b.len();
+    let mut i = 0usize;
+    let decl = format!("rv64im {name}");
+    while i < n {
+        // skip comments
+        if i + 1 < n && b[i] == b'/' && b[i + 1] == b'/' {
+            while i < n && b[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if i + 1 < n && b[i] == b'/' && b[i + 1] == b'*' {
+            i += 2;
+            while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
+                i += 1;
+            }
+            i = (i + 2).min(n);
+            continue;
+        }
+        // skip string literals
+        if b[i] == b'"' {
+            i += 1;
+            while i < n && b[i] != b'"' {
+                i += if b[i] == b'\\' { 2 } else { 1 };
+            }
+            i += 1;
+            continue;
+        }
+        // match the word `function` at a boundary
+        if i + 8 <= n && &b[i..i + 8] == b"function" && (i == 0 || !is_word(b[i - 1])) && (i + 8 >= n || !is_word(b[i + 8])) {
+            let rest = &source[i + 8..];
+            let trimmed = rest.trim_start();
+            if trimmed.starts_with(&decl) {
+                let after = &trimmed[decl.len()..];
+                if let Some((open, close)) = scan_balanced_braces(after) {
+                    // the body text strictly between the braces, so the
+                    // leading `// calc:` block is the first thing
+                    // `parse_kernel_meta` sees
+                    return Some(after[open + 1..close].to_string());
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn is_word(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// Byte indexes `(open, close)` of the first top-level `{`..`}` pair in
+/// `s`, or None.
+fn scan_balanced_braces(s: &str) -> Option<(usize, usize)> {
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    while i < b.len() && b[i] != b'{' {
+        if b[i] == b'/' && i + 1 < b.len() && b[i + 1] == b'/' {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    if i == b.len() {
+        return None;
+    }
+    let open = i;
+    let mut depth = 1usize;
+    i += 1;
+    while i < b.len() {
+        match b[i] {
+            b'/' if i + 1 < b.len() && b[i + 1] == b'/' => {
+                while i < b.len() && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < b.len() && b[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'"' => {
+                i += 1;
+                while i < b.len() && b[i] != b'"' {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((open, i));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Keys present in a source's leading `// calc:` comment block.
+fn body_comment_keys(body: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    for raw in body.lines() {
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some(comment) = line.strip_prefix("//") else {
+            break;
+        };
+        if let Some(kv) = comment.trim().strip_prefix("calc:") {
+            if let Some((key, _)) = kv.split_once('=') {
+                keys.push(key.trim().to_string());
+            }
+        }
+    }
+    keys
+}
+
+/// Build metadata for a native fitsh kernel body: the body's leading
+/// `// calc:` comment block (same schema as the rust kernels) mapped onto
+/// the lowering metadata. Profiles: `rv64im` → uncompressed profile 0,
+/// `rv64imc` → the register-banked compressed lowering (profile 2).
+pub fn fitsh_body_meta(
+    file: &Path,
+    source: &str,
+    name: &str,
+) -> Result<vm::fitshc::Rv64imBodyMeta, String> {
+    let mut meta = vm::fitshc::Rv64imBodyMeta::default();
+    let Some(body) = fitsh_body_source(source, name) else {
+        return Err(format!(
+            "{}: rv64im function '{name}' body not found for metadata scan",
+            file.display()
+        ));
+    };
+    let km = parse_kernel_meta(file, &body)?;
+    // absent `profile` keeps the fitsh-body default (the register-banked
+    // compressed lowering); an explicit key maps to the lowering mode
+    let has_profile_key = body_comment_keys(&body).contains(&"profile".to_string());
+    if has_profile_key {
+        meta.mode = match km.profile {
+            ProfileName::Rv64im => vm::ir::rv64::Rv64Mode::Im,
+            ProfileName::Rv64imc => vm::ir::rv64::Rv64Mode::ImcRemap,
+            other => {
+                return Err(format!(
+                    "{}: fitsh kernel bodies support profiles rv64im/rv64imc (got '{}'); \
+                     bitmanip extensions need the rust toolchain",
+                    file.display(),
+                    other.as_str()
+                ));
+            }
+        };
+    }
+    meta.input_max = km.input_max;
+    meta.output_max = km.output_max;
+    meta.mem_kib = match km.mem_kib {
+        MemSpec::Auto => 64,
+        MemSpec::KiB(n) => n,
+    };
+    Ok(meta)
+}

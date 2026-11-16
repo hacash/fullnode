@@ -3,11 +3,19 @@ use super::*;
 pub(super) struct Cursor {
     tokens: Vec<Token>,
     idx: usize,
+    /// P2-D03 T1 sidecar, parallel to `tokens` (may be shorter/empty when
+    /// built through the spanless path). Synthesized tokens carry
+    /// `TokenSpan::NONE`.
+    spans: Vec<TokenSpan>,
 }
 
 impl Cursor {
     pub(super) fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, idx: 0 }
+        Self { tokens, idx: 0, spans: Vec::new() }
+    }
+
+    pub(super) fn with_spans(tokens: Vec<Token>, spans: Vec<TokenSpan>) -> Self {
+        Self { tokens, idx: 0, spans }
     }
 
     pub(super) fn at_end(&self) -> bool {
@@ -18,9 +26,26 @@ impl Cursor {
         self.tokens.get(self.idx)
     }
 
+    /// Span of the current token (with last-known fallback for EOF);
+    /// `None` when no span information exists (spanless path).
+    pub(super) fn span(&self) -> Option<TokenSpan> {
+        if self.idx < self.spans.len() && self.spans[self.idx].known() {
+            return Some(self.spans[self.idx]);
+        }
+        self.spans.iter().rev().find(|s| s.known()).copied()
+    }
+
+    /// `{line}:{col}: ` prefix for error messages (empty without spans).
+    pub(super) fn pos_prefix(&self) -> String {
+        self.span().map(|s| format!("{s}: ")).unwrap_or_default()
+    }
+
     pub(super) fn next(&mut self) -> Ret<Token> {
         if self.idx >= self.tokens.len() {
-            return errf!("syntax: unexpected end of token stream");
+            let pre = self.pos_prefix();
+            return Err(Error::fault(format!(
+                "{pre}syntax: unexpected end of token stream"
+            )));
         }
         let token = self.tokens[self.idx].clone();
         self.idx += 1;

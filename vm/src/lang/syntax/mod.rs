@@ -53,6 +53,8 @@ struct ParserInjectedV2 {
 
 pub struct Syntax {
     cursor: Cursor,
+    /// P2-D03 T1: source-file name for `{file}:{line}:{col}` prefixes.
+    source_file: Option<String>,
     symbols: HashMap<String, SymbolEntryV2>,
     slots: HashMap<u8, SlotStateV2>,
     slot_used: HashSet<u8>,
@@ -81,9 +83,53 @@ impl Syntax {
         }
     }
 
+    /// P2-D03 T1: source-file name for error prefixes (purely presentational).
+    pub fn with_source_file(mut self, file: Option<String>) -> Self {
+        self.source_file = file;
+        self
+    }
+
+    /// P2-D03 T1: like [`Syntax::new`] with the tokenizer's parallel span
+    /// table for position-prefixed error messages. Token behavior identical.
+    pub fn new_with_spans(tokens: Vec<Token>, spans: Vec<TokenSpan>) -> Self {
+        Self {
+            cursor: Cursor::with_spans(tokens, spans),
+            emit: ParserEmitV2 {
+                irnode: IRNodeArray::with_opcode(Bytecode::IRBLOCK),
+                ..Default::default()
+            },
+            ..Self::empty()
+        }
+    }
+
+    /// P2-D03 T1: spans + source file in one constructor.
+    pub fn new_with_spans_at(
+        tokens: Vec<Token>,
+        spans: Vec<TokenSpan>,
+        file: Option<String>,
+    ) -> Self {
+        Self::new_with_spans(tokens, spans).with_source_file(file)
+    }
+
+    /// `{file}:{line}:{col}: ` prefix at the cursor (empty on the spanless
+    /// path). `file` is threaded from the fitshc contract layer when known.
+    pub(super) fn pos_here(&self) -> String {
+        let at = self.cursor.pos_prefix();
+        match &self.source_file {
+            Some(file) if !at.is_empty() => format!("{file}:{at}"),
+            _ => at,
+        }
+    }
+
+    /// Position-prefixed fault anchored at the cursor (`errf_at!` helper).
+    pub(super) fn err_here(&self, msg: impl std::fmt::Display) -> Error {
+        Error::fault(format!("{}{}", self.pos_here(), msg))
+    }
+
     fn empty() -> Self {
         Self {
             cursor: Cursor::new(Vec::new()),
+            source_file: None,
             symbols: HashMap::new(),
             slots: HashMap::new(),
             slot_used: HashSet::new(),

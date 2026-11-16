@@ -20,6 +20,10 @@ include! {"ir_literal.rs"}
 pub mod syntax;
 #[cfg(feature = "syntax")]
 pub use syntax::Syntax;
+/// P2-D03 T1: re-export the tokenizer's span sidecar type for external
+/// consumers (the `rt` module itself is `pub(crate)`).
+#[cfg(feature = "syntax")]
+pub use crate::rt::TokenSpan;
 
 #[cfg(feature = "syntax")]
 include! {"const_literal.rs"}
@@ -152,6 +156,57 @@ fn strip_display_root_block(tokens: &mut Vec<Token>) {
     stripped.extend(tokens[..body_start].iter().cloned());
     stripped.extend(tokens[body_start + 1..tokens.len() - 1].iter().cloned());
     *tokens = stripped;
+}
+
+/// Human-readable token description for error messages (P2-D03 T8): never
+/// leaks Rust enum variants or Debug output; identifiers/literals are quoted,
+/// keywords mirror their source spelling.
+#[cfg(feature = "syntax")]
+pub fn token_desc(t: &Token) -> String {
+    match t {
+        Token::Keyword(k) => format!("'{}'", kw_desc(*k)),
+        Token::Operator(o) => format!("'{}'", o.symbol()),
+        Token::Partition(c) => format!("'{}'", c),
+        Token::Identifier(s) => format!("'{}'", s),
+        Token::Integer(n) => format!("'{}'", n),
+        Token::IntegerWithSuffix(n, k) => format!("'{}{}'", n, kw_desc(*k)),
+        Token::Character(c) => format!("'{}'", *c as char),
+        Token::Bytes(b) => format!("'0x{}'", hex::encode(b)),
+        Token::Address(a) => format!("'{}'", a.to_readable()),
+    }
+}
+
+/// `token_desc` for an optional lookahead: a missing token renders as
+/// `end of input` instead of `None`.
+#[cfg(feature = "syntax")]
+pub fn token_desc_opt(t: Option<&Token>) -> String {
+    t.map(token_desc)
+        .unwrap_or_else(|| "end of input".to_string())
+}
+
+/// Source spelling of a keyword for error messages. Symbol-shaped keywords
+/// are table-driven; word-shaped ones derive from the Debug name (compound
+/// words lose the underscore: `CallExt` → `callext`, `Self_` → `self`).
+#[cfg(feature = "syntax")]
+fn kw_desc(k: KwTy) -> String {
+    let s = match k {
+        KwTy::Arrow => "->",
+        KwTy::DColon => "::",
+        KwTy::Colon => ":",
+        KwTy::Dot => ".",
+        KwTy::Assign => "=",
+        KwTy::AsgAdd => "+=",
+        KwTy::AsgSub => "-=",
+        KwTy::AsgMul => "*=",
+        KwTy::AsgDiv => "/=",
+        KwTy::LineCms => "//",
+        KwTy::BlkCmsL => "/*",
+        KwTy::BlkCmsR => "*/",
+        other => {
+            return format!("{:?}", other).to_ascii_lowercase().replace('_', "");
+        }
+    };
+    s.to_string()
 }
 
 #[cfg(feature = "syntax")]

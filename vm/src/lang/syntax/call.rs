@@ -47,7 +47,10 @@ impl Syntax {
         if let Some(idx) = NativeFunc::from_name(&id).map(|v| v.0) {
             let arg_nodes = self.parse_value_container('(', ')', "call argv format error")?;
             let Some(need) = NativeFunc::argv_len(idx) else {
-                return errf!("unknown native func idx {}", idx);
+                return errf!(
+                    "native func '{}' has no registered argument signature (internal dispatch gap)",
+                    id
+                );
             };
             if arg_nodes.len() != need {
                 return errf!(
@@ -68,7 +71,10 @@ impl Syntax {
         if let Some(idx) = NativeCtl::from_name(&id).map(|v| v.0) {
             let (num, argvs) = self.parse_call_args(ArgPackMode::Packed)?;
             let Some(need) = NativeCtl::argv_len(idx) else {
-                return errf!("unknown native ctl idx {}", idx);
+                return errf!(
+                    "native ctl '{}' has no registered argument signature (internal dispatch gap)",
+                    id
+                );
             };
             if num != need {
                 return errf!(
@@ -115,7 +121,20 @@ impl Syntax {
             return Ok(push_single_p1_hr(hrtv, inst, para, argvs));
         }
 
-        errf!("unknown function '{}'", id)
+        // P2-D03 T6: a `$`-prefixed call that survived macro expansion is a
+        // macro misuse (undefined name, or a contract-level macro not visible
+        // to this body, e.g. the CLI kernel-body path). Diagnose it as such
+        // instead of a bare `unknown function '$x'` (doc 66 §5 E13).
+        if id.starts_with('$') {
+            return Err(self.err_here(format!(
+                "'{id}' looks like a macro call, but no macro with this name was \
+                 expanded in this body; macros are contract-level `define $name(..) \
+                 {{ .. }}` declarations expanded before compilation; hint: check \
+                 the spelling, define the macro at contract level, or inline the \
+                 macro body by hand"
+            )));
+        }
+        Err(self.err_here(format!("unknown function '{id}'")))
     }
 
     fn track_special_ir_func(&mut self, inst: Bytecode, argvs: &[Box<dyn IRNode>]) -> Rerr {

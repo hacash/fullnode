@@ -1,5 +1,5 @@
 use super::state::MacroDef;
-use crate::rt::Token;
+use crate::rt::{Token, TokenSpan};
 use crate::rt::Token::*;
 use std::collections::HashSet;
 use sys::{errf, Ret};
@@ -11,6 +11,18 @@ pub(super) fn expand_macros(
     macros: &[MacroDef],
     reserved_names: &[String],
 ) -> Ret<Vec<Token>> {
+    expand_macros_with_spans(tokens, &[], macros, reserved_names).map(|(t, _)| t)
+}
+
+/// P2-D03 T1: expansion with the parallel span table. Expanded (substituted)
+/// tokens inherit the invocation site's span; untouched tokens keep theirs.
+/// The token output is byte-identical to [`expand_macros`].
+pub(super) fn expand_macros_with_spans(
+    tokens: Vec<Token>,
+    spans: &[TokenSpan],
+    macros: &[MacroDef],
+    reserved_names: &[String],
+) -> Ret<(Vec<Token>, Vec<TokenSpan>)> {
     let mut tokens = tokens;
     let mut occupied = HashSet::new();
     occupied.extend(reserved_names.iter().cloned());
@@ -26,32 +38,44 @@ pub(super) fn expand_macros(
             }
         }
     }
+    let mut spans = spans.to_vec();
+    // Pad the sidecar when the input came through the spanless path.
+    if spans.len() < tokens.len() {
+        spans.resize(tokens.len(), TokenSpan::NONE);
+    }
     let mut expansion_id = 0usize;
     let mut expansions = 0usize;
     let mut idx = 0usize;
     while idx < tokens.len() {
         if let Some((name, args, after)) = invocation(&tokens, idx)? {
+            let at = spans.get(idx).copied().unwrap_or(TokenSpan::NONE);
+            let pre = if at.known() { format!("{at}: ") } else { String::new() };
             let def = macros
                 .iter()
                 .find(|m| m.name == name)
-                .ok_or_else(|| format!("unknown macro '{}'", name))?;
+                .ok_or_else(|| {
+                    sys::Error::fault(format!("{pre}unknown macro '{name}'"))
+                })?;
             if args.len() != def.params.len() {
-                return errf!(
-                    "macro '{}' expects {} arguments, got {}",
-                    name,
+                return Err(sys::Error::fault(format!(
+                    "{pre}macro '{name}' expects {} arguments, got {}",
                     def.params.len(),
                     args.len()
-                );
+                )));
             }
             if args
                 .iter()
                 .any(|arg| !matches!(arg.as_slice(), [Identifier(_)]))
             {
-                return errf!("macro '{}' arguments must be variable names", name);
+                return Err(sys::Error::fault(format!(
+                    "{pre}macro '{name}' arguments must be variable names"
+                )));
             }
             expansions += 1;
             if expansions > MAX_EXPANSIONS {
-                return errf!("macro expansion limit exceeded (possible recursion)");
+                return Err(sys::Error::fault(format!(
+                    "{pre}macro expansion limit exceeded (possible recursion)"
+                )));
             }
             let mut substitutions = Vec::with_capacity(args.len());
             for (param, arg) in def.params.iter().zip(args) {
@@ -68,12 +92,14 @@ pub(super) fn expand_macros(
                 }
             }
             expansion_id += 1;
+            let repl_spans = vec![at; replacement.len()];
             tokens.splice(idx..after, replacement);
+            spans.splice(idx..after, repl_spans);
         } else {
             idx += 1;
         }
     }
-    Ok(tokens)
+    Ok((tokens, spans))
 }
 
 fn invocation(tokens: &[Token], idx: usize) -> Ret<Option<(String, Vec<Vec<Token>>, usize)>> {

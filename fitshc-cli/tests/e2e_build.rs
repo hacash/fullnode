@@ -759,7 +759,8 @@ fn pack_guards_and_flag_validation() {
         .output()
         .unwrap();
     assert!(!out.status.success(), "overwrite must be rejected");
-    assert!(String::from_utf8_lossy(&out.stdout).contains("overwrite"));
+    // P2-D03 T3: CLI errors moved from stdout to stderr (with `fitshc: ` prefix).
+    assert!(String::from_utf8_lossy(&out.stderr).contains("overwrite"));
 
     // Unknown flags and invalid profiles/periods fail at parse.
     for args in [
@@ -777,8 +778,9 @@ fn pack_guards_and_flag_validation() {
             .output()
             .unwrap();
         assert!(!out.status.success(), "accepted invalid args: {args:?}");
+        // P2-D03 T3: CLI errors moved to stderr with the `fitshc: ` prefix.
         assert!(
-            String::from_utf8_lossy(&out.stdout).starts_with("Error:"),
+            String::from_utf8_lossy(&out.stderr).starts_with("fitshc:"),
             "args {args:?}"
         );
     }

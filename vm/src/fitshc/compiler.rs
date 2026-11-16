@@ -18,19 +18,30 @@ pub fn compile_with_rv64im_and_warnings(
     code: &str,
     external_rv64im: &[(&str, Vec<u8>)],
 ) -> Ret<(FitshCompileOutput, Vec<String>)> {
+    compile_with_rv64im_and_warnings_at(None, code, external_rv64im)
+}
+
+/// P2-D03 T1: same compile with a source-file name for `{file}:{line}:{col}`
+/// error prefixes. Token stream and compiled output are identical to
+/// [`compile_with_rv64im_and_warnings`].
+pub fn compile_with_rv64im_and_warnings_at(
+    file: Option<&str>,
+    code: &str,
+    external_rv64im: &[(&str, Vec<u8>)],
+) -> Ret<(FitshCompileOutput, Vec<String>)> {
     let tkr = Tokenizer::new(code.as_bytes());
-    let tokens = tkr.parse().map_err(|e| e.to_string())?;
-    let mut state = ParseState::new(tokens);
+    let (tokens, spans) = tkr.parse_with_spans().map_err(|e| e.to_string())?;
+    let mut state = ParseState::with_spans(tokens, spans, file.map(|f| f.to_string()));
     for (name, bytes) in external_rv64im {
         state.external_rv64im.insert((*name).to_string(), bytes.clone());
     }
 
     parse_top_level(&mut state)?;
     if state.idx != state.max {
-        return errf!(
-            "unexpected token after contract end: {:?}",
-            state.current().cloned()
-        );
+        return Err(state.err_here(format!(
+            "unexpected token {} after contract end",
+            crate::lang::token_desc_opt(state.current())
+        )));
     }
 
     let warnings = std::mem::take(&mut state.warnings);
@@ -54,6 +65,18 @@ pub fn compile_with_rv64im(
     external_rv64im: &[(&str, Vec<u8>)],
 ) -> Ret<FitshCompileOutput> {
     let (output, _) = compile_with_rv64im_and_warnings(code, external_rv64im)?;
+    Ok(output)
+}
+
+/// P2-D03 T1: compile with a source-file name so errors carry
+/// `{file}:{line}:{col}: ` prefixes (CLI entry).
+pub fn compile_with_rv64im_at(
+    file: &str,
+    code: &str,
+    external_rv64im: &[(&str, Vec<u8>)],
+) -> Ret<FitshCompileOutput> {
+    let (output, _) =
+        compile_with_rv64im_and_warnings_at(Some(file), code, external_rv64im)?;
     Ok(output)
 }
 
@@ -599,14 +622,38 @@ contract Ext {
     }
 
     #[test]
-    fn reserved_fitsh_kernel_body_reports_not_supported() {
+    fn fitsh_kernel_body_compiles_natively() {
+        let src = "pragma fitsh 1.0.0\ncontract D {\n    function rv64im size8(data: bytes) -> bytes { var n = size(data)\nreturn n as bytes }\n    function external run(x: bytes) -> bytes { return self::size8(x) }\n}\n";
+        let (contract, ..) = crate::fitshc::compile(src).unwrap();
+        let sto = contract.into_sto();
+        // the kernel landed as a userfunc with RV64IM code
+        let code = user_code(&sto, "size8");
+        assert!(code.starts_with(b"HCF1"), "kernel must be a container");
+    }
+
+    #[test]
+    fn fitsh_kernel_body_rejects_outside_subset() {
+        // `return kern(data)` is a self-call: outside the kernel subset
         let src = "pragma fitsh 1.0.0\ncontract D {\n    function rv64im kern(data: bytes) -> bytes { return kern(data) }\n}\n";
         let err = match crate::fitshc::compile(src) {
-            Ok(_) => panic!("expected reserved-body error"),
+            Ok(_) => panic!("expected subset rejection"),
             Err(err) => err.to_string(),
         };
-        assert!(err.contains("not supported yet"), "{err}");
-        assert!(err.contains("kern.rs"), "{err}");
+        assert!(
+            err.contains("outside the translatable kernel subset") || err.contains("rv64im kernel 'kern'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn fitsh_kernel_body_accepts_external_bytes_override() {
+        let blob = echo8_container_bytes();
+        let src = "pragma fitsh 1.0.0\ncontract D {\n    function rv64im echo8(data: bytes) -> bytes { var n = size(data)\nreturn n as bytes }\n}\n";
+        let inject: Vec<(&str, Vec<u8>)> = vec![("echo8", blob)];
+        let (contract, ..) = crate::fitshc::compile_with_rv64im(src, &inject).unwrap();
+        let sto = contract.into_sto();
+        let code = user_code(&sto, "echo8");
+        assert_eq!(code, inject[0].1, "external bytes must win over the body");
     }
 
     #[test]

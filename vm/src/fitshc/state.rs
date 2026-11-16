@@ -7,12 +7,18 @@ use crate::contract::Contract;
 use crate::rt::SourceMap;
 use crate::rt::*;
 use field::Address;
-use sys::{Ret, errf};
+use sys::Ret;
 
 pub struct ParseState {
     pub tokens: Vec<Token>,
     pub idx: usize,
     pub max: usize,
+    /// Parallel to `tokens` (P2-D03 T1 sidecar). Empty (or per-entry
+    /// `TokenSpan::NONE`) when built through the spanless path.
+    pub spans: Vec<TokenSpan>,
+    /// Source file name for `{file}:{line}:{col}` error prefixes; `None` in
+    /// the library path (errors then carry `{line}:{col}: ` only).
+    pub file: Option<String>,
     pub contract: Contract,
     pub contract_name: String,
     pub libs: Vec<(String, Address)>,
@@ -65,11 +71,24 @@ pub const FITSH_CURRENT_VERSION: FitshVersion = FitshVersion::new(1, 0, 0);
 
 impl ParseState {
     pub fn new(tokens: Vec<Token>) -> Self {
+        Self::with_spans(tokens, Vec::new(), None)
+    }
+
+    /// P2-D03 T1: build with the tokenizer's parallel span table and an
+    /// optional source-file name for error prefixes. Tokens and their
+    /// behavior are identical to [`ParseState::new`].
+    pub fn with_spans(
+        tokens: Vec<Token>,
+        spans: Vec<TokenSpan>,
+        file: Option<String>,
+    ) -> Self {
         let max = tokens.len();
         Self {
             tokens,
             idx: 0,
             max,
+            spans,
+            file,
             contract: Contract::new(),
             contract_name: String::new(),
             libs: Vec::new(),
@@ -105,9 +124,49 @@ impl ParseState {
         }
     }
 
+    // ---------- P2-D03 T1: position-aware error construction ----------
+
+    /// Span of token `idx` from the sidecar table; `None` when the table is
+    /// absent, the index is out of range, or the token is synthesized
+    /// (line 0). Falls back to the last known span so EOF errors still point
+    /// at the end of the last real token.
+    pub fn span_at(&self, idx: usize) -> Option<TokenSpan> {
+        if idx < self.spans.len() && self.spans[idx].known() {
+            return Some(self.spans[idx]);
+        }
+        self.spans.iter().rev().find(|s| s.known()).copied()
+    }
+
+    /// `{file}:{line}:{col}: ` (or `{line}:{col}: ` without a file, or empty
+    /// when no span is known) prefix for error messages.
+    pub fn pos_prefix(&self, idx: usize) -> String {
+        match self.span_at(idx) {
+            Some(span) => match &self.file {
+                Some(file) => format!("{file}:{span}: "),
+                None => format!("{span}: "),
+            },
+            None => String::new(),
+        }
+    }
+
+    /// Build a position-prefixed fault error (the `errf_at!` helper).
+    pub fn errf_at(&self, idx: usize, msg: impl std::fmt::Display) -> sys::Error {
+        sys::Error::fault(format!("{}{}", self.pos_prefix(idx), msg))
+    }
+
+    /// Position prefix at the current lookahead token.
+    pub fn pos_here(&self) -> String {
+        self.pos_prefix(self.idx)
+    }
+
+    /// Error anchored at the current lookahead token.
+    pub fn err_here(&self, msg: impl std::fmt::Display) -> sys::Error {
+        self.errf_at(self.idx, msg)
+    }
+
     pub fn eat_partition(&mut self, char: char) -> Ret<()> {
         if self.idx >= self.max {
-            return errf!("expected '{}' but got EOF", char);
+            return Err(self.err_here(format!("expected '{char}' but got EOF")));
         }
         if let Partition(c) = self.tokens[self.idx] {
             if c == char {
@@ -115,6 +174,25 @@ impl ParseState {
                 return Ok(());
             }
         }
-        errf!("expected '{}' but got {:?}", char, self.tokens[self.idx])
+        Err(self.err_here(format!(
+            "expected '{}' but got {}",
+            char,
+            crate::lang::token_desc_opt(self.tokens.get(self.idx))
+        )))
     }
+}
+
+/// Count `'{'` vs `'}'` partition tokens over a token stream (P2-D03 T7:
+/// brace-balance diagnostics for EOF-class errors).
+pub fn brace_balance(tokens: &[Token]) -> (usize, usize) {
+    let mut open = 0usize;
+    let mut close = 0usize;
+    for t in tokens {
+        match t {
+            Partition('{') => open += 1,
+            Partition('}') => close += 1,
+            _ => {}
+        }
+    }
+    (open, close)
 }

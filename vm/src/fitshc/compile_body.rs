@@ -1,9 +1,8 @@
 use crate::IRNode;
 use crate::ir::{IRNodeArray, convert_ir_to_runtime_bytecode, drop_irblock_wrap};
 use crate::lang::Syntax;
-use crate::rt::{KwTy, SourceMap, Token, verify_bytecodes};
+use crate::rt::{KwTy, SourceMap, Token, TokenSpan, verify_bytecodes};
 use crate::value::ValueTy;
-use super::macro_expand::expand_macros;
 use super::state::MacroDef;
 use dyn_clone::clone_box;
 use field::Address;
@@ -146,7 +145,20 @@ pub fn compile_body(
     consts: &[(String, Box<dyn IRNode>)],
     is_ircode: bool,
 ) -> Ret<(IRNodeArray, CompiledCode, SourceMap)> {
-    compile_body_with_macros(body_tokens, args, libs, consts, is_ircode, &[])
+    compile_body_with_macros(body_tokens, args, libs, consts, is_ircode, &[], &[], None)
+}
+
+/// P2-D03 T1: same with the tokenizer's parallel span table (positions in
+/// error messages only; the token stream and output are identical).
+pub fn compile_body_with_spans(
+    body_tokens: Vec<Token>,
+    spans: &[TokenSpan],
+    args: Vec<(String, ValueTy)>,
+    libs: &[(String, Address)],
+    consts: &[(String, Box<dyn IRNode>)],
+    is_ircode: bool,
+) -> Ret<(IRNodeArray, CompiledCode, SourceMap)> {
+    compile_body_with_macros(body_tokens, args, libs, consts, is_ircode, &[], spans, None)
 }
 
 pub(super) fn compile_body_with_macros(
@@ -156,6 +168,8 @@ pub(super) fn compile_body_with_macros(
     consts: &[(String, Box<dyn IRNode>)],
     is_ircode: bool,
     macros: &[MacroDef],
+    spans: &[TokenSpan],
+    file: Option<&str>,
 ) -> Ret<(IRNodeArray, CompiledCode, SourceMap)> {
     // Function/abstract bodies may omit the trailing terminator HVM requires
     // (rt::ensure_terminal_instruction): append a virtual `end` statement. The
@@ -168,12 +182,22 @@ pub(super) fn compile_body_with_macros(
     let mut reserved_names: Vec<String> = args.iter().map(|(name, _)| name.clone()).collect();
     reserved_names.extend(libs.iter().map(|(name, _)| name.clone()));
     reserved_names.extend(consts.iter().map(|(name, _)| name.clone()));
-    let mut body_tokens = expand_macros(body_tokens, macros, &reserved_names)?;
+    let mut body_tokens = body_tokens;
+    let mut spans = spans.to_vec();
+    // P2-D03 T1: keep the span table in lockstep while macros splice tokens;
+    // expanded tokens inherit the invocation site's position.
+    let (expanded, expanded_spans) =
+        super::macro_expand::expand_macros_with_spans(body_tokens, &spans, macros, &reserved_names)?;
+    body_tokens = expanded;
+    spans = expanded_spans;
+    // The auto-appended terminal `end` is synthesized: span NONE (line 0).
     body_tokens.push(Token::Keyword(KwTy::End));
+    spans.push(TokenSpan::NONE);
     let has_manual_param_block = body_tokens
         .iter()
         .any(|tk| matches!(tk, Token::Keyword(KwTy::Param)));
-    let mut syntax = Syntax::new(body_tokens);
+    let mut syntax =
+        Syntax::new_with_spans_at(body_tokens, spans, file.map(|f| f.to_string()));
 
     if !libs.is_empty() {
         if libs.len() > u8::MAX as usize {
