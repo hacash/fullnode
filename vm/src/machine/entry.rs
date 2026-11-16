@@ -970,6 +970,7 @@ mod entry_semantics_tests {
 
     #[test]
     fn itemset_error_order_and_writes() {
+        // Check order: 83 -> 76 -> 80 -> 72 -> 85.
         // Bytes receiver: CompoOpNotMatch 83, and it fires before the tuple
         // value's CastBeValueFail 76 (receiver shape is checked first).
         for source in [
@@ -979,7 +980,16 @@ mod entry_semantics_tests {
             let err = fitsh_opcode_run(1, source).unwrap_err();
             assert_eq!(err.0, ItrErrCode::CompoOpNotMatch, "{source}: {err}");
         }
-        // Map receiver: CompoOpInvalid 80 (map writes stay `insert`).
+        // check_scalar 76 fires before the map's CompoOpInvalid 80: a map
+        // receiver with a tuple / sub-list value is a value-shape failure.
+        for source in [
+            "var m = map {1: 2}\nm[1] = tuple(1, 2)",
+            "var m = map {1: 2}\nm[1] = [3]",
+        ] {
+            let err = fitsh_opcode_run(1, source).unwrap_err();
+            assert_eq!(err.0, ItrErrCode::CastBeValueFail, "{source}: {err}");
+        }
+        // Map + scalar value: CompoOpInvalid 80 (map writes stay `insert`).
         let err = fitsh_opcode_run(1, "var m = map {1: 2}\nm[1] = 3").unwrap_err();
         assert_eq!(err.0, ItrErrCode::CompoOpInvalid, "{err}");
         // check_scalar 76 (tuple / sub-list value) fires before the index's 72.
@@ -1127,6 +1137,16 @@ mod entry_semantics_tests {
         // An empty list yields empty bytes.
         let (_, v, _) = fitsh_opcode_run(1, "var l = []\nreturn item_concat(l)").unwrap();
         assert_eq!(v, Value::Bytes(vec![]));
+        // Exactly value_size (1280) bytes in one element is the legal boundary.
+        let source = format!("var l = [0x{}]\nreturn item_concat(l)", "11".repeat(1280));
+        let (_, v, _) = fitsh_opcode_run(1, &source).unwrap();
+        match v {
+            Value::Bytes(bytes) => {
+                assert_eq!(bytes.len(), 1280);
+                assert!(bytes.iter().all(|b| *b == 0x11));
+            }
+            other => panic!("expected 1280 bytes, got {other:?}"),
+        }
         // Past value_size (1280) is OutOfValueSize 39.
         let source = format!(
             "var l = [0x{}, 0x01]\nreturn item_concat(l)",
@@ -1176,6 +1196,252 @@ mod entry_semantics_tests {
         );
     }
 
+    /// ITEMCAT charges the list-read component before the concat. Compare each
+    /// `return item_concat(l)` against `return l` on the same list: the only
+    /// difference is ITEMCAT, so the delta is exactly
+    /// `gas(ITEMCAT) + compo_items_read(len) + stack_op(result_len)`. The two
+    /// lists produce the same 5 output bytes but hold 1 vs 5 items.
+    #[test]
+    fn itemcat_gas_charges_the_list_read_component() {
+        use crate::rt::{Bytecode, GasExtra, GasTable};
+
+        let base = GasTable::new(1);
+        let extra = GasExtra::new(1, &STUB_VM_PARAMS);
+        let spent = |source: &str| fitsh_opcode_run(1, source).unwrap().2;
+
+        let one = "var l = [0x0102030405]\n";
+        let five = "var l = [1u8, 2u8, 3u8, 4u8, 5u8]\n";
+        let one_delta = spent(&format!("{one}return item_concat(l)")) - spent(&format!("{one}return l"));
+        let five_delta =
+            spent(&format!("{five}return item_concat(l)")) - spent(&format!("{five}return l"));
+
+        assert_eq!(extra.compo_items_read(5), 2, "guard: 5 items are two read units");
+        assert_eq!(
+            one_delta,
+            base.gas(Bytecode::ITEMCAT as u8)
+                + extra.compo_items_read(1)
+                + extra.stack_op(5),
+            "one-element list must bill base + read(1) + stack_op(5)"
+        );
+        assert_eq!(
+            five_delta,
+            base.gas(Bytecode::ITEMCAT as u8)
+                + extra.compo_items_read(5)
+                + extra.stack_op(5),
+            "five-element list must bill base + read(5) + stack_op(5)"
+        );
+        assert!(
+            five_delta > one_delta,
+            "same 5 output bytes, but the longer list must cost more read gas"
+        );
+    }
+
+    /// F2: an ITEMSET / compound item assignment used as a ternary (CHOOSE)
+    /// condition is parenthesized by the decompiler and recompiles exactly.
+    /// The assignment returns the container, so both forms fail the CHOOSE
+    /// condition cast with CastFail 71.
+    #[test]
+    fn itemset_and_compound_condition_decompile_with_parentheses() {
+        for (source, condition) in [
+            (
+                "var l = [1, 2]\nreturn item_set(l, 0, 9) ? 10 : 20",
+                "(l[0] = 9) ?",
+            ),
+            (
+                "var l = [1, 2]\nreturn (l[0] += 1) ? 10 : 20",
+                "(l[0] += 1) ?",
+            ),
+            (
+                "var l = [1, 2]\nreturn (l[0] += 1) + 2",
+                "(l[0] += 1) +",
+            ),
+        ] {
+            let codes = crate::lang::lang_to_bytecode(source).expect(source);
+            let (ircode, smap) =
+                crate::lang::lang_to_ircode_with_sourcemap(source).expect(source);
+            let printed = crate::lang::format_ircode_to_lang(&ircode, Some(&smap)).expect(source);
+            assert!(
+                printed.contains(condition),
+                "{source} => decompiled condition must be parenthesized: {printed}"
+            );
+            let recompiled =
+                crate::lang::lang_to_bytecode(&printed).unwrap_or_else(|e| panic!("{printed}: {e}"));
+            assert_eq!(
+                recompiled, codes,
+                "{source} => decompile/recompile changed the bytecode:\n{printed}"
+            );
+            let original_err = fitsh_opcode_run(1, source).unwrap_err();
+            let recompiled_err = fitsh_opcode_run(1, &printed).unwrap_err();
+            assert_eq!(
+                original_err.0,
+                ItrErrCode::CastFail,
+                "{source}: {original_err}"
+            );
+            assert_eq!(
+                original_err.0, recompiled_err.0,
+                "{source} => original and recompiled must fail alike: {recompiled_err}"
+            );
+        }
+    }
+
+    /// F6: compound item assignment is stack-only and RHS-first. The RHS may
+    /// rebind the receiver or mutate the element; receiver and index are read
+    /// only after the RHS has run.
+    #[test]
+    fn compound_item_assignment_is_rhs_first() {
+        // The RHS rebinds `l` to a fresh list: the old list is untouched...
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            "var l = [1]\nvar old = l\nl[0] += { l = [2]; 5 }\nreturn old[0]",
+        )
+        .unwrap();
+        assert_eq!(v, Value::U8(1));
+        // ...and the fresh list is the receiver that gets written.
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            "var l = [1]\nvar old = l\nl[0] += { l = [2]; 5 }\nreturn l[0]",
+        )
+        .unwrap();
+        assert_eq!(v, Value::U8(7));
+        // The RHS mutates the element: the element read happens after it.
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            "var l = [1]\nl[0] += { l[0] = 10; 5 }\nreturn l[0]",
+        )
+        .unwrap();
+        assert_eq!(v, Value::U8(15));
+        // The index is evaluated after the RHS: the RHS sets i=0, then the
+        // index expression sets i=1.
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            "var l = [10, 20]\nvar i = 0\nl[{ i = 1; 0 }] += { i = 0; 5 }\nreturn i",
+        )
+        .unwrap();
+        assert_eq!(v, Value::U8(1));
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            "var l = [10, 20]\nvar i = 0\nl[{ i = 1; 0 }] += { i = 0; 5 }\nreturn l[0]",
+        )
+        .unwrap();
+        assert_eq!(v, Value::U8(15));
+    }
+
+    /// F8: above slot 63 the local compound fallback is still RHS-first, uses
+    /// raw GET/SWAP/op/PUT (no XOP), decompiles to `x += ...`, and recompiles
+    /// byte-for-byte.
+    #[test]
+    fn compound_local_assignment_above_slot_63_is_rhs_first() {
+        let prefix: String = (0..64).map(|i| format!("var v{i} = 0\n")).collect();
+        let source = format!("{prefix}var x = 1\nx += {{ x = 2; 5 }}\nreturn x");
+        let codes = crate::lang::lang_to_bytecode(&source).unwrap();
+        assert!(
+            codes.windows(6).any(|w| w
+                == [
+                    crate::rt::Bytecode::GET as u8,
+                    64,
+                    crate::rt::Bytecode::SWAP as u8,
+                    crate::rt::Bytecode::ADD as u8,
+                    crate::rt::Bytecode::PUT as u8,
+                    64,
+                ]),
+            "slot 64 must use raw GET/SWAP/ADD/PUT: {codes:02x?}"
+        );
+        let (_, v, _) = fitsh_opcode_run(1, &source).unwrap();
+        assert_eq!(v, Value::U8(7));
+
+        // Same result below slot 64 through XOP.
+        let low = "var x = 1\nx += { x = 2; 5 }\nreturn x";
+        let (_, v, _) = fitsh_opcode_run(1, low).unwrap();
+        assert_eq!(v, Value::U8(7));
+
+        let (ircode, smap) = crate::lang::lang_to_ircode_with_sourcemap(&source).unwrap();
+        let printed = crate::lang::format_ircode_to_lang(&ircode, Some(&smap)).unwrap();
+        assert!(
+            printed.contains("x += "),
+            "decompile lost the high-slot compound assignment: {printed}"
+        );
+        let recompiled = crate::lang::lang_to_bytecode(&printed)
+            .unwrap_or_else(|e| panic!("{printed}\n{e}"));
+        assert_eq!(
+            recompiled, codes,
+            "high-slot compound assignment must roundtrip:\n{printed}"
+        );
+    }
+
+    /// F6 no-hidden-slot budget: 100 `l[0] += 1` statements compile (no
+    /// per-statement spill slots) and all increments take effect.
+    #[test]
+    fn compound_item_assignment_has_no_hidden_slot_budget() {
+        let mut source = String::from("var l = [0]\n");
+        for _ in 0..100 {
+            source.push_str("l[0] += 1\n");
+        }
+        source.push_str("return l[0]");
+        let (_, v, _) = fitsh_opcode_run(1, &source).unwrap();
+        assert_eq!(v, Value::U8(100));
+    }
+
+    /// F10: ITEMSET / INSERT / APPEND return the receiver container, so a
+    /// second alias observes later writes to it.
+    #[test]
+    fn insert_append_and_item_set_return_the_receiver_container() {
+        for source in [
+            "var l = [1, 2]\nvar x = item_set(l, 0, 9)\nx[1] = 7\nreturn l[1]",
+            "var l = [1, 2]\nvar x = insert(l, 0, 9)\nx[1] = 7\nreturn l[1]",
+            "var l = [1, 2]\nvar x = append(l, 3)\nx[1] = 7\nreturn l[1]",
+        ] {
+            let (_, v, _) = fitsh_opcode_run(1, source).unwrap();
+            assert_eq!(v, Value::U8(7), "{source}");
+        }
+    }
+
+    /// F9: `item_get(...)` is an ITEMGET target, so plain and compound
+    /// assignment through the call form work like `l[i]`.
+    #[test]
+    fn item_get_call_form_is_an_assignment_target() {
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [1, 2]\nitem_get(l, 0) = 9\nreturn l[0]")
+            .unwrap();
+        assert_eq!(v, Value::U8(9));
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [1, 2]\nitem_get(l, 0) += 1\nreturn l[0]")
+            .unwrap();
+        assert_eq!(v, Value::U8(2));
+    }
+
+    /// F7: arithmetic follows the interpreter's existing local ADD/XOP rule.
+    /// Mixed uint widths widen to the wider width and succeed; non-uint values
+    /// fail CastFail 71; same-width overflow is Arithmetic 90.
+    #[test]
+    fn compound_arithmetic_matches_local_width_and_cast_rules() {
+        let (_, v, _) =
+            fitsh_opcode_run(1, "var l = [1u8]\nl[0] += 2u16\nreturn l[0]").unwrap();
+        assert_eq!(v, Value::U16(3));
+        let (_, v, _) = fitsh_opcode_run(1, "var x = 1u8\nx += 2u16\nreturn x").unwrap();
+        assert_eq!(v, Value::U16(3));
+        for source in [
+            "var l = [1u8]\nl[0] += true\nreturn l[0]",
+            "var x = 1u8\nx += true\nreturn x",
+        ] {
+            let err = fitsh_opcode_run(1, source).unwrap_err();
+            assert_eq!(err.0, ItrErrCode::CastFail, "{source}: {err}");
+        }
+        let err = fitsh_opcode_run(1, "var l = [250u8]\nl[0] += 10u8").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::Arithmetic, "{err}");
+        let err = fitsh_opcode_run(1, "var x = 250u8\nx += 10u8\nreturn x").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::Arithmetic, "{err}");
+    }
+
+    /// A compound item assignment in expression context returns the same
+    /// container, so writes through the result are visible on the receiver.
+    #[test]
+    fn compound_item_assignment_expression_returns_the_container() {
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            "var l = [10, 20]\nvar x = (l[0] += 5)\nx[1] = 9\nreturn l[1]",
+        )
+        .unwrap();
+        assert_eq!(v, Value::U8(9));
+    }
+
     /// `+= -= *= /=` on an ITEMGET target reuse the arithmetic opcodes the
     /// locals path uses, so results (and failures) match `XOP` semantics.
     #[test]
@@ -1199,7 +1465,7 @@ mod entry_semantics_tests {
         // parser does not pre-restrict operand types.
         let err = fitsh_opcode_run(1, "var l = [250u8]\nl[0] += 10u8").unwrap_err();
         assert_eq!(err.0, ItrErrCode::Arithmetic, "{err}");
-        // The spilled form survives a decompile roundtrip byte-for-byte.
+        // The stack-only form survives a decompile roundtrip byte-for-byte.
         let source = "var l = [10, 20]\nvar i = 1\nl[i] += 5\nreturn l[1]";
         let codes = crate::lang::lang_to_bytecode(source).unwrap();
         let ircode = crate::lang::lang_to_ircode(source).unwrap();

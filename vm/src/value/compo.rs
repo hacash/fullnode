@@ -554,18 +554,18 @@ impl CompoItem {
     /// ITEMSET: in-place list item assignment (`t,k,v+` like `insert`, but the
     /// container stays and nothing shifts). The receiver checks precede this
     /// call on the execute path (`ops.compo()` already returned
-    /// `CompoOpNotMatch` for non-compo). Here the order is: map -> `CompoOpInvalid`
-    /// (same code `append` uses for a map), then `insert`'s `check_scalar` on the
-    /// value, then `itemget`'s index rule (`extract_u32` -> `CastParamFail`;
-    /// `idx >= len`, including `idx == len`, -> `CompoNoFindItem`). The length
-    /// never changes and neighbouring items never move.
+    /// `CompoOpNotMatch` for non-compo). Check order: non-compo -> 83 (execute),
+    /// value `check_scalar` -> 76, map -> `CompoOpInvalid` 80 (same code
+    /// `append` uses for a map), `extract_u32` -> `CastParamFail` 72, then
+    /// `idx >= len` (including `idx == len`) -> `CompoNoFindItem` 85. The
+    /// length never changes and neighbouring items never move.
     pub fn item_set(&self, k: Value, v: Value) -> VmrtErr {
+        v.check_scalar()?;
         let mut compo = self.compo.borrow_mut();
         let a = match &mut *compo {
             Compo::List(a) => a,
             Compo::Map(..) => ret_invalid_compo_op! {},
         };
-        v.check_scalar()?;
         let i = k.extract_u32()? as usize;
         if i >= a.len() {
             return itr_err_code!(CompoNoFindItem);

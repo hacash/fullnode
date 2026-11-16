@@ -101,24 +101,42 @@ impl Value {
     /// stack the source sits on top and the start below it, so the checks run
     /// source first, then start, then receiver: source bytes (`BytesHandle`,
     /// `extract_bytes_with_error_code` rejects Nil), start `extract_u16`
-    /// (`CastParamFail`), receiver bytes (`BytesHandle`). The boundary is
-    /// `cutout`'s rule: `start + src.len()` via `checked_add`, overflow or
-    /// `> buf.len()` -> `StackError`, `== buf.len()` legal (write ending at the
-    /// end). The length never changes: the interpreter's byte string is this
-    /// `Vec`, and every other slot keeps its old copy.
+    /// (`CastParamFail`), receiver bytes (`BytesHandle`). A `Bytes` receiver is
+    /// mutated in place without cloning its `Vec`; every other receiver goes
+    /// through `extract_bytes_with_error_code` and is converted to
+    /// `Value::Bytes` exactly as before (Nil/Compo/Tuple/Handle -> 91;
+    /// Bool/uints/Address -> canonical bytes). The boundary is `cutout`'s rule:
+    /// `start + src.len()` via `checked_add`, overflow or `> buf.len()` ->
+    /// `StackError`, `== buf.len()` legal (write ending at the end). The length
+    /// never changes, and every other stack slot keeps its old copy.
     #[inline(always)]
     pub fn bufset(&mut self, src: Value, ost: Value) -> VmrtErr {
         let src = src.extract_bytes_with_error_code(BytesHandle)?;
         let ost = ost.extract_u16()? as usize;
-        let mut buf = self.extract_bytes_with_error_code(BytesHandle)?;
-        let end = ost.checked_add(src.len()).ok_or_else(|| {
-            ItrErr::new(StackError, "bufset buf index overflow")
-        })?;
-        if end > buf.len() {
-            return itr_err_fmt!(StackError, "bufset buf overflow");
+        let end_of = |buf_len: usize| -> VmrtRes<usize> {
+            let end = ost.checked_add(src.len()).ok_or_else(|| {
+                ItrErr::new(StackError, "bufset buf index overflow")
+            })?;
+            if end > buf_len {
+                return itr_err_fmt!(StackError, "bufset buf overflow");
+            }
+            Ok(end)
+        };
+        match self {
+            Self::Bytes(buf) => {
+                let end = end_of(buf.len())?;
+                buf[ost..end].copy_from_slice(&src);
+            }
+            _ => {
+                // Non-Bytes receivers normalize through the canonical scalar
+                // extract (Nil/Compo/Tuple/Handle -> 91; Bool/uints/Address ->
+                // bytes), then become `Value::Bytes` as before.
+                let mut buf = self.extract_bytes_with_error_code(BytesHandle)?;
+                let end = end_of(buf.len())?;
+                buf[ost..end].copy_from_slice(&src);
+                *self = Self::Bytes(buf);
+            }
         }
-        buf[ost..end].copy_from_slice(&src);
-        *self = Self::Bytes(buf);
         Ok(())
     }
 
@@ -186,4 +204,39 @@ pub(crate) fn bit_shr(x: &Value, y: &Value) -> VmrtRes<Value> {
         (_, _) => return itr_err_fmt!(Arithmetic, "cannot do bit ops between {:?} and {:?}", x, y),
     };
     res.ok_or_else(|| bit_shift_overflow("right", x, y))
+}
+
+#[cfg(test)]
+mod bufset_tests {
+    use super::*;
+
+    /// BUFSET mutates a `Value::Bytes` receiver in place: the Vec pointer does
+    /// not move (no clone, no reallocation) and the bytes change. A non-Bytes
+    /// receiver still normalizes to `Value::Bytes` on a valid write, and stays
+    /// untouched when the write is rejected.
+    #[test]
+    fn bufset_mutates_bytes_in_place_and_normalizes_non_bytes() {
+        let mut v = Value::Bytes(vec![1, 2, 3]);
+        let ptr = match &v {
+            Value::Bytes(buf) => buf.as_ptr(),
+            _ => unreachable!(),
+        };
+        v.bufset(Value::U8(9), Value::U8(1)).unwrap();
+        match &v {
+            Value::Bytes(buf) => {
+                assert_eq!(buf.as_ptr(), ptr, "in-place write must not move the Vec");
+                assert_eq!(buf, &vec![1, 9, 3]);
+            }
+            other => panic!("expected Value::Bytes, got {other:?}"),
+        }
+
+        let mut v = Value::U16(0x0102);
+        v.bufset(Value::U8(9), Value::U8(1)).unwrap();
+        assert_eq!(v, Value::Bytes(vec![1, 9]));
+
+        let mut v = Value::U16(0x0102);
+        let err = v.bufset(Value::Nil, Value::U8(0)).unwrap_err();
+        assert_eq!(err.0, crate::rt::ItrErrCode::BytesHandle);
+        assert_eq!(v, Value::U16(0x0102), "failed write must not normalize");
+    }
 }

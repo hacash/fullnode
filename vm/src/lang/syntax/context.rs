@@ -252,14 +252,23 @@ impl Syntax {
             let mark = encode_local_operand_mark(lxop, idx).map_err(Error::from)?;
             return Ok(push_single_p1(XOP, mark, value));
         }
-        let getv = push_local_get(idx, s!(""));
-        let expr = Box::new(IRNodeDouble {
-            hrtv: true,
-            inst,
-            subx: getv,
-            suby: value,
-        });
-        Ok(push_single_p1(PUT, idx, expr))
+        // No `XOP` encoding above slot 63: read/modify/write explicitly, but
+        // still RHS-first like `XOP` (the value is evaluated before the local
+        // is read). SWAP has no standalone serializable IR node (multi-output),
+        // so the swap rides a fixed, verified raw fragment. It leaves no value
+        // (last raw item, hasretval=false), matching `XOP`.
+        let raw: Box<dyn IRNode> = Box::new(
+            IRNodeBytecodes::new(vec![
+                GET as u8,
+                idx,
+                SWAP as u8,
+                inst as u8,
+                PUT as u8,
+                idx,
+            ])
+            .map_err(|e| e.to_string())?,
+        );
+        Ok(Box::new(Self::build_irlist(vec![value, raw])?))
     }
 
     pub(super) fn bind_lib(&mut self, name: String, idx: u8, addr: Option<FieldAddress>) -> Rerr {

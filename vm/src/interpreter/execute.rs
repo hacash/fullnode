@@ -789,7 +789,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 // ITEMSET: container on the bottom, index and value above it; the
                 // container stays on the stack. Billing equals INSERT on a list
                 // (compo_items_edit + the value's compo_bytes; no key byte fee).
-                // Check order: ops.compo() -> 83, map -> 80, check_scalar -> 76,
+                // Check order: ops.compo() -> 83, check_scalar -> 76, map -> 80,
                 // then itemget's index rule (72 / 85) inside item_set.
                 ITEMSET => {
                     // Upgrade-window refusal (base::fitsh_opcodes_enabled_at, window
@@ -806,9 +806,10 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                 // ITEMCAT: list -> bytes. Same chunk concatenation as
                 // `extract_call_data`'s one-layer list (concat_call_chunks), but the
                 // bound is value_size and the element failure code is BytesHandle.
-                // Receiver must be a list: non-compo -> 83, map -> 80, then concat.
-                // Gas is CAT's stack_op on the result length (only known after the
-                // concat, so a failed ITEMCAT spends base gas only).
+                // Receiver must be a list: non-compo -> 83, map -> 80, then the
+                // compo_items_read charge for the list length and the checked-total
+                // pre-pass, then concat. Gas is CAT's stack_op on the result length
+                // (only known after the concat).
                 ITEMCAT => {
                     // Upgrade-window refusal (base::fitsh_opcodes_enabled_at, window
                     // [800_000, 802_000)), not an opcode semantic.
@@ -821,6 +822,17 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                             return itr_err_code!(CompoOpInvalid);
                         }
                         let list = compo.list_ref()?;
+                        gas_resource!(compo_items_read, list.len());
+                        // Spec: ITEMCAT must use checked_value_output_add and
+                        // still reuse concat_call_chunks. Pre-check each element's
+                        // canonical byte length (element failure stays
+                        // BytesHandle 91) and the running total (OutOfValueSize
+                        // 39); concat then builds the same bytes as before.
+                        let mut total = 0usize;
+                        for item in list.iter() {
+                            let len = item.extract_bytes_len_with_error_code(BytesHandle)?;
+                            total = crate::value::checked_value_output_add(cap, total, len)?;
+                        }
                         crate::value::concat_call_chunks(list.iter(), cap.value_size, BytesHandle)?
                     };
                     gas_resource!(stack_op, bytes.len());

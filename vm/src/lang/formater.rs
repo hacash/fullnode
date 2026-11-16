@@ -470,6 +470,37 @@ impl<'a> Formater<'a> {
         }
         let prefix = self.line_prefix();
         if arr.inst == IRLIST {
+            // `l[i] += v`: IRLIST[value, receiver, index, bytecode{..}, ROLL 0].
+            // Must be recognized before the generic list/tuple/map/log shapes.
+            if let Some((value, receiver, index, op)) = Self::compound_item_assign_parts(node) {
+                let opstr = Self::compound_assign_symbol(op)?;
+                let mut recvstr = self.print_inline(receiver);
+                if self.needs_postfix_lhs_wrap(receiver) {
+                    let t = recvstr.trim();
+                    if !(t.starts_with('(') && t.ends_with(')')) {
+                        recvstr = format!("({})", t);
+                    }
+                }
+                let idxstr = self.print_inline(index);
+                let valstr = self.print_inline(value);
+                return Some(format!(
+                    "{}{}[{}] {} {}",
+                    prefix, recvstr, idxstr, opstr, valstr
+                ));
+            }
+            // `l += v` for slots without an `XOP` encoding (idx >= 64):
+            // IRLIST[value, bytecode{GET idx; SWAP; op; PUT idx}].
+            if let Some((value, slot, op)) = Self::compound_local_assign_parts(node) {
+                let opstr = Self::compound_assign_symbol(op)?;
+                let valstr = self.print_inline(value);
+                return Some(format!(
+                    "{}{} {} {}",
+                    prefix,
+                    self.slot_name_display(slot),
+                    opstr,
+                    valstr
+                ));
+            }
             if let Some(elements) = self.extract_list_elements(arr.inst, &arr.subs) {
                 return Some(maybe!(
                     self.opt.flatten_array_list,
@@ -948,7 +979,10 @@ impl<'a> Formater<'a> {
                 let mut cond = self.print_inline(&*t.subx);
                 let mut yes = self.print_inline(&*t.suby);
                 let no = self.print_inline(&*t.subz);
-                if Self::is_choose_node(&*t.subx) {
+                if Self::is_choose_node(&*t.subx)
+                    || Self::is_item_set_node(&*t.subx)
+                    || Self::is_compound_item_assign_node(&*t.subx)
+                {
                     cond = Self::wrap_printed_expr(cond);
                 }
                 if Self::ternary_true_branch_needs_wrap(&*t.suby, &yes) {
@@ -1056,6 +1090,7 @@ impl<'a> Formater<'a> {
                 .is_some_and(|inner| inner.inst == Bytecode::NOT)
             || Self::is_choose_node(node)
             || Self::is_item_set_node(node)
+            || Self::is_compound_item_assign_node(node)
     }
 
     fn is_choose_node(node: &dyn IRNode) -> bool {
@@ -1071,6 +1106,92 @@ impl<'a> Formater<'a> {
         node.as_any()
             .downcast_ref::<IRNodeTriple>()
             .is_some_and(|t| t.inst == Bytecode::ITEMSET)
+    }
+
+    /// Recognize the stack-only compound item assignment emitted by
+    /// `assign_item`: `IRLIST[value, receiver, index, IRNodeBytecodes, ROLL 0]`
+    /// whose raw payload is exactly `DUPN 2; ITEMGET; ROLL 3; op; ITEMSET`
+    /// (7 bytes) with `op` in ADD/SUB/MUL/DIV, and whose trailing marker is
+    /// `IRNodeParam1 { ROLL, para: 0, hrtv: true }`.
+    ///
+    /// Returns `(value, receiver, index, op)`.
+    fn compound_item_assign_parts<'n>(
+        node: &'n dyn IRNode,
+    ) -> Option<(&'n dyn IRNode, &'n dyn IRNode, &'n dyn IRNode, Bytecode)> {
+        use Bytecode::*;
+        let arr = node.as_any().downcast_ref::<IRNodeArray>()?;
+        if arr.inst != IRLIST || arr.subs.len() != 5 {
+            return None;
+        }
+        let raw = arr.subs[3].as_any().downcast_ref::<IRNodeBytecodes>()?;
+        let codes = &raw.codes;
+        if codes.len() != 7
+            || codes[0] != DUPN as u8
+            || codes[1] != 2
+            || codes[2] != ITEMGET as u8
+            || codes[3] != ROLL as u8
+            || codes[4] != 3
+            || codes[6] != ITEMSET as u8
+        {
+            return None;
+        }
+        let op = Bytecode::try_from_u8(codes[5]).ok()?;
+        if !matches!(op, ADD | SUB | MUL | DIV) {
+            return None;
+        }
+        let mark = arr.subs[4].as_any().downcast_ref::<IRNodeParam1>()?;
+        if mark.inst != ROLL || mark.para != 0 || !mark.hrtv {
+            return None;
+        }
+        Some((&*arr.subs[0], &*arr.subs[1], &*arr.subs[2], op))
+    }
+
+    fn is_compound_item_assign_node(node: &dyn IRNode) -> bool {
+        Self::compound_item_assign_parts(node).is_some()
+    }
+
+    /// Recognize the local compound assignment fallback used when the slot has
+    /// no `XOP` encoding (idx >= 64): `IRLIST[value, IRNodeBytecodes]` whose
+    /// raw payload is exactly `GET idx; SWAP; op; PUT idx` (6 bytes) with `op`
+    /// in ADD/SUB/MUL/DIV. Returns `(value, slot_idx, op)`.
+    fn compound_local_assign_parts<'n>(
+        node: &'n dyn IRNode,
+    ) -> Option<(&'n dyn IRNode, u8, Bytecode)> {
+        use Bytecode::*;
+        let arr = node.as_any().downcast_ref::<IRNodeArray>()?;
+        if arr.inst != IRLIST || arr.subs.len() != 2 {
+            return None;
+        }
+        let raw = arr.subs[1].as_any().downcast_ref::<IRNodeBytecodes>()?;
+        let codes = &raw.codes;
+        if codes.len() != 6
+            || codes[0] != GET as u8
+            || codes[2] != SWAP as u8
+            || codes[4] != PUT as u8
+            || codes[5] != codes[1]
+            // Slots below 64 use XOP, so this raw shape is compiler-generated
+            // only for idx >= 64; do not claim a hand-written low-slot raw
+            // fragment round-trips through `x += v` (that would become XOP).
+            || codes[1] < 64
+        {
+            return None;
+        }
+        let op = Bytecode::try_from_u8(codes[3]).ok()?;
+        if !matches!(op, ADD | SUB | MUL | DIV) {
+            return None;
+        }
+        Some((&*arr.subs[0], codes[1], op))
+    }
+
+    fn compound_assign_symbol(op: Bytecode) -> Option<&'static str> {
+        use Bytecode::*;
+        Some(match op {
+            ADD => "+=",
+            SUB => "-=",
+            MUL => "*=",
+            DIV => "/=",
+            _ => return None,
+        })
     }
 
     fn wrap_printed_expr(s: String) -> String {
@@ -1765,7 +1886,8 @@ impl<'a> Formater<'a> {
         let need_wrap_left = !wrapx
             && ((clv > 0 && llv > 0 && (clv > llv || (is_right_assoc && clv == llv)))
                 || Self::is_choose_node(&*dbl.subx)
-                || Self::is_item_set_node(&*dbl.subx));
+                || Self::is_item_set_node(&*dbl.subx)
+                || Self::is_compound_item_assign_node(&*dbl.subx));
         if need_wrap_left {
             subx = format!("({})", &subx);
         }
@@ -1773,7 +1895,8 @@ impl<'a> Formater<'a> {
         let need_wrap_right = !wrapy
             && ((clv > 0 && rlv > 0 && (clv > rlv || (!is_right_assoc && clv == rlv)))
                 || Self::is_choose_node(&*dbl.suby)
-                || Self::is_item_set_node(&*dbl.suby));
+                || Self::is_item_set_node(&*dbl.suby)
+                || Self::is_compound_item_assign_node(&*dbl.suby));
         if need_wrap_right {
             suby = format!("({})", &suby);
         }
