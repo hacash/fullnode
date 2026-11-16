@@ -107,10 +107,10 @@ pub enum Bytecode {
     LDROP = 0x4e,  // *&     drop buf left *
     RDROP = 0x4f,  // *&     drop buf right *
 
-    // row 5: overflow 0x50-0x51 / compo create+mutate 0x58-0x5F
+    // row 5: overflow 0x50-0x51 / bytes write 0x52 / compo create+mutate 0x58-0x5F
     SIZE = 0x50,   // &      size (u16)
     CHOOSE = 0x51, // cond,yes,no+ cond?yes:no (stack bottom->top; +movement gas 2)
-    ____________52 = 0x52,
+    BUFSET = 0x52, // buf,ost,src+ pop src, ost; peek buf -> in-place buf[ost..ost+src.len()] = src
     ____________53 = 0x53,
     ____________54 = 0x54,
     ____________55 = 0x55,
@@ -138,8 +138,8 @@ pub enum Bytecode {
     UNPACK = 0x69,     // c,i+    pop start idx; peek container; item/4 read + local writes
     PACKTUPLE = 0x6a,  // (v...,n)+ tuple items then count on top
     TUPLE2LIST = 0x6b, // &       tuple to list
-    ____________6c = 0x6c,
-    ____________6d = 0x6d,
+    ITEMSET = 0x6c,   // t,k,v+  compo item set (in-place list item assignment; no shift, no length change)
+    ITEMCAT = 0x6d,   // t+      compo items concat: list -> bytes (item_get + concat verb family)
     ____________6e = 0x6e,
     ____________6f = 0x6f,
 
@@ -447,6 +447,7 @@ bytecode_metadata_define! {
     RDROP      : 1, 1, 1,     buf_right_drop
     SIZE       : 0, 1, 1,     size
     CHOOSE     : 0, 3, 1,     choose
+    BUFSET     : 0, 3, 1,     buf_set
 
     NEWLIST    : 0, 0, 1,     new_list
     NEWMAP     : 0, 0, 1,     new_map
@@ -467,6 +468,8 @@ bytecode_metadata_define! {
     CLONE      : 0, 1, 1,     clone
     PACKTUPLE  : 0, 255, 1,   pack_tuple
     TUPLE2LIST : 0, 1, 1,     tuple_to_list
+    ITEMSET    : 0, 3, 1,     item_set
+    ITEMCAT    : 0, 1, 1,     item_concat
     UNPACK     : 0, 2, 0,     unpack
 
     XLG        : 1, 1, 1,     local_logic
@@ -622,11 +625,14 @@ mod bytecode_tests {
         // row 5: overflow, then compo create/mutate
         assert_eq!(SIZE as u8, 0x50);
         assert_eq!(CHOOSE as u8, 0x51);
+        assert_eq!(BUFSET as u8, 0x52);
         assert_eq!(NEWLIST as u8, 0x58);
         assert_eq!(MERGE as u8, 0x5f);
         // row 6: compo read / transform
         assert_eq!(LENGTH as u8, 0x60);
         assert_eq!(TUPLE2LIST as u8, 0x6b);
+        assert_eq!(ITEMSET as u8, 0x6c);
+        assert_eq!(ITEMCAT as u8, 0x6d);
         // row 7: global/memory family 0x70-0x76, then locals
         assert_eq!(GPUT as u8, 0x70);
         assert_eq!(MGET as u8, 0x73);
@@ -719,7 +725,7 @@ mod bytecode_tests {
                 Err(e) => assert_eq!(e.0, ItrErrCode::InstInvalid),
             }
         }
-        assert_eq!(named, 185, "184 existing opcodes + MPATCH");
+        assert_eq!(named, 188, "184 existing opcodes + MPATCH + ITEMSET/BUFSET/ITEMCAT");
         // row 0 protocol window holes, the reserved 0x10 slot and the
         // permanently retired 0x11 slot, the 0x77 hole and
         // the 0x84-0x88 row-8 run (all never validated as opcodes by the live network),

@@ -275,7 +275,11 @@ impl Value {
     }
 }
 
-fn concat_call_chunks<'a>(
+/// Concatenate `extract_bytes` chunks of a one-layer list in order, bounding the
+/// running total by `max` (`OutOfValueSize` past it). Shared by
+/// `extract_call_data` (max `call_data_size`, error code `CastBeCallDataFail`)
+/// and the ITEMCAT opcode (max `value_size`, error code `BytesHandle`).
+pub(crate) fn concat_call_chunks<'a>(
     items: impl IntoIterator<Item = &'a Value>,
     max: usize,
     ec: ItrErrCode,

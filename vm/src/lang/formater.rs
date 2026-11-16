@@ -922,6 +922,27 @@ impl<'a> Formater<'a> {
             }
         }
         if let Some(t) = node.as_any().downcast_ref::<IRNodeTriple>() {
+            if t.inst == ITEMSET {
+                // Canonical source form is the assignment statement `l[i] = v`;
+                // recompiling rebuilds the same ITEMSET triple (`l[i] = v` and
+                // `item_set(l, i, v)` are one instruction).
+                let mut subxstr = self.print_inline(&*t.subx);
+                if self.needs_postfix_lhs_wrap(&*t.subx) {
+                    let tstr = subxstr.trim();
+                    if !(tstr.starts_with('(') && tstr.ends_with(')')) {
+                        subxstr = format!("({})", tstr);
+                    }
+                }
+                let subystr = self.print_inline(&*t.suby);
+                let subzstr = self.print_inline(&*t.subz);
+                return Some(format!(
+                    "{}{}[{}] = {}",
+                    self.line_prefix(),
+                    subxstr,
+                    subystr,
+                    subzstr
+                ));
+            }
             if t.inst == Bytecode::CHOOSE {
                 // Canonical source form is `cond ? yes : no` (same IR as choose()).
                 let mut cond = self.print_inline(&*t.subx);
@@ -1034,12 +1055,22 @@ impl<'a> Formater<'a> {
                 .downcast_ref::<IRNodeSingle>()
                 .is_some_and(|inner| inner.inst == Bytecode::NOT)
             || Self::is_choose_node(node)
+            || Self::is_item_set_node(node)
     }
 
     fn is_choose_node(node: &dyn IRNode) -> bool {
         node.as_any()
             .downcast_ref::<IRNodeTriple>()
             .is_some_and(|t| t.inst == Bytecode::CHOOSE)
+    }
+
+    /// An unwrapped ITEMSET is an assignment: as a binary operand or postfix
+    /// receiver its printed `lhs[idx] = rhs` form must be parenthesized, or
+    /// the `= rhs` tail would be absorbed by the surrounding expression.
+    fn is_item_set_node(node: &dyn IRNode) -> bool {
+        node.as_any()
+            .downcast_ref::<IRNodeTriple>()
+            .is_some_and(|t| t.inst == Bytecode::ITEMSET)
     }
 
     fn wrap_printed_expr(s: String) -> String {
@@ -1733,14 +1764,16 @@ impl<'a> Formater<'a> {
         // - For right-associative ops (currently only `**`), wrap the left child on equal precedence.
         let need_wrap_left = !wrapx
             && ((clv > 0 && llv > 0 && (clv > llv || (is_right_assoc && clv == llv)))
-                || Self::is_choose_node(&*dbl.subx));
+                || Self::is_choose_node(&*dbl.subx)
+                || Self::is_item_set_node(&*dbl.subx));
         if need_wrap_left {
             subx = format!("({})", &subx);
         }
 
         let need_wrap_right = !wrapy
             && ((clv > 0 && rlv > 0 && (clv > rlv || (!is_right_assoc && clv == rlv)))
-                || Self::is_choose_node(&*dbl.suby));
+                || Self::is_choose_node(&*dbl.suby)
+                || Self::is_item_set_node(&*dbl.suby));
         if need_wrap_right {
             suby = format!("({})", &suby);
         }

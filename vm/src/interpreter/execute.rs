@@ -669,6 +669,20 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                     gas_resource!(stack_op, ops.tail_val_size(0)?);
                     ops.peek()?.cutout(l, o)?; // peek buf (bottom)
                 }
+                // BUFSET: buf at stack bottom (subx); source on top, start below it.
+                // Gas is the byte-family stack_op on the source byte count (val_size equals
+                // the canonical extract_bytes length for every accepted source shape).
+                BUFSET => {
+                    // Upgrade-window refusal (base::fitsh_opcodes_enabled_at, window
+                    // [800_000, 802_000)), not an opcode semantic.
+                    if !base::fitsh_opcodes_enabled_at(machine.height()) {
+                        return itr_err_code!(InstDisabled);
+                    }
+                    gas_resource!(stack_op, ops.tail_val_size(0)?);
+                    let src = ops.pop()?;
+                    let ost = ops.pop()?;
+                    ops.peek()?.bufset(src, ost)?; // peek buf (bottom), stays mutated
+                }
                 LEFT => peek_op_gas!(cutleft(pu8_as_u16!())),
                 RIGHT => peek_op_gas!(cutright(pu8_as_u16!())),
                 LDROP => peek_op_gas!(dropleft(pu8_as_u16!())),
@@ -770,6 +784,47 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                     let v = ops.peek()?.itemget(k)?.valid(cap)?;
                     compo_read_gas!();
                     gas_resource!(compo_bytes, v.val_size());
+                    *ops.peek()? = v;
+                }
+                // ITEMSET: container on the bottom, index and value above it; the
+                // container stays on the stack. Billing equals INSERT on a list
+                // (compo_items_edit + the value's compo_bytes; no key byte fee).
+                // Check order: ops.compo() -> 83, map -> 80, check_scalar -> 76,
+                // then itemget's index rule (72 / 85) inside item_set.
+                ITEMSET => {
+                    // Upgrade-window refusal (base::fitsh_opcodes_enabled_at, window
+                    // [800_000, 802_000)), not an opcode semantic.
+                    if !base::fitsh_opcodes_enabled_at(machine.height()) {
+                        return itr_err_code!(InstDisabled);
+                    }
+                    let v = ops.pop()?;
+                    let k = ops.pop()?;
+                    compo_edit_gas!();
+                    gas_resource!(compo_bytes, v.val_size());
+                    ops.compo()?.item_set(k, v)?;
+                }
+                // ITEMCAT: list -> bytes. Same chunk concatenation as
+                // `extract_call_data`'s one-layer list (concat_call_chunks), but the
+                // bound is value_size and the element failure code is BytesHandle.
+                // Receiver must be a list: non-compo -> 83, map -> 80, then concat.
+                // Gas is CAT's stack_op on the result length (only known after the
+                // concat, so a failed ITEMCAT spends base gas only).
+                ITEMCAT => {
+                    // Upgrade-window refusal (base::fitsh_opcodes_enabled_at, window
+                    // [800_000, 802_000)), not an opcode semantic.
+                    if !base::fitsh_opcodes_enabled_at(machine.height()) {
+                        return itr_err_code!(InstDisabled);
+                    }
+                    let bytes = {
+                        let compo = ops.compo()?;
+                        if compo.is_map() {
+                            return itr_err_code!(CompoOpInvalid);
+                        }
+                        let list = compo.list_ref()?;
+                        crate::value::concat_call_chunks(list.iter(), cap.value_size, BytesHandle)?
+                    };
+                    gas_resource!(stack_op, bytes.len());
+                    let v = Value::bytes(bytes).valid(cap)?;
                     *ops.peek()? = v;
                 }
                 KEYS => {

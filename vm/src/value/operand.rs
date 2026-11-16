@@ -97,6 +97,31 @@ impl Value {
         Ok(())
     }
 
+    /// BUFSET: in-place bytes write. The receiver is `self`; on the operand
+    /// stack the source sits on top and the start below it, so the checks run
+    /// source first, then start, then receiver: source bytes (`BytesHandle`,
+    /// `extract_bytes_with_error_code` rejects Nil), start `extract_u16`
+    /// (`CastParamFail`), receiver bytes (`BytesHandle`). The boundary is
+    /// `cutout`'s rule: `start + src.len()` via `checked_add`, overflow or
+    /// `> buf.len()` -> `StackError`, `== buf.len()` legal (write ending at the
+    /// end). The length never changes: the interpreter's byte string is this
+    /// `Vec`, and every other slot keeps its old copy.
+    #[inline(always)]
+    pub fn bufset(&mut self, src: Value, ost: Value) -> VmrtErr {
+        let src = src.extract_bytes_with_error_code(BytesHandle)?;
+        let ost = ost.extract_u16()? as usize;
+        let mut buf = self.extract_bytes_with_error_code(BytesHandle)?;
+        let end = ost.checked_add(src.len()).ok_or_else(|| {
+            ItrErr::new(StackError, "bufset buf index overflow")
+        })?;
+        if end > buf.len() {
+            return itr_err_fmt!(StackError, "bufset buf overflow");
+        }
+        buf[ost..end].copy_from_slice(&src);
+        *self = Self::Bytes(buf);
+        Ok(())
+    }
+
     /* return buf: a + b */
     #[inline(always)]
     pub fn concat(a: &Value, b: &Value, cap: &SpaceCap) -> VmrtRes<Value> {

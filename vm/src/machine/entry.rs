@@ -911,4 +911,303 @@ mod entry_semantics_tests {
         verified(source);
         assert_eq!(run_arithmetic_source(source).unwrap(), Value::U8(3));
     }
+
+    /********** ITEMSET / BUFSET / ITEMCAT (docs.loc/fitsh-rv64-opcode.md task 4) **********/
+
+    /// Same lightweight Main-frame harness as the memory_init test, with the
+    /// machine height as a parameter (upgrade-window tests below).
+    fn fitsh_opcode_run(
+        height: u64,
+        source: &str,
+    ) -> Result<(crate::rt::CallExit, Value, i64), ItrErr> {
+        use std::sync::Arc;
+
+        use crate::frame::IntentScopeState;
+        use crate::interpreter::execute_code_in_frame;
+        use crate::rt::{EffectMode, ExecCtx, FrameBindings};
+        use field::Address;
+
+        let mut raw = [0u8; 21];
+        raw[0] = Address::VERSION_CONTRACT;
+        raw[20] = 3;
+        let who = Address::from(raw);
+
+        let mut vm = NativeVm::new(height, STUB_VM_PARAMS);
+        let mut ctx = TestCtx::new();
+        let codes = crate::lang::lang_to_bytecode(source).expect(source);
+        let cap = vm.runtime.warm.space_cap.clone();
+        let mut ops = vm.runtime.stack_allocat();
+        ops.reset(cap.stack_slot);
+        let mut locals = vm.runtime.stack_allocat();
+        locals.reset(cap.local_slot);
+        let mut heap = vm.runtime.heap_allocat();
+        heap.reset(cap.heap_segment);
+        let mut bindings = FrameBindings::root(who, Arc::from([]));
+        let mut intent = IntentScopeState::default();
+        let mut pc = 0usize;
+        let before = ctx.gas;
+        let exit = execute_code_in_frame(
+            &mut pc,
+            &codes,
+            ExecCtx::new(EntryKind::Main, EffectMode::Edit, 1),
+            &mut ops,
+            &mut locals,
+            &mut heap,
+            &mut bindings,
+            &mut intent,
+            &who,
+            &who,
+            &mut vm,
+            &mut ctx,
+        );
+        let spent = before - ctx.gas;
+        let top = ops.pop().unwrap_or(Value::Nil);
+        vm.runtime.stack_reclaim(ops);
+        vm.runtime.stack_reclaim(locals);
+        vm.runtime.heap_reclaim(heap);
+        exit.map(|e| (e, top, spent))
+    }
+
+    #[test]
+    fn itemset_error_order_and_writes() {
+        // Bytes receiver: CompoOpNotMatch 83, and it fires before the tuple
+        // value's CastBeValueFail 76 (receiver shape is checked first).
+        for source in [
+            "var b = 0x0102\nb[0] = 9",
+            "var b = 0x0102\nb[0] = tuple(1, 2)",
+        ] {
+            let err = fitsh_opcode_run(1, source).unwrap_err();
+            assert_eq!(err.0, ItrErrCode::CompoOpNotMatch, "{source}: {err}");
+        }
+        // Map receiver: CompoOpInvalid 80 (map writes stay `insert`).
+        let err = fitsh_opcode_run(1, "var m = map {1: 2}\nm[1] = 3").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::CompoOpInvalid, "{err}");
+        // check_scalar 76 (tuple / sub-list value) fires before the index's 72.
+        for source in [
+            "var l = [1, 2]\nl[nil] = tuple(1, 2)",
+            "var l = [1, 2]\nl[nil] = [3]",
+        ] {
+            let err = fitsh_opcode_run(1, source).unwrap_err();
+            assert_eq!(err.0, ItrErrCode::CastBeValueFail, "{source}: {err}");
+        }
+        // Index CastParamFail 72 (Nil, or >= 2^32) fires before the range check.
+        for source in [
+            "var l = [1, 2]\nl[nil] = 9",
+            "var l = [1, 2]\nl[4294967296u64] = 9",
+        ] {
+            let err = fitsh_opcode_run(1, source).unwrap_err();
+            assert_eq!(err.0, ItrErrCode::CastParamFail, "{source}: {err}");
+        }
+        // idx >= len (including idx == len) is CompoNoFindItem 85: no growth.
+        for source in [
+            "var l = [1, 2]\nl[2] = 9",
+            "var l = [1, 2]\nl[7] = 9",
+        ] {
+            let err = fitsh_opcode_run(1, source).unwrap_err();
+            assert_eq!(err.0, ItrErrCode::CompoNoFindItem, "{source}: {err}");
+        }
+        // The write replaces one item: neighbours and the length do not move.
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [1, 2, 3]\nl[1] = 9\nreturn l[0]").unwrap();
+        assert_eq!(v, Value::U8(1));
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [1, 2, 3]\nl[1] = 9\nreturn l[2]").unwrap();
+        assert_eq!(v, Value::U8(3));
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [1, 2, 3]\nl[1] = 9\nreturn length(l)").unwrap();
+        assert_eq!(v, Value::U32(3));
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [1, 2, 3]\nl[1] = 9\nreturn l[1]").unwrap();
+        assert_eq!(v, Value::U8(9));
+        // Nested write l[i][j] = v: a compo cannot hold a list (check_scalar),
+        // so the inner receiver rides a tuple; when the inner get yields a
+        // non-list (bytes here) the receiver rule gives 83.
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            "var t = tuple([1, 2], 0)\nt[0][1] = 9\nreturn t[0][1]",
+        )
+        .unwrap();
+        assert_eq!(v, Value::U8(9));
+        let err = fitsh_opcode_run(1, "var l = [0x0102]\nl[0][1] = 9").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::CompoOpNotMatch, "inner bytes receiver: {err}");
+        // Nil / bool / address values are writable scalars.
+        let (exit, v, _) = fitsh_opcode_run(1, "var l = [1]\nl[0] = nil\nreturn l[0]").unwrap();
+        assert!(matches!(exit, crate::rt::CallExit::Return));
+        assert!(v.is_nil());
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [1]\nl[0] = true\nreturn l[0]").unwrap();
+        assert_eq!(v, Value::Bool(true));
+        use field::Address;
+        let mut raw = [0u8; 21];
+        raw[0] = Address::VERSION_CONTRACT;
+        raw[20] = 5;
+        let addr = Address::from(raw);
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            &format!("var l = [1]\nl[0] = {}\nreturn l[0]", addr.to_readable()),
+        )
+        .unwrap();
+        assert_eq!(v, Value::Address(addr));
+    }
+
+    #[test]
+    fn bufset_writes_and_error_order() {
+        // BUFSET mutates the receiver's own Vec on the stack: the expression
+        // result is the written buffer (a local's copy keeps the old bytes,
+        // covered below). u8 writes exactly one byte.
+        let (_, v, _) = fitsh_opcode_run(1, "return buf_set(0x01020304, 1, 0xff)").unwrap();
+        assert_eq!(v, Value::Bytes(vec![0x01, 0xff, 0x03, 0x04]));
+        // u64 writes its 8 canonical big-endian bytes.
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            &format!(
+                "return buf_set(0x{}, 0, {}u64)",
+                "00".repeat(16),
+                0x0706050403020100u64
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            Value::Bytes(vec![0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0])
+        );
+        // bool writes its single canonical byte.
+        let (_, v, _) = fitsh_opcode_run(1, "return buf_set(0x0000, 1, true)").unwrap();
+        assert_eq!(v, Value::Bytes(vec![0x00, 0x01]));
+        // Nil source is BytesHandle 91 and is checked before the start's 72.
+        for source in [
+            "var b = 0x0102\nbuf_set(b, nil, nil)",
+            "var b = 0x0102\nbuf_set(b, 65536u64, nil)",
+        ] {
+            let err = fitsh_opcode_run(1, source).unwrap_err();
+            assert_eq!(err.0, ItrErrCode::BytesHandle, "{source}: {err}");
+        }
+        // Start past u16 is CastParamFail 72; a non-bytes receiver is 91.
+        let err = fitsh_opcode_run(1, "var b = 0x0102\nbuf_set(b, 65536u64, 0xff)").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::CastParamFail, "{err}");
+        let err = fitsh_opcode_run(1, "var l = [1]\nbuf_set(l, 0, 0xff)").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::BytesHandle, "{err}");
+        // start + source length == buffer length is legal; past it is StackError 42.
+        let (_, v, _) = fitsh_opcode_run(1, "return buf_set(0x01020304, 2, 0xaabb)").unwrap();
+        assert_eq!(v, Value::Bytes(vec![0x01, 0x02, 0xaa, 0xbb]));
+        let err = fitsh_opcode_run(1, "return buf_set(0x01020304, 3, 0xaabb)").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::StackError, "{err}");
+        // The length never changes.
+        let (_, v, _) =
+            fitsh_opcode_run(1, "var b = buf_set(0x01020304, 1, 0xff)\nreturn size(b)").unwrap();
+        assert_eq!(v, Value::U16(4));
+        // Other slots keep their old copy: the interpreter's byte string is
+        // the one Vec, and `var c = <bytes>` holds an independent copy.
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            "var c = 0x01020304\nvar b = buf_set(c, 0, 0xffff)\nreturn c",
+        )
+        .unwrap();
+        assert_eq!(v, Value::Bytes(vec![0x01, 0x02, 0x03, 0x04]));
+    }
+
+    #[test]
+    fn itemcat_concat_and_errors() {
+        // Non-list receiver is 83; a map is 80.
+        let err = fitsh_opcode_run(1, "var b = 0x0102\nreturn item_concat(b)").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::CompoOpNotMatch, "{err}");
+        let err = fitsh_opcode_run(1, "var m = map {1: 2}\nreturn item_concat(m)").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::CompoOpInvalid, "{err}");
+        // u8 and bytes mix equals each element's extract_bytes in order.
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [1, \"ab\"]\nreturn item_concat(l)").unwrap();
+        let mut want = Value::U8(1).extract_bytes().unwrap();
+        want.extend_from_slice(b"ab");
+        assert_eq!(v, Value::Bytes(want));
+        // u64 contributes 8 bytes; bool contributes its 1 canonical byte.
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [1u64]\nreturn item_concat(l)").unwrap();
+        assert_eq!(
+            v,
+            Value::Bytes(Value::U64(1).extract_bytes().unwrap())
+        );
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [true, false]\nreturn item_concat(l)").unwrap();
+        assert_eq!(v, Value::Bytes(vec![1, 0]));
+        // A Nil element is BytesHandle 91.
+        let err = fitsh_opcode_run(1, "var l = [1, nil]\nreturn item_concat(l)").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::BytesHandle, "{err}");
+        // An empty list yields empty bytes.
+        let (_, v, _) = fitsh_opcode_run(1, "var l = []\nreturn item_concat(l)").unwrap();
+        assert_eq!(v, Value::Bytes(vec![]));
+        // Past value_size (1280) is OutOfValueSize 39.
+        let source = format!(
+            "var l = [0x{}, 0x01]\nreturn item_concat(l)",
+            "11".repeat(1280)
+        );
+        let err = fitsh_opcode_run(1, &source).unwrap_err();
+        assert_eq!(err.0, ItrErrCode::OutOfValueSize, "{err}");
+    }
+
+    /// The three opcodes run below the window and from its end; inside
+    /// [800_000, 802_000) every dispatch is refused with InstDisabled (an
+    /// upgrade-window refusal, not an opcode semantic).
+    #[test]
+    fn fitsh_opcodes_refuse_only_inside_the_upgrade_window() {
+        for source in [
+            "var l = [1, 2]\nl[1] = 9\nreturn l[1]",
+            "var b = 0x01020304\nbuf_set(b, 1, 0xff)\nreturn b",
+            "var l = [1, \"ab\"]\nreturn item_concat(l)",
+        ] {
+            for height in [1u64, 799_999, 802_000, 9_999_999] {
+                let ran: Result<(crate::rt::CallExit, Value, i64), ItrErr> =
+                    fitsh_opcode_run(height, source);
+                assert!(ran.is_ok(), "height {height} {source}: {:?}", ran.err());
+            }
+            for height in [800_000u64, 800_001, 801_111, 801_999] {
+                let err = fitsh_opcode_run(height, source).unwrap_err();
+                assert_eq!(
+                    err.0,
+                    ItrErrCode::InstDisabled,
+                    "height {height} {source}: {err}"
+                );
+            }
+        }
+    }
+
+    /// ITEMSET spends exactly what INSERT spends on the same list:
+    /// compo_items_edit(len) + compo_bytes(value), no key byte fee.
+    #[test]
+    fn itemset_gas_matches_insert_on_a_list() {
+        let set = "var l = [1, 2, 3]\nitem_set(l, 1, 9)\nreturn l[1]";
+        let ins = "var l = [1, 2, 3]\ninsert(l, 1, 9)\nreturn l[1]";
+        let (_, _, set_spent) = fitsh_opcode_run(1, set).unwrap();
+        let (_, _, ins_spent) = fitsh_opcode_run(1, ins).unwrap();
+        assert_eq!(
+            set_spent, ins_spent,
+            "ITEMSET must bill like INSERT on a list"
+        );
+    }
+
+    /// `+= -= *= /=` on an ITEMGET target reuse the arithmetic opcodes the
+    /// locals path uses, so results (and failures) match `XOP` semantics.
+    #[test]
+    fn compound_item_assignment_matches_local_arithmetic() {
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [10, 20]\nvar i = 1\nl[i] += 5\nreturn l[1]").unwrap();
+        assert_eq!(v, Value::U8(25));
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [10, 20]\nl[1] -= 5\nreturn l[1]").unwrap();
+        assert_eq!(v, Value::U8(15));
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [10, 20]\nl[1] *= 2\nreturn l[1]").unwrap();
+        assert_eq!(v, Value::U8(40));
+        let (_, v, _) = fitsh_opcode_run(1, "var l = [10, 20]\nl[1] /= 2\nreturn l[1]").unwrap();
+        assert_eq!(v, Value::U8(10));
+        // Nested target (the inner list rides a tuple: compos cannot nest).
+        let (_, v, _) = fitsh_opcode_run(
+            1,
+            "var t = tuple([1, 2], 0)\nt[0][1] += 7\nreturn t[0][1]",
+        )
+        .unwrap();
+        assert_eq!(v, Value::U8(9));
+        // Same-width overflow is the interpreter's Arithmetic failure; the
+        // parser does not pre-restrict operand types.
+        let err = fitsh_opcode_run(1, "var l = [250u8]\nl[0] += 10u8").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::Arithmetic, "{err}");
+        // The spilled form survives a decompile roundtrip byte-for-byte.
+        let source = "var l = [10, 20]\nvar i = 1\nl[i] += 5\nreturn l[1]";
+        let codes = crate::lang::lang_to_bytecode(source).unwrap();
+        let ircode = crate::lang::lang_to_ircode(source).unwrap();
+        let printed = crate::lang::format_ircode_to_lang(&ircode, None).unwrap();
+        let recompiled = crate::lang::lang_to_bytecode(&printed).unwrap();
+        assert_eq!(
+            recompiled, codes,
+            "compound item assignment must survive a decompile roundtrip:\n{printed}"
+        );
+    }
 }
