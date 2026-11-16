@@ -12,8 +12,17 @@
 
 use crate::Token::*;
 use crate::lang::Tokenizer;
-use crate::rt::KwTy;
-use sys::{Ret, errf};
+use crate::rt::{KwTy, TokenSpan};
+use sys::{Ret, Rerr, errf};
+
+/// `{line}:{col}: ` prefix from the span sidecar (empty when unknown).
+fn span_pre(spans: &[TokenSpan], idx: usize) -> String {
+    if idx < spans.len() && spans[idx].known() {
+        format!("{}: ", spans[idx])
+    } else {
+        String::new()
+    }
+}
 
 /// One `function rv64im <name>` declaration without an inline payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,15 +33,80 @@ pub struct CalcRequest {
     /// signature users must write: `(input: &[u8], out: &mut [u8]) -> usize`
     /// vs `(out: &mut [u8]) -> usize`.
     pub has_input: bool,
+    /// The declared parameter name (`Some("data")` for the call-data form).
+    pub arg_name: Option<String>,
+    /// Tokens inside the braces of a native fitsh kernel body
+    /// (`function rv64im kern(data: bytes) -> bytes { ... }`); `None` for
+    /// the rust-kernel / container-file resolution form.
+    pub body: Option<Vec<crate::rt::Token>>,
+    /// P2-D03 T1: parallel span sidecar for `body` (same length); empty when
+    /// the body is `None`.
+    pub body_spans: Vec<crate::rt::TokenSpan>,
+}
+
+/// P2-D03 T5 pre-scan check: every `name: type` pair inside an rv64im
+/// parameter list must declare `bytes`. Diagnoses the declared type at the
+/// source level instead of letting the backend report the type confusion.
+fn validate_rv64im_param_types(
+    name: &str,
+    params: &[crate::rt::Token],
+    spans: &[TokenSpan],
+) -> Rerr {
+    let mut i = 0usize;
+    while i < params.len() {
+        let at = span_pre(spans, i);
+        let Some(Identifier(pname)) = params.get(i) else {
+            return errf!(
+                "{}rv64im function '{}': expected parameter name, got {}",
+                at,
+                name,
+                crate::lang::token_desc(params.get(i).unwrap_or(&Identifier(String::new())))
+            );
+        };
+        i += 1;
+        match params.get(i) {
+            Some(Keyword(KwTy::Colon)) | Some(Partition(':')) => i += 1,
+            other => {
+                return errf!(
+                    "{}rv64im function '{}': expected ':' after parameter '{}', got {}",
+                    span_pre(spans, i),
+                    name,
+                    pname,
+                    other.map(crate::lang::token_desc)
+                        .unwrap_or_else(|| "end of input".to_string())
+                );
+            }
+        }
+        match params.get(i) {
+            Some(Identifier(t)) if t == "bytes" => {}
+            Some(Keyword(KwTy::Bytes)) => {}
+            other => {
+                return errf!(
+                    "{}rv64im function '{}': parameter '{}' type must be bytes, got {}; \
+                     rv64im kernels take at most one bytes parameter — the call data",
+                    span_pre(spans, i),
+                    name,
+                    pname,
+                    other.map(crate::lang::token_desc)
+                        .unwrap_or_else(|| "end of input".to_string())
+                );
+            }
+        }
+        i += 1;
+        if matches!(params.get(i), Some(Partition(','))) {
+            i += 1;
+        }
+    }
+    Ok(())
 }
 
 /// Collect the rv64im calc requests of a contract source. Declarations with
 /// an inline `= 0x...` / `= CONST` payload are already self-contained and are
-/// skipped; the reserved fitsh kernel body form `{ ... }` is rejected here
-/// with a "not supported yet" error (same wording as the full parser).
+/// skipped; a fitsh kernel body `{ ... }` is captured (balanced-brace) as a
+/// native-body request the build tool lowers with the fitsh→RV64IM backend.
 pub fn collect_calc_requests(code: &str) -> Ret<Vec<CalcRequest>> {
-    let tokens = Tokenizer::new(code.as_bytes())
-        .parse()
+    let (tokens, spans) = Tokenizer::new(code.as_bytes())
+        .parse_with_spans()
         .map_err(|e| e.to_string())?;
     let mut out = Vec::new();
     let mut i = 0usize;
@@ -57,6 +131,7 @@ pub fn collect_calc_requests(code: &str) -> Ret<Vec<CalcRequest>> {
         // Optional parameter list: `()` or `(data: bytes[, ...])`. Skip to the
         // matching `)` (depth-aware even though the grammar has no nesting).
         let mut has_input = false;
+        let mut arg_name: Option<String> = None;
         if matches!(tokens.get(j), Some(Partition('('))) {
             let mut depth = 1usize;
             let start = j + 1;
@@ -73,9 +148,26 @@ pub fn collect_calc_requests(code: &str) -> Ret<Vec<CalcRequest>> {
                 j += 1;
             }
             if j >= tokens.len() {
-                return errf!("rv64im function '{}' args list not closed", name);
+                return errf!(
+                    "{}rv64im function '{}' args list not closed",
+                    span_pre(&spans, tokens.len().saturating_sub(1)),
+                    name
+                );
             }
             has_input = j > start;
+            if has_input {
+                if let Some(Identifier(arg)) = tokens.get(start) {
+                    arg_name = Some(arg.clone());
+                }
+                // P2-D03 T5: reject non-bytes parameter types here, before the
+                // build tool pre-lowers the body. Without this the CLI path
+                // bound the parameter as bytes regardless of the declared type
+                // and the lowering rejected it with the misleading
+                // `expected an int value, got bytes` (doc 66 §5 E05). The full
+                // parser (parse_rv64im_param_type) remains the authority and
+                // rejects the same declarations.
+                validate_rv64im_param_types(&name, &tokens[start..j], &spans[start..j])?;
+            }
             j += 1; // consume ')'
         }
         // Optional `-> bytes` (parenthesized form allowed, as in the parser).
@@ -99,15 +191,37 @@ pub fn collect_calc_requests(code: &str) -> Ret<Vec<CalcRequest>> {
                 j += 2;
             }
             Some(Partition('{')) => {
-                return errf!(
-                    "rv64im function '{}' fitsh kernel body is reserved and not supported yet; \
-                     assign container bytes ('= 0x..'), supply a '{name}.rs' rust kernel, \
-                     or pass '--calc {name}=<kernel.hcf1|kernel.elf>'",
-                    name
-                );
+                // Native fitsh kernel body: capture the balanced-brace token
+                // range for the fitsh→RV64IM lowering.
+                let mut depth = 1usize;
+                let start = j + 1;
+                j += 1;
+                while j < tokens.len() && depth > 0 {
+                    match &tokens[j] {
+                        Partition('{') => depth += 1,
+                        Partition('}') => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                if depth != 0 {
+                    return errf!(
+                        "{}rv64im function '{}' body braces not closed",
+                        span_pre(&spans, tokens.len().saturating_sub(1)),
+                        name
+                    );
+                }
+                let body = tokens[start..j].to_vec();
+                j += 1; // consume '}'
+                out.push(CalcRequest { name, has_input, arg_name, body: Some(body), body_spans: spans[start..j].to_vec() });
             }
             _ => {
-                out.push(CalcRequest { name, has_input });
+                out.push(CalcRequest { name, has_input, arg_name, body: None, body_spans: Vec::new() });
                 // Nothing else belongs to the declaration; continue from j.
             }
         }
@@ -125,6 +239,14 @@ mod collect_tests {
             .unwrap()
             .into_iter()
             .map(|r| (r.name, r.has_input))
+            .collect()
+    }
+
+    fn bodies(src: &str) -> Vec<(String, bool, bool)> {
+        collect_calc_requests(src)
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.name, r.body.is_some(), r.arg_name.is_some()))
             .collect()
     }
 
@@ -171,16 +293,35 @@ contract Demo {
     }
 
     #[test]
-    fn reserved_body_form_is_rejected() {
+    fn body_form_is_collected_as_a_native_request() {
         let src = r#"
 pragma fitsh 1.0.0
 contract Demo {
-    function rv64im kern(data: bytes) -> bytes { return kern(data) }
+    function rv64im kern(data: bytes) -> bytes {
+        var n = size(data)
+        return n as bytes
+    }
+    function external run(x: bytes) -> bytes { return self::kern(x) }
 }
 "#;
+        let reqs = collect_calc_requests(src).unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].name, "kern");
+        assert!(reqs[0].has_input);
+        assert_eq!(reqs[0].arg_name.as_deref(), Some("data"));
+        let body = reqs[0].body.as_ref().unwrap();
+        // balanced-brace capture: the body's own braces stay inside
+        assert!(
+            !body.iter().any(|t| matches!(t, crate::rt::Token::Partition('}'))),
+            "closing contract brace leaked into the body"
+        );
+    }
+
+    #[test]
+    fn body_brace_mismatch_is_an_error() {
+        let src = "function rv64im kern() -> bytes { var x = 1";
         let err = collect_calc_requests(src).unwrap_err().to_string();
-        assert!(err.contains("not supported yet"), "{err}");
-        assert!(err.contains("kern.rs"), "{err}");
+        assert!(err.contains("braces not closed"), "{err}");
     }
 
     #[test]

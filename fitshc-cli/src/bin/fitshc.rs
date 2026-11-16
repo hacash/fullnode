@@ -156,7 +156,10 @@ impl CommonArgs {
                                 .into(),
                         );
                     }
-                    me.elf_defaults.input_max = val!("--in").parse().map_err(|_| "--in N")?;
+                    let v = val!("--in");
+                    me.elf_defaults.input_max = v.parse().map_err(|_| {
+                        format!("--in expects an integer byte size, got '{v}'")
+                    })?;
                 }
                 "--out" => {
                     if sub == "image" {
@@ -165,7 +168,10 @@ impl CommonArgs {
                                 .into(),
                         );
                     }
-                    me.elf_defaults.output_max = val!("--out").parse().map_err(|_| "--out N")?;
+                    let v = val!("--out");
+                    me.elf_defaults.output_max = v.parse().map_err(|_| {
+                        format!("--out expects an integer byte size, got '{v}'")
+                    })?;
                 }
                 "--profile" => {
                     if sub == "image" {
@@ -175,8 +181,8 @@ impl CommonArgs {
                         );
                     }
                     let v = val!("--profile");
-                    me.elf_defaults.profile =
-                        ProfileName::parse(&v).ok_or_else(|| format!("unknown profile {v:?}"))?;
+                    me.elf_defaults.profile = ProfileName::parse(&v)
+                        .ok_or_else(|| format!("unknown profile '{v}' (expected rv64im or rv64imc)"))?;
                     // rv64im / rv64imb / rv64imc / rv64imcb are all admitted
                     // by the chain; hash stays rejected (see --hash).
                 }
@@ -191,7 +197,9 @@ impl CommonArgs {
                     me.elf_defaults.mem = if v == "auto" {
                         MemSpec::Auto
                     } else {
-                        MemSpec::KiB(v.parse().map_err(|_| "--mem auto|N")?)
+                        MemSpec::KiB(v.parse().map_err(|_| {
+                            format!("--mem expects 'auto' or an integer KiB size, got '{v}'")
+                        })?)
                     };
                 }
                 "--hash" => {
@@ -264,7 +272,7 @@ impl CommonArgs {
                     me.periods = Some(n);
                 }
                 other if other.starts_with("--") => {
-                    return Err(format!("unknown flag {other:?}"));
+                    return Err(format!("unknown flag '{other}' (try --help)"));
                 }
                 _ => me.rest.push(a.clone()),
             }
@@ -309,11 +317,13 @@ fn main() {
             usage();
             Ok(())
         }
-        "build" | "pack" | "image" | "run" => Err(format!("{} requires a file argument", args[1])),
+        "build" | "pack" | "image" | "run" => Err(format!("{} requires a file argument (try --help)", args[1])),
         _ => cmd_build(&args[1..]),
     };
     if let Err(e) = result {
-        println!("Error: {e}");
+        // Errors go to stderr (scripts redirecting stdout stay clean) with a
+        // uniform `fitshc: ` prefix identifying the emitting binary.
+        eprintln!("fitshc: {e}");
         std::process::exit(1);
     }
 }
@@ -470,7 +480,8 @@ fn write_deploy_json(
         .get(1)
         .cloned()
         .unwrap_or_else(|| "1:248".to_string());
-    let txfee = Amount::from(&fee_str).map_err(|e| format!("invalid fee {fee_str:?}: {e:?}"))?;
+    let txfee =
+        Amount::from(&fee_str).map_err(|e| format!("invalid fee '{fee_str}': {e}"))?;
     let nonce_val = common
         .rest
         .get(2)
@@ -629,9 +640,12 @@ fn cmd_image(args: &[String]) -> Result<(), String> {
         return Err("fitshc image requires exactly one <kernel.rs>".into());
     }
     let rs_path = PathBuf::from(&common.rest[0]);
+    if rs_path.extension().and_then(|e| e.to_str()) == Some("fitsh") {
+        return cmd_image_fitsh(&rs_path, &common);
+    }
     if rs_path.extension().and_then(|e| e.to_str()) != Some("rs") {
         return Err(format!(
-            "fitshc image expects a .rs kernel, got {}",
+            "fitshc image expects a .rs or .fitsh kernel, got {}",
             rs_path.display()
         ));
     }
@@ -698,6 +712,53 @@ fn cmd_image(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// `fitshc image contract.fitsh`: compile the contract's single native
+/// fitsh kernel body into a container file.
+fn cmd_image_fitsh(fitsh_path: &Path, common: &CommonArgs) -> Result<(), String> {
+    let source =
+        fs::read_to_string(fitsh_path).map_err(|e| format!("read {}: {e}", fitsh_path.display()))?;
+    let cap = SpaceCap::new(0);
+    let (name, bytes) = fitshc_cli::single_body_kernel(fitsh_path, &source, &cap)?;
+    let out = match &common.out {
+        Some(o) => PathBuf::from(o),
+        None => fitsh_path.with_extension("hcf1"),
+    };
+    if lex_abs(&out) == lex_abs(fitsh_path) {
+        return Err(format!(
+            "output path {} would overwrite the input source; pass -o with a different path",
+            out.display()
+        ));
+    }
+    // Same gate as a FitSH `= 0x` body.
+    vm::contract::Func::new(&name)
+        .and_then(|f| f.rv64im_container_bytes_with_cap(bytes.clone(), &cap))
+        .map_err(|e| e.to_string())?;
+    if let Some(parent) = out.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+        }
+    }
+    fs::write(&out, &bytes).map_err(|e| format!("write {}: {e}", out.display()))?;
+    let c = vm::fitshc::kernel::decode_container(&bytes).map_err(|e| e.to_string())?;
+    let summary = format!(
+        "image {} (kernel '{name}') -> {} (profile {:#04x}, mem {} KiB, in {}, out {}, {} B)",
+        fitsh_path.display(),
+        out.display(),
+        c.profile,
+        c.mem_kib,
+        c.input_max,
+        c.output_max,
+        bytes.len()
+    );
+    if common.hex {
+        println!("0x{}", hex::encode(&bytes));
+        eprintln!("{summary}");
+    } else {
+        println!("{summary}");
+    }
+    Ok(())
+}
+
 fn cmd_pack(args: &[String]) -> Result<(), String> {
     let common = CommonArgs::parse(args, "pack")?;
     if common.strict {
@@ -710,7 +771,7 @@ fn cmd_pack(args: &[String]) -> Result<(), String> {
         .rest
         .first()
         .cloned()
-        .ok_or_else(|| "fitshc pack requires a <kernel.elf>".to_string())?;
+        .ok_or_else(|| "fitshc pack requires a <kernel.elf> (try --help)".to_string())?;
     let out = match common.out {
         Some(o) => PathBuf::from(o),
         None => Path::new(&elf_path).with_extension("hcf1"),
@@ -752,7 +813,12 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
                 i += 2;
             }
             "--cycles" if i + 1 < args.len() => {
-                cycles = args[i + 1].parse().map_err(|_| "--cycles N")?;
+                cycles = args[i + 1].parse().map_err(|_| {
+                    format!(
+                        "--cycles expects an integer cycle budget, got '{}'",
+                        args[i + 1]
+                    )
+                })?;
                 i += 2;
             }
             "--no-input" => {
@@ -770,7 +836,7 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
         .rest
         .first()
         .cloned()
-        .ok_or_else(|| "fitshc run requires a <kernel.rs|.hcf1|.elf>".to_string())?;
+        .ok_or_else(|| "fitshc run requires a <kernel.rs|.hcf1|.elf|.fitsh> (try --help)".to_string())?;
     let path = Path::new(&kernel_path);
     let input = if input_hex.is_empty() {
         Vec::new()
@@ -779,10 +845,28 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
             .strip_prefix("0x")
             .or_else(|| input_hex.strip_prefix("0X"))
             .unwrap_or(&input_hex);
-        hex::decode(h).map_err(|e| format!("--input hex: {e}"))?
+        hex::decode(h).map_err(|e| {
+            format!(
+                "--input expects hex (optional 0x prefix), got '{input_hex}': {e}"
+            )
+        })?
     };
     let cap = SpaceCap::new(0);
     let (container, origin) = match path.extension().and_then(|e| e.to_str()) {
+        Some("fitsh") => {
+            let source =
+                fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+            let (name, bytes) = fitshc_cli::single_body_kernel(path, &source, &cap)?;
+            let c = vm::fitshc::kernel::decode_container(&bytes).map_err(|e| e.to_string())?;
+            println!(
+                "built {} (kernel '{name}', profile {:#04x}, mem {} KiB, image {} B)",
+                path.display(),
+                c.profile,
+                c.mem_kib,
+                bytes.len()
+            );
+            (c, "fitsh-source")
+        }
         Some("rs") => {
             if common.no_build {
                 return Err(
@@ -834,7 +918,8 @@ fn cmd_run(args: &[String]) -> Result<(), String> {
         }
         other => {
             return Err(format!(
-                "unsupported kernel type {other:?}: expected .rs, .hcf1 or .elf"
+                "unsupported kernel type '.{}': expected .rs, .hcf1, .elf or .fitsh",
+                other.unwrap_or("<no extension>")
             ));
         }
     };

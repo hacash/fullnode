@@ -67,6 +67,10 @@ pub enum Resolution {
     Container(PathBuf),
     /// Raw ELF, packed later with the CLI's `ElfDefaults`.
     Elf(PathBuf),
+    /// A native fitsh kernel body (`function rv64im f(...) { ... }`):
+    /// lowered by the fitsh→RV64IM backend, no rust toolchain involved.
+    /// An explicit `--calc` override redirects to a file kernel instead.
+    FitshBody { req: CalcRequest },
 }
 
 impl Resolution {
@@ -75,6 +79,7 @@ impl Resolution {
             Resolution::Rs { .. } => "rust-source",
             Resolution::Container(_) => "prebuilt-container",
             Resolution::Elf { .. } => "prebuilt-elf",
+            Resolution::FitshBody { .. } => "fitsh-source",
         }
     }
 }
@@ -112,6 +117,11 @@ fn resolve_one(
     // 1. explicit override
     if let Some(path) = overrides.get(name) {
         return classify_override(path, req);
+    }
+
+    // 1b. native fitsh kernel body (no file needed)
+    if req.body.is_some() {
+        return Ok(Resolution::FitshBody { req: req.clone() });
     }
 
     // 2./3. rust sources (skipped with --no-build)
@@ -288,8 +298,11 @@ mod resolve_tests {
 
     fn req(name: &str, has_input: bool) -> CalcRequest {
         CalcRequest {
+            body_spans: Vec::new(),
             name: name.to_string(),
             has_input,
+            arg_name: has_input.then(|| "data".to_string()),
+            body: None,
         }
     }
 

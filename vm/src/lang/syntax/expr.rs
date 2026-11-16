@@ -39,7 +39,9 @@ impl Syntax {
             let yes = self.with_ternary_true_branch(true, |s| s.parse_expr_bp(0))?;
             yes.checkretval()?;
             if !self.cursor.eat_keyword(KwTy::Colon) {
-                return errf!("ternary expression missing ':' after '?'");
+                return Err(
+                    self.err_here("ternary expression missing ':' after '?'")
+                );
             }
             let no = self.parse_expr_bp(0)?;
             no.checkretval()?;
@@ -420,8 +422,14 @@ impl Syntax {
             Token::Keyword(KwTy::Nil) => Ok(push_nil()),
             Token::Keyword(KwTy::True) => Ok(push_inst(Bytecode::PTRUE)),
             Token::Keyword(KwTy::False) => Ok(push_inst(Bytecode::PFALSE)),
-            Token::Operator(op) => errf!("operator {:?} cannot start expression", op),
-            other => errf!("unsupported token '{:?}'", other),
+            Token::Operator(op) => Err(self.err_here(format!(
+                "operator '{}' cannot start expression",
+                op.symbol()
+            ))),
+            other => Err(self.err_here(format!(
+                "unsupported token {}",
+                crate::lang::token_desc(&other)
+            ))),
         }
     }
 
@@ -522,7 +530,9 @@ impl Syntax {
         };
         if !self.cursor.eat_keyword(KwTy::Else) {
             if keep_retval {
-                return errf!("if expression must have else branch");
+                return Err(self.err_here(
+                    "if expression must have else branch; hint: add `else { .. }`                      or use the statement form",
+                ));
             }
             return Ok(Box::new(node));
         }

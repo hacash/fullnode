@@ -1,8 +1,8 @@
 use super::compile_body::{CompiledCode, compile_body_with_macros};
 use super::parse_deploy::parse_deploy;
 use super::parse_func::{
-    parse_func_body_tokens, parse_func_sig, parse_function, parse_optional_code_modifier,
-    parse_rv64im_function,
+    parse_func_body_tokens_spans, parse_func_sig, parse_function,
+    parse_optional_code_modifier, parse_rv64im_function,
 };
 use super::state::{FITSH_CURRENT_VERSION, FitshVersion, MacroDef, ParseState};
 use crate::contract::Abst;
@@ -17,11 +17,11 @@ pub fn parse_top_level(state: &mut ParseState) -> Ret<()> {
     state.skip_soft_separators();
 
     if !matches!(state.current(), Some(Keyword(KwTy::Contract))) {
-        return errf!("expected contract declaration after pragma");
+        return errf!("{}expected contract declaration after pragma", state.pos_here());
     }
     state.advance();
     let Some(Identifier(name)) = state.current() else {
-        return errf!("expected contract name after 'contract'");
+        return errf!("{}expected contract name after 'contract'", state.pos_here());
     };
     state.contract_name = name.clone();
     state.advance();
@@ -123,7 +123,7 @@ fn parse_optional_const_type(state: &mut ParseState) -> Ret<Option<ValueTy>> {
         .cloned()
         .ok_or_else(|| "expected const type after ':'".to_string())?;
     let Some(ty) = crate::lang::parse_const_value_ty(&token) else {
-        return errf!("const type invalid");
+        return errf!("{}const type invalid (expected u8/u16/u32/u64/u128/bytes/address/bool)", state.pos_here());
     };
     state.advance();
     Ok(Some(ty))
@@ -141,7 +141,7 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
             let name = if let Some(Identifier(n)) = state.current() {
                 n.clone()
             } else {
-                return errf!("expected const name after 'const'");
+                return errf!("{}expected const name after 'const'", state.pos_here());
             };
             state.advance();
             let explicit_ty = parse_optional_const_type(state)?;
@@ -150,7 +150,7 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
             if let Some(Keyword(KwTy::Assign)) = state.current() {
                 state.advance();
             } else {
-                return errf!("expected '=' after const name");
+                return errf!("{}expected '=' after const name", state.pos_here());
             }
 
             // Parse the const value
@@ -162,13 +162,13 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
             let literal = crate::lang::parse_const_literal(token, explicit_ty)?;
 
             if state.consts.iter().any(|(n, _)| n == &name) {
-                return errf!("duplicate const '{}'", name);
+                return errf!("{}duplicate const '{}'", state.pos_here(), name);
             }
             state.consts.push((name, literal.node));
         }
         Some(Keyword(KwTy::Deploy)) => {
             if state.deploy.is_some() {
-                return errf!("duplicate deploy block");
+                return errf!("{}duplicate deploy block", state.pos_here());
             }
             let info = parse_deploy(state)?;
             state.deploy = Some(info);
@@ -178,10 +178,10 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
             let libs = parse_addr_list(state)?;
             for (name, addr) in libs {
                 if state.libs.len() >= u8::MAX as usize {
-                    return errf!("too many contract libraries: max {}", u8::MAX);
+                    return errf!("{}too many contract libraries: max {}", state.pos_here(), u8::MAX);
                 }
                 if !state.library_addrs.insert(addr) {
-                    return errf!("duplicate library address");
+                    return errf!("{}duplicate library address", state.pos_here());
                 }
                 // libidx is 0-based order
                 state.libs.push((name, addr));
@@ -193,10 +193,10 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
             let inherit_list = parse_addr_list(state)?;
             for (_name, addr) in inherit_list {
                 if state.inherit_addrs.len() >= u8::MAX as usize {
-                    return errf!("too many inherit contracts: max {}", u8::MAX);
+                    return errf!("{}too many inherit contracts: max {}", state.pos_here(), u8::MAX);
                 }
                 if !state.inherit_addrs.insert(addr) {
-                    return errf!("duplicate inherit address");
+                    return errf!("{}duplicate inherit address", state.pos_here());
                 }
                 state.contract = state.contract.clone().inh(addr);
             }
@@ -215,19 +215,21 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
                 );
                 if !ok {
                     return errf!(
-                        "abstract '{}' return type must be integer (error code)",
+                        "{}abstract '{}' return type must be integer (error code)",
+                        state.pos_here(),
                         name
                     );
                 }
             }
             // parse body for abstract code
-            let body_tokens = parse_func_body_tokens(state)?;
+            let (body_tokens, body_spans) = parse_func_body_tokens_spans(state)?;
             let aid = AbstCall::from_name(&name).map_err(|e| e.to_string())?;
             // validate param types
             let expect = aid.param_types();
             if expect.len() != args.len() {
                 return errf!(
-                    "abstract '{}' params length mismatch: expected {}, got {}",
+                    "{}abstract '{}' params length mismatch: expected {}, got {}",
+                    state.pos_here(),
                     name,
                     expect.len(),
                     args.len()
@@ -236,7 +238,8 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
             for (i, (_, ty)) in args.iter().enumerate() {
                 if *ty != expect[i] {
                     return errf!(
-                        "abstract '{}' param {} type mismatch: expected {:?}, got {:?}",
+                        "{}abstract '{}' param {} type mismatch: expected {:?}, got {:?}",
+                        state.pos_here(),
                         name,
                         i,
                         expect[i],
@@ -253,6 +256,8 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
                 &state.consts,
                 is_ircode,
                 &state.macros,
+                &body_spans,
+                state.file.as_deref(),
             )?;
 
             let abst = match compiled {
@@ -279,14 +284,39 @@ fn parse_contract_body_item(state: &mut ParseState) -> Ret<()> {
                 let (func, smap, name) = parse_function(state, true)?;
                 let sign = calc_func_sign(&name);
                 if !state.userfunc_signs.insert(sign) {
-                    return errf!("duplicate function '{}' signature", name);
+                    return errf!("{}duplicate function '{}' signature", state.pos_here(), name);
                 }
                 state.contract = state.contract.clone().func(func);
                 state.source_maps.push((name, smap));
             }
         }
-        Some(token) => return errf!("unexpected token in contract body: {:?}", token),
-        None => return errf!("unexpected EOF while parsing contract body"),
+        Some(token) => {
+            return errf!(
+                "{}unexpected token {} in contract body",
+                state.pos_here(),
+                crate::lang::token_desc(token)
+            )
+        }
+        None => {
+            // P2-D03 T7: an EOF here is almost always an unclosed brace
+            // (E02: the message used to be the bare, misleading
+            // `unexpected EOF while parsing contract body`). Diagnose the
+            // imbalance from the whole token stream.
+            let (open, close) = super::state::brace_balance(&state.tokens);
+            let at = state.pos_here();
+            if open > close {
+                return errf!(
+                    "{}unexpected EOF while parsing contract body; {} '{{' never \
+                     closed ({} '{{' vs {} '}}') — a function body or the \
+                     contract block is missing its closing '}}'",
+                    at,
+                    open - close,
+                    open,
+                    close
+                );
+            }
+            return errf!("{}unexpected EOF while parsing contract body", at);
+        }
     }
     Ok(())
 }
@@ -296,7 +326,7 @@ fn take_rv64im_func(state: &mut ParseState) -> Ret<()> {
     let (func, name) = parse_rv64im_function(state)?;
     let sign = calc_func_sign(&name);
     if !state.userfunc_signs.insert(sign) {
-        return errf!("duplicate rv64im function '{}' signature", name);
+        return errf!("{}duplicate rv64im function '{}' signature", state.pos_here(), name);
     }
     state.contract = state.contract.clone().func(func);
     Ok(())
@@ -305,7 +335,7 @@ fn take_rv64im_func(state: &mut ParseState) -> Ret<()> {
 fn parse_macro_definition(state: &mut ParseState) -> Ret<()> {
     state.advance(); // define
     let Some(Identifier(name)) = state.current() else {
-        return errf!("expected macro name after 'define'");
+        return errf!("{}expected macro name after 'define'", state.pos_here());
     };
     let name = name.clone();
     state.advance();
@@ -318,20 +348,20 @@ fn parse_macro_definition(state: &mut ParseState) -> Ret<()> {
             break;
         }
         let Some(Identifier(param)) = state.current() else {
-            return errf!("expected $-prefixed macro parameter");
+            return errf!("{}expected $-prefixed macro parameter", state.pos_here());
         };
         if !param.starts_with('$') || param.len() < 2 {
-            return errf!("macro parameter '{}' must start with '$'", param);
+            return errf!("{}macro parameter '{}' must start with '$'", state.pos_here(), param);
         }
         if params.contains(param) {
-            return errf!("duplicate macro parameter '{}'", param);
+            return errf!("{}duplicate macro parameter '{}'", state.pos_here(), param);
         }
         params.push(param.clone());
         state.advance();
         if matches!(state.current(), Some(Partition(','))) {
             state.advance();
         } else if !matches!(state.current(), Some(Partition(')'))) {
-            return errf!("expected ',' or ')' in macro parameter list");
+            return errf!("{}expected ',' or ')' in macro parameter list", state.pos_here());
         }
     }
     state.eat_partition('{')?;
@@ -346,7 +376,7 @@ fn parse_macro_definition(state: &mut ParseState) -> Ret<()> {
                 if depth == 0 {
                     state.advance();
                     if state.macros.iter().any(|m| m.name == name) {
-                        return errf!("duplicate macro '{}'", name);
+                        return errf!("{}duplicate macro '{}'", state.pos_here(), name);
                     }
                     state.macros.push(MacroDef { name, params, body });
                     return Ok(());
@@ -357,7 +387,7 @@ fn parse_macro_definition(state: &mut ParseState) -> Ret<()> {
         body.push(token.clone());
         state.advance();
     }
-    errf!("bracket mismatch in macro definition")
+    errf!("bracket mismatch in macro definition (missing '}}')")
 }
 
 fn parse_addr_list(state: &mut ParseState) -> Ret<Vec<(String, field::Address)>> {
@@ -373,7 +403,7 @@ fn parse_addr_list(state: &mut ParseState) -> Ret<Vec<(String, field::Address)>>
         let name = if let Some(Identifier(n)) = state.current() {
             n.clone()
         } else {
-            return errf!("expected lib/inherit name");
+            return errf!("{}expected lib/inherit name", state.pos_here());
         };
         state.advance();
 
@@ -392,7 +422,11 @@ fn parse_addr_list(state: &mut ParseState) -> Ret<Vec<(String, field::Address)>>
             state.advance();
             adr
         } else {
-            return errf!("expected address but got {:?}", state.current());
+            return errf!(
+                "{}expected address but got {}",
+                state.pos_here(),
+                crate::lang::token_desc_opt(state.current())
+            );
         };
         if !addr.is_contract() {
             return errf!("address {} must be CONTRACT type", addr.to_readable());

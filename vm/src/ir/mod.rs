@@ -83,6 +83,11 @@ impl std::fmt::Debug for dyn IRNode {
 
 include!("node.rs");
 include!("parse.rs");
+
+// Prototype IR→RV64IM lowering (feasibility probe; see rv64.rs module docs).
+#[cfg(feature = "execute")]
+pub mod rv64;
+
 #[cfg(feature = "syntax")]
 include!("compile.rs");
 #[cfg(feature = "syntax")]

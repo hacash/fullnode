@@ -103,7 +103,7 @@ impl Syntax {
         self.reserve_slot(idx)?;
         if idx >= self.local_alloc {
             if idx == u8::MAX {
-                return errf!("slot {} exceeds limit", idx);
+                return Err(self.err_here(format!("slot {idx} exceeds limit (max slot index 255)")));
             }
             self.local_alloc = idx + 1;
         }
@@ -137,7 +137,10 @@ impl Syntax {
 
     fn register_slot_symbol(&mut self, name: String, idx: u8) -> Rerr {
         if self.symbols.contains_key(&name) {
-            return errf!("symbol '{}' already bound", name);
+            return Err(self.err_here(format!(
+                "symbol '{}' already bound; hint: rename the variable or drop the earlier binding",
+                name
+            )));
         }
         self.symbols.insert(name, SymbolEntryV2::Slot(idx));
         Ok(())
@@ -145,7 +148,10 @@ impl Syntax {
 
     fn register_bind_symbol(&mut self, name: String, entry: SymbolEntryV2) -> Rerr {
         if self.symbols.contains_key(&name) {
-            return errf!("symbol '{}' already bound", name);
+            return Err(self.err_here(format!(
+                "symbol '{}' already bound; hint: rename the variable or drop the earlier binding",
+                name
+            )));
         }
         self.symbols.insert(name, entry);
         Ok(())
@@ -182,7 +188,10 @@ impl Syntax {
             Some(SymbolEntryV2::Bind(node)) | Some(SymbolEntryV2::Const(node)) => {
                 Ok(ResolvedSymbol::Expr(clone_box(node.as_ref())))
             }
-            None => errf!("cannot find symbol '{}'", name),
+            None => Err(self.err_here(format!(
+                "cannot find symbol '{}'; hint: check the spelling or declare it with `var` first",
+                name
+            ))),
         }
     }
 
@@ -207,7 +216,10 @@ impl Syntax {
     ) -> Ret<Box<dyn IRNode>> {
         let (idx, mutable) = self.resolve_lvalue_slot(name)?;
         if !mutable {
-            return errf!("cannot assign to immutable symbol '{}'", name);
+            return Err(self.err_here(format!(
+                "cannot assign to immutable symbol '{}'; hint: declare it with `var` to make it mutable",
+                name
+            )));
         }
         self.emit.source_map.mark_slot_mutated(idx);
         Ok(push_single_p1(Bytecode::PUT, idx, value))
@@ -223,7 +235,10 @@ impl Syntax {
         use KwTy::*;
         let (idx, mutable) = self.resolve_lvalue_slot(name)?;
         if !mutable {
-            return errf!("cannot assign to immutable symbol '{}'", name);
+            return Err(self.err_here(format!(
+                "cannot assign to immutable symbol '{}'; hint: declare it with `var` to make it mutable",
+                name
+            )));
         }
         self.emit.source_map.mark_slot_mutated(idx);
         let (lxop, inst) = match op {
@@ -326,7 +341,9 @@ impl Syntax {
                                 continue;
                             }
                             if terminated {
-                                return errf!("unreachable code after terminal statement");
+                                return Err(s.err_here(
+                                    "unreachable code after terminal statement",
+                                ));
                             }
                             let Some(item) = s.parse_item()? else {
                                 return errf!("{}", err_msg);
@@ -341,8 +358,10 @@ impl Syntax {
                 if let SequenceMode::Statements { keep_retval: true } = mode {
                     match items.last() {
                         Some(last) if last.hasretval() => {}
-                        Some(_) => return errf!("block expression must return a value"),
-                        None => return errf!("block expression cannot be empty"),
+                        Some(_) => {
+                            return Err(s.err_here("block expression must return a value"))
+                        }
+                        None => return Err(s.err_here("block expression cannot be empty")),
                     }
                 }
                 Ok(items)

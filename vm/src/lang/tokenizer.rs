@@ -4,6 +4,15 @@ pub struct Tokenizer<'a> {
     texts: &'a [u8],
     idx: usize,
     tokens: Vec<Token>,
+    /// Parallel to `tokens`: first-byte (line, col) of each token
+    /// (P2-D03 T1 sidecar; `Token` is unchanged). In lockstep via `emit`.
+    spans: Vec<TokenSpan>,
+    /// Byte offset already accounted for in (line, col) (monotone watermark).
+    water: usize,
+    line: u32,
+    col: u32,
+    /// Byte offset of the token currently being scanned.
+    tok_start: usize,
 }
 
 #[allow(dead_code)]
@@ -11,21 +20,69 @@ impl Tokenizer<'_> {
     pub fn new<'a>(texts: &'a [u8]) -> Tokenizer<'a> {
         Tokenizer {
             texts,
+            line: 1,
             ..Default::default()
         }
     }
 
-    fn parse_num_bytes_or_address(s: &str) -> Ret<Token> {
+    /// Push a token and its span in lockstep. The watermark only advances to
+    /// `tok_start` (token starts are monotone), so (line, col) is exact.
+    fn emit(&mut self, t: Token) {
+        self.sync_to(self.tok_start);
+        self.tokens.push(t);
+        self.spans.push(TokenSpan { line: self.line, col: self.col + 1 });
+    }
+
+    fn sync_to(&mut self, target: usize) {
+        while self.water < target && self.water < self.texts.len() {
+            if self.texts[self.water] == b'\n' {
+                self.line += 1;
+                self.col = 0;
+            } else {
+                self.col += 1;
+            }
+            self.water += 1;
+        }
+    }
+
+    /// 1-based (line, col) of byte offset `off` (pure scan; error paths only).
+    fn line_col_at(&self, off: usize) -> (u32, u32) {
+        let mut line = 1u32;
+        let mut col = 0u32;
+        for &b in &self.texts[..off.min(self.texts.len())] {
+            if b == b'\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col + 1)
+    }
+
+    /// `{line}:{col}: ` prefix for tokenizer error messages.
+    fn pos_prefix(&self, off: usize) -> String {
+        let (line, col) = self.line_col_at(off);
+        format!("{line}:{col}: ")
+    }
+
+    fn parse_num_bytes_or_address(s: &str, pre: &str) -> Ret<Token> {
         if s.starts_with("0x") {
             // Ox1AE23F
             let v = s.to_owned().split_off(2);
             return Ok(match hex::decode(v) {
                 Ok(d) => Bytes(d),
-                _ => return errf!("hex data format invalid '{}'", s),
+                _ => {
+                    return Err(Error::fault(format!(
+                        "{pre}hex data format invalid '{s}'"
+                    )))
+                }
             });
         } else if s.starts_with("0b") {
             // 0b11110000
-            let e = errf!("binary data '{}' format invalid", s);
+            let e = Err(Error::fault(format!(
+                "{pre}binary data '{s}' format invalid"
+            )));
             let v = s.to_owned().split_off(2);
             let vl = v.len();
             if vl == 0 || vl % 8 != 0 || vl > 128 {
@@ -43,7 +100,11 @@ impl Tokenizer<'_> {
         // maybe integer
         Ok(Integer(match s.parse::<u128>() {
             Ok(u) => u,
-            _ => return errf!("integer type parse failed for '{}'", s),
+            _ => {
+                return Err(Error::fault(format!(
+                    "{pre}integer type parse failed for '{s}'"
+                )))
+            }
         }))
     }
 
@@ -136,7 +197,10 @@ impl Tokenizer<'_> {
                     }
                     self.idx += 1;
                 }
-                errf!("unterminated block comment")
+                Err(Error::fault(format!(
+                    "{}unterminated block comment",
+                    self.pos_prefix(self.idx.saturating_sub(1))
+                )))
             }
             _ => Ok(false),
         }
@@ -155,10 +219,10 @@ impl Tokenizer<'_> {
         }
         let ok = Ok(());
         if let Ok(k) = KwTy::build(&s) {
-            self.tokens.push(Keyword(k));
+            self.emit(Keyword(k));
             return ok;
         }
-        self.tokens.push(match Self::parse_address(&s) {
+        self.emit(match Self::parse_address(&s) {
             Some(addr) => addr,
             _ => Identifier(s.clone()),
         });
@@ -206,14 +270,15 @@ impl Tokenizer<'_> {
         }
 
         // Parse the number part first
-        let token = Self::parse_num_bytes_or_address(&num_part)?;
+        let token =
+            Self::parse_num_bytes_or_address(&num_part, &self.pos_prefix(self.tok_start))?;
         match (token, suffix_kw) {
-            (Integer(n), Some(kw)) => self.tokens.push(IntegerWithSuffix(n, kw)),
+            (Integer(n), Some(kw)) => self.emit(IntegerWithSuffix(n, kw)),
             (token, Some(kw)) => {
-                self.tokens.push(token);
-                self.tokens.push(Keyword(kw));
+                self.emit(token);
+                self.emit(Keyword(kw));
             }
-            (token, None) => self.tokens.push(token),
+            (token, None) => self.emit(token),
         }
         Ok(())
     }
@@ -232,18 +297,25 @@ impl Tokenizer<'_> {
         }
         let ok = Ok(());
         if let Ok(k) = KwTy::build(&s) {
-            self.tokens.push(Keyword(k));
+            self.emit(Keyword(k));
             return ok;
         }
         if let Ok(o) = OpTy::build(&s) {
-            self.tokens.push(Operator(o));
+            self.emit(Operator(o));
             return ok;
         }
-        errf!("unsupported symbol '{}'", s)
+        Err(Error::fault(format!(
+            "{}unsupported symbol '{}'",
+            self.pos_prefix(self.tok_start),
+            s
+        )))
     }
 
     pub fn parse_bytes(&mut self, max: usize, _c: char) -> Rerr {
-        let err_msg = "bytes format invalid";
+        let err_msg = format!(
+            "{}bytes format invalid",
+            self.pos_prefix(self.tok_start)
+        );
         let mut s = vec![];
         let mut closed = false;
         while self.idx < max {
@@ -254,58 +326,64 @@ impl Tokenizer<'_> {
                 break;
             }
             if c == '\\' {
-                let (byte, consumed) = self.parse_escape_byte(max, err_msg)?;
+                let (byte, consumed) = self.parse_escape_byte(max, &err_msg)?;
                 s.push(byte);
                 self.idx += consumed;
                 continue;
             }
             if !c.is_ascii() {
-                return errf!("{}", err_msg);
+                return Err(err_msg.clone().into());
             }
             s.push(c as u8);
             self.idx += 1;
         }
         if !closed {
-            return errf!("{}", err_msg);
+            return Err(err_msg.clone().into());
         }
-        self.tokens.push(Bytes(s));
+        self.emit(Bytes(s));
         Ok(())
     }
 
     pub fn parse_char(&mut self, max: usize, _c: char) -> Rerr {
-        let err_msg = "char format invalid";
+        let err_msg = format!(
+            "{}char format invalid",
+            self.pos_prefix(self.tok_start)
+        );
         if self.idx >= max - 1 {
-            return errf!("{}", err_msg);
+            return Err(err_msg.clone().into());
         }
 
         let byte = if self.texts[self.idx] == b'\\' {
-            let (byte, consumed) = self.parse_escape_byte(max, err_msg)?;
+            let (byte, consumed) = self.parse_escape_byte(max, &err_msg)?;
             self.idx += consumed;
             byte
         } else {
             let byte = self.texts[self.idx];
             self.idx += 1;
             if byte == b'\'' || !byte.is_ascii() {
-                return errf!("{}", err_msg);
+                return Err(err_msg.clone().into());
             }
             byte
         };
 
         if self.idx >= max || self.texts[self.idx] != b'\'' {
-            return errf!("{}", err_msg);
+            return Err(err_msg.clone().into());
         }
         self.idx += 1;
 
-        self.tokens.push(Character(byte));
+        self.emit(Character(byte));
         Ok(())
     }
 
-    pub fn parse(mut self) -> Ret<Vec<Token>> {
+    /// Parse with the parallel span table (P2-D03 T1). Token stream is
+    /// byte-identical to [`Self::parse`]; only the sidecar differs.
+    pub fn parse_with_spans(mut self) -> Ret<(Vec<Token>, Vec<TokenSpan>)> {
         // use TokenType::*;
         let max = self.texts.len();
         while self.idx < max {
             let c = self.texts[self.idx] as char;
             self.idx += 1;
+            self.tok_start = self.idx - 1;
             if c == '/' && self.idx < max {
                 if self.parse_comments(max)? {
                     continue;
@@ -314,18 +392,29 @@ impl Tokenizer<'_> {
             match c {
                 '0'..='9' => self.parse_number(max, c)?,
                 'A'..='Z' | 'a'..='z' | '$' | '_' => self.parse_identifier(max, c)?,
-                '{' | '}' | '(' | ')' | '[' | ']' | '?' => self.tokens.push(Partition(c)),
+                '{' | '}' | '(' | ')' | '[' | ']' | '?' => self.emit(Partition(c)),
                 // Comma is a soft separator token.
                 // Semicolon is normalized to comma at lexical stage.
-                ',' | ';' => self.tokens.push(Partition(',')),
+                ',' | ';' => self.emit(Partition(',')),
                 '+' | '-' | '*' | '/' | '=' | '!' | '.' | ':' | '>' | '<' | '|' | '&' | '%'
                 | '^' => self.parse_symbol(max, c)?,
                 '"' => self.parse_bytes(max, c)?,
                 '\'' => self.parse_char(max, c)?,
                 ' ' | '\n' | '\r' | '\t' => {} // ignore
-                _ => return errf!("unsupported char [{}]", c),
+                _ => {
+                    return Err(Error::fault(format!(
+                        "{}unsupported char [{}]",
+                        self.pos_prefix(self.tok_start),
+                        c
+                    )))
+                }
             }
         }
-        Ok(self.tokens)
+        Ok((self.tokens, self.spans))
+    }
+
+    /// Spanless parse (unchanged signature/behavior for existing callers).
+    pub fn parse(self) -> Ret<Vec<Token>> {
+        self.parse_with_spans().map(|(tokens, _)| tokens)
     }
 }

@@ -92,11 +92,58 @@ v1 containers carry version byte 1. Profiles 0..=3 are admitted;
 `hash` must stay false. Profile 0 (`rv64im`, eth-act `riscv64im_zicclsm`)
 is the zk-standardized subset.
 
+## Native fitsh kernel bodies
+
+`function rv64im` declarations can carry the kernel **in fitsh itself** — no
+rust toolchain, no `<name>.rs`:
+
+```rust
+contract Fold {
+    function rv64im fold(data: bytes) -> bytes {
+        // calc: input_max = 4800
+        // calc: output_max = 8
+        var s = 0u64
+        var i = 0u64
+        var n = size(data)
+        while i < n {
+            s = (s * 31 + byte(data, i)) % 1000000007
+            i += 1
+        }
+        return s as bytes
+    }
+    function external run(x: bytes) -> bytes { return self::fold(x) }
+}
+```
+
+The body lowers through the fitsh→RV64IM backend into an admitted `HCF1`
+container (verified with the exact chain checks before injection) and
+produces the same artifacts as a rust kernel (`fold.hcf1` +
+`fold.calc.manifest.json`, manifest `origin: fitsh-source`). The leading
+`// calc:` comment block supports the same schema as `.rs` kernels
+(`profile` restricted to `rv64im`/`rv64imc` — bitmanip needs the rust
+toolchain). Absent keys default to the smallest-code lowering
+(`rv64imc`, profile 2), L1 IO ceilings and a 64 KiB window with a
+maximum-size bump arena (byte concatenation traps on exhaustion — a bound,
+not a leak).
+
+The body must stay inside the backend's pinned kernel subset (`var`,
+`while`/`if`/`break`/`continue`, checked u64 arithmetic, bytes
+slicing/`byte`/`size`/`++`, `require`/`return`/`throw`); anything else —
+calls, u128, storage, natives — is a compile-time error naming the
+offending construct.
+
+`fitshc run contract.fitsh --input 0x...` and
+`fitshc image contract.fitsh -o fold.hcf1` work directly on the body
+declaration (exactly one body kernel per run/image invocation; `build`
+handles any number).
+
 ## Kernel resolution order
 
-For `function rv64im <name>` without `= 0x...` (relative to the `.fitsh`
-directory):
+For `function rv64im <name>` without `= 0x...` and **without a fitsh body**
+(relative to the `.fitsh` directory):
 
+0. a fitsh body on the declaration — `function rv64im f(...) { ... }` —
+   lowers natively (an explicit `--calc` override still wins)
 1. `--calc <name>=<path>` — explicit `.rs` / `.hcf1` / `.elf` override
 2. `<name>.rs` — rust kernel, auto-compiled (source of truth)
 3. `calc/<name>.rs` — directory-grouped variant

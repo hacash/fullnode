@@ -324,6 +324,31 @@ irfn_define! {
 }
 /* ******************************* #[derive(Default, Eq, PartialEq)] #[repr(u8)] pub enum TokenType { #[default] Blank,  // \s\n\t\r Word,   // _a~zA~Z0~9 Number, // 0~9 x b . Str, StrEsc, Split,  // () {} [] Symbol, // +-* /|& } */
 
+/// 1-based (line, col) of a token's first byte, from the tokenizer's
+/// parallel span table (P2-D03 T1 sidecar — `Token` itself is unchanged).
+/// The zero value (line 0) marks "no position": synthesized tokens (the
+/// virtual `end` appended by compile_body, macro-expanded tokens before
+/// span propagation) and tables built through the spanless `parse()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenSpan {
+    pub line: u32,
+    pub col: u32,
+}
+
+impl TokenSpan {
+    pub const NONE: Self = Self { line: 0, col: 0 };
+    /// `Some` only for real positions (line 0 = synthesized/unknown).
+    pub fn known(&self) -> bool {
+        self.line != 0
+    }
+}
+
+impl std::fmt::Display for TokenSpan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.line, self.col)
+    }
+}
+
 /********************************/
 
 #[derive(Debug, Clone, Eq, PartialEq)]
