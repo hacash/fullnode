@@ -272,6 +272,190 @@ mod token_t {
         );
     }
 
+    /// `l[i] = v` and `item_set(l, i, v)` are the same ITEMSET instruction, the
+    /// decompiler prints the assignment form, and recompiling returns the same
+    /// bytecode (docs.loc/fitsh-rv64-opcode.md §call names).
+    #[test]
+    fn item_set_assignment_and_call_are_one_instruction_and_roundtrip() {
+        use super::{format_ircode_to_lang, irnode_to_lang, lang_to_bytecode, lang_to_ircode, lang_to_irnode};
+        use crate::rt::Bytecode;
+
+        let assign = "var l = [1, 2, 3]\nl[1] = 9\nreturn l[1]";
+        let call = "var l = [1, 2, 3]\nitem_set(l, 1, 9)\nreturn l[1]";
+        let assign_codes = lang_to_bytecode(assign).expect("compile l[i] = v");
+        let call_codes = lang_to_bytecode(call).expect("compile item_set(l, i, v)");
+        assert!(
+            assign_codes.contains(&(Bytecode::ITEMSET as u8)),
+            "Expected ITEMSET (0x6c) in bytecode, got: {:02x?}",
+            assign_codes
+        );
+        assert_eq!(
+            assign_codes, call_codes,
+            "l[i] = v and item_set(l, i, v) must compile to the same instruction stream"
+        );
+
+        // Decompile prints the assignment form and recompiles to the same bytes.
+        // Without a source map the receiver shows as its `$n` slot alias.
+        let back = irnode_to_lang(lang_to_irnode(assign).unwrap()).unwrap();
+        assert!(
+            back.contains("$0[1] = 9"),
+            "decompiled output lost the assignment form: {back}"
+        );
+        let rebyte = lang_to_bytecode(&back).unwrap();
+        assert_eq!(
+            rebyte, assign_codes,
+            "ITEMSET must survive a decompile roundtrip"
+        );
+
+        // Same through the serialized-IR channel.
+        let printed = format_ircode_to_lang(&lang_to_ircode(assign).unwrap(), None).unwrap();
+        assert!(
+            printed.contains("$0[1] = 9"),
+            "serialized-IR decompile lost the assignment form: {printed}"
+        );
+        let rebyte2 = lang_to_bytecode(&printed).unwrap();
+        assert_eq!(
+            rebyte2, assign_codes,
+            "ITEMSET must survive the serialized-IR roundtrip"
+        );
+    }
+
+    /// `l[i][j] = v` is ITEMSET(ITEMGET(l, i), j, v): the inner list evaluates
+    /// exactly once (one ITEMGET in the stream), nested assignment included.
+    #[test]
+    fn nested_item_set_compiles_to_itemget_receiver_once() {
+        use super::lang_to_bytecode;
+        use crate::rt::Bytecode;
+
+        let codes = lang_to_bytecode("var l = [[1, 2], [3, 4]]\nl[1][0] = 7\nreturn l[1][0]")
+            .expect("compile l[i][j] = v");
+        let itemget = codes
+            .windows(1)
+            .filter(|w| w[0] == Bytecode::ITEMGET as u8)
+            .count();
+        let itemset = codes
+            .windows(1)
+            .filter(|w| w[0] == Bytecode::ITEMSET as u8)
+            .count();
+        assert_eq!(itemset, 1, "exactly the writeback: {codes:02x?}");
+        assert_eq!(
+            itemget, 3,
+            "inner receiver read + the two final reads: {codes:02x?}"
+        );
+    }
+
+    /// `b[i] = v` on a bytes receiver is still ITEMSET (runtime 83), never
+    /// BUFSET; only the `buf_set` call writes bytes.
+    #[test]
+    fn bytes_item_assignment_is_itemset_not_bufset() {
+        use super::lang_to_bytecode;
+        use crate::rt::Bytecode;
+
+        let codes = lang_to_bytecode("var b = 0x01020304\nb[1] = 0xff\nreturn b")
+            .expect("compile b[i] = v");
+        assert!(
+            codes.contains(&(Bytecode::ITEMSET as u8)),
+            "b[i] = v must compile to ITEMSET: {codes:02x?}"
+        );
+        assert!(
+            !codes.contains(&(Bytecode::BUFSET as u8)),
+            "b[i] = v must not compile to BUFSET: {codes:02x?}"
+        );
+    }
+
+    /// `buf_set` / `item_concat` call names compile and roundtrip through the
+    /// serialized-IR channel.
+    #[test]
+    fn buf_set_and_item_concat_call_names_roundtrip() {
+        use super::{format_ircode_to_lang, lang_to_bytecode, lang_to_ircode};
+        use crate::rt::Bytecode;
+
+        for (script, inst, intro) in [
+            ("var b = 0x01020304\nbuf_set(b, 1, 0xff)\nreturn b", Bytecode::BUFSET, "buf_set"),
+            ("var l = [1, \"ab\"]\nreturn item_concat(l)", Bytecode::ITEMCAT, "item_concat"),
+        ] {
+            let codes = lang_to_bytecode(script).unwrap_or_else(|e| panic!("{script}: {e}"));
+            assert!(codes.contains(&(inst as u8)), "{script}: {codes:02x?}");
+            let printed = format_ircode_to_lang(&lang_to_ircode(script).unwrap(), None).unwrap();
+            assert!(
+                printed.contains(intro),
+                "{script} => decompile lost `{intro}`: {printed}"
+            );
+            let rebyte = lang_to_bytecode(&printed).unwrap();
+            assert_eq!(rebyte, codes, "{script} => roundtrip changed the bytecode");
+        }
+    }
+
+    /// `+=` on an ITEMGET target adds no opcode: the index subtree appears
+    /// once (one index-producing instruction run), the rhs evaluates before
+    /// the element read, and the writeback is ITEMSET. Locals keep PUT/XOP.
+    #[test]
+    fn compound_item_assignment_spills_once_and_reads_after_rhs() {
+        use super::lang_to_bytecode;
+        use crate::rt::Bytecode;
+
+        let codes = lang_to_bytecode("var l = [10, 20]\nvar i = 1\nl[i] += 5\nreturn l[1]")
+            .expect("compile l[i] += v");
+        assert!(
+            codes.contains(&(Bytecode::ITEMSET as u8)),
+            "l[i] += v must write back via ITEMSET: {codes:02x?}"
+        );
+        // Exactly one evaluation of the index: the spilled index slot (3,
+        // after l=0, i=1 and the receiver/rhs spills 2 and 4; slots <= 3 use
+        // the GET0..GET3 short forms) is stored once and read twice (element
+        // read + writeback), never re-evaluated.
+        let index_gets = codes
+            .windows(1)
+            .filter(|w| w[0] == Bytecode::GET3 as u8)
+            .count();
+        assert_eq!(
+            index_gets, 2,
+            "spilled index slot is read twice (read + writeback) but stored once: {codes:02x?}"
+        );
+        let stores = codes
+            .windows(2)
+            .filter(|w| w[0] == Bytecode::PUT as u8 && w[1] == 3)
+            .count();
+        assert_eq!(stores, 1, "index spill stored exactly once: {codes:02x?}");
+
+        // Ordering: the rhs constant is pushed before the ITEMGET read.
+        let rhs_pos = codes
+            .windows(2)
+            .position(|w| w[0] == Bytecode::PU8 as u8 && w[1] == 5)
+            .expect("rhs constant");
+        let read_pos = codes
+            .windows(1)
+            .position(|w| w[0] == Bytecode::ITEMGET as u8)
+            .expect("element read");
+        assert!(
+            rhs_pos < read_pos,
+            "rhs must evaluate before the element read: {codes:02x?}"
+        );
+    }
+
+    /// `m[k] = v` keeps compiling to ITEMSET (map receivers fail at runtime
+    /// with CompoOpInvalid), and non-ITEMGET/non-local assignment targets
+    /// stay parse errors.
+    #[test]
+    fn map_item_assignment_stays_itemset_and_bad_targets_stay_errors() {
+        use super::{lang_to_bytecode, lang_to_irnode};
+        use crate::rt::Bytecode;
+
+        let codes = lang_to_bytecode("var m = map {1: 2}\nm[1] = 3\nreturn m")
+            .expect("compile m[k] = v");
+        assert!(
+            codes.contains(&(Bytecode::ITEMSET as u8)),
+            "m[k] = v must compile to ITEMSET (runtime CompoOpInvalid): {codes:02x?}"
+        );
+
+        for bad in ["1 = 2", "\"s\" = 2", "1 + 1 = 2"] {
+            assert!(
+                lang_to_irnode(bad).is_err(),
+                "{bad} must stay an invalid assignment target"
+            );
+        }
+    }
+
     #[test]
     fn test_memory_init_compiles_to_ntctl_and_roundtrips() {
         use super::{irnode_to_lang, lang_to_bytecode, lang_to_irnode};

@@ -574,14 +574,24 @@ impl Syntax {
             )) => {
                 let token = Token::Keyword(*kw);
                 self.cursor.next()?;
-                let Some(name) = Self::assign_target_name(left.as_ref()) else {
-                    return errf!("assign statement format invalid");
-                };
                 let value = self.parse_required_item()?;
                 value.checkretval()?;
-                *left = match token {
-                    Token::Keyword(KwTy::Assign) => self.save_local(&name, value)?,
-                    _ => self.assign_local(&name, value, token)?,
+                *left = if let Some(name) = Self::assign_target_name(left.as_ref()) {
+                    match token {
+                        Token::Keyword(KwTy::Assign) => self.save_local(&name, value)?,
+                        _ => self.assign_local(&name, value, token)?,
+                    }
+                } else if let Some((receiver, index)) = Self::assign_item_target(left.as_ref()) {
+                    // `l[i] = v` / `l[i][j] = v` / `l[i] += v`: the target is the
+                    // ITEMGET built by the `[` postfix; locals above stay PUT/XOP.
+                    match token {
+                        Token::Keyword(KwTy::Assign) => {
+                            Self::build_item_set_node(receiver, index, value)
+                        }
+                        _ => self.assign_item(receiver, index, value, token)?,
+                    }
+                } else {
+                    return errf!("assign statement format invalid");
                 };
                 return Ok(true);
             }
@@ -665,6 +675,109 @@ impl Syntax {
         node.as_any()
             .downcast_ref::<IRNodeLeaf>()
             .map(|ir| ir.as_text().clone())
+    }
+
+    /// `l[i] = v` (and `l[i][j] = v`, `b[i] = v`, `m[k] = v`): the assignment
+    /// target is the ITEMGET built by the `[` postfix. `l[i] = v` and
+    /// `item_set(l, i, v)` compile to the same ITEMSET; `b[i] = v` is also
+    /// ITEMSET (a bytes receiver fails at runtime with CompoOpNotMatch, not
+    /// at parse time). Returns the receiver and index — the whole `l[i]` tree
+    /// is replaced, so each is evaluated exactly once.
+    fn assign_item_target(
+        node: &dyn IRNode,
+    ) -> Option<(Box<dyn IRNode>, Box<dyn IRNode>)> {
+        let get = node.as_any().downcast_ref::<IRNodeDouble>()?;
+        if get.inst != Bytecode::ITEMGET {
+            return None;
+        }
+        Some((
+            clone_box(get.subx.as_ref()),
+            clone_box(get.suby.as_ref()),
+        ))
+    }
+
+    /// ITEMSET(receiver, index, value): container on the stack bottom, index
+    /// and value above it; the container stays on the stack (statement
+    /// contexts POP it).
+    fn build_item_set_node(
+        receiver: Box<dyn IRNode>,
+        index: Box<dyn IRNode>,
+        value: Box<dyn IRNode>,
+    ) -> Box<dyn IRNode> {
+        Box::new(IRNodeTriple {
+            hrtv: true,
+            inst: Bytecode::ITEMSET,
+            subx: receiver,
+            suby: index,
+            subz: value,
+        })
+    }
+
+    /// Reserve the three anonymous spill slots (receiver, index, rhs) of a
+    /// compound item assignment. They sit after every named / `$n`-aliased
+    /// slot and are covered by the head ALLOC through `local_alloc`.
+    fn alloc_item_assign_slots(&mut self) -> Ret<(u8, u8, u8)> {
+        let base = self.local_alloc;
+        if base > u8::MAX - 3 {
+            return errf!("local slot overflow for compound item assignment");
+        }
+        let slots = [base, base + 1, base + 2];
+        for idx in slots {
+            self.reserve_slot(idx)?;
+        }
+        self.local_alloc = base + 3;
+        Ok((slots[0], slots[1], slots[2]))
+    }
+
+    /// `l[i] += v` & co — no new opcode. Receiver, index, and rhs are spilled
+    /// to hidden locals in source order (receiver, index, rhs), then the
+    /// element is read, the arithmetic runs, and ITEMSET writes back. The
+    /// index (and receiver) subtree therefore appears exactly once in the IR,
+    /// and the rhs evaluates before the element read — the same ordering the
+    /// `XOP` path gives locals. The arithmetic is the interpreter's
+    /// same-width integer rule: non-integer or mixed-width operands fail at
+    /// runtime (Arithmetic), never at parse time.
+    fn assign_item(
+        &mut self,
+        receiver: Box<dyn IRNode>,
+        index: Box<dyn IRNode>,
+        value: Box<dyn IRNode>,
+        op: Token,
+    ) -> Ret<Box<dyn IRNode>> {
+        use Bytecode::*;
+        use KwTy::*;
+        let inst = match op {
+            Token::Keyword(AsgAdd) => ADD,
+            Token::Keyword(AsgSub) => SUB,
+            Token::Keyword(AsgMul) => MUL,
+            Token::Keyword(AsgDiv) => DIV,
+            _ => return errf!("assign statement format invalid"),
+        };
+        let (rs, is, vs) = self.alloc_item_assign_slots()?;
+        let read = Box::new(IRNodeDouble {
+            hrtv: true,
+            inst: ITEMGET,
+            subx: push_local_get(rs, s!("")),
+            suby: push_local_get(is, s!("")),
+        });
+        let arith = Box::new(IRNodeDouble {
+            hrtv: true,
+            inst,
+            subx: read,
+            suby: push_local_get(vs, s!("")),
+        });
+        let set = Self::build_item_set_node(
+            push_local_get(rs, s!("")),
+            push_local_get(is, s!("")),
+            arith,
+        );
+        let subs = vec![
+            push_single_p1(PUT, rs, receiver),
+            push_single_p1(PUT, is, index),
+            push_single_p1(PUT, vs, value),
+            set,
+        ];
+        Ok(Box::new(Self::build_irlist(subs)?))
     }
 
     fn parse_scalar_value_ty(token: &Token) -> Option<ValueTy> {

@@ -249,6 +249,7 @@ irfn_define! {
     roll_0
     roll
     byte
+    buf_set
     buf_cut
     buf_left
     buf_right
@@ -267,6 +268,8 @@ irfn_define! {
     length
     has_key
     item_get
+    item_set
+    item_concat
     keys
     values
     take_first

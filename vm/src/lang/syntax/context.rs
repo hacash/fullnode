@@ -165,7 +165,7 @@ impl Syntax {
         self.register_bind_symbol(name, SymbolEntryV2::Bind(node))
     }
 
-    fn reserve_slot(&mut self, idx: u8) -> Rerr {
+    pub(super) fn reserve_slot(&mut self, idx: u8) -> Rerr {
         if self.slot_used.contains(&idx) {
             return errf!("slot {} already bound", idx);
         }
