@@ -386,39 +386,51 @@ mod token_t {
         }
     }
 
-    /// `+=` on an ITEMGET target adds no opcode: the index subtree appears
-    /// once (one index-producing instruction run), the rhs evaluates before
-    /// the element read, and the writeback is ITEMSET. Locals keep PUT/XOP.
+    /// `+=` on an ITEMGET target adds no opcode and no hidden local slot. It is
+    /// stack-only and RHS-first (matching C++17/Rust and the local `XOP`
+    /// path): the rhs evaluates first, then the receiver and index are read
+    /// once, the element is read, the arithmetic runs, and ITEMSET writes back.
     #[test]
-    fn compound_item_assignment_spills_once_and_reads_after_rhs() {
-        use super::lang_to_bytecode;
+    fn compound_item_assignment_is_stack_only_and_rhs_first() {
+        use super::{format_ircode_to_lang, lang_to_bytecode};
         use crate::rt::Bytecode;
 
-        let codes = lang_to_bytecode("var l = [10, 20]\nvar i = 1\nl[i] += 5\nreturn l[1]")
-            .expect("compile l[i] += v");
+        let source = "var l = [10, 20]\nvar i = 1\nl[i] += 5\nreturn l[1]";
+        let codes = lang_to_bytecode(source).expect("compile l[i] += v");
         assert!(
             codes.contains(&(Bytecode::ITEMSET as u8)),
             "l[i] += v must write back via ITEMSET: {codes:02x?}"
         );
-        // Exactly one evaluation of the index: the spilled index slot (3,
-        // after l=0, i=1 and the receiver/rhs spills 2 and 4; slots <= 3 use
-        // the GET0..GET3 short forms) is stored once and read twice (element
-        // read + writeback), never re-evaluated.
-        let index_gets = codes
-            .windows(1)
-            .filter(|w| w[0] == Bytecode::GET3 as u8)
-            .count();
-        assert_eq!(
-            index_gets, 2,
-            "spilled index slot is read twice (read + writeback) but stored once: {codes:02x?}"
+        // No hidden receiver/index/rhs spills: the old lowering reserved slots
+        // 2 and 3 for the receiver and index. The only locals are l=0 and i=1.
+        for slot in [2u8, 3] {
+            assert!(
+                !codes
+                    .windows(2)
+                    .any(|w| w[0] == Bytecode::PUT as u8 && w[1] == slot),
+                "stack-only lowering must not spill to PUT {slot}: {codes:02x?}"
+            );
+        }
+        // One fixed raw block performs the stack shuffle: duplicate receiver
+        // and index, element read, roll the rhs up, arithmetic, writeback, and
+        // the `ROLL 0` retval marker that keeps the container as the value.
+        let raw = [
+            Bytecode::DUPN as u8,
+            2,
+            Bytecode::ITEMGET as u8,
+            Bytecode::ROLL as u8,
+            3,
+            Bytecode::ADD as u8,
+            Bytecode::ITEMSET as u8,
+            Bytecode::ROLL as u8,
+            0,
+        ];
+        assert!(
+            codes.windows(raw.len()).any(|w| w == raw),
+            "expected stack-only raw sequence {raw:02x?}: {codes:02x?}"
         );
-        let stores = codes
-            .windows(2)
-            .filter(|w| w[0] == Bytecode::PUT as u8 && w[1] == 3)
-            .count();
-        assert_eq!(stores, 1, "index spill stored exactly once: {codes:02x?}");
-
-        // Ordering: the rhs constant is pushed before the ITEMGET read.
+        // RHS-first: the constant 5 is pushed before the element read and
+        // before the receiver/index locals are read.
         let rhs_pos = codes
             .windows(2)
             .position(|w| w[0] == Bytecode::PU8 as u8 && w[1] == 5)
@@ -427,15 +439,40 @@ mod token_t {
             .windows(1)
             .position(|w| w[0] == Bytecode::ITEMGET as u8)
             .expect("element read");
+        let recv_pos = codes
+            .windows(1)
+            .position(|w| w[0] == Bytecode::GET0 as u8)
+            .expect("receiver read");
+        let idx_pos = codes
+            .windows(1)
+            .position(|w| w[0] == Bytecode::GET1 as u8)
+            .expect("index read");
         assert!(
             rhs_pos < read_pos,
             "rhs must evaluate before the element read: {codes:02x?}"
         );
+        assert!(
+            rhs_pos < recv_pos && rhs_pos < idx_pos,
+            "rhs must evaluate before the receiver/index reads: {codes:02x?}"
+        );
+
+        // Decompile with source names -> `l[i] += 5` -> byte-identical recompile.
+        let (ircode, smap) = super::lang_to_ircode_with_sourcemap(source).unwrap();
+        let printed = format_ircode_to_lang(&ircode, Some(&smap)).unwrap();
+        assert!(
+            printed.contains("l[i] += 5"),
+            "decompile lost the compound assignment: {printed}"
+        );
+        let rebyte = lang_to_bytecode(&printed).unwrap();
+        assert_eq!(
+            rebyte, codes,
+            "compound item assignment must survive a decompile roundtrip:\n{printed}"
+        );
     }
 
-    /// `m[k] = v` keeps compiling to ITEMSET (map receivers fail at runtime
-    /// with CompoOpInvalid), and non-ITEMGET/non-local assignment targets
-    /// stay parse errors.
+    /// `m[k] = v` keeps compiling to ITEMSET (an existing map key is overwritten
+    /// at runtime; a missing key is CompoNoFindItem). Non-ITEMGET/non-local
+    /// assignment targets stay parse errors.
     #[test]
     fn map_item_assignment_stays_itemset_and_bad_targets_stay_errors() {
         use super::{lang_to_bytecode, lang_to_irnode};
@@ -445,7 +482,7 @@ mod token_t {
             .expect("compile m[k] = v");
         assert!(
             codes.contains(&(Bytecode::ITEMSET as u8)),
-            "m[k] = v must compile to ITEMSET (runtime CompoOpInvalid): {codes:02x?}"
+            "m[k] = v must compile to ITEMSET: {codes:02x?}"
         );
 
         for bad in ["1 = 2", "\"s\" = 2", "1 + 1 = 2"] {

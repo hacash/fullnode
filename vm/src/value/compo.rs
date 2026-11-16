@@ -551,26 +551,34 @@ impl CompoItem {
         compo.insert(cap, k, v)
     }
 
-    /// ITEMSET: in-place list item assignment (`t,k,v+` like `insert`, but the
-    /// container stays and nothing shifts). The receiver checks precede this
-    /// call on the execute path (`ops.compo()` already returned
-    /// `CompoOpNotMatch` for non-compo). Here the order is: map -> `CompoOpInvalid`
-    /// (same code `append` uses for a map), then `insert`'s `check_scalar` on the
-    /// value, then `itemget`'s index rule (`extract_u32` -> `CastParamFail`;
-    /// `idx >= len`, including `idx == len`, -> `CompoNoFindItem`). The length
-    /// never changes and neighbouring items never move.
+    /// ITEMSET: in-place replacement on an existing slot (`t,k,v+` like
+    /// `insert`, but the container stays, nothing shifts, and the length never
+    /// changes). The receiver checks precede this call on the execute path
+    /// (`ops.compo()` already returned `CompoOpNotMatch` for non-compo).
+    /// Check order: non-compo -> 83 (execute), value `check_scalar` -> 76,
+    /// then list `extract_u32` -> `CastParamFail` 72 and `idx >= len`
+    /// (including `idx == len`) -> `CompoNoFindItem` 85, or map
+    /// `extract_key_bytes` -> `CastBeKeyFail` 73 and a missing key -> 85.
+    /// A new map key stays on `insert`. Neighbouring items never move.
     pub fn item_set(&self, k: Value, v: Value) -> VmrtErr {
-        let mut compo = self.compo.borrow_mut();
-        let a = match &mut *compo {
-            Compo::List(a) => a,
-            Compo::Map(..) => ret_invalid_compo_op! {},
-        };
         v.check_scalar()?;
-        let i = k.extract_u32()? as usize;
-        if i >= a.len() {
-            return itr_err_code!(CompoNoFindItem);
+        let mut compo = self.compo.borrow_mut();
+        match &mut *compo {
+            Compo::List(a) => {
+                let i = k.extract_u32()? as usize;
+                if i >= a.len() {
+                    return itr_err_code!(CompoNoFindItem);
+                }
+                a[i] = v;
+            }
+            Compo::Map(b) => {
+                let key = k.extract_key_bytes()?;
+                let Some(slot) = b.get_mut(&key) else {
+                    return itr_err_code!(CompoNoFindItem);
+                };
+                *slot = v;
+            }
         }
-        a[i] = v;
         Ok(())
     }
 

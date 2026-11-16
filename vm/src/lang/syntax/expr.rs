@@ -679,10 +679,11 @@ impl Syntax {
 
     /// `l[i] = v` (and `l[i][j] = v`, `b[i] = v`, `m[k] = v`): the assignment
     /// target is the ITEMGET built by the `[` postfix. `l[i] = v` and
-    /// `item_set(l, i, v)` compile to the same ITEMSET; `b[i] = v` is also
-    /// ITEMSET (a bytes receiver fails at runtime with CompoOpNotMatch, not
-    /// at parse time). Returns the receiver and index — the whole `l[i]` tree
-    /// is replaced, so each is evaluated exactly once.
+    /// `item_set(l, i, v)` compile to the same ITEMSET. An existing map key is
+    /// overwritten in place; `b[i] = v` is also ITEMSET (a bytes receiver fails
+    /// at runtime with CompoOpNotMatch, not at parse time). Returns the
+    /// receiver and index — the whole `l[i]` tree is replaced, so each is
+    /// evaluated exactly once.
     fn assign_item_target(
         node: &dyn IRNode,
     ) -> Option<(Box<dyn IRNode>, Box<dyn IRNode>)> {
@@ -713,30 +714,29 @@ impl Syntax {
         })
     }
 
-    /// Reserve the three anonymous spill slots (receiver, index, rhs) of a
-    /// compound item assignment. They sit after every named / `$n`-aliased
-    /// slot and are covered by the head ALLOC through `local_alloc`.
-    fn alloc_item_assign_slots(&mut self) -> Ret<(u8, u8, u8)> {
-        let base = self.local_alloc;
-        if base > u8::MAX - 3 {
-            return errf!("local slot overflow for compound item assignment");
-        }
-        let slots = [base, base + 1, base + 2];
-        for idx in slots {
-            self.reserve_slot(idx)?;
-        }
-        self.local_alloc = base + 3;
-        Ok((slots[0], slots[1], slots[2]))
-    }
-
-    /// `l[i] += v` & co — no new opcode. Receiver, index, and rhs are spilled
-    /// to hidden locals in source order (receiver, index, rhs), then the
-    /// element is read, the arithmetic runs, and ITEMSET writes back. The
-    /// index (and receiver) subtree therefore appears exactly once in the IR,
-    /// and the rhs evaluates before the element read — the same ordering the
-    /// `XOP` path gives locals. The arithmetic is the interpreter's
-    /// same-width integer rule: non-integer or mixed-width operands fail at
-    /// runtime (Arithmetic), never at parse time.
+    /// `l[i] += v` & co — no new opcode and no hidden locals. The lowering is
+    /// stack-only, RHS-first (matching C++17/Rust and the local `XOP` path):
+    ///
+    /// ```text
+    /// value            [v]                  rhs is evaluated first
+    /// receiver         [v,r]
+    /// index            [v,r,i]
+    /// DUPN 2           [v,r,i,r,i]
+    /// ITEMGET          [v,r,i,item]         element read only after the rhs
+    /// ROLL 3           [r,i,item,v]         rolls the rhs to the top
+    /// <ADD/SUB/MUL/DIV> [r,i,result]
+    /// ITEMSET          [container]          writes back in place
+    /// ROLL 0           [container]          identity; retval marker (F10)
+    /// ```
+    ///
+    /// Each child subtree appears exactly once in the IR (one evaluation of
+    /// each child). Receiver and index are duplicated on the runtime stack via
+    /// `DUPN`, not re-evaluated. The container the assignment returns stays on
+    /// the stack: enclosing statement blocks auto-POP it, while expression
+    /// contexts consume it. The arithmetic reuses the interpreter's ADD/XOP
+    /// path: mixed uint widths widen to the common width and succeed; non-uint
+    /// operands fail with `CastFail` 71; same-width overflow fails with
+    /// `Arithmetic` 90. The parser does not pre-restrict operand types.
     fn assign_item(
         &mut self,
         receiver: Box<dyn IRNode>,
@@ -753,30 +753,24 @@ impl Syntax {
             Token::Keyword(AsgDiv) => DIV,
             _ => return errf!("assign statement format invalid"),
         };
-        let (rs, is, vs) = self.alloc_item_assign_slots()?;
-        let read = Box::new(IRNodeDouble {
-            hrtv: true,
-            inst: ITEMGET,
-            subx: push_local_get(rs, s!("")),
-            suby: push_local_get(is, s!("")),
-        });
-        let arith = Box::new(IRNodeDouble {
-            hrtv: true,
-            inst,
-            subx: read,
-            suby: push_local_get(vs, s!("")),
-        });
-        let set = Self::build_item_set_node(
-            push_local_get(rs, s!("")),
-            push_local_get(is, s!("")),
-            arith,
+        // DUPN/SWAP are multi-output and have no standalone serializable IR
+        // node, so the stack shuffle rides a fixed, verified `IRNodeBytecodes`
+        // payload instead of losing the shape through serialization. The
+        // fragment and the decompiler matcher share `lang::compound`.
+        let raw_codes = crate::lang::compound::item_compound_raw(inst)
+            .ok_or_else(|| sys::Error::normal("assign statement format invalid"))?;
+        let raw: Box<dyn IRNode> = Box::new(
+            IRNodeBytecodes::new(raw_codes.to_vec()).map_err(|e| e.to_string())?,
         );
-        let subs = vec![
-            push_single_p1(PUT, rs, receiver),
-            push_single_p1(PUT, is, index),
-            push_single_p1(PUT, vs, value),
-            set,
-        ];
+        // `ROLL 0` is a serializable `IRNodeParam1` with runtime identity; its
+        // retval=true keeps the container as the assignment's value.
+        let retval_mark: Box<dyn IRNode> = Box::new(IRNodeParam1 {
+            hrtv: true,
+            inst: ROLL,
+            para: 0,
+            text: s!(""),
+        });
+        let subs = vec![value, receiver, index, raw, retval_mark];
         Ok(Box::new(Self::build_irlist(subs)?))
     }
 

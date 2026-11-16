@@ -693,6 +693,25 @@ mod bytecode_tests {
         assert_eq!(NT as u8, 0xff);
     }
 
+    /// F12: BUFSET/ITEMSET/ITEMCAT occupy same-family empty slots (0x52, 0x6C,
+    /// 0x6D). Row D stays the reserved growth row, not a home for these ops.
+    #[test]
+    fn fitsh_opcodes_stay_in_family_rows_not_row_d() {
+        assert_eq!(BUFSET as u8, 0x52);
+        assert_eq!(ITEMSET as u8, 0x6c);
+        assert_eq!(ITEMCAT as u8, 0x6d);
+        // Adjacent family members keep their meaning/slots.
+        assert_eq!(CHOOSE as u8, 0x51);
+        assert_eq!(NEWLIST as u8, 0x58);
+        assert_eq!(TUPLE2LIST as u8, 0x6b);
+        for op in 0xd0u8..=0xdf {
+            assert!(
+                Bytecode::try_from_u8(op).is_err(),
+                "0x{op:02x} row D must stay free/reserved"
+            );
+        }
+    }
+
     /// The call family is one range test: `is_user_call_inst` is true exactly on its run.
     #[test]
     fn call_family_is_one_contiguous_range() {
