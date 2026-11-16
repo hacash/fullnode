@@ -11,10 +11,10 @@ use crate::rt::{ItrErr, ItrErrCode, VmrtErr};
 use crate::space::{CtcKVMap, GKVMap, Heap, Stack};
 use crate::value::ContractAddress;
 
-const UPGRADE_HEIGHTS: &[u64] = &[
-    base::UPGRADE_DISABLE_FROM_HEIGHT,
-    base::UPGRADE_DISABLE_UNTIL_HEIGHT,
-];
+/// Heights that change VM gas or space configuration. Empty: the expired
+/// calc/HACD freeze no longer rebuilds this cache, and the kind-23 window
+/// is enforced in protocol execution rather than here.
+const UPGRADE_HEIGHTS: &[u64] = &[];
 
 #[derive(Default)]
 pub struct WarmState {

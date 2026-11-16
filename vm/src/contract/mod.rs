@@ -177,13 +177,6 @@ impl ContractUserFunc {
 }
 
 #[cfg(feature = "execute")]
-fn code_stuff_is_rv64im(code_stuff: &CodeStuff) -> bool {
-    code_stuff
-        .parse_conf()
-        .is_ok_and(|c| c.code_type() == CodeType::RV64IM)
-}
-
-#[cfg(feature = "execute")]
 fn verify_code_stuff(
     cap: &SpaceCap,
     gas: &GasExtra,
@@ -501,16 +494,6 @@ impl ContractSto {
         }
 
         if edit.userfuncs.length() > 0 {
-            // `base::upgrade_enabled_at` is also the HACD smelt view gate.
-            if edit
-                .userfuncs
-                .as_list()
-                .iter()
-                .any(|f| code_stuff_is_rv64im(&f.code_stuff))
-                && !base::upgrade_enabled_at(height)
-            {
-                return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
-            }
             let mut seen = HashSet::new();
             for a in edit.userfuncs.as_list() {
                 let key = a.sign.into_array();
@@ -531,9 +514,6 @@ impl ContractSto {
         }
 
         self.metas.revision = Uint2::from(next_rev);
-        // The activation gate applies only to calc user functions supplied in
-        // this edit. An unrelated edit must not freeze a contract that already
-        // carries `CodeType::RV64IM` functions.
         self.check_content(height, cap, gas, registry)?;
         Ok(did_change)
     }
@@ -553,22 +533,11 @@ impl ContractSto {
         gas: &GasExtra,
         registry: &dyn base::ExecutionServices,
     ) -> VmrtErr {
-        if self
-            .userfuncs
-            .as_list()
-            .iter()
-            .any(|f| code_stuff_is_rv64im(&f.code_stuff))
-            && !base::upgrade_enabled_at(height)
-        {
-            return itr_err_fmt!(ContractError, "calcfunc not enabled yet");
-        }
         self.check_content(height, cap, gas, registry)
     }
 
-    /// Validation of contract content, excluding the calcfunc activation
-    /// gate. Shared by deploy (`check`) and upgrade (`apply_edit`) so a state
-    /// loaded or upgraded outside the deploy path keeps the same invariants
-    /// without being frozen by the channel window.
+    /// Validation of contract content. Shared by deploy (`check`) and upgrade
+    /// (`apply_edit`).
     #[cfg(feature = "execute")]
     fn check_content(
         &self,
@@ -943,22 +912,19 @@ mod calc_io_load_tests {
     }
 
     #[test]
-    fn upgrade_with_existing_calcfuncs_survives_the_gate_window() {
+    fn upgrade_with_existing_calcfuncs_stays_open_past_the_expired_window() {
         let cap = SpaceCap::new(0);
         let gas = GasExtra::new(0, &STUB_VM_PARAMS);
         let svc = StubServices::new(STUB_VM_PARAMS);
-        let height = base::UPGRADE_DISABLE_FROM_HEIGHT;
+        let height = 790_000u64;
 
         let mut sto = ContractSto::default();
         sto.userfuncs.push(calc_user(16, 16)).unwrap();
 
-        // Deploy-style validation remains gated inside the freeze window.
-        let e = sto
-            .check(height, &cap, &gas, &svc)
-            .expect_err("deploy-style check must stay gated");
-        assert!(e.1.contains("calcfunc not enabled yet"), "unexpected: {:?}", e);
+        sto.check(height, &cap, &gas, &svc)
+            .expect("calcfunc stays enabled; the 790000-800000 gate is gone");
 
-        // An unrelated library edit must not freeze an existing contract.
+        // An unrelated library edit still applies.
         let addr = ContractAddress::calculate(
             &field::Address::from([0u8; field::Address::SIZE]),
             &Uint4::from(1),
@@ -975,7 +941,7 @@ mod calc_io_load_tests {
         };
         let _changed = sto
             .apply_edit(&edit, height, &cap, &gas, &svc)
-            .expect("library-only upgrade must pass during the freeze window");
+            .expect("library-only upgrade must pass");
         assert_eq!(sto.library.length(), 1);
         assert_eq!(sto.metas.revision.uint(), 1);
     }

@@ -484,13 +484,7 @@ fn load_hacd_smelt_fields(state: &CoreState<'_>, name: &DiamondName) -> Ret<Hacd
 fn each_smelt(
     state: &CoreState<'_>,
     diamonds: &DiamondNameListMax200,
-    height: u64,
 ) -> Ret<Vec<HacdSmeltFields>> {
-    // Same window as calc deployment (`base::upgrade_enabled_at`). Delete both
-    // checks together once the chain is past `UPGRADE_DISABLE_UNTIL_HEIGHT`.
-    if !base::upgrade_enabled_at(height) {
-        return errf!("hacd smelt not enabled yet");
-    }
     let _n = diamonds.check()?;
     let mut out = Vec::with_capacity(diamonds.length());
     for name in diamonds.as_list() {
@@ -502,9 +496,8 @@ fn each_smelt(
 base::impl_action_execute! {
     HacdSmelt {
         (self, ctx) {
-            let height = ctx.env().block.height;
             let state = CoreState::wrap(ctx.layer());
-            let rows = each_smelt(&state, &self.diamonds, height)?;
+            let rows = each_smelt(&state, &self.diamonds)?;
             let mut res = Vec::with_capacity(rows.len() * (8 + 10 + 32));
             for row in rows {
                 res.extend_from_slice(&row.number.to_be_bytes());
@@ -519,9 +512,8 @@ base::impl_action_execute! {
 base::impl_action_execute! {
     HacdNumberBatch {
         (self, ctx) {
-            let height = ctx.env().block.height;
             let state = CoreState::wrap(ctx.layer());
-            let rows = each_smelt(&state, &self.diamonds, height)?;
+            let rows = each_smelt(&state, &self.diamonds)?;
             let mut res = Vec::with_capacity(rows.len() * 8);
             for row in rows {
                 res.extend_from_slice(&row.number.to_be_bytes());
@@ -534,9 +526,8 @@ base::impl_action_execute! {
 base::impl_action_execute! {
     HacdVisualGeneBatch {
         (self, ctx) {
-            let height = ctx.env().block.height;
             let state = CoreState::wrap(ctx.layer());
-            let rows = each_smelt(&state, &self.diamonds, height)?;
+            let rows = each_smelt(&state, &self.diamonds)?;
             let mut res = Vec::with_capacity(rows.len() * 10);
             for row in rows {
                 res.extend_from_slice(&row.visual);
@@ -549,9 +540,8 @@ base::impl_action_execute! {
 base::impl_action_execute! {
     HacdLifeGeneBatch {
         (self, ctx) {
-            let height = ctx.env().block.height;
             let state = CoreState::wrap(ctx.layer());
-            let rows = each_smelt(&state, &self.diamonds, height)?;
+            let rows = each_smelt(&state, &self.diamonds)?;
             let mut res = Vec::with_capacity(rows.len() * 32);
             for row in rows {
                 res.extend_from_slice(&row.life);
@@ -1194,7 +1184,7 @@ mod tests {
     }
 
     #[test]
-    fn hacd_smelt_views_follow_the_upgrade_window() {
+    fn hacd_smelt_views_stay_open_past_the_expired_upgrade_window() {
         let name = hacd_name(1);
         let mut ctx = SigsetCtx::new(Vec::<Address>::new());
         put_smelt(&mut ctx, name, 1, 1);
@@ -1207,22 +1197,11 @@ mod tests {
                 ActionExecute::execute(&HacdLifeGeneBatch::new(list.clone()), ctx).map(|_| ()),
             ]
         };
-        for height in [
-            base::UPGRADE_DISABLE_FROM_HEIGHT,
-            base::UPGRADE_DISABLE_UNTIL_HEIGHT - 1,
-        ] {
+        for height in [790_000u64, 799_999, 800_000] {
             ctx.env.block.height = height;
             for result in run(&mut ctx) {
-                let err = result.expect_err("smelt views are closed inside the window");
-                assert!(
-                    err.to_string().contains("hacd smelt not enabled yet"),
-                    "{err}"
-                );
+                result.expect("smelt views stay open; the 790000-800000 gate is gone");
             }
-        }
-        ctx.env.block.height = base::UPGRADE_DISABLE_UNTIL_HEIGHT;
-        for result in run(&mut ctx) {
-            result.expect("smelt views reopen at the end of the window");
         }
     }
 }

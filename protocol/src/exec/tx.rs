@@ -56,6 +56,26 @@ fn check_tex_repeat_caps(params: &hacash_params::ProtocolParams, actions: &[Acti
     Ok(())
 }
 
+/// Kind 23 is refused on `[800_000, 802_000)` (`base::tex_repeat_enabled_at`).
+/// Heights below the start stay open. No-op when the tx has no repeat, so
+/// historical transactions are untouched. Mandatory in `execute_actions`
+/// (fast sync skips `precheck_tx`).
+fn check_tex_repeat_window(ctx: &dyn Context, actions: &[ActionRef]) -> Rerr {
+    let repeat_kind = crate::codec::action::tex::TexCellRepeat::KIND;
+    if !actions.iter().any(|act| act.kind() == repeat_kind) {
+        return Ok(());
+    }
+    let height = ctx.env().block.height;
+    if base::tex_repeat_enabled_at(height) {
+        return Ok(());
+    }
+    errf!(
+        "TexCellRepeat not enabled at height {height} (refused on [{}, {}))",
+        base::TEX_REPEAT_DISABLE_FROM_HEIGHT,
+        base::TEX_REPEAT_DISABLE_UNTIL_HEIGHT
+    )
+}
+
 /// A `TexCellRepeat` (kind 23) always charges gas — `times ≥ 2` bills at least
 /// one extra payload — so a type-3 envelope with `gas_max = 0` can never run
 /// one: reject it in precheck instead of failing at execute time with
@@ -101,6 +121,7 @@ fn precheck_tx(ctx: &dyn Context, tx: &dyn Transaction, actions: &[ActionRef]) -
             params.tx_actions_max
         );
     }
+    check_tex_repeat_window(ctx, actions)?;
     check_tex_repeat_caps(params, actions)?;
     check_tex_repeat_gas(ctx, actions)?;
     let need = tx.required_flags();
@@ -222,6 +243,7 @@ fn record_legacy_extra9_burn(ctx: &mut dyn Context, fee: &Amount, fee_got: &Amou
 
 fn execute_actions(ctx: &mut dyn Context, actions: &[ActionRef], charge_extra9: bool) -> Rerr {
     let params = crate::execution_params(ctx.services().as_ref())?;
+    check_tex_repeat_window(ctx, actions)?;
     check_tex_repeat_caps(params, actions)?;
     check_tex_repeat_gas(ctx, actions)?;
     let tex_kind = crate::codec::action::tex::TexCellExecute::KIND;

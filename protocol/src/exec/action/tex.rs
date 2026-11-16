@@ -600,6 +600,14 @@ fn check_repeat_dia_get_budget(
 /// kind 22. The returned `ActOut` gas stays 0 — everything was charged here.
 impl base::ActionExecute for TexCellRepeat {
     fn execute(&self, ctx: &mut dyn Context) -> Ret<ActOut> {
+        let height = ctx.env().block.height;
+        if !base::tex_repeat_enabled_at(height) {
+            return errf!(
+                "TexCellRepeat not enabled at height {height} (refused on [{}, {}))",
+                base::TEX_REPEAT_DISABLE_FROM_HEIGHT,
+                base::TEX_REPEAT_DISABLE_UNTIL_HEIGHT
+            );
+        }
         if ctx.exec_from() != ExecFrom::Top {
             return errf!(
                 "TexCellRepeat can only run in TOP context, got {}",
@@ -2397,6 +2405,39 @@ mod tests {
         let act = ctx.tx.actions()[0].clone();
         let rep = act.as_any().downcast_ref::<TexCellRepeat>().unwrap();
         ActionExecute::execute(rep, ctx.as_context_mut()).map(|_| ())
+    }
+
+    /// Kind 23 is refused only on `[800_000, 802_000)`. Below the start and at
+    /// the end the same bundle runs.
+    #[test]
+    fn repeat_follows_the_activation_window() {
+        let maker = sys::Account::create_by_secret_key_value([3u8; 32]).unwrap();
+        let taker = sys::Account::create_by_secret_key_value([4u8; 32]).unwrap();
+        let taker_addr = Address::from(*taker.address());
+        let cells = vec![TexCell::CondChainIdEq {
+            chainid: field::Uint4::from(0),
+        }];
+        let tx_at = || repeat_tx(&taker, vec![taker_addr], cells.clone(), 2, &maker);
+        for height in [
+            base::TEX_REPEAT_DISABLE_FROM_HEIGHT,
+            base::TEX_REPEAT_DISABLE_UNTIL_HEIGHT - 1,
+        ] {
+            let mut ctx = DirectedCtx::new(tx_at());
+            ctx.env.block.height = height;
+            let err = run_repeat(&mut ctx).expect_err("closed inside the window");
+            assert!(
+                err.to_string().contains("TexCellRepeat not enabled"),
+                "{err}"
+            );
+        }
+        for height in [
+            base::TEX_REPEAT_DISABLE_FROM_HEIGHT - 1,
+            base::TEX_REPEAT_DISABLE_UNTIL_HEIGHT,
+        ] {
+            let mut ctx = DirectedCtx::new(tx_at());
+            ctx.env.block.height = height;
+            run_repeat(&mut ctx).expect("open outside the window");
+        }
     }
 
     /// `times=50` of one bundle lands exactly where 50 flat kind-22 copies of

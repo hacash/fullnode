@@ -1,21 +1,22 @@
-//! One height window for the upgrade that ships together: calc kernels and
-//! the HACD smelt views (`hacd_smelt`, `hacd_number_batch`,
-//! `hacd_visual_gene_batch`, `hacd_life_gene_batch`).
+//! Height window for `TexCellRepeat` (kind 23).
 //!
-//! Both are refused on the half-open interval
-//! `[UPGRADE_DISABLE_FROM_HEIGHT, UPGRADE_DISABLE_UNTIL_HEIGHT)`.
+//! The action is refused on the half-open interval
+//! `[TEX_REPEAT_DISABLE_FROM_HEIGHT, TEX_REPEAT_DISABLE_UNTIL_HEIGHT)`.
 //! Heights below the start stay open, so test chains and historical replay
-//! keep the features. Once the chain is past `UPGRADE_DISABLE_UNTIL_HEIGHT`,
-//! delete this module and the two call sites that consult it.
+//! keep the action. From `TEX_REPEAT_DISABLE_UNTIL_HEIGHT` it stays enabled;
+//! delete this module once the chain is past that height.
+//!
+//! The previous calc / HACD smelt freeze (`[790_000, 800_000)`) has expired
+//! and is gone: those features are unconditional.
 
-/// First height at which the upgrade is refused.
-pub const UPGRADE_DISABLE_FROM_HEIGHT: u64 = 790_000;
-/// First height at which the upgrade is available again.
-pub const UPGRADE_DISABLE_UNTIL_HEIGHT: u64 = 800_000;
+/// First height at which `TexCellRepeat` is refused.
+pub const TEX_REPEAT_DISABLE_FROM_HEIGHT: u64 = 800_000;
+/// First height at which `TexCellRepeat` is available again.
+pub const TEX_REPEAT_DISABLE_UNTIL_HEIGHT: u64 = 802_000;
 
-/// Whether calc deployment and the HACD smelt views may run at `height`.
-pub const fn upgrade_enabled_at(height: u64) -> bool {
-    height < UPGRADE_DISABLE_FROM_HEIGHT || height >= UPGRADE_DISABLE_UNTIL_HEIGHT
+/// Whether kind 23 may run at `height`.
+pub const fn tex_repeat_enabled_at(height: u64) -> bool {
+    height < TEX_REPEAT_DISABLE_FROM_HEIGHT || height >= TEX_REPEAT_DISABLE_UNTIL_HEIGHT
 }
 
 #[cfg(test)]
@@ -23,10 +24,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upgrade_is_disabled_only_inside_the_window() {
-        assert!(upgrade_enabled_at(UPGRADE_DISABLE_FROM_HEIGHT - 1));
-        assert!(!upgrade_enabled_at(UPGRADE_DISABLE_FROM_HEIGHT));
-        assert!(!upgrade_enabled_at(UPGRADE_DISABLE_UNTIL_HEIGHT - 1));
-        assert!(upgrade_enabled_at(UPGRADE_DISABLE_UNTIL_HEIGHT));
+    fn tex_repeat_is_disabled_only_inside_the_window() {
+        assert!(tex_repeat_enabled_at(TEX_REPEAT_DISABLE_FROM_HEIGHT - 1));
+        assert!(!tex_repeat_enabled_at(TEX_REPEAT_DISABLE_FROM_HEIGHT));
+        assert!(!tex_repeat_enabled_at(TEX_REPEAT_DISABLE_UNTIL_HEIGHT - 1));
+        assert!(tex_repeat_enabled_at(TEX_REPEAT_DISABLE_UNTIL_HEIGHT));
     }
 }

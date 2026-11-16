@@ -6,7 +6,7 @@
 #![cfg(feature = "execute")]
 
 use crate::calc::container::CalcContainer;
-use crate::contract::{ContractAbstCall, ContractCalcFunc, ContractEdit, ContractSto, ContractUserFunc};
+use crate::contract::{ContractAbstCall, ContractCalcFunc, ContractSto, ContractUserFunc};
 use crate::machine::test_ctx::TestCtx;
 use crate::machine::VmRequest;
 use crate::rt::{
@@ -135,40 +135,6 @@ fn deploy_check_accepts_calcfunc() {
     let pkg = CodePkg { conf: CodeType::RV64IM as u8, data: vec![0xff; 40] };
     bad2.userfuncs.as_mut()[0].code_stuff = CodeStuff::try_from(pkg).unwrap();
     assert!(bad2.check(0, &cap, &gas, reg.as_ref()).is_err());
-}
-
-#[test]
-fn deploy_check_height_gate_restores_pre_calc_behavior() {
-    let mut sto = make_sto(&echo8_container());
-    let params = crate::machine::test_ctx::STUB_VM_PARAMS;
-    let gas = GasExtra::new(0, &params);
-    let cap = SpaceCap::new(0);
-    let reg: std::sync::Arc<dyn base::ExecutionServices> =
-        std::sync::Arc::new(crate::machine::test_ctx::StubServices::new(params.clone()));
-    let gate = base::UPGRADE_DISABLE_FROM_HEIGHT;
-
-    // inside the test window the container validates
-    sto.check(gate - 1, &cap, &gas, reg.as_ref()).expect("window open below the gate");
-
-    // at and past the gate the pre-calc rejection is restored, byte-identical
-    for hei in [gate, 790_001, 793_880] {
-        let e = sto
-            .check(hei, &cap, &gas, reg.as_ref())
-            .expect_err("calcfunc must be rejected past the gate");
-        assert_eq!(e.0, crate::rt::ItrErrCode::ContractError);
-        assert!(e.1.contains("calcfunc not enabled yet"), "got: {}", e.1);
-    }
-
-    // the upgrade path is gated the same way
-    let mut edit = ContractEdit::default();
-    edit.new_revision = field::Uint2::from(1u16);
-    edit.userfuncs = sto.userfuncs.clone();
-    let err = sto
-        .apply_edit(&edit, gate, &cap, &gas, reg.as_ref())
-        .expect_err("calcfunc edit must be rejected past the gate");
-    assert!(err.1.contains("calcfunc not enabled yet"), "got: {}", err.1);
-    sto.apply_edit(&edit, gate - 1, &cap, &gas, reg.as_ref())
-        .expect("calcfunc edit accepted inside the window");
 }
 
 #[test]
