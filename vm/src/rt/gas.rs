@@ -47,7 +47,9 @@ impl GasTable {
         gst.set(12, &[MULDIV, MULDIVUP]);
         // Arithmetic: four-operand handled by FIN4 family
         // Other
-        gst.set(4, &[INSERT, REMOVE, TAKEFIRST, TAKELAST, APPEND]);
+        // ITEMSET is INSERT's in-place sibling (same tier); BUFSET/ITEMCAT stay at the
+        // default 1 like the rest of the byte family (CAT/BYTE/CUT are not listed either).
+        gst.set(4, &[INSERT, REMOVE, TAKEFIRST, TAKELAST, APPEND, ITEMSET]);
         gst.set(5, &[MGET, GGET, NEWLIST, NEWMAP]);
         gst.set(6, &[CLEAR, KEYS, VALUES, TUPLE2LIST, UNPACK]);
         gst.set(8, &[CLONE, MERGE, PACKLIST, PACKMAP, PACKTUPLE]);
