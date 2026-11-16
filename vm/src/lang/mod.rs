@@ -4,6 +4,7 @@ use sys::*;
 use field::Address as FieldAddress;
 
 use super::ir::*;
+mod compound;
 // `tokenizer.rs` builds `Token` variants unqualified; `formater.rs` uses `*`
 // inline and needs no import.
 #[cfg(feature = "syntax")]

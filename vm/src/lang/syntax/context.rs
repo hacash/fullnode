@@ -257,16 +257,10 @@ impl Syntax {
         // is read). SWAP has no standalone serializable IR node (multi-output),
         // so the swap rides a fixed, verified raw fragment. It leaves no value
         // (last raw item, hasretval=false), matching `XOP`.
+        let raw_codes = crate::lang::compound::local_compound_raw(inst, idx)
+            .ok_or_else(|| sys::Error::normal("assign statement format invalid"))?;
         let raw: Box<dyn IRNode> = Box::new(
-            IRNodeBytecodes::new(vec![
-                GET as u8,
-                idx,
-                SWAP as u8,
-                inst as u8,
-                PUT as u8,
-                idx,
-            ])
-            .map_err(|e| e.to_string())?,
+            IRNodeBytecodes::new(raw_codes.to_vec()).map_err(|e| e.to_string())?,
         );
         Ok(Box::new(Self::build_irlist(vec![value, raw])?))
     }

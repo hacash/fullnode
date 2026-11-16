@@ -754,18 +754,12 @@ impl Syntax {
         };
         // DUPN/SWAP are multi-output and have no standalone serializable IR
         // node, so the stack shuffle rides a fixed, verified `IRNodeBytecodes`
-        // payload instead of losing the shape through serialization.
+        // payload instead of losing the shape through serialization. The
+        // fragment and the decompiler matcher share `lang::compound`.
+        let raw_codes = crate::lang::compound::item_compound_raw(inst)
+            .ok_or_else(|| sys::Error::normal("assign statement format invalid"))?;
         let raw: Box<dyn IRNode> = Box::new(
-            IRNodeBytecodes::new(vec![
-                DUPN as u8,
-                2,
-                ITEMGET as u8,
-                ROLL as u8,
-                3,
-                inst as u8,
-                ITEMSET as u8,
-            ])
-            .map_err(|e| e.to_string())?,
+            IRNodeBytecodes::new(raw_codes.to_vec()).map_err(|e| e.to_string())?,
         );
         // `ROLL 0` is a serializable `IRNodeParam1` with runtime identity; its
         // retval=true keeps the container as the assignment's value.

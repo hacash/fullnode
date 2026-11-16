@@ -473,7 +473,7 @@ impl<'a> Formater<'a> {
             // `l[i] += v`: IRLIST[value, receiver, index, bytecode{..}, ROLL 0].
             // Must be recognized before the generic list/tuple/map/log shapes.
             if let Some((value, receiver, index, op)) = Self::compound_item_assign_parts(node) {
-                let opstr = Self::compound_assign_symbol(op)?;
+                let opstr = compound::assign_symbol(op)?;
                 let mut recvstr = self.print_inline(receiver);
                 if self.needs_postfix_lhs_wrap(receiver) {
                     let t = recvstr.trim();
@@ -491,7 +491,7 @@ impl<'a> Formater<'a> {
             // `l += v` for slots without an `XOP` encoding (idx >= 64):
             // IRLIST[value, bytecode{GET idx; SWAP; op; PUT idx}].
             if let Some((value, slot, op)) = Self::compound_local_assign_parts(node) {
-                let opstr = Self::compound_assign_symbol(op)?;
+                let opstr = compound::assign_symbol(op)?;
                 let valstr = self.print_inline(value);
                 return Some(format!(
                     "{}{} {} {}",
@@ -1118,29 +1118,14 @@ impl<'a> Formater<'a> {
     fn compound_item_assign_parts<'n>(
         node: &'n dyn IRNode,
     ) -> Option<(&'n dyn IRNode, &'n dyn IRNode, &'n dyn IRNode, Bytecode)> {
-        use Bytecode::*;
         let arr = node.as_any().downcast_ref::<IRNodeArray>()?;
-        if arr.inst != IRLIST || arr.subs.len() != 5 {
+        if arr.inst != Bytecode::IRLIST || arr.subs.len() != 5 {
             return None;
         }
         let raw = arr.subs[3].as_any().downcast_ref::<IRNodeBytecodes>()?;
-        let codes = &raw.codes;
-        if codes.len() != 7
-            || codes[0] != DUPN as u8
-            || codes[1] != 2
-            || codes[2] != ITEMGET as u8
-            || codes[3] != ROLL as u8
-            || codes[4] != 3
-            || codes[6] != ITEMSET as u8
-        {
-            return None;
-        }
-        let op = Bytecode::try_from_u8(codes[5]).ok()?;
-        if !matches!(op, ADD | SUB | MUL | DIV) {
-            return None;
-        }
+        let op = compound::item_compound_op(&raw.codes)?;
         let mark = arr.subs[4].as_any().downcast_ref::<IRNodeParam1>()?;
-        if mark.inst != ROLL || mark.para != 0 || !mark.hrtv {
+        if mark.inst != Bytecode::ROLL || mark.para != 0 || !mark.hrtv {
             return None;
         }
         Some((&*arr.subs[0], &*arr.subs[1], &*arr.subs[2], op))
@@ -1157,41 +1142,13 @@ impl<'a> Formater<'a> {
     fn compound_local_assign_parts<'n>(
         node: &'n dyn IRNode,
     ) -> Option<(&'n dyn IRNode, u8, Bytecode)> {
-        use Bytecode::*;
         let arr = node.as_any().downcast_ref::<IRNodeArray>()?;
-        if arr.inst != IRLIST || arr.subs.len() != 2 {
+        if arr.inst != Bytecode::IRLIST || arr.subs.len() != 2 {
             return None;
         }
         let raw = arr.subs[1].as_any().downcast_ref::<IRNodeBytecodes>()?;
-        let codes = &raw.codes;
-        if codes.len() != 6
-            || codes[0] != GET as u8
-            || codes[2] != SWAP as u8
-            || codes[4] != PUT as u8
-            || codes[5] != codes[1]
-            // Slots below 64 use XOP, so this raw shape is compiler-generated
-            // only for idx >= 64; do not claim a hand-written low-slot raw
-            // fragment round-trips through `x += v` (that would become XOP).
-            || codes[1] < 64
-        {
-            return None;
-        }
-        let op = Bytecode::try_from_u8(codes[3]).ok()?;
-        if !matches!(op, ADD | SUB | MUL | DIV) {
-            return None;
-        }
-        Some((&*arr.subs[0], codes[1], op))
-    }
-
-    fn compound_assign_symbol(op: Bytecode) -> Option<&'static str> {
-        use Bytecode::*;
-        Some(match op {
-            ADD => "+=",
-            SUB => "-=",
-            MUL => "*=",
-            DIV => "/=",
-            _ => return None,
-        })
+        let (slot, op) = compound::local_compound_parts(&raw.codes)?;
+        Some((&*arr.subs[0], slot, op))
     }
 
     fn wrap_printed_expr(s: String) -> String {
