@@ -679,10 +679,11 @@ impl Syntax {
 
     /// `l[i] = v` (and `l[i][j] = v`, `b[i] = v`, `m[k] = v`): the assignment
     /// target is the ITEMGET built by the `[` postfix. `l[i] = v` and
-    /// `item_set(l, i, v)` compile to the same ITEMSET; `b[i] = v` is also
-    /// ITEMSET (a bytes receiver fails at runtime with CompoOpNotMatch, not
-    /// at parse time). Returns the receiver and index — the whole `l[i]` tree
-    /// is replaced, so each is evaluated exactly once.
+    /// `item_set(l, i, v)` compile to the same ITEMSET. An existing map key is
+    /// overwritten in place; `b[i] = v` is also ITEMSET (a bytes receiver fails
+    /// at runtime with CompoOpNotMatch, not at parse time). Returns the
+    /// receiver and index — the whole `l[i]` tree is replaced, so each is
+    /// evaluated exactly once.
     fn assign_item_target(
         node: &dyn IRNode,
     ) -> Option<(Box<dyn IRNode>, Box<dyn IRNode>)> {

@@ -470,10 +470,9 @@ mod token_t {
         );
     }
 
-    /// `m[k] = v` keeps compiling to ITEMSET (a map receiver with a scalar
-    /// value fails at runtime with CompoOpInvalid 80; tuple/sub-list values
-    /// fail check_scalar 76 first), and non-ITEMGET/non-local assignment
-    /// targets stay parse errors.
+    /// `m[k] = v` keeps compiling to ITEMSET (an existing map key is overwritten
+    /// at runtime; a missing key is CompoNoFindItem). Non-ITEMGET/non-local
+    /// assignment targets stay parse errors.
     #[test]
     fn map_item_assignment_stays_itemset_and_bad_targets_stay_errors() {
         use super::{lang_to_bytecode, lang_to_irnode};
@@ -483,7 +482,7 @@ mod token_t {
             .expect("compile m[k] = v");
         assert!(
             codes.contains(&(Bytecode::ITEMSET as u8)),
-            "m[k] = v must compile to ITEMSET (runtime CompoOpInvalid): {codes:02x?}"
+            "m[k] = v must compile to ITEMSET: {codes:02x?}"
         );
 
         for bad in ["1 = 2", "\"s\" = 2", "1 + 1 = 2"] {

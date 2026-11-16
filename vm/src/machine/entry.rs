@@ -970,7 +970,7 @@ mod entry_semantics_tests {
 
     #[test]
     fn itemset_error_order_and_writes() {
-        // Check order: 83 -> 76 -> 80 -> 72 -> 85.
+        // Check order: 83 -> 76 -> list 72/85, map 73/85.
         // Bytes receiver: CompoOpNotMatch 83, and it fires before the tuple
         // value's CastBeValueFail 76 (receiver shape is checked first).
         for source in [
@@ -980,18 +980,27 @@ mod entry_semantics_tests {
             let err = fitsh_opcode_run(1, source).unwrap_err();
             assert_eq!(err.0, ItrErrCode::CompoOpNotMatch, "{source}: {err}");
         }
-        // check_scalar 76 fires before the map's CompoOpInvalid 80: a map
-        // receiver with a tuple / sub-list value is a value-shape failure.
+        // check_scalar 76 fires before the map key extract: a tuple / sub-list
+        // value is a value-shape failure even when the key itself is illegal.
         for source in [
             "var m = map {1: 2}\nm[1] = tuple(1, 2)",
             "var m = map {1: 2}\nm[1] = [3]",
+            "var m = map {1: 2}\nm[nil] = tuple(1, 2)",
         ] {
             let err = fitsh_opcode_run(1, source).unwrap_err();
             assert_eq!(err.0, ItrErrCode::CastBeValueFail, "{source}: {err}");
         }
-        // Map + scalar value: CompoOpInvalid 80 (map writes stay `insert`).
-        let err = fitsh_opcode_run(1, "var m = map {1: 2}\nm[1] = 3").unwrap_err();
-        assert_eq!(err.0, ItrErrCode::CompoOpInvalid, "{err}");
+        // Existing key: replace in place, length unchanged. Missing key is 85
+        // (no insert). Illegal key is CastBeKeyFail 73.
+        let (_, v, _) = fitsh_opcode_run(1, "var m = map {1: 2}\nm[1] = 9\nreturn m[1]").unwrap();
+        assert_eq!(v, Value::U8(9));
+        let (_, v, _) =
+            fitsh_opcode_run(1, "var m = map {1: 2}\nm[1] = 9\nreturn length(m)").unwrap();
+        assert_eq!(v, Value::U32(1));
+        let err = fitsh_opcode_run(1, "var m = map {1: 2}\nm[3] = 9").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::CompoNoFindItem, "{err}");
+        let err = fitsh_opcode_run(1, "var m = map {1: 2}\nm[nil] = 9").unwrap_err();
+        assert_eq!(err.0, ItrErrCode::CastBeKeyFail, "{err}");
         // check_scalar 76 (tuple / sub-list value) fires before the index's 72.
         for source in [
             "var l = [1, 2]\nl[nil] = tuple(1, 2)",
@@ -1196,9 +1205,9 @@ mod entry_semantics_tests {
         );
     }
 
-    /// ITEMCAT charges the list-read component before the concat. Compare each
-    /// `return item_concat(l)` against `return l` on the same list: the only
-    /// difference is ITEMCAT, so the delta is exactly
+    /// ITEMCAT on success bills the list-read component plus CAT's stack_op on
+    /// the result. Compare each `return item_concat(l)` against `return l` on
+    /// the same list: the only difference is ITEMCAT, so the delta is exactly
     /// `gas(ITEMCAT) + compo_items_read(len) + stack_op(result_len)`. The two
     /// lists produce the same 5 output bytes but hold 1 vs 5 items.
     #[test]
