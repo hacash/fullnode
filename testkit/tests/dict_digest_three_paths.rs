@@ -195,7 +195,9 @@ fn kernel_container() -> vm::calc::container::CalcContainer {
     .expect("bss_len") as u32;
     let tmp = vm::calc::container::CalcContainer::from_regions(
         CALC_PROFILE_RV64IM,
-        8,
+        // 10 KiB: guard band + minimum stack above the 0x400 BSS no longer
+        // fit in 8 KiB. Same headroom as vm/tests/sha256kernel_fixture.rs.
+        10,
         vm::calc::CALC_CODE_BASE as u32,
         read("image_code.bin"),
         read("image_rodata.bin"),
