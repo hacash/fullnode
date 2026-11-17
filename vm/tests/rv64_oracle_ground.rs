@@ -1006,22 +1006,32 @@ return (out as u64) as bytes
 
 #[test]
 fn g5_as_bytes_width_divergence_pinned() {
-    // interpreter `as bytes` is width-aware (scalar_bytes: u8→1B, u16→2B);
-    // rv64 always emits the 8-byte BE u64 view.
+    // CLOSED by task-1 A2: `as bytes` follows the interpreter's
+    // `scalar_bytes` width on every engine (u8→1B, u16→2B, u32→4B, u64→8B
+    // BE). The rows this test pinned as divergences (rv64's uniform 8-byte
+    // view) are agreement rows now; the u64-pinned form keeps the 8-byte
+    // wire view.
     let data: Vec<u8> = (0xA0u8..0xB4).collect(); // 20 bytes
-    // size → U16 on the interpreter: 2-byte BE
+    // size → U16: 2-byte BE everywhere
     let body = "var r = size(data)\nreturn r as bytes";
     let it = Interp::build(body);
     assert_eq!(it.run(&data), Ok(vec![0x00, 0x14]));
     for (mode, got) in Rv64::build(body).run(&data) {
-        assert_eq!(got, Ok(be(20)), "mode {mode:?}");
+        assert_eq!(got, Ok(vec![0x00, 0x14]), "mode {mode:?}");
     }
-    // byte → U8 on the interpreter: 1-byte
+    // byte → U8: 1-byte everywhere
     let body = "var r = byte(data, 5)\nreturn r as bytes";
     let it = Interp::build(body);
     assert_eq!(it.run(&data), Ok(vec![0xA5]));
     for (mode, got) in Rv64::build(body).run(&data) {
-        assert_eq!(got, Ok(be(0xA5)), "mode {mode:?}");
+        assert_eq!(got, Ok(vec![0xA5]), "mode {mode:?}");
+    }
+    // the u64-pinned wire form: 8-byte BE everywhere
+    let body = "var r = (size(data) as u64)\nreturn r as bytes";
+    let it = Interp::build(body);
+    assert_eq!(it.run(&data), Ok(be(20)));
+    for (mode, got) in Rv64::build(body).run(&data) {
+        assert_eq!(got, Ok(be(20)), "mode {mode:?}");
     }
 }
 
@@ -1114,44 +1124,46 @@ fn g5_slice_bounds_divergence_pinned() {
 
 #[test]
 fn g5_shift_mask_divergence_pinned_90_vs_ok() {
-    // `v << n` with n ≥ 64: interpreter checked_shl → Arithmetic(90);
-    // rv64 masks the amount to 63 (rv64.rs documented deviation).
+    // `v << n` with n ≥ 64: interpreter checked_shl → Arithmetic(90).
+    // CLOSED by task-1 A1: rv64's amount check (`srli 6; bne`) faults 90
+    // at the same site — the pinned rv64-Ok row (masked `n & 63`) is now
+    // an agreement row.
     let src = "var v = 0u64\nvar i = 0u64\nwhile i < 8 { v = v * 256 + byte(data, i)\ni += 1 }\n\
                var n = 0u64\nvar j = 0u64\nwhile j < 8 { n = n * 256 + byte(data, j + 8)\nj += 1 }\n\
                var r = (v << n)\nreturn r as bytes";
     let rv = Rv64::build(src);
     let it = Interp::build(src);
-    for (v, n) in [(1u64, 63), (0xDEAD_BEEF, 7)] {
+    for (v, n) in [(1u64, 63), (0xDEAD_BEEF, 7), (u64::MAX, 1)] {
+        // amount < 64: both engines compute the truncating shift
         knock_ok(&rv, &it, &words(v, n), &be(v.wrapping_shl(n as u32)));
     }
     for (v, n) in [(1u64, 64), (1, 65), (0xFFFF_FFFF, 192)] {
-        pin_divergence(
-            &rv,
-            &it,
-            &words(v, n),
-            (ARITH, "shift overflow"),
-            Ok(be(v.wrapping_shl((n & 63) as u32))),
-        );
+        // amount ≥ 64: both engines trap Arithmetic 90
+        knock_trap(&rv, &it, &words(v, n), ARITH as u32);
     }
 }
 
 #[test]
 fn g5_narrow_width_arithmetic_divergence_pinned() {
     // The interpreter computes in the operands' common width: `1 << hv`
-    // with both sides u8 faults for hv ≥ 8 (u8 checked_shl → Arithmetic 90);
-    // rv64 is u64-uniform and succeeds. This is the exact shape the raw
-    // hacdtestnet score_sum transcription hits (`bitmap | (1 << hv)`).
+    // with both sides u8 faults for hv ≥ 8 (u8 checked_shl → Arithmetic 90).
+    // This is the exact shape the raw hacdtestnet score_sum transcription
+    // hits (`bitmap | (1 << hv)`). CLOSED by task-1 A3: rv64's narrow-width
+    // shift (amount checked against w, result truncated to w bits) faults
+    // at the same site — every row is an agreement now.
     let body = "var hv = byte(data, 0) / 2\nvar r = (1 << hv)\nreturn r as bytes";
-    // input 250 → hv = 125 (u8): interpreter u8 shl faults; rv64 → 1<<(125&63)
-    pin_divergence(
-        &Rv64::build(body),
-        &Interp::build(body),
-        &[250],
-        (ARITH, "shift overflow"),
-        Ok(be(1u64 << (125 & 63))),
-    );
-    // with the width pinned (`1u64`), both engines agree — including the
-    // shared trap at shift ≥ 64
+    let rv = Rv64::build(body);
+    let it = Interp::build(body);
+    // hv < 8: both engines compute the u8-width result (1-byte view)
+    for b in [0u8, 2, 4, 14] {
+        knock_ok(&rv, &it, &[b], &[(1u8 << (b / 2))]);
+    }
+    // 8 ≤ hv < 64 and hv ≥ 64: both engines trap Arithmetic 90
+    for b in [40u8, 16, 250] {
+        knock_trap(&rv, &it, &[b], ARITH as u32);
+    }
+    // with the width pinned (`1u64`), both engines agree everywhere —
+    // including the shared trap at shift ≥ 64
     let body = "var hv = byte(data, 0) / 2\nvar r = (1u64 << hv)\nreturn r as bytes";
     let rv = Rv64::build(body);
     let it = Interp::build(body);
@@ -1159,33 +1171,27 @@ fn g5_narrow_width_arithmetic_divergence_pinned() {
         let hv = (b / 2) as u32;
         knock_ok(&rv, &it, &[b], &be(1u64.wrapping_shl(hv & 63)));
     }
-    // b = 250 → hv = 125 ≥ 64: interpreter checked_shl traps 90; rv64 still
-    // masks (125 & 63) and succeeds — divergence all the way down
-    pin_divergence(
-        &rv,
-        &it,
-        &[250],
-        (ARITH, "shift overflow"),
-        Ok(be(1u64 << (125 & 63))),
-    );
+    // b = 250 → hv = 125 ≥ 64: both engines trap 90 (post-A1 agreement)
+    knock_trap(&rv, &it, &[250], ARITH as u32);
 }
 
 #[test]
 fn g5_pow_shape_divergences_pinned() {
-    // POW has two engine-shape divergences beyond the shift one above:
+    // POW engine-shape divergences:
     //
-    // (a) narrow-width POW: `2 ** b` with both operands u8 — the interpreter
-    //     runs u8::checked_pow (2**8 overflows u8 → Arithmetic 90); rv64 is
-    //     u64-uniform and succeeds. Same family as the narrow-width shift.
+    // (a) narrow-width POW — CLOSED by task-1 A3: `2 ** b` with both
+    //     operands u8 runs u8::checked_pow in the interpreter (2**8
+    //     overflows u8 → Arithmetic 90); rv64's post-loop range check
+    //     faults at the same width now, so b ≥ 8 is an agreement row.
     let body = "var b = byte(data, 0)\nvar r = ((2 ** b) as u64)\nreturn r as bytes";
     let rv = Rv64::build(&body);
     let it = Interp::build(&body);
     for b in [0u8, 1, 7] {
         knock_ok(&rv, &it, &[b], &be(2u64.checked_pow(b as u32).unwrap()));
     }
-    pin_divergence(&rv, &it, &[8], (ARITH, "pow"), Ok(be(256)));
-    // b = 9: interpreter faults too (u8), rv64 succeeds
-    pin_divergence(&rv, &it, &[9], (ARITH, "pow"), Ok(be(512)));
+    for b in [8u8, 9, 20] {
+        knock_trap(&rv, &it, &[b], ARITH as u32);
+    }
     // with the base width pinned both agree (incl. the shared 2^64 fault)
     let body = "var b = byte(data, 0)\nvar r = ((2u64 ** b) as u64)\nreturn r as bytes";
     let rv = Rv64::build(&body);
@@ -1290,10 +1296,10 @@ fn g5_expression_depth_limit_is_rv64_compile_only() {
 }
 
 #[test]
-fn g5_u128_rejected_rv64_compile_only() {
-    // Same family as the depth limit: the shared front end accepts u128
-    // (CU128 is a legal fitsh cast), the interpreter runs it (16-byte BE
-    // `as bytes` view), only the rv64 lowering rejects it (kernel subset).
+fn g5_u128_agrees_as_lo_hi_pair() {
+    // task 3 (B3): the former compile-only u128 boundary is now a lowering
+    // — a u128 value is a (lo, hi) u64 pair, `as bytes` renders the full
+    // 16-byte BE view, and all three modes lower it like the interpreter.
     let body = "var v = byte(data, 0)\nvar r = (v as u128)\nreturn r as bytes";
     let got = Interp::build(body).run(&[7]).expect("interpreter runs u128");
     let mut want = vec![0u8; 16];
@@ -1309,12 +1315,9 @@ fn g5_u128_rejected_rv64_compile_only() {
     )
     .unwrap();
     for mode in MODES {
-        let err = lower_body_mode_arena(&ir, true, mode, ARENA_SIZE_MAX)
-            .expect_err("u128 must be rejected");
-        assert!(
-            err.to_string().contains("CU128"),
-            "u128 error must name the opcode: {err}"
-        );
+        let lo = lower_body_mode_arena(&ir, true, mode, ARENA_SIZE_MAX)
+            .expect("u128 must lower now");
+        assert!(!lo.code.is_empty());
     }
 }
 

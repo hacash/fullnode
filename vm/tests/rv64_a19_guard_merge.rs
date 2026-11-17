@@ -57,17 +57,17 @@ fn ceil_div_2p64(k: u64) -> u64 {
 
 /* ---------------- proof pins on the anchor kernels ---------------- */
 
-/// (a)+(b)+(c) pinned on score_sum: exactly the doc-69 E6(i) byte outcome —
-/// the n-chain (6n check deleted under 8n) and the i-chain (6i deleted
-/// under 8i, 8i deleted under 10i — the pairwise cascade deletes the same
-/// bytes as the direct 6i,8i<10i domination: mulhu+bne @0x2a..0x36,
-/// mulhu+bne @0x5c..0x64, srl+bne @0x6e..0x76). The base register numbers
-/// are allocator output; pin the (k_dominated, k_retained) multiset and
-/// the base-sharing structure, not raw registers.
+/// (a)+(b)+(c) pinned on score_sum: the doc-69 E6(i) byte outcome minus the
+/// n-chain — the i-chain (6i deleted under 8i, 8i deleted under 10i — the
+/// pairwise cascade deletes the same bytes as the direct 6i,8i<10i
+/// domination) survives on its u64 slots. The n-chain record (`6n` under
+/// `8n`) DISSOLVED with the task-1 A3 width closure: `n` is u16 in the
+/// interpreter (size() is U16), so `n*6`/`n*8` are u16 range-checked muls
+/// with no mulhu pair for the merge to act on.
 #[test]
 fn a19_merge_sites_pinned_score_sum() {
     let (bytes, merges) = lower_dbg(SCORE_SUM_FITSH);
-    // Size history: 2946 (P2-MEASURE-V3, doc 69) → 2922 (P2-A19-B2 dominated
+    // Size History: 2946 (P2-MEASURE-V3, doc 69) → 2922 (P2-A19-B2 dominated
     // mul-check merges, doc 15) → 2918 (P3-GUARDTAIL GT-a: one 5-site guard
     // copy cluster @0x8e8..0xa2c, −10 site bytes +6 c.j copy placed @0x9ca
     // (final coords; predecessor = unconditional jal @0x9c8 = the safe
@@ -75,24 +75,23 @@ fn a19_merge_sites_pinned_score_sum() {
     // against LowerDbg.guard_copies[0].copy_at = 2506 = 0x9ca); sibling
     // cluster @0x634..0x7aa has no safe
     // boundary in reach and is not forced; records in LowerDbg.guard_copies,
-    // docs.loc 96).
-    assert_eq!(bytes, 2918, "census pin lives in rv64_backend_maxlive_census");
-    assert_eq!(merges.len(), 3, "merge site set changed: {merges:#?}");
+    // docs.loc 96) → 2930 (task-1 A1 shift closure: the 3 variable-amount
+    // u64 shift sites gained the checked-amount guard, +4 B each — the
+    // `andi 63` mask became `srli 6` + `bne -> fault_arith`) → 2950
+    // (task-1 A3 narrow-width closure: the u16 n-chain swaps u64 checked
+    // guards for u16 range checks — which also dissolves the (6,8) n-chain
+    // merge — and the u8 shift/pow2-mul sites re-shape; bucket attribution
+    // alongside the census pin in rv64_backend_maxlive_census.rs).
+    assert_eq!(bytes, 2950, "census pin lives in rv64_backend_maxlive_census");
+    assert_eq!(merges.len(), 2, "merge site set changed: {merges:#?}");
     let mut table: Vec<(u8, u64, u64)> =
         merges.iter().map(|m| (m.base_reg, m.k_dominated, m.k_retained)).collect();
     table.sort_unstable();
-    // the i home carries the (6,8)+(8,10) cascade; the n home the lone (6,8)
+    // the i home carries the (6,8)+(8,10) cascade
     let i_base = table.iter().find(|t| t.1 == 8 && t.2 == 10).expect("8->10 record").0;
-    let n_rec = merges
-        .iter()
-        .find(|m| m.base_reg != i_base)
-        .expect("one record on the n home");
-    let n_base = n_rec.base_reg;
-    assert_eq!(n_rec.k_dominated, 6);
-    assert_eq!(n_rec.k_retained, 8);
     assert_eq!(
         table,
-        vec![(i_base, 6, 8), (i_base, 8, 10), (n_base, 6, 8)],
+        vec![(i_base, 6, 8), (i_base, 8, 10)],
         "merge site set changed"
     );
     // proof (a), recomputed arithmetically from the recorded table: the
@@ -108,8 +107,7 @@ fn a19_merge_sites_pinned_score_sum() {
     }
     // proofs (b)+(c) as observed facts: every interval instruction is
     // whitelisted (Pure / frame-sd / arith guard) — the classifier vetoed
-    // anything else. The n-chain interval carries the frame store of `ne`
-    // and no guard; the (8i -> 10i) interval spans the retained xb
+    // anything else. The (8i -> 10i) interval spans the retained xb
     // add-overflow guard.
     for m in &merges {
         assert!(
@@ -120,9 +118,6 @@ fn a19_merge_sites_pinned_score_sum() {
             m
         );
     }
-    let n_rec = merges.iter().find(|m| m.base_reg == n_base).unwrap();
-    assert_eq!(n_rec.interval.iter().filter(|k| **k == MulMergeIvKind::GuardArith).count(), 0);
-    assert_eq!(n_rec.interval.iter().filter(|k| **k == MulMergeIvKind::FrameSd).count(), 1);
     let i8_rec = merges
         .iter()
         .find(|m| m.base_reg == i_base && m.k_dominated == 8 && m.k_retained == 10)
@@ -141,11 +136,19 @@ fn a19_merge_sites_pinned_score_sum() {
 /// re-measured to zero: the 6-site guard cluster @0x7a..0x272 is net-positive
 /// on paper but no safe boundary (unconditional-jump/trap tail) lies in any
 /// profitable copy-reach window — not forced; record in
-/// LowerDbg.guard_copies, docs.loc 96).
+/// LowerDbg.guard_copies, docs.loc 96) → 3060 (task-1 A1 shift closure:
+/// 2 variable-amount u64 shift sites gained the checked-amount guard,
+/// +4 B each) → 3068 (task-1 A3 narrow-width closure: the u8 `c1x * 16`
+/// pow2-mul guards in the pos-chain re-shape; same attribution as the
+/// census pin) → 3082 (narrow-PUT width-shadow closure: the `total` slot
+/// is mixed-width written (`if total < 1 { total = 1 }`) and viewed via
+/// `total as bytes`, so it gains the 1-byte runtime width shadow — prologue
+/// init, the two assignment stores, and the dynamic-length view loop; the
+/// view becomes width-exact to the interpreter on the total < 1 inputs).
 #[test]
 fn a19_merge_sites_pinned_hacd200_empty() {
     let (bytes, merges) = lower_dbg(HACD200_FITSH);
-    assert_eq!(bytes, 3052);
+    assert_eq!(bytes, 3082);
     assert!(merges.is_empty(), "hacd200 gained merge sites: {merges:#?}");
 }
 

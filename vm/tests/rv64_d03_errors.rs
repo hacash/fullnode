@@ -342,10 +342,12 @@ fn spanless_paths_unchanged() {
 
 /// GT-c: the input-parameter reject now carries an actionable hint; the
 /// asserted core substring "input parameter cannot be assigned"
-/// (rv64_gen_corpus.rs c2_probe_engine_edges P2) stays contiguous.
+/// (rv64_gen_corpus.rs c2_probe_engine_edges P2) stays contiguous. T15
+/// flipped the bytes rebind (`data = <bytes>`) to a supported form, so the
+/// pinned reject now rides the still-rejected compound (`data += v`).
 #[test]
 fn gt_c_input_param_reject_carries_hint() {
-    let src = "pragma fitsh 1.0.0\ncontract D {\n    function rv64im k(data: bytes) -> bytes {\n        data = buf_right(1, data)\n        return (byte(data, 0) as u64) as bytes\n    }\n}\n";
+    let src = "pragma fitsh 1.0.0\ncontract D {\n    function rv64im k(data: bytes) -> bytes {\n        data += 1u64\n        return 0u64 as bytes\n    }\n}\n";
     let err = compile_err(src);
     assert!(err.contains("input parameter cannot be assigned"), "{err}");
     assert!(err.contains("copy it into a local first"), "{err}");

@@ -715,7 +715,9 @@ impl Syntax {
     }
 
     /// `l[i] += v` & co — no new opcode and no hidden locals. The lowering is
-    /// stack-only, RHS-first (matching C++17/Rust and the local `XOP` path):
+    /// stack-only, RHS-first (matching C++17/Rust and the local `XOP` path),
+    /// and a statement: like the local `x += v` (`XOP`/`PUT` leave no value),
+    /// it yields nothing, so `return l[i] += v` is a compile error.
     ///
     /// ```text
     /// value            [v]                  rhs is evaluated first
@@ -726,17 +728,20 @@ impl Syntax {
     /// ROLL 3           [r,i,item,v]         rolls the rhs to the top
     /// <ADD/SUB/MUL/DIV> [r,i,result]
     /// ITEMSET          [container]          writes back in place
-    /// ROLL 0           [container]          identity; retval marker (F10)
+    /// POP              []                   discard the container; statement
     /// ```
     ///
     /// Each child subtree appears exactly once in the IR (one evaluation of
     /// each child). Receiver and index are duplicated on the runtime stack via
-    /// `DUPN`, not re-evaluated. The container the assignment returns stays on
-    /// the stack: enclosing statement blocks auto-POP it, while expression
-    /// contexts consume it. The arithmetic reuses the interpreter's ADD/XOP
-    /// path: mixed uint widths widen to the common width and succeed; non-uint
-    /// operands fail with `CastFail` 71; same-width overflow fails with
-    /// `Arithmetic` 90. The parser does not pre-restrict operand types.
+    /// `DUPN`, not re-evaluated. The trailing `POP` discards the container the
+    /// `ITEMSET` write leaves, so the whole form has no return value; the raw
+    /// fragment's `hasretval=false` is honest because this explicit successor
+    /// drops its result. Plain `l[i] = v` / `item_set(...)` still return the
+    /// receiver container (F10) — only the compound form is a statement. The
+    /// arithmetic reuses the interpreter's ADD/XOP path: mixed uint widths
+    /// widen to the common width and succeed; non-uint operands fail with
+    /// `CastFail` 71; same-width overflow fails with `Arithmetic` 90. The
+    /// parser does not pre-restrict operand types.
     fn assign_item(
         &mut self,
         receiver: Box<dyn IRNode>,
@@ -762,15 +767,13 @@ impl Syntax {
         let raw: Box<dyn IRNode> = Box::new(
             IRNodeBytecodes::new(raw_codes.to_vec()).map_err(|e| e.to_string())?,
         );
-        // `ROLL 0` is a serializable `IRNodeParam1` with runtime identity; its
-        // retval=true keeps the container as the assignment's value.
-        let retval_mark: Box<dyn IRNode> = Box::new(IRNodeParam1 {
-            hrtv: true,
-            inst: ROLL,
-            para: 0,
-            text: s!(""),
-        });
-        let subs = vec![value, receiver, index, raw, retval_mark];
+        // The fragment's `ITEMSET` leaves the receiver container on the stack.
+        // An explicit `POP` discards it, making the compound form a statement
+        // with no return value (like the local `XOP` path). This replaces the
+        // old `ROLL 0` identity retval-marker: the discard is now real and the
+        // raw fragment's `hasretval=false` is correct, so no marker is needed.
+        let discard: Box<dyn IRNode> = push_inst_noret(POP);
+        let subs = vec![value, receiver, index, raw, discard];
         Ok(Box::new(Self::build_irlist(subs)?))
     }
 

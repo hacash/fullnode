@@ -52,6 +52,18 @@ fn pin(body: &str, input: &[u8], want: u64) {
     }
 }
 
+/// Width-exact pin: the expected OUTPUT BYTES (task-1 A2 — `as bytes`
+/// follows the interpreter's `scalar_bytes` width: u8 → 1 B, u16 → 2, …).
+fn pin_w(body: &str, input: &[u8], want: &[u8]) {
+    for mode in MODES {
+        assert_eq!(
+            exec(body, input, mode),
+            Ok(want.to_vec()),
+            "mode {mode:?} diverged for body:\n{body}\ninput: {input:?}"
+        );
+    }
+}
+
 /// Two 8-byte BE input words.
 fn words(a: u64, b: u64) -> Vec<u8> {
     let mut v = a.to_be_bytes().to_vec();
@@ -72,7 +84,9 @@ fn ab_body(expr: &str) -> String {
 
 #[test]
 fn comparison_ops_all_directions() {
-    // fitsh comparisons are unsigned 64-bit
+    // fitsh comparisons are unsigned 64-bit; the result is a pure bool, so
+    // `as bytes` renders 1 canonical byte (A2) and the u64-pinned form
+    // keeps the 8-byte view
     let cases: Vec<(&str, fn(u64, u64) -> u64)> = vec![
         ("a < b", |a, b| (a < b) as u64),
         ("a > b", |a, b| (a > b) as u64),
@@ -95,7 +109,11 @@ fn comparison_ops_all_directions() {
     for (src, model) in &cases {
         let body = ab_body(src);
         for (a, b) in pairs {
-            pin(&body, &words(a, b), model(a, b));
+            pin_w(&body, &words(a, b), &[model(a, b) as u8]);
+        }
+        let body64 = ab_body(&format!("(({src}) as u64)"));
+        for (a, b) in pairs {
+            pin(&body64, &words(a, b), model(a, b));
         }
     }
 }
@@ -134,26 +152,43 @@ fn max_min_clamp_all_regions() {
 
 #[test]
 fn bitwise_and_shifts() {
-    let cases: Vec<(&str, fn(u64, u64) -> u64)> = vec![
-        ("a ^ b", |a, b| a ^ b),
-        ("a | b", |a, b| a | b),
-        ("a & b", |a, b| a & b),
-        ("a << b", |a, b| a.wrapping_shl((b & 63) as u32)),
-        ("a >> b", |a, b| a.wrapping_shr((b & 63) as u32)),
+    // Shifts model the interpreter's `checked_shl`/`checked_shr`: the
+    // AMOUNT must be < 64 (Arithmetic 90 otherwise); the value side
+    // truncates silently (Rust `<<`/`>>` on u64 match that exactly).
+    // The historical model masked the amount (`wrapping_shl(b & 63)`),
+    // matching the old `andi 63` lowering — closed with it.
+    let cases: Vec<(&str, fn(u64, u64) -> Option<u64>)> = vec![
+        ("a ^ b", |a, b| Some(a ^ b)),
+        ("a | b", |a, b| Some(a | b)),
+        ("a & b", |a, b| Some(a & b)),
+        ("a << b", |a, b| (b < 64).then(|| a << b)),
+        ("a >> b", |a, b| (b < 64).then(|| a >> b)),
     ];
     let pairs = [
         (0xF0F0_F0F0_F0F0_F0F0u64, 0x0FF0_0FF0_0FF0_0FF0),
         (u64::MAX, 0xFFFF_0000_FFFF_0000),
         (1, 63),
-        (1, 64),  // masked to 0
-        (1, 65),  // masked to 1
+        (1, 64),  // amount >= 64: trap 90
+        (1, 65),  // amount >= 64: trap 90
         (0xDEAD_BEEF, 4),
         (0x1234_5678_9ABC_DEF0, 7),
+        (u64::MAX, 1), // value side truncates, no fault
     ];
     for (src, model) in &cases {
         let body = ab_body(src);
         for (a, b) in pairs {
-            pin(&body, &words(a, b), model(a, b));
+            match model(a, b) {
+                Some(w) => pin(&body, &words(a, b), w),
+                None => {
+                    for mode in MODES {
+                        assert_eq!(
+                            exec(&body, &words(a, b), mode),
+                            Err(90),
+                            "mode {mode:?} must trap 90 for {src} with amount {b}"
+                        );
+                    }
+                }
+            }
         }
     }
 }
@@ -168,16 +203,17 @@ fn logical_and_or_not_choose() {
     println!("probe = {:?}", exec(probe, &[5], Rv64Mode::Im));
     let and_body = ab_body("if a != 0 { if b != 0 { 1 } else { 0 } } else { 0 }");
     for (a, b) in [(0u64, 0), (0, 5), (5, 0), (3, 7), (1, u64::MAX)] {
-        pin(&and_body, &words(a, b), ((a != 0) && (b != 0)) as u64);
+        // arms are U8 literals → `as bytes` is the 1-byte view (A2)
+        pin_w(&and_body, &words(a, b), &[((a != 0) && (b != 0)) as u8]);
     }
     let or_body = ab_body("if a != 0 { 1 } else { if b != 0 { 1 } else { 0 } }");
     for (a, b) in [(0u64, 0), (0, 5), (5, 0), (3, 7), (1, u64::MAX)] {
-        pin(&or_body, &words(a, b), ((a != 0) || (b != 0)) as u64);
+        pin_w(&or_body, &words(a, b), &[((a != 0) || (b != 0)) as u8]);
     }
-    // ! on an int
+    // ! on an int: pure-bool → 1 canonical byte (A2)
     let body = ab_body("!a");
     for a in [0u64, 1, 2, u64::MAX] {
-        pin(&body, &words(a, 0), (a == 0) as u64);
+        pin_w(&body, &words(a, 0), &[(a == 0) as u8]);
     }
     // value-if (CHOOSE): both arms evaluated, condition picks
     let body2 = ab_body("if a > b { a } else { b + 1000 }");
@@ -190,23 +226,33 @@ fn logical_and_or_not_choose() {
 fn bytes_ops_roundtrip() {
     // left/right/ldrop/rdrop/cat over a runtime slice (bytes 8.. of input)
     // count-style helpers take the literal count first (`buf_left(4, data)`);
-    // `data` here is the whole input (32 bytes: 8 index + 24 payload)
-    let cases: Vec<(&str, Box<dyn Fn(&[u8]) -> u64>)> = vec![
-        ("size(buf_left(4, data))", Box::new(|_: &[u8]| 4)),
-        ("size(buf_right(4, data))", Box::new(|_: &[u8]| 4)),
-        ("size(buf_left_drop(3, data))", Box::new(|d: &[u8]| d.len() as u64 - 3)),
-        ("size(buf_right_drop(5, data))", Box::new(|d: &[u8]| d.len() as u64 - 5)),
-        ("size(data ++ data)", Box::new(|d: &[u8]| (d.len() * 2) as u64)),
-        ("byte(buf_left(4, data), 2)", Box::new(|d: &[u8]| d[2] as u64)),
-        ("byte(buf_right(4, data), 0)", Box::new(|d: &[u8]| d[d.len() - 4] as u64)),
-        ("byte(data ++ data, size(data))", Box::new(|d: &[u8]| d[0] as u64)),
-        ("size(buf_cut(data, 3, 7))", Box::new(|_: &[u8]| 7)),
-        ("byte(buf_cut(data, 3, 7), 6)", Box::new(|d: &[u8]| d[9] as u64)),
+    // `data` here is the whole input (32 bytes: 8 index + 24 payload).
+    // A2: `size()` is U16 (2-byte `as bytes` view), `byte()` is U8 (1 byte).
+    let cases: Vec<(&str, Box<dyn Fn(&[u8]) -> Vec<u8>>)> = vec![
+        ("size(buf_left(4, data))", Box::new(|_: &[u8]| 4u16.to_be_bytes().to_vec())),
+        ("size(buf_right(4, data))", Box::new(|_: &[u8]| 4u16.to_be_bytes().to_vec())),
+        (
+            "size(buf_left_drop(3, data))",
+            Box::new(|d: &[u8]| (d.len() as u16 - 3).to_be_bytes().to_vec()),
+        ),
+        (
+            "size(buf_right_drop(5, data))",
+            Box::new(|d: &[u8]| (d.len() as u16 - 5).to_be_bytes().to_vec()),
+        ),
+        (
+            "size(data ++ data)",
+            Box::new(|d: &[u8]| ((d.len() * 2) as u16).to_be_bytes().to_vec()),
+        ),
+        ("byte(buf_left(4, data), 2)", Box::new(|d: &[u8]| vec![d[2]])),
+        ("byte(buf_right(4, data), 0)", Box::new(|d: &[u8]| vec![d[d.len() - 4]])),
+        ("byte(data ++ data, size(data))", Box::new(|d: &[u8]| vec![d[0]])),
+        ("size(buf_cut(data, 3, 7))", Box::new(|_: &[u8]| 7u16.to_be_bytes().to_vec())),
+        ("byte(buf_cut(data, 3, 7), 6)", Box::new(|d: &[u8]| vec![d[9]])),
     ];
     let data: Vec<u8> = (0xA0u8..0xC0).collect();
     for (src, model) in &cases {
         let body = format!("var r = {src}\nreturn r as bytes");
-        pin(&body, &data, model(&data));
+        pin_w(&body, &data, &model(&data));
     }
 }
 
@@ -314,44 +360,56 @@ fn bytes_ops_content_rdrop_and_cat() {
 /// behavior and the checker in both gate modes.
 #[test]
 fn xop_boundary_segment_sharing_soundness() {
-    let cases: Vec<(&str, u64)> = vec![
+    // Wants are WIDTH-EXACT to the interpreter (narrow-PUT face): `a = 7`
+    // narrows a to a u8 value and `a += 1` keeps the u8 plane, so the view
+    // is ONE byte ([8]) — the pre-fix pins demanded be_u64 (they pinned
+    // the static-join divergence). Cases 4-6 keep the u64 plane (the
+    // values stay u64 or re-widen through the u64 rhs of `s += i`).
+    let cases: Vec<(&str, u64, usize)> = vec![
         // straight-line gap clobber — the minimal miscompile (no if/while)
         (
             "var a = 0u64\nvar b = 0u64\nvar c = 0u64\na = 7\nb = a\nc = 9\na += 1\nreturn a as bytes",
             8,
+            1,
         ),
         (
             "var a = 0u64\nvar b = 0u64\nvar c = 0u64\na = 7\nb = a\nc = 9\nc += 2\na += 1\nreturn a as bytes",
             8,
+            1,
         ),
         (
             "var a = 0u64\nvar b = 0u64\nvar c = 0u64\nvar d = 0u64\na = 7\nb = a\nc = 9\nd = c\nc += 4\na += 1\nreturn a as bytes",
             8,
+            1,
         ),
         // loop-as-if-arm-tail (the documented panic shape): s stays 0, the
         // while runs i to 3, s += i → 3 (else arm skipped)
         (
             "var s = 0u64\nvar i = 0u64\nif s == 0 { while i < 3 { i += 1 } } else { s = 2 }\ns += i\nreturn s as bytes",
             3,
+            8,
         ),
         // same shape, condition false: the else arm writes the pre-XOP
         // segment (2), the while never runs (i stays 0) → 2 + 0
         (
             "var s = 9u64\nvar i = 0u64\nif s == 0 { while i < 3 { i += 1 } } else { s = 2 }\ns += i\nreturn s as bytes",
             2,
+            8,
         ),
         // while-tail shape nested in an outer loop: iter1 takes the then
         // arm (i → 3, s = 0+3), iter2 takes the else arm (s = 2, s += 3)
         (
             "var s = 0u64\nvar i = 0u64\nvar k = 0u64\nwhile k < 2 {\nif s == 0 { while i < 3 { i += 1 } } else { s = 2 }\ns += i\nk += 1 }\nreturn s as bytes",
             5,
+            8,
         ),
     ];
-    for (body, want) in &cases {
+    for (body, want, wbytes) in &cases {
+        let be = want.to_be_bytes()[8 - wbytes..].to_vec();
         for mode in MODES {
             assert_eq!(
                 exec(body, &[], mode),
-                Ok(want.to_be_bytes().to_vec()),
+                Ok(be.clone()),
                 "mode {mode:?} diverged for body:\n{body}"
             );
         }
@@ -446,36 +504,44 @@ fn const_select_table_forms() {
         s.push_str("return t as bytes");
         s
     };
+    // Width-exact to the INTERPRETER (narrow-PUT face): an arm PUT of a
+    // u8 literal narrows the slot's value tag, so a hit view is ONE byte
+    // and only the never-narrowed default keeps the declared u64's 8
+    // bytes. (The pre-fix pins here demanded be_u64 for every face — they
+    // pinned the static-join divergence this campaign removes; the
+    // interpreter, probed: input 65 → [1], input 0 → [99 u64 BE].)
+    let hit = |v: u64| vec![v as u8];
+    let miss = |v: u64| v.to_be_bytes().to_vec();
     for v in [0u8, 64, 65, 70, 80, 81, 255] {
         let want = match v {
-            65..=80 => (v - 64) as u64,
-            _ => 99,
+            65..=80 => hit((v - 64) as u64),
+            _ => miss(99),
         };
-        pin(&dense, &[v], want);
+        pin_w(&dense, &[v], &want);
     }
 
     // sparse with holes (span 0..40, keys only at 2/17/39)
     let holes = "var v = byte(data, 0)\nvar t = 7u64\nif v == 2 { t = 20 }\nif v == 17 { t = 30 }\nif v == 39 { t = 40 }\nreturn t as bytes";
     for v in [0u8, 2, 17, 39, 40] {
         let want = match v {
-            2 => 20,
-            17 => 30,
-            39 => 40,
-            _ => 7,
+            2 => hit(20),
+            17 => hit(30),
+            39 => hit(40),
+            _ => miss(7),
         };
-        pin(holes, &[v], want);
+        pin_w(holes, &[v], &want);
     }
 
     // three arms: below the 4-arm table threshold, plain branches
     let three = "var v = byte(data, 0)\nvar t = 5u64\nif v == 1 { t = 10 }\nif v == 2 { t = 20 }\nif v == 3 { t = 30 }\nreturn t as bytes";
     for v in [0u8, 1, 2, 3, 4] {
         let want = match v {
-            1 => 10,
-            2 => 20,
-            3 => 30,
-            _ => 5,
+            1 => hit(10),
+            2 => hit(20),
+            3 => hit(30),
+            _ => miss(5),
         };
-        pin(three, &[v], want);
+        pin_w(three, &[v], &want);
     }
 }
 
@@ -541,7 +607,9 @@ fn expression_depth_ladder() {
             e = format!("(v{k} + {e})");
         }
         let body = format!("{decls}var r = {e}\nreturn r as bytes");
-        let want: u64 = (0..d).map(|k| input[k] as u64).sum();
+        // byte() decls are U8 → the sum stays U8-width (A2: 1-byte view);
+        // input bytes 1..=16 keep every partial sum ≤ 128 < 256
+        let want: u8 = (0..d).map(|k| input[k]).sum();
         for mode in MODES {
             let got = exec(&body, &input, mode);
             assert_eq!(got, Ok(want.to_be_bytes().to_vec()), "depth {d} {mode:?}");
@@ -622,7 +690,8 @@ fn arena_churn_in_bounds() {
         for (i, b) in input.iter_mut().enumerate() {
             *b = (i % 251) as u8;
         }
-        let want = (iters + 1) * 200 + input[100] as u64;
+        // U16 + U8 widens to U16 → the 2-byte `as bytes` view (A2)
+        let want = ((iters + 1) * 200 + input[100] as u64) as u16;
         for mode in MODES {
             let got = exec(&body, &input, mode);
             assert_eq!(got, Ok(want.to_be_bytes().to_vec()), "churn {iters} {mode:?}");
@@ -640,12 +709,13 @@ fn arena_churn_in_bounds() {
 #[test]
 fn statement_expressions_and_fallthrough() {
     // expression statements with dead values + a body that falls off the
-    // end (empty output) vs an explicit empty return
+    // end (empty output) vs an explicit empty return. A2: `byte()` values
+    // render as the 1-byte `as bytes` view.
     let body = "var a = byte(data, 0)\na + 1\na * 2\nbyte(data, 0) % 7\nreturn a as bytes";
-    pin(body, &[9], 9);
+    pin_w(body, &[9], &[9]);
     // require / assert / throw shapes
     let req = "require 42, byte(data, 0) < 10\nreturn byte(data, 0) as bytes";
-    for (x, want) in [(0u8, Ok(0u64)), (9, Ok(9)), (10, Err(42))] {
+    for (x, want) in [(0u8, Ok(0u8)), (9, Ok(9u8)), (10, Err(42))] {
         let w = match want {
             Ok(v) => Ok(v.to_be_bytes().to_vec()),
             Err(c) => Err(c),

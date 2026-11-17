@@ -500,6 +500,13 @@ impl Interp {
         Ok(Self { codes: bts.into() })
     }
 
+    /// T1/T9 (pure-compute subset extension): build from raw BODY bytecode
+    /// — the hand-built-IR channel (an `IRNodeArray::codegen` stream, run
+    /// exactly like `try_build`'s output; SQRT/XLG have no source syntax).
+    pub fn from_body_codes(codes: Vec<u8>) -> Self {
+        Self { codes: codes.into() }
+    }
+
     pub fn run(&self, input: &[u8]) -> Result<Vec<u8>, InterpFault> {
         self.run_bounded(input, INTERP_GAS)
     }
@@ -522,6 +529,10 @@ impl Interp {
             Value::Bytes(buf) => Ok(buf),
             // `end` / fall-off-the-end ≡ empty bytes (pinned C1 equivalence)
             Value::Nil => Ok(vec![]),
+            // T13: `return <address>` — the container observable is the
+            // raw content bytes (the kernel ABI wraps every output as
+            // Value::Bytes; scalar_bytes of an Address is its 21 bytes)
+            Value::Address(a) => Ok(a.as_bytes().to_vec()),
             other => panic!("interpreter returned non-bytes value: {other:?}"),
         }
     }
@@ -2238,10 +2249,11 @@ impl Verdict {
 /// Extract the require/throw USER VALUE from a fault message. The HVM
 /// renders scalar values with their width suffix (`require failed: 42u64`),
 /// so the suffix must be stripped before taking the trailing digit-run
-/// (taking it raw would return 64 — the draft's exact bug).
+/// (taking it raw would return 64 — the draft's exact bug). A u128 error
+/// value renders with the `u128` suffix (T7) — strip it the same way.
 pub fn trailing_number(msg: &str) -> Option<u64> {
     let mut s = msg;
-    for suf in ["u64", "u32", "u16", "u8"] {
+    for suf in ["u128", "u64", "u32", "u16", "u8"] {
         if s.ends_with(suf) {
             s = &s[..s.len() - suf.len()];
             break;
@@ -3097,57 +3109,12 @@ pub fn rv64_negative_cases() -> Vec<(&'static str, String, Vec<&'static str>, bo
             vec!["nesting exceeds"],
             true,
         ),
-        (
-            "u128-cast",
-            "var a = (byte(data, 0) as u64)\nvar r = (a as u128)\nreturn (r as bytes)".into(),
-            vec!["CU128"],
-            false, // 16 B output > harness output_max; only the reject matters
-        ),
-        // P2-C3 B2: the u128 reject FAMILY (doc 70 follow-up 3) — every shape the
-        // shared front end accepts reaches rv64 lowering as a CU128 constant
-        // or cast node and must be rejected naming CU128.
-        (
-            "u128-fold-add",
-            "var a = (byte(data, 0) as u64)\nvar r = (a + (18446744073709551615u64 + 1u64))\nreturn (r as u64) as bytes".into(),
-            vec!["CU128"],
-            false, // interpreter faults 71 on the u128→u64 return cast
-        ),
-        (
-            "u128-fold-mul",
-            "var a = (byte(data, 0) as u64)\nvar r = (a + (4294967296u64 * 4294967296u64))\nreturn (r as u64) as bytes".into(),
-            vec!["CU128"],
-            false,
-        ),
-        (
-            "u128-fold-pow",
-            "var a = (byte(data, 0) as u64)\nvar r = (a + (2u64 ** 64u64))\nreturn (r as u64) as bytes".into(),
-            vec!["CU128"],
-            false,
-        ),
-        (
-            "u128-nested-arith",
-            "var a = (byte(data, 0) as u64)\nvar b = (byte(data, 1) as u64)\nvar r = (((a as u128) + (b as u128)) as u64)\nreturn (r) as bytes".into(),
-            vec!["CU128"],
-            true,
-        ),
-        (
-            "u128-compare",
-            "var a = (byte(data, 0) as u64)\nvar r = (((a as u128) > 5u128) as u64)\nreturn (r) as bytes".into(),
-            vec!["CU128"],
-            true,
-        ),
-        (
-            "u128-literal-suffix",
-            "var r = 170141183460469231731687303715884105727u128\nreturn (r as u64) as bytes".into(),
-            vec!["CU128"],
-            false,
-        ),
-        (
-            "u128-shift",
-            "var a = (byte(data, 0) as u64)\nvar r = (((a as u128) << 70u128) as u64)\nreturn (r) as bytes".into(),
-            vec!["CU128"],
-            false,
-        ),
+        // task 3 (B3) → T5/T6 flip: the four u128 rows (u128-fold-add /
+        // u128-fold-mul / u128-fold-pow / u128-shift) left the negative
+        // channel — mixed-width u128 arithmetic now zero-extends the narrow
+        // side (the interpreter's arithmetic_args2 widening) and the u128
+        // shift lowers with the checked-amount face. The agreement faces
+        // live in vm/tests/rv64_u128_arith.rs.
         // P2-C3 B1: choose() with MIXED int/bytes arms — the generator's
         // negative-channel shape (S_choose_mixed_arm). Interpreter accepts &
         // runs; rv64 cleanly rejects with the pinned text.
@@ -3159,97 +3126,39 @@ pub fn rv64_negative_cases() -> Vec<(&'static str, String, Vec<&'static str>, bo
             vec!["choose arms must have the same result type"],
             true,
         ),
-        (
-            "mul-mod",
-            "var a = (byte(data, 0) as u64)\nvar b = (byte(data, 1) as u64)\nvar c = (byte(data, 2) as u64)\nvar r = mul_mod(a, b, c)\nreturn (r as u64) as bytes".into(),
-            vec!["MULMOD"],
-            true,
-        ),
-        (
-            "add-mod",
-            "var a = (byte(data, 0) as u64)\nvar b = (byte(data, 1) as u64)\nvar c = (byte(data, 2) as u64)\nvar r = add_mod(a, b, c)\nreturn (r as u64) as bytes".into(),
-            vec!["ADDMOD"],
-            true,
-        ),
-        (
-            "mul-add",
-            "var a = (byte(data, 0) as u64)\nvar b = (byte(data, 1) as u64)\nvar c = (byte(data, 2) as u64)\nvar r = mul_add(a, b, c)\nreturn (r as u64) as bytes".into(),
-            vec!["MULADD"],
-            true,
-        ),
-        (
-            "mul-div",
-            "var a = (byte(data, 0) as u64)\nvar b = (byte(data, 1) as u64)\nvar c = (byte(data, 2) as u64)\nvar r = mul_div(a, b, c)\nreturn (r as u64) as bytes".into(),
-            vec!["MULDIV"],
-            true,
-        ),
-        (
-            "type-id",
-            "var a = (byte(data, 0) as u64)\nvar r = type_id(a)\nreturn (r as u64) as bytes".into(),
-            vec!["TID"],
-            true,
-        ),
+        // T2 add_mod/mul_mod pins FLIPPED: both opcodes lower at every
+        // width up to 128 (see vm/tests/rv64_modarith.rs for the positive
+        // differential coverage, including z=0 → 90 and the Nil → 71 face).
+        // T3/T4 removed rx:mul-add / rx:mul-div — mul_add/mul_sub lower at
+        // every width through the u256 library and mul_div/mul_div_up now
+        // lower at the u64/u128 widths too (rv64_rowc.rs / rv64_muldiv.rs).
         ("log-op", "log(data, 1)\nreturn 0u64 as bytes".into(), vec!["LOG"], true),
-        ("nil-value", "var n = nil\nreturn 0u64 as bytes".into(), vec!["PNIL"], true),
-        // P3-V2IMPL (A-25 M1): in-shape list literals LOWER now (creation /
-        // append / item_get / clear / length / has_key). The old single
-        // "list-literal" reject pin is re-semanticized as the ESCAPE
-        // family: every shape where a list value flows out of the admitted
-        // ops rejects, naming the consuming opcode. Interpreter behavior
-        // is asserted per row (accepts and runs unless noted).
+        // T26: a bare `nil` literal (and a `var n = nil` local) now LOWERS —
+        // the FIN*/cast nil guards reproduce the interpreter's CastFail(71)
+        // face (vm/tests/rv64_fin_family.rs::fin_nil_operand_fails_71). The
+        // remaining nil-representation boundary is the list element store:
+        // the interpreter accepts a Nil element and faults only on a later
+        // read, which a u64 frame block cannot represent — rv64 rejects
+        // naming ITEMSET (BUG-029 family).
         (
-            "list-literal-alias",
-            "var l = [1u64, 2u64]\nvar m = l\nreturn 0u64 as bytes".into(),
-            vec!["PUT", "outside the translatable kernel subset"],
+            "nil-value",
+            "var l = [1u64, 2u64]\nvar n = nil\nl[0] = n\nreturn (l[0] as u64) as bytes".into(),
+            vec!["ITEMSET", "Nil"],
             true,
         ),
-        (
-            "list-literal-rebind",
-            "var l = [1u64, 2u64]\nl = [3u64]\nreturn 0u64 as bytes".into(),
-            vec!["PUT", "outside the translatable kernel subset"],
-            true,
-        ),
-        (
-            "list-literal-nested",
-            "var l = [1u64, 2u64]\nvar m = [l]\nreturn 0u64 as bytes".into(),
-            vec!["PACKLIST", "outside the translatable kernel subset"],
-            true, // interpreter faults CastBeValueFail(76) at runtime
-        ),
-        (
-            "list-literal-eq",
-            "var l = [1u64, 2u64]\nvar r = ((l == l) as u64)\nreturn r as bytes".into(),
-            vec!["EQ", "outside the translatable kernel subset"],
-            true,
-        ),
-        (
-            "list-literal-ordered-cmp",
-            "var l = [1u64, 2u64]\nvar r = ((l < l) as u64)\nreturn r as bytes".into(),
-            vec!["LT", "outside the translatable kernel subset"],
-            true, // interpreter faults Arithmetic(90) at runtime
-        ),
+        // P3-V2IMPL (A-25 M1): in-shape list literals LOWER now. T17
+        // flipped the remaining escape family — alias / re-bind / nested
+        // element (the runtime 76 face) / EQ / ordered compare / casts /
+        // XOP / choose arms all compile now (their differentials live in
+        // vm/tests/rv64_list_shapes.rs l20-l21 and rv64_t17_list_values.rs).
+        // What stays a rv64-only reject: the ABI-level list return (the
+        // machine always pushes Value::Bytes) and a bytes receiver of an
+        // index.
         (
             "list-literal-return",
             "var l = [1u64, 2u64]\nreturn l".into(),
             vec!["RET", "outside the translatable kernel subset"],
             false, // returns a Compo — only the reject matters
-        ),
-        (
-            "list-literal-cast",
-            "var l = [1u64, 2u64]\nvar r = (l as bytes)\nreturn r".into(),
-            vec!["CBYTES", "outside the translatable kernel subset"],
-            true, // interpreter faults CastFail(71) at runtime
-        ),
-        (
-            "list-literal-xop",
-            "var l = [1u64, 2u64]\nl += 1u64\nreturn 0u64 as bytes".into(),
-            vec!["XOP", "outside the translatable kernel subset"],
-            true, // interpreter faults CastFail(71) at runtime
-        ),
-        (
-            "list-literal-choose-arm",
-            "var c = (byte(data, 0) as u64)\nvar l = [1u64, 2u64]\nvar r = choose(c == 0u64, l, l)\nreturn 0u64 as bytes".into(),
-            vec!["CHOOSE", "outside the translatable kernel subset"],
-            true,
         ),
         (
             "list-itemget-bytes-receiver",
@@ -3265,6 +3174,24 @@ pub fn rv64_negative_cases() -> Vec<(&'static str, String, Vec<&'static str>, bo
             "bytecode { P0 P1 }\nreturn 0u64 as bytes".into(),
             vec!["IRBYTECODE"],
             true,
+        ),
+        // T13: `as bool` / `as address` (CTO) LOWER now (truthiness / the
+        // 21-byte+version face, vm/tests/rv64_cast_addr.rs); the two rows
+        // below pin the deliberately kept fail-fast rejects — an int
+        // operand can never be a 21-byte address (the interpreter faults
+        // CastFail 71 deterministically), and an ordered compare of bytes
+        // faults Arithmetic 90.
+        (
+            "cast-int-as-address",
+            "var a = byte(data, 0) as u64\nvar b = (a as address)\nreturn b as bytes".into(),
+            vec!["as address"],
+            false, // interpreter faults CastFail(71) at runtime
+        ),
+        (
+            "address-ordered-cmp",
+            "var a = 1MzNY1oA3kfgYi75zquj3SRUPYztzXHzK9\nvar r = (a < a)\nreturn (r as u64) as bytes".into(),
+            vec!["expected an int value", "got bytes"],
+            false, // interpreter faults Arithmetic(90) at runtime
         ),
     ]
 }

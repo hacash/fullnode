@@ -614,27 +614,36 @@ fn c2_probe_engine_edges() {
     let input = vec![7u8, 9, 1, 2, 3, 4, 5, 6];
     let pre = dec2();
 
-    // P2: assignment to the `data` param slot. PINNED subset boundary:
-    // the interpreter accepts and runs param-slot assignment; rv64 rejects
-    // at LOWER time with a clean message ("the input parameter cannot be
-    // assigned") — a B-family compile-reject row, not a crash.
+    // P2: assignment to the `data` param slot. FLIPPED (T15 of the
+    // pure-compute extension list): a bytes-typed `data = ..` reassignment
+    // now LOWERS (slot 0 becomes an entry-copied bytes local) and agrees
+    // with the interpreter on every input — the old reject pin became a
+    // positive four-way row. The still-rejected shapes (`data += v`, an
+    // int-typed `data = v`) are pinned in vm/tests/rv64_assign_paths.rs.
     let body_p2 = "data = buf_right(1, data)\nreturn (byte(data, 0) as u64) as bytes";
     let bi2 = Interp::try_build(body_p2);
     let br2 = Rv64::try_build(body_p2);
     assert!(bi2.is_ok(), "P2: interpreter must accept data-slot assignment");
-    let e2 = br2.err().expect("P2: rv64 must reject data-slot assignment (pinned)");
-    assert!(e2.contains("input parameter cannot be assigned"), "P2 message: {e2}");
-    println!("P2 data-slot reassignment: interp accepts+runs; rv64 rejects ({}) — pinned subset boundary", first_line(&e2));
+    let rv2 = br2.expect("P2: rv64 must lower data-slot reassignment (T15)");
+    let ir2 = bi2.expect("P2: interp built").run(&input).expect("P2: interp run");
+    for (mode, got) in rv2.run(&input) {
+        assert_eq!(got.as_ref().expect("P2: rv64 run"), &ir2, "{mode:?} data-slot reassignment");
+    }
+    println!("P2 data-slot reassignment: interp and all rv64 modes agree (T15 flipped)");
 
-    // P3: bytes == bytes comparison. PINNED subset boundary: interpreter
-    // accepts (content equality in HVM), rv64 rejects cleanly.
+    // P3: bytes == bytes comparison. T13 lowered the value_content_eq
+    // face (raw byte equality — Address shares the 21B-Bytes value
+    // domain): the rv64 side now BUILDS and must agree with the
+    // interpreter on value or exit code (the pre-T13 pinned reject is
+    // flipped).
     let body_p3 = "var p = buf_left(2, data)\nvar q = buf_left(2, data)\nvar r = ((p == q) as u64)\nreturn r as bytes";
-    let bi3 = Interp::try_build(body_p3);
-    let br3 = Rv64::try_build(body_p3);
-    assert!(bi3.is_ok(), "P3: interpreter must accept bytes==bytes");
-    let e3 = br3.err().expect("P3: rv64 must reject bytes==bytes (pinned)");
-    assert!(e3.contains("expected an int value"), "P3 message: {e3}");
-    println!("P3 bytes==bytes: interp accepts; rv64 rejects ({}) — pinned subset boundary", first_line(&e3));
+    let i3 = Interp::try_build(body_p3).expect("P3: interpreter must accept bytes==bytes");
+    let r3 = Rv64::try_build(body_p3).expect("P3: rv64 must lower bytes==bytes (T13)");
+    let want3 = i3.run(&input).map_err(|f| f.code as u64);
+    for (mode, got) in r3.run(&input) {
+        assert_eq!(got, want3, "P3 bytes==bytes diverged in {mode:?}");
+    }
+    println!("P3 bytes==bytes: interp and rv64 agree ({want3:?}) — T13 lowered");
 
     // P4: mixed-type ternary arms (u64 vs bytes). WATCH (BUG-011 family):
     // in debug builds the lowerer's `value-if arms must share registers`

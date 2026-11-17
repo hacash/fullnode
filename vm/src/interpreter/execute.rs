@@ -950,7 +950,7 @@ pub fn execute_code_in_frame<M: VmMachine + ?Sized, H: VmHost + base::Context + 
                     *peek = heap.read(peek, n)?.valid(cap)?;
                 }
                 HWRITE => hwrite!(ops_pop_to_u32!() as usize),
-                HGROW => gas_resource_raw!(heap.grow(pu8!(), gst)?),
+                HGROW => gas_resource_raw!(heap.grow(pu8!(), cap.heap_grow_segment, gst)?),
                 // storage
                 SSTAT => {
                     nsr!();

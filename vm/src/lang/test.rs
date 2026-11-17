@@ -412,8 +412,8 @@ mod token_t {
             );
         }
         // One fixed raw block performs the stack shuffle: duplicate receiver
-        // and index, element read, roll the rhs up, arithmetic, writeback, and
-        // the `ROLL 0` retval marker that keeps the container as the value.
+        // and index, element read, roll the rhs up, arithmetic, writeback; a
+        // trailing `POP` discards the container, making the form a statement.
         let raw = [
             Bytecode::DUPN as u8,
             2,
@@ -422,8 +422,7 @@ mod token_t {
             3,
             Bytecode::ADD as u8,
             Bytecode::ITEMSET as u8,
-            Bytecode::ROLL as u8,
-            0,
+            Bytecode::POP as u8,
         ];
         assert!(
             codes.windows(raw.len()).any(|w| w == raw),

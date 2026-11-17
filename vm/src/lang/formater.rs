@@ -470,7 +470,7 @@ impl<'a> Formater<'a> {
         }
         let prefix = self.line_prefix();
         if arr.inst == IRLIST {
-            // `l[i] += v`: IRLIST[value, receiver, index, bytecode{..}, ROLL 0].
+            // `l[i] += v`: IRLIST[value, receiver, index, bytecode{..}, POP].
             // Must be recognized before the generic list/tuple/map/log shapes.
             if let Some((value, receiver, index, op)) = Self::compound_item_assign_parts(node) {
                 let opstr = compound::assign_symbol(op)?;
@@ -1109,10 +1109,11 @@ impl<'a> Formater<'a> {
     }
 
     /// Recognize the stack-only compound item assignment emitted by
-    /// `assign_item`: `IRLIST[value, receiver, index, IRNodeBytecodes, ROLL 0]`
+    /// `assign_item`: `IRLIST[value, receiver, index, IRNodeBytecodes, POP]`
     /// whose raw payload is exactly `DUPN 2; ITEMGET; ROLL 3; op; ITEMSET`
-    /// (7 bytes) with `op` in ADD/SUB/MUL/DIV, and whose trailing marker is
-    /// `IRNodeParam1 { ROLL, para: 0, hrtv: true }`.
+    /// (7 bytes) with `op` in ADD/SUB/MUL/DIV, and whose trailing terminator is
+    /// a no-retval `POP` leaf discarding the container the write leaves. The
+    /// form is a statement (no return value), like the local `XOP` path.
     ///
     /// Returns `(value, receiver, index, op)`.
     fn compound_item_assign_parts<'n>(
@@ -1124,8 +1125,8 @@ impl<'a> Formater<'a> {
         }
         let raw = arr.subs[3].as_any().downcast_ref::<IRNodeBytecodes>()?;
         let op = compound::item_compound_op(&raw.codes)?;
-        let mark = arr.subs[4].as_any().downcast_ref::<IRNodeParam1>()?;
-        if mark.inst != Bytecode::ROLL || mark.para != 0 || !mark.hrtv {
+        let discard = arr.subs[4].as_any().downcast_ref::<IRNodeLeaf>()?;
+        if discard.inst != Bytecode::POP || discard.hrtv {
             return None;
         }
         Some((&*arr.subs[0], &*arr.subs[1], &*arr.subs[2], op))

@@ -190,7 +190,11 @@ pub fn compile_rv64im_body_kernel_at(
         );
     }
     let arena_size = ARENA_SIZE_MAX.min(arena_budget);
-    let lo = rv64::lower_body_mode_arena(&ir, arg_name.is_some(), meta.mode, arena_size)
+    // task 7: the per-grow heap segment cap rides the same parameter
+    // channel as the arena budget — the live SpaceCap field, never a
+    // kernel-side literal
+    let lo =
+        rv64::lower_body_mode_arena_heap(&ir, arg_name.is_some(), meta.mode, arena_size, cap.heap_grow_segment)
         .map_err(|e| {
             sys::Error::fault(annotate_backend_reject(&format!(
                 "rv64im kernel '{name}': {e}"
@@ -266,10 +270,14 @@ pub fn annotate_backend_reject(msg: &str) -> String {
 ///
 /// P3-V2IMPL (A-25 M1): the compo-list v2 shape set LOWERS in-shape
 /// (`[e0..eN-1]` creation / `[]` / append / item_get / clear / length /
-/// has_key on list VARIABLES). The list rows below describe the ESCAPE
-/// paths only — the shapes where a list value flows out of the admitted
-/// ops, which still reject with the canonical subset text naming the
-/// opcode (see vm/tests/c3lib/mod.rs rv64_negative_cases, rx:list-* rows).
+/// has_key on list VARIABLES). T17 (the arena container model) added the
+/// general list VALUE forms — alias/re-bind/CLONE, nested elements (the
+/// runtime CastBeValueFail 76 face), TAKEFIRST/TAKELAST, MERGE, the true
+/// shifting INSERT/REMOVE, KEYS/VALUES(list) (CompoOpNotMatch 83), list
+/// EQ/NEQ, the list cast/ordered-compare/XOP fault faces and the CHOOSE
+/// descriptor select. The rows below describe only the shapes that still
+/// reject (non-variable receivers, unrepresentable element widths, may-Nil
+/// stores, tuples).
 const OP_CONSTRUCT: &[(&str, &str, &str)] = &[
     (
         "ITEMGET",
@@ -284,12 +292,12 @@ const OP_CONSTRUCT: &[(&str, &str, &str)] = &[
     ),
     (
         "PACKLIST",
-        "a list construction that escapes the supported list shapes (a \
-         nested list element, more than 128 items, or an element that may \
-         be Nil)",
-        "lists support up to 128 unconditional u64 elements — bind nested \
-         containers' elements as separate variables and make every element \
-         an unconditionally-assigned u64",
+        "a list construction that escapes the supported list shapes (more \
+         items than the block budget (128 at u8..u64 width, 64 at u128 \
+         width), mixed element widths, or an element that may be Nil)",
+        "lists support up to 128 unconditional uint elements at u8..u64 \
+         width (64 at u128 width) — make every element an \
+         unconditionally-assigned uint of one width",
     ),
     (
         "NEWLIST",
@@ -323,15 +331,12 @@ const OP_CONSTRUCT: &[(&str, &str, &str)] = &[
          `[..]` or `[]`",
     ),
     (
-        "NEWMAP",
-        "map construction (new_map)",
-        "the kernel subset has no maps — use fixed variables or byte strings",
-    ),
-    (
         "INSERT",
-        "list/map insertion (insert)",
-        "the kernel subset has no maps, and lists are append-only — use \
-         append(l, v)",
+        "an insertion into a value that is not a list or map variable, or a \
+         list insert whose index or value is not a definite uint",
+        "lists support `insert(l, i, v)` with a u64 index and a u64 value \
+         (pair it with remove(l, i) for a shifting edit); maps support \
+         `insert(m, k, v)` freely",
     ),
     (
         "PACKTUPLE",

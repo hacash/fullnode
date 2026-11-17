@@ -190,18 +190,20 @@ fn p3_expression_index_and_fuse_coexistence() {
 /// REMOVE; the interpreter itself runs it.
 #[test]
 fn p4_shifted_view_control_group() {
+    // T17 flip: the pair recognizer still refuses a receiver-touching
+    // index/value, but the two statements now lower STANDALONE (the true
+    // shifting REMOVE/INSERT on the arena descriptor) — the interpreter's
+    // shifted view is reproduced exactly.
     // value reads receiver: interpreter [1,2,3] remove@0 insert(0, l[0]) =
-    // [2,2,3] (the doc 75 E6 pin), rv64 must refuse the pair
+    // [2,2,3] (the doc 75 E6 pin)
     let body = "var l = [1u64, 2u64, 3u64]\nremove(l, 0u64)\ninsert(l, 0u64, l[0])\n";
     let mut full = body.to_string();
     full.push_str(&read3("l[0]", "l[1]", "l[2]"));
-    interp_accepts(&full);
-    rv64_must_reject(&full, "REMOVE");
+    agree4(&full, &[vec![0], vec![7]]);
 
     // index reads receiver: structurally unequal AND receiver-touching
     let body2 = "var l = [1u64, 2u64, 3u64]\nvar z = 0u64\nremove(l, 1u64)\ninsert(l, l[z], 9u64)\nreturn l[0] as bytes";
-    interp_accepts(body2);
-    rv64_must_reject(body2, "REMOVE");
+    agree4(body2, &[vec![0], vec![7]]);
 
     // the same-value NON-receiver read fuses fine (control: the reject is
     // about the receiver, not reads in general)
@@ -233,11 +235,11 @@ fn p5_may_nil_value_compile_reject() {
     );
     rv64_must_reject(&body, "REMOVE");
 
-    // Nil via a choose arm (may-Nil Int expression)
+    // Nil via a lazy-if arm (may-Nil Int expression)
     let body2 = format!(
         "{nil_decl}var l = [1u64, 2u64]\nremove(l, 1u64)\ninsert(l, 1u64, if q == 1u64 {{ n }} else {{ 4u64 }})\nreturn l[1] as bytes"
     );
-    rv64_must_reject(&body2, "REMOVE");
+    rv64_must_reject(&body2, "INSERT");
     let _ = Interp::try_build(&body2).unwrap_or_else(|e| panic!("interp must accept: {e}"));
 
     // a DEFINITE value fuses (control)
@@ -249,58 +251,31 @@ fn p5_may_nil_value_compile_reject() {
 /// The interpreter accepts and runs each shape (where it terminates).
 #[test]
 fn p6_negative_family() {
-    // single REMOVE / single INSERT
-    let b = "var l = [1u64, 2u64]\nremove(l, 0u64)\nreturn l[0] as bytes";
-    interp_accepts(b);
-    rv64_must_reject(b, "REMOVE");
-    let b = "var l = [1u64, 2u64]\ninsert(l, 0u64, 9u64)\nreturn l[0] as bytes";
-    interp_accepts(b);
-    rv64_must_reject(b, "INSERT");
-
-    // non-adjacent pair (a statement between)
-    let b = "var l = [1u64, 2u64]\nremove(l, 0u64)\nvar t = 5u64\ninsert(l, 0u64, t)\nreturn l[0] as bytes";
-    interp_accepts(b);
-    rv64_must_reject(b, "REMOVE");
-
-    // cross-control-flow pair
-    let b = "var l = [1u64, 2u64]\nvar c = 0u64\nremove(l, 0u64)\nif c == 1u64 { var x = 1u64 }\ninsert(l, 0u64, 9u64)\nreturn l[0] as bytes";
-    interp_accepts(b);
-    rv64_must_reject(b, "REMOVE");
-
-    // structurally unequal indices (const vs var)
-    let b = "var l = [1u64, 2u64]\nvar j = 0u64\nremove(l, 0u64)\ninsert(l, j, 9u64)\nreturn l[0] as bytes";
-    interp_accepts(b);
-    rv64_must_reject(b, "REMOVE");
-
-    // value-unequal indices with equal structure but different slots
-    let b = "var l = [1u64, 2u64]\nvar j = 0u64\nvar k2 = 0u64\nremove(l, j)\ninsert(l, k2, 9u64)\nreturn l[0] as bytes";
-    interp_accepts(b);
-    rv64_must_reject(b, "REMOVE");
-
-    // index reads receiver (shifted view)
-    let b = "var l = [1u64, 2u64]\nvar z = 0u64\nremove(l, 0u64)\ninsert(l, l[z], 9u64)\nreturn l[0] as bytes";
-    interp_accepts(b);
-    rv64_must_reject(b, "REMOVE");
-
-    // value reads receiver
-    let b = "var l = [1u64, 2u64]\nremove(l, 0u64)\ninsert(l, 0u64, l[0])\nreturn l[0] as bytes";
-    interp_accepts(b);
-    rv64_must_reject(b, "REMOVE");
-
-    // value reads receiver's length (mid-pair value differs)
+    // T17 flip: every shape the fused pair refuses because the two
+    // statements are not one fusable unit now lowers as two standalone
+    // descriptor ops (identical to the interpreter's two instructions).
+    let bodies = [
+        "var l = [1u64, 2u64]\nremove(l, 0u64)\nreturn l[0] as bytes",
+        "var l = [1u64, 2u64]\ninsert(l, 0u64, 9u64)\nreturn l[0] as bytes",
+        "var l = [1u64, 2u64]\nremove(l, 0u64)\nvar t = 5u64\ninsert(l, 0u64, t)\nreturn l[0] as bytes",
+        "var l = [1u64, 2u64]\nvar c = 0u64\nremove(l, 0u64)\nif c == 1u64 { var x = 1u64 }\ninsert(l, 0u64, 9u64)\nreturn l[0] as bytes",
+        "var l = [1u64, 2u64]\nvar j = 0u64\nremove(l, 0u64)\ninsert(l, j, 9u64)\nreturn l[0] as bytes",
+        "var l = [1u64, 2u64]\nvar j = 0u64\nvar k2 = 0u64\nremove(l, j)\ninsert(l, k2, 9u64)\nreturn l[0] as bytes",
+        "var l = [1u64, 2u64]\nvar z = 0u64\nremove(l, 0u64)\ninsert(l, l[z], 9u64)\nreturn l[0] as bytes",
+        "var l = [1u64, 2u64]\nremove(l, 0u64)\ninsert(l, 0u64, l[0])\nreturn l[0] as bytes",
+        "var l = [1u64, 2u64]\nvar m = remove(l, 0u64)\ninsert(l, 0u64, 9u64)\nreturn l[0] as bytes",
+        "var l = [1u64, 2u64]\nvar l2 = [3u64, 4u64]\nremove(l, 0u64)\ninsert(l2, 0u64, 9u64)\nreturn l[0] as bytes",
+    ];
+    for b in bodies {
+        interp_accepts(b);
+        agree4(b, &[vec![0], vec![7]]);
+    }
+    // the one row that STAYS a reject: length() is a U32 value and the
+    // u64 element stride cannot represent a mixed-width store (the
+    // interpreter keeps per-element widths) — the B-family stance.
     let b = "var l = [1u64, 2u64]\nremove(l, 1u64)\ninsert(l, 1u64, length(l))\nreturn l[0] as bytes";
     interp_accepts(b);
-    rv64_must_reject(b, "REMOVE");
-
-    // remove result bound into a var (alias face)
-    let b = "var l = [1u64, 2u64]\nvar m = remove(l, 0u64)\ninsert(l, 0u64, 9u64)\nreturn l[0] as bytes";
-    interp_accepts(b);
-    rv64_must_reject(b, "REMOVE");
-
-    // different receiver slots
-    let b = "var l = [1u64, 2u64]\nvar l2 = [3u64, 4u64]\nremove(l, 0u64)\ninsert(l2, 0u64, 9u64)\nreturn l[0] as bytes";
-    interp_accepts(b);
-    rv64_must_reject(b, "REMOVE");
+    rv64_must_reject(b, "mix element widths");
 }
 
 /// Pairs upgrade the storage class: a literal (rodata candidate) or

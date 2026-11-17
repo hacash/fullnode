@@ -211,7 +211,8 @@ fn l9_packlist_128_literal_boundary() {
         .unwrap_or_else(|| panic!("129-element list must reject"))
         .to_string();
     assert!(err.contains("PACKLIST"), "{err}");
-    assert!(err.contains("128-item list capacity"), "{err}");
+    // B2 task 4: the block-budget form — 129 × 8B exceeds the 1024B block
+    assert!(err.contains("129 × 8B elements exceed"), "{err}");
     interp_accepts(&body129, true);
 }
 
@@ -327,10 +328,9 @@ fn l13_haskey_fold() {
 
 #[test]
 fn l14_length_as_bytes_width_pinned() {
-    // D5/D7 pinned divergence (NOT a failure): `length(l) as bytes` yields
-    // the interpreter's U32 width (4B BE) vs the rv64 u64 view (8B BE) —
-    // the documented as-bytes width family (doc 30 D7, doc 74 E1 fold rows).
-    // Kernel discipline: `as u64` first makes all engines agree (l12).
+    // CLOSED by task-1 A2 (was the D5/D7 pinned divergence): `length(l)`
+    // is U32 in the interpreter and `as bytes` now renders that width on
+    // every engine (4B BE). The u64-pinned form keeps the 8B wire view.
     let body = "var w = [1u64, 2u64, 3u64]\nreturn (length(w)) as bytes";
     let rv = Rv64::try_build(body).unwrap();
     let it = Interp::try_build(body).unwrap();
@@ -340,10 +340,12 @@ fn l14_length_as_bytes_width_pinned() {
     for (mode, got) in rv.run(&[0u8; 4]) {
         assert_eq!(
             got.expect("rv64 runs"),
-            3u64.to_be_bytes().to_vec(),
-            "mode {mode:?} emits the pinned u64 width (8B)"
+            l3,
+            "mode {mode:?} emits the U32 width (4B)"
         );
     }
+    let body = "var w = [1u64, 2u64, 3u64]\nreturn (length(w) as u64) as bytes";
+    agree4(body, &[vec![0u8; 4]]);
 }
 
 #[test]
@@ -358,13 +360,16 @@ fn l15_rodata_multiple_tables() {
                 return (r as u64) as bytes";
     agree4(body, &inputs_first_byte());
     let lo = lower_im(body);
-    // both tables are all-u32 → 4-byte-stride packing (M2-d rule)
+    // B2 task 4: the table stride IS the slot's fixed element width —
+    // these literals are u64, so the 8-byte LE form (the M2-d all-u32
+    // packing is gone; u32-element tables keep their own 4-byte form,
+    // pinned by l31)
     let mut t1 = Vec::new();
-    for v in [10u32, 20, 30] {
+    for v in [10u64, 20, 30] {
         t1.extend_from_slice(&v.to_le_bytes());
     }
     let mut t2 = Vec::new();
-    for v in [7u32, 9] {
+    for v in [7u64, 9] {
         t2.extend_from_slice(&v.to_le_bytes());
     }
     assert!(contains_seq(&lo.pool, &t1), "table a/c missing: {:?}", lo.pool);
@@ -387,7 +392,10 @@ fn l16_sha256_wtable_shape() {
     // irrelevant here, the SHAPE (w table + K table + read window) is.
     let mut k = String::new();
     for i in 0..16 {
-        k.push_str(&format!("{}, ", 0x428a2f98u64.wrapping_mul(i as u64 + 1)));
+        // B2 task 4: the u64 suffix keeps the table's element width
+        // uniform (bare decimals that fit u32 parse CU32 → the fixed
+        // stride rejects a mixed-width table)
+        k.push_str(&format!("{}u64, ", 0x428a2f98u64.wrapping_mul(i as u64 + 1)));
     }
     let body = format!(
         "var k = [{k}16u64, 17u64]\n\
@@ -524,20 +532,15 @@ fn l24_bug021family_pow_nil_guard_deferred_sentinel() {
 
 #[test]
 fn l20_escape_family_rejects_named() {
+    // T17: the container-value escape family LOWERS now — alias / re-bind
+    // / nested element / EQ / ordered compare / casts / XOP / choose arms
+    // / append-result binds all compile to the interpreter's exact faces
+    // (see vm/tests/rv64_t17_list_values.rs and rv64_arena_containers.rs).
+    // What stays a compile reject: the unrepresentable slot-species
+    // changes, a list declared under a conditional, and the ABI-level
+    // list return.
     // (body, fragment, interpreter accepts and runs?)
     let cases: &[(&str, &str, &str, bool)] = &[
-        (
-            "list-alias",
-            "var l = [1u64, 2u64]\nvar m = l\nreturn 0u64 as bytes",
-            "PUT",
-            true,
-        ),
-        (
-            "list-rebind",
-            "var l = [1u64, 2u64]\nl = [3u64]\nreturn 0u64 as bytes",
-            "PUT",
-            true,
-        ),
         (
             "list-rebind-int",
             "var l = [1u64, 2u64]\nl = 5u64\nreturn 0u64 as bytes",
@@ -551,60 +554,10 @@ fn l20_escape_family_rejects_named() {
             true,
         ),
         (
-            "list-nested-element",
-            "var l = [1u64, 2u64]\nvar m = [l]\nreturn 0u64 as bytes",
-            "PACKLIST",
-            true, // interpreter faults CastBeValueFail(76) at runtime
-        ),
-        (
-            "list-eq",
-            "var l = [1u64, 2u64]\nvar r = ((l == l) as u64)\nreturn r as bytes",
-            "EQ",
-            true,
-        ),
-        (
-            "list-ordered-cmp",
-            "var l = [1u64, 2u64]\nvar r = ((l < l) as u64)\nreturn r as bytes",
-            "LT",
-            true, // interpreter faults Arithmetic(90) at runtime
-        ),
-        (
             "list-return",
             "var l = [1u64, 2u64]\nreturn l",
             "RET",
             false, // returns a Compo — only the reject matters
-        ),
-        (
-            "list-cast-bytes",
-            "var l = [1u64, 2u64]\nvar r = (l as bytes)\nreturn r",
-            "CBYTES",
-            true, // interpreter faults CastFail(71) at runtime
-        ),
-        (
-            "list-cast-u64",
-            "var l = [1u64, 2u64]\nvar r = (l as u64)\nreturn r as bytes",
-            "CU64",
-            true, // interpreter faults CastFail(71) at runtime
-        ),
-        (
-            "list-xop-assign",
-            "var l = [1u64, 2u64]\nl += 1u64\nreturn 0u64 as bytes",
-            "XOP",
-            true, // interpreter faults CastFail(71) at runtime
-        ),
-        (
-            "list-choose-arm",
-            "var c = (byte(data, 0) as u64)\nvar l = [1u64, 2u64]\nvar r = choose(c == 0u64, l, l)\nreturn 0u64 as bytes",
-            "CHOOSE",
-            true,
-        ),
-        (
-            "list-append-result",
-            "var l = [1u64, 2u64]\nvar m = append(l, 3u64)\nreturn 0u64 as bytes",
-            // the mutation itself is admitted; the ESCAPE is the list result
-            // aliasing into `m` — the consumer named is PUT
-            "PUT",
-            true,
         ),
         (
             "list-cond-decl",
@@ -632,64 +585,16 @@ fn l20_escape_family_rejects_named() {
 
 #[test]
 fn l21_out_of_shape_ops_reject_named() {
-    // the out-opcode family: every entry rejects naming the opcode, on both
-    // channels the interpreter accepts (and runs where marked)
+    // T17: clone / insert / remove / merge / take-first / take-last and a
+    // list-valued append all LOWER now (vm/tests/rv64_t17_list_values.rs).
+    // The out-of-subset family that stays: tuples, a bytes receiver of an
+    // index, and a non-variable list literal receiver. Maps (T16) lower too,
+    // so their creation forms are not reject pins either.
     let cases: &[(&str, &str, &str, bool)] = &[
-        (
-            "insert",
-            "var l = [1u64, 2u64]\ninsert(l, 0u64, 9u64)\nreturn 0u64 as bytes",
-            "INSERT",
-            true,
-        ),
-        (
-            "remove",
-            "var l = [1u64, 2u64]\nremove(l, 0u64)\nreturn 0u64 as bytes",
-            "REMOVE",
-            true,
-        ),
-        (
-            "merge",
-            "var a = [1u64]\nvar b = [2u64]\nmerge(a, b)\nreturn 0u64 as bytes",
-            "MERGE",
-            true,
-        ),
-        (
-            "take-first",
-            "var l = [1u64, 2u64]\nvar r = (take_first(l) as u64)\nreturn r as bytes",
-            "TAKEFIRST",
-            true,
-        ),
-        (
-            "take-last",
-            "var l = [1u64, 2u64]\nvar r = (take_last(l) as u64)\nreturn r as bytes",
-            "TAKELAST",
-            true,
-        ),
-        (
-            "pack-map",
-            "var m = map{1u64 : 2u64}\nreturn 0u64 as bytes",
-            // the map creation itself is the first out-of-subset site (no
-            // admissible map form exists, so keys/values on a map can only
-            // ever surface this same creation reject first)
-            "PACKMAP",
-            true,
-        ),
         (
             "pack-tuple",
             "var t = tuple(1u64, 2u64)\nreturn 0u64 as bytes",
             "PACKTUPLE",
-            true,
-        ),
-        (
-            "clone",
-            "var l = [1u64, 2u64]\nvar m = clone(l)\nreturn 0u64 as bytes",
-            "CLONE",
-            true,
-        ),
-        (
-            "new-map",
-            "var m = new_map()\nreturn 0u64 as bytes",
-            "NEWMAP",
             true,
         ),
         (
@@ -705,10 +610,10 @@ fn l21_out_of_shape_ops_reject_named() {
             true,
         ),
         (
-            "append-value-list",
-            "var a = [1u64]\nvar b = [2u64]\nappend(a, b)\nreturn 0u64 as bytes",
-            "APPEND",
-            true, // interpreter faults CastBeValueFail(76) at runtime
+            "itemcat-aliased-receiver",
+            "var l = [1u64, 2u64]\nvar m = l\nvar r = item_concat(m)\nreturn r",
+            "ITEMCAT",
+            true,
         ),
     ];
     for (name, body, frag, runs) in cases {
@@ -801,34 +706,38 @@ fn l30_thunk_signatures_40_72_85() {
 
 #[test]
 fn l31_rodata_table_in_pool() {
-    // all-literal tables live in the R segment (pool). P3-KERNELS M2-d
-    // rule: values that all fit u32 pack as a 4-byte-stride LE table
-    // (loaded by lwu, zero-extend keeps values identical); any value
-    // ≥ 2^32 keeps the 8-byte u64 form.
+    // all-literal tables live in the R segment (pool). B2 task 4: the
+    // table stride IS the slot's fixed element width (loaded by the
+    // width's zero-extending load, values identical); the M2-d
+    // all-u32 packing is gone — a u32-element table takes its own
+    // 4-byte form, a u64-element table the 8-byte form.
     let lo = lower_im("var k = [10u64, 20u64, 30u64]\nvar r = k[1]\nreturn (r as u64) as bytes");
-    let mut t32 = Vec::new();
-    for v in [10u32, 20, 30] {
-        t32.extend_from_slice(&v.to_le_bytes());
-    }
     let mut t64 = Vec::new();
     for v in [10u64, 20, 30] {
         t64.extend_from_slice(&v.to_le_bytes());
     }
     assert!(
-        contains_seq(&lo.pool, &t32),
-        "u32 rodata table missing from pool: {:?}",
+        contains_seq(&lo.pool, &t64),
+        "u64 rodata table missing from pool: {:?}",
         lo.pool
     );
+    // u32 elements keep the 4-byte-stride form
+    let lo32 = lower_im("var k = [10u32, 20u32, 30u32]\nvar r = k[1]\nreturn (r as u64) as bytes");
+    let mut t32 = Vec::new();
+    for v in [10u32, 20, 30] {
+        t32.extend_from_slice(&v.to_le_bytes());
+    }
     assert!(
-        !contains_seq(&lo.pool, &t64),
-        "all-u32 table must take the 4-byte packing: {:?}",
-        lo.pool
+        contains_seq(&lo32.pool, &t32),
+        "u32 rodata table missing from pool: {:?}",
+        lo32.pool
     );
-    // the u32 boundary: 2^32-1 packs to 4B, 2^32 needs the u64 form
-    let lob = lower_im("var k = [4294967295u64]\nvar r = k[0]\nreturn (r as u64) as bytes");
-    assert_eq!(lob.pool.len(), 4, "max-u32 table packs 4B: {:?}", lob.pool);
+    // the u32/u64 boundary: a max-u32 literal table is 4B per element,
+    // 2^32 forces the u64 element width (8B)
+    let lob = lower_im("var k = [4294967295u32]\nvar r = k[0]\nreturn (r as u64) as bytes");
+    assert_eq!(lob.pool.len(), 4, "max-u32 element packs 4B: {:?}", lob.pool);
     let lob2 = lower_im("var k = [4294967296u64]\nvar r = k[0]\nreturn (r as u64) as bytes");
-    assert_eq!(lob2.pool.len(), 8, "2^32 table keeps 8B: {:?}", lob2.pool);
+    assert_eq!(lob2.pool.len(), 8, "2^32 element keeps 8B: {:?}", lob2.pool);
     // a table with one wide value keeps the u64 stride throughout
     let lo2 = lower_im(
         "var k = [10u64, 4294967296u64, 30u64]\nvar r = k[1]\nreturn (r as u64) as bytes",
@@ -960,4 +869,546 @@ fn l25_append_may_nil_value_compile_reject() {
         "var q = 1u64\nif q == 1u64 { var n = 5u64 }\nvar l = []\nappend(l, n)\nreturn ((l[0] + 1u64)) as bytes",
         "APPEND",
     );
+}
+
+/* ================================================================== */
+/* Section 4: B2 task 4 — per-slot element widths + capacity path.     */
+/*                                                                     */
+/* Each list slot fixes ONE element width (the first store fixes it,   */
+/* every later store must fit it); the element block stride, the load/ */
+/* store instructions, the rodata table form, the arithmetic width of  */
+/* compound assignment and the byte-width cast faces all follow it.    */
+/* The block budget is LIST_BLOCK_MAX = 1024B, so the element-count    */
+/* capacity is 1024/step: 128 for u64 (the historical D2 form, byte    */
+/* for byte), 256 for u32, 512 for u16, 1024 for u8.                   */
+/* ================================================================== */
+
+#[test]
+fn t4_width_cast_faces_agree() {
+    // the element's own width IS its `as bytes` face: u8 → 1 byte BE,
+    // u16 → 2, u32 → 4 (the pre-task-4 uniform-u64 shape gave 8 for all
+    // — the pinned ITEMGET=64 deviation this task eliminates)
+    let b8 = "var a = [7u8, 200u8]\n\
+             var i = (byte(data, 0) as u64) % 2u64\n\
+             return (a[i] as bytes)";
+    agree4(b8, &inputs_first_byte());
+    let b16 = "var a = [5u16, 4660u16]\n\
+              var i = (byte(data, 0) as u64) % 2u64\n\
+              return (a[i] as bytes)";
+    agree4(b16, &inputs_first_byte());
+    let b32 = "var a = [1u32, 3735928559u32]\n\
+              var i = (byte(data, 0) as u64) % 2u64\n\
+              return (a[i] as bytes)";
+    agree4(b32, &inputs_first_byte());
+}
+
+#[test]
+fn t4_width_arithmetic_faces() {
+    // u8 elements add at the u8 common width: 100+100 fits, 200+100
+    // overflows and faults Arithmetic(90) — exactly the interpreter's
+    // width-8 add face (a uniform-u64 block would have wrapped at 2^64
+    // and returned 300 instead)
+    let b = "var a = [200u8, 100u8]\n\
+            var i = (byte(data, 0) as u64) % 2u64\n\
+            var j = (i + 1u64) % 2u64\n\
+            return ((a[i] + a[j]) as u64) as bytes";
+    agree4(b, &inputs_first_byte());
+    // the widened read face: cast to u64 first, the add runs at 64
+    let b2 = "var a = [200u8, 100u8]\n\
+             var i = (byte(data, 0) as u64) % 2u64\n\
+             var j = (i + 1u64) % 2u64\n\
+             return (((a[i] as u64) + (a[j] as u64)) as u64) as bytes";
+    agree4(b2, &inputs_first_byte());
+}
+
+#[test]
+fn t4_mixed_width_stores_reject() {
+    // pack: element widths mix (first fixes, later must match)
+    rv64_must_reject(
+        "var k = [1u8, 2u32]\nreturn (0u64) as bytes",
+        "mix element widths",
+    );
+    // append wider than the slot's stride
+    rv64_must_reject(
+        "var a = [1u8]\nappend(a, 2u32)\nreturn (0u64) as bytes",
+        "would mix element widths",
+    );
+    // append narrower than the slot's stride: the interpreter keeps
+    // per-element widths (a u8 element among u64s), the fixed-stride
+    // block cannot — the narrower store's later byte-width cast face
+    // (1B vs the slot's 8B) would diverge, so it rejects too
+    rv64_must_reject(
+        "var a = [1u64]\nappend(a, 2u8)\nreturn (0u64) as bytes",
+        "would mix element widths",
+    );
+    interp_accepts("var a = [1u64]\nappend(a, 2u8)\nreturn (0u64) as bytes", true);
+    // itemset: same face
+    rv64_must_reject(
+        "var a = [1u8, 2u8]\na[0] = 3u64\nreturn (0u64) as bytes",
+        "would mix element widths",
+    );
+}
+
+#[test]
+fn t4_bool_element_reject() {
+    // a bool element has no static uint width (width 1 < 8): the
+    // interpreter stores it, the fixed-stride block cannot
+    rv64_must_reject(
+        "var t = 1u64 == 1u64\nvar k = [t]\nreturn (0u64) as bytes",
+        "no static uint width",
+    );
+    interp_accepts(
+        "var t = 1u64 == 1u64\nvar k = [t]\nreturn (length(k) as u64) as bytes",
+        true,
+    );
+}
+
+#[test]
+fn t4_narrow_growable_agree() {
+    // a u8-element growable list: appends, clears, re-appends and reads
+    // at the 1-byte stride; the byte-width cast face travels through
+    let b = "var a = []\n\
+            var i = 0u64\n\
+            while i < 8u64 {\n\
+            append(a, (i * 40u64) as u8)\n\
+            i += 1u64\n\
+            }\n\
+            clear(a)\n\
+            append(a, 240u8)\n\
+            append(a, 15u8)\n\
+            var i2 = (byte(data, 0) as u64) % 2u64\n\
+            var r = (a[i2] as bytes)\n\
+            return r";
+    agree4(b, &inputs_first_byte());
+}
+
+#[test]
+fn t4_compound_width_faces() {
+    // u8 element += u8 value: the arithmetic runs at the element width —
+    // 100+100 fits, 200+100 faults 90 (a uniform-u64 block would have
+    // returned 300)
+    let b = "var a = [200u8, 100u8]\n\
+            var i = (byte(data, 0) as u64) % 2u64\n\
+            a[i] += 100u8\n\
+            return (0u64) as bytes";
+    agree4(b, &inputs_first_byte());
+    // compound value NARROWER than the element: accepted — the widened
+    // result stays at the slot's width, the byte-width faces are
+    // unchanged (pinned task-4 decision)
+    let b2 = "var a = [1u64, 2u64]\n\
+             var i = (byte(data, 0) as u64) % 2u64\n\
+             a[i] += 1u8\n\
+             return (((a[0] as u64) + (a[1] as u64)) as u64) as bytes";
+    agree4(b2, &inputs_first_byte());
+    // compound value WIDER than the element: the widened result cannot
+    // fit the fixed stride — reject
+    rv64_must_reject(
+        "var a = [1u8, 2u8]\na[0] += 1u64\nreturn (0u64) as bytes",
+        "exceeds the slot's fixed",
+    );
+}
+
+#[test]
+fn t4_itemcat_narrow_elements() {
+    // item_concat splices each element at its own width: a u8 list of
+    // [1,2,3] is the 3-byte string 01 02 03
+    let b = "var a = [1u8, 2u8, 3u8]\n\
+            return item_concat(a)";
+    agree4(b, &[vec![0u8; 4]]);
+    let b2 = "var a = [1u32, 2u32]\n\
+             return item_concat(a)";
+    agree4(b2, &[vec![0u8; 4]]);
+}
+
+#[test]
+fn t4_pack_capacity_follows_element_width() {
+    // 128 u8 elements: within BOTH budgets (interpreter compo_length=128,
+    // kernel block 1024B/1B) — four-way agreement holds
+    let mut elems = String::new();
+    for i in 0..128 {
+        elems.push_str(&format!("{}u8, ", i % 256));
+    }
+    let body = format!(
+        "var k = [{elems}]\nvar r = (k[127] as u64) + (k[0] as u64)\nreturn (r as u64) as bytes"
+    );
+    agree4(&body, &[vec![0u8; 4]]);
+
+    // 1024 u8 elements: the kernel block takes them (1024 × 1B = the
+    // whole budget); the interpreter's compo_length=128 budget faults 40
+    // — a CAP-face difference, single factor: same body, same widths,
+    // same semantics, only the element budget differs (the interpreter's
+    // cap is its SpaceCap::compo_length DEFAULT; the kernel's budget is
+    // LIST_BLOCK_MAX / element-step). Census: one-sided pin.
+    let mut big = String::new();
+    for i in 0..1024 {
+        big.push_str(&format!("{}u8, ", i % 256));
+    }
+    let body_big = format!("var k = [{big}]\nvar r = (k[1023] as u64) + (k[0] as u64)\nreturn (r as u64) as bytes");
+    let rv = Rv64::try_build(&body_big)
+        .unwrap_or_else(|e| panic!("rv64 must build the 1024×1B fill: {e}"));
+    let it = Interp::try_build(&body_big)
+        .unwrap_or_else(|e| panic!("interp must build: {e}"));
+    let want = it.run(&[0u8; 4]).map_err(|f| f.code as u64);
+    // the interpreter face here is OutOfStack(32): a 1024-element PACKLIST
+    // value form pushes every element before packing (its stack budget
+    // ends the run) — still a budget face, same single factor: only the
+    // element budgets differ
+    assert_eq!(want, Err(32), "interpreter stack budget face");
+    for (mode, got) in rv.run(&[0u8; 4]) {
+        assert_eq!(
+            got,
+            Ok((255u64).to_be_bytes().to_vec()),
+            "mode {mode:?} on the 1024×1B fill"
+        );
+    }
+
+    // 1025 u8 elements: over the block budget — compile reject
+    let mut over = String::new();
+    for i in 0..1025 {
+        over.push_str(&format!("{}u8, ", i % 256));
+    }
+    let body_over = format!("var k = [{over}]\nreturn (0u64) as bytes");
+    rv64_must_reject(&body_over, "1025 × 1B elements exceed");
+}
+
+#[test]
+fn t4_u8_capacity_over_interpreter_cap() {
+    // 200 u8 APPENDS: the kernel's 1024-element u8 capacity admits them;
+    // the interpreter's compo_length=128 budget faults 40 on append 129
+    // — the same single-factor cap-face difference as t4_pack (the
+    // 128×8B D2 form is preserved for u64 slots, pinned by l8)
+    let body = "var a = []\n\
+               var i = 0u64\n\
+               while i < 200u64 {\n\
+               append(a, i as u8)\n\
+               i += 1u64\n\
+               }\n\
+               return ((a[199] as u64) + (length(a) as u64)) as bytes";
+    let rv = Rv64::try_build(body).unwrap_or_else(|e| panic!("rv64 must build: {e}"));
+    let it = Interp::try_build(body).unwrap_or_else(|e| panic!("interp must build: {e}"));
+    let want = it.run(&[0u8; 4]).map_err(|f| f.code as u64);
+    assert_eq!(want, Err(40), "interpreter compo_length=128 cap face");
+    for (mode, got) in rv.run(&[0u8; 4]) {
+        assert_eq!(
+            got,
+            Ok(399u64.to_be_bytes().to_vec()),
+            "mode {mode:?} on the 200-append u8 list"
+        );
+    }
+}
+
+#[test]
+fn t4_determinism_narrow_slots() {
+    // cross-mode determinism on narrow-slot bodies (the three modes share
+    // the same ew plan; the emission differs, the bytes must not)
+    let b = "var a = [9u16, 300u16, 7u16]\n\
+            var i = (byte(data, 0) as u64) % 3u64\n\
+            a[i] += 1u8\n\
+            var r = (a[0] as u64) + (a[1] as u64) + (a[2] as u64)\n\
+            return (r as u64) as bytes";
+    agree4(b, &inputs_first_byte());
+}
+
+/* ================================================================== */
+/* Section 6: T19 — u128 list elements (16B stride).                   */
+/*                                                                     */
+/* The per-slot element-width table now admits 128: every element is   */
+/* a (lo, hi) pair stored as two consecutive little-endian words at    */
+/* a 16-byte stride; the element-count budget is LIST_BLOCK_MAX/16 =   */
+/* 64 (the interpreter's own cap is compo_length=128 — appends 65..128 */
+/* are a kernel-BUDGET face, the same single-factor budget divergence  */
+/* the u8 capacity test above documents in reverse). Everything else   */
+/* (fault codes, check order, byte-width faces) must agree exactly.    */
+/* ================================================================== */
+
+/// Big-output four-way agreement (itemcat totals past the default 16B
+/// harness budget — compare semantics, not budget sizes; the same
+/// builder rv64_itemset_bufset.rs uses).
+fn agree4_big_t19(body: &str, inputs: &[Vec<u8>]) {
+    let rv = c3lib_rv64_out(body, 1280, 0x7000);
+    let it = Interp::try_build(body).unwrap_or_else(|e| panic!("interp must build: {body}\n{e}"));
+    for input in inputs {
+        let want = interp_obs(&it, input);
+        for (mode, got) in rv.run(input) {
+            assert_eq!(
+                got, want,
+                "mode {mode:?} diverged on input {input:?} of body:\n{body}"
+            );
+        }
+    }
+}
+
+fn c3lib_rv64_out(body: &str, output_max: u16, arena: u64) -> Rv64 {
+    Rv64::try_build_out(body, output_max, arena)
+        .unwrap_or_else(|e| panic!("rv64 must build: {body}\n{e}"))
+}
+
+const MAX128: &str = "340282366920938463463374607431768211455";
+
+#[test]
+fn t19_rodata_table_const_and_var_index() {
+    // all-literal u128 table (rodata class): 16B-stride loads, const and
+    // variable index, the 16-byte `as bytes` face (2^64 and 2^100 exercise
+    // nonzero high halves; every sum stays under 2^128)
+    let body = "var k = [10u128, 18446744073709551616u128, \
+                1267650600228229401496703205376u128]\n\
+                var i = (byte(data, 0) as u64) % 3u64\n\
+                var r = k[i] + k[0] + k[2]\n\
+                return (r as bytes)";
+    agree4(body, &inputs_first_byte());
+}
+
+#[test]
+fn t19_frame_static_computed_elements() {
+    // computed u128 elements → frame block (N×16B), static length
+    let body = "var k = [(byte(data, 0) as u128) * 3u128, 20u128, (byte(data, 1) as u128)]\n\
+                var i = (byte(data, 0) as u64) % 3u64\n\
+                var r = k[i] + k[1]\n\
+                return (r as bytes)";
+    agree4(body, &inputs_first_byte());
+}
+
+#[test]
+fn t19_newlist_append_itemset_reads() {
+    // empty creation, u128 appends in a loop, in-place item_set, const +
+    // var index reads (the u128 payout-list shape)
+    let body = "var w = []\n\
+                var i = 0u64\n\
+                while i < 4u64 {\n\
+                append(w, (i as u128) * 18446744073709551615u128)\n\
+                i += 1u64\n\
+                }\n\
+                w[2] = 12345678901234567890123456789012345678u128\n\
+                var r = w[(byte(data, 0) as u64) % 4u64] + w[3] + w[0]\n\
+                return (r as bytes)";
+    agree4(body, &inputs_first_byte());
+}
+
+#[test]
+fn t19_literal_then_append_and_clear() {
+    // all-literal u128 creation + later append/clear upgrades the storage
+    // class to growable (init fill + len shadow)
+    let body = "var w = [5u128, 6u128]\n\
+                append(w, 7u128)\n\
+                append(w, (byte(data, 0) as u128) % 9u128)\n\
+                var r = w[2] + w[0] + w[3]\n\
+                return (r as bytes)";
+    agree4(body, &inputs_first_byte());
+    let body2 = format!(
+        "var w = [5u128, 6u128]\n\
+         clear(w)\n\
+         append(w, {MAX128}u128)\n\
+         return (w[0] as bytes)"
+    );
+    agree4(&body2, &[vec![0u8; 4]]);
+}
+
+#[test]
+fn t19_compound_addsubmul_faces() {
+    // `l[i] += v` at u128: checked add/sub/mul with the interpreter's
+    // Arithmetic(90) face; a u64 rhs zero-extends to the common width
+    let b = "var a = [200u128, {MAX128}u128]\n\
+            var i = (byte(data, 0) as u64) % 2u64\n\
+            a[i] += 100u128\n\
+            return (a[0] as bytes)";
+    let b = b.replace("{MAX128}", MAX128);
+    agree4(&b, &inputs_first_byte()); // a[1] += 100 overflows → 90
+    let b2 = "var a = [200u128, 100u128]\n\
+             var i = (byte(data, 0) as u64) % 2u64\n\
+             a[i] += 5u64\n\
+             a[i] -= 3u128\n\
+             return ((a[0] as u64) + (a[1] as u64)) as bytes";
+    agree4(b2, &inputs_first_byte());
+    let b3 = "var a = [5u128, 3u128]\n\
+             a[0] *= 4u128\n\
+             a[1] *= 0u128\n\
+             return ((a[0] as u64) + (a[1] as u64)) as bytes";
+    agree4(b3, &[vec![0u8; 4]]);
+    // 2^64 * 2^64 = 2^128 overflows the checked u128 mul → 90
+    let b3o = "var a = [18446744073709551616u128]\n\
+              a[0] *= 18446744073709551616u128\n\
+              return (0u64) as bytes";
+    agree4(b3o, &[vec![0u8; 4]]);
+    let b4 = "var a = [1u128]\n\
+             a[0] -= 2u128\n\
+             return (0u64) as bytes";
+    agree4(b4, &[vec![0u8; 4]]); // underflow → 90
+}
+
+#[test]
+fn t19_compound_div_faces() {
+    // `l[i] /= v`: the shared soft-divmod routine; divide-by-zero → 90;
+    // a u64 divisor zero-extends (common width 128)
+    let b = "var a = [100u128, 99u128]\n\
+            var i = (byte(data, 0) as u64) % 2u64\n\
+            a[i] /= 7u128\n\
+            return ((a[0] as u64) + (a[1] as u64)) as bytes";
+    agree4(b, &inputs_first_byte());
+    let b2 = "var a = [18446744073709551617u128]\n\
+             a[0] /= 18446744073709551616u128\n\
+             return (a[0] as bytes)";
+    agree4(b2, &[vec![0u8; 4]]);
+    let b3 = "var a = [100u128]\n\
+             a[0] /= 0u128\n\
+             return (0u64) as bytes";
+    agree4(b3, &[vec![0u8; 4]]); // 90
+    let b4 = "var a = [100u128]\n\
+             a[0] /= 7u64\n\
+             return (a[0] as bytes)";
+    agree4(b4, &[vec![0u8; 4]]);
+}
+
+#[test]
+fn t19_compound_may_nil_value_guard() {
+    // a may-Nil compound value faults CastFail(71) where the interpreter
+    // converts the ADD operand (Nil) — AFTER the itemget index checks;
+    // the pair's Nil tag rides its low half
+    let body = "var q = 0u64\n\
+                if q == 1u64 {\n\
+                var n = 5u128\n\
+                }\n\
+                var a = [1u128]\n\
+                a[0] += n\n\
+                return (0u64) as bytes";
+    agree4(body, &[vec![0u8; 4], vec![1u8; 4]]);
+}
+
+#[test]
+fn t19_itemcat_be_splice() {
+    // every u128 element contributes its 16 big-endian extract_bytes bytes
+    let body = "var l = [1u128, 2u128]\n\
+                var r = item_concat(l)\n\
+                return r";
+    let it = Interp::try_build(body).unwrap();
+    let want = it.run(&[0u8; 4]).unwrap();
+    let mut expect = Vec::new();
+    for v in [1u128, 2] {
+        expect.extend_from_slice(&v.to_be_bytes());
+    }
+    assert_eq!(want, expect, "interpreter splices 16 BE bytes per element");
+    agree4_big_t19(body, &[vec![0u8; 4]]);
+    // growable u128 elements splice in append order
+    let body2 = "var w = []\n\
+                 var i = 0u64\n\
+                 while i < 3u64 {\n\
+                 append(w, (i as u128) + 1u128)\n\
+                 i += 1u64\n\
+                 }\n\
+                 var r = item_concat(w)\n\
+                 return r";
+    agree4_big_t19(body2, &[vec![0u8; 4]]);
+}
+
+#[test]
+fn t19_fault_faces_match() {
+    // variable index ≥ len → 85; may-Nil index → 72; `as u64` narrowing of
+    // a >u64::MAX element → 71 — all in the interpreter's check order
+    let b = "var a = [1u128, 2u128, 3u128]\n\
+            var i = (byte(data, 0) as u64)\n\
+            return (a[i] as bytes)";
+    agree4(b, &inputs_first_byte()); // i < 3 reads; i ≥ 3 → 85
+    let b2 = "var q = 0u64\n\
+             if q == 1u64 {\n\
+             var n = 1u64\n\
+             }\n\
+             var a = [1u128]\n\
+             return (a[n] as bytes)";
+    agree4(b2, &[vec![0u8; 4], vec![1u8; 4]]); // Nil index → 72
+    let b3 = "var a = [{MAX128}u128]\n\
+             return (a[0] as u64) as bytes";
+    let b3 = b3.replace("{MAX128}", MAX128);
+    agree4(&b3, &[vec![0u8; 4]]); // 71
+    let b4 = "var a = [1u128, 2u128]\n\
+             a[2] = 5u128\n\
+             return (0u64) as bytes";
+    agree4(&b4, &[vec![0u8; 4]]); // idx == len → 85
+}
+
+#[test]
+fn t19_capacity_faces() {
+    // 64 u128 appends fit the block budget exactly (64 × 16B = 1024B; ==
+    // is legal); both engines return length 64
+    let b = "var w = []\n\
+            var i = 0u64\n\
+            while i < 64u64 {\n\
+            append(w, i as u128)\n\
+            i += 1u64\n\
+            }\n\
+            return ((length(w) as u64) + (w[63] as u64)) as bytes";
+    agree4(b, &[vec![0u8; 4]]);
+    // 129 appends: the kernel faults 40 at the 65th (its 64-element
+    // budget), the interpreter at the 129th (compo_length=128) — the
+    // observable fault code agrees on every engine
+    let b2 = "var w = []\n\
+            var i = 0u64\n\
+            while i < 129u64 {\n\
+            append(w, i as u128)\n\
+            i += 1u64\n\
+            }\n\
+            return ((length(w) as u64)) as bytes";
+    agree4(b2, &[vec![0u8; 4]]);
+    // has_key/length folds over a u128 list
+    let b3 = "var w = [7u128, 8u128]\n\
+            var i = (byte(data, 0) as u64) % 3u64\n\
+            return ((length(w) as u64) + ((has_key(w, i)) as u64)) as bytes";
+    agree4(b3, &inputs_first_byte());
+}
+
+#[test]
+fn t19_budget_compile_rejects() {
+    // 65 u128 literal elements exceed the 1024B block budget — B-family
+    // compile reject (the interpreter admits it: 65 ≤ compo_length 128)
+    let mut elems = String::new();
+    for i in 0..65u64 {
+        elems.push_str(&format!("{i}u128, "));
+    }
+    let body = format!("var k = [{elems}]\nreturn (0u64) as bytes");
+    rv64_must_reject(&body, "65 × 16B elements exceed");
+    interp_accepts(&body, false);
+    // constant OOB on the static classes stays a fail-fast reject (the
+    // plain assert style l22 uses — this reject is not the subset text)
+    let err = Rv64::try_build("var a = [1u128, 2u128]\nreturn (a[2] as bytes)")
+        .err()
+        .unwrap_or_else(|| panic!("rv64 must reject the const OOB read"))
+        .to_string();
+    assert!(err.contains("out of bounds"), "{err}");
+    // width mixes inside one list stay rejected (flat block, one stride):
+    // covered in rv64_u128_arith.rs t3_u128_list_element_mixed_width_rejects
+}
+
+#[test]
+fn t19_element_into_u128_arith_and_compares() {
+    // a u128 ITEMGET flows into the existing u128 pair ecosystem: mixed
+    // comparisons, arithmetic with u128 operands, narrowing casts
+    let b = "var a = [18446744073709551616u128, 5u128]\n\
+            var x = (byte(data, 0) as u128)\n\
+            if x == a[0] {\n\
+            return (a[1] as bytes)\n\
+            }\n\
+            return ((a[0] + a[1]) as bytes)";
+    agree4(b, &inputs_first_byte());
+    let b2 = "var a = [7u128]\n\
+             var s = a[0] * a[0]\n\
+             var t = s / 4u128\n\
+             var u = t % 9u128\n\
+             return (u as bytes)";
+    agree4(b2, &[vec![0u8; 4]]);
+    let b3 = "var a = [7u128]\n\
+             var b = [2u64]\n\
+             return ((a[0] as u64) + b[0]) as bytes";
+    agree4(b3, &[vec![0u8; 4]]);
+    // a u128 ITEMGET pair as the rhs of a u128 slot's XOP compound
+    let b4 = "var l = [3u128, 4u128]\n\
+             var s = 10u128\n\
+             var i = (byte(data, 0) as u64) % 2u64\n\
+             s += l[i]\n\
+             s *= 2u128\n\
+             return (s as bytes)";
+    agree4(b4, &inputs_first_byte());
+    // a u128 ITEMGET as a choose arm value (mixed u128/u64 arms widen)
+    let b5 = "var l = [3u128]\n\
+             var c = (byte(data, 0) % 2u64)\n\
+             var r = (if (c == 0u64) { l[0] } else { 5u128 })\n\
+             return (r as bytes)";
+    agree4(b5, &inputs_first_byte());
 }

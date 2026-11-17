@@ -54,6 +54,11 @@ pub mod fitshc;
 pub use rt::{
     Bytecode, CodeConf, CodePkg, CodeType, ItrErrCode, KwTy, Token, calc_func_sign,
 };
+// Pure-compute subset extension (T9): the XLG mark codec — the fitsh
+// frontend never emits XLG, so the rv64 differential tests build the node
+// by hand and need the canonical (op, idx) -> mark encoding.
+#[cfg(feature = "execute")]
+pub use rt::{encode_local_logic_mark, LxLg};
 // Execution engine: compiled only with `execute`. Codec stays on
 // `action` / `contract` / `rt` (wire types) / `value` (`ContractAddress`).
 #[cfg(feature = "execute")]

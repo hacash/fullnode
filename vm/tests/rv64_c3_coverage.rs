@@ -251,7 +251,9 @@ const SITE_ITEMS: &[&str] = &[
 /// ⑥ error paths: frontend rejects (fe:), rv64 compile rejects (rx:),
 /// runtime budget (rt:). Sources: c2_negative_frontend_rejects (17 incl.
 /// the C3 u64-literal-overflow addition), c2_negative_rv64_compile_rejects
-/// (19 incl. the C3 u128 family + choose-mixed-arm), budget row.
+/// (task 3/B3 shrank the u128 family; T5/T6 removed the last four u128 rows
+/// — the mixed-width folds and the u128 shift now lower and agree in
+/// rv64_u128_arith.rs), budget row.
 const FRONTEND_ERR_ITEMS: [&str; 17] = [
     "fe:truncated-var",
     "fe:var-name-integer",
@@ -272,39 +274,32 @@ const FRONTEND_ERR_ITEMS: [&str; 17] = [
     "fe:macro-unterminated-invocation",
 ];
 
-const RV64_ERR_ITEMS: [&str; 28] = [
+// T12 (pure-compute subset extension): rx:type-id left the negative
+// channel — type_id/is now lower and agree (vm/tests/rv64_misc_ops.rs)
+const RV64_ERR_ITEMS: [&str; 9] = [
     "rx:depth-9",
-    "rx:u128-cast",
-    "rx:u128-fold-add",
-    "rx:u128-fold-mul",
-    "rx:u128-fold-pow",
-    "rx:u128-nested-arith",
-    "rx:u128-compare",
-    "rx:u128-literal-suffix",
-    "rx:u128-shift",
-    "rx:mul-mod",
-    "rx:add-mod",
-    "rx:mul-add",
-    "rx:mul-div",
-    "rx:type-id",
+    // task 3/B3: the four u128 agreement faces (cast / nested-arith /
+    // compare / literal-suffix) left the negative channel; T2 removed
+    // rx:mul-mod / rx:add-mod (add_mod/mul_mod lower at every width up to
+    // 128, rv64_modarith.rs); T5/T6 removed the mixed-width folds and the
+    // u128 shift — all lower and agree now (rv64_u128_arith.rs)
+    // T3/T4 removed rx:mul-add / rx:mul-div — mul_add/mul_sub lower at every
+    // width through the u256 library (rv64_rowc.rs) and mul_div/mul_div_up
+    // lower at the u64/u128 widths too (rv64_muldiv.rs)
     "rx:log-op",
     "rx:nil-value",
-    // P3-V2IMPL (A-25 M1): in-shape list literals lower now; the single
-    // rx:list-literal pin was re-semanticized as the escape family (each
-    // row = one shape where a list value flows out of the admitted ops,
-    // rv64 rejects naming the consuming opcode, interpreter asserted)
-    "rx:list-literal-alias",
-    "rx:list-literal-rebind",
-    "rx:list-literal-nested",
-    "rx:list-literal-eq",
-    "rx:list-literal-ordered-cmp",
+    // P3-V2IMPL (A-25 M1): in-shape list literals lower now. T17 flipped
+    // the whole escape family — rx:list-literal-alias / -rebind / -nested
+    // / -eq / -ordered-cmp / -cast / -xop / -choose-arm all compile now
+    // (their differentials: rv64_t17_list_values.rs; removed above, so the
+    // rv64 err-item count drops 17 → 9 and DENOM_LEN follows).
     "rx:list-literal-return",
-    "rx:list-literal-cast",
-    "rx:list-literal-xop",
-    "rx:list-literal-choose-arm",
     "rx:list-itemget-bytes-receiver",
     "rx:bytecode-splice",
     "rx:choose-mixed-arm",
+    // T13: the deliberately kept CTO fail-fast rejects
+    "rx:cast-int-as-address",
+    "rx:address-ordered-cmp",
 ];
 
 const RUNTIME_ERR_ITEMS: [&str; 2] = ["rt:budget-exhaustion", "rx:mirror-overflow"];
@@ -372,7 +367,25 @@ fn denom_items() -> Vec<&'static str> {
 }
 
 // P3-PAIRPKG: guards 36→38 (g:pair-oob-85 / g:pair-idx-72), sites += s:pair-fuse-sd (SITE_ITEMS.len())
-pub const DENOM_LEN: usize = 76 * 3 + 38 + 27 + SITE_ITEMS.len() + 17 + 28 + 2;
+// task 3: rx err items 28→24 — the four u128 reject faces (u128-cast /
+// nested-arith / compare / literal-suffix) now LOWER and agree four-way in
+// rv64_u128_arith.rs, so they left the reject-universe denominator
+// T2: rx 24→22 — rx:mul-mod / rx:add-mod left the reject universe (add_mod
+// and mul_mod lower at every width up to 128, rv64_modarith.rs)
+// T5/T6: 22→18 — the mixed-width u128 folds and the u128 shift now LOWER
+// and agree four-way in rv64_u128_arith.rs, so they left the reject universe
+// T12: 18→17 — rx:type-id left the reject universe (type_id/is lower and
+// agree now, vm/tests/rv64_misc_ops.rs)
+// T3/T4: 17→15 — rx:mul-add / rx:mul-div left the reject universe
+// (mul_add/mul_sub lower at every width via the u256 library, rv64_rowc.rs;
+// mul_div/mul_div_up extend to the u64/u128 widths, rv64_muldiv.rs)
+// T13: 15→17 — two NEW reject pins (rx:cast-int-as-address /
+// rx:address-ordered-cmp): int→`as address` and ordered comparison on
+// bytes/address stay B-family compile rejects (interpreter faults 71/90)
+// T17: 17→9 — the eight list-literal escape rows (alias/rebind/nested/eq/
+// ordered-cmp/cast/xop/choose-arm) left the reject universe; only the ABI
+// list return and the bytes-receiver itemget stay pinned
+pub const DENOM_LEN: usize = 76 * 3 + 38 + 27 + SITE_ITEMS.len() + 17 + 9 + 2;
 
 /* ================================================================== */
 /* Section 2: detectors (IR walk, listing decode, LowerDbg, knocks).   */
@@ -1229,7 +1242,11 @@ const GUARD_PROBES: &[(&str, &str, &[u8], &[&str])] = &[
     ("g:throw-user-151", "var a = (byte(data,0) as u64)\nif (a == 3u64) { throw 7u64 }\nreturn (a) as bytes", &[3], &["AgreeUserValue"]),
     ("g:assert-abort-d3", "var a = (byte(data,0) as u64)\nassert (a == 999u64)\nreturn (a) as bytes", &[3], &["PinD3AssertAbort"]),
     ("g:shift-mask-d1", "var a = (byte(data,0) as u64)\nvar r = (a << 64u64)\nreturn (r) as bytes", &[3], &["PinD1ShiftMask"]),
-    ("g:bool-uint-d5", "var a = (byte(data,0) as u64)\nvar r = (a + (!(a == 0u64)))\nreturn (r) as bytes", &[3], &["PinD5BoolUint"]),
+    // bool-uint arithmetic is a pinned D5 deviation (interp to_uint → 71,
+    // rv64 computes 0/1): the mixed-width add leaves `r` with no static
+    // uint width, so the A2 `as bytes` gate requires the `as u64` pin
+    // (runtime verdict unchanged — the class is keyed on the interp fault)
+    ("g:bool-uint-d5", "var a = (byte(data,0) as u64)\nvar r = (a + (!(a == 0u64)))\nreturn ((r as u64)) as bytes", &[3], &["PinD5BoolUint"]),
     ("g:narrow-width-d5", "var r = (((byte(data, 0) * byte(data, 1)) + 1u8) as u64)\nreturn (r) as bytes", &[200, 200], &["PinD5NarrowWidth"]),
     ("g:and-chain-pure", "var a = (byte(data,0) as u64)\nif (a > 2u64) && (a < 200u64) { a = a + 1u64 }\nreturn (a) as bytes", &[3], &["AgreeOk", "AgreeTrap90", "AgreeTrap71"]),
     ("rt:budget-exhaustion", "var i = 0u64\nwhile i == 0u64 { i = 0u64 }\nreturn (i) as bytes", &IN1, &["Budget"]),
@@ -1311,7 +1328,7 @@ fn c3_denominator_pinned() {
     assert_eq!(ops, 76 * 3);
     assert_eq!(guards, GUARD_CLASSES.len());
     assert_eq!(tiers, 27);
-    assert_eq!(errs, 17 + 28 + 2);
+    assert_eq!(errs, 17 + 9 + 2);
     for (id, arg) in UNREACHABLE.iter() {
         assert!(set.contains(id), "unreachable id {id} not in denominator");
         assert!(arg.len() > 40, "unreachable {id} needs an argument");

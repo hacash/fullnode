@@ -1245,52 +1245,59 @@ mod entry_semantics_tests {
         );
     }
 
-    /// F2: an ITEMSET / compound item assignment used as a ternary (CHOOSE)
-    /// condition is parenthesized by the decompiler and recompiles exactly.
-    /// The assignment returns the container, so both forms fail the CHOOSE
-    /// condition cast with CastFail 71.
+    /// F2: a plain ITEMSET used as a ternary (CHOOSE) condition is parenthesized
+    /// by the decompiler and recompiles exactly. ITEMSET returns the container
+    /// (F10), so the condition fails the bool cast with CastFail 71. Compound
+    /// item assignment is a statement (no return value), so using it as a
+    /// condition or operand is a compile error instead — see
+    /// `compound_item_assignment_is_a_statement`.
     #[test]
-    fn itemset_and_compound_condition_decompile_with_parentheses() {
-        for (source, condition) in [
-            (
-                "var l = [1, 2]\nreturn item_set(l, 0, 9) ? 10 : 20",
-                "(l[0] = 9) ?",
-            ),
-            (
-                "var l = [1, 2]\nreturn (l[0] += 1) ? 10 : 20",
-                "(l[0] += 1) ?",
-            ),
-            (
-                "var l = [1, 2]\nreturn (l[0] += 1) + 2",
-                "(l[0] += 1) +",
-            ),
+    fn itemset_condition_decompiles_with_parentheses() {
+        let source = "var l = [1, 2]\nreturn item_set(l, 0, 9) ? 10 : 20";
+        let codes = crate::lang::lang_to_bytecode(source).expect(source);
+        let (ircode, smap) = crate::lang::lang_to_ircode_with_sourcemap(source).expect(source);
+        let printed = crate::lang::format_ircode_to_lang(&ircode, Some(&smap)).expect(source);
+        assert!(
+            printed.contains("(l[0] = 9) ?"),
+            "{source} => decompiled condition must be parenthesized: {printed}"
+        );
+        let recompiled =
+            crate::lang::lang_to_bytecode(&printed).unwrap_or_else(|e| panic!("{printed}: {e}"));
+        assert_eq!(
+            recompiled, codes,
+            "{source} => decompile/recompile changed the bytecode:\n{printed}"
+        );
+        let original_err = fitsh_opcode_run(1, source).unwrap_err();
+        let recompiled_err = fitsh_opcode_run(1, &printed).unwrap_err();
+        assert_eq!(original_err.0, ItrErrCode::CastFail, "{source}: {original_err}");
+        assert_eq!(
+            original_err.0, recompiled_err.0,
+            "{source} => original and recompiled must fail alike: {recompiled_err}"
+        );
+    }
+
+    /// Compound item assignment is a statement like the local `x += v` (`XOP`
+    /// leaves no value): it yields nothing, so expression contexts reject it at
+    /// compile time rather than returning the receiver container at runtime.
+    #[test]
+    fn compound_item_assignment_is_a_statement() {
+        for source in [
+            "var l = [1, 2]\nreturn l[0] += 1",
+            "var l = [1, 2]\nreturn (l[0] += 1) ? 10 : 20",
+            "var l = [1, 2]\nreturn (l[0] += 1) + 2",
+            "var l = [1, 2]\nvar x = (l[0] += 5)",
         ] {
-            let codes = crate::lang::lang_to_bytecode(source).expect(source);
-            let (ircode, smap) =
-                crate::lang::lang_to_ircode_with_sourcemap(source).expect(source);
-            let printed = crate::lang::format_ircode_to_lang(&ircode, Some(&smap)).expect(source);
             assert!(
-                printed.contains(condition),
-                "{source} => decompiled condition must be parenthesized: {printed}"
-            );
-            let recompiled =
-                crate::lang::lang_to_bytecode(&printed).unwrap_or_else(|e| panic!("{printed}: {e}"));
-            assert_eq!(
-                recompiled, codes,
-                "{source} => decompile/recompile changed the bytecode:\n{printed}"
-            );
-            let original_err = fitsh_opcode_run(1, source).unwrap_err();
-            let recompiled_err = fitsh_opcode_run(1, &printed).unwrap_err();
-            assert_eq!(
-                original_err.0,
-                ItrErrCode::CastFail,
-                "{source}: {original_err}"
-            );
-            assert_eq!(
-                original_err.0, recompiled_err.0,
-                "{source} => original and recompiled must fail alike: {recompiled_err}"
+                crate::lang::lang_to_bytecode(source).is_err(),
+                "{source}: compound item assignment must not be usable as a value"
             );
         }
+        // The local compound form is rejected the same way (XOP has no retval).
+        assert!(crate::lang::lang_to_bytecode("var x = 1\nreturn x += 1").is_err());
+        // As a statement it still compiles, mutates, and round-trips.
+        let ok = "var l = [1, 2]\nl[0] += 5\nreturn l[0]";
+        let (_, v, _) = fitsh_opcode_run(1, ok).unwrap();
+        assert_eq!(v, Value::U8(6));
     }
 
     /// F6: compound item assignment is stack-only and RHS-first. The RHS may
@@ -1437,18 +1444,6 @@ mod entry_semantics_tests {
         assert_eq!(err.0, ItrErrCode::Arithmetic, "{err}");
         let err = fitsh_opcode_run(1, "var x = 250u8\nx += 10u8\nreturn x").unwrap_err();
         assert_eq!(err.0, ItrErrCode::Arithmetic, "{err}");
-    }
-
-    /// A compound item assignment in expression context returns the same
-    /// container, so writes through the result are visible on the receiver.
-    #[test]
-    fn compound_item_assignment_expression_returns_the_container() {
-        let (_, v, _) = fitsh_opcode_run(
-            1,
-            "var l = [10, 20]\nvar x = (l[0] += 5)\nx[1] = 9\nreturn l[1]",
-        )
-        .unwrap();
-        assert_eq!(v, Value::U8(9));
     }
 
     /// `+= -= *= /=` on an ITEMGET target reuse the arithmetic opcodes the

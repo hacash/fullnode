@@ -180,7 +180,7 @@ fn require_nonzero_u128(d: u128, err: impl Fn() -> ItrErr) -> VmrtRes<u128> {
 }
 
 #[inline]
-fn half_up_round_u128_threshold(div: u128) -> u128 {
+pub(crate) fn half_up_round_u128_threshold(div: u128) -> u128 {
     div - div / 2
 }
 
@@ -348,29 +348,29 @@ fn low_bits_mask(bits: u32) -> u128 {
 }
 
 #[inline(always)]
-fn mul_wide_u128(a: u128, b: u128) -> (u128, u128) {
+pub(crate) fn mul_wide_u128(a: u128, b: u128) -> (u128, u128) {
     let (lo, hi) = a.carrying_mul(b, 0);
     (hi, lo)
 }
 
-fn add_u256_u128(hi: u128, lo: u128, add: u128) -> Option<(u128, u128)> {
+pub(crate) fn add_u256_u128(hi: u128, lo: u128, add: u128) -> Option<(u128, u128)> {
     let (lo, carry) = lo.overflowing_add(add);
     Some((hi.checked_add(carry as u128)?, lo))
 }
 
-fn add_u256(ahi: u128, alo: u128, bhi: u128, blo: u128) -> Option<(u128, u128)> {
+pub(crate) fn add_u256(ahi: u128, alo: u128, bhi: u128, blo: u128) -> Option<(u128, u128)> {
     let (lo, carry) = alo.overflowing_add(blo);
     let hi = ahi.checked_add(bhi)?.checked_add(carry as u128)?;
     Some((hi, lo))
 }
 
-fn sub_u256(ahi: u128, alo: u128, bhi: u128, blo: u128) -> Option<(u128, u128)> {
+pub(crate) fn sub_u256(ahi: u128, alo: u128, bhi: u128, blo: u128) -> Option<(u128, u128)> {
     let (lo, borrow) = alo.overflowing_sub(blo);
     let hi = ahi.checked_sub(bhi)?.checked_sub(borrow as u128)?;
     Some((hi, lo))
 }
 
-fn sub_u256_u128(hi: u128, lo: u128, sub: u128) -> Option<(u128, u128)> {
+pub(crate) fn sub_u256_u128(hi: u128, lo: u128, sub: u128) -> Option<(u128, u128)> {
     sub_u256(hi, lo, 0, sub)
 }
 
@@ -411,7 +411,7 @@ fn mul_xy_addsub_z_div_u128(
     div_u256_by_u128_with_round(hi, lo, div, round, err)
 }
 
-fn div_u256_by_u128_to_u128(hi: u128, lo: u128, d: u128) -> Option<(u128, u128)> {
+pub(crate) fn div_u256_by_u128_to_u128(hi: u128, lo: u128, d: u128) -> Option<(u128, u128)> {
     if d == 0 || hi >= d {
         return None;
     }
@@ -428,7 +428,7 @@ fn div_u256_by_u128_to_u128(hi: u128, lo: u128, d: u128) -> Option<(u128, u128)>
     Some((quo, rem))
 }
 
-fn div_u256_by_u129_to_u128(
+pub(crate) fn div_u256_by_u129_to_u128(
     n_hi: u128,
     n_lo: u128,
     d_hi: u128,
@@ -504,7 +504,7 @@ fn mul_u256_u128_to_u256_checked(hi: u128, lo: u128, mul: u128) -> Option<(u128,
     Some((out_hi, lo_lo))
 }
 
-fn cmp_u256(ahi: u128, alo: u128, bhi: u128, blo: u128) -> std::cmp::Ordering {
+pub(crate) fn cmp_u256(ahi: u128, alo: u128, bhi: u128, blo: u128) -> std::cmp::Ordering {
     ahi.cmp(&bhi).then(alo.cmp(&blo))
 }
 
@@ -594,7 +594,7 @@ fn round_half_even_quot_u128(
     Ok(quo)
 }
 
-fn round_quot_u128_with_policy(
+pub(crate) fn round_quot_u128_with_policy(
     mut quo: u128,
     rem: u128,
     d: u128,
@@ -623,7 +623,7 @@ fn round_quot_u128_with_policy(
     Ok(quo)
 }
 
-fn div_u256_by_u128_with_round(
+pub(crate) fn div_u256_by_u128_with_round(
     hi: u128,
     lo: u128,
     d: u128,
@@ -634,7 +634,7 @@ fn div_u256_by_u128_with_round(
     round_quot_u128_with_policy(quo, rem, d, round, err)
 }
 
-fn div_u256_by_u129_with_round(
+pub(crate) fn div_u256_by_u129_with_round(
     hi: u128,
     lo: u128,
     d_hi: u128,

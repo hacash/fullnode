@@ -1305,10 +1305,24 @@ fn kernels_pin_and_agree() {
     // rule: only directly after an unconditional jump/trap); the sibling
     // cluster @0x634..0x7aa has NO safe boundary in its copy-reach window
     // and hacd200's windows likewise — both recorded as zero-impact, not
-    // forced; per-cluster attribution in docs.loc/rv64im/96-a25-m4b-guardtail.md).
+    // forced; per-cluster attribution in docs.loc/rv64im/96-a25-m4b-guardtail.md)
+    // -> 2930 task-1 A1 shift closure: the 3 variable-amount u64 shift sites
+    // (`1 << hv` @:56, `1u64 << li` @:152, `1 << (byte(digs,j)-48)` @:214)
+    // each replace the `andi a1, rhs, 63` mask with `srli a1, rhs, 6` +
+    // `bne -> fault_arith` (interpreter checked_shl: amount >= 64 traps
+    // 90; the mask used to wrap `<< 64` to `<< 0`): +4 B x 3 sites.
+    // -> 2950 task-1 A3 narrow-width closure (bucket-attributed):
+    // alu-imm +8, br +12, const/li +12, const/lui +4, br-zero -8,
+    // shift -8. The n-chain (`ne = n*6`, `n*8`, `ne + n*8` — all u16 in
+    // the interpreter: size() is U16) swaps its u64 checked guards
+    // (mulhu+bne / add-bltu) for u16 range checks (mul + li 65536 + bgeu),
+    // which also DISSOLVES the A19 (6,8) mul-check merge (no mulhu pair
+    // remains — see rv64_a19_guard_merge pins); the two `1 <<` u8 shift
+    // sites trade srli+bne for c.addi+bgeu+andi; the `c1x * 16` u8
+    // pow2-muls re-shape their prechecks (srli 60 -> srli 4).
     let lo_remap = lower(SCORE_SUM_FITSH, true, Rv64Mode::ImcRemap);
     assert_eq!(
-        lo_remap.stats.code_bytes, 2918,
+        lo_remap.stats.code_bytes, 2950,
         "score_sum ImcRemap baseline moved — update docs.loc/rv64im/96-a25-m4b-guardtail.md"
     );
     let lo_im = lower(SCORE_SUM_FITSH, true, Rv64Mode::Im);
@@ -1338,10 +1352,27 @@ fn kernels_pin_and_agree() {
     // no safe boundary (placement rule: only directly after an
     // unconditional jump/trap) — recorded as re-measured-to-zero, not
     // forced (attribution in docs.loc/rv64im/96-a25-m4b-guardtail.md).
+    // -> 3060 task-1 A1 shift closure: hacd200's 2 variable-amount u64
+    // shift sites (`1u64 << hv` @:66, `1u64 << li` @:164) gained the
+    // checked-amount guard (+4 B x 2; same attribution as score_sum).
+    // -> 3068 task-1 A3 narrow-width closure: diffs confined to the
+    // pos-chain region (walk 81..120): the four u8-width `c1x * 16`
+    // pow2-mul guard sites (`c15 * 16 + c13 == c14 * 16 + c16` @:55) trade
+    // the u64 high-bits precheck (`srli t, d, 60`) for the u8 precheck
+    // (`srli t, d, 4`) with a register-allocation ripple through the
+    // compare chain. The BE-2 fusion @:4 stays fused (its multiplier
+    // literal's width keeps the interpreter overflow-free), so the u16
+    // `cnt` add gains no guard.
+    // -> 3082 narrow-PUT width-shadow closure: the `total` slot is
+    // mixed-width written (`if total < 1 { total = 1 }`) and viewed via
+    // `total as bytes` — it gains the 1-byte runtime width shadow
+    // (prologue init + the two assignment stores + the dynamic-length
+    // view loop, +14 B), making the view width-exact to the interpreter
+    // on the total < 1 inputs (the pre-fix 8-byte view diverged there).
     let h_remap = lower(HACD200_FITSH, true, Rv64Mode::ImcRemap);
     let h_im = lower(HACD200_FITSH, true, Rv64Mode::Im);
     assert_eq!(
-        h_remap.stats.code_bytes, 3052,
+        h_remap.stats.code_bytes, 3082,
         "hacd200 ImcRemap baseline moved — update docs.loc/rv64im/96-a25-m4b-guardtail.md"
     );
     println!(

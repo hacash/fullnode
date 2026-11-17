@@ -208,9 +208,10 @@ fn byte_index_bounds() {
     for idx in [0u64, 8, 23, 24, 25, u64::MAX] {
         let mut input = be(idx);
         input.extend(input24.clone());
-        // data is the FULL input (index word included): 32 bytes
+        // data is the FULL input (index word included): 32 bytes. byte()
+        // is U8 → the 1-byte `as bytes` view (A2)
         let want = if idx < 32 {
-            Want::Ok(be(input[idx as usize] as u64))
+            Want::Ok(vec![input[idx as usize]])
         } else {
             Want::Trap(CAST)
         };
@@ -235,8 +236,9 @@ fn slice_bounds_all_forms() {
         input.extend(be(ln));
         input.extend(tail16.clone());
         let len = input.len() as u64;
+        // byte(s, 0) is U8 → the 1-byte `as bytes` view (A2)
         let want = match ost.checked_add(ln) {
-            Some(end) if end <= len && ln > 0 => Want::Ok(be(input[ost as usize] as u64)),
+            Some(end) if end <= len && ln > 0 => Want::Ok(vec![input[ost as usize]]),
             // an empty slice still traps the byte(s, 0) read below
             Some(end) if end <= len && ln == 0 => Want::Trap(CAST),
             _ => Want::Trap(CAST),
@@ -249,16 +251,21 @@ fn slice_bounds_all_forms() {
 
 #[test]
 fn narrowing_casts_trap_on_overflow() {
-    // `x as u8/u16/u32` on a runtime value
-    for (ty, max) in [("u8", 255u64), ("u16", 65535), ("u32", 4_294_967_295)] {
+    // `x as u8/u16/u32` on a runtime value. A2: `as uN` pins the width, so
+    // `as bytes` renders that width's BE view (1/2/4 B).
+    for (ty, max, wbytes) in [
+        ("u8", 255u64, 1usize),
+        ("u16", 65535, 2),
+        ("u32", 4_294_967_295, 4),
+    ] {
         let body = format!(
             "var v = 0u64\nvar i = 0u64\nwhile i < 8 {{ v = v * 256 + byte(data, i)\ni += 1 }}\n\
              return (v as {ty}) as bytes"
         );
         for v in [0u64, max - 1, max, max + 1, u64::MAX] {
             let want = if v <= max {
-                // `as uN` re-widens to u64 for the `as bytes` view
-                Want::Ok(be(v))
+                let b = v.to_be_bytes();
+                Want::Ok(b[8 - wbytes..].to_vec())
             } else {
                 Want::Trap(CAST)
             };
@@ -267,12 +274,15 @@ fn narrowing_casts_trap_on_overflow() {
     }
 }
 
-/* ---- B5: shift semantics (documented deviation: amount masked to 63) ---- */
+/* ---- B5: shift semantics (checked amount — closed task-1 A1) ---- */
 
 #[test]
-fn shift_amounts_mask_to_63() {
-    // fitsh rv64 channel: `x << n` with n ≥ 64 shifts by n & 63
-    // (documented deviation from HVM's dynamic-width behavior)
+fn shift_amount_checked_against_width() {
+    // `x << n` follows the interpreter's `checked_shl`: the AMOUNT must be
+    // < 64 (Arithmetic 90 otherwise; the value side truncates silently).
+    // The historical rv64 channel masked the amount to 6 bits (`n & 63`)
+    // — the documented deviation this test used to pin; A1 closed it, so
+    // the pin now asserts the interpreter's trap.
     let body = format!(
         "var v = 0u64\nvar i = 0u64\nwhile i < 8 {{ v = v * 256 + byte(data, i)\ni += 1 }}\n\
          var n = 0u64\nvar j = 0u64\nwhile j < 8 {{ n = n * 256 + byte(data, j + 8)\nj += 1 }}\n\
@@ -281,7 +291,11 @@ fn shift_amounts_mask_to_63() {
     for (v, n) in [(1u64, 0), (1, 1), (1, 63), (1, 64), (1, 65), (0xDEAD_BEEF, 128), (0xFFFF_FFFF, 192)] {
         let mut input = be(v);
         input.extend(be(n));
-        let want = Want::Ok(be(v.wrapping_shl(n as u32 & 63)));
+        let want = if n < 64 {
+            Want::Ok(be(v.wrapping_shl(n as u32)))
+        } else {
+            Want::Trap(ARITH)
+        };
         pin(&body, &input, &want);
     }
 }
@@ -317,10 +331,14 @@ fn overflow_guard_fires_from_loop_and_branch() {
     // the same overflow behind an if/else — both arms must keep the guard
     // (the MAX literal + runtime byte avoids compile-time folding)
     let body2 = "var s = 0u64\nif byte(data, 0) % 2 == 0 { s = 18446744073709551615u64 + byte(data, 0) } else { s = 1 }\nreturn s as bytes";
+    // (narrow-PUT face: the odd arm stores a u8 literal, so the interpreter's
+    // view of s is ONE byte there — the pre-fix pin demanded be(1), the
+    // static-join 8-byte view this campaign removes)
+    let one = vec![1u8];
     for (b0, want) in [
         (0u8, Want::Ok(be(u64::MAX))), // even arm, MAX + 0 = MAX: no overflow
         (2, Want::Trap(ARITH)),        // even arm, MAX + 2 traps
-        (3, Want::Ok(be(1))),          // odd arm
+        (3, Want::Ok(one)),            // odd arm: u8-literal PUT → 1-byte view
     ] {
         pin(body2, &[b0], &want);
     }
@@ -339,10 +357,11 @@ fn div_zero_guard_fires_in_expression_depth() {
 
 #[test]
 fn bounds_guard_fires_on_empty_input() {
-    // byte(data, 0) on empty input: trap even though the index is 0
+    // byte(data, 0) on empty input: trap even though the index is 0.
+    // A2: byte() is U8 → the 1-byte `as bytes` view
     let body = "var v = byte(data, 0)\nreturn v as bytes";
     pin(body, &[], &Want::Trap(CAST));
-    pin(body, &[7], &Want::Ok(be(7)));
+    pin(body, &[7], &Want::Ok(vec![7]));
 }
 
 /* ---- checked pow (constant exponent unrolls to checked muls) ---- */

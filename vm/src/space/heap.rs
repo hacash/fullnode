@@ -91,13 +91,16 @@ impl Heap {
         })
     }
 
-    pub fn grow(&mut self, seg: u8, gas_extra: &GasExtra) -> VmrtRes<i64> {
+    /// `seg_max`: the per-grow segment cap (`SpaceCap::heap_grow_segment` —
+    /// task 7 moved the literal 16 out of here; the cumulative budget is
+    /// still `limit` through `heap_grow_gas` below).
+    pub fn grow(&mut self, seg: u8, seg_max: usize, gas_extra: &GasExtra) -> VmrtRes<i64> {
         let seg = seg as usize;
         if seg < 1 {
             return itr_err_fmt!(HeapError, "heap grow cannot be empty");
         }
-        if seg > 16 {
-            return itr_err_fmt!(HeapError, "heap grow cannot exceed 16");
+        if seg > seg_max {
+            return itr_err_fmt!(HeapError, "heap grow cannot exceed {}", seg_max);
         }
         let oldseg = self.datas.len() / Self::SEGLEN;
         let gas = gas_extra.heap_grow_gas(oldseg, seg, self.limit)?;
@@ -149,5 +152,67 @@ impl Heap {
         let uty = mark >> 13;
         let seg = mark & 0b0001111111111111;
         self.read_uint(uty, seg)
+    }
+}
+
+#[cfg(test)]
+mod heap_tests {
+    use super::*;
+    use crate::rt::SpaceCap;
+
+    fn gst() -> GasExtra {
+        GasExtra::new(0, &base::VmExecutionParams::default())
+    }
+
+    /// Task 7: the per-grow segment cap is the `SpaceCap::heap_grow_segment`
+    /// field (default 16 — the former literal inside `grow`), so every
+    /// existing success/failure is unchanged.
+    #[test]
+    fn grow_default_cap_faces_unchanged() {
+        let cap = SpaceCap::new(0);
+        assert_eq!(cap.heap_grow_segment, 16);
+        let mut h = Heap::new(cap.heap_segment);
+        // seg == 0 stays HeapError
+        let e = h.grow(0, cap.heap_grow_segment, &gst()).unwrap_err();
+        assert_eq!(e.0, ItrErrCode::HeapError);
+        // 17 segments exceed the default field
+        let e = h.grow(17, cap.heap_grow_segment, &gst()).unwrap_err();
+        assert_eq!(e.0, ItrErrCode::HeapError);
+        assert!(e.1.contains("cannot exceed 16"), "msg: {}", e.1);
+        // 16 segments grow fine
+        h.grow(16, cap.heap_grow_segment, &gst()).unwrap();
+        assert_eq!(h.do_read(0, 16 * Heap::SEGLEN).unwrap().val_size(), 16 * Heap::SEGLEN);
+    }
+
+    /// The field raised to its u8 parameter ceiling (255): the per-grow
+    /// check passes for huge segments, but the CUMULATIVE budget stays
+    /// `heap_segment` (64) through `heap_grow_gas` — OutOfHeap(34), the
+    /// existing gas semantics, untouched.
+    #[test]
+    fn grow_raised_field_meets_cumulative_limit() {
+        let mut cap = SpaceCap::new(0);
+        cap.heap_grow_segment = 255;
+        let mut h = Heap::new(cap.heap_segment);
+        // a single 255-segment grow passes the field check but hits the
+        // cumulative 64: OutOfHeap, not HeapError
+        let e = h.grow(255, cap.heap_grow_segment, &gst()).unwrap_err();
+        assert_eq!(e.0, ItrErrCode::OutOfHeap);
+        // 64 segments fit the cumulative budget, then one more does not
+        h.grow(64, cap.heap_grow_segment, &gst()).unwrap();
+        let e = h.grow(1, cap.heap_grow_segment, &gst()).unwrap_err();
+        assert_eq!(e.0, ItrErrCode::OutOfHeap);
+    }
+
+    /// The field lowered: the per-grow check rejects at the field value.
+    #[test]
+    fn grow_lowered_field_rejects_at_field() {
+        let mut cap = SpaceCap::new(0);
+        cap.heap_grow_segment = 4;
+        let mut h = Heap::new(cap.heap_segment);
+        let e = h.grow(5, cap.heap_grow_segment, &gst()).unwrap_err();
+        assert_eq!(e.0, ItrErrCode::HeapError);
+        assert!(e.1.contains("cannot exceed 4"), "msg: {}", e.1);
+        h.grow(4, cap.heap_grow_segment, &gst()).unwrap();
+        assert_eq!(h.do_read(0, 4 * Heap::SEGLEN).unwrap().val_size(), 4 * Heap::SEGLEN);
     }
 }

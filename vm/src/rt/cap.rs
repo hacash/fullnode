@@ -16,6 +16,12 @@ pub const CALL_DATA_MAX: usize = 5120;
 /// `SpaceCap` compiles in codec-only builds; the calc module re-exports it.
 pub const CALC_MEM_KIB_MAX: u32 = 64;
 
+/// Default of `SpaceCap::heap_grow_segment` — the per-grow HGROW segment
+/// cap that used to be the literal `16` inside `Heap::grow`. Kept here so
+/// the interpreter and the rv64 kernel compiler (which receives the field
+/// through its lowering parameter channel) share one source of truth.
+pub const HEAP_GROW_SEGMENT_DEFAULT: usize = 16;
+
 #[derive(Debug, Clone)]
 pub struct SpaceCap {
     pub loaded_contract: usize, // 20
@@ -37,6 +43,14 @@ pub struct SpaceCap {
     pub local_slot: usize, // 16*16 = 256
 
     pub heap_segment: usize, // 64: 256 * 64 = 16kb
+
+    /// Max SEGMENTS of one single `HGROW` (task 7: moved here from the
+    /// literal `16` inside `Heap::grow`; default keeps every existing
+    /// success/failure unchanged). This is the PER-GROW cap — cumulative
+    /// growth stays bounded by `heap_segment` (64) through the grow gas.
+    /// The HGROW instruction parameter is u8, so values above 255 behave
+    /// as 255 (a grow can never ask for more).
+    pub heap_grow_segment: usize, // 16: 256 * 16 = 4kb per grow
 
     pub global: usize,           // 40
     pub memory: usize,           // 24
@@ -102,6 +116,7 @@ impl SpaceCap {
             stack_slot: 256,
             local_slot: 256,
             heap_segment: 64,
+            heap_grow_segment: HEAP_GROW_SEGMENT_DEFAULT,
             global: 40,
             memory: 24,
             kv_key_size: 128,
