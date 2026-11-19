@@ -19,7 +19,7 @@
 /// First height at which `TexCellRepeat` is refused.
 pub const TEX_REPEAT_DISABLE_FROM_HEIGHT: u64 = 800_000;
 /// First height at which `TexCellRepeat` is available again.
-pub const TEX_REPEAT_DISABLE_UNTIL_HEIGHT: u64 = 802_000;
+pub const TEX_REPEAT_DISABLE_UNTIL_HEIGHT: u64 = 802_500;
 
 /// Whether kind 23 may run at `height`.
 pub const fn tex_repeat_enabled_at(height: u64) -> bool {
@@ -30,7 +30,7 @@ pub const fn tex_repeat_enabled_at(height: u64) -> bool {
 /// are refused.
 pub const FITSH_OPCODES_DISABLE_FROM_HEIGHT: u64 = 800_000;
 /// First height at which the fitsh HVM opcodes are available again.
-pub const FITSH_OPCODES_DISABLE_UNTIL_HEIGHT: u64 = 802_000;
+pub const FITSH_OPCODES_DISABLE_UNTIL_HEIGHT: u64 = 802_500;
 
 /// Whether the fitsh HVM opcodes may run at `height`.
 pub const fn fitsh_opcodes_enabled_at(height: u64) -> bool {
