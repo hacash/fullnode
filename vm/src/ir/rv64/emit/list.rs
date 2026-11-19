@@ -71,7 +71,9 @@ impl<'a> Lower<'a> {
         }
         let kr = loc_reg(self.vstack[kd]);
         match self.lists.kind.get(s) {
-            Some(ListKind::Arena { .. }) => self.emit_list_bounds_guards_arena(kr, s)?,
+            Some(ListKind::Arena { .. }) => {
+                self.emit_list_bounds_guards_arena(kr, s, self.idx_below_2pow32(index))?
+            }
             _ => {
                 return errf!(
                     "rv64 lower: opcode ITEMGET is outside the translatable kernel subset \
@@ -79,12 +81,18 @@ impl<'a> Lower<'a> {
                 )
             }
         }
-        self.pop_vreg(); // index
         let (sc1, a0) = (self.asm.sc1, self.a0);
         self.asm.ld(sc1, S0, cell); // obj
+        // the tmp pool slot is handed out BEFORE the index pop: the pool
+        // is position-indexed, so a push after the pop would hand the
+        // index's own slot right back (idx == tmp — the ctr_elem_addr
+        // pairwise-distinct contract). When the index sits on the vstack
+        // top (every plain `list[idx]` read), the old order collided and
+        // tripped the debug_assert; the shift sequence stays correct.
         let tmp = self.push_vreg();
+        self.pop_vreg(); // index
         self.ctr_elem_addr(a0, sc1, kr, tmp);
-        self.pop_vreg();
+        self.pop_vreg(); // tmp
         let ptr = self.push_vreg();
         let len = self.push_vreg();
         self.asm.ld(ptr, a0, 8);
@@ -102,15 +110,30 @@ impl<'a> Lower<'a> {
      * via the tag guard, ≥ 2³²), then idx ≥ len (incl. ==) → 85, then the  *
      * store (no shift, no length change).                                  */
 
+    /// C2 (rv64-size-min): can the runtime value of `index` provably never
+    /// reach the extract_u32 boundary (≥ 2³² → 72)? The width invariant —
+    /// every runtime value of a static width w is < 2^w (the same authority
+    /// emit_range_check relies on, arith.rs) — bounds a width-provable
+    /// subtree of width ≤ 32 below 2³² (a pure-bool w=1 value is the
+    /// canonical 0/1). A u64-width or unpinnable (None) index keeps its
+    /// guard. The Nil→72 tag guard is a separate face and always stays.
+    pub(crate) fn idx_below_2pow32(&self, index: &dyn IRNode) -> bool {
+        matches!(self.int_width(index), Some(w) if (1..=32).contains(&w))
+    }
+
     /// The post-evaluation guards of an in-place element write: the
     /// extract_u32 boundary (≥ 2³² → 72; the Nil-index tag guard is emitted
     /// by the caller at the same fault position) and the live-length bound
-    /// (idx ≥ len → 85).
-    pub(crate) fn itemset_bounds_guards(&mut self, s: usize, kr: u8) -> Ret<()> {
-        let l72 = self.nil_thunk(72);
+    /// (idx ≥ len → 85). `fits32` = [`Self::idx_below_2pow32`] of the index
+    /// subtree: the 72 guard is dead for a width-provable index and is
+    /// skipped (the 85 bound keeps its position).
+    pub(crate) fn itemset_bounds_guards(&mut self, s: usize, kr: u8, fits32: bool) -> Ret<()> {
         let sc1 = self.asm.sc1;
-        self.asm.li(sc1, 1u64 << 32);
-        self.asm.bgeu(kr, sc1, l72);
+        if !fits32 {
+            let l72 = self.nil_thunk(72);
+            self.asm.li(sc1, 1u64 << 32);
+            self.asm.bgeu(kr, sc1, l72);
+        }
         let l85 = self.nil_thunk(85);
         let cell = self.slot_offset(s as u8);
         self.asm.ld(sc1, S0, cell); // live len
@@ -172,12 +195,15 @@ impl<'a> Lower<'a> {
         // P2: the arena item_set — the same 72/85 guard pair with the
         // length read through the descriptor, then the in-place
         // tagged-cell store (no shift, no length change; visible through
-        // every alias)
+        // every alias). C2: the 72 guard is skipped for a width-provable
+        // (≤ 32) index — see idx_below_2pow32.
         if arena_kind {
             let sc1 = self.asm.sc1;
-            let l72 = self.nil_thunk(72);
-            self.asm.li(sc1, 1u64 << 32);
-            self.asm.bgeu(kr, sc1, l72);
+            if !self.idx_below_2pow32(index) {
+                let l72 = self.nil_thunk(72);
+                self.asm.li(sc1, 1u64 << 32);
+                self.asm.bgeu(kr, sc1, l72);
+            }
             let l85 = self.nil_thunk(85);
             let cell = self.slot_offset(s as u8);
             self.asm.ld(sc1, S0, cell); // obj
@@ -204,7 +230,7 @@ impl<'a> Lower<'a> {
             self.pop_vreg(); // index
             return Ok(());
         }
-        self.itemset_bounds_guards(s, kr)?;
+        self.itemset_bounds_guards(s, kr, self.idx_below_2pow32(index))?;
         let base = self.list_data_off[s];
         debug_assert!(base >= 0, "list data block missing from the frame plan");
         let sc1 = self.asm.sc1;
@@ -287,13 +313,18 @@ impl<'a> Lower<'a> {
     /// when the total exceeds the kernel's output budget (S3), then the
     /// arena-exhaustion resource face. Empty lists yield the empty bytes.
     pub(crate) fn emit_itemcat(&mut self, s: usize) -> Ret<()> {
+        self.cat_top_kill(); // B9: the splice bumps S1
         let step = self.list_step(s); // bytes per element (a power of two)
         let sh = step.trailing_zeros();
         // element count: folded for the static classes, the live length
-        // shadow for the growable one
+        // shadow for the growable one. C9: the Rodata arm no longer
+        // registers the LE table here — the folded literal path below
+        // needs only the BE concat, and a slot consumed by nothing else
+        // then never materializes the unused LE table (other consumers
+        // register it on their own first use, list_rodata_lbl).
         let (static_n, rodata) = match self.lists.kind[s] {
             ListKind::Empty => (Some(0u64), None),
-            ListKind::Rodata { n } => (Some(n), Some(self.list_rodata_lbl(s)?)),
+            ListKind::Rodata { n } => (Some(n), Some(())),
             ListKind::FrameStatic { n } => (Some(n), None),
             ListKind::Growable { .. } => (None, None),
             // P2 prework boundary: the tagged-cell splice is T17's
@@ -312,6 +343,54 @@ impl<'a> Lower<'a> {
                 );
             }
         };
+        // C9: a Rodata table's elements are compile-time constants, so the
+        // whole splice folds into ONE read-only pool literal: the elements'
+        // big-endian forms concatenated in output order, and the result
+        // descriptor is (lit_addr, li total) — the ~20-instruction BE
+        // byte-reversal loop disappears. Byte-exactness: the runtime loop
+        // zero-extends the LE table entry at the slot's stride and emits
+        // the loaded value's `stride`-byte BE form — exactly
+        // `reverse(le[..stride])` per element (for the u128 stride the
+        // two word reversals [hi word first] splice into the full 16-byte
+        // reversal); the interpreter's `concat_call_chunks` emits each
+        // element's `extract_bytes` (scalar_bytes = the value's own-width
+        // BE form) in element order, and the slot's fixed element width
+        // IS the stride (B2 task 4) — the two are byte-for-byte equal.
+        // Faces: the 39 check is KEPT VERBATIM as a runtime compare
+        // (`output_max` arrives in S3 at run time — folding `total` only
+        // pre-computes the compared value, never retires the check; ==
+        // stays legal); the arena-exhaustion face is gone with the loop's
+        // only S1 bump — a budget face whose resource this lowering never
+        // touches is structurally unreachable (the ctr.rs:71-77
+        // precedent). Nil/72 faces do not exist (no evaluation, the table
+        // is constant). The result aliases the read-only pool like any
+        // bytes value: every consumer either only reads bytes or
+        // copy-then-patches (premise 24 — buf_set/cat never write through
+        // a source/receiver descriptor).
+        if let Some(n) = static_n {
+            if rodata.is_some() {
+                let stride = step as usize;
+                let vals = self.lists.lits.get(s).cloned().unwrap_or_default();
+                let mut bytes = Vec::with_capacity(n as usize * stride);
+                for v in vals.iter().take(n as usize) {
+                    let le = v.to_le_bytes();
+                    bytes.extend(le[..stride].iter().rev());
+                }
+                let lbl = self.lit_label(&bytes);
+                let base = self.push_vreg();
+                self.lit_addr(base, lbl);
+                let rl = self.push_vreg();
+                // total = n * step: the runtime slli's "len ≤ cap: no wrap"
+                // bound holds at compile time too (n is a parsed literal
+                // count, far under 2^56 for any stride)
+                let total = n.checked_mul(step as u64).expect("rodata table size");
+                debug_assert_eq!(bytes.len() as u64, total);
+                self.li_k(rl, total);
+                let l39 = self.nil_thunk(39);
+                self.asm.bltu(S3, rl, l39);
+                return Ok(());
+            }
+        }
         let n_r = self.push_vreg();
         match static_n {
             Some(n) => self.asm.li(n_r, n),
@@ -322,7 +401,11 @@ impl<'a> Lower<'a> {
         }
         let base = self.push_vreg();
         match rodata {
-            Some(lbl) => self.lit_addr(base, lbl),
+            Some(()) => {
+                // the generic loop path: register the LE table on first use
+                let lbl = self.list_rodata_lbl(s)?;
+                self.lit_addr(base, lbl);
+            }
             None => {
                 if static_n == Some(0) {
                     // Empty: the loop never runs — a dead base value (the
@@ -423,6 +506,8 @@ impl<'a> Lower<'a> {
         self.asm.r(0x20, tr, S1, 0, rp, 0b0110011); // sub rp, S1, total
         let rl = self.push_vreg();
         self.asm.mv(rl, tr);
+        // B9: the splice IS the arena top (rp + total == S1)
+        self.cat_top_establish(rp, rl);
         Ok(())
     }
 
@@ -458,8 +543,25 @@ impl<'a> Lower<'a> {
         self.eval(src)?;
         let src_len_d = self.vstack.len() - 1; // the len half / the scalar
         // src extract_bytes → BytesHandle 91 on a Nil (tag under the len
-        // half for a bytes pair, at the value for a scalar)
-        let src_tag_d = self.vstack.len() - if src_is_bytes { 2 } else { 1 };
+        // half for a bytes pair, at the value for a scalar; a u128 scalar
+        // source is a (lo, hi) pair — its Nil tag sits on the LOW half,
+        // like every u128 pair)
+        let src_w = if src_is_bytes {
+            None
+        } else {
+            match self.int_width(src) {
+                Some(w) => Some(w),
+                None => {
+                    return errf!(
+                        "rv64 lower: buf_set is outside the translatable kernel subset \
+                         (the written value has no static uint width — pin bool or \
+                         comparison values with `as u64`)"
+                    );
+                }
+            }
+        };
+        let src_tag_d =
+            self.vstack.len() - if src_is_bytes || src_w == Some(128) { 2 } else { 1 };
         if self.nil_val(src) {
             self.nil_guard_tag(src_tag_d, 91);
         }
@@ -478,21 +580,15 @@ impl<'a> Lower<'a> {
         // are materialized in the arena NOW (while the scalar is the
         // vstack top); this moves the arena-exhaustion RESOURCE face ahead
         // of the remaining semantic faces, which the iron law allows.
-        let src_w = if src_is_bytes {
-            None
-        } else {
-            match self.int_width(src) {
-                Some(w) => Some(w),
-                None => {
-                    return errf!(
-                        "rv64 lower: buf_set is outside the translatable kernel subset \
-                         (the written value has no static uint width — pin bool or \
-                         comparison values with `as u64`)"
-                    );
-                }
-            }
-        };
-        if let Some(w) = src_w {
+        // B11: a u128 source is a (lo, hi) pair — its 16 big-endian bytes
+        // materialize through task-3's emit_cbytes128 (both halves popped
+        // into registers; it pushes the (ptr, 16) descriptor back — the
+        // same post-shape emit_cbytes leaves for the ≤64-bit widths).
+        if src_w == Some(128) {
+            let hi = self.pop_reg();
+            let lo = self.pop_reg();
+            self.emit_cbytes128(lo, hi)?;
+        } else if let Some(w) = src_w {
             self.emit_cbytes(w)?;
         }
         // after emit_cbytes both source shapes are the bytes pair
@@ -524,7 +620,7 @@ impl<'a> Lower<'a> {
             self.asm.r(0, kr, src_l, 0, sc1, 0b0110011); // add sc1, ost, src_len
             self.asm.bltu(sc1, kr, l42); // wrapped
         } else {
-            // ost + nb (nb ≤ 8, ost < 2¹⁶: no wrap)
+            // ost + nb (nb ≤ 16, ost < 2¹⁶: no wrap)
             let nb = if src_w.unwrap() == 1 { 1i32 } else { (src_w.unwrap() / 8) as i32 };
             self.asm.addi(sc1, kr, nb);
         }
@@ -557,15 +653,25 @@ impl<'a> Lower<'a> {
         // byte). Never patch a shared/owned buffer in place.
         self.emit_memcpy(rp_r, rl_r); // S1 advances to d + len (= t2)
         // 2. patch the copy: redirect the bump to d + ost, memcpy the
-        // source bytes, restore
+        // source bytes, restore. B11: a scalar source's byte length is the
+        // compile-time nb (1/2/4/8/16) — the straight-line constant-length
+        // copy replaces the 8-instruction loop; bytes sources keep the
+        // dynamic loop
         self.asm.mv(S1, t1);
-        self.emit_memcpy(src_p, src_l);
+        match src_w.map(|w| if w == 1 { 1u32 } else { w / 8 }) {
+            Some(nb) => self.emit_memcpy_const(src_p, nb),
+            None => self.emit_memcpy(src_p, src_l),
+        }
         self.asm.mv(S1, t2);
         // 3. the result pair: new ptr = d (= t2 − rl), unchanged len
         let rp2 = self.push_vreg();
         self.asm.r(0x20, rl_r, t2, 0, rp2, 0b0110011); // sub rp2, t2, rl
         let rl2 = self.push_vreg();
         self.asm.mv(rl2, rl_r);
+        // B9: the fresh copy IS the arena top (S1 == t2 == rp2 + rl2 — the
+        // memcpys above killed any prior fact; the patch's S1 excursion
+        // returned to t2)
+        self.cat_top_establish(rp2, rl2);
         Ok(())
     }
 
@@ -625,7 +731,7 @@ impl<'a> Lower<'a> {
             self.nil_guard_tag(kd, 72); // extract_u32(Nil) → 72 (itemget)
         }
         let kr = loc_reg(self.vstack[kd]);
-        self.itemset_bounds_guards(s, kr)?; // 72 (≥ 2³²) then 85 (≥ len)
+        self.itemset_bounds_guards(s, kr, self.idx_below_2pow32(index))?; // 72 (≥ 2³²) then 85 (≥ len)
         if lv {
             // vd is the value's TOP entry as an absolute vstack position;
             // a pair's Nil tag sits on its low half (vd - 1)
@@ -686,9 +792,7 @@ impl<'a> Lower<'a> {
                     self.asm.sd(vlo, S0, ws + 16);
                     self.asm.sd(vhi, S0, ws + 24);
                     let lbl = self.u128_divmod_label();
-                    self.asm.sd(RA, S0, ws + 128);
-                    self.asm.jal_(RA, lbl);
-                    self.asm.ld(RA, S0, ws + 128);
+                    self.asm.jal_(self.a0, lbl); // D1: a0-linked call — RA stays intact
                     self.asm.ld(it_lo, S0, ws + 32);
                     self.asm.ld(it_hi, S0, ws + 40);
                 }
@@ -754,16 +858,21 @@ impl<'a> Lower<'a> {
 
     /// Emit `idx ≥ 2³² → 72-thunk` (the extract_u32 boundary) and
     /// `idx ≥ len → 85-thunk`; `idx_reg` holds the variable index.
+    /// `fits32` = [`Self::idx_below_2pow32`] of the index subtree: the 72
+    /// guard is dead for a width-provable index and is skipped (C2).
     pub(crate) fn emit_list_bounds_guards(
         &mut self,
         idx_reg: u8,
         s: usize,
         static_len: Option<u64>,
+        fits32: bool,
     ) -> Ret<()> {
-        let l72 = self.nil_thunk(72);
         let sc1 = self.asm.sc1;
-        self.asm.li(sc1, 1u64 << 32);
-        self.asm.bgeu(idx_reg, sc1, l72);
+        if !fits32 {
+            let l72 = self.nil_thunk(72);
+            self.asm.li(sc1, 1u64 << 32);
+            self.asm.bgeu(idx_reg, sc1, l72);
+        }
         let l85 = self.nil_thunk(85);
         match static_len {
             Some(0) => {
@@ -979,9 +1088,14 @@ impl<'a> Lower<'a> {
             self.nil_guard_tag(kd, 72);
         }
         let kr = loc_reg(self.vstack[kd]);
-        let l72 = self.nil_thunk(72);
-        self.asm.li(sc1, 1u64 << 32);
-        self.asm.bgeu(kr, sc1, l72); // extract_u32: ≥ 2³² → 72
+        // C2: the extract_u32 72 guard is dead for a width-provable
+        // (≤ 32) index — see idx_below_2pow32; the 81/40 faces keep
+        // their order below
+        if !self.idx_below_2pow32(index) {
+            let l72 = self.nil_thunk(72);
+            self.asm.li(sc1, 1u64 << 32);
+            self.asm.bgeu(kr, sc1, l72); // extract_u32: ≥ 2³² → 72
+        }
         let cell = self.slot_offset(s as u8);
         self.asm.ld(sc1, S0, cell); // obj
         self.asm.ld(sc2, sc1, 0); // len
@@ -1043,9 +1157,13 @@ impl<'a> Lower<'a> {
             self.nil_guard_tag(kd, 72);
         }
         let kr = loc_reg(self.vstack[kd]);
-        let l72 = self.nil_thunk(72);
-        self.asm.li(sc1, 1u64 << 32);
-        self.asm.bgeu(kr, sc1, l72); // extract_u32: ≥ 2³² → 72
+        // C2: same dead-72 skip as insert — a width-provable (≤ 32) index
+        // cannot reach 2³²; the 85 bound keeps its position
+        if !self.idx_below_2pow32(index) {
+            let l72 = self.nil_thunk(72);
+            self.asm.li(sc1, 1u64 << 32);
+            self.asm.bgeu(kr, sc1, l72); // extract_u32: ≥ 2³² → 72
+        }
         let cell = self.slot_offset(s as u8);
         self.asm.ld(sc1, S0, cell); // obj
         self.asm.ld(sc2, sc1, 0); // len

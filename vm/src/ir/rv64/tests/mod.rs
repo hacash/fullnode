@@ -1,6 +1,13 @@
 mod helpers;
 mod asm_tests;
+mod d5_d6_tests;
 mod hip5_report;
 mod subset_tests;
 mod mulchk_tests;
 mod u256lib_tests;
+mod guard_elim_tests;
+mod ctrl_dse_tests;
+mod pool_cover_tests;
+mod fwd_regalloc_tests;
+mod cmp_sqrt_tests;
+mod cse_dse_bank_tests;

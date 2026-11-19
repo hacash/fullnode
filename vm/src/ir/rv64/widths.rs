@@ -236,6 +236,318 @@ pub(crate) fn body_needs_u256(
     nodes.iter().any(|n| walk(&**n, slot, slotw, ew))
 }
 
+/* ---- D2/D3 (fin-control survey): routine-amortization site counts ----
+ *
+ * The shared mul_wide / HalfUp / HalfEven routines pay for themselves only
+ * from the 3rd same-primitive site in a body (inline 26·N vs routine
+ * 43+11·N for mul_wide, 27·N vs 44+11·N for HalfUp, 30·N vs 48+11·N for
+ * HalfEven — all break even at N = 3). The gate is a construction-time
+ * decision like body_needs_u256: a pure function of the IR (the probe
+ * pass and every relaxation pass see identical values, and the frame
+ * layout never depends on it — the workspace reservation above is
+ * unchanged, the inline mul_wide parks p0 in the same N0 slot). */
+
+/// The per-primitive amortization threshold (see the block comment above).
+pub(crate) const FIN_ROUTINE_MIN_SITES: usize = 3;
+
+/// The body's STATIC site counts of the three routine-izable u256 library
+/// primitives: (mul_wide, round_half_up, round_half_even). Mirrors the
+/// emit sites — MULADD/MULSUB and the u64/u128 MULDIV/MULDIVUP in
+/// emit/arith.rs, the per-kernel FIN table in emit/fin.rs and the isqrt
+/// in lib_fin.rs — and must be kept in sync with them. Counts the
+/// `emit_u128_round_quot` call sites ONLY (the u129 tail and wavg2's
+/// specialized round never route through the shared HalfUp/HalfEven
+/// routines).
+pub(crate) fn body_routine_site_counts(
+    nodes: &[Box<dyn IRNode>],
+    slot: &[SlotTy],
+    slotw: &[Option<u32>],
+    ew: &[u32],
+) -> (usize, usize, usize) {
+    fn add_round(acc: &mut (usize, usize, usize), pol: FinRoundPolicy, n: usize) {
+        match pol {
+            FinRoundPolicy::HalfUp => acc.1 += n,
+            FinRoundPolicy::HalfEven => acc.2 += n,
+            _ => {}
+        }
+    }
+    fn walk(
+        n: &dyn IRNode,
+        slot: &[SlotTy],
+        slotw: &[Option<u32>],
+        ew: &[u32],
+        acc: &mut (usize, usize, usize),
+    ) {
+        if let Some(w) = n.as_any().downcast_ref::<IRNodeWrapOne>() {
+            return walk(&*w.node, slot, slotw, ew, acc);
+        }
+        if let Ok(op) = Bytecode::try_from_u8(n.bytecode()) {
+            match op {
+                // T3: mul_add / mul_sub lower one mul_wide at EVERY width
+                // (emit_muladdsub)
+                Bytecode::MULADD | Bytecode::MULSUB => acc.0 += 1,
+                // T4: mul_div / mul_div_up ride the u256 library (one
+                // mul_wide each) at the u64/u128 common widths only
+                Bytecode::MULDIV | Bytecode::MULDIVUP => {
+                    if matches!(node_int_width(n, slot, slotw, ew), Some(64) | Some(128)) {
+                        acc.0 += 1;
+                    }
+                }
+                _ => {}
+            }
+            // T26 FIN*: the per-kernel static site table
+            if matches!(
+                op,
+                Bytecode::FIN2
+                    | Bytecode::FIN3
+                    | Bytecode::FIN4
+                    | Bytecode::FINP3
+                    | Bytecode::FINP4
+                    | Bytecode::FINPOW3
+            ) {
+                let para = if let Some(d) = n.as_any().downcast_ref::<IRNodeParam1Double>() {
+                    Some(d.para)
+                } else if let Some(t) = n.as_any().downcast_ref::<IRNodeParam1Triple>() {
+                    Some(t.para)
+                } else {
+                    n.as_any()
+                        .downcast_ref::<IRNodeParam1Quad>()
+                        .map(|q| q.para)
+                };
+                if let Some(para) = para {
+                    if let Ok(spec) = fin_spec_lookup(op, para) {
+                        let pol = spec.round_or_exact();
+                        let half = matches!(pol, FinRoundPolicy::HalfUp | FinRoundPolicy::HalfEven);
+                        match spec.kernel {
+                            // emit_fin2: x·y plus the isqrt's cand·cand
+                            // (lib_fin.rs); the Ceil arm adds f·f
+                            FinKernel::SqrtMul => {
+                                acc.0 += 2 + usize::from(pol == FinRoundPolicy::Ceil);
+                            }
+                            FinKernel::Div => {
+                                if half {
+                                    add_round(acc, pol, 1);
+                                }
+                            }
+                            // one mul_wide each; MulShr / MulDivDenAdd /
+                            // U64Mad never reach emit_u128_round_quot
+                            FinKernel::MulDiv
+                            | FinKernel::ScaledDiv
+                            | FinKernel::DevScaled
+                            | FinKernel::ScaledAdd
+                            | FinKernel::ScaledSub
+                            | FinKernel::MulDivDenSub => {
+                                acc.0 += 1;
+                                if half {
+                                    add_round(acc, pol, 1);
+                                }
+                            }
+                            FinKernel::MulShr
+                            | FinKernel::MulDivDenAdd
+                            | FinKernel::U64Mad => {
+                                acc.0 += 1;
+                            }
+                            // emit_fin4: one mul_wide (+ the round tail)
+                            FinKernel::MulAddDiv | FinKernel::MulSubDiv => {
+                                acc.0 += 1;
+                                if half {
+                                    add_round(acc, pol, 1);
+                                }
+                            }
+                            // three chained mul_wides, one round tail
+                            FinKernel::Mul3Div => {
+                                acc.0 += 3;
+                                if half {
+                                    add_round(acc, pol, 1);
+                                }
+                            }
+                            // wavg2's round is specialized (emit_wavg2_round)
+                            FinKernel::Wavg2 => {
+                                acc.0 += 1;
+                            }
+                            // start·left + end·weight, one round tail
+                            FinKernel::Lerp => {
+                                acc.0 += 2;
+                                if half {
+                                    add_round(acc, pol, 1);
+                                }
+                            }
+                            // emit_finpow3: two mul_wide + two HalfUp round
+                            // sites inside the square-and-multiply loop
+                            FinKernel::RPow => {
+                                acc.0 += 2;
+                                acc.1 += 2;
+                            }
+                            // emit_finp4: two cross products each
+                            FinKernel::WithinBps
+                            | FinKernel::CrossLte
+                            | FinKernel::CrossGte
+                            | FinKernel::CrossEq => {
+                                acc.0 += 2;
+                            }
+                            // Quantize / SatAdd / SatSub / AbsDiffLte: no
+                            // mul_wide, no u128 round tail
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        for c in children(n) {
+            walk(c, slot, slotw, ew, acc);
+        }
+    }
+    let mut acc = (0usize, 0usize, 0usize);
+    for n in nodes {
+        walk(&**n, slot, slotw, ew, &mut acc);
+    }
+    acc
+}
+
+/// A9 (survey arith.md): the per-primitive amortization threshold for the
+/// shared u128 multiply routine. The routine body is 34 slots (4 saves +
+/// 4 operand loads + the 19-slot checked-mul core + 2 result stores +
+/// 4 restores + `jr a0`) and a site stages 7 slots (4 sd + `jal a0` +
+/// 2 result ld) against the 19-slot inline form — 34 + 7N < 19N breaks
+/// even exactly at N = 3, the same point the D2/D3 FIN routines amortize
+/// at (a 2-site body would REGRESS by 3 slots, so the gate is 3, not the
+/// survey sketch's optimistic 2).
+pub(crate) const MUL128_ROUTINE_MIN_SITES: usize = 3;
+
+/// A9: the body's STATIC site count of the u128 multiply primitive (the
+/// emit_u128_mul / emit_u128_mul_keep call sites; mirrors the emit sites
+/// and must be kept in sync with them):
+/// · MUL at the u128 width (emit_bin128's MUL arm) — 1 site;
+/// · POW at the u128 width (emit_u128_pow keeps two mul_keep calls in its
+///   square-and-multiply loop) — 2 sites;
+/// · XOP `*=` on a u128 int slot (emit_xop128_k's k >= 2 arm and the
+///   variable-rhs arm of emit_xop_stmt) — 1 site; a constant rhs 0/1
+///   folds without a mul;
+/// · the T8 high-slot fragment `*=` on a u128 slot (the same emit_xop_stmt
+///   path) — 1 site, same 0/1 fold;
+/// · T19 `l[i] *= v` on a u128 element (list.rs) — 1 site;
+/// · FIN Quantize (fin.rs: quo·step, checked) — 1 site, Floor and Ceil
+///   alike (each branch lowers exactly one emit_u128_mul).
+/// A pure IR function (the D2/D3 construction-time gate rule): the probe
+/// pass and every relaxation pass see identical values, and the frame
+/// layout never depends on the count directly (the divmod workspace it
+/// shares is reserved beside `body_needs_divmod` from the same count).
+pub(crate) fn body_u128_mul_site_count(
+    nodes: &[Box<dyn IRNode>],
+    slot: &[SlotTy],
+    slotw: &[Option<u32>],
+    ew: &[u32],
+) -> usize {
+    fn walk(
+        n: &dyn IRNode,
+        slot: &[SlotTy],
+        slotw: &[Option<u32>],
+        ew: &[u32],
+        acc: &mut usize,
+    ) {
+        if let Some(w) = n.as_any().downcast_ref::<IRNodeWrapOne>() {
+            return walk(&*w.node, slot, slotw, ew, acc);
+        }
+        if let Ok(op) = Bytecode::try_from_u8(n.bytecode()) {
+            match op {
+                // the eval.rs u128 route fires for the common width 128
+                // (a mixed widthless/u128 operand routes too but compiles
+                // -rejects at the arm's width check before any site — not
+                // counted, nothing is emitted for a rejected body)
+                Bytecode::MUL | Bytecode::POW => {
+                    if node_int_width(n, slot, slotw, ew) == Some(128) {
+                        *acc += if op == Bytecode::POW { 2 } else { 1 };
+                    }
+                }
+                Bytecode::XOP => {
+                    if let Some(p) = n.as_any().downcast_ref::<IRNodeParam1Single>() {
+                        let (lxop, idx) = decode_local_operand_mark(p.para);
+                        if lxop == LxOp::Mul {
+                            if let Some(Some(128)) = slotw.get(idx as usize) {
+                                if matches!(slot.get(idx as usize), Some(SlotTy::Int)) {
+                                    if !matches!(int_literal(&*p.subx), Some(0) | Some(1)) {
+                                        *acc += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // T8: the high-slot local compound fragment (slots >= 64)
+                Bytecode::IRLIST
+                    if n
+                        .as_any()
+                        .downcast_ref::<IRNodeArray>()
+                        .map(|a| local_compound_assign_parts(&*a).is_some())
+                        .unwrap_or(false) =>
+                {
+                    let (value, idx, aop) = local_compound_assign_parts(n).unwrap();
+                    if aop == Bytecode::MUL {
+                        if let Some(Some(128)) = slotw.get(idx as usize) {
+                            if matches!(slot.get(idx as usize), Some(SlotTy::Int)) {
+                                if !matches!(int_literal(value), Some(0) | Some(1)) {
+                                    *acc += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                // T19: the compound item assignment `l[i] *= v` on a u128
+                // element slot (children() does not descend into
+                // IRNodeBytecodes, so the fragment's MUL is only visible
+                // here — same shape as body_needs_divmod's T19 arm)
+                Bytecode::IRLIST | Bytecode::IRBLOCK | Bytecode::IRBLOCKR => {
+                    if let Some((_value, recv, _index, aop)) = compound_assign_parts(n) {
+                        if aop == Bytecode::MUL {
+                            if let Some(i) = slot_get_index(recv) {
+                                if ew.get(i as usize).copied() == Some(128) {
+                                    *acc += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            // T26 FIN*: Quantize lowers one checked u128 mul per site
+            if matches!(
+                op,
+                Bytecode::FIN2
+                    | Bytecode::FIN3
+                    | Bytecode::FIN4
+                    | Bytecode::FINP3
+                    | Bytecode::FINP4
+                    | Bytecode::FINPOW3
+            ) {
+                let para = if let Some(d) = n.as_any().downcast_ref::<IRNodeParam1Double>() {
+                    Some(d.para)
+                } else if let Some(t) = n.as_any().downcast_ref::<IRNodeParam1Triple>() {
+                    Some(t.para)
+                } else {
+                    n.as_any()
+                        .downcast_ref::<IRNodeParam1Quad>()
+                        .map(|q| q.para)
+                };
+                if let Some(para) = para {
+                    if let Ok(spec) = fin_spec_lookup(op, para) {
+                        if spec.kernel == FinKernel::Quantize {
+                            *acc += 1;
+                        }
+                    }
+                }
+            }
+        }
+        for c in children(n) {
+            walk(c, slot, slotw, ew, acc);
+        }
+    }
+    let mut acc = 0usize;
+    for n in nodes {
+        walk(&**n, slot, slotw, ew, &mut acc);
+    }
+    acc
+}
+
 /// T26: the body's static FIN nesting depth (0 = no FIN node). An outer
 /// FIN node parks its already-evaluated operands while the remaining
 /// operand expressions evaluate, including nested FIN calls, so the frame
@@ -797,4 +1109,86 @@ pub(crate) fn node_int_width_generic(
         }
         _ => None,
     }
+}
+
+/// A8 (survey arith.md): the per-variant amortization threshold for the
+/// shared sqrt routines. Recorded economics (static instruction slots,
+/// the same unit the size baseline counts):
+///
+/// | variant      | inline/site | site (sd+jal+ld) | routine body |
+/// |--------------|-------------|------------------|--------------|
+/// | sqrt64 floor | 11          | 3                | 19           |
+/// | sqrt64 ceil  | 14          | 3                | 22           |
+/// | sqrt128 floor| 14..15      | 5                | 26           |
+/// | sqrt128 ceil | 24..25      | 5                | 36           |
+///
+/// Break-evens (routine + N·site < N·inline): sqrt64 floor 11N vs
+/// 19+3N → N ≥ 3 (a 2-site body would REGRESS by 3, exactly the A9
+/// MUL128 precedent); sqrt64 ceil 14N vs 22+3N → even at 2, −11 at 3;
+/// sqrt128 floor 15N vs 26+5N → N ≥ 3 (−4); sqrt128 ceil 25N vs 36+5N →
+/// −4 already at 2. A single gate at 3 (the MUL128_ROUTINE_MIN_SITES /
+/// FIN_ROUTINE_MIN_SITES precedent) never regresses on any variant and
+/// forfeits only the small 2-site ceil wins (−4 at most), so the gate is
+/// 3 — NOT the survey sketch's optimistic per-site sketch of 2.
+pub(crate) const SQRT_ROUTINE_MIN_SITES: usize = 3;
+
+/// A8: the body's STATIC per-variant sqrt site counts
+/// (sqrt64-floor, sqrt64-ceil, sqrt128-floor, sqrt128-ceil). Mirrors the
+/// emit sites — the single SQRT|SQRTUP dispatch in emit/eval.rs routes to
+/// `emit_sqrt64` (w ∈ 8..=64) or `emit_sqrt128` (w == 128), and the ceil
+/// tail rides the SQRTUP op — and must be kept in sync with them. There
+/// are no compound/XOP sqrt fragments (LxOp carries only Add/Sub/Mul/Div),
+/// so the plain children() walk sees every site. A width the emitter
+/// rejects (not a statically sized uint) emits nothing — not counted.
+/// A pure IR function (the D2/D3/A9 construction-time gate rule): the
+/// probe pass and every relaxation pass see identical values, and the
+/// frame layout never depends on the count directly (the 64-byte
+/// workspace it reserves is gated by the derived booleans, which are
+/// stable across passes).
+pub(crate) fn body_sqrt_site_counts(
+    nodes: &[Box<dyn IRNode>],
+    slot: &[SlotTy],
+    slotw: &[Option<u32>],
+    ew: &[u32],
+) -> (usize, usize, usize, usize) {
+    fn walk(
+        n: &dyn IRNode,
+        slot: &[SlotTy],
+        slotw: &[Option<u32>],
+        ew: &[u32],
+        acc: &mut (usize, usize, usize, usize),
+    ) {
+        if let Some(w) = n.as_any().downcast_ref::<IRNodeWrapOne>() {
+            return walk(&*w.node, slot, slotw, ew, acc);
+        }
+        if let Ok(op) = Bytecode::try_from_u8(n.bytecode()) {
+            if matches!(op, Bytecode::SQRT | Bytecode::SQRTUP) {
+                match node_int_width(n, slot, slotw, ew) {
+                    Some(128) => {
+                        if op == Bytecode::SQRTUP {
+                            acc.3 += 1;
+                        } else {
+                            acc.2 += 1;
+                        }
+                    }
+                    Some(w) if (8..=64).contains(&w) => {
+                        if op == Bytecode::SQRTUP {
+                            acc.1 += 1;
+                        } else {
+                            acc.0 += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        for c in children(n) {
+            walk(c, slot, slotw, ew, acc);
+        }
+    }
+    let mut acc = (0usize, 0usize, 0usize, 0usize);
+    for n in nodes {
+        walk(n.as_ref(), slot, slotw, ew, &mut acc);
+    }
+    acc
 }

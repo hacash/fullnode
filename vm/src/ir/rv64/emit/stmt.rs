@@ -65,12 +65,12 @@ impl<'a> Lower<'a> {
                     1
                 }
             })
-            .sum::<usize>()
-            // task 7: the heap region (grown-flag word + reserved segment
-            // block) joins the entry-zero set — the interpreter's heap
-            // starts empty and grow zero-fills, so the block must read as
-            // zeros
-            + if self.heap_bytes > 0 { 1 + self.heap_bytes as usize / 8 } else { 0 };
+            .sum::<usize>();
+            // task 7 / D5: the heap region no longer joins this count —
+            // its zeroing is a counted loop whose single sd encodes 4B
+            // with either zero source, so a MakeCompressible register can
+            // never pay for its (8+seg·256)/8 words. Only the SLOT stores
+            // above decide zreg; a heap-only body skips the dead `li 0`.
         let zreg = if zero_stores >= 2 { Some(self.vregs[0]) } else { None };
         if let Some(r) = zreg {
             self.asm.addi(r, ZERO, 0);
@@ -138,18 +138,42 @@ impl<'a> Lower<'a> {
                 o += 8;
             }
         }
-        // task 7: the heap region reads as zeros — the flag word (length 0
-        // until the grow executes) and the whole reserved segment block
-        // (heap_grow zero-fills the grown bytes). zreg may carry the zero
-        // from the slot pass above (same MakeCompressible trick).
+        // task 7 / D5 (fin-control survey): the heap region reads as zeros
+        // — the flag word (length 0 until the grow executes) and the whole
+        // reserved segment block (heap_grow zero-fills the grown bytes).
+        // The stores are a 5-instruction counted loop over the frame
+        // window (cursor a0, end address a1 — the documented loop/address
+        // scratch pair: the ABI registers are already captured into
+        // S2..S5, and in every mode the pair sits outside the value pool,
+        // the bank candidates and sc1/sc2, so nothing live crosses the
+        // prologue here). Write content and order are byte-identical to
+        // the old static unroll: ascending 8-byte words of zero from
+        // heap_flag_off to heap_off + heap_bytes (zreg may carry the zero
+        // from the slot pass above; ZERO stores encode the same size —
+        // the loop's sd is 4B with either source, so the heap no longer
+        // pays for the MakeCompressible register, see zero_stores below).
+        // Measured against the unrolled form (K=0: the loop wins from the
+        // smallest admitted reservation): unroll = (8+seg·256)/8 sd
+        // stores — 33 stores ≈132B at seg=1 up to 225 ≈900B at seg=7
+        // (frame budget 2040B caps seg at 7); the loop is 5 instructions,
+        // 16-20B, at every seg. Cycles rise (≈4 insts/word executed
+        // before the grow's readers) — this pass optimizes static size.
         if self.heap_bytes > 0 {
             let zr = zreg.unwrap_or(ZERO);
             let end = self.heap_off + self.heap_bytes as i32;
-            let mut o = self.heap_flag_off;
-            while o < end {
-                self.asm.sd(zr, S0, o);
-                o += 8;
+            let p = self.a0;
+            let e = self.a1;
+            let l = self.asm.new_label();
+            if self.heap_flag_off == 0 {
+                self.asm.mv(p, S0);
+            } else {
+                self.asm.addi(p, S0, self.heap_flag_off);
             }
+            self.asm.addi(e, S0, end);
+            self.place(l);
+            self.asm.sd(zr, p, 0);
+            self.asm.addi(p, p, 8);
+            self.asm.bne(p, e, l);
         }
         // body
         self.stmt_list(nodes, false)?;
@@ -381,7 +405,12 @@ impl<'a> Lower<'a> {
                     }
                     let k = keep_last && i == last && n.hasretval();
                     self.stmt_one(&**n, k)?;
-                    if n.hasretval() && !k {
+                    // C11: an eliminated pure dead statement pushed nothing —
+                    // there is no value here to drop. (Without the skip this
+                    // pop underflowed the vstack: the default arm pops its
+                    // own result, so ANY value statement inside a block
+                    // rejected the body with a pop-without-push depth error.)
+                    if n.hasretval() && !k && !self.is_pure_dead_value(&**n) {
                         let ty = node_res_ty(&**n, self.slot)?;
                         match ty {
                             Ty::Int => {
@@ -474,7 +503,15 @@ impl<'a> Lower<'a> {
                 if !self.vstack.is_empty() {
                     return errf!("rv64 lower: while body leaves values on the stack");
                 }
-                self.asm.jal_(ZERO, l_cond);
+                // D6 (fin-control survey): a body that cannot fall out of
+                // its end (break/continue/return/throw/abort tail) makes
+                // the backedge jal physically unreachable — skip it. The
+                // same `ends_in_unconditional_jump` proof the if-join
+                // (skip_join above) and the fallthrough exit already use;
+                // pure dead code, zero semantics, one fixup fewer.
+                if !ends_in_unconditional_jump(&*n.suby) {
+                    self.asm.jal_(ZERO, l_cond);
+                }
                 self.place(l_end);
                 Ok(())
             }
@@ -772,6 +809,16 @@ impl<'a> Lower<'a> {
                 self.emit_merge(rs, ss)
             }
             _ => {
+                // C11 (impl/ctrl-dse): a statement-position value whose whole
+                // subtree is fault-free and side-effect-free and whose result
+                // is dropped right here — skip the emission entirely. The
+                // eager path below pushes then pops the same value, so
+                // emitting nothing leaves the identical (empty) vstack state;
+                // whitelisted subtrees carry no fault face, so nothing
+                // observable disappears.
+                if self.is_pure_dead_value(node) {
+                    return Ok(());
+                }
                 // value-position node in statement position: eval and drop
                 self.eval(node)?;
                 if node.hasretval() {
@@ -881,6 +928,10 @@ impl<'a> Lower<'a> {
                         // (position 0). Any later push hands vregs[2..] while
                         // the refs live, so nothing can re-hand — and then
                         // clobber — the watched registers mid-expression.
+                        // (The int arm below carries the E2 generalization
+                        // `r == vregs[j], j <= depth`; a bytes version must
+                        // re-issue BOTH registers of the pair and is not
+                        // attempted here.)
                         let hit = self
                             .fwd_enabled()
                             .then(|| {
@@ -918,25 +969,69 @@ impl<'a> Lower<'a> {
                     }
                     _ if self.slot_w.get(idx as usize).copied().flatten() == Some(128) => {
                         // task 3: a u128 slot reads as a (lo, hi) pair — two
-                        // vstack entries, low half first. No forwarding (the
-                        // single-register model cannot hold a pair) and the
-                        // tag byte lives on the LOW entry.
-                        let off = self.slot_offset(idx);
-                        let lo = self.push_vreg();
-                        let hi = self.push_vreg();
-                        self.asm.ld(lo, S0, off);
-                        self.asm.ld(hi, S0, off + 8);
-                        if mnil {
-                            self.nil_wtag_from_flag(idx, self.vstack.len() - 2);
+                        // vstack entries, low half first; the tag byte lives
+                        // on the LOW entry.
+                        // C7 (impl/cat-u128fwd): pair store→load forwarding.
+                        // The entry rides the fwd_bytes PAIR table: a u128
+                        // slot is SlotTy::Int (join_slot_widths only records
+                        // widths for Int slots) and is never banked (web.rs),
+                        // so no other producer can ever write this entry.
+                        // Hit discipline is the bytes arm's: empty stack,
+                        // the forwarded registers ARE the bottom pair, and
+                        // any push_vreg re-hand (kill_fwd_reg) or place()
+                        // label barrier kills the entry wholesale. The
+                        // may-Nil tag byte is independent of forwarding —
+                        // nil_wtag_from_flag reads the slot's flag byte and
+                        // writes the tag through the dedicated scratch, no
+                        // pool register traffic.
+                        let hit = self
+                            .fwd_enabled()
+                            .then(|| {
+                                if self.fwd_slot_ok(idx as usize) {
+                                    self.fwd_bytes.get(idx as usize).copied().flatten()
+                                } else {
+                                    None
+                                }
+                            })
+                            .flatten();
+                        match hit {
+                            Some((rp, rl))
+                                if self.vstack.is_empty()
+                                    && rp == self.vregs[0]
+                                    && self.vregs.len() > 1
+                                    && rl == self.vregs[1] =>
+                            {
+                                self.push_ref(rp);
+                                self.push_ref(rl);
+                                if mnil {
+                                    self.nil_wtag_from_flag(idx, self.vstack.len() - 2);
+                                }
+                            }
+                            _ => {
+                                let off = self.slot_offset(idx);
+                                let lo = self.push_vreg();
+                                let hi = self.push_vreg();
+                                self.asm.ld(lo, S0, off);
+                                self.asm.ld(hi, S0, off + 8);
+                                if mnil {
+                                    self.nil_wtag_from_flag(idx, self.vstack.len() - 2);
+                                }
+                            }
                         }
                     }
                     _ => match self.fwd_int.get(idx as usize).copied().flatten() {
-                        // same bottom-register rule (see the bytes arm)
+                        // E2: the read-side rule generalized off the empty
+                        // stack — `r == vregs[j]` with `j <= vstack.len()`
+                        // is the sound re-issue condition (the pushed Ref
+                        // sits at position vstack.len(), so later pushes
+                        // hand only registers ABOVE it; see
+                        // fwd_reg_reissuable for the full argument and the
+                        // push_vreg INV_CHECK mirror). Banked reads and the
+                        // bytes/u128 arms above keep their own rules.
                         Some(r)
                             if self.fwd_enabled()
                                 && self.fwd_slot_ok(idx as usize)
-                                && self.vstack.is_empty()
-                                && r == self.vregs[0] =>
+                                && self.fwd_reg_reissuable(r) =>
                         {
                             self.push_ref(r);
                             if mnil {
@@ -996,6 +1091,12 @@ impl<'a> Lower<'a> {
                     if let Some(si) = slot_get_index(src)
                         .filter(|&i| is_map_slot(self.slot.get(i as usize).copied().unwrap_or(SlotTy::None)))
                     {
+                        // B14: the object now has TWO slot names. The fact is
+                        // per-slot about the OBJECT's length, and an insert
+                        // through either name changes it — no len-zero fact
+                        // may survive an aliasing PUT (the destination never
+                        // gets one, the source's dies).
+                        self.map_zero_kill_all();
                         let sc1 = self.asm.sc1;
                         let off = self.slot_offset(idx);
                         self.ctr_load_obj(si as usize, sc1);
@@ -1076,11 +1177,32 @@ impl<'a> Lower<'a> {
                     };
                     // literals bind straight into the bank registers
                     if let Some(b) = bytes_literal(src) {
+                        if self.store_is_dead(idx) {
+                            // C13: a dead literal bind has no fault face at
+                            // all — the pool registration, the descriptor
+                            // materialization and the init flag all die with
+                            // the store; the kill_fwd_reg bookkeeping stays
+                            // (loop-carried / backedge exemptions live inside
+                            // store_is_dead).
+                            self.kill_fwd_reg(bp);
+                            self.kill_fwd_reg(bl);
+                            return Ok(());
+                        }
                         let lbl = self.lit_label(&b);
-                        self.kill_fwd_reg(bp);
-                        self.kill_fwd_reg(bl);
-                        self.lit_addr(bp, lbl);
-                        self.asm.li(bl, b.len() as u64);
+                        if self.desc_fwd.get(&lbl).copied() == Some((bp, bl)) {
+                            // C12 (impl/cse-dse-bank): the same pool label is
+                            // already materialized into these very bank homes
+                            // — nothing is emitted and nothing is rewritten,
+                            // so the register-watching tables (fwd/desc/cat)
+                            // stay valid and the kill discipline is skipped
+                            // with the emissions.
+                        } else {
+                            self.kill_fwd_reg(bp);
+                            self.kill_fwd_reg(bl);
+                            self.lit_addr(bp, lbl);
+                            self.asm.li(bl, b.len() as u64);
+                            self.desc_fwd.insert(lbl, (bp, bl));
+                        }
                         if stracked {
                             self.nil_set_flag_one(idx);
                         }
@@ -1090,19 +1212,39 @@ impl<'a> Lower<'a> {
                     let tag_d = self.vstack.len() - 2;
                     let ll = self.pop_reg();
                     let lp = self.pop_reg();
+                    // B9: the stored value may be the arena-top descriptor —
+                    // after it moves under the bank home (kill_fwd_reg above
+                    // may legitimately kill the fact when the homes coincide
+                    // with the watched registers) the claim transfers to the
+                    // new home pair: same VALUES, so ptr + len == S1 holds
+                    // for (bp, bl) exactly as it held for (lp, ll).
+                    let was_top = self.cat_top == Some((lp, ll));
                     self.kill_fwd_reg(bp);
                     self.kill_fwd_reg(bl);
-                    if lp != bp {
-                        self.asm.mv(bp, lp);
-                    }
-                    if ll != bl {
-                        self.asm.mv(bl, ll);
-                    }
-                    if stracked {
-                        if msrc {
-                            self.nil_set_flag_from_tag(idx, tag_d);
-                        } else {
-                            self.nil_set_flag_one(idx);
+                    if self.store_is_dead(idx) {
+                        // C13: the rhs ran in full (its fault faces are the
+                        // interpreter's); the bank-home mv pair and the init
+                        // flag are dead weight after the last read. The
+                        // arena-top fact stays as it is: (lp, ll) still hold
+                        // the descriptor (nothing was rewritten) and the
+                        // kill_fwd_reg calls above behaved exactly as on the
+                        // live path.
+                    } else {
+                        if lp != bp {
+                            self.asm.mv(bp, lp);
+                        }
+                        if ll != bl {
+                            self.asm.mv(bl, ll);
+                        }
+                        if was_top {
+                            self.cat_top_establish(bp, bl);
+                        }
+                        if stracked {
+                            if msrc {
+                                self.nil_set_flag_from_tag(idx, tag_d);
+                            } else {
+                                self.nil_set_flag_one(idx);
+                            }
                         }
                     }
                 } else if let Some(r) = self.bank_int(idx) {
@@ -1111,6 +1253,18 @@ impl<'a> Lower<'a> {
                     if is_plain_int_literal(src) {
                         let k = int_literal(src).unwrap();
                         self.kill_fwd_reg(r);
+                        if self.store_is_dead(idx) {
+                            // C13 (impl/cse-dse-bank): the timeline proves no
+                            // read of this slot exists after this statement —
+                            // the literal carries no fault face of its own, so
+                            // the bank write, the width shadow and the init
+                            // flag are all dead weight. Register bookkeeping
+                            // (kill_fwd_reg above) is kept, and the
+                            // loop-carried / backedge exemptions live inside
+                            // store_is_dead (BUG-022 discipline, shared with
+                            // the frame arm below).
+                            return Ok(());
+                        }
                         self.li_k(r, k);
                         // narrow-PUT face: the assignment replays its own width
                         self.shadow_put(idx, self.int_width(src));
@@ -1123,15 +1277,24 @@ impl<'a> Lower<'a> {
                     let tag_d = self.vstack.len() - 1;
                     let v = self.pop_reg();
                     self.kill_fwd_reg(r);
-                    if v != r {
-                        self.asm.mv(r, v);
-                    }
-                    self.shadow_put(idx, self.int_width(src));
-                    if stracked {
-                        if msrc {
-                            self.nil_set_flag_from_tag(idx, tag_d);
-                        } else {
-                            self.nil_set_flag_one(idx);
+                    if self.store_is_dead(idx) {
+                        // C13: the rhs evaluation above ran in full (its fault
+                        // faces — convert/overflow — are the interpreter's);
+                        // only the bank-home write and its shadow/flag
+                        // auxiliary machine die with the proven-dead store.
+                        // Same basis as the frame arm below; the loop-carried
+                        // and backedge exemptions stand (store_is_dead).
+                    } else {
+                        if v != r {
+                            self.asm.mv(r, v);
+                        }
+                        self.shadow_put(idx, self.int_width(src));
+                        if stracked {
+                            if msrc {
+                                self.nil_set_flag_from_tag(idx, tag_d);
+                            } else {
+                                self.nil_set_flag_one(idx);
+                            }
                         }
                     }
                 } else if int_literal(src) == Some(0)
@@ -1156,7 +1319,18 @@ impl<'a> Lower<'a> {
                     self.eval_int(src)?;
                     if wide {
                         // task 3: a u128 slot stores the (lo, hi) pair into
-                        // its 16-byte cell; no single-register forwarding
+                        // its 16-byte cell.
+                        // C7 (impl/cat-u128fwd): the pair forwards through
+                        // the fwd_bytes pair table (see the GET arm). PUT is
+                        // statement-level, so the source pair was pushed at
+                        // an empty stack and lo/hi ARE the bottom pool pair
+                        // (vregs[0]/vregs[1]) — exactly the shape the hit
+                        // rule demands; a dead store forwards nothing (no
+                        // reader exists, matching the bytes arm). Any later
+                        // push_vreg re-hand or place() label kills the entry
+                        // via the shared kill_fwd_reg/place discipline, so a
+                        // following u128 XOP (which stages its old pair with
+                        // push_vreg) clears it before it could go stale.
                         let tag_d = self.vstack.len() - 2;
                         let hi = self.pop_reg();
                         let lo = self.pop_reg();
@@ -1164,6 +1338,9 @@ impl<'a> Lower<'a> {
                         if !self.store_is_dead(idx) {
                             self.asm.sd(lo, S0, off);
                             self.asm.sd(hi, S0, off + 8);
+                            self.fwd_bytes[s] = Some((lo, hi));
+                        } else {
+                            self.fwd_bytes[s] = None;
                         }
                         self.fwd_int[s] = None;
                         if stracked {
@@ -1198,5 +1375,149 @@ impl<'a> Lower<'a> {
                     }
                 }
         Ok(())
+    }
+
+    /// C11 (impl/ctrl-dse): is this statement-position value node's whole
+    /// subtree fault-free, side-effect-free, and emitted purely to be
+    /// dropped? The whitelist is deliberately conservative — everything
+    /// with an evaluation face stays out:
+    ///   - plain literals (P0..P3/PU8/PU16/PTRUE/PFALSE and PNIL — the nil
+    ///     literal's tag write is dropped too, which is safe because a tag
+    ///     byte is only ever READ for a value whose own lowering publishes
+    ///     it at the same depth first: a may-Nil GET's `nil_wtag_from_flag`,
+    ///     a PNIL itself, a CHOOSE select's `nil_set_tag_one`; the next
+    ///     occupant of this vstack depth republishes before any consumer
+    ///     looks),
+    ///   - compile-time folded casts (eval lowers them to a single `li_k`;
+    ///     an overflowing literal keeps the eager path's compile reject),
+    ///   - SIZE over a bytes literal (the static fold; dynamic SIZE keeps
+    ///     its BytesHandle(91) face and is NOT admitted),
+    ///   - LENGTH over a static list class (Empty/Rodata/FrameStatic — the
+    ///     Growable/Arena header reads stay out),
+    ///   - GET of a non-tracked slot (a fault-free frame read; mirrors
+    ///     `is_pure_cond`'s slot rule) — what makes the TNIL-family
+    ///     constant answers reachable in practice,
+    ///   - type tests with a provably constant answer (TNIL/TIS/TID with a
+    ///     non-Nil operand, TLIST/TMAP always — the kernel has no Compo
+    ///     values); a may-Nil operand keeps the tag-read path.
+    /// HASKEY (the 72 face) is NOT admitted; anything dynamic is NOT
+    /// admitted. On any shape or type doubt this returns false and the
+    /// eager path lowers the node exactly as before.
+    /// Fold a paren-group-wrapped literal cast chain to its u128 value,
+    /// mirroring `ir_literal_value`'s CU* cast rules (out-of-range → None:
+    /// the eager path's compile-time reject stays reachable). Needed because
+    /// `ir_literal_value` itself does not see through IRNodeWrapOne.
+    fn dead_cast_value(&self, node: &dyn IRNode) -> Option<u128> {
+        if let Some(w) = node.as_any().downcast_ref::<IRNodeWrapOne>() {
+            return self.dead_cast_value(&*w.node);
+        }
+        if let Ok(Some(v)) = crate::lang::ir_literal_value(node) {
+            return v.extract_u128().ok().filter(|n| *n <= u64::MAX as u128);
+        }
+        let single = node.as_any().downcast_ref::<IRNodeSingle>()?;
+        let v = self.dead_cast_value(&*single.subx)?;
+        let limit: u128 = match Bytecode::try_from_u8(node.bytecode()).ok()? {
+            Bytecode::CU8 => 0xFF,
+            Bytecode::CU16 => 0xFFFF,
+            Bytecode::CU32 => 0xFFFF_FFFF,
+            Bytecode::CU64 => u64::MAX as u128,
+            _ => return None,
+        };
+        if v > limit {
+            return None;
+        }
+        Some(v)
+    }
+
+    pub(crate) fn is_pure_dead_value(&self, node: &dyn IRNode) -> bool {        if let Some(w) = node.as_any().downcast_ref::<IRNodeWrapOne>() {
+            return self.is_pure_dead_value(&*w.node);
+        }
+        let op = match Bytecode::try_from_u8(node.bytecode()) {
+            Ok(o) => o,
+            Err(_) => return false,
+        };
+        use Bytecode::*;
+        match op {
+            P0 | P1 | P2 | P3 | PU8 | PU16 | PTRUE | PFALSE | PNIL => true,
+            GET | GET0 | GET1 | GET2 | GET3 | GETX => match slot_get_index(node) {
+                Some(i) => !self.tracked.get(i as usize).copied().unwrap_or(false),
+                None => false,
+            },
+            CU8 | CU16 | CU32 | CU64 => {
+                // "already folded cast": the whole (paren-group-wrapped)
+                // literal cast chain folds into the target's range — eval
+                // lowers it to a single li_k. Anything else (bytes operand,
+                // overflow) keeps its eager faces and is not admitted.
+                self.dead_cast_value(node).is_some()
+            }
+            SIZE => {
+                let sub = match node.as_any().downcast_ref::<IRNodeSingle>() {
+                    Some(n) => &*n.subx,
+                    None => return false,
+                };
+                bytes_literal(sub).is_some()
+            }
+            LENGTH => {
+                let sub = match node.as_any().downcast_ref::<IRNodeSingle>() {
+                    Some(n) => &*n.subx,
+                    None => return false,
+                };
+                // the map-header path (emit_map_length) stays out
+                if is_map_slot(slot_get_index(sub).and_then(|i| self.slot.get(i as usize).copied()).unwrap_or(SlotTy::None)) {
+                    return false;
+                }
+                match self.list_any_slot_of(sub, op) {
+                    Ok(s) => matches!(
+                        self.lists.kind.get(s),
+                        Some(ListKind::Empty)
+                            | Some(ListKind::Rodata { .. })
+                            | Some(ListKind::FrameStatic { .. })
+                    ),
+                    Err(_) => false,
+                }
+            }
+            TNIL | TIS | TID | TLIST | TMAP => {
+                // TIS with an unknown type id keeps the eager path's
+                // fail-fast; a container/static-type-doubt operand too.
+                let (sub, para) = if op == TIS {
+                    match node.as_any().downcast_ref::<IRNodeParam1Single>() {
+                        Some(n) => (&*n.subx, n.para),
+                        None => return false,
+                    }
+                } else {
+                    match node.as_any().downcast_ref::<IRNodeSingle>() {
+                        Some(n) => (&*n.subx, 0u8),
+                        None => return false,
+                    }
+                };
+                if op == TIS && crate::value::parse_value_ty_param(para).is_err() {
+                    return false;
+                }
+                let ty = match node_res_ty(sub, self.slot) {
+                    Ok(t) => t,
+                    Err(_) => return false,
+                };
+                if matches!(ty, Ty::List | Ty::Map) {
+                    return false; // eval fail-fasts these; keep that path
+                }
+                let sid_known = match ty {
+                    Ty::Bytes | Ty::Address => true,
+                    Ty::Int => matches!(
+                        self.int_width(sub),
+                        Some(1) | Some(8) | Some(16) | Some(32) | Some(64) | Some(128)
+                    ),
+                    _ => false,
+                };
+                if !sid_known {
+                    return false;
+                }
+                // TLIST/TMAP answer false unconditionally (no kernel value is
+                // a Compo, even may-Nil); the identity tests need a
+                // provably non-Nil operand for the constant answer.
+                (matches!(op, TLIST | TMAP) || !self.nil_val(sub))
+                    && self.is_pure_dead_value(sub)
+            }
+            _ => false,
+        }
     }
 }

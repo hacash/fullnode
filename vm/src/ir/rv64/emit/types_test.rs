@@ -201,28 +201,64 @@ impl<'a> Lower<'a> {
     /// sc1 = square temp — four distinct registers in every mode.
     pub(crate) fn emit_sqrt64(&mut self, op: Bytecode, w: u32) {
         let d = self.pop_own_replace();
+        // A8: the gated form — the same body rides the shared routine, the
+        // site stages sd(operand) + `jal a0` + ld(result) through the
+        // sqrt frame workspace. The nil-72 guard (in emit_sqrt) and the
+        // w<64 range check below stay at the site, in order.
+        if match op {
+            Bytecode::SQRTUP => self.sqrt64up_routine,
+            _ => self.sqrt64_routine,
+        } {
+            let s = self.sqrt_save_off;
+            debug_assert!(s >= 0, "sqrt64 site without a reserved save area");
+            self.asm.sd(d, S0, s);
+            let lbl = if op == Bytecode::SQRTUP {
+                *self.sqrt64up_lbl.get_or_insert_with(|| self.asm.new_label())
+            } else {
+                *self.sqrt64_lbl.get_or_insert_with(|| self.asm.new_label())
+            };
+            self.asm.jal_(self.a0, lbl); // D1: a0-linked call — RA stays intact
+            self.asm.ld(d, S0, s + 16);
+            if w < 64 {
+                self.emit_range_check(d, w);
+            }
+            return;
+        }
         let (a0, a1) = (self.a0, self.a1);
         let sc1 = self.asm.sc1;
         self.asm.addi(a0, ZERO, 0);
         self.asm.li(a1, 1u64 << 31);
         let l_loop = self.asm.new_label();
         let l_keep = self.asm.new_label();
-        let l_clear = self.asm.new_label();
         let l_done = self.asm.new_label();
         self.place(l_loop);
         self.asm.beq(a1, ZERO, l_done);
         self.asm.or_(a0, a0, a1);
         self.asm.r(1, a0, a0, 0, sc1, 0b0110011); // mul sc1, r, r
-        self.asm.bltu(d, sc1, l_clear); // n < r*r → clear the bit
-        self.asm.jal_(ZERO, l_keep);
-        self.place(l_clear);
+        // A5 (survey arith.md): tail branch inverted — `keep` is the taken
+        // branch (n >= r*r) and the clear path is the fall-through into the
+        // xor, dropping the unconditional jal. Pure control-flow inversion:
+        // the taken/not-taken sets per input are unchanged (bltu d,sc1 ==
+        // complement of bgeu d,sc1), no fault or value face moves.
+        self.asm.bgeu(d, sc1, l_keep); // n >= r*r → keep the bit
         self.asm.xor(a0, a0, a1);
         self.place(l_keep);
         self.asm.srli_(a1, a1, 1);
         self.asm.jal_(ZERO, l_loop);
         self.place(l_done);
-        // a0 = isqrt(n); sc1 = a0*a0
+        // a0 = isqrt(n)
         if op == Bytecode::SQRTUP {
+            // ceil tail: RECOMPUTE r*r fresh — the loop's last mul belongs
+            // to the TESTED value (r|bit), which is stale by one step when
+            // the final bit was cleared (the founding-era ceil64
+            // divergence: even perfect squares 0/4/16/2^62 returned
+            // floor+1; odd roots kept their last bit so sc1 was fresh and
+            // agreed). Same shape as the u128 variant, which always
+            // recomputed. rem = n - r*r is borrow-safe on the fresh square
+            // (r*r <= n) and the interpreter's sqrt_up is the minimal r
+            // with r*r >= n (instruction.rs sqrt_up_checked: f·f==n → f,
+            // else f+1).
+            self.asm.r(1, a0, a0, 0, sc1, 0b0110011); // mul sc1, r, r (fresh)
             self.asm.sub(d, d, sc1); // d = n - r*r (borrow-safe: r*r <= n)
             self.asm.r(0, d, ZERO, 3, sc1, 0b0110011); // snez sc1, d
             self.asm.add(a0, a0, sc1); // ceil
@@ -251,6 +287,33 @@ impl<'a> Lower<'a> {
         };
         let dlo = loc_reg(self.vstack[base]);
         let dhi = loc_reg(self.vstack[base + 1]);
+        // A8: the gated form — the site stages the pair through the sqrt
+        // frame workspace (sd lo/hi + `jal a0` + pop both entries + push a
+        // fresh result pair + ld both halves), the same stack handback
+        // shape as the inline form (pop the operand entries, push the
+        // result pair) without the work registers riding above the pair.
+        if match op {
+            Bytecode::SQRTUP => self.sqrt128up_routine,
+            _ => self.sqrt128_routine,
+        } {
+            let s = self.sqrt_save_off;
+            debug_assert!(s >= 0, "sqrt128 site without a reserved save area");
+            self.asm.sd(dlo, S0, s);
+            self.asm.sd(dhi, S0, s + 8);
+            let lbl = if op == Bytecode::SQRTUP {
+                *self.sqrt128up_lbl.get_or_insert_with(|| self.asm.new_label())
+            } else {
+                *self.sqrt128_lbl.get_or_insert_with(|| self.asm.new_label())
+            };
+            self.asm.jal_(self.a0, lbl); // D1: a0-linked call — RA stays intact
+            let _ = self.pop_vreg(); // dhi entry
+            let _ = self.pop_vreg(); // dlo entry
+            let rlo = self.push_vreg();
+            let rhi = self.push_vreg();
+            self.asm.ld(rlo, S0, s + 16);
+            self.asm.ld(rhi, S0, s + 24);
+            return Ok(());
+        }
         let rr = self.push_vreg(); // r
         let kk = self.push_vreg(); // bit
         let sc1 = self.asm.sc1;
@@ -269,8 +332,12 @@ impl<'a> Lower<'a> {
         // sq > n iff sc2 > dhi, or sc2 == dhi && sc1 > dlo
         self.asm.bltu(dhi, sc2, l_clear);
         self.asm.bne(dhi, sc2, l_keep);
-        self.asm.bltu(dlo, sc1, l_clear);
-        self.asm.jal_(ZERO, l_keep);
+        // A5 (survey arith.md): equal-high tail inverted — `keep` is the
+        // taken branch (dlo >= sc1) and the clear path is the fall-through
+        // into the xor, dropping the unconditional jal. bltu dlo,sc1 is the
+        // exact complement of bgeu dlo,sc1, so the taken/not-taken sets per
+        // input are unchanged; the first bltu still targets l_clear.
+        self.asm.bgeu(dlo, sc1, l_keep);
         self.place(l_clear);
         self.asm.xor(rr, rr, kk);
         self.place(l_keep);
@@ -311,6 +378,145 @@ impl<'a> Lower<'a> {
             self.asm.mv(rhi, hi_src);
         }
         Ok(())
+    }
+
+    /* ---- A8: the shared sqrt routine bodies --------------------------- */
+
+    /// A8: the shared u64-domain sqrt routine — the SAME bitwise-isqrt
+    /// body as the inline `emit_sqrt64` (bit scan from 2^31 down, the A5
+    /// inverted tail, the ceil tail inside for the SQRTUP variant), with
+    /// the operand/result riding the 64-byte frame workspace at
+    /// `sqrt_save_off` instead of the pool register d. Workers: n = T1
+    /// (x6), r = T2 (x7), bit = T3 (x28) — all pool members in Im/Imc and
+    /// pool-or-bank homes in ImcRemap, so they are saved/restored around
+    /// the compute (the mul128 routine's D4 save-set discipline); the
+    /// square temp sc1 is dead at every call site (the A9 premise).
+    /// `a0` is never written — the `jr a0` return reads the caller's D1
+    /// link directly. The fault paths don't exist inside (isqrt never
+    /// faults); the routine's own faces are the site's range check and
+    /// nil guard, which stay at the site.
+    pub(crate) fn emit_sqrt64_routine(&mut self, op: Bytecode) {
+        let s = self.sqrt_save_off;
+        debug_assert!(s >= 0, "sqrt64 routine without a reserved save area");
+        const N: u8 = 6; // T1
+        const R: u8 = 7; // T2
+        const BIT: u8 = 28; // T3
+        let sc1 = self.asm.sc1;
+        let sd = |lw: &mut Self, rs: u8, off: i32| lw.asm.sd(rs, S0, off);
+        let ld = |lw: &mut Self, rd: u8, off: i32| lw.asm.ld(rd, S0, off);
+        sd(self, N, s + 32);
+        sd(self, R, s + 40);
+        sd(self, BIT, s + 48);
+        ld(self, N, s); // n
+        self.asm.addi(R, ZERO, 0); // r = 0
+        self.asm.li(BIT, 1u64 << 31); // bit = 2^31
+        let l_loop = self.asm.new_label();
+        let l_keep = self.asm.new_label();
+        let l_done = self.asm.new_label();
+        self.place(l_loop);
+        self.asm.beq(BIT, ZERO, l_done);
+        self.asm.or_(R, R, BIT);
+        self.asm.r(1, R, R, 0, sc1, 0b0110011); // mul sc1, r, r
+        // A5 inverted tail, same as the inline body (keep is the taken
+        // branch; clear is the fall-through into the xor)
+        self.asm.bgeu(N, sc1, l_keep); // n >= r*r → keep the bit
+        self.asm.xor(R, R, BIT);
+        self.place(l_keep);
+        self.asm.srli_(BIT, BIT, 1);
+        self.asm.jal_(ZERO, l_loop);
+        self.place(l_done);
+        // R = isqrt(n); the ceil tail is part of the routine (the same
+        // FIXED shape as the inline body: recompute R*R fresh — the
+        // loop's last square belongs to the TESTED value R|bit, stale by
+        // one step when the final bit was cleared, which used to return
+        // floor+1 on the even perfect squares; the fresh square makes
+        // rem = n - R*R borrow-safe and exact)
+        if op == Bytecode::SQRTUP {
+            self.asm.r(1, R, R, 0, sc1, 0b0110011); // mul sc1, r, r (fresh)
+            self.asm.sub(N, N, sc1); // n - r*r (borrow-safe: r*r <= n)
+            self.asm.r(0, N, ZERO, 3, sc1, 0b0110011); // snez sc1, n-r*r
+            self.asm.add(R, R, sc1); // ceil
+        }
+        sd(self, R, s + 16); // result
+        ld(self, N, s + 32);
+        ld(self, R, s + 40);
+        ld(self, BIT, s + 48);
+        self.asm.jr(self.a0); // D1: return through the link register
+    }
+
+    /// A8: the shared u128 pair-domain sqrt routine — the SAME loop as the
+    /// inline `emit_sqrt128` (bit scan from 2^63 down, mul+mulhu square,
+    /// the A5 inverted equal-high tail, the SQRTUP ceil tail with the
+    /// recomputed square and the 128-bit remainder subtract inside), with
+    /// the operand/result pair on the frame workspace. Workers: rr = T1
+    /// (x6), kk = T2 (x7), dlo = T3 (x28), dhi = T4 (x29) — the mul128
+    /// routine's save-set class (all pool members in Im/Imc; pool-or-bank
+    /// homes in ImcRemap), saved/restored around the compute; sc1/sc2 are
+    /// dead at every call site. a0 is never written (the D1 link).
+    pub(crate) fn emit_sqrt128_routine(&mut self, op: Bytecode) {
+        let s = self.sqrt_save_off;
+        debug_assert!(s >= 0, "sqrt128 routine without a reserved save area");
+        const RR: u8 = 6; // T1
+        const KK: u8 = 7; // T2
+        const DLO: u8 = 28; // T3
+        const DHI: u8 = 29; // T4
+        let (sc1, sc2) = (self.asm.sc1, self.asm.sc2);
+        let sd = |lw: &mut Self, rs: u8, off: i32| lw.asm.sd(rs, S0, off);
+        let ld = |lw: &mut Self, rd: u8, off: i32| lw.asm.ld(rd, S0, off);
+        sd(self, RR, s + 32);
+        sd(self, KK, s + 40);
+        sd(self, DLO, s + 48);
+        sd(self, DHI, s + 56);
+        ld(self, DLO, s); // n lo
+        ld(self, DHI, s + 8); // n hi
+        self.asm.addi(RR, ZERO, 0); // r = 0
+        self.asm.li(KK, 1u64 << 63); // bit = 2^63
+        let l_loop = self.asm.new_label();
+        let l_clear = self.asm.new_label();
+        let l_keep = self.asm.new_label();
+        let l_done = self.asm.new_label();
+        self.place(l_loop);
+        self.asm.beq(KK, ZERO, l_done);
+        self.asm.or_(RR, RR, KK);
+        self.asm.r(1, RR, RR, 0, sc1, 0b0110011); // mul sc1, r, r
+        self.asm.r(1, RR, RR, 3, sc2, 0b0110011); // mulhu sc2, r, r
+        // sq > n iff sc2 > dhi, or sc2 == dhi && sc1 > dlo — the A5
+        // inverted equal-high tail, same as the inline body
+        self.asm.bltu(DHI, sc2, l_clear);
+        self.asm.bne(DHI, sc2, l_keep);
+        self.asm.bgeu(DLO, sc1, l_keep);
+        self.place(l_clear);
+        self.asm.xor(RR, RR, KK);
+        self.place(l_keep);
+        self.asm.srli_(KK, KK, 1);
+        self.asm.jal_(ZERO, l_loop);
+        self.place(l_done);
+        // result halves: (r, 0) for the floor; the ceil's +1 may wrap the
+        // low half at n = 2^128-1, so the carry goes to the high half —
+        // the exact inline tail (the loop's last mul predates the final
+        // bit clear, so the square is recomputed)
+        if op == Bytecode::SQRTUP {
+            self.asm.r(1, RR, RR, 0, sc1, 0b0110011); // mul sc1, r, r
+            self.asm.r(1, RR, RR, 3, sc2, 0b0110011); // mulhu sc2, r, r
+            self.asm.r(0, sc1, DLO, 3, KK, 0b0110011); // sltu kk, dlo, sc1 (borrow)
+            self.asm.sub(sc1, DLO, sc1); // rem_lo
+            self.asm.sub(sc2, DHI, sc2); // rem_hi
+            self.asm.sub(sc2, sc2, KK); // - borrow
+            self.asm.or_(KK, sc1, sc2);
+            self.asm.r(0, KK, ZERO, 3, KK, 0b0110011); // snez kk, kk (=1 if rem)
+            self.asm.add(sc1, RR, KK); // sum = r + rem!=0 (may wrap)
+            self.asm.r(0, RR, sc1, 3, sc2, 0b0110011); // sltu sc2, sc1, rr (carry)
+            sd(self, sc1, s + 16); // result lo
+            sd(self, sc2, s + 24); // result hi (carry)
+        } else {
+            sd(self, RR, s + 16); // result lo
+            sd(self, ZERO, s + 24); // result hi = 0
+        }
+        ld(self, RR, s + 32);
+        ld(self, KK, s + 40);
+        ld(self, DLO, s + 48);
+        ld(self, DHI, s + 56);
+        self.asm.jr(self.a0); // D1: return through the link register
     }
 
     /// T9: XLG — `local[idx] OP rhs` with the Bool result replacing the

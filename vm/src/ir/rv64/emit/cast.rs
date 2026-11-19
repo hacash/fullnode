@@ -230,6 +230,7 @@ impl<'a> Lower<'a> {
 
     pub(crate) fn emit_cbytes(&mut self, w: u32) -> Ret<()> {
         debug_assert!(matches!(w, 1 | 8 | 16 | 32 | 64));
+        self.cat_top_kill(); // B9: this allocation bumps S1
         let nb = if w == 1 { 1 } else { (w / 8) as i32 }; // 1 | 2 | 4 | 8
         let rp = self.pop_own_replace(); // holds the value, becomes the ptr
         let rl = self.push_vreg();
@@ -256,6 +257,8 @@ impl<'a> Lower<'a> {
         self.place(l_st_end);
         self.asm.add(S1, S1, rl); // bump
         self.asm.r(0x20, rl, S1, 0, rp, 0b0110011); // sub rp, S1, rl (old bump)
+        // B9: the fresh nb bytes ARE the arena top (rp + rl == S1)
+        self.cat_top_establish(rp, rl);
         Ok(())
     }
 
@@ -266,6 +269,7 @@ impl<'a> Lower<'a> {
     /// are 1/2/4/8 (a flagged slot's join is sub-128), so the loop is the
     /// same shape with a register bound.
     pub(crate) fn emit_cbytes_dyn(&mut self, idx: u8) -> Ret<()> {
+        self.cat_top_kill(); // B9: this allocation bumps S1
         let off = self.dyn_w_off[idx as usize];
         let rp = self.pop_own_replace(); // holds the value, becomes the ptr
         let rl = self.push_vreg();
@@ -291,6 +295,8 @@ impl<'a> Lower<'a> {
         self.place(l_st_end);
         self.asm.add(S1, S1, rl); // bump
         self.asm.r(0x20, rl, S1, 0, rp, 0b0110011); // sub rp, S1, rl (old bump)
+        // B9: the fresh nb bytes ARE the arena top (rp + rl == S1)
+        self.cat_top_establish(rp, rl);
         Ok(())
     }
 }

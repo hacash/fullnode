@@ -69,6 +69,10 @@
                 0,
                 None,
                 false,
+                // D2/D3: this harness drives the library helpers directly,
+                // so the shared-routine gates are forced ON (the gate's
+                // production path is body_routine_site_counts' job)
+                (true, true, true, true, false, false, false, false),
             );
             lw.asm.long_branch_ids = long_ids.clone();
             lw.asm.wide_c_ids = wide_ids.clone();
@@ -93,6 +97,18 @@
             if let Some(l) = lw.u256div129_lbl {
                 lw.asm.place(l);
                 lw.emit_u256_divmod_u129_routine();
+            }
+            if let Some(l) = lw.u256mul_lbl {
+                lw.asm.place(l);
+                lw.emit_u256_mul_wide_routine();
+            }
+            if let Some(l) = lw.u256round_hu_lbl {
+                lw.asm.place(l);
+                lw.emit_u256_round_halfup_routine();
+            }
+            if let Some(l) = lw.u256round_he_lbl {
+                lw.asm.place(l);
+                lw.emit_u256_round_halfeven_routine();
             }
             lw.asm.place(lw.fault_arith);
             lw.asm.li(A0, EXIT_ARITH);

@@ -1,0 +1,613 @@
+# fitsh→RV64 代码体积基线（size baseline）
+
+生成工具：`testkit/tests/rv64_size_baseline.rs`（`#[ignore]` 测量工具，非断言型基线检查）。
+
+重新生成（改编译器后更新基线）：
+
+```
+RV64_BASELINE_WRITE=1 cargo test -p testkit --offline --test rv64_size_baseline -- --ignored --nocapture
+```
+
+对比运行（不写文件，输出与基线的逐用例 delta）：
+
+```
+cargo test -p testkit --offline --test rv64_size_baseline -- --ignored --nocapture
+```
+
+语料：182 个 fitsh 用例 × 3 个编译模式（Im / Imc / ImcRemap），共 546 行统计。
+
+测量口径：
+
+- 管线 = 生产内核路径：fitsh 源 → `Tokenizer` → `vm::fitshc::compile_body`（`(data: bytes)` 参数）→ `vm::ir::rv64::lower_body_mode_arena_heap`（arena 按 `Rv64imBodyMeta::default` 预算，即 mem 64 KiB / L1 IO 上限，镜像 `vm/src/fitshc/kernel.rs` 的计算）；
+- 每用例 × 模式编译两次断言字节一致（确定性自检），容器 `pack_segments_profile` + `verify_container_with_cap` 共识准入校验通过；
+- `code_bytes` 只计 RX 代码段（`Rv64Stats.code_bytes`），`pool_bytes` 为只读字面量池大小（单独列，不计入 code_bytes）；`cycles` 为静态指令权重和（`inst_cycles` 重解码求和）。
+
+## 三模式合计
+
+| mode | insts | code_bytes | cycles | locals(sum) | pool_bytes |
+|---|---:|---:|---:|---:|---:|
+| Im | 35337 | 141348 | 47442 | 1451 | 1949 |
+| Imc | 35255 | 115158 | 47360 | 1451 | 1949 |
+| ImcRemap | 32215 | 98390 | 40708 | 1451 | 2525 |
+
+Imc 相对 Im 压缩 18.5%；ImcRemap 相对 Im 压缩 30.4%；ImcRemap 相对 Imc 再压 14.6%。
+
+## 分组 code_bytes 小计
+
+| group | Im | Imc | ImcRemap |
+|---|---:|---:|---:|
+| micro | 5136 | 4254 | 3868 |
+| vmunit | 1668 | 1248 | 1136 |
+| net.g1 | 11940 | 9746 | 9364 |
+| net.g2 | 17100 | 14110 | 10738 |
+| net.g3 | 14752 | 11778 | 12390 |
+| net.g4 | 6288 | 5032 | 4374 |
+| net.g5 | 3040 | 2330 | 1972 |
+| net.g6 | 5444 | 4282 | 3744 |
+| net.g7 | 7644 | 5734 | 5720 |
+| net.g8 | 20292 | 15562 | 16302 |
+| net.g9 | 9688 | 8032 | 7044 |
+| net.g10 | 19468 | 16870 | 11530 |
+| net.g17 | 4504 | 3824 | 2688 |
+| prod | 14384 | 12356 | 7520 |
+
+## 语料构成
+
+- `micro` — 自建覆盖片段：其余组未覆盖的形态（u16 checked 面、被支配常量乘溢出检查合并面、FIN2 SqrtMul（软件 isqrt）、u128 对域四则、item_concat、复合下标赋值 *=、heap 读写、else-if 链）；
+- `vmunit` — `vm/src/ir/rv64/tests/subset_tests.rs` 的 `lowers_core_constructs` 8 个规范化用例；
+- `net.g1..net.g9` — hacdtestnet three_way 战役（g1 算术含 checked 溢出面 / g2 row-C 大数 mul_add、mul_div、add_mod、mul_mod（u64+u128，u256/u128 软除法与 mulmod 例程）/ g3 fin 目录 / g4 bytes / g5 控制流 / g6 类型转换 / g7 列表 / g8 映射 / g9 赋值路径），取自 testkit/tests/calc_aot_differential.rs 的去重 body 集；
+- `net.g10` — fullnodetest g10 算法集（median 排序网络、settle 分账、sha256-r4、keccak-r1、uni_v2、black_scholes、rpow）；
+- `net.g17` — fullnodetest g17 生产裁剪（dict-walk 解析游走、价格流 TWAP、CPMM 报价）；
+- `prod` — 跟踪的生产内核：`vm/tests/fitsh_kernels_score_sum.inc`、`vm/tests/fitsh_kernels_hacd200.inc`、sha256 单块内核（`vm/tests/rv64_hash_kernels.rs` 生成器移植）。
+
+## 每用例明细（长表）
+
+| name | group | mode | insts | code_bytes | cycles | locals | pool_bytes |
+|---|---|---|---:|---:|---:|---:|---:|
+| micro.arith.u16.checked | micro | Im | 125 | 500 | 157 | 5 | 0 |
+| micro.arith.u16.checked | micro | Imc | 125 | 404 | 157 | 5 | 0 |
+| micro.arith.u16.checked | micro | ImcRemap | 110 | 336 | 122 | 5 | 0 |
+| micro.mulcheck.dominated | micro | Im | 127 | 508 | 151 | 4 | 0 |
+| micro.mulcheck.dominated | micro | Imc | 127 | 410 | 151 | 4 | 0 |
+| micro.mulcheck.dominated | micro | ImcRemap | 122 | 378 | 137 | 4 | 0 |
+| micro.fin2.sqrt_mul | micro | Im | 456 | 1824 | 655 | 5 | 0 |
+| micro.fin2.sqrt_mul | micro | Imc | 456 | 1590 | 655 | 5 | 0 |
+| micro.fin2.sqrt_mul | micro | ImcRemap | 451 | 1412 | 636 | 5 | 0 |
+| micro.u128.arith | micro | Im | 227 | 908 | 348 | 6 | 0 |
+| micro.u128.arith | micro | Imc | 227 | 784 | 348 | 6 | 0 |
+| micro.u128.arith | micro | ImcRemap | 233 | 732 | 360 | 6 | 0 |
+| micro.list.itemcat | micro | Im | 30 | 120 | 32 | 2 | 32 |
+| micro.list.itemcat | micro | Imc | 30 | 88 | 32 | 2 | 32 |
+| micro.list.itemcat | micro | ImcRemap | 30 | 88 | 32 | 2 | 32 |
+| micro.list.itemxop | micro | Im | 87 | 348 | 108 | 2 | 0 |
+| micro.list.itemxop | micro | Imc | 87 | 262 | 108 | 2 | 0 |
+| micro.list.itemxop | micro | ImcRemap | 87 | 264 | 108 | 2 | 0 |
+| micro.heap.rw | micro | Im | 158 | 632 | 195 | 3 | 0 |
+| micro.heap.rw | micro | Imc | 158 | 488 | 195 | 3 | 0 |
+| micro.heap.rw | micro | ImcRemap | 152 | 464 | 180 | 3 | 0 |
+| micro.ctrl.elsechain | micro | Im | 74 | 296 | 90 | 3 | 0 |
+| micro.ctrl.elsechain | micro | Imc | 74 | 228 | 90 | 3 | 0 |
+| micro.ctrl.elsechain | micro | ImcRemap | 70 | 194 | 74 | 3 | 0 |
+| vmunit.while-sum | vmunit | Im | 58 | 232 | 70 | 3 | 0 |
+| vmunit.while-sum | vmunit | Imc | 58 | 174 | 70 | 3 | 0 |
+| vmunit.while-sum | vmunit | ImcRemap | 53 | 150 | 56 | 3 | 0 |
+| vmunit.bytes-idiom | vmunit | Im | 86 | 344 | 102 | 2 | 16 |
+| vmunit.bytes-idiom | vmunit | Imc | 86 | 266 | 102 | 2 | 16 |
+| vmunit.bytes-idiom | vmunit | ImcRemap | 77 | 234 | 86 | 2 | 24 |
+| vmunit.bytes-fold | vmunit | Im | 75 | 300 | 96 | 4 | 4 |
+| vmunit.bytes-fold | vmunit | Imc | 75 | 234 | 96 | 4 | 4 |
+| vmunit.bytes-fold | vmunit | ImcRemap | 65 | 186 | 69 | 4 | 4 |
+| vmunit.if-else-return | vmunit | Im | 46 | 184 | 50 | 1 | 2 |
+| vmunit.if-else-return | vmunit | Imc | 46 | 134 | 50 | 1 | 2 |
+| vmunit.if-else-return | vmunit | ImcRemap | 46 | 134 | 50 | 1 | 2 |
+| vmunit.require | vmunit | Im | 33 | 132 | 35 | 1 | 1 |
+| vmunit.require | vmunit | Imc | 33 | 94 | 35 | 1 | 1 |
+| vmunit.require | vmunit | ImcRemap | 33 | 94 | 35 | 1 | 1 |
+| vmunit.throw | vmunit | Im | 16 | 64 | 16 | 1 | 0 |
+| vmunit.throw | vmunit | Imc | 16 | 42 | 16 | 1 | 0 |
+| vmunit.throw | vmunit | ImcRemap | 16 | 42 | 16 | 1 | 0 |
+| vmunit.fin-minmax-clamp | vmunit | Im | 59 | 236 | 64 | 2 | 0 |
+| vmunit.fin-minmax-clamp | vmunit | Imc | 59 | 174 | 64 | 2 | 0 |
+| vmunit.fin-minmax-clamp | vmunit | ImcRemap | 59 | 170 | 62 | 2 | 0 |
+| vmunit.pow-mod | vmunit | Im | 44 | 176 | 49 | 2 | 0 |
+| vmunit.pow-mod | vmunit | Imc | 44 | 130 | 49 | 2 | 0 |
+| vmunit.pow-mod | vmunit | ImcRemap | 44 | 126 | 47 | 2 | 0 |
+| g1.add.u8 | net.g1 | Im | 59 | 236 | 70 | 3 | 0 |
+| g1.add.u8 | net.g1 | Imc | 59 | 184 | 70 | 3 | 0 |
+| g1.add.u8 | net.g1 | ImcRemap | 54 | 164 | 59 | 3 | 0 |
+| g1.add.u64 | net.g1 | Im | 184 | 736 | 209 | 3 | 0 |
+| g1.add.u64 | net.g1 | Imc | 184 | 600 | 209 | 3 | 0 |
+| g1.add.u64 | net.g1 | ImcRemap | 181 | 578 | 200 | 3 | 0 |
+| g1.sub.u64 | net.g1 | Im | 184 | 736 | 209 | 3 | 0 |
+| g1.sub.u64 | net.g1 | Imc | 184 | 602 | 209 | 3 | 0 |
+| g1.sub.u64 | net.g1 | ImcRemap | 182 | 578 | 201 | 3 | 0 |
+| g1.mul.u64 | net.g1 | Im | 185 | 740 | 214 | 3 | 0 |
+| g1.mul.u64 | net.g1 | Imc | 185 | 604 | 214 | 3 | 0 |
+| g1.mul.u64 | net.g1 | ImcRemap | 183 | 584 | 206 | 3 | 0 |
+| g1.div.u64 | net.g1 | Im | 184 | 736 | 220 | 3 | 0 |
+| g1.div.u64 | net.g1 | Imc | 184 | 602 | 220 | 3 | 0 |
+| g1.div.u64 | net.g1 | ImcRemap | 182 | 578 | 212 | 3 | 0 |
+| g1.mod.u64 | net.g1 | Im | 184 | 736 | 220 | 3 | 0 |
+| g1.mod.u64 | net.g1 | Imc | 184 | 602 | 220 | 3 | 0 |
+| g1.mod.u64 | net.g1 | ImcRemap | 182 | 578 | 212 | 3 | 0 |
+| g1.bshl.u64 | net.g1 | Im | 185 | 740 | 210 | 3 | 0 |
+| g1.bshl.u64 | net.g1 | Imc | 185 | 604 | 210 | 3 | 0 |
+| g1.bshl.u64 | net.g1 | ImcRemap | 183 | 584 | 202 | 3 | 0 |
+| g1.bshr.u64 | net.g1 | Im | 185 | 740 | 210 | 3 | 0 |
+| g1.bshr.u64 | net.g1 | Imc | 185 | 604 | 210 | 3 | 0 |
+| g1.bshr.u64 | net.g1 | ImcRemap | 183 | 584 | 202 | 3 | 0 |
+| g1.pow.u64 | net.g1 | Im | 193 | 772 | 222 | 3 | 0 |
+| g1.pow.u64 | net.g1 | Imc | 193 | 624 | 222 | 3 | 0 |
+| g1.pow.u64 | net.g1 | ImcRemap | 190 | 602 | 213 | 3 | 0 |
+| g1.clamp.u64 | net.g1 | Im | 257 | 1028 | 293 | 4 | 0 |
+| g1.clamp.u64 | net.g1 | Imc | 257 | 846 | 293 | 4 | 0 |
+| g1.clamp.u64 | net.g1 | ImcRemap | 253 | 814 | 280 | 4 | 0 |
+| g1.max.u64 | net.g1 | Im | 184 | 736 | 209 | 3 | 0 |
+| g1.max.u64 | net.g1 | Imc | 184 | 600 | 209 | 3 | 0 |
+| g1.max.u64 | net.g1 | ImcRemap | 182 | 578 | 201 | 3 | 0 |
+| g1.min.u64 | net.g1 | Im | 184 | 736 | 209 | 3 | 0 |
+| g1.min.u64 | net.g1 | Imc | 184 | 600 | 209 | 3 | 0 |
+| g1.min.u64 | net.g1 | ImcRemap | 182 | 578 | 201 | 3 | 0 |
+| g1.absdiff.u64 | net.g1 | Im | 186 | 744 | 211 | 3 | 0 |
+| g1.absdiff.u64 | net.g1 | Imc | 186 | 608 | 211 | 3 | 0 |
+| g1.absdiff.u64 | net.g1 | ImcRemap | 184 | 586 | 203 | 3 | 0 |
+| g1.divup.u64 | net.g1 | Im | 187 | 748 | 234 | 3 | 0 |
+| g1.divup.u64 | net.g1 | Imc | 187 | 610 | 234 | 3 | 0 |
+| g1.divup.u64 | net.g1 | ImcRemap | 185 | 588 | 226 | 3 | 0 |
+| g1.divexact.u64 | net.g1 | Im | 186 | 744 | 233 | 3 | 0 |
+| g1.divexact.u64 | net.g1 | Imc | 186 | 608 | 233 | 3 | 0 |
+| g1.divexact.u64 | net.g1 | ImcRemap | 184 | 586 | 225 | 3 | 0 |
+| g1.mixed.add.u8u64 | net.g1 | Im | 58 | 232 | 69 | 3 | 0 |
+| g1.mixed.add.u8u64 | net.g1 | Imc | 58 | 180 | 69 | 3 | 0 |
+| g1.mixed.add.u8u64 | net.g1 | ImcRemap | 53 | 160 | 58 | 3 | 0 |
+| g1.mixed.div.u8u128 | net.g1 | Im | 142 | 568 | 219 | 3 | 0 |
+| g1.mixed.div.u8u128 | net.g1 | Imc | 142 | 490 | 219 | 3 | 0 |
+| g1.mixed.div.u8u128 | net.g1 | ImcRemap | 147 | 488 | 227 | 3 | 0 |
+| g1.mixed.bshl.u8u16 | net.g1 | Im | 58 | 232 | 68 | 3 | 0 |
+| g1.mixed.bshl.u8u16 | net.g1 | Imc | 58 | 178 | 68 | 3 | 0 |
+| g1.mixed.bshl.u8u16 | net.g1 | ImcRemap | 54 | 156 | 58 | 3 | 0 |
+| g2.muladdsub | net.g2 | Im | 927 | 3708 | 1261 | 15 | 0 |
+| g2.muladdsub | net.g2 | Imc | 927 | 3148 | 1261 | 15 | 0 |
+| g2.muladdsub | net.g2 | ImcRemap | 847 | 2506 | 1129 | 15 | 48 |
+| g2.muldiv | net.g2 | Im | 1341 | 5364 | 2065 | 24 | 0 |
+| g2.muldiv | net.g2 | Imc | 1323 | 4406 | 2047 | 24 | 0 |
+| g2.muldiv | net.g2 | ImcRemap | 1173 | 3404 | 1832 | 24 | 16 |
+| g2.modarith64 | net.g2 | Im | 782 | 3128 | 1214 | 18 | 0 |
+| g2.modarith64 | net.g2 | Imc | 782 | 2432 | 1214 | 18 | 0 |
+| g2.modarith64 | net.g2 | ImcRemap | 691 | 2026 | 1060 | 18 | 32 |
+| g2.modarith128 | net.g2 | Im | 1225 | 4900 | 1590 | 12 | 0 |
+| g2.modarith128 | net.g2 | Imc | 1222 | 4124 | 1587 | 12 | 0 |
+| g2.modarith128 | net.g2 | ImcRemap | 850 | 2802 | 1239 | 12 | 56 |
+| g3.fin2.div_exact.exact | net.g3 | Im | 138 | 552 | 181 | 1 | 0 |
+| g3.fin2.div_exact.exact | net.g3 | Imc | 138 | 444 | 181 | 1 | 0 |
+| g3.fin2.div_exact.exact | net.g3 | ImcRemap | 148 | 476 | 201 | 1 | 0 |
+| g3.fin2.div_exact.inexact | net.g3 | Im | 138 | 552 | 181 | 1 | 0 |
+| g3.fin2.div_exact.inexact | net.g3 | Imc | 138 | 444 | 181 | 1 | 0 |
+| g3.fin2.div_exact.inexact | net.g3 | ImcRemap | 148 | 476 | 201 | 1 | 0 |
+| g3.fin2.div_floor | net.g3 | Im | 136 | 544 | 179 | 1 | 0 |
+| g3.fin2.div_floor | net.g3 | Imc | 136 | 436 | 179 | 1 | 0 |
+| g3.fin2.div_floor | net.g3 | ImcRemap | 146 | 468 | 199 | 1 | 0 |
+| g3.fin2.div_half_up | net.g3 | Im | 162 | 648 | 205 | 1 | 0 |
+| g3.fin2.div_half_up | net.g3 | Imc | 162 | 518 | 205 | 1 | 0 |
+| g3.fin2.div_half_up | net.g3 | ImcRemap | 172 | 560 | 225 | 1 | 0 |
+| g3.fin2.sat_add | net.g3 | Im | 70 | 280 | 81 | 1 | 0 |
+| g3.fin2.sat_add | net.g3 | Imc | 70 | 222 | 81 | 1 | 0 |
+| g3.fin2.sat_add | net.g3 | ImcRemap | 70 | 224 | 81 | 1 | 0 |
+| g3.fin2.sat_sub | net.g3 | Im | 75 | 300 | 86 | 1 | 0 |
+| g3.fin2.sat_sub | net.g3 | Imc | 75 | 234 | 86 | 1 | 0 |
+| g3.fin2.sat_sub | net.g3 | ImcRemap | 75 | 240 | 86 | 1 | 0 |
+| g3.fin2.div.zero | net.g3 | Im | 136 | 544 | 179 | 1 | 0 |
+| g3.fin2.div.zero | net.g3 | Imc | 136 | 436 | 179 | 1 | 0 |
+| g3.fin2.div.zero | net.g3 | ImcRemap | 146 | 468 | 199 | 1 | 0 |
+| g3.fin3.mul_div_exact.exact | net.g3 | Im | 164 | 656 | 225 | 1 | 0 |
+| g3.fin3.mul_div_exact.exact | net.g3 | Imc | 164 | 526 | 225 | 1 | 0 |
+| g3.fin3.mul_div_exact.exact | net.g3 | ImcRemap | 174 | 562 | 245 | 1 | 0 |
+| g3.fin3.mul_div_exact.inexact | net.g3 | Im | 164 | 656 | 225 | 1 | 0 |
+| g3.fin3.mul_div_exact.inexact | net.g3 | Imc | 164 | 526 | 225 | 1 | 0 |
+| g3.fin3.mul_div_exact.inexact | net.g3 | ImcRemap | 174 | 562 | 245 | 1 | 0 |
+| g3.fin3.mul_div_floor | net.g3 | Im | 162 | 648 | 223 | 1 | 0 |
+| g3.fin3.mul_div_floor | net.g3 | Imc | 162 | 518 | 223 | 1 | 0 |
+| g3.fin3.mul_div_floor | net.g3 | ImcRemap | 172 | 554 | 243 | 1 | 0 |
+| g3.fin3.mul_div_ceil | net.g3 | Im | 173 | 692 | 234 | 1 | 0 |
+| g3.fin3.mul_div_ceil | net.g3 | Imc | 173 | 552 | 234 | 1 | 0 |
+| g3.fin3.mul_div_ceil | net.g3 | ImcRemap | 183 | 592 | 254 | 1 | 0 |
+| g3.fin3.scaled_add_floor | net.g3 | Im | 174 | 696 | 239 | 1 | 0 |
+| g3.fin3.scaled_add_floor | net.g3 | Imc | 174 | 560 | 239 | 1 | 0 |
+| g3.fin3.scaled_add_floor | net.g3 | ImcRemap | 184 | 594 | 259 | 1 | 0 |
+| g3.fin3.scaled_sub_floor | net.g3 | Im | 175 | 700 | 240 | 1 | 0 |
+| g3.fin3.scaled_sub_floor | net.g3 | Imc | 175 | 568 | 240 | 1 | 0 |
+| g3.fin3.scaled_sub_floor | net.g3 | ImcRemap | 185 | 602 | 260 | 1 | 0 |
+| g3.fin3.u64_mad | net.g3 | Im | 97 | 388 | 130 | 1 | 0 |
+| g3.fin3.u64_mad | net.g3 | Imc | 97 | 298 | 130 | 1 | 0 |
+| g3.fin3.u64_mad | net.g3 | ImcRemap | 97 | 302 | 130 | 1 | 0 |
+| g3.fin3.u64_mad.u8-ovf | net.g3 | Im | 99 | 396 | 132 | 1 | 0 |
+| g3.fin3.u64_mad.u8-ovf | net.g3 | Imc | 99 | 306 | 132 | 1 | 0 |
+| g3.fin3.u64_mad.u8-ovf | net.g3 | ImcRemap | 99 | 310 | 132 | 1 | 0 |
+| g3.fin3.u64_mad.u16 | net.g3 | Im | 99 | 396 | 132 | 1 | 0 |
+| g3.fin3.u64_mad.u16 | net.g3 | Imc | 99 | 302 | 132 | 1 | 0 |
+| g3.fin3.u64_mad.u16 | net.g3 | ImcRemap | 99 | 306 | 132 | 1 | 0 |
+| g3.fin4.mul_sub_div.neg | net.g3 | Im | 180 | 720 | 245 | 1 | 0 |
+| g3.fin4.mul_sub_div.neg | net.g3 | Imc | 180 | 584 | 245 | 1 | 0 |
+| g3.fin4.mul_sub_div.neg | net.g3 | ImcRemap | 190 | 618 | 265 | 1 | 0 |
+| g3.finp3.abs_diff_lte.true | net.g3 | Im | 77 | 308 | 80 | 1 | 0 |
+| g3.finp3.abs_diff_lte.true | net.g3 | Imc | 77 | 226 | 80 | 1 | 0 |
+| g3.finp3.abs_diff_lte.true | net.g3 | ImcRemap | 77 | 232 | 80 | 1 | 0 |
+| g3.finp3.abs_diff_lte.false | net.g3 | Im | 77 | 308 | 80 | 1 | 0 |
+| g3.finp3.abs_diff_lte.false | net.g3 | Imc | 77 | 226 | 80 | 1 | 0 |
+| g3.finp3.abs_diff_lte.false | net.g3 | ImcRemap | 77 | 232 | 80 | 1 | 0 |
+| g3.finpow3.scaled-square | net.g3 | Im | 298 | 1192 | 409 | 1 | 0 |
+| g3.finpow3.scaled-square | net.g3 | Imc | 298 | 962 | 409 | 1 | 0 |
+| g3.finpow3.scaled-square | net.g3 | ImcRemap | 308 | 1002 | 429 | 1 | 0 |
+| g3.finpow3.half-up-per-mul | net.g3 | Im | 298 | 1192 | 409 | 1 | 0 |
+| g3.finpow3.half-up-per-mul | net.g3 | Imc | 298 | 966 | 409 | 1 | 0 |
+| g3.finpow3.half-up-per-mul | net.g3 | ImcRemap | 308 | 1006 | 429 | 1 | 0 |
+| g3.finpow3.scale-zero | net.g3 | Im | 298 | 1192 | 409 | 1 | 0 |
+| g3.finpow3.scale-zero | net.g3 | Imc | 298 | 962 | 409 | 1 | 0 |
+| g3.finpow3.scale-zero | net.g3 | ImcRemap | 308 | 1002 | 429 | 1 | 0 |
+| g3.finpow3.zero-base | net.g3 | Im | 298 | 1192 | 409 | 1 | 0 |
+| g3.finpow3.zero-base | net.g3 | Imc | 298 | 962 | 409 | 1 | 0 |
+| g3.finpow3.zero-base | net.g3 | ImcRemap | 308 | 1002 | 429 | 1 | 0 |
+| g4.omni | net.g4 | Im | 321 | 1284 | 404 | 11 | 302 |
+| g4.omni | net.g4 | Imc | 321 | 1060 | 404 | 11 | 302 |
+| g4.omni | net.g4 | ImcRemap | 299 | 906 | 350 | 11 | 312 |
+| g4.slb | net.g4 | Im | 209 | 836 | 268 | 8 | 0 |
+| g4.slb | net.g4 | Imc | 209 | 694 | 268 | 8 | 0 |
+| g4.slb | net.g4 | ImcRemap | 189 | 572 | 218 | 8 | 0 |
+| g4.byte-oob | net.g4 | Im | 99 | 396 | 115 | 3 | 0 |
+| g4.byte-oob | net.g4 | Imc | 99 | 314 | 115 | 3 | 0 |
+| g4.byte-oob | net.g4 | ImcRemap | 96 | 296 | 106 | 3 | 0 |
+| g4.cut7 | net.g4 | Im | 36 | 144 | 42 | 2 | 0 |
+| g4.cut7 | net.g4 | Imc | 36 | 108 | 42 | 2 | 0 |
+| g4.cut7 | net.g4 | ImcRemap | 33 | 94 | 35 | 2 | 0 |
+| g4.drop11 | net.g4 | Im | 71 | 284 | 89 | 3 | 0 |
+| g4.drop11 | net.g4 | Imc | 71 | 228 | 89 | 3 | 0 |
+| g4.drop11 | net.g4 | ImcRemap | 62 | 186 | 68 | 3 | 0 |
+| g4.lit | net.g4 | Im | 156 | 624 | 198 | 4 | 302 |
+| g4.lit | net.g4 | Imc | 156 | 506 | 198 | 4 | 302 |
+| g4.lit | net.g4 | ImcRemap | 130 | 406 | 149 | 4 | 312 |
+| g4.wide | net.g4 | Im | 78 | 312 | 94 | 2 | 0 |
+| g4.wide | net.g4 | Imc | 78 | 246 | 94 | 2 | 0 |
+| g4.wide | net.g4 | ImcRemap | 71 | 216 | 79 | 2 | 0 |
+| g4.cmp | net.g4 | Im | 191 | 764 | 217 | 4 | 0 |
+| g4.cmp | net.g4 | Imc | 191 | 586 | 217 | 4 | 0 |
+| g4.cmp | net.g4 | ImcRemap | 187 | 560 | 204 | 4 | 0 |
+| g4.read | net.g4 | Im | 170 | 680 | 203 | 5 | 0 |
+| g4.read | net.g4 | Imc | 170 | 544 | 203 | 5 | 0 |
+| g4.read | net.g4 | ImcRemap | 162 | 498 | 180 | 5 | 0 |
+| g4.nil.size | net.g4 | Im | 67 | 268 | 84 | 3 | 0 |
+| g4.nil.size | net.g4 | Imc | 67 | 208 | 84 | 3 | 0 |
+| g4.nil.size | net.g4 | ImcRemap | 62 | 180 | 71 | 3 | 0 |
+| g4.nil.byte | net.g4 | Im | 74 | 296 | 93 | 3 | 0 |
+| g4.nil.byte | net.g4 | Imc | 74 | 230 | 93 | 3 | 0 |
+| g4.nil.byte | net.g4 | ImcRemap | 69 | 206 | 80 | 3 | 0 |
+| g4.nil.cbytes | net.g4 | Im | 55 | 220 | 74 | 3 | 0 |
+| g4.nil.cbytes | net.g4 | Imc | 55 | 174 | 74 | 3 | 0 |
+| g4.nil.cbytes | net.g4 | ImcRemap | 46 | 136 | 55 | 3 | 0 |
+| g4.choose | net.g4 | Im | 45 | 180 | 52 | 2 | 0 |
+| g4.choose | net.g4 | Imc | 45 | 134 | 52 | 2 | 0 |
+| g4.choose | net.g4 | ImcRemap | 42 | 118 | 45 | 2 | 0 |
+| g5.if.stmt | net.g5 | Im | 69 | 276 | 83 | 3 | 0 |
+| g5.if.stmt | net.g5 | Imc | 69 | 214 | 83 | 3 | 0 |
+| g5.if.stmt | net.g5 | ImcRemap | 67 | 188 | 71 | 3 | 0 |
+| g5.if.value | net.g5 | Im | 59 | 236 | 68 | 3 | 0 |
+| g5.if.value | net.g5 | Imc | 59 | 180 | 68 | 3 | 0 |
+| g5.if.value | net.g5 | ImcRemap | 58 | 164 | 62 | 3 | 0 |
+| g5.if.nest | net.g5 | Im | 104 | 416 | 130 | 3 | 0 |
+| g5.if.nest | net.g5 | Imc | 104 | 324 | 130 | 3 | 0 |
+| g5.if.nest | net.g5 | ImcRemap | 85 | 246 | 89 | 3 | 0 |
+| g5.choose.ternary | net.g5 | Im | 64 | 256 | 74 | 3 | 0 |
+| g5.choose.ternary | net.g5 | Imc | 64 | 194 | 74 | 3 | 0 |
+| g5.choose.ternary | net.g5 | ImcRemap | 62 | 176 | 66 | 3 | 0 |
+| g5.choose.builtin | net.g5 | Im | 65 | 260 | 79 | 3 | 0 |
+| g5.choose.builtin | net.g5 | Imc | 65 | 196 | 79 | 3 | 0 |
+| g5.choose.builtin | net.g5 | ImcRemap | 63 | 182 | 71 | 3 | 0 |
+| g5.choose.eager | net.g5 | Im | 66 | 264 | 89 | 4 | 0 |
+| g5.choose.eager | net.g5 | Imc | 66 | 206 | 89 | 4 | 0 |
+| g5.choose.eager | net.g5 | ImcRemap | 63 | 178 | 78 | 4 | 0 |
+| g5.while.break | net.g5 | Im | 68 | 272 | 85 | 4 | 0 |
+| g5.while.break | net.g5 | Imc | 68 | 208 | 85 | 4 | 0 |
+| g5.while.break | net.g5 | ImcRemap | 60 | 170 | 64 | 4 | 0 |
+| g5.while.cont | net.g5 | Im | 68 | 272 | 85 | 4 | 0 |
+| g5.while.cont | net.g5 | Imc | 68 | 210 | 85 | 4 | 0 |
+| g5.while.cont | net.g5 | ImcRemap | 61 | 170 | 65 | 4 | 0 |
+| g5.while.trap | net.g5 | Im | 77 | 308 | 108 | 4 | 0 |
+| g5.while.trap | net.g5 | Imc | 77 | 236 | 108 | 4 | 0 |
+| g5.while.trap | net.g5 | ImcRemap | 67 | 188 | 82 | 4 | 0 |
+| g5.while.breakonly | net.g5 | Im | 62 | 248 | 76 | 3 | 0 |
+| g5.while.breakonly | net.g5 | Imc | 62 | 188 | 76 | 3 | 0 |
+| g5.while.breakonly | net.g5 | ImcRemap | 55 | 158 | 59 | 3 | 0 |
+| g5.while.count | net.g5 | Im | 58 | 232 | 70 | 3 | 0 |
+| g5.while.count | net.g5 | Imc | 58 | 174 | 70 | 3 | 0 |
+| g5.while.count | net.g5 | ImcRemap | 53 | 152 | 57 | 3 | 0 |
+| g6.is_pred | net.g6 | Im | 140 | 560 | 180 | 6 | 0 |
+| g6.is_pred | net.g6 | Imc | 140 | 450 | 180 | 6 | 0 |
+| g6.is_pred | net.g6 | ImcRemap | 112 | 304 | 116 | 6 | 0 |
+| g6.tid | net.g6 | Im | 103 | 412 | 142 | 4 | 0 |
+| g6.tid | net.g6 | Imc | 103 | 328 | 142 | 4 | 0 |
+| g6.tid | net.g6 | ImcRemap | 90 | 254 | 106 | 4 | 0 |
+| g6.logic | net.g6 | Im | 143 | 572 | 192 | 5 | 0 |
+| g6.logic | net.g6 | Imc | 143 | 484 | 192 | 5 | 0 |
+| g6.logic | net.g6 | ImcRemap | 107 | 316 | 112 | 5 | 0 |
+| g6.logic8 | net.g6 | Im | 79 | 316 | 102 | 4 | 0 |
+| g6.logic8 | net.g6 | Imc | 79 | 250 | 102 | 4 | 0 |
+| g6.logic8 | net.g6 | ImcRemap | 65 | 190 | 70 | 4 | 0 |
+| g6.nilcmp | net.g6 | Im | 69 | 276 | 86 | 4 | 0 |
+| g6.nilcmp | net.g6 | Imc | 69 | 216 | 86 | 4 | 0 |
+| g6.nilcmp | net.g6 | ImcRemap | 65 | 196 | 75 | 4 | 0 |
+| g6.asbool.u64 | net.g6 | Im | 48 | 192 | 54 | 2 | 0 |
+| g6.asbool.u64 | net.g6 | Imc | 48 | 146 | 54 | 2 | 0 |
+| g6.asbool.u64 | net.g6 | ImcRemap | 48 | 142 | 52 | 2 | 0 |
+| g6.asbool.bytes | net.g6 | Im | 50 | 200 | 54 | 1 | 0 |
+| g6.asbool.bytes | net.g6 | Imc | 50 | 146 | 54 | 1 | 0 |
+| g6.asbool.bytes | net.g6 | ImcRemap | 50 | 148 | 54 | 1 | 0 |
+| g6.asu8 | net.g6 | Im | 60 | 240 | 65 | 1 | 0 |
+| g6.asu8 | net.g6 | Imc | 60 | 174 | 65 | 1 | 0 |
+| g6.asu8 | net.g6 | ImcRemap | 60 | 178 | 65 | 1 | 0 |
+| g6.asu64 | net.g6 | Im | 60 | 240 | 65 | 1 | 0 |
+| g6.asu64 | net.g6 | Imc | 60 | 174 | 65 | 1 | 0 |
+| g6.asu64 | net.g6 | ImcRemap | 60 | 178 | 65 | 1 | 0 |
+| g6.multiwidth | net.g6 | Im | 294 | 1176 | 352 | 3 | 0 |
+| g6.multiwidth | net.g6 | Imc | 294 | 954 | 352 | 3 | 0 |
+| g6.multiwidth | net.g6 | ImcRemap | 288 | 914 | 332 | 3 | 0 |
+| g6.asaddr | net.g6 | Im | 38 | 152 | 46 | 2 | 0 |
+| g6.asaddr | net.g6 | Imc | 38 | 114 | 46 | 2 | 0 |
+| g6.asaddr | net.g6 | ImcRemap | 38 | 112 | 46 | 2 | 0 |
+| g6.cast8 | net.g6 | Im | 56 | 224 | 68 | 3 | 0 |
+| g6.cast8 | net.g6 | Imc | 56 | 174 | 68 | 3 | 0 |
+| g6.cast8 | net.g6 | ImcRemap | 55 | 166 | 63 | 3 | 0 |
+| g6.nilcbytes | net.g6 | Im | 64 | 256 | 79 | 3 | 0 |
+| g6.nilcbytes | net.g6 | Imc | 64 | 198 | 79 | 3 | 0 |
+| g6.nilcbytes | net.g6 | ImcRemap | 61 | 184 | 71 | 3 | 0 |
+| g6.addr.literal | net.g6 | Im | 30 | 120 | 35 | 2 | 21 |
+| g6.addr.literal | net.g6 | Imc | 30 | 90 | 35 | 2 | 21 |
+| g6.addr.literal | net.g6 | ImcRemap | 30 | 86 | 35 | 2 | 21 |
+| g6.addr.eq.same | net.g6 | Im | 64 | 256 | 71 | 2 | 21 |
+| g6.addr.eq.same | net.g6 | Imc | 64 | 194 | 71 | 2 | 21 |
+| g6.addr.eq.same | net.g6 | ImcRemap | 64 | 190 | 69 | 2 | 21 |
+| g6.addr.eq.len20 | net.g6 | Im | 63 | 252 | 70 | 2 | 21 |
+| g6.addr.eq.len20 | net.g6 | Imc | 63 | 190 | 70 | 2 | 21 |
+| g6.addr.eq.len20 | net.g6 | ImcRemap | 63 | 186 | 68 | 2 | 21 |
+| g7.create | net.g7 | Im | 69 | 276 | 89 | 4 | 24 |
+| g7.create | net.g7 | Imc | 69 | 210 | 89 | 4 | 24 |
+| g7.create | net.g7 | ImcRemap | 67 | 198 | 83 | 4 | 24 |
+| g7.append.frame | net.g7 | Im | 91 | 364 | 118 | 4 | 0 |
+| g7.append.frame | net.g7 | Imc | 91 | 270 | 118 | 4 | 0 |
+| g7.append.frame | net.g7 | ImcRemap | 88 | 262 | 108 | 4 | 0 |
+| g7.clear | net.g7 | Im | 90 | 360 | 115 | 4 | 0 |
+| g7.clear | net.g7 | Imc | 90 | 264 | 115 | 4 | 0 |
+| g7.clear | net.g7 | ImcRemap | 88 | 256 | 108 | 4 | 0 |
+| g7.itemset | net.g7 | Im | 98 | 392 | 125 | 3 | 0 |
+| g7.itemset | net.g7 | Imc | 98 | 290 | 125 | 3 | 0 |
+| g7.itemset | net.g7 | ImcRemap | 98 | 290 | 123 | 3 | 0 |
+| g7.haskey | net.g7 | Im | 83 | 332 | 100 | 3 | 0 |
+| g7.haskey | net.g7 | Imc | 83 | 238 | 100 | 3 | 0 |
+| g7.haskey | net.g7 | ImcRemap | 83 | 244 | 98 | 3 | 0 |
+| g7.oob.read | net.g7 | Im | 67 | 268 | 76 | 4 | 16 |
+| g7.oob.read | net.g7 | Imc | 67 | 204 | 76 | 4 | 16 |
+| g7.oob.read | net.g7 | ImcRemap | 65 | 192 | 70 | 4 | 16 |
+| g7.idx72.itemget | net.g7 | Im | 67 | 268 | 76 | 4 | 16 |
+| g7.idx72.itemget | net.g7 | Imc | 67 | 206 | 76 | 4 | 16 |
+| g7.idx72.itemget | net.g7 | ImcRemap | 65 | 192 | 70 | 4 | 16 |
+| g7.cap.append129 | net.g7 | Im | 63 | 252 | 77 | 3 | 8 |
+| g7.cap.append129 | net.g7 | Imc | 63 | 180 | 77 | 3 | 8 |
+| g7.cap.append129 | net.g7 | ImcRemap | 60 | 180 | 69 | 3 | 8 |
+| g7.cap.exact128 | net.g7 | Im | 66 | 264 | 79 | 3 | 0 |
+| g7.cap.exact128 | net.g7 | Imc | 66 | 194 | 79 | 3 | 0 |
+| g7.cap.exact128 | net.g7 | ImcRemap | 63 | 186 | 71 | 3 | 0 |
+| g7.nested.literal | net.g7 | Im | 29 | 116 | 31 | 3 | 24 |
+| g7.nested.literal | net.g7 | Imc | 29 | 84 | 31 | 3 | 24 |
+| g7.nested.literal | net.g7 | ImcRemap | 29 | 84 | 31 | 3 | 24 |
+| g7.nested.append | net.g7 | Im | 33 | 132 | 37 | 3 | 16 |
+| g7.nested.append | net.g7 | Imc | 33 | 94 | 37 | 3 | 16 |
+| g7.nested.append | net.g7 | ImcRemap | 33 | 94 | 37 | 3 | 16 |
+| g7.take.first-last | net.g7 | Im | 130 | 520 | 167 | 5 | 0 |
+| g7.take.first-last | net.g7 | Imc | 130 | 394 | 167 | 5 | 0 |
+| g7.take.first-last | net.g7 | ImcRemap | 126 | 388 | 155 | 5 | 0 |
+| g7.take.empty | net.g7 | Im | 87 | 348 | 101 | 3 | 0 |
+| g7.take.empty | net.g7 | Imc | 87 | 260 | 101 | 3 | 0 |
+| g7.take.empty | net.g7 | ImcRemap | 87 | 260 | 99 | 3 | 0 |
+| g7.take.clone-iso | net.g7 | Im | 141 | 564 | 180 | 5 | 0 |
+| g7.take.clone-iso | net.g7 | Imc | 141 | 432 | 180 | 5 | 0 |
+| g7.take.clone-iso | net.g7 | ImcRemap | 139 | 420 | 175 | 5 | 0 |
+| g7.insert.middle | net.g7 | Im | 161 | 644 | 210 | 3 | 0 |
+| g7.insert.middle | net.g7 | Imc | 161 | 486 | 210 | 3 | 0 |
+| g7.insert.middle | net.g7 | ImcRemap | 161 | 506 | 208 | 3 | 0 |
+| g7.insert.pastlen | net.g7 | Im | 96 | 384 | 116 | 2 | 8 |
+| g7.insert.pastlen | net.g7 | Imc | 96 | 286 | 116 | 2 | 8 |
+| g7.insert.pastlen | net.g7 | ImcRemap | 96 | 294 | 116 | 2 | 8 |
+| g7.remove.middle | net.g7 | Im | 153 | 612 | 202 | 3 | 0 |
+| g7.remove.middle | net.g7 | Imc | 153 | 458 | 202 | 3 | 0 |
+| g7.remove.middle | net.g7 | ImcRemap | 153 | 482 | 200 | 3 | 0 |
+| g7.merge.basic | net.g7 | Im | 152 | 608 | 199 | 4 | 0 |
+| g7.merge.basic | net.g7 | Imc | 152 | 476 | 199 | 4 | 0 |
+| g7.merge.basic | net.g7 | ImcRemap | 152 | 478 | 197 | 4 | 0 |
+| g7.merge.samerc | net.g7 | Im | 81 | 324 | 100 | 2 | 8 |
+| g7.merge.samerc | net.g7 | Imc | 81 | 254 | 100 | 2 | 8 |
+| g7.merge.samerc | net.g7 | ImcRemap | 81 | 250 | 100 | 2 | 8 |
+| g7.keys.on-list | net.g7 | Im | 29 | 116 | 31 | 3 | 24 |
+| g7.keys.on-list | net.g7 | Imc | 29 | 84 | 31 | 3 | 24 |
+| g7.keys.on-list | net.g7 | ImcRemap | 29 | 84 | 31 | 3 | 24 |
+| g7.remove.to-empty | net.g7 | Im | 125 | 500 | 148 | 3 | 0 |
+| g7.remove.to-empty | net.g7 | Imc | 125 | 370 | 148 | 3 | 0 |
+| g7.remove.to-empty | net.g7 | ImcRemap | 125 | 380 | 146 | 3 | 0 |
+| g8.newmap.len | net.g8 | Im | 57 | 228 | 66 | 2 | 0 |
+| g8.newmap.len | net.g8 | Imc | 57 | 170 | 66 | 2 | 0 |
+| g8.newmap.len | net.g8 | ImcRemap | 57 | 172 | 66 | 2 | 0 |
+| g8.map1.len | net.g8 | Im | 77 | 308 | 99 | 2 | 1 |
+| g8.map1.len | net.g8 | Imc | 77 | 220 | 99 | 2 | 1 |
+| g8.map1.len | net.g8 | ImcRemap | 77 | 242 | 99 | 2 | 1 |
+| g8.insert.itemget | net.g8 | Im | 124 | 496 | 153 | 2 | 1 |
+| g8.insert.itemget | net.g8 | Imc | 124 | 386 | 153 | 2 | 1 |
+| g8.insert.itemget | net.g8 | ImcRemap | 129 | 394 | 158 | 2 | 1 |
+| g8.overwrite | net.g8 | Im | 225 | 900 | 290 | 2 | 1 |
+| g8.overwrite | net.g8 | Imc | 225 | 684 | 290 | 2 | 1 |
+| g8.overwrite | net.g8 | ImcRemap | 235 | 732 | 300 | 2 | 1 |
+| g8.zero.key | net.g8 | Im | 124 | 496 | 153 | 2 | 1 |
+| g8.zero.key | net.g8 | Imc | 124 | 384 | 153 | 2 | 1 |
+| g8.zero.key | net.g8 | ImcRemap | 129 | 392 | 158 | 2 | 1 |
+| g8.itemset.overwrite | net.g8 | Im | 198 | 792 | 254 | 2 | 2 |
+| g8.itemset.overwrite | net.g8 | Imc | 198 | 584 | 254 | 2 | 2 |
+| g8.itemset.overwrite | net.g8 | ImcRemap | 208 | 652 | 264 | 2 | 2 |
+| g8.index.assign | net.g8 | Im | 173 | 692 | 213 | 2 | 1 |
+| g8.index.assign | net.g8 | Imc | 173 | 518 | 213 | 2 | 1 |
+| g8.index.assign | net.g8 | ImcRemap | 183 | 566 | 223 | 2 | 1 |
+| g8.keys.sorted | net.g8 | Im | 361 | 1444 | 473 | 3 | 3 |
+| g8.keys.sorted | net.g8 | Imc | 361 | 1140 | 473 | 3 | 3 |
+| g8.keys.sorted | net.g8 | ImcRemap | 371 | 1154 | 483 | 3 | 3 |
+| g8.values.order | net.g8 | Im | 315 | 1260 | 422 | 3 | 3 |
+| g8.values.order | net.g8 | Imc | 315 | 1004 | 422 | 3 | 3 |
+| g8.values.order | net.g8 | ImcRemap | 325 | 1008 | 432 | 3 | 3 |
+| g8.remove.reinsert | net.g8 | Im | 339 | 1356 | 430 | 2 | 3 |
+| g8.remove.reinsert | net.g8 | Imc | 339 | 1030 | 430 | 2 | 3 |
+| g8.remove.reinsert | net.g8 | ImcRemap | 359 | 1120 | 450 | 2 | 3 |
+| g8.merge.values | net.g8 | Im | 359 | 1436 | 470 | 3 | 2 |
+| g8.merge.values | net.g8 | Imc | 359 | 1084 | 470 | 3 | 2 |
+| g8.merge.values | net.g8 | ImcRemap | 374 | 1194 | 485 | 3 | 2 |
+| g8.alias.b | net.g8 | Im | 198 | 792 | 246 | 3 | 1 |
+| g8.alias.b | net.g8 | Imc | 198 | 614 | 246 | 3 | 1 |
+| g8.alias.b | net.g8 | ImcRemap | 208 | 640 | 256 | 3 | 1 |
+| g8.missing.get | net.g8 | Im | 123 | 492 | 152 | 3 | 2 |
+| g8.missing.get | net.g8 | Imc | 123 | 364 | 152 | 3 | 2 |
+| g8.missing.get | net.g8 | ImcRemap | 128 | 394 | 155 | 3 | 2 |
+| g8.missing.remove | net.g8 | Im | 118 | 472 | 148 | 2 | 10 |
+| g8.missing.remove | net.g8 | Imc | 118 | 350 | 148 | 2 | 10 |
+| g8.missing.remove | net.g8 | ImcRemap | 123 | 384 | 153 | 2 | 10 |
+| g8.missing.set | net.g8 | Im | 114 | 456 | 146 | 2 | 10 |
+| g8.missing.set | net.g8 | Imc | 114 | 340 | 146 | 2 | 10 |
+| g8.missing.set | net.g8 | ImcRemap | 119 | 372 | 151 | 2 | 10 |
+| g8.boolkey | net.g8 | Im | 60 | 240 | 79 | 2 | 8 |
+| g8.boolkey | net.g8 | Imc | 60 | 192 | 79 | 2 | 8 |
+| g8.boolkey | net.g8 | ImcRemap | 60 | 180 | 79 | 2 | 8 |
+| g8.emptybyteskey | net.g8 | Im | 161 | 644 | 205 | 3 | 8 |
+| g8.emptybyteskey | net.g8 | Imc | 161 | 508 | 205 | 3 | 8 |
+| g8.emptybyteskey | net.g8 | ImcRemap | 163 | 502 | 203 | 3 | 8 |
+| g8.dup.pack | net.g8 | Im | 66 | 264 | 79 | 2 | 0 |
+| g8.dup.pack | net.g8 | Imc | 66 | 198 | 79 | 2 | 0 |
+| g8.dup.pack | net.g8 | ImcRemap | 66 | 196 | 79 | 2 | 0 |
+| g8.dup.merge | net.g8 | Im | 264 | 1056 | 359 | 3 | 1 |
+| g8.dup.merge | net.g8 | Imc | 264 | 794 | 359 | 3 | 1 |
+| g8.dup.merge | net.g8 | ImcRemap | 269 | 874 | 364 | 3 | 1 |
+| g8.selfmerge | net.g8 | Im | 231 | 924 | 309 | 2 | 1 |
+| g8.selfmerge | net.g8 | Imc | 231 | 700 | 309 | 2 | 1 |
+| g8.selfmerge | net.g8 | ImcRemap | 236 | 762 | 314 | 2 | 1 |
+| g8.capacity | net.g8 | Im | 231 | 924 | 286 | 3 | 0 |
+| g8.capacity | net.g8 | Imc | 231 | 710 | 286 | 3 | 0 |
+| g8.capacity | net.g8 | ImcRemap | 232 | 724 | 281 | 3 | 0 |
+| g8.canon.collide | net.g8 | Im | 249 | 996 | 318 | 2 | 1 |
+| g8.canon.collide | net.g8 | Imc | 249 | 776 | 318 | 2 | 1 |
+| g8.canon.collide | net.g8 | ImcRemap | 259 | 798 | 328 | 2 | 1 |
+| g8.canon.zeroext | net.g8 | Im | 124 | 496 | 153 | 2 | 3 |
+| g8.canon.zeroext | net.g8 | Imc | 124 | 384 | 153 | 2 | 3 |
+| g8.canon.zeroext | net.g8 | ImcRemap | 129 | 392 | 160 | 2 | 11 |
+| g8.byteskey.sort | net.g8 | Im | 307 | 1228 | 395 | 3 | 0 |
+| g8.byteskey.sort | net.g8 | Imc | 307 | 976 | 395 | 3 | 0 |
+| g8.byteskey.sort | net.g8 | ImcRemap | 317 | 982 | 405 | 3 | 0 |
+| g8.bytesvalue.itemget | net.g8 | Im | 112 | 448 | 141 | 2 | 1 |
+| g8.bytesvalue.itemget | net.g8 | Imc | 112 | 346 | 141 | 2 | 1 |
+| g8.bytesvalue.itemget | net.g8 | ImcRemap | 117 | 352 | 146 | 2 | 1 |
+| g8.loop.sum | net.g8 | Im | 363 | 1452 | 440 | 5 | 0 |
+| g8.loop.sum | net.g8 | Imc | 363 | 1106 | 440 | 5 | 0 |
+| g8.loop.sum | net.g8 | ImcRemap | 364 | 1124 | 426 | 5 | 0 |
+| g9.byte_reads | net.g9 | Im | 85 | 340 | 104 | 5 | 0 |
+| g9.byte_reads | net.g9 | Imc | 85 | 274 | 104 | 5 | 0 |
+| g9.byte_reads | net.g9 | ImcRemap | 77 | 228 | 84 | 5 | 0 |
+| g9.slice_family | net.g9 | Im | 165 | 660 | 238 | 10 | 0 |
+| g9.slice_family | net.g9 | Imc | 165 | 550 | 238 | 10 | 0 |
+| g9.slice_family | net.g9 | ImcRemap | 136 | 412 | 164 | 10 | 0 |
+| g9.data_rebind | net.g9 | Im | 72 | 288 | 86 | 1 | 0 |
+| g9.data_rebind | net.g9 | Imc | 72 | 220 | 86 | 1 | 0 |
+| g9.data_rebind | net.g9 | ImcRemap | 66 | 198 | 72 | 1 | 0 |
+| g9.rebind.both | net.g9 | Im | 86 | 344 | 111 | 3 | 2 |
+| g9.rebind.both | net.g9 | Imc | 86 | 272 | 111 | 3 | 2 |
+| g9.rebind.both | net.g9 | ImcRemap | 76 | 234 | 87 | 3 | 2 |
+| g9.rebind.twice | net.g9 | Im | 80 | 320 | 98 | 1 | 1 |
+| g9.rebind.twice | net.g9 | Imc | 80 | 252 | 98 | 1 | 1 |
+| g9.rebind.twice | net.g9 | ImcRemap | 75 | 224 | 83 | 1 | 1 |
+| g9.buf_pbuf | net.g9 | Im | 181 | 724 | 250 | 9 | 316 |
+| g9.buf_pbuf | net.g9 | Imc | 181 | 598 | 250 | 9 | 316 |
+| g9.buf_pbuf | net.g9 | ImcRemap | 144 | 446 | 172 | 9 | 328 |
+| g9.bufset.res | net.g9 | Im | 121 | 484 | 149 | 4 | 8 |
+| g9.bufset.res | net.g9 | Imc | 121 | 380 | 149 | 4 | 8 |
+| g9.bufset.res | net.g9 | ImcRemap | 113 | 344 | 127 | 4 | 8 |
+| g9.compound.rhsfirst | net.g9 | Im | 126 | 504 | 208 | 71 | 0 |
+| g9.compound.rhsfirst | net.g9 | Imc | 126 | 450 | 208 | 71 | 0 |
+| g9.compound.rhsfirst | net.g9 | ImcRemap | 124 | 374 | 201 | 71 | 0 |
+| g9.compound.u128.div | net.g9 | Im | 236 | 944 | 396 | 65 | 0 |
+| g9.compound.u128.div | net.g9 | Imc | 236 | 862 | 396 | 65 | 0 |
+| g9.compound.u128.div | net.g9 | ImcRemap | 242 | 800 | 408 | 65 | 0 |
+| g9.compound.u128.add | net.g9 | Im | 172 | 688 | 280 | 65 | 0 |
+| g9.compound.u128.add | net.g9 | Imc | 172 | 622 | 280 | 65 | 0 |
+| g9.compound.u128.add | net.g9 | ImcRemap | 172 | 550 | 280 | 65 | 0 |
+| g9.compound.div0 | net.g9 | Im | 117 | 468 | 200 | 65 | 0 |
+| g9.compound.div0 | net.g9 | Imc | 117 | 418 | 200 | 65 | 0 |
+| g9.compound.div0 | net.g9 | ImcRemap | 114 | 336 | 192 | 65 | 0 |
+| g9.compound.addovf | net.g9 | Im | 122 | 488 | 193 | 65 | 0 |
+| g9.compound.addovf | net.g9 | Imc | 122 | 424 | 193 | 65 | 0 |
+| g9.compound.addovf | net.g9 | ImcRemap | 119 | 344 | 185 | 65 | 0 |
+| g9.compound.subunder | net.g9 | Im | 119 | 476 | 202 | 65 | 0 |
+| g9.compound.subunder | net.g9 | Imc | 119 | 424 | 202 | 65 | 0 |
+| g9.compound.subunder | net.g9 | ImcRemap | 116 | 342 | 194 | 65 | 0 |
+| g9.compound.mulovf | net.g9 | Im | 123 | 492 | 194 | 65 | 0 |
+| g9.compound.mulovf | net.g9 | Imc | 123 | 430 | 194 | 65 | 0 |
+| g9.compound.mulovf | net.g9 | ImcRemap | 120 | 348 | 186 | 65 | 0 |
+| g9.itemset.oob | net.g9 | Im | 81 | 324 | 98 | 4 | 0 |
+| g9.itemset.oob | net.g9 | Imc | 81 | 244 | 98 | 4 | 0 |
+| g9.itemset.oob | net.g9 | ImcRemap | 79 | 230 | 92 | 4 | 0 |
+| g9.itemset.u32 | net.g9 | Im | 58 | 232 | 68 | 3 | 8 |
+| g9.itemset.u32 | net.g9 | Imc | 58 | 172 | 68 | 3 | 8 |
+| g9.itemset.u32 | net.g9 | ImcRemap | 57 | 166 | 66 | 3 | 16 |
+| g9.itemset.rhstrap | net.g9 | Im | 58 | 232 | 79 | 2 | 8 |
+| g9.itemset.rhstrap | net.g9 | Imc | 58 | 178 | 79 | 2 | 8 |
+| g9.itemset.rhstrap | net.g9 | ImcRemap | 58 | 174 | 79 | 2 | 8 |
+| g9.itemset.addovf | net.g9 | Im | 86 | 344 | 102 | 3 | 0 |
+| g9.itemset.addovf | net.g9 | Imc | 86 | 256 | 102 | 3 | 0 |
+| g9.itemset.addovf | net.g9 | ImcRemap | 86 | 250 | 100 | 3 | 0 |
+| g9.bufset.nil | net.g9 | Im | 97 | 388 | 116 | 3 | 10 |
+| g9.bufset.nil | net.g9 | Imc | 97 | 302 | 116 | 3 | 10 |
+| g9.bufset.nil | net.g9 | ImcRemap | 92 | 278 | 103 | 3 | 10 |
+| g9.map.missing.set | net.g9 | Im | 114 | 456 | 146 | 2 | 10 |
+| g9.map.missing.set | net.g9 | Imc | 114 | 340 | 146 | 2 | 10 |
+| g9.map.missing.set | net.g9 | ImcRemap | 119 | 372 | 151 | 2 | 10 |
+| g9.map.missing.get | net.g9 | Im | 123 | 492 | 152 | 3 | 2 |
+| g9.map.missing.get | net.g9 | Imc | 123 | 364 | 152 | 3 | 2 |
+| g9.map.missing.get | net.g9 | ImcRemap | 128 | 394 | 155 | 3 | 2 |
+| g10.median | net.g10 | Im | 781 | 3124 | 1341 | 77 | 0 |
+| g10.median | net.g10 | Imc | 781 | 2998 | 1341 | 77 | 0 |
+| g10.median | net.g10 | ImcRemap | 421 | 1218 | 616 | 77 | 120 |
+| g10.settle | net.g10 | Im | 198 | 792 | 300 | 11 | 0 |
+| g10.settle | net.g10 | Imc | 198 | 652 | 300 | 11 | 0 |
+| g10.settle | net.g10 | ImcRemap | 161 | 478 | 211 | 11 | 8 |
+| g10.sha256r4 | net.g10 | Im | 1500 | 6000 | 2052 | 53 | 0 |
+| g10.sha256r4 | net.g10 | Imc | 1447 | 4942 | 1999 | 53 | 0 |
+| g10.sha256r4 | net.g10 | ImcRemap | 1072 | 3156 | 1285 | 53 | 120 |
+| g10.keccakr1 | net.g10 | Im | 1045 | 4180 | 1472 | 70 | 0 |
+| g10.keccakr1 | net.g10 | Imc | 1045 | 3716 | 1472 | 70 | 0 |
+| g10.keccakr1 | net.g10 | ImcRemap | 921 | 2592 | 1109 | 70 | 0 |
+| g10.uni_v2 | net.g10 | Im | 249 | 996 | 355 | 9 | 0 |
+| g10.uni_v2 | net.g10 | Imc | 251 | 818 | 357 | 9 | 0 |
+| g10.uni_v2 | net.g10 | ImcRemap | 251 | 770 | 333 | 9 | 0 |
+| g10.black_scholes | net.g10 | Im | 726 | 2904 | 1102 | 17 | 0 |
+| g10.black_scholes | net.g10 | Imc | 726 | 2546 | 1102 | 17 | 0 |
+| g10.black_scholes | net.g10 | ImcRemap | 695 | 2136 | 987 | 17 | 40 |
+| g10.rpow | net.g10 | Im | 368 | 1472 | 509 | 7 | 0 |
+| g10.rpow | net.g10 | Imc | 368 | 1198 | 509 | 7 | 0 |
+| g10.rpow | net.g10 | ImcRemap | 371 | 1180 | 495 | 7 | 0 |
+| g17.dict_walk | net.g17 | Im | 652 | 2608 | 927 | 38 | 5 |
+| g17.dict_walk | net.g17 | Imc | 654 | 2272 | 929 | 38 | 5 |
+| g17.dict_walk | net.g17 | ImcRemap | 512 | 1500 | 555 | 38 | 5 |
+| g17.twap | net.g17 | Im | 222 | 888 | 302 | 14 | 0 |
+| g17.twap | net.g17 | Imc | 224 | 722 | 304 | 14 | 0 |
+| g17.twap | net.g17 | ImcRemap | 190 | 540 | 205 | 14 | 0 |
+| g17.cpmm_quote | net.g17 | Im | 252 | 1008 | 355 | 15 | 0 |
+| g17.cpmm_quote | net.g17 | Imc | 254 | 830 | 357 | 15 | 0 |
+| g17.cpmm_quote | net.g17 | ImcRemap | 229 | 648 | 264 | 15 | 0 |
+| prod.score_sum | prod | Im | 1455 | 5820 | 2085 | 65 | 62 |
+| prod.score_sum | prod | Imc | 1446 | 5016 | 2076 | 65 | 62 |
+| prod.score_sum | prod | ImcRemap | 1015 | 2950 | 1112 | 65 | 62 |
+| prod.hacd200 | prod | Im | 1491 | 5964 | 2111 | 63 | 75 |
+| prod.hacd200 | prod | Imc | 1484 | 5116 | 2104 | 63 | 75 |
+| prod.hacd200 | prod | ImcRemap | 1043 | 3090 | 1142 | 63 | 75 |
+| prod.sha256_single_block | prod | Im | 650 | 2600 | 874 | 35 | 512 |
+| prod.sha256_single_block | prod | Imc | 650 | 2224 | 874 | 35 | 512 |
+| prod.sha256_single_block | prod | ImcRemap | 497 | 1480 | 548 | 35 | 592 |
+

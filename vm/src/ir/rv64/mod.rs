@@ -387,13 +387,40 @@ pub(crate) fn lower_body_mode_arena_impl(
     // task 3: the u128 soft-divmod routine's frame save area is reserved
     // at construction — compute the demand once, before the probe pass, so
     // both passes see the identical frame layout.
-    let needs_divmod = body_needs_divmod(&ir.subs, &fp.slot, &fp.slot_w, &fp.list.ew);
+    // A9 (survey arith.md): the u128 mul routine's site count — the gate
+    // is construction-time (the D2/D3 rule) and, when the routine
+    // activates, it shares the divmod frame workspace (s+0..s+128), so
+    // the reservation extends with the same count.
+    let mul128_sites = body_u128_mul_site_count(&ir.subs, &fp.slot, &fp.slot_w, &fp.list.ew);
+    let needs_divmod = body_needs_divmod(&ir.subs, &fp.slot, &fp.slot_w, &fp.list.ew)
+        || mul128_sites >= MUL128_ROUTINE_MIN_SITES;
     // P1 u256 library: same construction-time reservation rule (the probe
     // pass and the real lowering must see the identical frame layout).
     let needs_u256 = body_needs_u256(&ir.subs, &fp.slot, &fp.slot_w, &fp.list.ew);
     // T26: the FIN operand-park reservation is sized by the body's static
     // FIN nesting depth (also construction-time, for the same reason).
     let fin_levels = fin_nesting_depth(&ir.subs);
+    // D2/D3: the shared mul_wide / HalfUp / HalfEven routine gates — the
+    // body's static per-primitive site counts (pure IR functions, same
+    // construction-time rule, so the probe pass and every relaxation pass
+    // lower identically; the frame layout never depends on them).
+    let (mw_sites, hu_sites, he_sites) =
+        body_routine_site_counts(&ir.subs, &fp.slot, &fp.slot_w, &fp.list.ew);
+    // A8 (survey arith.md): the shared sqrt routines' per-variant gates —
+    // the same construction-time rule (the probe pass and every relaxation
+    // pass lower identically; the 64-byte frame workspace below is
+    // reserved iff any variant gates on).
+    let sqrt_sites = body_sqrt_site_counts(&ir.subs, &fp.slot, &fp.slot_w, &fp.list.ew);
+    let routine_gates = (
+        mw_sites >= FIN_ROUTINE_MIN_SITES,
+        hu_sites >= FIN_ROUTINE_MIN_SITES,
+        he_sites >= FIN_ROUTINE_MIN_SITES,
+        mul128_sites >= MUL128_ROUTINE_MIN_SITES,
+        sqrt_sites.0 >= SQRT_ROUTINE_MIN_SITES,
+        sqrt_sites.1 >= SQRT_ROUTINE_MIN_SITES,
+        sqrt_sites.2 >= SQRT_ROUTINE_MIN_SITES,
+        sqrt_sites.3 >= SQRT_ROUTINE_MIN_SITES,
+    );
     let profile = match mode {
         Rv64Mode::Im => container::CALC_PROFILE_RV64IM,
         _ => container::CALC_PROFILE_RV64IMC,
@@ -423,7 +450,7 @@ pub(crate) fn lower_body_mode_arena_impl(
     let mut lit_sites = 0usize;
     let mut bank_regs: Vec<u8> = Vec::new();
     if mode == Rv64Mode::ImcRemap {
-        let mut probe = Lower::new_mode_arena_nil(&fp.slot, &fp.needs_zero, mode, arena_size, &nilp, &fp.list, &fp.slot_w, &fp.dyn_w, needs_divmod, needs_u256, fin_levels, fp.heap, input_local);
+        let mut probe = Lower::new_mode_arena_nil(&fp.slot, &fp.needs_zero, mode, arena_size, &nilp, &fp.list, &fp.slot_w, &fp.dyn_w, needs_divmod, needs_u256, fin_levels, fp.heap, input_local, routine_gates);
         probe.record_spans = true;
         probe.fuse = fuse.clone();
         probe.pair_root = fp.pair.root.clone();
@@ -445,71 +472,111 @@ pub(crate) fn lower_body_mode_arena_impl(
                 println!("    pos{k}: cov={cov} {}", spans.join(""));
             }
         }
-        if d <= 6 {
-            // P2-A27 bank expansion. Candidates are (register, busy) pairs:
-            // busy = closed statement intervals during which the expression
-            // machinery may write the register. Base list (all fully free):
-            // the compressed window pair + gp/tp/t2/a6/a7/s6..s11 + t1/x6
-            // (S0: scratch a1 moved to SC2C) + sp/x2 (dead — no ABI stack).
-            // a7/x17 is safe because the whole product has exactly ONE ecall
-            // (the terminal trap epilogue `li a7,0; ecall` — every fault
-            // thunk jumps there too), so its only write happens after no
-            // bank read can ever occur. Then
-            // the pool registers proper join as busy candidates:
-            // VSTACK_ORDER_RVC[k] is written by any push at vstack position
-            // k, i.e. exactly on the probe's position-k spans. Positions
-            // 0/1 (a0/a1) are excluded — the XOP/forwarding arms use
-            // vregs[0]/vregs[1] as statement-level scratch
-            // (rv64.rs:3810-3813, 3598-3600), so they can never double as
-            // bank homes.
-            let busy = |k: usize| -> Vec<(usize, usize)> {
-                if k < d { probe_spans[k].clone() } else { Vec::new() }
-            };
-            let mut regs: Vec<(u8, Vec<(usize, usize)>)> = vec![
-                (14, Vec::new()),
-                (15, Vec::new()),
-                (3, Vec::new()),
-                (4, Vec::new()),
-                (7, Vec::new()),
-                (16, Vec::new()),
-                (17, Vec::new()),
-                (22, Vec::new()),
-                (23, Vec::new()),
-                (24, Vec::new()),
-                (25, Vec::new()),
-                (26, Vec::new()),
-                (27, Vec::new()),
-                (29, busy(5)),
-                (6, Vec::new()),
-                (12, busy(2)),
-                (13, busy(3)),
-                (28, busy(4)),
-                (2, Vec::new()),
-            ];
-            // literal-pool base register: pays for its prologue auipc+addi
-            // when several literal sites replace their pairs with c.addi
-            lit_sites = count_literal_sites(&ir.subs);
-            if lit_sites >= 4 {
-                let base_pos = regs.iter().position(|&(r, _)| r == 2).expect("x2 base candidate");
-                let (r, _) = regs.remove(base_pos);
-                pool_base_reg = Some(r);
-            }
-            bank_regs = regs.iter().map(|&(r, _)| r).collect();
-            plan = web_plan(&ir, &fp, &regs);
-            // un-banked slots laid out hottest-first for the c.ld/sd window
-            let (reads, writes) = slot_use_counts(&ir.subs);
-            let score = |i: usize| {
-                reads.get(i).copied().unwrap_or(0) + writes.get(i).copied().unwrap_or(0)
-            };
-            frame_order = (0..fp.slot.len())
-                .filter(|&i| {
-                    matches!(fp.slot[i], SlotTy::Int | SlotTy::Bytes)
-                        && plan.banked.get(i).copied().unwrap_or(BankKind::None) == BankKind::None
-                        && !(has_input && i == 0)
-                })
-                .collect();
-            frame_order.sort_by_key(|&i| std::cmp::Reverse(score(i)));
+        // E4: the literal-pool base decision is independent of the bank
+        // gate — x2 sits outside VSTACK_ORDER_RVC, so it is free at every
+        // pool size. Deep bodies (D=7/8: no bank either) previously had
+        // neither: every literal address paid the 8-byte auipc+addi pair
+        // and every big constant a 6-8-byte li. With the base they pay a
+        // 4-byte addi per address site and a 2-4-byte load per pooled
+        // constant (E1's c.ldsp window). The prologue pcrel that
+        // materializes the base runs after S0 is computed from SP
+        // (emit_prologue), so the frame base is unaffected. The ±2KiB
+        // pool-distance hard error (asm.rs PoolOff/PoolLd) is unchanged —
+        // an oversized pool still refuses to compile.
+        //
+        // E5: the site count covers li_k hits (int literals > 0xFFFF, CU*
+        // folds included — web.rs count_literal_sites) and the threshold is
+        // 2: the base costs an 8-byte prologue pcrel and pays 4B/site, so
+        // break-even sits at two sites; x2 was the bank candidate list's
+        // LAST entry, so requisitioning it costs the bank nothing.
+        lit_sites = count_literal_sites(&ir.subs);
+        if lit_sites >= 2 {
+            pool_base_reg = Some(2);
         }
+        // E10: the bank construction is no longer gated on `d <= 6`. D=7/8
+        // bodies keep the pool in positions 0..d of VSTACK_ORDER_RVC, but
+        // the non-window group (x3,x4,x7,x16,x22..x27) is still fully free
+        // there (every routine that writes one of them saves it — the
+        // audit recorded at the candidate list below), so a partial bank
+        // pays off: hot slots get zero-cost Ref reads instead of c.ld/sd
+        // traffic. Only x14/x15 lose their candidate entries — they sit at
+        // window positions 6/7 and are pool-occupied from D=7 / D=8 on.
+        // P2-A27 bank expansion. Candidates are (register, busy) pairs:
+        // busy = closed statement intervals during which the expression
+        // machinery may write the register. Base list (all fully free):
+        // the compressed window pair + gp/tp/t2/a6/s6..s11 + t1/x6
+        // (S0: scratch a1 moved to SC2C) + sp/x2 (dead — no ABI stack).
+        // a7/x17 is EXCLUDED (audit 3103669, §F3+§F4; defect shipped in
+        // 25806ba): this list used to claim a7's only write is the
+        // terminal `li a7,0; ecall`, but the shared routines use x17 as
+        // an UNSAVED working scratch — emit_divmod_routine (lib_u128.rs)
+        // and emit_mulmod_routine (emit/arith.rs) write it on every call
+        // (`or TMP, VLO, VHI` V==0 check, TMP == 17), and
+        // emit_u256_divmod_u128_routine / emit_u256_divmod_u129_routine
+        // (lib_u256.rs) do the same — so an ImcRemap bank slot homed in
+        // x17 and live across a `jal a0` call site was silently
+        // corrupted. Do NOT re-add 17 here unless every routine's
+        // save/restore set covers it too. Then
+        // the pool registers proper join as busy candidates:
+        // VSTACK_ORDER_RVC[k] is written by any push at vstack position
+        // k, i.e. exactly on the probe's position-k spans. Positions
+        // 0/1 (a0/a1) are excluded — the XOP/forwarding arms use
+        // vregs[0]/vregs[1] as statement-level scratch
+        // (rv64.rs:3810-3813, 3598-3600), so they can never double as
+        // bank homes.
+        let busy = |k: usize| -> Vec<(usize, usize)> {
+            if k < d { probe_spans[k].clone() } else { Vec::new() }
+        };
+        let mut regs: Vec<(u8, Vec<(usize, usize)>)> = vec![
+            (3, Vec::new()),
+            (4, Vec::new()),
+            (7, Vec::new()),
+            (16, Vec::new()),
+            (22, Vec::new()),
+            (23, Vec::new()),
+            (24, Vec::new()),
+            (25, Vec::new()),
+            (26, Vec::new()),
+            (27, Vec::new()),
+            (29, busy(5)),
+            (6, Vec::new()),
+            (12, busy(2)),
+            (13, busy(3)),
+            (28, busy(4)),
+            (2, Vec::new()),
+        ];
+        // The compressed-window pair still leads the candidate order
+        // (prefer window regs for the bank — free c.ld/sd access) but only
+        // while the pool does not occupy it: x14 is window position 6, x15
+        // position 7, so their entries are dropped from D=7 / D=8 on (E10).
+        if d <= 6 {
+            regs.insert(0, (15, Vec::new()));
+            regs.insert(0, (14, Vec::new()));
+        } else if d == 7 {
+            regs.insert(0, (15, Vec::new()));
+        }
+        // E4: x2 leaves the bank candidate list when the pool base
+        // claimed it above (it was the LAST entry, so the bank loses
+        // its least-preferred register — near-zero cost)
+        if pool_base_reg.is_some() {
+            let base_pos = regs.iter().position(|&(r, _)| r == 2).expect("x2 base candidate");
+            regs.remove(base_pos);
+        }
+        bank_regs = regs.iter().map(|&(r, _)| r).collect();
+        plan = web_plan(&ir, &fp, &regs);
+        // un-banked slots laid out hottest-first for the c.ld/sd window
+        let (reads, writes) = slot_use_counts(&ir.subs);
+        let score = |i: usize| {
+            reads.get(i).copied().unwrap_or(0) + writes.get(i).copied().unwrap_or(0)
+        };
+        frame_order = (0..fp.slot.len())
+            .filter(|&i| {
+                matches!(fp.slot[i], SlotTy::Int | SlotTy::Bytes)
+                    && plan.banked.get(i).copied().unwrap_or(BankKind::None) == BankKind::None
+                    && !(has_input && i == 0)
+            })
+            .collect();
+        frame_order.sort_by_key(|&i| std::cmp::Reverse(score(i)));
     }
     let mut long_ids: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut wide_ids: std::collections::HashSet<usize> = std::collections::HashSet::new();
@@ -591,6 +658,7 @@ pub(crate) fn lower_body_mode_arena_impl(
             fin_levels,
             fp.heap,
             input_local,
+            routine_gates,
         );
         if want_dbg {
             lw.stmt_trace = Some(Vec::new());
@@ -623,6 +691,32 @@ pub(crate) fn lower_body_mode_arena_impl(
             lw.asm.place(dl);
             lw.emit_divmod_routine();
         }
+        // A9: the shared u128 multiply routine (checked mul + the POW
+        // loop's mul_keep sites; same lazy-emission rule as the divmod
+        // routine above — emitted only when a gated site staged through it)
+        if let Some(l) = lw.mul128_lbl {
+            lw.asm.place(l);
+            lw.emit_mul128_routine();
+        }
+        // A8 (survey arith.md): the shared sqrt routines, one per
+        // (domain, op) variant that a gated site staged through — same
+        // lazy-emission rule, still inside the executable window.
+        if let Some(l) = lw.sqrt64_lbl {
+            lw.asm.place(l);
+            lw.emit_sqrt64_routine(Bytecode::SQRT);
+        }
+        if let Some(l) = lw.sqrt64up_lbl {
+            lw.asm.place(l);
+            lw.emit_sqrt64_routine(Bytecode::SQRTUP);
+        }
+        if let Some(l) = lw.sqrt128_lbl {
+            lw.asm.place(l);
+            lw.emit_sqrt128_routine(Bytecode::SQRT);
+        }
+        if let Some(l) = lw.sqrt128up_lbl {
+            lw.asm.place(l);
+            lw.emit_sqrt128_routine(Bytecode::SQRTUP);
+        }
         // T2: the shared u128 mul_mod routine (double-and-add), same lazy
         // emission as the divmod routine above.
         if let Some(ml) = lw.mulmod_lbl {
@@ -640,6 +734,23 @@ pub(crate) fn lower_body_mode_arena_impl(
         if let Some(l) = lw.u256div129_lbl {
             lw.asm.place(l);
             lw.emit_u256_divmod_u129_routine();
+        }
+        // D3 (fin-control survey): the shared 128×128→256 wide-multiply
+        // routine (same lazy-emission rule; never faults).
+        if let Some(l) = lw.u256mul_lbl {
+            lw.asm.place(l);
+            lw.emit_u256_mul_wide_routine();
+        }
+        // D2 (fin-control survey): the shared HalfUp / HalfEven rounding
+        // routines (same lazy-emission rule; the checked quo+1 carry →
+        // fault_arith 90 branches from inside, the divmod V==0 shape).
+        if let Some(l) = lw.u256round_hu_lbl {
+            lw.asm.place(l);
+            lw.emit_u256_round_halfup_routine();
+        }
+        if let Some(l) = lw.u256round_he_lbl {
+            lw.asm.place(l);
+            lw.emit_u256_round_halfeven_routine();
         }
         // Shared fault thunks, then the trap epilogue. Sites jump here with
         // one `jal` instead of inlining `li a0, code; jal trap`. The
@@ -695,9 +806,31 @@ pub(crate) fn lower_body_mode_arena_impl(
             lw.asm.place(l);
         }
         let entries = std::mem::take(&mut lw.pool_entries);
-        for (lbl, bytes) in &entries {
-            lw.asm.place(*lbl);
-            lw.asm.buf.extend_from_slice(bytes);
+        // E1: entries carry their creation-time pool offsets (8-byte value
+        // entries are zero-padded to alignment by `lit_label`); the padding
+        // rides in front of each label so the label positions equal the
+        // recorded offsets exactly — the same decision the per-site loads
+        // were emitted against.
+        let mut pool_at = 0usize;
+        for ent in &entries {
+            assert!(
+                ent.off >= pool_at,
+                "rv64 lower: pool entry offset {} overlaps the previous entry ({pool_at})",
+                ent.off
+            );
+            lw.asm.buf.extend(std::iter::repeat(0u8).take(ent.off - pool_at));
+            lw.asm.place(ent.lbl);
+            lw.asm.buf.extend_from_slice(&ent.bytes);
+            pool_at = ent.off + ent.bytes.len();
+            // E6: the interior labels of suffix-sharing sites point at
+            // their delta inside the just-emitted entry — the shared read
+            // sees exactly the requested bytes, and every PoolOff /
+            // PcRelHiLo fixup on the interior label resolves to the true
+            // address with the ±2KiB check (E12) operating on the real
+            // offset.
+            for (ilbl, delta) in &ent.interior {
+                lw.asm.place_at(*ilbl, lw.asm.labels[ent.lbl].expect("entry label placed") + delta);
+            }
         }
         let all = match lw.asm.finish() {
             Ok(all) => all,

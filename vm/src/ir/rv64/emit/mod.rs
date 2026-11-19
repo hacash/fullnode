@@ -1,5 +1,29 @@
 use super::*;
 
+/// E6: one read-only literal-pool entry.
+#[derive(Clone, Debug)]
+pub(crate) struct PoolEnt {
+    /// Label at the entry's content start (`off` inside the pool).
+    pub(crate) lbl: usize,
+    pub(crate) bytes: Vec<u8>,
+    /// Pool-relative content offset, fixed at creation time (E1: 8-byte
+    /// value entries may carry alignment padding in front of the label).
+    pub(crate) off: usize,
+    /// E6: 8-byte VALUE entries (the `li_k` c.ldsp/PoolLd loads) never
+    /// take part in suffix sharing — neither as sharer (they need their
+    /// own 8-aligned start for the c.ldsp window decision) nor as base
+    /// (a shared tail would couple the address family's offsets to the
+    /// value entry's alignment padding). Bytes-class address references
+    /// share freely: reads go through `lbu` walks at arbitrary offsets.
+    pub(crate) is_value: bool,
+    /// E6 suffix sharing: (label, delta) of sites whose bytes are exactly
+    /// this entry's suffix (delta = interior offset of the shared tail).
+    /// The pool emission places each label at the entry's content start +
+    /// delta, so every PoolOff/PcRelHiLo fixup resolves to the true
+    /// address with no fixup-side bias arithmetic and the ±2KiB pool
+    /// distance check (E12) keeps operating on the real offset.
+    pub(crate) interior: Vec<(usize, usize)>,
+}
 
 pub(crate) struct Lower<'a> {
     pub(crate) asm: Asm,
@@ -65,9 +89,20 @@ pub(crate) struct Lower<'a> {
     pub(crate) map_klen_cell: i32,
     pub(crate) map_v0_cell: i32,
     pub(crate) map_v1_cell: i32,
-    /// (label, bytes) in first-use order; laid out consecutively in the pool.
-    pub(crate) pool_entries: Vec<(usize, Vec<u8>)>,
-    pub(crate) pool_map: HashMap<Vec<u8>, usize>,
+    /// One read-only pool entry. Entries are created in first-use order
+    /// and laid out consecutively; `off` is the entry's offset from the
+    /// pool start, fixed at creation time (E1: 8-byte value entries may
+    /// carry alignment padding in front), so the pool layout and the
+    /// per-site loads agree by construction.
+    pub(crate) pool_entries: Vec<PoolEnt>,
+    /// Bytes of pool content + alignment padding accumulated so far (the
+    /// offset the NEXT entry lands at).
+    pub(crate) pool_bytes: usize,
+    /// Exact-dedup map: bytes → (label, pool-relative content offset).
+    /// E6: suffix-shared sites are registered here too, so a repeated
+    /// shared literal dedups to its interior label instead of re-scanning
+    /// (and a later scan cannot double-register it).
+    pub(crate) pool_map: HashMap<Vec<u8>, (usize, usize)>,
     pub(crate) break_labels: Vec<usize>,
     pub(crate) continue_labels: Vec<usize>,
     pub(crate) trap_label: usize,
@@ -93,6 +128,47 @@ pub(crate) struct Lower<'a> {
     /// and whenever the register is re-handed by `push_vreg`).
     pub(crate) fwd_int: Vec<Option<u8>>,
     pub(crate) fwd_bytes: Vec<Option<(u8, u8)>>,
+    /* ---- C12 (impl/cse-dse-bank): the bytes-literal descriptor table ---- */
+    /// Pool label → the (ptr, len) register pair a bytes-literal descriptor
+    /// was last materialized into. Producers: the pool-literal eval sites
+    /// (PBUF/PBUFL, folded scalar_bytes, CTO address literal, folded-slice
+    /// C4 helper) and the banked literal bind's bank homes. A repeat site
+    /// whose target pair matches the recorded one re-uses the registers
+    /// instead of re-emitting `lit_addr` + `li`: the registers still hold
+    /// the descriptor because every rewriter invalidates the entry —
+    /// `kill_fwd_reg` (push_vreg re-hands, bank writes, guard borrows)
+    /// drops entries naming a rewritten register and `place` annihilates
+    /// the table at every join/branch target, the same discipline the
+    /// fwd_bytes table runs under. Only the exact label hits (a
+    /// suffix-shared interior label is a different key). Never iterated —
+    /// get/insert/retain/clear only, so lowering stays deterministic.
+    pub(crate) desc_fwd: HashMap<usize, (u8, u8)>,
+    /* ---- B14 (impl/arena-mapflow): the len-zero map fact ---- */
+    /// Per map slot: the slot cell holds a descriptor whose object was
+    /// created by THIS body's `PUT s := new_map()` in the current
+    /// straight-line run, so its live length is the constant 0 (the first
+    /// INSERT/ITEMSET consumes the fact; killed at every join label, by
+    /// every other map operation and by an alias PUT — the fwd_int/
+    /// fwd_bytes kill discipline).
+    pub(crate) map_zero: Vec<bool>,
+    /* ---- B9 (impl/arena-mapflow): the arena-top fact ---- */
+    /// The bytes descriptor (ptr, len) whose bytes end EXACTLY at the
+    /// current arena top (ptr + len == S1), as register names. Established
+    /// by every value that is freshly bumped onto the arena stream
+    /// (cbytes / cbytes128 / cbytes_dyn / CAT (fused or not) / buf_set /
+    /// itemcat splice / the input-local copy's banked result); consumed by
+    /// emit_cat (and the fused chain's head leaf) to append the right
+    /// operand in place instead of re-copying the receive side. Killed by
+    /// every other S1 bump, at every join label (`place`), and whenever a
+    /// watched register is re-handed (`kill_fwd_reg`).
+    pub(crate) cat_top: Option<(u8, u8)>,
+    /// Bookkeeping epoch: bumped by every `cat_top_kill`. `cat_top_gen` is
+    /// the epoch at the fact's establishment. A live fact must always
+    /// satisfy `cat_top_gen == s1_gen` — the RV64_INV_CHECK mirror asserts
+    /// this at the consumption sites, catching any path that mutates
+    /// `cat_top` without the helpers.
+    pub(crate) s1_gen: u32,
+    pub(crate) cat_top_gen: u32,
     /// Highest statement index at which each slot is read (from the web
     /// walk's event timeline); a store at an index ≥ this is dead.
     pub(crate) last_read: Vec<usize>,
@@ -173,6 +249,55 @@ pub(crate) struct Lower<'a> {
     /// P1 u256 library: label of the shared 256/129 soft-division routine
     /// (`div_u256_by_u129_to_u128`'s emit twin, divisor bit 128 set).
     pub(crate) u256div129_lbl: Option<usize>,
+    /// D3 (fin-control survey): label of the shared 128×128→256 wide-
+    /// multiply routine (`mul_wide_u128`'s emit twin), created lazily at
+    /// the first `emit_u256_mul_wide` site. Never faults.
+    pub(crate) u256mul_lbl: Option<usize>,
+    /// D2 (fin-control survey): labels of the shared HalfUp / HalfEven
+    /// quotient-rounding routines (`round_quot_u128_with_policy`'s emit
+    /// twins), created lazily at the first `emit_u128_round_quot` site of
+    /// the respective policy. Fault 90 (checked quo+1 carry) from inside.
+    pub(crate) u256round_hu_lbl: Option<usize>,
+    pub(crate) u256round_he_lbl: Option<usize>,
+    /// D2/D3 amortization gates: construction-time decisions (pure IR
+    /// functions computed beside `body_needs_u256`, see
+    /// `body_routine_site_counts`) — the shared mul_wide / HalfUp /
+    /// HalfEven routines activate only when the body's static site count
+    /// of that primitive reaches `FIN_ROUTINE_MIN_SITES` (3); below the
+    /// threshold the historical inline form is emitted byte-for-byte, no
+    /// label is created and no routine body appears.
+    pub(crate) mulw_routine: bool,
+    pub(crate) round_hu_routine: bool,
+    pub(crate) round_he_routine: bool,
+    /// A9 (survey arith.md): the shared u128 multiply routine's gate (same
+    /// construction-time rule; `MUL128_ROUTINE_MIN_SITES` in widths.rs) and
+    /// its lazily created label — the routine serves BOTH the checked
+    /// `emit_u128_mul` sites and the POW loop's `emit_u128_mul_keep` sites,
+    /// and shares the divmod frame workspace (s+0..s+56 operands/results,
+    /// s+64..s+96 saves; a0 is never written inside, so the D1 `jal a0`
+    /// link needs no park).
+    pub(crate) mul128_routine: bool,
+    pub(crate) mul128_lbl: Option<usize>,
+    /// A8 (survey arith.md): the shared sqrt routines' gates (same
+    /// construction-time rule; `SQRT_ROUTINE_MIN_SITES` in widths.rs) and
+    /// their lazily created labels — one variant per (domain, op): the
+    /// u64-domain floor/ceil bodies and the u128 pair-domain floor/ceil
+    /// bodies. Each gated site stages sd(operand) + `jal a0` + ld(result)
+    /// through the 64-byte frame workspace `sqrt_save_off` (s+0/8 operand
+    /// pair, s+16/24 result pair, s+32..s+64 the routine's saved workers);
+    /// the w<64 range check and the nil-72 guard stay at the site.
+    pub(crate) sqrt64_routine: bool,
+    pub(crate) sqrt64up_routine: bool,
+    pub(crate) sqrt128_routine: bool,
+    pub(crate) sqrt128up_routine: bool,
+    pub(crate) sqrt64_lbl: Option<usize>,
+    pub(crate) sqrt64up_lbl: Option<usize>,
+    pub(crate) sqrt128_lbl: Option<usize>,
+    pub(crate) sqrt128up_lbl: Option<usize>,
+    /// A8: frame offset of the sqrt routines' workspace (layout in
+    /// [`Lower::new_mode_arena_bank`]; -1 = reserved for no sqrt-gated
+    /// body — the emit helpers reject then).
+    pub(crate) sqrt_save_off: i32,
     /// P1 u256 library: frame offset of the u256 routines' workspace
     /// (layout in [`Lower::new_mode_arena_bank`]; -1 = reserved for no
     /// u256-using site — the emit helpers reject then).
@@ -181,6 +306,17 @@ pub(crate) struct Lower<'a> {
     /// current nesting index while a FIN node stages its operands.
     pub(crate) fin_park_levels: usize,
     pub(crate) fin_depth: usize,
+    /// D4: do the shared routines need to save their bank-candidate
+    /// working registers (x22/x23/x24/x25/x3/x4)? True iff ImcRemap — the
+    /// only mode where the local bank exists (the promotion plan is built
+    /// exclusively under `mode == Rv64Mode::ImcRemap` in the lower
+    /// pipeline), so those registers can carry live slot values there. In
+    /// Im/Imc nothing outside the routines themselves ever writes them
+    /// (pool = x5/x6/x7/x28/x29/x30/x31/x14; scratches x15/x16 or
+    /// x12/x13; a0/a1 = x10/x11; fixed RA/SP/S0..S5/A7 — no overlap), so
+    /// the routines drop those saves/restores (−2 instructions per
+    /// register per routine). Mode is a compile-time input → deterministic.
+    pub(crate) saves_bank_candidate_regs: bool,
 }
 
 pub(crate) enum SliceKind {
@@ -243,6 +379,7 @@ impl<'a> Lower<'a> {
         fin_park_levels: usize,
         heap: Option<u8>,
         input_local: bool,
+        routine_gates: (bool, bool, bool, bool, bool, bool, bool, bool),
     ) -> Self {
         let order: Vec<usize> = (0..slot.len()).collect();
         Self::new_mode_arena_bank(
@@ -263,6 +400,7 @@ impl<'a> Lower<'a> {
             fin_park_levels,
             heap,
             input_local,
+            routine_gates,
         )
     }
 
@@ -291,6 +429,7 @@ impl<'a> Lower<'a> {
         fin_park_levels: usize,
         heap: Option<u8>,
         input_local: bool,
+        routine_gates: (bool, bool, bool, bool, bool, bool, bool, bool),
     ) -> Self {
         // The memory frame holds only the un-promoted slots, laid out in
         // `frame_order` (hottest first) so the most-accessed offsets stay
@@ -391,7 +530,12 @@ impl<'a> Lower<'a> {
         //   s+32/s+40  quotient lo/hi (routine-written)
         //   s+48/s+56  remainder lo/hi (routine-written)
         //   s+64..128  saved working regs x6/x7/x14/x23/x24/x22/x28/x29
-        //   s+128      caller's kernel-entry RA (parked around the jal)
+        //              (D4: Im/Imc save only the pool members
+        //              x6/x7/x14/x28/x29 — x22/x23/x24 have no writers
+        //              outside the routines there; ImcRemap saves all 8)
+        //   s+128      the ROUTINE's own link park (D1: the a0 return
+        //              address saved at entry, restored before its jr —
+        //              the call sites `jal a0` with no parking)
         // T2: the shared u128 mul_mod routine reuses the same area with its
         // own operand/result map (x→s+0/8, y→s+16/24, z→s+32/40, result→
         // s+48/56 — see emit_mulmod128); the two routines are never live
@@ -415,8 +559,14 @@ impl<'a> Lower<'a> {
         //   s+56..s+72   quotient Q0,Q1 (routine-written)
         //   s+72..s+88   remainder R0,R1 (routine-written, bits 0..127)
         //   s+88         RH — remainder bit 128 (u129 path, routine-written)
-        //   s+96..s+192  saved working regs (12 slots, see the routines)
-        //   s+192        caller's kernel-entry RA (parked around the jal)
+        //   s+96..s+192  saved working regs (12 slots; D4: Im/Imc save
+        //                only the 6 pool/scratch members — x22..x25/x3/x4
+        //                have no writers outside the routines there;
+        //                ImcRemap saves all 12. The first slots double as
+        //                the T3/T4 triop staging park, dead between calls)
+        //   s+192        the ROUTINE's own link park (D1: the a0 return
+        //                address saved at entry, restored before its jr —
+        //                the call sites `jal a0` with no parking)
         //   s+200..s+296 T26 FIN* composite parks (six u128 slots A..F —
         //                live values held across library calls; never
         //                touched by the P1 routines themselves)
@@ -428,6 +578,27 @@ impl<'a> Lower<'a> {
             // area behind the kernel slots (same reservation rule in the
             // probe and the real lowering — the layouts must agree).
             acc += U256WS_BYTES + fin_park_levels as i32 * FIN_PARK_LEVEL_BYTES;
+            off
+        } else {
+            -1
+        };
+        // A8 (survey arith.md): the sqrt routines' frame workspace,
+        // S0-relative, written before any read inside the routines so no
+        // prologue zeroing is needed. 64 bytes, only in a body where a
+        // sqrt variant gated on, so every existing frame stays
+        // byte-identical. Layout (see emit_sqrt64/emit_sqrt128 and their
+        // routine forms):
+        //   s+0/s+8     operand pair (sqrt64: n at s+0; sqrt128: lo/hi)
+        //   s+16/s+24   result pair (routine-written; sqrt64: value only)
+        //   s+32..s+64  saved working regs (sqrt64: T1/T2/T3 = x6/x7/x28;
+        //               sqrt128: T1..T4 = x6/x7/x28/x29 — all pool members
+        //               in Im/Imc and pool-or-bank homes in ImcRemap, the
+        //               same D4 audit class as the mul128 routine's save
+        //               set; sc1/sc2 stay unsaved — dead at every call
+        //               site, the A9 premise)
+        let sqrt_save_off: i32 = if routine_gates.4 || routine_gates.5 || routine_gates.6 || routine_gates.7 {
+            let off = acc;
+            acc += 64;
             off
         } else {
             -1
@@ -581,6 +752,7 @@ impl<'a> Lower<'a> {
             dyn_w,
             dyn_w_off,
             pool_entries: Vec::new(),
+            pool_bytes: 0,
             pool_map: HashMap::new(),
             break_labels: Vec::new(),
             continue_labels: Vec::new(),
@@ -592,6 +764,11 @@ impl<'a> Lower<'a> {
             slot_w: slotw.to_vec(),
             fwd_int: vec![None; slot.len()],
             fwd_bytes: vec![None; slot.len()],
+            desc_fwd: HashMap::new(),
+            map_zero: vec![false; slot.len()],
+            cat_top: None,
+            s1_gen: 0,
+            cat_top_gen: 0,
             last_read: vec![0; slot.len()],
             read_idx: vec![Vec::new(); slot.len()],
             while_spans: Vec::new(),
@@ -615,9 +792,27 @@ impl<'a> Lower<'a> {
             divmod_save_off,
             u256div_lbl: None,
             u256div129_lbl: None,
+            u256mul_lbl: None,
+            u256round_hu_lbl: None,
+            u256round_he_lbl: None,
+            mulw_routine: routine_gates.0,
+            round_hu_routine: routine_gates.1,
+            round_he_routine: routine_gates.2,
+            mul128_routine: routine_gates.3,
+            mul128_lbl: None,
+            sqrt64_routine: routine_gates.4,
+            sqrt64up_routine: routine_gates.5,
+            sqrt128_routine: routine_gates.6,
+            sqrt128up_routine: routine_gates.7,
+            sqrt64_lbl: None,
+            sqrt64up_lbl: None,
+            sqrt128_lbl: None,
+            sqrt128up_lbl: None,
+            sqrt_save_off,
             u256_save_off,
             fin_park_levels,
             fin_depth: 0,
+            saves_bank_candidate_regs: mode == Rv64Mode::ImcRemap,
         }
     }
 
@@ -676,6 +871,23 @@ impl<'a> Lower<'a> {
                     );
                 }
             }
+            // E2 mirror: a forwarded Ref names vregs[j] with j <= its own
+            // stack position (fwd_reg_reissuable), so a push — which hands
+            // vregs[len], strictly above every live position — can never
+            // re-hand (and clobber) a register a live Ref still names. A
+            // violation means some Ref was pushed naming a register above
+            // its own depth: exactly the unsoundness the read-side rule
+            // excludes (the mid-expression re-hand would desync the
+            // forwarded value from its slot).
+            for (pos, loc) in self.vstack.iter().enumerate() {
+                if let VLoc::Ref(rr) = loc {
+                    if *rr == r {
+                        panic!(
+                            "INV push re-hands vreg {r} while a live Ref at pos {pos} still names it"
+                        );
+                    }
+                }
+            }
         }
         self.span_open_at(self.vstack.len());
         self.kill_fwd_reg(r);
@@ -700,6 +912,60 @@ impl<'a> Lower<'a> {
                 }
             }
         }
+        // B9: a re-hand rewrites the register — a live arena-top fact
+        // watching it loses its witness (same discipline as fwd_bytes).
+        if let Some((p, l)) = self.cat_top {
+            if p == r || l == r {
+                self.cat_top_kill();
+            }
+        }
+        // C12: a rewritten register invalidates a descriptor watching it
+        // (same discipline as fwd_bytes — see `desc_fwd`).
+        self.desc_fwd.retain(|_, (p, l)| *p != r && *l != r);
+    }
+
+    /* ---- B9 (impl/arena-mapflow): the arena-top fact ---- */
+
+    /// Kill the arena-top fact and advance the bookkeeping epoch. Called at
+    /// EVERY arena S1 bump that does not itself establish a fresh arena-top
+    /// descriptor, at every join label (`place`), and when a watched
+    /// register is re-handed (`kill_fwd_reg`). The S1-bump site census this
+    /// discipline must cover (every `add(S1`/`addi(S1`/`mv(S1` write in the
+    /// module): emit_memcpy / emit_memcpy_const (killed at entry),
+    /// emit_cbytes / emit_cbytes_dyn / emit_cbytes128 (killed at entry,
+    /// re-established by the result), emit_itemcat (same), emit_bufset (its
+    /// memcpys kill; the result re-establishes), emit_input_local_copy (the
+    /// banked arm re-establishes), emit_ctr_map_key_uint (killed at
+    /// `emit_map_key_finish`'s entry), ctr_list_alloc / ctr_clone_list /
+    /// ctr_map_alloc / emit_map_to_list (killed inside).
+    pub(crate) fn cat_top_kill(&mut self) {
+        self.s1_gen = self.s1_gen.wrapping_add(1);
+        self.cat_top = None;
+    }
+
+    /// Establish "(p, l) names a bytes descriptor whose bytes end exactly
+    /// at the current arena top: p + l == S1". Both registers hold their
+    /// values from here on (a re-hand of either kills the fact via
+    /// `kill_fwd_reg`), and S1 must not move without a kill.
+    pub(crate) fn cat_top_establish(&mut self, p: u8, l: u8) {
+        if std::env::var("RV64_INV_CHECK").is_ok() {
+            if p == l {
+                panic!("INV B9 arena-top fact: ptr and len registers coincide (x{p})");
+            }
+            for (pos, loc) in self.vstack.iter().enumerate() {
+                if let VLoc::Ref(rr) = loc {
+                    if *rr == p || *rr == l {
+                        panic!(
+                            "INV B9 arena-top fact: watched reg x{} still named by a live Ref at pos {}",
+                            if *rr == p { p } else { l },
+                            pos
+                        );
+                    }
+                }
+            }
+        }
+        self.cat_top = Some((p, l));
+        self.cat_top_gen = self.s1_gen;
     }
 
     /// Forwarding master switch (diagnostics: `RV64_NO_FWD=1` disables the
@@ -707,6 +973,26 @@ impl<'a> Lower<'a> {
     pub(crate) fn fwd_slot_ok(&self, slot: usize) -> bool {
         let only = FWD_ONLY_SLOT.load(std::sync::atomic::Ordering::Relaxed);
         only == usize::MAX || only == slot
+    }
+
+    /// E2 (encoding-regalloc survey): may a forwarded GET re-issue pool
+    /// register `r` as a Ref at the CURRENT stack depth? The slot's value
+    /// still lives in `r` — the kill discipline covers every rewriter (a
+    /// re-hand in `push_vreg`, bank writes via `kill_fwd_reg`, XOP stores,
+    /// and `place`/join kill every entry naming it) — so the ONLY hazard
+    /// is a LATER push re-handing `r` while the pushed Ref is still live.
+    /// A Ref lands at position `d = vstack.len()`; while it is live the
+    /// stack keeps depth ≥ d+1, so pushes hand `vregs[d+1..]` — `r` can be
+    /// re-handed (and clobbered) only if it sits ABOVE the current depth.
+    /// SOUND IFF `r == vregs[j]` for some `j <= vstack.len()`. The pre-E2
+    /// rule (empty stack && r == vregs[0]) is exactly the j == d == 0
+    /// corner; bank homes are never pool registers, so a `vregs` hit is
+    /// always a forwarding-derived name. The runtime mirror of this
+    /// argument is the live-Ref check in `push_vreg`'s INV_CHECK block.
+    /// (bytes forwarding keeps its stricter bottom-pair rule — a
+    /// generalization there must re-issue BOTH registers of the pair.)
+    pub(crate) fn fwd_reg_reissuable(&self, r: u8) -> bool {
+        self.vregs.iter().take(self.vstack.len() + 1).any(|&v| v == r)
     }
 
     pub(crate) fn fwd_enabled(&self) -> bool {
@@ -720,9 +1006,20 @@ impl<'a> Lower<'a> {
 
     /// Join point / branch target: every path merging here can carry a
     /// different register history — forwarding state dies wholesale.
+    /// B9/B14: the arena-top and len-zero facts are straight-line dataflow
+    /// — a merged path may carry a different S1 history / a map object
+    /// mutated on another arm, so both die here with the fwd tables.
+    /// C12 joins them: an entry established on ONE arm of a CHOOSE/if
+    /// does not dominate the join (the other arm's path carries a
+    /// different descriptor in the same registers), so the whole table
+    /// dies at every label barrier. This is what keeps the hit face
+    /// basic-block-local — see `desc_fwd`.
     pub(crate) fn place(&mut self, l: usize) {
         self.fwd_int.fill(None);
         self.fwd_bytes.fill(None);
+        self.desc_fwd.clear();
+        self.map_zero.fill(false);
+        self.cat_top_kill();
         self.asm.place(l);
     }
 
@@ -865,7 +1162,6 @@ impl<'a> Lower<'a> {
             );
         }
         let cell = self.slot_offset(s as u8);
-        let l72 = self.nil_thunk(72);
         let l85 = self.nil_thunk(85);
         let sc1 = self.asm.sc1;
         let sc2 = self.asm.sc2;
@@ -880,8 +1176,14 @@ impl<'a> Lower<'a> {
                     self.nil_guard_tag(kd, 72);
                 }
                 let kr = loc_reg(self.vstack[kd]);
-                self.asm.li(sc1, 1u64 << 32);
-                self.asm.bgeu(kr, sc1, l72); // extract_u32: ≥ 2³² → 72
+                // C2: the extract_u32 72 guard is dead for a width-provable
+                // (≤ 32) index — see idx_below_2pow32; the 85 remove bound
+                // keeps its position (before the value evaluation, r4d)
+                if !self.idx_below_2pow32(&*rn.suby) {
+                    let l72 = self.nil_thunk(72);
+                    self.asm.li(sc1, 1u64 << 32);
+                    self.asm.bgeu(kr, sc1, l72); // extract_u32: ≥ 2³² → 72
+                }
                 self.asm.ld(sc1, S0, cell); // len shadow
                 self.asm.bgeu(kr, sc1, l85); // remove bound: idx ≥ len → 85
                 // the value evaluation runs AFTER the 85 guard: the
@@ -913,6 +1215,7 @@ impl<'a> Lower<'a> {
                 // applies to the guarded form: a Growable constant index
                 // checks the live length)
                 if k >= 1u64 << 32 {
+                    let l72 = self.nil_thunk(72);
                     self.asm.jal_(ZERO, l72);
                     return Ok(());
                 }
@@ -949,7 +1252,7 @@ impl<'a> Lower<'a> {
     /// says Nil.
     pub(crate) fn nil_guard_tag(&mut self, depth: usize, code: u64) {
         let t = self.nil_thunk(code);
-        let sc = self.asm.sc1;
+        let sc = self.guard_scratch();
         self.asm.lbu(sc, S0, self.tag_base + depth as i32);
         self.asm.beq(sc, ZERO, t);
     }
@@ -958,9 +1261,36 @@ impl<'a> Lower<'a> {
     /// fused comparisons reading the slot directly).
     pub(crate) fn nil_guard_flag(&mut self, s: u8, code: u64) {
         let t = self.nil_thunk(code);
-        let sc = self.asm.sc1;
+        let sc = self.guard_scratch();
         self.asm.lbu(sc, S0, self.flag_off[s as usize]);
         self.asm.beq(sc, ZERO, t);
+    }
+
+    /// E9 (encoding-regalloc survey): the scratch register for a nil
+    /// guard's `lbu` + zero-compare `beq`. The branch compresses to
+    /// c.beqz (2B) only when rs1 is window-resident — the dedicated
+    /// scratch is x30 in ImcRemap, outside the window, so every guard
+    /// site paid the full 4B B-type form. At an EMPTY stack no pool
+    /// register holds an operand, so the first pool register is
+    /// free-but-holding: borrow it (window-resident in ImcRemap — the
+    /// arith.rs XOP-frame precedent) and let the branch compress. The
+    /// borrow clobbers the register with the tag byte, so forwarding
+    /// entries naming it die first (`kill_fwd_reg`) — their readers
+    /// re-load from the frame. With a live stack every pool register may
+    /// hold an operand or a forwarded Ref: fall back to the dedicated
+    /// scratch (unchanged behavior). Non-RVC modes gain nothing from a
+    /// borrow (no compression at all), and Imc's vregs[0] (x5) sits
+    /// outside the window — both keep the dedicated scratch.
+    fn guard_scratch(&mut self) -> u8 {
+        if self.vstack.is_empty() && self.asm.rvc {
+            if let Some(&r) = self.vregs.first() {
+                if rvc_win(r) {
+                    self.kill_fwd_reg(r);
+                    return r;
+                }
+            }
+        }
+        self.asm.sc1
     }
 
     /// EQ/NEQ semantics: fault 90 iff EXACTLY one side is Nil (two Nils
@@ -1104,28 +1434,57 @@ impl<'a> Lower<'a> {
         }
     }
 
-    /// Pop the top two operands of a binary op and return
-    /// `(d, ra_read, rb_read)` where `d` is the destination pool register
-    /// already holding the left value: the left operand's pool register
+    /// Whether `op` at width `w` may take the E3 swapped-destination form.
+    /// ONLY these — LE/GE/SUB/LT/GT and the div/mod family are
+    /// operand-ordered (the operand order is part of the encoding —
+    /// invariant 2), so they keep pop2_dest's materializing `mv` even when
+    /// both operands are banked.
+    ///
+    /// MUL at w == 64 is excluded: the A19 mul-check merge
+    /// (`mul_check_base_const`) classifies a `mulhu` site by the copy
+    /// `mv d, base` feeding it, and the swapped form reads the bank home
+    /// directly — every dominated check on that shape stops merging,
+    /// which costs more (the whole cascaded guard pair stays emitted) than
+    /// the 2B mv saves. Narrow MUL (w < 64) has no mulhu face, so the
+    /// swap applies there.
+    pub(crate) fn commutative_swap(op: Bytecode, w: u32) -> bool {
+        use Bytecode::*;
+        if op == MUL && w == 64 {
+            return false;
+        }
+        matches!(op, ADD | MUL | BXOR | BOR | BAND | AND | OR | EQ | NEQ)
+    }
+
+    /// Pop the top two operands of a binary op `op` and return
+    /// `(d, ra_read, rb_read, swapped)`. `d` is the destination pool
+    /// register holding the left value: the left operand's pool register
     /// reused when it was Pool, or a fresh register loaded with `mv` when
-    /// it was a bank reference.
-    pub(crate) fn pop2_dest(&mut self) -> (u8, u8, u8) {
+    /// it was a bank reference — EXCEPT for a commutative `op` (E3), where
+    /// the `mv` is unnecessary: the caller emits the swapped form
+    /// `d = rb OP ra` (`emit_arith_commut`) with the left value still in
+    /// its bank home `ra`, and `swapped` tells it so. `rb` is only ever
+    /// read there, so it may itself be a bank reference (Ref+Ref shape).
+    pub(crate) fn pop2_dest(&mut self, op: Bytecode, w: u32) -> (u8, u8, u8, bool) {
         let rb = self.pop_reg();
         let la = self.pop_vreg();
         let d = self.push_vreg();
         match la {
             VLoc::Pool(r) => {
                 debug_assert_eq!(d, r);
-                (d, r, rb)
+                (d, r, rb, false)
             }
             VLoc::Ref(r) => {
                 // d can BE r when the ref names the pool register the
                 // shrunk stack just re-handed (forwarded GET): the value is
                 // already in place
-                if d != r {
+                if d == r {
+                    (d, r, rb, false)
+                } else if Self::commutative_swap(op, w) {
+                    (d, r, rb, true)
+                } else {
                     self.asm.mv(d, r);
+                    (d, r, rb, false)
                 }
-                (d, r, rb)
             }
         }
     }
@@ -1251,7 +1610,9 @@ impl<'a> Lower<'a> {
     /// Materialize the constant `v` into `rd`. Large constants (≥2048, the
     /// lui+addi pair) come from the read-only pool via the pool-base
     /// register when one is active: one 4-byte `ld` instead of a 6-byte
-    /// pair, deduplicated across every re-materialization site.
+    /// pair, deduplicated across every re-materialization site. E1: the
+    /// entry is 8-aligned in the pool, so sites whose offset fits the
+    /// c.ldsp window ([0,504], base x2) load in 2 bytes.
     pub(crate) fn li_k(&mut self, rd: u8, v: u64) {
         // Only values beyond one lui+addi pair justify the pool entry (an
         // 8-byte pool literal amortized against 2 saved bytes per site is
@@ -1260,8 +1621,8 @@ impl<'a> Lower<'a> {
         if v > 0xFFFF {
             if let Some((b, bl)) = self.pool_base {
                 // little-endian: the load reads a raw 64-bit word
-                let lbl = self.lit_label(&v.to_le_bytes());
-                self.asm.ld_label_off(rd, b, bl, lbl);
+                let (lbl, off) = self.lit_label_value(&v.to_le_bytes());
+                self.asm.ld_label_off(rd, b, bl, lbl, off);
                 return;
             }
         }
@@ -1278,18 +1639,151 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// C12 (impl/cse-dse-bank): push the (ptr, len) pool pair for a
+    /// bytes-literal `data`. When the pool label was already materialized
+    /// into exactly the pair this site would push — (vregs[d], vregs[d+1])
+    /// at the current stack depth, i.e. the establishing site ran at the
+    /// same depth and no re-hand of either register happened since — the
+    /// two registers are re-issued as zero-cost Refs and `lit_addr` + `li`
+    /// (2-3 instructions) disappear. Re-issue soundness is the E2 rule: a
+    /// Ref at position `d` naming `vregs[d]` can only be clobbered by a
+    /// push at position ≥ d, and pushes hand `vregs[d+1..]` — never the
+    /// watched registers — while the Refs are live. Registers are rewritten
+    /// off-stack only through `push_vreg` re-hands or bank writes, both of
+    /// which kill the entry via `kill_fwd_reg`; `place` clears the table at
+    /// every join. (Value-pool exhaustion keeps the fresh path: a hit needs
+    /// two more pool slots.)
+    ///
+    /// Trigger face (pinned by cse_dse_bank_tests): the hit is
+    /// basic-block-local — consecutive same-label materializations at the
+    /// same stack depth with no label barrier and no intervening push
+    /// between them. Two shapes cover everything that fires today: the
+    /// same-slot literal rebind (`a = "X"` twice in a row, all modes) and
+    /// consecutive distinct-slot binds on the frame path (`a = "X"; b =
+    /// "X"` — the second site's eval runs at the same depth 0). The
+    /// survey's motivating shape — the same 21-byte address constant
+    /// compared at several `data == "Addr.."` sites — does NOT fire and
+    /// must not: each bytes-compare materializes its descriptor pair,
+    /// then POPS both operands before its internal branch targets, so
+    /// every one of those joins is a `place` that drops the entry (the
+    /// pair is no longer stack-resident, and keeping below-stack entries
+    /// across a join is unsound — a CHOOSE arm re-materializing a
+    /// different literal into the same registers would leave the entry
+    /// stale on the first arm's path; the entry would need real
+    /// dominance tracking, out of C12's surveyed scope: "生命周期规则照搬
+    /// fwd_bytes（重发号/标签屏障即杀）").
+    pub(crate) fn eval_lit_bytes_pair(&mut self, data: &[u8]) -> (u8, u8) {
+        let lbl = self.lit_label(data);
+        if let Some(&(p, l)) = self.desc_fwd.get(&lbl) {
+            let d = self.vstack.len();
+            if d + 1 < self.vregs.len() && p == self.vregs[d] && l == self.vregs[d + 1] {
+                if std::env::var("RV64_INV_CHECK").is_ok() {
+                    if p == l {
+                        panic!("INV C12: descriptor pair registers coincide (x{p})");
+                    }
+                    // runtime mirror of the plan-level busy test: the reused
+                    // registers must not be live bank homes at this statement
+                    // (segments are born by writes, which kill the entry — a
+                    // violation means a missed kill path).
+                    for (reg, s0, s1, init) in &self.plan_reg_live {
+                        let hit = if *init {
+                            *s0 <= self.web_idx && self.web_idx <= *s1
+                        } else {
+                            *s0 < self.web_idx && self.web_idx <= *s1
+                        };
+                        if (*reg == p || *reg == l) && hit {
+                            panic!(
+                                "INV C12: reuse names live bank home reg={reg} at stmt {} (seg [{s0},{s1}] init={init})",
+                                self.web_idx
+                            );
+                        }
+                    }
+                }
+                self.push_ref(p);
+                self.push_ref(l);
+                return (p, l);
+            }
+        }
+        let rp = self.push_vreg();
+        let rl = self.push_vreg();
+        self.lit_addr(rp, lbl);
+        self.asm.li(rl, data.len() as u64);
+        self.desc_fwd.insert(lbl, (rp, rl));
+        (rp, rl)
+    }
+
     pub(crate) fn lit_label(&mut self, bytes: &[u8]) -> usize {
-        if let Some(i) = self.pool_map.get(bytes) {
-            return self.pool_entries[*i].0;
+        self.lit_label_inner(bytes, false).0
+    }
+
+    /// E1: pooled 8-byte VALUE entries (`li_k` constants) are 8-aligned
+    /// inside the pool with emission-time-determined zero padding, so the
+    /// pool-base load can take the 2-byte `c.ldsp` whenever the — then
+    /// already fixed — offset sits in its [0,504] window. Returns (label,
+    /// pool-relative content offset). The alignment decision is made HERE,
+    /// a pure function of the pool contents accumulated so far, so every
+    /// relaxation pass and the pool layout in `lower_body_mode_arena`
+    /// agree on it by construction.
+    fn lit_label_value(&mut self, bytes: &[u8]) -> (usize, usize) {
+        self.lit_label_inner(bytes, true)
+    }
+
+    fn lit_label_inner(&mut self, bytes: &[u8], value_entry: bool) -> (usize, usize) {
+        if let Some(&(lbl, off)) = self.pool_map.get(bytes) {
+            return (lbl, off);
+        }
+        // E6 suffix sharing: a bytes-class address reference whose bytes
+        // are exactly the suffix of an existing entry points into that
+        // entry's tail instead of paying a duplicate 8B×n pool segment.
+        // The scan runs in entry order (deterministic; the first hit
+        // wins — all hits carry the identical suffix bytes, so the choice
+        // only shifts which entry hosts the interior label). Value
+        // entries are excluded on both sides of the relation (see
+        // `PoolEnt::is_value`); exact matches were already handled above.
+        if !value_entry {
+            let hit = self.pool_entries.iter().position(|ent| {
+                !ent.is_value && ent.bytes.len() > bytes.len() && ent.bytes.ends_with(bytes)
+            });
+            if let Some(i) = hit {
+                let delta = self.pool_entries[i].bytes.len() - bytes.len();
+                let off = self.pool_entries[i].off + delta;
+                let lbl = self.asm.new_label();
+                self.pool_entries[i].interior.push((lbl, delta));
+                self.pool_map.insert(bytes.to_vec(), (lbl, off));
+                return (lbl, off);
+            }
         }
         let lbl = self.asm.new_label();
-        self.pool_map.insert(bytes.to_vec(), self.pool_entries.len());
-        self.pool_entries.push((lbl, bytes.to_vec()));
-        lbl
+        // Pad only when a compressed load can actually fire: a pool base
+        // must be active (Im/Imc pools stay byte-identical — no base
+        // register, no c.ldsp) and the aligned offset must still fit the
+        // 504-byte c.ldsp window (entries past it fall back to the
+        // alignment-agnostic 4-byte `ld`, so padding them is pure pool
+        // growth).
+        let pad = if value_entry && self.pool_base.is_some() {
+            let aligned = (self.pool_bytes + 7) & !7;
+            if aligned <= 504 { aligned - self.pool_bytes } else { 0 }
+        } else {
+            0
+        };
+        let off = self.pool_bytes + pad;
+        self.pool_map.insert(bytes.to_vec(), (lbl, off));
+        self.pool_entries.push(PoolEnt {
+            lbl,
+            bytes: bytes.to_vec(),
+            off,
+            is_value: value_entry,
+            interior: Vec::new(),
+        });
+        self.pool_bytes = off + bytes.len();
+        (lbl, off)
     }
 
 
     /// Top of stack: bytes descriptor → copy to output, `a0 = len`, `ret`.
+    /// (D1 keeps `ret` everywhere: routine calls link through the
+    /// mode-scratch a0 and never touch RA, so the kernel-entry RA
+    /// survives the whole body untouched.)
     pub(crate) fn emit_return(&mut self) -> Ret<()> {
         let rl = self.pop_reg();
         let rp = self.pop_reg();

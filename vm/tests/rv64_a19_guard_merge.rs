@@ -81,7 +81,15 @@ fn a19_merge_sites_pinned_score_sum() {
     // (task-1 A3 narrow-width closure: the u16 n-chain swaps u64 checked
     // guards for u16 range checks — which also dissolves the (6,8) n-chain
     // merge — and the u8 shift/pow2-mul sites re-shape; bucket attribution
-    // alongside the census pin in rv64_backend_maxlive_census.rs).
+    // alongside the census pin in rv64_backend_maxlive_census.rs)
+    // → 2952 x17-bank fix (audit 3103669): x17 removed from the ImcRemap
+    // bank candidate list (the shared divmod/mulmod routines clobber it
+    // unsaved), so one web segment that used to home in x17 spills to the
+    // frame (+2 B). Im/Imc unaffected.
+    // → 2950 E3 (impl/fwd-regalloc): a banked-left commutative site (narrow
+    // MUL / bitwise class) skips pop2_dest's materializing c.mv (−2 B); the
+    // w == 64 MUL sites keep the mv so the A19 mul-check merge below keeps
+    // its copy-feeding-mulhu shape. Im/Imc unaffected.
     assert_eq!(bytes, 2950, "census pin lives in rv64_backend_maxlive_census");
     assert_eq!(merges.len(), 2, "merge site set changed: {merges:#?}");
     let mut table: Vec<(u8, u64, u64)> =
@@ -144,11 +152,15 @@ fn a19_merge_sites_pinned_score_sum() {
 /// is mixed-width written (`if total < 1 { total = 1 }`) and viewed via
 /// `total as bytes`, so it gains the 1-byte runtime width shadow — prologue
 /// init, the two assignment stores, and the dynamic-length view loop; the
-/// view becomes width-exact to the interpreter on the total < 1 inputs).
+/// view becomes width-exact to the interpreter on the total < 1 inputs)
+/// → 3090 (x17-bank fix, audit 3103669: x17 removed from the ImcRemap
+/// bank candidate list — the shared divmod/mulmod routines clobber it
+/// unsaved — so hacd200's hottest slots re-plan into one fewer bank home,
+/// +8 B; Im/Imc unaffected).
 #[test]
 fn a19_merge_sites_pinned_hacd200_empty() {
     let (bytes, merges) = lower_dbg(HACD200_FITSH);
-    assert_eq!(bytes, 3082);
+    assert_eq!(bytes, 3090);
     assert!(merges.is_empty(), "hacd200 gained merge sites: {merges:#?}");
 }
 

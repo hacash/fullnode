@@ -49,7 +49,13 @@ impl<'a> Lower<'a> {
                     self.kill_fwd_reg(r);
                     if self.emit_arith_k(kop, r, k, w) {
                         // narrow-PUT face: compound writes only grow the shadow
-                        self.shadow_grow(idx, self.int_width(value));
+                        // (C13: the checked arithmetic above stays — fault
+                        // face — but its shadow grow is dead when no read of
+                        // the slot remains; store_is_dead carries the
+                        // loop-carried / backedge exemptions)
+                        if !self.store_is_dead(idx) {
+                            self.shadow_grow(idx, self.int_width(value));
+                        }
                         return Ok(());
                     }
                     unreachable!("arith_k_handles said yes");
@@ -143,9 +149,7 @@ impl<'a> Lower<'a> {
                     self.asm.sd(rlo, S0, s + 16);
                     self.asm.sd(rhi, S0, s + 24);
                     let lbl = self.u128_divmod_label();
-                    self.asm.sd(RA, S0, s + 128);
-                    self.asm.jal_(RA, lbl);
-                    self.asm.ld(RA, S0, s + 128);
+                    self.asm.jal_(self.a0, lbl); // D1: a0-linked call — RA stays intact
                     self.asm.ld(slo, S0, s + 32);
                     self.asm.ld(shi, S0, s + 40);
                     self.asm.sd(slo, S0, off);
@@ -204,16 +208,21 @@ impl<'a> Lower<'a> {
             }
             self.emit_arith(lxop_inst(lxop), rw, rv, w)?;
             // narrow-PUT face: compound writes only grow the shadow
-            self.shadow_grow(idx, self.int_width(value));
+            // (C13: the arithmetic's fault face stays in full; the shadow
+            // grow dies with a proven-dead store — same store_is_dead basis
+            // as the frame arm below, exemptions included)
+            if !self.store_is_dead(idx) {
+                self.shadow_grow(idx, self.int_width(value));
+            }
             return Ok(());
         }
         let rv = self.pop_reg();
         let off = self.slot_offset(idx);
-        // Forwarded old value: a live fwd entry names the bottom
-        // pool register (see the GET arm's soundness rule — XOP is
-        // statement-level, so the stack is empty here and vregs[0]
-        // is free-but-holding). Bank-register fwd entries are
-        // excluded: the arithmetic destination must never be
+        // Forwarded old value: a live fwd entry names a pool register at
+        // or below the current depth (E2 rule, fwd_reg_reissuable — XOP
+        // is statement-level, so the stack is empty here and this
+        // degenerates to the historical bottom-register rule). Bank-register
+        // fwd entries are excluded: the arithmetic destination must never be
         // another slot's bank home.
         let fr = self
             .fwd_int
@@ -223,7 +232,7 @@ impl<'a> Lower<'a> {
             .filter(|r| {
                 self.fwd_enabled()
                     && self.fwd_slot_ok(idx as usize)
-                    && self.vregs.first() == Some(r)
+                    && self.fwd_reg_reissuable(*r)
             });
         // at statement level (empty pool) the first pool registers
         // are free and window-resident, so the slot traffic
@@ -241,6 +250,17 @@ impl<'a> Lower<'a> {
             }
             None => self.asm.sc1,
         };
+        // E2 companion kill: the arithmetic below OVERWRITES sc1 (either the
+        // loaded old value or, on an fr hit, the forwarded one in place), so
+        // every fwd entry naming a pool register here must die — including
+        // entries of OTHER slots that name the same register (they were
+        // valid only while the old value lived there). Before the read-side
+        // generalization such entries were inert (only vregs[0] was ever
+        // re-issued, and the fr filter sees it first); with `r == vregs[j],
+        // j <= depth` reads they become live again, so the kill discipline
+        // must cover this overwrite source too. A no-op for the dedicated
+        // scratch (no entry can name it).
+        self.kill_fwd_reg(sc1);
         if fr.is_none() {
             self.asm.ld(sc1, S0, off);
         }
@@ -283,6 +303,11 @@ impl<'a> Lower<'a> {
                 // (asm.r takes (rs2, rs1): sub rd, rs1, rs2)
                 self.asm.r(0x20, S5, S1, 0, bp, 0b0110011); // sub bp, S1, S5
                 self.asm.mv(bl, S5);
+                // B9: the entry copy IS the arena top (bp + bl == S1); the
+                // unbanked arm below keeps its descriptor in scratch/ABI
+                // registers — no pool pair to attach the fact to, and no
+                // fact survives (the memcpy's kill stands)
+                self.cat_top_establish(bp, bl);
             }
             None => {
                 let off = self.slot_offset(0);
@@ -519,6 +544,72 @@ impl<'a> Lower<'a> {
         Ok(())
     }
 
+    /// E3: swapped-operand form for a commutative binary arithmetic —
+    /// (MUL w == 64 never reaches here: pop2_dest keeps the mv so the A19
+    /// mul-check merge keeps its copy-feeding-mulhu shape)
+    /// `d = lhs OP rhs` where the left value still lives in `lhs` (its
+    /// bank home; pop2_dest skipped the materializing `mv`) and `d` is the
+    /// fresh destination pool register. The fault faces are byte-for-byte
+    /// the ones `emit_arith` emits: the w=64 ADD overflow check and the
+    /// MUL mulhu guard compare against the ORIGINAL rhs, which stays the
+    /// `rhs` argument here, and the narrower widths range-check the
+    /// destination — only the add/mul operand wiring is mirrored, which
+    /// commutativity makes value-identical. EQ/NEQ keep the xor+sltiu /
+    /// xor+sltu chain (xor is commutative; the second step reads d only).
+    pub(crate) fn emit_arith_commut(
+        &mut self,
+        op: Bytecode,
+        d: u8,
+        lhs: u8,
+        rhs: u8,
+        w: u32,
+    ) -> Ret<()> {
+        use Bytecode::*;
+        match op {
+            ADD => {
+                if w < 64 {
+                    // sum < 2^(w+1) <= 2^64: no u64 wrap, range-check only
+                    self.asm.r(0, rhs, lhs, 0, d, 0b0110011); // add d, lhs, rhs
+                    self.emit_range_check(d, w);
+                } else {
+                    // overflow iff result < rhs (unsigned) — the ORIGINAL
+                    // rhs (lhs is the swapped-in left value)
+                    self.asm.r(0, rhs, lhs, 0, d, 0b0110011);
+                    self.asm.bltu(d, rhs, self.fault_arith);
+                }
+            }
+            MUL => {
+                if w < 64 {
+                    // product < 2^2w <= 2^64: no u64 wrap, range-check only
+                    self.asm.r(1, rhs, lhs, 0, d, 0b0110011); // mul
+                    self.emit_range_check(d, w);
+                } else {
+                    self.asm.r(1, rhs, lhs, 3, self.a1, 0b0110011); // mulhu (commutative)
+                    self.asm.bne(self.a1, ZERO, self.fault_arith);
+                    self.asm.r(1, rhs, lhs, 0, d, 0b0110011); // mul
+                }
+            }
+            BXOR => self.asm.xor(d, lhs, rhs),
+            BOR | OR => self.asm.or_(d, lhs, rhs),
+            BAND | AND => self.asm.and_(d, lhs, rhs),
+            EQ => {
+                self.asm.xor(d, lhs, rhs); // xor (rd != rs1: full width)
+                self.asm.i(1, d, 3, d, 0b0010011); // sltiu d, d, 1
+            }
+            NEQ => {
+                self.asm.xor(d, lhs, rhs);
+                self.asm.r(0, d, ZERO, 3, d, 0b0110011); // sltu d, x0, d
+            }
+            other => {
+                return errf!(
+                    "rv64 lower: internal: swapped-destination form requested for \
+                     non-commutative op {other:?}"
+                )
+            }
+        }
+        Ok(())
+    }
+
     /// Whether `emit_arith_k` has a constant-specialized form for
     /// `d = d OP k` (checked before the operand is consumed).
     pub(crate) fn arith_k_handles(op: Bytecode, k: u64) -> bool {
@@ -528,7 +619,13 @@ impl<'a> Lower<'a> {
             ADD | SUB => k <= 1,
             MUL => k <= 1 || pow2,
             DIV => k == 1 || pow2 || k >= 2, // any const: no zero-guard
-            DIVEXACT | DIVUP => k == 1 || (op == DIVEXACT && pow2),
+            // A7 (survey arith.md): DIVUP joins DIVEXACT's constant forms —
+            // pow2 rides the srli+andi+beq+addi 4-slot shape, any other
+            // k >= 2 keeps the divu pair minus the dead zero guard (a
+            // constant divisor is nonzero by proof). k == 0 stays
+            // unhandled: the zero-divisor 90 face needs the general
+            // path's runtime guard.
+            DIVEXACT | DIVUP => k >= 1,
             MOD => k == 1 || pow2 || k >= 2,
             // any constant amount: k < 64 shifts, k >= 64 faults
             // unconditionally (checked shift: amount >= width)
@@ -541,7 +638,7 @@ impl<'a> Lower<'a> {
     /// A non-negative constant that fits `andi`'s 12-bit signed immediate.
     /// Anything larger MUST ride a register (`li` + `and_`) — a cast through
     /// `as i32` silently truncates (2^32-1 became -1, an identity mask).
-    fn i12_mask(v: u64) -> Option<i32> {
+    pub(crate) fn i12_mask(v: u64) -> Option<i32> {
         (v <= 2047).then_some(v as i32)
     }
 
@@ -595,7 +692,10 @@ impl<'a> Lower<'a> {
             DIV if k >= 2 => {
                 // const nonzero: the beq rhs, ZERO guard is dead
                 let t = self.push_vreg();
-                self.asm.li(t, k);
+                // A11 (survey arith.md): k > 0xFFFF rides the literal pool
+                // (one ld) when a pool base is active; smaller constants
+                // fall back to the plain li inside li_k — never worse.
+                self.li_k(t, k);
                 self.asm.r(1, t, d, 5, d, 0b0110011); // divu d, d, t
                 let _ = self.pop_vreg();
             }
@@ -619,7 +719,62 @@ impl<'a> Lower<'a> {
                 let _ = self.pop_vreg();
                 self.asm.srli_(d, d, j);
             }
+            DIVEXACT if k >= 2 => {
+                // A7: non-pow2 constant divisor — the zero guard drops
+                // (nonzero by proof); the exactness face stays (a nonzero
+                // remainder faults 90, the interpreter's div_exact face)
+                let t = self.push_vreg();
+                // A11: same literal-pool materialization as the DIV arm
+                self.li_k(t, k);
+                self.asm.r(1, t, d, 7, self.a1, 0b0110011); // remu a1, d, t
+                self.asm.bne(self.a1, ZERO, self.fault_arith);
+                self.asm.r(1, t, d, 5, d, 0b0110011); // divu d, d, t
+                let _ = self.pop_vreg();
+            }
             DIVUP if k == 1 => {}
+            DIVUP if pow2j(k).is_some() => {
+                // A7 (survey arith.md): div_up(x, 2^j) = (x >> j) +
+                // (x & (2^j − 1) != 0). The quotient and the remainder
+                // both read the SAME original x, so the remainder mask is
+                // computed FIRST and the quotient shifts in place after
+                // (srli + andi + beq + addi; no `x + k − 1` add — the
+                // interpreter's div_with_round_checked has no such
+                // overflow face, and the +1 cannot wrap: the quotient of
+                // a k >= 2 division is < the dividend). Same i12_mask
+                // three-way fix as the DIVEXACT pow2 arm above.
+                let j = pow2j(k).unwrap();
+                let t = self.push_vreg();
+                match Self::i12_mask(k - 1) {
+                    Some(m) => self.asm.andi(t, d, m),
+                    None => {
+                        self.asm.li(t, k - 1);
+                        self.asm.and_(t, d, t);
+                    }
+                }
+                self.asm.srli_(d, d, j);
+                let join = self.asm.new_label();
+                self.asm.beq(t, ZERO, join);
+                self.asm.addi(d, d, 1);
+                self.place(join);
+                let _ = self.pop_vreg();
+            }
+            DIVUP if k >= 2 => {
+                // A7: non-pow2 constant divisor — nonzero by proof, so the
+                // general form's `beq rhs, ZERO` guard is dead and drops.
+                // The ceil bump matches the general DIVUP arm (remu →
+                // divu → +1 on a nonzero remainder; no overflow check —
+                // quo < x for k >= 2).
+                let t = self.push_vreg();
+                // A11: same literal-pool materialization as the DIV arm
+                self.li_k(t, k);
+                self.asm.r(1, t, d, 7, self.a1, 0b0110011); // remu a1, d, t
+                self.asm.r(1, t, d, 5, d, 0b0110011); // divu d, d, t
+                let join = self.asm.new_label();
+                self.asm.beq(self.a1, ZERO, join);
+                self.asm.addi(d, d, 1);
+                self.place(join);
+                let _ = self.pop_vreg();
+            }
             MOD if k == 1 => self.asm.addi(d, ZERO, 0),
             MOD if pow2j(k).is_some() => {
                 // three-way fix (g10_fullnode_mod_pow2_bug_candidate): the
@@ -642,7 +797,8 @@ impl<'a> Lower<'a> {
             }
             MOD if k >= 2 => {
                 let t = self.push_vreg();
-                self.asm.li(t, k);
+                // A11: same literal-pool materialization as the DIV arm above
+                self.li_k(t, k);
                 self.asm.r(1, t, d, 7, d, 0b0110011); // remu d, d, t
                 let _ = self.pop_vreg();
             }
@@ -1018,7 +1174,9 @@ impl<'a> Lower<'a> {
     /// workspace (the routine faults 90 on z == 0 itself) and reload the
     /// residue as a fresh (lo, hi) pool pair. Layout over the divmod
     /// workspace (never live at the same time): x → s+0/s+8, y →
-    /// s+16/s+24, z → s+32/s+40, result → s+48/s+56, RA parked at s+128.
+    /// s+16/s+24, z → s+32/s+40, result → s+48/s+56. D1: the call links
+    /// through the mode scratch a0 (the routine parks/restores it at
+    /// s+128) — RA is never touched.
     pub(crate) fn emit_mulmod128(
         &mut self,
         xlo: u8,
@@ -1037,9 +1195,7 @@ impl<'a> Lower<'a> {
         self.asm.sd(zlo, S0, s + 32);
         self.asm.sd(zhi, S0, s + 40);
         let lbl = self.u128_mulmod_label();
-        self.asm.sd(RA, S0, s + 128);
-        self.asm.jal_(RA, lbl);
-        self.asm.ld(RA, S0, s + 128);
+        self.asm.jal_(self.a0, lbl); // D1: a0-linked call — RA stays intact
         let out_lo = self.push_vreg();
         let out_hi = self.push_vreg();
         self.asm.ld(out_lo, S0, s + 48);
@@ -1065,11 +1221,31 @@ impl<'a> Lower<'a> {
         const VLO: u8 = 23;
         const VHI: u8 = 24;
         const CARRY: u8 = 22;
-        const TMP: u8 = 17;
+        const TMP: u8 = 17; // a7 — unsaved scratch. DEAD mid-body ONLY
+        // because x17 is excluded from the ImcRemap bank candidate list
+        // (mod.rs P2-A27 — audit 3103669); see the TMP comment in
+        // lib_u128's emit_divmod_routine. Never re-add 17 to the bank
+        // candidates without adding it to this routine's save set too.
         debug_assert!(s >= 0, "mulmod routine without a reserved save area");
         let sd = |lw: &mut Self, rs: u8, off: i32| lw.asm.sd(rs, S0, off);
         let ld = |lw: &mut Self, rd: u8, off: i32| lw.asm.ld(rd, S0, off);
-        let saved = [T1, T2, 14u8, VLO, VHI, CARRY, T3, T4];
+        // D4: mode-specialized save set — VLO/VHI/CARRY (x23/x24/x22) are
+        // bank candidates, ImcRemap-only writers (the no-writers audit is
+        // recorded in emit_divmod_routine; identical register classes
+        // here). Dropped in Im/Imc (−6 instructions); full set in
+        // ImcRemap. Cross-routine review: this routine never calls (or is
+        // called by) another routine — its only external edges are the
+        // body-side `jal a0` sites and the shared fault thunk (A0 only) —
+        // so the reduced save set cannot break a sibling routine.
+        let saved: &[u8] = if self.saves_bank_candidate_regs {
+            &[T1, T2, 14, VLO, VHI, CARRY, T3, T4]
+        } else {
+            &[T1, T2, 14, T3, T4]
+        };
+        // D1: park the link register FIRST — the caller's `jal a0` saved
+        // nothing (see emit_divmod_routine). The fault path (z == 0 below)
+        // skips the restore exactly like the old call-site `ld RA` did.
+        sd(self, self.a0, s + 128);
         for (i, &r) in saved.iter().enumerate() {
             sd(self, r, s + 64 + (i as i32) * 8);
         }
@@ -1201,7 +1377,8 @@ impl<'a> Lower<'a> {
         for (i, &r) in saved.iter().enumerate() {
             ld(self, r, s + 64 + (i as i32) * 8);
         }
-        self.asm.ret();
+        ld(self, self.a0, s + 128); // D1: return through the link register
+        self.asm.jr(self.a0);
     }
 
     pub(crate) fn emit_min(&mut self, d: u8, rhs: u8) {

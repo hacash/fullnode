@@ -107,23 +107,48 @@ fn keyword_desc_uses_source_spelling() {
     assert!(!err.contains("Arrow"), "Debug leak: {err}");
 }
 
-/// T9 / E26: the 9-deep variable nesting reject gains the actionable
-/// split hint (appended at the fitshc boundary; the core message, and with
-/// it the externally asserted substring `nesting exceeds`, stays contiguous).
+/// T9 / E26: the deep-variable nesting reject carries the actionable split
+/// hint (appended at the fitshc boundary; the core message, and with it the
+/// externally asserted substring `nesting exceeds`, stays contiguous).
+///
+/// E10 (bank construction leaves the `d <= 6` gate) split this face by
+/// lowering mode: with ImcRemap banking active, 9 hot int locals can sit in
+/// bank homes while at most 8 stack slots are live, so the 9-variable
+/// right-nested sum COMPILES in the production default mode (ImcRemap) and
+/// executes correctly (probe: sum of nine `byte(data,i)` with input 0x01…
+/// = 9, matching the interpreter bit-for-bit). The fixed 8-value pool still
+/// binds Im (no bank there): that mode keeps rejecting with the full hint,
+/// and that is what this test pins (through `lower_body_mode_arena` with an
+/// explicit `Rv64Mode::Im` — the `compile_with_rv64im` entry always rides
+/// the ImcRemap default).
 #[test]
 fn nesting_reject_carries_split_hint() {
-    let mut body = String::from("pragma fitsh 1.0.0\ncontract D {\n");
-    body.push_str("    function rv64im k(data: bytes) -> bytes {\n");
-    for i in 0..9 {
-        body.push_str(&format!("        var v{i} = size(data)\n"));
+    use vm::ir::rv64::{lower_body_mode_arena, Rv64Mode};
+
+    let mut body = String::from("var v0 = (byte(data, 0) as u64)\n");
+    for i in 1..9 {
+        body.push_str(&format!(
+            "var v{i} = (byte(data, {i}) as u64)\n"
+        ));
     }
-    body.push_str("        var r = (v0 + (v1 + (v2 + (v3 + (v4 + (v5 + (v6 + (v7 + v8))))))))\n");
-    body.push_str("        return r as bytes\n");
-    body.push_str("    }\n}\n");
-    let err = compile_err(&body);
+    body.push_str("var r = (v0 + (v1 + (v2 + (v3 + (v4 + (v5 + (v6 + (v7 + v8))))))))\n");
+    body.push_str("return (r as u64) as bytes\n");
+    let tokens = vm::lang::Tokenizer::new(body.as_bytes())
+        .parse()
+        .expect("tokenize");
+    let (ir, _, _) = vm::fitshc::compile_body(
+        tokens,
+        vec![("data".to_string(), vm::ValueTy::Bytes)],
+        &[],
+        &[],
+        false,
+    )
+    .expect("front end accepts the body");
+    let err = lower_body_mode_arena(&ir, true, Rv64Mode::Im, vm::ir::rv64::ARENA_SIZE_MAX)
+        .expect_err("Im must reject the 9-deep nesting");
+    let err = vm::fitshc::kernel::annotate_backend_reject(&err.to_string());
     assert!(err.contains("nesting exceeds"), "{err}");
     assert!(err.contains("hint: split the expression"), "{err}");
-    assert!(err.contains("rv64im kernel 'k'"), "{err}");
 }
 
 /// T5 / E05: an rv64im kernel parameter declared `x: u32` used to sail

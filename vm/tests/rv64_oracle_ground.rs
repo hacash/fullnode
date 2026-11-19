@@ -1261,7 +1261,10 @@ fn g5_bytes_churn_bound_divergence_pinned() {
 #[test]
 fn g5_expression_depth_limit_is_rv64_compile_only() {
     // Depth 9: the shared front end accepts, the interpreter RUNS the
-    // bytecode, only the rv64 lowering rejects (kernel subset limit).
+    // bytecode. Im/Imc (fixed 8-value pool) reject at lowering; E10's
+    // ImcRemap bank absorbs the hot int locals (reads become zero-cost
+    // Refs, at most 8 stack slots live), so that mode lowers the same body
+    // and agrees with the interpreter.
     let mut decls = String::new();
     for k in 0..10 {
         decls.push_str(&format!("var v{k} = byte(data, {k})\n"));
@@ -1275,7 +1278,6 @@ fn g5_expression_depth_limit_is_rv64_compile_only() {
     let input = [1u8; 16];
     let got = Interp::build(&body).run(&input).expect("interpreter runs depth 9");
     assert_eq!(got, be(9));
-    // rv64 lowering rejects in every mode
     let tokens = Tokenizer::new(body.as_bytes()).parse().unwrap();
     let (ir, _, _) = compile_body(
         tokens,
@@ -1285,14 +1287,30 @@ fn g5_expression_depth_limit_is_rv64_compile_only() {
         false,
     )
     .unwrap();
-    for mode in MODES {
+    // Im/Imc: fixed pool → reject with the limit named
+    for mode in [Rv64Mode::Im, Rv64Mode::Imc] {
         let err = lower_body_mode_arena(&ir, true, mode, ARENA_SIZE_MAX)
-            .expect_err("depth 9 must be rejected");
+            .expect_err("depth 9 must be rejected in Im/Imc");
         assert!(
             err.to_string().contains("nesting exceeds"),
             "depth-9 error must name the limit: {err}"
         );
     }
+    // ImcRemap: the bank absorbs the locals — compiles and executes
+    let lo = lower_body_mode_arena(&ir, true, Rv64Mode::ImcRemap, ARENA_SIZE_MAX)
+        .expect("ImcRemap lowers depth 9 via the E10 bank");
+    let cap = vm::calc::SpaceCap::new(0);
+    let profile = vm::calc::container::CALC_PROFILE_RV64IMC;
+    let c = lo
+        .pack_segments_profile(&cap, 64, 4800, 16, profile)
+        .expect("pack");
+    let f = vm::calc::CalcFnObj::build(c, &cap, vm::calc::CalcHostConfig::new()).expect("build");
+    let ex = f.run(
+        &input,
+        vm::calc::CalcRunLimits { cycles: 10_000_000, resource: -1, deadline: None },
+    );
+    let out = ex.result.expect("ImcRemap runs depth 9");
+    assert_eq!(out, be(9), "ImcRemap depth-9 agrees with the interpreter");
 }
 
 #[test]

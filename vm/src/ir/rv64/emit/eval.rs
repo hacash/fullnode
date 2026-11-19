@@ -2,6 +2,59 @@ use super::super::*;
 
 impl<'a> Lower<'a> {
 
+    /// C3: the value of `a OP b` computed the way the interpreter computes
+    /// a double-literal integer binop: both sides widened to the common
+    /// width `w` (the `cast_same_uint_width2` max-join, already applied by
+    /// the width oracle's caller), then the checked op at that width.
+    ///
+    /// `Some(v)` folds the node to the pool literal `v` (< 2^w). `None`
+    /// keeps the existing emission — either the op has no folding form,
+    /// or the checked op faults at width `w`. The fault cases are the
+    /// interpreter's deterministic Arithmetic-90 faces (checked_add/sub
+    /// overflow-underflow, zero divisor, exact-division remainder, shift
+    /// amount ≥ width); the emitted checked forms reproduce them exactly,
+    /// so they stay runtime faults instead of compile rejects.
+    ///
+    /// Width-invariant premise (same one emit_arith relies on): both
+    /// literals fit their own static widths, hence both < 2^w — the
+    /// bitwise/compare results stay in range by construction.
+    fn fold_const_pair_value(op: Bytecode, a: u128, b: u128, w: u32) -> Option<u128> {
+        let fits = |v: u128| v < 1u128 << w;
+        use Bytecode::*;
+        Some(match op {
+            ADD => a.checked_add(b).filter(|&v| fits(v))?,
+            SUB => a.checked_sub(b)?,
+            MUL => a.checked_mul(b).filter(|&v| fits(v))?,
+            DIV => (b != 0).then(|| a / b)?,
+            MOD => (b != 0).then(|| a % b)?,
+            // div_up: ceil quotient — `num/div + (rem != 0)`; the quotient
+            // never exceeds the dividend (divisor >= 1), so no width face
+            DIVUP => (b != 0).then(|| a / b + u128::from(a % b != 0))?,
+            // div_exact: the interpreter faults 90 on a nonzero remainder
+            DIVEXACT => (b != 0 && a % b == 0).then(|| a / b)?,
+            MAX => a.max(b),
+            MIN => a.min(b),
+            ABSDIFF => a.abs_diff(b),
+            BXOR => a ^ b,
+            BOR => a | b,
+            BAND => a & b,
+            // checked_shl/shr: the AMOUNT must stay under the width
+            // (Arithmetic 90 otherwise); the value side of shl silently
+            // discards the shifted-out bits (Rust `<<` on a fixed-width
+            // int), i.e. `(a << b) mod 2^w`
+            BSHL => (b < w as u128).then(|| (a << b) & ((1u128 << w) - 1))?,
+            BSHR => (b < w as u128).then(|| a >> b)?,
+            // comparisons are numeric over the extracted u128 values
+            // (`value_content_eq` / `lgc_ord_cmp`) — width plays no part
+            EQ => u128::from(a == b),
+            NEQ => u128::from(a != b),
+            LT => u128::from(a < b),
+            GT => u128::from(a > b),
+            LE => u128::from(a <= b),
+            GE => u128::from(a >= b),
+            _ => return None,
+        })
+    }
 
     pub(crate) fn eval(&mut self, node: &dyn IRNode) -> Ret<()> {
         if let Some(w) = node.as_any().downcast_ref::<IRNodeWrapOne>() {
@@ -44,11 +97,9 @@ impl<'a> Lower<'a> {
                     .downcast_ref::<IRNodeParams>()
                     .ok_or("rv64 lower: PBUF node shape unexpected")?;
                 let data = &p.para[if op == PBUF { 1 } else { 2 }..];
-                let lbl = self.lit_label(data);
-                let rp = self.push_vreg();
-                let rl = self.push_vreg();
-                self.lit_addr(rp, lbl);
-                self.asm.li(rl, data.len() as u64);
+                // C12: fresh pool pair, or a still-live descriptor re-issued
+                // as Refs when the establishing site left it exactly here
+                self.eval_lit_bytes_pair(data);
             }
             PNBUF => {
                 let rp = self.push_vreg();
@@ -146,15 +197,30 @@ impl<'a> Lower<'a> {
                     return Ok(());
                 }
                 if let Some(limit) = limit {
-                    let r = self.pop_own_replace();
-                    self.li_k(self.a0, limit);
-                    // trap iff r > limit (r == limit is IN range: 255 is a
-                    // valid u8). The historical form was doubly wrong —
-                    // bgeu(r, limit, ok) accepted overflows and trapped
-                    // every valid value; nothing e2e-tested a runtime
-                    // narrowing cast before the guard-semantics
-                    // differential caught it.
-                    self.asm.bltu(self.a0, r, self.fault_cast);
+                    // C1 (rv64-size-min): the width invariant — every
+                    // runtime value of a static width w is < 2^w (the same
+                    // authority emit_range_check relies on, arith.rs) —
+                    // makes the range guard unreachable when the operand's
+                    // provable width already fits the target (u8→CU8/16/32,
+                    // u16→CU16/32, u32→CU32; a pure-bool w=1 value is the
+                    // canonical 0/1). Skip it; a u64/128-width or unpinnable
+                    // (None) operand keeps the guard below.
+                    let target_w: u32 = match op {
+                        CU8 => 8,
+                        CU16 => 16,
+                        _ => 32,
+                    };
+                    if !matches!(self.int_width(&*sub.subx), Some(w) if (1..=target_w).contains(&w)) {
+                        let r = self.pop_own_replace();
+                        self.li_k(self.a0, limit);
+                        // trap iff r > limit (r == limit is IN range: 255
+                        // is a valid u8). The historical form was doubly
+                        // wrong — bgeu(r, limit, ok) accepted overflows and
+                        // trapped every valid value; nothing e2e-tested a
+                        // runtime narrowing cast before the guard-semantics
+                        // differential caught it.
+                        self.asm.bltu(self.a0, r, self.fault_cast);
+                    }
                 }
             }
             CU128 => {
@@ -247,11 +313,9 @@ impl<'a> Lower<'a> {
                             | Value::Bytes(_)
                     ) {
                         if let Some(be) = v.scalar_bytes() {
-                            let lbl = self.lit_label(&be);
-                            let rp = self.push_vreg();
-                            let rl = self.push_vreg();
-                            self.lit_addr(rp, lbl);
-                            self.asm.li(rl, be.len() as u64);
+                            // C12: fresh pool pair, or a still-live
+                            // descriptor re-issued as Refs
+                            self.eval_lit_bytes_pair(&be);
                             return Ok(());
                         }
                     }
@@ -375,11 +439,9 @@ impl<'a> Lower<'a> {
                                  21-byte address"
                             );
                         }
-                        let lbl = self.lit_label(&b);
-                        let rp = self.push_vreg();
-                        let rl = self.push_vreg();
-                        self.lit_addr(rp, lbl);
-                        self.asm.li(rl, b.len() as u64);
+                        // C12: fresh pool pair, or a still-live descriptor
+                        // re-issued as Refs
+                        self.eval_lit_bytes_pair(&b);
                         return Ok(());
                     }
                     match node_res_ty(&*p.subx, self.slot)? {
@@ -688,6 +750,43 @@ impl<'a> Lower<'a> {
                         return self.emit_bytes_eq(op, tx == Ty::Address, ty_ == Ty::Address);
                     }
                 }
+                // C3: both operands int literals with pinned real uint
+                // widths — the interpreter widens the pair to the joined
+                // common width (`arithmetic_args2`/`cast_same_uint_width2`
+                // max-join) and computes the checked op AT that width, so
+                // the whole node folds to one pool literal. Fault shapes
+                // (overflow / underflow / zero divisor / shift amount past
+                // the width) deliberately keep the emitted checked form:
+                // the deterministic runtime Arithmetic-90 face is the
+                // pinned semantics there (`1u64 << 64` "folds nothing,
+                // traps unconditionally", rv64_width_semantics.rs), and
+                // folding must not turn it into a compile reject.
+                let wx = self.int_width(&*n.subx);
+                let wy = self.int_width(&*n.suby);
+                if let (Some(wx), Some(wy)) = (wx, wy) {
+                    // FIX-C3PAIR: fold only when the joined width stays
+                    // ≤64. A 128-wide result must reach its consumers as a
+                    // (lo, hi) vstack pair — folding it here would push a
+                    // single `li_k` register and underflow every pair
+                    // consumer (PUT wide `vstack.len() - 2`): u128 pairs
+                    // keep their `emit_bin128` route (comparisons of two
+                    // u128 literals fold fine only because their result is
+                    // a pure bool, but the uniform ≤64 gate is simpler and
+                    // the corpus never relied on the 128-compare fold).
+                    if wx >= 8 && wy >= 8 && wx.max(wy) <= 64 {
+                        if let (Some(ax), Some(ay)) =
+                            (int_literal(&*n.subx), int_literal(&*n.suby))
+                        {
+                            if let Some(v) =
+                                Self::fold_const_pair_value(op, ax as u128, ay as u128, wx.max(wy))
+                            {
+                                let r = self.push_vreg();
+                                self.li_k(r, v as u64);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
                 // task-1 A3: the interpreter computes the pair at the
                 // operands' common width — the checked forms below emit
                 // that width's overflow face
@@ -740,8 +839,16 @@ impl<'a> Lower<'a> {
                 if lx || ly {
                     self.nil_guard_int_pair(op, lx, ly);
                 }
-                let (d, _ra, rb) = self.pop2_dest();
-                self.emit_arith(op, d, rb, w)?;
+                let (d, ra, rb, sw) = self.pop2_dest(op, w);
+                if sw {
+                    // E3: banked-left commutative op — no mv, the result is
+                    // computed straight out of the bank home (see
+                    // emit_arith_commut; non-commutative ops keep the mv
+                    // inside pop2_dest)
+                    self.emit_arith_commut(op, d, ra, rb, w)?;
+                } else {
+                    self.emit_arith(op, d, rb, w)?;
+                }
             }
             POW => {
                 let n = node
@@ -769,23 +876,114 @@ impl<'a> Lower<'a> {
                     .and_then(|v| v.extract_u128().ok())
                     .filter(|&e| e <= 64);
                 if let Some(e) = const_exp {
+                    // C3: both base and exponent literals — compute the
+                    // checked pow at the common width (the widen2 max-join
+                    // of the two operand widths, exactly what
+                    // `arithmetic_args2` feeds `pow_checked`). The u128
+                    // stepwise product is exact-equivalent to
+                    // `<uW>::checked_pow`: for base >= 2 the partial
+                    // powers only grow, so an exact result that fits 2^w
+                    // is precisely checked_pow's `Some`, and any overflow
+                    // along the way is its `None` — the interpreter's
+                    // deterministic Arithmetic 90. Fault shapes keep the
+                    // emitted chain (same stance as the binop C3 hook).
+                    let wb = self.int_width(&*n.subx);
+                    let we = self.int_width(&*n.suby);
+                    if let (Some(wb), Some(we)) = (wb, we) {
+                        if wb >= 8 && we >= 8 {
+                            if let Some(ab) = int_literal(&*n.subx) {
+                                let wc = wb.max(we);
+                                let mut acc: u128 = 1;
+                                let mut fits = true;
+                                for _ in 0..e {
+                                    match acc.checked_mul(ab as u128) {
+                                        Some(v) if v < 1u128 << wc => acc = v,
+                                        _ => {
+                                            fits = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if fits {
+                                    let r = self.push_vreg();
+                                    self.li_k(r, acc as u64);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                     let mb = self.nil_val(&*n.subx);
                     self.eval_int(&*n.subx)?; // base
                     if mb {
                         self.nil_guard_tag(self.vstack.len() - 1, 71);
                     }
                     let d = self.pop_own_replace();
-                    match e {
-                        0 => self.asm.addi(d, ZERO, 1),
-                        1 => {}
-                        _ => {
-                            self.asm.mv(self.a0, d); // preserved base
-                            for _ in 1..e {
-                                self.asm.r(1, self.a0, d, 3, self.a1, 0b0110011); // mulhu
+                    if e <= 4 {
+                        match e {
+                            0 => self.asm.addi(d, ZERO, 1),
+                            1 => {}
+                            2 => {
+                                // A7 (survey arith.md): e = 2 squares IN
+                                // PLACE — both products read d, so the
+                                // general chain's `mv a0, d` (base
+                                // preservation) is dead and drops. Same
+                                // checked face: mulhu d·d ≠ 0 → 90, then
+                                // the square. (Merged with the A1 gate:
+                                // e <= 4 stays linear, e >= 5 rides the
+                                // checked multiply loop below.)
+                                self.asm.r(1, d, d, 3, self.a1, 0b0110011); // mulhu a1, d, d
                                 self.asm.bne(self.a1, ZERO, self.fault_arith);
-                                self.asm.r(1, self.a0, d, 0, d, 0b0110011); // mul
+                                self.asm.r(1, d, d, 0, d, 0b0110011); // mul d, d, d
+                            }
+                            _ => {
+                                self.asm.mv(self.a0, d); // preserved base
+                                for _ in 1..e {
+                                    self.asm.r(1, self.a0, d, 3, self.a1, 0b0110011); // mulhu
+                                    self.asm.bne(self.a1, ZERO, self.fault_arith);
+                                    self.asm.r(1, self.a0, d, 0, d, 0b0110011); // mul
+                                }
                             }
                         }
+                    } else {
+                        // A1: constant exponent 5..=64 — the same checked
+                        // multiply loop the dynamic-exponent path emits,
+                        // with the counter as an immediate (`li`).
+                        //
+                        // Fault-face equivalence with the former linear
+                        // chain (survey/arith.md §1.2): both forms
+                        // multiply the running result by the preserved
+                        // base once per step and check the 64-bit high
+                        // half after EVERY multiply, so this loop's set of
+                        // checked intermediates (x^1..x^e) is the linear
+                        // chain's set (x^2..x^e) plus x^1 — and x^1 can
+                        // never overflow (base < 2^64). For base >= 2 the
+                        // powers are monotonically non-decreasing, so the
+                        // first overflowing step is the same in both
+                        // forms; bases 0/1 never overflow. Both forms
+                        // fault through the same shared Arithmetic-90
+                        // thunk with no observable side effect between the
+                        // last passing multiply and the fault (the
+                        // may-Nil 71 guard already ran before the loop),
+                        // and the narrow-width tail range check below is
+                        // byte-identical. The dynamic path's u32 exponent
+                        // pre-check is unreachable here: e <= 64 < 2^32.
+                        let rc = self.push_vreg(); // loop counter (transient stack entry)
+                        self.asm.mv(self.a0, d); // preserved base
+                        self.asm.addi(d, ZERO, 1); // running result
+                        self.asm.li(rc, e as u64);
+                        let l_loop = self.asm.new_label();
+                        let l_end = self.asm.new_label();
+                        self.place(l_loop);
+                        self.asm.beq(rc, ZERO, l_end);
+                        self.asm.r(1, self.a0, d, 3, self.a1, 0b0110011); // mulhu a1, a0, d
+                        self.asm.bne(self.a1, ZERO, self.fault_arith);
+                        self.asm.r(1, self.a0, d, 0, d, 0b0110011); // mul d, a0, d
+                        self.asm.addi(rc, rc, -1);
+                        self.asm.jal_(ZERO, l_loop);
+                        self.place(l_end);
+                        // drop the counter entry — the result entry (d)
+                        // stays on the stack
+                        let _ = self.pop_vreg();
                     }
                     if w < 64 {
                         self.emit_range_check(d, w);
@@ -1174,8 +1372,12 @@ impl<'a> Lower<'a> {
                     .ok_or("rv64 lower: logic node shape unexpected")?;
                 self.eval_int(&*n.subx)?;
                 self.eval_int(&*n.suby)?;
-                let (d, _ra, rb) = self.pop2_dest();
-                if op == AND {
+                let (d, ra, rb, sw) = self.pop2_dest(op, 64);
+                if sw {
+                    // E3: banked-left AND/OR — same swapped form as the
+                    // arithmetic path (AND/OR are commutative)
+                    self.emit_arith_commut(op, d, ra, rb, 64)?;
+                } else if op == AND {
                     self.asm.and_(d, d, rb);
                 } else {
                     self.asm.or_(d, d, rb);
@@ -1234,6 +1436,15 @@ impl<'a> Lower<'a> {
                     let rl = self.push_vreg();
                     self.lit_addr(rp, lbl);
                     self.asm.li(rl, cat.len() as u64);
+                } else if self.cat_fusion_gate(node) {
+                    // C6 (impl/cat-u128fwd): a CAT tree (some child is
+                    // itself a dynamic CAT) fuses into ONE check+copy
+                    // emission — layered evals + 91 guards in the original
+                    // order, then one overflow check, one arena check, one
+                    // memcpy per leaf, one descriptor (face arguments in
+                    // bytes.rs::emit_cat_fused). A single-layer CAT keeps
+                    // the exact emission below.
+                    self.emit_cat_fused(node)?;
                 } else {
                     let (mx, my) = (self.nil_val(&*n.subx), self.nil_val(&*n.suby));
                     self.eval_bytes(&*n.subx)?;
@@ -1271,6 +1482,44 @@ impl<'a> Lower<'a> {
                     .as_any()
                     .downcast_ref::<IRNodeTriple>()
                     .ok_or("rv64 lower: cut node shape unexpected")?;
+                // C4 (impl/eval-folding): a bytes-literal receiver with
+                // int-literal ost/len slices at compile time into one pool
+                // literal (lit_addr + li — 2-3 insts replacing the receiver
+                // materialization, both operand loads, the wrap/bounds
+                // guards and the slice math). A literal is never Nil, so
+                // the 91/72 Nil faces are unreachable; every remaining
+                // face is deterministic — an ost/len above the u16
+                // parameter space faults 72 (extract_u16), an ost+len
+                // past the receiver length faults at run time on the
+                // interpreter — both become compile-time fail-fast
+                // rejects (the CU-literal-overflow / ITEMGET
+                // constant-index precedent).
+                if let (Some(buf), Some(ost), Some(len)) = (
+                    bytes_literal(&*n.subx),
+                    int_literal(&*n.suby),
+                    int_literal(&*n.subz),
+                ) {
+                    if len > 0xFFFF || ost > 0xFFFF {
+                        return errf!(
+                            "rv64 lower: CUT literal offset/length {} exceeds the u16 \
+                             parameter space (the interpreter faults CastParamFail 72)",
+                            if len > 0xFFFF { len } else { ost }
+                        );
+                    }
+                    let (ost, len) = (ost as usize, len as usize);
+                    let end = match ost.checked_add(len).filter(|&e| e <= buf.len()) {
+                        Some(e) => e,
+                        // deterministic bounds face (cutout): compile reject
+                        None => {
+                            return errf!(
+                                "rv64 lower: CUT literal [{ost}..{ost}+{len}] is out of \
+                                 bounds for a {}-byte literal",
+                                buf.len()
+                            )
+                        }
+                    };
+                    return self.emit_lit_bytes(&buf[ost..end]);
+                }
                 let (mx, my, mz) =
                     (self.nil_val(&*n.subx), self.nil_val(&*n.suby), self.nil_val(&*n.subz));
                 self.eval_bytes(&*n.subx)?;
@@ -1294,6 +1543,30 @@ impl<'a> Lower<'a> {
                     .as_any()
                     .downcast_ref::<IRNodeParam1Single>()
                     .ok_or("rv64 lower: slice node shape unexpected")?;
+                // C4: a bytes-literal receiver with the embedded u8 count
+                // slices at compile time (the count is always a ≤255
+                // literal parameter). n > len is the deterministic
+                // interpreter bounds face for ALL four kinds (cutleft/
+                // cutright/dropleft/dropright) — a compile-time reject;
+                // the literal receiver is never Nil (91 unreachable).
+                if let Some(buf) = bytes_literal(&*n.subx) {
+                    let cnt = n.para as usize;
+                    if cnt > buf.len() {
+                        return errf!(
+                            "rv64 lower: {op:?} literal count {cnt} is out of bounds for \
+                             a {}-byte literal",
+                            buf.len()
+                        );
+                    }
+                    let len = buf.len();
+                    let out: &[u8] = match op {
+                        LEFT => &buf[..cnt],
+                        RIGHT => &buf[len - cnt..],
+                        LDROP => &buf[cnt..],
+                        _ => &buf[..len - cnt],
+                    };
+                    return self.emit_lit_bytes(out);
+                }
                 let m = self.nil_val(&*n.subx);
                 self.eval_bytes(&*n.subx)?;
                 if m {
@@ -1476,6 +1749,60 @@ impl<'a> Lower<'a> {
                         "rv64 lower: choose arms must have the same result type (yes {:?}, no {:?})",
                         ty, ty_no
                     );
+                }
+                // C10 (impl/eval-folding): a Bool/uint LITERAL condition
+                // selects at compile time — drop only the SELECTOR (the
+                // bne + the UNSELECTED arm's mv chain + jal + its tag
+                // copy), never the eager arm evaluation: the interpreter
+                // evaluates all three operands first and the arms keep
+                // their exact fault faces/order (cond → yes → no). The
+                // literal cond still materializes (one addi): its vstack
+                // slot is what keeps the two arms' register windows
+                // disjoint, exactly like the general form. Same-arm
+                // elimination (a structurally identical second arm) is
+                // deliberately NOT done — deciding subtree determinism
+                // needs a purity whitelist the lowering does not have; the
+                // conservative form keeps both arm evaluations and removes
+                // exactly the dead selector.
+                if let Some(take_yes) = const_cond_bool(&*n.subx) {
+                    self.eval_int(&*n.subx)?; // cond — fault-free literal
+                    self.eval(&*n.suby)?; // yes — kept: eager fault face
+                    self.eval(&*n.subz)?; // no — kept: eager fault face
+                    let no_locs = self.take_arm_values(vals);
+                    let yes_locs = self.take_arm_values(vals);
+                    let _ = self.pop_vreg(); // cond (dead after the select)
+                    let mut dests = Vec::with_capacity(vals);
+                    for _ in 0..vals {
+                        dests.push(self.push_vreg());
+                    }
+                    let entry = self.vstack.len() - vals;
+                    let my = self.nil_val(&*n.suby);
+                    let mn = self.nil_val(&*n.subz);
+                    // the TAKEN arm only: its mv chain and its tag publish
+                    // survive verbatim from the corresponding general-form
+                    // path (yes sits at entry+1+i, no at entry+1+vals+i —
+                    // the cond slot between them is what offsets the no arm)
+                    let (src_locs, src_off, src_may_nil) = if take_yes {
+                        (yes_locs, 1, my)
+                    } else {
+                        (no_locs, 1 + vals, mn)
+                    };
+                    for (i, &d) in dests.iter().enumerate() {
+                        let s = loc_reg(src_locs[i]);
+                        if d != s {
+                            self.asm.mv(d, s);
+                        }
+                    }
+                    if my || mn {
+                        for i in 0..vals {
+                            if src_may_nil {
+                                self.nil_copy_tag(entry + src_off + i, entry + i);
+                            } else {
+                                self.nil_set_tag_one(entry + i);
+                            }
+                        }
+                    }
+                    return Ok(());
                 }
                 self.eval_int(&*n.subx)?; // cond
                 self.eval(&*n.suby)?; // yes
@@ -1719,11 +2046,13 @@ impl<'a> Lower<'a> {
                 }
                 let kr = loc_reg(self.vstack[kd]);
                 // P2: an arena slot's guards read the length through the
-                // descriptor (the shared header word)
+                // descriptor (the shared header word). C2: a width-provable
+                // (≤ 32) index skips the dead 72 guard.
+                let fits32 = self.idx_below_2pow32(&*n.suby);
                 if matches!(kind, ListKind::Arena { .. }) {
-                    self.emit_list_bounds_guards_arena(kr, s)?;
+                    self.emit_list_bounds_guards_arena(kr, s, fits32)?;
                 } else {
-                    self.emit_list_bounds_guards(kr, s, static_len)?;
+                    self.emit_list_bounds_guards(kr, s, static_len, fits32)?;
                 }
                 if static_len != Some(0) {
                     // (an Empty list's always-85 guard exits above; there
@@ -1815,10 +2144,15 @@ impl<'a> Lower<'a> {
                     self.nil_guard_tag(kd, 72);
                 }
                 let kr = loc_reg(self.vstack[kd]);
-                let l72 = self.nil_thunk(72);
+                // C2: the 72 guard is dead for a width-provable (≤ 32) key
+                // — see idx_below_2pow32; the fold-to-false compare below
+                // keeps its position
                 let sc1 = self.asm.sc1;
-                self.asm.li(sc1, 1u64 << 32);
-                self.asm.bgeu(kr, sc1, l72);
+                if !self.idx_below_2pow32(&*n.suby) {
+                    let l72 = self.nil_thunk(72);
+                    self.asm.li(sc1, 1u64 << 32);
+                    self.asm.bgeu(kr, sc1, l72);
+                }
                 // the 0/1 result MUST go to a fresh pool register (the key
                 // may be a bank Ref — see the ITEMGET note above)
                 self.pop_vreg();
@@ -2102,6 +2436,24 @@ impl<'a> Lower<'a> {
         self.eval(node)
     }
 
+    /// C4 (impl/eval-folding): materialize a compile-time-known bytes value
+    /// (the folded-slice / literal result): empty → the PNBUF shape
+    /// (ptr 0, len 0 — 2 insts), else one pool literal (lit_addr + li,
+    /// 2-3 insts), deduplicated through the pool map like every other
+    /// literal site. C12: a repeat materialization whose target pair is the
+    /// recorded still-live descriptor re-issues it as Refs instead.
+    pub(crate) fn emit_lit_bytes(&mut self, bytes: &[u8]) -> Ret<()> {
+        if bytes.is_empty() {
+            let rp = self.push_vreg();
+            let rl = self.push_vreg();
+            self.asm.mv(rp, ZERO);
+            self.asm.addi(rl, ZERO, 0);
+            return Ok(());
+        }
+        self.eval_lit_bytes_pair(bytes);
+        Ok(())
+    }
+
     pub(crate) fn eval_bytes(&mut self, node: &dyn IRNode) -> Ret<()> {
         let ty = node_res_ty(node, self.slot)?;
         // T13: an Address value lowers as its 21 content bytes — the same
@@ -2112,5 +2464,27 @@ impl<'a> Lower<'a> {
             return errf!("rv64 lower: expected a bytes value, got int");
         }
         self.eval(node)
+    }
+}
+
+/// C10 (impl/eval-folding): the compile-time truth of a CHOOSE condition
+/// that is a Bool or uint (≤ 64-bit) LITERAL — the interpreter's
+/// `extract_bool` of such a value never faults (no Nil face, no tag
+/// byte), so the selector is statically decided. Nil and bytes literals
+/// return None (their evaluation keeps observable faces); a u128 literal
+/// condition also returns None (the general form's cond register logic
+/// assumes a single-entry cond).
+fn const_cond_bool(node: &dyn IRNode) -> Option<bool> {
+    let v = crate::lang::ir_literal_value(node).ok().flatten()?;
+    match &v {
+        Value::Bool(b) => Some(*b),
+        _ => {
+            let ty = v.ty();
+            if ty.is_uint() && ty.uint_bits().unwrap_or(0) <= 64 {
+                v.extract_u128().ok().map(|n| n != 0)
+            } else {
+                None
+            }
+        }
     }
 }

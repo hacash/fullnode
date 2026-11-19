@@ -1320,10 +1320,20 @@ fn kernels_pin_and_agree() {
     // remains — see rv64_a19_guard_merge pins); the two `1 <<` u8 shift
     // sites trade srli+bne for c.addi+bgeu+andi; the `c1x * 16` u8
     // pow2-muls re-shape their prechecks (srli 60 -> srli 4).
+    // -> 2952 x17-bank fix (audit 3103669): x17 removed from the ImcRemap
+    // bank candidate list (the shared divmod/mulmod routines clobber it
+    // unsaved), so one score_sum web segment that used to home in x17 now
+    // spills to the frame (+2 B). Im/Imc unaffected.
+    // -> 2950 E3 pop2_dest banked-Ref commutative mv skip (commit
+    // 189a6a4): a banked-Ref LEFT operand of a commutative op skips the
+    // materializing mv (swapped-destination emit_arith_commut) — one 2B
+    // compressed mv deleted in the score_sum stream (−2 B; the pin was
+    // left at 2952 by E3 and is synced here with this attribution,
+    // disclosed by the D8+A8 acceptance report). Im/Imc unaffected.
     let lo_remap = lower(SCORE_SUM_FITSH, true, Rv64Mode::ImcRemap);
     assert_eq!(
         lo_remap.stats.code_bytes, 2950,
-        "score_sum ImcRemap baseline moved — update docs.loc/rv64im/96-a25-m4b-guardtail.md"
+        "score_sum ImcRemap baseline moved — update the census history comment above"
     );
     let lo_im = lower(SCORE_SUM_FITSH, true, Rv64Mode::Im);
     println!("score_sum code bytes: Im={} ImcRemap={}", lo_im.stats.code_bytes, lo_remap.stats.code_bytes);
@@ -1369,10 +1379,14 @@ fn kernels_pin_and_agree() {
     // (prologue init + the two assignment stores + the dynamic-length
     // view loop, +14 B), making the view width-exact to the interpreter
     // on the total < 1 inputs (the pre-fix 8-byte view diverged there).
+    // -> 3090 x17-bank fix (audit 3103669): x17 removed from the ImcRemap
+    // bank candidate list (the shared divmod/mulmod routines clobber it
+    // unsaved), so hacd200's hottest slots re-plan into one fewer bank
+    // home (+8 B). Im/Imc unaffected.
     let h_remap = lower(HACD200_FITSH, true, Rv64Mode::ImcRemap);
     let h_im = lower(HACD200_FITSH, true, Rv64Mode::Im);
     assert_eq!(
-        h_remap.stats.code_bytes, 3082,
+        h_remap.stats.code_bytes, 3090,
         "hacd200 ImcRemap baseline moved — update docs.loc/rv64im/96-a25-m4b-guardtail.md"
     );
     println!(

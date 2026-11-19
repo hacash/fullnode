@@ -152,6 +152,23 @@ use super::helpers::{HIP5_FITSH, compile, compile_with_input, decode_stream, dec
         a.slli_(28, 28, 2); // c.slli works on any rd
         a.ret(); // c.jr ra
         a.li(10, 100000); // lui+addi -> c.lui + c.addi? (100000 hi = 24)
+        // E1 c.ldsp: pool-base constant loads (full 5-bit rd, x2 base).
+        // The pool offsets are fixed at emission, so no fixup rides on
+        // the compressed form; the labels only matter to the fallbacks.
+        let pbase = a.new_label();
+        a.place(pbase);
+        let pv0 = a.new_label();
+        let pv8 = a.new_label();
+        let pv504 = a.new_label();
+        let pfar = a.new_label();
+        a.ld_label_off(10, SP, pbase, pv0, 0); // c.ldsp a0, 0(x2)
+        a.ld_label_off(14, SP, pbase, pv8, 8); // c.ldsp a4, 8(x2)
+        a.ld_label_off(15, SP, pbase, pv504, 504); // c.ldsp a5, 504(x2) — window max
+        // beyond the window / rd == base: the 4-byte PoolLd fallback
+        a.ld_label_off(5, SP, pbase, pfar, 512); // >504 -> 4B ld (PoolLd patch)
+        a.ld_label_off(SP, SP, pbase, pv8, 8); // rd == x2 -> 4B ld (PoolLd patch)
+        a.place(pv8);
+        a.place(pfar);
         let buf = a.finish().unwrap();
         let insts = decode_stream_p(&buf, crate::calc::container::CALC_PROFILE_RV64IMC);
         let find = |f: &dyn Fn(&Inst) -> bool| insts.iter().filter(|i| f(i)).count();
@@ -180,8 +197,81 @@ use super::helpers::{HIP5_FITSH, compile, compile_with_input, decode_stream, dec
         assert!(find(&|i| matches!(i, Inst::ShiftImm { kind: ShiftKind::Sll, rd: 28, shamt: 2, word: false, .. })) == 1);
         // 100000 = hi 0x19<<12 + 0x610 -> c.lui + addi(0x610 > 31 -> full-width)
         assert!(find(&|i| matches!(i, Inst::Lui { rd: 10, val: 0x18000, .. })) == 1, "c.lui");
+        // E1 c.ldsp pins: exact rd/imm reconstruction, incl. the 504 window max
+        assert!(find(&|i| matches!(i, Inst::Load { op: LoadOp::Ld, rd: 10, rs1: 2, imm: 0 })) == 1, "c.ldsp off 0");
+        assert!(find(&|i| matches!(i, Inst::Load { op: LoadOp::Ld, rd: 14, rs1: 2, imm: 8 })) == 1, "c.ldsp off 8");
+        assert!(find(&|i| matches!(i, Inst::Load { op: LoadOp::Ld, rd: 15, rs1: 2, imm: 504 })) == 1, "c.ldsp off 504");
+        // fallbacks stay full-width loads off x2 (imm patched from labels)
+        assert!(find(&|i| matches!(i, Inst::Load { op: LoadOp::Ld, rd: 5, rs1: 2, .. })) == 1, "PoolLd fallback >504");
+        assert!(find(&|i| matches!(i, Inst::Load { op: LoadOp::Ld, rd: 2, rs1: 2, .. })) == 1, "PoolLd fallback rd=x2");
         // verify the stream is 2-byte aligned overall
         assert_eq!(buf.len() % 2, 0);
+    }
+
+
+    /// E1: pooled 8-byte value entries are 8-aligned in the literal pool
+    /// and materialize via the 2-byte `c.ldsp` whenever their
+    /// emission-time-fixed pool offset fits the [0,504] window (ImcRemap
+    /// with an active pool-base register only). Pins: (a) a body with
+    /// ≥4 large (>0xFFFF) constants compresses those sites, (b) the whole
+    /// code stream re-decodes through the consensus decoder, (c) Im/Imc —
+    /// no pool-base register — contain no c.ldsp at all, (d) all three
+    /// modes execute the body identically.
+    #[test]
+    fn e1_cldsp_pool_constant_loads() {
+        // Four distinct >0xFFFF constants on four literal sites reach the
+        // lit_sites>=4 pool-base threshold; the `byte(data, k)` addends
+        // keep the sums out of constant folding.
+        let body = "var a = 100000 + byte(data, 0)\n\
+                    var b = 200000 + byte(data, 1)\n\
+                    var c = 3000000000 + byte(data, 2)\n\
+                    var d = 1000000007 + byte(data, 3)\n\
+                    return (a + b + c + d) as bytes";
+        let input: Vec<u8> = (1u8..=4).collect();
+        let want: u64 = 100000 + 1 + 200000 + 2 + 3000000000 + 3 + 1000000007 + 4;
+        let count_cldsp = |code: &[u8], profile: u8| -> usize {
+            // full-stream decode is the re-verification: unwrap fails on
+            // any illegal encoding or boundary slip
+            let mut n = 0;
+            let mut off = 0;
+            while off < code.len() {
+                let (inst, len) = decode_at(code, off, profile).unwrap();
+                if len == 2
+                    && matches!(&inst, Inst::Load { op: LoadOp::Ld, rs1: 2, imm, .. }
+                        if *imm >= 0 && *imm & 7 == 0 && *imm <= 504)
+                {
+                    n += 1;
+                }
+                off += len as usize;
+            }
+            assert_eq!(off, code.len(), "stream must end on an instruction boundary");
+            n
+        };
+        let (ir, _) = compile_with_input(body);
+        for (mode, profile) in [
+            (Rv64Mode::Im, 0u8),
+            (Rv64Mode::Imc, crate::calc::container::CALC_PROFILE_RV64IMC),
+            (Rv64Mode::ImcRemap, crate::calc::container::CALC_PROFILE_RV64IMC),
+        ] {
+            let lo = lower_body_mode(&ir, true, mode).unwrap();
+            let n = count_cldsp(&lo.code, profile);
+            match mode {
+                Rv64Mode::ImcRemap => assert!(n >= 4, "expected >=4 c.ldsp sites, got {n}"),
+                _ => assert_eq!(n, 0, "{mode:?} must never emit c.ldsp (no pool base)"),
+            }
+        }
+        // all three modes execute the body correctly end to end. `as
+        // bytes` yields the minimal-width BE view (leading zero bytes
+        // trimmed), so compare against the trimmed expectation.
+        let want_bytes = {
+            let b = want.to_be_bytes();
+            let first = b.iter().position(|&x| x != 0).unwrap_or(b.len() - 1);
+            b[first..].to_vec()
+        };
+        for mode in [Rv64Mode::Im, Rv64Mode::Imc, Rv64Mode::ImcRemap] {
+            let out = run_input_mode(body, &input, mode);
+            assert_eq!(out, want_bytes, "mode {mode:?}");
+        }
     }
 
 

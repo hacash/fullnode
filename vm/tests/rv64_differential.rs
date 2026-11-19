@@ -630,17 +630,32 @@ fn expression_depth_ladder() {
     // probe: 10 decls + shallow use of v7
     let p1 = "var v0 = byte(data,0)\nvar v1 = byte(data,1)\nvar v2 = byte(data,2)\nvar v3 = byte(data,3)\nvar v4 = byte(data,4)\nvar v5 = byte(data,5)\nvar v6 = byte(data,6)\nvar v7 = byte(data,7)\nvar v8 = byte(data,8)\nvar v9 = byte(data,9)\nreturn v7 as bytes";
     println!("p1 = {:?}", exec(p1, &[0; 16], Rv64Mode::Im));
-    // depth 9: hard subset limit, clean compile error in every mode
+    // depth 9: the fixed 8-value pool binds Im/Imc — hard subset limit,
+    // clean compile error. ImcRemap's E10 bank absorbs the hot int locals
+    // (bank homes hold the reads as zero-cost Refs; at most 8 slots stay
+    // live), so the same shape compiles AND agrees with the interpreter
+    // there — a deliberate capability extension, pinned below.
     let mut e9 = "v8".to_string();
     for k in 0..8 {
         e9 = format!("(v{k} + {e9})");
     }
     let body9 = format!("{decls}var r = {e9}\nreturn r as bytes");
-    for mode in MODES {
+    for mode in [Rv64Mode::Im, Rv64Mode::Imc] {
         let err = lower_err(&body9, true, mode);
         assert!(
             err.contains("nesting exceeds"),
             "depth-9 must be rejected in {mode:?}: {err}"
+        );
+    }
+    {
+        // byte() decls are U8-width: the sum is returned as a 1-byte BE
+        // value (45 = 1+..+9), same as the d ≤ 8 arms above
+        let want: Vec<u8> = vec![input[..9].iter().map(|&b| b as u64).sum::<u64>() as u8];
+        let got = exec(&body9, &input, Rv64Mode::ImcRemap);
+        assert_eq!(
+            got,
+            Ok(want),
+            "depth-9 must compile and agree in ImcRemap (E10 bank)"
         );
     }
 }

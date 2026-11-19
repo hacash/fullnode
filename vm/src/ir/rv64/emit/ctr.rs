@@ -60,8 +60,9 @@ use super::super::*;
 /*             +32 u64 vb   — value payload word 1 (hi / bytes len)    */
 /*   Key bytes are private copies in the shared arena bump stream (a     */
 /*   removed key's bytes are dead space; entries shift, the kptr stays  */
-/*   valid). A MAP slot's descriptor is `ptr | CTR_MAP_DESC_TAG`; list  */
-/*   descriptors are the bare pointer.                                  */
+/*   valid). A MAP slot's descriptor is the bare object pointer (B6 —   */
+/*   the historical low-bit species tag had no runtime reader); list    */
+/*   descriptors are the bare pointer too.                              */
 /*                                                                     */
 /* T16 map faces: Bool/Nil/empty-Bytes key → 73; duplicate PACKMAP /   */
 /* MERGE key → 84; missing itemget/remove/item_set key → 85; self-    */
@@ -99,13 +100,13 @@ pub(crate) const CTR_MAP_HDR: i64 = 24;
 /// value's length can never exceed it.
 pub(crate) const CTR_MAP_CAP: u64 = 128;
 
-/// T16: map descriptor low-bit species tag. Arena objects are 8-byte
-/// aligned; a LIST descriptor is the bare pointer (bit 0 = 0), a MAP
-/// descriptor is `ptr | CTR_MAP_DESC_TAG`. Map code masks the tag off
-/// before dereferencing; list code is untouched. The object header word 0
-/// stays the live length in both species, so a runtime species test can
-/// also read the tag bit directly.
-pub(crate) const CTR_MAP_DESC_TAG: u64 = 1;
+// B6: the historical T16 map descriptor low-bit species tag
+// (`ptr | 1`, list = bare pointer) is GONE — a full-repo audit found no
+// runtime reader (every species dispatch is the static `is_map_slot`
+// walk; the alias copy passes the slot word through; the T17 element
+// cell's nested-container sub-tag is an independent whole word, not the
+// pointer's low bit). Creation stores the bare pointer and
+// `ctr_map_load_obj` needs no mask.
 
 /// P2: the Value type id a stored uint element of width `ew` bits carries
 /// in its tag word (U8=2..U128=6 — the interpreter's ValueTy table, so a
@@ -126,8 +127,8 @@ pub(crate) fn ctr_uint_type_tag(ew: u32) -> u64 {
 /// `[0x00]`; `U8(1)` and `U64(1)` share one encoding). Kept as a local
 /// mirror so the compiler side never depends on the interpreter module
 /// graph; `rv64_arena_containers` differentials pin it against
-/// `Value::extract_key_bytes`.
-#[allow(dead_code)] // T16 skeleton hook (constant-key rodata maps use it directly)
+/// `Value::extract_key_bytes`. B1: constant-key staging materializes
+/// these bytes in the read-only literal pool.
 pub(crate) fn ctr_map_key_bytes(n: u128) -> Vec<u8> {
     let be = n.to_be_bytes();
     let first_nz = be.iter().position(|b| *b != 0).unwrap_or(be.len());
@@ -137,6 +138,16 @@ pub(crate) fn ctr_map_key_bytes(n: u128) -> Vec<u8> {
     } else {
         trimmed.to_vec()
     }
+}
+
+/// B1: the compile-time uint value of a constant map key — the `PU*` /
+/// `PBUF` literal and `CU*`/`CTO` cast chains (`lang::ir_literal_value`)
+/// — or None. Strictly a uint: Nil/Bool/Bytes literals never match
+/// (`extract_u128` rejects them), so their 73 faces keep the runtime
+/// paths. A pure function of the IR node (determinism).
+pub(crate) fn ctr_const_map_key(node: &dyn IRNode) -> Option<u128> {
+    let v = crate::lang::ir_literal_value(node).ok()?;
+    v?.extract_u128().ok()
 }
 
 /* ------------------------------------------------------------------ */
@@ -155,11 +166,28 @@ pub(crate) fn ctr_map_key_bytes(n: u128) -> Vec<u8> {
 /// slot is `wbytes` bytes (the minimal key is never longer); exhaustion →
 /// `fault` (the CAT budget face).
 ///
-/// Mechanism (fully unrolled — `wbytes` is compile-time): BE byte index
-/// `j` lives at bit offset `(wbytes-1-j)*8` of the value. The first
-/// nonzero BE byte `j` fixes `klen = wbytes-j`; the key bytes are then
-/// extracted with constant shifts, so a u8(1) and a u64(1) both yield the
-/// canonical `[0x01]` and zero yields `[0x00]`.
+/// Mechanism (fully unrolled — `wbytes` is compile-time), the B2
+/// "write-first + thin-arm" shape: BE byte index `j` lives at bit offset
+/// `(wbytes-1-j)*8` of the value.
+///
+///   1. write the FULL-width big-endian form at `[kptr, kptr+wbytes)`
+///      (srli + sb per byte — sb stores just the low 8 bits, so no andi;
+///      the `heap_store_be_u64` precedent), reserving/kptr/bumping the
+///      prologue's `wbytes` arena bytes exactly as before;
+///   2. scan for the first nonzero BE byte `j` (srli + andi + bne; the
+///      andi is REQUIRED here — srli leaves the less-significant bytes in
+///      the high bits, a bare bne would misjudge);
+///   3. thin arm `j`: bytes [0..j) are proven zero and byte j is nonzero,
+///      so `[kptr+j, kptr+wbytes)` already holds the minimal big-endian
+///      key — just describe it: `klen = wbytes-j; kptr += j`. The zero
+///      value clamps to the last written byte (0x00) = `[0x00]`.
+///
+/// The skipped leading-zero bytes stay in the reserved region as dead
+/// arena space (the bump was `wbytes` either way — the same nothing a
+/// removed key leaves behind; only the (kptr, klen) descriptor and the
+/// klen bytes AT kptr are ever read, byte-wise). Output is byte-for-byte
+/// the old cascade's canonical form: a u8(1) and a u64(1) both yield
+/// `[0x01]`, zero yields `[0x00]`, 0x100 yields `[01,00]`.
 pub(crate) fn emit_ctr_map_key_uint(
     asm: &mut Asm,
     lo: u8,
@@ -172,14 +200,23 @@ pub(crate) fn emit_ctr_map_key_uint(
 ) {
     debug_assert!((1..=16).contains(&wbytes));
     debug_assert!(wbytes == 16 || hi.is_none());
-    // arena check (S1 + wbytes <= arena_end) and bump, using klen/kptr as
-    // the two transient registers (both are outputs, set below)
-    asm.li(klen, wbytes as u64);
+    // arena check (S1 + reserved <= arena_end) and bump, using klen/kptr as
+    // the two transient registers (both are outputs, set below). The bump
+    // is the key width ROUNDED UP to the 8-byte arena alignment unit: a
+    // descriptor-object allocation takes its base from this cursor and its
+    // consumers mask the low tag/alignment bits off the descriptor
+    // (`ctr_map_load_obj`), so an unaligned cursor would misalign the next
+    // map object — its header words read byte-shifted and the find loop
+    // dereferences a garbage key pointer (audit F1/F1b engine trap).
+    // `wbytes` is a compile-time constant, so the rounding is free; the
+    // pad bytes after the key stay dead space like a removed key's bytes.
+    let reserved = (wbytes + 7) & !7;
+    asm.li(klen, reserved as u64);
     asm.add(klen, S1, klen);
     asm.li(kptr, arena_end);
     asm.bgeu(klen, kptr, fault);
     asm.mv(kptr, S1);
-    asm.addi(S1, S1, wbytes as i32);
+    asm.addi(S1, S1, reserved as i32);
     // byte at LE position p lives in lo (p < 8) or hi (p >= 8)
     let byte_src = |p: u32| -> (u8, u32) {
         if p < 8 {
@@ -188,6 +225,13 @@ pub(crate) fn emit_ctr_map_key_uint(
             (hi.expect("u128 key needs the hi half"), (p - 8) * 8)
         }
     };
+    // 1. store the full-width big-endian form at [kptr, kptr+wbytes)
+    for t in 0..wbytes {
+        let (r, sh) = byte_src(wbytes - 1 - t); // BE byte t
+        asm.srli_(klen, r, sh);
+        asm.sb(klen, kptr, t as i32);
+    }
+    // 2. locate the first nonzero BE byte j
     let l_done = asm.new_label();
     let mut marks = Vec::with_capacity(wbytes as usize);
     for j in 0..wbytes {
@@ -198,18 +242,19 @@ pub(crate) fn emit_ctr_map_key_uint(
         asm.bne(klen, ZERO, l_nz);
         marks.push(l_nz);
     }
-    // every BE byte zero: klen = 1, key = [0x00]
+    // every BE byte zero: the last written byte is already 0x00 — clamp
+    // the descriptor onto it: key = [0x00] at kptr + wbytes - 1
+    if wbytes > 1 {
+        asm.addi(kptr, kptr, wbytes as i32 - 1);
+    }
     asm.addi(klen, ZERO, 1);
-    asm.sb(ZERO, kptr, 0);
     asm.jal_(ZERO, l_done);
+    // 3. thin arms: the write already placed the minimal key at kptr+j
     for (j, l_nz) in marks.into_iter().enumerate() {
         let j = j as u32;
         asm.place(l_nz);
-        for t in 0..(wbytes - j) {
-            let (r, sh) = byte_src(wbytes - 1 - j - t);
-            asm.srli_(klen, r, sh);
-            asm.andi(klen, klen, 0xff);
-            asm.sb(klen, kptr, t as i32);
+        if j > 0 {
+            asm.addi(kptr, kptr, j as i32);
         }
         asm.addi(klen, ZERO, (wbytes - j) as i32);
         asm.jal_(ZERO, l_done);
@@ -233,9 +278,13 @@ pub(crate) fn emit_ctr_map_key_uint(
 ///
 /// Register discipline: `obj`/`kptr`/`klen`/`pos`/`found` are caller
 /// values; `x`,`y`,`z` are three pairwise-distinct scratch registers (in
-/// ImcRemap `a1` and `sc2` are the SAME physical register, so the routine
-/// is written for exactly three). It recomputes the entry base per
-/// comparison byte, which keeps the byte compare inside three registers.
+/// ImcRemap `a1` and `sc2` are the SAME physical register, so only three
+/// exist there). B4: `ebase` is the optional FOURTH scratch (Im/Imc) —
+/// when present it caches the entry base for the whole scan step; the
+/// 3-scratch form recomputes it per comparison byte. `found` (an output,
+/// dead until the exits) parks the entry's klen_e for the byte loop: the
+/// old `min(klen_e, klen)` block folds into a pair of bgeu at the loop
+/// head and the prefix three-way compares the parked value directly.
 pub(crate) fn emit_ctr_map_find(
     asm: &mut Asm,
     obj: u8,
@@ -246,11 +295,16 @@ pub(crate) fn emit_ctr_map_find(
     x: u8,
     y: u8,
     z: u8,
+    ebase: Option<u8>,
 ) {
     debug_assert!(x != obj && x != kptr && x != klen && x != pos && x != found);
     debug_assert!(y != obj && y != kptr && y != klen && y != pos && y != found);
     debug_assert!(z != obj && z != kptr && z != klen && z != pos && z != found);
     debug_assert!(x != y && y != z && x != z);
+    if let Some(w) = ebase {
+        debug_assert!(w != obj && w != kptr && w != klen && w != pos && w != found);
+        debug_assert!(w != x && w != y && w != z);
+    }
     let l_loop = asm.new_label();
     let l_cmp = asm.new_label();
     let l_prefix = asm.new_label();
@@ -260,36 +314,41 @@ pub(crate) fn emit_ctr_map_find(
     let l_eq = asm.new_label();
     let l_nf = asm.new_label();
     let l_end = asm.new_label();
-    let l_min = asm.new_label();
-    let l_minv = asm.new_label();
     asm.addi(pos, ZERO, 0);
     asm.place(l_loop);
     asm.ld(x, obj, 0); // len
     asm.bgeu(pos, x, l_nf);
-    // ebase = obj + 24 + pos*40 ; klen_e = [ebase+8]
-    asm.slli_(x, pos, 5); // pos*32
-    asm.slli_(y, pos, 3); // pos*8
-    asm.add(x, x, y); // pos*40
-    asm.addi(x, x, CTR_MAP_HDR as i32);
-    asm.add(x, obj, x); // ebase
-    asm.ld(y, x, 8); // klen_e
-    // found := min(klen_e, klen) — the common-prefix compare bound
-    asm.mv(found, klen);
-    asm.bltu(y, klen, l_min);
-    asm.jal_(ZERO, l_minv);
-    asm.place(l_min);
-    asm.mv(found, y);
-    asm.place(l_minv);
+    // ebase = obj + 24 + pos*40 → cached in `ebase` (Im/Imc) or computed
+    // into x (ImcRemap's three scratches); klen_e = [ebase+8] parks in
+    // `found` (dead until the exits)
+    let (dst, tmp) = match ebase {
+        Some(w) => (w, x),
+        None => (x, y),
+    };
+    asm.slli_(dst, pos, 5); // pos*32
+    asm.slli_(tmp, pos, 3); // pos*8
+    asm.add(dst, dst, tmp); // pos*40
+    asm.addi(dst, dst, CTR_MAP_HDR as i32);
+    asm.add(dst, obj, dst); // dst = ebase
+    asm.ld(found, dst, 8); // found = klen_e (parked)
     asm.addi(z, ZERO, 0); // m
     asm.place(l_cmp);
+    // m >= klen or m >= klen_e → the common prefix ended: the folded
+    // min(klen_e, klen) bound of the old loop
+    asm.bgeu(z, klen, l_prefix);
     asm.bgeu(z, found, l_prefix);
-    // byte at entry key [m]: recompute ebase (3 scratch regs only)
-    asm.slli_(x, pos, 5);
-    asm.slli_(y, pos, 3);
-    asm.add(x, x, y);
-    asm.addi(x, x, CTR_MAP_HDR as i32);
-    asm.add(x, obj, x);
-    asm.ld(x, x, 0); // kptr_e
+    // byte m of the entry key vs the target key
+    if let Some(w) = ebase {
+        asm.ld(x, w, 0); // kptr_e
+    } else {
+        // recompute ebase (3 scratch regs only)
+        asm.slli_(x, pos, 5);
+        asm.slli_(y, pos, 3);
+        asm.add(x, x, y);
+        asm.addi(x, x, CTR_MAP_HDR as i32);
+        asm.add(x, obj, x);
+        asm.ld(x, x, 0); // kptr_e
+    }
     asm.add(x, x, z);
     asm.lbu(y, x, 0); // a = kptr_e[m]
     asm.add(x, kptr, z);
@@ -301,15 +360,10 @@ pub(crate) fn emit_ctr_map_find(
     asm.addi(z, z, 1);
     asm.jal_(ZERO, l_cmp);
     asm.place(l_prefix);
-    // equal prefix: the shorter key is smaller (BTreeMap byte-lex)
-    asm.slli_(x, pos, 5);
-    asm.slli_(y, pos, 3);
-    asm.add(x, x, y);
-    asm.addi(x, x, CTR_MAP_HDR as i32);
-    asm.add(x, obj, x);
-    asm.ld(x, x, 8); // klen_e
-    asm.bltu(x, klen, l_lt);
-    asm.beq(x, klen, l_eq);
+    // equal prefix: the shorter key is smaller (BTreeMap byte-lex);
+    // klen_e is the parked `found`
+    asm.bltu(found, klen, l_lt);
+    asm.beq(found, klen, l_eq);
     asm.jal_(ZERO, l_gt);
     asm.place(l_lt);
     asm.addi(pos, pos, 1);
@@ -398,12 +452,21 @@ impl<'a> Lower<'a> {
     /// Arena twin of `emit_list_bounds_guards` for a variable index: the
     /// 2³² extract_u32 face (72), then `idx ≥ len → 85` with the length
     /// read THROUGH the descriptor (the shared header word — the live
-    /// state every alias's mutation lands on).
-    pub(crate) fn emit_list_bounds_guards_arena(&mut self, idx_reg: u8, s: usize) -> Ret<()> {
-        let l72 = self.nil_thunk(72);
+    /// state every alias's mutation lands on). `fits32` =
+    /// [`Lower::idx_below_2pow32`] of the index subtree: the 72 guard is
+    /// dead for a width-provable index and is skipped (C2).
+    pub(crate) fn emit_list_bounds_guards_arena(
+        &mut self,
+        idx_reg: u8,
+        s: usize,
+        fits32: bool,
+    ) -> Ret<()> {
         let sc1 = self.asm.sc1;
-        self.asm.li(sc1, 1u64 << 32);
-        self.asm.bgeu(idx_reg, sc1, l72);
+        if !fits32 {
+            let l72 = self.nil_thunk(72);
+            self.asm.li(sc1, 1u64 << 32);
+            self.asm.bgeu(idx_reg, sc1, l72);
+        }
         let l85 = self.nil_thunk(85);
         let cell = self.slot_offset(s as u8);
         self.asm.ld(sc1, S0, cell);
@@ -436,6 +499,7 @@ impl<'a> Lower<'a> {
     /// the object base. The element cells are NOT zeroed — every access
     /// is bounded by the live `len` word.
     pub(crate) fn ctr_list_alloc(&mut self, dst: u8, cap: u64, len: u64) {
+        self.cat_top_kill(); // B9: this allocation bumps S1
         let a0 = self.a0;
         let sc1 = self.asm.sc1;
         let total = CTR_LIST_HDR + CTR_ELEM_BYTES * cap;
@@ -460,6 +524,7 @@ impl<'a> Lower<'a> {
     /// `Value::Compo`). Clobbers a0/sc1/sc2 and three value-pool scratch
     /// registers (pushed and popped internally).
     pub(crate) fn ctr_clone_list(&mut self, dst: u8, src: u8) {
+        self.cat_top_kill(); // B9: this allocation bumps S1
         let a0 = self.a0;
         let sc1 = self.asm.sc1;
         let sc2 = self.asm.sc2;

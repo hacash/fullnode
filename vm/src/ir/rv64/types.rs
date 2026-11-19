@@ -21,7 +21,9 @@ pub(crate) const S4: u8 = 20; // input_base (from a0)
 pub(crate) const S5: u8 = 21; // input_len (from a1)
 pub(crate) const A0: u8 = 10; // scratch; exit code / return length at exit
 pub(crate) const A1: u8 = 11; // scratch
-pub(crate) const A7: u8 = 17; // ecall number (never a general register)
+pub(crate) const A7: u8 = 17; // ecall number at exit; the shared routines
+// also use it as an UNSAVED mid-body scratch (divmod/mulmod/u256 divmod),
+// so it must NEVER be an ImcRemap bank-home candidate (audit 3103669)
 
 /// Virtual register stack. Kept at 8 so 15/16 stay dedicated scratch: values
 /// popped-but-still-live must never be clobbered by address temporaries.
@@ -78,7 +80,9 @@ pub(crate) const U256WS_SAVE: i32 = 96;
 /// their jal): the y pair, then the z pair.
 pub(crate) const U256WS_STAGE_Y: i32 = 96;
 pub(crate) const U256WS_STAGE_Z: i32 = 112;
-/// caller's kernel-entry RA park (around the jal).
+/// the division ROUTINE's own link park (D1: the a0 return address,
+/// saved at routine entry and restored before its `jr` — the call sites
+/// `jal a0` with no parking).
 pub(crate) const U256WS_RA: i32 = 192;
 /* T26 FIN*: composite-park slots (u128 pairs, six of them) behind the RA
  * park. The FIN kernels keep live values (divisors, loop state, the isqrt
@@ -297,9 +301,10 @@ pub(crate) enum SlotTy {
     /// (tag=8, ptr, len) and item_get yields a bytes pair. Mutation/append
     /// paths reject it (plan()).
     ListBytes,
-    /// T16: a map slot — the cell holds the TAGGED arena map descriptor
-    /// (object pointer | CTR_MAP_DESC_TAG). The payload is the static value
-    /// species every write site agrees on (`MapValKind`).
+    /// T16: a map slot — the cell holds the BARE arena map descriptor
+    /// (B6: the historical low-bit species tag had no runtime reader).
+    /// The payload is the static value species every write site agrees on
+    /// (`MapValKind`).
     Map(MapValKind),
 }
 

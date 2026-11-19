@@ -6,6 +6,9 @@ impl<'a> Lower<'a> {
 
     /// `for i in 0..len: *S1++ = src[i]` — clobbers the scratch pair, bumps S1.
     pub(crate) fn emit_memcpy(&mut self, src: u8, len: u8) {
+        // B9: the bump invalidates any arena-top fact (a fact consumed by
+        // an in-place CAT is read before the calls — see emit_cat).
+        self.cat_top_kill();
         self.asm.addi(self.a0, ZERO, 0);
         let l_loop = self.asm.new_label();
         let l_done = self.asm.new_label();
@@ -20,6 +23,47 @@ impl<'a> Lower<'a> {
         self.place(l_done);
     }
 
+    /// B11: the constant-length sibling of [`Self::emit_memcpy`] — a scalar
+    /// buf_set source's canonical byte length is a compile-time constant
+    /// (nb ∈ {1,2,4,8,16}), so the byte loop becomes one zero-extending
+    /// load + one same-width store + the S1 bump (8 instructions → 3; the
+    /// 16-byte form takes two words → 5). The load's zero-extension and
+    /// the store's low-byte truncation are exact inverses, so the copy is
+    /// byte-for-byte the loop's (lhu/lwu already in use, asm.rs; wide
+    /// access at an unaligned arena top is safe in all three engines —
+    /// container.md §0). Clobbers a0 (a strict subset of the loop's
+    /// a0/a1); the caller's arena check already covered the bump.
+    pub(crate) fn emit_memcpy_const(&mut self, src: u8, nb: u32) {
+        self.cat_top_kill(); // B9: the S1 bump below (see emit_memcpy)
+        match nb {
+            1 => {
+                self.asm.lbu(self.a0, src, 0);
+                self.asm.sb(self.a0, S1, 0);
+            }
+            2 => {
+                self.asm.lhu(self.a0, src, 0);
+                self.asm.sh(self.a0, S1, 0);
+            }
+            4 => {
+                self.asm.lwu(self.a0, src, 0);
+                self.asm.sw(self.a0, S1, 0);
+            }
+            8 => {
+                self.asm.ld(self.a0, src, 0);
+                self.asm.sd(self.a0, S1, 0);
+            }
+            _ => {
+                // 16: two words (little-endian loads/stores of the same
+                // bytes — order between the words is the copy order)
+                self.asm.ld(self.a0, src, 0);
+                self.asm.sd(self.a0, S1, 0);
+                self.asm.ld(self.a0, src, 8);
+                self.asm.sd(self.a0, S1, 8);
+            }
+        }
+        self.asm.addi(S1, S1, nb as i32);
+    }
+
     /// Arena-exhaustion check for `S1 + len_reg` against the declared end.
     pub(crate) fn emit_arena_check(&mut self, len_reg: u8) {
         self.asm.li(self.a0, self.arena_end);
@@ -28,6 +72,22 @@ impl<'a> Lower<'a> {
     }
 
     /// Top of stack: `a ++ b` → one bytes descriptor.
+    ///
+    /// B9 (impl/arena-mapflow): when the arena-top fact names the receive
+    /// operand's descriptor (pa, la) — its bytes are the LAST arena
+    /// allocation, pa + la == S1 — the receive-side copy is dropped and the
+    /// right operand's bytes are appended directly over S1. Correctness:
+    /// CAT's semantics is to PRODUCE a new value; the append writes
+    /// [pa+la, pa+la+lb) which sits above every already-allocated region
+    /// (the arena only grows, every allocated region ends at or below S1),
+    /// so every holder of the old (pa, la) view — other slots, DUP'd stack
+    /// pairs — reads exactly its own old bytes (alias holders index by
+    /// their own len; nothing is OVERWRITTEN, unlike premise 24's buf_set
+    /// case). The only premise is the compile-time S1 == pa + la proof.
+    /// The fault faces keep their order and position: overflow (90) first,
+    /// then the arena budget (71), then the copies — the deleted receive
+    /// copy is face-free (a pure byte loop). The result is re-established
+    /// as the new arena top (dstp + dstl == S1 after both bumps).
     pub(crate) fn emit_cat(&mut self) -> Ret<()> {
         // operands are read-only (memcpy sources, lengths); the two result
         // slots are fresh pool registers.
@@ -35,6 +95,15 @@ impl<'a> Lower<'a> {
         let pb = self.pop_reg();
         let la = self.pop_reg();
         let pa = self.pop_reg();
+        // the fact is consumed BEFORE the overflow-check join label below
+        // (place(ok) kills it — the append decision must be made first)
+        let recv_top = self.cat_top == Some((pa, la));
+        if std::env::var("RV64_INV_CHECK").is_ok() && recv_top {
+            assert_eq!(
+                self.cat_top_gen, self.s1_gen,
+                "INV B9: live arena-top fact with a stale bookkeeping epoch"
+            );
+        }
         // total = la + lb (checked)
         self.asm.r(0, lb, la, 0, self.a1, 0b0110011); // add a1 = la + lb
         let ok = self.asm.new_label();
@@ -42,13 +111,298 @@ impl<'a> Lower<'a> {
         self.trap(EXIT_ARITH);
         self.place(ok);
         self.emit_arena_check(self.a1);
-        // copies bump S1 by la then lb
-        self.emit_memcpy(pa, la);
+        // copies bump S1 by la then lb (the receive-side copy is the
+        // arena-top fact's whole payoff: the bytes are already in place)
+        if !recv_top {
+            self.emit_memcpy(pa, la);
+        }
         self.emit_memcpy(pb, lb);
         let dstp = self.push_vreg();
         let dstl = self.push_vreg();
         self.asm.r(0, lb, la, 0, dstl, 0b0110011); // add dstl, la + lb
         self.asm.r(0x20, dstl, S1, 0, dstp, 0b0110011); // sub dstp, S1 - dstl
+        self.cat_top_establish(dstp, dstl);
+        Ok(())
+    }
+
+    /* ---- C6 (impl/cat-u128fwd): CAT chain fusion ---- */
+
+    /// Is `node` (post-WRAP) a CAT whose lowering takes the DYNAMIC arm —
+    /// no empty-side fold (`x ++ ""` / `"" ++ x`), not `lit ++ lit`, and no
+    /// P3-IDIOMS Root mark (a marked root lowers through
+    /// `emit_fused_root`, never through its opcode arm — the recognizer
+    /// only marks BOR/BXOR/ADD, but the defensive lookup costs one map
+    /// probe)? Only such nodes fuse; every other child is a LEAF whose
+    /// `eval_bytes` reproduces its own arm (fold or plain eval)
+    /// byte-for-byte.
+    fn cat_dyn_parts<'n>(
+        node: &'n dyn IRNode,
+        fuse: &FuseMap,
+    ) -> Option<(&'n dyn IRNode, &'n dyn IRNode)> {
+        let mut cur = node;
+        while let Some(w) = cur.as_any().downcast_ref::<IRNodeWrapOne>() {
+            cur = &*w.node;
+        }
+        if fuse.contains_key(&node_addr(cur)) {
+            return None;
+        }
+        let n = cur.as_any().downcast_ref::<IRNodeDouble>()?;
+        if n.inst != Bytecode::CAT {
+            return None;
+        }
+        // mirror the CAT arm's own fold conditions exactly: a node whose
+        // arm would fold stays whole
+        let lx = bytes_literal(&*n.subx);
+        let ly = bytes_literal(&*n.suby);
+        if lx.as_ref().is_some_and(|a| a.is_empty()) || ly.as_ref().is_some_and(|b| b.is_empty()) {
+            return None;
+        }
+        if lx.is_some() && ly.is_some() {
+            return None;
+        }
+        Some((&*n.subx, &*n.suby))
+    }
+
+    /// C6 trigger + depth gate (a pure static decision). Fuse iff some
+    /// child is a fusion-able CAT — a single-layer `a ++ b` keeps the
+    /// per-node emission byte-for-byte — and the STAGED WALK fits the
+    /// value-register pool: leaf i (in the layered eval order) evaluates
+    /// with the 2·i earlier leaf pairs already on the stack, so its own
+    /// peak working depth must keep the total within the pool. The peak is
+    /// measured by a scratch lowering (the ImcRemap probe pattern: an
+    /// empty plan materializes every operand as a Pool push — banked Ref
+    /// reads and forwarding hits occupy the SAME entry counts, and the
+    /// tag/nil machinery pushes nothing — so the probe's peak is never
+    /// below the real one), which keeps the fusion from ever turning a
+    /// compiling body into a depth_err reject. Deterministic on the IR +
+    /// pool size, so the ImcRemap probe pass and the real lowering agree
+    /// on every site: a fusion the probe accepts reaches depth
+    /// base+2·i+W_i there, capping the probe max_depth (hence the real
+    /// pool) at or above it; a site the probe refused exceeds 8 positions,
+    /// which a clamped real pool refuses too.
+    pub(crate) fn cat_fusion_gate(&self, node: &dyn IRNode) -> bool {
+        let Some((x, y)) = Self::cat_dyn_parts(node, &self.fuse) else {
+            return false;
+        };
+        if Self::cat_dyn_parts(x, &self.fuse).is_none()
+            && Self::cat_dyn_parts(y, &self.fuse).is_none()
+        {
+            return false; // single-layer CAT: the per-node emission stays
+        }
+        let mut peaks = Vec::new();
+        self.cat_leaf_peaks(node, &mut peaks);
+        for (i, w) in peaks.iter().enumerate() {
+            if self.vstack.len() + 2 * i + w > self.vregs.len() {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Per-leaf staged peak depths of a fusion-able CAT subtree, in eval
+    /// order. Errors from the scratch lowering (a shape the probe context
+    /// cannot lower) refuse the fusion — the unfused path lowers them.
+    fn cat_leaf_peaks(&self, node: &dyn IRNode, out: &mut Vec<usize>) {
+        match Self::cat_dyn_parts(node, &self.fuse) {
+            Some((x, y)) => {
+                self.cat_leaf_peaks(x, out);
+                self.cat_leaf_peaks(y, out);
+            }
+            None => {
+                if let Some(w) = self.leaf_eval_peak(node) {
+                    out.push(w);
+                } else {
+                    // poison the gate: this subtree never fuses
+                    out.push(usize::MAX);
+                }
+            }
+        }
+    }
+
+    /// Scratch-lowering peak vstack depth of evaluating `leaf` from an
+    /// empty stack (never below the real lowering's peak — see
+    /// `cat_fusion_gate`). None when the scratch lowering errors.
+    fn leaf_eval_peak(&self, leaf: &dyn IRNode) -> Option<usize> {
+        let nilp = NilPlan {
+            tracked: vec![false; self.slot.len()],
+            occ: HashMap::new(),
+            tag_bytes: false,
+        };
+        let order: Vec<usize> = (0..self.slot.len()).collect();
+        let mut probe = Lower::new_mode_arena_nil(
+            self.slot,
+            self.needs_zero,
+            Rv64Mode::Im,
+            self.arena_end - ARENA_BASE,
+            &nilp,
+            &self.lists,
+            &self.slot_w,
+            &self.dyn_w,
+            false,
+            false,
+            self.fin_park_levels,
+            self.heap_seg,
+            self.input_local,
+            (
+                self.mulw_routine,
+                self.round_hu_routine,
+                self.round_he_routine,
+                self.mul128_routine,
+                self.sqrt64_routine,
+                self.sqrt64up_routine,
+                self.sqrt128_routine,
+                self.sqrt128up_routine,
+            ),
+        );
+        probe.pair_root = self.pair_root.clone();
+        probe.pair_skip = self.pair_skip.clone();
+        probe.fuse = self.fuse.clone();
+        match probe.eval_bytes(leaf) {
+            Ok(()) => Some(probe.max_depth),
+            Err(_) => None,
+        }
+    }
+
+    /// C6 walk over a fusion-able CAT subtree: emit the evals + Nil(91)
+    /// guards in the ORIGINAL per-layer order. Each layer keeps its
+    /// `eval x, eval y, guard x, guard y` sequence and layers nest
+    /// innermost-first, so the relative order of every evaluation and of
+    /// every 91 guard is exactly the unfused emission's (the per-node
+    /// `emit_cat` bodies sat strictly between their own layer's guards and
+    /// the next layer's evals — deleting them only removes the copies and
+    /// the checks fused into `emit_cat_fused`). A fusion-able child
+    /// recurses; a leaf evaluates through the ordinary `eval_bytes` (the
+    /// literal folds included). Only a LEAF can be may-Nil — the pre-pass
+    /// records no occ.val on a CAT node (an empty-fold pass-through
+    /// guards its own side internally) — and a leaf's tag position is
+    /// absolute on the vstack, stable across the later pushes.
+    fn emit_cat_chain_walk(&mut self, node: &dyn IRNode) -> Ret<()> {
+        let (x, y) = Self::cat_dyn_parts(node, &self.fuse)
+            .expect("emit_cat_chain_walk on a non-fusion-able CAT");
+        let mut gx = None;
+        let mut gy = None;
+        if Self::cat_dyn_parts(x, &self.fuse).is_some() {
+            self.emit_cat_chain_walk(x)?;
+        } else {
+            self.eval_bytes(x)?;
+            if self.nil_val(x) {
+                gx = Some(self.vstack.len() - 2);
+            }
+        }
+        if Self::cat_dyn_parts(y, &self.fuse).is_some() {
+            self.emit_cat_chain_walk(y)?;
+        } else {
+            self.eval_bytes(y)?;
+            if self.nil_val(y) {
+                gy = Some(self.vstack.len() - 2);
+            }
+        }
+        // this layer's guards, x then y (the unfused arm's guard order:
+        // x at len-4, y at len-2 after both pairs are up — the same
+        // absolute positions)
+        if let Some(d) = gx {
+            self.nil_guard_tag(d, 91);
+        }
+        if let Some(d) = gy {
+            self.nil_guard_tag(d, 91);
+        }
+        Ok(())
+    }
+
+    /// C6 fused emission for a CAT tree (some child is itself a dynamic
+    /// CAT): all leaves are evaluated and guarded by
+    /// [`Self::emit_cat_chain_walk`]; this half replaces every per-node
+    /// `emit_cat` body with ONE overflow check + ONE arena check + one
+    /// memcpy per leaf + ONE descriptor.
+    ///
+    /// Deleted inner checks — face argument. Each unfused inner node paid
+    /// `add + bgeu + trap(90)` (overflow) and the `li + add + bgeu(71)`
+    /// arena check. The overflow face is UNREACHABLE at every node: a live
+    /// bytes value's length is bounded by the arena layout (types.rs — the
+    /// arena is a fixed RW segment; a value must fit it, so len <
+    /// arena_end = 0x8000 by default), and the input band and pool
+    /// literals sit below the same 64 KiB layout cap, so with k leaves the
+    /// true sum < k * arena_end < 2^64 (k is the compile-time leaf count
+    /// of the frozen IR tree, bounded by the vstack pool depth the depth
+    /// gate enforces) — the wrapped add can never wrap, exactly the face
+    /// the per-node `bgeu` guarded. The fused emission keeps ONE check
+    /// covering the total: `total >= k * arena_end → trap(90)`, with the
+    /// bound materialized from the same compile-time k — unreachable under
+    /// the same invariant, so it deletes only dead faces. The arena
+    /// budget face (71) is allowed to shift position (the ctr.rs CAT
+    /// precedent: "arena exhaustion → the CAT precedent (fault_cast)" —
+    /// budget faces fire at the fused allocation instead of per
+    /// intermediate); the reachable 91 guards keep their exact order.
+/// Alias safety: the fused result is a FRESH arena allocation (S1 at
+/// the walk's base) written once from sources that all live strictly
+/// below the pre-copy S1 (arena values, input registers, pool
+/// literals, bank homes) — the intermediate `a++b` view the unfused
+/// path materialized is a consumed temporary with no possible
+/// observer, and nothing is written in place. B9 exception: when the
+/// head leaf carries the arena-top fact, its memcpy is skipped and the
+/// result EXTENDS that leaf's region in place — emit_cat's alias
+/// argument (append above every allocated region, old holders read by
+/// their own len) applies unchanged; see the head_top note in the body.
+    pub(crate) fn emit_cat_fused(&mut self, node: &dyn IRNode) -> Ret<()> {
+        let base = self.vstack.len();
+        self.emit_cat_chain_walk(node)?;
+        let n = (self.vstack.len() - base) / 2;
+        debug_assert!(n >= 3, "fused CAT chain with {n} leaves");
+        // stage the leaf pairs bottom-first (pop top-first, like emit_cat)
+        let mut leaves: Vec<(u8, u8)> = Vec::with_capacity(n);
+        for _ in 0..n {
+            let l = self.pop_reg();
+            let p = self.pop_reg();
+            leaves.push((p, l));
+        }
+        leaves.reverse();
+        // B9 (impl/arena-mapflow): the HEAD leaf's bytes may end exactly at
+        // the arena top (the arena-top fact named its descriptor when it
+        // was evaluated, and nothing in the walk bumped S1 — any bump would
+        // have killed the fact). Then leaf 0 is already in place at
+        // [S1 - l0, S1) and its memcpy is dropped: leaves 1.. append over
+        // S1 and the result's ptr = S1_after - total = the walk base - l0 =
+        // leaf 0's ptr — the unchanged `sub dstp, S1 - dstl` below computes
+        // exactly that. Alias safety is emit_cat's argument (append above
+        // every allocated region; old holders read their own len), lifted
+        // to the fused chain: the fused result OVERLAPS the head leaf's old
+        // view instead of being a fresh allocation, and every other holder
+        // of that descriptor still reads its own bytes untouched.
+        let head_top = self.cat_top == Some(leaves[0]);
+        // total = l1 + ... + ln, riding sc1 (disjoint from a0/a1 in every
+        // mode, and emit_memcpy below clobbers only a0/a1/S1)
+        let (_, l1) = leaves[0];
+        self.asm.mv(self.asm.sc1, l1);
+        for (_, li) in &leaves[1..] {
+            // add sc1, li, sc1
+            self.asm.r(0, self.asm.sc1, *li, 0, self.asm.sc1, 0b0110011);
+        }
+        // the single overflow check over the total (see the face note)
+        let bound = (n as u64) * self.arena_end;
+        let ok = self.asm.new_label();
+        self.li_k(self.a0, bound);
+        self.asm.bltu(self.asm.sc1, self.a0, ok);
+        self.trap(EXIT_ARITH);
+        self.place(ok);
+        // the single arena check over the total
+        self.emit_arena_check(self.asm.sc1);
+        // copies bump S1 by exactly the total; the descriptor pushes stay
+        // AFTER the loop — push_vreg hands the freed bottom pool registers,
+        // which still name the not-yet-copied leaf sources (emit_cat has
+        // the same discipline). dstl = total (kept in sc1 across the
+        // copies: sc1 is disjoint from a0/a1 in every mode); dstp =
+        // S1_after - total = the allocation base, the unfused shape's
+        // `sub dstp, S1 - dstl`.
+        for (i, (p, l)) in leaves.iter().enumerate() {
+            if !(i == 0 && head_top) {
+                self.emit_memcpy(*p, *l);
+            }
+        }
+        let dstp = self.push_vreg();
+        let dstl = self.push_vreg();
+        self.asm.mv(dstl, self.asm.sc1);
+        self.asm.r(0x20, dstl, S1, 0, dstp, 0b0110011); // sub dstp, S1 - dstl
+        self.cat_top_establish(dstp, dstl);
         Ok(())
     }
 
@@ -584,6 +938,7 @@ impl<'a> Lower<'a> {
     /// and the (ptr, len) descriptor is pushed ptr-first, matching the
     /// literal-fold shape.
     pub(crate) fn emit_cbytes128(&mut self, lo: u8, hi: u8) -> Ret<()> {
+        self.cat_top_kill(); // B9: this allocation bumps S1
         // arena room for 16 bytes
         self.asm.li(self.a0, self.arena_end);
         self.asm.addi(self.a1, S1, 16);
@@ -593,13 +948,15 @@ impl<'a> Lower<'a> {
         // pool registers, so a store after the mv/addi would read the
         // descriptor instead of the value) — byte k of the 128-bit value is
         // (hi:lo) >> 8*(15-k), truncated to 8 bits by the sb — pass A over
-        // hi (k 0..8), pass B over lo (k 8..16)
+        // hi (k 0..8), pass B over lo (k 8..16). B10: the per-byte address
+        // addi is redundant — S1 is the invariant base and the sb imm12
+        // offset covers base+j (0..15), the heap_store_be_u64 direct-offset
+        // pattern.
         let sc = self.asm.sc1;
         for (half, base) in [(hi, 0i32), (lo, 8)] {
             for j in 0..8u32 {
                 self.asm.srli_(sc, half, 8 * (7 - j));
-                self.asm.addi(self.a0, S1, base + j as i32);
-                self.asm.sb(sc, self.a0, 0);
+                self.asm.sb(sc, S1, base + j as i32);
             }
         }
         // descriptor (ptr, len): ptr = the old bump, len = 16, then bump
@@ -608,6 +965,8 @@ impl<'a> Lower<'a> {
         self.asm.mv(rp, S1);
         self.asm.addi(rl, ZERO, 16);
         self.asm.addi(S1, S1, 16); // bump
+        // B9: the fresh 16 bytes ARE the arena top (rp + 16 == S1)
+        self.cat_top_establish(rp, rl);
         Ok(())
     }
 }

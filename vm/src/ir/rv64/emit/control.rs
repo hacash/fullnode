@@ -34,11 +34,35 @@ impl<'a> Lower<'a> {
                     self.branch_cond(&*n.suby, false, label)?;
                     return Ok(());
                 }
+                if op == OR {
+                    // C16: a membership chain `x == K1 || x == K2 || ...`
+                    // (shared x, small distinct constants, N ≥ 3) collapses
+                    // into one bitmask test
+                    if self.try_or_membership_mask(node, when_true, label)? {
+                        return Ok(());
+                    }
+                    // C15: mirror of the AND chain — a fault-free disjunction
+                    // with any true operand jumps; no materialization at all.
+                    // The interpreter's OR is EAGER (binop_btw pops both
+                    // operands, lgc_or extracts bool from both), so skipping
+                    // the second operand's evaluation is only face-neutral
+                    // because is_pure_cond guarantees neither operand carries
+                    // a fault face — the same guard the AND chain relies on.
+                    if when_true && is_pure_cond(node, &self.tracked) {
+                        self.branch_cond(&*n.subx, true, label)?;
+                        self.branch_cond(&*n.suby, true, label)?;
+                        return Ok(());
+                    }
+                }
                 // eager (identical fault behavior to `eval`)
                 self.eval_int(&*n.subx)?;
                 self.eval_int(&*n.suby)?;
-                let (d, _ra, rb) = self.pop2_dest();
-                if op == AND {
+                let (d, ra, rb, sw) = self.pop2_dest(op, 64);
+                if sw {
+                    // E3: banked-left AND/OR — same swapped form as the
+                    // arithmetic path (AND/OR are commutative)
+                    self.emit_arith_commut(op, d, ra, rb, 64)?;
+                } else if op == AND {
                     self.asm.and_(d, d, rb);
                 } else {
                     self.asm.or_(d, d, rb);
@@ -92,14 +116,10 @@ impl<'a> Lower<'a> {
                     }
                     let b = self.pop_u128_pair(wy);
                     let a = self.pop_u128_pair(wx);
-                    let d = self.push_vreg();
-                    self.emit_u128_cmp(op, d, a, b);
-                    if when_true {
-                        self.asm.bne(d, ZERO, label);
-                    } else {
-                        self.asm.beq(d, ZERO, label);
-                    }
-                    let _ = self.pop_vreg(); // d (dead after the branch)
+                    // D8: the comparison fuses straight into the branch —
+                    // no 0/1 byte materialization (the dead d vreg and its
+                    // pop disappear with it)
+                    self.emit_u128_cmp_branch(op, when_true, label, a, b);
                     return Ok(());
                 }
                 // (f3, swapped): the branch to emit when the comparison is
@@ -242,9 +262,132 @@ impl<'a> Lower<'a> {
         }
     }
 
+    /// C16 (impl/ctrl-dse): try to lower an OR chain of `x == K` comparisons
+    /// sharing ONE non-literal x with small distinct constants as a single
+    /// membership bitmask: `t = mask >> x; t & 1` (with an `x < 64` window
+    /// check so a wrapped modular shift can never falsely match). The
+    /// interpreter evaluates x at EVERY arm eagerly; the arms are back-to-
+    /// back comparisons with no intervening statements, so all N evaluations
+    /// observe the same value and fire the same deterministic fault at the
+    /// first arm's position — one evaluation + one Nil guard preserves the
+    /// fault face exactly. Returns true when the statement was consumed.
+    /// Trigger: N ≥ 3 arms, every arm is EQ with an int-literal side K ≤ 63
+    /// and a structurally identical int (non-u128) x, key set ≤ 64.
+    pub(crate) fn try_or_membership_mask(
+        &mut self,
+        node: &dyn IRNode,
+        when_true: bool,
+        label: usize,
+    ) -> Ret<bool> {
+        // flatten the OR tree into its comparison leaves
+        let mut leaves: Vec<&dyn IRNode> = Vec::new();
+        fn flatten_or<'n>(node: &'n dyn IRNode, out: &mut Vec<&'n dyn IRNode>) {
+            if let Some(w) = node.as_any().downcast_ref::<IRNodeWrapOne>() {
+                flatten_or(&*w.node, out);
+                return;
+            }
+            if Bytecode::try_from_u8(node.bytecode()).ok() == Some(Bytecode::OR) {
+                if let Some(d) = node.as_any().downcast_ref::<IRNodeDouble>() {
+                    flatten_or(&*d.subx, out);
+                    flatten_or(&*d.suby, out);
+                    return;
+                }
+            }
+            out.push(node);
+        }
+        flatten_or(node, &mut leaves);
+        if leaves.len() < 3 {
+            return Ok(false);
+        }
+        // every leaf must be `EQ(x, K)` / `EQ(K, x)` with K ≤ 63, all naming
+        // the same x
+        let mut keys: Vec<u64> = Vec::new();
+        let mut x: Option<&dyn IRNode> = None;
+        let mut x_key: Option<Vec<u8>> = None;
+        for leaf in &leaves {
+            let d = match leaf.as_any().downcast_ref::<IRNodeDouble>() {
+                Some(d) if Bytecode::try_from_u8(leaf.bytecode()).ok() == Some(Bytecode::EQ) => d,
+                _ => return Ok(false),
+            };
+            let lx = int_literal(&*d.subx);
+            let ly = int_literal(&*d.suby);
+            let (xnode, k) = match (lx, ly) {
+                (None, Some(k)) => (&*d.subx, k),
+                (Some(k), None) => (&*d.suby, k),
+                _ => return Ok(false), // both/neither literal — not an arm
+            };
+            if k > 63 {
+                return Ok(false);
+            }
+            // structural identity of the shared x: the serialized prefix
+            // form is a pure function of the subtree
+            let key = xnode.serialize();
+            match &x_key {
+                None => {
+                    x_key = Some(key);
+                    x = Some(xnode);
+                }
+                Some(prev) if *prev == key => {}
+                _ => return Ok(false), // a different x — not one membership test
+            }
+            keys.push(k);
+        }
+        let x = x.ok_or("rv64 lower: internal: empty membership chain")?;
+        // x must be a plain int value (a u128 x is a (lo, hi) pair; the
+        // interpreter's bytes/address EQ carries content-equality faces)
+        if matches!(node_res_ty(x, self.slot)?, Ty::Bytes | Ty::Address | Ty::List | Ty::Map)
+            || self.int_width(x) == Some(128)
+        {
+            return Ok(false);
+        }
+        // the mask: bit K set for every key
+        let mut mask: u64 = 0;
+        for k in &keys {
+            mask |= 1u64 << k;
+        }
+        // ---- emit ----
+        // x is evaluated ONCE, at the first arm's position (the interpreter's
+        // first evaluation); the exactly-one-Nil 90 face fires there too —
+        // a Nil x faults against every literal arm alike.
+        let mx = self.nil_val(x);
+        self.eval_int(x)?;
+        if mx {
+            self.nil_guard_tag(self.vstack.len() - 1, 90);
+        }
+        let xv = loc_reg(*self.vstack.last().ok_or("rv64 lower: membership x missing")?);
+        // scratch registers ride ABOVE x (a pop-first push would re-hand x's
+        // own pool register — the control.rs eq-branch re-hand hazard)
+        let t = self.push_vreg();
+        let m = self.push_vreg();
+        self.li_k(m, mask);
+        // the shift amount is taken mod 64 on RISC-V: an x ≥ 64 can never be
+        // a member (every K ≤ 63), so window-check before shifting. NOT a
+        // member goes to `label` when the caller branches on false, else to
+        // the fall-through continuation.
+        let lim = self.push_vreg();
+        self.asm.addi(lim, ZERO, 64);
+        if when_true {
+            let l_not = self.asm.new_label();
+            self.asm.bgeu(xv, lim, l_not);
+            self.asm.r(0, xv, m, 5, t, 0b0110011); // srl t, m, xv
+            self.asm.andi(t, t, 1);
+            self.asm.bne(t, ZERO, label);
+            self.place(l_not);
+        } else {
+            self.asm.bgeu(xv, lim, label);
+            self.asm.r(0, xv, m, 5, t, 0b0110011); // srl t, m, xv
+            self.asm.andi(t, t, 1);
+            self.asm.beq(t, ZERO, label);
+        }
+        let _ = self.pop_vreg(); // lim
+        let _ = self.pop_vreg(); // m
+        let _ = self.pop_vreg(); // t
+        let _ = self.pop_vreg(); // x
+        Ok(true)
+    }
+
     /// Store an int value register into a local slot (banked home or frame).
-    pub(crate) fn store_int_slot(&mut self, slot: u8, v: u8) {
-        if let Some(r) = self.bank_int(slot) {
+    pub(crate) fn store_int_slot(&mut self, slot: u8, v: u8) {        if let Some(r) = self.bank_int(slot) {
             self.kill_fwd_reg(r);
             if r != v {
                 self.asm.mv(r, v);
@@ -454,11 +597,18 @@ impl<'a> Lower<'a> {
                 self.emit_min(rw, t);
             }
             // narrow-PUT face: the max/min result keeps the common width —
-            // grow by the operand's own static width
-            self.shadow_grow(slot, self.int_width(opnode));
-            if self.tracked.get(slot as usize).copied() == Some(true) {
-                // the guards proved both inputs non-Nil
-                self.nil_set_flag_one(slot);
+            // grow by the operand's own static width. C13: the fused
+            // comparison/arithmetic above keeps every fault face; the shadow
+            // grow and the init-flag set are auxiliary machine that dies with
+            // a proven-dead store (store_is_dead: last_read timeline +
+            // loop-carried / BUG-022 backedge exemptions, identical to the
+            // frame arm below).
+            if !self.store_is_dead(slot) {
+                self.shadow_grow(slot, self.int_width(opnode));
+                if self.tracked.get(slot as usize).copied() == Some(true) {
+                    // the guards proved both inputs non-Nil
+                    self.nil_set_flag_one(slot);
+                }
             }
         } else {
             let off = self.slot_offset(slot);

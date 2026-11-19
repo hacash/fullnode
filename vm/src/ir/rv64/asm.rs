@@ -126,6 +126,15 @@ impl Asm {
         assert!(self.labels[label].is_none(), "label {label} placed twice");
         self.labels[label] = Some(self.buf.len());
     }
+    /// E6: place a label at an absolute interior position inside the
+    /// already-emitted pool bytes — a suffix-sharing site's label resolves
+    /// to the shared tail's address (see `lit_label_inner`), so every
+    /// fixup that references it needs no bias arithmetic.
+    pub(crate) fn place_at(&mut self, label: usize, pos: usize) {
+        assert!(self.labels[label].is_none(), "label {label} placed twice");
+        assert!(pos <= self.buf.len(), "interior label {label} past the emitted pool");
+        self.labels[label] = Some(pos);
+    }
     pub(crate) fn word(&mut self, w: u32) {
         self.buf.extend_from_slice(&w.to_le_bytes());
     }
@@ -152,6 +161,22 @@ impl Asm {
             | ((f3 as u16) << 13)
             | ((u & 0x20) << 7)
             | ((u & 0x1F) << 2)
+    }
+
+    /// c.ldsp rd, off(x2): quadrant-2 CL form, funct3=011. Immediate bit
+    /// scatter per the consensus decoder (`decode_profile_c`): imm[5]=h12,
+    /// imm[4:3]=h6:5, imm[8:6]=h4:2 — `off` is a multiple of 8 inside
+    /// [0,504] (imm[2:0] are implicit zeros; rd is the full 5-bit field,
+    /// x0 reserved).
+    pub(crate) fn c_ldsp(rd: u8, off: u32) -> u16 {
+        debug_assert!(off % 8 == 0 && off <= 504);
+        let u = off as u16;
+        (0b011u16 << 13)
+            | ((u & (1 << 5)) << 7)
+            | ((rd as u16) << 7)
+            | (((u >> 3) & 0b11) << 5)
+            | (((u >> 6) & 0b111) << 2)
+            | 0b10
     }
 
     /// Quadrant-0 CL/CS: rd'/rs2' [4:2]+8, rs1' [9:7]+8,
@@ -325,6 +350,21 @@ impl Asm {
         }
         self.word(0b1100111u32 | ((RA as u32) << 15)); // jalr x0, ra, 0
     }
+
+    /// `jalr x0, rs, 0` — a return through an arbitrary register. D1: the
+    /// shared arithmetic routines are called with `jal a0` (the mode
+    /// scratch, dead at every routine call site in every mode) and return
+    /// through it, so routine calls never touch RA and the body's own
+    /// `ret` (the kernel-entry RA) stays intact with no call-site parking.
+    /// Encoding note: c.jr takes any rs1 (same CI form as c.ret above),
+    /// and the 4-byte form is the plain JALR with rd = x0.
+    pub(crate) fn jr(&mut self, rs: u8) {
+        if self.rvc {
+            self.half(Self::c_q2(4, 0, rs, 0)); // c.jr rs
+            return;
+        }
+        self.word(0b1100111u32 | ((rs as u32) << 15)); // jalr x0, rs, 0
+    }
     pub(crate) fn ecall(&mut self) {
         self.word(0x0000_0073);
     }
@@ -352,8 +392,26 @@ impl Asm {
     }
 
     /// `ld rd, <lit - base>(base_reg)`: load a pooled 8-byte constant
-    /// relative to the function-wide pool-base register.
-    pub(crate) fn ld_label_off(&mut self, rd: u8, base_reg: u8, base_label: usize, lit_label: usize) {
+    /// relative to the function-wide pool-base register. E1: `lit_off`
+    /// is the entry's pool-relative offset, fixed when `lit_label`
+    /// created the entry (a pure function of the pool contents, so it
+    /// is stable across relaxation passes). When the base register is
+    /// x2 and the offset sits inside the c.ldsp window — [0,504],
+    /// 8-aligned, rd a full 5-bit register distinct from x2/x0 — the
+    /// 2-byte compressed load is emitted directly with no fixup. Any
+    /// other shape keeps the 4-byte PoolLd fixup path (which places no
+    /// alignment requirement on the entry).
+    pub(crate) fn ld_label_off(&mut self, rd: u8, base_reg: u8, base_label: usize, lit_label: usize, lit_off: usize) {
+        if self.rvc
+            && base_reg == SP
+            && rd != SP
+            && rd != ZERO
+            && lit_off <= 504
+            && lit_off % 8 == 0
+        {
+            self.half(Self::c_ldsp(rd, lit_off as u32));
+            return;
+        }
         let at = self.here();
         // ld rd, 0(base_reg) (imm patched by finish)
         self.word(0b0000011u32 | ((rd as u32) << 7) | (3 << 12) | ((base_reg as u32) << 15));

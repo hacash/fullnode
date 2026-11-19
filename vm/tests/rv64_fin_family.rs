@@ -17,6 +17,7 @@ use c3lib::{Interp, Rv64};
 
 const MAX_U64: &str = "18446744073709551615";
 const MAX_U128: &str = "340282366920938463463374607431768211455";
+const MAX_U128_M1: &str = "340282366920938463463374607431768211454";
 const BIG1: &str = "123456789012345678901234567890123456789";
 const BIG2: &str = "98765432109876543210987654321";
 const BIG3: &str = "555555555555555555555555555555555555";
@@ -682,4 +683,247 @@ fn fin_nested_and_statement_forms() {
         "var s = 0u64\nvar i = 0u64\nwhile (i < 4u64) { s = u64_mad(s, 1u64, mul_div_floor(i, 10u64, 4u64))\n i = (i + 1u64) }\nreturn (s as u64) as bytes",
         &no_input(),
     );
+}
+
+/* ------- D2/D3 (fin-control survey): rounding-policy boundary matrix -------
+ *
+ * HalfUp / HalfEven — now shared ROUTINES inside the lowering — plus the
+ * Floor ("round-down") and Ceil siblings, across every rounded-division
+ * FIN family × the boundary shapes: quotient exactly .5 (tie up / tie to
+ * even / tie down by final parity), all-ones operands, all-zero operands,
+ * and the round-up carry chains (q+1 still fits u128 vs q = u128::MAX →
+ * the checked +1 faults 90 from INSIDE the routine). Interpreter vs all
+ * three lowered modes must agree on value AND fault code. */
+
+#[test]
+fn fin_round_policy_boundary_matrix() {
+    // FIN2 div_*: ties, all-ones, all-zero, divisor faces
+    agree4("return div_half_up(7u64, 2u64) as bytes", &no_input()); // 3.5 → 4
+    agree4("return div_half_up(5u64, 2u64) as bytes", &no_input()); // 2.5 → 3
+    agree4("return div_half_even(7u64, 2u64) as bytes", &no_input()); // 3.5 → 4 (q odd → up)
+    agree4("return div_half_even(5u64, 2u64) as bytes", &no_input()); // 2.5 → 2 (q even stays)
+    agree4("return div_floor(7u64, 2u64) as bytes", &no_input()); // 3 (round down)
+    agree4("return div_ceil(7u64, 2u64) as bytes", &no_input()); // 4
+    agree4("return div_half_up(0u64, 5u64) as bytes", &no_input()); // zero numerator
+    agree4("return div_half_up(0u64, 0u64) as bytes", &no_input()); // 0/0 → 90
+    agree4("return div_half_even(7u64, 0u64) as bytes", &no_input()); // x/0 → 90
+    // top tie: (2^128-1)/2 → q = 2^127-1, rem 1 ≥ d−d/2 → up fits
+    agree4(
+        &format!("return div_half_up({MAX_U128}u128, 2u128) as bytes"),
+        &no_input(),
+    );
+    agree4(
+        &format!("return div_half_even({MAX_U128}u128, 2u128) as bytes"),
+        &no_input(),
+    );
+    agree4(
+        &format!("return div_half_up({MAX_U128}u128, 1u128) as bytes"),
+        &no_input(),
+    ); // all-ones / 1
+    agree4(
+        &format!("return div_half_up({MAX_U128}u128, {MAX_U128}u128) as bytes"),
+        &no_input(),
+    ); // 1 rem 0
+    agree4(
+        &format!("return div_half_up(1u128, {MAX_U128}u128) as bytes"),
+        &no_input(),
+    ); // far below half → 0
+
+    // FIN3 mul_div_* / scaled_div_*: 256-bit numerators, ties at both
+    // parities, zero faces
+    agree4("return mul_div_half_up(3u64, 1u64, 2u64) as bytes", &no_input()); // 1.5 → 2
+    agree4("return mul_div_half_even(3u64, 1u64, 2u64) as bytes", &no_input()); // q=1 odd → 2
+    agree4("return mul_div_half_even(1u64, 1u64, 2u64) as bytes", &no_input()); // 0.5, q=0 even → 0
+    agree4("return mul_div_floor(3u64, 1u64, 2u64) as bytes", &no_input()); // 1
+    agree4("return scaled_div_half_up(3u64, 1u64, 2u64) as bytes", &no_input());
+    agree4("return scaled_div_half_even(1u64, 1u64, 2u64) as bytes", &no_input());
+    agree4("return mul_div_half_up(0u64, 9u64, 2u64) as bytes", &no_input()); // zeros
+    agree4("return mul_div_half_up(3u64, 1u64, 0u64) as bytes", &no_input()); // /0 → 90
+    // the round-up CARRY faces through a 256-bit numerator:
+    // n = 2·MAX+1 = 2^129-1, d = 2 → q = MAX, rem 1 ≥ 1 → up → 90
+    agree4(
+        &format!("return mul_add_div_half_up({MAX_U128}u128, 2u128, 1u128, 2u128) as bytes"),
+        &no_input(),
+    ); // → 90
+    agree4(
+        &format!("return mul_add_div_half_even({MAX_U128}u128, 2u128, 1u128, 2u128) as bytes"),
+        &no_input(),
+    ); // → 90 (above half)
+       // the fits sibling: n = 2^129-3 → q = MAX-1, rem 1 → up → MAX
+    agree4(
+        &format!("return mul_add_div_half_up({MAX_U128_M1}u128, 2u128, 1u128, 2u128) as bytes"),
+        &no_input(),
+    );
+    agree4(
+        &format!("return mul_add_div_half_even({MAX_U128_M1}u128, 2u128, 1u128, 2u128) as bytes"),
+        &no_input(),
+    );
+    agree4(
+        &format!("return mul_div_half_up({MAX_U128}u128, {MAX_U128}u128, {MAX_U128}u128) as bytes"),
+        &no_input(),
+    ); // all-ones everywhere
+
+    // FIN3 dev_scaled_half_even (rounds against the REFERENCE; 3 args:
+    // x, reference, scale — diff = |x−ref|)
+    agree4("return dev_scaled_half_even(4u64, 1u64, 2u64) as bytes", &no_input()); // 3·1/2 = 1.5 → 2
+    agree4("return dev_scaled_half_even(2u64, 1u64, 2u64) as bytes", &no_input()); // 1·1/2 = 0.5 → 0
+    agree4("return dev_scaled_half_even(3u64, 1u64, 2u64) as bytes", &no_input()); // 2·1/2 = 1 exact
+    agree4("return dev_scaled_half_even(3u64, 1u64, 0u64) as bytes", &no_input()); // ref 0 → 90
+    agree4("return dev_scaled_half_even(3u64, 1u64, 2u64) as bytes", &no_input());
+
+    // FIN4 mul3_div_* / lerp_* / wavg2_*: ties, parity, zero faces
+    agree4("return mul3_div_half_up(3u64, 1u64, 1u64, 2u64) as bytes", &no_input()); // 1.5 → 2
+    agree4("return mul3_div_half_even(3u64, 1u64, 1u64, 2u64) as bytes", &no_input()); // → 2
+    agree4("return mul3_div_half_even(1u64, 1u64, 1u64, 2u64) as bytes", &no_input()); // → 0
+    agree4("return lerp_half_up(0u64, 3u64, 2u64, 1u64) as bytes", &no_input()); // 1.5 → 2
+    agree4("return lerp_half_even(0u64, 3u64, 2u64, 1u64) as bytes", &no_input()); // → 2
+    agree4("return lerp_half_even(0u64, 1u64, 2u64, 1u64) as bytes", &no_input()); // 0.5 → 0
+    agree4("return lerp_half_up(0u64, 1u64, 0u64, 0u64) as bytes", &no_input()); // base 0 → 90
+    agree4("return lerp_half_up(0u64, 1u64, 2u64, 3u64) as bytes", &no_input()); // weight > base → 90
+    agree4("return wavg2_half_up(0u64, 3u64, 1u64, 1u64) as bytes", &no_input()); // 1.5 → 2
+    agree4("return wavg2_half_even(0u64, 3u64, 1u64, 1u64) as bytes", &no_input()); // → 2
+    agree4("return wavg2_half_up(0u64, 1u64, 1u64, 1u64) as bytes", &no_input()); // 0.5 → 1
+    agree4("return wavg2_half_even(0u64, 1u64, 1u64, 1u64) as bytes", &no_input()); // final parity even → 0
+    agree4("return wavg2_half_up(1u64, 1u64, 0u64, 0u64) as bytes", &no_input()); // den 0 → 90
+    // u129 denominator (bit 128 set): den = 2^128 exactly
+    agree4(
+        &format!("return wavg2_half_up(0u64, 3u64, {MAX_U128}u128, 1u128) as bytes"),
+        &no_input(),
+    );
+
+    // FINPOW3 rpow_half_up: per-multiplication half-up
+    agree4("return rpow_half_up(15u64, 1u64, 1u64) as bytes", &no_input()); // 1.5 → 2
+    agree4("return rpow_half_up(5u64, 1u64, 1u64) as bytes", &no_input()); // 0.5 → 1
+    agree4("return rpow_half_up(25u64, 1u64, 1u64) as bytes", &no_input()); // 2.5 → 3
+    agree4("return rpow_half_up(2u64, 0u64, 1u64) as bytes", &no_input()); // y = 0 → base
+    agree4("return rpow_half_up(2u64, 1u64, 0u64) as bytes", &no_input()); // z = 0 → 90
+    agree4(
+        &format!("return rpow_half_up({MAX_U64}u64, 2u64, {MAX_U64}u64) as bytes"),
+        &no_input(),
+    ); // all-ones chain
+
+    // FINP3 / FINP4 have no rounding tail — boundary-value smoke over the
+    // 256-bit cross products they lower through mul_wide
+    agree4(
+        &format!("return (abs_diff_lte({MAX_U128}u128, 0u128, {MAX_U128}u128)) as bytes"),
+        &no_input(),
+    );
+    agree4("return (abs_diff_lte(0u64, 0u64, 0u64)) as bytes", &no_input());
+    agree4(
+        &format!("return (cross_eq({MAX_U128}u128, {MAX_U128}u128, 1u128, 1u128)) as bytes"),
+        &no_input(),
+    );
+    agree4(
+        &format!("return (cross_lte(0u128, {MAX_U128}u128, 1u128, 1u128)) as bytes"),
+        &no_input(),
+    );
+    agree4("return (within_bps(1u64, 1u64, 0u64, 1u64)) as bytes", &no_input()); // ref 0 → 90
+    agree4("return (within_bps(1u64, 1u64, 1u64, 0u64)) as bytes", &no_input()); // scale 0 → 90
+    agree4(
+        &format!("return (within_bps({MAX_U64}u64, 0u64, {MAX_U64}u64, {MAX_U64}u64)) as bytes"),
+        &no_input(),
+    );
+}
+
+/// D2/D3 site-count gate + routine single-emission. Every `ret` in the
+/// stream is either a routine epilogue or the body's own `return`
+/// epilogue (each body here has exactly one `return`), so the ret count
+/// is 1 + the number of distinct shared routines. D1 link convention:
+/// the body ret stays a plain `ret` (`jalr x0, 0(x1)` — the c.jr ra
+/// halfword in the RVC modes) while every shared routine returns through
+/// the mode-scratch a0 (`jr a0`: x10 in Im/Imc, x5 in ImcRemap); both
+/// forms decode to `Jalr { rd: 0, imm: 0 }`, so the census counts ra +
+/// the mode scratch through the consensus decoder.
+///
+/// * BELOW the threshold (static site count < 3 per primitive) the D2/D3
+///   gates keep the historical inline forms — only the 256/128 divmod
+///   routine (ungated) appears besides the body's own return.
+/// * AT/ABOVE the threshold (≥3 mul_wide, ≥3 HalfUp, ≥3 HalfEven sites)
+///   the shared routines activate, and each is emitted EXACTLY ONCE —
+///   adding MORE sites must not move the ret count.
+/// * FINPOW3 (2 mul_wide + 2 HalfUp static sites) sits below the
+///   threshold: its mul_wide/round tails stay inline (the N=2 form the
+///   gate deliberately keeps at baseline size).
+#[test]
+fn fin_shared_routines_emitted_once() {
+    use vm::calc::container::CALC_PROFILE_RV64IMC;
+    use vm::calc::decode::{decode_at, Inst};
+    use vm::ir::rv64::Rv64Mode;
+    let count_rets = |code: &[u8], mode: &Rv64Mode| -> usize {
+        // body ret link + routine link (D1 mode-scratch a0: x10/x10/x5)
+        let scratch = match mode {
+            Rv64Mode::ImcRemap => 5u8,
+            _ => 10u8,
+        };
+        let profile = if *mode == Rv64Mode::Im { 0u8 } else { CALC_PROFILE_RV64IMC };
+        let mut n = 0;
+        let mut off = 0usize;
+        while off < code.len() {
+            let (inst, len) = decode_at(code, off, profile)
+                .unwrap_or_else(|e| panic!("decode @{off}: {e:?}"));
+            if matches!(&inst, Inst::Jalr { rd: 0, imm: 0, rs1 }
+                if *rs1 == 1 || *rs1 == scratch)
+            {
+                n += 1;
+            }
+            off += len as usize;
+        }
+        assert_eq!(off, code.len(), "stream must end on an instruction boundary");
+        n
+    };
+    let base = "var a = (byte(data, 0) as u64)\nvar b = (byte(data, 1) as u64)\n";
+    // below the gate: 2 HalfUp + 1 HalfEven round sites, 1 mul_wide site
+    let small = format!(
+        "{base}var r1 = div_half_up(a, b)\nvar r2 = mul_div_half_up(a, b, 100u64)\n\
+         var r3 = div_half_even(a, b)\nreturn ((r1 + r2 + r3) as u64) as bytes"
+    );
+    // at/above the gate: 3 HalfUp + 3 HalfEven + 3 mul_wide sites
+    let big = format!(
+        "{base}var r1 = div_half_up(a, b)\nvar r2 = div_half_up(b, a)\n\
+         var r3 = mul_div_half_up(a, b, 100u64)\nvar r4 = div_half_even(a, b)\n\
+         var r5 = div_half_even(b, a)\nvar r6 = mul_div_half_even(a, b, 100u64)\n\
+         var r7 = u64_mad(a, b, 3u64)\n\
+         return ((((r1 + r2 + r3 + r4) + r5) + r6 + r7) as u64) as bytes"
+    );
+    // one MORE site of each primitive — the ret counts must not move
+    let bigger = format!(
+        "{base}var r1 = div_half_up(a, b)\nvar r2 = div_half_up(b, a)\n\
+         var r3 = mul_div_half_up(a, b, 100u64)\nvar r4 = div_half_even(a, b)\n\
+         var r5 = div_half_even(b, a)\nvar r6 = mul_div_half_even(a, b, 100u64)\n\
+         var r7 = u64_mad(a, b, 3u64)\nvar r8 = div_half_up(a, a)\n\
+         var r9 = div_half_even(a, a)\nvar r10 = mul_div_half_up(b, a, 50u64)\n\
+         return ((((((r1 + r2 + r3 + r4) + r5) + r6 + r7) + r8 + r9) + r10) as u64) as bytes"
+    );
+    let rvs = Rv64::try_build(&small).unwrap_or_else(|e| panic!("small: {e}"));
+    let rvb = Rv64::try_build(&big).unwrap_or_else(|e| panic!("big: {e}"));
+    let rvbb = Rv64::try_build(&bigger).unwrap_or_else(|e| panic!("bigger: {e}"));
+    for i in 0..rvs.codes.len() {
+        let (mode, cs) = &rvs.codes[i];
+        let ns = count_rets(cs, mode);
+        let nb = count_rets(&rvb.codes[i].1, mode);
+        let nbb = count_rets(&rvbb.codes[i].1, mode);
+        assert_eq!(
+            ns, 2,
+            "{mode:?}: below the gate only body return + the divmod routine (rets = {ns})"
+        );
+        assert_eq!(
+            nb, 5,
+            "{mode:?}: body return + divmod + mul_wide + round_halfup + round_halfeven (rets = {nb})"
+        );
+        assert_eq!(
+            nbb, 5,
+            "{mode:?}: extra sites must add ZERO routine bodies (rets = {nbb})"
+        );
+    }
+    // FINPOW3: 2 mul_wide + 2 HalfUp static sites — below the gate, the
+    // loop's tails stay inline (divmod only)
+    let rv2 = Rv64::try_build("return rpow_half_up(3u64, 3u64, 1u64) as bytes")
+        .unwrap_or_else(|e| panic!("rpow: {e}"));
+    for (mode, code) in &rv2.codes {
+        let n = count_rets(code, mode);
+        assert_eq!(
+            n, 2,
+            "{mode:?}: FINPOW3 sits below the gate — inline mul_wide/round, divmod only (rets = {n})"
+        );
+    }
 }

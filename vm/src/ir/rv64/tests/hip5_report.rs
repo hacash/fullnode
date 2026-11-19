@@ -357,6 +357,8 @@ use super::helpers::{HIP5_FITSH, census_stream, compile, compile_with_input, dee
             }
         }
         let nilp = NilPlan { tracked: vec![false; fp.slot.len()], occ: HashMap::new(), tag_bytes: false };
+        let (mw_sites, hu_sites, he_sites) =
+            body_routine_site_counts(&ir.subs, &fp.slot, &fp.slot_w, &[]);
         let mut lw = Lower::new_mode_arena_nil(
             &fp.slot,
             &fp.needs_zero,
@@ -371,6 +373,16 @@ use super::helpers::{HIP5_FITSH, census_stream, compile, compile_with_input, dee
             0,
             None,
             false,
+            (
+                mw_sites >= FIN_ROUTINE_MIN_SITES,
+                hu_sites >= FIN_ROUTINE_MIN_SITES,
+                he_sites >= FIN_ROUTINE_MIN_SITES,
+                false,
+                false,
+                false,
+                false,
+                false,
+            ),
         );
         lw.emit_prologue_body_epilogue(&ir.subs).unwrap();
         println!("HIP5 peak vstack depth = {}", lw.max_depth);

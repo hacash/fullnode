@@ -1272,8 +1272,11 @@ pub(crate) fn web_plan(ir: &IRNodeArray, fp: &FramePlan, regs_available: &[BankC
 }
 
 /// Count the sites that will reference a pool literal (PBUF-family
-/// evaluations, literal PUT/CBYTES/CAT folds) — drives the pool-base
-/// register decision.
+/// evaluations, literal PUT/CBYTES/CAT folds, and — E5 — int literals
+/// above 0xFFFF whose `li_k` materialization rides the pooled `ld`)
+/// — drives the pool-base register decision. Pure IR function: the
+/// probe pass, every relaxation pass and the dbg census all see the
+/// same count.
 pub(crate) fn count_literal_sites(nodes: &[Box<dyn IRNode>]) -> usize {
     fn walkc(n: &dyn IRNode, count: &mut usize) {
         if let Some(w) = n.as_any().downcast_ref::<IRNodeWrapOne>() {
@@ -1304,6 +1307,42 @@ pub(crate) fn count_literal_sites(nodes: &[Box<dyn IRNode>]) -> usize {
                 if let Some(d) = n.as_any().downcast_ref::<IRNodeDouble>() {
                     if bytes_literal(&*d.subx).is_some() && bytes_literal(&*d.suby).is_some() {
                         *count += 1;
+                    }
+                }
+            }
+            CU8 | CU16 | CU32 | CU64 | CU128 => {
+                // E5: an int literal > 0xFFFF folds through the cast chain
+                // (the eval.rs fold gate — ir_literal_value sees through
+                // CU*) and materializes via li_k, a pooled `ld` when a pool
+                // base is active. Count the site so int-constant bodies
+                // reach the pool-base threshold. CU128 lowers to two li_k
+                // halves, so each >0xFFFF half counts. When the fold fires
+                // the children are never evaluated (no pool entries of
+                // their own), so the walk stops there — no double counting
+                // from the PBUF byte carrier inside a CU fold or from
+                // nested `x as u64 as u32` chains; a fold that misses (non-
+                // literal or errored cast operand) keeps the runtime path,
+                // where the children do evaluate and may pool.
+                if let Ok(Some(v)) = crate::lang::ir_literal_value(n) {
+                    if let Ok(x) = v.extract_u128() {
+                        if matches!(op, CU128) {
+                            if x & u64::MAX as u128 > 0xFFFF {
+                                *count += 1;
+                            }
+                            if x >> 64 > 0xFFFF {
+                                *count += 1;
+                            }
+                            return;
+                        }
+                        // CU8-CU64 fold only u64-range values (the eval.rs
+                        // gate); the overflow face is a compile error
+                        // downstream, so its count never matters
+                        if x <= u64::MAX as u128 {
+                            if x > 0xFFFF {
+                                *count += 1;
+                            }
+                            return;
+                        }
                     }
                 }
             }
